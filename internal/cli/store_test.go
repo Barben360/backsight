@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 func TestStoreSendsAtOnce(t *testing.T) {
@@ -51,4 +53,8 @@ func TestStoreRefusals(t *testing.T) {
 			t.Errorf("%s: exit %d %q %q", name, code, out, errOut)
 		}
 	}
+}
+
+func newTestNote() retain.Note {
+	return retain.NewNote("claude-memory", "lesson", "p", "Retry with backoff.", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 }
