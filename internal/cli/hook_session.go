@@ -10,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -21,8 +22,10 @@ const (
 	briefingChars     = 1200
 	briefingTimeout   = 5 * time.Second
 	compactReplay     = 6
+	compactStores     = 10
 	subagentItems     = 2
 	subagentChars     = 600
+	subagentItemChars = 180
 )
 
 func init() {
@@ -50,14 +53,28 @@ func (h *hookEnv) sessionStart() []byte {
 	case "startup", "":
 	case "compact":
 		return contextOutput("SessionStart", instructions.Guide+h.compactReplay(), "")
-	default: // resume, clear, fork
+	default: // resume, clear, fork: clear and fork start a new session id
+		h.writeEnvFile()
 		return contextOutput("SessionStart", instructions.Guide, "")
 	}
 	h.writeEnvFile()
-	text, items, source, err := h.briefing()
-	banner := "backsight · project " + h.project + " · memory on"
-	if err != nil {
-		banner = "backsight · project " + h.project + " · " + instructions.MemoryUnavailable("server unreachable")
+	project := safeProject(h.project)
+	var text, source string
+	var items []session.Injection
+	var err error
+	banner := "backsight · project " + project + " · memory on"
+	unavailable := false
+	switch {
+	case h.maintenance():
+		banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("maintenance in progress"), true
+	default:
+		text, items, source, err = h.briefing()
+		if err != nil {
+			banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("server unreachable"), true
+		}
+	}
+	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
+		banner += fmt.Sprintf("\nbacksight: %d session(s) quarantined: run `backsight doctor`", len(held))
 	}
 	if h.firstSession() {
 		banner = instructions.FirstSessionNotice(h.cfg.Server.URL, h.cfg.LLM.Provider) + "\n" + banner
@@ -68,6 +85,7 @@ func (h *hookEnv) sessionStart() []byte {
 	}
 	h.updateSession(func(st *session.State) error {
 		st.Project = h.project
+		st.Unavailable = st.Unavailable || unavailable
 		for _, it := range items {
 			if !slices.Contains(st.Seen, it.ID) {
 				st.Seen = append(st.Seen, it.ID)
@@ -108,13 +126,17 @@ func (h *hookEnv) briefing() (text string, items []session.Injection, source str
 		return instructions.BriefingEmpty, nil, "empty", nil
 	}
 	var b strings.Builder
-	b.WriteString(instructions.BriefingHeader(h.project) + "\n")
+	b.WriteString(instructions.BriefingHeader(safeProject(h.project)) + "\n")
 	if source == "raw" {
 		b.WriteString(instructions.BriefingRaw + "\n")
 	}
 	at := now()
 	for _, m := range mems {
-		line := fmt.Sprintf("- %s (%s ago)\n", clip(m.Text, briefingItemChars), recall.Age(at.Sub(m.UpdatedAt)))
+		ago := ""
+		if !m.UpdatedAt.IsZero() {
+			ago = recall.Age(at.Sub(m.UpdatedAt))
+		}
+		line := "- " + clip(m.Text, briefingItemChars) + age(ago) + "\n"
 		if len([]rune(b.String()))+len([]rune(line)) > briefingChars {
 			break
 		}
@@ -138,8 +160,12 @@ func (h *hookEnv) writeEnvFile() {
 	_ = f.Close()
 }
 
-// firstSession records, once, that the notice was shown.
+// firstSession records, once, that the notice was shown; later starts only
+// read the state (jobs write it too).
 func (h *hookEnv) firstSession() bool {
+	if st, err := state.Load(h.dirs.StateFile()); err != nil || st.FirstSessionNoticeShown {
+		return false
+	}
 	first := false
 	_ = state.Update(h.dirs, "hook session-start", func(s *state.State) error {
 		if !s.FirstSessionNoticeShown {
@@ -159,13 +185,14 @@ func (h *hookEnv) compactReplay() string {
 	}
 	var b strings.Builder
 	if len(st.Injected) > 0 {
-		b.WriteString("\n\nMemories shown earlier in this session:\n")
+		b.WriteString("\n\nMemories shown earlier in this session " + instructions.HintsLine + ":\n")
 		for _, in := range st.Injected[max(0, len(st.Injected)-compactReplay):] {
-			fmt.Fprintf(&b, "- [%s] %s\n", in.Project, clip(in.Text, briefingItemChars))
+			fmt.Fprintf(&b, "- [%s] %s\n", safeProject(in.Project), clip(in.Text, briefingItemChars))
 		}
 	}
 	if len(st.Stored) > 0 {
-		fmt.Fprintf(&b, "\nStored this session: %s\n", strings.Join(st.Stored, ", "))
+		stored := st.Stored[max(0, len(st.Stored)-compactStores):]
+		fmt.Fprintf(&b, "\nStored this session: %s\n", strings.Join(stored, ", "))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -175,14 +202,14 @@ func (h *hookEnv) subagentStart() []byte {
 	if slices.Contains(h.cfg.Hooks.SubagentSkip, h.in.AgentType) {
 		return nil
 	}
-	text := instructions.SubagentGuide
+	text := instructions.SubagentGuide + " " + instructions.HintsLine
 	if st, err := h.store.Load(h.in.SessionID); err == nil {
 		n := 0
 		for _, in := range st.Injected {
 			if in.Rule != "briefing" || n == subagentItems {
 				continue
 			}
-			line := "\n- " + clip(in.Text, briefingItemChars)
+			line := "\n- " + clip(in.Text, subagentItemChars)
 			if len([]rune(text))+len([]rune(line)) > subagentChars {
 				break
 			}

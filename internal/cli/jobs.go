@@ -103,6 +103,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
+			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
 			}
@@ -120,6 +121,22 @@ func tickText(r tickResult) string {
 		msg += ", backfill " + r.Backfill
 	}
 	return msg + "\n"
+}
+
+// sessionTTL: session state older than this is deleted (it holds prompt
+// words and reply excerpts; a resumed session starts a fresh state).
+const sessionTTL = 30 * 24 * time.Hour
+
+func pruneSessions(d paths.Dirs) {
+	ents, err := os.ReadDir(d.SessionsDir())
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if fi, err := e.Info(); err == nil && !e.IsDir() && now().Sub(fi.ModTime()) > sessionTTL {
+			_ = os.Remove(filepath.Join(d.SessionsDir(), e.Name()))
+		}
+	}
 }
 
 // refreshIndex rebuilds the entity index when it is older than a day; best

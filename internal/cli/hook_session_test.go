@@ -59,7 +59,7 @@ func TestSessionStartGivesTheGuideAndTheBriefing(t *testing.T) {
 	t.Setenv("CLAUDE_ENV_FILE", envFile)
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
 	ctx := h.Specific.Context
-	if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) || !strings.Contains(ctx, "Where you left off on billing:") ||
+	if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) || !strings.Contains(ctx, "Where you left off on billing "+instructions.HintsLine+":") ||
 		!strings.Contains(ctx, "PostgreSQL 16") || !strings.Contains(ctx, "3h ago") || !strings.Contains(ctx, "2d ago") {
 		t.Fatalf("context:\n%s", ctx)
 	}

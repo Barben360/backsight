@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
@@ -69,7 +70,8 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	if h.cfg, h.sec, err = loadServerConfig(); err != nil {
 		return nil, false
 	}
-	if (side == readSide && !h.cfg.Components.Read) || (side == writeSide && !h.cfg.Components.Write) {
+	c := h.cfg.Components
+	if (side == readSide && !c.Read) || (side == writeSide && !c.Write) || (side == "" && !c.Read && !c.Write) {
 		return nil, false
 	}
 	cwd := h.in.Cwd
@@ -77,7 +79,9 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 		cwd, _ = os.Getwd()
 	}
 	h.project = project.New(h.home, h.cfg.Projects.Transverse).Project(cwd)
-	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir()}
+	// Hooks of one session can run in parallel: a short bounded retry
+	// instead of losing their updates (0054 amendment).
+	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir(), Retry: 100 * time.Millisecond}
 	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version})
 	// One deadline for every call of a hook: the supervisor's own is the
 	// hard stop, this one lets the handler finish with what it has.
@@ -94,6 +98,25 @@ func (h *hookEnv) updateSession(fn func(*session.State) error) {
 	if err := h.store.Update(h.in.SessionID, fn); err != nil && !errors.Is(err, session.ErrBusy) {
 		h.tw.Emit(telemetry.Raw{Name: "session_state_error", Fields: map[string]any{"error": err.Error()}})
 	}
+}
+
+// maintenance: a maintenance lock is held; hooks only queue (SPEC §14).
+func (h *hookEnv) maintenance() bool {
+	_, err := os.Stat(h.dirs.MaintenanceLock())
+	return err == nil
+}
+
+// safeProject renders a project name that came from the server or a tool
+// call: one line, no control characters, short (memory text is data and
+// must not break out of its framing).
+func safeProject(p string) string {
+	p = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, p)
+	return clip(p, 60)
 }
 
 // contextOutput is a hook answer: text for Claude, a banner for the user.

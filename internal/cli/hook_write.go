@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
@@ -36,7 +38,7 @@ func init() {
 		return h.gate(), nil
 	}
 	handlers["stop"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, "")
+		h, ok := newHookEnv(ctx, input, "") // read (detector, outcomes) or write: either side needs it
 		if !ok {
 			return nil, nil
 		}
@@ -44,23 +46,34 @@ func init() {
 		return nil, nil
 	}
 	handlers["subagent-stop"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, writeSide)
+		h, ok := newHookEnv(ctx, input, "")
 		if !ok {
 			return nil, nil
 		}
 		h.subagentStop()
 		return nil, nil
 	}
-	handlers["session-end"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, writeSide)
-		if !ok {
-			return nil, nil
-		}
-		if session.ValidID(h.in.SessionID) {
-			_ = spawnDetached("retain", "flush", "--session", h.in.SessionID)
-		}
+	handlers["session-end"] = sessionEnd
+}
+
+// sessionEnd spawns the session's flush, doing as little as possible first:
+// the whole event has 1.5 s (C06). No project resolution, no client.
+func sessionEnd(_ context.Context, _ string, input []byte) ([]byte, error) {
+	var in hookInput
+	if json.Unmarshal(input, &in) != nil || !session.ValidID(in.SessionID) {
 		return nil, nil
 	}
+	cfg, _, err := loadServerConfig()
+	if err != nil || !cfg.Components.Write {
+		return nil, nil
+	}
+	if err := spawnDetached("retain", "flush", "--session", in.SessionID); err != nil {
+		if d, derr := paths.Default(); derr == nil {
+			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version}).
+				Emit(telemetry.Raw{Name: "spawn_failed", Fields: map[string]any{"error": err.Error()}})
+		}
+	}
+	return nil, nil
 }
 
 // gate (SPEC §6.2): before AskUserQuestion, if no memory tool ran during
@@ -68,6 +81,9 @@ func init() {
 func (h *hookEnv) gate() []byte {
 	if h.in.ToolName != "AskUserQuestion" {
 		return nil
+	}
+	if h.maintenance() || h.breakerOpen() {
+		return nil // memory unreachable: never block a question on it
 	}
 	st, _ := h.store.Load(h.in.SessionID)
 	n := st.Prompts
@@ -88,11 +104,12 @@ func (h *hookEnv) gate() []byte {
 	reason := instructions.GateReason
 	if q := questionText(h.in.ToolInput); q != "" {
 		eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: gateRecallBudget, Now: now}
-		res := eng.Search(h.ctx, recall.Query{Queries: []string{h.recallQuery(q)}, Current: h.project, MinReranker: h.cfg.Recall.MinScore, Limit: gateHits})
+		res := eng.Search(h.ctx, recall.Query{Queries: []string{h.recallQuery(q)}, Current: h.project, MinReranker: h.cfg.Recall.MinScore,
+			GlobalMinReranker: h.cfg.Recall.GlobalMinScore, Limit: gateHits})
 		if len(res.Hits) > 0 {
-			reason += "\nPossibly relevant memories:"
+			reason += "\nPossibly relevant memories " + instructions.HintsLine + ":"
 			for _, hit := range res.Hits {
-				reason += fmt.Sprintf("\n- [%s] %s", hit.Project, clip(hit.Text, briefingItemChars))
+				reason += fmt.Sprintf("\n- [%s] %s", safeProject(hit.Project), clip(hit.Text, briefingItemChars))
 			}
 		}
 	}
@@ -118,19 +135,30 @@ func questionText(raw json.RawMessage) string {
 // stop records the end of the last reply (the transcript can lag, C06):
 // the detector's approval context and the next outcome's credit. No network.
 func (h *hookEnv) stop() {
-	last := []rune(strings.TrimSpace(h.in.LastAssistantMessage))
+	if paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID); paused {
+		return
+	}
+	full := strings.TrimSpace(h.in.LastAssistantMessage)
+	credit := ""
+	if k := replyKind(full); k != nil {
+		credit = *k // over the whole reply: a citation may sit early in a long one
+	}
+	last := []rune(full)
 	if len(last) > lastReplyChars {
 		last = last[len(last)-lastReplyChars:]
 	}
-	h.updateSession(func(s *session.State) error { s.LastAssistant = string(last); return nil })
+	h.updateSession(func(s *session.State) error {
+		s.LastAssistant, s.LastCredit = string(last), credit
+		return nil
+	})
 }
 
 // subagentStop queues the subagent's final report as a document (SPEC §6.2),
 // redacted and capped, honouring the session pause and opt-outs.
 func (h *hookEnv) subagentStop() {
-	h.updateSession(func(s *session.State) error { s.SubagentDone = true; return nil })
+	h.updateSession(func(s *session.State) error { s.SubagentDone = true; return nil }) // the approval detector (read side)
 	text := strings.TrimSpace(h.in.LastAssistantMessage)
-	if text == "" || h.in.AgentID == "" {
+	if !h.cfg.Components.Write || text == "" || h.in.AgentID == "" {
 		return
 	}
 	if paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID); paused {

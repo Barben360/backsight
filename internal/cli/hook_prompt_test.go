@@ -143,35 +143,32 @@ func TestContextBudgetStopsInjections(t *testing.T) {
 	}
 }
 
-func TestNudgeAfterQuietPromptsNamesTerms(t *testing.T) {
+func TestNudgeNamesTermsThePromptMentions(t *testing.T) {
 	home := hookHome(t)
-	idx := recall.Index{BuiltAt: time.Now(), Names: map[string][]recall.ProjectCount{"PostgreSQL": {{Project: "billing", Count: 4}}}}
+	idx := recall.Index{BuiltAt: time.Now(), Names: map[string][]recall.ProjectCount{
+		"PostgreSQL": {{Project: "billing", Count: 4}}, "pgbouncer": {{Project: "infra", Count: 2}}, "Grafana": {{Project: "garage", Count: 1}}}}
 	_ = idx.Save(pathsOf(home).EntitiesFile())
 	recallAnswer = "[]"
-	var nudged []int
-	for i := 1; i <= 6; i++ {
-		h := prompt(t, home, "s1", "ok")
-		if strings.Contains(h.Specific.Context, "No memory search for a few prompts") {
-			nudged = append(nudged, i)
-			if !strings.Contains(h.Specific.Context, "PostgreSQL") {
-				t.Errorf("nudge without terms: %s", h.Specific.Context)
-			}
-		}
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Prompts, st.LastInject = 3, 1; return nil })
+	quiet := "Tune the PostgreSQL pool behind pgbouncer for the nightly batch jobs please" // two known names, >= 40 chars
+	h := prompt(t, home, "s1", quiet)                                                      // prompt 4: three quiet prompts before it
+	if !strings.Contains(h.Specific.Context, "No memory search for a few prompts") || !strings.Contains(h.Specific.Context, "PostgreSQL") || !strings.Contains(h.Specific.Context, "pgbouncer") {
+		t.Fatalf("no nudge:\n%s", h.Specific.Context)
 	}
-	// three quiet prompts before the 4th, then three more after the nudge
-	if len(nudged) != 1 || nudged[0] != 4 {
-		t.Errorf("nudged at prompts %v, want [4]", nudged)
+	if h := prompt(t, home, "s1", quiet); strings.Contains(h.Specific.Context, "No memory search") {
+		t.Error("nudged again right after a nudge")
 	}
-	// a memory search resets the quiet count
-	fire(t, "post-tool-use", map[string]any{"session_id": "s2", "tool_name": "mcp__plugin_backsight_memory__memory_search", "tool_response": "nothing in memory"})
-	for i := 1; i <= 3; i++ {
-		prompt(t, home, "s2", "ok")
-		if i == 2 {
-			fire(t, "post-tool-use", map[string]any{"session_id": "s2", "tool_name": "mcp__plugin_backsight_memory__memory_search", "tool_response": "nothing"})
-		}
+	_ = sessions(home).Update("s2", func(st *session.State) error { st.Prompts, st.LastInject = 3, 1; return nil })
+	if h := prompt(t, home, "s2", "Only PostgreSQL is mentioned in this long enough prompt here"); strings.Contains(h.Specific.Context, "No memory search") {
+		t.Error("nudged with a single known name")
 	}
-	if h := prompt(t, home, "s2", "ok"); strings.Contains(h.Specific.Context, "No memory search") {
-		t.Error("nudged right after a search")
+	_ = sessions(home).Update("s3", func(st *session.State) error { st.Prompts, st.LastInject = 3, 1; return nil })
+	if h := prompt(t, home, "s3", "PostgreSQL pgbouncer?"); strings.Contains(h.Specific.Context, "No memory search") {
+		t.Error("nudged on a short prompt")
+	}
+	_ = sessions(home).Update("s4", func(st *session.State) error { st.Prompts, st.LastInject, st.SearchedPromptID = 3, 1, 2; return nil })
+	if h := prompt(t, home, "s4", quiet); strings.Contains(h.Specific.Context, "No memory search") {
+		t.Error("nudged one prompt after a search")
 	}
 }
 

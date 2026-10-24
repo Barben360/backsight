@@ -83,7 +83,7 @@ func TestHooksCoverEveryEventInExecForm(t *testing.T) {
 	var hf hooksFile
 	read(t, filepath.Join(dir, "plugins", "backsight", "hooks", "hooks.json"), &hf)
 	want := map[string][]string{ // Claude Code event -> matchers
-		"SessionStart":     {"startup", "resume|clear|compact"},
+		"SessionStart":     {"startup", "resume|clear|compact|fork"},
 		"UserPromptSubmit": {""},
 		"PreToolUse":       {"AskUserQuestion"},
 		"PostToolUse":      {"mcp__plugin_backsight_memory__.*"},

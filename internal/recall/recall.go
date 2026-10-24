@@ -45,6 +45,10 @@ type Query struct {
 	Limit       int      // 0: no limit
 	MinScore    float64  // on the boosted score
 	MinReranker float64  // on the server's score (prompt recall: SPEC §10.2)
+	// GlobalMinReranker: hits of projects that are neither the current one,
+	// a transverse alias nor asked/related need this score (0046 poisoning
+	// defence: recall.global_min_score).
+	GlobalMinReranker float64
 }
 
 // Hit is one merged result.
@@ -153,6 +157,9 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 				continue
 			}
 			h := e.hit(r, a.scope, q.Current)
+			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
+				continue
+			}
 			if prev, ok := best[h.ID]; h.Score >= q.MinScore && h.Reranker >= q.MinReranker && (!ok || h.Score > prev.Score) {
 				best[h.ID] = h
 			}
@@ -232,6 +239,11 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 	}
 	wg.Wait()
 	return answers
+}
+
+// near: the current project, a transverse alias, or asked/related.
+func (e *Engine) near(q Query, project string) bool {
+	return project == q.Current || contains(e.Transverse, project) || contains(q.Projects, project) || contains(q.Related, project)
 }
 
 func (e *Engine) hit(r hindsight.RecallHit, scope, current string) Hit {

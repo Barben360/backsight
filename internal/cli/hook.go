@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -42,8 +43,12 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	sup := hook.Supervisor{Command: hookChildCommand, Deadline: hook.ChildDeadline}
 	out, failure := sup.Run(ctx, event, input)
 	if failure != nil {
+		var in struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = json.Unmarshal(input, &in)
 		if d, err := paths.Default(); err == nil {
-			telemetry.New(d.State, telemetry.Common{V: instructions.Version, BinaryVersion: buildinfo.Version}).
+			telemetry.New(d.State, telemetry.Common{V: instructions.Version, Session: in.SessionID, BinaryVersion: buildinfo.Version}).
 				Emit(telemetry.HookFailure{Hook: event, Kind: failure.Kind, MS: failure.MS})
 		}
 		return 0

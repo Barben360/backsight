@@ -109,7 +109,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			// Refusals first: nothing leaves the machine for a refused note.
-			if err := checkNote(deps.dirs, deps.home, deps.cfg, a.Kind, a.Text); err != nil {
+			if err := checkNote(deps.dirs, deps.home, deps.cfg, a.Kind, a.Project, a.Text); err != nil {
 				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds())})
 				return errorResult(err.Error()), nil, nil
 			}

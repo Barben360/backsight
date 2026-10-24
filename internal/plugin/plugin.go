@@ -44,7 +44,7 @@ type event struct {
 
 var events = []event{
 	{"SessionStart", "startup", "session-start", 10},
-	{"SessionStart", "resume|clear|compact", "session-start", 5},
+	{"SessionStart", "resume|clear|compact|fork", "session-start", 5},
 	{"UserPromptSubmit", "", "user-prompt-submit", 25},
 	{"PreToolUse", "AskUserQuestion", "pre-tool-use", 10},
 	{"PostToolUse", "mcp__plugin_" + Name + "_" + Server + "__.*", "post-tool-use", 2},

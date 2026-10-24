@@ -32,7 +32,7 @@ func (s Sticky) Load(now time.Time, window time.Duration) map[string][]time.Time
 	}
 	for id, ts := range all {
 		for _, t := range ts {
-			if now.Sub(t) < window {
+			if d := now.Sub(t); d < window && d > -time.Hour { // a clock that jumped back must not mute for days
 				out[id] = append(out[id], t)
 			}
 		}

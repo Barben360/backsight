@@ -36,6 +36,7 @@ type State struct {
 	Unavailable      bool        `json:"unavailable_notified"` // the visible failure was shown
 	LastAssistant    string      `json:"last_assistant"`       // the last reply, recorded at Stop
 	SubagentDone     bool        `json:"subagent_done"`        // a subagent finished since the last prompt
+	LastCredit       string      `json:"last_credit"`          // how the last reply cited memory: exact | empty | free | ""
 }
 
 // Injection is one memory a hook put in the context, and the rule that let
@@ -55,6 +56,9 @@ type Injection struct {
 type Store struct {
 	Dir   string
 	Locks string
+	// Retry is how long Update keeps trying a busy lock (hooks of one
+	// session can run in parallel); 0 gives up at once.
+	Retry time.Duration
 }
 
 // ErrBusy: another hook holds this session's lock.
@@ -95,14 +99,25 @@ func (s Store) Update(id string, fn func(*State) error) error {
 	if err := checkID(id); err != nil {
 		return err
 	}
-	lockPath := filepath.Join(s.Locks, "session-"+id+".lock")
-	l, err := state.TryAcquire(lockPath, "hook")
-	var held *state.HeldError
-	if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
+	// Not session-<id>.lock: that one is the flusher's, held during its
+	// network calls.
+	lockPath := filepath.Join(s.Locks, "state-"+id+".lock")
+	deadline := time.Now().Add(s.Retry)
+	var l *state.Lock
+	var err error
+	for {
 		l, err = state.TryAcquire(lockPath, "hook")
-	}
-	if errors.As(err, &held) {
-		return ErrBusy
+		var held *state.HeldError
+		if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
+			l, err = state.TryAcquire(lockPath, "hook")
+		}
+		if !errors.As(err, &held) {
+			break
+		}
+		if time.Now().After(deadline) {
+			return ErrBusy
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if err != nil {
 		return err

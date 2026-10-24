@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -74,7 +75,7 @@ func newStoreCmd(e *env) *cobra.Command {
 // storeNote validates and queues one note, then tries to send it now (the
 // outbox keeps it otherwise). Shared by the CLI and memory_store.
 func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, kind, proj, text string) (storeResult, error) {
-	if err := checkNote(d, home, cfg, kind, text); err != nil {
+	if err := checkNote(d, home, cfg, kind, proj, text); err != nil {
 		return storeResult{}, err
 	}
 	text = strings.TrimSpace(text)
@@ -120,12 +121,15 @@ const TransverseKeyword = "transverse"
 // checkNote refuses a note before anything leaves the machine: bad kind,
 // empty text, a secret, or a session or directory opted out of memory (SPEC
 // §7, §13; notes honour pause and opt-outs, 0051).
-func checkNote(d paths.Dirs, home string, cfg config.Config, kind, text string) error {
+func checkNote(d paths.Dirs, home string, cfg config.Config, kind, proj, text string) error {
 	if !retain.Kinds[kind] {
 		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("kind %q: one of %s", kind, kindList())}
 	}
 	if strings.TrimSpace(text) == "" {
 		return &output.Error{Code: output.Usage, Message: "empty text"}
+	}
+	if !validProject(proj) {
+		return &output.Error{Code: output.Usage, Message: "project: one line, at most 64 characters, no control characters"}
 	}
 	if _, kinds := redact.Text(text); len(kinds) > 0 {
 		return &output.Error{Code: output.Usage, Message: "the text holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory"}
@@ -140,6 +144,19 @@ func checkNote(d paths.Dirs, home string, cfg config.Config, kind, text string) 
 		return &output.Error{Code: output.Blocked, Message: "this directory is excluded from memory (" + why + "): nothing stored"}
 	}
 	return nil
+}
+
+// validProject: a project name given by a caller ("" = the default).
+func validProject(p string) bool {
+	if len([]rune(p)) > 64 {
+		return false
+	}
+	for _, r := range p {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // noteProject: the asked project, else the working directory's; any
@@ -159,7 +176,7 @@ func noteProject(home string, cfg config.Config, proj string) string {
 func storeText(res storeResult) string {
 	msg := fmt.Sprintf("%s (%s, project %s) %s\n", res.Status, res.Kind, res.Project, res.Document)
 	if res.Status == "queued" {
-		msg = fmt.Sprintf("queued (%s, project %s): the server did not take it now, the next jobs tick sends it\n", res.Kind, res.Project)
+		msg = fmt.Sprintf("queued (%s, project %s) %s: the server did not take it now, the next jobs tick sends it\n", res.Kind, res.Project, res.Document)
 	}
 	if res.Warning != "" {
 		msg += "warning: " + res.Warning + "\n"

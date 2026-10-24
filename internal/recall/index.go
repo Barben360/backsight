@@ -146,6 +146,44 @@ func (idx Index) Projects(text, current string, transverse []string) []string {
 	return out
 }
 
+// Mentioned are the distinctive names the text mentions, most mentioned
+// in the bank first, at most n (the quiet-prompt nudge, SPEC §10.2).
+func (idx Index) Mentioned(text string, n int) []string {
+	if len(text) > maxMatchChars {
+		text = text[:maxMatchChars]
+	}
+	lower := strings.ToLower(text)
+	type term struct {
+		name  string
+		count int
+	}
+	var terms []term
+	for name, ps := range idx.Names {
+		if !distinctive(name, ps) || !mentions(lower, strings.ToLower(name)) {
+			continue
+		}
+		c := 0
+		for _, p := range ps {
+			c += p.Count
+		}
+		terms = append(terms, term{name, c})
+	}
+	sort.Slice(terms, func(i, j int) bool {
+		if terms[i].count != terms[j].count {
+			return terms[i].count > terms[j].count
+		}
+		return terms[i].name < terms[j].name
+	})
+	var out []string
+	for _, t := range terms {
+		if len(out) == n {
+			break
+		}
+		out = append(out, t.name)
+	}
+	return out
+}
+
 // Terms are up to n distinctive names of the current project, most
 // mentioned first: what the quiet-prompt nudge can suggest searching.
 func (idx Index) Terms(current string, transverse []string, n int) []string {

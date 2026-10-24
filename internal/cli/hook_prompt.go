@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -32,7 +33,7 @@ var fenceRE = regexp.MustCompile("(?s)```.*?(?:```|$)")
 // Detector patterns (SPEC §9.3), French and English, whole words.
 var (
 	ruleRE     = regexp.MustCompile(`(?i)(?:^|[^\pL\pN])(?:retiens|à partir de maintenant|désormais|on a décidé|jamais|toujours|remember|from now on|we decided|actually|never|always)(?:[^\pL\pN]|$)|^\s*non[,.!]?\s+pas\b`)
-	approvalRE = regexp.MustCompile(`(?i)^\s*(?:ok(?:ay)?|parfait|valid[ée]|go|looks good|lgtm|yes|oui|d'accord|ça marche|perfect|top)\b`)
+	approvalRE = regexp.MustCompile(`(?i)^\s*(?:ok(?:ay)?|parfait|valid[ée]|go|looks good|lgtm|yes|oui|d'accord|ça marche|perfect|top)(?:[^\pL\pN]|$)`)
 )
 
 // Credit detection on the previous reply (outcome telemetry, C12).
@@ -67,10 +68,27 @@ func init() {
 	}
 }
 
+// maxWordChars: the vocabulary of a long paste is taken from its start.
+const maxWordChars = 4000
+
+// head is s cut to n runes.
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
 func words(s string) []string {
+	s = head(s, maxWordChars)
 	var out []string
+	seen := map[string]bool{}
 	for _, w := range wordRE.FindAllString(strings.ToLower(s), -1) {
-		if !stopwords[w] && !slices.Contains(out, w) {
+		if !stopwords[w] && !seen[w] {
+			seen[w] = true
 			out = append(out, w)
 		}
 	}
@@ -81,9 +99,13 @@ func overlap(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 1
 	}
+	inB := make(map[string]bool, len(b))
+	for _, w := range b {
+		inB[w] = true
+	}
 	inter := 0
 	for _, w := range a {
-		if slices.Contains(b, w) {
+		if inB[w] {
 			inter++
 		}
 	}
@@ -96,6 +118,7 @@ func (h *hookEnv) recallQuery(prompt string) string {
 	if r := []rune(q); len(r) > h.cfg.Recall.QueryChars {
 		q = string(r[:h.cfg.Recall.QueryChars])
 	}
+	q, _ = redact.Text(q) // a pasted key never leaves as a query
 	return q
 }
 
@@ -122,6 +145,7 @@ func (h *hookEnv) decide(st session.State, n int, prompt string) (bool, string) 
 }
 
 func detect(st session.State, prompt string) string {
+	prompt = head(prompt, maxWordChars) // a rule is stated up front, not deep in a paste
 	switch {
 	case ruleRE.MatchString(prompt):
 		return "rule"
@@ -175,14 +199,28 @@ func (h *hookEnv) userPrompt() []byte {
 				ids = append(ids, in.ID)
 			}
 		}
-		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: replyKind(st.LastAssistant), Contradicted: detector == "rule"})
+		credited := replyKind(st.LastAssistant)
+		if st.LastCredit != "" {
+			credited = &st.LastCredit // computed at Stop over the whole reply
+		}
+		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, Contradicted: detector == "rule"})
 	}
 
 	var parts []string
 	var injected []session.Injection
 	banner := ""
 	ok, reason := h.decide(st, n, prompt)
+	switch {
+	case ok && h.maintenance():
+		ok, reason = false, "maintenance"
+		if !st.Unavailable {
+			banner = instructions.MemoryUnavailable("maintenance in progress")
+		}
+	case ok && h.breakerOpen():
+		ok, reason = false, "breaker"
+	}
 	ev.Decision, ev.Reason = "skip", reason
+	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
 		text, items, res := h.promptRecall(st, prompt, reason)
@@ -192,6 +230,7 @@ func (h *hookEnv) userPrompt() []byte {
 			ev.Scopes[name] = telemetry.ScopeResult{OK: m.OK, MS: m.MS, Raw: m.Raw}
 			failed = failed && !m.OK
 		}
+		h.breakerRecord(failed)
 		ev.Above = len(res.Hits)
 		if len(res.Hits) > 0 {
 			ev.Top = res.Hits[0].Reranker
@@ -202,6 +241,7 @@ func (h *hookEnv) userPrompt() []byte {
 		if text != "" {
 			parts = append(parts, text)
 			injected = items
+			memoryChars = len([]rune(text))
 		}
 	}
 	if n == 1 && len([]rune(prompt)) >= rc.ReminderMinChars {
@@ -209,13 +249,15 @@ func (h *hookEnv) userPrompt() []byte {
 		ev.Hinted = true
 	}
 	nudged := false
-	if len(injected) == 0 && n-1-max(st.SearchedPromptID, st.LastNudge) >= rc.QuietPrompts {
-		var terms []string
+	// Quiet-prompt nudge (SPEC §10.2, C12): only when the prompt names at
+	// least two things the memory knows about.
+	if len(injected) == 0 && len([]rune(prompt)) >= rc.ReminderMinChars && n-1-max(st.SearchedPromptID, st.LastNudge) >= rc.QuietPrompts {
 		if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
-			terms = idx.Terms(h.project, h.cfg.Projects.Transverse, nudgeTerms)
+			if terms := idx.Mentioned(prompt, nudgeTerms); len(terms) >= 2 {
+				parts = append(parts, instructions.Nudge(terms))
+				nudged, ev.Nudged = true, true
+			}
 		}
-		parts = append(parts, instructions.Nudge(terms))
-		nudged, ev.Nudged = true, true
 	}
 	switch detector {
 	case "rule":
@@ -240,16 +282,19 @@ func (h *hookEnv) userPrompt() []byte {
 		if banner != "" {
 			s.Unavailable = true
 		}
-		if len(injected) > 0 {
-			s.LastInject, s.LastWords = n, words(prompt)
-			for _, in := range injected {
-				if !slices.Contains(s.Seen, in.ID) {
-					s.Seen = append(s.Seen, in.ID)
-				}
-			}
-			s.Injected = append(s.Injected, injected...)
+		if ev.Decision == "recall" {
+			// Every recall decision restarts the gap, hit or not (C12):
+			// otherwise each prompt recalls again until something is found.
+			red, _ := redact.Text(head(prompt, maxWordChars))
+			s.LastInject, s.LastWords = n, words(red)
 		}
-		s.CharsInjected += len([]rune(text))
+		for _, in := range injected {
+			if !slices.Contains(s.Seen, in.ID) {
+				s.Seen = append(s.Seen, in.ID)
+			}
+		}
+		s.Injected = append(s.Injected, injected...)
+		s.CharsInjected += memoryChars // memory text only, not reminders or nudges
 		return nil
 	})
 	if len(ids) > 0 {
@@ -258,6 +303,14 @@ func (h *hookEnv) userPrompt() []byte {
 	ev.MS = int(time.Since(start).Milliseconds())
 	h.tw.Emit(ev)
 	return contextOutput("UserPromptSubmit", text, banner)
+}
+
+// age renders " (4d ago)", or nothing for an unknown date.
+func age(a string) string {
+	if a == "" {
+		return ""
+	}
+	return " (" + a + " ago)"
 }
 
 func (h *hookEnv) sticky() session.Sticky {
@@ -274,7 +327,7 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, [
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now}
-	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Related: related, MinReranker: rc.MinScore, Limit: 20})
+	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
 	counts := h.sticky().Load(now(), stickyWindow)
 	var b strings.Builder
 	var items []session.Injection
@@ -287,7 +340,7 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, [
 			continue
 		}
 		room := rc.PromptChars - len([]rune(b.String()))
-		prefix, suffix := "- ["+hit.Project+"] ", " ("+hit.Age+" ago)\n"
+		prefix, suffix := "- ["+safeProject(hit.Project)+"] ", age(hit.Age)+"\n"
 		textRoom := room - len([]rune(prefix)) - len([]rune(suffix))
 		if textRoom < 60 {
 			break
@@ -330,7 +383,9 @@ func (h *hookEnv) postToolUse() {
 		s.Stored = append(s.Stored, notes...)
 		return nil
 	})
-	h.tw.Emit(telemetry.Tool{Name: h.in.ToolName, Hits: len(ids), OK: true})
+	// The MCP server logs the call itself (tool event); this one only ties
+	// it to the session, so stats do not count calls twice.
+	h.tw.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": h.in.ToolName, "ids": len(ids)}})
 }
 
 // responseText flattens a tool response: a string, or MCP content blocks.

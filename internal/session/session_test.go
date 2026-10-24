@@ -40,7 +40,7 @@ func TestUpdateThenLoad(t *testing.T) {
 // Hooks never wait: a held lock gives up at once (SPEC §6.1).
 func TestUpdateGivesUpOnAHeldLock(t *testing.T) {
 	s := store(t)
-	l, err := state.TryAcquire(filepath.Join(s.Locks, "session-abc.lock"), "other hook")
+	l, err := state.TryAcquire(filepath.Join(s.Locks, "state-abc.lock"), "other hook")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestUpdateGivesUpOnAHeldLock(t *testing.T) {
 func TestUpdateBreaksAStaleLock(t *testing.T) {
 	s := store(t)
 	_ = os.MkdirAll(s.Locks, 0o700)
-	_ = os.WriteFile(filepath.Join(s.Locks, "session-abc.lock"), []byte(`{"pid":999999999,"command":"dead","since":"2026-10-24T09:00:00Z"}`), 0o600)
+	_ = os.WriteFile(filepath.Join(s.Locks, "state-abc.lock"), []byte(`{"pid":999999999,"command":"dead","since":"2026-10-24T09:00:00Z"}`), 0o600)
 	if err := s.Update("abc", func(st *State) error { st.Prompts = 1; return nil }); err != nil {
 		t.Fatal(err)
 	}

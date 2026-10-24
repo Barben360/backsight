@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,6 +16,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("HOOK_TEST_CHILD") == "1" {
 		os.Exit(RunChild(context.Background(), os.Args[len(os.Args)-1], os.Stdin, os.Stdout, func(_ context.Context, event string, in []byte) ([]byte, error) {
 			switch os.Getenv("HOOK_TEST_BEHAVIOUR") {
+			case "echo-input":
+				msg, _ := json.Marshal(string(in))
+				return []byte(`{"systemMessage":` + string(msg) + `}`), nil
 			case "echo":
 				return []byte(`{"hookSpecificOutput":{"hookEventName":"` + event + `","additionalContext":"ok"}}`), nil
 			case "empty":
@@ -124,5 +128,12 @@ func TestDeadlines(t *testing.T) {
 		if got := ChildDeadline(c.event, []byte(c.input)); got != c.want {
 			t.Errorf("%s %s: %s, want %s", c.event, c.input, got, c.want)
 		}
+	}
+}
+
+func TestTheChildReceivesTheEvent(t *testing.T) {
+	out, f := super(t, "echo-input", "", 5*time.Second)
+	if f != nil || !strings.Contains(string(out), `session_id`) || !strings.Contains(string(out), `s1`) {
+		t.Errorf("out %q failure %+v", out, f)
 	}
 }

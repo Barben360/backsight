@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/hook"
 )
@@ -69,5 +70,24 @@ func TestHookWithoutAnEventOrWithJunkArgsExitsZero(t *testing.T) {
 		if code, out := runHookCmd(t, "not json at all", args...); code != 0 || out != "" {
 			t.Errorf("%v: exit %d %q", args, code, out)
 		}
+	}
+}
+
+// End to end through the parent: a healthy child's answer is printed, and
+// a hanging one is cut at the event's deadline (PostToolUse: 1.5 s).
+func TestHookPrintsTheChildAnswerAndCutsAHang(t *testing.T) {
+	home := hookHome(t)
+	childFromTestBinary(t, "")
+	code, out := runHookCmd(t, `{"session_id":"s1","source":"resume","cwd":"`+home+`"}`, "session-start")
+	if code != 0 || !strings.Contains(out, `"hookEventName":"SessionStart"`) || !strings.Contains(out, "memory_search") {
+		t.Fatalf("exit %d: %q", code, out)
+	}
+	childFromTestBinary(t, "hang")
+	start := time.Now()
+	if code, out := runHookCmd(t, `{"session_id":"s1"}`, "post-tool-use"); code != 0 || out != "" || time.Since(start) > 4*time.Second {
+		t.Errorf("hang: exit %d %q after %s", code, out, time.Since(start))
+	}
+	if !strings.Contains(telemetryText(t, home), `"kind":"timeout"`) || !strings.Contains(telemetryText(t, home), `"session":"s1"`) {
+		t.Error("timeout not logged with its session")
 	}
 }
