@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -87,15 +88,17 @@ type installResult struct {
 	Version  string   `json:"version,omitempty"`
 }
 
-func stepsText(r installResult) string {
-	var b strings.Builder
-	for _, s := range r.Steps {
-		fmt.Fprintf(&b, "%-8s %s", s.Status, s.Name)
-		if s.Detail != "" {
-			fmt.Fprintf(&b, ": %s", s.Detail)
-		}
-		b.WriteString("\n")
+func stepLine(s step) string {
+	line := fmt.Sprintf("%-8s %s", s.Status, s.Name)
+	if s.Detail != "" {
+		line += ": " + s.Detail
 	}
+	return line + "\n"
+}
+
+// installSummary is what text mode prints after the streamed steps.
+func installSummary(r installResult) string {
+	var b strings.Builder
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
@@ -103,6 +106,33 @@ func stepsText(r installResult) string {
 		fmt.Fprintf(&b, "\nHindsight %s healthy at %s (UI %s)\n", r.Version, r.URL, r.UI)
 	}
 	return b.String()
+}
+
+// uiURL is the control plane address on the interface it is bound to.
+func uiURL(cfg config.Config) string {
+	host := "127.0.0.1"
+	if cfg.Network.Exposure == "private" {
+		host = cfg.Network.BindIP
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(cfg.Server.UIPort))
+}
+
+// configFromFlags validates the config install would write, without writing it.
+func configFromFlags(f installFlags, d paths.Dirs, home string) (config.Config, error) {
+	tmp, err := os.MkdirTemp("", "backsight-plan-")
+	if err != nil {
+		return config.Config{}, blocked(err)
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	p := filepath.Join(tmp, "config.toml")
+	if err := os.WriteFile(p, initialConfig(f), 0o600); err != nil {
+		return config.Config{}, blocked(err)
+	}
+	cfg, err := config.Load(p, d, home)
+	if err != nil {
+		return cfg, &output.Error{Code: output.Usage, Message: err.Error()}
+	}
+	return cfg, nil
 }
 
 type installFlags struct {
@@ -162,17 +192,23 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 			var res installResult
-			add := func(name, status, detail string) { res.Steps = append(res.Steps, step{name, status, detail}) }
-			if f.plan {
-				for _, s := range []string{"config", "secrets", "render", "pull", "start", "health", "bank", "provider"} {
-					add(s, "planned", "")
+			// Text mode shows each step as it completes; JSON gets them all at the end.
+			add := func(name, status, detail string) {
+				st := step{name, status, detail}
+				res.Steps = append(res.Steps, st)
+				if !e.json {
+					fmt.Fprint(e.stdout, stepLine(st))
 				}
-				return e.emit("server install", res, func() string { return stepsText(res) })
 			}
 
 			// 1. Config.
 			cfg, err := config.Load(d.ConfigFile(), d, home)
 			switch {
+			case errors.Is(err, fs.ErrNotExist) && f.plan:
+				if cfg, err = configFromFlags(f, d, home); err != nil {
+					return err
+				}
+				add("config", "planned", "would write "+d.ConfigFile())
 			case errors.Is(err, fs.ErrNotExist):
 				if err := fsutil.ReplaceIfUnchanged(d.ConfigFile(), initialConfig(f), 0o600, fsutil.Absent); err != nil {
 					return blocked(err)
@@ -188,7 +224,26 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				if c := conflicts(cmd, cfg, f); len(c) > 0 {
 					return &output.Error{Code: output.Usage, Message: "config " + d.ConfigFile() + " already exists and differs: " + strings.Join(c, "; ")}
 				}
-				add("config", "skipped", "kept "+d.ConfigFile())
+				add("config", map[bool]string{true: "planned", false: "skipped"}[f.plan], "keep "+d.ConfigFile())
+			}
+			if err := requireLocal(cfg); err != nil {
+				return err
+			}
+
+			if f.plan {
+				prev, err := config.LoadSecrets(d.SecretsFile())
+				if err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return blocked(err)
+				}
+				gen := config.GenerateMissing(&prev)
+				add("secrets", "planned", map[bool]string{true: "would generate " + strings.Join(gen, ", "), false: "all server keys present"}[len(gen) > 0])
+				if req := config.RequiredSecrets(cfg); req["llm_api_key"] && prev.LLMAPIKey == "" {
+					return needSecrets([]string{"llm_api_key"}, "backsight server install")
+				}
+				for _, s := range []string{"render", "pull", "start", "health", "bank", "provider"} {
+					add(s, "planned", "")
+				}
+				return e.emit("server install", res, func() string { return installSummary(res) })
 			}
 
 			// One install, render or start at a time.
@@ -229,12 +284,8 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 
 			// 3. Render.
-			files, err := renderFiles(cfg, sec)
+			files, err := renderFiles(cfg, sec, "backsight server install")
 			if err != nil {
-				var oe *output.Error
-				if errors.As(err, &oe) && oe.Code == output.NeedsUser {
-					oe.Message += "; then rerun backsight server install"
-				}
 				return err
 			}
 			ch, err := server.Write(cfg.Server.ComposeDir, files)
@@ -272,8 +323,8 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return redacted(err, sec)
 			}
 			add("provider", "done", fmt.Sprintf("%s/%s extracted %d English fact(s)", cfg.LLM.Provider, cfg.LLM.Model, pr.Facts))
-			res.URL, res.UI, res.Version = cfg.Server.URL, fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.UIPort), v.APIVersion
-			return e.emit("server install", res, func() string { return stepsText(res) })
+			res.URL, res.UI, res.Version = cfg.Server.URL, uiURL(cfg), v.APIVersion
+			return e.emit("server install", res, func() string { return installSummary(res) })
 		},
 	}
 	cmd.Flags().IntVar(&f.apiPort, "api-port", 8888, "API port published on the host")
@@ -295,6 +346,9 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := requireLocal(cfg); err != nil {
+				return err
+			}
 			d, _, err := machine()
 			if err != nil {
 				return err
@@ -304,7 +358,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			files, err := renderFiles(cfg, sec)
+			files, err := renderFiles(cfg, sec, "backsight server start")
 			if err != nil {
 				return err
 			}
@@ -327,6 +381,9 @@ func newServerStopCmd(e *env) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, _, err := loadServerConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireLocal(cfg); err != nil {
 				return err
 			}
 			if err := composeFor(cfg).Stop(cmd.Context()); err != nil {
@@ -355,6 +412,9 @@ func newServerStatusCmd(e *env) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireLocal(cfg); err != nil {
 				return err
 			}
 			var res statusResult
@@ -421,17 +481,43 @@ func loadServerConfig() (config.Config, config.Secrets, error) {
 	return cfg, sec, nil
 }
 
-func renderFiles(cfg config.Config, sec config.Secrets) (server.Files, error) {
+// renderFiles renders the project; missing secrets become a needs_user
+// error telling the user what to run and which command resumes.
+func renderFiles(cfg config.Config, sec config.Secrets, resume string) (server.Files, error) {
 	host, _ := os.Hostname()
 	f, err := server.Render(cfg, sec, host)
 	var missing *server.MissingSecretsError
 	switch {
 	case errors.As(err, &missing):
-		return f, &output.Error{Code: output.NeedsUser, Message: err.Error()}
+		return f, needSecrets(missing.Names, resume)
 	case err != nil:
 		return f, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	return f, nil
+}
+
+var secretWhy = map[string]string{
+	"llm_api_key": "the server's extraction LLM needs its key",
+	"api_key":     "clients authenticate to the server with it",
+	"ui_key":      "the control plane UI login",
+	"db_password": "the database password",
+}
+
+func needSecrets(names []string, resume string) error {
+	e := &output.Error{Code: output.NeedsUser, Secrets: names, Resume: resume}
+	for _, n := range names {
+		e.Actions = append(e.Actions, output.Action{Kind: "run_as_user", Cmd: "backsight secret set " + n, Why: secretWhy[n]})
+	}
+	e.Message = (&server.MissingSecretsError{Names: names}).Error() + "; then rerun " + resume
+	return e
+}
+
+// requireLocal refuses server commands on a client of a remote server.
+func requireLocal(cfg config.Config) error {
+	if cfg.Server.Mode != "local" {
+		return &output.Error{Code: output.Usage, Message: "server.mode is " + cfg.Server.Mode + ": this command manages a local server (run it on the server machine)"}
+	}
+	return nil
 }
 
 type renderResult struct {
@@ -451,7 +537,10 @@ func newServerRenderCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			f, err := renderFiles(cfg, sec)
+			if err := requireLocal(cfg); err != nil {
+				return err
+			}
+			f, err := renderFiles(cfg, sec, "backsight server render")
 			if err != nil {
 				return err
 			}

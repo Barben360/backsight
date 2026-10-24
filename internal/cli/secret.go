@@ -34,7 +34,7 @@ func newSecretListCmd(e *env) *cobra.Command {
 		Short: "Show which secrets are set",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			d, _, err := machine()
+			d, home, err := machine()
 			if err != nil {
 				return err
 			}
@@ -42,25 +42,44 @@ func newSecretListCmd(e *env) *cobra.Command {
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}
 			}
-			names := s.Names()
-			return e.emit("secret list", names, func() string {
-				keys := make([]string, 0, len(names))
-				for k := range names {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
+			cfg, err := config.Load(d.ConfigFile(), d, home)
+			if errors.Is(err, os.ErrNotExist) {
+				cfg = config.Default(d, home) // what server install would use
+			} else if err != nil {
+				return &output.Error{Code: output.Blocked, Message: err.Error()}
+			}
+			list := secretStates(s, config.RequiredSecrets(cfg))
+			return e.emit("secret list", list, func() string {
 				var b strings.Builder
-				for _, k := range keys {
+				for _, st := range list {
 					state := "not set"
-					if names[k] {
+					if st.Set {
 						state = "set"
 					}
-					fmt.Fprintf(&b, "%-16s %s\n", k, state)
+					if st.Required {
+						state += " (required)"
+					}
+					fmt.Fprintf(&b, "%-16s %s\n", st.Name, state)
 				}
 				return b.String()
 			})
 		},
 	}
+}
+
+type secretState struct {
+	Name     string `json:"name"`
+	Set      bool   `json:"set"`
+	Required bool   `json:"required"`
+}
+
+func secretStates(s config.Secrets, required map[string]bool) []secretState {
+	var list []secretState
+	for name, set := range s.Names() {
+		list = append(list, secretState{name, set, required[name]})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
+	return list
 }
 
 func newSecretSetCmd(e *env) *cobra.Command {

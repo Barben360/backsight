@@ -31,7 +31,14 @@ func (f *fakeBank) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"banks":[` + strings.Join(items, ",") + `]}`))
 	case r.Method == http.MethodPut:
-		f.banks = append(f.banks, strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"))
+		id := strings.TrimPrefix(r.URL.Path, "/v1/default/banks/")
+		found := false
+		for _, b := range f.banks {
+			found = found || b == id
+		}
+		if !found {
+			f.banks = append(f.banks, id)
+		}
 		_, _ = w.Write([]byte(`{}`))
 	case r.Method == http.MethodPatch:
 		var body struct {
@@ -106,7 +113,7 @@ func TestApplyUnchangedTemplateSendsNothing(t *testing.T) {
 		t.Errorf("%+v %v calls %v", res, err, f.calls)
 	}
 	res, err = ApplyBank(context.Background(), client(t, f), "claude-memory", TemplateHash(), true)
-	if err != nil || !res.Sent || len(f.patches) != 1 {
+	if err != nil || !res.Sent || res.Created || len(f.patches) != 1 || !hasCall(f, "PUT") {
 		t.Errorf("--force must re-send: %+v %v", res, err)
 	}
 }
@@ -114,7 +121,8 @@ func TestApplyUnchangedTemplateSendsNothing(t *testing.T) {
 func TestApplyNewTemplateResends(t *testing.T) {
 	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
 	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", "older-template-hash", false)
-	if err != nil || res.Created || !res.Sent || hasCall(f, "PUT") {
+	// A new template also refreshes the profile: PUT then PATCH.
+	if err != nil || res.Created || !res.Sent || !hasCall(f, "PUT") {
 		t.Errorf("%+v %v", res, err)
 	}
 }
@@ -170,5 +178,14 @@ func TestApplyServerErrors(t *testing.T) {
 			t.Errorf("%s failure not reported", name)
 		}
 		srv.Close()
+	}
+}
+
+func TestMissionsStartWithTheEnglishRule(t *testing.T) {
+	tmpl := bankTemplate()
+	for _, m := range []string{bankMission, tmpl["retain_mission"].(string), tmpl["observations_mission"].(string)} {
+		if !strings.HasPrefix(m, "Write every") || !strings.Contains(strings.SplitN(m, ".", 2)[0], "English") {
+			t.Errorf("mission must open with the English rule: %q", m)
+		}
 	}
 }

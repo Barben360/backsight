@@ -261,7 +261,12 @@ func TestServerInstallStopsForTheLLMKey(t *testing.T) {
 	home := isolate(t)
 	f := withCompose(t)
 	code, out, _ := run(t, "server", "install", "--json")
-	if code != output.NeedsUser || !strings.Contains(out, "secret set llm_api_key") {
+	var env struct {
+		Error output.Error `json:"error"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.NeedsUser || strings.Join(env.Error.Secrets, ",") != "llm_api_key" || env.Error.Resume != "backsight server install" ||
+		len(env.Error.Actions) != 1 || env.Error.Actions[0].Cmd != "backsight secret set llm_api_key" || env.Error.Actions[0].Kind != "run_as_user" {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 	if len(f.calls) != 0 {
@@ -284,8 +289,10 @@ func TestServerInstallRefusesConflictingFlags(t *testing.T) {
 func TestServerInstallPlanDoesNothing(t *testing.T) {
 	home := isolate(t)
 	f := withCompose(t)
+	t.Setenv("LLM", "fakellmkey")
+	run(t, "secret", "set", "llm_api_key", "--from-env", "LLM")
 	code, out, _ := run(t, "server", "install", "--plan")
-	if code != output.OK || !strings.Contains(out, "pull") || len(f.calls) != 0 {
+	if code != output.OK || !strings.Contains(out, "would write") || !strings.Contains(out, "would generate api_key, db_password, ui_key") || len(f.calls) != 0 {
 		t.Errorf("exit %d calls %v\n%s", code, f.calls, out)
 	}
 	if _, err := os.Stat(filepath.Join(home, "backsight", "config", "config.toml")); err == nil {
@@ -498,5 +505,44 @@ func TestInstallWarnsAboutRemoteDockerHost(t *testing.T) {
 	_, out, _ := run(t, "server", "install")
 	if !strings.Contains(out, "warning  DOCKER_HOST=tcp://10.0.0.5:2375") {
 		t.Errorf("%s", out)
+	}
+}
+
+func TestServerInstallPlanRunsTheRealChecks(t *testing.T) {
+	devInstall(t, true)
+	withCompose(t)
+	if code, _, _ := run(t, "server", "install", "--plan", "--ui-port", "29999"); code != output.Usage {
+		t.Errorf("conflicting flag under --plan: exit %d", code)
+	}
+	isolate(t)
+	if code, out, _ := run(t, "server", "install", "--plan", "--json"); code != output.NeedsUser || !strings.Contains(out, `"resume": "backsight server install"`) {
+		t.Errorf("missing key under --plan: exit %d\n%s", code, out)
+	}
+}
+
+func TestServerCommandsRefuseRemoteMode(t *testing.T) {
+	home := isolate(t)
+	withCompose(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
+	_ = os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
+	for _, args := range [][]string{{"server", "render"}, {"server", "start"}, {"server", "stop"}, {"server", "status"}, {"server", "install"}} {
+		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "local server") {
+			t.Errorf("%v: exit %d: %s", args, code, errOut)
+		}
+	}
+}
+
+func TestServerInstallStreamsStepsInTextMode(t *testing.T) {
+	home := devInstall(t, true)
+	withCompose(t)
+	pointAt(t, home, fakeHindsight(t))
+	_, out, _ := run(t, "server", "install")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 9 || !strings.HasPrefix(lines[0], "skipped  config") || !strings.HasPrefix(lines[7], "done     provider") || !strings.Contains(out, "UI http://127.0.0.1:19999") {
+		t.Errorf("%s", out)
+	}
+	if strings.Count(out, "skipped  config:") != 1 || strings.Count(out, "done     provider:") != 1 {
+		t.Errorf("each step must be printed once:\n%s", out)
 	}
 }

@@ -160,3 +160,19 @@ func UpdateSecrets(path string, fn func(*Secrets) error) error {
 	}
 	return fsutil.ReplaceIfUnchanged(path, raw, 0o600, hash)
 }
+
+// KeylessProviders run without an LLM API key.
+var KeylessProviders = map[string]bool{"ollama": true}
+
+// RequiredSecrets says which secrets cfg needs: the server keys for a local
+// server, the API key always, the LLM key unless the provider needs none.
+func RequiredSecrets(cfg Config) map[string]bool {
+	local := cfg.Server.Mode == "local"
+	return map[string]bool{
+		"api_key":         true,
+		"ui_key":          local,
+		"db_password":     local,
+		"llm_api_key":     local && !KeylessProviders[cfg.LLM.Provider],
+		"backup_identity": false, // backups arrive in M5
+	}
+}

@@ -13,10 +13,12 @@ import (
 )
 
 // Bank profile and the config keys backsight owns on it (decision 0049).
-// Every other key on the bank is left as it is.
+// Each owned key is replaced whole (a user's extra strategy or label under
+// retain_strategies or entity_labels does not survive a send); every other
+// key on the bank is left as it is.
 const (
 	bankName    = "backsight memory"
-	bankMission = "Long-term memory of one developer's work with Claude Code across projects: " +
+	bankMission = "Write every fact in English. Long-term memory of one developer's work with Claude Code across projects: " +
 		"decisions and their reasons, corrections, conventions, pitfalls and fixes, and what was delivered."
 )
 
@@ -59,16 +61,17 @@ func bankTemplate() map[string]any {
 			"description": "What kind of knowledge the fact is.", "values": values}},
 		"entities_allow_free_form": true,
 		"enable_observations":      true,
-		"observations_mission": "Consolidate durable knowledge per project: decisions with their reasons, conventions, pitfalls and fixes, " +
-			"and the current state of what was delivered. When a newer fact corrects or supersedes an older one, rewrite the observation " +
-			"to the newest truth and keep the date of the change. Write in English.",
+		"observations_mission": "Write every observation in English. Consolidate durable knowledge per project: decisions with their reasons, " +
+			"conventions, pitfalls and fixes, and the current state of what was delivered. When a newer fact corrects or supersedes an older one, " +
+			"rewrite the observation to the newest truth and keep the date of the change.",
 		"default_observation_scopes": [][]string{{"project:*"}},
 	}
 }
 
-// TemplateHash identifies the template this binary applies.
+// TemplateHash identifies the template this binary applies, bank profile
+// included.
 func TemplateHash() string {
-	raw, _ := json.Marshal(bankTemplate()) // maps marshal with sorted keys
+	raw, _ := json.Marshal(map[string]any{"config": bankTemplate(), "name": bankName, "mission": bankMission}) // sorted keys
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -93,15 +96,14 @@ func ApplyBank(ctx context.Context, c *hindsight.Client, bank, appliedHash strin
 	for _, b := range banks {
 		exists = exists || b.ID == bank
 	}
-	if !exists {
-		if err := c.CreateBank(ctx, bank, bankName, bankMission); err != nil {
-			return res, err
-		}
-		res.Created = true
-	}
 	if exists && !force && appliedHash == res.Hash {
 		return res, nil
 	}
+	// PUT creates the bank or refreshes its profile (name, mission).
+	if err := c.CreateBank(ctx, bank, bankName, bankMission); err != nil {
+		return res, err
+	}
+	res.Created = !exists
 	tmpl := bankTemplate()
 	if err := c.PatchBankConfig(ctx, bank, tmpl); err != nil {
 		return res, err

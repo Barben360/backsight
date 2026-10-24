@@ -189,3 +189,18 @@ func TestDBPasswordMustBeURLSafe(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestRequiredSecrets(t *testing.T) {
+	cfg := Default(dirs, "/home/u")
+	if r := RequiredSecrets(cfg); !r["api_key"] || !r["ui_key"] || !r["db_password"] || !r["llm_api_key"] || r["backup_identity"] {
+		t.Errorf("local deepseek: %v", r)
+	}
+	cfg.LLM.Provider = "ollama"
+	if RequiredSecrets(cfg)["llm_api_key"] {
+		t.Error("ollama needs no key")
+	}
+	cfg.Server.Mode = "remote"
+	if r := RequiredSecrets(cfg); !r["api_key"] || r["ui_key"] || r["db_password"] || r["llm_api_key"] {
+		t.Errorf("remote client: %v", r)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -96,5 +97,27 @@ func TestErrorEnvelopeFromPlainAndWrappedErrors(t *testing.T) {
 		if env.OK || env.Error == nil || env.Error.Code != c.code || env.Error.Message != c.msg || env.Data["n"] != 1 {
 			t.Errorf("%s: %s", name, buf.String())
 		}
+	}
+}
+
+func TestNeedsUserPayload(t *testing.T) {
+	var buf bytes.Buffer
+	e := &Error{Code: NeedsUser, Message: "missing secrets: llm_api_key", Secrets: []string{"llm_api_key"},
+		Actions: []Action{{Kind: "run_as_user", Cmd: "backsight secret set llm_api_key", Why: "the extraction LLM needs its key"}},
+		Resume:  "backsight server install"}
+	_ = WriteJSON(&buf, "server install", nil, e)
+	var env struct {
+		Error Error `json:"error"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Error.Resume != "backsight server install" || len(env.Error.Secrets) != 1 || env.Error.Actions[0].Kind != "run_as_user" {
+		t.Errorf("%s", buf.String())
+	}
+	buf.Reset()
+	_ = WriteJSON(&buf, "x", nil, &Error{Code: Blocked, Message: "m"})
+	if strings.Contains(buf.String(), "secrets") || strings.Contains(buf.String(), "resume") {
+		t.Errorf("empty payload fields must be omitted: %s", buf.String())
 	}
 }

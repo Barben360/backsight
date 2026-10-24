@@ -89,16 +89,37 @@ func TestSecretListNeverShowsValues(t *testing.T) {
 	_ = config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("api_key", "fakevalue5") })
 	code, out, _ := run(t, "secret", "list", "--json")
 	var env struct {
-		Data map[string]bool `json:"data"`
+		Data []struct {
+			Name     string `json:"name"`
+			Set      bool   `json:"set"`
+			Required bool   `json:"required"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
 		t.Fatalf("exit %d: %v\n%s", code, err, out)
 	}
-	if !env.Data["api_key"] || env.Data["llm_api_key"] || len(env.Data) != 5 || strings.Contains(out, "fakevalue5") {
+	got := map[string][2]bool{}
+	for _, d := range env.Data {
+		got[d.Name] = [2]bool{d.Set, d.Required}
+	}
+	if len(got) != 5 || got["api_key"] != [2]bool{true, true} || got["llm_api_key"] != [2]bool{false, true} ||
+		got["backup_identity"] != [2]bool{false, false} || strings.Contains(out, "fakevalue5") {
 		t.Errorf("%s", out)
 	}
 	_, text, _ := run(t, "secret", "list")
-	if !strings.Contains(text, "api_key") || !strings.Contains(text, "set") || strings.Contains(text, "fakevalue5") {
+	if !strings.Contains(text, "llm_api_key      not set (required)") || strings.Contains(text, "fakevalue5") {
 		t.Errorf("%q", text)
+	}
+}
+
+// A keyless provider does not require an LLM key.
+func TestSecretListFollowsTheProvider(t *testing.T) {
+	home := isolate(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
+	_ = os.WriteFile(cfg, []byte("[server]\nurl = \"http://127.0.0.1:18888\"\nui_port = 19999\n[llm]\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\n"), 0o600)
+	_, text, _ := run(t, "secret", "list")
+	if !strings.Contains(text, "llm_api_key      not set\n") {
+		t.Errorf("%s", text)
 	}
 }
