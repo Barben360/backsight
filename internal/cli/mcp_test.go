@@ -300,9 +300,23 @@ func TestMCPFollowsTheLiveProject(t *testing.T) {
 	if !strings.Contains(out, "project infra)") {
 		t.Errorf("%s", out)
 	}
+	// a later cd is followed: the record is read again at every call
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4343, session.Live{SessionID: "s1", Cwd: filepath.Join(home, "billing"), Project: "billing"})
 	recallTags = nil
 	call(t, cs, "memory_search", map[string]any{"queries": []string{"traefik"}})
-	if !strings.Contains("|"+strings.Join(recallTags, "|"), "|project:infra,") {
+	if j := "|" + strings.Join(recallTags, "|"); !strings.Contains(j, "|project:billing,") || strings.Contains(j, "project:infra") {
 		t.Errorf("search not scoped to the live project: %q", recallTags)
+	}
+}
+
+// Without a record (an older Claude Code, a manual run) the server keeps its
+// start project and has no session.
+func TestMCPWithoutALiveRecordKeepsItsStartProject(t *testing.T) {
+	mcpParentPID = 4444
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."})
+	if !strings.Contains(out, "project billing)") {
+		t.Errorf("%s", out)
 	}
 }

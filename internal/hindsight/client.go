@@ -240,8 +240,9 @@ type Memory struct {
 const pageSize = 200
 
 // EachMemory calls fn for every memory of factType ("observation", "world",
-// "experience"), page by page.
-func (c *Client) EachMemory(ctx context.Context, bank, factType string, fn func(Memory) error) error {
+// "experience"), page by page; state "invalidated" lists the archive of
+// soft-forgotten facts instead of the live rows.
+func (c *Client) EachMemory(ctx context.Context, bank, factType, state string, fn func(Memory) error) error {
 	for offset, pages := 0, 0; ; pages++ {
 		if pages == maxPages {
 			return fmt.Errorf("listing %s memories: more than %d pages, stopping", factType, maxPages)
@@ -251,6 +252,9 @@ func (c *Client) EachMemory(ctx context.Context, bank, factType string, fn func(
 			Total int      `json:"total"`
 		}
 		q := url.Values{"type": {factType}, "limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}}
+		if state != "" {
+			q.Set("state", state) // "invalidated": the archive; default: live rows
+		}
 		if err := c.get(ctx, bankPath(bank, "/memories/list"), q, &page); err != nil {
 			return err
 		}

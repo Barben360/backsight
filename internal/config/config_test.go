@@ -286,3 +286,11 @@ func TestSetExcludePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestSetExcludePathsWithHashesAndQuotesInValues(t *testing.T) {
+	in := "[privacy]\nexclude_paths = [\"/a#b\", \"/c]d\"] # kept \"note\"\n"
+	got, err := SetExcludePaths([]byte(in), []string{"/a#b", "/c]d", "/e"})
+	if err != nil || string(got) != "[privacy]\nexclude_paths = [\"/a#b\", \"/c]d\", \"/e\"] # kept \"note\"\n" {
+		t.Errorf("%q %v", got, err)
+	}
+}

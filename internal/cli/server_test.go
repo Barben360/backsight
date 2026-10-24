@@ -178,7 +178,10 @@ var (
 	recallTags      []string
 	recallQueries   []string
 	recentAnswer    map[string]string // memories/list items by type ("" = any)
-	listAnswer      map[string]string // memories/list (paged listing) items by type
+	recentByTag     map[string]string // memories/list items by tags (wins over recentAnswer)
+	tagCounts       map[string]int    // /tags count by project (default 1)
+	listAnswer      map[string]string // memories/list (paged listing) items by type; "invalidated:<type>" for the archive
+	documentUnits   map[string]int    // GET /documents/{id} memory_unit_count, for documents not retained in the test
 	curation        []string          // PATCH/DELETE calls on memories and documents
 	recentDown      atomic.Bool
 	memories        map[string]string
@@ -207,6 +210,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	recallQueries = nil
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
+	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
 	var mu sync.Mutex
 	banks := map[string]bool{}
@@ -257,18 +261,44 @@ func fakeHindsight(t *testing.T) (port int) {
 				return
 			}
 			items := recentAnswer[r.URL.Query().Get("type")]
+			if !strings.HasPrefix(r.URL.Query().Get("tags"), "project:") {
+				items = "" // like the server: the answer depends on the tag asked
+			}
+			if v, ok := recentByTag[r.URL.Query().Get("tags")]; ok {
+				items = v
+			}
 			if items == "" {
 				items = "[]"
 			}
 			_, _ = w.Write([]byte(`{"items":` + items + `}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list"):
-			items := listAnswer[r.URL.Query().Get("type")]
+			key := r.URL.Query().Get("type")
+			if st := r.URL.Query().Get("state"); st != "" {
+				key = st + ":" + key
+			}
+			items := listAnswer[key]
 			if items == "" || r.URL.Query().Get("offset") != "0" {
 				items = "[]"
 			}
 			_, _ = w.Write([]byte(`{"items":` + items + `,"total":` + strconv.Itoa(strings.Count(items, `"id"`)) + `}`))
 		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
 			body, _ := io.ReadAll(r.Body)
+			// Strict like Hindsight 1.1.0: unknown memories are 404 and an
+			// observation cannot be curated (400).
+			if strings.Contains(r.URL.Path, "/memories/") {
+				id := strings.TrimSuffix(r.URL.Path[strings.Index(r.URL.Path, "/memories/")+len("/memories/"):], "/observations")
+				m, ok := memories[id]
+				switch {
+				case !ok:
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(`{"detail":"Memory unit '` + id + `' not found"}`))
+					return
+				case r.Method == http.MethodPatch && strings.Contains(m, `"type":"observation"`):
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"detail":"only world/experience facts can be curated"}`))
+					return
+				}
+			}
 			curation = append(curation, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reflect"):
@@ -285,7 +315,11 @@ func fakeHindsight(t *testing.T) (port int) {
 		case strings.HasSuffix(r.URL.Path, "/tags"):
 			var items []string
 			for p := range projectEntities {
-				items = append(items, `{"tag":"project:`+p+`","count":1}`)
+				n := tagCounts[p]
+				if n == 0 {
+					n = 1
+				}
+				items = append(items, `{"tag":"project:`+p+`","count":`+strconv.Itoa(n)+`}`)
 			}
 			_, _ = w.Write([]byte(`{"items":[` + strings.Join(items, ",") + `],"total":` + strconv.Itoa(len(items)) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/entities"):
@@ -318,6 +352,10 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
 			id := r.URL.Path[strings.Index(r.URL.Path, "/documents/")+len("/documents/"):]
+			if n, ok := documentUnits[id]; ok {
+				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `}`))
+				return
+			}
 			meta, ok := docs[id]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)

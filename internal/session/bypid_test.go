@@ -29,8 +29,12 @@ func TestLiveRecordsByClaudePID(t *testing.T) {
 	}
 	old := time.Now().Add(-10 * 24 * time.Hour)
 	_ = os.Chtimes(filepath.Join(dir, "by-pid", "4242.json"), old, old)
+	_ = WriteLive(dir, 4343, Live{SessionID: "s3"})
 	PruneLive(dir, 7*24*time.Hour, time.Now())
 	if _, ok := ReadLive(dir, 4242); ok {
 		t.Error("an old record survived pruning")
+	}
+	if _, ok := ReadLive(dir, 4343); !ok {
+		t.Error("a fresh record was pruned")
 	}
 }

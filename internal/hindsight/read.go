@@ -154,8 +154,8 @@ type ReflectAnswer struct {
 	} `json:"usage"`
 }
 
-// Reflect asks the server's LLM a question over the memory (one LLM call
-// over many memories: costly, never on a hook path).
+// Reflect asks the server's LLM a question over the memory (an agentic
+// loop over many memories: costly, never on a hook path).
 func (c *Client) Reflect(ctx context.Context, bank, query string, tags []string, maxTokens int) (ReflectAnswer, error) {
 	body := map[string]any{"query": query, "budget": "low", "max_tokens": maxTokens}
 	if len(tags) > 0 {

@@ -28,6 +28,36 @@ func SetExcludePaths(raw []byte, paths []string) ([]byte, error) {
 	return setKey(raw, "privacy", "exclude_paths", "["+strings.Join(quoted, ", ")+"]")
 }
 
+// valueEnd is where a one-line TOML value ends in s (strings and arrays
+// read with their quotes, so a "#" or "]" inside a string counts for
+// nothing); ok false when an array does not close on this line.
+func valueEnd(s string) (int, bool) {
+	depth, quote := 0, byte(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == '\\' && quote == '"' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '[':
+			depth++
+		case c == ']':
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+		case c == '#' && depth == 0:
+			return i, true
+		}
+	}
+	return len(s), depth == 0
+}
+
 // setKey sets key = value in [table] ("" removes the key), line by line.
 // Forms a line edit cannot change safely are refused: dotted keys, inline
 // tables, multi-line strings, and a multi-line value for the key itself.
@@ -59,16 +89,16 @@ func setKey(raw []byte, table, key, value string) ([]byte, error) {
 		}
 		if section == table && (strings.HasPrefix(t, key+" ") || strings.HasPrefix(t, key+"=")) {
 			_, rest, _ := strings.Cut(t, "=")
-			rest = strings.TrimSpace(rest)
-			if strings.HasPrefix(rest, "[") && !strings.Contains(strings.SplitN(rest, "#", 2)[0], "]") {
+			end, ok := valueEnd(strings.TrimSpace(rest))
+			if !ok {
 				return nil, errors.New("config.toml spreads " + table + "." + key + " over several lines: put it on one line or set it by hand")
 			}
 			if value == "" {
 				return []byte(strings.Join(append(lines[:i:i], lines[i+1:]...), "")), nil
 			}
 			comment := ""
-			if j := strings.LastIndex(rest, "#"); j >= 0 && !strings.Contains(rest[j:], `"`) {
-				comment = " " + rest[j:]
+			if c := strings.TrimSpace(strings.TrimSpace(rest)[end:]); strings.HasPrefix(c, "#") {
+				comment = " " + c
 			}
 			lines[i] = entry + comment + nl
 			return []byte(strings.Join(lines, "")), nil

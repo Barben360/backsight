@@ -99,7 +99,7 @@ func TestEachMemoryPaginates(t *testing.T) {
 		fmt.Fprintf(w, `{"items":[%s],"total":%d,"limit":%d,"offset":%d}`, strings.Join(items, ","), total, lim, off)
 	})
 	seen := map[string]bool{}
-	err := c.EachMemory(context.Background(), "b", "observation", func(m Memory) error {
+	err := c.EachMemory(context.Background(), "b", "observation", "", func(m Memory) error {
 		if seen[m.ID] {
 			t.Errorf("duplicate %s", m.ID)
 		}
@@ -279,7 +279,7 @@ func TestEachMemoryStopsOnCallbackError(t *testing.T) {
 	})
 	stop := errors.New("stop")
 	seen := 0
-	err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { seen++; return stop })
+	err := c.EachMemory(context.Background(), "b", "observation", "", func(Memory) error { seen++; return stop })
 	if !errors.Is(err, stop) || seen != 1 || calls != 1 {
 		t.Errorf("err %v, seen %d, calls %d", err, seen, calls)
 	}
@@ -287,7 +287,7 @@ func TestEachMemoryStopsOnCallbackError(t *testing.T) {
 
 func TestEachMemoryEmptyPageEndsEvenIfTotalLies(t *testing.T) {
 	c := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"items":[],"total":1000}`)) })
-	if err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { return nil }); err != nil {
+	if err := c.EachMemory(context.Background(), "b", "observation", "", func(Memory) error { return nil }); err != nil {
 		t.Errorf("got %v", err)
 	}
 }
@@ -301,7 +301,7 @@ func TestEachMemoryPageCap(t *testing.T) {
 		calls++
 		_, _ = w.Write([]byte(`{"items":[{"id":"a"}],"total":999999}`))
 	})
-	err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { return nil })
+	err := c.EachMemory(context.Background(), "b", "observation", "", func(Memory) error { return nil })
 	if err == nil || calls != 3 {
 		t.Errorf("want an error after 3 pages, got %v after %d", err, calls)
 	}

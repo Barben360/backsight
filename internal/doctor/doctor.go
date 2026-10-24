@@ -337,7 +337,7 @@ func existingParent(dir string) string {
 func checkUntagged(ctx context.Context, cl *hindsight.Client, bank string) Check {
 	c := Check{ID: "untagged"}
 	total, untagged := 0, 0
-	err := cl.EachMemory(ctx, bank, "observation", func(m hindsight.Memory) error {
+	err := cl.EachMemory(ctx, bank, "observation", "", func(m hindsight.Memory) error {
 		total++
 		for _, tag := range m.Tags {
 			if strings.HasPrefix(tag, "project:") {

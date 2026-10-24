@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,7 +19,10 @@ import (
 	"github.com/Barben360/backsight/internal/redact"
 )
 
-const curateTimeout = 30 * time.Second
+const (
+	curateTimeout   = 30 * time.Second
+	projectsTimeout = 20 * time.Second
+)
 
 func curateClient() (*hindsight.Client, string, error) {
 	cfg, sec, err := loadServerConfig()
@@ -31,11 +37,19 @@ func curateClient() (*hindsight.Client, string, error) {
 }
 
 type forgetResult struct {
-	ID        string   `json:"id"`
-	Action    string   `json:"action"` // forgotten | restored | purge_planned | purged
-	Sources   []string `json:"sources,omitempty"`
-	Documents []string `json:"documents,omitempty"`
-	Note      string   `json:"note,omitempty"`
+	ID          string     `json:"id"`
+	Action      string     `json:"action"` // forgotten | restored | purge_planned | purged | partly_purged
+	Sources     []string   `json:"sources,omitempty"`
+	Documents   []purgeDoc `json:"documents,omitempty"`
+	Undeletable []string   `json:"undeletable,omitempty"` // facts with no document: retired, kept in Hindsight's archive
+	Note        string     `json:"note,omitempty"`
+}
+
+// purgeDoc is a document a purge deletes, with every memory extracted from
+// it: one secret costs the whole conversation segment.
+type purgeDoc struct {
+	ID       string `json:"id"`
+	Memories int    `json:"memories"`
 }
 
 // newForgetCmd is `forget <id> [--purge [--yes]] [--restore]` (SPEC §2,
@@ -57,16 +71,23 @@ func newForgetCmd(e *env) *cobra.Command {
 			ctx, id := cmd.Context(), args[0]
 			res := forgetResult{ID: id}
 			switch {
-			case restore:
-				if err := cl.Invalidate(ctx, bank, id, "restored by the user (backsight forget --restore)", true); err != nil {
+			case restore, !purge:
+				// Only raw facts can be curated: an observation is retired
+				// through its source facts and regenerates without them.
+				targets, err := curatable(ctx, cl, bank, id)
+				if err != nil {
 					return curateError(err, id)
 				}
-				res.Action = "restored"
-			case !purge:
-				if err := cl.Invalidate(ctx, bank, id, "forgotten by the user (backsight forget)", false); err != nil {
-					return curateError(err, id)
+				reason := map[bool]string{true: "restored by the user (backsight forget --restore)", false: "forgotten by the user (backsight forget)"}[restore]
+				for _, t := range targets {
+					if err := cl.Invalidate(ctx, bank, t, reason, restore); err != nil {
+						return curateError(err, t)
+					}
 				}
-				res.Action = "forgotten"
+				res.Action = map[bool]string{true: "restored", false: "forgotten"}[restore]
+				if len(targets) != 1 || targets[0] != id {
+					res.Sources = targets
+				}
 			default:
 				res, err = purgeMemory(ctx, cl, bank, id, yes)
 				if err != nil {
@@ -87,51 +108,105 @@ func newForgetCmd(e *env) *cobra.Command {
 	return cmd
 }
 
-// purgeMemory plans, and with yes performs, the purge: retire the memory,
-// clear the observations of its source facts, delete their documents.
+// curatable are the raw facts behind id: id itself for a world or
+// experience fact, its source facts for an observation (the API curates
+// raw facts only).
+func curatable(ctx context.Context, cl *hindsight.Client, bank, id string) ([]string, error) {
+	m, err := cl.GetMemory(ctx, bank, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.Type != "observation" {
+		return []string{id}, nil
+	}
+	var out []string
+	for _, s := range m.Sources {
+		out = append(out, s.ID)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("observation %s lists no source facts to retire", id)
+	}
+	return out, nil
+}
+
+// purgeMemory plans, and with yes performs, the purge (Hindsight 1.1.0
+// has no single-memory delete). The raw facts behind id are read one by
+// one, since an observation's source list carries no document. Each live
+// fact has its observations cleared while the API still sees it, then is
+// retired; last, the documents go, and with them every fact, live or
+// archived, extracted from them. A fact with no document stays in the
+// archive: the purge says so instead of claiming it.
 func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes bool) (forgetResult, error) {
 	res := forgetResult{ID: id, Action: "purge_planned"}
 	m, err := cl.GetMemory(ctx, bank, id)
 	if err != nil {
 		return res, err
 	}
-	docs := map[string]bool{}
-	if m.DocumentID != "" {
-		docs[m.DocumentID] = true
+	facts := []hindsight.MemoryDetail{m}
+	if m.Type == "observation" {
+		facts = nil
+		for _, s := range m.Sources {
+			f, err := cl.GetMemory(ctx, bank, s.ID)
+			if err != nil {
+				return res, fmt.Errorf("reading source fact %s: %w", s.ID, err)
+			}
+			facts = append(facts, f)
+			res.Sources = append(res.Sources, s.ID)
+		}
+		if len(facts) == 0 {
+			return res, fmt.Errorf("observation %s lists no source facts to purge", id)
+		}
 	}
-	for _, s := range m.Sources {
-		res.Sources = append(res.Sources, s.ID)
-		if s.DocumentID != "" {
-			docs[s.DocumentID] = true
+	docs := map[string]bool{}
+	for _, f := range facts {
+		if f.DocumentID == "" {
+			res.Undeletable = append(res.Undeletable, f.ID)
+		} else {
+			docs[f.DocumentID] = true
 		}
 	}
 	for d := range docs {
-		res.Documents = append(res.Documents, d)
+		doc, err := cl.GetDocument(ctx, bank, d)
+		if err != nil {
+			return res, fmt.Errorf("reading document %s: %w", d, err)
+		}
+		res.Documents = append(res.Documents, purgeDoc{ID: d, Memories: doc.MemoryUnits})
 	}
-	sort.Strings(res.Documents)
+	sort.Slice(res.Documents, func(i, j int) bool { return res.Documents[i].ID < res.Documents[j].ID })
 	if !yes {
 		return res, nil
 	}
-	if err := cl.Invalidate(ctx, bank, id, "purged by the user (backsight forget --purge)", false); err != nil {
-		return res, err
-	}
-	for _, s := range res.Sources {
-		if err := cl.ClearObservations(ctx, bank, s); err != nil {
-			return res, err
+	for _, f := range facts {
+		if f.State == "invalidated" {
+			continue // already archived: only its document can remove it
+		}
+		if err := cl.ClearObservations(ctx, bank, f.ID); err != nil {
+			return res, fmt.Errorf("clearing the observations of %s: %w", f.ID, err)
+		}
+		if err := cl.Invalidate(ctx, bank, f.ID, "purged by the user (backsight forget --purge)", false); err != nil {
+			return res, fmt.Errorf("retiring %s: %w", f.ID, err)
 		}
 	}
 	for _, d := range res.Documents {
-		if err := cl.DeleteDocument(ctx, bank, d); err != nil {
-			return res, err
+		if err := cl.DeleteDocument(ctx, bank, d.ID); err != nil {
+			return res, fmt.Errorf("deleting document %s: %w", d.ID, err)
 		}
 	}
-	res.Action, res.Note = "purged", "backups taken before now still hold it (backups come with M5): delete or re-key them if the text was a secret"
+	res.Action = "purged"
+	res.Note = "backups taken before now still hold it (backups come with M5): delete or re-key them if the text was a secret"
+	if len(res.Undeletable) > 0 {
+		res.Action = "partly_purged"
+		res.Note = "the facts with no document are retired but stay in Hindsight's archive (no API deletes them); " + res.Note
+	}
 	return res, nil
 }
 
 func curateError(err error, id string) error {
 	var apiErr *hindsight.APIError
-	if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
+	// Only a read of the asked id itself means "no such memory"; any other
+	// NotFound (a source fact, a document) is the server's state, reported.
+	if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound && apiErr.Method == http.MethodGet &&
+		strings.HasSuffix(apiErr.Path, "/memories/"+url.PathEscape(id)) {
 		return &output.Error{Code: output.Usage, Message: "no memory " + id}
 	}
 	return blocked(err)
@@ -139,16 +214,24 @@ func curateError(err error, id string) error {
 
 func forgetText(r forgetResult) string {
 	switch r.Action {
-	case "forgotten":
-		return fmt.Sprintf("%s forgotten: out of recall and consolidation (undo: backsight forget --restore %s)\n", r.ID, r.ID)
-	case "restored":
-		return fmt.Sprintf("%s restored\n", r.ID)
+	case "forgotten", "restored":
+		what := r.ID
+		if len(r.Sources) > 0 {
+			what = fmt.Sprintf("%s (through its %d source fact(s): observations are derived)", r.ID, len(r.Sources))
+		}
+		if r.Action == "restored" {
+			return what + " restored\n"
+		}
+		return fmt.Sprintf("%s forgotten: out of recall and consolidation (undo: backsight forget --restore %s)\n", what, r.ID)
 	}
 	var b strings.Builder
-	verb := map[bool]string{true: "deleted", false: "would delete"}[r.Action == "purged"]
+	verb := map[bool]string{true: "deleted", false: "would delete"}[r.Action != "purge_planned"]
 	fmt.Fprintf(&b, "%s: memory %s, %d source fact(s), document(s):\n", verb, r.ID, len(r.Sources))
 	for _, d := range r.Documents {
-		fmt.Fprintf(&b, "- %s (every fact extracted from it)\n", d)
+		fmt.Fprintf(&b, "- %s (with all %d memories extracted from it)\n", d.ID, d.Memories)
+	}
+	if len(r.Undeletable) > 0 {
+		fmt.Fprintf(&b, "not deletable (no document, retired only): %s\n", strings.Join(r.Undeletable, ", "))
 	}
 	if r.Note != "" {
 		b.WriteString(r.Note + "\n")
@@ -159,6 +242,7 @@ func forgetText(r forgetResult) string {
 type scanFinding struct {
 	ID      string   `json:"id"`
 	Type    string   `json:"type"`
+	State   string   `json:"state"` // live | forgotten
 	Project string   `json:"project"`
 	Kinds   []string `json:"kinds"`
 	Preview string   `json:"preview"` // redacted
@@ -177,11 +261,16 @@ func newMemoryCmd(e *env) *cobra.Command {
 				return err
 			}
 			findings := []scanFinding{}
-			for _, ft := range []string{"world", "experience", "observation"} {
-				err := cl.EachMemory(cmd.Context(), bank, ft, func(m hindsight.Memory) error {
+			// A plain forget keeps the text on the server (archive, exports):
+			// soft-forgotten facts are scanned too. Observations are never
+			// archived.
+			passes := []struct{ ft, state string }{{"world", ""}, {"experience", ""}, {"observation", ""}, {"world", "invalidated"}, {"experience", "invalidated"}}
+			for _, p := range passes {
+				err := cl.EachMemory(cmd.Context(), bank, p.ft, p.state, func(m hindsight.Memory) error {
 					red, kinds := redact.Text(m.Text)
 					if len(kinds) > 0 {
-						findings = append(findings, scanFinding{ID: m.ID, Type: ft, Project: recall.ProjectOf(m.Tags), Kinds: kinds, Preview: clip(red, 100)})
+						findings = append(findings, scanFinding{ID: m.ID, Type: p.ft, State: map[bool]string{true: "forgotten", false: "live"}[p.state != ""],
+							Project: recall.ProjectOf(m.Tags), Kinds: kinds, Preview: clip(red, 100)})
 					}
 					return nil
 				})
@@ -195,7 +284,7 @@ func newMemoryCmd(e *env) *cobra.Command {
 				}
 				var b strings.Builder
 				for _, f := range findings {
-					fmt.Fprintf(&b, "%s (%s, %s, %s): %s\n  backsight forget %s --purge\n", f.ID, f.Type, f.Project, strings.Join(f.Kinds, ", "), f.Preview, f.ID)
+					fmt.Fprintf(&b, "%s (%s, %s, %s, %s): %s\n  backsight forget %s --purge\n", f.ID, f.Type, f.State, f.Project, strings.Join(f.Kinds, ", "), f.Preview, f.ID)
 				}
 				return b.String()
 			})
@@ -210,13 +299,13 @@ type askResult struct {
 	OutputTokens int64  `json:"output_tokens"`
 }
 
-// newAskCmd is `ask <question>` (Hindsight reflect): one LLM call over the
-// memory, scoped to the project and the transverse aliases unless --all.
+// newAskCmd is `ask <question>` (Hindsight reflect): an agentic LLM loop
+// over the memory, scoped to the project and the transverse aliases unless --all.
 func newAskCmd(e *env) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "ask <question>",
-		Short: "Ask the server's LLM a question over the memory (costs one LLM call over many memories)",
+		Short: "Ask the server's LLM a question over the memory (an LLM loop over many memories: costly, tokens shown)",
 		Args:  usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, sec, err := loadServerConfig()
@@ -275,15 +364,27 @@ func newProjectsCmd(e *env) *cobra.Command {
 			if err != nil {
 				return blocked(err)
 			}
-			list := []projectInfo{}
-			for _, t := range tags {
-				p := projectInfo{Name: strings.TrimPrefix(t.Tag, "project:"), Memories: t.Count}
-				if m, err := cl.Recent(cmd.Context(), bank, t.Tag, "", 1); err == nil && len(m) > 0 {
-					p.Last = m[0].UpdatedAt
-				}
-				list = append(list, p)
+			// Last activity is one read per project: four at a time, all
+			// within one bound; a project whose read fails shows "-".
+			list := make([]projectInfo, len(tags))
+			ctx, cancel := context.WithTimeout(cmd.Context(), projectsTimeout)
+			defer cancel()
+			var wg sync.WaitGroup
+			sem := make(chan struct{}, 4)
+			for i, t := range tags {
+				list[i] = projectInfo{Name: strings.TrimPrefix(t.Tag, "project:"), Memories: t.Count}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					if m, err := cl.Recent(ctx, bank, t.Tag, "", 1); err == nil && len(m) > 0 {
+						list[i].Last = m[0].UpdatedAt
+					}
+				}()
 			}
-			sort.Slice(list, func(i, j int) bool { return list[i].Last.After(list[j].Last) })
+			wg.Wait()
+			sort.SliceStable(list, func(i, j int) bool { return list[i].Last.After(list[j].Last) })
 			return e.emit("projects", list, func() string {
 				var b strings.Builder
 				for _, p := range list {
