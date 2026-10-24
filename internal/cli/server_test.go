@@ -161,7 +161,7 @@ func (f *fakeCompose) subcommands() []string {
 // retained counts retain items the fake server accepted; llmInput is the
 // bank's LLM input-token total the fake reports, raised by llmPerRetain on
 // each accepted item.
-var retained, llmInput, llmPerRetain atomic.Int64
+var retained, llmInput, llmPerRetain, queued atomic.Int64
 
 // fakeHindsight answers like a started server: health, version, banks and
 // bank config (overrides kept in memory).
@@ -221,6 +221,12 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/llm-requests/stats"):
 			_, _ = w.Write([]byte(`{"buckets":[{"tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}]}`))
+		case strings.HasSuffix(r.URL.Path, "/operations"):
+			n := queued.Load()
+			if r.URL.Query().Get("status") == "pending" && n > 0 {
+				queued.Add(-1) // the queue drains as it is polled
+			}
+			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats"):
 			_, _ = w.Write([]byte(`{"total_nodes":0,"pending_operations":0,"pending_consolidation":0}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract"):

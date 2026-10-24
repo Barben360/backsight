@@ -243,15 +243,15 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 	}
 }
 
-// waitQueue waits while the bank has more than backfillQueueLimit pending
-// operations and consolidations.
+// waitQueue waits while the bank has more than backfillQueueLimit queued
+// or running operations, so spend is measured as it happens.
 func waitQueue(ctx context.Context, c *hindsight.Client, bank string) error {
 	for {
-		st, err := c.BankStats(ctx, bank)
+		n, err := c.QueuedOperations(ctx, bank)
 		if err != nil {
 			return err
 		}
-		if st.PendingOperations+st.PendingConsolidation <= backfillQueueLimit {
+		if n <= backfillQueueLimit {
 			return nil
 		}
 		select {

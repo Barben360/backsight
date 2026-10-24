@@ -388,3 +388,17 @@ func TestLLMTokensSumsBuckets(t *testing.T) {
 		t.Errorf("%+v %v", got, err)
 	}
 }
+
+func TestQueuedOperationsCountsPendingAndProcessing(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/default/banks/b/operations" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		total := map[string]string{"pending": "139", "processing": "9"}[r.URL.Query().Get("status")]
+		_, _ = w.Write([]byte(`{"total":` + total + `,"operations":[]}`))
+	})
+	if n, err := c.QueuedOperations(context.Background(), "b"); err != nil || n != 148 {
+		t.Errorf("%d %v", n, err)
+	}
+}

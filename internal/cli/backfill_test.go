@@ -155,3 +155,18 @@ func TestJobsTickContinuesABackfill(t *testing.T) {
 		t.Errorf("%s", out)
 	}
 }
+
+// Backfill waits for the server's queue before each session.
+func TestBackfillWaitsForTheQueue(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "q1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	queued.Store(int64(backfillQueueLimit) + 5) // drains by one per poll
+	t.Cleanup(func() { queued.Store(0) })
+	before := retained.Load()
+	run(t, "retain", "backfill")
+	if retained.Load() != before+1 || queued.Load() > int64(backfillQueueLimit) {
+		t.Errorf("sent %d, queue %d", retained.Load()-before, queued.Load())
+	}
+}
