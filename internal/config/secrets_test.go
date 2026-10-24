@@ -10,11 +10,12 @@ import (
 	"testing"
 )
 
-const secretsTOML = `api_key = "hs-api-SECRET1"
-ui_key = "hs-ui-SECRET2"
-db_password = "db-SECRET3"
-llm_api_key = "sk-SECRET4"
-backup_identity = "AGE-SECRET-KEY-SECRET5"
+// Low-entropy fake values: secret scanners must not flag this file.
+const secretsTOML = `api_key = "fakevalue1"
+ui_key = "fakevalue2"
+db_password = "fakevalue3"
+llm_api_key = "fakevalue4"
+backup_identity = "fakevalue5"
 `
 
 func writeSecrets(t *testing.T, content string, mode os.FileMode) string {
@@ -34,7 +35,7 @@ func TestLoadSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.APIKey != "hs-api-SECRET1" || s.UIKey != "hs-ui-SECRET2" || s.DBPassword != "db-SECRET3" || s.LLMAPIKey != "sk-SECRET4" || s.BackupIdentity != "AGE-SECRET-KEY-SECRET5" {
+	if s.APIKey != "fakevalue1" || s.UIKey != "fakevalue2" || s.DBPassword != "fakevalue3" || s.LLMAPIKey != "fakevalue4" || s.BackupIdentity != "fakevalue5" {
 		t.Errorf("fields not loaded: %v", s.Names())
 	}
 }
@@ -71,7 +72,7 @@ func TestSecretsNeverPrinted(t *testing.T) {
 	jsPtr, _ := json.Marshal(&s)
 	outs := []string{fmt.Sprint(s), fmt.Sprintf("%v %+v %#v %s", s, s, s, s), fmt.Sprintf("%+v", &s), string(js), string(jsPtr)}
 	for _, out := range outs {
-		if strings.Contains(out, "SECRET") {
+		if strings.Contains(out, "fakevalue") {
 			t.Errorf("secret leaked: %s", out)
 		}
 	}
