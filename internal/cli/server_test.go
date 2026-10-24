@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,13 +23,26 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
-// devInstall writes a dev config and every secret under an isolated home.
+// closedPort is a loopback port nothing listens on: tests must never reach
+// a real server (the author's dev install listens on 18888).
+func closedPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
+}
+
+// devInstall writes a dev config pointing at a closed port and every secret
+// under an isolated home; tests needing a server call pointAt.
 func devInstall(t *testing.T, withLLMKey bool) string {
 	t.Helper()
 	home := isolate(t)
-	cfg := filepath.Join(home, "backsight", "config", "config.toml")
-	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
-	_ = os.WriteFile(cfg, []byte("[server]\nurl = \"http://127.0.0.1:18888\"\nui_port = 19999\n"), 0o600)
+	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
+	pointAt(t, home, closedPort(t))
 	_ = config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error {
 		config.GenerateMissing(s)
 		if withLLMKey {
@@ -50,7 +65,7 @@ func TestServerRenderWritesFiles(t *testing.T) {
 		t.Error("a secret reached the output")
 	}
 	c, err := os.ReadFile(filepath.Join(composeDir(home), "compose.yaml"))
-	if err != nil || !strings.Contains(string(c), `"127.0.0.1:18888:8888"`) {
+	if err != nil || !strings.Contains(string(c), `"127.0.0.1:`) || !strings.Contains(string(c), `:8888"`) {
 		t.Errorf("%v\n%s", err, c)
 	}
 	if e, _ := os.ReadFile(filepath.Join(composeDir(home), ".env")); !strings.Contains(string(e), "fakellmkey") {
@@ -96,12 +111,18 @@ func TestServerRenderWithoutConfig(t *testing.T) {
 }
 
 type fakeCompose struct {
-	calls [][]string
-	ps    string
+	calls  [][]string
+	ps     string
+	failOn string // subcommand that fails like a port clash
 }
 
 func (f *fakeCompose) Run(_ context.Context, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, args)
+	for _, a := range args {
+		if f.failOn != "" && a == f.failOn {
+			return []byte("Error: port is already allocated"), errors.New("exit status 1")
+		}
+	}
 	for _, a := range args {
 		if a == "ps" {
 			return []byte(f.ps), nil
@@ -259,6 +280,18 @@ func TestServerInstallPlanDoesNothing(t *testing.T) {
 	}
 }
 
+func TestServerInstallComposeFailure(t *testing.T) {
+	isolate(t)
+	f := withCompose(t)
+	f.failOn = "up"
+	t.Setenv("LLM", "fakellmkey")
+	run(t, "secret", "set", "llm_api_key", "--from-env", "LLM")
+	code, _, errOut := run(t, "server", "install", "--api-port", strconv.Itoa(closedPort(t)), "--ui-port", "19999")
+	if code != output.Blocked || !strings.Contains(errOut, "port is already allocated") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+}
+
 func TestServerInstallHealthTimeout(t *testing.T) {
 	isolate(t)
 	withCompose(t)
@@ -267,7 +300,7 @@ func TestServerInstallHealthTimeout(t *testing.T) {
 	t.Cleanup(func() { healthTimeout = old })
 	t.Setenv("LLM", "fakellmkey")
 	run(t, "secret", "set", "llm_api_key", "--from-env", "LLM")
-	code, _, errOut := run(t, "server", "install", "--api-port", "1", "--ui-port", "19999")
+	code, _, errOut := run(t, "server", "install", "--api-port", strconv.Itoa(closedPort(t)), "--ui-port", "19999")
 	if code != output.Blocked || !strings.Contains(errOut, "health") {
 		t.Errorf("exit %d: %s", code, errOut)
 	}
@@ -296,7 +329,7 @@ func TestServerStatus(t *testing.T) {
 }
 
 func TestServerStatusAPIDown(t *testing.T) {
-	devInstall(t, true) // port 18888: nothing listens there in tests
+	devInstall(t, true) // a closed port
 	f := withCompose(t)
 	f.ps = ""
 	code, out, _ := run(t, "server", "status")
@@ -378,5 +411,18 @@ func TestServerLLMCheckServerDown(t *testing.T) {
 	devInstall(t, true)
 	if code, _, errOut := run(t, "server", "llm", "check"); code != output.Blocked || !strings.Contains(errOut, "LLM") {
 		t.Errorf("exit %d: %s", code, errOut)
+	}
+}
+
+// A state hash with no bank on the server (volume wiped) must recreate and
+// reconfigure the bank.
+func TestBankApplyRecreatesAWipedBank(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	_ = state.Update(d, "test", func(s *state.State) error { s.BankConfigHash = server.TemplateHash(); return nil })
+	_, out, _ := run(t, "bank", "apply", "--json")
+	if !strings.Contains(out, `"created": true`) || !strings.Contains(out, `"sent": true`) {
+		t.Errorf("%s", out)
 	}
 }

@@ -32,10 +32,12 @@ func dryRun(t *testing.T, status int, body string) (*hindsight.Client, *map[stri
 func TestProviderCheckPasses(t *testing.T) {
 	c, req := dryRun(t, 200, `{"facts":[{"text":"The billing service keeps PostgreSQL 16 instead of MySQL because it needs partial indexes (decided 2026-10-24).","fact_type":"world"},{"text":"postgres:16 is pinned in billing/compose.yaml.","fact_type":"experience"}],"usage":{"input_tokens":900,"output_tokens":80}}`)
 	res, err := CheckProvider(context.Background(), c, "claude-memory")
-	if err != nil || res.Facts != 2 || res.InputTokens != 900 {
+	if err != nil || res.Facts != 2 || res.InputTokens != 900 || res.OutputTokens != 80 || len(res.Sample) != 2 || !strings.HasPrefix(res.Sample[1], "postgres:16 is pinned") {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if (*req)["strategy"] != "conversation" || !strings.Contains((*req)["content"].(string), "PostgreSQL") || (*req)["timestamp"] == "" {
+	content, _ := (*req)["content"].(string)
+	if (*req)["strategy"] != "conversation" || !strings.Contains(content, "PostgreSQL") ||
+		(*req)["timestamp"] != "2026-10-24T09:00:00Z" || (*req)["context"] != "backsight provider check" {
 		t.Errorf("request %v", *req)
 	}
 }
@@ -66,6 +68,8 @@ func TestLooksEnglish(t *testing.T) {
 		"Deploy to la-defense-cluster on 2026-10-24.":                               true, // one stray token is fine
 		"Le service garde PostgreSQL pour les index partiels.":                      false,
 		"Décision : on garde la base actuelle.":                                     false,
+		"Le service billing uses PostgreSQL.":                                       true,  // one French word
+		"Le service pour billing uses PostgreSQL.":                                  false, // two
 	} {
 		if got := looksEnglish(text); got != want {
 			t.Errorf("%q: %v", text, got)

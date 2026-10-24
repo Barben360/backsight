@@ -48,6 +48,12 @@ func TestRenderDevInstall(t *testing.T) {
 	}
 	golden(t, "compose.dev.yaml", f.Compose)
 	golden(t, "env.dev", f.Env)
+	// compose.yaml is world-readable: no secret may land in it.
+	for _, v := range []string{secrets.APIKey, secrets.UIKey, secrets.DBPassword, secrets.LLMAPIKey} {
+		if strings.Contains(string(f.Compose), v) {
+			t.Errorf("secret %q in compose.yaml", v)
+		}
+	}
 }
 
 func TestRenderPrivateExposureAndOverrides(t *testing.T) {
@@ -80,6 +86,10 @@ func TestRenderListsMissingSecrets(t *testing.T) {
 	var missing *MissingSecretsError
 	if !errors.As(err, &missing) || strings.Join(missing.Names, ",") != "api_key,db_password,llm_api_key" {
 		t.Errorf("got %v", err)
+	}
+	_, err = Render(devConfig(), config.Secrets{APIKey: "a", DBPassword: "b", LLMAPIKey: "c"}, "box")
+	if !errors.As(err, &missing) || strings.Join(missing.Names, ",") != "ui_key" || !strings.Contains(err.Error(), "backsight secret set ui_key") {
+		t.Errorf("ui_key: %v", err)
 	}
 }
 

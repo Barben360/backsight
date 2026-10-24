@@ -31,7 +31,7 @@ func (f *fakeBank) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"banks":[` + strings.Join(items, ",") + `]}`))
 	case r.Method == http.MethodPut:
-		f.banks = append(f.banks, "claude-memory")
+		f.banks = append(f.banks, strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"))
 		_, _ = w.Write([]byte(`{}`))
 	case r.Method == http.MethodPatch:
 		var body struct {
@@ -102,7 +102,7 @@ func TestApplyCreatesBankAndSendsTemplate(t *testing.T) {
 func TestApplyUnchangedTemplateSendsNothing(t *testing.T) {
 	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
 	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", TemplateHash(), false)
-	if err != nil || res.Created || res.Sent || len(f.patches) != 0 {
+	if err != nil || res.Created || res.Sent || len(f.patches) != 0 || hasCall(f, "PUT") {
 		t.Errorf("%+v %v calls %v", res, err, f.calls)
 	}
 	res, err = ApplyBank(context.Background(), client(t, f), "claude-memory", TemplateHash(), true)
@@ -114,7 +114,7 @@ func TestApplyUnchangedTemplateSendsNothing(t *testing.T) {
 func TestApplyNewTemplateResends(t *testing.T) {
 	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
 	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", "older-template-hash", false)
-	if err != nil || res.Created || !res.Sent {
+	if err != nil || res.Created || !res.Sent || hasCall(f, "PUT") {
 		t.Errorf("%+v %v", res, err)
 	}
 }
@@ -133,5 +133,42 @@ func TestApplyVerifiesReadBack(t *testing.T) {
 	c, _ := hindsight.New(srv.URL, "k", 2*time.Second)
 	if _, err := ApplyBank(context.Background(), c, "claude-memory", "", false); err == nil || !strings.Contains(err.Error(), "retain_strategies") {
 		t.Errorf("want a read-back error naming the missing keys, got %v", err)
+	}
+}
+
+func hasCall(f *fakeBank, method string) bool {
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, method+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// After a volume wipe state.json still holds the hash: the recreated bank
+// must get its template.
+func TestApplyRecreatedBankGetsTemplateDespiteHash(t *testing.T) {
+	f := &fakeBank{overrides: map[string]json.RawMessage{}}
+	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", TemplateHash(), false)
+	if err != nil || !res.Created || !res.Sent || len(f.patches) != 1 || f.banks[0] != "claude-memory" {
+		t.Errorf("%+v %v banks %v", res, err, f.banks)
+	}
+}
+
+func TestApplyServerErrors(t *testing.T) {
+	for name, failing := range map[string]string{"list": "GET /v1/default/banks", "patch": "PATCH"} {
+		f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.Method+" "+r.URL.Path, failing) {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			f.handler(w, r)
+		}))
+		c, _ := hindsight.New(srv.URL, "k", 2*time.Second)
+		if _, err := ApplyBank(context.Background(), c, "claude-memory", "", false); err == nil {
+			t.Errorf("%s failure not reported", name)
+		}
+		srv.Close()
 	}
 }

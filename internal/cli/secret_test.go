@@ -56,11 +56,13 @@ func TestSecretSetFromEnvAndFile(t *testing.T) {
 }
 
 func TestSecretSetRefusals(t *testing.T) {
-	isolate(t)
+	home := isolate(t)
+	keyFile := filepath.Join(home, "key.txt")
+	_ = os.WriteFile(keyFile, []byte("fakevalue4\n"), 0o600)
 	cases := map[string][]string{
 		"unknown name":   {"secret", "set", "password", "--from-env", "HOME"},
 		"unset env":      {"secret", "set", "llm_api_key", "--from-env", "BACKSIGHT_NO_SUCH_VAR"},
-		"both sources":   {"secret", "set", "llm_api_key", "--from-env", "HOME", "--from-file", "/etc/hostname"},
+		"both sources":   {"secret", "set", "llm_api_key", "--from-env", "HOME", "--from-file", keyFile},
 		"missing name":   {"secret", "set"},
 		"value argument": {"secret", "set", "llm_api_key", "fakevalue4"},
 	}
