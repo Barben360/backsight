@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Barben360/backsight/internal/claudecode"
 )
 
 // Secret is a string that never prints.
@@ -53,18 +55,13 @@ var mcpRules = []struct{ needle, id string }{
 	{"hindsight-memory-mcp.py", "python-memory-mcp"},
 }
 
-func replacedIn(id, event string) string {
-	switch {
-	case id == "python-retro":
-		return "M3"
-	case id == "npm-plugin-hook" && (event == "Stop" || event == "SessionEnd" || event == "SubagentStop"):
-		return "M2"
-	}
-	return "M1"
-}
+// cutOver is the roadmap milestone that retires every reference piece:
+// until then the reference stack stays the daily memory (ROADMAP v7).
+const cutOver = "M4"
 
-// Discover inspects home. It returns nil when no reference piece exists.
-func Discover(home string) (*Install, error) {
+// Discover inspects home and Claude Code's files at loc. It returns nil
+// when no reference piece exists.
+func Discover(home string, loc claudecode.Location) (*Install, error) {
 	in := &Install{}
 	found := false
 
@@ -100,7 +97,7 @@ func Discover(home string) (*Install, error) {
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
-	if _, err := readJSON(filepath.Join(home, ".claude", "settings.json"), &settings); err != nil {
+	if _, err := readJSON(loc.Settings, &settings); err != nil {
 		return nil, err
 	}
 	for event, groups := range settings.Hooks {
@@ -108,7 +105,7 @@ func Discover(home string) (*Install, error) {
 			for _, h := range g.Hooks {
 				for _, r := range hookRules {
 					if strings.Contains(h.Command, r.needle) {
-						add(Piece{r.id, "settings.json " + event, replacedIn(r.id, event)})
+						add(Piece{r.id, "settings.json " + event, cutOver})
 					}
 				}
 			}
@@ -121,20 +118,23 @@ func Discover(home string) (*Install, error) {
 			Args    []string `json:"args"`
 		} `json:"mcpServers"`
 	}
-	if _, err := readJSON(filepath.Join(home, ".claude.json"), &claudeJSON); err != nil {
+	if _, err := readJSON(loc.State, &claudeJSON); err != nil {
 		return nil, err
 	}
 	for name, s := range claudeJSON.MCPServers {
 		line := s.Command + " " + strings.Join(s.Args, " ")
 		for _, r := range mcpRules {
 			if strings.Contains(line, r.needle) {
-				add(Piece{r.id, ".claude.json mcpServers." + name, "M1"})
+				add(Piece{r.id, ".claude.json mcpServers." + name, cutOver})
 			}
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(home, ".claude", "hooks", "memory-retro.py")); err == nil {
-		add(Piece{"python-retro", ".claude/hooks/memory-retro.py", "M3"})
+	if _, err := os.Stat(filepath.Join(loc.Dir, "hooks", "memory-retro.py")); err == nil {
+		add(Piece{"python-retro", ".claude/hooks/memory-retro.py", cutOver})
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", "memory-retro.timer")); err == nil {
+		add(Piece{"python-retro-timer", "systemd memory-retro.timer", cutOver})
 	}
 
 	if !found && len(in.Pieces) == 0 {
@@ -142,7 +142,7 @@ func Discover(home string) (*Install, error) {
 	}
 	sort.Slice(in.Pieces, func(i, j int) bool {
 		a, b := in.Pieces[i], in.Pieces[j]
-		return a.ReplacedIn+a.ID+a.Where < b.ReplacedIn+b.ID+b.Where
+		return a.ID+a.Where < b.ID+b.Where
 	})
 	return in, nil
 }

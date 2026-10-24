@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/claudecode"
 )
 
 func put(t *testing.T, home, rel, content string) {
@@ -35,7 +37,33 @@ func authorHome(t *testing.T) string {
  "user-memory":{"command":"python3","args":["/h/.claude/hooks/hindsight-memory-mcp.py"],"env":{"TOKEN":"fakevalue"}},
  "vfs":{"command":"vfs","args":["mcp"]}}}`)
 	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
+	put(t, home, ".config/systemd/user/memory-retro.timer", "[Timer]")
 	return home
+}
+
+func at(home string) claudecode.Location {
+	return claudecode.Locate(home, func(string) string { return "" })
+}
+
+// Claude Code files under $CLAUDE_CONFIG_DIR are found there, not in ~/.claude.
+func TestDiscoverFollowsClaudeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, "cc/settings.json", `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"node /h/.hindsight/coding-agents/dist/claude-stop-hook.js"}]}]}}`)
+	put(t, home, "cc/.claude.json", `{"mcpServers":{"hindsight":{"command":"node","args":["/h/.hindsight/coding-agents/dist/mcp-server.js"]}}}`)
+	loc := claudecode.Locate(home, func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return filepath.Join(home, "cc")
+		}
+		return ""
+	})
+	in, err := Discover(home, loc)
+	if err != nil || in == nil {
+		t.Fatalf("%+v %v", in, err)
+	}
+	got := ids(in)
+	if got["npm-plugin-hook|settings.json Stop"] != "M4" || got["npm-plugin-mcp|.claude.json mcpServers.hindsight"] != "M4" || len(got) != 2 {
+		t.Errorf("%v", got)
+	}
 }
 
 func ids(in *Install) map[string]string {
@@ -48,7 +76,7 @@ func ids(in *Install) map[string]string {
 
 func TestDiscoverAuthorMachine(t *testing.T) {
 	home := authorHome(t)
-	in, err := Discover(home)
+	in, err := Discover(home, at(home))
 	if err != nil || in == nil {
 		t.Fatalf("%v %v", in, err)
 	}
@@ -56,15 +84,16 @@ func TestDiscoverAuthorMachine(t *testing.T) {
 		t.Errorf("%+v", in)
 	}
 	want := map[string]string{
-		"npm-plugin-hook|settings.json SessionStart":            "M1",
-		"python-search-hook|settings.json SessionStart":         "M1",
-		"npm-plugin-hook|settings.json UserPromptSubmit":        "M1",
-		"python-search-hook|settings.json UserPromptSubmit":     "M1",
-		"python-search-hook|settings.json PreToolUse":           "M1",
-		"npm-plugin-hook|settings.json Stop":                    "M2",
-		"npm-plugin-mcp|.claude.json mcpServers.hindsight":      "M1",
-		"python-memory-mcp|.claude.json mcpServers.user-memory": "M1",
-		"python-retro|.claude/hooks/memory-retro.py":            "M3",
+		"npm-plugin-hook|settings.json SessionStart":            "M4",
+		"python-search-hook|settings.json SessionStart":         "M4",
+		"npm-plugin-hook|settings.json UserPromptSubmit":        "M4",
+		"python-search-hook|settings.json UserPromptSubmit":     "M4",
+		"python-search-hook|settings.json PreToolUse":           "M4",
+		"npm-plugin-hook|settings.json Stop":                    "M4",
+		"npm-plugin-mcp|.claude.json mcpServers.hindsight":      "M4",
+		"python-memory-mcp|.claude.json mcpServers.user-memory": "M4",
+		"python-retro|.claude/hooks/memory-retro.py":            "M4",
+		"python-retro-timer|systemd memory-retro.timer":         "M4",
 	}
 	got := ids(in)
 	for k, v := range want {
@@ -78,7 +107,8 @@ func TestDiscoverAuthorMachine(t *testing.T) {
 }
 
 func TestDiscoverNothing(t *testing.T) {
-	in, err := Discover(t.TempDir())
+	home := t.TempDir()
+	in, err := Discover(home, at(home))
 	if err != nil || in != nil {
 		t.Errorf("empty home: %+v %v", in, err)
 	}
@@ -88,8 +118,8 @@ func TestDiscoverNothing(t *testing.T) {
 func TestDiscoverHooksWithoutPluginConfig(t *testing.T) {
 	home := t.TempDir()
 	put(t, home, ".claude/settings.json", `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"python3 ~/.claude/hooks/hindsight-multibank.py"}]}]}}`)
-	in, err := Discover(home)
-	if err != nil || in == nil || ids(in)["legacy-multibank-hook|settings.json UserPromptSubmit"] != "M1" || in.URL != "" {
+	in, err := Discover(home, at(home))
+	if err != nil || in == nil || ids(in)["legacy-multibank-hook|settings.json UserPromptSubmit"] != "M4" || in.URL != "" {
 		t.Errorf("%+v %v", in, err)
 	}
 }
@@ -97,13 +127,14 @@ func TestDiscoverHooksWithoutPluginConfig(t *testing.T) {
 func TestDiscoverReportsBrokenFiles(t *testing.T) {
 	home := t.TempDir()
 	put(t, home, ".claude/settings.json", `{"hooks": `)
-	if _, err := Discover(home); err == nil || !strings.Contains(err.Error(), "settings.json") {
+	if _, err := Discover(home, at(home)); err == nil || !strings.Contains(err.Error(), "settings.json") {
 		t.Errorf("want an error naming settings.json, got %v", err)
 	}
 }
 
 func TestTokenNeverPrinted(t *testing.T) {
-	in, _ := Discover(authorHome(t))
+	home := authorHome(t)
+	in, _ := Discover(home, at(home))
 	js, _ := json.Marshal(in)
 	for _, out := range []string{fmt.Sprintf("%v %+v %#v", in, in, *in), string(js)} {
 		if strings.Contains(out, "fakevalue") {
