@@ -2,25 +2,30 @@ package config
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // Secrets is secrets.toml (SPEC Appendix A.2), the only secret store in v1.
 // Its values never print: every fmt verb and JSON show which ones are set.
 type Secrets struct {
-	APIKey         string `toml:"api_key"`
-	UIKey          string `toml:"ui_key"`
-	DBPassword     string `toml:"db_password"`
-	LLMAPIKey      string `toml:"llm_api_key"`
-	BackupIdentity string `toml:"backup_identity"`
+	APIKey         string `toml:"api_key,omitempty"`
+	UIKey          string `toml:"ui_key,omitempty"`
+	DBPassword     string `toml:"db_password,omitempty"`
+	LLMAPIKey      string `toml:"llm_api_key,omitempty"`
+	BackupIdentity string `toml:"backup_identity,omitempty"`
 }
 
 // Names maps each secret name to whether it is set.
@@ -77,4 +82,75 @@ func LoadSecrets(path string) (Secrets, error) {
 		return Secrets{}, fmt.Errorf("%s: invalid TOML", path)
 	}
 	return s, nil
+}
+
+// field returns the secret called name.
+func (s *Secrets) field(name string) (*string, error) {
+	switch name {
+	case "api_key":
+		return &s.APIKey, nil
+	case "ui_key":
+		return &s.UIKey, nil
+	case "db_password":
+		return &s.DBPassword, nil
+	case "llm_api_key":
+		return &s.LLMAPIKey, nil
+	case "backup_identity":
+		return &s.BackupIdentity, nil
+	}
+	return nil, fmt.Errorf("unknown secret %q (one of api_key, ui_key, db_password, llm_api_key, backup_identity)", name)
+}
+
+// Set stores value under name; empty values are refused.
+func (s *Secrets) Set(name, value string) error {
+	f, err := s.field(name)
+	if err != nil {
+		return err
+	}
+	if value == "" {
+		return fmt.Errorf("%s: empty value", name)
+	}
+	*f = value
+	return nil
+}
+
+// GenerateMissing fills the server-side secrets that are unset with 32
+// random bytes (base64url) and returns their names.
+func GenerateMissing(s *Secrets) []string {
+	var made []string
+	for _, name := range []string{"api_key", "db_password", "ui_key"} {
+		f, _ := s.field(name)
+		if *f != "" {
+			continue
+		}
+		b := make([]byte, 32)
+		_, _ = rand.Read(b) // never fails (crypto/rand, Go 1.24+)
+		*f = base64.RawURLEncoding.EncodeToString(b)
+		made = append(made, name)
+	}
+	sort.Strings(made)
+	return made
+}
+
+// UpdateSecrets loads path (missing: empty), applies fn and writes it back
+// with mode 0600, unless the file changed meanwhile. fn's error writes nothing.
+func UpdateSecrets(path string, fn func(*Secrets) error) error {
+	hash, err := fsutil.HashFile(path)
+	if err != nil {
+		return err
+	}
+	var s Secrets
+	if hash != fsutil.Absent {
+		if s, err = LoadSecrets(path); err != nil {
+			return err
+		}
+	}
+	if err := fn(&s); err != nil {
+		return err
+	}
+	raw, err := toml.Marshal(s)
+	if err != nil {
+		return err
+	}
+	return fsutil.ReplaceIfUnchanged(path, raw, 0o600, hash)
 }

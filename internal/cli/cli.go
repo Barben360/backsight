@@ -73,12 +73,22 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
-	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e))
+	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e))
 	return root
 }
 
 // usageError marks cobra's own argument and flag errors.
 type usageError struct{ error }
+
+// usageArgs makes a positional-argument check a usage error (exit 2).
+func usageArgs(check cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := check(cmd, args); err != nil {
+			return usageError{err}
+		}
+		return nil
+	}
+}
 
 // Execute runs backsight with args and returns the process exit code.
 func Execute(args []string, stdout, stderr io.Writer) int {

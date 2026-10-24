@@ -110,3 +110,70 @@ func TestLoadSecretsErrorsNeverEchoValues(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateSecretsCreatesWith0600AndRoundTrips(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c", "secrets.toml")
+	if err := UpdateSecrets(p, func(s *Secrets) error { return s.Set("llm_api_key", "fakevalue9") }); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+			t.Errorf("mode %o", fi.Mode().Perm())
+		}
+	}
+	s, err := LoadSecrets(p)
+	if err != nil || s.LLMAPIKey != "fakevalue9" || s.APIKey != "" {
+		t.Errorf("%v %v", s.Names(), err)
+	}
+	// A second update keeps the first value.
+	if err := UpdateSecrets(p, func(s *Secrets) error { return s.Set("ui_key", "fakevalue8") }); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := LoadSecrets(p); s.LLMAPIKey != "fakevalue9" || s.UIKey != "fakevalue8" {
+		t.Errorf("%v", s.Names())
+	}
+}
+
+func TestUpdateSecretsCallbackErrorWritesNothing(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "secrets.toml")
+	if err := UpdateSecrets(p, func(s *Secrets) error { return s.Set("nope", "x") }); err == nil {
+		t.Fatal("unknown name accepted")
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Error("file written despite the error")
+	}
+}
+
+func TestUpdateSecretsRefusesUnsafeExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes")
+	}
+	p := writeSecrets(t, secretsTOML, 0o644)
+	if err := UpdateSecrets(p, func(s *Secrets) error { return s.Set("ui_key", "x") }); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestSetRefusesEmptyAndUnknown(t *testing.T) {
+	var s Secrets
+	if err := s.Set("api_key", ""); err == nil {
+		t.Error("empty value accepted")
+	}
+	if err := s.Set("password", "x"); err == nil || !strings.Contains(err.Error(), "llm_api_key") {
+		t.Errorf("an unknown name must list the valid ones, got %v", err)
+	}
+}
+
+func TestGenerateMissing(t *testing.T) {
+	s := Secrets{UIKey: "keep"}
+	got := GenerateMissing(&s)
+	if strings.Join(got, ",") != "api_key,db_password" || s.UIKey != "keep" || s.LLMAPIKey != "" {
+		t.Errorf("generated %v: %v", got, s.Names())
+	}
+	if len(s.APIKey) != 43 || s.APIKey == s.DBPassword || strings.ContainsAny(s.APIKey, "+/=") {
+		t.Errorf("want two distinct 32-byte base64url values, got lengths %d", len(s.APIKey))
+	}
+	if again := GenerateMissing(&s); len(again) != 0 {
+		t.Errorf("second run generated %v", again)
+	}
+}
