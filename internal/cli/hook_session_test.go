@@ -179,3 +179,16 @@ func TestReadHooksRespectTheComponentsFlagAndAMissingConfig(t *testing.T) {
 		t.Errorf("no config still injected: %+v", h)
 	}
 }
+
+func TestSessionStartBannerShowsDrift(t *testing.T) {
+	home := hookHome(t)
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if strings.Contains(h.SystemMessage, "drifted") {
+		t.Errorf("never installed: no drift line: %q", h.SystemMessage)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.PluginVersion = "0.0.0-old"; return nil })
+	h = fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.SystemMessage, "drifted") || !strings.Contains(h.SystemMessage, "backsight client install") {
+		t.Errorf("banner %q", h.SystemMessage)
+	}
+}

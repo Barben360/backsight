@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -71,6 +74,12 @@ func (h *hookEnv) sessionStart() []byte {
 		text, items, source, err = h.briefing()
 		if err != nil {
 			banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("server unreachable"), true
+		}
+	}
+	if st, err := state.Load(h.dirs.StateFile()); err == nil {
+		settings := claudecode.Locate(h.home, os.Getenv).Settings
+		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version); len(drift) > 0 {
+			banner += "\nbacksight: Claude Code wiring drifted (" + drift[0] + "): run `backsight client install`"
 		}
 	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {

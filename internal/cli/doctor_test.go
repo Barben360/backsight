@@ -10,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // isolate points backsight and Claude Code at empty temp dirs and fakes the
@@ -92,5 +93,18 @@ func TestDoctorTextErrorExitsBlockedWithoutStderr(t *testing.T) {
 	}
 	if errOut != "" {
 		t.Errorf("the report already says it; stderr must stay empty: %q", errOut)
+	}
+}
+
+func TestDoctorClientCheck(t *testing.T) {
+	home := isolate(t)
+	_, out, _ := run(t, "doctor")
+	if !strings.Contains(out, "client") || !strings.Contains(out, "not wired into Claude Code") {
+		t.Errorf("not installed:\n%s", out)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.PluginVersion = "0.0.0-old"; return nil })
+	_, out, _ = run(t, "doctor")
+	if !strings.Contains(out, "Claude Code wiring drifted") || !strings.Contains(out, "permission rule") {
+		t.Errorf("drift:\n%s", out)
 	}
 }

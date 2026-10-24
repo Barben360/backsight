@@ -15,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
@@ -106,6 +108,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
+	add(checkClient(env.Dirs, loc))
 	add(checkGPU(env.GPUs()))
 	return r
 }
@@ -399,6 +402,25 @@ func checkRetention(loc claudecode.Location, managedDir string) Check {
 	} else {
 		c.Fix = "backsight client retention (keeps transcripts 3650 days; backs up " + loc.Settings + " first)"
 	}
+	return c
+}
+
+// checkClient compares Claude Code's wiring with what client install
+// recorded (SPEC §5 drift, §15).
+func checkClient(d paths.Dirs, loc claudecode.Location) Check {
+	c := Check{ID: "client"}
+	st, err := state.Load(d.StateFile())
+	if err != nil || st.PluginVersion == "" {
+		c.Status, c.Summary = Info, "backsight is not wired into Claude Code yet"
+		c.Fix = "backsight client install"
+		return c
+	}
+	drift := plugin.Drift(d.Data, loc.Settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version)
+	if len(drift) == 0 {
+		c.Status, c.Summary = OK, "plugin "+st.PluginVersion+" and permission rule in place"
+		return c
+	}
+	c.Status, c.Summary, c.Detail, c.Fix = Warn, "Claude Code wiring drifted", strings.Join(drift, "; "), "backsight client install"
 	return c
 }
 
