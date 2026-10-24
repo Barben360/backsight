@@ -1,0 +1,8 @@
+# Default gitleaks rules, plus one allowlisted path: the redaction corpus
+# must contain credential-shaped fakes to prove they are caught.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "redaction corpus (fake credentials by design)"
+paths = ['''internal/redact/redact_test\.go''']
