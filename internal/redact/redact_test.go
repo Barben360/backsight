@@ -52,6 +52,12 @@ func TestTruePositives(t *testing.T) {
 		{"npm", "npm_" + rep("a1B2c3D4e5F6", 3), "npm_token", "a1B2c3D4e5F6a1B2"},
 		{"url password with slash", "postgres://u:pa/ss@h/db", "url_password", "pa/ss"},
 		{"high entropy", "token is " + rep("aB3dE5gH9kZx", 3) + " ok", "high_entropy", "aB3dE5gH9kZx"},
+		// M1 review probes
+		{"bare PASS key", "export DB_PASS=Zx9kLmQ2wP", "secret_value", "Zx9kLmQ2wP"},
+		{"hyphenated api key header", `curl -H "X-API-Key: 7fA9qL2mZx8Pw3Rt" https://x`, "secret_value", "7fA9qL2mZx8Pw3Rt"},
+		{"escaped json", `{\"api_key\": \"q8Fh2LmZp0Xr7Tn\"}`, "secret_value", "q8Fh2LmZp0Xr7Tn"},
+		{"authorization token", "Authorization: Token " + rep("0123456789abcdef", 2), "auth_header", "0123456789abcdef0123"},
+		{"gitlab", "remote https://oauth2:x@h " + "gl" + "pat-" + rep("xY7kQ2mZ9p", 2), "gitlab_token", "xY7kQ2mZ9pxY7kQ2mZ9p"},
 	}
 	for _, c := range cases {
 		out, kinds := Text(c.in)
@@ -114,6 +120,11 @@ func TestLookAlikesSurvive(t *testing.T) {
 		"Downloads/Contrat_CDI_-_Jean_DUPONT_au_01.07.2026.pdf",
 		"sed 's/password:.*/password: ***/' netplan.yaml",
 		"Crée un token : Paramètres → Sécurité",
+		"bypass_mode=enabled and compass=north",
+		"passport_number = 12",
+		"use the --pass-through flag",
+		"Authorization: header missing",
+		"PASS=1",
 	} {
 		out, kinds := Text(s)
 		if out != s || len(kinds) != 0 {
