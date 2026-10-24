@@ -25,6 +25,7 @@ const SchemaVersion = 1
 type Config struct {
 	SchemaVersion int        `toml:"schema_version" json:"schema_version"`
 	Server        Server     `toml:"server" json:"server"`
+	Client        Client     `toml:"client" json:"client"`
 	Projects      Projects   `toml:"projects" json:"projects"`
 	Privacy       Privacy    `toml:"privacy" json:"privacy"`
 	Components    Components `toml:"components" json:"components"`
@@ -44,6 +45,11 @@ type Server struct {
 	UIPort     int    `toml:"ui_port" json:"ui_port"`
 	ComposeDir string `toml:"compose_dir" json:"compose_dir"`
 	Digest     string `toml:"digest" json:"digest"` // empty: the binary's pin
+}
+
+// Client is what backsight keeps in Claude Code's own settings (0052).
+type Client struct {
+	RetentionDays int `toml:"retention_days" json:"retention_days"` // cleanupPeriodDays floor; 0 = not managed
 }
 
 type Projects struct {
@@ -267,6 +273,7 @@ func (c Config) Validate() error {
 	if c.Hooks.OutboxWarnMB > c.Hooks.OutboxMaxMB {
 		bad("hooks.outbox_warn_mb", "(%d) must not exceed hooks.outbox_max_mb (%d)", c.Hooks.OutboxWarnMB, c.Hooks.OutboxMaxMB)
 	}
+	atLeast("client.retention_days", c.Client.RetentionDays, 0)
 	atLeast("backup.keep_daily", c.Backup.KeepDaily, 0)
 	atLeast("backup.keep_weekly", c.Backup.KeepWeekly, 0)
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })

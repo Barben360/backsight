@@ -148,6 +148,21 @@ func RemoveWhere(doc []byte, path []string, match func(key string, v any) bool) 
 	}
 }
 
+// Get returns the decoded value at path (numbers as json.Number) and
+// whether it exists.
+func Get(doc []byte, path []string) (any, bool, error) {
+	var v any
+	var found bool
+	_, err := patch(doc, func(src []byte, root *node) ([]byte, error) {
+		n, i, err := walk(root, path)
+		if err == nil && i == len(path) {
+			v, found = decode(src[n.start:n.end]), true
+		}
+		return src, err
+	}, nil)
+	return v, found, err
+}
+
 // MarkedBlock puts text between backsight's markers for id, replacing an
 // existing block; an empty text removes the block.
 func MarkedBlock(doc []byte, id, text string) ([]byte, Change) {

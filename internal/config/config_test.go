@@ -128,6 +128,7 @@ func TestValidate(t *testing.T) {
 		{"no transverse alias", func(c *Config) { c.Projects.Transverse = nil }, "projects.transverse"},
 		{"outbox order", func(c *Config) { c.Hooks.OutboxWarnMB = 600 }, "hooks.outbox_warn_mb"},
 		{"backup keep", func(c *Config) { c.Backup.KeepDaily = -1 }, "backup.keep_daily"},
+		{"retention", func(c *Config) { c.Client.RetentionDays = -1 }, "client.retention_days"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -169,6 +170,7 @@ func TestValidateIntegerBoundaries(t *testing.T) {
 		"recall.reminder_min_chars":   {0, func(c *Config, v int) { c.Recall.ReminderMinChars = v }},
 		"recall.quiet_prompts":        {0, func(c *Config, v int) { c.Recall.QuietPrompts = v }},
 		"backup.keep_daily":           {0, func(c *Config, v int) { c.Backup.KeepDaily = v }},
+		"client.retention_days":       {0, func(c *Config, v int) { c.Client.RetentionDays = v }},
 		"backup.keep_weekly":          {0, func(c *Config, v int) { c.Backup.KeepWeekly = v }},
 	}
 	for key, k := range keys {

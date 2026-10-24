@@ -32,6 +32,7 @@ type State struct {
 	// RetainSince: live retain only takes sessions started after it; older
 	// ones belong to backfill (decision 0050).
 	RetainSince *time.Time `json:"retain_since,omitempty"`
+	Client      *Client    `json:"client,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -86,6 +87,13 @@ func knownKeys() []string {
 		}
 	}
 	return keys
+}
+
+// Client remembers Claude Code settings as they were before backsight first
+// changed them, so uninstall can offer them back (decision 0052).
+type Client struct {
+	// RetentionBefore: absent = not recorded yet; null = the key was absent.
+	RetentionBefore json.RawMessage `json:"retention_before,omitempty"`
 }
 
 // Backfill tracks the replay of past transcripts (decision 0037).
