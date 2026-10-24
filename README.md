@@ -17,3 +17,9 @@ backsight is an independent project, not affiliated with or endorsed by Anthropi
 ## License
 
 MIT, see `LICENSE`.
+
+## Development
+
+`make test` (race detector), `make lint` (golangci-lint v2), `make cross` (compiles the four release targets), `make build` → `bin/backsight`.
+
+Every command accepts `--json` and prints one envelope `{schema_version, command, ok, data | error}`. Exit codes: `0` ok, `2` invalid invocation, `10` needs the user, `20` blocked by the environment, `30` failed and rolled back, `40` partial and resumable.
