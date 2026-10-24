@@ -72,10 +72,12 @@ func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return write(target, data, perm)
+	return write(target, data, perm, nil)
 }
 
-func write(path string, data []byte, perm fs.FileMode) error {
+// write puts data at path through a synced temp file; check, when set, runs
+// right before the rename and aborts it with its error.
+func write(path string, data []byte, perm fs.FileMode, check func() error) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -103,6 +105,11 @@ func write(path string, data []byte, perm fs.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
@@ -125,8 +132,8 @@ func syncDir(dir string) {
 // ReplaceIfUnchanged writes path only if its current hash is want (Absent:
 // the file must not exist), so a concurrent edit by the user is never lost.
 // An existing file keeps its mode; perm applies to a new file. Symlinks are
-// followed. The check and the rename are not one atomic step; the window is
-// the time to write one small file.
+// followed. The hash is checked again after the temp file is synced, right
+// before the rename, so the window left is one stat-and-rename.
 func ReplaceIfUnchanged(path string, data []byte, perm fs.FileMode, want string) error {
 	target, err := resolve(path)
 	if err != nil {
@@ -142,5 +149,10 @@ func ReplaceIfUnchanged(path string, data []byte, perm fs.FileMode, want string)
 	if fi, err := os.Stat(target); err == nil {
 		perm = fi.Mode().Perm()
 	}
-	return write(target, data, perm)
+	return write(target, data, perm, func() error {
+		if got, err := HashFile(target); err != nil || got != want {
+			return fmt.Errorf("%s: %w", path, ErrConflict)
+		}
+		return nil
+	})
 }

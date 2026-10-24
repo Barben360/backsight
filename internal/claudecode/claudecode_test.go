@@ -171,3 +171,22 @@ func TestZeroRetentionIsAValue(t *testing.T) {
 		t.Errorf("%+v %v", got, err)
 	}
 }
+
+// What the config editor accepts, retention reading accepts too: an empty
+// file is {}, a BOM is skipped, a non-integer value counts as unset (M1
+// review).
+func TestReadRetentionToleratesWhatTheEditorAccepts(t *testing.T) {
+	for _, c := range []struct {
+		doc  string
+		want int
+	}{{"", 30}, {"  \n", 30}, {"\xef\xbb\xbf{\"cleanupPeriodDays\": 90}", 90}, {`{"cleanupPeriodDays": "90"}`, 30}, {`{"cleanupPeriodDays": 9.5}`, 30}, {`{"cleanupPeriodDays": null}`, 30}} {
+		home := t.TempDir()
+		loc := Locate(home, func(string) string { return "" })
+		_ = os.MkdirAll(loc.Dir, 0o700)
+		_ = os.WriteFile(loc.Settings, []byte(c.doc), 0o600)
+		r, err := ReadRetention(loc, filepath.Join(home, "etc"))
+		if err != nil || r.EffectiveDays != c.want {
+			t.Errorf("%q: %+v %v", c.doc, r, err)
+		}
+	}
+}

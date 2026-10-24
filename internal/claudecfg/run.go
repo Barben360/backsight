@@ -81,15 +81,44 @@ func Plan(edits []Edit) ([]FileResult, error) {
 // run's pre-image directory; ts is empty when nothing was written.
 func (r Runner) Apply(edits []Edit) (string, []FileResult, error) {
 	run := runState{r: r, action: "edit"}
+	defer run.finish()
 	var res []FileResult
 	for _, e := range edits {
 		fr, err := run.edit(e)
 		res = append(res, fr)
 		if err != nil {
-			return run.ts, res, err
+			return run.done(), res, err
 		}
 	}
-	return run.ts, res, nil
+	return run.done(), res, nil
+}
+
+// done is the run's id, empty when it wrote nothing.
+func (s *runState) done() string {
+	if len(s.m.Files) == 0 {
+		return ""
+	}
+	return s.ts
+}
+
+// finish drops the run directory when nothing was written, then prunes:
+// runs without a manifest (crash leftovers) and all but the last keepRuns.
+// Pruning after the run, never during it, keeps a run being restored whole.
+func (s *runState) finish() {
+	if s.ts != "" && len(s.m.Files) == 0 {
+		_ = os.RemoveAll(filepath.Join(s.r.PreImages, s.ts))
+	}
+	ents, _ := os.ReadDir(s.r.PreImages)
+	for _, e := range ents {
+		if _, err := os.Stat(filepath.Join(s.r.PreImages, e.Name(), "manifest.json")); e.IsDir() && err != nil && e.Name() != s.ts {
+			_ = os.RemoveAll(filepath.Join(s.r.PreImages, e.Name()))
+		}
+	}
+	runs, _ := Runs(s.r.PreImages)
+	for len(runs) > keepRuns {
+		_ = os.RemoveAll(filepath.Join(s.r.PreImages, runs[0]))
+		runs = runs[1:]
+	}
 }
 
 type runState struct {
@@ -151,11 +180,16 @@ func (s *runState) write(target string, before []byte, sha string, after []byte)
 		}
 		mf.PreImage = &name
 	}
+	var err error
 	if after == nil {
-		if err := removeIfUnchanged(target, sha); err != nil {
-			return err
+		err = removeIfUnchanged(target, sha)
+	} else {
+		err = fsutil.ReplaceIfUnchanged(target, after, 0o600, sha)
+	}
+	if err != nil {
+		if mf.PreImage != nil { // nothing replaced: no pre-image for it
+			_ = os.Remove(filepath.Join(dir, *mf.PreImage))
 		}
-	} else if err := fsutil.ReplaceIfUnchanged(target, after, 0o600, sha); err != nil {
 		return err
 	}
 	s.m.Files = append(s.m.Files, mf)
@@ -177,7 +211,8 @@ func removeIfUnchanged(path, want string) error {
 	return os.Remove(path)
 }
 
-// newRun creates a fresh pre-image directory and prunes old runs.
+// newRun creates a fresh pre-image directory; same-instant runs get a
+// zero-padded suffix so names sort in creation order.
 func (r Runner) newRun() (string, error) {
 	now := time.Now
 	if r.Now != nil {
@@ -196,17 +231,12 @@ func (r Runner) newRun() (string, error) {
 		if !errors.Is(err, os.ErrExist) {
 			return "", err
 		}
-		ts = fmt.Sprintf("%s-%d", base, i)
-	}
-	runs, _ := Runs(r.PreImages)
-	for len(runs) > keepRuns {
-		_ = os.RemoveAll(filepath.Join(r.PreImages, runs[0]))
-		runs = runs[1:]
+		ts = fmt.Sprintf("%s-%03d", base, i)
 	}
 	return ts, nil
 }
 
-// Runs lists the run directories, oldest first.
+// Runs lists the completed runs (those with a manifest), oldest first.
 func Runs(dir string) ([]string, error) {
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -217,7 +247,7 @@ func Runs(dir string) ([]string, error) {
 	}
 	var runs []string
 	for _, e := range ents {
-		if e.IsDir() {
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "manifest.json")); e.IsDir() && err == nil {
 			runs = append(runs, e.Name())
 		}
 	}
@@ -291,6 +321,7 @@ func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) 
 		return ts, res, fmt.Errorf("%d file(s) %w", countStatus(res, "refused"), ErrChangedSince)
 	}
 	run := runState{r: r, action: "restore"}
+	defer run.finish()
 	for i, f := range m.Files {
 		if res[i].Status == "unchanged" {
 			continue
@@ -304,17 +335,36 @@ func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) 
 				want = []byte{}
 			}
 		}
-		if err := run.put(f.Target, want); err != nil {
-			return run.ts, res, err
+		beforePut()
+		if err := run.put(f.Target, want, f.ShaAfter, force); err != nil {
+			if errors.Is(err, fsutil.ErrConflict) {
+				res[i].Status, res[i].Reason = "refused", ErrChangedSince.Error()
+				err = fmt.Errorf("%s %w", f.Target, ErrChangedSince)
+			}
+			return run.done(), res, err
 		}
 		res[i].Status = map[bool]string{true: "deleted", false: "restored"}[want == nil]
 	}
-	return run.ts, res, nil
+	return run.done(), res, nil
 }
 
-// put makes target hold want (nil: absent), backing up what it replaces;
-// a concurrent change is retried like an edit.
-func (s *runState) put(target string, want []byte) error {
+// beforePut is a test seam: it runs between a restore's check and its write.
+var beforePut = func() {}
+
+// put makes target hold want (nil: absent), backing up what it replaces.
+// Without force it writes only over expect, the bytes the restored run left
+// (a later change is a conflict); with force it re-reads and retries.
+func (s *runState) put(target string, want []byte, expect string, force bool) error {
+	if !force {
+		doc, sha, err := fsutil.ReadHashed(target)
+		if err != nil {
+			return err
+		}
+		if sha != expect {
+			return fmt.Errorf("%s: %w", target, fsutil.ErrConflict)
+		}
+		return s.write(target, doc, sha, want)
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		doc, sha, err := fsutil.ReadHashed(target)
 		if err != nil {

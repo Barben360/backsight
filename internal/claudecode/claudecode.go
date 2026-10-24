@@ -4,6 +4,7 @@
 package claudecode
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,13 +95,21 @@ func cleanupDays(path string) (*int, error) {
 	if err != nil {
 		return nil, err
 	}
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil // an empty file is {} (decision 0052)
+	}
 	var s struct {
-		CleanupPeriodDays *int `json:"cleanupPeriodDays"`
+		CleanupPeriodDays json.RawMessage `json:"cleanupPeriodDays"`
 	}
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return s.CleanupPeriodDays, nil
+	var days int
+	if string(s.CleanupPeriodDays) == "null" || json.Unmarshal(s.CleanupPeriodDays, &days) != nil {
+		return nil, nil // absent, or not an integer: Claude Code's default applies
+	}
+	return &days, nil
 }
 
 // Transcripts summarises the session transcripts Claude Code keeps.

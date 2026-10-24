@@ -50,10 +50,12 @@ func Set(doc []byte, path []string, value any) ([]byte, Change, error) {
 		}
 		if i == len(path) { // exists: replace the value
 			old := string(src[obj.start:obj.end])
-			ch.Old = &old
 			if equalJSON(old, enc) {
+				ch.Old = ch.New
 				return src, nil
 			}
+			shown, _ := redact.Text(old) // the value replaced may be a token
+			ch.Old = &shown
 			return splice(src, obj.start, obj.end, reindent(enc, lineIndent(src, obj.start), indentUnit(src))), nil
 		}
 		return insertMember(src, obj, path[i], nest(path[i+1:], value))
@@ -64,7 +66,7 @@ func Set(doc []byte, path []string, value any) ([]byte, Change, error) {
 // EnsureInArray appends value to the array at path unless an equal element
 // is already there; a missing array is created.
 func EnsureInArray(doc []byte, path []string, value any) ([]byte, Change, error) {
-	ch := Change{Path: showPath(path)}
+	ch := Change{Path: showPath(path) + "[+]"} // the appended element, not the whole array
 	enc, err := encode(value)
 	if err != nil {
 		return nil, ch, err
@@ -100,6 +102,7 @@ func RemoveWhere(doc []byte, path []string, match func(key string, v any) bool) 
 	out := doc
 	for {
 		var hit *Change
+		var hitKey string
 		next, err := patch(out, func(src []byte, root *node) ([]byte, error) {
 			n, i, err := walk(root, path)
 			if err != nil || i < len(path) {
@@ -129,13 +132,13 @@ func RemoveWhere(doc []byte, path []string, match func(key string, v any) bool) 
 				return src, nil
 			}
 			old, _ := redact.Text(string(src[n.item(k).start:n.item(k).end]))
-			hit = &Change{Path: showPath(append(append([]string{}, path...), key)), Old: &old}
+			hit, hitKey = &Change{Path: showPath(append(append([]string{}, path...), key)), Old: &old}, key
 			return removeItem(src, n, k), nil
 		}, func(tree any) (any, error) {
 			if hit == nil {
 				return tree, nil
 			}
-			return treeRemove(tree, path, hit.Path[strings.LastIndex(hit.Path, ".")+1:])
+			return treeRemove(tree, path, hitKey)
 		})
 		if err != nil {
 			return nil, nil, err
@@ -164,8 +167,9 @@ func Get(doc []byte, path []string) (any, bool, error) {
 }
 
 // MarkedBlock puts text between backsight's markers for id, replacing an
-// existing block; an empty text removes the block.
-func MarkedBlock(doc []byte, id, text string) ([]byte, Change) {
+// existing block; an empty text removes the block. Unbalanced or repeated
+// markers are refused: editing them would swallow the user's text.
+func MarkedBlock(doc []byte, id, text string) ([]byte, Change, error) {
 	begin, end := "<!-- backsight:"+id+":begin -->", "<!-- backsight:"+id+":end -->"
 	block := begin + "\n" + strings.TrimRight(text, "\n") + "\n" + end
 	ch := Change{Path: "block " + id}
@@ -173,11 +177,17 @@ func MarkedBlock(doc []byte, id, text string) ([]byte, Change) {
 	if text != "" {
 		ch.New = &block
 	}
-	b := strings.Index(s, begin)
-	e := strings.Index(s, end)
-	if b >= 0 && e > b {
-		old := s[b : e+len(end)]
+	nb, ne := strings.Count(s, begin), strings.Count(s, end)
+	b, e := strings.Index(s, begin), strings.Index(s, end)
+	if nb > 1 || ne > 1 || nb != ne || (nb == 1 && e < b) {
+		return nil, ch, fmt.Errorf("the %s markers are unbalanced or repeated: fix them by hand first", id)
+	}
+	if nb == 1 {
+		old, _ := redact.Text(s[b : e+len(end)])
 		ch.Old = &old
+		if s[b:e+len(end)] == block {
+			ch.Old = ch.New
+		}
 		if text == "" { // drop the block, its line break and the blank line before it
 			before, after := strings.TrimRight(s[:b], "\n"), strings.TrimPrefix(s[e+len(end):], "\n")
 			if before != "" {
@@ -186,17 +196,17 @@ func MarkedBlock(doc []byte, id, text string) ([]byte, Change) {
 					before += "\n"
 				}
 			}
-			return []byte(before + after), ch
+			return []byte(before + after), ch, nil
 		}
-		return []byte(s[:b] + block + s[e+len(end):]), ch
+		return []byte(s[:b] + block + s[e+len(end):]), ch, nil
 	}
 	if text == "" {
-		return doc, ch
+		return doc, ch, nil
 	}
 	if s == "" {
-		return []byte(block + "\n"), ch
+		return []byte(block + "\n"), ch, nil
 	}
-	return []byte(strings.TrimRight(s, "\n") + "\n\n" + block + "\n"), ch
+	return []byte(strings.TrimRight(s, "\n") + "\n\n" + block + "\n"), ch, nil
 }
 
 // patch parses doc (an empty doc is {}), runs edit on the bytes and, when

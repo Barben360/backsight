@@ -282,3 +282,102 @@ func TestRestoreWithoutRuns(t *testing.T) {
 		t.Error("restore with no run must fail")
 	}
 }
+
+// A run that ends without writing (every attempt conflicted) leaves no run
+// behind: the default restore still finds the last real run, and failed
+// runs never push real ones out (M1 review).
+func TestBusyRunsLeaveNoRunAndPruneNothing(t *testing.T) {
+	r, dir := runner(t)
+	target := filepath.Join(dir, "settings.json")
+	_ = os.WriteFile(target, []byte(`{}`), 0o600)
+	good, _, err := r.Apply([]Edit{{Target: target, Apply: retention(3650)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := func(doc []byte) ([]byte, []Change, error) {
+		_ = os.WriteFile(target, append(doc, ' '), 0o600)
+		return retention(1)(doc)
+	}
+	for i := 0; i < 21; i++ {
+		if _, _, err := r.Apply([]Edit{{Target: target, Apply: busy}}); !errors.Is(err, ErrBusy) {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	ents, _ := os.ReadDir(r.PreImages)
+	if len(ents) != 1 || ents[0].Name() != good {
+		t.Fatalf("pre-images %v, want only %s", ents, good)
+	}
+	if _, _, err := r.Restore("", true); err != nil {
+		t.Errorf("default restore after busy runs: %v", err)
+	}
+}
+
+// Restoring the oldest kept run must not prune it halfway (M1 review).
+func TestRestoringTheOldestRunKeepsItWhole(t *testing.T) {
+	r, dir := runner(t)
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	oldest, _, _ := r.Apply([]Edit{{Target: a, Apply: retention(1)}, {Target: b, Apply: retention(1)}})
+	for i := 2; i <= 20; i++ {
+		_, _, _ = r.Apply([]Edit{{Target: filepath.Join(dir, "c.json"), Apply: retention(i)}})
+	}
+	_, res, err := r.Restore(oldest, false)
+	if err != nil || len(res) != 2 || res[0].Status != "deleted" || res[1].Status != "deleted" {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	for _, p := range []string{a, b} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s not restored", p)
+		}
+	}
+}
+
+// Without --force a restore writes only over the exact bytes its run left:
+// a change landing between the check and the write is refused, not
+// overwritten (M1 review).
+func TestRestoreNeverOverwritesALateChange(t *testing.T) {
+	r, dir := runner(t)
+	target := filepath.Join(dir, "settings.json")
+	_ = os.WriteFile(target, []byte(`{}`), 0o600)
+	ts, _, _ := r.Apply([]Edit{{Target: target, Apply: retention(3650)}})
+	beforePut = func() { _ = os.WriteFile(target, []byte(`{"late": true}`), 0o600) }
+	t.Cleanup(func() { beforePut = func() {} })
+	if _, _, err := r.Restore(ts, false); !errors.Is(err, ErrChangedSince) {
+		t.Fatalf("err %v", err)
+	}
+	if read(t, target) != `{"late": true}` {
+		t.Error("the late change was overwritten")
+	}
+}
+
+func TestRestoreSkipsAFileAlreadyBackAndJournalsTheRestore(t *testing.T) {
+	r, dir := runner(t)
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, []byte(`{}`), 0o600)
+	_ = os.WriteFile(b, []byte(`{}`), 0o600)
+	ts, _, _ := r.Apply([]Edit{{Target: a, Apply: retention(1)}, {Target: b, Apply: retention(1)}})
+	_ = os.WriteFile(a, []byte(`{}`), 0o600) // the user already put a back by hand
+	r.Command = "client config restore"
+	_, res, err := r.Restore(ts, false)
+	if err != nil || res[0].Status != "unchanged" || res[1].Status != "restored" {
+		t.Fatalf("res %+v err %v", res, err)
+	}
+	j := journal(t, r)
+	last := j[len(j)-1]
+	if len(j) != 3 || last["action"] != "restore" || last["target"] != b || last["command"] != "client config restore" || last["status"] != "done" || last["ts"] == "" {
+		t.Errorf("journal %v", j)
+	}
+}
+
+func TestRunsWithTheSameTimestampSortInOrder(t *testing.T) {
+	r, dir := runner(t)
+	r.Now = func() time.Time { return time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC) }
+	target := filepath.Join(dir, "settings.json")
+	var last string
+	for i := 1; i <= 12; i++ {
+		last, _, _ = r.Apply([]Edit{{Target: target, Apply: retention(i)}})
+	}
+	runs, _ := Runs(r.PreImages)
+	if runs[len(runs)-1] != last {
+		t.Errorf("last run %s sorts before others: %v", last, runs)
+	}
+}

@@ -198,26 +198,83 @@ func TestTabIndentedFilesKeepTabs(t *testing.T) {
 
 func TestMarkedBlock(t *testing.T) {
 	md := "# Me\n\nMy rules.\n"
-	out, ch := MarkedBlock([]byte(md), "memory", "Use memory_search first.")
+	out, ch, _ := MarkedBlock([]byte(md), "memory", "Use memory_search first.")
 	want := md + "\n<!-- backsight:memory:begin -->\nUse memory_search first.\n<!-- backsight:memory:end -->\n"
 	if string(out) != want || !ch.Changed() {
 		t.Fatalf("add:\n%q", out)
 	}
-	again, ch := MarkedBlock(out, "memory", "Use memory_search first.")
+	again, ch, _ := MarkedBlock(out, "memory", "Use memory_search first.")
 	if string(again) != want || ch.Changed() {
 		t.Error("same block twice changed the file")
 	}
 	edited := strings.Replace(want, "My rules.", "My rules, edited.", 1)
-	upd, _ := MarkedBlock([]byte(edited), "memory", "New text.")
+	upd, _, _ := MarkedBlock([]byte(edited), "memory", "New text.")
 	if string(upd) != strings.Replace(edited, "Use memory_search first.", "New text.", 1) {
 		t.Errorf("update:\n%q", upd)
 	}
-	gone, ch := MarkedBlock(upd, "memory", "")
+	gone, ch, _ := MarkedBlock(upd, "memory", "")
 	if string(gone) != "# Me\n\nMy rules, edited.\n" || !ch.Changed() {
 		t.Errorf("remove:\n%q", gone)
 	}
-	fresh, _ := MarkedBlock(nil, "memory", "x")
+	fresh, _, _ := MarkedBlock(nil, "memory", "x")
 	if string(fresh) != "<!-- backsight:memory:begin -->\nx\n<!-- backsight:memory:end -->\n" {
 		t.Errorf("empty file:\n%q", fresh)
+	}
+}
+
+func TestRemoveWhereHandlesKeysWithDotsAndSpaces(t *testing.T) {
+	doc := `{"enabledPlugins": {"hindsight@vectorize.io": true, "my server": true, "keep": true}}`
+	out, chs, err := RemoveWhere([]byte(doc), []string{"enabledPlugins"}, func(k string, _ any) bool { return k != "keep" })
+	if err != nil || string(out) != `{"enabledPlugins": {"keep": true}}` || len(chs) != 2 {
+		t.Fatalf("out %s chs %+v err %v", out, chs, err)
+	}
+	if chs[1].Path != `enabledPlugins."my server"` {
+		t.Errorf("second change %+v", chs[1])
+	}
+	if _, _, err := RemoveWhere([]byte(doc), []string{"enabledPlugins", "keep"}, func(string, any) bool { return true }); err == nil {
+		t.Error("removing under a boolean must be refused")
+	}
+}
+
+// Unbalanced markers would make the next edit swallow the user's text in
+// between: refused (M1 review).
+func TestMarkedBlockRefusesUnbalancedMarkers(t *testing.T) {
+	for _, md := range []string{
+		"<!-- backsight:memory:begin -->\nold\n\n## My notes\nkeep me\n",
+		"## My notes\n<!-- backsight:memory:end -->\n",
+		"<!-- backsight:memory:end -->\n<!-- backsight:memory:begin -->\n",
+		"<!-- backsight:memory:begin -->\na\n<!-- backsight:memory:end -->\n<!-- backsight:memory:begin -->\nb\n<!-- backsight:memory:end -->\n",
+	} {
+		if _, _, err := MarkedBlock([]byte(md), "memory", "new"); err == nil {
+			t.Errorf("accepted:\n%s", md)
+		}
+	}
+}
+
+func TestEnsureInArrayNamesTheAppendedElement(t *testing.T) {
+	_, ch, _ := EnsureInArray([]byte(settings), []string{"permissions", "allow"}, "Edit")
+	if ch.Path != "permissions.allow[+]" || ch.Old != nil || *ch.New != `"Edit"` {
+		t.Errorf("change %+v", ch)
+	}
+}
+
+func TestSetRedactsTheOldValueItReplaces(t *testing.T) {
+	doc := `{"env": {"GITHUB_TOKEN": "ghp_0123456789abcdefghijklmnopqrstuvwxyz01"}}`
+	_, ch, err := Set([]byte(doc), []string{"env", "GITHUB_TOKEN"}, "")
+	if err != nil || ch.Old == nil || strings.Contains(*ch.Old, "0123456789abcdef") || !ch.Changed() {
+		t.Errorf("change %+v err %v", ch, err)
+	}
+}
+
+// The bytes-vs-tree check refuses a patch that does not do what the
+// operation means, even when the bytes are valid JSON.
+func TestPatchRefusesBytesThatDisagreeWithTheTree(t *testing.T) {
+	lie := func(src []byte, _ *node) ([]byte, error) { return []byte(`{"a": 2}`), nil }
+	if _, err := patch([]byte(`{"a": 1}`), lie, func(tree any) (any, error) { return treeSet(tree, []string{"a"}, 3) }); err == nil {
+		t.Error("a lying patch was accepted")
+	}
+	broken := func(src []byte, _ *node) ([]byte, error) { return []byte(`{"a": `), nil }
+	if _, err := patch([]byte(`{"a": 1}`), broken, nil); err == nil {
+		t.Error("invalid patched JSON accepted")
 	}
 }

@@ -220,3 +220,26 @@ func TestRenameFailureLeavesNoTempFile(t *testing.T) {
 		t.Errorf("leftovers: %v", names)
 	}
 }
+
+// A writer that lands while our temp file is being synced must win: the
+// hash is checked again right before the rename (M1 review).
+func TestReplaceIfUnchangedLosesNoWriteDuringSync(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "claude.json")
+	_ = os.WriteFile(p, []byte(`{"a":1}`), 0o600)
+	h, _ := HashFile(p)
+	syncFile = func(f *os.File) error {
+		_ = os.WriteFile(p, []byte(`{"oauth":"NEW"}`), 0o600)
+		return f.Sync()
+	}
+	t.Cleanup(func() { syncFile = (*os.File).Sync })
+	err := ReplaceIfUnchanged(p, []byte(`{"a":1,"x":2}`), 0o600, h)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("err %v, want a conflict", err)
+	}
+	if got := read(t, p); got != `{"oauth":"NEW"}` {
+		t.Errorf("the concurrent write was lost: %s", got)
+	}
+	if left := entries(t, filepath.Dir(p)); len(left) != 1 {
+		t.Errorf("temp file left behind: %v", left)
+	}
+}
