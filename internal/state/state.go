@@ -94,6 +94,11 @@ func knownKeys() []string {
 type Client struct {
 	// RetentionBefore: absent = not recorded yet; null = the key was absent.
 	RetentionBefore json.RawMessage `json:"retention_before,omitempty"`
+	// Profile is the Claude Code directory client install wired ("" = the
+	// default ~/.claude); ShimPrevious the binary the shim ran before, for
+	// a rollback.
+	Profile      string `json:"profile,omitempty"`
+	ShimPrevious string `json:"shim_previous,omitempty"`
 }
 
 // Backfill tracks the replay of past transcripts (decision 0037).

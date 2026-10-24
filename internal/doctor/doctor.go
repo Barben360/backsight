@@ -5,6 +5,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -60,7 +61,10 @@ type Env struct {
 	Docker     func(context.Context) (string, error)
 	GPUs       func() []string
 	FreeBytes  func(path string) (uint64, error)
-	Timeout    time.Duration // per Hindsight call
+	// ClaudePlugins runs `claude plugin list --json` in a profile ("" =
+	// default); nil skips asking Claude Code.
+	ClaudePlugins func(profile string) ([]byte, error)
+	Timeout       time.Duration // per Hindsight call
 }
 
 const (
@@ -108,7 +112,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
-	add(checkClient(env.Dirs, loc))
+	add(checkClient(env, loc))
 	add(checkGPU(env.GPUs()))
 	return r
 }
@@ -407,20 +411,55 @@ func checkRetention(loc claudecode.Location, managedDir string) Check {
 
 // checkClient compares Claude Code's wiring with what client install
 // recorded (SPEC §5 drift, §15).
-func checkClient(d paths.Dirs, loc claudecode.Location) Check {
+func checkClient(env Env, loc claudecode.Location) Check {
 	c := Check{ID: "client"}
-	st, err := state.Load(d.StateFile())
+	st, err := state.Load(env.Dirs.StateFile())
 	if err != nil || st.PluginVersion == "" {
 		c.Status, c.Summary = Info, "backsight is not wired into Claude Code yet"
 		c.Fix = "backsight client install"
 		return c
 	}
-	drift := plugin.Drift(d.Data, loc.Settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version)
+	// The profile client install wired, not the shell's (0048: the dev
+	// install lives in its own profile).
+	profile, fix := "", "backsight client install"
+	if st.Client != nil && st.Client.Profile != "" {
+		profile = st.Client.Profile
+		fix += " --config-dir " + profile
+		loc = claudecode.Locate(env.Home, func(k string) string {
+			if k == "CLAUDE_CONFIG_DIR" {
+				return profile
+			}
+			return env.Getenv(k)
+		})
+	}
+	drift := plugin.Drift(env.Dirs.Data, loc.Settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version)
+	if env.ClaudePlugins != nil {
+		if raw, err := env.ClaudePlugins(profile); err == nil {
+			var items []struct {
+				ID      string `json:"id"`
+				Enabled bool   `json:"enabled"`
+			}
+			if json.Unmarshal(raw, &items) == nil {
+				found := false
+				for _, it := range items {
+					if it.ID == plugin.PluginID() {
+						found = true
+						if !it.Enabled {
+							drift = append(drift, "the plugin is disabled in Claude Code")
+						}
+					}
+				}
+				if !found {
+					drift = append(drift, "the plugin is not installed in Claude Code")
+				}
+			}
+		}
+	}
 	if len(drift) == 0 {
-		c.Status, c.Summary = OK, "plugin "+st.PluginVersion+" and permission rule in place"
+		c.Status, c.Summary = OK, "plugin "+st.PluginVersion+" and permission rule in place in "+loc.Dir
 		return c
 	}
-	c.Status, c.Summary, c.Detail, c.Fix = Warn, "Claude Code wiring drifted", strings.Join(drift, "; "), "backsight client install"
+	c.Status, c.Summary, c.Detail, c.Fix = Warn, "Claude Code wiring drifted", strings.Join(drift, "; "), fix
 	return c
 }
 

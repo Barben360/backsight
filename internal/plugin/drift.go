@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-
-	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // Installed is what client install recorded (state plugin_version,
@@ -25,7 +23,7 @@ func Drift(data, settings string, in Installed, binaryVersion string) []string {
 		return nil // never installed: nothing to compare
 	}
 	var out []string
-	shim := filepath.Join(data, "bin", "current")
+	shim := filepath.Join(data, "bin", ShimName(runtime.GOOS))
 	if Version(binaryVersion, shim) != in.Version {
 		out = append(out, "plugin "+in.Version+" is not this binary's ("+Version(binaryVersion, shim)+")")
 	}
@@ -45,15 +43,14 @@ func Drift(data, settings string, in Installed, binaryVersion string) []string {
 	switch target, err := filepath.EvalSymlinks(shim); {
 	case err != nil:
 		out = append(out, "shim "+shim+" missing")
-	case in.ShimTarget == "":
-	case runtime.GOOS == "windows": // the shim is a copy there
-		a, _ := fsutil.HashFile(shim)
-		b, _ := fsutil.HashFile(in.ShimTarget)
-		if a != b {
-			out = append(out, "shim "+shim+" is not "+in.ShimTarget)
+	case in.ShimTarget == "", runtime.GOOS == "windows":
+		// Windows: the shim is a copy; hashing two binaries would blow the
+		// SessionStart budget, presence is what is checked there.
+	default:
+		want, werr := filepath.EvalSymlinks(in.ShimTarget) // a data dir behind a symlink resolves the same
+		if werr != nil || target != want {
+			out = append(out, "shim points to "+target+", not "+in.ShimTarget)
 		}
-	case target != in.ShimTarget:
-		out = append(out, "shim points to "+target+", not "+in.ShimTarget)
 	}
 	return out
 }

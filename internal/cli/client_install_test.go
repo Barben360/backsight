@@ -3,10 +3,15 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/fsutil"
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -21,6 +26,7 @@ type fakeClaude struct {
 	marketplaces string
 	plugins      string
 	missing      bool
+	failOn       string // a command line that fails
 }
 
 func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byte, error) {
@@ -29,6 +35,9 @@ func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byt
 	}
 	f.calls = append(f.calls, args)
 	f.envs = append(f.envs, env)
+	if f.failOn != "" && strings.HasPrefix(strings.Join(args, " "), f.failOn) {
+		return nil, errors.New("claude failed: " + f.failOn)
+	}
 	switch strings.Join(args, " ") {
 	case "--version":
 		return []byte(f.version + " (Claude Code)\n"), nil
@@ -108,7 +117,7 @@ func TestClientInstallAgainUpdatesInsteadOfAdding(t *testing.T) {
 	f := withClaude(t)
 	run(t, "client", "install")
 	f.calls = nil
-	f.marketplaces = `[{"name":"backsight","source":"directory"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
 	f.plugins = `[{"id":"backsight@backsight","version":"x","scope":"user","enabled":true}]`
 	if code, out, _ := run(t, "client", "install"); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -185,4 +194,209 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func TestClientInstallLeavesNoDriftAndRecordsTheProfile(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	profile := filepath.Join(home, "claude-dev")
+	if code, out, _ := run(t, "client", "install", "--config-dir", profile); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	d := pathsOf(home)
+	st, _ := state.Load(d.StateFile())
+	if st.Client == nil || st.Client.Profile != profile {
+		t.Fatalf("profile not recorded: %+v", st.Client)
+	}
+	if drift := plugin.Drift(d.Data, filepath.Join(profile, "settings.json"), plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, "dev"); len(drift) != 0 {
+		t.Errorf("drift right after install: %v", drift)
+	}
+	// doctor checks the recorded profile, not the shell's default one
+	_, out, _ := run(t, "doctor")
+	if !strings.Contains(out, "permission rule in place in "+profile) {
+		t.Errorf("doctor:\n%s", out)
+	}
+}
+
+func TestClientInstallShimTargetIsAVerifiedCopy(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	run(t, "client", "install")
+	d := pathsOf(home)
+	st, _ := state.Load(d.StateFile())
+	exe, _ := os.Executable()
+	want, _ := fsutil.HashFile(exe)
+	if !strings.HasPrefix(st.ShimTarget, filepath.Join(d.Data, "bin", "dev-"+want[:12])+string(filepath.Separator)) {
+		t.Errorf("target %s", st.ShimTarget)
+	}
+	// a damaged copy (crash, full disk) is replaced on the next install
+	_ = os.WriteFile(st.ShimTarget, nil, 0o755)
+	run(t, "client", "install")
+	if got, _ := fsutil.HashFile(st.ShimTarget); got != want {
+		t.Error("a damaged binary was kept")
+	}
+}
+
+func TestClientInstallOnANewVersionSwitchesTheShim(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	setBuild(t, "1.0.0", "a")
+	run(t, "client", "install")
+	d := pathsOf(home)
+	first, _ := state.Load(d.StateFile())
+	setBuild(t, "1.1.0", "b")
+	run(t, "client", "install")
+	st, _ := state.Load(d.StateFile())
+	got, _ := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", "current"))
+	want, _ := filepath.EvalSymlinks(st.ShimTarget)
+	if st.ShimTarget == first.ShimTarget || got != want || !strings.HasPrefix(st.PluginVersion, "1.1.0+") ||
+		st.Client == nil || st.Client.ShimPrevious != first.ShimTarget {
+		t.Errorf("state %+v (client %+v), shim -> %s", st, st.Client, got)
+	}
+	if _, err := os.Stat(first.ShimTarget); err != nil {
+		t.Error("the previous binary was removed: no rollback")
+	}
+}
+
+func TestClientInstallMovedDataDirReaddsTheMarketplace(t *testing.T) {
+	home := devInstall(t, true)
+	f := withClaude(t)
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"/old/place/marketplace"}]`
+	run(t, "client", "install")
+	got := mutating(f)
+	mkt := filepath.Join(pathsOf(home).Data, "marketplace")
+	if len(got) < 2 || got[0] != "plugin marketplace remove backsight" || got[1] != "plugin marketplace add "+mkt {
+		t.Errorf("calls %q", got)
+	}
+}
+
+func TestClientInstallMarketplaceKnownPluginNot(t *testing.T) {
+	home := devInstall(t, true)
+	f := withClaude(t)
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	run(t, "client", "install")
+	if got := mutating(f); len(got) != 2 || got[0] != "plugin marketplace update backsight" || got[1] != "plugin install backsight@backsight --scope user" {
+		t.Errorf("calls %q", got)
+	}
+}
+
+func TestClientInstallHalfwayFailureThenRerun(t *testing.T) {
+	home := devInstall(t, true)
+	f := withClaude(t)
+	f.failOn = "plugin install"
+	if code, _, _ := run(t, "client", "install"); code != output.Partial {
+		t.Fatalf("exit %d, want 40", code)
+	}
+	f.failOn, f.calls = "", nil
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("rerun: exit %d\n%s", code, out)
+	}
+	if got := mutating(f); got[len(got)-1] != "plugin install backsight@backsight --scope user" {
+		t.Errorf("rerun calls %q", got)
+	}
+}
+
+func TestClientInstallPlanWritesNothingAtAll(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	code, out, _ := run(t, "client", "install", "--plan", "--json")
+	var env struct {
+		Data clientInstallResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+		t.Fatalf("exit %d %v\n%s", code, err, out)
+	}
+	d := pathsOf(home)
+	for _, p := range []string{filepath.Join(d.Data, "bin"), filepath.Join(home, ".claude", "settings.json"), d.StateFile()} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("plan wrote %s", p)
+		}
+	}
+	names := map[string]string{}
+	for _, s := range env.Data.Steps {
+		names[s.Name] = s.Status
+	}
+	if names["shim"] != "planned" || names["plugin"] != "planned" || names["permission rule"] != "planned" {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+}
+
+func TestClientInstallVersionBoundaryAndActions(t *testing.T) {
+	devInstall(t, true)
+	f := withClaude(t)
+	f.version = "2.1.309"
+	if code, _, _ := run(t, "client", "install"); code != output.OK {
+		t.Errorf("2.1.309 (the minimum): exit %d", code)
+	}
+	f.version = "2.1.308"
+	code, out, _ := run(t, "client", "install", "--json")
+	if code != output.NeedsUser || !strings.Contains(out, "npm install -g @anthropic-ai/claude-code") || !strings.Contains(out, `"resume"`) {
+		t.Errorf("2.1.308: exit %d\n%s", code, out)
+	}
+}
+
+func TestClientInstallRefusesUnreadableClaudeOutputAndConcurrency(t *testing.T) {
+	home := devInstall(t, true)
+	f := withClaude(t)
+	f.plugins = "Warning: not json"
+	if code, out, _ := run(t, "client", "install", "--json"); code != output.Blocked || !strings.Contains(out, "unexpected output") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	f.plugins = "[]"
+	d := pathsOf(home)
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "client-install.lock"), "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	if code, out, _ := run(t, "client", "install", "--json"); code != output.Blocked || !strings.Contains(out, "another client install") {
+		t.Errorf("concurrent: exit %d\n%s", code, out)
+	}
+}
+
+// The real runner parses stdout only: a warning on stderr must not break
+// the JSON (block-3 review, proven).
+func TestExecClaudeIgnoresStderrWarnings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script")
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'Warning: something' >&2\nif [ \"$1\" = --version ]; then echo '2.1.310 (Claude Code)'; else echo '[]'; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := execClaude{}.Run(context.Background(), nil, "plugin", "list", "--json")
+	if err != nil || strings.TrimSpace(string(out)) != "[]" {
+		t.Errorf("%q %v", out, err)
+	}
+	v, _ := execClaude{}.Run(context.Background(), nil, "--version")
+	if !strings.HasPrefix(string(v), "2.1.310") {
+		t.Errorf("version %q", v)
+	}
+}
+
+func TestDoctorAsksClaudeCodeWhetherThePluginIsEnabled(t *testing.T) {
+	devInstall(t, true)
+	withClaude(t)
+	run(t, "client", "install")
+	old := probes
+	probes = func(e *doctor.Env) {
+		old(e)
+		e.ClaudePlugins = func(string) ([]byte, error) {
+			return []byte(`[{"id":"backsight@backsight","enabled":false}]`), nil
+		}
+	}
+	t.Cleanup(func() { probes = old })
+	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "disabled in Claude Code") {
+		t.Errorf("doctor:\n%s", out)
+	}
+	probes = func(e *doctor.Env) {
+		old(e)
+		e.ClaudePlugins = func(string) ([]byte, error) { return []byte(`[]`), nil }
+	}
+	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "not installed in Claude Code") {
+		t.Errorf("doctor:\n%s", out)
+	}
 }

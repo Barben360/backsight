@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func TestGenerateWritesAMarketplaceWithOnePlugin(t *testing.T) {
 		Author        struct{ Name string }
 	}
 	read(t, filepath.Join(dir, "plugins", "backsight", ".claude-plugin", "plugin.json"), &pj)
-	if pj.Name != Name || pj.Version != "1.2.3" || pj.Author.Name == "" {
+	if pj.Name != Name || !strings.HasPrefix(pj.Version, "1.2.3+") || pj.Author.Name == "" {
 		t.Errorf("plugin.json %+v", pj)
 	}
 	var mcp struct {
@@ -140,7 +141,68 @@ func TestGenerateIsIdempotentAndRewritesOnChange(t *testing.T) {
 
 func TestDevBuildsGetAContentVersion(t *testing.T) {
 	a, b := Version("dev", "/a/current"), Version("dev", "/b/current")
-	if !strings.HasPrefix(a, "0.0.0-dev+") || a == b || Version("dev", "/a/current") != a || Version("1.2.3", "/a") != "1.2.3" {
+	if !strings.HasPrefix(a, "0.0.0-dev+") || a == b || Version("dev", "/a/current") != a {
 		t.Errorf("%q %q", a, b)
+	}
+	// a release too: the shim path is in the generated files, so a moved data
+	// directory must be an update Claude Code applies
+	r1, r2 := Version("1.2.3", "/a/current"), Version("1.2.3", "/b/current")
+	if !strings.HasPrefix(r1, "1.2.3+") || r1 == r2 || Version("1.2.3+meta", "/a") != "1.2.3+meta."+strings.TrimPrefix(Version("1.2.3", "/a"), "1.2.3+") {
+		t.Errorf("%q %q", r1, r2)
+	}
+}
+
+// Exact names and values: tests built from the code's own constants would
+// agree with a typo (decision 0054 tool names, SPEC §6.2 timeouts).
+func TestExactToolNamesEventsAndTimeouts(t *testing.T) {
+	want := []string{"mcp__plugin_backsight_memory__memory_search", "mcp__plugin_backsight_memory__memory_read", "mcp__plugin_backsight_memory__memory_store"}
+	if strings.Join(ToolNames, ",") != strings.Join(want, ",") {
+		t.Errorf("tool names %v", ToolNames)
+	}
+	dir := t.TempDir()
+	_, _ = Generate(dir, "/s", "1.2.3")
+	var hf hooksFile
+	read(t, filepath.Join(dir, "plugins", "backsight", "hooks", "hooks.json"), &hf)
+	exact := map[string]string{ // event/matcher -> backsight event, timeout
+		"SessionStart/startup": "session-start 10", "SessionStart/resume|clear|compact|fork": "session-start 5",
+		"UserPromptSubmit/": "user-prompt-submit 25", "PreToolUse/AskUserQuestion": "pre-tool-use 10",
+		"PostToolUse/mcp__plugin_backsight_memory__.*": "post-tool-use 2", "SubagentStart/": "subagent-start 5",
+		"SubagentStop/": "subagent-stop 5", "Stop/": "stop 5", "SessionEnd/": "session-end 1",
+	}
+	n := 0
+	for ev, groups := range hf.Hooks {
+		for _, g := range groups {
+			n++
+			h := g.Hooks[0]
+			got := h.Args[1] + " " + strconv.Itoa(h.Timeout)
+			if exact[ev+"/"+g.Matcher] != got {
+				t.Errorf("%s/%s: %s, want %s", ev, g.Matcher, got, exact[ev+"/"+g.Matcher])
+			}
+		}
+	}
+	if n != len(exact) {
+		t.Errorf("%d groups, want %d", n, len(exact))
+	}
+	var mkt, pj map[string]any
+	read(t, filepath.Join(dir, ".claude-plugin", "marketplace.json"), &mkt)
+	read(t, filepath.Join(dir, "plugins", "backsight", ".claude-plugin", "plugin.json"), &pj)
+	if mkt["owner"] == nil || mkt["description"] == nil || pj["description"] == nil {
+		t.Errorf("fields Claude Code's schema wants: %v %v", mkt, pj)
+	}
+}
+
+func TestANewBinaryVersionRewritesThePlugin(t *testing.T) {
+	dir := t.TempDir()
+	_, _ = Generate(dir, "/s", "1.2.3")
+	if changed, _ := Generate(dir, "/s", "1.2.4"); !changed {
+		t.Fatal("not rewritten")
+	}
+	var pj struct{ Version string }
+	read(t, filepath.Join(dir, "plugins", "backsight", ".claude-plugin", "plugin.json"), &pj)
+	if !strings.HasPrefix(pj.Version, "1.2.4+") {
+		t.Errorf("version %s", pj.Version)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(dir)); len(ents) != 1 {
+		t.Errorf("temporary trees left beside the marketplace: %v", ents)
 	}
 }

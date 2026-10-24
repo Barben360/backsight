@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/Barben360/backsight/internal/fsutil"
 )
@@ -54,14 +55,27 @@ var events = []event{
 	{"SessionEnd", "", "session-end", 1}, // 1.5 s total, not raisable from a plugin (C06)
 }
 
-// Version is the plugin version: the binary's, or for a dev build one
-// derived from what the generated files depend on.
+// Version is the plugin version: the binary's, plus a hash of what the
+// generated files depend on (the shim path), so any change to them is an
+// update Claude Code applies (a moved data directory included).
 func Version(binary, shim string) string {
-	if binary != "" && binary != "dev" {
-		return binary
-	}
 	sum := sha256.Sum256([]byte(layout + "\n" + shim))
-	return "0.0.0-dev+" + hex.EncodeToString(sum[:6])
+	h := hex.EncodeToString(sum[:6])
+	if binary == "" || binary == "dev" {
+		return "0.0.0-dev+" + h
+	}
+	if strings.Contains(binary, "+") {
+		return binary + "." + h
+	}
+	return binary + "+" + h
+}
+
+// ShimName is the shim's file name: Windows exec form needs a real .exe.
+func ShimName(goos string) string {
+	if goos == "windows" {
+		return "current.exe"
+	}
+	return "current"
 }
 
 // files is the generated tree, relative to the marketplace directory.
@@ -112,8 +126,8 @@ func files(shim, version string) (map[string][]byte, error) {
 var owned = []string{".claude-plugin", "plugins"}
 
 // Generate writes the marketplace into dir; changed says whether anything
-// differed. Files under the owned entries that it does not generate are
-// removed.
+// differed. The new tree is written beside dir and swapped in, so Claude
+// Code (which reads the plugin from this folder) never sees half of it.
 func Generate(dir, shim, binaryVersion string) (bool, error) {
 	want, err := files(shim, Version(binaryVersion, shim))
 	if err != nil {
@@ -126,20 +140,42 @@ func Generate(dir, shim, binaryVersion string) (bool, error) {
 	if same(have, want) {
 		return false, nil
 	}
-	for _, o := range owned {
-		if err := os.RemoveAll(filepath.Join(dir, o)); err != nil {
-			return false, err
-		}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return false, err
 	}
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), "."+filepath.Base(dir)+".new-")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
 	paths := make([]string, 0, len(want))
 	for p := range want {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
 	for _, p := range paths {
-		if err := fsutil.WriteAtomic(filepath.Join(dir, filepath.FromSlash(p)), want[p], 0o644); err != nil {
+		if err := fsutil.WriteAtomic(filepath.Join(tmp, filepath.FromSlash(p)), want[p], 0o644); err != nil {
 			return false, err
 		}
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return false, err
+	}
+	old := ""
+	if _, err := os.Stat(dir); err == nil {
+		old = tmp + ".old"
+		if err := os.Rename(dir, old); err != nil {
+			return false, err
+		}
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		if old != "" {
+			_ = os.Rename(old, dir)
+		}
+		return false, err
+	}
+	if old != "" {
+		_ = os.RemoveAll(old)
 	}
 	return true, nil
 }

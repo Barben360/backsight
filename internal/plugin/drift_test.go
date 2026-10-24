@@ -37,3 +37,45 @@ func TestDrift(t *testing.T) {
 		t.Errorf("never installed: no drift to report: %v", got)
 	}
 }
+
+func TestDriftShimTargetsAndSettingsFiles(t *testing.T) {
+	data := t.TempDir()
+	mk := func(v string) string {
+		p := filepath.Join(data, "bin", v, "backsight")
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte(v), 0o755)
+		return p
+	}
+	v1, v2 := mk("v1"), mk("v2")
+	shim := filepath.Join(data, "bin", "current")
+	if err := os.Symlink(v2, shim); err != nil {
+		t.Skip("no symlinks")
+	}
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["`+strings.Join(ToolNames, `","`)+`"]}}`), 0o600)
+	in := Installed{Version: Version("1.2.3", shim), ShimTarget: v1}
+	if got := Drift(data, settings, in, "1.2.3"); len(got) != 1 || !strings.Contains(got[0], "shim points to") {
+		t.Errorf("shim on another version: %v", got)
+	}
+	in.ShimTarget = ""
+	if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
+		t.Errorf("no recorded target: %v", got)
+	}
+	// a data directory reached through a symlink resolves to the same target
+	link := filepath.Join(t.TempDir(), "data-link")
+	_ = os.Symlink(data, link)
+	in.ShimTarget = filepath.Join(link, "bin", "v2", "backsight")
+	if got := Drift(data, settings, in, "1.2.3"); len(got) != 0 {
+		t.Errorf("symlinked data dir: %v", got)
+	}
+	for _, doc := range []string{"", "{not json"} {
+		_ = os.WriteFile(settings, []byte(doc), 0o600)
+		if got := Drift(data, settings, in, "1.2.3"); len(got) != 1 || !strings.Contains(got[0], "permission") {
+			t.Errorf("settings %q: %v", doc, got)
+		}
+	}
+	_ = os.Remove(settings)
+	if got := Drift(data, settings, in, "1.2.3"); len(got) != 1 {
+		t.Errorf("settings missing: %v", got)
+	}
+}

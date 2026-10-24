@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,11 +47,12 @@ func (execClaude) Run(ctx context.Context, env []string, args ...string) ([]byte
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return out, fmt.Errorf("claude %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr // warnings on stderr never corrupt the JSON
+	if err := cmd.Run(); err != nil {
+		return stdout.Bytes(), fmt.Errorf("claude %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()+" "+stdout.String()))
 	}
-	return out, nil
+	return stdout.Bytes(), nil
 }
 
 var claudeRunner claudeCLI = execClaude{}
@@ -93,7 +96,23 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		env = []string{"CLAUDE_CONFIG_DIR=" + configDir}
 	}
 	add := func(name, status, detail string) { res.Steps = append(res.Steps, installStep{name, status, detail}) }
-	status := map[bool]string{true: "planned", false: "done"}[plan]
+	did := func(changed bool) string {
+		switch {
+		case plan && changed:
+			return "planned"
+		case changed:
+			return "done"
+		}
+		return "unchanged"
+	}
+	if !plan {
+		l, err := state.TryAcquire(filepath.Join(c.dirs.LocksDir(), "client-install.lock"), "client install")
+		if err != nil {
+			return res, &output.Error{Code: output.Blocked, Message: "another client install is running"}
+		}
+		defer func() { _ = l.Release() }()
+	}
+	before, _ := state.Load(c.dirs.StateFile())
 
 	// 1. A recent enough claude CLI (SPEC §5: missing or too old → exit 10).
 	v, err := claudeRunner.Run(ctx, env, "--version")
@@ -107,40 +126,51 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	add("claude", "done", version)
 
 	// 2. The stable shim every generated file points at (SPEC §3 Paths).
-	shim := filepath.Join(c.dirs.Data, "bin", "current")
+	shim := filepath.Join(c.dirs.Data, "bin", plugin.ShimName(runtime.GOOS))
 	target, err := shimTarget(c.dirs.Data)
 	if err != nil {
 		return res, blocked(err)
 	}
+	current, _ := filepath.EvalSymlinks(shim)
+	wantTarget, _ := filepath.EvalSymlinks(target)
+	shimChanged := runtime.GOOS == "windows" || current == "" || current != wantTarget
 	if !plan {
 		if err := installShim(target, shim); err != nil {
 			return res, blocked(err)
 		}
+		pruneBinaries(c.dirs.Data, target, before.ShimTarget)
 	}
-	add("shim", status, shim+" → "+target)
+	add("shim", did(shimChanged), shim+" → "+target)
 
 	// 3. The plugin, generated whole in a local marketplace (E1).
 	mkt := filepath.Join(c.dirs.Data, "marketplace")
 	pversion := plugin.Version(buildinfo.Version, shim)
+	pluginChanged := true
 	if !plan {
-		if _, err := plugin.Generate(mkt, shim, buildinfo.Version); err != nil {
+		if pluginChanged, err = plugin.Generate(mkt, shim, buildinfo.Version); err != nil {
 			return res, blocked(err)
 		}
 	}
-	add("plugin", status, mkt+" (version "+pversion+")")
+	add("plugin", did(pluginChanged), mkt+" (version "+pversion+")")
 
-	// 4. Marketplace and plugin registered with Claude Code.
+	// 4. Marketplace and plugin registered with Claude Code; a marketplace
+	// registered at another path (moved data directory) is re-added.
 	known, err := listed(ctx, env, "id", "plugin", "list", "--json")
 	if err != nil {
 		return res, blocked(err)
 	}
-	markets, err := listed(ctx, env, "name", "plugin", "marketplace", "list", "--json")
+	marketPath, err := marketplacePath(ctx, env)
 	if err != nil {
 		return res, blocked(err)
 	}
-	steps := [][]string{{"plugin", "marketplace", "add", mkt}}
-	if markets[plugin.Marketplace] {
-		steps[0] = []string{"plugin", "marketplace", "update", plugin.Marketplace}
+	var steps [][]string
+	switch {
+	case marketPath == "":
+		steps = append(steps, []string{"plugin", "marketplace", "add", mkt})
+	case marketPath != mkt:
+		steps = append(steps, []string{"plugin", "marketplace", "remove", plugin.Marketplace}, []string{"plugin", "marketplace", "add", mkt})
+	default:
+		steps = append(steps, []string{"plugin", "marketplace", "update", plugin.Marketplace})
 	}
 	if known[plugin.PluginID()] {
 		steps = append(steps, []string{"plugin", "update", plugin.PluginID()})
@@ -153,7 +183,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 				return res, partialError(err)
 			}
 		}
-		add("claude "+strings.Join(args[:min(3, len(args))], " "), status, "")
+		add("claude", did(true), strings.Join(args, " "))
 	}
 
 	// 5. The one settings change: allow the three memory tools (SPEC §5).
@@ -173,17 +203,31 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		if err != nil {
 			return res, editError(err)
 		}
-		add("permission rule", map[bool]string{true: "planned", false: "skipped"}[len(fr[0].Changes) > 0], c.loc.Settings)
+		add("permission rule", did(len(fr[0].Changes) > 0), c.loc.Settings)
 		return res, nil
 	}
 	run, files, err := c.runner("client install").Apply([]claudecfg.Edit{edit})
 	if err != nil {
 		return res, partialError(err)
 	}
-	add("permission rule", map[bool]string{true: "done", false: "skipped"}[files[0].Written], strings.TrimSpace(c.loc.Settings+" "+run))
+	add("permission rule", did(files[0].Written), strings.TrimSpace(c.loc.Settings+" "+run))
 
+	profile := ""
+	if configDir != "" {
+		profile, _ = filepath.Abs(configDir)
+	}
 	if err := state.Update(c.dirs, "client install", func(s *state.State) error {
+		if s.ShimTarget != "" && s.ShimTarget != target {
+			if s.Client == nil {
+				s.Client = &state.Client{}
+			}
+			s.Client.ShimPrevious = s.ShimTarget
+		}
 		s.PluginVersion, s.ShimTarget = pversion, target
+		if s.Client == nil {
+			s.Client = &state.Client{}
+		}
+		s.Client.Profile = profile
 		return nil
 	}); err != nil {
 		return res, partialError(err)
@@ -191,10 +235,36 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	return res, nil
 }
 
+// marketplacePath is where Claude Code reads backsight's marketplace from,
+// "" when it is not registered.
+func marketplacePath(ctx context.Context, env []string) (string, error) {
+	raw, err := claudeRunner.Run(ctx, env, "plugin", "marketplace", "list", "--json")
+	if err != nil {
+		return "", err
+	}
+	var items []struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return "", fmt.Errorf("claude plugin marketplace list: unexpected output: %w", err)
+	}
+	for _, m := range items {
+		if m.Name == plugin.Marketplace {
+			if m.Path == "" {
+				return "?", nil // registered, path unknown: re-add to be sure
+			}
+			return m.Path, nil
+		}
+	}
+	return "", nil
+}
+
 func needsClaude(msg string) error {
 	return &output.Error{Code: output.NeedsUser, Message: msg, Actions: []output.Action{
-		{Kind: "install", Cmd: "npm install -g @anthropic-ai/claude-code", Why: "backsight wires itself into Claude Code through its plugin commands"},
-	}}
+		{Kind: "install", Cmd: "npm install -g @anthropic-ai/claude-code", Why: "backsight wires itself into Claude Code through its plugin commands (or `claude update` for an old version)"},
+		{Kind: "run_as_user", Cmd: "backsight client install", Why: "then wire Claude Code again"},
+	}, Resume: "backsight client install"}
 }
 
 // listed runs a claude list command and returns the set of field values.
@@ -216,51 +286,81 @@ func listed(ctx context.Context, env []string, field string, args ...string) (ma
 	return out, nil
 }
 
-// shimTarget is where this binary is installed: <data>/bin/<version>/,
-// a dev build under a content hash so every build gets its own directory.
+// shimTarget is where this binary is installed: <data>/bin/<version>-<hash>/,
+// so every distinct build (a rebuilt dev or dirty binary included) gets its
+// own directory and the shim always runs the binary that installed it.
 func shimTarget(data string) (string, error) {
-	version := buildinfo.Version
-	if version == "" || version == "dev" {
-		exe, err := os.Executable()
-		if err != nil {
-			return "", err
-		}
-		h, err := fsutil.HashFile(exe)
-		if err != nil {
-			return "", err
-		}
-		version = "dev-" + h[:12]
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
 	}
+	h, err := fsutil.HashFile(exe)
+	if err != nil {
+		return "", err
+	}
+	version := buildinfo.Version
+	if version == "" {
+		version = "dev"
+	}
+	version = strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ' ' {
+			return '_'
+		}
+		return r
+	}, version)
 	name := "backsight"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join(data, "bin", version, name), nil
+	return filepath.Join(data, "bin", version+"-"+h[:12], name), nil
 }
 
-// installShim copies this binary to target (if absent) and points the shim
-// at it atomically (a copy on Windows, SPEC §3).
+// installShim copies this binary to target (unless an identical copy is
+// there) and points the shim at it: a symlink swapped atomically, or on
+// Windows a copy, the running one renamed aside first (Windows lets a
+// running image be renamed, not replaced).
 func installShim(target, shim string) error {
-	if _, err := os.Stat(target); err != nil {
-		exe, err := os.Executable()
-		if err != nil {
-			return err
-		}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	want, err := fsutil.HashFile(exe)
+	if err != nil {
+		return err
+	}
+	if got, _ := fsutil.HashFile(target); got != want {
 		if err := copyFile(exe, target, 0o755); err != nil {
 			return err
 		}
 	}
 	if runtime.GOOS == "windows" {
+		old := shim + ".old"
+		_ = os.Remove(old) // fails while a previous session still runs it: fine
+		if _, err := os.Stat(shim); err == nil {
+			if err := os.Rename(shim, old); err != nil {
+				return err
+			}
+		}
 		return copyFile(target, shim, 0o755)
 	}
-	tmp := shim + ".tmp"
-	_ = os.Remove(tmp)
-	if err := os.Symlink(target, tmp); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(shim), ".current-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, shim)
+	name := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(name)
+	if err := os.Symlink(target, name); err != nil {
+		return err
+	}
+	if err := os.Rename(name, shim); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
+// copyFile copies src to dst durably: unique temp file, fsync, rename.
 func copyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -270,19 +370,67 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	out, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = out.Close()
+			_ = os.Remove(out.Name())
+		}
+	}()
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+		return err
+	}
+	if err := out.Chmod(mode); err != nil {
+		return err
+	}
+	if err := out.Sync(); err != nil {
 		return err
 	}
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err := os.Rename(out.Name(), dst); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
+// keepBinaries: installed versions kept besides the current and previous.
+const keepBinaries = 3
+
+// pruneBinaries removes old <data>/bin/<version>/ directories, never the
+// shim's current or previous target.
+func pruneBinaries(data, current, previous string) {
+	dir := filepath.Join(data, "bin")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type ver struct {
+		path string
+		mod  time.Time
+	}
+	var vs []ver
+	for _, e := range ents {
+		p := filepath.Join(dir, e.Name())
+		if !e.IsDir() || strings.HasPrefix(current, p+string(filepath.Separator)) || (previous != "" && strings.HasPrefix(previous, p+string(filepath.Separator))) {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			vs = append(vs, ver{p, fi.ModTime()})
+		}
+	}
+	sort.Slice(vs, func(i, j int) bool { return vs[i].mod.After(vs[j].mod) })
+	for i, v := range vs {
+		if i >= keepBinaries {
+			_ = os.RemoveAll(v.path)
+		}
+	}
 }
 
 // atLeast compares dotted versions numerically.

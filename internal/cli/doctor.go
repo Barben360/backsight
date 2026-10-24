@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -20,6 +21,13 @@ var probes = func(e *doctor.Env) {
 	e.Docker = doctor.DockerVersion
 	e.GPUs = doctor.LocalGPUs
 	e.FreeBytes = doctor.FreeBytes
+	e.ClaudePlugins = func(profile string) ([]byte, error) {
+		var env []string
+		if profile != "" {
+			env = []string{"CLAUDE_CONFIG_DIR=" + profile}
+		}
+		return claudeRunner.Run(context.Background(), env, "plugin", "list", "--json")
+	}
 }
 
 func newDoctorCmd(e *env) *cobra.Command {

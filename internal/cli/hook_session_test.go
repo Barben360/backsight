@@ -188,7 +188,7 @@ func TestSessionStartBannerShowsDrift(t *testing.T) {
 	}
 	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.PluginVersion = "0.0.0-old"; return nil })
 	h = fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(h.SystemMessage, "drifted") || !strings.Contains(h.SystemMessage, "backsight client install") {
-		t.Errorf("banner %q", h.SystemMessage)
+	if !strings.Contains(h.SystemMessage, "drifted") || !strings.Contains(h.SystemMessage, "backsight client install") || strings.Count(h.SystemMessage, "drifted") != 1 {
+		t.Errorf("banner %q (one drift line wanted)", h.SystemMessage)
 	}
 }
