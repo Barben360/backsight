@@ -1,0 +1,66 @@
+package paths
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+
+func TestResolve(t *testing.T) {
+	cases := []struct {
+		name string
+		goos string
+		home string
+		env  map[string]string
+		want Dirs
+	}{
+		{"linux defaults", "linux", "/home/u", nil, Dirs{
+			Data: "/home/u/.local/share/backsight", Config: "/home/u/.config/backsight",
+			State: "/home/u/.local/state/backsight", Bin: "/home/u/.local/bin"}},
+		{"linux XDG", "linux", "/home/u", map[string]string{"XDG_DATA_HOME": "/x/data", "XDG_CONFIG_HOME": "/x/cfg", "XDG_STATE_HOME": "/x/state"}, Dirs{
+			Data: "/x/data/backsight", Config: "/x/cfg/backsight", State: "/x/state/backsight", Bin: "/home/u/.local/bin"}},
+		// The XDG spec says relative values are invalid and must be ignored.
+		{"linux relative XDG ignored", "linux", "/home/u", map[string]string{"XDG_CONFIG_HOME": "rel/cfg"}, Dirs{
+			Data: "/home/u/.local/share/backsight", Config: "/home/u/.config/backsight",
+			State: "/home/u/.local/state/backsight", Bin: "/home/u/.local/bin"}},
+		{"darwin", "darwin", "/Users/u", map[string]string{"XDG_CONFIG_HOME": "/x/cfg"}, Dirs{
+			Data: "/Users/u/Library/Application Support/backsight", Config: "/Users/u/Library/Application Support/backsight/config",
+			State: "/Users/u/Library/Application Support/backsight/state", Bin: "/Users/u/.local/bin"}},
+		{"windows", "windows", `C:\Users\u`, map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}, Dirs{
+			Data: filepath.Join(`C:\Users\u\AppData\Local`, "backsight"), Config: filepath.Join(`C:\Users\u\AppData\Local`, "backsight", "config"),
+			State: filepath.Join(`C:\Users\u\AppData\Local`, "backsight", "state"), Bin: filepath.Join(`C:\Users\u\AppData\Local`, "Programs", "backsight")}},
+		{"BACKSIGHT_HOME wins everywhere", "darwin", "/Users/u", map[string]string{"BACKSIGHT_HOME": "/t/bs"}, Dirs{
+			Data: "/t/bs/data", Config: "/t/bs/config", State: "/t/bs/state", Bin: "/t/bs/bin"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Resolve(c.goos, c.home, env(c.env))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Errorf("got  %+v\nwant %+v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestResolveRefusesMissingBase(t *testing.T) {
+	if _, err := Resolve("linux", "", env(nil)); err == nil {
+		t.Error("an empty home must be refused, not resolved to relative paths")
+	}
+	if _, err := Resolve("windows", `C:\Users\u`, env(nil)); err == nil {
+		t.Error("windows without LOCALAPPDATA must be refused")
+	}
+	if _, err := Resolve("linux", "/home/u", env(map[string]string{"BACKSIGHT_HOME": "relative"})); err == nil {
+		t.Error("a relative BACKSIGHT_HOME must be refused")
+	}
+}
+
+func TestFiles(t *testing.T) {
+	d := Dirs{Config: "/c", State: "/s"}
+	if d.ConfigFile() != filepath.Join("/c", "config.toml") || d.SecretsFile() != filepath.Join("/c", "secrets.toml") {
+		t.Errorf("%s %s", d.ConfigFile(), d.SecretsFile())
+	}
+}
