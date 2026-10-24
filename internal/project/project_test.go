@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,5 +97,56 @@ func TestBrokenBacksightTomlIsReported(t *testing.T) {
 	write(t, filepath.Join(home, "notes", ".backsight.toml"), "retain = maybe\n")
 	if out, why := r.OptedOut(filepath.Join(home, "notes"), nil); !out || why == "" {
 		t.Errorf("an unreadable .backsight.toml must fail closed (no retain): %v %q", out, why)
+	}
+}
+
+// A nearer file naming the project must not hide a parent's retain = false.
+func TestParentOptOutIsNeverHidden(t *testing.T) {
+	home, r := fixture(t)
+	repo := filepath.Join(home, "work", "billing")
+	write(t, filepath.Join(repo, ".backsight.toml"), "retain = false\n")
+	write(t, filepath.Join(repo, "internal", ".backsight.toml"), "project = \"billing-core\"\n")
+	if out, _ := r.OptedOut(filepath.Join(repo, "internal", "export"), nil); !out {
+		t.Error("the repository's retain = false was hidden by a subdirectory file")
+	}
+	if got := r.Project(filepath.Join(repo, "internal", "export")); got != "billing-core" {
+		t.Errorf("nearest project: %q", got)
+	}
+}
+
+// Outside a repository (or when git fails) the walk still reaches the home
+// directory.
+func TestOptOutAboveCwdWithoutGit(t *testing.T) {
+	home, r := fixture(t)
+	write(t, filepath.Join(home, "clients", ".backsight.toml"), "retain = false\n")
+	_ = os.MkdirAll(filepath.Join(home, "clients", "acme", "app"), 0o700)
+	if out, why := r.OptedOut(filepath.Join(home, "clients", "acme", "app"), nil); !out || !strings.Contains(why, "retain = false") {
+		t.Errorf("%v %q", out, why)
+	}
+}
+
+func TestSymlinkedCwdIntoExcludedPath(t *testing.T) {
+	home, r := fixture(t)
+	secret := filepath.Join(home, "secret-client")
+	_ = os.MkdirAll(secret, 0o700)
+	link := filepath.Join(home, "shortcut")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skip(err)
+	}
+	if out, _ := r.OptedOut(link, []string{secret}); !out {
+		t.Error("a symlink into an excluded path escaped the exclusion")
+	}
+	if out, _ := r.OptedOut(secret, []string{link}); !out {
+		t.Error("an excluded symlink did not cover its target")
+	}
+}
+
+func TestBareTildeAndEmptyCwd(t *testing.T) {
+	home, r := fixture(t)
+	if out, _ := r.OptedOut(filepath.Join(home, "notes"), []string{"~"}); !out {
+		t.Error("~ must exclude the whole home directory")
+	}
+	if out, why := r.OptedOut("", nil); !out || why == "" {
+		t.Error("a record without working directory must not be sent")
 	}
 }

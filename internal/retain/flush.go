@@ -169,33 +169,82 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		}
 		send = recs[:n]
 	}
-	last := send[len(send)-1]
-	cwd := send[0].CWD
-	if out, why := f.optedOut(sid, cwd); out {
-		cur.Offset, cur.LastUUID, cur.LastTurnAt = last.End, last.UUID, last.Timestamp
-		return f.save(res, cur, OptedOut, why)
-	}
-	proj := f.Resolver.Project(cwd)
-	segNo := cur.Segment + 1
-	seg := BuildSegment(f.Bank, send, segNo, proj, f.MachineID, f.Version)
-	res.Records, res.Segment, res.Chars, res.Project = len(send), segNo, seg.Chars, proj
-	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
-		var apiErr *hindsight.APIError
-		if errors.As(err, &apiErr) && !apiErr.Retryable() {
-			return f.quarantine(res, &cur, errSummary(err))
+	return f.sendRuns(ctx, res, cur, sid, send, now)
+}
+
+// runKey groups consecutive records that go out together: same project and
+// same opt-out answer for their working directory.
+type runKey struct {
+	optOut  bool
+	reason  string
+	project string
+}
+
+// sendRuns sends records in runs of one project, skipping opted-out runs
+// (a session can cd into an excluded path mid-way). It stops at the first
+// failure, with the cursor after the last run done.
+func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, now time.Time) Result {
+	paused, why := f.paused(sid)
+	keys := map[string]runKey{}
+	key := func(cwd string) runKey {
+		if paused {
+			return runKey{optOut: true, reason: why}
 		}
-		return f.save(res, cur, Retry, errSummary(err))
+		if k, ok := keys[cwd]; ok {
+			return k
+		}
+		k := runKey{}
+		if out, reason := f.Resolver.OptedOut(cwd, f.Exclude); out {
+			k.optOut, k.reason = true, reason
+		} else {
+			k.project = f.Resolver.Project(cwd)
+		}
+		keys[cwd] = k
+		return k
 	}
-	uuids := make([]string, len(send))
-	for i, r := range send {
-		uuids[i] = r.UUID
+	status, detail := Nothing, ""
+	for len(send) > 0 {
+		k := key(send[0].CWD)
+		n := 1
+		for n < len(send) && key(send[n].CWD) == k {
+			n++
+		}
+		run := send[:n]
+		send = send[n:]
+		last := run[len(run)-1]
+		if k.optOut {
+			cur.Offset, cur.LastUUID, cur.LastTurnAt = last.End, last.UUID, last.Timestamp
+			if status != Sent {
+				status, detail = OptedOut, k.reason
+			}
+			continue
+		}
+		segNo := cur.Segment + 1
+		seg := BuildSegment(f.Bank, sid, run, segNo, k.project, f.MachineID, f.Version)
+		if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
+			var apiErr *hindsight.APIError
+			if errors.As(err, &apiErr) && !apiErr.Retryable() {
+				return f.quarantine(res, &cur, errSummary(err))
+			}
+			if status == Sent {
+				return f.save(res, cur, Sent, "partly sent; the rest is retried: "+errSummary(err))
+			}
+			return f.save(res, cur, Retry, errSummary(err))
+		}
+		uuids := make([]string, len(run))
+		for i, r := range run {
+			uuids[i] = r.UUID
+		}
+		if err := f.Index.Add(uuids...); err != nil {
+			detail = "sent, but the fork-guard index was not updated: " + err.Error()
+		}
+		cur.Offset, cur.LastUUID, cur.Segment, cur.LastTurnAt, cur.SentAt = last.End, last.UUID, segNo, last.Timestamp, now
+		cur.Records += len(run)
+		res.Records += len(run)
+		res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, k.project
+		status = Sent
 	}
-	if err := f.Index.Add(uuids...); err != nil {
-		res.Detail = "sent, but the fork-guard index was not updated: " + err.Error()
-	}
-	cur.Offset, cur.LastUUID, cur.Segment, cur.LastTurnAt, cur.SentAt = last.End, last.UUID, segNo, last.Timestamp, now
-	cur.Records += len(send)
-	return f.save(res, cur, Sent, res.Detail)
+	return f.save(res, cur, status, detail)
 }
 
 func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
@@ -222,14 +271,20 @@ func (f *Flusher) quarantine(res Result, cur *Cursor, why string) Result {
 	return f.save(res, *cur, Quarantined, why)
 }
 
-func (f *Flusher) optedOut(sid, cwd string) (bool, string) {
+// paused reads the session's pause flag; an unreadable file counts as
+// paused (fail closed).
+func (f *Flusher) paused(sid string) (bool, string) {
 	var s struct {
 		Paused bool `json:"paused"`
 	}
-	if raw, err := os.ReadFile(filepath.Join(f.Dirs.SessionsDir(), sid+".json")); err == nil && json.Unmarshal(raw, &s) == nil && s.Paused {
-		return true, "session paused"
+	raw, err := os.ReadFile(filepath.Join(f.Dirs.SessionsDir(), sid+".json"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return false, ""
+	case err != nil || json.Unmarshal(raw, &s) != nil:
+		return true, "session state unreadable: treated as paused"
 	}
-	return f.Resolver.OptedOut(cwd, f.Exclude)
+	return s.Paused, "session paused"
 }
 
 // lockSession takes the per-session lock, taking over one whose owner died

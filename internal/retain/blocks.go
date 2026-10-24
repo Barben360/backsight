@@ -70,8 +70,9 @@ type line struct {
 
 // BuildSegment turns records of one session into a retain item; segment 1
 // creates the document, later ones append (decision 0050).
-func BuildSegment(bank string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
-	sid := recs[0].SessionID
+// sid is the transcript file's session id, used for the document whatever
+// the records say (a resumed or forked file keeps one identity).
+func BuildSegment(bank, sid string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
 	doc := "conversation:" + sid
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

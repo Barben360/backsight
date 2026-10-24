@@ -100,13 +100,18 @@ func newEnv(t *testing.T) *env {
 // record appends a user or assistant record at minutes after 09:00.
 func (e *env) record(sid, uuid, role string, minute int, text string) {
 	e.t.Helper()
+	e.recordIn(e.cwd, sid, uuid, role, minute, text)
+}
+
+func (e *env) recordIn(cwd, sid, uuid, role string, minute int, text string) {
+	e.t.Helper()
 	ts := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC).Add(time.Duration(minute) * time.Minute).Format(time.RFC3339)
 	content := fmt.Sprintf("%q", text)
 	if role == "assistant" {
 		content = fmt.Sprintf(`[{"type":"text","text":%q}]`, text)
 	}
 	line := fmt.Sprintf(`{"type":%q,"uuid":%q,"sessionId":%q,"cwd":%q,"timestamp":%q,"message":{"role":%q,"content":%s}}`+"\n",
-		role, uuid, sid, e.cwd, ts, role, content)
+		role, uuid, sid, cwd, ts, role, content)
 	fh, err := os.OpenFile(filepath.Join(e.dir, sid+".jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		e.t.Fatal(err)
@@ -337,5 +342,64 @@ func TestRewrittenTranscriptResyncs(t *testing.T) {
 	expect(t, r, Sent, 1, 2)
 	if strings.Contains(e.hs.retains[1].Content, "first") {
 		t.Error("resent after a rewrite")
+	}
+}
+
+// A cd into an excluded path mid-session: those turns are never sent.
+func TestCwdChangeIntoExcludedPathMidSession(t *testing.T) {
+	e := newEnv(t)
+	secret := filepath.Join(filepath.Dir(e.cwd), "secret-client")
+	_ = os.MkdirAll(secret, 0o700)
+	e.f.Exclude = []string{secret}
+	e.record("s1", "u1", "user", 0, "billing work")
+	e.recordIn(secret, "s1", "u2", "user", 1, "confidential client detail")
+	e.record("s1", "u3", "user", 2, "back to billing")
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || r.Records != 2 || len(e.hs.retains) != 2 {
+		t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	for _, it := range e.hs.retains {
+		if strings.Contains(it.Content, "confidential") {
+			t.Errorf("an excluded turn was sent: %s", it.Content)
+		}
+	}
+	if e.hs.retains[1].UpdateMode != "append" || e.hs.retains[1].Metadata["segment"] != "2" {
+		t.Errorf("the run after the excluded part must append: %+v", e.hs.retains[1])
+	}
+}
+
+// A session moving to another project sends one segment per project.
+func TestProjectChangeMidSessionSplitsSegments(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(filepath.Dir(e.cwd), "infra")
+	_ = os.MkdirAll(other, 0o700)
+	e.record("s1", "u1", "user", 0, "billing question")
+	e.recordIn(other, "s1", "u2", "user", 1, "infra question")
+	e.flush("s1", Options{})
+	if len(e.hs.retains) != 2 || e.hs.retains[0].Tags[0] != "project:billing" || e.hs.retains[1].Tags[0] != "project:infra" {
+		t.Errorf("%+v", e.hs.retains)
+	}
+}
+
+func TestUnreadablePauseFileFailsClosed(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"), []byte(`{"paused": tr`), 0o600)
+	e.record("s1", "u1", "user", 0, "q")
+	if r := e.flush("s1", Options{}); r.Status != OptedOut || len(e.hs.retains) != 0 {
+		t.Errorf("%+v", r)
+	}
+}
+
+// The document follows the file name even when records say otherwise.
+func TestDocumentIDFollowsTheFile(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "q")
+	raw, _ := os.ReadFile(filepath.Join(e.dir, "s1.jsonl"))
+	_ = os.WriteFile(filepath.Join(e.dir, "s2.jsonl"), []byte(strings.Replace(string(raw), `"sessionId":"s1"`, `"sessionId":"other"`, 1)), 0o600)
+	e.f.Index, _ = LoadSentIndex(t.TempDir())
+	e.flush("s2", Options{})
+	if got := e.hs.retains[len(e.hs.retains)-1].DocumentID; got != "conversation:s2" {
+		t.Errorf("document %q", got)
 	}
 }
