@@ -481,3 +481,19 @@ func TestFreeBytesOnRealDir(t *testing.T) {
 		t.Errorf("%d %v", n, err)
 	}
 }
+
+func TestDetectGPUsOtherCases(t *testing.T) {
+	dev := t.TempDir()
+	if got := detectGPUs("linux", "amd64", dev); len(got) != 0 {
+		t.Errorf("empty /dev: %v", got)
+	}
+	put(t, filepath.Join(dev, "nvidiactl"), "", 0o600)
+	if got := detectGPUs("linux", "amd64", dev); len(got) != 1 || !strings.Contains(got[0], "NVIDIA") {
+		t.Errorf("nvidia: %v", got)
+	}
+	for _, osArch := range [][2]string{{"windows", "amd64"}, {"darwin", "amd64"}} {
+		if got := detectGPUs(osArch[0], osArch[1], dev); got != nil {
+			t.Errorf("%v: %v", osArch, got)
+		}
+	}
+}

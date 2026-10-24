@@ -134,11 +134,59 @@ func TestDiscoverReportsBrokenFiles(t *testing.T) {
 
 func TestTokenNeverPrinted(t *testing.T) {
 	home := authorHome(t)
-	in, _ := Discover(home, at(home))
+	in, err := Discover(home, at(home))
+	if err != nil || in == nil {
+		t.Fatalf("%v %v", in, err)
+	}
 	js, _ := json.Marshal(in)
 	for _, out := range []string{fmt.Sprintf("%v %+v %#v", in, in, *in), string(js)} {
 		if strings.Contains(out, "fakevalue") {
 			t.Errorf("token leaked: %s", out)
 		}
+	}
+}
+
+// doctor reads Pieces[0]; the order must be stable.
+func TestDiscoverOrder(t *testing.T) {
+	home := authorHome(t)
+	in, _ := Discover(home, at(home))
+	for i := 1; i < len(in.Pieces); i++ {
+		a, b := in.Pieces[i-1], in.Pieces[i]
+		if a.ID+a.Where > b.ID+b.Where {
+			t.Errorf("pieces out of order at %d: %v then %v", i, a, b)
+		}
+	}
+	if in.Pieces[0].ID != "npm-plugin-hook" {
+		t.Errorf("first piece %v", in.Pieces[0])
+	}
+}
+
+func TestDiscoverReportsBrokenStateAndPluginConfig(t *testing.T) {
+	for rel, want := range map[string]string{".claude.json": ".claude.json", ".hindsight/coding-agent.json": "coding-agent.json"} {
+		home := t.TempDir()
+		put(t, home, rel, `{"broken": `)
+		if _, err := Discover(home, at(home)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want an error naming it, got %v", rel, err)
+		}
+	}
+}
+
+func TestDiscoverPluginConfigWithoutURL(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, ".hindsight/coding-agent.json", `{"bankId":"b"}`)
+	in, err := Discover(home, at(home))
+	if err != nil || in == nil || in.URL != "" || len(in.Pieces) != 0 {
+		t.Errorf("a config without URL is still an install, with no server: %+v %v", in, err)
+	}
+}
+
+func TestDiscoverCollapsesDuplicates(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, ".claude/settings.json", `{"hooks":{"UserPromptSubmit":[
+ {"hooks":[{"type":"command","command":"python3 ~/.claude/hooks/memory-search.py"}]},
+ {"hooks":[{"type":"command","command":"python3 ~/.claude/hooks/memory-search.py --again"}]}]}}`)
+	in, _ := Discover(home, at(home))
+	if in == nil || len(in.Pieces) != 1 {
+		t.Errorf("one piece per id and place: %+v", in)
 	}
 }

@@ -17,8 +17,15 @@ func run(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
+func setBuild(t *testing.T, version, commit string) {
+	t.Helper()
+	oldV, oldC := buildinfo.Version, buildinfo.Commit
+	buildinfo.Version, buildinfo.Commit = version, commit
+	t.Cleanup(func() { buildinfo.Version, buildinfo.Commit = oldV, oldC })
+}
+
 func TestVersionJSON(t *testing.T) {
-	buildinfo.Version, buildinfo.Commit = "0.1.0-test", "abc1234"
+	setBuild(t, "0.1.0-test", "abc1234")
 	code, out, _ := run(t, "version", "--json")
 	if code != output.OK {
 		t.Fatalf("exit %d", code)
@@ -40,7 +47,7 @@ func TestVersionJSON(t *testing.T) {
 }
 
 func TestVersionText(t *testing.T) {
-	buildinfo.Version = "0.1.0-test"
+	setBuild(t, "0.1.0-test", "abc1234")
 	code, out, _ := run(t, "version")
 	if code != output.OK || !strings.HasPrefix(out, "backsight 0.1.0-test") {
 		t.Errorf("exit %d, out %q", code, out)
@@ -74,5 +81,13 @@ func TestUnknownCommandJSONIsEnvelope(t *testing.T) {
 func TestUnknownFlagIsUsageError(t *testing.T) {
 	if code, _, _ := run(t, "version", "--bogus"); code != output.Usage {
 		t.Errorf("exit %d, want %d", code, output.Usage)
+	}
+}
+
+func TestExtraArgumentsAreUsageErrors(t *testing.T) {
+	for _, cmd := range []string{"version", "paths", "doctor"} {
+		if code, _, _ := run(t, cmd, "extra"); code != output.Usage {
+			t.Errorf("%s extra: exit %d, want %d", cmd, code, output.Usage)
+		}
 	}
 }

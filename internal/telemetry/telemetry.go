@@ -42,8 +42,15 @@ func (w *Writer) file(t time.Time) string {
 	return filepath.Join(w.dir, "events-"+t.UTC().Format("2006-01")+".jsonl")
 }
 
-// Emit appends e. It never fails the caller: errors are only counted.
+// Emit appends e. It never fails the caller: errors and panics (a broken
+// event type) are only counted. A write cut short by a full disk leaves a
+// partial line; readers skip lines that do not parse.
 func (w *Writer) Emit(e Event) {
+	defer func() {
+		if recover() != nil {
+			w.failures.Add(1)
+		}
+	}()
 	if err := w.emit(e); err != nil {
 		w.failures.Add(1)
 	}

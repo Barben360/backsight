@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -67,6 +68,33 @@ func TestCodeOf(t *testing.T) {
 	for _, c := range cases {
 		if got := CodeOf(c.err); got != c.want {
 			t.Errorf("CodeOf(%v) = %d, want %d", c.err, got, c.want)
+		}
+	}
+}
+
+func TestErrorEnvelopeFromPlainAndWrappedErrors(t *testing.T) {
+	for name, c := range map[string]struct {
+		err  error
+		code int
+		msg  string
+	}{
+		"plain":   {errors.New("disk full"), Blocked, "disk full"},
+		"wrapped": {fmt.Errorf("setup: %w", &Error{Code: NeedsUser, Message: "type the key"}), NeedsUser, "type the key"},
+	} {
+		var buf bytes.Buffer
+		if err := WriteJSON(&buf, "x", map[string]int{"n": 1}, c.err); err != nil {
+			t.Fatal(err)
+		}
+		var env struct {
+			OK    bool           `json:"ok"`
+			Data  map[string]int `json:"data"`
+			Error *Error         `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.OK || env.Error == nil || env.Error.Code != c.code || env.Error.Message != c.msg || env.Data["n"] != 1 {
+			t.Errorf("%s: %s", name, buf.String())
 		}
 	}
 }

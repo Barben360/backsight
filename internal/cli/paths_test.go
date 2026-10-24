@@ -50,3 +50,30 @@ func TestPathsRefusesRelativeHome(t *testing.T) {
 		t.Errorf("exit %d, stderr %q", code, errOut)
 	}
 }
+
+func TestPathsText(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BACKSIGHT_HOME", home)
+	code, out, _ := run(t, "paths")
+	want := []string{"config.toml   " + filepath.Join(home, "config", "config.toml") + " (missing)", "state         " + filepath.Join(home, "state")}
+	for _, w := range want {
+		if code != output.OK || !strings.Contains(out, w) {
+			t.Errorf("exit %d, output lacks %q:\n%s", code, w, out)
+		}
+	}
+}
+
+func TestPathsErrorJSONEnvelope(t *testing.T) {
+	t.Setenv("BACKSIGHT_HOME", "relative/dir")
+	code, out, errOut := run(t, "paths", "--json")
+	var env struct {
+		OK    bool          `json:"ok"`
+		Error *output.Error `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if code != output.Blocked || env.OK || env.Error == nil || env.Error.Code != output.Blocked || !strings.Contains(env.Error.Message, "BACKSIGHT_HOME") || errOut != "" {
+		t.Errorf("exit %d: %s (stderr %q)", code, out, errOut)
+	}
+}

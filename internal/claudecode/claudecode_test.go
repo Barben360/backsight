@@ -138,3 +138,36 @@ func show(r Retention) string {
 	}
 	return fmt.Sprintf("%s %d user=%s managed=%s", r.Source, r.EffectiveDays, v(r.UserDays), v(r.ManagedDays))
 }
+
+// Drop-ins apply in name order, not in the order the files were created.
+func TestDropInsApplyInNameOrder(t *testing.T) {
+	root := t.TempDir()
+	loc := Locate(filepath.Join(root, "home"), env(nil))
+	managed := filepath.Join(root, "etc")
+	put(t, filepath.Join(managed, "managed-settings.d", "90-z.json"), `{"cleanupPeriodDays": 90}`)
+	put(t, filepath.Join(managed, "managed-settings.d", "10-a.json"), `{"cleanupPeriodDays": 10}`)
+	got, err := ReadRetention(loc, managed)
+	if err != nil || got.EffectiveDays != 90 {
+		t.Errorf("want 90 from 90-z.json, got %+v %v", got, err)
+	}
+}
+
+func TestCorruptManagedSettingsNamesTheFile(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "etc")
+	p := filepath.Join(managed, "managed-settings.json")
+	put(t, p, `{"cleanupPeriodDays": `)
+	if _, err := ReadRetention(Locate(filepath.Join(root, "home"), env(nil)), managed); err == nil || !strings.Contains(err.Error(), p) {
+		t.Errorf("want an error naming %s, got %v", p, err)
+	}
+}
+
+// 0 is a value someone wrote, not "unset".
+func TestZeroRetentionIsAValue(t *testing.T) {
+	loc := Locate(t.TempDir(), env(nil))
+	put(t, loc.Settings, `{"cleanupPeriodDays": 0}`)
+	got, err := ReadRetention(loc, t.TempDir())
+	if err != nil || got.Source != "user" || got.EffectiveDays != 0 || got.UserDays == nil {
+		t.Errorf("%+v %v", got, err)
+	}
+}

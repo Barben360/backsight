@@ -85,10 +85,16 @@ func TestEventNames(t *testing.T) {
 func TestCommonFieldsWin(t *testing.T) {
 	dir := t.TempDir()
 	w := New(dir, common)
-	w.Emit(Raw{Name: "custom", Fields: map[string]any{"session": "forged", "extra": 1}})
+	w.now = fixedClock("2026-10-24T08:00:00Z")
+	w.Emit(Raw{Name: "custom", Fields: map[string]any{"session": "forged", "event": "forged", "ts": "forged",
+		"v": "forged", "project": "forged", "binary_version": "forged", "extra": 1}})
 	got := lines(t, w.currentFile())[0]
-	if got["session"] != "s1" || got["event"] != "custom" || got["extra"] != float64(1) {
-		t.Errorf("%v", got)
+	want := map[string]any{"session": common.Session, "event": "custom", "ts": "2026-10-24T08:00:00.000Z",
+		"v": common.V, "project": common.Project, "binary_version": common.BinaryVersion, "extra": float64(1)}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
 	}
 }
 
@@ -105,6 +111,8 @@ func TestEmitNeverFails(t *testing.T) {
 		t.Errorf("failures = %d", w.Failures())
 	}
 }
+
+const childNow = "2026-10-15T12:00:00Z"
 
 // Hooks are separate processes writing the same file at once.
 func TestConcurrentProcessesKeepLinesWhole(t *testing.T) {
@@ -128,6 +136,7 @@ func TestConcurrentProcessesKeepLinesWhole(t *testing.T) {
 		}
 	}
 	w := New(dir, common)
+	w.now = fixedClock(childNow)
 	got := lines(t, w.currentFile())
 	if len(got) != procs*per {
 		t.Errorf("%d lines, want %d", len(got), procs*per)
@@ -141,11 +150,44 @@ func TestHelperWriter(t *testing.T) {
 	}
 	n, _ := strconv.Atoi(os.Getenv("CHILD_N"))
 	w := New(dir, common)
+	w.now = fixedClock(childNow)     // parent and children agree on the month
 	pad := fmt.Sprintf("%03000d", 0) // long lines make interleaving visible
 	for i := range n {
 		w.Emit(Raw{Name: "load", Fields: map[string]any{"child": os.Getenv("CHILD_ID"), "i": i, "pad": pad}})
 	}
 	if w.Failures() != 0 {
 		t.Fatal("write failures in child")
+	}
+}
+
+type panicky struct{}
+
+func (panicky) EventName() string            { return "panicky" }
+func (panicky) MarshalJSON() ([]byte, error) { panic("boom") }
+
+func TestEmitSurvivesBadEvents(t *testing.T) {
+	w := New(t.TempDir(), common)
+	w.Emit(Raw{Name: "bad", Fields: map[string]any{"c": make(chan int)}}) // not marshalable
+	w.Emit(panicky{})
+	if w.Failures() != 2 {
+		t.Errorf("failures = %d, want 2", w.Failures())
+	}
+}
+
+// Pins the wire shape analysers rely on: unset pointers are null, empty
+// scopes are omitted.
+func TestWireShapeOfNullableFields(t *testing.T) {
+	w := New(t.TempDir(), common)
+	w.Emit(Prompt{N: 1, Decision: "skip"})
+	w.Emit(Outcome{N: 1})
+	got := lines(t, w.currentFile())
+	if v, ok := got[0]["detector"]; !ok || v != nil {
+		t.Errorf("prompt.detector must be present and null: %v", got[0])
+	}
+	if _, ok := got[0]["scopes"]; ok {
+		t.Errorf("empty scopes must be omitted: %v", got[0])
+	}
+	if v, ok := got[1]["credited"]; !ok || v != nil {
+		t.Errorf("outcome.credited must be present and null: %v", got[1])
 	}
 }
