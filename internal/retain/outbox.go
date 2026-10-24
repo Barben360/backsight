@@ -41,9 +41,19 @@ type Note struct {
 	CreatedAt   time.Time `json:"created_at"`
 	Attempts    int       `json:"attempts"`
 	LastError   string    `json:"last_error,omitempty"`
+	Source      string    `json:"source,omitempty"` // "" (a note) | subagent
 }
 
 // NewNote builds a note with its document and operation ids.
+// NewSubagentNote is a subagent's final report as document
+// subagent:<session>:<agent> (SPEC §6.2 SubagentStop).
+func NewSubagentNote(bank, sid, agentID, project, content string, at time.Time) Note {
+	doc := "subagent:" + sid + ":" + agentID
+	sum := sha256.Sum256([]byte(content))
+	return Note{OperationID: uuid5(nsBacksight, bank+"\n"+doc+"\n"+hex.EncodeToString(sum[:])), DocumentID: doc,
+		Source: "subagent", Project: project, Content: content, CreatedAt: at.UTC()}
+}
+
 func NewNote(bank, kind, project, content string, at time.Time) Note {
 	doc := "note:" + uuid5(nsBacksight, bank+"\n"+project+"\n"+at.UTC().Format(time.RFC3339Nano)+"\n"+content)
 	sum := sha256.Sum256([]byte(content))
@@ -54,6 +64,15 @@ func NewNote(bank, kind, project, content string, at time.Time) Note {
 // Item is the retain item of a note.
 func (n Note) Item(machineID string) hindsight.RetainItem {
 	ts := n.CreatedAt
+	if n.Source == "subagent" {
+		return hindsight.RetainItem{
+			Content: n.Content, Context: "final report of a subagent", DocumentID: n.DocumentID, Strategy: "document",
+			Tags:              []string{"project:" + n.Project, "source:subagent", "harness:claude-code"},
+			ObservationScopes: [][]string{{"project:" + n.Project}},
+			Timestamp:         &ts,
+			Metadata:          map[string]string{"source": "subagent", "machine_id": machineID},
+		}
+	}
 	return hindsight.RetainItem{
 		Content: n.Content, Context: "note stored by the user or the agent", DocumentID: n.DocumentID, Strategy: "document",
 		Tags:              []string{"project:" + n.Project, "source:note", "kind:" + n.Kind, "harness:claude-code"},

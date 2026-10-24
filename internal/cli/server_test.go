@@ -175,6 +175,7 @@ var (
 	// /memories/{id}; projectEntities answers /tags and /entities.
 	recallAnswer    string
 	recallTags      []string
+	recallQueries   []string
 	recentAnswer    map[string]string // memories/list items by type ("" = any)
 	recentDown      atomic.Bool
 	memories        map[string]string
@@ -201,6 +202,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	extractFails.Store(false)
 	retainedTags, queueAtRetain = nil, nil
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
+	recallQueries = nil
 	recentAnswer = map[string]string{}
 	recentDown.Store(false)
 	var mu sync.Mutex
@@ -235,10 +237,12 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/recall"):
 			var body struct {
-				Tags []string `json:"tags"`
+				Query string   `json:"query"`
+				Tags  []string `json:"tags"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			recallTags = append(recallTags, strings.Join(body.Tags, ","))
+			recallQueries = append(recallQueries, body.Query)
 			if st := recallStatus.Load(); st != 0 {
 				w.WriteHeader(int(st))
 				return

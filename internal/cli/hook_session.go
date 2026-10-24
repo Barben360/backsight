@@ -27,14 +27,14 @@ const (
 
 func init() {
 	handlers["session-start"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, true)
+		h, ok := newHookEnv(ctx, input, readSide)
 		if !ok {
 			return nil, nil
 		}
 		return h.sessionStart(), nil
 	}
 	handlers["subagent-start"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, true)
+		h, ok := newHookEnv(ctx, input, readSide)
 		if !ok {
 			return nil, nil
 		}
@@ -78,6 +78,7 @@ func (h *hookEnv) sessionStart() []byte {
 	})
 	if err == nil {
 		h.tw.Emit(telemetry.Briefing{IDs: ids, Chars: len([]rune(text)), Source: source})
+		_ = h.sticky().Record(ids, now(), stickyWindow) // briefed ids count towards muting (SPEC §6.2)
 	}
 	context := instructions.Guide
 	if text != "" {

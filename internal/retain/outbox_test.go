@@ -246,3 +246,12 @@ func TestOutboxQuarantinesANoteThatKeepsFailing(t *testing.T) {
 		t.Errorf("%+v", res)
 	}
 }
+
+func TestSubagentNoteItem(t *testing.T) {
+	n := NewSubagentNote("b", "s1", "agent-7", "billing", "Found the leak in pool.go.", at)
+	it := n.Item("m1")
+	if n.DocumentID != "subagent:s1:agent-7" || it.Strategy != "document" || strings.Join(it.Tags, ",") != "project:billing,source:subagent,harness:claude-code" ||
+		it.ObservationScopes[0][0] != "project:billing" || it.Metadata["source"] != "subagent" {
+		t.Errorf("%+v %+v", n, it)
+	}
+}

@@ -1,0 +1,133 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/session"
+)
+
+type gateOut struct {
+	Specific struct {
+		Event    string `json:"hookEventName"`
+		Decision string `json:"permissionDecision"`
+		Reason   string `json:"permissionDecisionReason"`
+	} `json:"hookSpecificOutput"`
+}
+
+func gate(t *testing.T, home string) gateOut {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"session_id": "s1", "cwd": filepath.Join(home, "billing"), "tool_name": "AskUserQuestion",
+		"tool_input": map[string]any{"questions": []map[string]any{{"question": "Which PostgreSQL version should billing use?"}}}})
+	out, err := handleHook(context.Background(), "pre-tool-use", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g gateOut
+	if len(out) > 0 {
+		_ = json.Unmarshal(out, &g)
+	}
+	return g
+}
+
+func TestGateDeniesOncePerPromptWithHits(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = `[{"id":"m1","text":"Billing keeps PostgreSQL 16 for partial indexes.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Prompts = 2; return nil })
+	g := gate(t, home)
+	if g.Specific.Event != "PreToolUse" || g.Specific.Decision != "deny" || !strings.HasPrefix(g.Specific.Reason, instructions.GateReason) ||
+		!strings.Contains(g.Specific.Reason, "PostgreSQL 16") {
+		t.Fatalf("%+v", g)
+	}
+	if !strings.Contains(strings.Join(recallQueries, "|"), "Which PostgreSQL version") {
+		t.Errorf("the question was not searched: %q", recallQueries)
+	}
+	if g := gate(t, home); g.Specific.Decision != "" {
+		t.Errorf("denied twice in one prompt: %+v", g)
+	}
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Prompts = 3; return nil })
+	if g := gate(t, home); g.Specific.Decision != "deny" {
+		t.Error("a new prompt must gate again")
+	}
+	if !strings.Contains(telemetryText(t, home), `"event":"gate"`) {
+		t.Error("gate not logged")
+	}
+}
+
+func TestGateAllowsAfterAMemorySearch(t *testing.T) {
+	home := hookHome(t)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Prompts = 2; st.SearchedPromptID = 2; return nil })
+	if g := gate(t, home); g.Specific.Decision != "" {
+		t.Errorf("%+v", g)
+	}
+}
+
+func TestStopRecordsTheLastReply(t *testing.T) {
+	home := hookHome(t)
+	if h := fire(t, "stop", map[string]any{"session_id": "s1", "cwd": home, "last_assistant_message": strings.Repeat("a", 5000) + " Shall I merge?"}); h.Specific.Context != "" || h.SystemMessage != "" {
+		t.Errorf("stop must print nothing: %+v", h)
+	}
+	st, _ := sessions(home).Load("s1")
+	if !strings.HasSuffix(st.LastAssistant, "Shall I merge?") || len([]rune(st.LastAssistant)) > 1000 {
+		t.Errorf("%d chars: ...%s", len(st.LastAssistant), st.LastAssistant[max(0, len(st.LastAssistant)-20):])
+	}
+}
+
+func TestSubagentStopQueuesItsReport(t *testing.T) {
+	home := hookHome(t)
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "agent-7", "cwd": filepath.Join(home, "billing"),
+		"last_assistant_message": "Found the leak in pool.go. Token ghp_" + strings.Repeat("a1B2c3D4e5F6", 3) + " was in the log. " + strings.Repeat("x", 5000)})
+	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
+	if !strings.Contains(string(raw), `"document_id":"subagent:s1:agent-7"`) || !strings.Contains(string(raw), `"source":"subagent"`) ||
+		strings.Contains(string(raw), "a1B2c3D4e5F6a1B2") || !strings.Contains(string(raw), "pool.go") {
+		t.Fatalf("outbox:\n%.600s", raw)
+	}
+	var n struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal([]byte(strings.SplitN(string(raw), "\n", 2)[0]), &n)
+	if len([]rune(n.Content)) > 4000 {
+		t.Errorf("report %d chars", len([]rune(n.Content)))
+	}
+	if st, _ := sessions(home).Load("s1"); !st.SubagentDone {
+		t.Error("subagent result not recorded for the approval detector")
+	}
+}
+
+func TestSubagentStopHonoursPauseAndTheWriteFlag(t *testing.T) {
+	home := hookHome(t)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Paused = true; return nil })
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "last_assistant_message": "report"})
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
+		t.Error("paused session queued a report")
+	}
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("[components]\nwrite = false\n")...), 0o600)
+	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "last_assistant_message": "report"})
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
+		t.Error("write = false queued a report")
+	}
+}
+
+func TestSessionEndSpawnsADetachedFlush(t *testing.T) {
+	home := hookHome(t)
+	var got []string
+	old := spawnDetached
+	spawnDetached = func(args ...string) error { got = args; return nil }
+	t.Cleanup(func() { spawnDetached = old })
+	fire(t, "session-end", map[string]any{"session_id": "s1", "cwd": home, "reason": "prompt_input_exit"})
+	if strings.Join(got, " ") != "retain flush --session s1" {
+		t.Errorf("spawned %v", got)
+	}
+	got = nil
+	fire(t, "session-end", map[string]any{"session_id": "../x", "cwd": home})
+	if got != nil {
+		t.Errorf("an invalid session id was passed on: %v", got)
+	}
+}

@@ -157,7 +157,7 @@ func noteProject(home string, cfg config.Config, proj string) string {
 }
 
 func storeText(res storeResult) string {
-	msg := fmt.Sprintf("%s (%s, project %s)\n", res.Status, res.Kind, res.Project)
+	msg := fmt.Sprintf("%s (%s, project %s) %s\n", res.Status, res.Kind, res.Project, res.Document)
 	if res.Status == "queued" {
 		msg = fmt.Sprintf("queued (%s, project %s): the server did not take it now, the next jobs tick sends it\n", res.Kind, res.Project)
 	}

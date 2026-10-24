@@ -32,6 +32,10 @@ type State struct {
 	SearchedPromptID int         `json:"searched_prompt_id"` // last prompt during which a memory tool ran
 	CharsInjected    int         `json:"chars_injected"`     // hook-injected text after the briefing
 	Paused           bool        `json:"paused"`
+	LastNudge        int         `json:"last_nudge"`           // prompt number of the last quiet-prompt nudge
+	Unavailable      bool        `json:"unavailable_notified"` // the visible failure was shown
+	LastAssistant    string      `json:"last_assistant"`       // the last reply, recorded at Stop
+	SubagentDone     bool        `json:"subagent_done"`        // a subagent finished since the last prompt
 }
 
 // Injection is one memory a hook put in the context, and the rule that let
@@ -57,6 +61,9 @@ type Store struct {
 var ErrBusy = errors.New("session state busy")
 
 var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+// ValidID says whether id can name a session (and its files).
+func ValidID(id string) bool { return idRE.MatchString(id) }
 
 func checkID(id string) error {
 	if !idRE.MatchString(id) {

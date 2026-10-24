@@ -49,9 +49,15 @@ type hookEnv struct {
 	client  *hindsight.Client
 }
 
+// Which component an event belongs to (A.1 components).
+const (
+	readSide  = "read"
+	writeSide = "write"
+)
+
 // newHookEnv parses the event; ok false means print nothing: no config yet,
-// an unreadable event, or (for read hooks) components.read off.
-func newHookEnv(ctx context.Context, input []byte, readSide bool) (*hookEnv, bool) {
+// an unreadable event, or the event's component turned off.
+func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool) {
 	h := &hookEnv{ctx: ctx}
 	if json.Unmarshal(input, &h.in) != nil {
 		return nil, false
@@ -63,7 +69,7 @@ func newHookEnv(ctx context.Context, input []byte, readSide bool) (*hookEnv, boo
 	if h.cfg, h.sec, err = loadServerConfig(); err != nil {
 		return nil, false
 	}
-	if readSide && !h.cfg.Components.Read {
+	if (side == readSide && !h.cfg.Components.Read) || (side == writeSide && !h.cfg.Components.Write) {
 		return nil, false
 	}
 	cwd := h.in.Cwd
