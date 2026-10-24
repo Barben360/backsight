@@ -93,16 +93,22 @@ type Backfill struct {
 	Done      int       `json:"done"`
 	Total     int       `json:"total"`
 	StartedAt time.Time `json:"started_at"`
-	// Budget (decision 0051): a cap in currency or in tokens, the spend
-	// measured so far, and the last token snapshot it was measured from.
-	MaxCost     float64  `json:"max_cost,omitempty"`
-	MaxTokens   int64    `json:"max_tokens,omitempty"`
-	Currency    string   `json:"currency,omitempty"`
-	SpentCost   float64  `json:"spent_cost"`
-	SpentTokens int64    `json:"spent_tokens"`
-	Last        [4]int64 `json:"last_tokens"`        // input, cached, output, thoughts
-	Paused      string   `json:"paused,omitempty"`   // budget | server | ""
-	Sessions    []string `json:"sessions,omitempty"` // still to send, oldest first
+	// Budget (decision 0051): a cap in currency or in tokens and the spend
+	// measured so far.
+	MaxCost     float64 `json:"max_cost,omitempty"`
+	MaxTokens   int64   `json:"max_tokens,omitempty"`
+	Currency    string  `json:"currency,omitempty"`
+	SpentCost   float64 `json:"spent_cost"`
+	SpentTokens int64   `json:"spent_tokens"`
+	// StartDay (UTC) and its token sums when the backfill started: spend is
+	// the start day's increase plus every later day.
+	StartDay  string   `json:"start_day"`
+	StartBase [4]int64 `json:"start_base"` // input, cached, output, thoughts
+	// Paused: budget | server | measure | interrupted | "" (running).
+	Paused            string   `json:"paused,omitempty"`
+	AllowSubscription bool     `json:"allow_subscription,omitempty"`
+	Filters           string   `json:"filters,omitempty"`  // since|project|projects-dir of the queue
+	Sessions          []string `json:"sessions,omitempty"` // still to send, oldest first
 }
 
 // Load reads path; a missing file is an empty state of the current schema.

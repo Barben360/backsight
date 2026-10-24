@@ -3,11 +3,19 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Barben360/backsight/internal/cli"
 )
 
 func main() {
-	os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
+	// Ctrl-C cancels the command's context so long runs (backfill) can stop
+	// cleanly and record why.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := cli.ExecuteContext(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }

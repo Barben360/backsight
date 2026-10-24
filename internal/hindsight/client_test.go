@@ -402,3 +402,13 @@ func TestQueuedOperationsCountsPendingAndProcessing(t *testing.T) {
 		t.Errorf("%d %v", n, err)
 	}
 }
+
+func TestLLMTokensByDay(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"buckets":[{"time":"2026-10-23T00:00:00+00:00","tokens":{"input":100,"output":10}},{"time":"2026-10-24T00:00:00+00:00","tokens":{"input":50,"cached":5}}]}`))
+	})
+	days, err := c.LLMTokensByDay(context.Background(), "b", "30d")
+	if err != nil || days["2026-10-23"].Input != 100 || days["2026-10-24"].Cached != 5 || len(days) != 2 {
+		t.Errorf("%+v %v", days, err)
+	}
+}

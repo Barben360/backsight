@@ -79,9 +79,10 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
-			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" {
+			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" &&
+				(cfg.LLM.Provider != "claude-code" || st.Backfill.AllowSubscription) {
 				prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
-				br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, tickBackfillLimit)
+				br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, true)
 				res.Backfill = fmt.Sprintf("%d/%d", br.Done, br.Total)
 				if berr != nil {
 					res.Backfill += " paused: " + br.Paused

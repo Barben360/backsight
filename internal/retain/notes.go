@@ -38,9 +38,15 @@ func str(in map[string]json.RawMessage, key string) string {
 // NotesFromRecords turns explicit saves found in a session (memory_store
 // and hindsight_ingest_document calls) into notes, dated by their record
 // and identified by session and tool call so a rerun collapses (0051).
-func NotesFromRecords(bank, sid, sessionProject string, recs []transcript.Record) []Note {
+// projectOf names the project of a record's directory; ok false skips the
+// record (opted out).
+func NotesFromRecords(bank, sid string, recs []transcript.Record, projectOf func(cwd string) (project string, ok bool)) []Note {
 	var notes []Note
 	for _, r := range recs {
+		sessionProject, ok := projectOf(r.CWD)
+		if !ok {
+			continue
+		}
 		for _, tu := range r.Tools {
 			var kind, project, content string
 			switch {

@@ -348,6 +348,39 @@ type LLMTokens struct {
 	Input, Output, Cached, Thoughts int64
 }
 
+// LLMTokensByDay returns the bank's LLM token sums per UTC day
+// ("2006-01-02") over period (e.g. "30d").
+func (c *Client) LLMTokensByDay(ctx context.Context, bank, period string) (map[string]LLMTokens, error) {
+	var out struct {
+		Buckets []struct {
+			Time   string `json:"time"`
+			Tokens struct {
+				Input    int64 `json:"input"`
+				Output   int64 `json:"output"`
+				Cached   int64 `json:"cached"`
+				Thoughts int64 `json:"thoughts"`
+			} `json:"tokens"`
+		} `json:"buckets"`
+	}
+	if err := c.get(ctx, bankPath(bank, "/llm-requests/stats"), url.Values{"period": {period}}, &out); err != nil {
+		return nil, err
+	}
+	days := map[string]LLMTokens{}
+	for _, b := range out.Buckets {
+		day := b.Time
+		if len(day) >= 10 {
+			day = day[:10]
+		}
+		t := days[day]
+		t.Input += b.Tokens.Input
+		t.Output += b.Tokens.Output
+		t.Cached += b.Tokens.Cached
+		t.Thoughts += b.Tokens.Thoughts
+		days[day] = t
+	}
+	return days, nil
+}
+
 // LLMTokens sums the bank's llm-requests/stats buckets over period (e.g.
 // "30d"): the measured spend of extraction and consolidation.
 func (c *Client) LLMTokens(ctx context.Context, bank, period string) (LLMTokens, error) {

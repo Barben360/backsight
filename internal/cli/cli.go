@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -92,6 +93,11 @@ func usageArgs(check cobra.PositionalArgs) cobra.PositionalArgs {
 
 // Execute runs backsight with args and returns the process exit code.
 func Execute(args []string, stdout, stderr io.Writer) int {
+	return ExecuteContext(context.Background(), args, stdout, stderr)
+}
+
+// ExecuteContext is Execute with a context commands can watch (Ctrl-C).
+func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	e := &env{stdout: stdout, stderr: stderr}
 	root := newRoot(e)
 	root.SetArgs(args)
@@ -104,7 +110,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 			e.json = true
 		}
 	}
-	cmd, err := root.ExecuteC()
+	cmd, err := root.ExecuteContextC(ctx)
 	if err == nil {
 		return output.OK
 	}

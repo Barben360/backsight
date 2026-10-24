@@ -161,12 +161,30 @@ func (f *fakeCompose) subcommands() []string {
 // retained counts retain items the fake server accepted; llmInput is the
 // bank's LLM input-token total the fake reports, raised by llmPerRetain on
 // each accepted item.
-var retained, llmInput, llmPerRetain, queued atomic.Int64
+var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter atomic.Int64
+
+// statsDown makes the LLM usage endpoint fail; retainedTags records the
+// tags of every accepted item.
+var (
+	statsDown    atomic.Bool
+	retainedTags []string
+)
 
 // fakeHindsight answers like a started server: health, version, banks and
 // bank config (overrides kept in memory).
 func fakeHindsight(t *testing.T) (port int) {
 	t.Helper()
+	// Shared counters start clean for every test.
+	retained.Store(0)
+	llmInput.Store(0)
+	llmPerRetain.Store(0)
+	queued.Store(0)
+	processing.Store(0)
+	failRetains.Store(0)
+	statsCalls.Store(0)
+	statsFailAfter.Store(0)
+	statsDown.Store(false)
+	retainedTags = nil
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -202,13 +220,19 @@ func fakeHindsight(t *testing.T) (port int) {
 				Items []struct {
 					DocumentID string          `json:"document_id"`
 					Metadata   json.RawMessage `json:"metadata"`
+					Tags       []string        `json:"tags"`
 				} `json:"items"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if failRetains.Load() > 0 && retained.Load() >= failRetains.Load() {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			for _, it := range body.Items {
 				docs[it.DocumentID] = it.Metadata
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())
+				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))
 			}
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
@@ -220,11 +244,25 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/llm-requests/stats"):
-			_, _ = w.Write([]byte(`{"buckets":[{"tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}]}`))
+			calls := statsCalls.Add(1)
+			if statsDown.Load() || (statsFailAfter.Load() > 0 && calls > statsFailAfter.Load()) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			day := time.Now().UTC().Format("2006-01-02")
+			_, _ = w.Write([]byte(`{"buckets":[{"time":"` + day + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}]}`))
 		case strings.HasSuffix(r.URL.Path, "/operations"):
-			n := queued.Load()
-			if r.URL.Query().Get("status") == "pending" && n > 0 {
-				queued.Add(-1) // the queue drains as it is polled
+			// Pending and processing are reported separately, like Hindsight;
+			// only pending drains as it is polled.
+			var n int64
+			switch r.URL.Query().Get("status") {
+			case "pending":
+				n = queued.Load()
+				if n > 0 {
+					queued.Add(-1)
+				}
+			case "processing":
+				n = processing.Load()
 			}
 			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats"):

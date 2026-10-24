@@ -21,7 +21,9 @@ import (
 // Pacing seams (decision 0051); tests shorten them.
 var (
 	backfillPoll       = 5 * time.Second
-	backfillQueueLimit = 20
+	backfillQueueLimit = 2                // wait until the server queue is this short
+	tickQueueWait      = 60 * time.Second // a tick does not wait longer on the queue
+	finalQueueWait     = 15 * time.Minute // the closing measurement waits at most this long
 	tickBackfillLimit  = 3
 )
 
@@ -34,6 +36,7 @@ type backfillFlags struct {
 
 type backfillPlan struct {
 	Send      int             `json:"send"`
+	NotesOnly int             `json:"notes_only"`
 	Sent      int             `json:"already_sent"`
 	OptedOut  int             `json:"opted_out"`
 	Notes     int             `json:"notes"`
@@ -89,27 +92,58 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			if fl.plan {
 				return e.emit("retain backfill", res, func() string { return backfillText(res, true) })
 			}
+			if cmd.Flags().Changed("max-cost") && !prices.Known() {
+				return &output.Error{Code: output.Usage, Message: "no price is known for model " + cfg.LLM.Model + ": cap with --max-tokens, or set [llm] price_input and price_output"}
+			}
 			queue := make([]string, 0, len(cands))
 			for _, c := range cands {
 				queue = append(queue, c.Path)
 			}
+			filters := fl.since + "|" + fl.project + "|" + fl.dir
+			capGiven := cmd.Flags().Changed("max-cost") || cmd.Flags().Changed("max-tokens")
+			var startErr error
 			err = state.Update(d, "retain backfill", func(s *state.State) error {
 				b := s.Backfill
-				if b == nil || len(b.Sessions) == 0 || cmd.Flags().Changed("since") || cmd.Flags().Changed("project") {
-					b = &state.Backfill{StartedAt: now().UTC(), Total: len(queue), Sessions: queue, Currency: prices.Currency}
-					if t, err := f.Client.LLMTokens(cmd.Context(), cfg.Server.Bank, "30d"); err == nil {
-						b.Last = [4]int64{t.Input, t.Cached, t.Output, t.Thoughts}
+				active := b != nil && len(b.Sessions) > 0
+				switch {
+				case !active:
+					// A new backfill: baseline of today's spend, which must be readable.
+					day := now().UTC().Format("2006-01-02")
+					days, err := f.Client.LLMTokensByDay(cmd.Context(), cfg.Server.Bank, "30d")
+					if err != nil {
+						startErr = fmt.Errorf("cannot read the server's LLM usage, so the spending cap could not work: %w", err)
+						return nil
 					}
+					t := days[day]
+					b = &state.Backfill{StartedAt: now().UTC(), StartDay: day, StartBase: [4]int64{t.Input, t.Cached, t.Output, t.Thoughts},
+						Currency: prices.Currency, MaxCost: plan.MaxCost, MaxTokens: plan.MaxTokens}
+					b.Sessions, b.Total, b.Filters = queue, len(queue), filters
+				case b.Filters != filters:
+					// Other filters: a new queue, the spend so far still counts.
+					b.Sessions, b.Total, b.Done, b.Filters = queue, len(queue), 0, filters
 				}
-				b.MaxCost, b.MaxTokens = plan.MaxCost, plan.MaxTokens
+				if capGiven {
+					b.MaxCost, b.MaxTokens = plan.MaxCost, plan.MaxTokens
+				}
+				if b.MaxCost <= 0 && b.MaxTokens <= 0 {
+					b.MaxCost, b.MaxTokens = plan.MaxCost, plan.MaxTokens
+				}
+				if b.Paused == "budget" && !capGiven {
+					startErr = &output.Error{Code: output.Partial, Message: fmt.Sprintf("backfill paused: budget reached (%.4f %s spent); rerun with a higher --max-cost or --max-tokens", b.SpentCost, b.Currency)}
+					return nil
+				}
 				b.Paused = ""
+				b.AllowSubscription = fl.allowSubscription
 				s.Backfill = b
 				return nil
 			})
 			if err != nil {
 				return blocked(err)
 			}
-			res, failed := runBackfill(cmd.Context(), f, d, cfg, prices, 0)
+			if startErr != nil {
+				return blocked(startErr)
+			}
+			res, failed := runBackfill(cmd.Context(), f, d, cfg, prices, false)
 			res.Plan = plan
 			return e.report("retain backfill", res, func() string { return backfillText(res, false) }, failed)
 		},
@@ -151,6 +185,11 @@ func surveyAll(f *retain.Flusher, files []string, fl backfillFlags, prices retai
 			plan.Notes += c.Notes
 			plan.Estimate = plan.Estimate.Add(retain.EstimateSession(c.Chars, prices))
 			send = append(send, c)
+		case "notes":
+			plan.NotesOnly++
+			plan.Notes += c.Notes
+			plan.Estimate = plan.Estimate.Add(retain.EstimateSession(int64(c.Notes)*600, prices))
+			send = append(send, c)
 		}
 	}
 	sort.Slice(send, func(i, j int) bool { return send[i].Start.Before(send[j].Start) })
@@ -167,92 +206,165 @@ func surveyAll(f *retain.Flusher, files []string, fl backfillFlags, prices retai
 	return send, plan, nil
 }
 
-// runBackfill sends the queued sessions (limit > 0: at most that many),
-// checking the measured spend and the server queue before each.
-func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, prices retain.Prices, limit int) (backfillResult, error) {
+// errBackfillBusy: another backfill holds the lock.
+var errBackfillBusy = &output.Error{Code: output.Blocked, Message: "another backfill is running"}
+
+// runBackfill sends the queued sessions, one at a time, measuring the
+// spend before each (decision 0051). inTick: at most tickBackfillLimit
+// sessions and a bounded wait on the server's queue.
+func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, prices retain.Prices, inTick bool) (backfillResult, error) {
 	var res backfillResult
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "retain backfill")
+	if err != nil {
+		return res, errBackfillBusy
+	}
+	defer func() { _ = l.Release() }()
 	ob := notesOutbox(d)
+	pause := func(reason string, msg string) (backfillResult, error) {
+		if err := state.Update(d, "retain backfill", func(s *state.State) error {
+			if s.Backfill != nil {
+				s.Backfill.Paused = reason
+			}
+			return nil
+		}); err != nil {
+			return res, blocked(err)
+		}
+		res.Paused = reason
+		return res, &output.Error{Code: output.Partial, Message: "backfill paused: " + msg}
+	}
 	sent := 0
 	for {
 		st, err := state.Load(d.StateFile())
-		if err != nil || st.Backfill == nil {
+		if err != nil {
+			return res, blocked(err)
+		}
+		if st.Backfill == nil {
 			return res, blocked(fmt.Errorf("no backfill in progress"))
 		}
 		b := *st.Backfill
 		res.Done, res.Total, res.Spent, res.Tokens = b.Done, b.Total, b.SpentCost, b.SpentTokens
 		if len(b.Sessions) == 0 {
+			if !inTick { // the last sessions' extraction is spend too
+				_ = waitQueue(ctx, f.Client, cfg.Server.Bank, 0, finalQueueWait)
+				if err := measure(ctx, f.Client, cfg.Server.Bank, &b, prices); err == nil {
+					_ = state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill = &b; return nil })
+					res.Spent, res.Tokens = b.SpentCost, b.SpentTokens
+				}
+			}
 			res.Finished = true
 			return res, nil
 		}
-		if limit > 0 && sent >= limit {
+		if inTick && sent >= tickBackfillLimit {
 			return res, nil
 		}
-		// Measured spend since the last check (decision 0051).
-		if t, err := f.Client.LLMTokens(ctx, cfg.Server.Bank, "30d"); err == nil {
-			now := [4]int64{t.Input, t.Cached, t.Output, t.Thoughts}
-			var delta [4]int64
-			for i := range now {
-				if delta[i] = now[i] - b.Last[i]; delta[i] < 0 {
-					delta[i] = 0 // an old day left the 30-day window
-				}
+		if ctx.Err() != nil {
+			return pause("interrupted", "interrupted; rerun backsight retain backfill to continue")
+		}
+		wait := time.Duration(0)
+		if inTick {
+			wait = tickQueueWait
+		}
+		if err := waitQueue(ctx, f.Client, cfg.Server.Bank, backfillQueueLimit, wait); err != nil {
+			if ctx.Err() != nil {
+				return pause("interrupted", "interrupted; rerun backsight retain backfill to continue")
 			}
-			b.Last = now
-			b.SpentTokens += delta[0] + delta[2] + delta[3]
-			b.SpentCost += prices.Cost(delta[0], delta[1], delta[2], delta[3])
+			if inTick {
+				return res, nil // the server is busy: the next tick tries again
+			}
+			return pause("server", "cannot read the server's queue: "+err.Error())
+		}
+		if err := measure(ctx, f.Client, cfg.Server.Bank, &b, prices); err != nil {
+			return pause("measure", "cannot measure the spend, so the cap cannot be enforced: "+err.Error())
 		}
 		over := (b.MaxCost > 0 && b.SpentCost >= b.MaxCost) || (b.MaxTokens > 0 && b.SpentTokens >= b.MaxTokens)
-		if over {
-			b.Paused = "budget"
-		}
 		if err := state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill = &b; return nil }); err != nil {
 			return res, blocked(err)
 		}
 		res.Spent, res.Tokens = b.SpentCost, b.SpentTokens
 		if over {
-			res.Paused = "budget"
-			return res, &output.Error{Code: output.Partial, Message: "backfill paused: budget reached; rerun with a higher --max-cost (or --max-tokens) to continue"}
-		}
-		if err := waitQueue(ctx, f.Client, cfg.Server.Bank); err != nil {
-			return res, blocked(err)
+			return pause("budget", fmt.Sprintf("budget reached (%.4f %s, %d tokens); rerun with a higher --max-cost or --max-tokens", b.SpentCost, b.Currency, b.SpentTokens))
 		}
 		path := b.Sessions[0]
 		r := f.FlushFile(ctx, path, retain.Options{Force: true, IgnoreSince: true})
 		res.Results = append(res.Results, r)
-		if r.Stop {
-			_ = state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill.Paused = "server"; return nil })
-			res.Paused = "server"
-			return res, &output.Error{Code: output.Partial, Message: "backfill paused: " + r.Detail + "; rerun once the server is back"}
-		}
-		if r.Status == retain.Sent || r.Status == retain.Nothing || r.Status == retain.OptedOut {
-			if _, recs := f.Survey(path); len(recs) > 0 && r.Status != retain.OptedOut {
-				sid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-				for _, n := range retain.NotesFromRecords(cfg.Server.Bank, sid, f.Resolver.Project(recs[0].CWD), recs) {
-					if _, err := ob.Append(n); err != nil {
-						return res, blocked(err)
-					}
-				}
-				_, _ = ob.Flush(ctx, f.Client, cfg.Server.Bank, f.MachineID)
+		switch r.Status {
+		case retain.Sent, retain.Nothing, retain.OptedOut, retain.Quarantined, retain.Held:
+		default:
+			if r.Stop {
+				return pause("server", r.Detail+"; rerun once the server is back")
 			}
+			// Locked, maintenance or a transient read error: keep the session.
+			if inTick {
+				return res, nil
+			}
+			return res, &output.Error{Code: output.Partial, Message: "backfill stopped at " + r.Session + " (" + r.Status + ": " + r.Detail + "); rerun to continue"}
 		}
-		_ = state.Update(d, "retain backfill", func(s *state.State) error {
-			s.Backfill.Sessions = s.Backfill.Sessions[1:]
-			s.Backfill.Done++
+		if _, recs := f.Survey(path); len(recs) > 0 {
+			sid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+			for _, n := range f.Notes(sid, recs) {
+				if _, err := ob.Append(n); err != nil {
+					return res, blocked(err)
+				}
+			}
+			_, _ = ob.Flush(ctx, f.Client, cfg.Server.Bank, f.MachineID) // kept notes go out with the next tick
+			_ = retain.MarkNotesReplayed(d.CursorsDir(), sid)            // they are in the outbox: never queued again
+		}
+		if err := state.Update(d, "retain backfill", func(s *state.State) error {
+			if s.Backfill != nil && len(s.Backfill.Sessions) > 0 && s.Backfill.Sessions[0] == path {
+				s.Backfill.Sessions = s.Backfill.Sessions[1:]
+				s.Backfill.Done++
+			}
 			return nil
-		})
+		}); err != nil {
+			return res, blocked(err)
+		}
 		sent++
 	}
 }
 
-// waitQueue waits while the bank has more than backfillQueueLimit queued
-// or running operations, so spend is measured as it happens.
-func waitQueue(ctx context.Context, c *hindsight.Client, bank string) error {
+// measure sets the spend from the bank's per-day token sums: the start
+// day's increase over its baseline plus every later day. Other writers to
+// the bank count too (conservative).
+func measure(ctx context.Context, c *hindsight.Client, bank string, b *state.Backfill, prices retain.Prices) error {
+	days, err := c.LLMTokensByDay(ctx, bank, "30d")
+	if err != nil {
+		return err
+	}
+	var sum [4]int64
+	for day, t := range days {
+		v := [4]int64{t.Input, t.Cached, t.Output, t.Thoughts}
+		switch {
+		case day > b.StartDay:
+		case day == b.StartDay:
+			for i := range v {
+				v[i] = max(v[i]-b.StartBase[i], 0)
+			}
+		default:
+			continue
+		}
+		for i := range v {
+			sum[i] += v[i]
+		}
+	}
+	b.SpentTokens = sum[0] + sum[2] + sum[3]
+	b.SpentCost = prices.Cost(sum[0], sum[1], sum[2], sum[3])
+	return nil
+}
+
+// waitQueue waits until the bank has at most limit queued or running
+// operations; maxWait > 0 bounds the wait (errQueueBusy).
+func waitQueue(ctx context.Context, c *hindsight.Client, bank string, limit int, maxWait time.Duration) error {
+	deadline := time.Now().Add(maxWait)
 	for {
 		n, err := c.QueuedOperations(ctx, bank)
 		if err != nil {
 			return err
 		}
-		if n <= backfillQueueLimit {
+		if n <= limit {
 			return nil
+		}
+		if maxWait > 0 && time.Now().After(deadline) {
+			return errQueueBusy
 		}
 		select {
 		case <-ctx.Done():
@@ -262,6 +374,8 @@ func waitQueue(ctx context.Context, c *hindsight.Client, bank string) error {
 	}
 }
 
+var errQueueBusy = fmt.Errorf("the server's queue stays busy")
+
 func backfillText(r backfillResult, plan bool) string {
 	var b strings.Builder
 	p := r.Plan
@@ -269,7 +383,7 @@ func backfillText(r backfillResult, plan bool) string {
 	if p.MaxCost == 0 {
 		capText = fmt.Sprintf("%d tokens", p.MaxTokens)
 	}
-	fmt.Fprintf(&b, "%d session(s) to send (%d already sent, %d opted out), %d note(s) to replay\n", p.Send, p.Sent, p.OptedOut, p.Notes)
+	fmt.Fprintf(&b, "%d session(s) to send (%d already sent, %d opted out), %d note(s) to replay (%d from sessions already sent)\n", p.Send, p.Sent, p.OptedOut, p.Notes, p.NotesOnly)
 	fmt.Fprintf(&b, "estimate: %.1fk characters, %dk input and %dk output tokens, %.2f %s, about %s; cap %s\n",
 		float64(p.Estimate.Chars)/1000, p.Estimate.InputTokens/1000, p.Estimate.OutputTokens/1000, p.Estimate.Cost, p.Currency,
 		p.Estimate.Duration.Round(time.Minute), capText)

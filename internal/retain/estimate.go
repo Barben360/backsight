@@ -24,6 +24,9 @@ var priceTable = map[string]Prices{
 // PricesFor returns the configured prices, else the table's for model.
 func PricesFor(model string, input, cached, output float64, currency string) Prices {
 	if input > 0 || output > 0 {
+		if cached == 0 {
+			cached = input // unknown cache discount: charge cached tokens as input
+		}
 		return Prices{Input: input, Cached: cached, Output: output, Currency: currency}
 	}
 	if p, ok := priceTable[strings.ToLower(model)]; ok {

@@ -17,7 +17,7 @@ type Candidate struct {
 	Start   time.Time `json:"start"`
 	Chars   int64     `json:"chars"`  // unsent turn text
 	Notes   int       `json:"notes"`  // explicit saves to replay
-	Status  string    `json:"status"` // send | sent | opted_out | empty
+	Status  string    `json:"status"` // send | notes (sent, explicit saves to replay) | sent | opted_out | empty
 	Reason  string    `json:"reason,omitempty"`
 }
 
@@ -39,7 +39,9 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	c.Start = recs[0].Timestamp
 	c.Project = f.Resolver.Project(recs[0].CWD)
 	pending := recs
+	replayed := false
 	if cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), sid); ok && !cur.Backfill {
+		replayed = cur.NotesReplayed
 		pending = nil
 		for _, r := range recs {
 			if r.Start >= cur.Offset {
@@ -52,14 +54,36 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 			c.Chars += int64(len(t.Content))
 		}
 	}
-	c.Notes = len(NotesFromRecords(f.Bank, sid, c.Project, recs))
-	switch out, why := f.Resolver.OptedOut(recs[0].CWD, f.Exclude); {
-	case out:
+	if paused, why := f.paused(sid); paused {
 		c.Status, c.Reason = "opted_out", why
+		return c, recs
+	}
+	if !replayed {
+		c.Notes = len(f.Notes(sid, recs))
+	}
+	switch out, why := f.Resolver.OptedOut(recs[0].CWD, f.Exclude); {
+	case out && c.Notes == 0:
+		c.Status, c.Reason = "opted_out", why
+	case len(pending) == 0 && c.Notes > 0:
+		c.Status = "notes"
 	case len(pending) == 0:
 		c.Status = "sent"
 	default:
 		c.Status = "send"
 	}
 	return c, recs
+}
+
+// Notes are the explicit saves of a session that may be replayed: none for
+// a paused session, none from records in opted-out directories.
+func (f *Flusher) Notes(sid string, recs []transcript.Record) []Note {
+	if paused, _ := f.paused(sid); paused {
+		return nil
+	}
+	return NotesFromRecords(f.Bank, sid, recs, func(cwd string) (string, bool) {
+		if out, _ := f.Resolver.OptedOut(cwd, f.Exclude); out {
+			return "", false
+		}
+		return f.Resolver.Project(cwd), true
+	})
 }

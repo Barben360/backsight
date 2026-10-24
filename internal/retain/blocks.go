@@ -122,6 +122,8 @@ type Cursor struct {
 	// Backfill: the session started before retain_since; live retain leaves
 	// it to backfill without re-reading it every tick.
 	Backfill bool `json:"backfill,omitempty"`
+	// NotesReplayed: backfill replayed the session's explicit saves.
+	NotesReplayed bool `json:"notes_replayed,omitempty"`
 }
 
 func cursorPath(dir, sid string) (string, error) {
@@ -305,4 +307,14 @@ func ReleaseQuarantine(cursorDir, sid string) ([]string, error) {
 		released = append(released, s)
 	}
 	return released, nil
+}
+
+// MarkNotesReplayed records that a session's explicit saves were replayed.
+func MarkNotesReplayed(cursorDir, sid string) error {
+	c, ok, err := LoadCursor(cursorDir, sid)
+	if err != nil || !ok {
+		return err
+	}
+	c.NotesReplayed = true
+	return SaveCursor(cursorDir, sid, c)
 }
