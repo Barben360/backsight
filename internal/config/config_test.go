@@ -229,3 +229,24 @@ func TestAPIPortAndDigestAccepted(t *testing.T) {
 		t.Errorf("remote without explicit port: %v", err)
 	}
 }
+
+func TestSetClientRetentionKeepsTheRestOfTheFile(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		days           int
+	}{
+		{"no section", "schema_version = 1\n# mine\n[server]\nbank = \"b\"\n", "schema_version = 1\n# mine\n[server]\nbank = \"b\"\n\n[client]\nretention_days = 3650\n", 3650},
+		{"section without key", "[client]\n# note\n[server]\nbank = \"b\"\n", "[client]\nretention_days = 90\n# note\n[server]\nbank = \"b\"\n", 90},
+		{"replace", "[client]\nretention_days = 30 # old\n\n[llm]\nmodel = \"m\"\n", "[client]\nretention_days = 3650\n\n[llm]\nmodel = \"m\"\n", 3650},
+		{"remove", "[client]\nretention_days = 30\n[llm]\n", "[client]\n[llm]\n", 0},
+		{"remove absent", "[llm]\n", "[llm]\n", 0},
+		{"empty file", "", "[client]\nretention_days = 3650\n", 3650},
+		{"no trailing newline", "[server]\nbank = \"b\"", "[server]\nbank = \"b\"\n\n[client]\nretention_days = 7\n", 7},
+		{"other table's same key", "[other]\nretention_days = 1\n", "[other]\nretention_days = 1\n\n[client]\nretention_days = 5\n", 5},
+	}
+	for _, c := range cases {
+		if got := string(SetClientRetention([]byte(c.in), c.days)); got != c.want {
+			t.Errorf("%s:\ngot  %q\nwant %q", c.name, got, c.want)
+		}
+	}
+}

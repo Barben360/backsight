@@ -141,7 +141,7 @@ func TestNothingInstalled(t *testing.T) {
 	expect(t, check(t, r, "docker"), OK, "28.1.1")
 	ret := check(t, r, "retention")
 	expect(t, ret, Warn, "30 days")
-	if !strings.Contains(ret.Fix, "cleanupPeriodDays") || !strings.Contains(ret.Fix, "3650") {
+	if !strings.Contains(ret.Fix, "backsight client retention") || !strings.Contains(ret.Fix, "3650") {
 		t.Errorf("retention fix: %q", ret.Fix)
 	}
 	expect(t, check(t, r, "gpu"), Info, "no GPU detected")

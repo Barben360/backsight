@@ -397,7 +397,7 @@ func checkRetention(loc claudecode.Location, managedDir string) Check {
 	if ret.Source == "managed" {
 		c.Fix = "the value is set by policy in " + managedDir + ": ask your administrator"
 	} else {
-		c.Fix = `set "cleanupPeriodDays": 3650 in ` + loc.Settings + " (backsight client retention will do it, M1)"
+		c.Fix = "backsight client retention (keeps transcripts 3650 days; backs up " + loc.Settings + " first)"
 	}
 	return c
 }

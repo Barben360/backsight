@@ -147,11 +147,16 @@ func Default(d paths.Dirs, home string) Config {
 // Load reads path over the defaults. Unknown keys and invalid values are
 // refused with their key path; a missing file returns an fs.ErrNotExist error.
 func Load(path string, d paths.Dirs, home string) (Config, error) {
-	cfg := Default(d, home)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return cfg, err
+		return Default(d, home), err
 	}
+	return Parse(raw, path, d, home)
+}
+
+// Parse is Load on bytes already read; path names them in errors.
+func Parse(raw []byte, path string, d paths.Dirs, home string) (Config, error) {
+	cfg := Default(d, home)
 	dec := toml.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
