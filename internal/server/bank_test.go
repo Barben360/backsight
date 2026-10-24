@@ -1,0 +1,137 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Barben360/backsight/internal/hindsight"
+)
+
+// fakeBank is a Hindsight that stores PATCHed overrides and records calls.
+type fakeBank struct {
+	banks     []string
+	overrides map[string]json.RawMessage
+	calls     []string
+	patches   []map[string]json.RawMessage
+}
+
+func (f *fakeBank) handler(w http.ResponseWriter, r *http.Request) {
+	f.calls = append(f.calls, r.Method+" "+r.URL.EscapedPath())
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/default/banks":
+		var items []string
+		for _, b := range f.banks {
+			items = append(items, `{"bank_id":"`+b+`"}`)
+		}
+		_, _ = w.Write([]byte(`{"banks":[` + strings.Join(items, ",") + `]}`))
+	case r.Method == http.MethodPut:
+		f.banks = append(f.banks, "claude-memory")
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPatch:
+		var body struct {
+			Updates map[string]json.RawMessage `json:"updates"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		f.patches = append(f.patches, body.Updates)
+		for k, v := range body.Updates {
+			f.overrides[k] = v
+		}
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodGet:
+		ov, _ := json.Marshal(f.overrides)
+		_, _ = w.Write([]byte(`{"config":{},"overrides":` + string(ov) + `}`))
+	}
+}
+
+func client(t *testing.T, f *fakeBank) *hindsight.Client {
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	t.Cleanup(srv.Close)
+	c, _ := hindsight.New(srv.URL, "k", 2*time.Second)
+	return c
+}
+
+func TestApplyCreatesBankAndSendsTemplate(t *testing.T) {
+	f := &fakeBank{overrides: map[string]json.RawMessage{"reflect_mission": json.RawMessage(`"user's own"`)}}
+	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Created || !res.Sent || res.Hash != TemplateHash() || len(f.patches) != 1 {
+		t.Fatalf("%+v patches %d", res, len(f.patches))
+	}
+	p := f.patches[0]
+	if _, ok := p["reflect_mission"]; ok {
+		t.Error("a key backsight does not own was sent")
+	}
+	if string(f.overrides["reflect_mission"]) != `"user's own"` {
+		t.Error("the user's own override was lost")
+	}
+	if string(p["default_observation_scopes"]) != `[["project:*"]]` || string(p["retain_default_strategy"]) != `"conversation"` {
+		t.Errorf("scopes/default strategy: %s %s", p["default_observation_scopes"], p["retain_default_strategy"])
+	}
+	var labels []struct {
+		Key    string `json:"key"`
+		Tag    bool   `json:"tag"`
+		Values []struct {
+			Value string `json:"value"`
+		} `json:"values"`
+	}
+	_ = json.Unmarshal(p["entity_labels"], &labels)
+	if len(labels) != 1 || labels[0].Key != "kind" || !labels[0].Tag || len(labels[0].Values) != 6 {
+		t.Errorf("kind labels: %s", p["entity_labels"])
+	}
+	var strategies map[string]map[string]any
+	_ = json.Unmarshal(p["retain_strategies"], &strategies)
+	for _, name := range []string{"conversation", "document"} {
+		s := strategies[name]
+		instr, _ := s["retain_custom_instructions"].(string)
+		if s["retain_extraction_mode"] != "custom" || s["retain_chunk_size"] != float64(30000) ||
+			!strings.HasPrefix(instr, "Write every fact in English") || !strings.Contains(instr, "absolute dates") || !strings.Contains(instr, "kind") {
+			t.Errorf("%s strategy: %v", name, s)
+		}
+	}
+}
+
+func TestApplyUnchangedTemplateSendsNothing(t *testing.T) {
+	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
+	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", TemplateHash(), false)
+	if err != nil || res.Created || res.Sent || len(f.patches) != 0 {
+		t.Errorf("%+v %v calls %v", res, err, f.calls)
+	}
+	res, err = ApplyBank(context.Background(), client(t, f), "claude-memory", TemplateHash(), true)
+	if err != nil || !res.Sent || len(f.patches) != 1 {
+		t.Errorf("--force must re-send: %+v %v", res, err)
+	}
+}
+
+func TestApplyNewTemplateResends(t *testing.T) {
+	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
+	res, err := ApplyBank(context.Background(), client(t, f), "claude-memory", "older-template-hash", false)
+	if err != nil || res.Created || !res.Sent {
+		t.Errorf("%+v %v", res, err)
+	}
+}
+
+// A server that silently drops a key must not be reported as applied.
+func TestApplyVerifiesReadBack(t *testing.T) {
+	f := &fakeBank{banks: []string{"claude-memory"}, overrides: map[string]json.RawMessage{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path != "/v1/default/banks" {
+			_, _ = w.Write([]byte(`{"config":{},"overrides":{"enable_observations":true}}`))
+			return
+		}
+		f.handler(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := hindsight.New(srv.URL, "k", 2*time.Second)
+	if _, err := ApplyBank(context.Background(), c, "claude-memory", "", false); err == nil || !strings.Contains(err.Error(), "retain_strategies") {
+		t.Errorf("want a read-back error naming the missing keys, got %v", err)
+	}
+}

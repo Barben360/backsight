@@ -146,7 +146,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			var res installResult
 			add := func(name, status, detail string) { res.Steps = append(res.Steps, step{name, status, detail}) }
 			if f.plan {
-				for _, s := range []string{"config", "secrets", "render", "pull", "start", "health"} {
+				for _, s := range []string{"config", "secrets", "render", "pull", "start", "health", "bank"} {
 					add(s, "planned", "")
 				}
 				return e.emit("server install", res, func() string { return stepsText(res) })
@@ -219,6 +219,11 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			add("health", "done", "healthy")
+			br, err := applyBank(cmd, d, cfg, sec, false)
+			if err != nil {
+				return err
+			}
+			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
 			res.URL, res.UI, res.Version = cfg.Server.URL, fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.UIPort), v.APIVersion
 			return e.emit("server install", res, func() string { return stepsText(res) })
 		},

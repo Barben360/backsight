@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // devInstall writes a dev config and every secret under an isolated home.
@@ -121,15 +123,42 @@ func (f *fakeCompose) subcommands() []string {
 	return out
 }
 
-// fakeHindsight answers health and version like a started server.
+// fakeHindsight answers like a started server: health, version, banks and
+// bank config (overrides kept in memory).
 func fakeHindsight(t *testing.T) (port int) {
 	t.Helper()
+	var mu sync.Mutex
+	banks := map[string]bool{}
+	overrides := map[string]json.RawMessage{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.URL.Path == "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","database":"connected"}`))
-		case "/version":
+		case r.URL.Path == "/version":
 			_, _ = w.Write([]byte(`{"api_version":"1.1.0"}`))
+		case r.URL.Path == "/v1/default/banks":
+			var items []string
+			for b := range banks {
+				items = append(items, `{"bank_id":"`+b+`"}`)
+			}
+			_, _ = w.Write([]byte(`{"banks":[` + strings.Join(items, ",") + `]}`))
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/default/banks/"):
+			banks[strings.TrimPrefix(r.URL.Path, "/v1/default/banks/")] = true
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/config"):
+			var body struct {
+				Updates map[string]json.RawMessage `json:"updates"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			for k, v := range body.Updates {
+				overrides[k] = v
+			}
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			ov, _ := json.Marshal(overrides)
+			_, _ = w.Write([]byte(`{"config":{},"overrides":` + string(ov) + `}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -138,6 +167,13 @@ func fakeHindsight(t *testing.T) (port int) {
 	u, _ := url.Parse(srv.URL)
 	port, _ = strconv.Atoi(u.Port())
 	return port
+}
+
+// pointAt rewrites the dev config to use the fake server's port.
+func pointAt(t *testing.T, home string, port int) {
+	t.Helper()
+	cfgPath := filepath.Join(home, "backsight", "config", "config.toml")
+	_ = os.WriteFile(cfgPath, []byte("[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\n"), 0o600)
 }
 
 func withCompose(t *testing.T) *fakeCompose {
@@ -172,7 +208,7 @@ func TestServerInstallFromScratch(t *testing.T) {
 	if s.APIKey == "" || s.UIKey == "" || s.DBPassword == "" || s.LLMAPIKey != "fakellmkey" {
 		t.Errorf("secrets: %v", s.Names())
 	}
-	if !strings.Contains(out, "healthy") || strings.Contains(out+errOut, s.APIKey) {
+	if !strings.Contains(out, "bank") || !strings.Contains(out, "healthy") || strings.Contains(out+errOut, s.APIKey) {
 		t.Errorf("output:\n%s", out)
 	}
 	// Idempotent: a second run keeps config and secrets.
@@ -238,9 +274,7 @@ func TestServerInstallHealthTimeout(t *testing.T) {
 func TestServerStatus(t *testing.T) {
 	home := devInstall(t, true)
 	withCompose(t)
-	port := fakeHindsight(t)
-	cfgPath := filepath.Join(home, "backsight", "config", "config.toml")
-	_ = os.WriteFile(cfgPath, []byte("[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\n"), 0o600)
+	pointAt(t, home, fakeHindsight(t))
 	code, out, _ := run(t, "server", "status", "--json")
 	var env struct {
 		Data struct {
@@ -298,5 +332,33 @@ func TestErrorEnvelopeNamesTheFullCommand(t *testing.T) {
 	_, out, _ := run(t, "server", "render", "--json")
 	if !strings.Contains(out, `"command": "server render"`) {
 		t.Errorf("%s", out)
+	}
+}
+
+func TestBankApply(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	code, out, errOut := run(t, "bank", "apply", "--json")
+	if code != output.OK || !strings.Contains(out, `"created": true`) || !strings.Contains(out, `"sent": true`) {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	st, _ := state.Load(filepath.Join(home, "backsight", "state", "state.json"))
+	if st.BankConfigHash != server.TemplateHash() {
+		t.Errorf("hash not recorded: %q", st.BankConfigHash)
+	}
+	_, out, _ = run(t, "bank", "apply", "--json")
+	if !strings.Contains(out, `"sent": false`) {
+		t.Errorf("an unchanged template was re-sent:\n%s", out)
+	}
+	_, out, _ = run(t, "bank", "apply", "--plan")
+	if !strings.Contains(out, "unchanged") {
+		t.Errorf("plan: %s", out)
+	}
+}
+
+func TestBankApplyServerDown(t *testing.T) {
+	devInstall(t, true)
+	if code, _, errOut := run(t, "bank", "apply"); code != output.Blocked || !strings.Contains(errOut, "unreachable") {
+		t.Errorf("exit %d: %s", code, errOut)
 	}
 }

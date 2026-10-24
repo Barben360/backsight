@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -303,5 +304,37 @@ func TestEachMemoryPageCap(t *testing.T) {
 	err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { return nil })
 	if err == nil || calls != 3 {
 		t.Errorf("want an error after 3 pages, got %v after %d", err, calls)
+	}
+}
+
+func TestBankWrites(t *testing.T) {
+	var got []string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"config":{"a":1},"overrides":{"retain_default_strategy":"conversation"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	})
+	ctx := context.Background()
+	if err := c.CreateBank(ctx, "a:b", "name", "mission"); err != nil {
+		t.Fatal(err)
+	}
+	ov, err := c.BankConfigOverrides(ctx, "a:b")
+	if err != nil || string(ov["retain_default_strategy"]) != `"conversation"` {
+		t.Errorf("%v %v", ov, err)
+	}
+	if err := c.PatchBankConfig(ctx, "a:b", map[string]any{"enable_observations": true}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`PUT /v1/default/banks/a%3Ab {"mission":"mission","name":"name"}`,
+		`GET /v1/default/banks/a%3Ab/config `,
+		`PATCH /v1/default/banks/a%3Ab/config {"updates":{"enable_observations":true}}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

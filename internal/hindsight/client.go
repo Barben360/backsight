@@ -265,3 +265,21 @@ func (c *Client) EachMemory(ctx context.Context, bank, factType string, fn func(
 		}
 	}
 }
+
+// CreateBank creates (or updates the profile of) bank.
+func (c *Client) CreateBank(ctx context.Context, bank, name, mission string) error {
+	return c.do(ctx, http.MethodPut, bankPath(bank, ""), nil, map[string]string{"name": name, "mission": mission}, nil)
+}
+
+// BankConfigOverrides returns only the bank-specific config overrides.
+func (c *Client) BankConfigOverrides(ctx context.Context, bank string) (map[string]json.RawMessage, error) {
+	var out struct {
+		Overrides map[string]json.RawMessage `json:"overrides"`
+	}
+	return out.Overrides, c.get(ctx, bankPath(bank, "/config"), nil, &out)
+}
+
+// PatchBankConfig sets the given config keys on bank; other keys are kept.
+func (c *Client) PatchBankConfig(ctx context.Context, bank string, updates map[string]any) error {
+	return c.do(ctx, http.MethodPatch, bankPath(bank, "/config"), nil, map[string]any{"updates": updates}, nil)
+}
