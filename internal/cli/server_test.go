@@ -161,12 +161,13 @@ func (f *fakeCompose) subcommands() []string {
 // retained counts retain items the fake server accepted; llmInput is the
 // bank's LLM input-token total the fake reports, raised by llmPerRetain on
 // each accepted item.
-var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter atomic.Int64
+var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter, retainStatus atomic.Int64
 
 // statsDown makes the LLM usage endpoint fail; retainedTags records the
 // tags of every accepted item.
 var (
 	statsDown    atomic.Bool
+	extractFails atomic.Bool
 	retainedTags []string
 )
 
@@ -183,7 +184,9 @@ func fakeHindsight(t *testing.T) (port int) {
 	failRetains.Store(0)
 	statsCalls.Store(0)
 	statsFailAfter.Store(0)
+	retainStatus.Store(0)
 	statsDown.Store(false)
+	extractFails.Store(false)
 	retainedTags = nil
 	var mu sync.Mutex
 	banks := map[string]bool{}
@@ -224,6 +227,11 @@ func fakeHindsight(t *testing.T) (port int) {
 				} `json:"items"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if st := retainStatus.Load(); st != 0 {
+				w.WriteHeader(int(st))
+				_, _ = w.Write([]byte(`{"detail":"refused"}`))
+				return
+			}
 			if failRetains.Load() > 0 && retained.Load() >= failRetains.Load() {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
@@ -267,6 +275,9 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats"):
 			_, _ = w.Write([]byte(`{"total_nodes":0,"pending_operations":0,"pending_consolidation":0}`))
+		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract") && extractFails.Load():
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"detail":"provider said: invalid api key fakellmkey"}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract"):
 			_, _ = w.Write([]byte(`{"facts":[{"text":"The billing service keeps PostgreSQL 16 for partial indexes.","fact_type":"world"}],"usage":{"input_tokens":900,"output_tokens":40}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
@@ -621,5 +632,51 @@ func TestServerInstallStreamsStepsInTextMode(t *testing.T) {
 	}
 	if strings.Count(out, "skipped  config:") != 1 || strings.Count(out, "done     provider:") != 1 {
 		t.Errorf("each step must be printed once:\n%s", out)
+	}
+}
+
+func TestServerInstallFailureKeepsTheStepsDone(t *testing.T) {
+	isolate(t)
+	withCompose(t)
+	old := healthTimeout
+	healthTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { healthTimeout = old })
+	t.Setenv("LLM", "fakellmkey")
+	run(t, "secret", "set", "llm_api_key", "--from-env", "LLM")
+	code, out, _ := run(t, "server", "install", "--json", "--api-port", strconv.Itoa(closedPort(t)), "--ui-port", "19999")
+	var env struct {
+		OK   bool          `json:"ok"`
+		Data installResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.Blocked || env.OK || len(env.Data.Steps) < 3 || env.Data.Steps[len(env.Data.Steps)-1].Name != "start" {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestServerStartAndStopPlanTouchNothing(t *testing.T) {
+	home := devInstall(t, true)
+	f := withCompose(t)
+	for _, args := range [][]string{{"server", "start", "--plan"}, {"server", "stop", "--plan"}} {
+		code, out, _ := run(t, args...)
+		if code != output.OK || !strings.Contains(out, "would") {
+			t.Errorf("%v: exit %d\n%s", args, code, out)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("docker called: %v", f.calls)
+	}
+	if _, err := os.Stat(filepath.Join(pathsOf(home).Data, "server", ".env")); !os.IsNotExist(err) {
+		t.Error("start --plan rendered the server files")
+	}
+}
+
+func TestServerLLMCheckMasksSecretsInErrors(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	extractFails.Store(true)
+	code, out, errOut := run(t, "server", "llm", "check")
+	if code == output.OK || strings.Contains(out+errOut, "fakellmkey") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 }

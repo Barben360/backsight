@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -90,7 +91,7 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			}
 			res := backfillResult{Plan: plan}
 			if fl.plan {
-				return e.emit("retain backfill", res, func() string { return backfillText(res, true) })
+				return e.emit("retain backfill", res, func() string { return backfillText(res) })
 			}
 			if cmd.Flags().Changed("max-cost") && !prices.Known() {
 				return &output.Error{Code: output.Usage, Message: "no price is known for model " + cfg.LLM.Model + ": cap with --max-tokens, or set [llm] price_input and price_output"}
@@ -101,6 +102,13 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			}
 			filters := fl.since + "|" + fl.project + "|" + fl.dir
 			capGiven := cmd.Flags().Changed("max-cost") || cmd.Flags().Changed("max-tokens")
+			// The lock comes first: a running backfill would write its old
+			// cap and queue back over this invocation's changes.
+			release, err := acquireBackfill(d)
+			if err != nil {
+				return err
+			}
+			defer release()
 			var startErr error
 			err = state.Update(d, "retain backfill", func(s *state.State) error {
 				b := s.Backfill
@@ -143,9 +151,12 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			if startErr != nil {
 				return blocked(startErr)
 			}
+			if !e.json { // the plan before a long run (decision 0051)
+				_, _ = io.WriteString(e.stdout, backfillText(backfillResult{Plan: plan}))
+			}
 			res, failed := runBackfill(cmd.Context(), f, d, cfg, prices, false)
 			res.Plan = plan
-			return e.report("retain backfill", res, func() string { return backfillText(res, false) }, failed)
+			return e.report("retain backfill", res, func() string { return backfillRunText(res) }, failed)
 		},
 	}
 	cmd.Flags().BoolVar(&fl.plan, "plan", false, "show sessions, size, expected cost and duration without sending")
@@ -213,16 +224,21 @@ func surveyAll(f *retain.Flusher, files []string, fl backfillFlags, prices retai
 // errBackfillBusy: another backfill holds the lock.
 var errBackfillBusy = &output.Error{Code: output.Blocked, Message: "another backfill is running"}
 
+// acquireBackfill takes the backfill lock or reports another backfill.
+func acquireBackfill(d paths.Dirs) (func(), error) {
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "retain backfill")
+	if err != nil {
+		return nil, errBackfillBusy
+	}
+	return func() { _ = l.Release() }, nil
+}
+
 // runBackfill sends the queued sessions, one at a time, measuring the
 // spend before each (decision 0051). inTick: at most tickBackfillLimit
 // sessions and a bounded wait on the server's queue.
+// The caller holds the backfill lock (acquireBackfill).
 func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, prices retain.Prices, inTick bool) (backfillResult, error) {
 	var res backfillResult
-	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "retain backfill")
-	if err != nil {
-		return res, errBackfillBusy
-	}
-	defer func() { _ = l.Release() }()
 	ob := notesOutbox(d)
 	pause := func(reason string, msg string) (backfillResult, error) {
 		if err := state.Update(d, "retain backfill", func(s *state.State) error {
@@ -380,7 +396,7 @@ func waitQueue(ctx context.Context, c *hindsight.Client, bank string, limit int,
 
 var errQueueBusy = fmt.Errorf("the server's queue stays busy")
 
-func backfillText(r backfillResult, plan bool) string {
+func backfillText(r backfillResult) string {
 	var b strings.Builder
 	p := r.Plan
 	capText := fmt.Sprintf("%.2f %s", p.MaxCost, p.Currency)
@@ -391,9 +407,13 @@ func backfillText(r backfillResult, plan bool) string {
 	fmt.Fprintf(&b, "estimate: %.1fk characters, %dk input and %dk output tokens, %.2f %s, about %s; cap %s\n",
 		float64(p.Estimate.Chars)/1000, p.Estimate.InputTokens/1000, p.Estimate.OutputTokens/1000, p.Estimate.Cost, p.Currency,
 		p.Estimate.Duration.Round(time.Minute), capText)
-	if plan {
-		return b.String()
-	}
+	return b.String()
+}
+
+// backfillRunText is the outcome of a run, printed after its plan.
+func backfillRunText(r backfillResult) string {
+	var b strings.Builder
+	p := r.Plan
 	fmt.Fprintf(&b, "done %d/%d, spent %.4f %s (%d tokens)", r.Done, r.Total, r.Spent, p.Currency, r.Tokens)
 	if r.Paused != "" {
 		fmt.Fprintf(&b, ", paused: %s", r.Paused)

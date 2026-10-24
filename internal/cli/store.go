@@ -76,6 +76,7 @@ func newStoreCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res := storeResult{Status: "queued", Document: n.DocumentID, Project: proj, Kind: kind}
+			var failed error
 			if warn {
 				res.Warning = "the notes outbox is over 50 MB: the server has not accepted notes for a while"
 			}
@@ -83,20 +84,26 @@ func newStoreCmd(e *env) *cobra.Command {
 			if _, err := os.Stat(d.MaintenanceLock()); err == nil {
 				res.Warning = "maintenance in progress: the note goes out after it"
 			} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
-				if fr, err := ob.Flush(cmd.Context(), cl, cfg.Server.Bank, machineID); err == nil && fr.Kept == 0 {
+				fr, err := ob.Flush(cmd.Context(), cl, cfg.Server.Bank, machineID)
+				switch {
+				case err != nil || fr.Kept > 0:
+				case fr.Quarantined > 0:
+					res.Status = "rejected"
+					failed = &output.Error{Code: output.Blocked, Message: "the server refused the note (" + fr.LastError + "); it is kept in quarantine: see backsight doctor"}
+				default:
 					res.Status = "stored"
 				}
 			}
-			return e.emit("store", res, func() string {
+			return e.report("store", res, func() string {
 				msg := fmt.Sprintf("%s (%s, project %s)\n", res.Status, kind, proj)
 				if res.Status == "queued" {
-					msg = fmt.Sprintf("queued (%s, project %s): the server is unreachable, the next jobs tick sends it\n", kind, proj)
+					msg = fmt.Sprintf("queued (%s, project %s): the server did not take it now, the next jobs tick sends it\n", kind, proj)
 				}
 				if res.Warning != "" {
 					msg += "warning: " + res.Warning + "\n"
 				}
 				return msg
-			})
+			}, failed)
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "", "decision, correction, convention, pitfall, state or lesson")

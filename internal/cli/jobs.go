@@ -82,10 +82,15 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" &&
 				(cfg.LLM.Provider != "claude-code" || st.Backfill.AllowSubscription) {
 				prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
-				br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, true)
-				res.Backfill = fmt.Sprintf("%d/%d", br.Done, br.Total)
-				if berr != nil {
-					res.Backfill += " paused: " + br.Paused
+				if release, err := acquireBackfill(d); err != nil {
+					res.Backfill = "skipped: another backfill is running"
+				} else {
+					br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, true)
+					release()
+					res.Backfill = fmt.Sprintf("%d/%d", br.Done, br.Total)
+					if berr != nil {
+						res.Backfill += " paused: " + br.Paused
+					}
 				}
 			}
 			res.Notes, err = notesOutbox(d).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)

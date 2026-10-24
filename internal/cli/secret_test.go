@@ -123,3 +123,11 @@ func TestSecretListFollowsTheProvider(t *testing.T) {
 		t.Errorf("%s", text)
 	}
 }
+
+func TestSecretSetRefusesAnEmptyValue(t *testing.T) {
+	isolate(t)
+	withStdin(t, "\n")
+	if code, _, _ := run(t, "secret", "set", "llm_api_key"); code != output.Usage {
+		t.Errorf("exit %d", code)
+	}
+}

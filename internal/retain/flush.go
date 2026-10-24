@@ -88,6 +88,9 @@ type Result struct {
 	// Stop tells the caller the server or setup is failing: later sessions
 	// would fail the same way, so the run ends here.
 	Stop bool `json:"-"`
+	// NeedsFix: the server refused backsight itself (credentials, redirect,
+	// missing bank); retrying cannot help until the user fixes it.
+	NeedsFix bool `json:"-"`
 }
 
 // FlushFile sends what is settled and unsent in one transcript.
@@ -198,7 +201,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 				return f.save(res, cur, Backfill, "started before live retain began; backfill sends it")
 			}
 		default:
-			res.Stop = true
+			res.Stop, res.NeedsFix = true, needsFix(err)
 			return fail(Retry, errSummary(err))
 		}
 	}
@@ -287,7 +290,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 		if refusesDocument(err) {
 			return f.quarantine(res, &cur, errSummary(err)), cur, status, detail, true
 		}
-		res.Stop = true
+		res.Stop, res.NeedsFix = true, needsFix(err)
 		if status == Sent {
 			return f.save(res, cur, Sent, "partly sent; the rest is retried: "+errSummary(err)), cur, status, detail, true
 		}
@@ -419,6 +422,13 @@ func indexOf(recs []transcript.Record, uuid string) int {
 
 // errSummary describes a server error without its body: a refusal can echo
 // the submitted transcript text.
+// needsFix: errors only the user can clear (decision 0050's stop cases that
+// are not transient).
+func needsFix(err error) bool {
+	var apiErr *hindsight.APIError
+	return errors.As(err, &apiErr) && (apiErr.Kind == hindsight.Unauthorized || apiErr.Kind == hindsight.Redirected || apiErr.Kind == hindsight.NotFound)
+}
+
 func errSummary(err error) string {
 	var apiErr *hindsight.APIError
 	if errors.As(err, &apiErr) {

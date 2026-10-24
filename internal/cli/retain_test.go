@@ -127,3 +127,15 @@ func TestRetryQuarantine(t *testing.T) {
 		t.Error("a healthy cursor was dropped")
 	}
 }
+
+// A server refusing backsight's credentials needs the user, not a retry
+// loop: 20, not 40 (M1 review).
+func TestFlushRefusedCredentialsAreBlocked(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	retainStatus.Store(401)
+	if code, out, _ := run(t, "retain", "flush", "--session", "s1"); code != output.Blocked {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}

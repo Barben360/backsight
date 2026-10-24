@@ -99,6 +99,9 @@ func newSecretSetCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if value == "" {
+				return &output.Error{Code: output.Usage, Message: "empty value: nothing saved"}
+			}
 			d, _, err := machine()
 			if err != nil {
 				return err

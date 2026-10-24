@@ -111,8 +111,11 @@ func reportFlush(results []retain.Result) (flushReport, error) {
 		if r.Status != retain.Nothing && r.Status != retain.Backfill {
 			rep.Results = append(rep.Results, r)
 		}
-		if r.Status == retain.Retry {
+		if r.Status == retain.Retry && failed == nil {
 			failed = &output.Error{Code: output.Partial, Message: "some sessions could not be sent now; the next jobs tick retries them"}
+		}
+		if r.NeedsFix {
+			failed = &output.Error{Code: output.Blocked, Message: "the server refused backsight (" + r.Detail + "): run backsight doctor"}
 		}
 	}
 	return rep, failed

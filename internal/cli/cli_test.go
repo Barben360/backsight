@@ -91,3 +91,22 @@ func TestExtraArgumentsAreUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownOrMissingSubcommandIsAUsageError(t *testing.T) {
+	isolate(t)
+	for _, args := range [][]string{{"server", "bogus"}, {"client", "config", "bogus"}, {"server"}, {"client"}, {"retain"}} {
+		if code, _, _ := run(t, args...); code != output.Usage {
+			t.Errorf("%v: exit %d", args, code)
+		}
+	}
+	code, out, _ := run(t, "--json", "client", "config", "bogus")
+	var env struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.Usage || env.OK || env.Error.Code != output.Usage {
+		t.Errorf("exit %d envelope %s", code, out)
+	}
+}

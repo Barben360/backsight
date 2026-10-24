@@ -402,3 +402,23 @@ func TestBackfillInterruptPauses(t *testing.T) {
 		t.Errorf("a tick continued an interrupted backfill: %s", out)
 	}
 }
+
+// While another backfill runs, a new invocation changes nothing in the
+// state: the running one would write its old cap back (M1 review).
+func TestBackfillBusyLeavesTheStateAlone(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	d := pathsOf(home)
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	code, _, _ := run(t, "retain", "backfill", "--max-cost", "1")
+	st, _ := state.Load(d.StateFile())
+	if code != output.Blocked || st.Backfill != nil {
+		t.Errorf("exit %d, state backfill %+v", code, st.Backfill)
+	}
+}

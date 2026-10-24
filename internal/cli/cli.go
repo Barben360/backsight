@@ -87,7 +87,29 @@ func newRoot(e *env) *cobra.Command {
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
 	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e))
+	requireSubcommands(root)
 	return root
+}
+
+// requireSubcommands makes every group a usage error (exit 2) when called
+// bare or with an unknown subcommand; cobra would print help and exit 0.
+func requireSubcommands(cmd *cobra.Command) {
+	for _, c := range cmd.Commands() {
+		requireSubcommands(c)
+	}
+	if !cmd.HasSubCommands() || cmd.Runnable() || !cmd.HasParent() {
+		return
+	}
+	cmd.Args = usageArgs(cobra.NoArgs)
+	cmd.RunE = func(c *cobra.Command, _ []string) error {
+		var names []string
+		for _, sub := range c.Commands() {
+			if sub.IsAvailableCommand() {
+				names = append(names, sub.Name())
+			}
+		}
+		return usageError{fmt.Errorf("%s needs a subcommand: %s", c.CommandPath(), strings.Join(names, ", "))}
+	}
 }
 
 // usageError marks cobra's own argument and flag errors.

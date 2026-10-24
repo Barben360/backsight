@@ -73,3 +73,15 @@ func TestStoreQueuesDuringMaintenance(t *testing.T) {
 		t.Errorf("%s", out)
 	}
 }
+
+// A note the server refuses goes to quarantine: the command says so and
+// exits 20, never "stored" (M1 review).
+func TestStoreReportsARejectedNote(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	retainStatus.Store(400)
+	code, out, _ := run(t, "store", "--kind", "decision", "--json", "We keep PostgreSQL 16.")
+	if code != output.Blocked || strings.Contains(out, `"status": "stored"`) || !strings.Contains(out, "quarantine") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}

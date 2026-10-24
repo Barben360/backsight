@@ -220,8 +220,13 @@ func Write(dir string, f Files) (Changes, error) {
 			return c, err
 		}
 	}
+	env := filepath.Join(dir, ".env")
 	if c.Env {
-		if err := fsutil.WriteAtomic(filepath.Join(dir, ".env"), f.Env, 0o600); err != nil {
+		if err := fsutil.WriteAtomic(env, f.Env, 0o600); err != nil {
+			return c, err
+		}
+	} else if fi, err := os.Stat(env); err == nil && fi.Mode().Perm() != 0o600 {
+		if err := os.Chmod(env, 0o600); err != nil { // loosened by hand: it holds secrets
 			return c, err
 		}
 	}

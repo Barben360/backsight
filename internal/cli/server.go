@@ -294,14 +294,18 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 			add("render", map[bool]string{true: "done", false: "skipped"}[ch.Compose || ch.Env], cfg.Server.ComposeDir)
 
-			// 4-6. Pull, start, health.
+			// 4-6. Pull, start, health. A failure from here keeps the steps
+			// done in the envelope (text mode already printed them).
+			fail := func(err error) error {
+				return e.report("server install", res, func() string { return "" }, err)
+			}
 			res.Warnings = installWarnings(cfg)
 			if err := c.Pull(ctx); err != nil {
-				return redacted(err, sec)
+				return fail(redacted(err, sec))
 			}
 			add("pull", "done", "")
 			if err := c.Up(ctx); err != nil {
-				return redacted(err, sec)
+				return fail(redacted(err, sec))
 			}
 			detail := "project " + server.Project
 			if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
@@ -310,17 +314,17 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			add("start", "done", detail)
 			v, err := waitHealthy(ctx, cfg, sec)
 			if err != nil {
-				return redacted(err, sec)
+				return fail(redacted(err, sec))
 			}
 			add("health", "done", "healthy")
 			br, err := applyBank(cmd, d, cfg, sec, false)
 			if err != nil {
-				return err
+				return fail(err)
 			}
 			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
 			pr, err := checkProvider(cmd.Context(), cfg, sec)
 			if err != nil {
-				return redacted(err, sec)
+				return fail(err)
 			}
 			add("provider", "done", fmt.Sprintf("%s/%s extracted %d English fact(s)", cfg.LLM.Provider, cfg.LLM.Model, pr.Facts))
 			res.URL, res.UI, res.Version = cfg.Server.URL, uiURL(cfg), v.APIVersion
@@ -337,7 +341,8 @@ func newServerInstallCmd(e *env) *cobra.Command {
 }
 
 func newServerStartCmd(e *env) *cobra.Command {
-	return &cobra.Command{
+	var plan bool
+	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Render if needed and start the local server",
 		Args:  cobra.NoArgs,
@@ -349,6 +354,20 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
+			files, err := renderFiles(cfg, sec, "backsight server start")
+			if err != nil {
+				return err
+			}
+			if plan {
+				ch, err := server.Diff(cfg.Server.ComposeDir, files)
+				if err != nil {
+					return blocked(err)
+				}
+				return e.emit("server start", map[string]any{"project": server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
+					func() string {
+						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
+					})
+			}
 			d, _, err := machine()
 			if err != nil {
 				return err
@@ -358,10 +377,6 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			files, err := renderFiles(cfg, sec, "backsight server start")
-			if err != nil {
-				return err
-			}
 			if _, err := server.Write(cfg.Server.ComposeDir, files); err != nil {
 				return blocked(err)
 			}
@@ -371,27 +386,36 @@ func newServerStartCmd(e *env) *cobra.Command {
 			return e.emit("server start", map[string]string{"project": server.Project}, func() string { return "started\n" })
 		},
 	}
+	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be rendered and started without doing it")
+	return cmd
 }
 
 func newServerStopCmd(e *env) *cobra.Command {
-	return &cobra.Command{
+	var plan bool
+	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the local server (containers and data are kept)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, _, err := loadServerConfig()
+			cfg, sec, err := loadServerConfig()
 			if err != nil {
 				return err
 			}
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
+			if plan {
+				return e.emit("server stop", map[string]any{"project": server.Project, "plan": true},
+					func() string { return "would stop the containers of project " + server.Project + " (data kept)\n" })
+			}
 			if err := composeFor(cfg).Stop(cmd.Context()); err != nil {
-				return blocked(err)
+				return redacted(err, sec)
 			}
 			return e.emit("server stop", map[string]string{"project": server.Project}, func() string { return "stopped\n" })
 		},
 	}
+	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be stopped without doing it")
+	return cmd
 }
 
 type statusResult struct {
@@ -420,7 +444,7 @@ func newServerStatusCmd(e *env) *cobra.Command {
 			var res statusResult
 			res.Containers, err = composeFor(cfg).PS(cmd.Context())
 			if err != nil {
-				return blocked(err)
+				return redacted(err, sec)
 			}
 			res.API.URL = cfg.Server.URL
 			if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second); err == nil {
@@ -585,7 +609,7 @@ func checkProvider(ctx context.Context, cfg config.Config, sec config.Secrets) (
 	}
 	res, err := server.CheckProvider(ctx, cl, cfg.Server.Bank)
 	if err != nil {
-		return res, blocked(err)
+		return res, redacted(err, sec) // provider errors may echo a key
 	}
 	return res, nil
 }
