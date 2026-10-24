@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -37,8 +38,14 @@ func (s Secrets) MarshalJSON() ([]byte, error) { return json.Marshal(s.Names()) 
 // LoadSecrets reads path, refusing it when group or others can read it.
 func LoadSecrets(path string) (Secrets, error) {
 	var s Secrets
+	// One handle for the mode check and the read: no window to swap the file.
+	f, err := os.Open(path)
+	if err != nil {
+		return s, err
+	}
+	defer f.Close()
 	if runtime.GOOS != "windows" {
-		fi, err := os.Stat(path)
+		fi, err := f.Stat()
 		if err != nil {
 			return s, err
 		}
@@ -46,7 +53,7 @@ func LoadSecrets(path string) (Secrets, error) {
 			return s, fmt.Errorf("%s is readable by others (mode %o): run chmod 600 %s", path, fi.Mode().Perm(), path)
 		}
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := io.ReadAll(f)
 	if err != nil {
 		return s, err
 	}

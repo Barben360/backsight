@@ -2,7 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,5 +88,25 @@ func TestSecretsNames(t *testing.T) {
 	got := s.Names()
 	if got["api_key"] != true || got["llm_api_key"] != true || got["ui_key"] != false || len(got) != 5 {
 		t.Errorf("%v", got)
+	}
+}
+
+func TestLoadSecretsMissingIsNotExist(t *testing.T) {
+	if _, err := LoadSecrets(filepath.Join(t.TempDir(), "secrets.toml")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("want fs.ErrNotExist, got %v", err)
+	}
+}
+
+// Decode errors can quote the offending value; none may reach the message.
+func TestLoadSecretsErrorsNeverEchoValues(t *testing.T) {
+	for name, content := range map[string]string{
+		"unterminated": "api_key = \"fakevalue7\n",
+		"type":         "api_key = [\"fakevalue7\"]\n",
+		"bare value":   "api_key = fakevalue7\n",
+	} {
+		_, err := LoadSecrets(writeSecrets(t, content, 0o600))
+		if err == nil || strings.Contains(err.Error(), "fakevalue7") || !strings.Contains(err.Error(), "secrets.toml") {
+			t.Errorf("%s: want an error naming the file without the value, got %v", name, err)
+		}
 	}
 }

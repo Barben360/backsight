@@ -16,6 +16,7 @@ read = true
 write = true
 [recall]
 min_score = 0.5
+global_min_score = 0.6
 prompt_hits = 3
 query_chars = 300
 prompt_chars = 800

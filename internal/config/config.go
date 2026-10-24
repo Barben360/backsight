@@ -60,6 +60,7 @@ type Components struct {
 
 type Recall struct {
 	MinScore           float64 `toml:"min_score" json:"min_score"`
+	GlobalMinScore     float64 `toml:"global_min_score" json:"global_min_score"` // per-prompt global hits (0046)
 	PromptHits         int     `toml:"prompt_hits" json:"prompt_hits"`
 	QueryChars         int     `toml:"query_chars" json:"query_chars"`
 	PromptChars        int     `toml:"prompt_chars" json:"prompt_chars"`
@@ -118,7 +119,7 @@ func Default(d paths.Dirs, home string) Config {
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}},
 		Components: Components{Read: true, Write: true},
-		Recall: Recall{MinScore: 0.5, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
+		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
 			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000},
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-v4-flash"},
@@ -160,6 +161,9 @@ func Load(path string, d paths.Dirs, home string) (Config, error) {
 		}
 		return cfg, fmt.Errorf("%s: %w", path, err)
 	}
+	if cfg.SchemaVersion < 1 {
+		return cfg, fmt.Errorf("%s: schema_version must be ≥ 1, got %d", path, cfg.SchemaVersion)
+	}
 	if cfg.SchemaVersion > SchemaVersion {
 		return cfg, fmt.Errorf("%s: schema_version %d was written by a newer backsight (this one reads %d)", path, cfg.SchemaVersion, SchemaVersion)
 	}
@@ -192,17 +196,24 @@ func (c Config) Validate() error {
 	}
 
 	oneOf("server.mode", c.Server.Mode, "local", "remote")
-	if u, err := url.Parse(c.Server.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		bad("server.url", "%q is not an http(s) URL", c.Server.URL)
+	switch u, err := url.Parse(c.Server.URL); {
+	case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+		bad("server.url", "is not an http(s) URL with a host")
+	case u.User != nil:
+		bad("server.url", "must not carry credentials (the API key lives in secrets.toml)")
 	}
-	if c.Server.Bank == "" {
+	switch c.Server.Bank {
+	case "":
 		bad("server.bank", "must not be empty")
+	case ".", "..":
+		bad("server.bank", "%q is not a bank id", c.Server.Bank)
 	}
 	if len(c.Projects.Transverse) == 0 || c.Projects.Transverse[0] == "" {
 		bad("projects.transverse", "needs at least one alias (the first is canonical)")
 	}
 	r := c.Recall
 	unit("recall.min_score", r.MinScore)
+	unit("recall.global_min_score", r.GlobalMinScore)
 	unit("recall.sticky_bypass", r.StickyBypass)
 	unit("recall.project_boost", r.ProjectBoost)
 	for key, v := range map[string]int{"recall.prompt_hits": r.PromptHits, "recall.query_chars": r.QueryChars,
