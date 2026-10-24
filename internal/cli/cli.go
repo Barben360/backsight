@@ -35,7 +35,7 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
-	root.AddCommand(newVersionCmd(e))
+	root.AddCommand(newVersionCmd(e), newPathsCmd(e))
 	return root
 }
 
