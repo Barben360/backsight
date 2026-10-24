@@ -36,6 +36,7 @@ func (d Dirs) QuarantineDir() string   { return filepath.Join(d.State, "quaranti
 func (d Dirs) JournalFile() string     { return filepath.Join(d.State, "journal.jsonl") }
 func (d Dirs) PreImagesDir() string    { return filepath.Join(d.State, "pre-images") }
 func (d Dirs) TelemetryDir() string    { return filepath.Join(d.State, "telemetry") }
+func (d Dirs) EntitiesFile() string    { return filepath.Join(d.State, "entities.json") }
 
 // Default resolves the directories of the running process.
 func Default() (Dirs, error) {

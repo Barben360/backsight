@@ -170,7 +170,14 @@ var (
 	extractFails atomic.Bool
 	// queueAtRetain: pending + processing seen by each accepted retain.
 	queueAtRetain []int64
-	retainedTags  []string
+	// recallAnswer answers every recall (JSON results array); recallTags
+	// records the tags of each recall request; memories answers GET
+	// /memories/{id}; projectEntities answers /tags and /entities.
+	recallAnswer    string
+	recallTags      []string
+	memories        map[string]string
+	projectEntities map[string]string
+	retainedTags    []string
 )
 
 // fakeHindsight answers like a started server: health, version, banks and
@@ -190,6 +197,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	statsDown.Store(false)
 	extractFails.Store(false)
 	retainedTags, queueAtRetain = nil, nil
+	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -220,6 +228,28 @@ func fakeHindsight(t *testing.T) (port int) {
 				overrides[k] = v
 			}
 			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/recall"):
+			var body struct {
+				Tags []string `json:"tags"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			recallTags = append(recallTags, strings.Join(body.Tags, ","))
+			_, _ = w.Write([]byte(`{"results":` + recallAnswer + `}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
+			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte(m))
+		case strings.HasSuffix(r.URL.Path, "/tags"):
+			var items []string
+			for p := range projectEntities {
+				items = append(items, `{"tag":"project:`+p+`","count":1}`)
+			}
+			_, _ = w.Write([]byte(`{"items":[` + strings.Join(items, ",") + `],"total":` + strconv.Itoa(len(items)) + `}`))
+		case strings.HasSuffix(r.URL.Path, "/entities"):
+			_, _ = w.Write([]byte(`{"items":` + projectEntities[strings.TrimPrefix(r.URL.Query().Get("tags"), "project:")] + `}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories"):
 			var body struct {
 				Items []struct {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,7 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -28,6 +32,7 @@ type tickResult struct {
 	Sessions map[string]int     `json:"sessions,omitempty"`
 	Notes    retain.FlushResult `json:"notes"`
 	Backfill string             `json:"backfill,omitempty"`
+	Index    string             `json:"index,omitempty"` // entity index: rebuilt | failed: <why>
 	MS       int                `json:"ms"`
 }
 
@@ -97,6 +102,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if err != nil || res.Notes.Kept > 0 {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 			}
+			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			if failed != nil {
 				res.Status = "partial"
 			}
@@ -114,4 +120,20 @@ func tickText(r tickResult) string {
 		msg += ", backfill " + r.Backfill
 	}
 	return msg + "\n"
+}
+
+// refreshIndex rebuilds the entity index when it is older than a day; best
+// effort, the hooks only read it.
+func refreshIndex(ctx context.Context, d paths.Dirs, bank string, cl *hindsight.Client) string {
+	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil && now().Sub(idx.BuiltAt) < recall.IndexMaxAge {
+		return ""
+	}
+	idx, err := recall.BuildIndex(ctx, cl, bank, now())
+	if err == nil {
+		err = idx.Save(d.EntitiesFile())
+	}
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+	return "rebuilt"
 }
