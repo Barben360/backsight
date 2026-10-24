@@ -2,6 +2,7 @@ package hindsight
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -121,6 +122,8 @@ func TestErrorKinds(t *testing.T) {
 		{503, "7", Unavailable, 7 * time.Second},
 		{500, "", ServerError, 0},
 		{422, "", BadRequest, 0},
+		{429, "3", RateLimited, 3 * time.Second},
+		{403, "", Unauthorized, 0},
 	}
 	for _, c := range cases {
 		cl := server(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -161,15 +164,144 @@ func TestDeadline(t *testing.T) {
 	c.http.Timeout = 100 * time.Millisecond
 	start := time.Now()
 	_, err := c.Health(context.Background())
-	if err == nil || time.Since(start) > 2*time.Second {
-		t.Errorf("err %v after %s", err, time.Since(start))
+	if !errors.Is(err, ErrTimeout) || errors.Is(err, ErrUnreachable) || time.Since(start) > 2*time.Second {
+		t.Errorf("want ErrTimeout (not unreachable), got %v after %s", err, time.Since(start))
 	}
 }
 
 func TestNewRefusesBadURL(t *testing.T) {
-	for _, u := range []string{"", "ftp://x", "127.0.0.1:8888"} {
-		if _, err := New(u, token, time.Second); err == nil {
+	for _, u := range []string{"", "ftp://x", "127.0.0.1:8888", "http://", "http://u:fakepw@127.0.0.1:8888"} {
+		_, err := New(u, token, time.Second)
+		if err == nil {
 			t.Errorf("%q accepted", u)
+		} else if strings.Contains(err.Error(), "fakepw") {
+			t.Errorf("password echoed: %v", err)
 		}
+	}
+	if _, err := New("http://127.0.0.1:8888", token, 0); err == nil {
+		t.Error("a zero timeout means no deadline and must be refused")
+	}
+}
+
+func TestRetryable(t *testing.T) {
+	for kind, want := range map[Kind]bool{RateLimited: true, Unavailable: true, ServerError: true,
+		Unauthorized: false, NotFound: false, BadRequest: false, Redirected: false} {
+		if got := (&APIError{Kind: kind}).Retryable(); got != want {
+			t.Errorf("%s: Retryable = %v", kind, got)
+		}
+	}
+}
+
+// A redirect must not carry the bearer token anywhere, even to the same host.
+func TestRedirectsAreNotFollowed(t *testing.T) {
+	hit := false
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	t.Cleanup(other.Close)
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/version", http.StatusFound)
+	})
+	_, err := c.Version(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != Redirected || hit {
+		t.Errorf("want a Redirected error and no request to the target, got %v (target hit: %v)", err, hit)
+	}
+}
+
+func TestOversizedResponseRefused(t *testing.T) {
+	old := maxBody
+	maxBody = 64
+	t.Cleanup(func() { maxBody = old })
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"api_version":"` + strings.Repeat("x", 200) + `"}`))
+	})
+	if _, err := c.Version(context.Background()); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("want a size refusal, got %v", err)
+	}
+}
+
+func TestInvalidJSON(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"api_version":`)) })
+	if _, err := c.Version(context.Background()); err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestNoTokenNoAuthorizationHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := r.Header["Authorization"]; ok {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := New(srv.URL, "", time.Second)
+	if _, err := c.Health(context.Background()); err != nil {
+		t.Errorf("an empty token must send no Authorization header: %v", err)
+	}
+}
+
+func TestBasePathPrefixKept(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/hs/v1/default/banks/a%3Ab/stats" {
+			t.Errorf("path %s", r.URL.EscapedPath())
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := New(srv.URL+"/hs/", token, time.Second)
+	if _, err := c.BankStats(context.Background(), "a:b"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostSendsJSONBody(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Items []string }
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" || json.NewDecoder(r.Body).Decode(&in) != nil || len(in.Items) != 2 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	var out struct{ Success bool }
+	if err := c.do(context.Background(), http.MethodPost, "/x", nil, map[string][]string{"items": {"a", "b"}}, &out); err != nil || !out.Success {
+		t.Errorf("%v %+v", err, out)
+	}
+}
+
+func TestEachMemoryStopsOnCallbackError(t *testing.T) {
+	calls := 0
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"items":[{"id":"a"},{"id":"b"}],"total":1000}`))
+	})
+	stop := errors.New("stop")
+	seen := 0
+	err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { seen++; return stop })
+	if !errors.Is(err, stop) || seen != 1 || calls != 1 {
+		t.Errorf("err %v, seen %d, calls %d", err, seen, calls)
+	}
+}
+
+func TestEachMemoryEmptyPageEndsEvenIfTotalLies(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"items":[],"total":1000}`)) })
+	if err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { return nil }); err != nil {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestEachMemoryPageCap(t *testing.T) {
+	old := maxPages
+	maxPages = 3
+	t.Cleanup(func() { maxPages = old })
+	calls := 0
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"items":[{"id":"a"}],"total":999999}`))
+	})
+	err := c.EachMemory(context.Background(), "b", "observation", func(Memory) error { return nil })
+	if err == nil || calls != 3 {
+		t.Errorf("want an error after 3 pages, got %v after %d", err, calls)
 	}
 }

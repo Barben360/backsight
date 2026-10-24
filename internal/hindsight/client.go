@@ -3,6 +3,7 @@
 package hindsight
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,16 @@ import (
 // ErrUnreachable wraps connection failures (server down, refused, DNS).
 var ErrUnreachable = errors.New("hindsight server unreachable")
 
+// ErrTimeout wraps calls that hit their deadline: the server may still be
+// working, so writers keep the item and retry.
+var ErrTimeout = errors.New("hindsight call timed out")
+
+// Limits against a buggy or hostile server; variables so tests can shrink them.
+var (
+	maxBody  int64 = 32 << 20
+	maxPages       = 10000 // 2 million memories at 200 per page
+)
+
 // Kind classifies HTTP errors so callers can pick a fix.
 type Kind string
 
@@ -27,6 +38,8 @@ const (
 	BadRequest   Kind = "bad_request"
 	Unavailable  Kind = "unavailable" // 503: migrating or shedding load
 	ServerError  Kind = "server_error"
+	RateLimited  Kind = "rate_limited" // 429
+	Redirected   Kind = "redirected"   // 3xx: never followed, the token stays put
 )
 
 // APIError is a non-2xx response. It never carries the token.
@@ -36,6 +49,11 @@ type APIError struct {
 	Kind         Kind
 	RetryAfter   time.Duration
 	Body         string // first 300 bytes
+}
+
+// Retryable reports whether the same request may succeed later.
+func (e *APIError) Retryable() bool {
+	return e.Kind == RateLimited || e.Kind == Unavailable || e.Kind == ServerError
 }
 
 func (e *APIError) Error() string {
@@ -53,19 +71,44 @@ type Client struct {
 func New(baseURL, token string, timeout time.Duration) (*Client, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("invalid Hindsight URL %q", baseURL)
+		return nil, errors.New("invalid Hindsight URL: want http(s)://host[:port][/prefix]")
 	}
-	return &Client{base: u, token: token, http: &http.Client{Timeout: timeout}}, nil
+	if u.User != nil {
+		return nil, errors.New("invalid Hindsight URL: credentials belong in secrets.toml, not the URL")
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("invalid Hindsight timeout %s", timeout)
+	}
+	hc := &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	return &Client{base: u, token: token, http: hc}, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
+	return c.do(ctx, http.MethodGet, path, query, nil, out)
+}
+
+// do sends one request; body, when not nil, is sent as JSON.
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
 	u := *c.base // keeps a base path such as a reverse-proxy prefix
 	u.RawPath = strings.TrimSuffix(c.base.EscapedPath(), "/") + path
 	u.Path, _ = url.PathUnescape(u.RawPath)
 	u.RawQuery = query.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	var reqBody io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("%s %s: %w", method, path, err)
+		}
+		reqBody = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), reqBody)
 	if err != nil {
 		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -73,20 +116,24 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, out any
 	resp, err := c.http.Do(req)
 	if err != nil {
 		var ue *url.Error
-		if errors.As(err, &ue) && ue.Timeout() {
-			return fmt.Errorf("GET %s: timed out after %s", path, c.http.Timeout)
+		if (errors.As(err, &ue) && ue.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %s %s", ErrTimeout, method, path)
 		}
-		return fmt.Errorf("%w: GET %s: %w", ErrUnreachable, path, errors.Unwrap(err))
+		return fmt.Errorf("%w: %s %s: %w", ErrUnreachable, method, path, errors.Unwrap(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
-		e := &APIError{Method: http.MethodGet, Path: path, Status: resp.StatusCode, Body: string(body)}
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		e := &APIError{Method: method, Path: path, Status: resp.StatusCode, Body: string(msg)}
 		switch {
+		case resp.StatusCode/100 == 3:
+			e.Kind = Redirected
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 			e.Kind = Unauthorized
 		case resp.StatusCode == http.StatusNotFound:
 			e.Kind = NotFound
+		case resp.StatusCode == http.StatusTooManyRequests:
+			e.Kind = RateLimited
 		case resp.StatusCode == http.StatusServiceUnavailable:
 			e.Kind = Unavailable
 		case resp.StatusCode >= 500:
@@ -99,8 +146,18 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, out any
 		}
 		return e
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("GET %s: invalid JSON: %w", path, err)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil {
+		return fmt.Errorf("%s %s: reading the response: %w", method, path, err)
+	}
+	if int64(len(raw)) > maxBody {
+		return fmt.Errorf("%s %s: response larger than %d bytes", method, path, maxBody)
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("%s %s: invalid JSON: %w", method, path, err)
 	}
 	return nil
 }
@@ -185,7 +242,10 @@ const pageSize = 200
 // EachMemory calls fn for every memory of factType ("observation", "world",
 // "experience"), page by page.
 func (c *Client) EachMemory(ctx context.Context, bank, factType string, fn func(Memory) error) error {
-	for offset := 0; ; {
+	for offset, pages := 0, 0; ; pages++ {
+		if pages == maxPages {
+			return fmt.Errorf("listing %s memories: more than %d pages, stopping", factType, maxPages)
+		}
 		var page struct {
 			Items []Memory `json:"items"`
 			Total int      `json:"total"`
