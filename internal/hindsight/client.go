@@ -307,3 +307,38 @@ func (c *Client) DryRunExtract(ctx context.Context, bank, content, strategy stri
 	body := map[string]any{"content": content, "strategy": strategy, "timestamp": at.UTC().Format(time.RFC3339), "context": "backsight provider check"}
 	return out, c.do(ctx, http.MethodPost, bankPath(bank, "/memories/dry-run-extract"), nil, body, &out)
 }
+
+// RetainItem is one item of a retain request.
+type RetainItem struct {
+	Content           string            `json:"content"`
+	Context           string            `json:"context,omitempty"`
+	DocumentID        string            `json:"document_id"`
+	Strategy          string            `json:"strategy,omitempty"`
+	Tags              []string          `json:"tags"`
+	ObservationScopes [][]string        `json:"observation_scopes,omitempty"`
+	Timestamp         *time.Time        `json:"timestamp,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+	UpdateMode        string            `json:"update_mode,omitempty"`
+}
+
+// Retain queues items for extraction (async). A repeated operationID is
+// collapsed by the server (E21).
+func (c *Client) Retain(ctx context.Context, bank string, items []RetainItem, operationID string) error {
+	body := map[string]any{"items": items, "async": true}
+	if operationID != "" {
+		body["operation_id"] = operationID
+	}
+	return c.do(ctx, http.MethodPost, bankPath(bank, "/memories"), nil, body, nil)
+}
+
+// Document is what backsight reads back of a stored document.
+type Document struct {
+	ID       string            `json:"id"`
+	Metadata map[string]string `json:"document_metadata"`
+}
+
+// GetDocument returns a document; an *APIError of kind NotFound when absent.
+func (c *Client) GetDocument(ctx context.Context, bank, id string) (Document, error) {
+	var d Document
+	return d, c.get(ctx, bankPath(bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A")), nil, &d)
+}

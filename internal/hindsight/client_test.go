@@ -338,3 +338,39 @@ func TestBankWrites(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestRetainAndGetDocument(t *testing.T) {
+	var got []string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+		if r.Method == http.MethodGet {
+			if strings.Contains(r.URL.EscapedPath(), "missing") {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"conversation:s1","document_metadata":{"last_uuid":"u9","segment":"2"},"original_text":"..."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"operation_id":"op"}`))
+	})
+	ts := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	err := c.Retain(context.Background(), "b", []RetainItem{{Content: "x", DocumentID: "conversation:s1", Tags: []string{"project:p"},
+		ObservationScopes: [][]string{{"project:p"}}, Timestamp: &ts, Metadata: map[string]string{"segment": "1"}, UpdateMode: "append"}}, "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `POST /v1/default/banks/b/memories {"async":true,"items":[{"content":"x","document_id":"conversation:s1","tags":["project:p"],"observation_scopes":[["project:p"]],"timestamp":"2026-10-24T09:00:00Z","metadata":{"segment":"1"},"update_mode":"append"}],"operation_id":"op-1"}`
+	if got[0] != want {
+		t.Errorf("got  %s\nwant %s", got[0], want)
+	}
+	d, err := c.GetDocument(context.Background(), "b", "conversation:s1")
+	if err != nil || d.Metadata["last_uuid"] != "u9" || !strings.Contains(got[1], "/documents/conversation%3As1") {
+		t.Errorf("%+v %v %s", d, err, got[1])
+	}
+	_, err = c.GetDocument(context.Background(), "b", "conversation:missing")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != NotFound {
+		t.Errorf("want NotFound, got %v", err)
+	}
+}
