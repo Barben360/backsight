@@ -55,7 +55,18 @@ func (h *hookEnv) sessionStart() []byte {
 	switch h.in.Source {
 	case "startup", "":
 	case "compact":
-		return contextOutput("SessionStart", instructions.Guide+h.compactReplay(), "")
+		replay := h.compactReplay()
+		// After a compaction only what was replayed is still in context:
+		// the rest of the seen set may be recalled again.
+		h.updateSession(func(st *session.State) error {
+			var keep []string
+			for _, in := range st.Injected[max(0, len(st.Injected)-compactReplay):] {
+				keep = append(keep, in.ID)
+			}
+			st.Seen = keep
+			return nil
+		})
+		return contextOutput("SessionStart", instructions.Guide+replay, "")
 	default: // resume, clear, fork: clear and fork start a new session id
 		h.writeEnvFile()
 		return contextOutput("SessionStart", instructions.Guide, "")
@@ -105,7 +116,9 @@ func (h *hookEnv) sessionStart() []byte {
 	})
 	if err == nil {
 		h.tw.Emit(telemetry.Briefing{IDs: ids, Chars: len([]rune(text)), Source: source})
-		_ = h.sticky().Record(ids, now(), stickyWindow) // briefed ids count towards muting (SPEC §6.2)
+		// Briefed ids join this session's seen set only: counting them in the
+		// cross-session sticky muted them in sessions that never got the
+		// briefing (resume, clear, fork).
 	}
 	context := instructions.Guide
 	if text != "" {

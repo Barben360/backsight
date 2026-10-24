@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/redact"
 )
 
 const (
@@ -40,13 +41,16 @@ func newEngine(cfg config.Config, sec config.Secrets) (*recall.Engine, error) {
 	if err != nil {
 		return nil, blocked(err)
 	}
-	return &recall.Engine{Client: cl, Bank: cfg.Server.Bank, Transverse: cfg.Projects.Transverse, Timeout: recallTimeout, Now: now}, nil
+	return &recall.Engine{Client: cl, Bank: cfg.Server.Bank, Transverse: cfg.Projects.Transverse, Timeout: recallTimeout, Now: now, Boost: cfg.Recall.ProjectBoost}, nil
 }
 
 // searchMemory is memory_search's engine, shared by the CLI and MCP: the
 // related scope adds asked-for projects and those whose names the queries
 // mention (entity index).
 func searchMemory(ctx context.Context, d paths.Dirs, cfg config.Config, eng *recall.Engine, current string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
+	for i, q := range queries {
+		queries[i], _ = redact.Text(q) // a key pasted into a query never leaves the machine
+	}
 	var related []string
 	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil {
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
@@ -78,12 +82,8 @@ func newSearchCmd(e *env) *cobra.Command {
 			}
 			res := searchMemory(cmd.Context(), d, cfg, eng, currentProject(home, cfg), args, projects, all, limit, minScore)
 			var failed error
-			if len(res.Hits) == 0 {
-				for name, m := range res.Scopes {
-					if !m.OK {
-						failed = &output.Error{Code: output.Blocked, Message: "scope " + name + " failed: " + m.Err}
-					}
-				}
+			if len(res.Hits) == 0 && !scopesOK(res) { // a failing scope alone is skipped (0054)
+				failed = &output.Error{Code: output.Blocked, Message: "memory unavailable: " + scopeErrors(res)}
 			}
 			return e.report("search", res, func() string { return searchText(res) }, failed)
 		},

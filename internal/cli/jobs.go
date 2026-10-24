@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -82,6 +84,14 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
+				res.Status, res.Reason = "skipped", "components.write is off"
+				if cfg.Components.Read {
+					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
+				}
+				pruneSessions(d)
+				return finish(nil)
+			}
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
 			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" &&
@@ -134,6 +144,10 @@ func pruneSessions(d paths.Dirs) {
 	}
 	for _, e := range ents {
 		if fi, err := e.Info(); err == nil && !e.IsDir() && now().Sub(fi.ModTime()) > sessionTTL {
+			id := strings.TrimSuffix(e.Name(), ".json")
+			if paused, _ := session.Paused(d.SessionsDir(), id); paused {
+				continue // a pause outlives the pruning: a resumed session stays paused
+			}
 			_ = os.Remove(filepath.Join(d.SessionsDir(), e.Name()))
 		}
 	}

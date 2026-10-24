@@ -33,6 +33,7 @@ type Engine struct {
 	Transverse []string      // aliases; the first is canonical
 	Timeout    time.Duration // the whole search: every call and the raw fallback
 	Now        func() time.Time
+	Boost      float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
 }
 
 // Query is one search.
@@ -250,7 +251,11 @@ func (e *Engine) hit(r hindsight.RecallHit, scope, current string) Hit {
 	h := Hit{ID: r.ID, Text: strings.TrimSpace(r.Text), Project: ProjectOf(r.Tags), Type: r.Type, Scope: scope, Reranker: r.Scores.Reranker}
 	h.Score = h.Reranker
 	if h.Project != "" && h.Project == current {
-		h.Score += ProjectBoost
+		if e.Boost > 0 {
+			h.Score += e.Boost
+		} else {
+			h.Score += ProjectBoost
+		}
 	}
 	h.Score = float64(int(h.Score*10000+0.5)) / 10000
 	if t, err := time.Parse(time.RFC3339Nano, r.MentionedAt); err == nil {

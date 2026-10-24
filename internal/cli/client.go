@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -62,6 +63,11 @@ func (c clientEnv) runner(command string) claudecfg.Runner {
 // only the transcript retention floor (decisions 0041, 0052). notes say
 // what was left alone and why.
 func (c clientEnv) ownedEdits() (edits []claudecfg.Edit, notes []string, err error) {
+	// The permission rule for the memory tools, once client install wired
+	// this profile (SPEC §5): client config apply repairs it.
+	if st, err := state.Load(c.dirs.StateFile()); err == nil && st.PluginVersion != "" {
+		edits = append(edits, claudecfg.Edit{Target: c.loc.Settings, Apply: permissionRule})
+	}
 	if days := c.cfg.Client.RetentionDays; days > 0 {
 		ret, err := claudecode.ReadRetention(c.loc, c.managed)
 		if err != nil {
@@ -74,6 +80,19 @@ func (c clientEnv) ownedEdits() (edits []claudecfg.Edit, notes []string, err err
 		}
 	}
 	return edits, notes, nil
+}
+
+// permissionRule allows the three memory tools (SPEC §5).
+func permissionRule(doc []byte) ([]byte, []claudecfg.Change, error) {
+	var changes []claudecfg.Change
+	for _, tool := range plugin.ToolNames {
+		out, ch, err := claudecfg.EnsureInArray(doc, []string{"permissions", "allow"}, tool)
+		if err != nil {
+			return nil, nil, err
+		}
+		doc, changes = out, append(changes, ch)
+	}
+	return doc, changes, nil
 }
 
 // retentionFloor raises cleanupPeriodDays to days; a higher value stays.

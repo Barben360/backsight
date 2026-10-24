@@ -128,6 +128,9 @@ func checkNote(d paths.Dirs, home string, cfg config.Config, kind, proj, text st
 	if strings.TrimSpace(text) == "" {
 		return &output.Error{Code: output.Usage, Message: "empty text"}
 	}
+	if !cfg.Components.Write {
+		return &output.Error{Code: output.Blocked, Message: "components.write is off in config.toml: another integration writes to this bank; nothing stored"}
+	}
 	if !validProject(proj) {
 		return &output.Error{Code: output.Usage, Message: "project: one line, at most 64 characters, no control characters"}
 	}

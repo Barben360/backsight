@@ -155,13 +155,19 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 
 	// 4. Marketplace and plugin registered with Claude Code; a marketplace
 	// registered at another path (moved data directory) is re-added.
+	failAfterWrites := func(err error) error { // the shim and plugin may already be rewritten
+		if plan {
+			return blocked(err)
+		}
+		return partialError(err)
+	}
 	known, err := listed(ctx, env, "id", "plugin", "list", "--json")
 	if err != nil {
-		return res, blocked(err)
+		return res, failAfterWrites(err)
 	}
 	marketPath, err := marketplacePath(ctx, env)
 	if err != nil {
-		return res, blocked(err)
+		return res, failAfterWrites(err)
 	}
 	var steps [][]string
 	switch {
@@ -187,17 +193,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	}
 
 	// 5. The one settings change: allow the three memory tools (SPEC §5).
-	edit := claudecfg.Edit{Target: c.loc.Settings, Apply: func(doc []byte) ([]byte, []claudecfg.Change, error) {
-		var changes []claudecfg.Change
-		for _, tool := range plugin.ToolNames {
-			out, ch, err := claudecfg.EnsureInArray(doc, []string{"permissions", "allow"}, tool)
-			if err != nil {
-				return nil, nil, err
-			}
-			doc, changes = out, append(changes, ch)
-		}
-		return doc, changes, nil
-	}}
+	edit := claudecfg.Edit{Target: c.loc.Settings, Apply: permissionRule}
 	if plan {
 		fr, err := claudecfg.Plan([]claudecfg.Edit{edit})
 		if err != nil {

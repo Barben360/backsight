@@ -340,7 +340,8 @@ func TestClientInstallRefusesUnreadableClaudeOutputAndConcurrency(t *testing.T) 
 	home := devInstall(t, true)
 	f := withClaude(t)
 	f.plugins = "Warning: not json"
-	if code, out, _ := run(t, "client", "install", "--json"); code != output.Blocked || !strings.Contains(out, "unexpected output") {
+	// the shim and plugin are already rewritten when claude's lists are read: partial
+	if code, out, _ := run(t, "client", "install", "--json"); code != output.Partial || !strings.Contains(out, "unexpected output") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 	f.plugins = "[]"

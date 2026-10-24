@@ -15,10 +15,18 @@ import (
 )
 
 // mcpSession starts the memory server on a fake bank and connects a client.
-func mcpSession(t *testing.T) *mcp.ClientSession {
+func mcpSession(t *testing.T) *mcp.ClientSession { t.Helper(); return mcpSessionWith(t, "") }
+
+// mcpSessionWith appends extra TOML to the config before the server starts.
+func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
 	t.Helper()
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
+	if extra != "" {
+		cfgPath := filepath.Join(home, "backsight", "config", "config.toml")
+		raw, _ := os.ReadFile(cfgPath)
+		_ = os.WriteFile(cfgPath, append(raw, []byte(extra)...), 0o600)
+	}
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		t.Fatal(err)

@@ -147,6 +147,8 @@ func (h *hookEnv) stop() {
 	if len(last) > lastReplyChars {
 		last = last[len(last)-lastReplyChars:]
 	}
+	tail, _ := redact.Text(string(last))
+	last = []rune(tail)
 	h.updateSession(func(s *session.State) error {
 		s.LastAssistant, s.LastCredit = string(last), credit
 		return nil

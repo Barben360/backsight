@@ -39,9 +39,12 @@ func newWhyCmd(e *env) *cobra.Command {
 			}
 			res := whyResult{Session: id, Injections: []session.Injection{}}
 			if id != "" {
+				if !session.ValidID(id) {
+					return &output.Error{Code: output.Usage, Message: "invalid session id " + id}
+				}
 				st, err := store.Load(id)
 				if err != nil {
-					return &output.Error{Code: output.Usage, Message: err.Error()}
+					return &output.Error{Code: output.Blocked, Message: "session state unreadable: " + err.Error()}
 				}
 				res.Injections = st.Injected
 				if last > 0 && len(res.Injections) > last {

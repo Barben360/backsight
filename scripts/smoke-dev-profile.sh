@@ -11,9 +11,19 @@ profile=${1:-$HOME/.claude-backsight-dev}
 case "$profile" in "$HOME/.claude" | "$HOME/.claude/") echo "refusing the main profile" >&2; exit 2 ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
-cleanup() { rm -f "$profile/.credentials.json"; rm -rf "$work"; }
+# Credentials the profile already had are put back; ours are deleted.
+had=""
+if [ -e "$profile/.credentials.json" ]; then
+  had=$work/credentials.backup
+fi
+cleanup() {
+  rm -f "$profile/.credentials.json"
+  if [ -n "$had" ] && [ -e "$had" ]; then mv "$had" "$profile/.credentials.json"; fi
+  rm -rf "$work"
+}
 trap cleanup EXIT
 
+if [ -n "$had" ]; then cp -p "$profile/.credentials.json" "$had"; fi
 (cd "$root" && go build -o "$work/backsight" ./cmd/backsight)
 "$work/backsight" client install --config-dir "$profile"
 cp -p "$HOME/.claude/.credentials.json" "$profile/.credentials.json"

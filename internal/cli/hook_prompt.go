@@ -60,7 +60,7 @@ func init() {
 		return h.userPrompt(), nil
 	}
 	handlers["post-tool-use"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, readSide)
+		h, ok := newHookEnv(ctx, input, "") // stores are recorded with write on, the search flag with read on
 		if !ok {
 			return nil, nil
 		}
@@ -299,7 +299,7 @@ func (h *hookEnv) userPrompt() []byte {
 		return nil
 	})
 	if len(ids) > 0 {
-		_ = h.sticky().Record(ids, now(), stickyWindow)
+		_ = h.sticky().Record(ids, now(), h.stickyWindow())
 	}
 	ev.MS = int(time.Since(start).Milliseconds())
 	h.tw.Emit(ev)
@@ -314,6 +314,14 @@ func age(a string) string {
 	return " (" + a + " ago)"
 }
 
+// stickyWindow is A.1 recall.sticky_window_h.
+func (h *hookEnv) stickyWindow() time.Duration {
+	if h.cfg.Recall.StickyWindowH > 0 {
+		return time.Duration(h.cfg.Recall.StickyWindowH) * time.Hour
+	}
+	return stickyWindow
+}
+
 func (h *hookEnv) sticky() session.Sticky {
 	return session.Sticky{Path: h.dirs.State + "/sticky.json", Locks: h.dirs.LocksDir()}
 }
@@ -322,7 +330,7 @@ func (h *hookEnv) sticky() session.Sticky {
 // unmuted memories above the reranker floor, within PromptChars.
 func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, []session.Injection, recall.Result) {
 	_, res := h.searchPrompt(prompt)
-	counts := h.sticky().Load(now(), stickyWindow)
+	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
 	block, chosen := selectHits(res.Hits, rc, func(hit recall.Hit) bool {
 		return slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass)
@@ -347,7 +355,7 @@ func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
-	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now}
+	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost}
 	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
 }
 
@@ -397,11 +405,14 @@ func (h *hookEnv) postToolUse() {
 	} else {
 		ids = uuidRE.FindAllString(text, -1)
 	}
+	subagent := h.in.AgentID != "" // a subagent's search is not the main thread's
 	h.updateSession(func(s *session.State) error {
-		s.SearchedPromptID = s.Prompts
-		for _, id := range ids {
-			if !slices.Contains(s.Seen, id) {
-				s.Seen = append(s.Seen, id)
+		if !subagent {
+			s.SearchedPromptID = s.Prompts
+			for _, id := range ids {
+				if !slices.Contains(s.Seen, id) {
+					s.Seen = append(s.Seen, id)
+				}
 			}
 		}
 		s.Stored = append(s.Stored, notes...)

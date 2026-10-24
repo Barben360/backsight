@@ -67,6 +67,9 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
+			if !deps.cfg.Components.Read {
+				return errorResult("components.read is off in config.toml: search with the other integration"), nil, nil
+			}
 			if len(a.Queries) == 0 || len(a.Queries) > maxQueries {
 				return errorResult("queries: give 1 to 4 short keyword queries"), nil, nil
 			}
@@ -90,6 +93,9 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
+			if !deps.cfg.Components.Read {
+				return errorResult("components.read is off in config.toml"), nil, nil
+			}
 			id := strings.TrimSpace(a.ID)
 			if !memoryIDRE.MatchString(id) || strings.Contains(id, "..") {
 				return errorResult("id: the memory id shown by memory_search"), nil, nil
