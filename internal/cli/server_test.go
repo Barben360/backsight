@@ -158,8 +158,10 @@ func (f *fakeCompose) subcommands() []string {
 	return out
 }
 
-// retained counts retain items the fake server accepted.
-var retained atomic.Int64
+// retained counts retain items the fake server accepted; llmInput is the
+// bank's LLM input-token total the fake reports, raised by llmPerRetain on
+// each accepted item.
+var retained, llmInput, llmPerRetain atomic.Int64
 
 // fakeHindsight answers like a started server: health, version, banks and
 // bank config (overrides kept in memory).
@@ -206,6 +208,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			for _, it := range body.Items {
 				docs[it.DocumentID] = it.Metadata
 				retained.Add(1)
+				llmInput.Add(llmPerRetain.Load())
 			}
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
@@ -216,6 +219,10 @@ func fakeHindsight(t *testing.T) (port int) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `}`))
+		case strings.HasSuffix(r.URL.Path, "/llm-requests/stats"):
+			_, _ = w.Write([]byte(`{"buckets":[{"tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}]}`))
+		case strings.HasSuffix(r.URL.Path, "/stats"):
+			_, _ = w.Write([]byte(`{"total_nodes":0,"pending_operations":0,"pending_consolidation":0}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract"):
 			_, _ = w.Write([]byte(`{"facts":[{"text":"The billing service keeps PostgreSQL 16 for partial indexes.","fact_type":"world"}],"usage":{"input_tokens":900,"output_tokens":40}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):

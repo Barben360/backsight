@@ -27,6 +27,7 @@ type tickResult struct {
 	Reason   string             `json:"reason,omitempty"`
 	Sessions map[string]int     `json:"sessions,omitempty"`
 	Notes    retain.FlushResult `json:"notes"`
+	Backfill string             `json:"backfill,omitempty"`
 	MS       int                `json:"ms"`
 }
 
@@ -78,6 +79,14 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
+			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" {
+				prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+				br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, tickBackfillLimit)
+				res.Backfill = fmt.Sprintf("%d/%d", br.Done, br.Total)
+				if berr != nil {
+					res.Backfill += " paused: " + br.Paused
+				}
+			}
 			res.Notes, err = notesOutbox(d).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
 			if err != nil || res.Notes.Kept > 0 {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
@@ -94,5 +103,9 @@ func tickText(r tickResult) string {
 	if r.Status == "skipped" {
 		return "skipped: " + r.Reason + "\n"
 	}
-	return fmt.Sprintf("%s: sessions %v, notes sent %d, queued %d (%d ms)\n", r.Status, r.Sessions, r.Notes.Sent, r.Notes.Kept, r.MS)
+	msg := fmt.Sprintf("%s: sessions %v, notes sent %d, queued %d (%d ms)", r.Status, r.Sessions, r.Notes.Sent, r.Notes.Kept, r.MS)
+	if r.Backfill != "" {
+		msg += ", backfill " + r.Backfill
+	}
+	return msg + "\n"
 }
