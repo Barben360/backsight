@@ -27,6 +27,28 @@ func (e *env) emit(command string, data any, text func() string) error {
 	return err
 }
 
+// report prints a result that may carry a failure: the data is always shown
+// (inside the error envelope with --json), and the exit code still follows
+// cmdErr without a second message.
+func (e *env) report(command string, data any, text func() string, cmdErr error) error {
+	if e.json {
+		if err := output.WriteJSON(e.stdout, command, data, cmdErr); err != nil {
+			return err
+		}
+	} else if _, err := io.WriteString(e.stdout, text()); err != nil {
+		return err
+	}
+	if cmdErr != nil {
+		return reported{output.CodeOf(cmdErr)}
+	}
+	return nil
+}
+
+// reported is an exit code whose message was already printed.
+type reported struct{ code int }
+
+func (r reported) Error() string { return fmt.Sprintf("exit %d", r.code) }
+
 func newRoot(e *env) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "backsight",
@@ -35,7 +57,7 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
-	root.AddCommand(newVersionCmd(e), newPathsCmd(e))
+	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e))
 	return root
 }
 
@@ -59,6 +81,10 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	cmd, err := root.ExecuteC()
 	if err == nil {
 		return output.OK
+	}
+	var rep reported
+	if errors.As(err, &rep) {
+		return rep.code
 	}
 	code := output.CodeOf(err)
 	var ue usageError
