@@ -62,6 +62,40 @@ func TestUpdateBreaksAStaleLock(t *testing.T) {
 	if err := s.Update("abc", func(st *State) error { st.Prompts = 1; return nil }); err != nil {
 		t.Fatal(err)
 	}
+	if st, _ := s.Load("abc"); st.Prompts != 1 {
+		t.Error("not written after breaking the stale lock")
+	}
+}
+
+// A corrupt state restarts paused: a pause is never lost (flushes treat an
+// unreadable state as paused too).
+func TestCorruptStateRestartsPaused(t *testing.T) {
+	s := store(t)
+	_ = os.MkdirAll(s.Dir, 0o700)
+	_ = os.WriteFile(filepath.Join(s.Dir, "abc.json"), []byte("{not json"), 0o600)
+	if p, _ := Paused(s.Dir, "abc"); !p {
+		t.Error("an unreadable state must count as paused")
+	}
+	if err := s.Update("abc", func(st *State) error { st.Prompts++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Load("abc"); !st.Paused || st.Prompts != 1 {
+		t.Errorf("%+v", st)
+	}
+	if p, _ := Paused(s.Dir, "unknown"); p {
+		t.Error("an unknown session is not paused")
+	}
+}
+
+func TestAFailingUpdateWritesNothing(t *testing.T) {
+	s := store(t)
+	_ = s.Update("abc", func(st *State) error { st.Prompts = 1; return nil })
+	if err := s.Update("abc", func(st *State) error { st.Prompts = 9; return errors.New("no") }); err == nil {
+		t.Fatal("error lost")
+	}
+	if st, _ := s.Load("abc"); st.Prompts != 1 {
+		t.Errorf("written despite the error: %+v", st)
+	}
 }
 
 func TestSessionIDsCannotEscapeTheDirectory(t *testing.T) {
@@ -82,6 +116,8 @@ func TestLatestIsTheMostRecentlyWritten(t *testing.T) {
 	_ = s.Update("new", func(*State) error { return nil })
 	past := time.Now().Add(-time.Hour)
 	_ = os.Chtimes(filepath.Join(s.Dir, "old.json"), past, past)
+	_ = os.WriteFile(filepath.Join(s.Dir, ".hidden.json"), []byte("{}"), 0o600) // not a session id
+	_ = os.WriteFile(filepath.Join(s.Dir, "notes.txt"), []byte("x"), 0o600)
 	if id, err := s.Latest(); err != nil || id != "new" {
 		t.Errorf("%q %v", id, err)
 	}

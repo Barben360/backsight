@@ -40,14 +40,16 @@ func (c *Client) Recall(ctx context.Context, bank string, req RecallRequest) ([]
 
 // MemoryDetail is one memory with the raw facts it was consolidated from.
 type MemoryDetail struct {
-	ID          string   `json:"id"`
-	Text        string   `json:"text"`
-	Type        string   `json:"type"`
-	Tags        []string `json:"tags"`
-	MentionedAt string   `json:"mentioned_at"`
-	DocumentID  string   `json:"document_id"`
-	State       string   `json:"state"`
-	Sources     []struct {
+	ID            string   `json:"id"`
+	Text          string   `json:"text"`
+	Type          string   `json:"type"`
+	Tags          []string `json:"tags"`
+	MentionedAt   string   `json:"mentioned_at"`
+	OccurredStart string   `json:"occurred_start"`
+	OccurredEnd   string   `json:"occurred_end"`
+	DocumentID    string   `json:"document_id"`
+	State         string   `json:"state"`
+	Sources       []struct {
 		ID         string   `json:"id"`
 		Text       string   `json:"text"`
 		Type       string   `json:"type"`
@@ -71,21 +73,23 @@ type TagCount struct {
 // Tags lists the bank's tags matching prefix q, every page.
 func (c *Client) Tags(ctx context.Context, bank, q string) ([]TagCount, error) {
 	var all []TagCount
+	offset := 0 // counts every item the server returned, matching or not
 	for page := 0; page < maxPages; page++ {
 		var out struct {
 			Items []TagCount `json:"items"`
 			Total int        `json:"total"`
 		}
-		query := url.Values{"q": {q}, "limit": {"200"}, "offset": {strconv.Itoa(len(all))}}
+		query := url.Values{"q": {q}, "limit": {"200"}, "offset": {strconv.Itoa(offset)}}
 		if err := c.get(ctx, bankPath(bank, "/tags"), query, &out); err != nil {
 			return all, err
 		}
+		offset += len(out.Items)
 		for _, t := range out.Items {
 			if strings.HasPrefix(t.Tag, q) {
 				all = append(all, t)
 			}
 		}
-		if len(out.Items) == 0 || len(all) >= out.Total {
+		if len(out.Items) == 0 || offset >= out.Total {
 			break
 		}
 	}

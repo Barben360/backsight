@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/session"
 )
 
 func notesOutbox(d paths.Dirs) retain.Outbox {
@@ -73,23 +74,11 @@ func newStoreCmd(e *env) *cobra.Command {
 // storeNote validates and queues one note, then tries to send it now (the
 // outbox keeps it otherwise). Shared by the CLI and memory_store.
 func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, kind, proj, text string) (storeResult, error) {
-	if !retain.Kinds[kind] {
-		return storeResult{}, &output.Error{Code: output.Usage, Message: fmt.Sprintf("kind %q: one of %s", kind, kindList())}
+	if err := checkNote(d, home, cfg, kind, text); err != nil {
+		return storeResult{}, err
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return storeResult{}, &output.Error{Code: output.Usage, Message: "empty text"}
-	}
-	if _, kinds := redact.Text(text); len(kinds) > 0 {
-		return storeResult{}, &output.Error{Code: output.Usage, Message: "the text holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory"}
-	}
-	if proj == "" {
-		cwd, _ := os.Getwd()
-		proj = project.New(home, cfg.Projects.Transverse).Project(cwd)
-	}
-	if len(cfg.Projects.Transverse) > 0 && slices.Contains(cfg.Projects.Transverse, proj) {
-		proj = cfg.Projects.Transverse[0] // one transverse pool (SPEC §4)
-	}
+	proj = noteProject(home, cfg, proj)
 	n := retain.NewNote(cfg.Server.Bank, kind, proj, text, now())
 	ob := notesOutbox(d)
 	warn, err := ob.Append(n)
@@ -116,6 +105,49 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		}
 	}
 	return res, failed
+}
+
+// TransverseKeyword names the transverse project in tool calls, whatever
+// the configured aliases are.
+const TransverseKeyword = "transverse"
+
+// checkNote refuses a note before anything leaves the machine: bad kind,
+// empty text, a secret, or a session or directory opted out of memory (SPEC
+// §7, §13; notes honour pause and opt-outs, 0051).
+func checkNote(d paths.Dirs, home string, cfg config.Config, kind, text string) error {
+	if !retain.Kinds[kind] {
+		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("kind %q: one of %s", kind, kindList())}
+	}
+	if strings.TrimSpace(text) == "" {
+		return &output.Error{Code: output.Usage, Message: "empty text"}
+	}
+	if _, kinds := redact.Text(text); len(kinds) > 0 {
+		return &output.Error{Code: output.Usage, Message: "the text holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory"}
+	}
+	if sid := os.Getenv("BACKSIGHT_SESSION"); sid != "" {
+		if paused, why := session.Paused(d.SessionsDir(), sid); paused {
+			return &output.Error{Code: output.Blocked, Message: "memory is paused for this session (" + why + "): nothing stored"}
+		}
+	}
+	cwd, _ := os.Getwd()
+	if out, why := project.New(home, cfg.Projects.Transverse).OptedOut(cwd, cfg.Privacy.ExcludePaths); out {
+		return &output.Error{Code: output.Blocked, Message: "this directory is excluded from memory (" + why + "): nothing stored"}
+	}
+	return nil
+}
+
+// noteProject: the asked project, else the working directory's; any
+// transverse alias, or the keyword, maps to the first alias (one pool, SPEC
+// §4).
+func noteProject(home string, cfg config.Config, proj string) string {
+	if proj == "" {
+		cwd, _ := os.Getwd()
+		proj = project.New(home, cfg.Projects.Transverse).Project(cwd)
+	}
+	if len(cfg.Projects.Transverse) > 0 && (proj == TransverseKeyword || slices.Contains(cfg.Projects.Transverse, proj)) {
+		proj = cfg.Projects.Transverse[0]
+	}
+	return proj
 }
 
 func storeText(res storeResult) string {

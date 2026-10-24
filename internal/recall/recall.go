@@ -21,7 +21,9 @@ const (
 	ProjectBoost = 0.05
 	// MaxRelated caps the related projects searched (SPEC §4).
 	MaxRelated = 6
-	maxTokens  = 1500 // per call, as the reference hook (C12)
+	// MaxAsked caps the projects a caller asks for explicitly.
+	MaxAsked  = 10
+	maxTokens = 1500 // per call, as the reference hook (C12)
 )
 
 // Engine runs searches against one bank.
@@ -29,18 +31,20 @@ type Engine struct {
 	Client     *hindsight.Client
 	Bank       string
 	Transverse []string      // aliases; the first is canonical
-	Timeout    time.Duration // per call
+	Timeout    time.Duration // the whole search: every call and the raw fallback
 	Now        func() time.Time
 }
 
 // Query is one search.
 type Query struct {
-	Queries  []string
-	Current  string   // the current project
-	Projects []string // related projects (asked for, or matched in the entity index)
-	All      bool     // the whole bank only, no project scopes
-	Limit    int      // 0: no limit
-	MinScore float64  // on the boosted score
+	Queries     []string
+	Current     string   // the current project
+	Projects    []string // projects asked for explicitly (all searched, up to MaxAsked)
+	Related     []string // projects matched in the entity index (up to MaxRelated)
+	All         bool     // the whole bank only, no project scopes
+	Limit       int      // 0: no limit
+	MinScore    float64  // on the boosted score
+	MinReranker float64  // on the server's score (prompt recall: SPEC §10.2)
 }
 
 // Hit is one merged result.
@@ -64,8 +68,9 @@ type ScopeMeta struct {
 	Err string `json:"err,omitempty"`
 }
 
-// Result of a search. Raw: no observation existed in any scope, so raw
-// facts stand in (a bank not consolidated yet, SPEC §4 Reads).
+// Result of a search. Raw: some hits are raw facts, standing in for a scope
+// that holds no observation yet (a project not consolidated yet, SPEC §4
+// Reads).
 type Result struct {
 	Hits   []Hit                `json:"hits"`
 	Scopes map[string]ScopeMeta `json:"scopes"`
@@ -89,97 +94,67 @@ func (e *Engine) scopes(q Query) []scope {
 	}
 	out := []scope{{name: "project", tags: projectTags(own)}, {name: "global"}}
 	var related []string
-	for _, p := range q.Projects {
-		if p != "" && !contains(own, p) && !contains(related, p) && len(related) < MaxRelated {
-			related = append(related, p)
+	add := func(list []string, limit int) {
+		n := 0
+		for _, p := range list {
+			if n < limit && p != "" && !contains(own, p) && !contains(related, p) {
+				related, n = append(related, p), n+1
+			}
 		}
 	}
+	add(q.Projects, MaxAsked)
+	add(q.Related, MaxRelated)
 	if len(related) > 0 {
 		out = append(out, scope{name: "related", tags: projectTags(related)})
 	}
 	return out
 }
 
-// Search runs every (scope, query) pair in parallel and merges the hits.
+// Search runs every (scope, query) pair in parallel within one budget and
+// merges the hits. A scope that answered without any observation is asked
+// again for raw facts, still within the budget.
 func (e *Engine) Search(ctx context.Context, q Query) Result {
-	res := e.search(ctx, q, []string{"observation"})
-	if !res.Raw { // Raw marks here that no observation came back at all
-		return res
+	if e.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, e.Timeout)
+		defer cancel()
 	}
-	for _, m := range res.Scopes {
-		if !m.OK {
-			res.Raw = false
-			return res // a failure, not an empty bank
+	scopes := e.scopes(q)
+	answers := e.run(ctx, scopes, q.Queries, []string{"observation"})
+	res := Result{Scopes: map[string]ScopeMeta{}}
+	var empty []scope
+	for _, s := range scopes {
+		if m := meta(answers, s.name); m.OK && m.Raw == 0 {
+			empty = append(empty, s)
 		}
 	}
-	raw := e.search(ctx, q, []string{"world", "experience"})
-	raw.Raw = true
-	return raw
-}
-
-func (e *Engine) search(ctx context.Context, q Query, types []string) Result {
-	type job struct {
-		scope scope
-		query string
-	}
-	var jobs []job
-	for _, s := range e.scopes(q) {
-		for _, text := range q.Queries {
-			if text = strings.TrimSpace(text); text != "" {
-				jobs = append(jobs, job{s, text})
+	if len(empty) > 0 && ctx.Err() == nil {
+		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"})
+		for _, a := range raw {
+			if len(a.hits) > 0 {
+				res.Raw = true
 			}
 		}
+		answers = append(answers, raw...)
 	}
-	type answer struct {
-		hits []hindsight.RecallHit
-		err  error
-		ms   int
-	}
-	answers := make([]answer, len(jobs))
-	var wg sync.WaitGroup
-	for i, j := range jobs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cctx, cancel := context.WithTimeout(ctx, e.Timeout)
-			defer cancel()
-			start := time.Now()
-			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens}
-			if len(j.scope.tags) > 0 {
-				req.Tags, req.TagsMatch = j.scope.tags, "any_strict"
-			}
-			h, err := e.Client.Recall(cctx, e.Bank, req)
-			answers[i] = answer{h, err, int(time.Since(start).Milliseconds())}
-		}()
-	}
-	wg.Wait()
-
-	res := Result{Scopes: map[string]ScopeMeta{}, Raw: true}
 	best := map[string]Hit{}
-	for i, a := range answers {
-		name := jobs[i].scope.name
-		m, seen := res.Scopes[name]
+	for _, a := range answers {
+		m, seen := res.Scopes[a.scope]
 		if !seen {
 			m.OK = true
 		}
 		m.MS = max(m.MS, a.ms)
 		if a.err != nil {
 			m.OK, m.Err = false, a.err.Error()
-			res.Scopes[name] = m
-			continue
 		}
 		for _, r := range a.hits {
-			if strings.TrimSpace(r.Text) == "" {
-				continue
-			}
 			m.Raw++
-			res.Raw = false
-			h := e.hit(r, name, q.Current)
-			if h.Score >= q.MinScore && h.Score > best[h.ID].Score {
+			h := e.hit(r, a.scope, q.Current)
+			if h.Score >= q.MinScore && h.Reranker >= q.MinReranker && h.Score > best[h.ID].Score {
 				best[h.ID] = h
 			}
 		}
-		res.Scopes[name] = m
+		res.Scopes[a.scope] = m
 	}
 	for _, h := range best {
 		res.Hits = append(res.Hits, h)
@@ -194,6 +169,66 @@ func (e *Engine) search(ctx context.Context, q Query, types []string) Result {
 		res.Hits = res.Hits[:q.Limit]
 	}
 	return res
+}
+
+type answer struct {
+	scope string
+	hits  []hindsight.RecallHit // non-empty text only
+	err   error
+	ms    int
+}
+
+// meta sums the answers of one scope: ok unless a call failed, raw =
+// results returned.
+func meta(answers []answer, name string) ScopeMeta {
+	m := ScopeMeta{OK: true}
+	for _, a := range answers {
+		if a.scope == name {
+			m.Raw += len(a.hits)
+			if a.err != nil {
+				m.OK = false
+			}
+		}
+	}
+	return m
+}
+
+func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string) []answer {
+	type job struct {
+		scope scope
+		query string
+	}
+	var jobs []job
+	for _, s := range scopes {
+		for _, text := range queries {
+			if text = strings.TrimSpace(text); text != "" {
+				jobs = append(jobs, job{s, text})
+			}
+		}
+	}
+	answers := make([]answer, len(jobs))
+	var wg sync.WaitGroup
+	for i, j := range jobs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens}
+			if len(j.scope.tags) > 0 {
+				req.Tags, req.TagsMatch = j.scope.tags, "any_strict"
+			}
+			got, err := e.Client.Recall(ctx, e.Bank, req)
+			var hits []hindsight.RecallHit
+			for _, h := range got {
+				if strings.TrimSpace(h.Text) != "" {
+					hits = append(hits, h)
+				}
+			}
+			answers[i] = answer{scope: j.scope.name, hits: hits, err: err, ms: int(time.Since(start).Milliseconds())}
+		}()
+	}
+	wg.Wait()
+	return answers
 }
 
 func (e *Engine) hit(r hindsight.RecallHit, scope, current string) Hit {

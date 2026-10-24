@@ -26,7 +26,7 @@ type searchArgs struct {
 	Projects []string `json:"projects,omitempty" jsonschema:"other projects to search too"`
 	Scope    string   `json:"scope,omitempty" jsonschema:"auto (current project, transverse, related projects and the whole memory; default) or all (the whole memory only)"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"most memories returned (default 8)"`
-	MinScore float64  `json:"min_score,omitempty" jsonschema:"relevance floor (default 0.4); lower it to widen"`
+	MinScore *float64 `json:"min_score,omitempty" jsonschema:"relevance floor (default 0.4); lower it to widen"`
 }
 
 type readArgs struct {
@@ -36,7 +36,7 @@ type readArgs struct {
 type storeArgs struct {
 	Kind    string `json:"kind" jsonschema:"decision, correction, convention, pitfall, state or lesson"`
 	Text    string `json:"text" jsonschema:"1-3 sentences: the fact, why, absolute dates"`
-	Project string `json:"project,omitempty" jsonschema:"default: the current project; a transverse alias for user-wide rules"`
+	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" for user-wide rules"`
 }
 
 // mcpDeps is what the tools need, resolved once per server.
@@ -70,12 +70,15 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if len(a.Queries) == 0 || len(a.Queries) > maxQueries {
 				return errorResult("queries: give 1 to 4 short keyword queries"), nil, nil
 			}
-			limit, minScore := a.Limit, a.MinScore
+			if a.Scope != "" && a.Scope != "auto" && a.Scope != "all" {
+				return errorResult(`scope: "auto" or "all"`), nil, nil
+			}
+			limit, minScore := a.Limit, searchMinScore
 			if limit <= 0 {
 				limit = searchLimit
 			}
-			if minScore <= 0 {
-				minScore = searchMinScore
+			if a.MinScore != nil {
+				minScore = *a.MinScore
 			}
 			cmdCtx.SetContext(ctx)
 			res := searchMemory(cmdCtx, deps.dirs, deps.cfg, deps.engine, deps.current, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
@@ -102,10 +105,16 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_store", Description: instructions.StoreDescription},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
+			// Refusals first: nothing leaves the machine for a refused note.
+			if err := checkNote(deps.dirs, deps.home, deps.cfg, a.Kind, a.Text); err != nil {
+				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds())})
+				return errorResult(err.Error()), nil, nil
+			}
 			proj := a.Project
 			if proj == "" {
 				proj = deps.current
 			}
+			proj = noteProject(deps.home, deps.cfg, proj)
 			// What this fact updates or repeats, before it is stored (SPEC §7).
 			similar := deps.engine.Search(ctx, recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3})
 			res, err := storeNote(ctx, deps.dirs, deps.home, deps.cfg, deps.sec, a.Kind, proj, a.Text)

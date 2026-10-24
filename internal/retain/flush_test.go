@@ -666,3 +666,34 @@ func TestForkStillCreatesItsDocument(t *testing.T) {
 		t.Fatalf("%+v %+v", r, e.hs.retains)
 	}
 }
+
+// A first segment the server never stores is not waited for forever: after
+// PendingLimit the session is quarantined, and releasing it resends it.
+func TestAFirstSegmentThatNeverLandsIsQuarantined(t *testing.T) {
+	e := newEnv(t)
+	e.hs.hidden = true
+	e.record("s1", "u1", "user", 0, "first")
+	e.flush("s1", Options{})
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.record("s1", "u2", "user", 30, "second")
+	if r := e.flush("s1", Options{}); r.Status != Retry {
+		t.Fatalf("%+v", r)
+	}
+	e.clock = e.clock.Add(PendingLimit)
+	if r := e.flush("s1", Options{}); r.Status != Quarantined || len(e.hs.retains) != 1 {
+		t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	e.hs.retains, e.hs.content = nil, map[string]string{}
+	e.hs.hidden = false
+	e.hs.docs = map[string]map[string]string{} // the server really lost it
+	if _, err := ReleaseQuarantine(e.f.Dirs.CursorsDir(), "s1"); err != nil {
+		t.Fatal(err)
+	}
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || len(e.hs.retains) != 1 || e.hs.retains[0].UpdateMode == "append" || e.hs.countLines("first") != 1 || e.hs.countLines("second") != 1 {
+		t.Errorf("%+v %+v", r, e.hs.retains)
+	}
+	if _, err := os.Stat(filepath.Join(e.f.Dirs.CursorsDir(), "s1.pending")); !os.IsNotExist(err) {
+		t.Error("the pending marker outlived the resend")
+	}
+}

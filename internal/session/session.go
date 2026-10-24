@@ -103,7 +103,9 @@ func (s Store) Update(id string, fn func(*State) error) error {
 	defer func() { _ = l.Release() }()
 	st, err := s.Load(id)
 	if err != nil {
-		st = State{} // a corrupt state starts over: hooks must not fail on it
+		// A corrupt state starts over, paused: a pause must never be lost
+		// (flushes treat an unreadable state as paused too).
+		st = State{Paused: true}
 	}
 	if err := fn(&st); err != nil {
 		return err
@@ -113,6 +115,19 @@ func (s Store) Update(id string, fn func(*State) error) error {
 		return err
 	}
 	return fsutil.WriteAtomic(s.path(id), raw, 0o600)
+}
+
+// Paused says whether session id is paused; an unreadable state counts as
+// paused (fail closed). An unknown session is not.
+func Paused(dir, id string) (bool, string) {
+	if checkID(id) != nil {
+		return false, ""
+	}
+	st, err := Store{Dir: dir}.Load(id)
+	if err != nil {
+		return true, "session state unreadable: treated as paused"
+	}
+	return st.Paused, "session paused"
 }
 
 // Latest is the most recently written session id, "" when there is none.

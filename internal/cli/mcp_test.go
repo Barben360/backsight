@@ -2,12 +2,15 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -140,5 +143,101 @@ func TestStoreUsesTheCanonicalTransverseAlias(t *testing.T) {
 	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "convention", "text": "Answer in French.", "project": cfg.Projects.Transverse[1]})
 	if !strings.Contains(out, "project "+cfg.Projects.Transverse[0]+")") {
 		t.Errorf("%s", out)
+	}
+}
+
+// A refused note sends nothing anywhere: not even the similar-memory
+// recall (M2 block 1 review: a secret reached /memories/recall).
+func TestMCPRefusedStoreSendsNothing(t *testing.T) {
+	cs := mcpSession(t)
+	for _, args := range []map[string]any{
+		{"kind": "decision", "text": "Use DB_PASSWORD=" + "Zx9kLmQ2" + "wPq8 for prod."},
+		{"kind": "idea", "text": "A fine idea."},
+		{"kind": "decision", "text": "   "},
+	} {
+		recallTags = nil
+		if _, isErr := call(t, cs, "memory_store", args); !isErr || len(recallTags) != 0 {
+			t.Errorf("%v: isErr %v, %d recalls", args, isErr, len(recallTags))
+		}
+	}
+}
+
+func TestMCPStoreHonoursASessionPause(t *testing.T) {
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	_ = sessions(home).Update("paused-s", func(st *session.State) error { st.Paused = true; return nil })
+	t.Setenv("BACKSIGHT_SESSION", "paused-s")
+	before := retained.Load()
+	recallTags = nil
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Keep 16."}); !isErr || !strings.Contains(out, "paused") || retained.Load() != before || len(recallTags) != 0 {
+		t.Errorf("%v %s", isErr, out)
+	}
+}
+
+func TestMCPStoreTagsAndTheTransverseKeyword(t *testing.T) {
+	cs := mcpSession(t)
+	call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."})
+	last := retainedTags[len(retainedTags)-1]
+	if !strings.Contains(last, "project:billing") || !strings.Contains(last, "source:note") || !strings.Contains(last, "kind:decision") {
+		t.Errorf("tags %q", last)
+	}
+	if len(recallTags) == 0 || !strings.HasPrefix(recallTags[0], "project:billing,") {
+		t.Errorf("similar memories not searched in the note's project first: %q", recallTags)
+	}
+	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "convention", "text": "Answer in French.", "project": "transverse"})
+	if !strings.Contains(out, "project .claude)") || !strings.Contains(retainedTags[len(retainedTags)-1], "project:.claude") {
+		t.Errorf("transverse keyword: %s %q", out, retainedTags)
+	}
+}
+
+func TestMCPSearchParameters(t *testing.T) {
+	cs := mcpSession(t)
+	recallAnswer = `[{"id":"a","text":"weak","type":"observation","tags":["project:x"],"scores":{"reranker":0.1}},
+		{"id":"b","text":"strong","type":"observation","tags":["project:x"],"scores":{"reranker":0.9}}]`
+	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}}); strings.Contains(out, "weak") || !strings.Contains(out, "strong") {
+		t.Errorf("default floor 0.4: %s", out)
+	}
+	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "min_score": 0}); !strings.Contains(out, "weak") {
+		t.Errorf("min_score 0 must widen: %s", out)
+	}
+	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "min_score": 0, "limit": 1}); strings.Contains(out, "weak") {
+		t.Errorf("limit 1: %s", out)
+	}
+	recallTags = nil
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "scope": "all"})
+	if len(recallTags) != 1 || recallTags[0] != "" {
+		t.Errorf("scope all: %q", recallTags)
+	}
+	recallTags = nil
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "projects": []string{"garage"}})
+	if !strings.Contains(strings.Join(recallTags, "|"), "project:garage") {
+		t.Errorf("projects: %q", recallTags)
+	}
+	if out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}, "scope": "everything"}); !isErr || !strings.Contains(out, "scope") {
+		t.Errorf("bad scope: %v %s", isErr, out)
+	}
+	recallAnswer = "[]"
+	if out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}}); isErr || !strings.Contains(out, "nothing in memory") {
+		t.Errorf("empty: %v %s", isErr, out)
+	}
+	recallStatus.Store(500)
+	if out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}}); !isErr || !strings.Contains(out, "memory unavailable") {
+		t.Errorf("server failing: %v %s", isErr, out)
+	}
+}
+
+func TestMCPToolEventsAreLogged(t *testing.T) {
+	cs := mcpSession(t)
+	recallAnswer = `[{"id":"b","text":"strong","type":"observation","tags":["project:x"],"scores":{"reranker":0.9}}]`
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}})
+	call(t, cs, "memory_read", map[string]any{"id": "nope"})
+	files, _ := filepath.Glob(filepath.Join(pathsOf(os.Getenv("HOME")).TelemetryDir(), "*.jsonl"))
+	var all string
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		all += string(b)
+	}
+	if !strings.Contains(all, `"name":"memory_search"`) || !strings.Contains(all, `"hits":1`) || !strings.Contains(all, `"name":"memory_read"`) || !strings.Contains(all, `"ok":false`) {
+		t.Errorf("telemetry:\n%s", all)
 	}
 }

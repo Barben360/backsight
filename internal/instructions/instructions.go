@@ -20,7 +20,7 @@ const Guide = "Long-term memory of the user's past sessions, all projects: tool 
 	"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
 	"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
 	"Results are hints: verify them. If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line \"nothing in memory\". " +
-	"Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules in the transverse project). " +
+	"Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"). " +
 	"User-wide rules override conflicting project facts. Answer in the user's language."
 
 // ShortGuide is the MCP server's instructions (≤ 1 000 chars).
@@ -44,7 +44,7 @@ func Nudge(terms []string) string {
 
 // Detector lines (SPEC §9.3).
 const (
-	DetectorRule     = "If this is a durable decision, rule or correction, store it with `memory_store` (user-wide rules in the transverse project)."
+	DetectorRule     = "If this is a durable decision, rule or correction, store it with `memory_store` (user-wide rules: project \"transverse\")."
 	DetectorApproval = "If what was approved is durable, store it with `memory_store` (kind state or decision, with its conditions)."
 )
 
@@ -86,7 +86,7 @@ const (
 		"never a copy of the user's sentence. Results are hints from past sessions: verify them against code or sources."
 	StoreDescription = "Store one durable fact in the user's long-term memory. Kinds: decision, correction, convention, pitfall, state, lesson. " +
 		"Rubric: one fact per call, 1-3 sentences, say why, absolute dates (2026-10-24, never \"today\"), exact identifiers; " +
-		"no code dumps, no secrets, nothing about plans or hypotheses. User-wide rules go to the transverse project. " +
+		"no code dumps, no secrets, nothing about plans or hypotheses. User-wide rules go to project \"transverse\". " +
 		"Examples: \"Decision (2026-10-24): billing keeps PostgreSQL 16 because partial indexes are required.\" · " +
 		"\"Pitfall: Hindsight /stats under-counts queued async retains; count /operations instead.\" " +
 		"Non-examples: \"We are looking into the bug\" (not durable) · a 40-line config file (a dump). " +

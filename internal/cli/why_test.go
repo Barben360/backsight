@@ -26,7 +26,7 @@ func TestWhyShowsTheLastInjectionsAndTheirRules(t *testing.T) {
 	})
 	t.Setenv("BACKSIGHT_SESSION", "s1")
 	code, out, _ := run(t, "why")
-	if code != output.OK || !strings.Contains(out, "memory 7") || !strings.Contains(out, "gap") || !strings.Contains(out, "0.71") || strings.Contains(out, "memory 2 ") {
+	if code != output.OK || !strings.Contains(out, "memory 7") || !strings.Contains(out, "memory 3 ") || !strings.Contains(out, "gap") || !strings.Contains(out, "0.71") || strings.Contains(out, "memory 2 ") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 	if code, out, _ := run(t, "why", "--last", "10"); code != output.OK || !strings.Contains(out, "memory 1") {
@@ -49,8 +49,12 @@ func TestWhyPicksTheGivenOrTheLatestSession(t *testing.T) {
 	if _, out, _ := run(t, "why"); !strings.Contains(out, "new memory") {
 		t.Errorf("latest: %s", out)
 	}
-	if _, out, _ := run(t, "why", "--session", "old"); !strings.Contains(out, "old memory") {
-		t.Errorf("--session: %s", out)
+	t.Setenv("BACKSIGHT_SESSION", "old") // this session's env beats the latest file
+	if _, out, _ := run(t, "why"); !strings.Contains(out, "old memory") {
+		t.Errorf("env: %s", out)
+	}
+	if _, out, _ := run(t, "why", "--session", "new"); !strings.Contains(out, "new memory") {
+		t.Errorf("--session beats the env: %s", out)
 	}
 }
 

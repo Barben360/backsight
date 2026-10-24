@@ -161,7 +161,7 @@ func (f *fakeCompose) subcommands() []string {
 // retained counts retain items the fake server accepted; llmInput is the
 // bank's LLM input-token total the fake reports, raised by llmPerRetain on
 // each accepted item.
-var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter, retainStatus atomic.Int64
+var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter, retainStatus, recallStatus atomic.Int64
 
 // statsDown makes the LLM usage endpoint fail; retainedTags records the
 // tags of every accepted item.
@@ -194,6 +194,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	statsCalls.Store(0)
 	statsFailAfter.Store(0)
 	retainStatus.Store(0)
+	recallStatus.Store(0)
 	statsDown.Store(false)
 	extractFails.Store(false)
 	retainedTags, queueAtRetain = nil, nil
@@ -234,6 +235,10 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			recallTags = append(recallTags, strings.Join(body.Tags, ","))
+			if st := recallStatus.Load(); st != 0 {
+				w.WriteHeader(int(st))
+				return
+			}
 			_, _ = w.Write([]byte(`{"results":` + recallAnswer + `}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
 			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]

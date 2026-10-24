@@ -46,10 +46,11 @@ func newEngine(cfg config.Config, sec config.Secrets) (*recall.Engine, error) {
 // related scope adds asked-for projects and those whose names the queries
 // mention (entity index).
 func searchMemory(cmd *cobra.Command, d paths.Dirs, cfg config.Config, eng *recall.Engine, current string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
+	var related []string
 	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil {
-		projects = append(projects, idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)...)
+		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
-	return eng.Search(cmd.Context(), recall.Query{Queries: queries, Current: current, Projects: projects, All: all, Limit: limit, MinScore: minScore})
+	return eng.Search(cmd.Context(), recall.Query{Queries: queries, Current: current, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
 }
 
 func newSearchCmd(e *env) *cobra.Command {
@@ -113,7 +114,7 @@ func searchText(r recall.Result) string {
 	for _, p := range order {
 		fmt.Fprintf(&b, "[%s]\n", p)
 		for _, h := range groups[p] {
-			fmt.Fprintf(&b, "- %s (%s ago, %s, %.2f)\n", h.Text, h.Age, h.ID, h.Score)
+			fmt.Fprintf(&b, "- %s (%s, %s ago, %s, %.2f)\n", h.Text, h.Date.Format("2006-01-02"), h.Age, h.ID, h.Score)
 		}
 	}
 	return b.String()
@@ -148,7 +149,16 @@ func newReadCmd(e *env) *cobra.Command {
 
 func readText(m hindsight.MemoryDetail) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n%s · project %s · %s", m.Text, m.Type, recall.ProjectOf(m.Tags), m.MentionedAt)
+	fmt.Fprintf(&b, "%s\n\n%s · project %s · mentioned %s", m.Text, m.Type, recall.ProjectOf(m.Tags), m.MentionedAt)
+	if m.OccurredStart != "" {
+		fmt.Fprintf(&b, " · occurred %s", m.OccurredStart)
+		if m.OccurredEnd != "" && m.OccurredEnd != m.OccurredStart {
+			fmt.Fprintf(&b, " → %s", m.OccurredEnd)
+		}
+	}
+	if m.DocumentID != "" {
+		fmt.Fprintf(&b, " · document %s", m.DocumentID)
+	}
 	if m.State != "" && m.State != "valid" {
 		fmt.Fprintf(&b, " · %s", m.State)
 	}

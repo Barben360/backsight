@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
@@ -187,13 +188,20 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 				cur.Offset, cur.LastUUID = recs[skip-1].End, recs[skip-1].UUID
 				recs = recs[skip:]
 			}
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound && f.pendingMark(sid) == resendMark:
+			// Released from quarantine after a first segment the server
+			// never stored: resend the whole session as segment 1.
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
 			skip := 0
 			for skip < len(recs) && f.Index.Has(recs[skip].UUID) {
 				if f.Index.Has(sessionKey(sid, recs[skip].UUID)) {
 					// This session's own records went out, but the document
 					// is not readable yet (its async retain is still running):
-					// a new segment 1 would replace it (issue 101).
+					// a new segment 1 would replace it (issue 101). After
+					// PendingLimit the retain is taken as lost: quarantine.
+					if f.waitedTooLong(sid, now) {
+						return f.quarantine(res, &cur, "the server never stored this session's first segment; retain retry-quarantine resends the session")
+					}
 					return fail(Retry, "the server has not stored this session's earlier segment yet; retried later")
 				}
 				skip++ // a fork copies its parent's records (decision 0038)
@@ -318,6 +326,9 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 
 func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 	res.Status, res.Detail = status, detail
+	if status == Sent {
+		_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), res.Session)) // the document exists now
+	}
 	if fp, err := Fingerprint(cur.Transcript, cur.Offset); err == nil {
 		cur.Fingerprint = fp
 	}
@@ -395,6 +406,32 @@ func (f *Flusher) paused(sid string) (bool, string) {
 		return true, "session state unreadable: treated as paused"
 	}
 	return s.Paused, "session paused"
+}
+
+// PendingLimit: how long a flush waits for a first segment the server has
+// not stored yet before quarantining the session.
+const PendingLimit = 24 * time.Hour
+
+// resendMark in <sid>.pending: the session was released from quarantine
+// and is resent whole.
+const resendMark = "resend"
+
+func pendingPath(cursorDir, sid string) string { return filepath.Join(cursorDir, sid+".pending") }
+
+func (f *Flusher) pendingMark(sid string) string {
+	raw, _ := os.ReadFile(pendingPath(f.Dirs.CursorsDir(), sid))
+	return strings.TrimSpace(string(raw))
+}
+
+// waitedTooLong records when the flush first found sid's first segment
+// pending and says whether that is longer ago than PendingLimit.
+func (f *Flusher) waitedTooLong(sid string, now time.Time) bool {
+	if mark := f.pendingMark(sid); mark != "" {
+		since, err := time.Parse(time.RFC3339, mark)
+		return err == nil && now.Sub(since) >= PendingLimit
+	}
+	_ = fsutil.WriteAtomic(pendingPath(f.Dirs.CursorsDir(), sid), []byte(now.UTC().Format(time.RFC3339)), 0o600)
+	return false
 }
 
 // lockSession takes the per-session lock, taking over one whose owner died

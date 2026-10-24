@@ -308,6 +308,12 @@ func ReleaseQuarantine(cursorDir, sid string) ([]string, error) {
 		if err := os.Remove(p); err != nil {
 			return released, err
 		}
+		if _, err := os.Stat(pendingPath(cursorDir, s)); err == nil {
+			// quarantined for a first segment never stored: resend it whole
+			if err := fsutil.WriteAtomic(pendingPath(cursorDir, s), []byte(resendMark), 0o600); err != nil {
+				return released, err
+			}
+		}
 		released = append(released, s)
 	}
 	return released, nil
