@@ -124,6 +124,7 @@ func TestValidate(t *testing.T) {
 		{"zero hits", func(c *Config) { c.Recall.PromptHits = 0 }, "recall.prompt_hits"},
 		{"preset", func(c *Config) { c.Embeddings.Preset = "huge" }, "embeddings.preset"},
 		{"provider empty", func(c *Config) { c.LLM.Provider = "" }, "llm.provider"},
+		{"negative price", func(c *Config) { c.LLM.PriceOutput = -1 }, "llm.price_output"},
 		{"no transverse alias", func(c *Config) { c.Projects.Transverse = nil }, "projects.transverse"},
 		{"outbox order", func(c *Config) { c.Hooks.OutboxWarnMB = 600 }, "hooks.outbox_warn_mb"},
 		{"backup keep", func(c *Config) { c.Backup.KeepDaily = -1 }, "backup.keep_daily"},

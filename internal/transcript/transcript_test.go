@@ -176,3 +176,15 @@ func TestMultiBlockAssistantRecord(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+func TestToolUsesAreKept(t *testing.T) {
+	in := `{"type":"assistant","uuid":"a1","sessionId":"s","timestamp":"2026-10-24T09:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t7","name":"mcp__hindsight__hindsight_ingest_document","input":{"title":"Décision : x","content":"y"}}]}}` + "\n"
+	recs, _, _ := Read(strings.NewReader(in), 0)
+	if len(recs) != 1 || len(recs[0].Tools) != 1 {
+		t.Fatalf("%+v", recs)
+	}
+	tu := recs[0].Tools[0]
+	if tu.ID != "t7" || tu.Name != "mcp__hindsight__hindsight_ingest_document" || string(tu.Input["title"]) != `"Décision : x"` {
+		t.Errorf("%+v", tu)
+	}
+}

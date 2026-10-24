@@ -82,6 +82,11 @@ type LLM struct {
 	Provider string `toml:"provider" json:"provider"`
 	Model    string `toml:"model" json:"model"`
 	BaseURL  string `toml:"base_url" json:"base_url"`
+	// Prices per million tokens; 0 uses the binary's table (decision 0051).
+	PriceInput  float64 `toml:"price_input" json:"price_input"`
+	PriceCached float64 `toml:"price_cached" json:"price_cached"`
+	PriceOutput float64 `toml:"price_output" json:"price_output"`
+	Currency    string  `toml:"currency" json:"currency"`
 }
 
 type Embeddings struct {
@@ -125,7 +130,7 @@ func Default(d paths.Dirs, home string) Config {
 		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
 			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000},
-		LLM:        LLM{Provider: "deepseek", Model: "deepseek-v4-flash"},
+		LLM:        LLM{Provider: "deepseek", Model: "deepseek-v4-flash", Currency: "USD"},
 		Embeddings: Embeddings{Preset: "multilingual"},
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
@@ -243,6 +248,11 @@ func (c Config) Validate() error {
 	}
 	if c.LLM.Provider == "" {
 		bad("llm.provider", "must not be empty")
+	}
+	for key, v := range map[string]float64{"llm.price_input": c.LLM.PriceInput, "llm.price_cached": c.LLM.PriceCached, "llm.price_output": c.LLM.PriceOutput} {
+		if v < 0 {
+			bad(key, "must be ≥ 0, got %v", v)
+		}
 	}
 	oneOf("embeddings.preset", c.Embeddings.Preset, "multilingual", "english")
 	oneOf("network.exposure", c.Network.Exposure, "loopback", "private")

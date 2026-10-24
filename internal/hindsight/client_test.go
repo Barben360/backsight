@@ -374,3 +374,17 @@ func TestRetainAndGetDocument(t *testing.T) {
 		t.Errorf("want NotFound, got %v", err)
 	}
 }
+
+func TestLLMTokensSumsBuckets(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/default/banks/b/llm-requests/stats" || r.URL.Query().Get("period") != "30d" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"buckets":[{"tokens":{"input":100,"output":10,"cached":40,"thoughts":5}},{"tokens":{"input":50,"output":5,"cached":0,"thoughts":0}}]}`))
+	})
+	got, err := c.LLMTokens(context.Background(), "b", "30d")
+	if err != nil || got != (LLMTokens{Input: 150, Output: 15, Cached: 40, Thoughts: 5}) {
+		t.Errorf("%+v %v", got, err)
+	}
+}

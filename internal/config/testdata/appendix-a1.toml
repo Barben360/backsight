@@ -34,6 +34,10 @@ session_budget_chars = 6000
 provider = "deepseek"
 model = "deepseek-v4-flash"
 base_url = ""
+price_input = 0.0
+price_cached = 0.0
+price_output = 0.0
+currency = "USD"
 [embeddings]
 preset = "multilingual"
 [network]

@@ -32,6 +32,14 @@ type Record struct {
 	Start     int64 // offset of the line
 	End       int64 // offset after its newline
 	Turns     []Turn
+	Tools     []ToolUse // the record's tool calls, for backfill's replayed notes
+}
+
+// ToolUse is one tool call with its raw input.
+type ToolUse struct {
+	ID    string
+	Name  string
+	Input map[string]json.RawMessage
 }
 
 // Stats describe one read.
@@ -54,6 +62,7 @@ type rawRecord struct {
 }
 
 type block struct {
+	ID    string                     `json:"id"`
 	Type  string                     `json:"type"`
 	Text  string                     `json:"text"`
 	Name  string                     `json:"name"`
@@ -137,21 +146,21 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 			ts = prevTS // missing or malformed: the previous record's time
 		}
 		prevTS = ts
-		turns := normalise(rr, ts)
+		turns, tools := normalise(rr, ts)
 		if len(turns) == 0 {
 			continue
 		}
 		recs = append(recs, Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Timestamp: ts,
-			Start: start, End: off, Turns: turns})
+			Start: start, End: off, Turns: turns, Tools: tools})
 	}
 }
 
-func normalise(rr rawRecord, ts time.Time) []Turn {
+func normalise(rr rawRecord, ts time.Time) ([]Turn, []ToolUse) {
 	var msg struct {
 		Content json.RawMessage `json:"content"`
 	}
 	if json.Unmarshal(rr.Message, &msg) != nil {
-		return nil
+		return nil, nil
 	}
 	prose := func(text string) []Turn {
 		if rr.Type == "user" {
@@ -165,23 +174,25 @@ func normalise(rr rawRecord, ts time.Time) []Turn {
 	}
 	var s string
 	if json.Unmarshal(msg.Content, &s) == nil {
-		return prose(s)
+		return prose(s), nil
 	}
 	var blocks []block
 	if json.Unmarshal(msg.Content, &blocks) != nil {
-		return nil
+		return nil, nil
 	}
 	var texts []string
 	var actions []Turn
+	var tools []ToolUse
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
 			texts = append(texts, b.Text)
 		case "tool_use":
 			actions = append(actions, Turn{Role: "action", Content: action(b), Timestamp: ts})
+			tools = append(tools, ToolUse{ID: b.ID, Name: b.Name, Input: b.Input})
 		}
 	}
-	return append(prose(strings.Join(texts, "\n")), actions...)
+	return append(prose(strings.Join(texts, "\n")), actions...), tools
 }
 
 var targetKeys = []string{"file_path", "path", "notebook_path", "command", "pattern", "query", "url", "name", "id"}

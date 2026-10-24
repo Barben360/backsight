@@ -342,3 +342,34 @@ func (c *Client) GetDocument(ctx context.Context, bank, id string) (Document, er
 	var d Document
 	return d, c.get(ctx, bankPath(bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A")), nil, &d)
 }
+
+// LLMTokens are the bank's summed LLM token counts over a period.
+type LLMTokens struct {
+	Input, Output, Cached, Thoughts int64
+}
+
+// LLMTokens sums the bank's llm-requests/stats buckets over period (e.g.
+// "30d"): the measured spend of extraction and consolidation.
+func (c *Client) LLMTokens(ctx context.Context, bank, period string) (LLMTokens, error) {
+	var out struct {
+		Buckets []struct {
+			Tokens struct {
+				Input    int64 `json:"input"`
+				Output   int64 `json:"output"`
+				Cached   int64 `json:"cached"`
+				Thoughts int64 `json:"thoughts"`
+			} `json:"tokens"`
+		} `json:"buckets"`
+	}
+	var t LLMTokens
+	if err := c.get(ctx, bankPath(bank, "/llm-requests/stats"), url.Values{"period": {period}}, &out); err != nil {
+		return t, err
+	}
+	for _, b := range out.Buckets {
+		t.Input += b.Tokens.Input
+		t.Output += b.Tokens.Output
+		t.Cached += b.Tokens.Cached
+		t.Thoughts += b.Tokens.Thoughts
+	}
+	return t, nil
+}
