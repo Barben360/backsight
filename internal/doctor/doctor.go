@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/claudecode"
-	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/target"
 )
 
 type Status string
@@ -40,19 +41,11 @@ type Check struct {
 	Fix     string `json:"fix,omitempty"`
 }
 
-// Target is the Hindsight server doctor inspected.
-type Target struct {
-	URL    string `json:"url"`
-	Bank   string `json:"bank"`
-	Source string `json:"source"` // config | reference
-	token  string
-}
-
 type Report struct {
-	Checks   []Check `json:"checks"`
-	Server   *Target `json:"server,omitempty"`
-	Errors   int     `json:"errors"`
-	Warnings int     `json:"warnings"`
+	Checks   []Check        `json:"checks"`
+	Server   *target.Target `json:"server,omitempty"`
+	Errors   int            `json:"errors"`
+	Warnings int            `json:"warnings"`
 }
 
 // Env is everything doctor reads; tests replace the probes.
@@ -63,71 +56,88 @@ type Env struct {
 	ManagedDir string
 	Docker     func(context.Context) (string, error)
 	GPUs       func() []string
+	FreeBytes  func(path string) (uint64, error)
 	Timeout    time.Duration // per Hindsight call
 }
 
-// retentionFloor is the retention below which doctor warns (decision 0041).
-const retentionFloor = 365
+const (
+	retentionFloor = 365 // days; below it doctor warns (decision 0041)
+	diskWarn       = 2 << 30
+	diskError      = 256 << 20
+)
 
 // Run performs every check in a fixed order.
 func Run(ctx context.Context, env Env) Report {
 	var r Report
-	add := func(c Check) {
-		r.Checks = append(r.Checks, c)
-		switch c.Status {
-		case Error:
-			r.Errors++
-		case Warn:
-			r.Warnings++
+	add := func(cs ...Check) {
+		for _, c := range cs {
+			r.Checks = append(r.Checks, c)
+			switch c.Status {
+			case Error:
+				r.Errors++
+			case Warn:
+				r.Warnings++
+			}
 		}
 	}
 
-	cfgCheck, target := checkConfig(env)
+	cfgCheck, tg := checkConfig(env)
 	add(cfgCheck)
 	add(checkDocker(ctx, env))
 
 	loc := claudecode.Locate(env.Home, env.Getenv)
 	ref, refErr := reference.Discover(env.Home, loc)
-	if target == nil && ref != nil && ref.URL != "" {
-		target = &Target{URL: ref.URL, Bank: ref.Bank, Source: "reference", token: string(ref.Token)}
+	if tg == nil {
+		tg = target.FromReference(ref)
 	}
-	r.Server = target
-	for _, c := range checkServer(ctx, env, target) {
-		add(c)
+	r.Server = tg
+	srv, cl := checkServer(ctx, env, tg)
+	add(srv)
+	bank := checkBank(ctx, cl, tg)
+	add(bank)
+	if bank.Status == OK || bank.Status == Warn {
+		add(checkUntagged(ctx, cl, tg.Bank))
+	} else {
+		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
 	}
+	add(checkMaintenance(env.Dirs))
+	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
 	add(checkGPU(env.GPUs()))
 	return r
 }
 
-func checkConfig(env Env) (Check, *Target) {
+func skipReason(srv Check) string {
+	switch srv.Status {
+	case Info:
+		return "no server"
+	case Error:
+		return "server not usable"
+	}
+	return "bank not usable"
+}
+
+func checkConfig(env Env) (Check, *target.Target) {
 	c := Check{ID: "config"}
-	path := env.Dirs.ConfigFile()
-	cfg, err := config.Load(path, env.Dirs, env.Home)
+	tg, err := target.FromConfig(env.Dirs, env.Home)
+	var ce *target.ConfigError
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		c.Status, c.Summary = Info, "backsight is not set up yet"
-		c.Detail = "expected at " + path + "; until setup exists (M4) doctor inspects the reference install"
+		c.Detail = "expected at " + env.Dirs.ConfigFile() + "; until setup exists (M4) doctor inspects the reference install"
+		return c, nil
+	case errors.As(err, &ce) && ce.File == env.Dirs.SecretsFile():
+		c.Status, c.Summary, c.Detail = Error, "secrets.toml cannot be used", err.Error()
+		c.Fix = "chmod 600 " + ce.File
 		return c, nil
 	case err != nil:
 		c.Status, c.Summary, c.Detail = Error, "config.toml is invalid", err.Error()
-		c.Fix = "correct the key named in the detail in " + path
+		c.Fix = "correct the key named in the detail in " + env.Dirs.ConfigFile()
 		return c, nil
 	}
-	if err := cfg.Validate(); err != nil {
-		c.Status, c.Summary, c.Detail = Error, "config.toml is invalid", err.Error()
-		c.Fix = "correct the key named in the detail in " + path
-		return c, nil
-	}
-	sec, err := config.LoadSecrets(env.Dirs.SecretsFile())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		c.Status, c.Summary, c.Detail = Error, "secrets.toml cannot be used", err.Error()
-		c.Fix = "chmod 600 " + env.Dirs.SecretsFile()
-		return c, nil
-	}
-	c.Status, c.Summary = OK, "config "+path
-	return c, &Target{URL: cfg.Server.URL, Bank: cfg.Server.Bank, Source: "config", token: sec.APIKey}
+	c.Status, c.Summary = OK, "config "+env.Dirs.ConfigFile()
+	return c, tg
 }
 
 func checkDocker(ctx context.Context, env Env) Check {
@@ -146,70 +156,147 @@ func checkDocker(ctx context.Context, env Env) Check {
 	return c
 }
 
-func checkServer(ctx context.Context, env Env, t *Target) []Check {
-	skipped := func(why string) []Check {
-		return []Check{{ID: "bank", Status: Info, Summary: "skipped: " + why}, {ID: "untagged", Status: Info, Summary: "skipped: " + why}}
-	}
+// checkServer returns the server check and, when it passed, a client.
+func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsight.Client) {
+	c := Check{ID: "server"}
 	if t == nil {
-		return append([]Check{{ID: "server", Status: Info, Summary: "no server configured"}}, skipped("no server")...)
+		c.Status, c.Summary = Info, "no server configured"
+		return c, nil
 	}
-	srv := Check{ID: "server"}
-	cl, err := hindsight.New(t.URL, t.token, env.Timeout)
+	from := " (from " + t.Source + ")"
+	cl, err := hindsight.New(t.URL, string(t.Token), env.Timeout)
 	if err != nil {
-		srv.Status, srv.Summary = Error, err.Error()
-		return append([]Check{srv}, skipped("no usable server URL")...)
+		c.Status, c.Summary = Error, "unusable server URL"+from
+		c.Detail, c.Fix = err.Error(), "correct the server URL in the "+t.Source
+		return c, nil
 	}
 	var apiErr *hindsight.APIError
+	var v hindsight.Version
 	if _, err = cl.Health(ctx); err == nil {
-		var v hindsight.Version
-		if v, err = cl.Version(ctx); err == nil {
-			srv.Status, srv.Summary = OK, fmt.Sprintf("Hindsight %s at %s (from %s)", v.APIVersion, t.URL, t.Source)
-		}
+		v, err = cl.Version(ctx)
 	}
 	switch {
 	case err == nil:
-	case errors.Is(err, hindsight.ErrUnreachable):
-		srv.Status, srv.Summary = Error, "Hindsight unreachable at "+t.URL+" (from "+t.Source+")"
-		srv.Fix = "start the server (the reference stack: docker compose up -d in its directory)"
+	case errors.Is(err, hindsight.ErrUnreachable), errors.Is(err, hindsight.ErrTimeout):
+		c.Status, c.Summary = Error, "Hindsight unreachable at "+t.Display()+from
+		c.Detail = err.Error()
+		c.Fix = "start the server (the reference stack: docker compose up -d in its directory)"
+		return c, nil
 	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.Unauthorized:
-		srv.Status, srv.Summary = Error, "the server rejected the API key (from "+t.Source+")"
-		srv.Fix = "check the key the " + t.Source + " uses against the server's"
+		c.Status, c.Summary = Error, "the server rejected the API key"+from
+		c.Fix = "check the key the " + t.Source + " uses against the server's"
+		return c, nil
 	default:
-		srv.Status, srv.Summary, srv.Detail = Error, "Hindsight at "+t.URL+" answered with an error", err.Error()
+		c.Status, c.Summary, c.Detail = Error, "Hindsight at "+t.Display()+" answered with an error"+from, err.Error()
+		return c, nil
 	}
-	if srv.Status != OK {
-		return append([]Check{srv}, skipped("server not usable")...)
+	c.Status, c.Summary = OK, fmt.Sprintf("Hindsight %s at %s%s", v.APIVersion, t.Display(), from)
+	if t.Cleartext() {
+		c.Status = Warn
+		c.Detail = "the API key travels unencrypted to a non-loopback host"
+		c.Fix = "reach the server over a tailnet or WireGuard, or keep it on loopback until the TLS proxy exists"
 	}
+	return c, cl
+}
 
-	bank := Check{ID: "bank"}
+func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Check {
+	c := Check{ID: "bank"}
+	if cl == nil {
+		c.Status, c.Summary = Info, "skipped: "
+		if t == nil {
+			c.Summary += "no server"
+		} else {
+			c.Summary += "server not usable"
+		}
+		return c
+	}
 	banks, err := cl.Banks(ctx)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Error, "cannot list banks", err.Error()
+		return c
+	}
 	found := false
 	for _, b := range banks {
 		found = found || b.ID == t.Bank
 	}
-	switch {
-	case err != nil:
-		bank.Status, bank.Summary, bank.Detail = Error, "cannot list banks", err.Error()
-	case !found:
-		bank.Status, bank.Summary = Error, "bank "+t.Bank+" does not exist on the server"
-		bank.Fix = "check the bank id in the " + t.Source
-	}
-	if bank.Status != "" {
-		return []Check{srv, bank, {ID: "untagged", Status: Info, Summary: "skipped: bank not usable"}}
+	if !found {
+		c.Status, c.Summary = Error, "bank "+t.Bank+" does not exist on the server"
+		c.Fix = "check the bank id in the " + t.Source
+		return c
 	}
 	st, err := cl.BankStats(ctx, t.Bank)
 	if err != nil {
-		bank.Status, bank.Summary, bank.Detail = Error, "cannot read bank "+t.Bank, err.Error()
-		return []Check{srv, bank, {ID: "untagged", Status: Info, Summary: "skipped: bank not usable"}}
+		c.Status, c.Summary, c.Detail = Error, "cannot read bank "+t.Bank, err.Error()
+		return c
 	}
-	bank.Status = OK
-	bank.Summary = fmt.Sprintf("bank %s: %d memories, %d documents, %d awaiting consolidation", t.Bank, st.TotalNodes, st.TotalDocuments, st.PendingConsolidation)
+	c.Status = OK
+	c.Summary = fmt.Sprintf("bank %s: %d memories, %d documents, %d awaiting consolidation", t.Bank, st.TotalNodes, st.TotalDocuments, st.PendingConsolidation)
 	if st.FailedOperations > 0 || st.FailedConsolidation > 0 {
-		bank.Status = Warn
-		bank.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
-		bank.Fix = "open the Hindsight UI operations page to see the provider errors"
+		c.Status = Warn
+		c.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
+		c.Fix = "open the Hindsight UI operations page to see the provider errors"
 	}
-	return []Check{srv, bank, checkUntagged(ctx, cl, t.Bank)}
+	return c
+}
+
+// checkMaintenance reports the maintenance lock (§11.4): owner when held,
+// and a stale lock as such, never removed here.
+func checkMaintenance(d paths.Dirs) Check {
+	c := Check{ID: "maintenance", Status: OK, Summary: "no maintenance in progress"}
+	l, err := state.TryAcquire(d.MaintenanceLock(), "doctor")
+	var held *state.HeldError
+	switch {
+	case err == nil:
+		_ = l.Release()
+	case errors.As(err, &held) && held.Stale:
+		c.Status, c.Summary, c.Detail = Warn, "stale maintenance lock", held.Error()
+		c.Fix = "check that no backsight update, backup or restore is running, then remove " + held.Path
+	case errors.As(err, &held):
+		c.Status, c.Summary = Info, fmt.Sprintf("maintenance in progress: %s (pid %d, since %s)", held.Owner.Command, held.Owner.PID, held.Owner.Since.Format(time.RFC3339))
+	default:
+		c.Status, c.Summary, c.Detail = Warn, "cannot check the maintenance lock", err.Error()
+	}
+	return c
+}
+
+func checkDisk(env Env) Check {
+	c := Check{ID: "disk", Status: OK}
+	var parts []string
+	for _, dir := range []string{env.Dirs.Data, env.Dirs.State} {
+		probe := existingParent(dir)
+		free, err := env.FreeBytes(probe)
+		if err != nil {
+			c.Status, c.Summary, c.Detail = Info, "free space unknown", err.Error()
+			return c
+		}
+		parts = append(parts, fmt.Sprintf("%s: %.1f GB free", dir, float64(free)/1e9))
+		switch {
+		case free < diskError:
+			c.Status = Error
+		case free < diskWarn && c.Status == OK:
+			c.Status = Warn
+		}
+	}
+	c.Summary = strings.Join(parts, "; ")
+	if c.Status != OK {
+		c.Fix = "free disk space: outboxes, backups and the server's database grow there"
+	}
+	return c
+}
+
+// existingParent is dir or its nearest existing ancestor (before setup the
+// directories do not exist yet).
+func existingParent(dir string) string {
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
 }
 
 func checkUntagged(ctx context.Context, cl *hindsight.Client, bank string) Check {
@@ -264,11 +351,14 @@ func checkRetention(loc claudecode.Location, managedDir string) Check {
 		c.Status, c.Summary, c.Detail = Warn, "cannot read the transcript retention", err.Error()
 		return c
 	}
-	tr, _ := claudecode.ScanTranscripts(loc.Projects)
+	tr, scanErr := claudecode.ScanTranscripts(loc.Projects)
 	c.Summary = fmt.Sprintf("Claude Code keeps transcripts %d days (%s)", ret.EffectiveDays, ret.Source)
 	c.Detail = fmt.Sprintf("%d transcript(s), %.1f MB", tr.Count, float64(tr.Bytes)/(1<<20))
 	if !tr.Oldest.IsZero() {
 		c.Detail += ", oldest " + tr.Oldest.UTC().Format("2006-01-02")
+	}
+	if scanErr != nil {
+		c.Detail += "; transcripts not counted: " + scanErr.Error()
 	}
 	if ret.EffectiveDays >= retentionFloor {
 		c.Status = OK

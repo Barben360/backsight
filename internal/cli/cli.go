@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 // env is what every command needs: where to write and whether to emit JSON.
@@ -25,6 +27,20 @@ func (e *env) emit(command string, data any, text func() string) error {
 	}
 	_, err := io.WriteString(e.stdout, text())
 	return err
+}
+
+// machine resolves backsight's directories and the user's home, the
+// starting point of every command that reads the machine.
+func machine() (paths.Dirs, string, error) {
+	d, err := paths.Default()
+	if err != nil {
+		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	return d, home, nil
 }
 
 // report prints a result that may carry a failure: the data is always shown
@@ -88,6 +104,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	}
 	code := output.CodeOf(err)
 	var ue usageError
+	// cobra reports an unknown subcommand as a plain error with this prefix.
 	if errors.As(err, &ue) || strings.HasPrefix(err.Error(), "unknown command") {
 		code = output.Usage
 		err = &output.Error{Code: code, Message: err.Error()}

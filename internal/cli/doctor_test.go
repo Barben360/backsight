@@ -25,6 +25,7 @@ func isolate(t *testing.T) string {
 		e.ManagedDir = filepath.Join(home, "etc")
 		e.Docker = func(context.Context) (string, error) { return "28.1.1", nil }
 		e.GPUs = func() []string { return nil }
+		e.FreeBytes = func(string) (uint64, error) { return 50e9, nil }
 	}
 	t.Cleanup(func() { probes = old })
 	return home
@@ -73,9 +74,23 @@ func TestDoctorText(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	for _, want := range []string{"config", "retention", "WARN", "fix:", "cleanupPeriodDays"} {
+	for _, want := range []string{"info   config", "WARN   retention", "fix: set \"cleanupPeriodDays\": 3650", "0 error(s), 1 warning(s)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("text output lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDoctorTextErrorExitsBlockedWithoutStderr(t *testing.T) {
+	home := isolate(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
+	_ = os.WriteFile(cfg, []byte("[recall]\nmin_scor = 1\n"), 0o600)
+	code, out, errOut := run(t, "doctor")
+	if code != output.Blocked || !strings.Contains(out, "ERROR  config") || !strings.Contains(out, "1 error(s)") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if errOut != "" {
+		t.Errorf("the report already says it; stderr must stay empty: %q", errOut)
 	}
 }

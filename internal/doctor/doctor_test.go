@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func put(t *testing.T, p, content string, mode os.FileMode) {
@@ -45,6 +47,7 @@ func newFixture(t *testing.T) *fixture {
 		ManagedDir: filepath.Join(root, "etc"),
 		Docker:     func(context.Context) (string, error) { return "28.1.1", nil },
 		GPUs:       func() []string { return nil },
+		FreeBytes:  func(string) (uint64, error) { return 50e9, nil },
 		Timeout:    2 * time.Second,
 	}
 	return f
@@ -77,9 +80,25 @@ func expect(t *testing.T, c Check, status Status, inSummary string) {
 
 // fakeServer fakes the endpoints doctor reads; observations carries tags lists.
 func fakeServer(t *testing.T, observations ...string) *httptest.Server {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return fakeServerWith(t, nil, observations...)
+}
+
+// fakeServerWith answers paths in overrides with their status and body first.
+func fakeServerWith(t *testing.T, overrides map[string]reply, observations ...string) *httptest.Server {
+	srv := httptest.NewServer(fakeHandler(overrides, observations...))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func fakeHandler(overrides map[string]reply, observations ...string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fakevalue" {
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if o, ok := overrides[r.URL.EscapedPath()]; ok {
+			w.WriteHeader(o.status)
+			_, _ = w.Write([]byte(o.body))
 			return
 		}
 		switch r.URL.EscapedPath() {
@@ -100,10 +119,18 @@ func fakeServer(t *testing.T, observations ...string) *httptest.Server {
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	})
 }
+
+type reply struct {
+	status int
+	body   string
+}
+
+const (
+	statsPath = "/v1/default/banks/coding-agent%3A%3Amemoire/stats"
+	listPath  = "/v1/default/banks/coding-agent%3A%3Amemoire/memories/list"
+)
 
 func TestNothingInstalled(t *testing.T) {
 	f := newFixture(t)
@@ -281,5 +308,176 @@ func TestDetectGPUsLinux(t *testing.T) {
 	}
 	if got := detectGPUs("darwin", "arm64", dev); len(got) != 1 || !strings.Contains(got[0], "Metal") {
 		t.Errorf("darwin arm64: %v", got)
+	}
+}
+
+func TestServerFailureBranches(t *testing.T) {
+	cases := []struct {
+		name      string
+		overrides map[string]reply
+		check     string
+		status    Status
+		inSummary string
+	}{
+		{"failed operations", map[string]reply{statsPath: {200, `{"total_nodes":3,"failed_operations":2}`}}, "bank", Warn, "bank coding-agent::memoire"},
+		{"failed consolidation", map[string]reply{statsPath: {200, `{"total_nodes":3,"failed_consolidation":1}`}}, "bank", Warn, "bank coding-agent::memoire"},
+		{"stats error", map[string]reply{statsPath: {500, `boom`}}, "bank", Error, "cannot read bank"},
+		{"banks error", map[string]reply{"/v1/default/banks": {500, `boom`}}, "bank", Error, "cannot list banks"},
+		{"list error", map[string]reply{listPath: {500, `boom`}}, "untagged", Error, "cannot list observations"},
+		{"version fails", map[string]reply{"/version": {500, `boom`}}, "server", Error, "answered with an error"},
+		{"health 503", map[string]reply{"/health": {503, `migrating`}}, "server", Error, "answered with an error"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.reference(fakeServerWith(t, c.overrides).URL)
+			r := f.run()
+			got := check(t, r, c.check)
+			expect(t, got, c.status, c.inSummary)
+			if c.status == Warn && (got.Detail == "" || got.Fix == "") {
+				t.Errorf("a warning needs a detail and a fix: %+v", got)
+			}
+		})
+	}
+}
+
+func TestInvalidReferenceURL(t *testing.T) {
+	f := newFixture(t)
+	f.reference("ftp://x")
+	r := f.run()
+	expect(t, check(t, r, "server"), Error, "unusable server URL")
+	expect(t, check(t, r, "bank"), Info, "skipped")
+}
+
+func TestReferenceURLCredentialsNeverPrinted(t *testing.T) {
+	f := newFixture(t)
+	f.reference("http://u:fakepw@127.0.0.1:1")
+	r := f.run()
+	for _, c := range r.Checks {
+		if strings.Contains(c.Summary+c.Detail+c.Fix, "fakepw") {
+			t.Errorf("password printed in %+v", c)
+		}
+	}
+}
+
+// The fake server listens on this machine's first non-loopback address, so
+// the key would cross a network: no DNS, no outside traffic.
+func TestCleartextKeyWarned(t *testing.T) {
+	ip := localNonLoopback(t)
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", ip, err)
+	}
+	srv := httptest.NewUnstartedServer(fakeHandler(nil))
+	_ = srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	f := newFixture(t)
+	f.reference("http://" + ln.Addr().String())
+	c := check(t, f.run(), "server")
+	expect(t, c, Warn, "Hindsight 1.1.0")
+	if !strings.Contains(c.Detail, "unencrypted") {
+		t.Errorf("detail: %q", c.Detail)
+	}
+}
+
+func localNonLoopback(t *testing.T) string {
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil && !n.IP.IsLinkLocalUnicast() {
+			return n.IP.String()
+		}
+	}
+	t.Skip("no non-loopback IPv4 address")
+	return ""
+}
+
+// A valid config.toml without secrets.toml is a server without a key.
+func TestConfigWithoutSecretsIsValid(t *testing.T) {
+	f := newFixture(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nbank = \"b\"\n", 0o600)
+	expect(t, check(t, f.run(), "config"), OK, "config")
+}
+
+func TestRetentionBoundary(t *testing.T) {
+	for days, want := range map[int]Status{364: Warn, 365: OK} {
+		f := newFixture(t)
+		put(t, filepath.Join(f.home, ".claude", "settings.json"), `{"cleanupPeriodDays": `+strconv.Itoa(days)+`}`, 0o600)
+		c := check(t, f.run(), "retention")
+		if c.Status != want {
+			t.Errorf("%d days: %s", days, c.Status)
+		}
+		if want == Warn && !strings.Contains(c.Fix, filepath.Join(f.home, ".claude", "settings.json")) {
+			t.Errorf("fix must name the user's settings file: %q", c.Fix)
+		}
+	}
+}
+
+func TestRetentionCorruptSettings(t *testing.T) {
+	f := newFixture(t)
+	put(t, filepath.Join(f.home, ".claude", "settings.json"), `{"cleanupPeriodDays": `, 0o600)
+	c := check(t, f.run(), "retention")
+	expect(t, c, Warn, "cannot read")
+	if !strings.Contains(c.Detail, "settings.json") {
+		t.Errorf("detail must name the file: %q", c.Detail)
+	}
+}
+
+func TestMaintenanceLock(t *testing.T) {
+	f := newFixture(t)
+	expect(t, check(t, f.run(), "maintenance"), OK, "no maintenance")
+	if _, err := os.Stat(f.env.Dirs.MaintenanceLock()); err == nil {
+		t.Fatal("doctor must not leave a lock behind")
+	}
+
+	l, err := state.TryAcquire(f.env.Dirs.MaintenanceLock(), "backup create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, check(t, f.run(), "maintenance"), Info, "backup create")
+	_ = l.Release()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	put(t, f.env.Dirs.MaintenanceLock(), `{"pid":`+strconv.Itoa(cmd.Process.Pid)+`,"command":"restore","since":"2026-10-24T08:00:00Z"}`, 0o600)
+	c := check(t, f.run(), "maintenance")
+	expect(t, c, Warn, "stale")
+	if _, err := os.Stat(f.env.Dirs.MaintenanceLock()); err != nil {
+		t.Error("a stale lock is reported, never removed by doctor")
+	}
+	if !strings.Contains(c.Fix, f.env.Dirs.MaintenanceLock()) {
+		t.Errorf("fix must name the lock: %q", c.Fix)
+	}
+}
+
+func TestDiskThresholds(t *testing.T) {
+	for free, want := range map[uint64]Status{50e9: OK, 1e9: Warn, 100e6: Error} {
+		f := newFixture(t)
+		f.env.FreeBytes = func(string) (uint64, error) { return free, nil }
+		if c := check(t, f.run(), "disk"); c.Status != want {
+			t.Errorf("%d bytes free: %s %q", free, c.Status, c.Summary)
+		}
+	}
+	f := newFixture(t)
+	f.env.FreeBytes = func(string) (uint64, error) { return 0, errors.New("statfs: not supported") }
+	expect(t, check(t, f.run(), "disk"), Info, "unknown")
+}
+
+func TestExistingParent(t *testing.T) {
+	dir := t.TempDir()
+	if got := existingParent(filepath.Join(dir, "a", "b")); got != dir {
+		t.Errorf("got %s, want %s", got, dir)
+	}
+}
+
+func TestFreeBytesOnRealDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("not implemented on Windows")
+	}
+	if n, err := FreeBytes(t.TempDir()); err != nil || n == 0 {
+		t.Errorf("%d %v", n, err)
 	}
 }

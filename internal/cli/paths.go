@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -25,9 +24,9 @@ func newPathsCmd(e *env) *cobra.Command {
 		Short: "Show where backsight keeps its binaries, config and state",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			d, err := paths.Default()
+			d, _, err := machine()
 			if err != nil {
-				return &output.Error{Code: output.Blocked, Message: err.Error()}
+				return err
 			}
 			info := pathsInfo{Dirs: d, ConfigFile: d.ConfigFile(), SecretsFile: d.SecretsFile()}
 			info.ConfigExists = exists(info.ConfigFile)
