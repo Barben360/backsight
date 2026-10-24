@@ -8,9 +8,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 // SchemaVersion of state.json this binary reads and writes.
@@ -25,6 +29,60 @@ type State struct {
 	Backfill                *Backfill `json:"backfill"`
 	ReplacedFrom            string    `json:"replaced_from"`
 	FirstSessionNoticeShown bool      `json:"first_session_notice_shown"`
+
+	// extra holds fields this binary does not know (written by a newer
+	// minor version), saved back unchanged.
+	extra map[string]json.RawMessage
+}
+
+type plain State // State without its JSON methods
+
+func (s *State) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, (*plain)(s)); err != nil {
+		return err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		return err
+	}
+	for _, k := range knownKeys() {
+		delete(all, k)
+	}
+	if len(all) > 0 {
+		s.extra = all
+	}
+	return nil
+}
+
+func (s State) MarshalJSON() ([]byte, error) {
+	if s.AppliedMigrations == nil {
+		s.AppliedMigrations = []string{}
+	}
+	known, err := json.Marshal(plain(s))
+	if err != nil || len(s.extra) == 0 {
+		return known, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(known, &all); err != nil {
+		return nil, err
+	}
+	for k, v := range s.extra {
+		if _, ok := all[k]; !ok {
+			all[k] = v
+		}
+	}
+	return json.Marshal(all)
+}
+
+func knownKeys() []string {
+	t := reflect.TypeOf(plain{})
+	keys := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
 }
 
 // Backfill tracks the replay of past transcripts (decision 0037).
@@ -35,6 +93,7 @@ type Backfill struct {
 }
 
 // Load reads path; a missing file is an empty state of the current schema.
+// Load then Save is not safe against concurrent writers: use Update.
 func Load(path string) (State, error) {
 	s := State{SchemaVersion: SchemaVersion, AppliedMigrations: []string{}}
 	raw, err := os.ReadFile(path)
@@ -60,4 +119,23 @@ func Save(path string, s State) error {
 		return err
 	}
 	return fsutil.WriteAtomic(path, append(raw, '\n'), 0o600)
+}
+
+// Update loads state.json, applies fn and saves it, under the state lock.
+// It never waits: a held lock returns the *HeldError. fn's error aborts
+// without writing.
+func Update(d paths.Dirs, command string, fn func(*State) error) error {
+	l, err := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), command)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = l.Release() }()
+	s, err := Load(d.StateFile())
+	if err != nil {
+		return err
+	}
+	if err := fn(&s); err != nil {
+		return err
+	}
+	return Save(d.StateFile(), s)
 }

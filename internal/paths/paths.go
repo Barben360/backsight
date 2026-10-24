@@ -24,6 +24,19 @@ type Dirs struct {
 func (d Dirs) ConfigFile() string  { return filepath.Join(d.Config, "config.toml") }
 func (d Dirs) SecretsFile() string { return filepath.Join(d.Config, "secrets.toml") }
 
+// State layout, SPEC Appendix A.3.
+func (d Dirs) StateFile() string       { return filepath.Join(d.State, "state.json") }
+func (d Dirs) LocksDir() string        { return filepath.Join(d.State, "locks") }
+func (d Dirs) MaintenanceLock() string { return filepath.Join(d.State, "maintenance.lock") }
+func (d Dirs) CursorsDir() string      { return filepath.Join(d.State, "cursors") }
+func (d Dirs) SessionsDir() string     { return filepath.Join(d.State, "sessions") }
+func (d Dirs) SentIndexDir() string    { return filepath.Join(d.State, "sent-index") }
+func (d Dirs) OutboxDir() string       { return filepath.Join(d.State, "outbox") }
+func (d Dirs) QuarantineDir() string   { return filepath.Join(d.State, "quarantine") }
+func (d Dirs) JournalFile() string     { return filepath.Join(d.State, "journal.jsonl") }
+func (d Dirs) PreImagesDir() string    { return filepath.Join(d.State, "pre-images") }
+func (d Dirs) TelemetryDir() string    { return filepath.Join(d.State, "telemetry") }
+
 // Default resolves the directories of the running process.
 func Default() (Dirs, error) {
 	home, err := os.UserHomeDir()

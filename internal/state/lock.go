@@ -18,12 +18,17 @@ type Owner struct {
 }
 
 // HeldError reports a lock held by someone else. Stale means its owner
-// process is gone: the lock is reported, never taken over silently.
+// process is gone (or it was never written and is older than
+// unwrittenGrace): the lock is reported, and only BreakStale removes it.
 type HeldError struct {
 	Path  string
 	Owner Owner
 	Stale bool
+	raw   []byte // content when reported, so BreakStale removes only that lock
 }
+
+// unwrittenGrace is how long an unparseable lock counts as being written.
+const unwrittenGrace = 10 * time.Second
 
 func (e *HeldError) Error() string {
 	if e.Stale {
@@ -71,12 +76,39 @@ func TryAcquire(path, command string) (*Lock, error) {
 func held(path string) error {
 	e := &HeldError{Path: path}
 	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &e.Owner) != nil {
-		// Being written right now, or unreadable: held either way.
+	if err != nil {
+		return e // unreadable: held
+	}
+	e.raw = raw
+	if json.Unmarshal(raw, &e.Owner) != nil {
+		// Being written right now, or left empty by a crash between create
+		// and write: stale only once it is old enough.
+		fi, err := os.Stat(path)
+		e.Stale = err == nil && time.Since(fi.ModTime()) > unwrittenGrace
 		return e
 	}
 	e.Stale = e.Owner.PID > 0 && !processAlive(e.Owner.PID)
 	return e
+}
+
+// BreakStale removes the lock e reported, only if it was stale and the file
+// still holds exactly what was reported. The caller reports the takeover.
+// PID reuse can make a dead owner look alive; that errs on the side of held.
+func BreakStale(e *HeldError) error {
+	if !e.Stale {
+		return fmt.Errorf("%s: not stale, refusing to break it", e.Path)
+	}
+	raw, err := os.ReadFile(e.Path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if string(raw) != string(e.raw) {
+		return fmt.Errorf("%s changed since it was reported, refusing to break it", e.Path)
+	}
+	return os.Remove(e.Path)
 }
 
 // Release removes the lock file if it still names this lock's owner.

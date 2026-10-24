@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestAcquireWritesOwner(t *testing.T) {
@@ -46,6 +48,14 @@ func TestSecondAcquireIsHeld(t *testing.T) {
 		t.Fatalf("after release: %v", err)
 	}
 	_ = l2.Release()
+}
+
+func writeOwner(t *testing.T, p string, o Owner) {
+	t.Helper()
+	raw, _ := json.Marshal(o)
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func deadPID(t *testing.T) int {
@@ -105,12 +115,95 @@ func TestOnlyOneWinner(t *testing.T) {
 	}
 }
 
-func TestUnreadableLockIsHeldNotStolen(t *testing.T) {
+// A lock being written right now cannot be parsed yet: held, not stale.
+func TestFreshUnreadableLockIsHeld(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.lock")
+	_ = os.WriteFile(p, nil, 0o600)
+	var held *HeldError
+	if _, err := TryAcquire(p, "a"); !errors.As(err, &held) || held.Stale {
+		t.Errorf("want held and not stale, got %v", err)
+	}
+}
+
+// A crash between create and write leaves an empty lock: stale once old.
+func TestOldUnreadableLockIsStale(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "x.lock")
 	_ = os.WriteFile(p, []byte("garbage"), 0o600)
+	old := time.Now().Add(-time.Minute)
+	_ = os.Chtimes(p, old, old)
 	var held *HeldError
-	if _, err := TryAcquire(p, "a"); !errors.As(err, &held) {
-		t.Errorf("a lock that cannot be parsed must be treated as held, got %v", err)
+	if _, err := TryAcquire(p, "a"); !errors.As(err, &held) || !held.Stale {
+		t.Errorf("want a stale report, got %v", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Error("a stale lock is reported, never removed by TryAcquire")
+	}
+}
+
+func TestBreakStale(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.lock")
+	writeOwner(t, p, Owner{PID: deadPID(t), Command: "jobs tick", Since: time.Now().UTC()})
+	_, err := TryAcquire(p, "a")
+	var held *HeldError
+	if !errors.As(err, &held) || !held.Stale {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := BreakStale(held); err != nil {
+		t.Fatal(err)
+	}
+	l, err := TryAcquire(p, "a")
+	if err != nil {
+		t.Fatalf("after BreakStale the lock must be free: %v", err)
+	}
+	_ = l.Release()
+}
+
+func TestBreakStaleRefusesLiveOrChangedLock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.lock")
+	l, _ := TryAcquire(p, "owner")
+	_, err := TryAcquire(p, "a")
+	var held *HeldError
+	if !errors.As(err, &held) || held.Stale {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := BreakStale(held); err == nil {
+		t.Error("a live lock must not be broken")
+	}
+	_ = l.Release()
+
+	writeOwner(t, p, Owner{PID: deadPID(t), Command: "old", Since: time.Now().UTC()})
+	_, err = TryAcquire(p, "a")
+	if !errors.As(err, &held) || !held.Stale {
+		t.Fatalf("setup: %v", err)
+	}
+	writeOwner(t, p, Owner{PID: os.Getpid(), Command: "new owner", Since: time.Now().UTC()})
+	if err := BreakStale(held); err == nil {
+		t.Error("a lock that changed since it was reported must not be broken")
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Error("the new owner's lock was removed")
+	}
+}
+
+func TestReleaseKeepsLockWithSamePIDButOtherSince(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.lock")
+	l, _ := TryAcquire(p, "a")
+	writeOwner(t, p, Owner{PID: os.Getpid(), Command: "a", Since: time.Now().UTC().Add(time.Hour)})
+	_ = l.Release()
+	if _, err := os.Stat(p); err != nil {
+		t.Error("a later lock of the same process was released")
+	}
+}
+
+func TestHeldErrorMessages(t *testing.T) {
+	e := &HeldError{Path: "/s/x.lock", Owner: Owner{PID: 42, Command: "backup create", Since: time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)}}
+	if m := e.Error(); !strings.Contains(m, "backup create") || !strings.Contains(m, "42") || strings.Contains(m, "gone") {
+		t.Errorf("held: %q", m)
+	}
+	e.Stale = true
+	if m := e.Error(); !strings.Contains(m, "gone") {
+		t.Errorf("stale: %q", m)
 	}
 }
 

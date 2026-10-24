@@ -64,3 +64,25 @@ func TestFiles(t *testing.T) {
 		t.Errorf("%s %s", d.ConfigFile(), d.SecretsFile())
 	}
 }
+
+// Appendix A.3: every state location is named here, once.
+func TestStateLayout(t *testing.T) {
+	d := Dirs{State: "/s"}
+	for got, rel := range map[string]string{
+		d.StateFile():       "state.json",
+		d.LocksDir():        "locks",
+		d.MaintenanceLock(): "maintenance.lock",
+		d.CursorsDir():      "cursors",
+		d.SessionsDir():     "sessions",
+		d.SentIndexDir():    "sent-index",
+		d.OutboxDir():       "outbox",
+		d.QuarantineDir():   "quarantine",
+		d.JournalFile():     "journal.jsonl",
+		d.PreImagesDir():    "pre-images",
+		d.TelemetryDir():    "telemetry",
+	} {
+		if want := filepath.Join("/s", rel); got != want {
+			t.Errorf("got %s, want %s", got, want)
+		}
+	}
+}

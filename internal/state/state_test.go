@@ -1,6 +1,8 @@
 package state
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 func TestLoadMissingIsEmptyCurrentSchema(t *testing.T) {
@@ -62,5 +66,74 @@ func TestLoadRefusesCorruptFile(t *testing.T) {
 	_ = os.WriteFile(p, []byte(`{"schema_version": 1,`), 0o600)
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), p) {
 		t.Errorf("want an error naming the file, got %v", err)
+	}
+}
+
+func TestNilSlicesSavedAsEmptyArrays(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	if err := Save(p, State{SchemaVersion: SchemaVersion}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), `"applied_migrations": []`) {
+		t.Errorf("%s", raw)
+	}
+}
+
+// A newer minor version may add fields; saving must not drop them.
+func TestUnknownFieldsSurviveSave(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	_ = os.WriteFile(p, []byte(`{"schema_version": 1, "plugin_version": "0.1.0", "future": {"a": [1, 2]}}`), 0o600)
+	s, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PluginVersion = "0.2.0"
+	if err := Save(p, s); err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]json.RawMessage
+	raw, _ := os.ReadFile(p)
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	var future struct{ A []int }
+	if string(back["plugin_version"]) != `"0.2.0"` || json.Unmarshal(back["future"], &future) != nil || len(future.A) != 2 {
+		t.Errorf("known field not updated or unknown field lost: %s", raw)
+	}
+}
+
+func TestUpdateUnderLock(t *testing.T) {
+	d := paths.Dirs{State: t.TempDir()}
+	if err := Update(d, "test", func(s *State) error { s.PluginVersion = "0.1.0"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := Load(d.StateFile())
+	if s.PluginVersion != "0.1.0" {
+		t.Errorf("not persisted: %+v", s)
+	}
+	if _, err := os.Stat(filepath.Join(d.LocksDir(), "state.lock")); err == nil {
+		t.Error("the lock must be released after the update")
+	}
+
+	l, _ := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	defer func() { _ = l.Release() }()
+	var held *HeldError
+	if err := Update(d, "test", func(s *State) error { s.PluginVersion = "lost"; return nil }); !errors.As(err, &held) {
+		t.Errorf("want HeldError while another process holds the lock, got %v", err)
+	}
+	if s, _ := Load(d.StateFile()); s.PluginVersion != "0.1.0" {
+		t.Errorf("state changed without the lock: %+v", s)
+	}
+}
+
+func TestUpdateCallbackErrorWritesNothing(t *testing.T) {
+	d := paths.Dirs{State: t.TempDir()}
+	boom := errors.New("boom")
+	if err := Update(d, "test", func(s *State) error { s.PluginVersion = "x"; return boom }); !errors.Is(err, boom) {
+		t.Errorf("got %v", err)
+	}
+	if _, err := os.Stat(d.StateFile()); err == nil {
+		t.Error("state.json written despite the callback error")
 	}
 }
