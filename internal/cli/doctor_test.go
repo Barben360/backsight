@@ -74,7 +74,7 @@ func TestDoctorText(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	for _, want := range []string{"info   config", "WARN   retention", "fix: set \"cleanupPeriodDays\": 3650", "0 error(s), 1 warning(s)"} {
+	for _, want := range []string{"info   config", "WARN   retention", "fix: backsight client retention", "0 error(s), 1 warning(s)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("text output lacks %q:\n%s", want, out)
 		}
