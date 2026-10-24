@@ -1,0 +1,5 @@
+{"type":"summary","summary":"Old style summary","leafUuid":"zz"}
+{"type":"user","uuid":"o1","sessionId":"s-128","cwd":"/home/u","timestamp":"2026-09-18T10:00:00.000Z","version":"2.1.128","userType":"external","message":{"role":"user","content":"Remember: always use pnpm in my repos."}}
+{"type":"assistant","uuid":"o2","sessionId":"s-128","cwd":"/home/u","timestamp":"2026-09-18T10:00:04.000Z","version":"2.1.128","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"Noted, pnpm everywhere."}],"model":"claude-x"}}
+{"type":"user","uuid":"o3","sessionId":"s-128","cwd":"/home/u","timestamp":"2026-09-18T10:01:00.000Z","message":{"role":"user","content":"<local-command-stdout>(no content)</local-command-stdout>"}}
+{"type":"assistant","uuid":"o4","sessionId":"s-128","cwd":"/home/u","timestamp":"2026-09-18T10:01:30.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"WebFetch","input":{"url":"https://example.com/a-very-long-path/that/goes/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/x","prompt":"read"}}]}}
