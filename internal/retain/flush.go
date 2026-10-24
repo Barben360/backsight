@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -181,9 +182,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
 		var apiErr *hindsight.APIError
 		if errors.As(err, &apiErr) && !apiErr.Retryable() {
-			return f.quarantine(res, &cur, err.Error())
+			return f.quarantine(res, &cur, errSummary(err))
 		}
-		return f.save(res, cur, Retry, err.Error())
+		return f.save(res, cur, Retry, errSummary(err))
 	}
 	uuids := make([]string, len(send))
 	for i, r := range send {
@@ -258,4 +259,14 @@ func indexOf(recs []transcript.Record, uuid string) int {
 		}
 	}
 	return -1
+}
+
+// errSummary describes a server error without its body: a refusal can echo
+// the submitted transcript text.
+func errSummary(err error) string {
+	var apiErr *hindsight.APIError
+	if errors.As(err, &apiErr) {
+		return fmt.Sprintf("%s %s: HTTP %d (%s)", apiErr.Method, apiErr.Path, apiErr.Status, apiErr.Kind)
+	}
+	return err.Error()
 }

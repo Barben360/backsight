@@ -122,3 +122,18 @@ func TestEmptyInput(t *testing.T) {
 		t.Errorf("%v %+v %v", recs, st, err)
 	}
 }
+
+// A secret at the 100-character cut must not leak its prefix.
+func TestActionRedactedBeforeTheCut(t *testing.T) {
+	key := "gh" + "p_" + strings.Repeat("a1B2c3D4e5F6", 3)
+	cmd := strings.Repeat("x", 90) + " " + key
+	line := `{"type":"assistant","uuid":"a1","sessionId":"s","timestamp":"2026-10-24T09:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"` + cmd + `"}}]}}` + "\n"
+	recs, _, err := Read(strings.NewReader(line), 0)
+	if err != nil || len(recs) != 1 {
+		t.Fatal(err)
+	}
+	got := recs[0].Turns[0].Content
+	if strings.Contains(got, "a1B2c3") || strings.Contains(got, "gh"+"p_") {
+		t.Errorf("token prefix leaked: %q", got)
+	}
+}

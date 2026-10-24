@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/redact"
 )
 
 // Turn is one retained line: role user, assistant or action.
@@ -159,6 +161,9 @@ func action(b block) string {
 		if v == "" {
 			continue
 		}
+		// Redact before cutting: a token cut at the boundary would fall below
+		// its pattern's minimum length and leak its prefix.
+		v, _ = redact.Text(v)
 		if r := []rune(v); len(r) > 100 {
 			v = string(r[:100])
 		}

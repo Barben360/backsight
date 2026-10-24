@@ -149,12 +149,12 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 			res.Sent++
 		case errors.As(err, &apiErr) && !apiErr.Retryable():
 			res.Quarantined++
-			n.LastError = err.Error()
+			n.LastError = errSummary(err)
 			_ = appendJSON(o.QuarantinePath, n)
 		default:
 			// Unreachable or busy: keep this note and the rest untouched.
 			n.Attempts++
-			n.LastError = err.Error()
+			n.LastError = errSummary(err)
 			res.LastError = n.LastError
 			keep = append(keep, n)
 			keep = append(keep, notes[i+1:]...)

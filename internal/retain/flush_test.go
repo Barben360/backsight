@@ -279,8 +279,11 @@ func TestServerErrors(t *testing.T) {
 		t.Errorf("503: %+v", r)
 	}
 	e.hs.status = http.StatusUnprocessableEntity
-	if r := e.flush("s1", Options{}); r.Status != Quarantined {
-		t.Errorf("422: %+v", r)
+	if r := e.flush("s1", Options{}); r.Status != Quarantined || strings.Contains(r.Detail, "refused") || !strings.Contains(r.Detail, "HTTP 422") {
+		t.Errorf("422: %+v (the server body must not be kept)", r)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(e.f.Dirs.QuarantineDir(), "s1.jsonl")); strings.Contains(string(raw), "refused") {
+		t.Errorf("quarantine file kept the server body: %s", raw)
 	}
 	e.hs.status = 0
 	if r := e.flush("s1", Options{}); r.Status != Quarantined {

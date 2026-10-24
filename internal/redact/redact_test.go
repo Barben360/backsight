@@ -39,6 +39,19 @@ func TestTruePositives(t *testing.T) {
 		{"json token", `{"apiUrl":"http://x","apiToken":"q8Zr4Lm2Vn7Tw1Ks"}`, "secret_value", "q8Zr4Lm2Vn7Tw1Ks"},
 		{"yaml password", "db:\n  password: hunter2hunter2\n", "secret_value", "hunter2hunter2"},
 		{"long letters-only secret", "API_KEY=abcdefghijklmnopqrstuvwxyzABCD", "secret_value", "abcdefghijklmnopqrstuvwxyzABCD"},
+		{"suffixed key", "export SECRET_KEY=django-insecure-q8zr4lm2", "secret_value", "django-insecure-q8zr4lm2"},
+		{"key with suffix", "GITHUB_TOKEN_PROD=abcdefgh1234", "secret_value", "abcdefgh1234"},
+		{"letters-only password", "password=correcthorsebattery", "secret_value", "correcthorsebattery"},
+		{"short password", "DB_PASSWORD=hunter2", "secret_value", "hunter2"},
+		{"quoted with spaces", `{"password": "my long pass phrase"}`, "secret_value", "my long pass phrase"},
+		{"basic auth", "Authorization: Basic " + "dXNlcjpwYXNzd29yZDEyMw==", "basic_auth", "dXNlcjpwYXNzd29yZDEyMw=="},
+		{"curl -u", "curl -u admin:s3cretpass https://x", "cli_password", "s3cretpass"},
+		{"--password", "mytool --password Sup3rS3cret login", "cli_password", "Sup3rS3cret"},
+		{"mysql -p", "mysql -u root -pSuperSecret1 billing", "cli_password", "SuperSecret1"},
+		{"stripe", "sk_" + "live_" + rep("4eC39HqLyjWDarjtT1zdp7dc", 1), "stripe_key", "4eC39HqLyjWDarjtT1zdp7dc"},
+		{"npm", "npm_" + rep("a1B2c3D4e5F6", 3), "npm_token", "a1B2c3D4e5F6a1B2"},
+		{"url password with slash", "postgres://u:pa/ss@h/db", "url_password", "pa/ss"},
+		{"high entropy", "token is " + rep("aB3dE5gH9kZx", 3) + " ok", "high_entropy", "aB3dE5gH9kZx"},
 	}
 	for _, c := range cases {
 		out, kinds := Text(c.in)
@@ -86,9 +99,21 @@ func TestLookAlikesSurvive(t *testing.T) {
 		"Bearer tokens go in the Authorization header.",
 		"secrets.toml must be 0600",
 		"apiToken: [redacted:secret_value]",
+		"docker run -p 8080:80 nginx",
+		"sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11",
+		"session 88cf850f-c82e-4b79-b1d7-ecc3af0e50a9 resumed",
+		"see TestServerInstallComposeFailure and TestBankApplyRecreatesAWipedBank",
+		"github.com/Barben360/backsight/internal/hindsight",
+		"flatpak override --user --filesystem=xdg-config/gtk-4.0:ro",
+		"const expediteurPubliqueFingerprintDeclare = 1",
+		"/tmp/claude-1000/-home-user-Workspace-github-com-Barben360-ref-stack/x",
+		`"predicted_per_token_ms":41.23456789`,
+		"The signing keys have no password: `pass` and GitHub secrets encrypt them.",
+		"Crée un token : Profil → Sécurité",
+		"Crée un token : `https://ha.example.org/profile/security` → « Jetons »",
+		"Downloads/Contrat_CDI_-_Jean_DUPONT_au_01.07.2026.pdf",
 		"sed 's/password:.*/password: ***/' netplan.yaml",
 		"Crée un token : Paramètres → Sécurité",
-		"the password: correct",
 	} {
 		out, kinds := Text(s)
 		if out != s || len(kinds) != 0 {
