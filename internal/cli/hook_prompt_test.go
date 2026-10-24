@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -238,5 +239,27 @@ func TestOutcomeOfThePreviousInjection(t *testing.T) {
 	tel := telemetryText(t, home)
 	if !strings.Contains(tel, `"event":"outcome"`) || !strings.Contains(tel, `"credited":"exact"`) || !strings.Contains(tel, `"contradicted":true`) {
 		t.Errorf("telemetry:\n%s", tel)
+	}
+}
+
+// recall-prompt (E23) shows exactly what the hook would inject for a first
+// prompt, without session state.
+func TestRecallPromptMatchesTheHookSelection(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9, 0.85, 0.8, 0.75)
+	code, out, _ := run(t, "recall-prompt", "--cwd", filepath.Join(home, "billing"), "--json", longPrompt)
+	var env struct {
+		Data recallPromptResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != 0 || env.Data.Project != "billing" || len(env.Data.Ranked) != 4 || strings.Join(env.Data.Injected, ",") != "m1,m2,m3" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if ents, _ := os.ReadDir(pathsOf(home).SessionsDir()); len(ents) != 0 {
+		t.Errorf("recall-prompt wrote session state: %v", ents)
+	}
+	h := prompt(t, home, "s1", longPrompt)
+	if !strings.Contains(h.Specific.Context, env.Data.Block) {
+		t.Errorf("the hook injected something else:\nhook:\n%s\nrecall-prompt:\n%s", h.Specific.Context, env.Data.Block)
 	}
 }

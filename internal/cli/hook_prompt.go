@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
@@ -320,6 +321,26 @@ func (h *hookEnv) sticky() session.Sticky {
 // promptRecall searches the prompt and keeps up to PromptHits unseen,
 // unmuted memories above the reranker floor, within PromptChars.
 func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, []session.Injection, recall.Result) {
+	_, res := h.searchPrompt(prompt)
+	counts := h.sticky().Load(now(), stickyWindow)
+	rc := h.cfg.Recall
+	block, chosen := selectHits(res.Hits, rc, func(hit recall.Hit) bool {
+		return slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass)
+	})
+	if len(chosen) == 0 {
+		return "", nil, res
+	}
+	at := now()
+	items := make([]session.Injection, 0, len(chosen))
+	for _, hit := range chosen {
+		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
+	}
+	return block, items, res
+}
+
+// searchPrompt is the prompt path's query and recall (SPEC §10.2), shared
+// with `recall-prompt` so the replay gate measures exactly the hook.
+func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 	rc := h.cfg.Recall
 	q := h.recallQuery(prompt)
 	var related []string
@@ -327,16 +348,19 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, [
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now}
-	res := eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
-	counts := h.sticky().Load(now(), stickyWindow)
+	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
+}
+
+// selectHits keeps up to PromptHits hits that skip does not drop, within
+// PromptChars, and renders the injected block.
+func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool) (string, []recall.Hit) {
 	var b strings.Builder
-	var items []session.Injection
-	at := now()
-	for _, hit := range res.Hits {
-		if len(items) == rc.PromptHits {
+	var chosen []recall.Hit
+	for _, hit := range hits {
+		if len(chosen) == rc.PromptHits {
 			break
 		}
-		if slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass) {
+		if skip(hit) {
 			continue
 		}
 		room := rc.PromptChars - len([]rune(b.String()))
@@ -346,12 +370,12 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, [
 			break
 		}
 		b.WriteString(prefix + clip(hit.Text, textRoom) + suffix)
-		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
+		chosen = append(chosen, hit)
 	}
-	if len(items) == 0 {
-		return "", nil, res
+	if len(chosen) == 0 {
+		return "", nil
 	}
-	return instructions.RecallHeader + "\n" + strings.TrimRight(b.String(), "\n"), items, res
+	return instructions.RecallHeader + "\n" + strings.TrimRight(b.String(), "\n"), chosen
 }
 
 var (
