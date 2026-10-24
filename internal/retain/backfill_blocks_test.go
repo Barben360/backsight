@@ -100,3 +100,19 @@ func TestEstimateChunkBoundary(t *testing.T) {
 		t.Errorf("30001 characters is a second chunk: %d vs %d", a.InputTokens, b.InputTokens)
 	}
 }
+
+// A memory_store project input wins over the session's project; an ingest
+// note without a project tag takes the session's (M1 review).
+func TestNoteProjectPrecedence(t *testing.T) {
+	ts := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	recs := []transcript.Record{{UUID: "a1", Timestamp: ts, Tools: []transcript.ToolUse{
+		{ID: "t1", Name: "mcp__plugin_backsight_memory__memory_store", Input: map[string]json.RawMessage{
+			"kind": raw("convention"), "text": raw("Tabs in Makefiles."), "project": raw("infra")}},
+		{ID: "t2", Name: "mcp__hindsight__hindsight_ingest_document", Input: map[string]json.RawMessage{
+			"title": raw("Leçon : x"), "content": raw("y"), "tags": raw([]string{"kind:lesson"})}},
+	}}}
+	notes := NotesFromRecords("b", "s1", recs, func(string) (string, bool) { return "billing", true })
+	if len(notes) != 2 || notes[0].Project != "infra" || notes[1].Project != "billing" {
+		t.Errorf("%+v", notes)
+	}
+}

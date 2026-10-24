@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,9 +84,9 @@ func TestBackfillSendsOldestFirstWithNotesThenNothing(t *testing.T) {
 		t.Errorf("the replayed note lost its kind or project: %v", retainedTags)
 	}
 	before = retained.Load()
-	_, out, _ = run(t, "retain", "backfill", "--plan")
-	if !strings.Contains(out, "0 session(s) to send (2 already sent") || retained.Load() != before {
-		t.Errorf("a second run must find nothing to send:\n%s", out)
+	code, out, _ = run(t, "retain", "backfill")
+	if code != output.OK || !strings.Contains(out, "0 session(s) to send (2 already sent") || retained.Load() != before {
+		t.Errorf("a second real run must send nothing (no session, no note): exit %d, %d items\n%s", code, retained.Load()-before, out)
 	}
 }
 
@@ -108,8 +109,8 @@ func TestBackfillStopsAtTheBudgetAndResumes(t *testing.T) {
 		t.Errorf("state %+v", st.Backfill)
 	}
 	// A plain rerun does not grant a new cap.
-	if code, out, _ := run(t, "retain", "backfill"); code != output.Partial || !strings.Contains(out+"", "") || retained.Load() != before+1 {
-		t.Errorf("a plain rerun after a budget pause must stay paused: exit %d", code)
+	if code, _, errOut := run(t, "retain", "backfill"); code != output.Partial || !strings.Contains(errOut, "higher --max-cost") || retained.Load() != before+1 {
+		t.Errorf("a plain rerun after a budget pause must stay paused and say how to resume: exit %d, %q", code, errOut)
 	}
 	code, out, _ = run(t, "retain", "backfill", "--max-cost", "50")
 	if code != output.OK || !strings.Contains(out, "finished") || retained.Load() != before+2 {
@@ -184,8 +185,8 @@ func TestBackfillWaitsForTheQueue(t *testing.T) {
 	processing.Store(1)                         // counted too: the wait ends at limit-1 pending
 	before := retained.Load()
 	run(t, "retain", "backfill")
-	if retained.Load() != before+1 || queued.Load()+processing.Load() > int64(backfillQueueLimit) {
-		t.Errorf("sent %d, queue %d", retained.Load()-before, queued.Load())
+	if retained.Load() != before+1 || len(queueAtRetain) != 1 || queueAtRetain[0] > int64(backfillQueueLimit) {
+		t.Errorf("sent %d, queue seen by the retain %v (limit %d)", retained.Load()-before, queueAtRetain, backfillQueueLimit)
 	}
 }
 
@@ -420,5 +421,26 @@ func TestBackfillBusyLeavesTheStateAlone(t *testing.T) {
 	st, _ := state.Load(d.StateFile())
 	if code != output.Blocked || st.Backfill != nil {
 		t.Errorf("exit %d, state backfill %+v", code, st.Backfill)
+	}
+}
+
+// Without a test override, one tick sends at most three backfill sessions
+// (decision 0051).
+func TestJobsTickSendsThreeBackfillSessions(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	var queue []string
+	for i := 0; i < 4; i++ {
+		sid := "y" + strconv.Itoa(i)
+		oldSession(t, home, sid, time.Date(2026, 9, 20+i, 9, 0, 0, 0, time.UTC), false)
+		queue = append(queue, filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl"))
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Total: 4, MaxCost: 10, Currency: "USD", StartDay: time.Now().UTC().Format("2006-01-02"), Sessions: queue}
+		return nil
+	})
+	if _, out, _ := run(t, "jobs", "tick"); !strings.Contains(out, "backfill 3/4") || retained.Load() != 3 {
+		t.Errorf("retained %d\n%s", retained.Load(), out)
 	}
 }

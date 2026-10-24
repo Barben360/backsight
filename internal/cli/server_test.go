@@ -168,7 +168,9 @@ var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCall
 var (
 	statsDown    atomic.Bool
 	extractFails atomic.Bool
-	retainedTags []string
+	// queueAtRetain: pending + processing seen by each accepted retain.
+	queueAtRetain []int64
+	retainedTags  []string
 )
 
 // fakeHindsight answers like a started server: health, version, banks and
@@ -187,7 +189,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainStatus.Store(0)
 	statsDown.Store(false)
 	extractFails.Store(false)
-	retainedTags = nil
+	retainedTags, queueAtRetain = nil, nil
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -236,6 +238,7 @@ func fakeHindsight(t *testing.T) (port int) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+			queueAtRetain = append(queueAtRetain, queued.Load()+processing.Load())
 			for _, it := range body.Items {
 				docs[it.DocumentID] = it.Metadata
 				retained.Add(1)

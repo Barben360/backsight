@@ -609,3 +609,19 @@ func TestSettleBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// In an open session, a turn exactly 2 h old goes; 1 h 59 stays (decision
+// 0050). The clock is 12:00.
+func TestOpenSessionTwoHourBoundary(t *testing.T) {
+	for _, c := range []struct {
+		offset int // minutes after 09:00
+		want   string
+	}{{61, Waiting}, {60, Sent}} {
+		e := newEnv(t)
+		e.record("s1", "u1", "user", c.offset, "older turn")
+		e.record("s1", "u2", "user", 170, "fresh turn") // keeps the session open
+		if r := e.flush("s1", Options{}); r.Status != c.want {
+			t.Errorf("turn at +%d min: %s, want %s", c.offset, r.Status, c.want)
+		}
+	}
+}
