@@ -105,11 +105,18 @@ func (o Outbox) Append(n Note) (warn bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
 		return false, err
 	}
-	f, err := os.OpenFile(o.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(o.Path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return false, err
 	}
-	if _, err := f.Write(append(raw, '\n')); err != nil {
+	line := append(append([]byte{}, raw...), '\n')
+	if size > 0 { // after a torn last line, start a new one
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, size-1); err == nil && last[0] != '\n' {
+			line = append([]byte{'\n'}, line...)
+		}
+	}
+	if _, err := f.Write(line); err != nil {
 		_ = f.Close()
 		return false, err
 	}
@@ -128,43 +135,64 @@ type FlushResult struct {
 	LastError   string `json:"last_error,omitempty"`
 }
 
-// Flush sends every queued note; retryable failures stay queued.
+// Flush sends every queued note; retryable failures stay queued. The lock
+// is held only to read and rewrite the file, never during network calls,
+// so store can append meanwhile.
 func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID string) (FlushResult, error) {
 	var res FlushResult
 	unlock, err := o.lock("notes flush")
 	if err != nil {
 		return res, err
 	}
-	defer unlock()
 	notes, err := o.read()
+	unlock()
 	if err != nil || len(notes) == 0 {
 		return res, err
 	}
-	var keep []Note
-	for i, n := range notes {
+	done := map[string]bool{}   // sent or quarantined: remove
+	failed := map[string]Note{} // kept with its new attempt count
+	for _, n := range notes {
 		err := c.Retain(ctx, bank, []hindsight.RetainItem{n.Item(machineID)}, n.OperationID)
-		switch {
-		case err == nil:
+		if err == nil {
 			res.Sent++
+			done[n.OperationID] = true
 			continue
-		case refusesDocument(err):
-			n.LastError = errSummary(err)
+		}
+		n.LastError = errSummary(err)
+		if refusesDocument(err) {
 			if qerr := appendJSON(o.QuarantinePath, n); qerr == nil {
 				res.Quarantined++
+				done[n.OperationID] = true
 				continue
 			}
-			// The quarantine record could not be written: keep the note.
-		default:
+		} else {
 			n.Attempts++
-			n.LastError = errSummary(err)
 		}
-		// Unreachable, misconfigured or busy: keep this note and the rest.
+		// Unreachable, misconfigured or busy: stop, keep this note and the rest.
 		res.LastError = n.LastError
-		keep = append(keep, n)
-		keep = append(keep, notes[i+1:]...)
-		res.Kept = len(keep)
-		return res, o.rewrite(keep)
+		failed[n.OperationID] = n
+		break
 	}
+	unlock, err = o.lock("notes flush")
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
+	current, err := o.read() // includes notes appended during the sends
+	if err != nil {
+		return res, err
+	}
+	var keep []Note
+	for _, n := range current {
+		if done[n.OperationID] {
+			continue
+		}
+		if f, ok := failed[n.OperationID]; ok {
+			n = f
+		}
+		keep = append(keep, n)
+	}
+	res.Kept = len(keep)
 	return res, o.rewrite(keep)
 }
 

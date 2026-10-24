@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -57,4 +59,17 @@ func TestStoreRefusals(t *testing.T) {
 
 func newTestNote() retain.Note {
 	return retain.NewNote("claude-memory", "lesson", "p", "Retry with backoff.", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+}
+
+func TestStoreQueuesDuringMaintenance(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1}`), 0o600)
+	before := retained.Load()
+	_, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Queued during maintenance.")
+	if !strings.Contains(out, "queued") || retained.Load() != before {
+		t.Errorf("%s", out)
+	}
 }

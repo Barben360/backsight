@@ -40,6 +40,10 @@ func TestRetainFlushLeavesHistoryToBackfill(t *testing.T) {
 	if code != output.OK || !strings.Contains(out, "1 backfill") || retained.Load() != before {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
 	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.RetainSince != nil {
+		t.Errorf("retain flush must not record retain_since (only jobs tick does): %v", st.RetainSince)
+	}
+	run(t, "jobs", "tick")
 	st, _ := state.Load(pathsOf(home).StateFile())
 	if st.RetainSince == nil || !st.RetainSince.Equal(time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)) {
 		t.Errorf("retain_since %v", st.RetainSince)
@@ -63,7 +67,7 @@ func TestRetainFlushSendsLiveSessions(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)) // retain_since before the session
-	run(t, "retain", "flush")
+	run(t, "jobs", "tick")
 	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	before := retained.Load()
 	_, out, _ := run(t, "retain", "flush")

@@ -113,7 +113,14 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if cur.Quarantined {
 		return fail(Held, "quarantined earlier: backsight retain retry-quarantine")
 	}
-	resync := !haveCursor || cur.Bank != f.Bank
+	if haveCursor && cur.Backfill && !opt.IgnoreSince {
+		return fail(Backfill, "started before live retain began; backfill sends it")
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fail(Retry, err.Error())
+	}
+	resync := !haveCursor || cur.Bank != f.Bank || cur.Backfill || fi.Size() < cur.Offset
 	if haveCursor {
 		fp, err := Fingerprint(path, cur.Offset)
 		if err != nil {
@@ -138,6 +145,13 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if err != nil {
 		return fail(Retry, err.Error())
 	}
+	now := f.Now()
+	for i := range recs {
+		recs[i].Timestamp = clampTime(recs[i].Timestamp, fi.ModTime(), now)
+		for j := range recs[i].Turns {
+			recs[i].Turns[j].Timestamp = recs[i].Timestamp
+		}
+	}
 
 	if resync {
 		cur = Cursor{Transcript: path, Document: "conversation:" + sid, Bank: f.Bank}
@@ -159,6 +173,17 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 			}
 			cur.Segment, cur.LastUUID, cur.Offset = seg, last, recs[i].End
 			recs = recs[i+1:]
+			// Records this machine already sent may be missing from the
+			// server's metadata (async retain still running, or a crash
+			// before the cursor was saved): never send them twice.
+			skip := 0
+			for skip < len(recs) && f.Index.Has(recs[skip].UUID) {
+				skip++
+			}
+			if skip > 0 {
+				cur.Offset, cur.LastUUID = recs[skip-1].End, recs[skip-1].UUID
+				recs = recs[skip:]
+			}
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
 			skip := 0
 			for skip < len(recs) && f.Index.Has(recs[skip].UUID) {
@@ -169,7 +194,8 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 				recs = recs[skip:]
 			}
 			if len(recs) > 0 && !opt.IgnoreSince && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince) {
-				return fail(Backfill, "started before live retain began; backfill sends it")
+				cur.Backfill = true
+				return f.save(res, cur, Backfill, "started before live retain began; backfill sends it")
 			}
 		default:
 			res.Stop = true
@@ -181,7 +207,6 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		cur.Offset = max(cur.Offset, st.Consumed)
 		return f.save(res, cur, Nothing, "")
 	}
-	now := f.Now()
 	send := recs
 	if !opt.Force && now.Sub(recs[len(recs)-1].Timestamp) < SettleAfter {
 		n := 0
@@ -243,32 +268,43 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 			}
 			continue
 		}
-		segNo := cur.Segment + 1
-		seg := BuildSegment(f.Bank, sid, run, segNo, k.project, f.MachineID, f.Version)
-		if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
-			if refusesDocument(err) {
-				return f.quarantine(res, &cur, errSummary(err))
+		for _, part := range chunk(run) {
+			var done bool
+			if res, cur, status, detail, done = f.sendPart(ctx, res, cur, sid, part, k.project, status, detail, now); done {
+				return res
 			}
-			res.Stop = true
-			if status == Sent {
-				return f.save(res, cur, Sent, "partly sent; the rest is retried: "+errSummary(err))
-			}
-			return f.save(res, cur, Retry, errSummary(err))
 		}
-		uuids := make([]string, len(run))
-		for i, r := range run {
-			uuids[i] = r.UUID
-		}
-		if err := f.Index.Add(uuids...); err != nil {
-			detail = "sent, but the fork-guard index was not updated: " + err.Error()
-		}
-		cur.Offset, cur.LastUUID, cur.Segment, cur.LastTurnAt, cur.SentAt = last.End, last.UUID, segNo, last.Timestamp, now
-		cur.Records += len(run)
-		res.Records += len(run)
-		res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, k.project
-		status = Sent
 	}
 	return f.save(res, cur, status, detail)
+}
+
+// sendPart sends one segment; done reports that the flush ended (error).
+func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid string, run []transcript.Record, project, status, detail string, now time.Time) (Result, Cursor, string, string, bool) {
+	last := run[len(run)-1]
+	segNo := cur.Segment + 1
+	seg := BuildSegment(f.Bank, sid, run, segNo, project, f.MachineID, f.Version)
+	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
+		if refusesDocument(err) {
+			return f.quarantine(res, &cur, errSummary(err)), cur, status, detail, true
+		}
+		res.Stop = true
+		if status == Sent {
+			return f.save(res, cur, Sent, "partly sent; the rest is retried: "+errSummary(err)), cur, status, detail, true
+		}
+		return f.save(res, cur, Retry, errSummary(err)), cur, status, detail, true
+	}
+	uuids := make([]string, len(run))
+	for i, r := range run {
+		uuids[i] = r.UUID
+	}
+	if err := f.Index.Add(uuids...); err != nil {
+		detail = "sent, but the fork-guard index was not updated: " + err.Error()
+	}
+	cur.Offset, cur.LastUUID, cur.Segment, cur.LastTurnAt, cur.SentAt = last.End, last.UUID, segNo, last.Timestamp, now
+	cur.Records += len(run)
+	res.Records += len(run)
+	res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, project
+	return res, cur, Sent, detail, false
 }
 
 func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
@@ -277,9 +313,50 @@ func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 		cur.Fingerprint = fp
 	}
 	if err := SaveCursor(f.Dirs.CursorsDir(), res.Session, cur); err != nil && status == Sent {
-		res.Detail = "sent, but the cursor was not saved: " + err.Error() // the server-held cursor recovers it
+		// A stale cursor would resend; without one the next flush resyncs
+		// from the server and the sent index.
+		if p, perr := cursorPath(f.Dirs.CursorsDir(), res.Session); perr == nil {
+			_ = os.Remove(p)
+		}
+		res.Detail = "sent, but the cursor was not saved: " + err.Error()
 	}
 	return res
+}
+
+// clampTime gives a missing or future time (a clock moved back) the file's
+// modification time, itself never later than now.
+func clampTime(t, mtime, now time.Time) time.Time {
+	if mtime.After(now) {
+		mtime = now
+	}
+	if t.IsZero() || t.After(now) {
+		return mtime
+	}
+	return t
+}
+
+// Segment caps (a large backlog goes out as several appends).
+var (
+	maxSegmentRecords = 400
+	maxSegmentChars   = 900_000
+)
+
+// chunk splits records into segments under the caps.
+func chunk(recs []transcript.Record) [][]transcript.Record {
+	var out [][]transcript.Record
+	start, chars := 0, 0
+	for i, r := range recs {
+		n := 0
+		for _, t := range r.Turns {
+			n += len(t.Content)
+		}
+		if i > start && (i-start >= maxSegmentRecords || chars+n > maxSegmentChars) {
+			out = append(out, recs[start:i])
+			start, chars = i, 0
+		}
+		chars += n
+	}
+	return append(out, recs[start:])
 }
 
 func (f *Flusher) quarantine(res Result, cur *Cursor, why string) Result {

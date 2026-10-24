@@ -46,7 +46,7 @@ type rawRecord struct {
 	UUID             string          `json:"uuid"`
 	SessionID        string          `json:"sessionId"`
 	CWD              string          `json:"cwd"`
-	Timestamp        time.Time       `json:"timestamp"`
+	Timestamp        string          `json:"timestamp"`
 	IsMeta           bool            `json:"isMeta"`
 	IsSidechain      bool            `json:"isSidechain"`
 	IsCompactSummary bool            `json:"isCompactSummary"`
@@ -60,8 +60,38 @@ type block struct {
 	Input map[string]json.RawMessage `json:"input"`
 }
 
-// maxLine bounds one transcript line (pasted images can be large).
-const maxLine = 64 << 20
+// maxLine bounds one transcript line (pasted images can be large); longer
+// lines are skipped without being buffered. A variable so tests can shrink it.
+var maxLine = 16 << 20
+
+// parseTime accepts RFC 3339 with or without fractions; zero when invalid.
+func parseTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
+}
+
+// readLine returns the next complete line; a line longer than maxLine
+// comes back as tooLong with its length, its bytes discarded.
+func readLine(br *bufio.Reader) (line []byte, n int64, tooLong bool, err error) {
+	for {
+		chunk, err := br.ReadSlice('\n')
+		n += int64(len(chunk))
+		if !tooLong {
+			if int64(len(line))+int64(len(chunk)) > int64(maxLine) {
+				tooLong, line = true, nil
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, n, tooLong, err
+	}
+}
 
 // Read normalises the complete lines of r, which starts at byte offset from
 // in the transcript. A last line without newline is left for a later read.
@@ -70,11 +100,9 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 	br := bufio.NewReaderSize(r, 1<<16)
 	var recs []Record
 	off := from
+	var prevTS time.Time
 	for {
-		line, err := br.ReadBytes('\n')
-		if len(line) > maxLine {
-			return recs, st, errors.New("transcript line larger than 64 MiB")
-		}
+		line, n, tooLong, err := readLine(br)
 		if errors.Is(err, io.EOF) {
 			return recs, st, nil // partial or empty last line: not consumed
 		}
@@ -82,8 +110,12 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 			return recs, st, err
 		}
 		start := off
-		off += int64(len(line))
+		off += n
 		st.Consumed = off
+		if tooLong {
+			st.BadLines++
+			continue
+		}
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
@@ -100,16 +132,21 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 		if rr.IsMeta || rr.IsSidechain || rr.IsCompactSummary || len(rr.Message) == 0 {
 			continue
 		}
-		turns := normalise(rr)
+		ts := parseTime(rr.Timestamp)
+		if ts.IsZero() {
+			ts = prevTS // missing or malformed: the previous record's time
+		}
+		prevTS = ts
+		turns := normalise(rr, ts)
 		if len(turns) == 0 {
 			continue
 		}
-		recs = append(recs, Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Timestamp: rr.Timestamp,
+		recs = append(recs, Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Timestamp: ts,
 			Start: start, End: off, Turns: turns})
 	}
 }
 
-func normalise(rr rawRecord) []Turn {
+func normalise(rr rawRecord, ts time.Time) []Turn {
 	var msg struct {
 		Content json.RawMessage `json:"content"`
 	}
@@ -124,7 +161,7 @@ func normalise(rr rawRecord) []Turn {
 		if text == "" {
 			return nil
 		}
-		return []Turn{{Role: rr.Type, Content: text, Timestamp: rr.Timestamp}}
+		return []Turn{{Role: rr.Type, Content: text, Timestamp: ts}}
 	}
 	var s string
 	if json.Unmarshal(msg.Content, &s) == nil {
@@ -141,7 +178,7 @@ func normalise(rr rawRecord) []Turn {
 		case "text":
 			texts = append(texts, b.Text)
 		case "tool_use":
-			actions = append(actions, Turn{Role: "action", Content: action(b), Timestamp: rr.Timestamp})
+			actions = append(actions, Turn{Role: "action", Content: action(b), Timestamp: ts})
 		}
 	}
 	return append(prose(strings.Join(texts, "\n")), actions...)

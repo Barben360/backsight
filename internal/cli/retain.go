@@ -33,7 +33,9 @@ func newRetainCmd(e *env) *cobra.Command {
 
 // newFlusher builds the flusher for this machine and records retain_since
 // the first time live retain runs.
-func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets) (*retain.Flusher, error) {
+// Only jobs tick records retain_since (decision 0050); other callers use a
+// transient boundary of now, so history stays with backfill either way.
+func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets, setSince bool) (*retain.Flusher, error) {
 	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 60*time.Second)
 	if err != nil {
 		return nil, blocked(err)
@@ -46,15 +48,20 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	if err != nil {
 		return nil, blocked(err)
 	}
-	var since time.Time
-	err = state.Update(d, "retain", func(s *state.State) error {
-		if s.RetainSince == nil {
-			t := now().UTC().Truncate(time.Second)
-			s.RetainSince = &t
-		}
-		since = *s.RetainSince
-		return nil
-	})
+	since := now().UTC().Truncate(time.Second)
+	if setSince {
+		err = state.Update(d, "jobs tick", func(s *state.State) error {
+			if s.RetainSince == nil {
+				s.RetainSince = &since
+			}
+			since = *s.RetainSince
+			return nil
+		})
+	} else if st, lerr := state.Load(d.StateFile()); lerr == nil && st.RetainSince != nil {
+		since = *st.RetainSince
+	} else {
+		err = lerr
+	}
 	if err != nil {
 		return nil, blocked(err)
 	}
@@ -151,7 +158,7 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			f, err := newFlusher(d, home, cfg, sec)
+			f, err := newFlusher(d, home, cfg, sec, false)
 			if err != nil {
 				return err
 			}

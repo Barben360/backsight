@@ -137,3 +137,42 @@ func TestActionRedactedBeforeTheCut(t *testing.T) {
 		t.Errorf("token prefix leaked: %q", got)
 	}
 }
+
+func TestTimestampsMissingOrMalformedKeepTheRecord(t *testing.T) {
+	in := `{"type":"user","uuid":"u1","sessionId":"s","timestamp":"2026-10-24T09:00:00+02:00","message":{"role":"user","content":"first"}}
+{"type":"user","uuid":"u2","sessionId":"s","timestamp":"yesterday","message":{"role":"user","content":"malformed"}}
+{"type":"user","uuid":"u3","sessionId":"s","message":{"role":"user","content":"missing"}}
+`
+	recs, st, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(recs) != 3 || st.BadLines != 0 {
+		t.Fatalf("%d records, %+v, %v", len(recs), st, err)
+	}
+	want := time.Date(2026, 10, 24, 7, 0, 0, 0, time.UTC) // +02:00 normalised to UTC
+	for _, r := range recs {
+		if !r.Timestamp.Equal(want) || r.Timestamp.Location() != time.UTC {
+			t.Errorf("%s: %v", r.UUID, r.Timestamp)
+		}
+	}
+}
+
+// An oversized line is skipped and counted; the records after it are read.
+func TestOversizedLineIsSkipped(t *testing.T) {
+	old := maxLine
+	maxLine = 200
+	t.Cleanup(func() { maxLine = old })
+	big := `{"type":"user","uuid":"big","sessionId":"s","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"` + strings.Repeat("x", 500) + `"}}`
+	in := big + "\n" + `{"type":"user","uuid":"u2","sessionId":"s","timestamp":"2026-10-24T09:01:00Z","message":{"role":"user","content":"after"}}` + "\n"
+	recs, st, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(recs) != 1 || recs[0].UUID != "u2" || st.BadLines != 1 || st.Consumed != int64(len(in)) {
+		t.Errorf("%v %+v %v", recs, st, err)
+	}
+}
+
+func TestMultiBlockAssistantRecord(t *testing.T) {
+	in := `{"type":"assistant","uuid":"a1","sessionId":"s","timestamp":"2026-10-24T09:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"one"},{"type":"tool_use","name":"Read","input":{"file_path":"/a"}},{"type":"text","text":"two"}]}}` + "\n"
+	recs, _, _ := Read(strings.NewReader(in), 0)
+	got := flatten(recs)
+	if len(got) != 2 || got[0].content != "one\ntwo" || got[1].content != "Read /a" {
+		t.Errorf("%v", got)
+	}
+}

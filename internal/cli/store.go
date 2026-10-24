@@ -80,7 +80,9 @@ func newStoreCmd(e *env) *cobra.Command {
 				res.Warning = "the notes outbox is over 50 MB: the server has not accepted notes for a while"
 			}
 			machineID, _ := retain.MachineID(d.State)
-			if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
+			if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+				res.Warning = "maintenance in progress: the note goes out after it"
+			} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
 				if fr, err := ob.Flush(cmd.Context(), cl, cfg.Server.Bank, machineID); err == nil && fr.Kept == 0 {
 					res.Status = "stored"
 				}

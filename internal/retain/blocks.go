@@ -119,6 +119,9 @@ type Cursor struct {
 	LastTurnAt  time.Time `json:"last_turn_at"`
 	SentAt      time.Time `json:"sent_at"`
 	Quarantined bool      `json:"quarantined"`
+	// Backfill: the session started before retain_since; live retain leaves
+	// it to backfill without re-reading it every tick.
+	Backfill bool `json:"backfill,omitempty"`
 }
 
 func cursorPath(dir, sid string) (string, error) {
@@ -199,7 +202,7 @@ func LoadSentIndex(dir string) (*SentIndex, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	for i := 0; i+8 <= len(raw); i += 8 {
+	for i := 0; i+8 <= len(raw); i += 8 { // a torn trailing entry is ignored
 		idx.set[binary.BigEndian.Uint64(raw[i:])] = true
 	}
 	return idx, nil
@@ -227,6 +230,13 @@ func (s *SentIndex) Add(uuids ...string) error {
 	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
+	}
+	// A torn entry from a crash would shift every later key: cut it first.
+	if fi, err := f.Stat(); err == nil && fi.Size()%8 != 0 {
+		if err := f.Truncate(fi.Size() - fi.Size()%8); err != nil {
+			_ = f.Close()
+			return err
+		}
 	}
 	if _, err := f.Write(buf); err != nil {
 		_ = f.Close()

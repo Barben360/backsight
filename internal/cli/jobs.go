@@ -72,7 +72,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				return finish(nil)
 			}
 
-			f, err := newFlusher(d, home, cfg, sec)
+			f, err := newFlusher(d, home, cfg, sec, true)
 			if err != nil {
 				return err
 			}

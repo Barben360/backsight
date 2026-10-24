@@ -28,7 +28,10 @@ type fakeHS struct {
 	content map[string]string
 	retains []hindsight.RetainItem
 	ops     []string
-	status  int // non-zero: answer retains with this status
+	status  int  // non-zero: answer retains with this status
+	stale   bool // metadata not updated (async retain still running)
+	gets    int  // document reads
+	seenOps map[string]bool
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -46,9 +49,19 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 			OperationID string                 `json:"operation_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if h.seenOps == nil {
+			h.seenOps = map[string]bool{}
+		}
+		if body.OperationID != "" && h.seenOps[body.OperationID] {
+			_, _ = w.Write([]byte(`{"success":true}`)) // E21: a repeated operation collapses
+			return
+		}
+		h.seenOps[body.OperationID] = true
 		for _, it := range body.Items {
 			h.retains = append(h.retains, it)
-			h.docs[it.DocumentID] = it.Metadata
+			if !h.stale || h.docs[it.DocumentID] == nil {
+				h.docs[it.DocumentID] = it.Metadata
+			}
 			if it.UpdateMode == "append" {
 				h.content[it.DocumentID] += "\n" + it.Content
 			} else {
@@ -58,6 +71,7 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		h.ops = append(h.ops, body.OperationID)
 		_, _ = w.Write([]byte(`{"success":true}`))
 	case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
+		h.gets++
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
 		meta, ok := h.docs[id]
 		if !ok {
@@ -454,5 +468,144 @@ func TestReleaseQuarantineResyncs(t *testing.T) {
 	}
 	if r := e.flush("s1", Options{}); r.Status != Sent {
 		t.Errorf("after release: %+v", r)
+	}
+}
+
+// countLines counts how many stored lines of session s1's document contain text.
+func (h *fakeHS) countLines(text string) int {
+	n := 0
+	for _, l := range strings.Split(h.content["conversation:s1"], "\n") {
+		if strings.Contains(l, text) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestLargeBacklogGoesOutInCappedSegments(t *testing.T) {
+	old := maxSegmentRecords
+	maxSegmentRecords = 2
+	t.Cleanup(func() { maxSegmentRecords = old })
+	e := newEnv(t)
+	for i := 0; i < 5; i++ {
+		e.record("s1", fmt.Sprintf("u%d", i), "user", i, fmt.Sprintf("turn %d", i))
+	}
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || r.Records != 5 || r.Segment != 3 || len(e.hs.retains) != 3 {
+		t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	if e.hs.retains[0].UpdateMode != "" || e.hs.retains[1].UpdateMode != "append" || e.hs.retains[2].Metadata["segment"] != "3" {
+		t.Errorf("%+v", e.hs.retains)
+	}
+	for i := 0; i < 5; i++ {
+		if n := e.hs.countLines(fmt.Sprintf("turn %d", i)); n != 1 {
+			t.Errorf("turn %d stored %d times", i, n)
+		}
+	}
+}
+
+// Server metadata lagging an async retain, plus a lost cursor: the sent
+// index prevents a duplicate.
+func TestStaleServerMetadataDoesNotDuplicate(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	e.flush("s1", Options{})
+	e.hs.stale = true
+	e.record("s1", "u2", "user", 30, "second")
+	e.flush("s1", Options{})
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.record("s1", "u3", "user", 60, "third")
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || r.Records != 1 {
+		t.Fatalf("%+v", r)
+	}
+	for _, text := range []string{"first", "second", "third"} {
+		if n := e.hs.countLines(text); n != 1 {
+			t.Errorf("%q stored %d times", text, n)
+		}
+	}
+}
+
+// A cursor that cannot be saved after a send must not cause a resend.
+func TestCursorSaveFailureDoesNotDuplicate(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	_ = os.MkdirAll(e.f.Dirs.CursorsDir(), 0o700)
+	_ = os.Chmod(e.f.Dirs.CursorsDir(), 0o500) // writes fail
+	r := e.flush("s1", Options{})
+	_ = os.Chmod(e.f.Dirs.CursorsDir(), 0o700)
+	if r.Status != Sent || !strings.Contains(r.Detail, "cursor was not saved") {
+		t.Fatalf("%+v", r)
+	}
+	r = e.flush("s1", Options{})
+	if r.Status == Sent || e.hs.countLines("first") != 1 || len(e.hs.retains) != 1 {
+		t.Errorf("resent after a failed cursor save: %+v, %d retains", r, len(e.hs.retains))
+	}
+}
+
+// A backfill session is remembered: later ticks neither re-read nor query it.
+func TestBackfillSessionIsNotRequeriedEveryTick(t *testing.T) {
+	e := newEnv(t)
+	e.f.RetainSince = time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	e.record("s1", "u1", "user", 0, "old")
+	e.flush("s1", Options{})
+	gets := e.hs.gets
+	for i := 0; i < 3; i++ {
+		if r := e.flush("s1", Options{}); r.Status != Backfill {
+			t.Fatalf("%+v", r)
+		}
+	}
+	if e.hs.gets != gets {
+		t.Errorf("%d extra document reads for a backfill session", e.hs.gets-gets)
+	}
+	if r := e.flush("s1", Options{IgnoreSince: true}); r.Status != Sent {
+		t.Errorf("an explicit flush still sends it: %+v", r)
+	}
+}
+
+func TestTruncatedTranscriptResyncs(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	e.record("s1", "u2", "user", 1, "second")
+	e.flush("s1", Options{})
+	p := filepath.Join(e.dir, "s1.jsonl")
+	_ = os.WriteFile(p, nil, 0o600) // rewritten shorter than the cursor offset
+	e.record("s1", "u1", "user", 0, "first")
+	e.record("s1", "u2", "user", 1, "second")
+	e.record("s1", "u3", "user", 60, "third")
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || r.Records != 1 || e.hs.countLines("third") != 1 {
+		t.Errorf("%+v", r)
+	}
+}
+
+// A clock-skewed future timestamp is clamped: the session waits, then goes.
+func TestFutureTimestampIsClamped(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 600, "from the future")               // 19:00, the clock says 12:00
+	_ = os.Chtimes(filepath.Join(e.dir, "s1.jsonl"), e.clock, e.clock) // written now
+	if r := e.flush("s1", Options{}); r.Status != Waiting {
+		t.Fatalf("%+v", r)
+	}
+	e.clock = e.clock.Add(31 * time.Minute)
+	if r := e.flush("s1", Options{}); r.Status != Sent || e.hs.retains[0].Timestamp.After(e.clock) {
+		t.Errorf("%+v %v", r, e.hs.retains)
+	}
+}
+
+func TestSettleBoundaries(t *testing.T) {
+	for _, c := range []struct {
+		age  time.Duration
+		want string
+	}{{29*time.Minute + 59*time.Second, Waiting}, {30 * time.Minute, Sent}} {
+		e := newEnv(t)
+		e.record("s1", "u1", "user", 0, "q")
+		e.clock = time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC).Add(c.age)
+		if r := e.flush("s1", Options{}); r.Status != c.want {
+			t.Errorf("age %s: %s, want %s", c.age, r.Status, c.want)
+		}
 	}
 }

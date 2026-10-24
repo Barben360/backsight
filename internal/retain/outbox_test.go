@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/hindsight"
 )
 
 func outbox(t *testing.T) Outbox {
@@ -177,5 +180,47 @@ func TestRequeue(t *testing.T) {
 	}
 	if n, _ := o.Quarantined(); n != 0 {
 		t.Errorf("still quarantined %d", n)
+	}
+}
+
+// After a torn line, the next note starts on a new line and both survive.
+func TestAppendAfterTornLine(t *testing.T) {
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "before", at))
+	f, _ := os.OpenFile(o.Path, os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.WriteString(`{"operation_id":"torn","conte`)
+	_ = f.Close()
+	if _, err := o.Append(NewNote("b", "lesson", "p", "after", at)); err != nil {
+		t.Fatal(err)
+	}
+	notes, _ := o.read()
+	if len(notes) != 2 || notes[0].Content != "before" || notes[1].Content != "after" {
+		t.Errorf("%+v", notes)
+	}
+}
+
+// store can append while a flush waits on a slow server; the new note is
+// kept after the flush.
+func TestAppendDuringSlowFlush(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := hindsight.New(srv.URL, "k", 5*time.Second)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "first", at))
+	done := make(chan FlushResult)
+	go func() { r, _ := o.Flush(context.Background(), c, "b", "m"); done <- r }()
+	time.Sleep(50 * time.Millisecond) // the flush is now waiting on the server
+	if _, err := o.Append(NewNote("b", "lesson", "p", "during", at)); err != nil {
+		t.Fatalf("append blocked by a flush in flight: %v", err)
+	}
+	close(release)
+	r := <-done
+	notes, _ := o.read()
+	if r.Sent != 1 || len(notes) != 1 || notes[0].Content != "during" {
+		t.Errorf("%+v %+v", r, notes)
 	}
 }

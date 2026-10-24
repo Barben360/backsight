@@ -166,3 +166,25 @@ func TestMachineIDIsStable(t *testing.T) {
 		t.Error("machine id changed")
 	}
 }
+
+// A torn trailing entry (crash mid-write) must not shift later keys.
+func TestSentIndexTornEntry(t *testing.T) {
+	dir := t.TempDir()
+	idx, _ := LoadSentIndex(dir)
+	_ = idx.Add("u1")
+	f, _ := os.OpenFile(filepath.Join(dir, "index.bin"), os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.Write([]byte{1, 2, 3})
+	_ = f.Close()
+	idx, err := LoadSentIndex(dir)
+	if err != nil || !idx.Has("u1") {
+		t.Fatalf("%v", err)
+	}
+	_ = idx.Add("u2")
+	again, _ := LoadSentIndex(dir)
+	if !again.Has("u1") || !again.Has("u2") {
+		t.Error("an entry written after a torn one was misaligned")
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, "index.bin")); fi.Size() != 16 {
+		t.Errorf("size %d", fi.Size())
+	}
+}
