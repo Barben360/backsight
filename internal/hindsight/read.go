@@ -110,3 +110,16 @@ func (c *Client) Entities(ctx context.Context, bank, tag string, limit int) ([]E
 	query := url.Values{"tags": {tag}, "tags_match": {"any_strict"}, "limit": {strconv.Itoa(limit)}}
 	return out.Items, c.get(ctx, bankPath(bank, "/entities"), query, &out)
 }
+
+// Recent lists up to limit memories tagged tag, most recently updated
+// first; factType "" lists every type.
+func (c *Client) Recent(ctx context.Context, bank, tag, factType string, limit int) ([]Memory, error) {
+	var out struct {
+		Items []Memory `json:"items"`
+	}
+	q := url.Values{"tags": {tag}, "tags_match": {"any_strict"}, "time_field": {"updated_at"}, "limit": {strconv.Itoa(limit)}}
+	if factType != "" {
+		q.Set("type", factType)
+	}
+	return out.Items, c.get(ctx, bankPath(bank, "/memories/list"), q, &out)
+}

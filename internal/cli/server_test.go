@@ -175,6 +175,8 @@ var (
 	// /memories/{id}; projectEntities answers /tags and /entities.
 	recallAnswer    string
 	recallTags      []string
+	recentAnswer    map[string]string // memories/list items by type ("" = any)
+	recentDown      atomic.Bool
 	memories        map[string]string
 	projectEntities map[string]string
 	retainedTags    []string
@@ -199,6 +201,8 @@ func fakeHindsight(t *testing.T) (port int) {
 	extractFails.Store(false)
 	retainedTags, queueAtRetain = nil, nil
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
+	recentAnswer = map[string]string{}
+	recentDown.Store(false)
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -240,6 +244,16 @@ func fakeHindsight(t *testing.T) (port int) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"results":` + recallAnswer + `}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") == "updated_at":
+			if recentDown.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			items := recentAnswer[r.URL.Query().Get("type")]
+			if items == "" {
+				items = "[]"
+			}
+			_, _ = w.Write([]byte(`{"items":` + items + `}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
 			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]
 			if !ok {

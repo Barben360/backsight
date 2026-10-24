@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -80,5 +81,24 @@ func TestTagsAndEntitiesPage(t *testing.T) {
 	ents, err := c.Entities(context.Background(), "b", "project:a", 200)
 	if err != nil || len(ents) != 1 || ents[0].Name != "PostgreSQL" || ents[0].Mentions != 4 {
 		t.Errorf("%+v %v", ents, err)
+	}
+}
+
+func TestRecentAsksForTheLatestUpdatedOfOneProject(t *testing.T) {
+	var q url.Values
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		q = r.URL.Query()
+		_, _ = w.Write([]byte(`{"items":[{"id":"o1","text":"t","fact_type":"observation","updated_at":"2026-10-24T09:00:00Z"}]}`))
+	})
+	got, err := c.Recent(context.Background(), "b", "project:billing", "observation", 5)
+	if err != nil || len(got) != 1 || got[0].ID != "o1" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if q.Get("tags") != "project:billing" || q.Get("tags_match") != "any_strict" || q.Get("time_field") != "updated_at" || q.Get("limit") != "5" || q.Get("type") != "observation" {
+		t.Errorf("query %v", q)
+	}
+	_, _ = c.Recent(context.Background(), "b", "project:billing", "", 5)
+	if _, ok := q["type"]; ok {
+		t.Errorf("no type filter wanted: %v", q)
 	}
 }
