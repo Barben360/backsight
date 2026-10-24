@@ -4,7 +4,7 @@ COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 LDFLAGS  := -s -w -X $(PKG)/internal/buildinfo.Version=$(VERSION) -X $(PKG)/internal/buildinfo.Commit=$(COMMIT)
 export CGO_ENABLED := 0
 
-.PHONY: build test lint cross leaks
+.PHONY: build test lint cross leaks snapshot verify-dist
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/backsight ./cmd/backsight
 
@@ -23,3 +23,17 @@ cross:
 
 leaks:
 	gitleaks git . --no-banner --redact
+
+# Signed local release build; the key comes from pass and never touches the
+# repository (decision 0027).
+snapshot:
+	@set -e; d=$$(mktemp -d); trap 'shred -u "$$d/key" 2>/dev/null; rm -rf "$$d"' EXIT; \
+	pass show backsight/minisign-secret-key > "$$d/key"; \
+	MINISIGN_KEY_FILE="$$d/key" goreleaser release --snapshot --clean
+	@$(MAKE) --no-print-directory verify-dist
+
+# Every artifact in dist/ must verify against the committed public key.
+verify-dist:
+	@set -e; n=0; for s in dist/*.minisig; do \
+		minisign -Vq -p minisign.pub -m "$${s%.minisig}"; n=$$((n+1)); \
+	done; test $$n -gt 0; echo "$$n signatures verified"

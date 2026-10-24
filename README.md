@@ -23,3 +23,14 @@ MIT, see `LICENSE`.
 `make test` (race detector), `make lint` (golangci-lint v2), `make cross` (compiles the four release targets), `make build` → `bin/backsight`.
 
 Every command accepts `--json` and prints one envelope `{schema_version, command, ok, data | error}`. Exit codes: `0` ok, `2` invalid invocation, `10` needs the user, `20` blocked by the environment, `30` failed and rolled back, `40` partial and resumable.
+
+## Verifying a release
+
+Every archive and `checksums.txt` carry a minisign signature. With the public key from this repository:
+
+```sh
+minisign -Vm checksums.txt -p minisign.pub
+sha256sum -c --ignore-missing checksums.txt
+```
+
+`minisign.next.pub` is the next key: binaries embed both so a key rotation needs no trust reset. Maintainers: `make snapshot` builds and signs locally (key from `pass`), and tags `v*` publish through `.github/workflows/release.yml`.

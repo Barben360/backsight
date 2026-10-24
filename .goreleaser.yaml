@@ -1,0 +1,53 @@
+# Release build (SPEC §16, decision 0027). `make snapshot` runs it locally.
+version: 2
+project_name: backsight
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - main: ./cmd/backsight
+    binary: backsight
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/Barben360/backsight/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/Barben360/backsight/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/Barben360/backsight/internal/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets: [linux_amd64, linux_arm64, darwin_arm64, windows_amd64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md, minisign.pub]
+
+checksum:
+  name_template: checksums.txt
+
+# Every archive and the checksums file get a minisign signature. The secret
+# key comes from MINISIGN_KEY_FILE (written from an Actions secret, or from
+# pass by `make snapshot`); it has no password, the store protects it.
+signs:
+  - id: minisign
+    cmd: minisign
+    args: ["-S", "-s", "{{ .Env.MINISIGN_KEY_FILE }}", "-m", "${artifact}", "-x", "${signature}"]
+    signature: "${artifact}.minisig"
+    artifacts: all
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+release:
+  prerelease: auto
+  draft: false
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude: ["^Merge"]
