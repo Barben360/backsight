@@ -5,6 +5,7 @@ schema_version = 1
 url = "http://127.0.0.1:8888"
 bank = "claude-memory"
 mode = "local"
+ui_port = 9999
 compose_dir = "/d/server"
 digest = ""
 [projects]

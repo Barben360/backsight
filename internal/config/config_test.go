@@ -97,6 +97,12 @@ func TestValidate(t *testing.T) {
 		{"url without host", func(c *Config) { c.Server.URL = "http://" }, "server.url"},
 		{"url with credentials", func(c *Config) { c.Server.URL = "http://u:pw@127.0.0.1:8888" }, "server.url"},
 		{"bank dot", func(c *Config) { c.Server.Bank = "." }, "server.bank"},
+		{"ui port zero", func(c *Config) { c.Server.UIPort = 0 }, "server.ui_port"},
+		{"ui port too big", func(c *Config) { c.Server.UIPort = 70000 }, "server.ui_port"},
+		{"ui port equals api port", func(c *Config) { c.Server.UIPort = 8888 }, "server.ui_port"},
+		{"local without explicit port", func(c *Config) { c.Server.URL = "http://127.0.0.1" }, "server.url"},
+		{"digest not sha256", func(c *Config) { c.Server.Digest = "latest" }, "server.digest"},
+		{"digest short", func(c *Config) { c.Server.Digest = "sha256:abc" }, "server.digest"},
 		{"bank dotdot", func(c *Config) { c.Server.Bank = ".." }, "server.bank"},
 		{"global_min_score range", func(c *Config) { c.Recall.GlobalMinScore = 1.2 }, "recall.global_min_score"},
 		{"negative min_score", func(c *Config) { c.Recall.MinScore = -0.1 }, "recall.min_score"},
@@ -201,5 +207,22 @@ func TestValidateDoesNotEchoURLCredentials(t *testing.T) {
 	cfg.Server.URL = "http://u:fakevalue@127.0.0.1:8888"
 	if err := cfg.Validate(); err == nil || strings.Contains(err.Error(), "fakevalue") {
 		t.Errorf("want a refusal without the password, got %v", err)
+	}
+}
+
+func TestAPIPortAndDigestAccepted(t *testing.T) {
+	cfg := Default(dirs, "/home/u")
+	cfg.Server.URL, cfg.Server.UIPort = "http://127.0.0.1:18888", 19999
+	cfg.Server.Digest = "sha256:" + strings.Repeat("a", 64)
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := cfg.APIPort(); err != nil || p != 18888 {
+		t.Errorf("%d %v", p, err)
+	}
+	// Remote mode reaches a server elsewhere: the default https port is fine.
+	cfg.Server.Mode, cfg.Server.URL = "remote", "https://mem.example"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("remote without explicit port: %v", err)
 	}
 }

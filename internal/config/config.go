@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -39,8 +41,9 @@ type Server struct {
 	URL        string `toml:"url" json:"url"`
 	Bank       string `toml:"bank" json:"bank"`
 	Mode       string `toml:"mode" json:"mode"`
+	UIPort     int    `toml:"ui_port" json:"ui_port"`
 	ComposeDir string `toml:"compose_dir" json:"compose_dir"`
-	Digest     string `toml:"digest" json:"digest"`
+	Digest     string `toml:"digest" json:"digest"` // empty: the binary's pin
 }
 
 type Projects struct {
@@ -115,7 +118,7 @@ func Default(d paths.Dirs, home string) Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
 		Server: Server{URL: "http://127.0.0.1:8888", Bank: "claude-memory", Mode: "local",
-			ComposeDir: filepath.Join(d.Data, "server")},
+			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server")},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}},
 		Components: Components{Read: true, Write: true},
@@ -202,6 +205,19 @@ func (c Config) Validate() error {
 	case u.User != nil:
 		bad("server.url", "must not carry credentials (the API key lives in secrets.toml)")
 	}
+	if c.Server.Mode == "local" {
+		if u, err := url.Parse(c.Server.URL); err == nil && u.Host != "" && u.Port() == "" {
+			bad("server.url", "local mode needs an explicit port (the API port to publish)")
+		}
+	}
+	if c.Server.UIPort < 1 || c.Server.UIPort > 65535 {
+		bad("server.ui_port", "must be within [1, 65535], got %d", c.Server.UIPort)
+	} else if p, err := c.APIPort(); err == nil && p == c.Server.UIPort {
+		bad("server.ui_port", "must differ from the API port %d", p)
+	}
+	if d := c.Server.Digest; d != "" && !digestRE.MatchString(d) {
+		bad("server.digest", "%q is not empty or sha256:<64 hex>", d)
+	}
 	switch c.Server.Bank {
 	case "":
 		bad("server.bank", "must not be empty")
@@ -245,6 +261,25 @@ func (c Config) Validate() error {
 	atLeast("backup.keep_weekly", c.Backup.KeepWeekly, 0)
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
 	return errors.Join(errs...)
+}
+
+var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// APIPort is the port of server.url, explicit or the scheme's default.
+func (c Config) APIPort() (int, error) {
+	u, err := url.Parse(c.Server.URL)
+	if err != nil {
+		return 0, err
+	}
+	p := u.Port()
+	switch {
+	case p != "":
+	case u.Scheme == "https":
+		p = "443"
+	default:
+		p = "80"
+	}
+	return strconv.Atoi(p)
 }
 
 // cgnat is 100.64.0.0/10, the range tailnets such as Tailscale use.
