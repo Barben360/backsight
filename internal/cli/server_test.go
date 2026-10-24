@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -177,6 +178,8 @@ var (
 	recallTags      []string
 	recallQueries   []string
 	recentAnswer    map[string]string // memories/list items by type ("" = any)
+	listAnswer      map[string]string // memories/list (paged listing) items by type
+	curation        []string          // PATCH/DELETE calls on memories and documents
 	recentDown      atomic.Bool
 	memories        map[string]string
 	projectEntities map[string]string
@@ -203,7 +206,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainedTags, queueAtRetain = nil, nil
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	recallQueries = nil
-	recentAnswer = map[string]string{}
+	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentDown.Store(false)
 	var mu sync.Mutex
 	banks := map[string]bool{}
@@ -258,6 +261,20 @@ func fakeHindsight(t *testing.T) (port int) {
 				items = "[]"
 			}
 			_, _ = w.Write([]byte(`{"items":` + items + `}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list"):
+			items := listAnswer[r.URL.Query().Get("type")]
+			if items == "" || r.URL.Query().Get("offset") != "0" {
+				items = "[]"
+			}
+			_, _ = w.Write([]byte(`{"items":` + items + `,"total":` + strconv.Itoa(strings.Count(items, `"id"`)) + `}`))
+		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
+			body, _ := io.ReadAll(r.Body)
+			curation = append(curation, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reflect"):
+			body, _ := io.ReadAll(r.Body)
+			recallTags = append(recallTags, string(body))
+			_, _ = w.Write([]byte(`{"text":"Billing keeps PostgreSQL 16.","usage":{"input_tokens":1200,"output_tokens":40}}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
 			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]
 			if !ok {

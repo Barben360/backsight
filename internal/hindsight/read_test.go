@@ -102,3 +102,32 @@ func TestRecentAsksForTheLatestUpdatedOfOneProject(t *testing.T) {
 		t.Errorf("no type filter wanted: %v", q)
 	}
 }
+
+func TestCurationCalls(t *testing.T) {
+	var got []string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+		if strings.HasSuffix(r.URL.Path, "/reflect") {
+			_, _ = w.Write([]byte(`{"text":"answer","usage":{"input_tokens":10,"output_tokens":2}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	})
+	ctx := context.Background()
+	_ = c.Invalidate(ctx, "b", "m1", "forgotten", false)
+	_ = c.Invalidate(ctx, "b", "m1", "restored", true)
+	_ = c.ClearObservations(ctx, "b", "f1")
+	_ = c.DeleteDocument(ctx, "b", "conversation:s1")
+	a, err := c.Reflect(ctx, "b", "why?", []string{"project:p"}, 500)
+	want := []string{
+		`PATCH /v1/default/banks/b/memories/m1 {"reason":"forgotten","state":"invalidated"}`,
+		`PATCH /v1/default/banks/b/memories/m1 {"reason":"restored","state":"valid"}`,
+		`DELETE /v1/default/banks/b/memories/f1/observations `,
+		`DELETE /v1/default/banks/b/documents/conversation%3As1 `,
+		`POST /v1/default/banks/b/reflect {"budget":"low","max_tokens":500,"query":"why?","tags":["project:p"],"tags_match":"any_strict"}`,
+	}
+	if err != nil || a.Text != "answer" || a.Usage.InputTokens != 10 || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("err %v\ngot:\n%s\nwant:\n%s", err, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}

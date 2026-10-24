@@ -333,8 +333,9 @@ func (c *Client) Retain(ctx context.Context, bank string, items []RetainItem, op
 
 // Document is what backsight reads back of a stored document.
 type Document struct {
-	ID       string            `json:"id"`
-	Metadata map[string]string `json:"document_metadata"`
+	ID          string            `json:"id"`
+	Metadata    map[string]string `json:"document_metadata"`
+	MemoryUnits int               `json:"memory_unit_count"`
 }
 
 // GetDocument returns a document; an *APIError of kind NotFound when absent.

@@ -123,3 +123,43 @@ func (c *Client) Recent(ctx context.Context, bank, tag, factType string, limit i
 	}
 	return out.Items, c.get(ctx, bankPath(bank, "/memories/list"), q, &out)
 }
+
+// Invalidate soft-retires (or with valid=true restores) a memory: excluded
+// from recall and consolidation, reversible (SPEC §4 Corrections).
+func (c *Client) Invalidate(ctx context.Context, bank, id, reason string, valid bool) error {
+	body := map[string]string{"state": "invalidated", "reason": reason}
+	if valid {
+		body = map[string]string{"state": "valid", "reason": reason}
+	}
+	return c.do(ctx, http.MethodPatch, bankPath(bank, "/memories/"+url.PathEscape(id)), nil, body, nil)
+}
+
+// ClearObservations deletes the observations derived from a memory.
+func (c *Client) ClearObservations(ctx context.Context, bank, id string) error {
+	return c.do(ctx, http.MethodDelete, bankPath(bank, "/memories/"+url.PathEscape(id)+"/observations"), nil, nil, nil)
+}
+
+// DeleteDocument deletes a document and the memories extracted from it.
+func (c *Client) DeleteDocument(ctx context.Context, bank, id string) error {
+	return c.do(ctx, http.MethodDelete, bankPath(bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A")), nil, nil, nil)
+}
+
+// ReflectAnswer is Hindsight's reflect answer and its token use.
+type ReflectAnswer struct {
+	Text  string `json:"text"`
+	Usage struct {
+		InputTokens  int64 `json:"input_tokens"`
+		OutputTokens int64 `json:"output_tokens"`
+	} `json:"usage"`
+}
+
+// Reflect asks the server's LLM a question over the memory (one LLM call
+// over many memories: costly, never on a hook path).
+func (c *Client) Reflect(ctx context.Context, bank, query string, tags []string, maxTokens int) (ReflectAnswer, error) {
+	body := map[string]any{"query": query, "budget": "low", "max_tokens": maxTokens}
+	if len(tags) > 0 {
+		body["tags"], body["tags_match"] = tags, "any_strict"
+	}
+	var a ReflectAnswer
+	return a, c.do(ctx, http.MethodPost, bankPath(bank, "/reflect"), nil, body, &a)
+}
