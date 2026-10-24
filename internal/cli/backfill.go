@@ -188,8 +188,12 @@ func surveyAll(f *retain.Flusher, files []string, fl backfillFlags, prices retai
 		case "notes":
 			plan.NotesOnly++
 			plan.Notes += c.Notes
-			plan.Estimate = plan.Estimate.Add(retain.EstimateSession(int64(c.Notes)*600, prices))
 			send = append(send, c)
+		}
+		if c.Status == "send" || c.Status == "notes" {
+			for _, n := range c.NoteEst { // each save is its own document and extraction
+				plan.Estimate = plan.Estimate.Add(retain.EstimateSession(n, prices))
+			}
 		}
 	}
 	sort.Slice(send, func(i, j int) bool { return send[i].Start.Before(send[j].Start) })

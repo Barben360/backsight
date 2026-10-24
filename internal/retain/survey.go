@@ -17,6 +17,7 @@ type Candidate struct {
 	Start   time.Time `json:"start"`
 	Chars   int64     `json:"chars"`  // unsent turn text
 	Notes   int       `json:"notes"`  // explicit saves to replay
+	NoteEst []int64   `json:"-"`      // characters of each save, for the estimate
 	Status  string    `json:"status"` // send | notes (sent, explicit saves to replay) | sent | opted_out | empty
 	Reason  string    `json:"reason,omitempty"`
 }
@@ -59,7 +60,10 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 		return c, recs
 	}
 	if !replayed {
-		c.Notes = len(f.Notes(sid, recs))
+		for _, n := range f.Notes(sid, recs) {
+			c.NoteEst = append(c.NoteEst, int64(len(n.Content)))
+		}
+		c.Notes = len(c.NoteEst)
 	}
 	switch out, why := f.Resolver.OptedOut(recs[0].CWD, f.Exclude); {
 	case out && c.Notes == 0:

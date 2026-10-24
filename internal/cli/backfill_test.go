@@ -295,6 +295,36 @@ func TestBackfillOptedOutSessionSendsNoNotes(t *testing.T) {
 	}
 }
 
+// Each explicit save is its own document and extraction: the plan adds a
+// per-note estimate, for sessions to send and for sessions already sent.
+func TestBackfillPlanEstimatesEachNote(t *testing.T) {
+	estimate := func(withSave, sent bool) retain.Estimate {
+		home := devInstall(t, true)
+		pointAt(t, home, fakeHindsight(t))
+		fastBackfill(t)
+		oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), withSave)
+		if sent {
+			run(t, "retain", "flush", "--session", "s1")
+		}
+		_, out, _ := run(t, "retain", "backfill", "--plan", "--json")
+		var env struct {
+			Data backfillResult `json:"data"`
+		}
+		_ = json.Unmarshal([]byte(out), &env)
+		return env.Data.Plan.Estimate
+	}
+	prices := retain.PricesFor("deepseek-v4-flash", 0, 0, 0, "")
+	note := retain.EstimateSession(int64(len("Index partiels requis.")), prices)
+	// the save's tool-use line also adds a few turn characters
+	if got, base := estimate(true, false), estimate(false, false); got.InputTokens < base.InputTokens+note.InputTokens || got.InputTokens > base.InputTokens+note.InputTokens+100 {
+		t.Errorf("session to send: input %d, want %d + note %d", got.InputTokens, base.InputTokens, note.InputTokens)
+	}
+	// the note's content also carries its title
+	if got := estimate(true, true); got.InputTokens < note.InputTokens || got.InputTokens > note.InputTokens+50 {
+		t.Errorf("notes only: input %d, want the note's %d", got.InputTokens, note.InputTokens)
+	}
+}
+
 // A session already sent that holds explicit saves is queued for them.
 func TestBackfillReplaysNotesOfSentSessions(t *testing.T) {
 	home := devInstall(t, true)
