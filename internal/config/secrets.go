@@ -43,7 +43,7 @@ func LoadSecrets(path string) (Secrets, error) {
 	if err != nil {
 		return s, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if runtime.GOOS != "windows" {
 		fi, err := f.Stat()
 		if err != nil {
