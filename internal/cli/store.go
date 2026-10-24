@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -47,16 +50,6 @@ func newStoreCmd(e *env) *cobra.Command {
 		Short: "Store one durable fact (a decision, correction, convention, pitfall, state or lesson)",
 		Args:  usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !retain.Kinds[kind] {
-				return &output.Error{Code: output.Usage, Message: fmt.Sprintf("--kind %q: one of %s", kind, kindList())}
-			}
-			text := strings.TrimSpace(strings.Join(args, " "))
-			if text == "" {
-				return &output.Error{Code: output.Usage, Message: "empty text"}
-			}
-			if _, kinds := redact.Text(text); len(kinds) > 0 {
-				return &output.Error{Code: output.Usage, Message: "the text holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory"}
-			}
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
 				return err
@@ -65,48 +58,73 @@ func newStoreCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if proj == "" {
-				cwd, _ := os.Getwd()
-				proj = project.New(home, cfg.Projects.Transverse).Project(cwd)
+			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, kind, proj, strings.Join(args, " "))
+			if res.Document == "" {
+				return failed // refused before anything was queued
 			}
-			n := retain.NewNote(cfg.Server.Bank, kind, proj, text, now())
-			ob := notesOutbox(d)
-			warn, err := ob.Append(n)
-			if err != nil {
-				return blocked(err)
-			}
-			res := storeResult{Status: "queued", Document: n.DocumentID, Project: proj, Kind: kind}
-			var failed error
-			if warn {
-				res.Warning = "the notes outbox is over 50 MB: the server has not accepted notes for a while"
-			}
-			machineID, _ := retain.MachineID(d.State)
-			if _, err := os.Stat(d.MaintenanceLock()); err == nil {
-				res.Warning = "maintenance in progress: the note goes out after it"
-			} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
-				fr, err := ob.Flush(cmd.Context(), cl, cfg.Server.Bank, machineID)
-				switch {
-				case err != nil || fr.Kept > 0:
-				case fr.Quarantined > 0:
-					res.Status = "rejected"
-					failed = &output.Error{Code: output.Blocked, Message: "the server refused the note (" + fr.LastError + "); it is kept in quarantine: see backsight doctor"}
-				default:
-					res.Status = "stored"
-				}
-			}
-			return e.report("store", res, func() string {
-				msg := fmt.Sprintf("%s (%s, project %s)\n", res.Status, kind, proj)
-				if res.Status == "queued" {
-					msg = fmt.Sprintf("queued (%s, project %s): the server did not take it now, the next jobs tick sends it\n", kind, proj)
-				}
-				if res.Warning != "" {
-					msg += "warning: " + res.Warning + "\n"
-				}
-				return msg
-			}, failed)
+			return e.report("store", res, func() string { return storeText(res) }, failed)
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "", "decision, correction, convention, pitfall, state or lesson")
 	cmd.Flags().StringVar(&proj, "project", "", "project tag (default: the current directory's project; a transverse alias for user-wide rules)")
 	return cmd
+}
+
+// storeNote validates and queues one note, then tries to send it now (the
+// outbox keeps it otherwise). Shared by the CLI and memory_store.
+func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, kind, proj, text string) (storeResult, error) {
+	if !retain.Kinds[kind] {
+		return storeResult{}, &output.Error{Code: output.Usage, Message: fmt.Sprintf("kind %q: one of %s", kind, kindList())}
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return storeResult{}, &output.Error{Code: output.Usage, Message: "empty text"}
+	}
+	if _, kinds := redact.Text(text); len(kinds) > 0 {
+		return storeResult{}, &output.Error{Code: output.Usage, Message: "the text holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory"}
+	}
+	if proj == "" {
+		cwd, _ := os.Getwd()
+		proj = project.New(home, cfg.Projects.Transverse).Project(cwd)
+	}
+	if len(cfg.Projects.Transverse) > 0 && slices.Contains(cfg.Projects.Transverse, proj) {
+		proj = cfg.Projects.Transverse[0] // one transverse pool (SPEC §4)
+	}
+	n := retain.NewNote(cfg.Server.Bank, kind, proj, text, now())
+	ob := notesOutbox(d)
+	warn, err := ob.Append(n)
+	if err != nil {
+		return storeResult{}, blocked(err)
+	}
+	res := storeResult{Status: "queued", Document: n.DocumentID, Project: proj, Kind: kind}
+	var failed error
+	if warn {
+		res.Warning = "the notes outbox is over 50 MB: the server has not accepted notes for a while"
+	}
+	machineID, _ := retain.MachineID(d.State)
+	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+		res.Warning = "maintenance in progress: the note goes out after it"
+	} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
+		fr, err := ob.Flush(ctx, cl, cfg.Server.Bank, machineID)
+		switch {
+		case err != nil || fr.Kept > 0:
+		case fr.Quarantined > 0:
+			res.Status = "rejected"
+			failed = &output.Error{Code: output.Blocked, Message: "the server refused the note (" + fr.LastError + "); it is kept in quarantine: see backsight doctor"}
+		default:
+			res.Status = "stored"
+		}
+	}
+	return res, failed
+}
+
+func storeText(res storeResult) string {
+	msg := fmt.Sprintf("%s (%s, project %s)\n", res.Status, res.Kind, res.Project)
+	if res.Status == "queued" {
+		msg = fmt.Sprintf("queued (%s, project %s): the server did not take it now, the next jobs tick sends it\n", res.Kind, res.Project)
+	}
+	if res.Warning != "" {
+		msg += "warning: " + res.Warning + "\n"
+	}
+	return msg
 }
