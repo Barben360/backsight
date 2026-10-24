@@ -70,7 +70,8 @@ type TagCount struct {
 	Count int    `json:"count"`
 }
 
-// Tags lists the bank's tags matching prefix q, every page.
+// Tags lists the bank's tags starting with prefix q, every page. The
+// server's q is a wildcard pattern (an exact match without "*").
 func (c *Client) Tags(ctx context.Context, bank, q string) ([]TagCount, error) {
 	var all []TagCount
 	offset := 0 // counts every item the server returned, matching or not
@@ -79,7 +80,7 @@ func (c *Client) Tags(ctx context.Context, bank, q string) ([]TagCount, error) {
 			Items []TagCount `json:"items"`
 			Total int        `json:"total"`
 		}
-		query := url.Values{"q": {q}, "limit": {"200"}, "offset": {strconv.Itoa(offset)}}
+		query := url.Values{"q": {q + "*"}, "limit": {"200"}, "offset": {strconv.Itoa(offset)}}
 		if err := c.get(ctx, bankPath(bank, "/tags"), query, &out); err != nil {
 			return all, err
 		}

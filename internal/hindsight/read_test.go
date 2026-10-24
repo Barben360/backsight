@@ -57,7 +57,7 @@ func TestTagsAndEntitiesPage(t *testing.T) {
 	c := server(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/default/banks/b/tags":
-			if r.URL.Query().Get("q") != "project:" {
+			if r.URL.Query().Get("q") != "project:*" { // the server's wildcard syntax (an exact match without *)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
