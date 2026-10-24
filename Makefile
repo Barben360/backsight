@@ -4,7 +4,7 @@ COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 LDFLAGS  := -s -w -X $(PKG)/internal/buildinfo.Version=$(VERSION) -X $(PKG)/internal/buildinfo.Commit=$(COMMIT)
 export CGO_ENABLED := 0
 
-.PHONY: build test lint cross
+.PHONY: build test lint cross leaks
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/backsight ./cmd/backsight
 
@@ -20,3 +20,6 @@ cross:
 		echo "== $$t"; GOOS=$${t%/*} GOARCH=$${t#*/} go build -o /dev/null ./... || exit 1; \
 		GOOS=$${t%/*} GOARCH=$${t#*/} go vet ./... || exit 1; \
 	done
+
+leaks:
+	gitleaks git . --no-banner --redact

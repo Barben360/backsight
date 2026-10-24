@@ -1,0 +1,3 @@
+# Fake test values of internal/config/secrets_test.go before #10 (false positives).
+c03d0a7aa6b76d0200d2c970f4183e5e29532a50:internal/config/secrets_test.go:generic-api-key:13
+7cb6e019b2bd3752eeaf27f738a0eadf36f0c01c:internal/config/secrets_test.go:generic-api-key:13
