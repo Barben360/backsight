@@ -108,3 +108,115 @@ func TestReplaceIfUnchangedAbsent(t *testing.T) {
 		t.Errorf("file appeared meanwhile: want ErrConflict, got %v", err)
 	}
 }
+
+func TestReadHashed(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	data, h, err := ReadHashed(p)
+	if err != nil || data != nil || h != Absent {
+		t.Errorf("missing file: %q %q %v", data, h, err)
+	}
+	if err := os.WriteFile(p, []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, h, err = ReadHashed(p)
+	want, _ := HashFile(p)
+	// sha256("abc")
+	if err != nil || string(data) != "abc" || h != want || h != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+		t.Errorf("%q %q %v", data, h, err)
+	}
+}
+
+func TestHashFileOfDirectoryFails(t *testing.T) {
+	if _, err := HashFile(t.TempDir()); err == nil {
+		t.Error("a directory has no content hash")
+	}
+}
+
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+}
+
+// Dotfile managers symlink settings.json: the link must survive a write.
+func TestWritesFollowSymlinks(t *testing.T) {
+	for name, write := range map[string]func(link string, h string) error{
+		"WriteAtomic":        func(link, _ string) error { return WriteAtomic(link, []byte("new"), 0o600) },
+		"ReplaceIfUnchanged": func(link, h string) error { return ReplaceIfUnchanged(link, []byte("new"), 0o600, h) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "dotfiles", "settings.json")
+			_ = os.MkdirAll(filepath.Dir(target), 0o700)
+			_ = os.WriteFile(target, []byte("old"), 0o600)
+			link := filepath.Join(dir, "settings.json")
+			symlinkOrSkip(t, target, link)
+			h, _ := HashFile(link)
+			if err := write(link, h); err != nil {
+				t.Fatal(err)
+			}
+			if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("the symlink was replaced by a regular file")
+			}
+			if read(t, target) != "new" {
+				t.Errorf("target not updated: %q", read(t, target))
+			}
+		})
+	}
+}
+
+func TestWriteRefusesDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "settings.json")
+	symlinkOrSkip(t, filepath.Join(dir, "gone", "settings.json"), link)
+	if err := WriteAtomic(link, []byte("x"), 0o600); err == nil {
+		t.Error("a dangling symlink must be refused, not replaced")
+	}
+	if fi, _ := os.Lstat(link); fi == nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("the dangling link must be left as it was")
+	}
+}
+
+func TestReplaceIfUnchangedKeepsExistingMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes")
+	}
+	p := filepath.Join(t.TempDir(), "settings.json")
+	_ = os.WriteFile(p, []byte("old"), 0o644)
+	_ = os.Chmod(p, 0o644)
+	h, _ := HashFile(p)
+	if err := ReplaceIfUnchanged(p, []byte("new"), 0o600, h); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o644 {
+		t.Errorf("user file mode changed to %o", fi.Mode().Perm())
+	}
+}
+
+func TestReplaceIfUnchangedDeletedAfterHash(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	_ = os.WriteFile(p, []byte("old"), 0o600)
+	h, _ := HashFile(p)
+	_ = os.Remove(p)
+	if err := ReplaceIfUnchanged(p, []byte("new"), 0o600, h); !errors.Is(err, ErrConflict) {
+		t.Errorf("want ErrConflict, got %v", err)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Error("a file the user deleted must not be recreated")
+	}
+}
+
+func TestRenameFailureLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f")
+	if err := os.MkdirAll(filepath.Join(target, "child"), 0o700); err != nil { // a non-empty dir cannot be renamed over
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(target, []byte("x"), 0o600); err == nil {
+		t.Fatal("rename over a non-empty directory must fail")
+	}
+	if names := entries(t, dir); len(names) != 1 || names[0] != "f" {
+		t.Errorf("leftovers: %v", names)
+	}
+}
