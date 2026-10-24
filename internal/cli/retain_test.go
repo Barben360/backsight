@@ -88,3 +88,38 @@ func TestRetainFlushUnknownSession(t *testing.T) {
 		t.Errorf("exit %d", code)
 	}
 }
+
+// A failing server stops the run after the first session: the others are
+// not hammered with the same error.
+func TestFlushStopsOnServerFailure(t *testing.T) {
+	home := devInstall(t, true) // closed port: unreachable
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	writeTranscript(t, home, "a-live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	writeTranscript(t, home, "b-live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	_, out, _ := run(t, "retain", "flush", "--json")
+	var env struct {
+		Data flushReport `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if env.Data.Counts["retry"] != 1 || len(env.Data.Results) != 1 {
+		t.Errorf("%s", out)
+	}
+}
+
+func TestRetryQuarantine(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.CursorsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.CursorsDir(), "s1.json"), []byte(`{"quarantined":true}`), 0o600)
+	_ = os.WriteFile(filepath.Join(d.CursorsDir(), "s2.json"), []byte(`{"quarantined":false}`), 0o600)
+	code, out, _ := run(t, "retain", "retry-quarantine", "--json")
+	if code != output.OK || !strings.Contains(out, `"s1"`) || strings.Contains(out, `"s2"`) {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(d.CursorsDir(), "s1.json")); err == nil {
+		t.Error("the quarantined cursor must be dropped so the session resyncs")
+	}
+	if _, err := os.Stat(filepath.Join(d.CursorsDir(), "s2.json")); err != nil {
+		t.Error("a healthy cursor was dropped")
+	}
+}

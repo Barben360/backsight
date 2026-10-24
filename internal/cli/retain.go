@@ -27,7 +27,7 @@ var now = time.Now
 
 func newRetainCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "retain", Short: "Send settled sessions to the memory", Args: cobra.NoArgs}
-	cmd.AddCommand(newRetainFlushCmd(e))
+	cmd.AddCommand(newRetainFlushCmd(e), newRetainRetryCmd(e))
 	return cmd
 }
 
@@ -84,6 +84,9 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 			tw.Emit(telemetry.Retain{Document: "conversation:" + r.Session, Items: 1, Status: st, MS: int(time.Since(start).Milliseconds())})
 		}
 		out = append(out, r)
+		if r.Stop {
+			break // the server or setup is failing: the next run retries
+		}
 	}
 	return out
 }
@@ -121,7 +124,7 @@ func flushText(rep flushReport) string {
 		b.WriteString("\n")
 	}
 	var parts []string
-	for _, s := range []string{retain.Sent, retain.Waiting, retain.Nothing, retain.Backfill, retain.OptedOut, retain.Retry, retain.Quarantined, retain.Locked, retain.Maintenance} {
+	for _, s := range []string{retain.Sent, retain.Waiting, retain.Nothing, retain.Backfill, retain.OptedOut, retain.Retry, retain.Quarantined, retain.Held, retain.Locked, retain.Maintenance} {
 		if n := rep.Counts[s]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, s))
 		}
@@ -171,5 +174,46 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&session, "session", "", "flush only this session id (even one older than live retain)")
+	return cmd
+}
+
+type retryResult struct {
+	Sessions []string `json:"sessions"`
+	Notes    int      `json:"notes"`
+}
+
+func newRetainRetryCmd(e *env) *cobra.Command {
+	var session string
+	var notesOnly bool
+	cmd := &cobra.Command{
+		Use:   "retry-quarantine",
+		Short: "Give quarantined sessions and notes another try on the next flush",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			var res retryResult
+			if !notesOnly {
+				if res.Sessions, err = retain.ReleaseQuarantine(d.CursorsDir(), session); err != nil {
+					return blocked(err)
+				}
+			}
+			if session == "" {
+				if res.Notes, err = notesOutbox(d).Requeue(); err != nil {
+					return blocked(err)
+				}
+			}
+			if res.Sessions == nil {
+				res.Sessions = []string{}
+			}
+			return e.emit("retain retry-quarantine", res, func() string {
+				return fmt.Sprintf("%d session(s) will resync from the server, %d note(s) queued again; they go out on the next flush or tick\n", len(res.Sessions), res.Notes)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&session, "session", "", "only this session")
+	cmd.Flags().BoolVar(&notesOnly, "notes", false, "only the notes")
 	return cmd
 }

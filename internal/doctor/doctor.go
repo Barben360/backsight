@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/target"
 )
@@ -101,6 +102,7 @@ func Run(ctx context.Context, env Env) Report {
 		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
 	}
 	add(checkMaintenance(env.Dirs))
+	add(checkWrites(env.Dirs))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
@@ -235,6 +237,32 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Chec
 		c.Status = Warn
 		c.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
 		c.Fix = "open the Hindsight UI operations page to see the provider errors"
+	}
+	return c
+}
+
+// checkWrites reports what has not reached the server: queued notes and
+// quarantined sessions and notes (SPEC §15).
+func checkWrites(d paths.Dirs) Check {
+	c := Check{ID: "writes", Status: OK}
+	ob := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl"), QuarantinePath: filepath.Join(d.QuarantineDir(), "notes.jsonl")}
+	pending, _ := ob.Pending()
+	qNotes, _ := ob.Quarantined()
+	qSessions, _ := retain.QuarantinedSessions(d.CursorsDir())
+	var size int64
+	if fi, err := os.Stat(ob.Path); err == nil {
+		size = fi.Size()
+	}
+	c.Summary = fmt.Sprintf("%d note(s) queued, %d session(s) and %d note(s) quarantined", pending, len(qSessions), qNotes)
+	switch {
+	case size >= retain.OutboxMaxBytes:
+		c.Status, c.Fix = Error, "the notes outbox is full: bring the server back (backsight server status), then backsight jobs tick"
+	case len(qSessions)+qNotes > 0:
+		c.Status = Warn
+		c.Detail = "the server refused them; reasons in " + d.QuarantineDir()
+		c.Fix = "fix the cause, then backsight retain retry-quarantine"
+	case size >= retain.OutboxWarnBytes:
+		c.Status, c.Fix = Warn, "the server has not accepted notes for a while: backsight server status"
 	}
 	return c
 }

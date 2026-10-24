@@ -133,3 +133,49 @@ func TestOutboxToleratesATornLine(t *testing.T) {
 		t.Errorf("%+v %v", res, err)
 	}
 }
+
+func TestOutboxErrorClasses(t *testing.T) {
+	for status, quarantined := range map[int]bool{400: true, 422: true, 401: false, 404: false, 302: false, 500: false} {
+		e := newEnv(t)
+		o := outbox(t)
+		_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+		e.hs.status = status
+		res, _ := o.Flush(context.Background(), e.f.Client, "b", "m1")
+		if (res.Quarantined == 1) != quarantined || (res.Kept == 1) == quarantined {
+			t.Errorf("HTTP %d: %+v", status, res)
+		}
+	}
+}
+
+// A note is never dropped because its quarantine record cannot be written.
+func TestOutboxKeepsNoteWhenQuarantineFails(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_ = os.MkdirAll(o.QuarantinePath, 0o700) // a directory: appends fail
+	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+	e.hs.status = 422
+	res, _ := o.Flush(context.Background(), e.f.Client, "b", "m1")
+	if n, _ := o.Pending(); n != 1 || res.Quarantined != 0 {
+		t.Errorf("note lost: pending %d, %+v", n, res)
+	}
+}
+
+func TestRequeue(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+	e.hs.status = 422
+	_, _ = o.Flush(context.Background(), e.f.Client, "b", "m1")
+	if n, _ := o.Quarantined(); n != 1 {
+		t.Fatalf("quarantined %d", n)
+	}
+	if n, err := o.Requeue(); err != nil || n != 1 {
+		t.Fatalf("%d %v", n, err)
+	}
+	if n, _ := o.Pending(); n != 1 {
+		t.Errorf("pending %d", n)
+	}
+	if n, _ := o.Quarantined(); n != 0 {
+		t.Errorf("still quarantined %d", n)
+	}
+}

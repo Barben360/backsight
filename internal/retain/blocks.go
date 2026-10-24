@@ -259,3 +259,40 @@ func MachineID(dir string) (string, error) {
 	}
 	return id, nil
 }
+
+// QuarantinedSessions lists the sessions whose cursor is quarantined.
+func QuarantinedSessions(cursorDir string) ([]string, error) {
+	files, err := filepath.Glob(filepath.Join(cursorDir, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, f := range files {
+		sid := strings.TrimSuffix(filepath.Base(f), ".json")
+		if c, ok, err := LoadCursor(cursorDir, sid); err == nil && ok && c.Quarantined {
+			out = append(out, sid)
+		}
+	}
+	return out, nil
+}
+
+// ReleaseQuarantine drops the cursor of quarantined sessions (all, or only
+// sid): the next flush resyncs them from the server's document.
+func ReleaseQuarantine(cursorDir, sid string) ([]string, error) {
+	held, err := QuarantinedSessions(cursorDir)
+	if err != nil {
+		return nil, err
+	}
+	var released []string
+	for _, s := range held {
+		if sid != "" && s != sid {
+			continue
+		}
+		p, _ := cursorPath(cursorDir, s)
+		if err := os.Remove(p); err != nil {
+			return released, err
+		}
+		released = append(released, s)
+	}
+	return released, nil
+}

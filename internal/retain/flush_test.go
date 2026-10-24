@@ -217,8 +217,8 @@ func TestUnknownServerPositionQuarantines(t *testing.T) {
 	if raw, err := os.ReadFile(filepath.Join(e.f.Dirs.QuarantineDir(), "s1.jsonl")); err != nil || !strings.Contains(string(raw), "not-in-this-file") {
 		t.Errorf("quarantine file: %v %s", err, raw)
 	}
-	if r := e.flush("s1", Options{}); r.Status != Quarantined {
-		t.Errorf("a quarantined session must stay skipped: %+v", r)
+	if r := e.flush("s1", Options{}); r.Status != Held {
+		t.Errorf("a quarantined session must stay skipped (held): %+v", r)
 	}
 }
 
@@ -291,8 +291,8 @@ func TestServerErrors(t *testing.T) {
 		t.Errorf("quarantine file kept the server body: %s", raw)
 	}
 	e.hs.status = 0
-	if r := e.flush("s1", Options{}); r.Status != Quarantined {
-		t.Errorf("stays quarantined: %+v", r)
+	if r := e.flush("s1", Options{}); r.Status != Held {
+		t.Errorf("stays held: %+v", r)
 	}
 }
 
@@ -401,5 +401,58 @@ func TestDocumentIDFollowsTheFile(t *testing.T) {
 	e.flush("s2", Options{})
 	if got := e.hs.retains[len(e.hs.retains)-1].DocumentID; got != "conversation:s2" {
 		t.Errorf("document %q", got)
+	}
+}
+
+// Only a refusal of the document quarantines it; anything about the server
+// or the setup stops the run and keeps the session for the next tick.
+func TestErrorClasses(t *testing.T) {
+	for status, want := range map[int]string{
+		400: Quarantined, 413: Quarantined, 422: Quarantined,
+		401: Retry, 403: Retry, 302: Retry, 404: Retry, 408: Retry, 409: Retry, 429: Retry, 500: Retry, 502: Retry, 503: Retry, 504: Retry,
+	} {
+		e := newEnv(t)
+		e.record("s1", "u1", "user", 0, "q")
+		e.hs.status = status
+		r := e.flush("s1", Options{})
+		if r.Status != want || r.Stop != (want == Retry) {
+			t.Errorf("HTTP %d: %s stop=%v, want %s", status, r.Status, r.Stop, want)
+		}
+		if want == Retry {
+			e.hs.status = 0
+			if r := e.flush("s1", Options{}); r.Status != Sent {
+				t.Errorf("HTTP %d then OK: %+v", status, r)
+			}
+		}
+	}
+}
+
+func TestInvalidServerSegmentQuarantines(t *testing.T) {
+	for _, seg := range []string{"", "abc", "0"} {
+		e := newEnv(t)
+		e.record("s1", "u1", "user", 0, "q")
+		e.record("s1", "u2", "user", 1, "q2")
+		e.hs.docs["conversation:s1"] = map[string]string{"last_uuid": "u1", "segment": seg}
+		if r := e.flush("s1", Options{}); r.Status != Quarantined || len(e.hs.retains) != 0 {
+			t.Errorf("segment %q: %+v", seg, r)
+		}
+	}
+}
+
+func TestReleaseQuarantineResyncs(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "q")
+	e.hs.status = 422
+	e.flush("s1", Options{})
+	if held, _ := QuarantinedSessions(e.f.Dirs.CursorsDir()); len(held) != 1 {
+		t.Fatalf("%v", held)
+	}
+	e.hs.status = 0
+	released, err := ReleaseQuarantine(e.f.Dirs.CursorsDir(), "")
+	if err != nil || len(released) != 1 {
+		t.Fatalf("%v %v", released, err)
+	}
+	if r := e.flush("s1", Options{}); r.Status != Sent {
+		t.Errorf("after release: %+v", r)
 	}
 }

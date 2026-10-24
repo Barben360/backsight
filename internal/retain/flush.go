@@ -36,7 +36,24 @@ const (
 	Locked      = "locked"      // another flusher holds the session
 	Maintenance = "maintenance" // maintenance lock held
 	Backfill    = "backfill"    // started before retain_since: backfill's job
+	Held        = "held"        // quarantined earlier, waiting for retry-quarantine
 )
+
+// refusesDocument says the server rejected this document itself (bad
+// request, too large, unprocessable): quarantine it. Every other failure
+// (auth, redirect, missing bank, conflict, rate limit, server error,
+// network) is about the server or setup: stop the run and retry later.
+func refusesDocument(err error) bool {
+	var apiErr *hindsight.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.Status {
+	case 400, 413, 422:
+		return true
+	}
+	return false
+}
 
 // Flusher sends settled sessions of one machine to one bank.
 type Flusher struct {
@@ -68,6 +85,9 @@ type Result struct {
 	Segment    int    `json:"segment,omitempty"`
 	Chars      int    `json:"chars,omitempty"`
 	Project    string `json:"project,omitempty"`
+	// Stop tells the caller the server or setup is failing: later sessions
+	// would fail the same way, so the run ends here.
+	Stop bool `json:"-"`
 }
 
 // FlushFile sends what is settled and unsent in one transcript.
@@ -91,7 +111,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		return fail(Retry, err.Error())
 	}
 	if cur.Quarantined {
-		return fail(Quarantined, "quarantined earlier: backsight retain retry-quarantine")
+		return fail(Held, "quarantined earlier: backsight retain retry-quarantine")
 	}
 	resync := !haveCursor || cur.Bank != f.Bank
 	if haveCursor {
@@ -133,7 +153,10 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 			if i < 0 {
 				return f.quarantine(res, &cur, "the server holds this session up to record "+last+", which this transcript does not contain")
 			}
-			seg, _ := strconv.Atoi(doc.Metadata["segment"])
+			seg, err := strconv.Atoi(doc.Metadata["segment"])
+			if err != nil || seg < 1 {
+				return f.quarantine(res, &cur, "the server's document has no valid segment number; sending would replace it")
+			}
 			cur.Segment, cur.LastUUID, cur.Offset = seg, last, recs[i].End
 			recs = recs[i+1:]
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
@@ -149,7 +172,8 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 				return fail(Backfill, "started before live retain began; backfill sends it")
 			}
 		default:
-			return fail(Retry, err.Error())
+			res.Stop = true
+			return fail(Retry, errSummary(err))
 		}
 	}
 
@@ -222,10 +246,10 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		segNo := cur.Segment + 1
 		seg := BuildSegment(f.Bank, sid, run, segNo, k.project, f.MachineID, f.Version)
 		if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
-			var apiErr *hindsight.APIError
-			if errors.As(err, &apiErr) && !apiErr.Retryable() {
+			if refusesDocument(err) {
 				return f.quarantine(res, &cur, errSummary(err))
 			}
+			res.Stop = true
 			if status == Sent {
 				return f.save(res, cur, Sent, "partly sent; the rest is retried: "+errSummary(err))
 			}

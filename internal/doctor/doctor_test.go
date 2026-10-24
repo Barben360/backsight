@@ -497,3 +497,16 @@ func TestDetectGPUsOtherCases(t *testing.T) {
 		}
 	}
 }
+
+func TestWritesCheck(t *testing.T) {
+	f := newFixture(t)
+	expect(t, check(t, f.run(), "writes"), OK, "0 note(s) queued")
+	d := f.env.Dirs
+	put(t, filepath.Join(d.OutboxDir(), "notes.jsonl"), `{"operation_id":"a","content":"x"}`+"\n", 0o600)
+	put(t, filepath.Join(d.CursorsDir(), "s1.json"), `{"quarantined":true}`, 0o600)
+	c := check(t, f.run(), "writes")
+	expect(t, c, Warn, "1 note(s) queued, 1 session(s)")
+	if !strings.Contains(c.Fix, "retry-quarantine") {
+		t.Errorf("fix: %q", c.Fix)
+	}
+}

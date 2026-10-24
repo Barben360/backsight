@@ -143,24 +143,27 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 	var keep []Note
 	for i, n := range notes {
 		err := c.Retain(ctx, bank, []hindsight.RetainItem{n.Item(machineID)}, n.OperationID)
-		var apiErr *hindsight.APIError
 		switch {
 		case err == nil:
 			res.Sent++
-		case errors.As(err, &apiErr) && !apiErr.Retryable():
-			res.Quarantined++
+			continue
+		case refusesDocument(err):
 			n.LastError = errSummary(err)
-			_ = appendJSON(o.QuarantinePath, n)
+			if qerr := appendJSON(o.QuarantinePath, n); qerr == nil {
+				res.Quarantined++
+				continue
+			}
+			// The quarantine record could not be written: keep the note.
 		default:
-			// Unreachable or busy: keep this note and the rest untouched.
 			n.Attempts++
 			n.LastError = errSummary(err)
-			res.LastError = n.LastError
-			keep = append(keep, n)
-			keep = append(keep, notes[i+1:]...)
-			res.Kept = len(keep)
-			return res, o.rewrite(keep)
 		}
+		// Unreachable, misconfigured or busy: keep this note and the rest.
+		res.LastError = n.LastError
+		keep = append(keep, n)
+		keep = append(keep, notes[i+1:]...)
+		res.Kept = len(keep)
+		return res, o.rewrite(keep)
 	}
 	return res, o.rewrite(keep)
 }
@@ -193,6 +196,37 @@ func (o Outbox) rewrite(notes []Note) error {
 		buf.Write(append(raw, '\n'))
 	}
 	return fsutil.WriteAtomic(o.Path, buf.Bytes(), 0o600)
+}
+
+// Requeue moves quarantined notes back into the outbox.
+func (o Outbox) Requeue() (int, error) {
+	unlock, err := o.lock("retry-quarantine")
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	q := Outbox{Path: o.QuarantinePath}
+	held, err := q.read()
+	if err != nil || len(held) == 0 {
+		return 0, err
+	}
+	notes, err := o.read()
+	if err != nil {
+		return 0, err
+	}
+	for i := range held {
+		held[i].Attempts, held[i].LastError = 0, ""
+	}
+	if err := o.rewrite(append(notes, held...)); err != nil {
+		return 0, err
+	}
+	return len(held), os.Remove(o.QuarantinePath)
+}
+
+// Quarantined counts quarantined notes.
+func (o Outbox) Quarantined() (int, error) {
+	notes, err := Outbox{Path: o.QuarantinePath}.read()
+	return len(notes), err
 }
 
 // Pending counts queued notes.
