@@ -33,4 +33,4 @@ minisign -Vm checksums.txt -p minisign.pub
 sha256sum -c --ignore-missing checksums.txt
 ```
 
-`minisign.next.pub` is the next key: binaries embed both so a key rotation needs no trust reset. Maintainers: `make snapshot` builds and signs locally (key from `pass`), and tags `v*` publish through `.github/workflows/release.yml`.
+`minisign.next.pub` is the next key: binaries embed both (`internal/signing`) so a key rotation needs no trust reset. Releases are built only from tags on `main`, by actions pinned to commit SHAs. Maintainers: `make snapshot` builds and signs locally (key from `pass`), and tags `v*` publish through `.github/workflows/release.yml`.
