@@ -71,7 +71,7 @@ const (
 
 // FirstSessionNotice is shown once after setup.
 func FirstSessionNotice(server, provider string) string {
-	return fmt.Sprintf("Memory is on: this session is stored on %s and processed by %s; to keep a project out, add retain = false to a .backsight.toml at its root.", server, provider)
+	return fmt.Sprintf("Memory is on: this session is stored on %s and processed by %s; `backsight pause` stops it for this session, `backsight pause --project` for this project.", server, provider)
 }
 
 // MemoryUnavailable is the once-per-session visible failure (systemMessage).

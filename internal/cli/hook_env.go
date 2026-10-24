@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -83,6 +84,9 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// instead of losing their updates (0054 amendment).
 	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir(), Retry: 100 * time.Millisecond}
 	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version})
+	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {
+		_ = session.WriteLive(h.dirs.SessionsDir(), pid, session.Live{SessionID: h.in.SessionID, Cwd: cwd, Project: h.project, At: now()})
+	}
 	// One deadline for every call of a hook: the supervisor's own is the
 	// hard stop, this one lets the handler finish with what it has.
 	h.client, err = hindsight.New(h.cfg.Server.URL, h.sec.APIKey, 30*time.Second)

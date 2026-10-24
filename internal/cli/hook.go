@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/hook"
@@ -20,8 +21,15 @@ var hookChildCommand = func(ctx context.Context, event string) *exec.Cmd {
 	if err != nil {
 		exe = os.Args[0]
 	}
-	return exec.CommandContext(ctx, exe, "hook-child", event)
+	c := exec.CommandContext(ctx, exe, "hook-child", event)
+	// The child records its session under Claude Code's pid, the parent of
+	// this process, where the MCP server looks it up (decision 0056).
+	c.Env = append(os.Environ(), claudePIDEnv+"="+strconv.Itoa(os.Getppid()))
+	return c
 }
+
+// claudePIDEnv carries the Claude Code process id to the hook child.
+const claudePIDEnv = "BACKSIGHT_CLAUDE_PID"
 
 // runHook is `backsight hook <event>`, the supervisor's parent. It never
 // fails: whatever happens, Claude Code gets exit 0 and at most a valid hook

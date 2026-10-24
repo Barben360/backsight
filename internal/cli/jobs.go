@@ -138,6 +138,7 @@ func tickText(r tickResult) string {
 const sessionTTL = 30 * 24 * time.Hour
 
 func pruneSessions(d paths.Dirs) {
+	session.PruneLive(d.SessionsDir(), 7*24*time.Hour, now())
 	ents, err := os.ReadDir(d.SessionsDir())
 	if err != nil {
 		return

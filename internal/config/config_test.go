@@ -262,3 +262,27 @@ func TestSetClientRetentionRefusesOtherForms(t *testing.T) {
 		}
 	}
 }
+
+func TestSetExcludePaths(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		paths          []string
+	}{
+		{"add section", "[server]\nbank = \"b\"\n", "[server]\nbank = \"b\"\n\n[privacy]\nexclude_paths = [\"/w/secret\"]\n", []string{"/w/secret"}},
+		{"replace keeps comment", "[privacy]\nexclude_paths = [] # mine\n", "[privacy]\nexclude_paths = [\"/a\", \"/b c\"] # mine\n", []string{"/a", "/b c"}},
+		{"key added to section", "[privacy]\n[llm]\n", "[privacy]\nexclude_paths = [\"/a\"]\n[llm]\n", []string{"/a"}},
+		{"empty list", "[privacy]\nexclude_paths = [\"/a\"]\n", "[privacy]\nexclude_paths = []\n", nil},
+		{"quotes escaped", "", "[privacy]\nexclude_paths = [\"/w/\\\"q\\\"\"]\n", []string{`/w/"q"`}},
+	}
+	for _, c := range cases {
+		got, err := SetExcludePaths([]byte(c.in), c.paths)
+		if err != nil || string(got) != c.want {
+			t.Errorf("%s:\ngot  %q (%v)\nwant %q", c.name, got, err, c.want)
+		}
+	}
+	for _, in := range []string{"[privacy]\nexclude_paths = [\n  \"/a\",\n]\n", "privacy.exclude_paths = []\n", "privacy = { exclude_paths = [] }\n"} {
+		if _, err := SetExcludePaths([]byte(in), []string{"/x"}); err == nil {
+			t.Errorf("accepted %q", in)
+		}
+	}
+}

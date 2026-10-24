@@ -17,6 +17,9 @@ import (
 // mcpSession starts the memory server on a fake bank and connects a client.
 func mcpSession(t *testing.T) *mcp.ClientSession { t.Helper(); return mcpSessionWith(t, "") }
 
+// mcpParentPID is the Claude Code pid the next mcpSession believes it has.
+var mcpParentPID int
+
 // mcpSessionWith appends extra TOML to the config before the server starts.
 func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
 	t.Helper()
@@ -36,7 +39,7 @@ func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{})})
+	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID})
 	ct, st := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {
@@ -170,11 +173,15 @@ func TestMCPRefusedStoreSendsNothing(t *testing.T) {
 	}
 }
 
+// The MCP server learns its session from the record its Claude Code
+// process's hooks keep (decision 0056): a paused session stores nothing.
 func TestMCPStoreHonoursASessionPause(t *testing.T) {
+	mcpParentPID = 4242
+	t.Cleanup(func() { mcpParentPID = 0 })
 	cs := mcpSession(t)
 	home := os.Getenv("HOME")
 	_ = sessions(home).Update("paused-s", func(st *session.State) error { st.Paused = true; return nil })
-	t.Setenv("BACKSIGHT_SESSION", "paused-s")
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4242, session.Live{SessionID: "paused-s", Cwd: home, Project: "billing"})
 	before := retained.Load()
 	recallTags = nil
 	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Keep 16."}); !isErr || !strings.Contains(out, "paused") || retained.Load() != before || len(recallTags) != 0 {
@@ -279,5 +286,23 @@ func TestMCPConcurrentSearches(t *testing.T) {
 		if e := <-errs; e != "" {
 			t.Errorf("a concurrent search failed: %s", e)
 		}
+	}
+}
+
+// After a cd, the hooks' record gives the MCP server the live project.
+func TestMCPFollowsTheLiveProject(t *testing.T) {
+	mcpParentPID = 4343
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4343, session.Live{SessionID: "s1", Cwd: filepath.Join(home, "infra"), Project: "infra"})
+	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Infra keeps Traefik."})
+	if !strings.Contains(out, "project infra)") {
+		t.Errorf("%s", out)
+	}
+	recallTags = nil
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"traefik"}})
+	if !strings.Contains("|"+strings.Join(recallTags, "|"), "|project:infra,") {
+		t.Errorf("search not scoped to the live project: %q", recallTags)
 	}
 }

@@ -107,7 +107,7 @@ func TestSessionStartWithTheServerDownStillGuides(t *testing.T) {
 func TestFirstSessionNoticeOnlyOnce(t *testing.T) {
 	home := hookHome(t)
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(h.SystemMessage, "Memory is on") || !strings.Contains(h.SystemMessage, "retain = false") {
+	if !strings.Contains(h.SystemMessage, "Memory is on") || !strings.Contains(h.SystemMessage, "backsight pause") {
 		t.Fatalf("banner %q", h.SystemMessage)
 	}
 	h = fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})

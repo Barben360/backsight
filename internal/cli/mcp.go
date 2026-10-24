@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -40,15 +42,29 @@ type storeArgs struct {
 	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" for user-wide rules"`
 }
 
+// live is the session and project of the Claude Code session this server
+// belongs to, from the record its hooks keep under its parent pid
+// (decision 0056); without one, the start directory and no session.
+func (d mcpDeps) live() session.Live {
+	if d.parentPID > 1 {
+		if l, ok := session.ReadLive(d.dirs.SessionsDir(), d.parentPID); ok {
+			return l
+		}
+	}
+	cwd, _ := os.Getwd()
+	return session.Live{Cwd: cwd, Project: d.current}
+}
+
 // mcpDeps is what the tools need, resolved once per server.
 type mcpDeps struct {
-	dirs    paths.Dirs
-	home    string
-	cfg     config.Config
-	sec     config.Secrets
-	engine  *recall.Engine
-	current string
-	tw      *telemetry.Writer
+	dirs      paths.Dirs
+	home      string
+	cfg       config.Config
+	sec       config.Secrets
+	engine    *recall.Engine
+	current   string
+	tw        *telemetry.Writer
+	parentPID int // the Claude Code process that started this server
 }
 
 func textResult(s string) *mcp.CallToolResult {
@@ -83,7 +99,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if a.MinScore != nil {
 				minScore = *a.MinScore
 			}
-			res := searchMemory(ctx, deps.dirs, deps.cfg, deps.engine, deps.current, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			res := searchMemory(ctx, deps.dirs, deps.cfg, deps.engine, deps.live().Project, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res)})
 			if len(res.Hits) == 0 && !scopesOK(res) {
 				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil
@@ -115,18 +131,19 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, a storeArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
 			// Refusals first: nothing leaves the machine for a refused note.
-			if err := checkNote(deps.dirs, deps.home, deps.cfg, a.Kind, a.Project, a.Text); err != nil {
+			live := deps.live()
+			if err := checkNote(deps.dirs, deps.home, deps.cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text); err != nil {
 				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds())})
 				return errorResult(err.Error()), nil, nil
 			}
 			proj := a.Project
 			if proj == "" {
-				proj = deps.current
+				proj = live.Project
 			}
 			proj = noteProject(deps.home, deps.cfg, proj)
 			// What this fact updates or repeats, before it is stored (SPEC §7).
 			similar := deps.engine.Search(ctx, recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3})
-			res, err := storeNote(ctx, deps.dirs, deps.home, deps.cfg, deps.sec, a.Kind, proj, a.Text)
+			res, err := storeNote(ctx, deps.dirs, deps.home, deps.cfg, deps.sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil})
 			if res.Document == "" {
 				return errorResult(err.Error()), nil, nil
@@ -199,7 +216,7 @@ func newMCPCmd() *cobra.Command {
 			}
 			current := currentProject(home, cfg)
 			tw := telemetry.New(d.State, telemetry.Common{V: instructions.Version, Project: current, BinaryVersion: buildinfo.Version})
-			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw})
+			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: os.Getppid()})
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}

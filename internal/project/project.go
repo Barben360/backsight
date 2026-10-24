@@ -118,6 +118,15 @@ func (r *Resolver) Project(cwd string) string {
 	return filepath.Base(cwd)
 }
 
+// Root is the directory a project-wide setting applies to: the main
+// worktree of cwd's repository (every worktree under it), else cwd.
+func (r *Resolver) Root(cwd string) string {
+	if g := r.git(cwd); g.main != "" {
+		return g.main
+	}
+	return filepath.Clean(cwd)
+}
+
 // OptedOut reports whether sessions in cwd must not be retained, and why.
 // An unreadable .backsight.toml, or no directory at all, fails closed.
 func (r *Resolver) OptedOut(cwd string, exclude []string) (bool, string) {

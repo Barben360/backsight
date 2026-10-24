@@ -60,7 +60,8 @@ func newStoreCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, kind, proj, strings.Join(args, " "))
+			cwd, _ := os.Getwd()
+			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, os.Getenv("BACKSIGHT_SESSION"), cwd, kind, proj, strings.Join(args, " "))
 			if res.Document == "" {
 				return failed // refused before anything was queued
 			}
@@ -74,8 +75,8 @@ func newStoreCmd(e *env) *cobra.Command {
 
 // storeNote validates and queues one note, then tries to send it now (the
 // outbox keeps it otherwise). Shared by the CLI and memory_store.
-func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, kind, proj, text string) (storeResult, error) {
-	if err := checkNote(d, home, cfg, kind, proj, text); err != nil {
+func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, sid, cwd, kind, proj, text string) (storeResult, error) {
+	if err := checkNote(d, home, cfg, sid, cwd, kind, proj, text); err != nil {
 		return storeResult{}, err
 	}
 	text = strings.TrimSpace(text)
@@ -121,7 +122,7 @@ const TransverseKeyword = "transverse"
 // checkNote refuses a note before anything leaves the machine: bad kind,
 // empty text, a secret, or a session or directory opted out of memory (SPEC
 // §7, §13; notes honour pause and opt-outs, 0051).
-func checkNote(d paths.Dirs, home string, cfg config.Config, kind, proj, text string) error {
+func checkNote(d paths.Dirs, home string, cfg config.Config, sid, cwd, kind, proj, text string) error {
 	if !retain.Kinds[kind] {
 		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("kind %q: one of %s", kind, kindList())}
 	}
@@ -137,12 +138,11 @@ func checkNote(d paths.Dirs, home string, cfg config.Config, kind, proj, text st
 	if _, kinds := redact.Text(text); len(kinds) > 0 {
 		return &output.Error{Code: output.Usage, Message: "the text holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory"}
 	}
-	if sid := os.Getenv("BACKSIGHT_SESSION"); sid != "" {
+	if sid != "" {
 		if paused, why := session.Paused(d.SessionsDir(), sid); paused {
 			return &output.Error{Code: output.Blocked, Message: "memory is paused for this session (" + why + "): nothing stored"}
 		}
 	}
-	cwd, _ := os.Getwd()
 	if out, why := project.New(home, cfg.Projects.Transverse).OptedOut(cwd, cfg.Privacy.ExcludePaths); out {
 		return &output.Error{Code: output.Blocked, Message: "this directory is excluded from memory (" + why + "): nothing stored"}
 	}
@@ -167,8 +167,8 @@ func validProject(p string) bool {
 // §4).
 func noteProject(home string, cfg config.Config, proj string) string {
 	if proj == "" {
-		cwd, _ := os.Getwd()
-		proj = project.New(home, cfg.Projects.Transverse).Project(cwd)
+		wd, _ := os.Getwd()
+		proj = project.New(home, cfg.Projects.Transverse).Project(wd)
 	}
 	if len(cfg.Projects.Transverse) > 0 && (proj == TransverseKeyword || slices.Contains(cfg.Projects.Transverse, proj)) {
 		proj = cfg.Projects.Transverse[0]
