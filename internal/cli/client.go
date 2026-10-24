@@ -101,10 +101,11 @@ func setRetention(days int) func([]byte) ([]byte, []claudecfg.Change, error) {
 }
 
 // recordBefore keeps, once, the user's retention before backsight's first
-// change to it (decision 0052).
-func recordBefore(d paths.Dirs, command string, res []claudecfg.FileResult, settings string) error {
-	for _, fr := range res {
-		if !fr.Written || fr.Target != settings {
+// change to it (decision 0052). It runs on the plan, before any write, so a
+// state that cannot be updated stops the command with nothing written.
+func recordBefore(d paths.Dirs, command string, planned []claudecfg.FileResult, settings string) error {
+	for _, fr := range planned {
+		if fr.Target != settings {
 			continue
 		}
 		for _, ch := range fr.Changes {
@@ -135,7 +136,16 @@ func editError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var oe *output.Error
+	if errors.As(err, &oe) {
+		return err
+	}
 	return &output.Error{Code: output.Blocked, Message: err.Error()}
+}
+
+// partialError: some writes happened before err; rerunning resumes (40).
+func partialError(err error) error {
+	return &output.Error{Code: output.Partial, Message: err.Error() + " (some changes were made: rerun to finish, or restore)"}
 }
 
 type clientConfigResult struct {
@@ -174,12 +184,10 @@ func newClientConfigApplyCmd(e *env, configDir *string, plan bool) *cobra.Comman
 				return err
 			}
 			res := clientConfigResult{Notes: notes}
-			if plan {
-				res.Files, err = claudecfg.Plan(edits)
-			} else {
-				res.Run, res.Files, err = c.runner(command).Apply(edits)
-				if err == nil {
-					err = recordBefore(c.dirs, command, res.Files, c.loc.Settings)
+			res.Files, err = claudecfg.Plan(edits)
+			if err == nil && !plan {
+				if err = recordBefore(c.dirs, command, res.Files, c.loc.Settings); err == nil {
+					res.Run, res.Files, err = c.runner(command).Apply(edits)
 				}
 			}
 			if res.Files == nil {
@@ -224,10 +232,11 @@ type clientRestoreResult struct {
 	Restored string                    `json:"restored"`
 	Run      string                    `json:"run,omitempty"` // the restore's own run, to undo it
 	Files    []claudecfg.RestoreResult `json:"files"`
+	Plan     bool                      `json:"plan"`
 }
 
 func newClientConfigRestoreCmd(e *env, configDir *string) *cobra.Command {
-	var force bool
+	var force, plan bool
 	cmd := &cobra.Command{
 		Use:   "restore [<run>]",
 		Short: "Put Claude Code's files back as they were before a run (default: the last one)",
@@ -248,10 +257,19 @@ func newClientConfigRestoreCmd(e *env, configDir *string) *cobra.Command {
 					restored = runs[len(runs)-1]
 				}
 			}
-			run, files, err := c.runner("client config restore").Restore(ts, force)
-			res := clientRestoreResult{Restored: restored, Files: files}
+			var run string
+			var files []claudecfg.RestoreResult
+			if plan {
+				files, err = c.runner("client config restore").RestorePlan(ts, force)
+			} else {
+				run, files, err = c.runner("client config restore").Restore(ts, force)
+			}
+			res := clientRestoreResult{Restored: restored, Files: files, Plan: plan}
 			if run != restored {
 				res.Run = run
+			}
+			if err != nil && res.Run != "" {
+				err = partialError(err)
 			}
 			if res.Files == nil {
 				res.Files = []claudecfg.RestoreResult{}
@@ -259,7 +277,11 @@ func newClientConfigRestoreCmd(e *env, configDir *string) *cobra.Command {
 			return e.report("client config restore", res, func() string {
 				var b strings.Builder
 				for _, f := range res.Files {
-					fmt.Fprintf(&b, "%s: %s", f.Target, f.Status)
+					status := f.Status
+					if plan && (status == "restore" || status == "delete") {
+						status = "would " + status
+					}
+					fmt.Fprintf(&b, "%s: %s", f.Target, status)
 					if f.Reason != "" {
 						fmt.Fprintf(&b, " (%s)", f.Reason)
 					}
@@ -273,5 +295,6 @@ func newClientConfigRestoreCmd(e *env, configDir *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "restore files changed since that run too")
+	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be restored without writing")
 	return cmd
 }

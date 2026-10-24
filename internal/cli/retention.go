@@ -98,7 +98,9 @@ func clientRetention(configDir string, days int, explicit, keep, plan bool) (ret
 	if sha == fsutil.Absent && res.Target > 0 {
 		newRaw = []byte("schema_version = 1\n")
 	}
-	newRaw = config.SetClientRetention(newRaw, res.Target)
+	if newRaw, err = config.SetClientRetention(newRaw, res.Target); err != nil {
+		return res, &output.Error{Code: output.Usage, Message: err.Error()}
+	}
 	if _, err := config.Parse(newRaw, c.dirs.ConfigFile(), c.dirs, ""); err != nil {
 		return res, &output.Error{Code: output.Usage, Message: "the edited config would not load: " + err.Error()}
 	}
@@ -112,8 +114,10 @@ func clientRetention(configDir string, days int, explicit, keep, plan bool) (ret
 	default:
 		edits = append(edits, claudecfg.Edit{Target: c.loc.Settings, Apply: retentionFloor(recommendedRetention)})
 	}
-	if plan {
-		res.Files, err = claudecfg.Plan(edits)
+	if res.Files, err = claudecfg.Plan(edits); err != nil || plan {
+		return res, editError(err)
+	}
+	if err := recordBefore(c.dirs, "client retention", res.Files, c.loc.Settings); err != nil {
 		return res, editError(err)
 	}
 	if res.ConfigChange {
@@ -122,11 +126,11 @@ func clientRetention(configDir string, days int, explicit, keep, plan bool) (ret
 		}
 	}
 	res.Run, res.Files, err = c.runner("client retention").Apply(edits)
-	if err == nil {
-		err = recordBefore(c.dirs, "client retention", res.Files, c.loc.Settings)
-	}
 	if res.Files == nil {
 		res.Files = []claudecfg.FileResult{}
+	}
+	if err != nil && res.ConfigChange {
+		return res, partialError(err)
 	}
 	return res, editError(err)
 }
@@ -142,7 +146,7 @@ func retentionText(r retentionResult) string {
 	verb := map[bool]string{true: "would change", false: "changed"}[r.Plan]
 	for _, f := range r.Files {
 		for _, ch := range f.Changes {
-			fmt.Fprintf(&b, "%s %s: %s → %s\n", verb, f.Target, showValue(ch.Old), showValue(ch.New))
+			fmt.Fprintf(&b, "%s %s: %s: %s → %s\n", verb, f.Target, ch.Path, showValue(ch.Old), showValue(ch.New))
 		}
 	}
 	if r.ConfigChange {

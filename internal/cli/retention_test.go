@@ -142,3 +142,68 @@ func TestRetentionRefusesAConfigItCannotRead(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+func TestRetentionDaysIsWrittenToTheConfig(t *testing.T) {
+	home, _ := clientHome(t, userSettings, 3650)
+	retentionRun(t, "--days", "90")
+	if got := readFile(t, cfgFile(home)); got != "[client]\nretention_days = 90\n" {
+		t.Errorf("config %q", got)
+	}
+}
+
+func TestRetentionHonoursConfigDir(t *testing.T) {
+	home, settings := clientHome(t, userSettings, 0)
+	other := filepath.Join(home, "profile-dev")
+	_ = os.MkdirAll(other, 0o700)
+	_ = os.WriteFile(filepath.Join(other, "settings.json"), []byte(`{"cleanupPeriodDays": 7}`), 0o600)
+	code, res, out := retentionRun(t, "--config-dir", other)
+	if code != output.OK || res.Before.EffectiveDays != 7 || readFile(t, settings) != userSettings ||
+		readFile(t, filepath.Join(other, "settings.json")) != `{"cleanupPeriodDays": 3650}` {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestRetentionRefusesAConfigFormItCannotEdit(t *testing.T) {
+	home, settings := clientHome(t, userSettings, 0)
+	_ = os.WriteFile(cfgFile(home), []byte("client = { retention_days = 30 }\n"), 0o600)
+	if code, _, out := retentionRun(t); code != output.Usage || readFile(t, settings) != userSettings {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestRetentionTextShowsThePathAndErrors(t *testing.T) {
+	_, settings := clientHome(t, userSettings, 0)
+	code, out, _ := run(t, "client", "retention", "--plan")
+	if code != output.OK || !strings.Contains(out, "cleanupPeriodDays: 30 → 3650") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	_ = os.WriteFile(settings, []byte(`{"a": 1,}`), 0o600)
+	code, _, errOut := run(t, "client", "retention")
+	if code != output.Blocked || !strings.Contains(errOut, "fix the file by hand") {
+		t.Errorf("exit %d, stderr %q", code, errOut)
+	}
+}
+
+// The user's value is recorded before Claude Code's file is written: if the
+// state cannot be updated, nothing is written (M1 review).
+func TestRetentionRecordsTheOldValueBeforeWriting(t *testing.T) {
+	home, settings := clientHome(t, userSettings, 0)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.LocksDir(), 0o700)
+	lock, err := state.TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, out := retentionRun(t)
+	_ = lock.Release()
+	if code == output.OK || readFile(t, settings) != userSettings {
+		t.Fatalf("exit %d, settings written while the state was locked\n%s", code, out)
+	}
+	if code, _, out := retentionRun(t); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	st, _ := state.Load(d.StateFile())
+	if st.Client == nil || string(st.Client.RetentionBefore) != "30" {
+		t.Errorf("retention_before %+v", st.Client)
+	}
+}

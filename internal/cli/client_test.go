@@ -171,3 +171,33 @@ func TestClientConfigRestoreWithNoRun(t *testing.T) {
 		t.Errorf("exit %d", code)
 	}
 }
+
+func TestClientConfigRestorePlanWritesNothing(t *testing.T) {
+	_, settings := clientHome(t, userSettings, 3650)
+	run(t, "client", "config", "apply")
+	edited := readFile(t, settings)
+	code, out, _ := run(t, "client", "config", "restore", "--plan")
+	if code != output.OK || !strings.Contains(out, "would restore") || readFile(t, settings) != edited {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	_ = os.WriteFile(settings, []byte(`{}`), 0o644)
+	if code, out, _ := run(t, "client", "config", "restore", "--plan"); code != output.Blocked || !strings.Contains(out, "refused") {
+		t.Errorf("plan over a hand edit: exit %d\n%s", code, out)
+	}
+}
+
+func TestClientConfigRestoreTextExplainsAMissingRun(t *testing.T) {
+	clientHome(t, userSettings, 3650)
+	code, _, errOut := run(t, "client", "config", "restore")
+	if code != output.Blocked || !strings.Contains(errOut, "no config editor run") {
+		t.Errorf("exit %d stderr %q", code, errOut)
+	}
+}
+
+func TestClientConfigAcceptsAnEmptySettingsFile(t *testing.T) {
+	_, settings := clientHome(t, "", 3650)
+	_ = os.WriteFile(settings, nil, 0o600)
+	if code, out, errOut := run(t, "client", "config", "apply"); code != output.OK || !strings.Contains(readFile(t, settings), `"cleanupPeriodDays": 3650`) {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}

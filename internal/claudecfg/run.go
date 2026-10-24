@@ -287,38 +287,9 @@ var ErrChangedSince = errors.New("changed since that run: --force restores it an
 // is itself a run, so it can be undone. Files changed since are refused
 // unless force; then nothing is written at all.
 func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) {
-	if ts == "" {
-		runs, err := Runs(r.PreImages)
-		if err != nil {
-			return "", nil, err
-		}
-		if len(runs) == 0 {
-			return "", nil, errors.New("no config editor run to restore")
-		}
-		ts = runs[len(runs)-1]
-	}
-	m, err := LoadManifest(r.PreImages, ts)
+	ts, m, res, err := r.checkRestore(ts, force)
 	if err != nil {
-		return "", nil, fmt.Errorf("run %s: %w", ts, err)
-	}
-	var res []RestoreResult
-	refused := false
-	for _, f := range m.Files {
-		cur, err := fsutil.HashFile(f.Target)
-		if err != nil {
-			return "", nil, err
-		}
-		rr := RestoreResult{Target: f.Target}
-		switch {
-		case cur == f.ShaBefore:
-			rr.Status = "unchanged"
-		case cur != f.ShaAfter && !force:
-			rr.Status, rr.Reason, refused = "refused", ErrChangedSince.Error(), true
-		}
-		res = append(res, rr)
-	}
-	if refused {
-		return ts, res, fmt.Errorf("%d file(s) %w", countStatus(res, "refused"), ErrChangedSince)
+		return ts, res, err
 	}
 	run := runState{r: r, action: "restore"}
 	defer run.finish()
@@ -346,6 +317,57 @@ func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) 
 		res[i].Status = map[bool]string{true: "deleted", false: "restored"}[want == nil]
 	}
 	return run.done(), res, nil
+}
+
+// RestorePlan says what Restore would do (status restore, delete,
+// unchanged or refused) without writing.
+func (r Runner) RestorePlan(ts string, force bool) ([]RestoreResult, error) {
+	_, m, res, err := r.checkRestore(ts, force)
+	for i, f := range m.Files {
+		if res[i].Status == "" {
+			res[i].Status = map[bool]string{true: "delete", false: "restore"}[f.PreImage == nil]
+		}
+	}
+	return res, err
+}
+
+// checkRestore loads run ts (the last when empty) and checks each file:
+// unchanged since before the run, or refused when edited since it.
+func (r Runner) checkRestore(ts string, force bool) (string, Manifest, []RestoreResult, error) {
+	var m Manifest
+	if ts == "" {
+		runs, err := Runs(r.PreImages)
+		if err != nil {
+			return "", m, nil, err
+		}
+		if len(runs) == 0 {
+			return "", m, nil, errors.New("no config editor run to restore")
+		}
+		ts = runs[len(runs)-1]
+	}
+	m, err := LoadManifest(r.PreImages, ts)
+	if err != nil {
+		return "", m, nil, fmt.Errorf("run %s: %w", ts, err)
+	}
+	var res []RestoreResult
+	for _, f := range m.Files {
+		cur, err := fsutil.HashFile(f.Target)
+		if err != nil {
+			return ts, m, nil, err
+		}
+		rr := RestoreResult{Target: f.Target}
+		switch {
+		case cur == f.ShaBefore:
+			rr.Status = "unchanged"
+		case cur != f.ShaAfter && !force:
+			rr.Status, rr.Reason = "refused", ErrChangedSince.Error()
+		}
+		res = append(res, rr)
+	}
+	if n := countStatus(res, "refused"); n > 0 {
+		return ts, m, res, fmt.Errorf("%d file(s) %w", n, ErrChangedSince)
+	}
+	return ts, m, res, nil
 }
 
 // beforePut is a test seam: it runs between a restore's check and its write.

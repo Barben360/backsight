@@ -37,7 +37,7 @@ func newDoctorCmd(e *env) *cobra.Command {
 			rep := doctor.Run(cmd.Context(), denv)
 			var failed error
 			if rep.Errors > 0 {
-				failed = &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}
+				failed = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}}
 			}
 			return e.report("doctor", rep, func() string { return doctorText(rep) }, failed)
 		},

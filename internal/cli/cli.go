@@ -52,14 +52,26 @@ func (e *env) report(command string, data any, text func() string, cmdErr error)
 		if err := output.WriteJSON(e.stdout, command, data, cmdErr); err != nil {
 			return err
 		}
-	} else if _, err := io.WriteString(e.stdout, text()); err != nil {
-		return err
+	} else {
+		if _, err := io.WriteString(e.stdout, text()); err != nil {
+			return err
+		}
+		var shown shownError
+		if cmdErr != nil && !errors.As(cmdErr, &shown) { // the reason, which the text may not carry
+			_, _ = fmt.Fprintf(e.stderr, "backsight: %v\n", cmdErr)
+		}
 	}
 	if cmdErr != nil {
 		return reported{output.CodeOf(cmdErr)}
 	}
 	return nil
 }
+
+// shownError is a failure the command's text output already explains.
+type shownError struct{ err *output.Error }
+
+func (s shownError) Error() string { return s.err.Error() }
+func (s shownError) Unwrap() error { return s.err }
 
 // reported is an exit code whose message was already printed.
 type reported struct{ code int }
