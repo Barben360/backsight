@@ -112,6 +112,9 @@ func requireSubcommands(cmd *cobra.Command) {
 	}
 }
 
+// hookStdin is where hook events are read; tests replace it.
+var hookStdin io.Reader = os.Stdin
+
 // usageError marks cobra's own argument and flag errors.
 type usageError struct{ error }
 
@@ -132,6 +135,14 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 
 // ExecuteContext is Execute with a context commands can watch (Ctrl-C).
 func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// Hooks bypass the command parser: no usage error (exit 2 blocks in
+	// Claude Code) can come out of a hook call, whatever its arguments.
+	if len(args) > 0 && args[0] == "hook" {
+		return runHook(ctx, args[1:], hookStdin, stdout)
+	}
+	if len(args) > 0 && args[0] == "hook-child" {
+		return runHookChild(ctx, args[1:], hookStdin, stdout)
+	}
 	e := &env{stdout: stdout, stderr: stderr}
 	root := newRoot(e)
 	root.SetArgs(args)

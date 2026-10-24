@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,13 @@ func (refuseDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 }
 
 func TestMain(m *testing.M) {
+	if os.Getenv("BACKSIGHT_TEST_HOOK_CHILD") == "1" { // the supervisor's child (hook_test.go)
+		args := os.Args[1:]
+		for len(args) > 0 && strings.HasPrefix(args[0], "-test.") {
+			args = args[1:]
+		}
+		os.Exit(Execute(args, os.Stdout, os.Stderr))
+	}
 	composeRunner = refuseDocker{}
 	os.Exit(m.Run())
 }
