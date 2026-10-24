@@ -1,0 +1,94 @@
+package server
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// Runner executes docker with args and returns combined output.
+type Runner interface {
+	Run(ctx context.Context, args ...string) ([]byte, error)
+}
+
+// DockerRunner runs the docker CLI (Compose v2 plugin).
+type DockerRunner struct{}
+
+func (DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+}
+
+// Compose drives the backsight compose project in Dir.
+type Compose struct {
+	Dir    string
+	Runner Runner
+}
+
+func (c Compose) args(sub ...string) []string {
+	a := []string{"compose", "-p", Project, "--project-directory", c.Dir, "-f", filepath.Join(c.Dir, "compose.yaml")}
+	if override := filepath.Join(c.Dir, "compose.override.yaml"); fileExists(override) {
+		a = append(a, "-f", override)
+	}
+	return append(a, sub...)
+}
+
+func (c Compose) run(ctx context.Context, sub ...string) ([]byte, error) {
+	out, err := c.Runner.Run(ctx, c.args(sub...)...)
+	if err != nil {
+		return out, fmt.Errorf("docker compose %s: %w: %s", strings.Join(sub, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+// Pull downloads the pinned images.
+func (c Compose) Pull(ctx context.Context) error { _, err := c.run(ctx, "pull"); return err }
+
+// Up starts the project and waits until Compose sees it running and healthy.
+func (c Compose) Up(ctx context.Context) error {
+	_, err := c.run(ctx, "up", "-d", "--wait")
+	return err
+}
+
+// Stop stops the containers and keeps them and their volumes.
+func (c Compose) Stop(ctx context.Context) error { _, err := c.run(ctx, "stop"); return err }
+
+// Container is one service's state as Compose reports it.
+type Container struct {
+	Service string `json:"Service"`
+	State   string `json:"State"`
+	Health  string `json:"Health"`
+}
+
+// PS lists the project's containers; Compose prints JSON lines or, in
+// older versions, one array.
+func (c Compose) PS(ctx context.Context) ([]Container, error) {
+	out, err := c.run(ctx, "ps", "--all", "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	out = bytes.TrimSpace(out)
+	var list []Container
+	if len(out) > 0 && out[0] == '[' {
+		return list, json.Unmarshal(out, &list)
+	}
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if len(bytes.TrimSpace(sc.Bytes())) == 0 {
+			continue
+		}
+		var ct Container
+		if err := json.Unmarshal(sc.Bytes(), &ct); err != nil {
+			return nil, fmt.Errorf("docker compose ps: %w", err)
+		}
+		list = append(list, ct)
+	}
+	return list, sc.Err()
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }

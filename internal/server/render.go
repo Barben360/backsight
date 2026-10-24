@@ -33,7 +33,11 @@ type Files struct {
 type MissingSecretsError struct{ Names []string }
 
 func (e *MissingSecretsError) Error() string {
-	return "missing secrets: " + strings.Join(e.Names, ", ") + " (backsight secret set <name>)"
+	cmds := make([]string, len(e.Names))
+	for i, n := range e.Names {
+		cmds[i] = "backsight secret set " + n
+	}
+	return "missing secrets: " + strings.Join(e.Names, ", ") + "; run " + strings.Join(cmds, ", then ")
 }
 
 // keylessProviders run without an LLM API key.

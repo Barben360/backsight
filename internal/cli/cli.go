@@ -120,7 +120,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		err = &output.Error{Code: code, Message: err.Error()}
 	}
 	if e.json {
-		_ = output.WriteJSON(stdout, cmd.Name(), nil, err)
+		_ = output.WriteJSON(stdout, strings.TrimPrefix(cmd.CommandPath(), "backsight "), nil, err)
 	} else {
 		_, _ = fmt.Fprintf(stderr, "backsight: %v\n", err)
 	}
