@@ -206,3 +206,37 @@ func TestANewBinaryVersionRewritesThePlugin(t *testing.T) {
 		t.Errorf("temporary trees left beside the marketplace: %v", ents)
 	}
 }
+
+// SPEC §17: the plugin ships remember, pause, memory-retro and memory; the
+// tools they may run are backsight's own commands only.
+func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
+	dir := t.TempDir()
+	_, _ = Generate(dir, "/opt/b/current", "1.2.3")
+	for _, name := range []string{"remember", "pause", "memory-retro", "memory"} {
+		raw, err := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", name, "SKILL.md"))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		s := string(raw)
+		if !strings.HasPrefix(s, "---\nname: "+name+"\ndescription: ") || !strings.Contains(s, "\n---\n") {
+			t.Errorf("%s frontmatter:\n%s", name, s)
+		}
+		for _, line := range strings.Split(s, "\n") {
+			if strings.HasPrefix(line, "allowed-tools:") {
+				for _, tool := range strings.Split(strings.TrimPrefix(line, "allowed-tools:"), ", ") {
+					if !strings.HasPrefix(strings.TrimSpace(tool), "Bash(/opt/b/current ") {
+						t.Errorf("%s allows %q", name, tool)
+					}
+				}
+			}
+		}
+	}
+	pause, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))
+	if !strings.Contains(string(pause), "/opt/b/current pause --project") || !strings.Contains(string(pause), "resume") {
+		t.Errorf("pause skill:\n%s", pause)
+	}
+	remember, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "remember", "SKILL.md"))
+	if strings.Contains(string(remember), "allowed-tools") || !strings.Contains(string(remember), "memory_store") {
+		t.Errorf("remember stores through the MCP tool, no shell:\n%s", remember)
+	}
+}

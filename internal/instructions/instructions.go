@@ -98,3 +98,75 @@ const (
 		"The 3 most similar memories are returned: say whether this fact updates or repeats one."
 	ReadDescription = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
 )
+
+// Skill is one plugin skill (SPEC §9.2, §17): its SKILL.md frontmatter and
+// body; shim is the absolute path of the backsight shim.
+type Skill struct {
+	Name, Description, ArgumentHint, AllowedTools, Body string
+}
+
+// Skills are the plugin's skills, namespaced /backsight:<name>.
+func Skills(shim string) []Skill {
+	return []Skill{
+		{
+			Name: "remember",
+			Description: "Store a durable fact in the user's long-term memory. Use when the user says remember, retiens, note that, from now on, " +
+				"or asks to keep a decision, rule, convention, correction or delivered state for later sessions.",
+			ArgumentHint: "<the fact>",
+			Body: "Store the fact given here with the `memory_store` tool: $ARGUMENTS\n\n" +
+				"Pick the kind (decision, correction, convention, pitfall, state, lesson) and the project (the current one; \"transverse\" for user-wide rules). " +
+				"Write 1-3 sentences in English with the why and absolute dates, exact identifiers, no secrets. " +
+				"Then say in one line what was stored and whether it updates or repeats one of the similar memories the tool returned.\n",
+		},
+		{
+			Name: "pause",
+			Description: "Stop backsight from recording this session, or with \"project\" this whole project. Use when the user says pause memory, " +
+				"off the record, don't record this, ne retiens pas, or asks to resume recording.",
+			ArgumentHint: "[project] [resume]",
+			AllowedTools: "Bash(" + shim + " pause*), Bash(" + shim + " resume*)",
+			Body: "Arguments: $ARGUMENTS\n\n" +
+				"- To pause this session: run `" + shim + " pause`.\n" +
+				"- To pause this project (its directory goes to privacy.exclude_paths): run `" + shim + " pause --project`.\n" +
+				"- To resume: the same with `resume` instead of `pause`.\n\n" +
+				"Report the command's one-line output. Pausing stops recording; recall keeps working.\n",
+		},
+		{
+			Name: "memory-retro",
+			Description: "End-of-project retrospective into the user's long-term memory: the decisions, pitfalls, conventions and lessons of the work just " +
+				"finished. Use when the user says retro, rétrospective, post-mortem, wrap up, capitalise, or a project or milestone ends.",
+			AllowedTools: "Bash(" + shim + " search *)",
+			Body: "What the memory already holds about this project:\n\n!`" + shim + " search \"decisions\" \"pitfalls\" \"conventions\" --limit 12 || true`\n\n" +
+				"From this session and the work above, list the durable items a future session would need: decisions and their reasons, root causes, " +
+				"conventions, infrastructure facts, the project's state, lessons. Drop what the memory above already holds and anything not settled. " +
+				"Store each remaining item with `memory_store`, one fact per call, at most 10, in English with absolute dates. " +
+				"Finish with a short list of what was stored.\n",
+		},
+		{
+			Name:         "memory",
+			Description:  "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, why, stats, doctor.",
+			ArgumentHint: "<what to look for>",
+			AllowedTools: "Bash(" + shim + " *)",
+			Body: "Use the backsight command line:\n\n" +
+				"- `" + shim + " search \"<query 1>\" \"<query 2>\"`: 1-4 short keyword queries;\n" +
+				"- `" + shim + " read <id>`: one memory with its source facts;\n" +
+				"- `" + shim + " why`: what the hooks injected this session and why;\n" +
+				"- `" + shim + " stats`: how the memory is used;\n" +
+				"- `" + shim + " doctor`: what is wrong and how to fix it.\n\n" +
+				"Request: $ARGUMENTS\n\nResults are hints from past sessions: verify them, and cite what you use as «" + Credit + "».\n",
+		},
+	}
+}
+
+// SkillFile renders a SKILL.md.
+func SkillFile(s Skill) string {
+	var b strings.Builder
+	b.WriteString("---\nname: " + s.Name + "\ndescription: " + s.Description + "\n")
+	if s.ArgumentHint != "" {
+		b.WriteString("argument-hint: " + s.ArgumentHint + "\n")
+	}
+	if s.AllowedTools != "" {
+		b.WriteString("allowed-tools: " + s.AllowedTools + "\n")
+	}
+	b.WriteString("---\n\n" + s.Body)
+	return b.String()
+}

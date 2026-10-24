@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/instructions"
 )
 
 // Names fixed by SPEC §5: tools are mcp__plugin_backsight_memory__<tool>.
@@ -26,7 +27,7 @@ const (
 	Server      = "memory"
 	// layout changes whenever the generated files change shape, so dev
 	// builds get a new plugin version.
-	layout = "2"
+	layout = "3"
 )
 
 // ToolNames are the three memory tools as Claude Code names them.
@@ -111,6 +112,9 @@ func files(shim, version string) (map[string][]byte, error) {
 		}},
 	}
 	out := map[string][]byte{}
+	for _, sk := range instructions.Skills(shim) {
+		out["plugins/"+Name+"/skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
+	}
 	for p, d := range docs {
 		raw, err := json.MarshalIndent(d, "", "  ")
 		if err != nil {
