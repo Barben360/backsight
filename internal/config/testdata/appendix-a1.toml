@@ -1,0 +1,54 @@
+# SPEC Appendix A.1 with the placeholders resolved for home=/home/u,
+# data=/d. Written by hand from the spec, not generated: it pins defaults.
+schema_version = 1
+language = "en"
+[server]
+url = "http://127.0.0.1:8888"
+bank = "claude-memory"
+mode = "local"
+compose_dir = "/d/server"
+digest = ""
+[projects]
+transverse = [".claude", "u"]
+[privacy]
+exclude_paths = []
+[components]
+read = true
+write = true
+[recall]
+min_score = 0.5
+prompt_hits = 3
+query_chars = 300
+prompt_chars = 800
+min_gap = 3
+recall_min_chars = 60
+reminder_min_chars = 40
+quiet_prompts = 3
+sticky_max = 3
+sticky_bypass = 0.97
+sticky_window_h = 24
+project_boost = 0.05
+session_budget_chars = 6000
+[llm]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+base_url = ""
+[embeddings]
+preset = "multilingual"
+[network]
+exposure = "loopback"
+bind_ip = ""
+breaker_failures = 3
+breaker_pause_min = 5
+[hooks]
+subagent_skip = ["Explore", "statusline-setup", "claude-code-guide"]
+outbox_warn_mb = 50
+outbox_max_mb = 500
+[backup]
+enabled = true
+dir = "/d/backups"
+recipient = ""
+keep_daily = 7
+keep_weekly = 4
+[update]
+auto_apply = false
