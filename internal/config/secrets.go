@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -101,6 +102,8 @@ func (s *Secrets) field(name string) (*string, error) {
 	return nil, fmt.Errorf("unknown secret %q (one of api_key, ui_key, db_password, llm_api_key, backup_identity)", name)
 }
 
+var dbPasswordRE = regexp.MustCompile(`^[A-Za-z0-9_-]{16,}$`)
+
 // Set stores value under name; empty values are refused.
 func (s *Secrets) Set(name, value string) error {
 	f, err := s.field(name)
@@ -109,6 +112,9 @@ func (s *Secrets) Set(name, value string) error {
 	}
 	if value == "" {
 		return fmt.Errorf("%s: empty value", name)
+	}
+	if name == "db_password" && !dbPasswordRE.MatchString(value) {
+		return fmt.Errorf("db_password: use at least 16 characters from A-Z, a-z, 0-9, - and _ (it goes into a database URL)")
 	}
 	*f = value
 	return nil

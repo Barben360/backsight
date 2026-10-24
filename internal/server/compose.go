@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -92,3 +93,25 @@ func (c Compose) PS(ctx context.Context) ([]Container, error) {
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// DataVolume is the database volume Compose creates for the project.
+const DataVolume = Project + "_pg_data"
+
+// VolumeExists reports whether the project's database volume exists: its
+// password was fixed when it was created.
+func (c Compose) VolumeExists(ctx context.Context) (bool, error) {
+	out, err := c.Runner.Run(ctx, "volume", "inspect", DataVolume)
+	switch {
+	case err == nil:
+		return true, nil
+	case strings.Contains(strings.ToLower(string(out)), "no such volume"):
+		return false, nil
+	}
+	return false, fmt.Errorf("docker volume inspect %s: %w: %s", DataVolume, err, strings.TrimSpace(string(out)))
+}
+
+// Logs returns the last n lines of service's log.
+func (c Compose) Logs(ctx context.Context, service string, n int) (string, error) {
+	out, err := c.run(ctx, "logs", "--no-color", "--tail", strconv.Itoa(n), service)
+	return string(out), err
+}

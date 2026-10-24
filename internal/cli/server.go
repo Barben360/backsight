@@ -17,7 +17,10 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/target"
 )
 
 // Seams replaced by tests.
@@ -39,17 +42,28 @@ func blocked(err error) error {
 	return &output.Error{Code: output.Blocked, Message: err.Error()}
 }
 
-// waitHealthy polls /health until it answers or healthTimeout passes.
+// waitHealthy polls /health until it answers or healthTimeout passes, and
+// fails early with the last log lines when the hindsight container exits or
+// restarts (a crash loop has no health to wait for).
 func waitHealthy(ctx context.Context, cfg config.Config, sec config.Secrets) (hindsight.Version, error) {
 	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
 	if err != nil {
 		return hindsight.Version{}, err
 	}
+	c := composeFor(cfg)
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	for {
 		if _, err := cl.Health(ctx); err == nil {
 			return cl.Version(ctx)
+		}
+		if list, err := c.PS(ctx); err == nil {
+			for _, ct := range list {
+				if ct.Service == "hindsight" && (ct.State == "exited" || ct.State == "restarting" || ct.State == "dead") {
+					logs, _ := c.Logs(ctx, "hindsight", 20)
+					return hindsight.Version{}, fmt.Errorf("the hindsight container is %s; last log lines:\n%s", ct.State, strings.TrimSpace(logs))
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -66,10 +80,11 @@ type step struct {
 }
 
 type installResult struct {
-	Steps   []step `json:"steps"`
-	URL     string `json:"url,omitempty"`
-	UI      string `json:"ui,omitempty"`
-	Version string `json:"version,omitempty"`
+	Steps    []step   `json:"steps"`
+	Warnings []string `json:"warnings,omitempty"`
+	URL      string   `json:"url,omitempty"`
+	UI       string   `json:"ui,omitempty"`
+	Version  string   `json:"version,omitempty"`
 }
 
 func stepsText(r installResult) string {
@@ -80,6 +95,9 @@ func stepsText(r installResult) string {
 			fmt.Fprintf(&b, ": %s", s.Detail)
 		}
 		b.WriteString("\n")
+	}
+	for _, w := range r.Warnings {
+		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
 	if r.Version != "" {
 		fmt.Fprintf(&b, "\nHindsight %s healthy at %s (UI %s)\n", r.Version, r.URL, r.UI)
@@ -173,7 +191,29 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				add("config", "skipped", "kept "+d.ConfigFile())
 			}
 
-			// 2. Secrets: server keys generated, the LLM key is the user's.
+			// One install, render or start at a time.
+			unlock, err := serverLock(d, "server install")
+			if err != nil {
+				return err
+			}
+			defer unlock()
+
+			// 2. Secrets: server keys generated, the LLM key is the user's. A
+			// database volume keeps the password it was created with, so a
+			// lost db_password cannot be regenerated against it.
+			c := composeFor(cfg)
+			ctx := cmd.Context()
+			if prev, err := config.LoadSecrets(d.SecretsFile()); (err == nil || errors.Is(err, fs.ErrNotExist)) && prev.DBPassword == "" {
+				exists, err := c.VolumeExists(ctx)
+				if err != nil {
+					return blocked(err)
+				}
+				if exists {
+					return &output.Error{Code: output.Blocked, Message: "the database volume " + server.DataVolume +
+						" exists but secrets.toml has no db_password: restore the secrets.toml it was created with, or delete the volume and its memories (docker volume rm " +
+						server.DataVolume + ") before installing again"}
+				}
+			}
 			var made []string
 			if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { made = config.GenerateMissing(s); return nil }); err != nil {
 				return blocked(err)
@@ -204,19 +244,22 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			add("render", map[bool]string{true: "done", false: "skipped"}[ch.Compose || ch.Env], cfg.Server.ComposeDir)
 
 			// 4-6. Pull, start, health.
-			c := composeFor(cfg)
-			ctx := cmd.Context()
+			res.Warnings = installWarnings(cfg)
 			if err := c.Pull(ctx); err != nil {
-				return blocked(err)
+				return redacted(err, sec)
 			}
 			add("pull", "done", "")
 			if err := c.Up(ctx); err != nil {
-				return blocked(err)
+				return redacted(err, sec)
 			}
-			add("start", "done", "project "+server.Project)
+			detail := "project " + server.Project
+			if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
+				detail += ", with your compose.override.yaml"
+			}
+			add("start", "done", detail)
 			v, err := waitHealthy(ctx, cfg, sec)
 			if err != nil {
-				return blocked(err)
+				return redacted(err, sec)
 			}
 			add("health", "done", "healthy")
 			br, err := applyBank(cmd, d, cfg, sec, false)
@@ -226,7 +269,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
 			pr, err := checkProvider(cmd.Context(), cfg, sec)
 			if err != nil {
-				return err
+				return redacted(err, sec)
 			}
 			add("provider", "done", fmt.Sprintf("%s/%s extracted %d English fact(s)", cfg.LLM.Provider, cfg.LLM.Model, pr.Facts))
 			res.URL, res.UI, res.Version = cfg.Server.URL, fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.UIPort), v.APIVersion
@@ -252,6 +295,15 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			unlock, err := serverLock(d, "server start")
+			if err != nil {
+				return err
+			}
+			defer unlock()
 			files, err := renderFiles(cfg, sec)
 			if err != nil {
 				return err
@@ -260,7 +312,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			if err := composeFor(cfg).Up(cmd.Context()); err != nil {
-				return blocked(err)
+				return redacted(err, sec)
 			}
 			return e.emit("server start", map[string]string{"project": server.Project}, func() string { return "started\n" })
 		},
@@ -407,6 +459,15 @@ func newServerRenderCmd(e *env) *cobra.Command {
 			if plan {
 				res.Changes, err = server.Diff(res.Dir, f)
 			} else {
+				d, _, merr := machine()
+				if merr != nil {
+					return merr
+				}
+				unlock, lerr := serverLock(d, "server render")
+				if lerr != nil {
+					return lerr
+				}
+				defer unlock()
 				res.Changes, err = server.Write(res.Dir, f)
 			}
 			if err != nil {
@@ -466,4 +527,34 @@ func newServerLLMCmd(e *env) *cobra.Command {
 		},
 	})
 	return llm
+}
+
+// serverLock serialises commands that rewrite the compose project.
+func serverLock(d paths.Dirs, command string) (func(), error) {
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "server.lock"), command)
+	if err != nil {
+		return nil, &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	return func() { _ = l.Release() }, nil
+}
+
+// redacted is blocked() with every known secret value masked: Docker and
+// provider output can quote configuration.
+func redacted(err error, sec config.Secrets) error {
+	var oe *output.Error
+	if errors.As(err, &oe) {
+		return &output.Error{Code: oe.Code, Message: server.Redact(oe.Message, sec)}
+	}
+	return &output.Error{Code: output.Blocked, Message: server.Redact(err.Error(), sec)}
+}
+
+func installWarnings(cfg config.Config) []string {
+	var w []string
+	if h := os.Getenv("DOCKER_HOST"); h != "" && !strings.HasPrefix(h, "unix://") && !strings.HasPrefix(h, "npipe://") {
+		w = append(w, "DOCKER_HOST="+h+": the containers and their .env secrets go to that engine, while health checks use "+cfg.Server.URL)
+	}
+	if (target.Target{URL: cfg.Server.URL}).Cleartext() {
+		w = append(w, "the API key travels unencrypted to "+cfg.Server.URL)
+	}
+	return w
 }

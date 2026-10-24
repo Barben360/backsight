@@ -105,6 +105,7 @@ func readSecret(e *env, name, fromEnv, fromFile string) (string, error) {
 	switch {
 	case fromEnv != "":
 		v, ok := os.LookupEnv(fromEnv)
+		v = strings.TrimSpace(v)
 		if !ok || v == "" {
 			return "", &output.Error{Code: output.Usage, Message: fromEnv + " is not set"}
 		}
@@ -129,7 +130,7 @@ func readSecret(e *env, name, fromEnv, fromFile string) (string, error) {
 }
 
 func firstLine(r io.Reader) (string, error) {
-	line, err := bufio.NewReader(r).ReadString('\n')
+	line, err := bufio.NewReader(io.LimitReader(r, 64<<10)).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", &output.Error{Code: output.Blocked, Message: err.Error()}
 	}

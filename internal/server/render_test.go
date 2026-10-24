@@ -154,3 +154,31 @@ func TestWriteFiles(t *testing.T) {
 		t.Errorf("a secret change touches .env only: %+v", plan)
 	}
 }
+
+func TestDSNEncodesThePassword(t *testing.T) {
+	s := secrets
+	s.DBPassword = "p@ss/w:rd?#%"
+	f, err := Render(devConfig(), s, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(f.Env), "@db:5432/hindsight'") || !strings.Contains(string(f.Env), "hindsight:p%40ss%2Fw%3Ard%3F%23%25@db") {
+		t.Errorf("%s", f.Env)
+	}
+}
+
+func TestIPv6BindIsBracketed(t *testing.T) {
+	cfg := devConfig()
+	cfg.Network.Exposure, cfg.Network.BindIP = "private", "fd7a:115c:a1e0::1"
+	f, err := Render(cfg, secrets, "box")
+	if err != nil || !strings.Contains(string(f.Compose), `"[fd7a:115c:a1e0::1]:18888:8888"`) {
+		t.Errorf("%v\n%s", err, f.Compose)
+	}
+}
+
+func TestRedact(t *testing.T) {
+	got := Redact("auth failed for fakellmkey; db fakedbpassword; short x", secrets)
+	if strings.Contains(got, "fakellmkey") || strings.Contains(got, "fakedbpassword") || !strings.Contains(got, "[redacted]") {
+		t.Errorf("%q", got)
+	}
+}

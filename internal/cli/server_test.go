@@ -111,13 +111,26 @@ func TestServerRenderWithoutConfig(t *testing.T) {
 }
 
 type fakeCompose struct {
-	calls  [][]string
-	ps     string
-	failOn string // subcommand that fails like a port clash
+	calls        [][]string
+	ps           string
+	failOn       string // subcommand that fails like a port clash
+	volumeExists bool
+	logs         string
 }
 
 func (f *fakeCompose) Run(_ context.Context, args ...string) ([]byte, error) {
+	if args[0] == "volume" {
+		if f.volumeExists {
+			return []byte(`[{"Name":"backsight_pg_data"}]`), nil
+		}
+		return []byte("Error: no such volume"), errors.New("exit status 1")
+	}
 	f.calls = append(f.calls, args)
+	for _, a := range args {
+		if a == "logs" {
+			return []byte(f.logs), nil
+		}
+	}
 	for _, a := range args {
 		if f.failOn != "" && a == f.failOn {
 			return []byte("Error: port is already allocated"), errors.New("exit status 1")
@@ -423,6 +436,67 @@ func TestBankApplyRecreatesAWipedBank(t *testing.T) {
 	_ = state.Update(d, "test", func(s *state.State) error { s.BankConfigHash = server.TemplateHash(); return nil })
 	_, out, _ := run(t, "bank", "apply", "--json")
 	if !strings.Contains(out, `"created": true`) || !strings.Contains(out, `"sent": true`) {
+		t.Errorf("%s", out)
+	}
+}
+
+func TestInstallRefusesNewDBPasswordForAnExistingVolume(t *testing.T) {
+	isolate(t)
+	f := withCompose(t)
+	f.volumeExists = true
+	t.Setenv("LLM", "fakellmkey")
+	run(t, "secret", "set", "llm_api_key", "--from-env", "LLM")
+	code, _, errOut := run(t, "server", "install", "--api-port", strconv.Itoa(closedPort(t)), "--ui-port", "19999")
+	if code != output.Blocked || !strings.Contains(errOut, "backsight_pg_data") || !strings.Contains(errOut, "restore the secrets.toml") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("nothing may start: %v", f.calls)
+	}
+}
+
+func TestInstallHeldLock(t *testing.T) {
+	home := devInstall(t, true)
+	withCompose(t)
+	l, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "server.lock"), "server install")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	for _, args := range [][]string{{"server", "install"}, {"server", "start"}, {"server", "render"}} {
+		if code, _, errOut := run(t, args...); code != output.Blocked || !strings.Contains(errOut, "server install") {
+			t.Errorf("%v: exit %d: %s", args, code, errOut)
+		}
+	}
+}
+
+// A crash loop fails fast with the container's last lines, secrets masked.
+func TestInstallCrashLoopFailsFastWithRedactedLogs(t *testing.T) {
+	home := devInstall(t, true)
+	f := withCompose(t)
+	f.ps = `{"Service":"hindsight","State":"restarting","Health":""}`
+	s, _ := config.LoadSecrets(secretsFile(home))
+	f.logs = "FATAL: password authentication failed; url postgresql://hindsight:" + s.DBPassword + "@db"
+	start := time.Now()
+	code, _, errOut := run(t, "server", "install")
+	if code != output.Blocked || !strings.Contains(errOut, "restarting") || !strings.Contains(errOut, "password authentication failed") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+	if strings.Contains(errOut, s.DBPassword) {
+		t.Error("the database password reached the output")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("a crash loop must not wait for the health timeout")
+	}
+}
+
+func TestInstallWarnsAboutRemoteDockerHost(t *testing.T) {
+	home := devInstall(t, true)
+	withCompose(t)
+	pointAt(t, home, fakeHindsight(t))
+	t.Setenv("DOCKER_HOST", "tcp://10.0.0.5:2375")
+	_, out, _ := run(t, "server", "install")
+	if !strings.Contains(out, "warning  DOCKER_HOST=tcp://10.0.0.5:2375") {
 		t.Errorf("%s", out)
 	}
 }

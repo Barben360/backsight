@@ -177,3 +177,15 @@ func TestGenerateMissing(t *testing.T) {
 		t.Errorf("second run generated %v", again)
 	}
 }
+
+func TestDBPasswordMustBeURLSafe(t *testing.T) {
+	var s Secrets
+	for _, bad := range []string{"short", "has space in it here", "p@ss/word-longer-than-16"} {
+		if err := s.Set("db_password", bad); err == nil || strings.Contains(err.Error(), bad) {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	if err := s.Set("db_password", "abcdefgh_ijklm-nop"); err != nil {
+		t.Error(err)
+	}
+}

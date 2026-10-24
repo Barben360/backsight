@@ -40,7 +40,7 @@ func TestSecretSetFromPipe(t *testing.T) {
 
 func TestSecretSetFromEnvAndFile(t *testing.T) {
 	home := isolate(t)
-	t.Setenv("MY_KEY", "fakevalue2")
+	t.Setenv("MY_KEY", " fakevalue2\n")
 	if code, out, errOut := run(t, "secret", "set", "llm_api_key", "--from-env", "MY_KEY"); code != output.OK {
 		t.Fatalf("exit %d: %s %s", code, out, errOut)
 	}

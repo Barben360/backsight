@@ -72,3 +72,34 @@ func TestPSParsesBothFormats(t *testing.T) {
 		t.Errorf("no containers: %+v %v", got, err)
 	}
 }
+
+func TestVolumeExists(t *testing.T) {
+	cases := []struct {
+		out    string
+		err    error
+		exists bool
+		fails  bool
+	}{
+		{`[{"Name":"backsight_pg_data"}]`, nil, true, false},
+		{"Error response from daemon: get backsight_pg_data: no such volume", errors.New("exit status 1"), false, false},
+		{"Cannot connect to the Docker daemon", errors.New("exit status 1"), false, true},
+	}
+	for _, c := range cases {
+		r := &fakeRunner{out: []byte(c.out), err: c.err}
+		got, err := Compose{Dir: t.TempDir(), Runner: r}.VolumeExists(context.Background())
+		if got != c.exists || (err != nil) != c.fails {
+			t.Errorf("%q: %v %v", c.out, got, err)
+		}
+		if strings.Join(r.calls[0], " ") != "volume inspect backsight_pg_data" {
+			t.Errorf("args %v", r.calls[0])
+		}
+	}
+}
+
+func TestLogsArgs(t *testing.T) {
+	r := &fakeRunner{out: []byte("line")}
+	out, err := Compose{Dir: t.TempDir(), Runner: r}.Logs(context.Background(), "hindsight", 20)
+	if err != nil || out != "line" || strings.Join(r.calls[0][len(r.calls[0])-5:], " ") != "logs --no-color --tail 20 hindsight" {
+		t.Errorf("%q %v %v", out, err, r.calls[0])
+	}
+}
