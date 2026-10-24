@@ -283,3 +283,27 @@ func (c *Client) BankConfigOverrides(ctx context.Context, bank string) (map[stri
 func (c *Client) PatchBankConfig(ctx context.Context, bank string, updates map[string]any) error {
 	return c.do(ctx, http.MethodPatch, bankPath(bank, "/config"), nil, map[string]any{"updates": updates}, nil)
 }
+
+// ExtractedFact is one candidate fact from a dry-run extraction.
+type ExtractedFact struct {
+	Text     string   `json:"text"`
+	FactType string   `json:"fact_type"`
+	Entities []string `json:"entities"`
+}
+
+// DryRunResult is what the retain step would extract.
+type DryRunResult struct {
+	Facts []ExtractedFact `json:"facts"`
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+}
+
+// DryRunExtract asks the server's LLM to extract facts from content
+// without storing anything.
+func (c *Client) DryRunExtract(ctx context.Context, bank, content, strategy string, at time.Time) (DryRunResult, error) {
+	var out DryRunResult
+	body := map[string]any{"content": content, "strategy": strategy, "timestamp": at.UTC().Format(time.RFC3339), "context": "backsight provider check"}
+	return out, c.do(ctx, http.MethodPost, bankPath(bank, "/memories/dry-run-extract"), nil, body, &out)
+}

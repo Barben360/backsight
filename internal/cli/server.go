@@ -146,7 +146,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			var res installResult
 			add := func(name, status, detail string) { res.Steps = append(res.Steps, step{name, status, detail}) }
 			if f.plan {
-				for _, s := range []string{"config", "secrets", "render", "pull", "start", "health", "bank"} {
+				for _, s := range []string{"config", "secrets", "render", "pull", "start", "health", "bank", "provider"} {
 					add(s, "planned", "")
 				}
 				return e.emit("server install", res, func() string { return stepsText(res) })
@@ -224,6 +224,11 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
+			pr, err := checkProvider(cmd.Context(), cfg, sec)
+			if err != nil {
+				return err
+			}
+			add("provider", "done", fmt.Sprintf("%s/%s extracted %d English fact(s)", cfg.LLM.Provider, cfg.LLM.Model, pr.Facts))
 			res.URL, res.UI, res.Version = cfg.Server.URL, fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.UIPort), v.APIVersion
 			return e.emit("server install", res, func() string { return stepsText(res) })
 		},
@@ -340,7 +345,7 @@ func statusText(r statusResult) string {
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e))
 	return cmd
 }
 
@@ -421,4 +426,44 @@ func renderText(r renderResult) string {
 	}
 	return fmt.Sprintf("%s: %s\n%s: %s\n",
 		filepath.Join(r.Dir, "compose.yaml"), verb[r.Compose], filepath.Join(r.Dir, ".env"), verb[r.Env])
+}
+
+func checkProvider(ctx context.Context, cfg config.Config, sec config.Secrets) (server.ProviderResult, error) {
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 3*time.Minute) // a slow model still answers
+	if err != nil {
+		return server.ProviderResult{}, blocked(err)
+	}
+	res, err := server.CheckProvider(ctx, cl, cfg.Server.Bank)
+	if err != nil {
+		return res, blocked(err)
+	}
+	return res, nil
+}
+
+func newServerLLMCmd(e *env) *cobra.Command {
+	llm := &cobra.Command{Use: "llm", Short: "Check the server's extraction LLM", Args: cobra.NoArgs}
+	llm.AddCommand(&cobra.Command{
+		Use:   "check",
+		Short: "Extract facts from a fixed sample without storing them (auth, model, output, language)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, sec, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
+			res, err := checkProvider(cmd.Context(), cfg, sec)
+			if err != nil {
+				return err
+			}
+			return e.emit("server llm check", res, func() string {
+				var b strings.Builder
+				fmt.Fprintf(&b, "%s/%s: %d fact(s) in English, %d input and %d output tokens\n", cfg.LLM.Provider, cfg.LLM.Model, res.Facts, res.InputTokens, res.OutputTokens)
+				for _, f := range res.Sample {
+					fmt.Fprintf(&b, "  - %s\n", f)
+				}
+				return b.String()
+			})
+		},
+	})
+	return llm
 }

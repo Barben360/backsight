@@ -156,6 +156,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				overrides[k] = v
 			}
 			_, _ = w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract"):
+			_, _ = w.Write([]byte(`{"facts":[{"text":"The billing service keeps PostgreSQL 16 for partial indexes.","fact_type":"world"}],"usage":{"input_tokens":900,"output_tokens":40}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
 			ov, _ := json.Marshal(overrides)
 			_, _ = w.Write([]byte(`{"config":{},"overrides":` + string(ov) + `}`))
@@ -208,7 +210,7 @@ func TestServerInstallFromScratch(t *testing.T) {
 	if s.APIKey == "" || s.UIKey == "" || s.DBPassword == "" || s.LLMAPIKey != "fakellmkey" {
 		t.Errorf("secrets: %v", s.Names())
 	}
-	if !strings.Contains(out, "bank") || !strings.Contains(out, "healthy") || strings.Contains(out+errOut, s.APIKey) {
+	if !strings.Contains(out, "bank") || !strings.Contains(out, "provider") || !strings.Contains(out, "healthy") || strings.Contains(out+errOut, s.APIKey) {
 		t.Errorf("output:\n%s", out)
 	}
 	// Idempotent: a second run keeps config and secrets.
@@ -359,6 +361,22 @@ func TestBankApply(t *testing.T) {
 func TestBankApplyServerDown(t *testing.T) {
 	devInstall(t, true)
 	if code, _, errOut := run(t, "bank", "apply"); code != output.Blocked || !strings.Contains(errOut, "unreachable") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+}
+
+func TestServerLLMCheck(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	code, out, errOut := run(t, "server", "llm", "check")
+	if code != output.OK || !strings.Contains(out, "1 fact") || !strings.Contains(out, "PostgreSQL 16") {
+		t.Errorf("exit %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+func TestServerLLMCheckServerDown(t *testing.T) {
+	devInstall(t, true)
+	if code, _, errOut := run(t, "server", "llm", "check"); code != output.Blocked || !strings.Contains(errOut, "LLM") {
 		t.Errorf("exit %d: %s", code, errOut)
 	}
 }
