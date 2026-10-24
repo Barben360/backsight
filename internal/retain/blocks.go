@@ -212,6 +212,10 @@ func LoadSentIndex(dir string) (*SentIndex, error) {
 
 func (s *SentIndex) Has(uuid string) bool { return s.set[uuidKey(uuid)] }
 
+// sessionKey indexes a record as sent within one session, which tells a
+// fork's copied records (sent under the parent) from this session's own.
+func sessionKey(sid, uuid string) string { return sid + "\x00" + uuid }
+
 // Add appends uuids (one write, fsynced).
 func (s *SentIndex) Add(uuids ...string) error {
 	var buf []byte

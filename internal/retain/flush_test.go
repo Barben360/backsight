@@ -30,6 +30,7 @@ type fakeHS struct {
 	ops     []string
 	status  int  // non-zero: answer retains with this status
 	stale   bool // metadata not updated (async retain still running)
+	hidden  bool // new documents not readable yet (their first async retain still running)
 	gets    int  // document reads
 	seenOps map[string]bool
 }
@@ -74,7 +75,7 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		h.gets++
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
 		meta, ok := h.docs[id]
-		if !ok {
+		if !ok || h.hidden {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -623,5 +624,45 @@ func TestOpenSessionTwoHourBoundary(t *testing.T) {
 		if r := e.flush("s1", Options{}); r.Status != c.want {
 			t.Errorf("turn at +%d min: %s, want %s", c.offset, r.Status, c.want)
 		}
+	}
+}
+
+// Issue 101: the first segment's async retain has not landed and the
+// cursor is lost. The document reads as missing, but this session's records
+// were sent: a new segment 1 would replace them, so the flush waits.
+func TestLostCursorBeforeTheFirstSegmentLandsWaits(t *testing.T) {
+	e := newEnv(t)
+	e.hs.hidden = true
+	e.record("s1", "u1", "user", 0, "first")
+	e.flush("s1", Options{})
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.record("s1", "u2", "user", 30, "second")
+	r := e.flush("s1", Options{})
+	if r.Status != Retry || r.Stop || len(e.hs.retains) != 1 {
+		t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	e.hs.hidden = false // the first retain lands
+	r = e.flush("s1", Options{})
+	if r.Status != Sent || len(e.hs.retains) != 2 || e.hs.retains[1].UpdateMode != "append" {
+		t.Fatalf("%+v, %+v", r, e.hs.retains)
+	}
+	for _, text := range []string{"first", "second"} {
+		if n := e.hs.countLines(text); n != 1 {
+			t.Errorf("%q stored %d times", text, n)
+		}
+	}
+}
+
+// A fork's copied records were sent under the parent's session: the fork's
+// own document is created normally.
+func TestForkStillCreatesItsDocument(t *testing.T) {
+	e := newEnv(t)
+	e.record("parent", "u1", "user", 0, "shared turn")
+	e.flush("parent", Options{})
+	e.record("fork", "u1", "user", 0, "shared turn")
+	e.record("fork", "u9", "user", 30, "fork turn")
+	r := e.flush("fork", Options{})
+	if r.Status != Sent || r.Records != 1 || e.hs.retains[len(e.hs.retains)-1].UpdateMode == "append" {
+		t.Fatalf("%+v %+v", r, e.hs.retains)
 	}
 }
