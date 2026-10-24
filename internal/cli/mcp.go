@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -63,7 +64,6 @@ func errorResult(s string) *mcp.CallToolResult {
 // newMCPServer builds the memory server (SPEC §7).
 func newMCPServer(deps mcpDeps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.ShortGuide})
-	cmdCtx := &cobra.Command{}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
@@ -80,8 +80,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if a.MinScore != nil {
 				minScore = *a.MinScore
 			}
-			cmdCtx.SetContext(ctx)
-			res := searchMemory(cmdCtx, deps.dirs, deps.cfg, deps.engine, deps.current, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			res := searchMemory(ctx, deps.dirs, deps.cfg, deps.engine, deps.current, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res)})
 			if len(res.Hits) == 0 && !scopesOK(res) {
 				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil
@@ -91,7 +90,11 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
-			m, err := deps.engine.Client.GetMemory(ctx, deps.cfg.Server.Bank, strings.TrimSpace(a.ID))
+			id := strings.TrimSpace(a.ID)
+			if !memoryIDRE.MatchString(id) || strings.Contains(id, "..") {
+				return errorResult("id: the memory id shown by memory_search"), nil, nil
+			}
+			m, err := deps.engine.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_read", MS: int(time.Since(start).Milliseconds()), Hits: map[bool]int{true: 1}[err == nil], OK: err == nil})
 			var apiErr *hindsight.APIError
 			if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
@@ -137,6 +140,10 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 		})
 	return s
 }
+
+// memoryIDRE: what Hindsight ids look like (UUIDs); nothing that could
+// turn into another path.
+var memoryIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func scopesOK(r recall.Result) bool {
 	for _, m := range r.Scopes {

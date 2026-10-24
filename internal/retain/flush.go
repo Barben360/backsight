@@ -194,7 +194,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
 			skip := 0
 			for skip < len(recs) && f.Index.Has(recs[skip].UUID) {
-				if f.Index.Has(sessionKey(sid, recs[skip].UUID)) {
+				if f.Index.Has(sessionKey(f.Bank, sid, recs[skip].UUID)) {
 					// This session's own records went out, but the document
 					// is not readable yet (its async retain is still running):
 					// a new segment 1 would replace it (issue 101). After
@@ -312,7 +312,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	}
 	uuids := make([]string, 0, 2*len(run))
 	for _, r := range run {
-		uuids = append(uuids, r.UUID, sessionKey(sid, r.UUID)) // fork guard, then "sent in this session"
+		uuids = append(uuids, r.UUID, sessionKey(f.Bank, sid, r.UUID)) // fork guard, then "sent in this session"
 	}
 	if err := f.Index.Add(uuids...); err != nil {
 		detail = "sent, but the fork-guard index was not updated: " + err.Error()

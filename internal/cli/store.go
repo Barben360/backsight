@@ -94,18 +94,24 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
 		res.Warning = "maintenance in progress: the note goes out after it"
 	} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
-		fr, err := ob.Flush(ctx, cl, cfg.Server.Bank, machineID)
+		fctx, cancel := context.WithTimeout(ctx, storeFlushBudget)
+		fr, err := ob.Flush(fctx, cl, cfg.Server.Bank, machineID)
+		cancel()
 		switch {
-		case err != nil || fr.Kept > 0:
-		case fr.Quarantined > 0:
+		case err != nil && !slices.Contains(fr.SentDocs, n.DocumentID):
+		case slices.Contains(fr.QuarantinedDocs, n.DocumentID):
 			res.Status = "rejected"
 			failed = &output.Error{Code: output.Blocked, Message: "the server refused the note (" + fr.LastError + "); it is kept in quarantine: see backsight doctor"}
-		default:
+		case slices.Contains(fr.SentDocs, n.DocumentID):
 			res.Status = "stored"
 		}
 	}
 	return res, failed
 }
+
+// storeFlushBudget bounds the immediate send: a backlog left by an outage
+// is the jobs tick's work, not the caller's wait.
+const storeFlushBudget = 10 * time.Second
 
 // TransverseKeyword names the transverse project in tool calls, whatever
 // the configured aliases are.

@@ -149,8 +149,11 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 		for _, r := range a.hits {
 			m.Raw++
+			if r.ID == "" {
+				continue
+			}
 			h := e.hit(r, a.scope, q.Current)
-			if h.Score >= q.MinScore && h.Reranker >= q.MinReranker && h.Score > best[h.ID].Score {
+			if prev, ok := best[h.ID]; h.Score >= q.MinScore && h.Reranker >= q.MinReranker && (!ok || h.Score > prev.Score) {
 				best[h.ID] = h
 			}
 		}

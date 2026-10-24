@@ -224,3 +224,25 @@ func TestAppendDuringSlowFlush(t *testing.T) {
 		t.Errorf("%+v %+v", r, notes)
 	}
 }
+
+// A note failing MaxAttempts times goes to quarantine instead of blocking
+// every note queued after it (M2 block 1 review).
+func TestOutboxQuarantinesANoteThatKeepsFailing(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "stuck", at))
+	_, _ = o.Append(NewNote("b", "lesson", "p", "next", at))
+	notes, _ := o.read()
+	notes[0].Attempts = MaxAttempts - 1
+	_ = o.rewrite(notes)
+	e.hs.status = http.StatusInternalServerError
+	res, _ := o.Flush(context.Background(), e.f.Client, "b", "m1")
+	left, _ := o.read()
+	if res.Quarantined != 1 || len(res.QuarantinedDocs) != 1 || len(left) != 1 || left[0].Content != "next" {
+		t.Errorf("%+v %+v", res, left)
+	}
+	e.hs.status = 0
+	if res, _ := o.Flush(context.Background(), e.f.Client, "b", "m1"); res.Sent != 1 || res.SentDocs[0] != left[0].DocumentID {
+		t.Errorf("%+v", res)
+	}
+}

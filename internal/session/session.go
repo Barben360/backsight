@@ -102,10 +102,15 @@ func (s Store) Update(id string, fn func(*State) error) error {
 	}
 	defer func() { _ = l.Release() }()
 	st, err := s.Load(id)
-	if err != nil {
+	var syntax *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syntax) || errors.As(err, &typeErr):
 		// A corrupt state starts over, paused: a pause must never be lost
 		// (flushes treat an unreadable state as paused too).
 		st = State{Paused: true}
+	case err != nil:
+		return err // unreadable for now (permissions, I/O): never overwrite it
 	}
 	if err := fn(&st); err != nil {
 		return err

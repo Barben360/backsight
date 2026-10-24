@@ -181,7 +181,7 @@ func TestMCPStoreTagsAndTheTransverseKeyword(t *testing.T) {
 	if !strings.Contains(last, "project:billing") || !strings.Contains(last, "source:note") || !strings.Contains(last, "kind:decision") {
 		t.Errorf("tags %q", last)
 	}
-	if len(recallTags) == 0 || !strings.HasPrefix(recallTags[0], "project:billing,") {
+	if !strings.Contains("|"+strings.Join(recallTags, "|"), "|project:billing,") { // scopes run in parallel: any order
 		t.Errorf("similar memories not searched in the note's project first: %q", recallTags)
 	}
 	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "convention", "text": "Answer in French.", "project": "transverse"})
@@ -239,5 +239,37 @@ func TestMCPToolEventsAreLogged(t *testing.T) {
 	}
 	if !strings.Contains(all, `"name":"memory_search"`) || !strings.Contains(all, `"hits":1`) || !strings.Contains(all, `"name":"memory_read"`) || !strings.Contains(all, `"ok":false`) {
 		t.Errorf("telemetry:\n%s", all)
+	}
+}
+
+func TestMCPReadRefusesIDsThatAreNotIDs(t *testing.T) {
+	cs := mcpSession(t)
+	for _, id := range []string{"", "..", "../banks", "a/b"} {
+		if out, isErr := call(t, cs, "memory_read", map[string]any{"id": id}); !isErr || !strings.Contains(out, "id") {
+			t.Errorf("%q: %v %s", id, isErr, out)
+		}
+	}
+}
+
+// Concurrent searches each keep their own context (M2 block 1 review: a
+// shared one was cancelled by the faster call; go test -race flagged it).
+func TestMCPConcurrentSearches(t *testing.T) {
+	cs := mcpSession(t)
+	recallAnswer = `[{"id":"b","text":"strong","type":"observation","tags":["project:x"],"scores":{"reranker":0.9}}]`
+	errs := make(chan string, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"q"}})
+			if isErr || !strings.Contains(out, "strong") {
+				errs <- out
+				return
+			}
+			errs <- ""
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		if e := <-errs; e != "" {
+			t.Errorf("a concurrent search failed: %s", e)
+		}
 	}
 }

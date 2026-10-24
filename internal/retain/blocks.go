@@ -212,9 +212,10 @@ func LoadSentIndex(dir string) (*SentIndex, error) {
 
 func (s *SentIndex) Has(uuid string) bool { return s.set[uuidKey(uuid)] }
 
-// sessionKey indexes a record as sent within one session, which tells a
-// fork's copied records (sent under the parent) from this session's own.
-func sessionKey(sid, uuid string) string { return sid + "\x00" + uuid }
+// sessionKey indexes a record as sent within one session of one bank, which
+// tells a fork's copied records (sent under the parent) from this session's
+// own, and a bank switch from a pending first segment.
+func sessionKey(bank, sid, uuid string) string { return bank + "\x00" + sid + "\x00" + uuid }
 
 // Add appends uuids (one write, fsynced).
 func (s *SentIndex) Add(uuids ...string) error {

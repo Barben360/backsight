@@ -133,7 +133,15 @@ type FlushResult struct {
 	Kept        int    `json:"kept"`
 	Quarantined int    `json:"quarantined"`
 	LastError   string `json:"last_error,omitempty"`
+	// SentDocs and QuarantinedDocs name the notes this flush sent or
+	// quarantined, so a caller can tell what became of its own note.
+	SentDocs        []string `json:"-"`
+	QuarantinedDocs []string `json:"-"`
 }
+
+// MaxAttempts: a note failing this many times (about half a day of ticks)
+// goes to quarantine instead of blocking every note queued after it.
+const MaxAttempts = 50
 
 // Flush sends every queued note; retryable failures stay queued. The lock
 // is held only to read and rewrite the file, never during network calls,
@@ -155,18 +163,21 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 		err := c.Retain(ctx, bank, []hindsight.RetainItem{n.Item(machineID)}, n.OperationID)
 		if err == nil {
 			res.Sent++
+			res.SentDocs = append(res.SentDocs, n.DocumentID)
 			done[n.OperationID] = true
 			continue
 		}
 		n.LastError = errSummary(err)
-		if refusesDocument(err) {
+		if !refusesDocument(err) {
+			n.Attempts++
+		}
+		if refusesDocument(err) || n.Attempts >= MaxAttempts {
 			if qerr := appendJSON(o.QuarantinePath, n); qerr == nil {
 				res.Quarantined++
+				res.QuarantinedDocs = append(res.QuarantinedDocs, n.DocumentID)
 				done[n.OperationID] = true
 				continue
 			}
-		} else {
-			n.Attempts++
 		}
 		// Unreachable, misconfigured or busy: stop, keep this note and the rest.
 		res.LastError = n.LastError

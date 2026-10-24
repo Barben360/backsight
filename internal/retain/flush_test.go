@@ -697,3 +697,18 @@ func TestAFirstSegmentThatNeverLandsIsQuarantined(t *testing.T) {
 		t.Error("the pending marker outlived the resend")
 	}
 }
+
+// A bank switch is not a pending first segment: the sent index's session
+// keys are per bank, so the new bank gets the session.
+func TestBankSwitchSendsTheSessionToTheNewBank(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	e.flush("s1", Options{})
+	e.hs.docs = map[string]map[string]string{} // the new bank holds nothing
+	e.f.Bank = "other-bank"
+	e.record("s1", "u2", "user", 30, "second")
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || e.hs.retains[len(e.hs.retains)-1].UpdateMode == "append" {
+		t.Fatalf("%+v %+v", r, e.hs.retains)
+	}
+}

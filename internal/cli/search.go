@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -45,12 +46,12 @@ func newEngine(cfg config.Config, sec config.Secrets) (*recall.Engine, error) {
 // searchMemory is memory_search's engine, shared by the CLI and MCP: the
 // related scope adds asked-for projects and those whose names the queries
 // mention (entity index).
-func searchMemory(cmd *cobra.Command, d paths.Dirs, cfg config.Config, eng *recall.Engine, current string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
+func searchMemory(ctx context.Context, d paths.Dirs, cfg config.Config, eng *recall.Engine, current string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
 	var related []string
 	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil {
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
-	return eng.Search(cmd.Context(), recall.Query{Queries: queries, Current: current, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
+	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
 }
 
 func newSearchCmd(e *env) *cobra.Command {
@@ -75,7 +76,7 @@ func newSearchCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res := searchMemory(cmd, d, cfg, eng, currentProject(home, cfg), args, projects, all, limit, minScore)
+			res := searchMemory(cmd.Context(), d, cfg, eng, currentProject(home, cfg), args, projects, all, limit, minScore)
 			var failed error
 			if len(res.Hits) == 0 {
 				for name, m := range res.Scopes {

@@ -6,10 +6,11 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -61,7 +62,12 @@ func BuildIndex(ctx context.Context, c *hindsight.Client, bank string, now time.
 	if err != nil {
 		return idx, err
 	}
+	seen := map[string]bool{}
 	for _, t := range tags {
+		if seen[t.Tag] {
+			continue // a server repeating tags must not double the counts
+		}
+		seen[t.Tag] = true
 		project := strings.TrimPrefix(t.Tag, "project:")
 		ents, err := c.Entities(ctx, bank, t.Tag, entitiesPerProject)
 		if err != nil {
@@ -102,12 +108,20 @@ func distinctive(name string, projects []ProjectCount) bool {
 	return len(name) >= minNameLen && !strings.Contains(name, ":") && len(projects) <= maxProjectsPerName
 }
 
+// maxMatchChars: only the start of a long text is matched against names
+// (prompt recall uses 300 chars; the cost grows with names × text).
+const maxMatchChars = 2000
+
 // Projects are the other projects whose distinctive names the text
 // mentions, most mentioned first, at most MaxRelated.
 func (idx Index) Projects(text, current string, transverse []string) []string {
+	if len(text) > maxMatchChars {
+		text = text[:maxMatchChars]
+	}
+	lower := strings.ToLower(text)
 	score := map[string]int{}
 	for name, ps := range idx.Names {
-		if !distinctive(name, ps) || !mentions(text, name) {
+		if !distinctive(name, ps) || !mentions(lower, strings.ToLower(name)) {
 			continue
 		}
 		for _, p := range ps {
@@ -166,8 +180,23 @@ func (idx Index) Terms(current string, transverse []string, n int) []string {
 	return out
 }
 
-// mentions: name appears in text as a whole word, any case.
+// mentions: lowercase name appears in lowercase text as a whole word
+// (neighbours are not letters, digits, _ or -).
 func mentions(text, name string) bool {
-	re, err := regexp.Compile(`(?i)(?:^|[^\pL\pN_-])` + regexp.QuoteMeta(name) + `(?:[^\pL\pN_-]|$)`)
-	return err == nil && re.MatchString(text)
+	for from := 0; from <= len(text)-len(name); {
+		i := strings.Index(text[from:], name)
+		if i < 0 {
+			return false
+		}
+		start, end := from+i, from+i+len(name)
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if (start == 0 || !wordRune(before)) && (end == len(text) || !wordRune(after)) {
+			return true
+		}
+		from = start + 1
+	}
+	return false
 }
+
+func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' }

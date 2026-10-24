@@ -125,3 +125,22 @@ func TestLatestIsTheMostRecentlyWritten(t *testing.T) {
 		t.Errorf("no sessions: %q %v", id, err)
 	}
 }
+
+// A state that cannot be read for now (permissions) is never overwritten.
+func TestAnUnreadableStateIsNotOverwritten(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads anything")
+	}
+	s := store(t)
+	_ = s.Update("abc", func(st *State) error { st.Prompts = 3; return nil })
+	p := filepath.Join(s.Dir, "abc.json")
+	_ = os.Chmod(p, 0o000)
+	defer func() { _ = os.Chmod(p, 0o600) }()
+	if err := s.Update("abc", func(st *State) error { st.Prompts = 9; return nil }); err == nil {
+		t.Error("an unreadable state was replaced")
+	}
+	_ = os.Chmod(p, 0o600)
+	if st, _ := s.Load("abc"); st.Prompts != 3 {
+		t.Errorf("%+v", st)
+	}
+}

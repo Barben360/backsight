@@ -3,6 +3,7 @@ package recall
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -281,5 +282,31 @@ func TestIndexFileFormat(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`{"names":{"x":[["only-one"]]}}`), &back); err == nil {
 		t.Error("a malformed pair must not load")
+	}
+}
+
+func TestZeroScoresAndEmptyIDs(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"z", "zero score", "x", 0}, {"", "no id", "x", 0.9}}}}
+	res := engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing"})
+	if len(res.Hits) != 1 || res.Hits[0].ID != "z" {
+		t.Errorf("%+v", res.Hits)
+	}
+}
+
+// Matching a prompt against a large index stays cheap (M2 block 1 review:
+// one regex per name took seconds).
+func TestEntityMatchingIsCheap(t *testing.T) {
+	idx := Index{Names: map[string][]ProjectCount{}}
+	for i := 0; i < 10000; i++ {
+		idx.Names[fmt.Sprintf("entity-%05d", i)] = []ProjectCount{{fmt.Sprintf("p%d", i%50), 1}}
+	}
+	text := strings.Repeat("a long prompt about nothing in particular ", 2500) // 100 KB
+	start := time.Now()
+	idx.Projects(text, "billing", nil)
+	if el := time.Since(start); el > 500*time.Millisecond {
+		t.Errorf("matching took %s", el)
+	}
+	if got := idx.Projects("see entity-00042 please", "billing", nil); len(got) != 1 || got[0] != "p42" {
+		t.Errorf("%v", got)
 	}
 }
