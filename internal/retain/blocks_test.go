@@ -114,18 +114,25 @@ func TestCursorRoundTripAndMissing(t *testing.T) {
 func TestFingerprint(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "s.jsonl")
-	_ = os.WriteFile(p, []byte(strings.Repeat("a", 5000)), 0o600)
-	f1, err := Fingerprint(p)
+	_ = os.WriteFile(p, []byte(strings.Repeat("a", 100)), 0o600)
+	f1, err := Fingerprint(p, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Appending beyond 4 KiB keeps the fingerprint; changing the prefix does not.
-	_ = os.WriteFile(p, []byte(strings.Repeat("a", 5000)+"more"), 0o600)
-	if f2, _ := Fingerprint(p); f2 != f1 {
+	// Appending after the consumed part keeps it, even in a small file.
+	_ = os.WriteFile(p, []byte(strings.Repeat("a", 100)+"more"), 0o600)
+	if f2, _ := Fingerprint(p, 100); f2 != f1 {
 		t.Error("an append changed the fingerprint")
 	}
-	_ = os.WriteFile(p, []byte("b"+strings.Repeat("a", 4999)), 0o600)
-	if f3, _ := Fingerprint(p); f3 == f1 {
+	// Only the first 4 KiB count for a long consumed part.
+	_ = os.WriteFile(p, []byte(strings.Repeat("a", 5000)), 0o600)
+	g1, _ := Fingerprint(p, 5000)
+	_ = os.WriteFile(p, []byte(strings.Repeat("a", 4096)+strings.Repeat("b", 904)), 0o600)
+	if g2, _ := Fingerprint(p, 5000); g2 != g1 {
+		t.Error("bytes beyond 4 KiB changed the fingerprint")
+	}
+	_ = os.WriteFile(p, []byte("b"+strings.Repeat("a", 99)), 0o600)
+	if f3, _ := Fingerprint(p, 100); f3 == f1 {
 		t.Error("a rewritten prefix kept the fingerprint")
 	}
 }

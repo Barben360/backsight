@@ -29,6 +29,9 @@ type State struct {
 	Backfill                *Backfill `json:"backfill"`
 	ReplacedFrom            string    `json:"replaced_from"`
 	FirstSessionNoticeShown bool      `json:"first_session_notice_shown"`
+	// RetainSince: live retain only takes sessions started after it; older
+	// ones belong to backfill (decision 0050).
+	RetainSince *time.Time `json:"retain_since,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.

@@ -160,16 +160,20 @@ func SaveCursor(dir, sid string, c Cursor) error {
 	return fsutil.WriteAtomic(p, append(raw, '\n'), 0o600)
 }
 
-// Fingerprint is the SHA-256 of the transcript's first 4 KiB: appends keep
-// it, a rewritten file does not.
-func Fingerprint(path string) (string, error) {
+// fingerprintMax bounds the prefix a fingerprint covers.
+const fingerprintMax = 4096
+
+// Fingerprint is the SHA-256 of the first min(consumed, 4 KiB) bytes of the
+// transcript: appends after the consumed part keep it, a rewritten file
+// does not.
+func Fingerprint(path string, consumed int64) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
 	h := sha256.New()
-	if _, err := io.CopyN(h, f, 4096); err != nil && !errors.Is(err, io.EOF) {
+	if _, err := io.CopyN(h, f, min(consumed, fingerprintMax)); err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

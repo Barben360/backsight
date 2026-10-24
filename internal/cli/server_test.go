@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,6 +158,9 @@ func (f *fakeCompose) subcommands() []string {
 	return out
 }
 
+// retained counts retain items the fake server accepted.
+var retained atomic.Int64
+
 // fakeHindsight answers like a started server: health, version, banks and
 // bank config (overrides kept in memory).
 func fakeHindsight(t *testing.T) (port int) {
@@ -164,6 +168,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
+	docs := map[string]json.RawMessage{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -190,6 +195,27 @@ func fakeHindsight(t *testing.T) (port int) {
 				overrides[k] = v
 			}
 			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories"):
+			var body struct {
+				Items []struct {
+					DocumentID string          `json:"document_id"`
+					Metadata   json.RawMessage `json:"metadata"`
+				} `json:"items"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			for _, it := range body.Items {
+				docs[it.DocumentID] = it.Metadata
+				retained.Add(1)
+			}
+			_, _ = w.Write([]byte(`{"success":true}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
+			id := r.URL.Path[strings.Index(r.URL.Path, "/documents/")+len("/documents/"):]
+			meta, ok := docs[id]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract"):
 			_, _ = w.Write([]byte(`{"facts":[{"text":"The billing service keeps PostgreSQL 16 for partial indexes.","fact_type":"world"}],"usage":{"input_tokens":900,"output_tokens":40}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
