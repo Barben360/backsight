@@ -52,12 +52,12 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestLoadPartialFileKeepsDefaults(t *testing.T) {
-	cfg, err := Load(write(t, "language = \"fr\"\n[recall]\nmin_score = 0.6\n"), dirs, "/home/u")
+	cfg, err := Load(write(t, "[server]\nbank = \"work\"\n[recall]\nmin_score = 0.6\n"), dirs, "/home/u")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Default(dirs, "/home/u")
-	want.Language, want.Recall.MinScore = "fr", 0.6
+	want.Server.Bank, want.Recall.MinScore = "work", 0.6
 	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("got %+v\nwant %+v", cfg, want)
 	}
@@ -69,7 +69,9 @@ func TestLoadRefusals(t *testing.T) {
 		{"unknown table", "[gpu]\nenabled = true\n", "gpu"},
 		{"type mismatch", "[recall]\nmin_gap = \"three\"\n", "min_gap"},
 		{"newer schema", "schema_version = 2\n", "newer backsight"},
-		{"invalid value", "language = \"de\"\n", "language"},
+		{"invalid value", "[server]\nmode = \"cloud\"\n", "server.mode"},
+		// Removed by spec v8 (decision 0039): facts are always English.
+		{"language key", "language = \"fr\"\n", "language"},
 		{"not toml", "this is = = not toml", "config.toml"},
 	}
 	for _, c := range cases {
@@ -88,7 +90,6 @@ func TestValidate(t *testing.T) {
 		mutate    func(*Config)
 		wantInErr string
 	}{
-		{"language", func(c *Config) { c.Language = "de" }, "language"},
 		{"mode", func(c *Config) { c.Server.Mode = "cloud" }, "server.mode"},
 		{"url scheme", func(c *Config) { c.Server.URL = "ftp://x" }, "server.url"},
 		{"url empty", func(c *Config) { c.Server.URL = "" }, "server.url"},

@@ -1,7 +1,6 @@
 # SPEC Appendix A.1 with the placeholders resolved for home=/home/u,
 # data=/d. Written by hand from the spec, not generated: it pins defaults.
 schema_version = 1
-language = "en"
 [server]
 url = "http://127.0.0.1:8888"
 bank = "claude-memory"

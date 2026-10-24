@@ -17,19 +17,18 @@ import (
 const SchemaVersion = 1
 
 type State struct {
-	SchemaVersion           int      `json:"schema_version"`
-	AppliedMigrations       []string `json:"applied_migrations"`
-	BankConfigHash          string   `json:"bank_config_hash"`
-	PluginVersion           string   `json:"plugin_version"`
-	ShimTarget              string   `json:"shim_target"`
-	Rebuild                 *Rebuild `json:"rebuild"`
-	AdoptedFrom             string   `json:"adopted_from"`
-	FirstSessionNoticeShown bool     `json:"first_session_notice_shown"`
+	SchemaVersion           int       `json:"schema_version"`
+	AppliedMigrations       []string  `json:"applied_migrations"`
+	BankConfigHash          string    `json:"bank_config_hash"`
+	PluginVersion           string    `json:"plugin_version"`
+	ShimTarget              string    `json:"shim_target"`
+	Backfill                *Backfill `json:"backfill"`
+	ReplacedFrom            string    `json:"replaced_from"`
+	FirstSessionNoticeShown bool      `json:"first_session_notice_shown"`
 }
 
-// Rebuild tracks a running observation rebuild so it can resume.
-type Rebuild struct {
-	Phase     string    `json:"phase"`
+// Backfill tracks the replay of past transcripts (decision 0037).
+type Backfill struct {
 	Done      int       `json:"done"`
 	Total     int       `json:"total"`
 	StartedAt time.Time `json:"started_at"`

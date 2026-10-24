@@ -22,7 +22,6 @@ const SchemaVersion = 1
 
 type Config struct {
 	SchemaVersion int        `toml:"schema_version" json:"schema_version"`
-	Language      string     `toml:"language" json:"language"`
 	Server        Server     `toml:"server" json:"server"`
 	Projects      Projects   `toml:"projects" json:"projects"`
 	Privacy       Privacy    `toml:"privacy" json:"privacy"`
@@ -114,7 +113,6 @@ type Update struct {
 func Default(d paths.Dirs, home string) Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
-		Language:      "en",
 		Server: Server{URL: "http://127.0.0.1:8888", Bank: "claude-memory", Mode: "local",
 			ComposeDir: filepath.Join(d.Data, "server")},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
@@ -193,7 +191,6 @@ func (c Config) Validate() error {
 		}
 	}
 
-	oneOf("language", c.Language, "en", "fr")
 	oneOf("server.mode", c.Server.Mode, "local", "remote")
 	if u, err := url.Parse(c.Server.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		bad("server.url", "%q is not an http(s) URL", c.Server.URL)
