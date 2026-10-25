@@ -29,6 +29,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/selfcheck"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -53,11 +54,15 @@ type fakeBinaries struct {
 	dirs     paths.Dirs
 	// claimVersion makes a binary report another version than its own.
 	claimVersion map[string]string
+	// images: the Hindsight image each version pins (default: this one's).
+	images map[string]string
+	// onFail runs when a fail prefix matches, before the failure returns.
+	onFail func(line string)
 }
 
 func withBinaries(t *testing.T, d paths.Dirs) *fakeBinaries {
 	t.Helper()
-	f := &fakeBinaries{t: t, migrations: map[string][]migrate.Migration{}, fail: map[string]int{}, dirs: d, claimVersion: map[string]string{}}
+	f := &fakeBinaries{t: t, migrations: map[string][]migrate.Migration{}, fail: map[string]int{}, dirs: d, claimVersion: map[string]string{}, images: map[string]string{}}
 	old := binaryExec
 	binaryExec = f
 	t.Cleanup(func() { binaryExec = old })
@@ -83,19 +88,25 @@ func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]b
 	f.lockHeld = append(f.lockHeld, h != nil && !h.Stale && h.Owner.Command == "update apply")
 	for prefix, code := range f.fail {
 		if strings.HasPrefix(line, prefix) {
+			if f.onFail != nil {
+				f.onFail(line)
+			}
 			var out bytes.Buffer
 			_ = output.WriteJSON(&out, "test", nil, &output.Error{Code: code, Message: "failing on purpose: " + prefix})
 			return out.Bytes(), []byte("progress\n"), code, nil
 		}
 	}
-	oldV, oldExe, oldMig := buildinfo.Version, selfExe, migrations
+	oldV, oldExe, oldMig, oldImg := buildinfo.Version, selfExe, migrations, server.HindsightImage
+	if img, ok := f.images[v]; ok {
+		server.HindsightImage = img
+	}
 	buildinfo.Version = v
 	if c, ok := f.claimVersion[v]; ok {
 		buildinfo.Version = c
 	}
 	selfExe = func() (string, error) { return exe, nil }
 	migrations = func() []migrate.Migration { return f.migrations[v] }
-	defer func() { buildinfo.Version, selfExe, migrations = oldV, oldExe, oldMig }()
+	defer func() { buildinfo.Version, selfExe, migrations, server.HindsightImage = oldV, oldExe, oldMig, oldImg }()
 	var out, errb bytes.Buffer
 	code := Execute(args, &out, &errb)
 	return out.Bytes(), errb.Bytes(), code, nil
@@ -194,6 +205,13 @@ func installedAt(t *testing.T, v string) (string, *fakeClaude, *fakeBinaries) {
 	t.Helper()
 	home := devInstall(t, true)
 	configure(t, home, "[backup]\nenabled = false")
+	f, b := installedOn(t, home, v)
+	return home, f, b
+}
+
+// installedOn wires an existing dev install as installedAt does.
+func installedOn(t *testing.T, home, v string) (*fakeClaude, *fakeBinaries) {
+	t.Helper()
 	f := withClaude(t)
 	d := pathsOf(home)
 	dl := filepath.Join(t.TempDir(), "backsight")
@@ -210,7 +228,7 @@ func installedAt(t *testing.T, v string) (string, *fakeClaude, *fakeBinaries) {
 	f.calls = nil
 	f.marketplaces = `[{"name":"backsight","path":"` + filepath.Join(d.Data, "marketplace") + `"}]`
 	f.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
-	return home, f, withBinaries(t, d)
+	return f, withBinaries(t, d)
 }
 
 func shimOf(t *testing.T, d paths.Dirs) string {
@@ -237,8 +255,14 @@ type applyEnvelope struct {
 		Previous   string   `json:"previous"`
 		Migrations []string `json:"migrations"`
 		Plugin     string   `json:"plugin"`
-		RolledBack bool     `json:"rolled_back"`
-		Steps      []step   `json:"steps"`
+		Server     *struct {
+			Current  string `json:"current"`
+			Target   string `json:"target"`
+			Upgrade  bool   `json:"upgrade"`
+			Upgraded bool   `json:"upgraded"`
+		} `json:"server"`
+		RolledBack bool   `json:"rolled_back"`
+		Steps      []step `json:"steps"`
 	} `json:"data"`
 }
 
@@ -442,7 +466,7 @@ func TestUpdateApplyPlanChangesNothing(t *testing.T) {
 	}
 	planned := map[string]bool{}
 	for _, s := range env.Data.Steps {
-		if s.Status != "planned" && s.Status != "done" {
+		if s.Status != "planned" && s.Status != "done" && s.Status != "skipped" {
 			t.Errorf("plan step %+v", s)
 		}
 		planned[s.Name] = true
@@ -673,6 +697,11 @@ func TestExecBinaryRunsAProgram(t *testing.T) {
 	if _, _, _, err := (execBinary{}).Run(context.Background(), filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Error("a missing binary is no error")
 	}
+	// With Progress, the child's stderr also streams there.
+	var progress bytes.Buffer
+	if _, stderr, _, _ := (execBinary{Progress: &progress}).Run(context.Background(), exe); string(stderr) != "progress\n" || progress.String() != "progress\n" {
+		t.Errorf("stderr %q, progress %q", stderr, progress.String())
+	}
 }
 
 func doctorReport(t *testing.T) doctor.Report {
@@ -694,4 +723,115 @@ func findCheck(r doctor.Report, id string) *doctor.Check {
 		}
 	}
 	return nil
+}
+
+// serverInstalledAt is a fake backsight v wired into Claude Code with a
+// fake server deployed on the current pin (restore's fakes); v2 pins
+// newImage.
+func serverInstalledAt(t *testing.T, v, v2 string) (home, archive string, dk *restoreDocker, claude *fakeClaude, bins *fakeBinaries, oldImage string) {
+	t.Helper()
+	home, archive, dk, _ = restoreSetup(t)
+	oldImage = server.HindsightImage
+	if code, out, _ := run(t, "server", "render"); code != output.OK {
+		t.Fatalf("render: exit %d\n%s", code, out)
+	}
+	claude, bins = installedOn(t, home, v)
+	bins.images[v2] = newImage
+	dk.calls, dk.unlocked, dk.images = nil, nil, nil
+	return
+}
+
+func TestUpdateApplyUpgradesTheServerWithTheNewBinarysPin(t *testing.T) {
+	home, _, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+
+	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || env.Data.Server == nil || !env.Data.Server.Upgrade || env.Data.Server.Current != oldImage || env.Data.Server.Target != newImage {
+		t.Fatalf("plan: exit %d\n%s", code, out)
+	}
+	if deployedImage(t, home) != oldImage || len(dk.images) != 0 {
+		t.Fatalf("the plan deployed %s (ups %v)", deployedImage(t, home), dk.images)
+	}
+
+	bins.calls = nil
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env = decodeApply(t, out)
+	if code != output.OK || env.Data.Server == nil || !env.Data.Server.Upgraded {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if got := deployedImage(t, home); got != newImage {
+		t.Errorf("deployed %s", got)
+	}
+	if bins.ran("0.2.0 server upgrade") != 2 { // --plan, then the upgrade
+		t.Errorf("calls %q", bins.calls)
+	}
+	if len(dk.unlocked) > 0 {
+		t.Errorf("docker calls without the lock: %q", dk.unlocked)
+	}
+	if !strings.HasPrefix(shimOf(t, pathsOf(home)), filepath.Join(pathsOf(home).Data, "bin", "0.2.0-")) {
+		t.Errorf("shim %s", shimOf(t, pathsOf(home)))
+	}
+}
+
+// The new version fails to start: the new binary's server upgrade puts
+// the previous version and its data back, then update apply rolls back
+// the client: everything as it was, exit 30.
+func TestUpdateApplyServerFailureRollsEverythingBack(t *testing.T) {
+	home, _, dk, claude, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	dk.failImage = newImage
+	old := shimOf(t, d)
+	beforeState, _ := state.Load(d.StateFile())
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	if code != output.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if deployedImage(t, home) != oldImage || dk.rows != 25 || !dk.running || len(dk.restores) != 1 {
+		t.Errorf("server: image %s rows %d running %v restores %v", deployedImage(t, home), dk.rows, dk.running, dk.restores)
+	}
+	st, _ := state.Load(d.StateFile())
+	if shimOf(t, d) != old || st.PluginVersion != beforeState.PluginVersion || bins.ran("0.1.0 client install") != 1 {
+		t.Errorf("client: shim %s plugin %q calls %q", shimOf(t, d), st.PluginVersion, bins.calls)
+	}
+	if !slices.Contains(mutating(claude), "plugin update "+plugin.PluginID()) {
+		t.Errorf("claude %q", mutating(claude))
+	}
+	for _, p := range []string{d.RestoreMarker(), d.UpdateMarker(), d.MaintenanceLock()} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s left", p)
+		}
+	}
+}
+
+// The new binary's server upgrade dies with the upgrade marked in
+// progress: update apply restores the safety archive itself, through
+// restore and with its own pin.
+func TestUpdateApplyRestoresWhenTheServerStepDied(t *testing.T) {
+	home, archive, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	bins.fail["0.2.0 server upgrade --json"] = -1
+	bins.onFail = func(string) {
+		// What a killed upgrade leaves: the new version deployed, the
+		// database migrated, the marker naming the safety archive.
+		raw, _ := os.ReadFile(filepath.Join(composeDir(home), "compose.yaml"))
+		_ = os.WriteFile(filepath.Join(composeDir(home), "compose.yaml"), []byte(strings.Replace(string(raw), oldImage, newImage, 1)), 0o644)
+		dk.rows = 99
+		_ = state.WriteRestoreMarker(d, state.RestoreMarker{Command: "server upgrade", Safety: archive, Archive: archive})
+	}
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	if code != output.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if deployedImage(t, home) != oldImage || dk.rows != 10 || !dk.running {
+		t.Errorf("image %s rows %d (want the archive's 10) running %v", deployedImage(t, home), dk.rows, dk.running)
+	}
+	if state.RestoreIncomplete(d) {
+		t.Error("marker left")
+	}
 }

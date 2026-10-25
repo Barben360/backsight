@@ -20,10 +20,15 @@ import (
 
 // Images pinned by this binary (multi-arch index digests, decision 0049).
 const (
-	HindsightImage = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06"
-	PostgresImage  = "pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11"
-	Project        = "backsight"
+	PostgresImage = "pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11"
+	Project       = "backsight"
 )
+
+// HindsightImage is the pinned Hindsight image. A testhooks build may pin
+// another (CI's update proof); a release never does (make verify-keys).
+var HindsightImage = pinnedHindsight
+
+const pinnedHindsight = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06"
 
 // Files are the rendered compose project.
 type Files struct {
@@ -83,6 +88,12 @@ volumes:
 
 // Render builds compose.yaml and .env for cfg; host names the worker.
 func Render(cfg config.Config, sec config.Secrets, host string) (Files, error) {
+	return RenderImage(cfg, sec, host, ImageFor(cfg))
+}
+
+// RenderImage is Render with the Hindsight image given: an upgrade's
+// rollback renders the image the server ran before.
+func RenderImage(cfg config.Config, sec config.Secrets, host, image string) (Files, error) {
 	if cfg.Embeddings.Preset != "multilingual" {
 		return Files{}, fmt.Errorf("embeddings preset %q is not available yet (decision 0049): use multilingual", cfg.Embeddings.Preset)
 	}
@@ -109,7 +120,6 @@ func Render(cfg config.Config, sec config.Secrets, host string) (Files, error) {
 	if strings.Contains(bind, ":") { // IPv6: Compose wants [addr]:port
 		bind = "[" + bind + "]"
 	}
-	image := ImageFor(cfg)
 	var compose bytes.Buffer
 	project := cfg.Server.Project
 	if project == "" {

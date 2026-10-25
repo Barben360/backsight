@@ -45,6 +45,22 @@ type restoreDocker struct {
 	sqlEpoch  string         // the epoch document's metadata read from the database ("" = no row)
 	sqlFails  bool           // reading the database fails
 	keys      []string       // HINDSIGHT_API_TENANT_API_KEY of each compose up
+	images    []string       // the hindsight image of each compose up
+	pulls     []string       // images pulled
+	failPull  bool           // docker pull fails
+	failImage string         // compose up of this hindsight image fails
+}
+
+// upImage reads the hindsight image of the compose.yaml a `compose ... up`
+// call runs.
+func upImage(args []string) string {
+	for i, a := range args {
+		if a == "--project-directory" && i+1 < len(args) {
+			raw, _ := os.ReadFile(filepath.Join(args[i+1], "compose.yaml"))
+			return server.ServiceImage(raw, "hindsight")
+		}
+	}
+	return ""
 }
 
 // upKey reads the API key the .env in the compose project directory of a
@@ -123,7 +139,18 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 			return []byte("cannot stop"), os.ErrClosed
 		}
 		f.running = false
+	case args[0] == "pull":
+		f.pulls = append(f.pulls, last)
+		if f.failPull {
+			return []byte("manifest unknown"), os.ErrNotExist
+		}
 	case strings.HasSuffix(line, "up -d --wait"):
+		img := upImage(args)
+		f.images = append(f.images, img)
+		if f.failImage != "" && img == f.failImage {
+			f.running = false
+			return []byte("container hindsight exited (1)"), os.ErrClosed
+		}
 		if f.failStart {
 			return []byte("container exited"), os.ErrClosed
 		}

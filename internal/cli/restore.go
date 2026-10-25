@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -146,13 +147,14 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		return blocked(err)
 	}
 	res.Manifest = m
-	if err := restorable(m, cfg); err != nil {
+	if err := restorable(m, cfg, runtimeFor(cfg)); err != nil {
 		return err
 	}
 	// A live maintenance refuses, the plan too. A restore that did not
 	// finish does not: restoring again (its safety archive, or the
 	// archive) is the way back, and this run replaces its marker.
-	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale {
+	// update apply's own rollback restores under the lock it holds.
+	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale && !heldByUpdate(held) {
 		return &output.Error{Code: output.Blocked, Message: "maintenance in progress: " + held.Error()}
 	}
 	if prev, _ := state.ReadRestoreMarker(d); prev != nil {
@@ -200,11 +202,11 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 
 	// 2. Locks, held to the end: hooks only queue, jobs skip, and no other
 	// command starts or rewrites the server.
-	l, note, err := acquireMaintenance(d, "restore")
+	unlock, note, err := maintenanceFor(d, "restore")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = l.Release() }()
+	defer unlock()
 	if note != "" {
 		res.Warnings = append(res.Warnings, note)
 	}
@@ -215,12 +217,8 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	defer func() { _ = sl.Release() }()
 	add("lock", "done", d.MaintenanceLock()+", server.lock")
 
-	c := composeFor(cfg)
-	if r, ok := c.Runner.(server.DockerRunner); ok {
-		r.OwnGroup = true // a Ctrl-C must not kill the rollback's docker
-		c.Runner = r
-	}
-	db := server.DB{Compose: c}
+	rt := ownGroupRuntime(cfg)
+	db := rt.Database()
 	_ = db.RemoveStaleDumps(ctx) // a killed backup's or restore's clear dump
 
 	// The epochs known now: the server's (through the API, else read only
@@ -237,7 +235,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if err != nil {
 		return &output.Error{Code: output.Blocked, Message: "cannot read this client's restore epoch (" + err.Error() + "): nothing was changed"}
 	}
-	rb := &rollback{res: res, cfg: cfg, sec: sec, c: c, db: db, d: d, highest: max(before.Epoch, st.EpochOf(cfg.Server.Bank)), history: before.History,
+	rb := &rollback{res: res, cfg: cfg, sec: sec, rt: rt, db: db, d: d, highest: max(before.Epoch, st.EpochOf(cfg.Server.Bank)), history: before.History,
 		safetyAt: now().UTC().Truncate(time.Second), add: add}
 
 	// 3. The safety archive, its clear dump kept to roll back to.
@@ -264,11 +262,11 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		add(step, "failed", server.Redact(err.Error(), sec))
 		return rb.run(ctx, err)
 	}
-	if err := c.Stop(ctx, "hindsight"); err != nil {
+	if err := rt.StopAPI(ctx); err != nil {
 		// The database is untouched: whatever did stop starts again.
 		add("stop", "failed", server.Redact(err.Error(), sec))
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackStepTimeout)
-		_ = c.Up(uctx)
+		_ = rt.Start(uctx)
 		cancel()
 		_ = state.ClearRestoreMarker(d)
 		return &output.Error{Code: output.Blocked, Message: server.Redact("the server could not be stopped, nothing was restored: "+err.Error(), sec)}
@@ -294,7 +292,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 
 	// 5. Started on a key only this run knows: no client sends before the
 	// epoch exists (a refused key stops a client's run until later).
-	tmp, tcl, err := startOnTemporaryKey(ctx, cfg, sec, c)
+	tmp, tcl, err := startOnTemporaryKey(ctx, cfg, sec, rt)
 	if err != nil {
 		return failed("verify", err)
 	}
@@ -325,7 +323,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	_ = state.ClearRestoreMarker(d)
 
 	// 7. The server on its own key again.
-	if err := startOnKey(ctx, cfg, sec, c, sec.APIKey); err != nil {
+	if err := startOnKey(ctx, cfg, sec, rt, sec.APIKey); err != nil {
 		add("key", "failed", server.Redact(err.Error(), sec))
 		return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("restored (epoch %d), but the server did not start again on its API key (%v): run backsight server start", next.Epoch, err), sec)}
 	}
@@ -333,9 +331,27 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	return nil
 }
 
+// ownGroupRuntime is cfg's runtime with Docker children in their own
+// process group: a Ctrl-C must not kill a rollback's docker.
+func ownGroupRuntime(cfg config.Config) server.Runtime {
+	c := composeFor(cfg)
+	if r, ok := c.Runner.(server.DockerRunner); ok {
+		r.OwnGroup = true
+		c.Runner = r
+	}
+	return server.Docker{Compose: c, Cfg: cfg}
+}
+
+// heldByUpdate: the maintenance lock is update apply's, in this process or
+// its parent (update apply runs the new binary's server upgrade, and its
+// own rollback may restore).
+func heldByUpdate(h *state.HeldError) bool {
+	return h.Owner.Command == "update apply" && (h.Owner.PID == os.Getpid() || h.Owner.PID == os.Getppid())
+}
+
 // epochBefore reads the server's restore epoch through the API, else read
 // only from its database; how names the fallback.
-func epochBefore(ctx context.Context, cl *hindsight.Client, db server.DB, bank string) (retain.Epoch, string, error) {
+func epochBefore(ctx context.Context, cl *hindsight.Client, db server.Database, bank string) (retain.Epoch, string, error) {
 	ep, apiErr := retain.ReadEpoch(ctx, cl, bank)
 	if apiErr == nil {
 		return ep, "", nil
@@ -356,17 +372,17 @@ func epochBefore(ctx context.Context, cl *hindsight.Client, db server.DB, bank s
 // startOnKey renders the server's files with key as its API key, starts
 // the project (the hindsight container is recreated when the key changes)
 // and waits for health on that key.
-func startOnKey(ctx context.Context, cfg config.Config, sec config.Secrets, c server.Compose, key string) error {
+func startOnKey(ctx context.Context, cfg config.Config, sec config.Secrets, rt server.Runtime, key string) error {
 	s := sec
 	s.APIKey = key
-	files, err := renderFiles(cfg, s, "backsight restore")
+	files, err := renderOn(rt, s, "backsight restore")
 	if err != nil {
 		return err
 	}
-	if _, err := server.Write(cfg.Server.ComposeDir, files); err != nil {
+	if _, err := rt.Write(files); err != nil {
 		return err
 	}
-	if err := c.Up(ctx); err != nil {
+	if err := rt.Start(ctx); err != nil {
 		return err
 	}
 	_, err = waitHealthy(ctx, cfg, s)
@@ -375,13 +391,13 @@ func startOnKey(ctx context.Context, cfg config.Config, sec config.Secrets, c se
 
 // startOnTemporaryKey starts the server on a new random key and returns it
 // with a client that uses it.
-func startOnTemporaryKey(ctx context.Context, cfg config.Config, sec config.Secrets, c server.Compose) (string, *hindsight.Client, error) {
+func startOnTemporaryKey(ctx context.Context, cfg config.Config, sec config.Secrets, rt server.Runtime) (string, *hindsight.Client, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
 		return "", nil, err
 	}
 	key := "bs-restore-" + hex.EncodeToString(b)
-	if err := startOnKey(ctx, cfg, sec, c, key); err != nil {
+	if err := startOnKey(ctx, cfg, sec, rt, key); err != nil {
 		return "", nil, err
 	}
 	cl, err := hindsight.New(cfg.Server.URL, key, 30*time.Second)
@@ -400,9 +416,9 @@ func writeEpochOn(ctx context.Context, cfg config.Config, key string, e retain.E
 // cannot run: one from a newer Hindsight than the pinned one (its schema is
 // ahead), one it cannot place, one of another bank, or one whose vectors
 // come from other embedding models.
-func restorable(m backup.Manifest, cfg config.Config) error {
-	pinned := server.ImageFor(cfg)
-	cmp, ok := server.CompareImages(m.HindsightImage, pinned)
+func restorable(m backup.Manifest, cfg config.Config, rt server.Runtime) error {
+	pinned := rt.Version()
+	cmp, ok := rt.ComparePins(m.HindsightImage, pinned)
 	embeddings := cfg.Embeddings.Preset + ": " + server.EmbeddingModels
 	switch {
 	case !ok:
@@ -424,8 +440,8 @@ type rollback struct {
 	res      *restoreResult
 	cfg      config.Config
 	sec      config.Secrets
-	c        server.Compose
-	db       server.DB
+	rt       server.Runtime // deploying the version to roll back to
+	db       server.Database
 	d        paths.Dirs
 	dump     string           // the safety dump ("" with --no-safety)
 	want     map[string]int64 // its counts
@@ -435,6 +451,14 @@ type rollback struct {
 	safetyAt time.Time
 	tempKey  string
 	add      func(name, status, detail string)
+	op       string // what failed: "restore" (default) or "server upgrade"
+}
+
+func (r *rollback) what() string {
+	if r.op == "" {
+		return "restore"
+	}
+	return r.op
 }
 
 // run puts the safety dump back when restore dropped the database (else
@@ -452,7 +476,7 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 		defer cancel()
 		return fn(sctx)
 	}
-	err := step(func(ctx context.Context) error { return r.c.Stop(ctx, "hindsight") })
+	err := step(func(ctx context.Context) error { return r.rt.StopAPI(ctx) })
 	if err == nil && r.dropped {
 		if r.dump == "" {
 			err = errors.New("the database was replaced and there is no safety dump (--no-safety)")
@@ -474,7 +498,7 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 	var key string
 	if err == nil {
 		err = step(func(ctx context.Context) (err error) {
-			key, _, err = startOnTemporaryKey(ctx, r.cfg, r.sec, r.c)
+			key, _, err = startOnTemporaryKey(ctx, r.cfg, r.sec, r.rt)
 			return err
 		})
 	}
@@ -484,11 +508,11 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 	}
 	if err == nil {
 		_ = state.ClearRestoreMarker(r.d)
-		err = step(func(ctx context.Context) error { return startOnKey(ctx, r.cfg, r.sec, r.c, r.sec.APIKey) })
+		err = step(func(ctx context.Context) error { return startOnKey(ctx, r.cfg, r.sec, r.rt, r.sec.APIKey) })
 		if err != nil {
 			r.add("rollback", "failed", server.Redact(err.Error(), r.sec))
-			return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("restore failed (%v) and was rolled back (epoch %d), but the server did not start again on its API key (%v): run backsight server start",
-				cause, epoch.Epoch, err), r.sec)}
+			return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("%s failed (%v) and was rolled back (epoch %d), but the server did not start again on its API key (%v): run backsight server start",
+				r.what(), cause, epoch.Epoch, err), r.sec)}
 		}
 	}
 	way := "backsight restore " + r.res.Safety + " --no-safety"
@@ -497,13 +521,13 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 	}
 	if err != nil {
 		r.add("rollback", "failed", server.Redact(err.Error(), r.sec))
-		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("restore failed (%v) and so did the rollback (%v): every client holds its sends; restore the server as it was by hand with %s",
-			cause, server.Redact(err.Error(), r.sec), way)}
+		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s failed (%v) and so did the rollback (%v): every client holds its sends; restore the server as it was by hand with %s",
+			r.what(), cause, server.Redact(err.Error(), r.sec), way)}
 	}
 	r.res.RolledBack = true
 	r.res.Epoch = &epoch
 	r.add("rollback", "done", fmt.Sprintf("the server runs the safety archive's data again, restore epoch %d", epoch.Epoch))
-	return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("restore failed and was rolled back to the safety archive %s: %v", r.res.Safety, cause)}
+	return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("%s failed and was rolled back to the safety archive %s: %v", r.what(), r.res.Safety, cause)}
 }
 
 // sameCounts compares the rows of the tables a backup counts.

@@ -35,6 +35,11 @@ func composeFor(cfg config.Config) server.Compose {
 	return server.Compose{Dir: cfg.Server.ComposeDir, Runner: composeRunner, Project: cfg.Server.Project}
 }
 
+// runtimeFor is the server runtime of cfg (decision 0070): Docker Compose.
+func runtimeFor(cfg config.Config) server.Runtime {
+	return server.Docker{Compose: composeFor(cfg), Cfg: cfg}
+}
+
 func blocked(err error) error {
 	var oe *output.Error
 	if errors.As(err, &oe) {
@@ -494,7 +499,7 @@ func statusText(r statusResult) string {
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e))
 	return cmd
 }
 
@@ -521,8 +526,13 @@ func loadServerConfig() (config.Config, config.Secrets, error) {
 // renderFiles renders the project; missing secrets become a needs_user
 // error telling the user what to run and which command resumes.
 func renderFiles(cfg config.Config, sec config.Secrets, resume string) (server.Files, error) {
+	return renderOn(runtimeFor(cfg), sec, resume)
+}
+
+// renderOn is renderFiles for a runtime and the version it deploys.
+func renderOn(rt server.Runtime, sec config.Secrets, resume string) (server.Files, error) {
 	host, _ := os.Hostname()
-	f, err := server.Render(cfg, sec, host)
+	f, err := rt.Render(sec, host)
 	var missing *server.MissingSecretsError
 	switch {
 	case errors.As(err, &missing):

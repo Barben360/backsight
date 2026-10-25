@@ -98,6 +98,16 @@ func (c Compose) run(ctx context.Context, sub ...string) ([]byte, error) {
 // Pull downloads the pinned images.
 func (c Compose) Pull(ctx context.Context) error { _, err := c.run(ctx, "pull"); return err }
 
+// PullImage downloads one image, outside the project: nothing that runs
+// changes.
+func (c Compose) PullImage(ctx context.Context, image string) error {
+	out, err := c.Runner.Run(ctx, "pull", image)
+	if err != nil {
+		return fmt.Errorf("docker pull %s: %w: %s", image, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Up starts the project and waits until Compose sees it running and healthy.
 func (c Compose) Up(ctx context.Context) error {
 	_, err := c.run(ctx, "up", "-d", "--wait")

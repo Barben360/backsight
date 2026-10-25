@@ -121,7 +121,10 @@ func acquireMaintenance(d paths.Dirs, command string) (*state.Lock, string, erro
 // holds the maintenance lock, which is neither taken nor released here, the
 // clear dump is linked at dump to roll back to, and nothing is pruned (the
 // archive being restored may be one of the old ones).
-type safetyCopy struct{ dump string }
+type safetyCopy struct {
+	dump  string
+	image string // the image the server runs, when it is not the pinned one (server upgrade)
+}
 
 // createBackup holds the maintenance lock for the database work only (hooks
 // queue, jobs skip), then encrypts, writes the archive and prunes old ones.
@@ -176,7 +179,8 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	}
 	// Under the maintenance lock: a dump left in the container by a killed
 	// backup or restore holds the memory in clear.
-	_ = server.DB{Compose: composeFor(cfg)}.RemoveStaleDumps(ctx)
+	db := runtimeFor(cfg).Database()
+	_ = db.RemoveStaleDumps(ctx)
 	extras := map[string][]byte{}
 	if bankConfig != nil {
 		extras["bank-config.json"] = bankConfig
@@ -193,9 +197,13 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	if dir == "" {
 		dir = filepath.Join(d.Data, "backups")
 	}
-	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, HindsightImage: server.ImageFor(cfg), PostgresImage: server.PostgresImage,
+	image := server.ImageFor(cfg)
+	if safety != nil && safety.image != "" {
+		image = safety.image
+	}
+	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, HindsightImage: image, PostgresImage: server.PostgresImage,
 		Embeddings: cfg.Embeddings.Preset + ": " + server.EmbeddingModels, Bank: cfg.Server.Bank, Recipients: lines}
-	path, m, err := backup.Create(ctx, server.DB{Compose: composeFor(cfg)}, dir, filepath.Join(d.State, "staging"), m, extras, recipients, afterDump)
+	path, m, err := backup.Create(ctx, db, dir, filepath.Join(d.State, "staging"), m, extras, recipients, afterDump)
 	if err != nil {
 		return res, blocked(err)
 	}
@@ -281,7 +289,7 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 			if err != nil {
 				return blocked(err)
 			}
-			counts, err := server.RestoreCounts(cmd.Context(), composeRunner, filepath.Join(work, "db.dump"), backup.Tables)
+			counts, err := runtimeFor(cfg).VerifyDump(cmd.Context(), filepath.Join(work, "db.dump"), backup.Tables)
 			if err != nil {
 				return blocked(err)
 			}

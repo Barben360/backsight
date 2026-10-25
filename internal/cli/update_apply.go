@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/migrate"
 	"github.com/Barben360/backsight/internal/output"
@@ -50,13 +51,18 @@ type binaryRunner interface {
 	Run(ctx context.Context, exe string, args ...string) (stdout, stderr []byte, code int, err error)
 }
 
-type execBinary struct{}
+// execBinary runs the binary; Progress, when set, also gets its stderr as
+// it comes (the child's JSON progress lines, with update apply --json).
+type execBinary struct{ Progress io.Writer }
 
-func (execBinary) Run(ctx context.Context, exe string, args ...string) ([]byte, []byte, int, error) {
+func (b execBinary) Run(ctx context.Context, exe string, args ...string) ([]byte, []byte, int, error) {
 	cmd := exec.CommandContext(ctx, exe, args...)
 	server.OwnGroup(cmd) // a Ctrl-C reaches update apply, which rolls back; a rollback's child is not killed with it
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if b.Progress != nil {
+		cmd.Stderr = io.MultiWriter(&stderr, b.Progress)
+	}
 	err := cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) && ee.ExitCode() >= 0 {
@@ -131,10 +137,35 @@ type updateApplyResult struct {
 	Previous   string          `json:"previous,omitempty"`
 	Migrations []string        `json:"migrations"` // applied, or pending with --plan
 	Plugin     string          `json:"plugin,omitempty"`
+	Server     *updateServer   `json:"server,omitempty"`
 	Steps      []step          `json:"steps"`
 	RolledBack bool            `json:"rolled_back,omitempty"`
 	Warnings   []string        `json:"warnings,omitempty"`
 	MS         int             `json:"ms"`
+}
+
+// updateServer is the server step: the version deployed and the new
+// binary's pin.
+type updateServer struct {
+	Current  string `json:"current"`
+	Target   string `json:"target"`
+	Upgrade  bool   `json:"upgrade"`
+	Upgraded bool   `json:"upgraded"`
+}
+
+// serverStepSkipped says why update apply has no server to upgrade here:
+// none configured, a remote one (upgraded on its host), or none deployed.
+func serverStepSkipped(d paths.Dirs, cfg config.Config) string {
+	if _, err := os.Stat(d.ConfigFile()); err != nil {
+		return "no server configured on this machine"
+	}
+	if cfg.Server.Mode != "local" {
+		return "the server is remote: update backsight on its host"
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.yaml")); err != nil {
+		return "no server deployed on this machine"
+	}
+	return ""
 }
 
 func newUpdateApplyCmd(e *env) *cobra.Command {
@@ -155,6 +186,11 @@ func newUpdateApplyCmd(e *env) *cobra.Command {
 				}
 			}
 			start := time.Now()
+			if b, ok := binaryExec.(execBinary); ok && e.json { // the new binary's progress lines pass through
+				b.Progress = e.stderr
+				binaryExec = b
+				defer func() { binaryExec = execBinary{} }()
+			}
 			res := updateApplyResult{Installed: buildinfo.Version, Plan: fl.plan, Steps: []step{}, Migrations: []string{}}
 			err := runUpdateApply(cmd.Context(), &res, fl, streamStep(e, "update apply", &res.Steps))
 			res.MS = int(time.Since(start).Milliseconds())
@@ -219,7 +255,7 @@ func newUpdateMigrateCmd(e *env) *cobra.Command {
 			if plan || len(res.Pending) == 0 {
 				return e.emit("update migrate", res, text)
 			}
-			unlock, err := maintenanceFor(d, "update migrate")
+			unlock, _, err := maintenanceFor(d, "update migrate")
 			if err != nil {
 				return err
 			}
@@ -239,16 +275,15 @@ func newUpdateMigrateCmd(e *env) *cobra.Command {
 // maintenanceFor takes the maintenance lock for command, unless update
 // apply holds it in this process or in the parent that runs this binary:
 // the lock is then held for the whole update and is not released here.
-func maintenanceFor(d paths.Dirs, command string) (func(), error) {
-	if h := state.Inspect(d.MaintenanceLock()); h != nil && !h.Stale && h.Owner.Command == "update apply" &&
-		(h.Owner.PID == os.Getpid() || h.Owner.PID == os.Getppid()) {
-		return func() {}, nil
+func maintenanceFor(d paths.Dirs, command string) (release func(), note string, err error) {
+	if h := state.Inspect(d.MaintenanceLock()); h != nil && !h.Stale && heldByUpdate(h) {
+		return func() {}, "", nil
 	}
-	l, _, err := acquireMaintenance(d, command)
+	l, note, err := acquireMaintenance(d, command)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return func() { _ = l.Release() }, nil
+	return func() { _ = l.Release() }, note, nil
 }
 
 // pickRelease is the release to install: --version, else the newest one
@@ -395,6 +430,21 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 			res.Plugin = "skipped: Claude Code is not wired on this machine"
 			add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
 		}
+		if why := serverStepSkipped(d, cfg); why != "" {
+			add("server", "skipped", why)
+			return nil
+		}
+		senv, err := runChild(ctx, staged, "server", "upgrade", "--plan")
+		if err != nil {
+			return nothingChanged("the new binary cannot plan the server upgrade (%v)", err)
+		}
+		sp := decodeServerPlan(senv.Data)
+		res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
+		if sp.Upgrade {
+			add("server", "planned", "would run the new binary's server upgrade: "+sp.Current+" → "+sp.Target+" (backup and verify, pull, start, health, smoke)")
+		} else {
+			add("server", "planned", "the new binary pins "+sp.Target+", which the server runs already")
+		}
 		return nil
 	}
 
@@ -473,7 +523,31 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 		return failed("plugin", err)
 	}
 
-	// 6. Recorded: the shim's target and the one to roll back to.
+	// 6. The server, when the new binary pins another version than the
+	// one deployed: the new binary owns its pin, so it runs the upgrade
+	// (and its own rollback to the version deployed before).
+	if why := serverStepSkipped(d, cfg); why != "" {
+		add("server", "skipped", why)
+	} else {
+		senv, err := runChild(ctx, target, "server", "upgrade", "--plan")
+		if err != nil {
+			return failed("server", err)
+		}
+		sp := decodeServerPlan(senv.Data)
+		res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
+		if sp.Upgrade {
+			rb.serverTouched = true
+			if _, err := runChild(ctx, target, "server", "upgrade"); err != nil {
+				return failed("server", err)
+			}
+			res.Server.Upgraded = true
+			add("server", "done", sp.Current+" → "+sp.Target)
+		} else {
+			add("server", "skipped", "the server runs "+sp.Target+" already")
+		}
+	}
+
+	// 7. Recorded: the shim's target and the one to roll back to.
 	if err := state.Update(d, "update apply", func(s *state.State) error {
 		if s.Client == nil {
 			s.Client = &state.Client{}
@@ -674,6 +748,7 @@ type updateRollback struct {
 	clientArgs       []string // client install, with the wired profile
 	wayBack          string   // the previous binary's client install, by hand
 	pluginTouched    bool
+	serverTouched    bool              // the new binary's server upgrade ran
 	saved            map[string][]byte // state.json and config.toml before the update (nil: absent)
 	add              func(name, status, detail string)
 	res              *updateApplyResult
@@ -708,6 +783,11 @@ func (r *updateRollback) removeBinary() {
 func (r *updateRollback) run(ctx context.Context, cause error) error {
 	base := context.WithoutCancel(ctx)
 	var errs []string
+	if r.serverTouched {
+		if err := r.serverBack(base); err != nil {
+			errs = append(errs, "the server: "+err.Error())
+		}
+	}
 	for p, raw := range r.saved {
 		var err error
 		if raw == nil {
@@ -743,6 +823,47 @@ func (r *updateRollback) run(ctx context.Context, cause error) error {
 	r.res.RolledBack = true
 	r.add("rollback", "done", "the shim runs "+r.previous+" again, state.json, config.toml and the plugin as they were")
 	return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("update to %s failed and was rolled back: %v", r.res.Target, cause)}
+}
+
+// serverBack makes the server run this binary's pin again. The new
+// binary's server upgrade rolls itself back; if it died first, its marker
+// names the safety archive, which restore puts back (with this binary's
+// pin, under update apply's lock). Otherwise this binary's files are
+// rendered again, and the server started when they changed.
+func (r *updateRollback) serverBack(ctx context.Context) error {
+	if m, _ := state.ReadRestoreMarker(r.d); m != nil {
+		if m.Safety == "" {
+			return fmt.Errorf("a restore or upgrade did not finish and names no safety archive (%s)", r.d.RestoreMarker())
+		}
+		r.add("server", "rollback", "restoring the safety archive "+m.Safety)
+		rr := restoreResult{Archive: m.Safety, Steps: []step{}}
+		return runRestore(ctx, nil, &rr, restoreFlags{noSafety: true, nonInter: true}, r.add)
+	}
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		return err
+	}
+	sl, _, err := state.Acquire(filepath.Join(r.d.LocksDir(), "server.lock"), "update apply")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sl.Release() }()
+	rt := ownGroupRuntime(cfg)
+	files, err := renderOn(rt, sec, "backsight server start")
+	if err != nil {
+		return err
+	}
+	ch, err := rt.Write(files)
+	if err != nil || (!ch.Compose && !ch.Env) {
+		return err
+	}
+	sctx, cancel := context.WithTimeout(ctx, rollbackStepTimeout)
+	defer cancel()
+	if err := rt.Start(sctx); err != nil {
+		return err
+	}
+	_, err = waitHealthy(sctx, cfg, sec)
+	return err
 }
 
 func updateApplyText(r updateApplyResult) string {

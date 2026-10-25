@@ -8,6 +8,9 @@ LDFLAGS  += $(if $(TEST_KEY),-X $(PKG)/internal/signing.TestKey=$(TEST_KEY))
 # TEST_HOOKS=1 adds the testhooks tag: CI's update proof (a migration that
 # fails on demand). Never a release either (verify-keys refuses it).
 TAGS     := $(if $(TEST_HOOKS),-tags testhooks)
+# TEST_IMAGE (with TEST_HOOKS) pins another Hindsight image: the update
+# proof's server upgrade. Ignored without the tag.
+LDFLAGS  += $(if $(TEST_IMAGE),-X $(PKG)/internal/server.TestImage=$(TEST_IMAGE))
 DIST     ?= dist
 OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
