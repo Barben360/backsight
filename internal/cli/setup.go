@@ -40,7 +40,7 @@ type setupFlags struct {
 	answers                      []string
 	answersFile                  string
 	nonInteractive, plan, resume bool
-	questions                    bool
+	questions, undo, force       bool
 	configDir                    string
 }
 
@@ -96,6 +96,16 @@ func newSetupCmd(e *env) *cobra.Command {
 			"Secrets never travel in answers: missing ones end with exit 10 and the backsight secret set command to run.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.undo {
+				if len(f.answers) > 0 || f.answersFile != "" || f.resume || f.questions {
+					return &output.Error{Code: output.Usage, Message: "--undo takes only --plan and --force"}
+				}
+				res, err := runSetupUndo(cmd.Context(), f, f.force)
+				return e.report("setup", res, func() string { return undoText(res) }, err)
+			}
+			if f.force {
+				return &output.Error{Code: output.Usage, Message: "--force goes with --undo"}
+			}
 			res, err := runSetup(cmd.Context(), e, f)
 			return e.report("setup", res, func() string { return setupText(res) }, err)
 		},
@@ -106,6 +116,8 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "show the checks, answers and steps without changing anything")
 	cmd.Flags().BoolVar(&f.resume, "resume", false, "continue the last run with its saved answers")
 	cmd.Flags().BoolVar(&f.questions, "questions", false, "list the questions and exit")
+	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
+	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: restore pre-images over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	return cmd
 }
@@ -158,6 +170,7 @@ type setupEnv struct {
 	cfg    *config.Config // nil: no config.toml yet
 	loc    claudecode.Location
 	saved  *setup.Record
+	refs   int // reference changes a retire would make (§11.5)
 	f      setupFlags
 	e      *env
 	answer map[string]string
@@ -197,6 +210,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		}
 	}
 	s.loc = claudecode.Locate(home, getenv)
+	s.refs = referenceCount(ctx, s.loc)
 
 	interactive := !e.json && !f.nonInteractive && !f.plan && !f.questions && stdinIsTerminal()
 	qs, extra, err := s.resolve(interactive)
@@ -258,7 +272,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 	if s.f.resume && s.saved != nil {
 		saved = s.saved.Answers
 	}
-	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate}
+	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, ReferencePieces: s.refs}
 	for {
 		qs, extra, err := setup.Resolve(in)
 		var ue *setup.UsageError
@@ -287,7 +301,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			trial[k] = val
 		}
 		trial[next.ID] = v
-		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved}); errors.As(err, &ue) {
+		if _, _, err := setup.Resolve(setup.Inputs{Config: s.cfg, Answers: trial, Saved: saved, ReferencePieces: s.refs}); errors.As(err, &ue) {
 			fmt.Fprintln(s.e.stdout, "  "+ue.Msg)
 			continue
 		}
@@ -450,6 +464,7 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		}
 		return strings.Fields(string(out) + " ?")[0], nil
 	}
+	p.Reference = s.refs
 	var de doctor.Env
 	probes(&de)
 	if r, err := claudecode.ReadRetention(s.loc, de.ManagedDir); err == nil {
@@ -672,6 +687,25 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			return setup.Step{Name: "verify", Status: "done", Detail: fmt.Sprintf("%d checks passed: every hook, the MCP server, a retain/recall round trip", len(vr.Checks))}, nil
 		}},
+		{"reference", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
+			if answers["reference"] != "retire" {
+				return setup.Step{Name: "reference", Status: "skipped", Detail: map[bool]string{true: "kept, as answered", false: "no reference piece wired"}[answers["reference"] == "keep"]}, nil
+			}
+			// After verify: the old memory is unwired only once backsight works.
+			out := withRuns(r, func() subResult { return subcommand(ctx, clientArgs("client", "retire")...) })
+			var rr retireResult
+			_ = json.Unmarshal(out.Data, &rr)
+			r.Undo.Timers = appendNew(r.Undo.Timers, rr.Timers...)
+			if out.Err != nil {
+				return setup.Step{}, out.Err
+			}
+			n := len(rr.Timers)
+			for _, f := range rr.Files {
+				n += len(f.Changes)
+			}
+			*restart = *restart || n > 0
+			return setup.Step{Name: "reference", Status: "done", Detail: fmt.Sprintf("%d reference piece(s) unwired; the old server is untouched", n)}, nil
+		}},
 		{"backfill", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
 			if answers["backfill"] != "yes" {
 				return setup.Step{Name: "backfill", Status: "skipped", Detail: "not asked for"}, nil
@@ -689,6 +723,32 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "backfill", Status: "done", Detail: fmt.Sprintf("%d session(s) queued: jobs tick sends them in the background", br.Total)}, nil
 		}},
 	}
+}
+
+func appendNew(list []string, items ...string) []string {
+	for _, it := range items {
+		if !slices.Contains(list, it) {
+			list = append(list, it)
+		}
+	}
+	return list
+}
+
+// referenceCount is how many reference pieces a retire would unwire now
+// (read-only: a plan and systemctl is-enabled).
+func referenceCount(ctx context.Context, loc claudecode.Location) int {
+	files, err := claudecfg.Plan([]claudecfg.Edit{{Target: loc.Settings, Apply: retireSettings}, {Target: loc.State, Apply: retireMCP}})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, f := range files {
+		n += len(f.Changes)
+	}
+	if runtime.GOOS == "linux" && retroTimerEnabled(ctx) {
+		n++
+	}
+	return n
 }
 
 func newRuns(before, after []string) []string {
@@ -779,6 +839,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	if answers["backups"] == "on" {
 		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show (at a terminal)")
 	}
+	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""
 	return res, nil
 }
@@ -867,6 +928,13 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	if a["retention"] == "keep" {
 		retention = "leave Claude Code's setting as it is"
 	}
+	reference := "nothing to retire"
+	switch a["reference"] {
+	case "retire":
+		reference = fmt.Sprintf("backsight client retire: unwire %d reference piece(s) after verify passes", s.refs)
+	case "keep":
+		reference = "keep the reference pieces"
+	}
 	backfill := "start empty"
 	if a["backfill"] == "yes" {
 		backfill = "queue past sessions for jobs tick"
@@ -879,6 +947,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "retention", Status: "planned", Detail: retention},
 		{Name: "scheduler", Status: "planned", Detail: "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"},
 		{Name: "verify", Status: "planned", Detail: "backsight verify: every hook, the MCP handshake, a round trip in a scratch bank"},
+		{Name: "reference", Status: "planned", Detail: reference},
 		{Name: "backfill", Status: "planned", Detail: backfill},
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -51,6 +52,8 @@ func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 		data = verifyResult{Checks: []verifyCheck{{ID: "mcp", Status: "ok"}}}
 	case "retain backfill":
 		data = backfillResult{Total: 2, Queued: true}
+	case "client retire":
+		return runSubcommand(context.Background(), args...) // the real one: pre-images to undo
 	}
 	raw, _ := json.Marshal(data)
 	return subResult{Data: raw}
@@ -68,6 +71,7 @@ func (f *fakeSteps) commands() []string {
 func setupMachine(t *testing.T) (string, *fakeSteps) {
 	t.Helper()
 	home := isolate(t)
+	withSys(t, "linux") // the reference count asks systemctl about the retro timer
 	f := &fakeSteps{fail: map[string]*output.Error{}, home: home}
 	oldSub, oldProbes, oldUp := subcommand, preflightProbes, serverAnswers
 	subcommand = f.run
@@ -423,3 +427,118 @@ func TestSetupVerifyFailureNamesTheFailingChecks(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+func TestSetupRetiresTheReferenceAfterVerifyAndUndoPutsItBack(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	settings, state := filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")
+	_ = os.WriteFile(settings, []byte(referenceSettings), 0o600)
+	_ = os.WriteFile(state, []byte(referenceClaudeJSON), 0o600)
+	sys := sysRunner.(*fakeSys)
+	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	claude := withClaude(t)
+
+	_, out, _ := run(t, "setup", "--questions", "--json")
+	if !strings.Contains(out, `"id": "reference"`) || !strings.Contains(out, "7 pieces") {
+		t.Fatalf("no reference question for 6 file changes and the timer:\n%s", out)
+	}
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	cmds := strings.Join(f.commands(), ",")
+	if !strings.Contains(cmds, "verify,client retire") {
+		t.Errorf("retire must follow verify: %s", cmds)
+	}
+	if a, _ := os.ReadFile(state); strings.Contains(string(a), "user-memory") {
+		t.Error("the reference MCP server is still wired")
+	}
+	rec, _ := setup.Load(pathsOf(home).SetupFile())
+	if rec == nil || len(rec.Undo.Timers) != 1 || len(rec.Undo.ConfigRuns) != 2 {
+		t.Fatalf("record: %+v", rec)
+	}
+
+	// --undo --plan changes nothing.
+	f.calls = nil
+	if code, out, _ := run(t, "setup", "--undo", "--plan"); code != output.OK || !strings.Contains(out, "planned") || len(f.calls) > 0 {
+		t.Fatalf("undo plan: exit %d, steps %v\n%s", code, f.commands(), out)
+	}
+	if a, _ := os.ReadFile(state); strings.Contains(string(a), "user-memory") {
+		t.Error("--undo --plan restored a file")
+	}
+
+	claude.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
+	claude.marketplaces = `[{"name":"` + plugin.Marketplace + `","path":"/x"}]`
+	code, out, errOut = run(t, "setup", "--undo", "--json")
+	if code != output.OK {
+		t.Fatalf("undo: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if a, _ := os.ReadFile(settings); string(a) != referenceSettings {
+		t.Errorf("settings.json not restored byte for byte:\n%s", a)
+	}
+	if a, _ := os.ReadFile(state); string(a) != referenceClaudeJSON {
+		t.Error("~/.claude.json not restored byte for byte")
+	}
+	if !contains(sys.calls, "systemctl --user enable --now memory-retro.timer") {
+		t.Errorf("the retro timer was not started again: %v", sys.calls)
+	}
+	got := strings.Join(f.commands(), ",")
+	if got != "jobs uninstall,server stop" {
+		t.Errorf("undo steps %q", got)
+	}
+	m := strings.Join(mutating(claude), ",")
+	if !strings.Contains(m, "plugin uninstall "+plugin.PluginID()) || !strings.Contains(m, "plugin marketplace remove "+plugin.Marketplace) {
+		t.Errorf("plugin not removed: %s", m)
+	}
+	if _, err := os.Stat(pathsOf(home).ConfigFile()); err != nil {
+		t.Error("undo removed config.toml")
+	}
+	if st, _ := stateLoad(home); st.PluginVersion != "" {
+		t.Error("state still says the plugin is installed")
+	}
+	if code, out, _ := run(t, "setup", "--undo"); code != output.OK || !strings.Contains(out, "changed nothing") {
+		t.Errorf("a second undo: exit %d\n%s", code, out)
+	}
+}
+
+func TestSetupUndoRefusesAFileEditedSince(t *testing.T) {
+	home, _ := setupMachine(t)
+	withLLMKey(t, home)
+	withClaude(t)
+	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	settings := filepath.Join(home, ".claude", "settings.json")
+	_ = os.WriteFile(settings, []byte(referenceSettings), 0o600)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	edited, _ := os.ReadFile(settings)
+	edited = append(edited[:len(edited)-2], []byte(`, "theme": "dark"}`+"\n")...)
+	_ = os.WriteFile(settings, edited, 0o600)
+
+	code, out, _ := run(t, "setup", "--undo", "--json")
+	if code != output.Partial || !strings.Contains(out, "--force") || !strings.Contains(out, `"refused"`) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if a, _ := os.ReadFile(settings); string(a) != string(edited) {
+		t.Error("a refused restore wrote the file")
+	}
+	if code, out, _ := run(t, "setup", "--undo", "--force", "--json"); code != output.OK {
+		t.Fatalf("--force: exit %d\n%s", code, out)
+	}
+	if a, _ := os.ReadFile(settings); string(a) != referenceSettings {
+		t.Errorf("--force did not put the pre-image back:\n%s", a)
+	}
+}
+
+func TestSetupUndoFlagsAreExclusive(t *testing.T) {
+	setupMachine(t)
+	if code, _, _ := run(t, "setup", "--undo", "--answer", "consent=yes"); code != output.Usage {
+		t.Errorf("--undo with answers: exit %d", code)
+	}
+	if code, _, _ := run(t, "setup", "--force"); code != output.Usage {
+		t.Errorf("--force without --undo: exit %d", code)
+	}
+}
+
+func stateLoad(home string) (state.State, error) { return state.Load(pathsOf(home).StateFile()) }

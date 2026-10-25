@@ -45,6 +45,13 @@ type Undo struct {
 	Scheduler bool `json:"scheduler,omitempty"`
 	// ServerStarted: the server was not answering before setup.
 	ServerStarted bool `json:"server_started,omitempty"`
+	// Timers: reference systemd user timers setup stopped (§11.5).
+	Timers []string `json:"timers,omitempty"`
+}
+
+// Empty reports whether there is nothing to undo.
+func (u Undo) Empty() bool {
+	return len(u.ConfigRuns) == 0 && !u.Client && !u.Scheduler && !u.ServerStarted && len(u.Timers) == 0
 }
 
 // RecordVersion of setup.json.

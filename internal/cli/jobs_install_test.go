@@ -15,9 +15,10 @@ import (
 
 type fakeSys struct {
 	calls  []string
-	fail   string // a command line prefix that fails
-	output string // what a failing command prints
-	xdg    string // the user manager's XDG_CONFIG_HOME
+	fail   string            // a command line prefix that fails
+	output string            // what a failing command prints
+	xdg    string            // the user manager's XDG_CONFIG_HOME
+	out    map[string]string // what a command line prints
 }
 
 func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -26,6 +27,9 @@ func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, e
 		return []byte("HOME=/home/u\nXDG_CONFIG_HOME=" + f.xdg + "\n"), nil
 	}
 	f.calls = append(f.calls, line)
+	if o, ok := f.out[line]; ok {
+		return []byte(o), nil
+	}
 	if f.fail != "" && strings.HasPrefix(line, f.fail) {
 		out := f.output
 		if out == "" {
