@@ -2,11 +2,13 @@
 # Runs the client against a sandbox Hindsight (SPEC §16, from M1): the
 # pinned stack rendered by backsight itself, with Hindsight's mock LLM, then
 # the sandbox tests. Usage: scripts/sandbox.sh [api port] (default 8888).
-# SANDBOX_PROJECT names the compose project (default backsight); KEEP=1
+# SANDBOX_PROJECT names the compose project (default bs-sandbox; never
+# backsight, the machine's own install, which cleanup would wipe); KEEP=1
 # leaves the stack running.
 set -euo pipefail
 port=${1:-8888}
-project=${SANDBOX_PROJECT:-backsight}
+project=${SANDBOX_PROJECT:-bs-sandbox}
+[ "$project" != backsight ] || { echo "SANDBOX_PROJECT=backsight would be the machine's own install" >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 export BACKSIGHT_HOME=$work/backsight
