@@ -19,6 +19,13 @@ func TestSystemdUnits(t *testing.T) {
 		!strings.Contains(svc, "Environment=PATH=/usr/bin:/home/a/.local/bin\n") || !strings.Contains(svc, "TimeoutStartSec=30min") {
 		t.Errorf("the install's environment is not carried:\n%s", svc)
 	}
+	// A stop (a timeout, a shutdown) signals the job only, then waits long
+	// enough for an update's rollback before killing what is left.
+	for _, name := range []string{"tick", "maintain"} {
+		if svc := files["/home/a/.config/systemd/user/backsight-"+name+".service"]; !strings.Contains(svc, "KillMode=mixed\n") || !strings.Contains(svc, "TimeoutStopSec=45min\n") {
+			t.Errorf("%s stop policy:\n%s", name, svc)
+		}
+	}
 	tick := files["/home/a/.config/systemd/user/backsight-tick.timer"]
 	if !strings.Contains(tick, "OnCalendar=*:0/15\n") || !strings.Contains(tick, "Persistent=true") || !strings.Contains(tick, "WantedBy=timers.target") {
 		t.Errorf("tick timer:\n%s", tick)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,19 @@ func TestMain(m *testing.M) {
 		os.Exit(Execute(args, os.Stdout, os.Stderr))
 	}
 	composeRunner = refuseDocker{}
-	githubAPI = "http://127.0.0.1:1" // closed: no test reaches GitHub
+	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
 	os.Exit(m.Run())
+}
+
+// liveProcess is the PID of a process that runs until the test ends and is
+// neither this process nor its parent: a lock owner that is alive and
+// someone else.
+func liveProcess(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sleep", "600")
+	if err := cmd.Start(); err != nil {
+		t.Skip("no sleep:", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return cmd.Process.Pid
 }

@@ -25,17 +25,33 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
-// closedPort is a loopback port nothing listens on: tests must never reach
-// a real server (the author's dev install listens on 18888).
+// closedPort is a loopback port where no server answers: tests must never
+// reach a real server (the author's dev install listens on 18888).
 func closedPort(t *testing.T) int {
 	t.Helper()
+	ln := hangUpListener()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// hangUpListener is a port where nothing answers: it closes every
+// connection at once. Unlike a port listened on then closed, no other
+// process can take it while the test runs.
+func hangUpListener() net.Listener {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	return ln
 }
 
 // devInstall writes a dev config pointing at a closed port and every secret

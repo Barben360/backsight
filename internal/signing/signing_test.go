@@ -263,3 +263,21 @@ func read(t *testing.T, path string) []byte {
 func lines(t *testing.T, path string) []string {
 	return strings.Split(strings.TrimRight(string(read(t, path)), "\n"), "\n")
 }
+
+// The next key is trusted like the current one: a release signed after
+// the rotation verifies, and its id is the next key's.
+func TestTheNextKeyVerifies(t *testing.T) {
+	pub, priv := keypair(t)
+	setTestKey(t, "")
+	old := Next
+	Next = pub.String()
+	t.Cleanup(func() { Next = old })
+	sums := []byte(sumLine("a", "backsight_1.0.0_linux_amd64.tar.gz"))
+	id, err := VerifyChecksums(sums, sign(t, priv, sums, "timestamp:1\tfile:checksums.txt\thashed"))
+	if err != nil || id != fmt.Sprintf("%016X", pub.ID()) {
+		t.Fatalf("signed by the next key: %q %v", id, err)
+	}
+	if ks := Keys(); len(ks) != 2 || ks[1] != (Key{id, "next"}) {
+		t.Errorf("Keys() = %v, want the next key second", ks)
+	}
+}

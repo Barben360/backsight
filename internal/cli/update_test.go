@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -307,7 +308,9 @@ func TestSessionStartBannerShowsANewerRelease(t *testing.T) {
 		t.Errorf("no check recorded: %q", msg)
 	}
 	record("0.2.0")
-	if msg := start(); !strings.Contains(msg, "backsight: update 0.2.0 available (✨ Add update check (+3 more))") {
+	// The version only: release notes are unsigned and never reach a
+	// Claude session.
+	if msg := start(); !strings.Contains(msg, "backsight: update 0.2.0 available, see `backsight changelog`") || strings.Contains(msg, "Add update check") {
 		t.Errorf("banner %q", msg)
 	}
 	setBuild(t, "0.2.0", "def5678") // updated since the check
@@ -318,5 +321,21 @@ func TestSessionStartBannerShowsANewerRelease(t *testing.T) {
 	record("")
 	if msg := start(); strings.Contains(msg, "update") {
 		t.Errorf("up to date: %q", msg)
+	}
+}
+
+// A failed check keeps the release the last good check of the same source
+// found, never one another source found (it may not exist there).
+func TestAFailedCheckKeepsOnlyItsSourcesRelease(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	recordUpdateCheck(d, updateCheckResult{Source: "dir:/a", Installed: "0.1.0", UpdateAvailable: true, Latest: "0.2.0", Versions: []versionEntry{{Version: "0.2.0", Summary: "s"}}}, nil)
+	recordUpdateCheck(d, updateCheckResult{Source: "dir:/a", Installed: "0.1.0"}, errors.New("unreadable"))
+	if st, _ := state.Load(d.StateFile()); st.UpdateCheck == nil || st.UpdateCheck.Latest != "0.2.0" || st.UpdateCheck.Error != "unreadable" {
+		t.Errorf("same source: %+v", st.UpdateCheck)
+	}
+	recordUpdateCheck(d, updateCheckResult{Source: "github:Barben360/backsight", Installed: "0.1.0"}, errors.New("answered 404"))
+	if st, _ := state.Load(d.StateFile()); st.UpdateCheck == nil || st.UpdateCheck.Latest != "" || st.UpdateCheck.Source != "github:Barben360/backsight" {
+		t.Errorf("another source kept dir:/a's release: %+v", st.UpdateCheck)
 	}
 }

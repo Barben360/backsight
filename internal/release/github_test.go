@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,11 +128,55 @@ func TestGitHubNotFoundNamesTheToken(t *testing.T) {
 }
 
 func TestGitHubUnreachable(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	url := srv.URL
-	srv.Close()
-	if _, err := newTestGitHub(url, "").Releases(context.Background()); err == nil || !strings.Contains(err.Error(), "unreachable") {
-		t.Errorf("a closed server: %v", err)
+	// A listener that hangs up on every connection: unlike a closed port,
+	// no other process can take it meanwhile.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	if _, err := newTestGitHub("http://"+ln.Addr().String(), "").Releases(context.Background()); err == nil || !strings.Contains(err.Error(), "unreachable") {
+		t.Errorf("a server that hangs up: %v", err)
+	}
+}
+
+// Releases is bounded by its timeout; Open reports an asset the API
+// refuses (not a body to verify).
+func TestGitHubTimeoutAndRefusedAsset(t *testing.T) {
+	stall := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases") {
+			select {
+			case <-stall:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		http.Error(w, "gone", http.StatusGone)
+	}))
+	defer srv.Close()
+	defer close(stall)
+	g := newTestGitHub(srv.URL, "")
+	g.Timeout = 100 * time.Millisecond
+	start := time.Now()
+	if _, err := g.Releases(context.Background()); err == nil || time.Since(start) > 5*time.Second {
+		t.Errorf("a stalled list: %v after %s", err, time.Since(start))
+	}
+	rel := Release{Tag: "v1.0.0", Assets: []Asset{{Name: "checksums.txt", URL: srv.URL + "/assets/1"}}}
+	if rc, err := g.Open(context.Background(), rel, "checksums.txt"); err == nil || !strings.Contains(err.Error(), "410") {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		t.Errorf("a refused asset: %v", err)
 	}
 }
 
