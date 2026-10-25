@@ -24,11 +24,13 @@ const (
 // Error is a command failure with its exit code. With NeedsUser it carries
 // what the user must provide or do (SPEC §11.2 needs_user).
 type Error struct {
-	Code    int      `json:"code"`
-	Message string   `json:"message"`
-	Secrets []string `json:"secrets,omitempty"`
-	Actions []Action `json:"actions,omitempty"`
-	Resume  string   `json:"resume,omitempty"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	// Questions: the full question schema (setup), when answers are missing.
+	Questions any      `json:"questions,omitempty"`
+	Secrets   []string `json:"secrets,omitempty"`
+	Actions   []Action `json:"actions,omitempty"`
+	Resume    string   `json:"resume,omitempty"`
 }
 
 // Action is something the user runs: run_as_user | relogin | install.
