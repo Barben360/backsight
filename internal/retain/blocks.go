@@ -108,7 +108,10 @@ func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, 
 		ObservationScopes: [][]string{{"project:" + project}},
 		Timestamp:         &ts,
 		Metadata: map[string]string{"session_id": sid, "last_uuid": last.UUID, "records": strconv.Itoa(len(recs)),
-			"segment": strconv.Itoa(segment), "machine_id": machineID, "binary_version": version, "source": "chat", "harness": "claude-code"},
+			"segment": strconv.Itoa(segment), "machine_id": machineID, "binary_version": version, "source": "chat", "harness": "claude-code",
+			// project marks the per-project layout: a conversation:<sid>
+			// without it holds every project's records (legacy, resync)
+			"project": project},
 	}
 	if ep := first.Entrypoint; ep != "" {
 		item.Metadata["entrypoint"] = ep
@@ -133,15 +136,22 @@ type Cursor struct {
 	// before per-project documents reads and appends to.
 	Segment  int    `json:"segment"`
 	Document string `json:"document"`
-	// Home is the session's home project (DocumentID); a cursor without
-	// one was written before per-project documents and resyncs once.
+	// Home is the session's home project (DocumentID), kept across
+	// resyncs once named.
 	Home string `json:"home,omitempty"`
-	// Segments is the last segment sent to each document, by project.
-	Segments map[string]int `json:"segments,omitempty"`
-	// Project is the project of the record at Offset, which the project
-	// rule carries to the next record (attribute); empty at the file's
-	// start.
-	Project     string    `json:"project,omitempty"`
+	// Segments is the last segment sent to each document, by project; a
+	// cursor without it was written before per-project documents and
+	// resyncs once.
+	Segments map[string]int `json:"segments"`
+	// Project is the project of the record at Offset, and OptOut why the
+	// record that named it was kept out: the project rule carries both to
+	// the next record (attribute). Both are empty at the file's start.
+	Project string `json:"project,omitempty"`
+	OptOut  string `json:"opt_out,omitempty"`
+	// Legacy is the last record up to which conversation:<sid> holds the
+	// records of every project (sent by a build from before per-project
+	// documents); its later segments carry it as legacy_last_uuid.
+	Legacy      string    `json:"legacy,omitempty"`
 	Bank        string    `json:"bank"`
 	LastTurnAt  time.Time `json:"last_turn_at"`
 	SentAt      time.Time `json:"sent_at"`

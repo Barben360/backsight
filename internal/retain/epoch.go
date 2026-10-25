@@ -245,12 +245,10 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (r
 	return resend, nil
 }
 
-// dropSession compares one session's cursor with the server's documents,
-// under the session's lock. The server's position is the furthest record
-// any of the session's documents holds (the one a resync resumes after).
-// When the server holds less, it records the records this session sent
-// after that position (all of them when no document is left) as its own to
-// resend (the .dropped mark), removes their "sent in this session" index
+// dropSession compares what one session sent with the server's documents,
+// under the session's lock. When a document no longer holds records this
+// session sent to it, it records them as its own to resend (the .dropped
+// mark), removes their "sent in this session" index
 // entries, queues the session for backfill when it belongs there, and only
 // then removes the cursor: a crash in between leaves the cursor, and the
 // next run does it again. The bare uuids stay in the index: they are the
@@ -277,13 +275,6 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	if err != nil {
 		return false, errors.New(errSummary(err))
 	}
-	held := false
-	for _, d := range docs {
-		if d.found && d.lastUUID == cur.LastUUID {
-			return false, nil // the server holds the latest send: nothing lost
-		}
-		held = held || d.found
-	}
 	fh, err := os.Open(cur.Transcript)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil // nothing left to resend from
@@ -296,24 +287,34 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	if err != nil {
 		return false, err
 	}
-	// Records up to the server's position stay sent. A last_uuid the
-	// transcript lacks leaves the index alone: the resync quarantines.
-	at, _, ok := furthest(recs, docs)
-	from := at + 1
-	if !ok {
-		from = len(recs)
-	}
+	// A record is lost when this session sent it (its session key) and its
+	// project's document no longer holds it: positions are per document, as
+	// the resync reads them. A position that cannot be trusted leaves the
+	// index alone: the resync quarantines.
+	attrs := f.attribute(sid, recs, attr{})
+	pos, bad := serverPosition(recs, docs, DocumentID(sid, cur.Home, cur.Home))
 	mark := dropped{Records: map[string]bool{}}
+	earlier := f.loadDropped(sid) // a run stopped half way already dropped these
 	var keys []string
-	for _, r := range recs[from:] {
+	lostAny := bad != ""
+	for i, r := range recs {
+		if bad != "" || pos.holds(i, attrs[r.End].project) {
+			continue
+		}
 		// Only this session's own sends: a fork's copied records stay
 		// marked under the parent that sent them.
 		if k := sessionKey(f.Bank, sid, r.UUID); f.Index.Has(k) {
 			mark.Records[r.UUID] = true
 			keys = append(keys, k)
+			lostAny = true
+		} else if earlier.Records[r.UUID] {
+			lostAny = true
 		}
 	}
-	early := !held && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
+	if !lostAny {
+		return false, nil // the server holds every record this session sent
+	}
+	early := !pos.found && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
 	mark.PastSince = early && !queued // resent by live retain, past retain_since
 	if err := f.addDropped(sid, mark); err != nil {
 		return false, err

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // fakeHS stores retained documents like Hindsight: append concatenates
@@ -34,8 +36,11 @@ type fakeHS struct {
 	stale   bool            // metadata not updated (async retain still running)
 	hidden  bool            // new documents not readable yet (their first async retain still running)
 	hide    map[string]bool // these documents not readable yet
-	gets    int             // document reads
-	seenOps map[string]bool
+	refuse  map[string]int  // retains into these documents answer with this status
+	// onRetain sees each item before it is stored.
+	onRetain func(hindsight.RetainItem)
+	gets     int // document reads
+	seenOps  map[string]bool
 	// epochStatus non-zero: reads of the restore epoch answer with it.
 	epochStatus int
 	queued      int // pending operations the bank reports
@@ -62,6 +67,15 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		if body.OperationID != "" && h.seenOps[body.OperationID] {
 			_, _ = w.Write([]byte(`{"success":true}`)) // E21: a repeated operation collapses
 			return
+		}
+		for _, it := range body.Items {
+			if h.onRetain != nil {
+				h.onRetain(it)
+			}
+			if st := h.refuse[it.DocumentID]; st != 0 {
+				w.WriteHeader(st)
+				return
+			}
 		}
 		h.seenOps[body.OperationID] = true
 		for _, it := range body.Items {
@@ -526,20 +540,21 @@ func TestANonRepoDirectoryKeepsThePreviousProject(t *testing.T) {
 	}
 }
 
-// With no cursor (new machine, lost state), the session resumes after the
-// furthest record any of its documents holds, whichever document that is.
-func TestResyncResumesAfterTheFurthestDocument(t *testing.T) {
+// With no cursor (new machine, lost state), each document resumes after its
+// own position: a record goes out unless its project's document holds it.
+func TestResyncResumesEachDocumentAfterItsOwnPosition(t *testing.T) {
+	type item struct{ doc, text, mode, segment string }
 	for _, c := range []struct {
 		name string
 		docs map[string]map[string]string
-		want []struct{ doc, text, mode, segment string }
+		want []item
 	}{
-		{"only the side document", map[string]map[string]string{"conversation:s1@beta": {"last_uuid": "u2", "segment": "1"}},
-			[]struct{ doc, text, mode, segment string }{{"conversation:s1", "alpha 3", "", "1"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
-		{"side further than home", map[string]map[string]string{"conversation:s1": {"last_uuid": "u1", "segment": "1"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1"}},
-			[]struct{ doc, text, mode, segment string }{{"conversation:s1", "alpha 3", "append", "2"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
-		{"home further than side", map[string]map[string]string{"conversation:s1": {"last_uuid": "u3", "segment": "2"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1"}},
-			[]struct{ doc, text, mode, segment string }{{"conversation:s1@beta", "beta 4", "append", "2"}}},
+		{"only the side document", map[string]map[string]string{"conversation:s1@beta": {"last_uuid": "u2", "segment": "1", "project": "beta"}},
+			[]item{{"conversation:s1", "alpha 1", "", "1"}, {"conversation:s1", "alpha 3", "append", "2"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
+		{"side further than home", map[string]map[string]string{"conversation:s1": {"last_uuid": "u1", "segment": "1", "project": "alpha"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1", "project": "beta"}},
+			[]item{{"conversation:s1", "alpha 3", "append", "2"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
+		{"home further than side", map[string]map[string]string{"conversation:s1": {"last_uuid": "u3", "segment": "2", "project": "alpha"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1", "project": "beta"}},
+			[]item{{"conversation:s1@beta", "beta 4", "append", "2"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -560,10 +575,19 @@ func TestResyncResumesAfterTheFurthestDocument(t *testing.T) {
 				if it.DocumentID != w.doc || it.UpdateMode != w.mode || it.Metadata["segment"] != w.segment || !strings.Contains(it.Content, w.text) {
 					t.Errorf("item %d: %s %q segment %s %s", i, it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content)
 				}
-				for _, old := range []string{"alpha 1", "beta 2"} {
-					if strings.Contains(it.Content, old) {
-						t.Errorf("item %d resent %q", i, old)
+			}
+			for _, text := range []string{"alpha 1", "beta 2", "alpha 3", "beta 4"} {
+				n, want := 0, 0
+				for _, it := range e.hs.retains {
+					n += strings.Count(it.Content, `"`+text+`"`)
+				}
+				for _, w := range c.want {
+					if w.text == text {
+						want = 1
 					}
+				}
+				if n != want {
+					t.Errorf("%q sent %d times, want %d", text, n, want)
 				}
 			}
 		})
@@ -1130,5 +1154,291 @@ func TestSurveyCountsHeadlessSessionsAsOptedOut(t *testing.T) {
 	c, _ := e.f.Survey(filepath.Join(e.dir, "s1.jsonl"))
 	if c.Status != "opted_out" || c.Chars != 0 || !strings.Contains(c.Reason, "skip_entrypoints") {
 		t.Errorf("%+v", c)
+	}
+}
+
+// releaseAndResend: the server lost the documents named, and the
+// operations that wrote them; the session is released from quarantine and
+// flushed again.
+func (e *env) releaseAndResend(lost ...string) Result {
+	e.t.Helper()
+	e.hs.hide, e.hs.seenOps = nil, nil
+	for _, d := range lost {
+		delete(e.hs.docs, d)
+	}
+	if _, err := ReleaseQuarantine(e.f.Dirs.CursorsDir(), "s1"); err != nil {
+		e.t.Fatal(err)
+	}
+	return e.flush("s1", Options{})
+}
+
+// waitThenQuarantine: a resync finds this session's first segment of a
+// document missing; it waits, then quarantines after PendingLimit.
+func (e *env) waitThenQuarantine(sent int) {
+	e.t.Helper()
+	if r := e.flush("s1", Options{}); r.Status != Retry || len(e.hs.retains) != sent {
+		e.t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	e.clock = e.clock.Add(PendingLimit)
+	if r := e.flush("s1", Options{}); r.Status != Quarantined || len(e.hs.retains) != sent {
+		e.t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+}
+
+// expectItems checks the items sent since from: document, update mode,
+// segment and the one text each holds.
+func (e *env) expectItems(from int, want ...[4]string) {
+	e.t.Helper()
+	got := e.hs.retains[from:]
+	if len(got) != len(want) {
+		e.t.Fatalf("%d items, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		it := got[i]
+		if it.DocumentID != w[0] || it.UpdateMode != w[1] || it.Metadata["segment"] != w[2] || !strings.Contains(it.Content, w[3]) {
+			e.t.Errorf("item %d: %s %q segment %s\n%s\nwant %v", i, it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content, w)
+		}
+	}
+}
+
+// Issue 101 for the home document while a side document landed: positions
+// are per document, so the side document's further position does not let
+// a new segment 1 replace the pending home document; once taken as lost
+// and released, the home records go out again from its segment 1.
+func TestAPendingHomeDocumentIsNotReplacedByAFurtherSideDocument(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	e.hs.hide = map[string]bool{"conversation:s1": true}
+	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
+	e.waitThenQuarantine(2)
+	if r := e.releaseAndResend("conversation:s1"); r.Status != Sent {
+		t.Fatalf("%+v", r)
+	}
+	e.expectItems(2, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha three"})
+	if strings.Contains(e.hs.retains[2].Content, "alpha three") || strings.Contains(e.hs.retains[3].Content, "beta") {
+		t.Errorf("%+v", e.hs.retains[2:])
+	}
+}
+
+// A side document lost for good while the home document is further ahead:
+// the session waits, is quarantined, and its release resends that project's
+// records from the side document's segment 1, and nothing of the home's.
+func TestALostSideDocumentIsResentFromItsFirstSegment(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	e.recordIn(alpha, "s1", "u3", "user", 2, "alpha three")
+	expect(t, e.flush("s1", Options{}), Sent, 3, 2)
+	delete(e.hs.docs, "conversation:s1@beta")
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.recordIn(alpha, "s1", "u4", "user", 60, "alpha four")
+	e.waitThenQuarantine(3)
+	if r := e.releaseAndResend(); r.Status != Sent {
+		t.Fatalf("%+v", r)
+	}
+	e.expectItems(3, [4]string{"conversation:s1@beta", "", "1", "beta two"}, [4]string{"conversation:s1", "append", "3", "alpha four"})
+	if strings.Contains(e.hs.retains[4].Content, "alpha three") {
+		t.Errorf("resent: %s", e.hs.retains[4].Content)
+	}
+}
+
+// noName fails when a retained item names project p anywhere.
+func (e *env) noName(p string) {
+	e.t.Helper()
+	for _, it := range e.hs.retains {
+		if strings.Contains(it.DocumentID, p) || strings.Contains(strings.Join(it.Tags, ","), p) || strings.Contains(fmt.Sprint(it.Metadata, it.ObservationScopes), p) {
+			e.t.Errorf("%s leaked: %+v", p, it)
+		}
+	}
+}
+
+// A plain directory after an excluded repository keeps its project, so it
+// is kept out too: never sent, never labelled with the excluded name, until
+// a retained repository names the project again. Also when the session
+// starts in the excluded repository.
+func TestAPlainDirectoryAfterAnExcludedRepositoryStaysOut(t *testing.T) {
+	e := newEnv(t)
+	alpha, secret := e.repo("alpha"), e.repo("secret")
+	scratch := filepath.Join(filepath.Dir(e.cwd), "scratch")
+	_ = os.MkdirAll(scratch, 0o700)
+	e.f.Exclude = []string{secret}
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(secret, "s1", "u2", "user", 1, "confidential repo")
+	e.recordIn(scratch, "s1", "u3", "user", 2, "confidential scratch")
+	e.recordIn(alpha, "s1", "u4", "user", 3, "alpha again")
+	expect(t, e.flush("s1", Options{}), Sent, 2, 2)
+	e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha again"})
+	e.noName("secret")
+	for _, it := range e.hs.retains {
+		if strings.Contains(it.Content, "confidential") {
+			t.Errorf("sent: %s", it.Content)
+		}
+	}
+
+	// started in the excluded repository
+	e.recordIn(secret, "s2", "v1", "user", 0, "confidential repo")
+	e.recordIn(scratch, "s2", "v2", "user", 1, "confidential scratch")
+	e.recordIn(alpha, "s2", "v3", "user", 2, "alpha work")
+	from := len(e.hs.retains)
+	if r := e.flush("s2", Options{}); r.Status != Sent || r.Records != 1 {
+		t.Fatalf("%+v", r)
+	}
+	if it := e.hs.retains[from]; it.DocumentID != "conversation:s2@alpha" || it.Tags[0] != "project:alpha" || strings.Contains(it.Content, "confidential") {
+		t.Errorf("%+v", it)
+	}
+	e.noName("secret")
+}
+
+// An opt-out run last in a flush: the next flush, starting mid-file, still
+// knows the plain directory after it inherits a kept-out project.
+func TestAnOptOutRunLastCarriesToTheNextFlush(t *testing.T) {
+	e := newEnv(t)
+	alpha, secret := e.repo("alpha"), e.repo("secret")
+	scratch := filepath.Join(filepath.Dir(e.cwd), "scratch")
+	_ = os.MkdirAll(scratch, 0o700)
+	e.f.Exclude = []string{secret}
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(secret, "s1", "u2", "user", 1, "confidential repo")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.recordIn(scratch, "s1", "u3", "user", 60, "confidential scratch")
+	if r := e.flush("s1", Options{}); r.Status != OptedOut || len(e.hs.retains) != 1 {
+		t.Errorf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	e.noName("secret")
+}
+
+// A resync with nothing left to send still records the last record's
+// project: a later plain directory keeps it.
+func TestAResyncWithNothingToSendKeepsTheLastProject(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	scratch := filepath.Join(filepath.Dir(e.cwd), "scratch")
+	_ = os.MkdirAll(scratch, 0o700)
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	e.flush("s1", Options{})
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	e.recordIn(scratch, "s1", "u3", "user", 60, "beta scratch")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	e.expectItems(2, [4]string{"conversation:s1@beta", "append", "2", "beta scratch"})
+}
+
+// A fork copies parent records of two projects: it sends only its own
+// turn, to its own document of the project that turn keeps.
+func TestAForkSpanningTwoProjectsSendsOnlyItsOwnTurns(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	scratch := filepath.Join(filepath.Dir(e.cwd), "scratch")
+	_ = os.MkdirAll(scratch, 0o700)
+	e.recordIn(alpha, "parent", "u1", "user", 0, "alpha shared")
+	e.recordIn(beta, "parent", "u2", "user", 1, "beta shared")
+	e.flush("parent", Options{})
+	raw, _ := os.ReadFile(filepath.Join(e.dir, "parent.jsonl"))
+	_ = os.WriteFile(filepath.Join(e.dir, "fork.jsonl"), raw, 0o600)
+	e.recordIn(scratch, "fork", "u9", "user", 30, "the fork's own turn")
+	if r := e.flush("fork", Options{}); r.Status != Sent || r.Records != 1 {
+		t.Fatalf("%+v", r)
+	}
+	e.expectItems(2, [4]string{"conversation:fork@beta", "", "1", "the fork's own turn"})
+	if it := e.hs.retains[2]; strings.Contains(it.Content, "shared") || it.Tags[0] != "project:beta" {
+		t.Errorf("%+v", it)
+	}
+}
+
+// legacySession is what a build from before per-project documents left:
+// alpha's u1 and beta's u2 both in conversation:s1 (segment 2, no project
+// in its metadata), sent from this machine, and its cursor.
+func legacySession(t *testing.T) (e *env, alpha, beta string) {
+	e = newEnv(t)
+	alpha, beta = e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	path := filepath.Join(e.dir, "s1.jsonl")
+	fi, _ := os.Stat(path)
+	fp, _ := Fingerprint(path, fi.Size())
+	e.hs.docs["conversation:s1"] = map[string]string{"last_uuid": "u2", "segment": "2", "session_id": "s1"}
+	_ = e.f.Index.Add("u1", "u2", sessionKey("claude-memory", "s1", "u1"), sessionKey("claude-memory", "s1", "u2"))
+	if err := SaveCursor(e.f.Dirs.CursorsDir(), "s1", Cursor{Transcript: path, Offset: fi.Size(), Fingerprint: fp, LastUUID: "u2", Records: 2,
+		Segment: 2, Document: "conversation:s1", Bank: "claude-memory", SentAt: e.clock}); err != nil {
+		t.Fatal(err)
+	}
+	return e, alpha, beta
+}
+
+// A cursor from an older build, whose conversation:s1 mixes projects: the
+// records it holds are not resent, a new beta record starts beta's own
+// document, and the legacy position survives a later lost cursor (beta's
+// u2 has no document of its own to be found in).
+func TestALegacyMixedDocumentIsNotResent(t *testing.T) {
+	e, _, beta := legacySession(t)
+	e.recordIn(beta, "s1", "u3", "user", 60, "beta three")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.expectItems(0, [4]string{"conversation:s1@beta", "", "1", "beta three"})
+	if c := e.hs.retains[0].Content; strings.Contains(c, "two") || strings.Contains(c, "one") {
+		t.Errorf("resent: %s", c)
+	}
+
+	e, alpha, _ := legacySession(t)
+	e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
+	e.expectItems(0, [4]string{"conversation:s1", "append", "3", "alpha three"})
+	if m := e.hs.retains[0].Metadata; m["legacy_last_uuid"] != "u2" || m["project"] != "alpha" {
+		t.Errorf("metadata %v", m)
+	}
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.recordIn(alpha, "s1", "u4", "user", 120, "alpha four")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 4)
+	e.expectItems(1, [4]string{"conversation:s1", "append", "4", "alpha four"})
+}
+
+// The cursor is saved after each segment: when the second document's send
+// starts, the cursor on disk is already past the first document's records.
+func TestTheCursorIsSavedAfterEachSegment(t *testing.T) {
+	e := newEnv(t)
+	beta := e.repo("beta")
+	e.record("s1", "u1", "user", 0, "billing one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	var seen Cursor
+	e.hs.onRetain = func(it hindsight.RetainItem) {
+		if it.DocumentID == "conversation:s1@beta" {
+			seen, _, _ = LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+		}
+	}
+	e.hs.refuse = map[string]int{"conversation:s1@beta": http.StatusServiceUnavailable}
+	if r := e.flush("s1", Options{}); r.Status != Sent || r.Records != 1 || r.FailedDocument != "conversation:s1@beta" {
+		t.Fatalf("%+v", r)
+	}
+	if seen.LastUUID != "u1" || seen.Segments["billing"] != 1 || seen.Segment != 1 {
+		t.Errorf("cursor when beta's send started: %+v", seen)
+	}
+}
+
+// Replayed explicit saves take their record's project by the session's
+// rule: a save made from a plain directory mid-session gets the session's
+// project, one kept out (after an excluded repository) is not replayed.
+func TestReplayedSavesFollowTheSessionsProjectRule(t *testing.T) {
+	e := newEnv(t)
+	alpha, secret := e.repo("alpha"), e.repo("secret")
+	scratch := filepath.Join(filepath.Dir(e.cwd), "scratch")
+	e.f.Exclude = []string{secret}
+	store := func(id, text string) []transcript.ToolUse {
+		return []transcript.ToolUse{{ID: id, Name: "mcp__plugin_backsight_memory__memory_store", Input: map[string]json.RawMessage{"text": json.RawMessage(strconv.Quote(text))}}}
+	}
+	ts := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	recs := []transcript.Record{
+		{UUID: "u1", CWD: alpha, Timestamp: ts, End: 1},
+		{UUID: "a1", CWD: scratch, Timestamp: ts, End: 2, Tools: store("t1", "We keep the export page at 200.")},
+		{UUID: "u2", CWD: secret, Timestamp: ts, End: 3},
+		{UUID: "a2", CWD: scratch, Timestamp: ts, End: 4, Tools: store("t2", "confidential note")},
+	}
+	notes := e.f.Notes("s1", recs)
+	if len(notes) != 1 || notes[0].Project != "alpha" || !strings.Contains(notes[0].Content, "export page") {
+		t.Errorf("%+v", notes)
 	}
 }

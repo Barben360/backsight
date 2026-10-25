@@ -83,21 +83,15 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	return c, recs
 }
 
-// Notes are the explicit saves of a session that may be replayed: none for
-// a paused session, none from records in opted-out directories.
+// Notes are the explicit saves of a session that may be replayed, recs
+// being the whole transcript: none from records kept out (a pause, an
+// opted-out directory, or a directory that inherits a kept-out project),
+// and a save without a project gets its record's project by the same rule
+// as the session's text (attribute), not its directory's basename.
 func (f *Flusher) Notes(sid string, recs []transcript.Record) []Note {
-	pauses := f.pauses(sid)
-	var kept []transcript.Record
-	for _, r := range recs {
-		if out, _ := pauses(r); !out {
-			kept = append(kept, r)
-		}
-	}
-	recs = kept
-	return NotesFromRecords(f.Bank, sid, recs, func(cwd string) (string, bool) {
-		if out, _ := f.Resolver.OptedOut(cwd, f.Exclude); out {
-			return "", false
-		}
-		return f.Resolver.Project(cwd), true
+	attrs := f.attribute(sid, recs, attr{})
+	return NotesFromRecords(f.Bank, sid, recs, func(r transcript.Record) (string, bool) {
+		a := attrs[r.End]
+		return a.project, !a.out
 	})
 }

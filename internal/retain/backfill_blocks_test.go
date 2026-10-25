@@ -21,7 +21,7 @@ func TestNotesFromRecords(t *testing.T) {
 		{ID: "t3", Name: "Bash", Input: map[string]json.RawMessage{"command": raw("ls")}},
 		{ID: "t4", Name: "mcp__user-memory__memory_store", Input: map[string]json.RawMessage{"kind": raw("idea"), "text": raw("Unknown kind falls back.")}},
 	}}}
-	all := func(string) (string, bool) { return "workspace", true }
+	all := func(transcript.Record) (string, bool) { return "workspace", true }
 	notes := NotesFromRecords("b", "s1", recs, all)
 	if len(notes) != 3 {
 		t.Fatalf("%d notes: %+v", len(notes), notes)
@@ -43,7 +43,7 @@ func TestNotesFromRecords(t *testing.T) {
 	if other := NotesFromRecords("b", "s2", recs, all); other[0].DocumentID == a.DocumentID {
 		t.Error("the session must be part of the id")
 	}
-	if none := NotesFromRecords("b", "s1", recs, func(string) (string, bool) { return "", false }); len(none) != 0 {
+	if none := NotesFromRecords("b", "s1", recs, func(transcript.Record) (string, bool) { return "", false }); len(none) != 0 {
 		t.Errorf("records in an opted-out directory must give no note: %+v", none)
 	}
 }
@@ -111,7 +111,7 @@ func TestNoteProjectPrecedence(t *testing.T) {
 		{ID: "t2", Name: "mcp__hindsight__hindsight_ingest_document", Input: map[string]json.RawMessage{
 			"title": raw("Leçon : x"), "content": raw("y"), "tags": raw([]string{"kind:lesson"})}},
 	}}}
-	notes := NotesFromRecords("b", "s1", recs, func(string) (string, bool) { return "billing", true })
+	notes := NotesFromRecords("b", "s1", recs, func(transcript.Record) (string, bool) { return "billing", true })
 	if len(notes) != 2 || notes[0].Project != "infra" || notes[1].Project != "billing" {
 		t.Errorf("%+v", notes)
 	}
