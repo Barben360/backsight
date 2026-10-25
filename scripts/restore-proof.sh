@@ -13,17 +13,19 @@
 # scratch install writes (the archive's decrypted files included), live in
 # one 0700 directory removed on exit with the scratch stack.
 #
-# Usage: scripts/restore-proof.sh [api port] (default 48888; the UI takes
-# port + 1111). PROJECT names the scratch Compose project (default
+# Usage: scripts/restore-proof.sh [api port] (default 28350 +
+# BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; the UI takes port + 1111). PROJECT names the scratch Compose project (default
 # bs-restore-proof); LIVE is the live install's binary (default
 # ~/.local/share/backsight/bin/current); WORK is the parent of the run's own
 # directory (must allow executables; default ~/.cache/backsight-restore-proof).
 # KEEP=1 leaves the stack and the directory (the copied identity included).
 set -euo pipefail
-port=${1:-48888}
+root=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=scripts/ports.sh
+. "$root/scripts/ports.sh"
+port=$(slot_port 28350 "${1:-}")
 ui_port=$((port + 1111))
 project=${PROJECT:-bs-restore-proof}
-root=$(cd "$(dirname "$0")/.." && pwd)
 real_home=$HOME
 live=${LIVE:-$real_home/.local/share/backsight/bin/current}
 fail() { echo "restore-proof: $*" >&2; exit 1; }

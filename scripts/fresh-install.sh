@@ -7,16 +7,18 @@
 # after a failing one rolled back (M5 block 2). No hand edit: the only inputs are the answers,
 # one `secret set` and the synthetic transcripts.
 #
-# Usage: scripts/fresh-install.sh [api port] (default 38888; the UI takes
-# port + 1111). PROJECT names the Compose project and scheduler entries
+# Usage: scripts/fresh-install.sh [api port] (default 28400 +
+# BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; the UI takes port + 1111). PROJECT names the Compose project and scheduler entries
 # (default bs-fresh) so a machine's own install is left alone; KEEP=1
 # leaves the stack and the work directory; WORK is the parent of the run's
 # own directory (it must allow executables); only the run's is removed.
 set -euo pipefail
-port=${1:-38888}
+root=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=scripts/ports.sh
+. "$root/scripts/ports.sh"
+port=$(slot_port 28400 "${1:-}")
 project=${PROJECT:-bs-fresh}
 [ "$project" != backsight ] || { echo "PROJECT=backsight would be the machine's own install" >&2; exit 2; }
-root=$(cd "$(dirname "$0")/.." && pwd)
 if [ -n "${WORK:-}" ]; then
   mkdir -p "$WORK"
   work=$(mktemp -d "$WORK/run.XXXXXX")

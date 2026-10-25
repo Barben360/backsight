@@ -7,16 +7,19 @@
 # key (nothing written); the "user" then sets it; round 2 must finish setup
 # with verify passing. Undo and cleanup follow, whatever happens.
 #
-# Usage: scripts/agent-install.sh [api port] (default 38888). Needs a
+# Usage: scripts/agent-install.sh [api port] (default 28450 +
+# BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; the UI takes port + 1111). Needs a
 # logged-in ~/.claude (its credentials are copied into the throwaway
 # profile for the run, then shredded). WORK: the parent of the run's own
 # directory (must allow executables; default ~/.cache/backsight-agent-install);
 # only the run's directory is removed. KEEP=1 keeps it.
 set -euo pipefail
-port=${1:-38888}
+root=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=scripts/ports.sh
+. "$root/scripts/ports.sh"
+port=$(slot_port 28450 "${1:-}")
 project=${PROJECT:-bs-fresh}
 [ "$project" != backsight ] || { echo "PROJECT=backsight would be the machine's own install" >&2; exit 2; }
-root=$(cd "$(dirname "$0")/.." && pwd)
 real_home=$HOME
 base=${WORK:-$real_home/.cache/backsight-agent-install}
 mkdir -p "$base"
