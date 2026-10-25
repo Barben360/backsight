@@ -5,13 +5,17 @@ LDFLAGS  := -s -w -X $(PKG)/internal/buildinfo.Version=$(VERSION) -X $(PKG)/inte
 # TEST_KEY (a minisign public key line) makes a test build, which trusts it
 # too: never a release (verify-keys refuses it).
 LDFLAGS  += $(if $(TEST_KEY),-X $(PKG)/internal/signing.TestKey=$(TEST_KEY))
+# TEST_HOOKS=1 adds the testhooks tag: CI's update proof (a migration that
+# fails on demand). Never a release either (verify-keys refuses it).
+TAGS     := $(if $(TEST_HOOKS),-tags testhooks)
 DIST     ?= dist
+OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
 .PHONY: build test lint cross leaks snapshot verify-dist verify-keys
 build:
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/backsight ./cmd/backsight
+	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
 test:
 	CGO_ENABLED=1 go test -race ./...
@@ -49,7 +53,8 @@ verify-dist:
 	@$(MAKE) --no-print-directory verify-keys
 
 # A release binary trusts minisign.pub and minisign.next.pub and nothing
-# else: a test key in a release fails it (decision 0067). BIN is the binary
+# else, and has no test hooks: a test key or the testhooks tag in a
+# release fails it (decision 0067). BIN is the binary
 # (default: this machine's in DIST); TARGET its os_arch, and another
 # machine's binary is skipped: goreleaser's post-build hook passes every
 # target, so a release with a test key stops before anything is published.
@@ -61,7 +66,7 @@ verify-keys:
 	cur=$$(sed -n 's/^untrusted comment: minisign public key //p' minisign.pub); \
 	nxt=$$(sed -n 's/^untrusted comment: minisign public key //p' minisign.next.pub); \
 	want=$$(printf '[{"id":"%s","role":"current"},{"id":"%s","role":"next"}]' "$$cur" "$$nxt"); \
-	"$$b" version --json | jq -e --argjson want "$$want" '.data.signing_keys == $$want and .data.test_key == false' >/dev/null || { \
-		echo "verify-keys: $$b trusts other keys than minisign.pub ($$cur) and minisign.next.pub ($$nxt):"; \
-		"$$b" version --json | jq -c '.data | {signing_keys, test_key}'; exit 1; }; \
+	"$$b" version --json | jq -e --argjson want "$$want" '.data.signing_keys == $$want and .data.test_key == false and .data.test_hooks == false' >/dev/null || { \
+		echo "verify-keys: $$b trusts other keys than minisign.pub ($$cur) and minisign.next.pub ($$nxt), or has test hooks:"; \
+		"$$b" version --json | jq -c '.data | {signing_keys, test_key, test_hooks}'; exit 1; }; \
 	echo "$$b trusts $$cur and $$nxt only"

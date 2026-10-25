@@ -11,10 +11,10 @@ import (
 
 // buildInto builds backsight where goreleaser puts this machine's binary
 // in dist, with extra ldflags.
-func buildInto(t *testing.T, dist, ldflags string) {
+func buildInto(t *testing.T, dist, ldflags string, extra ...string) {
 	t.Helper()
 	out := filepath.Join(dist, "backsight_"+runtime.GOOS+"_"+runtime.GOARCH+"_v1", "backsight")
-	cmd := exec.Command("go", "build", "-o", out, "-ldflags", ldflags, "./cmd/backsight")
+	cmd := exec.Command("go", append(append([]string{"build"}, extra...), "-o", out, "-ldflags", ldflags, "./cmd/backsight")...)
 	cmd.Dir = ".."
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -47,6 +47,15 @@ func TestVerifyKeysRefusesATestBuild(t *testing.T) {
 	out, err := verifyKeys(t, "DIST="+test)
 	if err == nil || !strings.Contains(out, `"role":"test"`) {
 		t.Errorf("a test build passes the release check: %v\n%s", err, out)
+	}
+
+	// A testhooks build (CI's update proof: a migration that fails on
+	// demand) is never a release either.
+	hooks := t.TempDir()
+	buildInto(t, hooks, "-X github.com/Barben360/backsight/internal/buildinfo.Version=9.9.9", "-tags", "testhooks")
+	out, err = verifyKeys(t, "DIST="+hooks)
+	if err == nil || !strings.Contains(out, `"test_hooks":true`) {
+		t.Errorf("a testhooks build passes the release check: %v\n%s", err, out)
 	}
 
 	// goreleaser's post-build hook form: the binary and its target.

@@ -21,6 +21,8 @@ type versionInfo struct {
 	// true in a test build, which a release must never be (decision 0067).
 	SigningKeys []signing.Key `json:"signing_keys"`
 	TestKey     bool          `json:"test_key"`
+	// TestHooks: built with the testhooks tag (CI's update proof).
+	TestHooks bool `json:"test_hooks"`
 }
 
 func newVersionCmd(e *env) *cobra.Command {
@@ -29,13 +31,16 @@ func newVersionCmd(e *env) *cobra.Command {
 		Short: "Print the backsight version",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			v := versionInfo{buildinfo.Version, buildinfo.Commit, buildinfo.Date, runtime.Version(), runtime.GOOS, runtime.GOARCH, signing.Keys(), signing.TestKey != ""}
+			v := versionInfo{buildinfo.Version, buildinfo.Commit, buildinfo.Date, runtime.Version(), runtime.GOOS, runtime.GOARCH, signing.Keys(), signing.TestKey != "", buildinfo.TestHooks}
 			return e.emit("version", v, func() string {
 				s := fmt.Sprintf("backsight %s (%s, %s) %s %s/%s\n", v.Version, v.Commit, v.Date, v.Go, v.OS, v.Arch)
 				for _, k := range v.SigningKeys {
 					if k.Role == "test" {
 						s += "test build: trusts the test signing key " + k.ID + "\n"
 					}
+				}
+				if v.TestHooks {
+					s += "test build: has the CI test hooks\n"
 				}
 				return s
 			})
