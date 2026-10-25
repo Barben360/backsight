@@ -10,7 +10,8 @@ permissions:
 # BACKSIGHT_CI_SLOT (1-3): the Docker jobs take their Compose project from
 # it here and their ports from it in scripts/ports.sh (below the ephemeral
 # range), apart from each other and from the machine's own install
-# (project backsight, ports 18888 and 19999).
+# (project backsight, ports 18888 and 19999). A runner without it fails
+# (scripts/ports.sh, and ${…:?} here) rather than share slot 0.
 jobs:
   test:
     runs-on: [self-hosted, backsight]
@@ -51,6 +52,7 @@ jobs:
           MINISIGN_KEY_FILE: ${{ runner.temp }}/test.key
       - run: make verify-dist PUBKEY="$RUNNER_TEMP/test.pub"
       - name: The Go verifier on goreleaser's output
+        shell: bash # -eo pipefail: the tee below must not hide go test's status
         env:
           BACKSIGHT_TEST_DIST: ${{ github.workspace }}/dist
           BACKSIGHT_TEST_DIST_PUBKEY: ${{ runner.temp }}/test.pub
@@ -78,7 +80,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: SANDBOX_PROJECT="bs-sandbox-${BACKSIGHT_CI_SLOT:-0}" scripts/sandbox.sh
+      - run: SANDBOX_PROJECT="bs-sandbox-${BACKSIGHT_CI_SLOT:?set it in the runner .env}" scripts/sandbox.sh
   fresh-install:
     # M4 block 4: setup from nothing (isolated HOME and Claude Code
     # profile), through verify, a stored memory found again, doctor, a
@@ -96,11 +98,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Claude Code, pinned, in the job's own prefix (not the machine's)
+      - name: Claude Code, pinned, in the job's own prefix and HOME (not the machine's)
         # npm 12 blocks install scripts by default; the postinstall fetches
-        # the native binary.
+        # the native binary. It runs with a HOME of its own: the runner's
+        # is the machine's, with its live Claude Code profile.
         run: |
-          npm install -g --prefix "$RUNNER_TEMP/npm" --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.310
+          mkdir -p "$RUNNER_TEMP/npm-home"
+          HOME="$RUNNER_TEMP/npm-home" npm install -g --prefix "$RUNNER_TEMP/npm" --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.310
           echo "$RUNNER_TEMP/npm/bin" >> "$GITHUB_PATH"
       - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
-      - run: PROJECT="bs-fresh-${BACKSIGHT_CI_SLOT:-0}" WORK="$RUNNER_TEMP" scripts/fresh-install.sh
+      - run: PROJECT="bs-fresh-${BACKSIGHT_CI_SLOT:?set it in the runner .env}" WORK="$RUNNER_TEMP" scripts/fresh-install.sh

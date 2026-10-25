@@ -10,22 +10,49 @@ import (
 )
 
 // slotPort runs scripts/ports.sh's slot_port with BACKSIGHT_CI_SLOT=slot
-// ("" leaves it unset).
+// ("" leaves it unset), off CI.
 func slotPort(t *testing.T, slot string, args ...string) (string, error) {
 	t.Helper()
+	out, _, err := slotPortEnv(t, slot, "", args...)
+	return out, err
+}
+
+// slotPortEnv is slotPort with CI=ci ("" leaves it unset) and stderr.
+func slotPortEnv(t *testing.T, slot, ci string, args ...string) (string, string, error) {
+	t.Helper()
 	cmd := exec.Command("bash", append([]string{"-c", `. ./ports.sh && slot_port "$@"`, "slot_port"}, args...)...)
-	cmd.Env = os.Environ()
-	for i, kv := range cmd.Env {
-		if strings.HasPrefix(kv, "BACKSIGHT_CI_SLOT=") {
-			cmd.Env = append(cmd.Env[:i:i], cmd.Env[i+1:]...)
-			break
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "BACKSIGHT_CI_SLOT=") && !strings.HasPrefix(kv, "CI=") {
+			cmd.Env = append(cmd.Env, kv)
 		}
 	}
 	if slot != "" {
 		cmd.Env = append(cmd.Env, "BACKSIGHT_CI_SLOT="+slot)
 	}
+	if ci != "" {
+		cmd.Env = append(cmd.Env, "CI="+ci)
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	b, err := cmd.Output()
-	return strings.TrimSpace(string(b)), err
+	return strings.TrimSpace(string(b)), stderr.String(), err
+}
+
+// On a CI runner an unset slot is a runner without its .env: slot 0 would
+// share its project and ports with another runner's job (decision 0067
+// block review), so slot_port refuses.
+func TestSlotPortNeedsTheSlotOnCI(t *testing.T) {
+	for _, args := range [][]string{{"28300"}, {"28300", "31000"}} {
+		if out, stderr, err := slotPortEnv(t, "", "true", args...); err == nil || !strings.Contains(stderr, "BACKSIGHT_CI_SLOT is not set") {
+			t.Errorf("%v on CI without a slot: %q, %v, %s", args, out, err, stderr)
+		}
+	}
+	if out, _, err := slotPortEnv(t, "2", "true", "28300"); err != nil || out != "28320" {
+		t.Errorf("slot 2 on CI: %q, %v", out, err)
+	}
+	if out, _, err := slotPortEnv(t, "", "", "28300"); err != nil || out != "28300" {
+		t.Errorf("off CI: %q, %v", out, err)
+	}
 }
 
 // Issue #214: every scratch stack's API and UI ports, for every script that
