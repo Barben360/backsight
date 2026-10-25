@@ -135,19 +135,25 @@ func encodings(v string) []string {
 	return out
 }
 
-// Name replaces every whole-word occurrence of v with placeholder (a
-// machine name, a bank, a remote server host, the OS user name), in its
-// URL-escaped forms too. A value of fewer than 3 characters is replaced
-// only as a whole path segment: anywhere else it would eat ordinary words.
+// minName is the shortest name replaced outside a path segment.
+const minName = 4
+
+// Name replaces v with placeholder (a machine name, a bank, a remote
+// server host, the OS user name), in its URL-escaped forms too, wherever
+// no letter or digit touches it: `-`, `_` and `.` are boundaries, so
+// backsight-annsbox and annsbox-2 lose the name, but annsboxer keeps anns
+// (privacy over readability, decision 0067 block 3). A value of fewer than
+// minName characters is replaced only as a whole path segment: anywhere
+// else it would eat ordinary words.
 func (s *Scrubber) Name(v, placeholder string) {
 	if v == "" {
 		return
 	}
+	before, after := `(^|[^A-Za-z0-9])`, `($|[^A-Za-z0-9])`
+	if len(v) < minName {
+		before, after = `(^|[/\\])`, `($|[/\\])`
+	}
 	for _, f := range encodings(v) {
-		before, after := `(^|[^A-Za-z0-9_-])`, `($|[^A-Za-z0-9_-])`
-		if len(f) < 3 {
-			before, after = `(^|[/\\])`, `($|[/\\])`
-		}
 		s.names = append(s.names, name{regexp.MustCompile(before + regexp.QuoteMeta(f) + after), "${1}" + placeholder + "${2}"})
 	}
 }

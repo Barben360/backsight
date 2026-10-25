@@ -55,12 +55,19 @@ func TestScrubDropsServerAnswersAndSecrets(t *testing.T) {
 	}
 }
 
-func TestScrubNamesWholeWordsOnly(t *testing.T) {
+func TestScrubNamesInsideCompoundWords(t *testing.T) {
 	s := NewScrubber("")
 	s.Name("annsbox", "<host>")
-	s.Name("ab", "<x>") // too short to replace safely
-	got := s.String("annsbox annsbox,annsbox-2 myannsbox annsbox.lan ab")
-	if want := "<host> <host>,annsbox-2 myannsbox <host>.lan ab"; got != want {
+	s.Name("user", "<user>")
+	s.Name("ab", "<x>") // too short to replace outside a path segment
+	got := s.String("annsbox annsbox,annsbox-2 backsight-annsbox annsbox_x annsbox.lan myannsbox annsboxer user-laptop ab")
+	if want := "<host> <host>,<host>-2 backsight-<host> <host>_x <host>.lan myannsbox annsboxer <user>-laptop ab"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// A name is never cut out of a longer word: anns stays in annsboxer.
+	near := NewScrubber("")
+	near.Name("anns", "<host>")
+	if got, want := near.String("annsboxer anns-2 xanns"), "annsboxer <host>-2 xanns"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -242,7 +249,11 @@ func TestScrubNamesInTheirPercentEncodedForms(t *testing.T) {
 func TestScrubShortNamesOnlyAsPathSegments(t *testing.T) {
 	s := NewScrubber("")
 	s.Name("jd", "<user>")
+	s.Name("ann", "<user>")
 	if got, want := s.String(`open /run/media/jd/usb and C:\Users\jd\x: jd is short`), `open /run/media/<user>/usb and C:\Users\<user>\x: jd is short`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, want := s.String("/mnt/ann/x: ann-2 ann.lan ann"), "/mnt/<user>/x: ann-2 ann.lan ann"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }

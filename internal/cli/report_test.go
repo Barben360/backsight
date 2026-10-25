@@ -66,7 +66,7 @@ func plantedMachine(t *testing.T) reportPlant {
 	ts := now.Add(-time.Hour).Format("2006-01-02T15:04:05.000Z")
 	lines := []map[string]any{
 		{"ts": ts, "event": "session_state_error", "project": "ann-secret-project",
-			"error": "open " + home + "/work/annsbox.lan/state.json with token=" + p.secret + ": POST /v1/x: HTTP 422 (bad_request): {\"input\":\"" + p.prompt + "\",\"memory\":\"" + p.memory + "\"}"},
+			"error": "open " + home + "/work/annsbox.lan/state.json with token=" + p.secret + " on worker backsight-annsbox: POST /v1/x: HTTP 422 (bad_request): {\"input\":\"" + p.prompt + "\",\"memory\":\"" + p.memory + "\"}"},
 		{"ts": ts, "event": "prompt", "decision": "recall", "plen": len(p.prompt), "prompt": p.prompt, "text": p.memory,
 			"scopes": map[string]any{"project": map[string]any{"ok": false}}},
 		{"ts": ts, "event": "hook_failure", "hook": "prompt", "kind": "timeout", "ms": 9000},
@@ -153,7 +153,7 @@ func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
 	p := plantedMachine(t)
 	assertScrubbed(t, map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
 		"host": "annsbox", "project": "ann-secret-project"},
-		[]string{"[redacted:", "~/backsight/config/config.toml", "~/work/<host>/state.json", "[server answer omitted]",
+		[]string{"[redacted:", "~/backsight/config/config.toml", "~/work/<host>/state.json", "worker backsight-<host>", "[server answer omitted]",
 			"doctor/server/error", "hook_failure/prompt/timeout", "recall/scope_failed", "session_state_error", "job/tick/partial"})
 }
 
@@ -405,7 +405,7 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 	now := time.Now().UTC()
 	var tel strings.Builder
 	for ev, msg := range map[string]string{
-		"open_failed":   "open /run/media/annuser/usb/notes.json: permission denied",
+		"open_failed":   "open /run/media/annuser/usb/notes.json on annuser-laptop: permission denied",
 		"dial_failed":   "dial " + tomlKey + ": refused",
 		"lookup_failed": "lookup " + url.QueryEscape(phrase) + ": no such host",
 		"stat_failed":   "stat " + envKey + ": gone",
@@ -420,7 +420,7 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 
 	assertScrubbed(t, map[string]string{"user": "annuser", "temp dir": ext, "BACKSIGHT_HOME": bs, "backup dir": vault,
 		"secrets.toml key": tomlKey, "secrets.toml phrase": phrase, ".env key": envKey},
-		[]string{"<config>/config.toml", "no backup in <backups>", "/run/media/<user>/usb/notes.json", "<state>/sessions/a.json and <bin>/backsight",
+		[]string{"<config>/config.toml", "no backup in <backups>", "/run/media/<user>/usb/notes.json on <user>-laptop", "<state>/sessions/a.json and <bin>/backsight",
 			"copy to <backups>/x.tar", "dial [redacted:secret]: refused", "lookup [redacted:secret]: no such host", "stat [redacted:secret]: gone"})
 }
 
