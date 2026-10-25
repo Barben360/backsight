@@ -166,15 +166,17 @@ func parseAnswers(list []string, file string) (map[string]string, error) {
 
 // setupEnv is what setup reads before it changes anything.
 type setupEnv struct {
-	dirs   paths.Dirs
-	home   string
-	cfg    *config.Config // nil: no config.toml yet
-	loc    claudecode.Location
-	saved  *setup.Record
-	refs   int // reference changes a retire would make (§11.5)
-	f      setupFlags
-	e      *env
-	answer map[string]string
+	dirs  paths.Dirs
+	home  string
+	cfg   *config.Config // nil: no config.toml yet
+	loc   claudecode.Location
+	saved *setup.Record
+	refs  int // reference changes a retire would make (§11.5)
+	// ownConfig: the hash of the config.toml setup wrote, unedited since.
+	ownConfig string
+	f         setupFlags
+	e         *env
+	answer    map[string]string
 }
 
 func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
@@ -195,6 +197,14 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	if s.saved, err = setup.Load(d.SetupFile()); err != nil {
 		return res, blocked(err)
 	}
+	// A config.toml setup wrote and nobody edited since is setup's own:
+	// its answers stay open to change (an agent switching provider after
+	// the secrets exit must not need a hand edit).
+	if s.cfg != nil && s.saved != nil && s.saved.ConfigSHA != "" {
+		if sha, err := fsutil.HashFile(d.ConfigFile()); err == nil && sha == s.saved.ConfigSHA {
+			s.cfg, s.ownConfig = nil, sha
+		}
+	}
 	if f.resume && s.saved == nil {
 		return res, &output.Error{Code: output.Usage, Message: "no setup run to resume: run backsight setup"}
 	}
@@ -213,7 +223,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	s.loc = claudecode.Locate(home, getenv)
 	s.refs = referenceCount(ctx, s.loc)
 
-	interactive := !e.json && !f.nonInteractive && !f.plan && !f.questions && stdinIsTerminal()
+	interactive := !e.json && !f.nonInteractive && !f.plan && !f.questions && stdinIsTerminal() && stdoutIsTerminal()
 	qs, extra, err := s.resolve(interactive)
 	if err != nil {
 		return res, err
@@ -242,8 +252,18 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		return res, preflightError(class, failed)
 	}
 	if len(missing) > 0 {
-		return res, &output.Error{Code: output.NeedsUser, Questions: qs, Resume: "backsight setup --answer id=value …",
+		e := &output.Error{Code: output.NeedsUser, Questions: qs, Resume: "backsight setup --answer id=value …",
 			Message: "setup needs answers to " + strings.Join(missing, ", ") + ": list the questions with backsight setup --questions --json, then rerun with --answer id=value"}
+		if !slices.Contains(missing, "provider") {
+			if names, _, _ := s.missingSecrets(res.Answers); len(names) > 0 {
+				ns := needSecrets(names, "backsight setup --answer id=value …")
+				var se *output.Error
+				if errors.As(ns, &se) {
+					e.Secrets, e.Actions = se.Secrets, se.Actions
+				}
+			}
+		}
+		return res, e
 	}
 	if interactive && res.Answers["consent"] == "" {
 		fmt.Fprint(e.stdout, setupPlanText(s.planSteps(res.Answers)))
@@ -273,9 +293,15 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 // resolve builds the questions; at a terminal it asks each open one in
 // turn (an answer can change the next questions: provider → model).
 func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]string, error) {
-	var saved map[string]string
-	if s.f.resume && s.saved != nil {
-		saved = s.saved.Answers
+	// Earlier answers are the defaults of any rerun; the go itself is
+	// reused only by a --resume that changes nothing.
+	saved := map[string]string{}
+	if s.saved != nil {
+		for k, v := range s.saved.Answers {
+			if k != "consent" || (s.f.resume && len(s.answer) == 0) {
+				saved[k] = v
+			}
+		}
 	}
 	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, ReferencePieces: s.refs}
 	for {
@@ -342,6 +368,12 @@ func ask(e *env, q setup.Question) (string, error) {
 	line, err := readLine()
 	if err != nil {
 		return "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	for line == "" && q.Default == "" && q.ID != "base_url" { // no default: an answer is needed
+		fmt.Fprint(e.stdout, prompt+": ")
+		if line, err = readLine(); err != nil {
+			return "", &output.Error{Code: output.Blocked, Message: err.Error()}
+		}
 	}
 	switch n, convErr := strconv.Atoi(line); {
 	case line == "":
@@ -445,7 +477,10 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		return true
 	}
 	if s.cfg != nil {
-		p.OwnServer = serverAnswers(ctx, *s.cfg)
+		// Ours only when our compose project runs a hindsight container:
+		// health alone would take the reference server on the same port
+		// for ours, and miss our own while it starts or fails.
+		p.OwnServer = composeRuns(ctx, *s.cfg)
 		_, err := os.Stat(filepath.Join(s.cfg.Server.ComposeDir, "compose.yaml"))
 		p.ServerInstalled = err == nil
 	}
@@ -479,6 +514,21 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		p.Transcript = fmt.Sprintf("%d transcripts, %.1f MB, oldest %s", t.Count, float64(t.Bytes)/(1<<20), t.Oldest.UTC().Format("2006-01-02"))
 	}
 	return p
+}
+
+// composeRuns reports whether backsight's compose project has a hindsight
+// container up (running, starting or restarting).
+func composeRuns(ctx context.Context, cfg config.Config) bool {
+	list, err := composeFor(cfg).PS(ctx)
+	if err != nil {
+		return false
+	}
+	for _, c := range list {
+		if c.Service == "hindsight" && (c.State == "running" || c.State == "restarting" || c.State == "created") {
+			return true
+		}
+	}
+	return false
 }
 
 // serverAnswers reports whether cfg's server answers its health check;
@@ -538,43 +588,12 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		serverETA = 300 // the first pull downloads the image
 	}
 	return []setupStep{
-		{"config", 1, func(_ context.Context, r *setup.Record) (setup.Step, error) {
-			if s.cfg != nil {
-				return setup.Step{Name: "config", Status: "skipped", Detail: "adopted " + s.dirs.ConfigFile()}, nil
-			}
-			if _, err := os.Stat(s.dirs.ConfigFile()); err == nil { // written by an earlier, interrupted run
-				return setup.Step{Name: "config", Status: "skipped", Detail: "keep " + s.dirs.ConfigFile()}, nil
-			}
-			if err := os.MkdirAll(s.dirs.Config, 0o700); err != nil {
-				return setup.Step{}, blocked(err)
-			}
-			if err := fsutil.ReplaceIfUnchanged(s.dirs.ConfigFile(), setupConfig(answers), 0o600, fsutil.Absent); err != nil {
-				return setup.Step{}, blocked(err)
-			}
-			if _, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home); err != nil {
-				_ = os.Remove(s.dirs.ConfigFile())
-				return setup.Step{}, &output.Error{Code: output.Usage, Message: err.Error()}
-			}
-			r.Undo.CreatedConfig = true
-			return setup.Step{Name: "config", Status: "done", Detail: "written to " + s.dirs.ConfigFile()}, nil
-		}},
+		// Secrets first: nothing is written while a key is missing, so the
+		// answers stay free to change.
 		{"secrets", 1, func(context.Context, *setup.Record) (setup.Step, error) {
-			cfg, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home)
+			missing, cfg, err := s.missingSecrets(answers)
 			if err != nil {
-				return setup.Step{}, &output.Error{Code: output.Usage, Message: err.Error()}
-			}
-			sec, err := config.LoadSecrets(s.dirs.SecretsFile())
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return setup.Step{}, blocked(err)
-			}
-			have := sec.Names()
-			var missing []string
-			for _, n := range []string{"llm_api_key", "api_key"} {
-				// server keys are generated by the server step; a remote
-				// client needs the server's API key from its owner
-				if need := config.RequiredSecrets(cfg)[n] && (n == "llm_api_key" || cfg.Server.Mode == "remote"); need && !have[n] {
-					missing = append(missing, n)
-				}
+				return setup.Step{}, err
 			}
 			if len(missing) == 0 {
 				return setup.Step{Name: "secrets", Status: "skipped", Detail: "present"}, nil
@@ -600,6 +619,29 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 				}
 			}
 			return setup.Step{Name: "secrets", Status: "done", Detail: "saved " + strings.Join(missing, ", ")}, nil
+		}},
+		{"config", 1, func(_ context.Context, r *setup.Record) (setup.Step, error) {
+			if s.cfg != nil {
+				return setup.Step{Name: "config", Status: "skipped", Detail: "adopted " + s.dirs.ConfigFile()}, nil
+			}
+			if err := os.MkdirAll(s.dirs.Config, 0o700); err != nil {
+				return setup.Step{}, blocked(err)
+			}
+			want := fsutil.Absent
+			if s.ownConfig != "" { // setup's own, unedited: rewritten from the answers
+				want = s.ownConfig
+			}
+			raw := setupConfig(answers)
+			if err := fsutil.ReplaceIfUnchanged(s.dirs.ConfigFile(), raw, 0o600, want); err != nil {
+				return setup.Step{}, blocked(fmt.Errorf("%s changed while setup wrote it: %w", s.dirs.ConfigFile(), err))
+			}
+			if _, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home); err != nil {
+				_ = os.Remove(s.dirs.ConfigFile())
+				return setup.Step{}, &output.Error{Code: output.Usage, Message: err.Error()}
+			}
+			r.Undo.CreatedConfig = true
+			r.ConfigSHA, _ = fsutil.HashFile(s.dirs.ConfigFile())
+			return setup.Step{Name: "config", Status: "done", Detail: "written to " + s.dirs.ConfigFile()}, nil
 		}},
 		{"server", serverETA, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			cfg, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home)
@@ -735,6 +777,31 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 	}
 }
 
+// missingSecrets lists the keys the configuration these answers give
+// needs and secrets.toml lacks: the LLM key of a local server, the API key
+// of a remote one (the server keys are generated by server install).
+func (s *setupEnv) missingSecrets(answers map[string]string) ([]string, config.Config, error) {
+	var cfg config.Config
+	var err error
+	if s.cfg != nil {
+		cfg = *s.cfg
+	} else if cfg, err = config.Parse(setupConfig(answers), s.dirs.ConfigFile(), s.dirs, s.home); err != nil {
+		return nil, cfg, &output.Error{Code: output.Usage, Message: err.Error()}
+	}
+	sec, err := config.LoadSecrets(s.dirs.SecretsFile())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, cfg, blocked(err)
+	}
+	have := sec.Names()
+	var missing []string
+	for _, n := range []string{"llm_api_key", "api_key"} {
+		if need := config.RequiredSecrets(cfg)[n] && (n == "llm_api_key" || cfg.Server.Mode == "remote"); need && !have[n] {
+			missing = append(missing, n)
+		}
+	}
+	return missing, cfg, nil
+}
+
 func appendNew(list []string, items ...string) []string {
 	for _, it := range items {
 		if !slices.Contains(list, it) {
@@ -799,6 +866,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	}
 	if s.saved != nil {
 		rec.Undo = s.saved.Undo // undo reverses every setup since the last undo
+		rec.ConfigSHA = s.saved.ConfigSHA
 		if s.f.resume && sameAnswers(s.saved.Answers, answers) {
 			rec.Run, rec.StartedAt, rec.Steps = s.saved.Run, s.saved.StartedAt, s.saved.Steps
 		}

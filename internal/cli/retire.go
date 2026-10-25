@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -91,7 +90,7 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 // profile's transcripts, so only a setup of ~/.claude may stop it.
 func retroTimerOwned(ctx context.Context, loc claudecode.Location) bool {
 	home, err := os.UserHomeDir()
-	if err != nil || runtime.GOOS != "linux" || filepath.Clean(loc.Dir) != filepath.Join(home, ".claude") {
+	if err != nil || schedulerGOOS != "linux" || filepath.Clean(loc.Dir) != filepath.Join(home, ".claude") {
 		return false
 	}
 	return retroTimerEnabled(ctx)

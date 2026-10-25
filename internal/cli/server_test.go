@@ -193,6 +193,8 @@ var (
 	mentalGetDelay     time.Duration     // a slow page read
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
+	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
+	retainBody         string            // body of a refused retain
 	memories           map[string]string
 	projectEntities    map[string]string
 	retainedTags       []string
@@ -228,6 +230,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	mentalModels, mentalCalls, mentalGetDelay = map[string]string{}, nil, 0
 	mentalCreateStatus.Store(0)
 	docDeleteFails.Store(false)
+	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -235,6 +238,10 @@ func fakeHindsight(t *testing.T) (port int) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/v1/default/banks/"); ok {
+			bank, sub, _ := strings.Cut(rest, "/")
+			bankCalls = append(bankCalls, r.Method+" "+bank+" /"+sub)
+		}
 		switch {
 		case r.URL.Path == "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","database":"connected"}`))
@@ -397,7 +404,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if st := retainStatus.Load(); st != 0 {
 				w.WriteHeader(int(st))
-				_, _ = w.Write([]byte(`{"detail":"refused"}`))
+				_, _ = w.Write([]byte(retainBody))
 				return
 			}
 			if failRetains.Load() > 0 && retained.Load() >= failRetains.Load() {

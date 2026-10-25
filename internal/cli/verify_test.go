@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -84,19 +85,46 @@ func TestVerifyRunsEveryHookTheMCPServerAndARoundTrip(t *testing.T) {
 			t.Errorf("hook %s: %+v", h.Arg, c)
 		}
 	}
-	if checks["mcp"].Status != "ok" || !strings.Contains(checks["mcp"].Summary, "3 tools") {
+	if checks["mcp"].Status != "ok" || !strings.Contains(checks["mcp"].Summary, "and 3 tools") {
 		t.Errorf("mcp: %+v", checks["mcp"])
 	}
 	if checks["round_trip"].Status != "ok" {
 		t.Errorf("round trip: %+v", checks["round_trip"])
 	}
-	if deleted := scratchBankDeleted(); deleted == "" {
-		t.Errorf("the scratch bank was not deleted: %v", curation)
-	}
-	for _, tags := range retainedTags {
-		if tags != "source:verify" {
-			t.Errorf("verify retained into a real scope: %q", tags)
+	// Every bank call of the round trip goes to one scratch bank, created
+	// then deleted; the configured bank is never written.
+	var scratch string
+	for _, c := range bankCalls {
+		f := strings.Fields(c)
+		if f[0] == "PUT" && f[2] == "/" {
+			scratch = f[1]
 		}
+	}
+	if !strings.HasPrefix(scratch, "backsight-verify-") || retained.Load() != 1 {
+		t.Fatalf("no scratch bank created, or %d retains: %v", retained.Load(), bankCalls)
+	}
+	var seen []string
+	for _, c := range bankCalls {
+		f := strings.Fields(c)
+		switch {
+		case f[1] == scratch:
+			seen = append(seen, f[0]+" "+f[2])
+		case f[0] != "GET": // the hooks may read the real bank, never write it
+			t.Errorf("verify wrote into another bank: %s", c)
+		}
+	}
+	if want := "PUT /,POST /memories"; !strings.HasPrefix(strings.Join(seen, ","), want) || seen[len(seen)-1] != "DELETE /" {
+		t.Errorf("round trip calls %v", seen)
+	}
+	if retainedTags[0] != "source:verify" {
+		t.Errorf("verify retained with tags %q", retainedTags[0])
+	}
+	// Hooks and the MCP server ran against a scratch state.
+	if st, _ := stateLoad(home); st.FirstSessionNoticeShown {
+		t.Error("verify used up the first-session notice")
+	}
+	if ev, _ := filepath.Glob(filepath.Join(pathsOf(home).TelemetryDir(), "*.jsonl")); len(ev) > 0 {
+		t.Errorf("verify wrote telemetry into the real state: %v", ev)
 	}
 	if _, err := os.Stat(filepath.Join(pathsOf(home).SessionsDir(), "by-pid", strconv.Itoa(os.Getpid())+".json")); err == nil {
 		t.Error("the by-pid record of the synthetic session was left behind")
@@ -181,5 +209,30 @@ func TestHookFailedReadsTheSupervisorsEvent(t *testing.T) {
 	}
 	if hookFailed(d, "backsight-verify-other", "stop") || hookFailed(d, "backsight-verify-abc", "session-end") {
 		t.Error("another run's or another hook's failure was counted")
+	}
+}
+
+func TestVerifyCatchesAHookFailingBehindTheSupervisor(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	asShim(t)
+	verifyEnv = append(verifyEnv, hook.ChaosEnv+"=panic")
+	code, out, _ := run(t, "verify", "--no-round-trip", "--json")
+	c := parseVerify(t, out)["hook stop"]
+	if code != output.Blocked || c.Status != "fail" || !strings.Contains(c.Summary, "behind the supervisor") {
+		t.Errorf("exit %d %+v", code, c)
+	}
+}
+
+func TestVerifyRedactsProviderErrors(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	asShim(t)
+	fastVerify(t)
+	retainStatus.Store(500)
+	retainBody = `{"detail":"provider said: bad key fakellmkey"}`
+	code, out, _ := run(t, "verify", "--json")
+	if c := parseVerify(t, out)["round_trip"]; code != output.Blocked || c.Status != "fail" || strings.Contains(out, "fakellmkey") {
+		t.Errorf("exit %d %+v\n%s", code, c, out)
 	}
 }

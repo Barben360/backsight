@@ -86,3 +86,15 @@ func TestStateLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestStateDirOverrideMovesOnlyTheState(t *testing.T) {
+	env := map[string]string{"BACKSIGHT_HOME": "/b", "BACKSIGHT_STATE_DIR": "/scratch/state"}
+	d, err := Resolve("linux", "/home/u", func(k string) string { return env[k] })
+	if err != nil || d.State != "/scratch/state" || d.Config != "/b/config" || d.Data != "/b/data" {
+		t.Errorf("%+v %v", d, err)
+	}
+	env["BACKSIGHT_STATE_DIR"] = "relative"
+	if d, _ := Resolve("linux", "/home/u", func(k string) string { return env[k] }); d.State != "/b/state" {
+		t.Errorf("a relative override must be ignored: %+v", d)
+	}
+}

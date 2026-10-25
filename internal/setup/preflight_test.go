@@ -110,8 +110,10 @@ func TestRemoteServerSkipsTheDockerChecks(t *testing.T) {
 	p.Remote = true
 	p.Docker = func(context.Context) (string, error) { t.Fatal("docker probed for a remote server"); return "", nil }
 	cs := Preflight(context.Background(), p)
-	if _, ok := byID(cs)["api_port"]; ok {
-		t.Error("ports checked for a remote server")
+	for _, id := range []string{"api_port", "ui_port", "compose", "disk"} {
+		if _, ok := byID(cs)[id]; ok {
+			t.Errorf("%s checked for a remote server", id)
+		}
 	}
 	if byID(cs)["docker"].Status != Info {
 		t.Errorf("%+v", byID(cs)["docker"])
@@ -135,5 +137,14 @@ func TestRootlessAndGPUAreReported(t *testing.T) {
 	cs := byID(Preflight(context.Background(), p))
 	if !strings.Contains(cs["docker"].Summary, "rootless") || !strings.Contains(cs["gpu"].Summary, "AMD Radeon") {
 		t.Errorf("%+v %+v", cs["docker"], cs["gpu"])
+	}
+}
+
+func TestNeedsUserWinsWhateverTheOrder(t *testing.T) {
+	p := healthy()
+	p.Docker = func(context.Context) (string, error) { return "", fmt.Errorf("x: %w", exec.ErrNotFound) } // needs_user, first
+	p.FreeBytes = func() (uint64, error) { return 1 << 30, nil }                                          // blocked, later
+	if class, failed := Verdict(Preflight(context.Background(), p)); class != "needs_user" || len(failed) != 2 {
+		t.Errorf("class %q, %d failed", class, len(failed))
 	}
 }

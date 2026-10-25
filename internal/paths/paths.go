@@ -51,6 +51,16 @@ func Default() (Dirs, error) {
 // Resolve computes the directories for goos. BACKSIGHT_HOME, when set,
 // puts everything under one absolute directory (tests, portable installs).
 func Resolve(goos, home string, getenv func(string) string) (Dirs, error) {
+	d, err := resolve(goos, home, getenv)
+	// BACKSIGHT_STATE_DIR moves the runtime state alone: verify runs the
+	// hooks and the MCP server against a scratch state (decision 0064).
+	if s := getenv("BACKSIGHT_STATE_DIR"); err == nil && filepath.IsAbs(s) {
+		d.State = s
+	}
+	return d, err
+}
+
+func resolve(goos, home string, getenv func(string) string) (Dirs, error) {
 	if h := getenv("BACKSIGHT_HOME"); h != "" {
 		if !filepath.IsAbs(h) {
 			return Dirs{}, fmt.Errorf("BACKSIGHT_HOME must be absolute, got %q", h)

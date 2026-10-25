@@ -7,6 +7,7 @@ package setup
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -120,6 +121,9 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	fromConfig := configAnswers(in.Config)
 	pick := func(q *Question) error {
 		ans, given := in.Answers[q.ID]
+		if given && ans == "" && q.ID != "base_url" { // empty is no answer (only a base URL may be empty)
+			given = false
+		}
 		if c, ok := fromConfig[q.ID]; ok {
 			if given && ans != c {
 				return &UsageError{fmt.Sprintf("config.toml already sets %s to %q (answer %q): edit %s in config.toml, or drop the answer", q.ID, c, ans, configKey[q.ID])}
@@ -156,6 +160,14 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		return nil, nil, err
 	}
 	provider := qs[0].Value
+	if saved := in.Saved["provider"]; saved != "" && saved != orDefault(provider, "deepseek") {
+		// The provider changed: the earlier model, URL and acknowledgement
+		// belonged to the old one.
+		in.Saved = maps.Clone(in.Saved)
+		for _, k := range []string{"model", "base_url", "ack_subscription"} {
+			delete(in.Saved, k)
+		}
+	}
 	preset, listed := PresetFor(provider)
 	provider = orDefault(provider, "deepseek")
 	if qs[0].Value == "" {
@@ -186,7 +198,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 	if provider == "claude-code" {
-		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Accept?",
+		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes (decision 0043). Accept?",
 			Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}); err != nil {
 			return nil, nil, err
 		}

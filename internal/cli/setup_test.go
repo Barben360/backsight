@@ -203,12 +203,8 @@ func TestSetupStopsAtTheMissingKeyThenResumes(t *testing.T) {
 	if code != output.NeedsUser || env.Error == nil || len(env.Error.Secrets) != 1 || env.Error.Secrets[0] != "llm_api_key" || env.Error.Resume != setupResume {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	raw, err := os.ReadFile(pathsOf(home).ConfigFile())
-	if err != nil || !strings.Contains(string(raw), `provider = "deepseek"`) || !strings.Contains(string(raw), "enabled = false") {
-		t.Fatalf("config not written from the answers: %v\n%s", err, raw)
-	}
-	if len(f.calls) > 0 {
-		t.Fatalf("steps ran without the key: %v", f.commands())
+	if _, err := os.Stat(pathsOf(home).ConfigFile()); err == nil || len(f.calls) > 0 {
+		t.Fatalf("setup wrote config or ran steps without the key: %v", f.commands())
 	}
 
 	withLLMKey(t, home)
@@ -238,6 +234,9 @@ func TestSetupStopsAtTheMissingKeyThenResumes(t *testing.T) {
 	}
 	if rec != nil && rec.Answers["backups"] != "off" {
 		t.Errorf("resume lost the saved answers: %v", rec.Answers)
+	}
+	if raw, _ := os.ReadFile(pathsOf(home).ConfigFile()); !strings.Contains(string(raw), `provider = "deepseek"`) || !strings.Contains(string(raw), "enabled = false") {
+		t.Errorf("config not written from the saved answers:\n%s", raw)
 	}
 	for _, s := range []string{`"event":"progress"`, `"step":"server"`} {
 		if !strings.Contains(errOut, s) {
@@ -302,7 +301,13 @@ func TestSetupAdoptsAnExistingInstall(t *testing.T) {
 	}
 	code, out, _ := run(t, "setup", "--answer", "consent=yes", "--non-interactive", "--json")
 	env := parseSetup(t, out)
-	if code != output.OK || env.Data.Steps[0].Status != "skipped" || !strings.Contains(env.Data.Steps[0].Detail, "adopted") {
+	var cfgStep setup.Step
+	for _, st := range env.Data.Steps {
+		if st.Name == "config" {
+			cfgStep = st
+		}
+	}
+	if code != output.OK || cfgStep.Status != "skipped" || !strings.Contains(cfgStep.Detail, "adopted") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
@@ -336,13 +341,29 @@ func TestSetupPassesTheClaudeProfile(t *testing.T) {
 	home, f := setupMachine(t)
 	withLLMKey(t, home)
 	prof := filepath.Join(home, "scratch-profile")
-	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--config-dir", prof, "--non-interactive", "--json"); code != output.OK {
+	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	_ = os.MkdirAll(filepath.Join(prof, "projects", "-p"), 0o700)
+	_ = os.WriteFile(filepath.Join(prof, "projects", "-p", "s2.jsonl"), []byte(`{"type":"user","uuid":"u","sessionId":"s2","cwd":"/p","timestamp":"2026-09-20T09:00:00Z","message":{"role":"user","content":"We pin Go 1.26 here."}}`+"\n"), 0o600)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "backfill=yes", "--config-dir", prof, "--non-interactive", "--json"); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	for _, c := range f.commands()[1:3] {
-		if !strings.HasSuffix(c, "--config-dir "+prof) {
-			t.Errorf("%q lacks the profile", c)
+	for _, c := range f.commands() {
+		switch {
+		case strings.HasPrefix(c, "client ") || strings.HasPrefix(c, "verify"):
+			if !strings.HasSuffix(c, "--config-dir "+prof) {
+				t.Errorf("%q lacks the profile", c)
+			}
+		case strings.HasPrefix(c, "retain backfill"):
+			if !strings.Contains(c, "--projects-dir "+filepath.Join(prof, "projects")) {
+				t.Errorf("%q reads another profile's transcripts", c)
+			}
 		}
+	}
+	if !strings.Contains(strings.Join(f.commands(), ","), "verify --config-dir") {
+		t.Errorf("verify not run for the profile: %v", f.commands())
+	}
+	if rec, _ := setup.Load(pathsOf(home).SetupFile()); rec == nil || rec.Profile != prof {
+		t.Errorf("record profile %v", rec)
 	}
 }
 
@@ -369,6 +390,9 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 	// backups: 2 (off), backfill: no, then the go.
 	withStdin(t, "3\n\n\nkeep\n2\nno\ny\n")
 	stdinIsTerminal = func() bool { return true }
+	oldOut := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdoutIsTerminal = oldOut })
 	code, out, errOut := run(t, "setup")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
@@ -391,6 +415,9 @@ func TestSetupAtATerminalDeclines(t *testing.T) {
 	home, f := setupMachine(t)
 	withStdin(t, "1\n\n\n\nn\n")
 	stdinIsTerminal = func() bool { return true }
+	oldOut := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdoutIsTerminal = oldOut })
 	if code, out, _ := run(t, "setup"); code != output.OK || !strings.Contains(out, "nothing changed") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -757,5 +784,116 @@ func TestClientRetireTellsHowToRestartTheTimer(t *testing.T) {
 	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
 	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "systemctl --user enable --now memory-retro.timer") {
 		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestSetupKeepsItsOwnConfigOpenToNewAnswers(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	f.fail["server install"] = &output.Error{Code: output.Blocked, Message: "pull failed"}
+	if code, _, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.Partial {
+		t.Fatalf("exit %d", code)
+	}
+	delete(f.fail, "server install")
+	// Another provider, no hand edit: the config is setup's own.
+	if code, out, errOut := run(t, "setup", "--answer", "provider=openai", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-5.4-mini"`) {
+		t.Fatalf("config not rewritten:\n%s", raw)
+	}
+	// Once edited by hand it is the user's: adopted, contradictions refused.
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), append(raw, []byte("\n# mine\n")...), 0o600)
+	if code, _, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.Usage || !strings.Contains(errOut, "llm.provider") {
+		t.Errorf("an edited config must be adopted: exit %d %s", code, errOut)
+	}
+}
+
+func TestSetupResumeWithNewAnswersAsksTheGoAgain(t *testing.T) {
+	home, f := setupMachine(t)
+	f.fail["client install"] = &output.Error{Code: output.Blocked, Message: "x"}
+	withLLMKey(t, home)
+	if code, _, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.Partial {
+		t.Fatalf("exit %d", code)
+	}
+	delete(f.fail, "client install")
+	code, out, _ := run(t, "setup", "--resume", "--answer", "backups=off", "--non-interactive", "--json")
+	if env := parseSetup(t, out); code != output.NeedsUser || !strings.Contains(env.Error.Message, "consent") {
+		t.Errorf("a changed plan must not run on the old go: exit %d\n%s", code, out)
+	}
+	if code, _, _ := run(t, "setup", "--resume", "--non-interactive"); code != output.OK {
+		t.Errorf("a plain resume keeps the go: exit %d", code)
+	}
+}
+
+func TestSetupMissingAnswersAlsoNameMissingSecrets(t *testing.T) {
+	setupMachine(t)
+	code, out, _ := run(t, "setup", "--answer", "provider=anthropic", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.NeedsUser || len(env.Error.Secrets) != 1 || env.Error.Secrets[0] != "llm_api_key" || len(env.Error.Questions.([]any)) == 0 {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestSetupResumeWithoutARunIsAUsageError(t *testing.T) {
+	setupMachine(t)
+	if code, _, errOut := run(t, "setup", "--resume", "--non-interactive"); code != output.Usage || !strings.Contains(errOut, "no setup run") {
+		t.Errorf("exit %d %s", code, errOut)
+	}
+}
+
+func TestSetupStepFailureBeforeAnyChangeIsBlocked(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n"), 0o600) // adopted: nothing written
+	f.fail["server install"] = &output.Error{Code: output.Blocked, Message: "docker gone"}
+	if code, out, _ := run(t, "setup", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.Blocked || !strings.Contains(out, "server: docker gone") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestSetupSubscriptionLane(t *testing.T) {
+	home, f := setupMachine(t)
+	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	base := []string{"setup", "--answer", "provider=claude-code", "--answer", "consent=yes", "--non-interactive", "--json"}
+	code, out, _ := run(t, base...)
+	if env := parseSetup(t, out); code != output.NeedsUser || !strings.Contains(env.Error.Message, "ack_subscription") {
+		t.Fatalf("the subscription lane needs its acknowledgement: exit %d\n%s", code, out)
+	}
+	code, out, _ = run(t, append(base, "--answer", "ack_subscription=")...)
+	if env := parseSetup(t, out); code != output.NeedsUser || !strings.Contains(env.Error.Message, "ack_subscription") {
+		t.Fatalf("an empty acknowledgement is no acknowledgement: exit %d\n%s", code, out)
+	}
+	code, out, _ = run(t, append(base, "--answer", "ack_subscription=yes")...)
+	env := parseSetup(t, out)
+	if code != output.NeedsUser || len(env.Error.Actions) < 2 || env.Error.Actions[0].Cmd != "claude setup-token" {
+		t.Fatalf("the token comes from claude setup-token: exit %d\n%s", code, out)
+	}
+	withLLMKey(t, home)
+	if code, out, _ := run(t, append(base, "--answer", "ack_subscription=yes", "--answer", "backfill=yes")...); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	last := f.commands()[len(f.commands())-1]
+	if !strings.HasPrefix(last, "retain backfill --queue") || !strings.HasSuffix(last, "--allow-subscription") {
+		t.Errorf("an explicit backfill=yes on the subscription lane must allow it: %q", last)
+	}
+}
+
+func TestSetupAsksAgainAfterAnInvalidAnswer(t *testing.T) {
+	home, _ := setupMachine(t)
+	withLLMKey(t, home)
+	// provider 1, model Enter, retention Enter, backups "maybe" then 2, go.
+	withStdin(t, "1\n\n\nmaybe\n2\ny\n")
+	stdinIsTerminal = func() bool { return true }
+	oldOut := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdoutIsTerminal = oldOut })
+	code, out, errOut := run(t, "setup")
+	if code != output.OK || !strings.Contains(out, "backups=maybe is not one of") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	if raw, _ := os.ReadFile(pathsOf(home).ConfigFile()); !strings.Contains(string(raw), "enabled = false") {
+		t.Errorf("the second answer was not taken:\n%s", raw)
 	}
 }

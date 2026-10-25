@@ -113,7 +113,7 @@ func TestProviderShapesTheFollowUpQuestions(t *testing.T) {
 	}
 }
 
-func TestUnlistedProviderNeedsAModel(t *testing.T) {
+func TestUnlistedProviderNeedsAModel(t *testing.T) { // see also TestNonInteractiveAnthropicNeedsNoBaseURL
 	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "groq"}})
 	if err != nil {
 		t.Fatal(err)
@@ -228,5 +228,52 @@ func TestQuestionJSONCarriesAsked(t *testing.T) {
 	b, _ := json.Marshal(Question{ID: "x", Value: "v", Source: "answer"})
 	if !strings.Contains(string(b), `"asked":false`) || !strings.Contains(string(b), `"id":"x"`) {
 		t.Errorf("%s", b)
+	}
+}
+
+func TestSavedModelFollowsOnlyItsProvider(t *testing.T) {
+	saved := map[string]string{"provider": "deepseek", "model": "deepseek-v4-flash", "backups": "off"}
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "openai"}, Saved: saved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	Defaults(qs)
+	if m := find(t, qs, "model"); m.Value != "gpt-5.4-mini" {
+		t.Errorf("model %q (%s): the old provider's model leaked", m.Value, m.Source)
+	}
+	if b := find(t, qs, "backups"); b.Value != "off" || b.Source != "saved" {
+		t.Errorf("unrelated saved answers must stay: %+v", b)
+	}
+	qs, _, _ = Resolve(Inputs{Saved: saved})
+	if m := find(t, qs, "model"); m.Value != "deepseek-v4-flash" || m.Source != "saved" {
+		t.Errorf("same provider: saved model expected, got %+v", m)
+	}
+}
+
+func TestEmptyAnswersAreNoAnswers(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "claude-code", "ack_subscription": "", "consent": "yes"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing := Defaults(qs); strings.Join(missing, ",") != "ack_subscription" {
+		t.Errorf("missing %v, want the acknowledgement", missing)
+	}
+	qs, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "openai", "base_url": "", "consent": "yes"}})
+	if missing := Defaults(qs); len(missing) != 0 {
+		t.Errorf("an empty base URL is the provider's own: missing %v", missing)
+	}
+}
+
+func TestNonInteractiveAnthropicNeedsNoBaseURL(t *testing.T) {
+	qs, _, _ := Resolve(Inputs{Answers: map[string]string{"provider": "anthropic"}})
+	if missing := Defaults(qs); strings.Join(missing, ",") != "consent" {
+		t.Errorf("missing %v, want only consent", missing)
+	}
+	if b := find(t, qs, "base_url"); b.Value != "" || b.Source != "default" {
+		t.Errorf("base_url %+v", b)
+	}
+	qs, _, _ = Resolve(Inputs{Answers: map[string]string{"provider": "groq"}})
+	if missing := Defaults(qs); strings.Join(missing, ",") != "model,consent" {
+		t.Errorf("groq: missing %v, want model,consent", missing)
 	}
 }

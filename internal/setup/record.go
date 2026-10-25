@@ -22,7 +22,10 @@ type Record struct {
 	Answers       map[string]string `json:"answers"`
 	Steps         []Step            `json:"steps"`
 	Undo          Undo              `json:"undo"`
-	Finished      bool              `json:"finished"`
+	// ConfigSHA: the hash of the config.toml setup wrote; while it matches,
+	// the file is setup's own and its answers can still change (0064).
+	ConfigSHA string `json:"config_sha,omitempty"`
+	Finished  bool   `json:"finished"`
 }
 
 // Step is one step's outcome.

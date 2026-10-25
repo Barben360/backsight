@@ -154,7 +154,11 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				return blocked(startErr)
 			}
 			if fl.queue { // jobs tick sends it in the background (decision 0064)
-				res := backfillResult{Plan: plan, Total: len(queue), Queued: true}
+				total := len(queue)
+				if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil {
+					total = len(st.Backfill.Sessions) // what is kept: an active queue survives
+				}
+				res := backfillResult{Plan: plan, Total: total, Queued: true}
 				return e.emit("retain backfill", res, func() string { return backfillText(res) + "queued: jobs tick sends it in the background\n" })
 			}
 			if !e.json { // the plan before a long run (decision 0051)

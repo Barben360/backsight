@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -90,24 +89,35 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 		return res, &output.Error{Code: output.NeedsUser, Message: "no backsight shim at " + shim + ": Claude Code has nothing to run",
 			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install", Why: "installs the shim the plugin's hooks and MCP server run"}}}
 	}
-	env := append(os.Environ(), verifyEnv...)
-	if configDir != "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
-	}
-
 	sid := "backsight-verify-" + randomHex(6)
 	scratch, err := os.MkdirTemp("", "backsight-verify-")
 	if err != nil {
 		return res, blocked(err)
 	}
-	defer func() {
-		_ = os.RemoveAll(scratch)
-		removeSession(d, sid)
-	}()
-	for _, h := range plugin.Hooks() {
-		add(verifyHook(ctx, d, shim, env, h, sid, scratch))
+	defer func() { _ = os.RemoveAll(scratch) }()
+	// The hooks and the MCP server read the real config and secrets but
+	// write a scratch state: verify must not use up the first-session
+	// notice, add telemetry or leave a live session (decision 0064).
+	work := filepath.Join(scratch, "cwd")
+	sd := d
+	sd.State = filepath.Join(scratch, "state")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		return res, blocked(err)
 	}
-	add(verifyMCP(ctx, shim, env, scratch))
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CLAUDE_ENV_FILE=") && !strings.HasPrefix(kv, "BACKSIGHT_STATE_DIR=") {
+			env = append(env, kv)
+		}
+	}
+	env = append(append(env, verifyEnv...), "BACKSIGHT_STATE_DIR="+sd.State)
+	if configDir != "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
+	}
+	for _, h := range plugin.Hooks() {
+		add(verifyHook(ctx, sd, shim, env, h, sid, work))
+	}
+	add(verifyMCP(ctx, shim, env, work))
 	if noRoundTrip {
 		add(verifyCheck{ID: "round_trip", Status: "skipped", Summary: "--no-round-trip"})
 		return res, nil
@@ -181,19 +191,6 @@ func hookFailed(d paths.Dirs, sid, arg string) bool {
 		}
 	}
 	return false
-}
-
-// removeSession drops the state the synthetic session left, and the
-// by-pid record the hooks wrote under verify's own pid (their "Claude Code").
-func removeSession(d paths.Dirs, sid string) {
-	matches, _ := filepath.Glob(filepath.Join(d.SessionsDir(), sid+"*"))
-	for _, m := range matches {
-		_ = os.RemoveAll(m)
-	}
-	byPID := filepath.Join(d.SessionsDir(), "by-pid", strconv.Itoa(os.Getpid())+".json")
-	if raw, err := os.ReadFile(byPID); err == nil && bytes.Contains(raw, []byte(sid)) {
-		_ = os.Remove(byPID)
-	}
 }
 
 func verifyMCP(ctx context.Context, shim string, env []string, dir string) verifyCheck {
