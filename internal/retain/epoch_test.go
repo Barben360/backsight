@@ -216,3 +216,34 @@ func TestRestoreRequeuesBackfilledSessions(t *testing.T) {
 	}
 	expect(t, e.flush("old", Options{Force: true, IgnoreSince: true}), Sent, 1, 1)
 }
+
+// A session older than retain_since that the user sent by hand (`retain
+// flush --session`) after the backup, with no backfill queue to take it
+// back, is sent again by the next live flush: nothing else would send it,
+// and decision 0044 resends what the restore lost.
+func TestRestoreResendsAnOldSessionWithoutBackfillQueue(t *testing.T) {
+	e := newEnv(t)
+	e.f.RetainSince = clockAt(10, 0)
+	e.record("old", "o1", "user", 0, "09:00, before live retain")
+	e.record("old", "o2", "assistant", 1, "an answer")
+	snap := e.hs.backup()
+	e.clock = clockAt(13, 0)
+	expect(t, e.flush("old", Options{Force: true, IgnoreSince: true}), Sent, 2, 1) // retain flush --session old
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(13, 30))
+	e.clock = clockAt(13, 30)
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || !reflect.DeepEqual(rec.Resend, []string{"old"}) {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if st, _ := state.Load(e.f.Dirs.StateFile()); st.Backfill != nil {
+		t.Fatalf("a backfill queue was started: %+v", st.Backfill)
+	}
+	sent := len(e.hs.retains)
+	expect(t, e.flush("old", Options{}), Sent, 2, 1) // the next jobs tick
+	if len(e.hs.retains) != sent+1 || !strings.Contains(e.hs.content["conversation:old"], "before live retain") {
+		t.Errorf("not resent whole: %+v", e.hs.retains[sent:])
+	}
+	expect(t, e.flush("old", Options{}), Nothing, 0, 0)
+	if len(e.hs.retains) != sent+1 {
+		t.Errorf("sent twice: %d", len(e.hs.retains)-sent)
+	}
+}

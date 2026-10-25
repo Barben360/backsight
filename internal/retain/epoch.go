@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
@@ -112,7 +113,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	}
 	var backfill []string
 	if rec.To > rec.From { // a lower epoch is another server's history: nothing to undo
-		if rec.Resend, backfill, err = f.dropLost(ctx, ep.BackupCreatedAt.Add(-epochSkew)); err != nil {
+		if rec.Resend, backfill, err = f.dropLost(ctx, ep.BackupCreatedAt.Add(-epochSkew), st.Backfill != nil); err != nil {
 			return rec, err
 		}
 	}
@@ -133,8 +134,10 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 // dropLost undoes, for each session of this bank sent after since, what
 // the server no longer holds. backfill lists the transcripts of lost
 // sessions that started before retain_since: live retain leaves those to
-// backfill.
-func (f *Flusher) dropLost(ctx context.Context, since time.Time) (resend, backfill []string, err error) {
+// backfill when queued (a backfill queue exists); without one, the user
+// sent them by hand (`retain flush --session`) and the next live flush
+// sends them again whole.
+func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (resend, backfill []string, err error) {
 	files, err := filepath.Glob(filepath.Join(f.Dirs.CursorsDir(), "*.json"))
 	if err != nil {
 		return nil, nil, err
@@ -145,7 +148,7 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time) (resend, backfi
 		if err != nil || !ok || cur.Bank != f.Bank || !cur.SentAt.After(since) {
 			continue // an unreadable cursor, or another bank's, resyncs anyway
 		}
-		lost, early, err := f.dropSession(ctx, sid, cur)
+		lost, early, err := f.dropSession(ctx, sid, cur, queued)
 		if err != nil {
 			return nil, nil, fmt.Errorf("session %s: %w", sid, err)
 		}
@@ -163,8 +166,10 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time) (resend, backfi
 // under the session's lock. When the server holds less, it removes the
 // sent-index entries of the records this session sent after the server's
 // last_uuid (all of them when the document is gone), then the cursor.
-// early: the document is gone and the session started before retain_since.
-func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor) (lost, early bool, err error) {
+// early: the document is gone and the session started before retain_since;
+// unless queued for backfill, it is marked to be resent whole, past
+// retain_since, before its cursor goes.
+func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queued bool) (lost, early bool, err error) {
 	unlock, err := f.lockSession(sid)
 	if err != nil {
 		return false, false, err
@@ -213,12 +218,17 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor) (lost
 	if err := f.Index.Remove(keys...); err != nil {
 		return false, false, err
 	}
+	early = last == "" && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
+	if early && !queued {
+		if err := fsutil.WriteAtomic(pendingPath(f.Dirs.CursorsDir(), sid), []byte(resendMark), 0o600); err != nil {
+			return false, false, err
+		}
+	}
 	p, _ := cursorPath(f.Dirs.CursorsDir(), sid)
 	if err := os.Remove(p); err != nil {
 		return false, false, err
 	}
-	early = last == "" && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
-	return true, early, nil
+	return true, early && queued, nil
 }
 
 // controlConfig keeps Hindsight's work on a control bank to the least
