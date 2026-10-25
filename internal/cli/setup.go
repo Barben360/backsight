@@ -1023,6 +1023,10 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	if a["retention"] == "keep" {
 		retention = "leave Claude Code's setting as it is"
 	}
+	scheduler := "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"
+	if a["scheduler"] == "off" {
+		scheduler = "none (scheduler=off): run jobs tick and jobs maintain some other way"
+	}
 	reference := "nothing to retire"
 	switch a["reference"] {
 	case "retire":
@@ -1040,7 +1044,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])},
 		{Name: "client", Status: "planned", Detail: "backsight client install: plugin and permission rule in " + s.loc.Dir},
 		{Name: "retention", Status: "planned", Detail: retention},
-		{Name: "scheduler", Status: "planned", Detail: "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"},
+		{Name: "scheduler", Status: "planned", Detail: scheduler},
 		{Name: "verify", Status: "planned", Detail: "backsight verify: every hook, the MCP handshake, a round trip in a scratch bank"},
 		{Name: "reference", Status: "planned", Detail: reference},
 		{Name: "backfill", Status: "planned", Detail: backfill},

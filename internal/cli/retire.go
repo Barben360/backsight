@@ -93,6 +93,12 @@ func retroTimerOwned(ctx context.Context, loc claudecode.Location) bool {
 	if err != nil || schedulerGOOS != "linux" || filepath.Clean(loc.Dir) != filepath.Join(home, ".claude") {
 		return false
 	}
+	// The profile must hold the retro script the timer runs: a HOME moved
+	// for a test install has no such file, while the real timer still runs
+	// from the real one (found by the agent-driven install run).
+	if _, err := os.Stat(filepath.Join(loc.Dir, "hooks", "memory-retro.py")); err != nil {
+		return false
+	}
 	return retroTimerEnabled(ctx)
 }
 
