@@ -217,9 +217,12 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	}
 	add("permission rule", did(files[0].Written), strings.TrimSpace(c.loc.Settings+" "+run))
 
+	// The profile this install wired, from --config-dir or the shell's
+	// CLAUDE_CONFIG_DIR: a scheduled job has neither and reads the recorded
+	// one. "" is ~/.claude.
 	profile := ""
-	if configDir != "" {
-		profile, _ = filepath.Abs(configDir)
+	if _, home, err := machine(); err == nil && filepath.Clean(c.loc.Dir) != filepath.Join(home, ".claude") {
+		profile, _ = filepath.Abs(c.loc.Dir)
 	}
 	if err := state.Update(c.dirs, "client install", func(s *state.State) error {
 		if s.ShimTarget != "" && s.ShimTarget != target {

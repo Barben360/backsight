@@ -38,9 +38,13 @@ func authorHome(t *testing.T) string {
  "vfs":{"command":"vfs","args":["mcp"]}}}`)
 	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
 	put(t, home, ".config/systemd/user/memory-retro.timer", "[Timer]")
+	put(t, home, ".config/systemd/user/memory-retro.service", retroService)
 	put(t, home, ".config/systemd/user/timers.target.wants/memory-retro.timer", "[Timer]") // enabled
 	return home
 }
+
+// retroService is the author's unit: it runs the default profile's script.
+const retroService = "[Service]\nType=oneshot\nExecStart=/usr/bin/python3 %h/.claude/hooks/memory-retro.py run\n"
 
 func at(home string) claudecode.Location {
 	return claudecode.Locate(home, func(string) string { return "" })
@@ -215,6 +219,7 @@ func TestDiscoverRetiredRetroIsALeftover(t *testing.T) {
 	put(t, home, ".claude/settings.json", `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify-send done"}]}]}}`)
 	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
 	put(t, home, ".config/systemd/user/memory-retro.timer", "[Timer]")
+	put(t, home, ".config/systemd/user/memory-retro.service", retroService)
 	in, err := Discover(home, at(home))
 	if err != nil || in == nil {
 		t.Fatalf("leftovers alone are still reported: %+v %v", in, err)
@@ -243,5 +248,67 @@ func TestDiscoverRetroRunByAHookIsWired(t *testing.T) {
 	got := ids(in)
 	if got["python-retro|.claude/hooks/memory-retro.py"] != "M4" || got["python-retro|settings.json SessionEnd"] != "M4" {
 		t.Errorf("%v", got)
+	}
+}
+
+// client retire removes reference MCP servers from every project: doctor
+// counts them there too.
+func TestDiscoverProjectMCPServers(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, ".claude.json", `{"projects":{"/w/app":{"mcpServers":{
+ "user-memory":{"command":"python3","args":["/h/.claude/hooks/hindsight-memory-mcp.py"]},
+ "vfs":{"command":"vfs","args":["mcp"]}}}}}`)
+	in, err := Discover(home, at(home))
+	if err != nil || in == nil {
+		t.Fatalf("%+v %v", in, err)
+	}
+	if got := ids(in); got["python-memory-mcp|.claude.json projects./w/app.mcpServers.user-memory"] != "M4" || len(got) != 1 {
+		t.Errorf("%v", got)
+	}
+}
+
+// The timer is a profile's only when its service runs that profile's
+// script, as client retire decides: another profile's is not counted.
+func TestDiscoverRetroTimerBelongsToTheProfileItRuns(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, "cc/hooks/memory-retro.py", "# retro")
+	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
+	put(t, home, ".config/systemd/user/memory-retro.timer", "[Timer]")
+	put(t, home, ".config/systemd/user/memory-retro.service", "[Service]\nExecStart=/usr/bin/python3 "+filepath.Join(home, "cc", "hooks", "memory-retro.py")+" run\n")
+	put(t, home, ".config/systemd/user/timers.target.wants/memory-retro.timer", "[Timer]")
+	cc := claudecode.Locate(home, func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return filepath.Join(home, "cc")
+		}
+		return ""
+	})
+	in, _ := Discover(home, cc)
+	if in == nil || ids(in)["python-retro-timer|systemd memory-retro.timer"] != "M4" || ids(in)["python-retro|.claude/hooks/memory-retro.py"] != "M4" {
+		t.Errorf("the profile the timer runs: %+v", in)
+	}
+	in, _ = Discover(home, at(home))
+	if in == nil || len(in.Pieces) != 0 {
+		t.Fatalf("another profile's timer counted as wired here: %+v", in)
+	}
+	for _, p := range in.Leftovers {
+		if p.ID == "python-retro-timer" {
+			t.Errorf("another profile's timer reported as this one's leftover: %+v", p)
+		}
+	}
+}
+
+// An enable link left after the unit file was deleted is a leftover.
+func TestDiscoverDanglingTimerLinkIsALeftover(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, ".config/systemd/user/memory-retro.service", retroService)
+	wants := filepath.Join(home, ".config", "systemd", "user", "timers.target.wants")
+	_ = os.MkdirAll(wants, 0o700)
+	if err := os.Symlink(filepath.Join(home, ".config", "systemd", "user", "memory-retro.timer"), filepath.Join(wants, "memory-retro.timer")); err != nil {
+		t.Fatal(err)
+	}
+	in, err := Discover(home, at(home))
+	if err != nil || in == nil || len(in.Pieces) != 0 || len(in.Leftovers) != 1 ||
+		in.Leftovers[0].ID != "python-retro-timer" || !strings.Contains(in.Leftovers[0].Where, "deleted unit") {
+		t.Errorf("%+v %v", in, err)
 	}
 }

@@ -115,30 +115,45 @@ func Discover(home string, loc claudecode.Location) (*Install, error) {
 		}
 	}
 
+	type servers map[string]struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
 	var claudeJSON struct {
-		MCPServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		} `json:"mcpServers"`
+		MCPServers servers `json:"mcpServers"`
+		Projects   map[string]struct {
+			MCPServers servers `json:"mcpServers"`
+		} `json:"projects"`
 	}
 	if _, err := readJSON(loc.State, &claudeJSON); err != nil {
 		return nil, err
 	}
-	for name, s := range claudeJSON.MCPServers {
-		line := s.Command + " " + strings.Join(s.Args, " ")
-		for _, r := range mcpRules {
-			if strings.Contains(line, r.needle) {
-				add(Piece{r.id, ".claude.json mcpServers." + name, cutOver})
+	scan := func(where string, m servers) {
+		for name, s := range m {
+			line := s.Command + " " + strings.Join(s.Args, " ")
+			for _, r := range mcpRules {
+				if strings.Contains(line, r.needle) {
+					add(Piece{r.id, where + name, cutOver})
+				}
 			}
 		}
 	}
+	// client retire removes them from every project too.
+	scan(".claude.json mcpServers.", claudeJSON.MCPServers)
+	for p, proj := range claudeJSON.Projects {
+		scan(".claude.json projects."+p+".mcpServers.", proj.MCPServers)
+	}
 
 	// The retro script and timer are wired only while the timer is enabled
-	// (a *.wants link) or a hook entry runs the script.
+	// (a *.wants link) or a hook entry runs the script. The timer is this
+	// profile's only when its service runs this profile's script, as client
+	// retire decides; an enable link left to a deleted unit is a leftover.
 	userUnits := filepath.Join(home, ".config", "systemd", "user")
 	_, timerErr := os.Stat(filepath.Join(userUnits, RetroTimer))
 	wants, _ := filepath.Glob(filepath.Join(userUnits, "*.wants", RetroTimer))
-	timerOn := timerErr == nil && len(wants) > 0
+	ours := retroServiceRuns(home, filepath.Join(userUnits, strings.TrimSuffix(RetroTimer, ".timer")+".service"),
+		filepath.Join(loc.Dir, "hooks", "memory-retro.py"))
+	timerOn := timerErr == nil && len(wants) > 0 && ours
 	hookRuns := false
 	for _, p := range in.Pieces {
 		hookRuns = hookRuns || p.ID == "python-retro"
@@ -152,10 +167,13 @@ func Discover(home string, loc claudecode.Location) (*Install, error) {
 			in.Leftovers = append(in.Leftovers, p)
 		}
 	}
-	if timerOn {
+	switch {
+	case timerOn:
 		add(Piece{"python-retro-timer", "systemd " + RetroTimer, cutOver})
-	} else if timerErr == nil {
+	case timerErr == nil && ours:
 		in.Leftovers = append(in.Leftovers, Piece{"python-retro-timer", "systemd " + RetroTimer + ", disabled", cutOver})
+	case errors.Is(timerErr, fs.ErrNotExist) && len(wants) > 0:
+		in.Leftovers = append(in.Leftovers, Piece{"python-retro-timer", "systemd " + RetroTimer + ", enable link to a deleted unit: " + wants[0], cutOver})
 	}
 
 	if !found && len(in.Pieces) == 0 && len(in.Leftovers) == 0 {
@@ -166,6 +184,27 @@ func Discover(home string, loc claudecode.Location) (*Install, error) {
 		return a.ID+a.Where < b.ID+b.Where
 	})
 	return in, nil
+}
+
+// retroServiceRuns reports whether the unit file at path starts script
+// (%h stands for home, as systemd expands it).
+func retroServiceRuns(home, path, script string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(raw), "\n") {
+		v, ok := strings.CutPrefix(strings.TrimSpace(l), "ExecStart=")
+		if !ok {
+			continue
+		}
+		for _, arg := range strings.Fields(strings.ReplaceAll(v, "%h", home)) {
+			if filepath.Clean(arg) == filepath.Clean(script) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // readJSON decodes path into out; a missing file is (false, nil).

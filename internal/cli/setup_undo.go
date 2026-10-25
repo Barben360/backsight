@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
@@ -30,8 +31,9 @@ type undoResult struct {
 
 // runSetupUndo reverses what setup changed (decision 0064): the config
 // editor runs first, newest first, each by its inverse edit; then the
-// reference timers it stopped, the scheduler entries, the plugin in each
-// profile setup wired, and the server it started. Config, secrets and the
+// scheduler entries, the plugin in each profile setup wired, the server it
+// started, and last the reference timers it stopped (a timer that cannot
+// start again never leaves backsight wired). Config, secrets and the
 // database volume are kept. Each action done is struck from setup.json at
 // once, so an interrupted undo continues where it stopped.
 func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, error) {
@@ -70,7 +72,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 	}
 	var lost []string
 
-	// 1. Config-editor runs, newest first. Every manifest is read before
+	// Config-editor runs, newest first. Every manifest is read before
 	// anything is changed; a run whose pre-images are gone is reported and
 	// skipped, never a reason to leave the rest wired.
 	runner := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: "setup --undo", Now: now}
@@ -91,13 +93,15 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 		add(undoAction{Name: "restore " + ts, Status: "lost", Detail: "its pre-images are gone: check the files it edited by hand"})
 		if !f.plan {
 			rec.Undo.ConfigRuns = without(rec.Undo.ConfigRuns, ts)
+			delete(rec.Undo.Retention, ts)
 		}
 	}
 	save()
 	for i := len(runs) - 1; i >= 0; i-- {
 		r := runs[i]
 		name := "undo " + r.m.Command + " (" + r.ts + ")"
-		edits, whole, err := inverseEdits(d.PreImagesDir(), r.m)
+		kept := map[string]string{}
+		edits, whole, err := inverseEdits(d.PreImagesDir(), r.m, rec.Undo.Retention[r.ts], kept)
 		if err != nil {
 			return fail(name, err)
 		}
@@ -126,6 +130,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				return fail(name, err)
 			}
 			add(undoAction{Name: name, Status: "planned", Detail: changedPaths(fr)})
+			res.Kept = append(res.Kept, sortedValues(kept)...)
 			continue
 		}
 		if whole {
@@ -150,22 +155,12 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				return fail(name, err)
 			}
 			add(undoAction{Name: name, Status: "done", Detail: changedPaths(fr)})
+			res.Kept = append(res.Kept, sortedValues(kept)...)
 		}
 		claudecfg.Unpin(d.PreImagesDir(), r.ts)
 		rec.Undo.ConfigRuns = without(rec.Undo.ConfigRuns, r.ts)
+		delete(rec.Undo.Retention, r.ts)
 		save()
-	}
-
-	// 2. The reference timers, once their hooks and servers are back.
-	for _, t := range append([]string(nil), rec.Undo.Timers...) {
-		if !f.plan {
-			if out, err := sysRunner.Run(ctx, "systemctl", "--user", "enable", "--now", t); err != nil {
-				return fail("timer "+t, fmt.Errorf("%w %s", err, strings.TrimSpace(string(out))))
-			}
-			rec.Undo.Timers = without(rec.Undo.Timers, t)
-			save()
-		}
-		add(undoAction{Name: "timer " + t, Status: done(f.plan), Detail: "systemd user timer started again"})
 	}
 
 	if rec.Undo.Scheduler {
@@ -185,7 +180,13 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				return fail("client "+prof, err)
 			}
 			if err := state.Update(d, "setup --undo", func(s *state.State) error {
-				if s.Client == nil || s.Client.Profile == "" || filepath.Clean(s.Client.Profile) == prof || (prof == filepath.Join(home, ".claude")) {
+				// Only when the state records this profile ("" is ~/.claude):
+				// another profile wired since keeps its plugin.
+				wired := filepath.Join(home, ".claude")
+				if s.Client != nil && s.Client.Profile != "" {
+					wired = filepath.Clean(s.Client.Profile)
+				}
+				if wired == prof {
 					s.PluginVersion = ""
 					if s.Client != nil {
 						s.Client.Profile = ""
@@ -211,22 +212,66 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 		}
 		add(undoAction{Name: "server", Status: done(f.plan), Detail: "stopped; its data is kept"})
 	}
+
+	// The reference timers, once their hooks and servers are back. A unit
+	// deleted since cannot start again: it is lost, not a reason to stop.
+	var lostTimers []string
+	for _, t := range append([]string(nil), rec.Undo.Timers...) {
+		if !f.plan {
+			if out, err := sysRunner.Run(ctx, "systemctl", "--user", "enable", "--now", t); err != nil {
+				if !unitGone(ctx, t) {
+					return fail("timer "+t, fmt.Errorf("%w %s", err, strings.TrimSpace(string(out))))
+				}
+				lostTimers = append(lostTimers, t)
+				add(undoAction{Name: "timer " + t, Status: "lost", Detail: "its unit file is gone: nothing to start again"})
+				rec.Undo.Timers = without(rec.Undo.Timers, t)
+				save()
+				continue
+			}
+			rec.Undo.Timers = without(rec.Undo.Timers, t)
+			save()
+		}
+		add(undoAction{Name: "timer " + t, Status: done(f.plan), Detail: "systemd user timer started again"})
+	}
 	if !f.plan {
 		rec.Steps, rec.Finished = nil, false
 		if err := rec.Save(d.SetupFile()); err != nil {
 			return res, blocked(err)
 		}
 	}
-	if len(lost) > 0 && !f.plan {
-		return res, &output.Error{Code: output.Partial, Message: "undone, except the config runs whose pre-images are gone (" + strings.Join(lost, ", ") + "): check those files by hand"}
+	var except []string
+	if len(lost) > 0 {
+		except = append(except, "the config runs whose pre-images are gone ("+strings.Join(lost, ", ")+"): check those files by hand")
+	}
+	if len(lostTimers) > 0 {
+		except = append(except, "the timers whose unit files are gone ("+strings.Join(lostTimers, ", ")+")")
+	}
+	if len(except) > 0 && !f.plan {
+		return res, &output.Error{Code: output.Partial, Message: "undone, except " + strings.Join(except, "; ")}
 	}
 	return res, nil
 }
 
+// unitGone reports whether systemd no longer knows unit (its file deleted).
+func unitGone(ctx context.Context, unit string) bool {
+	out, err := sysRunner.Run(ctx, "systemctl", "--user", "show", "-p", "LoadState", unit)
+	return err == nil && strings.TrimSpace(string(out)) == "LoadState=not-found"
+}
+
+func sortedValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // inverseEdits are the edits that reverse run m (decision 0064
 // amendment); whole is true for a run of an unknown command, which only a
-// whole-file restore can reverse.
-func inverseEdits(dir string, m claudecfg.Manifest) (edits []claudecfg.Edit, whole bool, err error) {
+// whole-file restore can reverse. wrote is the retention value the run set
+// (JSON), and kept collects, per file, a value left as the user changed it.
+func inverseEdits(dir string, m claudecfg.Manifest, wrote string, kept map[string]string) (edits []claudecfg.Edit, whole bool, err error) {
 	pre := func(mf claudecfg.ManifestFile) ([]byte, error) {
 		if mf.PreImage == nil {
 			return nil, nil // the run created the file
@@ -270,7 +315,14 @@ func inverseEdits(dir string, m claudecfg.Manifest) (edits []claudecfg.Edit, who
 			if err != nil {
 				return nil, false, err
 			}
-			edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: restoreKey(b, "cleanupPeriodDays")})
+			target := mf.Target
+			edits = append(edits, claudecfg.Edit{Target: target, Apply: restoreKey(b, "cleanupPeriodDays", wrote, func(why string) {
+				if why == "" {
+					delete(kept, target)
+				} else {
+					kept[target] = target + ": " + why
+				}
+			})})
 		}
 	default:
 		return nil, true, nil

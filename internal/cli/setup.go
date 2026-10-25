@@ -701,6 +701,17 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			var rr retentionResult
 			_ = json.Unmarshal(out.Data, &rr)
+			// What the run wrote: undo puts the old value back only over it.
+			for _, fr := range rr.Files {
+				for _, ch := range fr.Changes {
+					if rr.Run != "" && ch.Path == "cleanupPeriodDays" && ch.New != nil {
+						if r.Undo.Retention == nil {
+							r.Undo.Retention = map[string]string{}
+						}
+						r.Undo.Retention[rr.Run] = *ch.New
+					}
+				}
+			}
 			detail := "Claude Code's setting left as it is"
 			if rr.Target > 0 {
 				detail = fmt.Sprintf("transcripts kept at least %d days", rr.Target)

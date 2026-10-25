@@ -51,6 +51,9 @@ type Undo struct {
 	ServerStarted bool `json:"server_started,omitempty"`
 	// Timers: reference systemd user timers setup stopped (§11.5).
 	Timers []string `json:"timers,omitempty"`
+	// Retention: per client retention run, the cleanupPeriodDays it wrote
+	// (JSON). Undo puts the old value back only over that one.
+	Retention map[string]string `json:"retention,omitempty"`
 }
 
 // Empty reports whether there is nothing to undo.

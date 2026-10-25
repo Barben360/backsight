@@ -218,6 +218,28 @@ func TestClientInstallLeavesNoDriftAndRecordsTheProfile(t *testing.T) {
 	}
 }
 
+// A profile given by the shell's CLAUDE_CONFIG_DIR is recorded too: the
+// scheduled jobs have no such variable and read their transcripts from it.
+func TestClientInstallRecordsTheProfileFromTheEnvironment(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	profile := filepath.Join(home, "claude-dev")
+	t.Setenv("CLAUDE_CONFIG_DIR", profile)
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.Client == nil || st.Client.Profile != profile {
+		t.Errorf("profile from CLAUDE_CONFIG_DIR not recorded: %+v", st.Client)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.Client == nil || st.Client.Profile != "" {
+		t.Errorf("~/.claude is recorded as the default, \"\": %+v", st.Client)
+	}
+}
+
 func TestClientInstallShimTargetIsAVerifiedCopy(t *testing.T) {
 	home := devInstall(t, true)
 	withClaude(t)

@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -497,15 +498,23 @@ func claudeSettings(t *testing.T, path string) (hooks map[string][]string, allow
 // on settings.json, one on ~/.claude.json).
 func referenceSetup(t *testing.T) (home, settings, state string, f *fakeSteps, claude *fakeClaude, sys *fakeSys) {
 	t.Helper()
+	return referenceSetupWith(t, referenceSettings, "enabled")
+}
+
+// referenceSetupWith is referenceSetup over settingsJSON, with this
+// profile's retro timer answering is-enabled with timer.
+func referenceSetupWith(t *testing.T, settingsJSON, timer string) (home, settings, state string, f *fakeSteps, claude *fakeClaude, sys *fakeSys) {
+	t.Helper()
 	home, f = setupMachine(t)
 	withLLMKey(t, home)
 	claude = claudeRunner.(*fakeClaude)
 	sys = sysRunner.(*fakeSys)
 	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
 	settings, state = filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")
-	_ = os.WriteFile(settings, []byte(referenceSettings), 0o600)
+	_ = os.WriteFile(settings, []byte(settingsJSON), 0o600)
 	_ = os.WriteFile(state, []byte(referenceClaudeJSON), 0o600)
 	sys.out = retroTimer(os.Getenv("HOME"))
+	sys.out["systemctl --user is-enabled "+reference.RetroTimer] = timer + "\n"
 	f.real["client install"], f.real["client retention"] = true, true
 	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
 	if code != output.OK {
@@ -656,6 +665,12 @@ func TestSetupUndoUnknownRunNeedsForceButNeverOnClaudeJSON(t *testing.T) {
 	if code, out, _ := run(t, "setup", "--undo", "--json"); code != output.Partial || !strings.Contains(out, "--force") {
 		t.Fatalf("an edited file must be refused: exit %d\n%s", code, out)
 	}
+	if a, _ := os.ReadFile(settings); string(a) != `{"a": 2, "edited": true}` {
+		t.Errorf("a refused undo wrote the file: %s", a)
+	}
+	if rec, _ := setup.Load(d.SetupFile()); rec == nil || len(rec.Undo.ConfigRuns) != 1 || rec.Undo.ConfigRuns[0] != ts {
+		t.Fatalf("a refused undo struck its run: %+v", rec)
+	}
 	if code, out, _ := run(t, "setup", "--undo", "--force", "--json"); code != output.OK {
 		t.Fatalf("--force: exit %d\n%s", code, out)
 	}
@@ -765,8 +780,8 @@ func TestAnInterruptedUndoContinuesWhereItStopped(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	rec, _ := setup.Load(pathsOf(home).SetupFile())
-	if len(rec.Undo.ConfigRuns) != 0 || len(rec.Undo.Timers) != 0 || !rec.Undo.Scheduler {
-		t.Fatalf("done actions must be struck, the failed one kept: %+v", rec.Undo)
+	if len(rec.Undo.ConfigRuns) != 0 || len(rec.Undo.Timers) != 1 || !rec.Undo.Scheduler {
+		t.Fatalf("done actions must be struck, the failed one and those after it kept: %+v", rec.Undo)
 	}
 	delete(f.fail, "jobs uninstall")
 	f.calls = nil
@@ -934,5 +949,171 @@ func TestSetupSchedulerOffSkipsTheEntries(t *testing.T) {
 	}
 	if code, _, _ := run(t, "setup", "--answer", "scheduler=maybe", "--non-interactive"); code != output.Usage {
 		t.Errorf("scheduler=maybe: exit %d", code)
+	}
+}
+
+// A whole-file run edited since is planned as refused, and nothing written.
+func TestSetupUndoPlanShowsAWholeFileRunRefused(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	settings := filepath.Join(home, ".claude", "settings.json")
+	_ = os.MkdirAll(filepath.Dir(settings), 0o700)
+	_ = os.WriteFile(settings, []byte(`{"a": 1}`), 0o600)
+	r := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: "some future step", Now: now}
+	ts, _, err := r.Apply([]claudecfg.Edit{{Target: settings, Apply: func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		out, ch, err := claudecfg.Set(doc, []string{"a"}, 2)
+		return out, []claudecfg.Change{ch}, err
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = (&setup.Record{SchemaVersion: 1, Run: "r", Undo: setup.Undo{ConfigRuns: []string{ts}}}).Save(d.SetupFile())
+	status := func() string {
+		t.Helper()
+		code, out, _ := run(t, "setup", "--undo", "--plan", "--json")
+		var env struct {
+			Data undoResult `json:"data"`
+		}
+		_ = json.Unmarshal([]byte(out), &env)
+		if code != output.OK || len(env.Data.Actions) != 1 {
+			t.Fatalf("plan: exit %d\n%s", code, out)
+		}
+		return env.Data.Actions[0].Status
+	}
+	if got := status(); got != "planned" {
+		t.Errorf("an untouched file: %q, want planned", got)
+	}
+	_ = os.WriteFile(settings, []byte(`{"a": 2, "edited": true}`), 0o600)
+	if got := status(); got != "refused" {
+		t.Errorf("an edited file: %q, want refused", got)
+	}
+	if a, _ := os.ReadFile(settings); string(a) != `{"a": 2, "edited": true}` {
+		t.Errorf("--plan wrote the file: %s", a)
+	}
+}
+
+// The user lengthened the retention after setup wrote it: undo keeps the
+// user's value (removing it would let Claude Code fall back to 30 days and
+// delete transcripts) and says so.
+func TestSetupUndoKeepsARetentionChangedSince(t *testing.T) {
+	_, settings, _, _, claude, _ := referenceSetup(t)
+	if _, _, raw := claudeSettings(t, settings); fmt.Sprint(raw["cleanupPeriodDays"]) != "3650" {
+		t.Fatalf("setup wrote cleanupPeriodDays %v", raw["cleanupPeriodDays"])
+	}
+	sj, _ := os.ReadFile(settings)
+	_ = os.WriteFile(settings, []byte(strings.Replace(string(sj), "3650", "365", 1)), 0o600)
+	claude.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
+	code, out, errOut := run(t, "setup", "--undo", "--json")
+	if code != output.OK {
+		t.Fatalf("undo: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if _, _, raw := claudeSettings(t, settings); fmt.Sprint(raw["cleanupPeriodDays"]) != "365" {
+		t.Errorf("cleanupPeriodDays after undo %v, want the user's 365", raw["cleanupPeriodDays"])
+	}
+	if !strings.Contains(out, "cleanupPeriodDays = 365 kept") {
+		t.Errorf("the kept value is not reported:\n%s", out)
+	}
+}
+
+// What was there before setup comes back: the user's retention, and a
+// memory-tool rule the user had already allowed.
+func TestSetupUndoPutsBackTheValuesThatWereThere(t *testing.T) {
+	pre := strings.Replace(referenceSettings, `"Bash(git *)"]`, `"Bash(git *)", "`+plugin.ToolNames[0]+`"]`, 1)
+	pre = strings.Replace(pre, `"enabledPlugins"`, `"cleanupPeriodDays": 90, "enabledPlugins"`, 1)
+	_, settings, _, _, claude, _ := referenceSetupWith(t, pre, "enabled")
+	if _, _, raw := claudeSettings(t, settings); fmt.Sprint(raw["cleanupPeriodDays"]) != "3650" {
+		t.Fatalf("setup wrote cleanupPeriodDays %v", raw["cleanupPeriodDays"])
+	}
+	claude.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
+	if code, out, errOut := run(t, "setup", "--undo", "--json"); code != output.OK {
+		t.Fatalf("undo: exit %d\n%s\n%s", code, out, errOut)
+	}
+	_, allow, raw := claudeSettings(t, settings)
+	if fmt.Sprint(raw["cleanupPeriodDays"]) != "90" {
+		t.Errorf("cleanupPeriodDays after undo %v, want 90 as before setup", raw["cleanupPeriodDays"])
+	}
+	if !contains(allow, plugin.ToolNames[0]) || contains(allow, plugin.ToolNames[1]) {
+		t.Errorf("allow after undo %v: the rule the user had must stay, the ones setup added go", allow)
+	}
+}
+
+// A retro timer already disabled is not this setup's to stop, nor undo's
+// to start.
+func TestSetupLeavesADisabledRetroTimerAlone(t *testing.T) {
+	home, _, state, _, claude, sys := referenceSetupWith(t, referenceSettings, "disabled")
+	if a, _ := os.ReadFile(state); strings.Contains(string(a), "user-memory") {
+		t.Fatal("the reference was not retired")
+	}
+	if contains(sys.calls, "systemctl --user disable --now "+reference.RetroTimer) {
+		t.Errorf("a disabled timer was stopped: %v", sys.calls)
+	}
+	if rec, _ := setup.Load(pathsOf(home).SetupFile()); rec == nil || len(rec.Undo.Timers) != 0 {
+		t.Fatalf("undo would start a timer setup never stopped: %+v", rec)
+	}
+	claude.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
+	sys.calls = nil
+	if code, out, _ := run(t, "setup", "--undo", "--json"); code != output.OK {
+		t.Fatalf("undo: exit %d\n%s", code, out)
+	}
+	for _, c := range sys.calls {
+		if strings.Contains(c, "enable") && !strings.Contains(c, "is-enabled") {
+			t.Errorf("undo started the timer: %v", sys.calls)
+		}
+	}
+}
+
+// A timer that will not start again stops the undo only after backsight
+// is unwired; one whose unit file the user deleted is lost, not a reason
+// to stop.
+func TestSetupUndoGetsPastAGoneTimer(t *testing.T) {
+	home, _, _, f, claude, sys := referenceSetupWith(t, referenceSettings, "enabled")
+	claude.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
+	claude.marketplaces = `[{"name":"` + plugin.Marketplace + `","path":"/x"}]`
+	sys.fail = "systemctl --user enable --now " + reference.RetroTimer
+	sys.out["systemctl --user show -p LoadState "+reference.RetroTimer] = "LoadState=loaded\n"
+	f.calls = nil
+	if code, out, _ := run(t, "setup", "--undo", "--json"); code != output.Partial || !strings.Contains(out, `"failed"`) {
+		t.Fatalf("a timer that fails to start: exit %d\n%s", code, out)
+	}
+	if got := strings.Join(f.commands(), ","); got != "jobs uninstall,server stop" {
+		t.Errorf("backsight left wired behind a failing timer: %q", got)
+	}
+	if !strings.Contains(strings.Join(mutating(claude), ","), "plugin uninstall "+plugin.PluginID()) {
+		t.Errorf("plugin not removed before the timer: %v", mutating(claude))
+	}
+	if rec, _ := setup.Load(pathsOf(home).SetupFile()); rec == nil || len(rec.Undo.Timers) != 1 {
+		t.Fatalf("the failed timer must stay to retry: %+v", rec)
+	}
+
+	sys.out["systemctl --user show -p LoadState "+reference.RetroTimer] = "LoadState=not-found\n"
+	code, out, _ := run(t, "setup", "--undo", "--json")
+	if code != output.Partial || !strings.Contains(out, `"lost"`) || !strings.Contains(out, "unit files are gone") {
+		t.Fatalf("a deleted unit: exit %d\n%s", code, out)
+	}
+	if code, out, _ := run(t, "setup", "--undo"); code != output.OK || !strings.Contains(out, "changed nothing") {
+		t.Errorf("a lost timer must not block later undos: exit %d\n%s", code, out)
+	}
+}
+
+// Undo of the default profile leaves the plugin state alone when the state
+// records another profile, wired since.
+func TestSetupUndoKeepsThePluginStateOfAnotherProfile(t *testing.T) {
+	home, _ := setupMachine(t)
+	withLLMKey(t, home)
+	claude := claudeRunner.(*fakeClaude)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	dev := filepath.Join(home, "dev")
+	_ = state.Update(pathsOf(home), "client install", func(s *state.State) error {
+		s.Client = &state.Client{Profile: dev}
+		return nil
+	})
+	claude.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
+	if code, out, _ := run(t, "setup", "--undo"); code != output.OK {
+		t.Fatalf("undo: exit %d\n%s", code, out)
+	}
+	if st, _ := stateLoad(home); st.PluginVersion != "1.0.0" || st.Client == nil || st.Client.Profile != dev {
+		t.Errorf("undo of ~/.claude cleared the dev profile's plugin state: %+v %+v", st.PluginVersion, st.Client)
 	}
 }

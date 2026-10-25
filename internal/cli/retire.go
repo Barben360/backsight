@@ -490,16 +490,46 @@ func removeAdded(pre []byte) func([]byte) ([]byte, []claudecfg.Change, error) {
 }
 
 // restoreKey puts key back to its value in pre, or removes it when pre
-// lacked it (the inverse of client retention's edit).
-func restoreKey(pre []byte, key string) func([]byte) ([]byte, []claudecfg.Change, error) {
+// lacked it (the inverse of client retention's edit), but only over the
+// value the run wrote (JSON): a value changed since is the user's, and
+// removing a longer retention would let Claude Code delete transcripts.
+// kept is told why a value stays ("" when it does not).
+func restoreKey(pre []byte, key, wrote string, kept func(why string)) func([]byte) ([]byte, []claudecfg.Change, error) {
 	v, had, _ := claudecfg.Get(pre, []string{key})
 	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		kept("")
+		cur, there, err := claudecfg.Get(doc, []string{key})
+		if err != nil || !there {
+			return doc, nil, err // removed since: nothing of the run's is left
+		}
+		now, _ := json.Marshal(cur)
+		if w := canonJSON(wrote); w == "" || w != string(now) {
+			why := fmt.Sprintf("%s = %s kept: setup wrote %s, changed by hand since", key, now, w)
+			if w == "" {
+				why = fmt.Sprintf("%s = %s kept: setup did not record the value it wrote", key, now)
+			}
+			kept(why)
+			return doc, nil, nil
+		}
 		if had {
 			out, ch, err := claudecfg.Set(doc, []string{key}, v)
 			return out, []claudecfg.Change{ch}, err
 		}
 		return claudecfg.RemoveWhere(doc, nil, func(k string, _ any) bool { return k == key })
 	}
+}
+
+// canonJSON re-encodes a JSON value the way json.Marshal prints a decoded
+// one; "" when it is empty or not JSON.
+func canonJSON(s string) string {
+	d := json.NewDecoder(strings.NewReader(s))
+	d.UseNumber()
+	var v any
+	if s == "" || d.Decode(&v) != nil {
+		return ""
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func retireText(r retireResult) string {
