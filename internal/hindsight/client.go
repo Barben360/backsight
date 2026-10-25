@@ -236,6 +236,10 @@ type Memory struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 	MentionedAt     time.Time `json:"mentioned_at"`
 	SourceMemoryIDs []string  `json:"source_memory_ids"`
+	// ConsolidatedAt (a fact): when consolidation last took it in, "" not
+	// yet; ConsolidationFailedAt: it failed for good (ISO 8601).
+	ConsolidatedAt        string `json:"consolidated_at"`
+	ConsolidationFailedAt string `json:"consolidation_failed_at"`
 }
 
 // When is the memory's event time, else when the server last wrote it.
@@ -278,6 +282,55 @@ func (c *Client) eachMemory(ctx context.Context, bank, factType, state, tag stri
 			q.Set("tags_match", "any_strict")
 		}
 		if err := c.get(ctx, bankPath(bank, "/memories/list"), q, &page); err != nil {
+			return err
+		}
+		for _, m := range page.Items {
+			if err := fn(m); err != nil {
+				return err
+			}
+		}
+		offset += len(page.Items)
+		if len(page.Items) == 0 || offset >= page.Total {
+			return nil
+		}
+	}
+}
+
+// MemoryQuery narrows a listing of live memories.
+type MemoryQuery struct {
+	Type         string    // world | experience | observation; "" = every type
+	DocumentID   string    // the facts extracted from one document
+	UpdatedSince time.Time // zero: no time window
+}
+
+// ListMemories calls fn for every live memory q selects, page by page.
+func (c *Client) ListMemories(ctx context.Context, bank string, q MemoryQuery, fn func(Memory) error) error {
+	v := url.Values{}
+	if q.Type != "" {
+		v.Set("type", q.Type)
+	}
+	if q.DocumentID != "" {
+		v.Set("document_id", q.DocumentID)
+	}
+	if !q.UpdatedSince.IsZero() {
+		v.Set("time_field", "updated_at")
+		v.Set("start_date", q.UpdatedSince.UTC().Format(time.RFC3339))
+	}
+	what := q.Type
+	if what == "" {
+		what = "document " + q.DocumentID
+	}
+	for offset, pages := 0, 0; ; pages++ {
+		if pages == maxPages {
+			return fmt.Errorf("listing %s memories: more than %d pages, stopping", what, maxPages)
+		}
+		var page struct {
+			Items []Memory `json:"items"`
+			Total int      `json:"total"`
+		}
+		v.Set("limit", strconv.Itoa(pageSize))
+		v.Set("offset", strconv.Itoa(offset))
+		if err := c.get(ctx, bankPath(bank, "/memories/list"), v, &page); err != nil {
 			return err
 		}
 		for _, m := range page.Items {

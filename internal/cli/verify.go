@@ -19,12 +19,15 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // Seams replaced by tests: the command verify runs as Claude Code would
@@ -50,12 +53,23 @@ type verifyResult struct {
 
 func newVerifyCmd(e *env) *cobra.Command {
 	var configDir string
-	var noRoundTrip bool
+	var noRoundTrip, live bool
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Run every hook and the MCP server as Claude Code would, then a retain/recall round trip in a scratch bank",
-		Args:  usageArgs(cobra.NoArgs),
+		Long: "Run every hook and the MCP server as Claude Code would, then a retain/recall round trip in a scratch bank.\n\n" +
+			"With --live, check the real pipeline instead, read-only: this machine's latest settled session reached the\n" +
+			"configured server and an observation was consolidated from it. Exit 0 pass, 40 pending (rerun after wait_s),\n" +
+			"20 fail.",
+		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if live {
+				if noRoundTrip {
+					return &output.Error{Code: output.Usage, Message: "--live reads the real bank and makes no round trip: drop --no-round-trip"}
+				}
+				res, err := runVerifyLive(cmd.Context(), configDir)
+				return e.report("verify", res, func() string { return liveText(res) }, err)
+			}
 			res, err := runVerify(cmd.Context(), configDir, noRoundTrip)
 			if err == nil && res.Failed > 0 {
 				err = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", res.Failed)}}
@@ -65,6 +79,7 @@ func newVerifyCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&configDir, "config-dir", "", "Claude Code's directory the hooks run for (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	cmd.Flags().BoolVar(&noRoundTrip, "no-round-trip", false, "skip the retain/recall round trip (no LLM call)")
+	cmd.Flags().BoolVar(&live, "live", false, "check, read-only, that this machine's latest settled session was sent and consolidated")
 	return cmd
 }
 
@@ -297,6 +312,64 @@ func verifyText(r verifyResult) string {
 	var b strings.Builder
 	for _, c := range r.Checks {
 		fmt.Fprintf(&b, "%-7s %-24s %s\n", c.Status, c.ID, c.Summary)
+	}
+	return b.String()
+}
+
+// liveServer is the configured server as verify --live reads it; tests
+// replace it.
+var liveServer = func(url, key string) (livecheck.Server, error) { return hindsight.New(url, key, 30*time.Second) }
+
+// runVerifyLive is verify --live (0068): read-only against the configured
+// server. Pending exits 40 with the rerun as its resume, fail exits 20.
+func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, error) {
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		return livecheck.Result{}, err
+	}
+	d, home, err := machine()
+	if err != nil {
+		return livecheck.Result{}, err
+	}
+	srv, err := liveServer(cfg.Server.URL, sec.APIKey)
+	if err != nil {
+		return livecheck.Result{}, blocked(err)
+	}
+	files := transcripts(home)
+	if configDir != "" {
+		loc := claudecode.Locate(home, func(k string) string {
+			if k == "CLAUDE_CONFIG_DIR" {
+				return configDir
+			}
+			return os.Getenv(k)
+		})
+		files, _ = filepath.Glob(filepath.Join(loc.Projects, "*", "*.jsonl"))
+	}
+	in := livecheck.Input{Server: srv, Bank: cfg.Server.Bank, Transcripts: files, CursorsDir: d.CursorsDir(), Now: now()}
+	if st, err := state.Load(d.StateFile()); err == nil && st.RetainSince != nil {
+		in.RetainSince = *st.RetainSince
+	}
+	res := livecheck.Check(ctx, in)
+	switch res.Status {
+	case livecheck.Pending:
+		return res, shownError{&output.Error{Code: output.Partial, Message: res.Summary, Resume: "backsight verify --live"}}
+	case livecheck.Fail:
+		return res, shownError{&output.Error{Code: output.Blocked, Message: res.Summary}}
+	}
+	return res, nil
+}
+
+func liveText(r livecheck.Result) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s\n", r.Status, r.Summary)
+	if r.Detail != "" {
+		fmt.Fprintf(&b, "  %s\n", r.Detail)
+	}
+	if r.Fix != "" {
+		fmt.Fprintf(&b, "  fix: %s\n", r.Fix)
+	}
+	if r.Status == livecheck.Pending && r.WaitS > 0 {
+		fmt.Fprintf(&b, "  rerun in about %d min: backsight verify --live\n", (r.WaitS+59)/60)
 	}
 	return b.String()
 }

@@ -63,7 +63,7 @@ On exit 0, `data` holds:
 - `next_steps`: relay each one (the backup key to save, the background backfill);
 - `try_first`: suggest it.
 
-`backsight doctor --json` checks the whole install at any time. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
+`backsight doctor --json` checks the whole install at any time. About an hour after the user's first real session, `backsight verify --live --json` checks the real pipeline, read-only: exit 0 means this machine's latest settled session reached the server and an observation was consolidated from it; exit 40 means not yet, rerun after `data.wait_s` seconds; exit 20 means it failed, with `data.fix`. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
 
 ## When something goes wrong
 

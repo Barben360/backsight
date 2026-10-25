@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,10 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/hook"
+	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 // asShim makes verify run this test binary as the shim: TestMain turns it
@@ -237,5 +241,119 @@ func TestVerifyRedactsProviderErrors(t *testing.T) {
 	code, out, _ := run(t, "verify", "--json")
 	if c := parseVerify(t, out)["round_trip"]; code != output.Blocked || c.Status != "fail" || strings.Contains(out, "fakellmkey") {
 		t.Errorf("exit %d %+v\n%s", code, c, out)
+	}
+}
+
+// liveFake is a read-only server for verify --live.
+type liveFake struct {
+	docs     map[string]hindsight.Document
+	memories []hindsight.Memory
+	queued   int
+}
+
+func (f *liveFake) GetDocument(_ context.Context, _, id string) (hindsight.Document, error) {
+	if d, ok := f.docs[id]; ok {
+		return d, nil
+	}
+	return hindsight.Document{}, &hindsight.APIError{Status: 404, Kind: hindsight.NotFound}
+}
+
+func (f *liveFake) ListMemories(_ context.Context, _ string, q hindsight.MemoryQuery, fn func(hindsight.Memory) error) error {
+	for _, m := range f.memories {
+		if (q.Type == "" || m.FactType == q.Type) && (q.DocumentID == "" || m.DocumentID == q.DocumentID) {
+			if err := fn(m); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (f *liveFake) QueuedOperations(context.Context, string) (int, error) { return f.queued, nil }
+
+func withLiveServer(t *testing.T, f *liveFake) (gotURL *string) {
+	t.Helper()
+	old := liveServer
+	var u string
+	liveServer = func(url, _ string) (livecheck.Server, error) { u = url; return f, nil }
+	t.Cleanup(func() { liveServer = old })
+	return &u
+}
+
+func liveSession(t *testing.T, home, sid string, written time.Time) string {
+	t.Helper()
+	p := filepath.Join(home, ".claude", "projects", "-work-api", sid+".jsonl")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	_ = os.WriteFile(p, []byte(`{"type":"user"}`+"\n"), 0o600)
+	_ = os.Chtimes(p, written, written)
+	return p
+}
+
+func parseLive(t *testing.T, out string) (livecheck.Result, *output.Error) {
+	t.Helper()
+	var env struct {
+		Data  livecheck.Result `json:"data"`
+		Error *output.Error    `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	return env.Data, env.Error
+}
+
+func TestVerifyLivePassPendingAndFail(t *testing.T) {
+	home := devInstall(t, true)
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	f := &liveFake{docs: map[string]hindsight.Document{}}
+	gotURL := withLiveServer(t, f)
+
+	// Settled 40 min ago, not sent yet: pending, exit 40, rerun as resume.
+	p := liveSession(t, home, "s1", at.Add(-40*time.Minute))
+	code, out, _ := run(t, "verify", "--live", "--json")
+	res, e := parseLive(t, out)
+	if code != output.Partial || res.Status != livecheck.Pending || res.WaitS <= 0 || e == nil || e.Resume != "backsight verify --live" {
+		t.Fatalf("pending: exit %d\n%s", code, out)
+	}
+	if !strings.HasPrefix(*gotURL, "http://127.0.0.1:") {
+		t.Errorf("read %q, not the configured server", *gotURL)
+	}
+
+	// Sent, stored, consolidated into an observation: pass, exit 0.
+	fi, _ := os.Stat(p)
+	_ = retain.SaveCursor(pathsOf(home).CursorsDir(), "s1", retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u9", Segment: 1,
+		Document: "conversation:s1", Bank: "claude-memory", SentAt: at.Add(-35 * time.Minute)})
+	f.docs["conversation:s1"] = hindsight.Document{Metadata: map[string]string{"segment": "1", "last_uuid": "u9"}}
+	f.memories = []hindsight.Memory{
+		{ID: "f1", FactType: "world", DocumentID: "conversation:s1", ConsolidatedAt: "2026-10-25T11:40:00+00:00"},
+		{ID: "o1", FactType: "observation", SourceMemoryIDs: []string{"f1"}},
+	}
+	code, out, errOut := run(t, "verify", "--live", "--json")
+	if res, _ = parseLive(t, out); code != output.OK || res.Status != livecheck.Pass || res.Observations != 1 {
+		t.Fatalf("pass: exit %d\n%s%s", code, out, errOut)
+	}
+	code, out, _ = run(t, "verify", "--live")
+	if code != output.OK || !strings.HasPrefix(out, "pass: session s1 reached the server") {
+		t.Errorf("text: exit %d\n%s", code, out)
+	}
+
+	// Two hours later the server lost the document: fail, exit 20, a fix.
+	withClock(t, at.Add(2*time.Hour))
+	delete(f.docs, "conversation:s1")
+	code, out, _ = run(t, "verify", "--live", "--json")
+	if res, _ = parseLive(t, out); code != output.Blocked || res.Status != livecheck.Fail || res.Fix == "" {
+		t.Errorf("fail: exit %d\n%s", code, out)
+	}
+	code, out, errOut = run(t, "verify", "--live")
+	if code != output.Blocked || !strings.Contains(out, "fix: ") || errOut != "" {
+		t.Errorf("text fail: exit %d\n%s\nstderr %q", code, out, errOut)
+	}
+}
+
+func TestVerifyLiveRefusesNoRoundTrip(t *testing.T) {
+	devInstall(t, true)
+	withLiveServer(t, &liveFake{})
+	if code, _, _ := run(t, "verify", "--live", "--no-round-trip"); code != output.Usage {
+		t.Errorf("exit %d", code)
 	}
 }

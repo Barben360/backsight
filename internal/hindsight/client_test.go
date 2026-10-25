@@ -436,3 +436,27 @@ func TestLLMTokensByDay(t *testing.T) {
 		t.Errorf("%+v %v", days, err)
 	}
 }
+
+func TestListMemoriesFiltersByDocumentTypeAndUpdateTime(t *testing.T) {
+	since := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
+	var queries []url.Values
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		fmt.Fprint(w, `{"items":[{"id":"f1","fact_type":"world","document_id":"conversation:s1","consolidated_at":"2026-10-25T10:00:00+00:00","source_memory_ids":null},`+
+			`{"id":"f2","fact_type":"experience","document_id":"conversation:s1","consolidated_at":null,"consolidation_failed_at":"2026-10-25T10:01:00+00:00"}],"total":2,"limit":200,"offset":0}`)
+	})
+	var got []Memory
+	err := c.ListMemories(context.Background(), "b", MemoryQuery{DocumentID: "conversation:s1"}, func(m Memory) error { got = append(got, m); return nil })
+	if err != nil || len(got) != 2 || got[0].ConsolidatedAt == "" || got[1].ConsolidatedAt != "" || got[1].ConsolidationFailedAt == "" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	q := queries[0]
+	if q.Get("document_id") != "conversation:s1" || q.Has("type") || q.Has("time_field") || q.Has("start_date") {
+		t.Errorf("document query %v", q)
+	}
+	_ = c.ListMemories(context.Background(), "b", MemoryQuery{Type: "observation", UpdatedSince: since}, func(Memory) error { return nil })
+	q = queries[1]
+	if q.Get("type") != "observation" || q.Has("document_id") || q.Get("time_field") != "updated_at" || q.Get("start_date") != "2026-10-25T09:30:00Z" {
+		t.Errorf("observation query %v", q)
+	}
+}
