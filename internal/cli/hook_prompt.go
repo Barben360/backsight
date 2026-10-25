@@ -406,7 +406,9 @@ func (h *hookEnv) postToolUse() {
 		ids = uuidRE.FindAllString(text, -1)
 	}
 	subagent := h.in.AgentID != "" // a subagent's search is not the main thread's
+	n := 0
 	h.updateSession(func(s *session.State) error {
+		n = s.Prompts
 		if !subagent {
 			s.SearchedPromptID = s.Prompts
 			for _, id := range ids {
@@ -420,7 +422,9 @@ func (h *hookEnv) postToolUse() {
 	})
 	// The MCP server logs the call itself (tool event); this one only ties
 	// it to the session, so stats do not count calls twice.
-	h.tw.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": h.in.ToolName, "ids": len(ids)}})
+	// n ties it to the prompt (detector follow-up), memory_ids to the
+	// briefing (briefing use).
+	h.tw.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": h.in.ToolName, "ids": len(ids), "memory_ids": ids, "n": n, "subagent": subagent}})
 }
 
 // responseText flattens a tool response: a string, or MCP content blocks.

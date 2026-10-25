@@ -34,6 +34,14 @@ type Outcome struct {
 	Contradicted bool     `json:"contradicted"`
 }
 
+// Reply is how a finished reply used memory (Stop): the per-turn search
+// and credit rates of C12.
+type Reply struct {
+	N        int    `json:"n"`
+	Credit   string `json:"credit"` // exact | free | empty | "" (silent)
+	Searched bool   `json:"searched"`
+}
+
 type Briefing struct {
 	IDs    []string `json:"ids"`
 	Chars  int      `json:"chars"`
@@ -86,6 +94,7 @@ type Raw struct {
 
 func (Prompt) EventName() string          { return "prompt" }
 func (Outcome) EventName() string         { return "outcome" }
+func (Reply) EventName() string           { return "reply" }
 func (Briefing) EventName() string        { return "briefing" }
 func (BriefingOutcome) EventName() string { return "briefing_outcome" }
 func (Tool) EventName() string            { return "tool" }

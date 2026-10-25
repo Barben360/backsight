@@ -87,6 +87,9 @@ type Result struct {
 	Segment    int    `json:"segment,omitempty"`
 	Chars      int    `json:"chars,omitempty"`
 	Project    string `json:"project,omitempty"`
+	// Unknown counts the record types of this read that Claude Code is not
+	// known to write (transcript.Known).
+	Unknown map[string]int `json:"unknown,omitempty"`
 	// Stop tells the caller the server or setup is failing: later sessions
 	// would fail the same way, so the run ends here.
 	Stop bool `json:"-"`
@@ -149,6 +152,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	_ = fh.Close()
 	if err != nil {
 		return fail(Retry, err.Error())
+	}
+	if u := st.UnknownTypes(); len(u) > 0 {
+		res.Unknown = u
 	}
 	now := f.Now()
 	for i := range recs {

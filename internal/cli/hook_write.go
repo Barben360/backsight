@@ -149,10 +149,15 @@ func (h *hookEnv) stop() {
 	}
 	tail, _ := redact.Text(string(last))
 	last = []rune(tail)
+	ev := telemetry.Reply{Credit: credit}
 	h.updateSession(func(s *session.State) error {
 		s.LastAssistant, s.LastCredit = string(last), credit
+		ev.N, ev.Searched = s.Prompts, s.Prompts > 0 && s.SearchedPromptID == s.Prompts
 		return nil
 	})
+	if ev.N > 0 {
+		h.tw.Emit(ev)
+	}
 }
 
 // subagentStop queues the subagent's final report as a document (SPEC §6.2),

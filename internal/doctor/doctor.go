@@ -64,7 +64,8 @@ type Env struct {
 	// ClaudePlugins runs `claude plugin list --json` in a profile ("" =
 	// default); nil skips asking Claude Code.
 	ClaudePlugins func(profile string) ([]byte, error)
-	Timeout       time.Duration // per Hindsight call
+	Timeout       time.Duration    // per Hindsight call
+	Now           func() time.Time // nil: time.Now
 }
 
 const (
@@ -114,6 +115,11 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkRetention(loc, env.ManagedDir))
 	add(checkClient(env, loc))
 	add(checkGPU(env.GPUs()))
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
+	add(checkUsage(env.Dirs.TelemetryDir(), now())...)
 	return r
 }
 

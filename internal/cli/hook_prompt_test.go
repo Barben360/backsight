@@ -263,3 +263,22 @@ func TestRecallPromptMatchesTheHookSelection(t *testing.T) {
 		t.Errorf("the hook injected something else:\nhook:\n%s\nrecall-prompt:\n%s", h.Specific.Context, env.Data.Block)
 	}
 }
+
+// Stop records how the reply used memory; PostToolUse ties a memory tool
+// call to its prompt and the ids it returned (stats: search rate, detector
+// follow-up, briefing use).
+func TestReplyAndToolUseEventsCarryTheTurn(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = "[]"
+	prompt(t, home, "s1", longPrompt)
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": "[billing] fact (2d ago, 0b4c2a52-0000-4000-8000-000000000001)"})
+	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."})
+	tel := telemetryText(t, home)
+	if !strings.Contains(tel, `"event":"tool_use"`) || !strings.Contains(tel, `"memory_ids":["0b4c2a52-0000-4000-8000-000000000001"]`) || !strings.Contains(tel, `"n":1`) {
+		t.Errorf("tool_use:\n%s", tel)
+	}
+	if !strings.Contains(tel, `"credit":"exact","event":"reply","n":1`) || !strings.Contains(tel, `"searched":true`) {
+		t.Errorf("reply:\n%s", tel)
+	}
+}

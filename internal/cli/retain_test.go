@@ -139,3 +139,24 @@ func TestFlushRefusedCredentialsAreBlocked(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+// Record types Claude Code is not known to write are counted once the
+// cursor moves (a format change shows in stats and doctor); known ones are
+// not.
+func TestFlushCountsUnknownTranscriptRecords(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", "live.jsonl")
+	f, _ := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.WriteString(`{"type":"brand-new-kind","uuid":"z"}` + "\n" + `{"type":"ai-title","uuid":"y"}` + "\n")
+	_ = f.Close()
+	withClock(t, time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
+	run(t, "retain", "flush")
+	tel := telemetryText(t, home)
+	if !strings.Contains(tel, `"event":"transcript_unknown"`) || !strings.Contains(tel, `"brand-new-kind":1`) || strings.Contains(tel, `"ai-title"`) {
+		t.Errorf("telemetry:\n%s", tel)
+	}
+}

@@ -42,6 +42,28 @@ type ToolUse struct {
 	Input map[string]json.RawMessage
 }
 
+// Known are the record types Claude Code writes besides user and assistant
+// turns, as seen in October 2026 (none carries conversation text). Any
+// other type is counted as unknown: a rising count is a format change to
+// look at (SPEC §14).
+var Known = map[string]bool{
+	"attachment": true, "api-request": true, "api-request-blob": true, "api-request-shape": true, "last-prompt": true,
+	"atis-latch": true, "mode": true, "ai-title": true, "bridge-session": true, "permission-mode": true,
+	"queue-operation": true, "pr-link": true, "custom-title": true, "agent-name": true, "system": true,
+	"file-history-snapshot": true, "file-history-delta": true, "cost-state": true, "summary": true, "progress": true,
+}
+
+// UnknownTypes are the types of a read that are not Known.
+func (s Stats) UnknownTypes() map[string]int {
+	out := map[string]int{}
+	for t, n := range s.Unknown {
+		if !Known[t] {
+			out[t] += n
+		}
+	}
+	return out
+}
+
 // Stats describe one read.
 type Stats struct {
 	Consumed int64          // offset after the last complete line

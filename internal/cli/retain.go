@@ -90,6 +90,11 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		if st, ok := telemetryStatus[r.Status]; ok {
 			tw.Emit(telemetry.Retain{Document: "conversation:" + r.Session, Items: 1, Status: st, MS: int(time.Since(start).Milliseconds())})
 		}
+		// A waiting or retried session is read again next time: counted
+		// once its cursor moves.
+		if len(r.Unknown) > 0 && r.Status != retain.Waiting && r.Status != retain.Retry {
+			tw.Emit(telemetry.Raw{Name: "transcript_unknown", Fields: map[string]any{"types": r.Unknown}})
+		}
 		out = append(out, r)
 		if r.Stop {
 			break // the server or setup is failing: the next run retries
