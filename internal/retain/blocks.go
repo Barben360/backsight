@@ -97,6 +97,9 @@ func BuildSegment(bank, sid string, recs []transcript.Record, segment int, proje
 		Metadata: map[string]string{"session_id": sid, "last_uuid": last.UUID, "records": strconv.Itoa(len(recs)),
 			"segment": strconv.Itoa(segment), "machine_id": machineID, "binary_version": version, "source": "chat", "harness": "claude-code"},
 	}
+	if ep := first.Entrypoint; ep != "" {
+		item.Metadata["entrypoint"] = ep
+	}
 	if segment > 1 {
 		item.UpdateMode = "append"
 	}

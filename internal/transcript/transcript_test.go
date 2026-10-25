@@ -204,3 +204,19 @@ func TestUnknownLinesAndTheCursor(t *testing.T) {
 		t.Errorf("all: %v", got)
 	}
 }
+
+func TestRecordsCarryTheirEntrypoint(t *testing.T) {
+	in := `{"type":"queue-operation","operation":"enqueue"}
+{"type":"user","uuid":"u1","sessionId":"s","cwd":"/w","entrypoint":"sdk-cli","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"run the digest"}}
+`
+	recs, _, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(recs) != 1 || recs[0].Entrypoint != "sdk-cli" {
+		t.Fatalf("%+v %v", recs, err)
+	}
+	if got := Entrypoint(strings.NewReader(in)); got != "sdk-cli" {
+		t.Errorf("Entrypoint = %q", got)
+	}
+	if got := Entrypoint(strings.NewReader(`{"type":"user","uuid":"u1"}` + "\n")); got != "" {
+		t.Errorf("no entrypoint: got %q", got)
+	}
+}

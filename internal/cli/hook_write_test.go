@@ -131,3 +131,21 @@ func TestSessionEndSpawnsADetachedFlush(t *testing.T) {
 		t.Errorf("an invalid session id was passed on: %v", got)
 	}
 }
+
+func TestSubagentStopSkipsTheReportOfAHeadlessSession(t *testing.T) {
+	home := hookHome(t)
+	parent := filepath.Join(t.TempDir(), "s1.jsonl")
+	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/w","entrypoint":"sdk-cli","message":{"role":"user","content":"cron digest"}}`+"\n"), 0o600)
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
+		"transcript_path": parent, "last_assistant_message": "All 11 workers exited with code 0."})
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
+		t.Fatalf("a headless session's subagent report was queued:\n%s", raw)
+	}
+	interactive := filepath.Join(t.TempDir(), "s2.jsonl")
+	_ = os.WriteFile(interactive, []byte(`{"type":"user","uuid":"u1","sessionId":"s2","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"fix the leak"}}`+"\n"), 0o600)
+	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
+		"transcript_path": interactive, "last_assistant_message": "Found the leak in pool.go."})
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); !strings.Contains(string(raw), "pool.go") {
+		t.Errorf("an interactive session's report was not queued:\n%s", raw)
+	}
+}

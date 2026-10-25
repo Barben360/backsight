@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
+	"github.com/Barben360/backsight/internal/transcript"
 )
 
 const (
@@ -174,6 +176,9 @@ func (h *hookEnv) subagentStop() {
 	if out, _ := project.New(h.home, h.cfg.Projects.Transverse).OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths); out {
 		return
 	}
+	if h.cfg.Privacy.SkipsEntrypoint(parentEntrypoint(h.in.TranscriptPath)) {
+		return // a headless session's subagent (decision 0071 C1)
+	}
 	text, _ = redact.Text(text)
 	if r := []rune(text); len(r) > reportChars {
 		text = string(r[:reportChars])
@@ -184,4 +189,18 @@ func (h *hookEnv) subagentStop() {
 		return
 	}
 	h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "queued"})
+}
+
+// parentEntrypoint is how the session that ran a subagent was started, read
+// from the head of its transcript; "" when unknown.
+func parentEntrypoint(path string) string {
+	if path == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	return transcript.Entrypoint(f)
 }

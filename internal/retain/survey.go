@@ -51,6 +51,9 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 		}
 	}
 	for _, r := range pending {
+		if f.headless(r.Entrypoint) {
+			continue // never sent: no cost
+		}
 		for _, t := range r.Turns {
 			c.Chars += int64(len(t.Content))
 		}
@@ -68,6 +71,8 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	switch out, why := f.Resolver.OptedOut(recs[0].CWD, f.Exclude); {
 	case out && c.Notes == 0:
 		c.Status, c.Reason = "opted_out", why
+	case f.headless(recs[0].Entrypoint) && c.Notes == 0:
+		c.Status, c.Reason = "opted_out", "headless session (entrypoint "+recs[0].Entrypoint+"): privacy.skip_entrypoints"
 	case len(pending) == 0 && c.Notes > 0:
 		c.Status = "notes"
 	case len(pending) == 0:

@@ -67,7 +67,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 		return nil, blocked(err)
 	}
 	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: project.New(home, cfg.Projects.Transverse),
-		Exclude: cfg.Privacy.ExcludePaths, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx}, nil
+		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx}, nil
 }
 
 // transcripts lists the session transcripts of this machine's Claude Code.

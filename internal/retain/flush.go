@@ -59,11 +59,14 @@ func refusesDocument(err error) bool {
 
 // Flusher sends settled sessions of one machine to one bank.
 type Flusher struct {
-	Client      *hindsight.Client
-	Bank        string
-	Dirs        paths.Dirs
-	Resolver    *project.Resolver
-	Exclude     []string
+	Client   *hindsight.Client
+	Bank     string
+	Dirs     paths.Dirs
+	Resolver *project.Resolver
+	Exclude  []string
+	// Headless says the records of an entrypoint are never retained
+	// (privacy.skip_entrypoints, decision 0071); nil keeps every record.
+	Headless    func(entrypoint string) bool
 	MachineID   string
 	Version     string
 	Now         func() time.Time
@@ -281,6 +284,9 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		if out, why := pauses(r); out {
 			return runKey{optOut: true, reason: why}
 		}
+		if f.headless(r.Entrypoint) {
+			return runKey{optOut: true, reason: "headless session (entrypoint " + r.Entrypoint + "): privacy.skip_entrypoints"}
+		}
 		cwd := r.CWD
 		if k, ok := keys[cwd]; ok {
 			return k
@@ -327,6 +333,10 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		}
 	}
 	return f.save(res, cur, status, detail)
+}
+
+func (f *Flusher) headless(entrypoint string) bool {
+	return f.Headless != nil && f.Headless(entrypoint)
 }
 
 // sendPart sends one segment; done reports that the flush ended (error).

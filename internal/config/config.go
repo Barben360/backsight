@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -61,6 +62,23 @@ type Projects struct {
 
 type Privacy struct {
 	ExcludePaths []string `toml:"exclude_paths" json:"exclude_paths"`
+	// SkipEntrypoints: transcript entrypoints (globs) whose records are never
+	// retained, headless SDK runs by default (decision 0071 C1).
+	SkipEntrypoints []string `toml:"skip_entrypoints" json:"skip_entrypoints"`
+}
+
+// SkipsEntrypoint reports whether records written under entrypoint ep stay
+// out of memory. Records with no entrypoint (older transcripts) are kept.
+func (p Privacy) SkipsEntrypoint(ep string) bool {
+	if ep == "" {
+		return false
+	}
+	for _, pat := range p.SkipEntrypoints {
+		if ok, _ := path.Match(pat, ep); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Components say which integration pieces this install owns, so the product
@@ -145,7 +163,7 @@ func Default(d paths.Dirs, home string) Config {
 		Server: Server{URL: "http://127.0.0.1:8888", Bank: "claude-memory", Mode: "local",
 			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server"), Project: "backsight"},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
-		Privacy:    Privacy{ExcludePaths: []string{}},
+		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: []string{"sdk-*"}},
 		Components: Components{Read: true, Write: true},
 		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
@@ -259,6 +277,11 @@ func (c Config) Validate() error {
 	}
 	if len(c.Projects.Transverse) == 0 || c.Projects.Transverse[0] == "" {
 		bad("projects.transverse", "needs at least one alias (the first is canonical)")
+	}
+	for _, pat := range c.Privacy.SkipEntrypoints {
+		if _, err := path.Match(pat, ""); err != nil || pat == "" {
+			bad("privacy.skip_entrypoints", "%q is not a valid pattern", pat)
+		}
 	}
 	r := c.Recall
 	unit("recall.min_score", r.MinScore)

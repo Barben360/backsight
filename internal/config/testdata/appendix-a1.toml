@@ -13,6 +13,7 @@ digest = ""
 transverse = [".claude", "u"]
 [privacy]
 exclude_paths = []
+skip_entrypoints = ["sdk-*"]
 [components]
 read = true
 write = true

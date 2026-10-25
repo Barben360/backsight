@@ -28,11 +28,14 @@ type Record struct {
 	UUID      string
 	SessionID string
 	CWD       string
-	Timestamp time.Time
-	Start     int64 // offset of the line
-	End       int64 // offset after its newline
-	Turns     []Turn
-	Tools     []ToolUse // the record's tool calls, for backfill's replayed notes
+	// Entrypoint is how Claude Code was started (cli, claude-desktop,
+	// sdk-cli…); empty in older transcripts.
+	Entrypoint string
+	Timestamp  time.Time
+	Start      int64 // offset of the line
+	End        int64 // offset after its newline
+	Turns      []Turn
+	Tools      []ToolUse // the record's tool calls, for backfill's replayed notes
 }
 
 // ToolUse is one tool call with its raw input.
@@ -85,6 +88,7 @@ type rawRecord struct {
 	UUID             string          `json:"uuid"`
 	SessionID        string          `json:"sessionId"`
 	CWD              string          `json:"cwd"`
+	Entrypoint       string          `json:"entrypoint"`
 	Timestamp        string          `json:"timestamp"`
 	IsMeta           bool            `json:"isMeta"`
 	IsSidechain      bool            `json:"isSidechain"`
@@ -184,7 +188,7 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 		if len(turns) == 0 {
 			continue
 		}
-		recs = append(recs, Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Timestamp: ts,
+		recs = append(recs, Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Entrypoint: rr.Entrypoint, Timestamp: ts,
 			Start: start, End: off, Turns: turns, Tools: tools})
 	}
 }
@@ -270,4 +274,23 @@ func stripTags(s string) string {
 		s = re.ReplaceAllString(s, "")
 	}
 	return s
+}
+
+// entrypointScan bounds how much of a transcript Entrypoint reads.
+const entrypointScan = 1 << 20
+
+// Entrypoint is the entrypoint of the first record of r that names one,
+// within its first MiB; "" when none does.
+func Entrypoint(r io.Reader) string {
+	br := bufio.NewReaderSize(io.LimitReader(r, entrypointScan), 1<<16)
+	for {
+		line, _, tooLong, err := readLine(br)
+		var rr rawRecord
+		if !tooLong && json.Unmarshal(bytes.TrimSpace(line), &rr) == nil && rr.Entrypoint != "" {
+			return rr.Entrypoint
+		}
+		if err != nil {
+			return ""
+		}
+	}
 }

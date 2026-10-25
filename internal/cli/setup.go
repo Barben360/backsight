@@ -431,7 +431,7 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 		since = *st.RetainSince
 	}
 	fl := &retain.Flusher{Bank: cfg.Server.Bank, Dirs: s.dirs, Resolver: project.New(s.home, cfg.Projects.Transverse),
-		Exclude: cfg.Privacy.ExcludePaths, Now: now, RetainSince: since, Index: idx}
+		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, Now: now, RetainSince: since, Index: idx}
 	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 	if model != cfg.LLM.Model {
 		prices = retain.PricesFor(model, 0, 0, 0, cfg.LLM.Currency)

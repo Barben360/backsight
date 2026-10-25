@@ -107,6 +107,8 @@ func TestValidate(t *testing.T) {
 		{"bank dotdot", func(c *Config) { c.Server.Bank = ".." }, "server.bank"},
 		{"global_min_score range", func(c *Config) { c.Recall.GlobalMinScore = 1.2 }, "recall.global_min_score"},
 		{"briefing source", func(c *Config) { c.Recall.Briefing = "both" }, "recall.briefing"},
+		{"skip_entrypoints bad glob", func(c *Config) { c.Privacy.SkipEntrypoints = []string{"sdk-["} }, "privacy.skip_entrypoints"},
+		{"skip_entrypoints empty pattern", func(c *Config) { c.Privacy.SkipEntrypoints = []string{""} }, "privacy.skip_entrypoints"},
 		{"negative min_score", func(c *Config) { c.Recall.MinScore = -0.1 }, "recall.min_score"},
 		{"sticky_bypass range", func(c *Config) { c.Recall.StickyBypass = 2 }, "recall.sticky_bypass"},
 		{"project_boost range", func(c *Config) { c.Recall.ProjectBoost = -1 }, "recall.project_boost"},
@@ -332,5 +334,18 @@ func TestAbsoluteDirectoriesAccepted(t *testing.T) {
 	}
 	if _, err := Load(write(t, "[backup]\ndir = \"backups\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "backup.dir") {
 		t.Errorf("a relative backup.dir in the file: %v", err)
+	}
+}
+
+func TestSkipsEntrypoint(t *testing.T) {
+	p := Default(dirs, "/home/u").Privacy
+	for ep, want := range map[string]bool{"sdk-ts": true, "sdk-cli": true, "sdk-py": true, "cli": false, "claude-desktop": false, "": false} {
+		if got := p.SkipsEntrypoint(ep); got != want {
+			t.Errorf("default SkipsEntrypoint(%q) = %v, want %v", ep, got, want)
+		}
+	}
+	p.SkipEntrypoints = []string{}
+	if p.SkipsEntrypoint("sdk-ts") {
+		t.Error("an empty list must keep every entrypoint")
 	}
 }

@@ -825,3 +825,80 @@ func TestAForkOfAPausedSessionKeepsTheStretchOut(t *testing.T) {
 		t.Errorf("sent:\n%s", all)
 	}
 }
+
+// recordFrom is record with the entrypoint Claude Code writes on each record.
+func (e *env) recordFrom(entrypoint, uuid string, minute int, text string) {
+	const sid = "s1"
+	e.t.Helper()
+	ts := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC).Add(time.Duration(minute) * time.Minute).Format(time.RFC3339)
+	line := fmt.Sprintf(`{"type":"user","uuid":%q,"sessionId":%q,"cwd":%q,"entrypoint":%q,"timestamp":%q,"message":{"role":"user","content":%q}}`+"\n",
+		uuid, sid, e.cwd, entrypoint, ts, text)
+	fh, err := os.OpenFile(filepath.Join(e.dir, sid+".jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	_, _ = fh.WriteString(line)
+	_ = fh.Close()
+}
+
+func skipSDK(ep string) bool { return strings.HasPrefix(ep, "sdk-") }
+
+func TestHeadlessSessionIsNeverSent(t *testing.T) {
+	e := newEnv(t)
+	e.f.Headless = skipSDK
+	e.recordFrom("sdk-ts", "u1", 0, "observer: summarise a meeting")
+	e.recordFrom("sdk-ts", "u2", 1, "observer: list open tasks")
+	r := e.flush("s1", Options{})
+	if r.Status != OptedOut || !strings.Contains(r.Detail, "sdk-ts") || len(e.hs.retains) != 0 {
+		t.Fatalf("%+v, retains %d", r, len(e.hs.retains))
+	}
+	// Handled for good: a later flush does not read them again.
+	if r := e.flush("s1", Options{}); r.Status != Nothing || len(e.hs.retains) != 0 {
+		t.Errorf("second flush %+v", r)
+	}
+	if !e.f.Index.Has("u1") || !e.f.Index.Has("u2") {
+		t.Error("headless records not marked in the sent index")
+	}
+}
+
+func TestInteractiveEntrypointsAreSentWithTheirEntrypoint(t *testing.T) {
+	for _, ep := range []string{"cli", "claude-desktop", ""} {
+		e := newEnv(t)
+		e.f.Headless = skipSDK
+		e.recordFrom(ep, "u1", 0, "we decided to keep PostgreSQL 16")
+		if r := e.flush("s1", Options{}); r.Status != Sent || len(e.hs.retains) != 1 {
+			t.Fatalf("entrypoint %q: %+v", ep, r)
+		}
+		if got := e.hs.retains[0].Metadata["entrypoint"]; got != ep {
+			t.Errorf("entrypoint %q: metadata entrypoint = %q", ep, got)
+		}
+	}
+}
+
+func TestHeadlessStretchOfAFileIsLeftOut(t *testing.T) {
+	e := newEnv(t)
+	e.f.Headless = skipSDK
+	e.recordFrom("cli", "u1", 0, "interactive question")
+	e.recordFrom("sdk-cli", "u2", 1, "cron run log line")
+	e.recordFrom("cli", "u3", 2, "interactive follow-up")
+	if r := e.flush("s1", Options{}); r.Status != Sent {
+		t.Fatalf("%+v", r)
+	}
+	var all string
+	for _, it := range e.hs.retains {
+		all += it.Content
+	}
+	if strings.Contains(all, "cron run log") || !strings.Contains(all, "interactive question") || !strings.Contains(all, "interactive follow-up") {
+		t.Errorf("sent:\n%s", all)
+	}
+}
+
+func TestSurveyCountsHeadlessSessionsAsOptedOut(t *testing.T) {
+	e := newEnv(t)
+	e.f.Headless = skipSDK
+	e.recordFrom("sdk-cli", "u1", 0, "cron run log line")
+	c, _ := e.f.Survey(filepath.Join(e.dir, "s1.jsonl"))
+	if c.Status != "opted_out" || c.Chars != 0 || !strings.Contains(c.Reason, "skip_entrypoints") {
+		t.Errorf("%+v", c)
+	}
+}
