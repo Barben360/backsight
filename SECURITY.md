@@ -6,10 +6,7 @@ backsight keeps a long-term memory of your Claude Code sessions on a Hindsight s
 
 Please do not open a public issue, discussion or pull request for a vulnerability.
 
-- **Once the repository is public**: use GitHub's private vulnerability reporting, at https://github.com/Barben360/backsight/security/advisories/new (the "Report a vulnerability" button under the Security tab). Only the maintainer sees the report.
-- **While the repository is private**:
-
-  > **PLACEHOLDER (author to fill in before the repository goes public or before anyone outside gets access)**: the private contact for vulnerability reports until GitHub's private reporting is available.
+Use GitHub's private vulnerability reporting, at https://github.com/Barben360/backsight/security/advisories/new (the "Report a vulnerability" button under the Security tab). Only the maintainer sees the report. There is no email contact.
 
 Include what you can:
 
