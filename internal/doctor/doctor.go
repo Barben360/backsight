@@ -121,6 +121,7 @@ func Run(ctx context.Context, env Env) Report {
 		}
 	}
 	add(checkMaintenance(env.Dirs))
+	add(checkRestore(env.Dirs))
 	add(checkLocks(env.Dirs))
 	add(checkWrites(env.Dirs))
 	add(checkBackfill(env.Dirs))
@@ -302,7 +303,16 @@ func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d p
 func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
 	c := Check{ID: "restore-epoch"}
 	ep, err := retain.ReadEpoch(ctx, cl, bank)
-	if err != nil {
+	var unreadable *retain.EpochUnreadable
+	switch {
+	case errors.As(err, &unreadable):
+		// The server answered with a document that does not parse: every
+		// session send holds on it until it does.
+		c.Status, c.Summary, c.Detail = Warn, "the bank's restore epoch does not parse: sessions are held", err.Error()
+		c.Fix = "the next `backsight restore` rewrites it; or delete document " + retain.EpochDocument + " from bank " + retain.ControlBank(bank) +
+			" to go back to epoch 0, once every client reconciled"
+		return c
+	case err != nil:
 		c.Status, c.Summary, c.Detail = Info, "cannot read the bank's restore epoch", err.Error()
 		return c
 	}
@@ -401,6 +411,32 @@ func checkMaintenance(d paths.Dirs) Check {
 	default:
 		c.Status, c.Summary = Info, fmt.Sprintf("maintenance in progress: %s (pid %d, since %s)", held.Owner.Command, held.Owner.PID, held.Owner.Since.Format(time.RFC3339))
 	}
+	return c
+}
+
+// checkRestore reports a restore that did not finish (its marker, decision
+// 0044): every session and backfill send holds until it is gone, and the
+// server may be the old one, the restored one or none.
+func checkRestore(d paths.Dirs) Check {
+	c := Check{ID: "restore", Status: OK, Summary: "no restore in progress"}
+	m, err := state.ReadRestoreMarker(d)
+	switch {
+	case m == nil:
+		return c
+	case err != nil:
+		c.Status, c.Summary, c.Detail = Error, "a restore did not finish: sessions are held", err.Error()
+		c.Fix = "check the server (backsight server status) and the newest safety archive (backsight backup list), restore it, then remove " + d.RestoreMarker()
+		return c
+	}
+	c.Status = Error
+	c.Summary = fmt.Sprintf("a restore did not finish (%s, started %s): sessions are held", m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+	c.Detail = "the server as it was before is in the safety archive " + m.Safety + "; the archive being restored is " + m.Archive
+	if m.Safety == "" {
+		c.Detail = "no safety archive was made; the archive being restored is " + m.Archive
+		c.Fix = "rerun backsight restore " + m.Archive
+		return c
+	}
+	c.Fix = "backsight restore " + m.Safety + " --no-safety (back to the server as it was), or rerun backsight restore " + m.Archive
 	return c
 }
 
