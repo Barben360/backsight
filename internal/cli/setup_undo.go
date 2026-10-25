@@ -357,7 +357,7 @@ func done(plan bool) string { return map[bool]string{true: "planned", false: "do
 
 // profileEnv is the environment that points the claude CLI at profile:
 // none for the default ~/.claude (CLAUDE_CONFIG_DIR would move
-// .claude.json into it).
+// .claude.json into it), and claudeEnviron drops the shell's.
 func profileEnv(home, profile string) []string {
 	if profile == "" || filepath.Clean(profile) == filepath.Join(home, ".claude") {
 		return nil

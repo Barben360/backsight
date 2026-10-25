@@ -67,7 +67,7 @@ func installMachine(t *testing.T) installed {
 	if _, err := os.Stat(filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")); err != nil {
 		t.Fatalf("the fixture has no scheduler entry: %v", err)
 	}
-	m.claude.calls, m.sys.calls, m.dk.calls = nil, nil, nil
+	m.claude.calls, m.claude.ran, m.sys.calls, m.dk.calls = nil, nil, nil, nil
 	return m
 }
 
@@ -320,10 +320,13 @@ func TestUninstallAsksForTheBankIDAtATerminal(t *testing.T) {
 	before := treeOf(t, m.home)
 	atTerminal(t, "claude\n")
 	code, out, errOut := run(t, "uninstall", "--delete-data")
-	if code != output.Usage || !strings.Contains(out, "claude-memory") {
+	if code != output.Usage || !strings.Contains(errOut+out, "is not this server's") {
 		t.Fatalf("mistyped: exit %d\n%s%s", code, out, errOut)
 	}
 	sameTree(t, before, treeOf(t, m.home))
+	if len(m.dk.calls) > 0 || len(mutating(m.claude)) > 0 {
+		t.Fatalf("acted on a mistyped id: %q %q", m.dk.subcommands(), mutating(m.claude))
+	}
 	// The id, then Enter for the retention question (keep).
 	atTerminal(t, "claude-memory\n\n")
 	if code, out, errOut := run(t, "uninstall", "--delete-data"); code != output.OK || !reflect.DeepEqual(m.dk.subcommands(), []string{"down --volumes --remove-orphans"}) {
@@ -448,7 +451,7 @@ func TestUninstallFlagsAreChecked(t *testing.T) {
 	raw := readFile(t, pathsOf(m.home).ConfigFile())
 	_ = os.WriteFile(pathsOf(m.home).ConfigFile(), []byte(strings.Replace(raw, "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
 	before = treeOf(t, m.home)
-	if code, _, out := uninstall(t, "--stop"); code != output.Usage || !strings.Contains(out, "remote") {
+	if code, _, out := uninstall(t, "--stop"); code != output.Blocked || !strings.Contains(out, "remote") {
 		t.Errorf("--stop on a remote server: exit %d\n%s", code, out)
 	}
 	sameTree(t, before, treeOf(t, m.home))

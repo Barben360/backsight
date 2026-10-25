@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -71,28 +73,44 @@ func newUninstallCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.deleteData, "delete-data", false, "also delete the local server and every memory in its bank (asks for the bank id)")
 	cmd.Flags().BoolVar(&f.purgeLocal, "purge-local", false, "also delete config.toml, secrets.toml and the state directory (backups stay)")
 	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: exit 10 when an answer is needed")
-	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: confirm_bank=<id>, retention=keep|restore, identity_saved=yes")
+	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: confirm_bank=<id>, retention=keep|restore, identity_saved=yes, pre_images_ack=yes, drop_queued=yes")
 	cmd.Flags().StringVar(&f.answersFile, "answers-file", "", "read answers from a file (id=value lines or a JSON object)")
 	return cmd
 }
 
+// resume is the command that continues this run, every flag kept.
 func (f uninstallFlags) resume() string {
 	cmd := "backsight uninstall"
 	for _, fl := range []struct {
 		on   bool
 		name string
-	}{{f.stop, "--stop"}, {f.deleteData, "--delete-data"}, {f.purgeLocal, "--purge-local"}} {
+	}{{f.stop, "--stop"}, {f.deleteData, "--delete-data"}, {f.purgeLocal, "--purge-local"}, {f.nonInteractive, "--non-interactive"}} {
 		if fl.on {
 			cmd += " " + fl.name
 		}
 	}
+	if f.answersFile != "" {
+		cmd += " --answers-file " + shellWord(f.answersFile)
+	}
 	for _, a := range f.answers {
-		cmd += " --answer " + a
+		cmd += " --answer " + shellWord(a)
 	}
 	return cmd
 }
 
-var uninstallAnswers = map[string][]string{"confirm_bank": nil, "retention": {"keep", "restore"}, "identity_saved": {"yes"}}
+// shellWord quotes s for a POSIX shell when it is not one plain word.
+func shellWord(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=./:,@+%") == "" {
+		return s
+	}
+	return shellQuote(s)
+}
+
+// jobLockWait bounds the wait for a running jobs tick or jobs maintain.
+var jobLockWait = 2 * time.Minute
+
+var uninstallAnswers = map[string][]string{"confirm_bank": nil, "retention": {"keep", "restore"}, "identity_saved": {"yes"},
+	"pre_images_ack": {"yes"}, "drop_queued": {"yes"}}
 
 func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResult, error) {
 	res := uninstallResult{Plan: f.plan, Server: "keep", Steps: []undoAction{}, Kept: []string{}}
@@ -111,7 +129,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	for k, v := range answers {
 		allowed, known := uninstallAnswers[k]
 		if !known {
-			return res, &output.Error{Code: output.Usage, Message: "unknown answer " + k + ": uninstall asks confirm_bank, retention and identity_saved"}
+			return res, &output.Error{Code: output.Usage, Message: "unknown answer " + k + ": uninstall asks confirm_bank, retention, identity_saved, pre_images_ack and drop_queued"}
 		}
 		if allowed != nil && !slices.Contains(allowed, v) {
 			return res, &output.Error{Code: output.Usage, Message: fmt.Sprintf("answer %s=%s: want %s", k, v, strings.Join(allowed, " or "))}
@@ -137,7 +155,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		return res, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	if cfg.Server.Mode != "local" && (f.stop || f.deleteData) {
-		return res, &output.Error{Code: output.Usage, Message: "server.mode is " + cfg.Server.Mode + ": the server runs on another machine; run backsight uninstall " + res.flag() + " there"}
+		return res, &output.Error{Code: output.Blocked, Message: "server.mode is " + cfg.Server.Mode + ": the server runs on another machine; run backsight uninstall " + res.flag() + " there"}
 	}
 	st, err := state.Load(d.StateFile())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -155,6 +173,9 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	if backups == "" {
 		backups = filepath.Join(d.Data, "backups")
 	}
+	// Archives are kept wherever they are: the configured directory and
+	// the default one, which holds those made before backup.dir changed.
+	keep := []string{backups, filepath.Join(d.Data, "backups")}
 	deployed := ""
 	if cfg.Server.Mode == "local" {
 		if deployed, err = runtimeFor(cfg).Deployed(); err != nil {
@@ -163,6 +184,11 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	}
 	profiles := wiredProfiles(home, st, rec)
 	offer := retentionOfferFor(home, st, rec, cfg)
+	retired := 0
+	if rec != nil {
+		retired = retiredRuns(d, rec)
+	}
+	queued := queuedWrites(d)
 	interactive := !e.json && !f.nonInteractive && !f.plan && stdinIsTerminal() && stdoutIsTerminal()
 
 	// Every answer before any change.
@@ -204,17 +230,35 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 				offer.Action = "restore"
 			}
 		}
-		if f.purgeLocal && sec.BackupIdentity != "" && cfg.Backup.Recipient == "" && hasFiles(backups) && answers["identity_saved"] != "yes" {
-			saved := false
-			if interactive {
-				saved = confirm(e, "\nYour backups in "+backups+" open only with the backup identity in secrets.toml, which --purge-local deletes.\n"+
-					"Saved it elsewhere (backsight backup identity show)? [y/N] ")
+		// --purge-local deletes the state and secrets: what only they hold
+		// is asked for first (0067 block 3 review rules).
+		purgeAsk := func(id, prompt, saved string, act output.Action) {
+			if !f.purgeLocal || answers[id] == "yes" {
+				return
 			}
-			if !saved {
-				missing = append(missing, setup.Question{ID: "identity_saved", Required: true, Options: []setup.Option{{Value: "yes", Label: "the backup identity is saved outside this machine"}},
-					Prompt: "--purge-local deletes secrets.toml, which holds the only key to the backups in " + backups + ": save it first, then answer yes"})
-				actions = append(actions, output.Action{Kind: "run_as_user", Cmd: "backsight backup identity show", Why: "print the backup identity to keep it somewhere safe: without it the backups cannot be restored"})
+			if interactive && confirm(e, "\n"+prompt+"\n"+saved+" [y/N] ") {
+				return
 			}
+			missing = append(missing, setup.Question{ID: id, Required: true, Prompt: prompt + ": answer yes once done",
+				Options: []setup.Option{{Value: "yes", Label: saved}}})
+			actions = append(actions, act)
+		}
+		if sec.BackupIdentity != "" {
+			// Whatever backup.recipient says: archives made before it was set
+			// open only with this identity.
+			purgeAsk("identity_saved", "--purge-local deletes secrets.toml and the backup identity it holds, the only key to the backups made with it",
+				"the backup identity is saved outside this machine",
+				output.Action{Kind: "run_as_user", Cmd: "backsight backup identity show", Why: "print the backup identity to keep it somewhere safe: without it the backups cannot be restored"})
+		}
+		if retired > 0 {
+			purgeAsk("pre_images_ack", "--purge-local deletes the pre-images of setup's reference retire, the only way to put the reference install's hooks and MCP servers back (backsight setup --undo)",
+				"the reference install is not wanted back, or setup --undo already ran",
+				output.Action{Kind: "run_as_user", Cmd: "backsight setup --undo", Why: "put the reference install's pieces back before their pre-images go"})
+		}
+		if queued.total() > 0 {
+			purgeAsk("drop_queued", "--purge-local deletes "+queued.String()+", never sent to the server",
+				"they can be dropped",
+				output.Action{Kind: "run_as_user", Cmd: "backsight jobs tick", Why: "send the queued notes while the server answers; quarantined ones need backsight retain retry-quarantine"})
 		}
 		if len(missing) > 0 {
 			var ids []string
@@ -229,23 +273,57 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	}
 	res.Retention = offer
 
-	// What exists before uninstall's own lock creates the state directory.
+	// What exists before uninstall's own locks create the state directory.
 	var local []string
 	for _, dir := range []string{d.Config, d.State} {
 		if _, err := os.Stat(dir); err == nil {
 			local = append(local, dir)
 		}
 	}
-	var release func()
+	// The locks, in the state directory: setup's, then the jobs' (a running
+	// tick or maintain finishes first, and none starts until the end), then
+	// the server's when it is stopped or deleted. Released before
+	// --purge-local deletes their directory.
+	var held []func()
+	releaseLocks := func() {
+		for i := len(held) - 1; i >= 0; i-- {
+			held[i]()
+		}
+		held = nil
+	}
+	defer releaseLocks()
 	if !f.plan {
-		if release, err = setupLock(d, "uninstall"); err != nil {
+		unlock, err := setupLock(d, "uninstall")
+		if err != nil {
 			return res, err
 		}
-		defer func() {
-			if release != nil {
-				release()
+		held = append(held, unlock)
+		unlocks, err := waitForJobs(ctx, d, func(msg string) {
+			if !e.json {
+				fmt.Fprintln(e.stderr, msg)
 			}
-		}()
+		})
+		held = append(held, unlocks...)
+		if err != nil {
+			releaseLocks()
+			cleanLocks(d, local)
+			return res, err
+		}
+		if res.Server != "keep" && deployed != "" {
+			unlock, err := serverLock(d, "uninstall")
+			if err != nil {
+				releaseLocks()
+				cleanLocks(d, local)
+				return res, err
+			}
+			held = append(held, unlock)
+		}
+	} else {
+		for _, name := range jobLocks {
+			if h := state.Inspect(filepath.Join(d.LocksDir(), name+".lock")); h != nil && !h.Stale {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("%s is running (pid %d): uninstall waits up to %s for it to finish", h.Owner.Command, h.Owner.PID, jobLockWait))
+			}
+		}
 	}
 	add := func(a undoAction) { res.Steps = append(res.Steps, a) }
 	fail := func(name string, err error) (uninstallResult, error) {
@@ -330,7 +408,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	if offer != nil && offer.Action == "restore" && !f.plan {
 		offer.Action = "restored"
 	}
-	if !f.plan {
+	if _, err := os.Stat(d.StateFile()); err == nil && !f.plan { // none on a machine without state
 		if err := state.Update(d, "uninstall", func(s *state.State) error {
 			s.PluginVersion, s.ShimTarget = "", ""
 			if s.Client != nil {
@@ -343,11 +421,11 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}); err != nil {
 			return fail("claude settings", err)
 		}
-		saveRecord(func(u *setup.Undo) { u.ClientProfiles = nil })
 	}
+	saveRecord(func(u *setup.Undo) { u.ClientProfiles = nil })
 
 	// 4. The server: kept, stopped, or deleted with its data.
-	if a, err := uninstallServer(ctx, d, cfg, res.Server, f.plan); err != nil {
+	if a, err := uninstallServer(ctx, cfg, res.Server, f.plan); err != nil {
 		return fail("server", err)
 	} else {
 		add(a)
@@ -356,51 +434,65 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}
 	}
 
-	// 5. The command on PATH, the shim, the binaries and the marketplace.
-	if a, err := uninstallBinaries(d, backups, f.plan); err != nil {
-		return fail("binaries", err)
-	} else {
-		add(a)
-	}
-
-	// 6. Local files.
+	// 5. Local files, before the binaries: a failure here still resumes.
 	switch {
 	case len(local) == 0:
 		add(undoAction{Name: "local files", Status: "skipped", Detail: "no config or state here"})
 	case f.purgeLocal:
-		if !f.plan {
-			release()
-			release = nil
-			for _, dir := range local {
-				if err := removeAllExcept(dir, backups); err != nil {
-					return fail("local files", err)
-				}
+		var foreign []string
+		if f.plan {
+			foreign = foreignEntries(d)
+		} else {
+			releaseLocks()
+			var err error
+			if foreign, err = purgeLocal(d, keep); err != nil {
+				return fail("local files", err)
 			}
-			removeIfEmpty(filepath.Join(d.Data, "server"))
-			removeIfEmpty(d.Data)
 		}
-		add(undoAction{Name: "local files", Status: done(f.plan), Detail: strings.Join(local, ", ") + " deleted (config.toml, secrets.toml, the state)"})
+		detail := strings.Join(local, ", ") + " deleted (config.toml, secrets.toml, the state)"
+		if n := queued.total(); n > 0 {
+			detail += ", with " + queued.String()
+		}
+		add(undoAction{Name: "local files", Status: done(f.plan), Detail: detail})
+		for _, p := range foreign {
+			res.Kept = append(res.Kept, p+": not written by backsight")
+		}
+		if f.plan && queued.total() > 0 {
+			res.Warnings = append(res.Warnings, "--purge-local drops "+queued.String()+" (asks drop_queued): backsight jobs tick sends the queued notes first")
+		}
 	default:
 		add(undoAction{Name: "local files", Status: map[bool]string{true: "planned", false: "kept"}[f.plan], Detail: "kept: " + strings.Join(local, ", ")})
 		res.Kept = append(res.Kept, "config.toml and secrets.toml in "+d.Config+" (the server's keys, the LLM key and the backup identity)", "the state in "+d.State+", the config editor's pre-images included")
+	}
+
+	// 6. Last, the command on PATH, the shim, the binaries and the
+	// marketplace. A failure here is not resumable (the state may be gone
+	// and the binary with it): what is left is listed, to remove by hand.
+	a, warn, err := uninstallBinaries(d, keep, f.plan)
+	res.Warnings = append(res.Warnings, warn...)
+	if err != nil {
+		add(undoAction{Name: "binaries", Status: "failed", Detail: errMessage(err)})
+		return res, &output.Error{Code: output.Blocked, Message: "binaries: " + errMessage(err) + "; remove by hand: " + strings.Join(stillThere(a.paths), ", ")}
+	}
+	add(a.undoAction)
+	if !f.plan {
+		removeIfEmpty(filepath.Join(d.Data, "server"))
+		removeIfEmpty(d.Data)
 	}
 	if res.Server != "delete-data" && deployed != "" {
 		res.Kept = append(res.Kept, "the memory server's data (backsight uninstall --delete-data removes it)")
 	}
 	res.Kept = append(res.Kept, "backups in "+backups+": never deleted")
 
-	if rec != nil && (len(rec.Undo.Timers) > 0 || retiredRuns(d, rec) > 0) {
+	if rec != nil && (len(rec.Undo.Timers) > 0 || retired > 0) {
 		res.Warnings = append(res.Warnings, "setup retired a reference install's pieces (hooks, MCP servers or timers): uninstall does not bring them back; run backsight setup --undo first to put them back")
 	}
 	if f.purgeLocal && res.Server != "delete-data" && deployed != "" {
 		res.Warnings = append(res.Warnings, "the kept server's database password now lives only in "+filepath.Join(cfg.Server.ComposeDir, ".env")+": keep that file to reach its data again")
 	}
-	if !f.plan && !slices.Contains(local, d.State) && release != nil {
-		// No state before: leave none behind for the lock.
-		release()
-		release = nil
-		removeIfEmpty(d.LocksDir())
-		removeIfEmpty(d.State)
+	if !f.plan {
+		releaseLocks()
+		cleanLocks(d, local)
 	}
 	if len(profiles) > 0 {
 		res.NextSteps = append(res.NextSteps, "restart Claude Code (or /reload-plugins): its sessions still run the removed plugin")
@@ -554,16 +646,167 @@ func uninstallScheduler(ctx context.Context, plan bool, st state.State) (undoAct
 		a.Status, a.Detail = "skipped", "no entries"
 		return a, nil
 	}
+	// systemd: the services too, once their timers are off (disable
+	// --now stops a timer, not the job it started).
+	var services []string
+	if r.Kind == "systemd" {
+		for _, f := range r.Files {
+			if strings.HasSuffix(f.Target, ".service") {
+				services = append(services, filepath.Base(f.Target))
+			}
+		}
+	}
 	if !plan {
 		if out := subcommand(ctx, "jobs", "uninstall"); out.Err != nil {
 			return a, out.Err
 		}
+		if len(services) > 0 {
+			args := append([]string{"--user", "stop"}, services...)
+			if out, err := sysRunner.Run(ctx, "systemctl", args...); err != nil && !notLoaded(string(out)) {
+				return a, fmt.Errorf("systemctl --user stop %s: %w %s", strings.Join(services, " "), err, strings.TrimSpace(string(out)))
+			}
+		}
 	}
 	a.Status, a.Detail = done(plan), "jobs tick and jobs maintain entries removed ("+strings.Join(there, ", ")+")"
+	if len(services) > 0 {
+		a.Detail += ", " + strings.Join(services, " and ") + " stopped"
+	}
 	return a, nil
 }
 
-func uninstallServer(ctx context.Context, d paths.Dirs, cfg config.Config, mode string, plan bool) (undoAction, error) {
+// jobLocks are the locks jobs tick and jobs maintain hold while they run.
+var jobLocks = []string{"job-tick", "job-maintain"}
+
+// waitForJobs takes the jobs' locks, waiting up to jobLockWait for a
+// running one to finish: none runs, and none starts, while uninstall
+// removes what it uses. Still held after the wait → exit 20, nothing
+// changed. The release functions come back even on error.
+func waitForJobs(ctx context.Context, d paths.Dirs, say func(string)) ([]func(), error) {
+	var unlocks []func()
+	deadline := time.Now().Add(jobLockWait)
+	said := map[string]bool{}
+	for _, name := range jobLocks {
+		path := filepath.Join(d.LocksDir(), name+".lock")
+		for {
+			l, _, err := state.Acquire(path, "uninstall")
+			if err == nil {
+				unlocks = append(unlocks, func() { _ = l.Release() })
+				break
+			}
+			var held *state.HeldError
+			if !errors.As(err, &held) {
+				return unlocks, blocked(err)
+			}
+			if !said[name] {
+				said[name] = true
+				say(fmt.Sprintf("waiting up to %s for %s (pid %d) to finish...", jobLockWait, held.Owner.Command, held.Owner.PID))
+			}
+			if time.Now().After(deadline) {
+				return unlocks, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s is still running after %s (%s): nothing was changed; rerun once it finishes",
+					held.Owner.Command, jobLockWait, held.Error())}
+			}
+			select {
+			case <-ctx.Done():
+				return unlocks, blocked(ctx.Err())
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+	return unlocks, nil
+}
+
+// cleanLocks leaves no locks or state directory behind when there was no
+// state before uninstall (local lists what existed then).
+func cleanLocks(d paths.Dirs, local []string) {
+	if !slices.Contains(local, d.State) {
+		removeIfEmpty(d.LocksDir())
+		removeIfEmpty(d.State)
+	}
+}
+
+// pendingWrites is what has not reached the server yet (doctor's writes check).
+type pendingWrites struct{ notes, qSessions, qNotes int }
+
+func queuedWrites(d paths.Dirs) pendingWrites {
+	ob := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl"), QuarantinePath: filepath.Join(d.QuarantineDir(), "notes.jsonl")}
+	var q pendingWrites
+	q.notes, _ = ob.Pending()
+	q.qNotes, _ = ob.Quarantined()
+	sessions, _ := retain.QuarantinedSessions(d.CursorsDir())
+	q.qSessions = len(sessions)
+	return q
+}
+
+func (q pendingWrites) total() int { return q.notes + q.qSessions + q.qNotes }
+
+func (q pendingWrites) String() string {
+	return fmt.Sprintf("%d note(s) queued, %d session(s) and %d note(s) quarantined", q.notes, q.qSessions, q.qNotes)
+}
+
+// ownEntry reports whether name, directly in dir, is one backsight writes.
+func ownEntry(d paths.Dirs, dir, name string) bool {
+	if strings.HasPrefix(name, ".") && strings.Contains(name, ".tmp-") {
+		return true // an atomic write's temporary file
+	}
+	var own []string
+	switch dir {
+	case d.Config:
+		own = []string{d.ConfigFile(), d.SecretsFile()}
+	case d.State:
+		if strings.HasPrefix(name, "update-") {
+			return true // an update's staging directory
+		}
+		own = []string{d.StateFile(), d.LocksDir(), d.MaintenanceLock(), d.CursorsDir(), d.SessionsDir(), d.SentIndexDir(),
+			d.OutboxDir(), d.QuarantineDir(), d.JournalFile(), d.PreImagesDir(), d.TelemetryDir(), d.EntitiesFile(), d.SetupFile(),
+			d.RestoreMarker(), d.UpdateMarker(), d.UpdateSnapshot()}
+		for _, n := range []string{"staging", "logs", "breaker.json", "doctor-snapshot.json", "machine_id"} {
+			own = append(own, filepath.Join(d.State, n))
+		}
+	}
+	return slices.Contains(own, filepath.Join(dir, name))
+}
+
+// foreignEntries are the entries of the config and state directories that
+// backsight did not write: --purge-local keeps them.
+func foreignEntries(d paths.Dirs) []string {
+	var out []string
+	for _, dir := range []string{d.Config, d.State} {
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if !ownEntry(d, dir, e.Name()) {
+				out = append(out, filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	return out
+}
+
+// purgeLocal deletes what backsight wrote in the config and state
+// directories, never the backups (keep) nor an entry it did not write,
+// which it returns.
+func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
+	foreign := foreignEntries(d)
+	for _, dir := range []string{d.Config, d.State} {
+		ents, err := os.ReadDir(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return foreign, err
+		}
+		for _, e := range ents {
+			if ownEntry(d, dir, e.Name()) {
+				if err := removeAllExcept(filepath.Join(dir, e.Name()), keep...); err != nil {
+					return foreign, err
+				}
+			}
+		}
+		removeIfEmpty(dir)
+	}
+	return foreign, nil
+}
+
+func uninstallServer(ctx context.Context, cfg config.Config, mode string, plan bool) (undoAction, error) {
 	a := undoAction{Name: "server"}
 	if cfg.Server.Mode != "local" {
 		a.Status, a.Detail = "skipped", "the server runs on another machine ("+cfg.Server.URL+"): uninstall it there"
@@ -587,11 +830,7 @@ func uninstallServer(ctx context.Context, d paths.Dirs, cfg config.Config, mode 
 		a.Detail = map[string]string{"stop": "stopped, its data kept", "delete-data": "deleted with every memory in bank " + cfg.Server.Bank + " (asks for the bank id); backups kept"}[mode]
 		return a, nil
 	}
-	unlock, err := serverLock(d, "uninstall")
-	if err != nil {
-		return a, err
-	}
-	defer unlock()
+	// The caller holds the server lock.
 	if mode == "stop" {
 		if err := rt.Stop(ctx); err != nil {
 			return a, err
@@ -607,60 +846,106 @@ func uninstallServer(ctx context.Context, d paths.Dirs, cfg config.Config, mode 
 	return a, nil
 }
 
+// binariesAction is the binaries step and the paths it removes.
+type binariesAction struct {
+	undoAction
+	paths []string
+}
+
 // uninstallBinaries removes the command on PATH when it is backsight's
 // link, then <data>/bin (shim and versioned binaries) and the marketplace.
-func uninstallBinaries(d paths.Dirs, backups string, plan bool) (undoAction, error) {
-	a := undoAction{Name: "binaries"}
+// A command on PATH that is not that link stays, with a warning.
+func uninstallBinaries(d paths.Dirs, keep []string, plan bool) (binariesAction, []string, error) {
+	a := binariesAction{undoAction: undoAction{Name: "binaries"}}
+	var warn []string
 	bin, mkt := filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace")
-	var gone []string
 	link := ""
 	if runtime.GOOS != "windows" && d.Bin != "" {
 		p := filepath.Join(d.Bin, "backsight")
-		if dest, err := os.Readlink(p); err == nil {
-			if !filepath.IsAbs(dest) {
+		if _, err := os.Lstat(p); err == nil {
+			dest, err := os.Readlink(p)
+			if err == nil && !filepath.IsAbs(dest) {
 				dest = filepath.Join(d.Bin, dest)
 			}
-			if strings.HasPrefix(filepath.Clean(dest), bin+string(filepath.Separator)) {
+			if err == nil && strings.HasPrefix(filepath.Clean(dest), bin+string(filepath.Separator)) {
 				link = p
-				gone = append(gone, p)
+				a.paths = append(a.paths, p)
+			} else {
+				warn = append(warn, p+" is not backsight's link into "+bin+": kept; remove it by hand if it is an old backsight")
 			}
 		}
 	}
 	for _, p := range []string{bin, mkt} {
 		if _, err := os.Lstat(p); err == nil {
-			gone = append(gone, p)
+			a.paths = append(a.paths, p)
 		}
 	}
-	if len(gone) == 0 {
+	if len(a.paths) == 0 {
 		a.Status, a.Detail = "skipped", "none installed"
-		return a, nil
+		return a, warn, nil
 	}
 	if !plan {
 		if link != "" {
 			if err := os.Remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return a, err
+				return a, warn, err
 			}
 		}
 		for _, p := range []string{bin, mkt} {
-			if err := removeAllExcept(p, backups); err != nil {
-				return a, err
+			if err := removeAllExcept(p, keep...); err != nil {
+				return a, warn, err
 			}
 		}
 	}
-	a.Status, a.Detail = done(plan), strings.Join(gone, ", ")
-	return a, nil
+	a.Status, a.Detail = done(plan), strings.Join(a.paths, ", ")
+	return a, warn, nil
 }
 
-// removeAllExcept removes root and everything under it, except keep and
-// the directories that lead to it.
-func removeAllExcept(root, keep string) error {
-	root, keep = filepath.Clean(root), filepath.Clean(keep)
-	rel, err := filepath.Rel(root, keep)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return os.RemoveAll(root) // keep is elsewhere
+// stillThere are the paths that exist.
+func stillThere(list []string) []string {
+	var out []string
+	for _, p := range list {
+		if _, err := os.Lstat(p); err == nil {
+			out = append(out, p)
+		}
 	}
-	if rel == "." {
-		return nil
+	return out
+}
+
+// removeAllExcept removes root and everything under it, except the keep
+// paths and the directories that lead to them. A keep path is also
+// compared through its symlinks, so a backup directory reached by a link
+// into root is kept.
+func removeAllExcept(root string, keep ...string) error {
+	var keeps []string
+	for _, k := range keep {
+		keeps = append(keeps, filepath.Clean(k))
+		if r, err := filepath.EvalSymlinks(k); err == nil {
+			keeps = append(keeps, r)
+		}
+	}
+	return removeKeeping(filepath.Clean(root), keeps)
+}
+
+func removeKeeping(root string, keeps []string) error {
+	real := root
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		real = r
+	}
+	inside := false
+	for _, k := range keeps {
+		for _, base := range []string{root, real} {
+			rel, err := filepath.Rel(base, k)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			if rel == "." {
+				return nil
+			}
+			inside = true
+		}
+	}
+	if !inside {
+		return os.RemoveAll(root) // a link is removed, never what it points at
 	}
 	ents, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -670,7 +955,7 @@ func removeAllExcept(root, keep string) error {
 		return err
 	}
 	for _, e := range ents {
-		if err := removeAllExcept(filepath.Join(root, e.Name()), keep); err != nil {
+		if err := removeKeeping(filepath.Join(root, e.Name()), keeps); err != nil {
 			return err
 		}
 	}
@@ -682,18 +967,6 @@ func removeIfEmpty(dir string) {
 	if ents, err := os.ReadDir(dir); err == nil && len(ents) == 0 {
 		_ = os.Remove(dir)
 	}
-}
-
-func hasFiles(dir string) bool {
-	found := false
-	_ = filepath.WalkDir(dir, func(_ string, de fs.DirEntry, err error) error {
-		if err == nil && de.Type().IsRegular() {
-			found = true
-			return fs.SkipAll
-		}
-		return nil
-	})
-	return found
 }
 
 // retiredRuns counts setup's config runs that retired reference pieces.

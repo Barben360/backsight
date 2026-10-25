@@ -23,6 +23,7 @@ import (
 type fakeClaude struct {
 	calls        [][]string
 	envs         [][]string
+	ran          []claudeCall
 	version      string
 	marketplaces string
 	plugins      string
@@ -38,6 +39,7 @@ func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byt
 	}
 	f.calls = append(f.calls, args)
 	f.envs = append(f.envs, env)
+	f.ran = append(f.ran, claudeCall{strings.Join(args, " "), configDirIn(claudeEnviron(env))})
 	if f.failOn != "" && strings.HasPrefix(strings.Join(args, " "), f.failOn) && (f.failOnly == 0 || f.failed < f.failOnly) {
 		f.failed++
 		return nil, errors.New("claude failed: " + f.failOn)
@@ -51,6 +53,34 @@ func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byt
 		return []byte(f.plugins), nil
 	}
 	return []byte("ok\n"), nil
+}
+
+// claudeCall is one claude command line and the CLAUDE_CONFIG_DIR the real
+// runner would have given it ("" unset): the profile it acts on.
+type claudeCall struct{ line, configDir string }
+
+// profilesOf are the CLAUDE_CONFIG_DIR values the calls starting with
+// prefix ran with.
+func (f *fakeClaude) profilesOf(prefix string) []string {
+	var out []string
+	for _, c := range f.ran {
+		if strings.HasPrefix(c.line, prefix) {
+			out = append(out, c.configDir)
+		}
+	}
+	return out
+}
+
+// configDirIn is the CLAUDE_CONFIG_DIR a process with environ sees (the
+// last entry wins, as with exec.Cmd).
+func configDirIn(environ []string) string {
+	dir := ""
+	for _, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+			dir = v
+		}
+	}
+	return dir
 }
 
 func withClaude(t *testing.T) *fakeClaude {
@@ -401,6 +431,27 @@ func TestExecClaudeIgnoresStderrWarnings(t *testing.T) {
 	v, _ := execClaude{}.Run(context.Background(), nil, "--version")
 	if !strings.HasPrefix(string(v), "2.1.310") {
 		t.Errorf("version %q", v)
+	}
+}
+
+// The real runner never passes on the shell's CLAUDE_CONFIG_DIR: the
+// caller names the profile, and none means ~/.claude (block 3 review).
+func TestExecClaudeTakesTheProfileFromTheCallerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script")
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho \"${CLAUDE_CONFIG_DIR-unset}\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CLAUDE_CONFIG_DIR", "/home/u/.claude-work")
+	if out, err := (execClaude{}).Run(context.Background(), nil, "plugin", "list"); err != nil || strings.TrimSpace(string(out)) != "unset" {
+		t.Errorf("no profile given: CLAUDE_CONFIG_DIR=%q %v", out, err)
+	}
+	if out, err := (execClaude{}).Run(context.Background(), []string{"CLAUDE_CONFIG_DIR=/home/u/.claude-dev"}, "plugin", "list"); err != nil || strings.TrimSpace(string(out)) != "/home/u/.claude-dev" {
+		t.Errorf("profile given: CLAUDE_CONFIG_DIR=%q %v", out, err)
 	}
 }
 

@@ -48,7 +48,7 @@ func (execClaude) Run(ctx context.Context, env []string, args ...string) ([]byte
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = claudeEnviron(env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr // warnings on stderr never corrupt the JSON
 	if err := cmd.Run(); err != nil {
@@ -58,6 +58,22 @@ func (execClaude) Run(ctx context.Context, env []string, args ...string) ([]byte
 }
 
 var claudeRunner claudeCLI = execClaude{}
+
+// claudeEnviron is the environment a claude call runs with: this
+// process's without CLAUDE_CONFIG_DIR, then env. The caller names the
+// profile (profileEnv), none meaning ~/.claude: a shell set to another
+// profile never redirects a call meant for ~/.claude (0067 block 3 review).
+func claudeEnviron(env []string) []string {
+	out := make([]string, 0, len(os.Environ())+len(env))
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "CLAUDE_CONFIG_DIR" || (runtime.GOOS == "windows" && strings.EqualFold(k, "CLAUDE_CONFIG_DIR")) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, env...)
+}
 
 // selfExe is the running binary; tests replace it.
 var selfExe = os.Executable
@@ -96,10 +112,12 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		return res, err
 	}
 	res.Profile = c.loc.Dir
-	var env []string
-	if configDir != "" {
-		env = []string{"CLAUDE_CONFIG_DIR=" + configDir}
+	_, home, err := machine()
+	if err != nil {
+		return res, err
 	}
+	// The profile located from --config-dir or the shell, named to claude.
+	env := profileEnv(home, c.loc.Dir)
 	add := func(name, status, detail string) { res.Steps = append(res.Steps, installStep{name, status, detail}) }
 	did := func(changed bool) string {
 		switch {
@@ -238,7 +256,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	// CLAUDE_CONFIG_DIR: a scheduled job has neither and reads the recorded
 	// one. "" is ~/.claude.
 	profile := ""
-	if _, home, err := machine(); err == nil && filepath.Clean(c.loc.Dir) != filepath.Join(home, ".claude") {
+	if filepath.Clean(c.loc.Dir) != filepath.Join(home, ".claude") {
 		profile, _ = filepath.Abs(c.loc.Dir)
 	}
 	if err := state.Update(c.dirs, "client install", func(s *state.State) error {
