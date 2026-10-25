@@ -1,0 +1,359 @@
+package guide
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/Barben360/backsight/internal/hindsight"
+)
+
+// fakeDoc is a document the fake server holds.
+type fakeDoc struct {
+	content string
+	tags    []string
+	meta    map[string]string
+}
+
+// fakeServer is a Hindsight holding documents per bank: retains replace
+// documents, PATCH replaces tags, DELETE removes; recall answers the
+// documents of the bank tagged with one of the asked tags, ordered by
+// rank (document ids, best first; others after, by id).
+type fakeServer struct {
+	mu      sync.Mutex
+	banks   map[string]map[string]*fakeDoc
+	configs map[string]map[string]any
+	calls   []string // METHOD bank /rest
+	retains []string // document ids sent, in order
+	recall  []map[string]any
+	rank    []string
+	downAt  string   // a call whose METHOD /rest starts so answers 500
+	phantom []string // listed, but gone when deleted (another client removed them)
+}
+
+func newFake(t *testing.T) (*fakeServer, *hindsight.Client) {
+	t.Helper()
+	f := &fakeServer{banks: map[string]map[string]*fakeDoc{}, configs: map[string]map[string]any{}}
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	cl, err := hindsight.New(srv.URL, "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, cl
+}
+
+func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rest, _ := strings.CutPrefix(r.URL.EscapedPath(), "/v1/default/banks/")
+	rawBank, sub, _ := strings.Cut(rest, "/")
+	bank, _ := url.PathUnescape(rawBank)
+	sub = "/" + sub
+	f.calls = append(f.calls, r.Method+" "+bank+" "+sub)
+	if f.downAt != "" && strings.HasPrefix(r.Method+" "+sub, f.downAt) {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	docs, exists := f.banks[bank]
+	switch {
+	case r.Method == http.MethodPut && sub == "/":
+		if !exists {
+			f.banks[bank] = map[string]*fakeDoc{}
+		}
+		_, _ = w.Write([]byte(`{}`))
+	case !exists:
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Bank not found"}`))
+	case r.Method == http.MethodPatch && sub == "/config":
+		var body struct {
+			Updates map[string]any `json:"updates"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.configs[bank] = body.Updates
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodGet && sub == "/documents":
+		if r.URL.Query().Get("offset") != "0" {
+			_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			return
+		}
+		var items []map[string]any
+		for id, d := range docs {
+			items = append(items, map[string]any{"id": id, "tags": d.tags, "document_metadata": d.meta})
+		}
+		for _, id := range f.phantom {
+			items = append(items, map[string]any{"id": id, "tags": []string{}})
+		}
+		raw, _ := json.Marshal(map[string]any{"items": items, "total": len(items)})
+		_, _ = w.Write(raw)
+	case r.Method == http.MethodPost && sub == "/memories":
+		var body struct {
+			Items []struct {
+				Content    string            `json:"content"`
+				DocumentID string            `json:"document_id"`
+				Tags       []string          `json:"tags"`
+				Metadata   map[string]string `json:"metadata"`
+			} `json:"items"`
+			Async bool `json:"async"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, it := range body.Items {
+			docs[it.DocumentID] = &fakeDoc{it.Content, it.Tags, it.Metadata}
+			f.retains = append(f.retains, it.DocumentID)
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	case r.Method == http.MethodPatch && strings.HasPrefix(sub, "/documents/"):
+		id, _ := url.PathUnescape(strings.TrimPrefix(sub, "/documents/"))
+		var body struct {
+			Tags []string `json:"tags"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if d, ok := docs[id]; ok {
+			d.tags = body.Tags
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	case r.Method == http.MethodDelete && strings.HasPrefix(sub, "/documents/"):
+		id, _ := url.PathUnescape(strings.TrimPrefix(sub, "/documents/"))
+		if _, ok := docs[id]; !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Document not found"}`))
+			return
+		}
+		delete(docs, id)
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPost && sub == "/memories/recall":
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.recall = append(f.recall, body)
+		want := map[string]bool{}
+		tags, _ := body["tags"].([]any)
+		for _, t := range tags {
+			want[t.(string)] = true
+		}
+		var ids []string
+		for id, d := range docs {
+			for _, t := range d.tags {
+				if want[t] {
+					ids = append(ids, id)
+					break
+				}
+			}
+		}
+		pos := func(id string) int {
+			for i, r := range f.rank {
+				if r == id {
+					return i
+				}
+			}
+			return len(f.rank)
+		}
+		sort.Slice(ids, func(a, b int) bool {
+			if pos(ids[a]) != pos(ids[b]) {
+				return pos(ids[a]) < pos(ids[b])
+			}
+			return ids[a] < ids[b]
+		})
+		var results []map[string]any
+		for i, id := range ids {
+			// two chunks of the first document: hits are per section
+			n := 1
+			if i == 0 {
+				n = 2
+			}
+			for j := 0; j < n; j++ {
+				results = append(results, map[string]any{"id": id + "/u" + string(rune('0'+j)), "text": docs[id].content, "type": "world", "document_id": id,
+					"scores": map[string]any{"final": 1 - float64(i)/10 - float64(j)/100, "reranker": 0.9 - float64(i)/10}})
+			}
+		}
+		results = append(results, map[string]any{"id": "x", "text": "?", "document_id": "docs:gone#old", "scores": map[string]any{"final": 0.1}})
+		raw, _ := json.Marshal(map[string]any{"results": results})
+		_, _ = w.Write(raw)
+	default:
+		w.WriteHeader(http.StatusTeapot)
+	}
+}
+
+func (f *fakeServer) writes() []string {
+	var out []string
+	for _, c := range f.calls {
+		if !strings.HasPrefix(c, "GET ") && !strings.Contains(c, "/memories/recall") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (f *fakeServer) reset() { f.calls, f.retains, f.recall = nil, nil, nil }
+
+func TestIndexSetsUpAQuietBankAndSendsEverySection(t *testing.T) {
+	f, cl := newFake(t)
+	c := load(t)
+	res, err := Index(context.Background(), cl, "mem", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Bank != "mem-docs" || res.Sections != 6 || res.Sent != 6 || res.Unchanged != 0 || res.DocsHash != c.Hash {
+		t.Errorf("%+v", res)
+	}
+	if cfg := f.configs["mem-docs"]; cfg["retain_extraction_mode"] != "chunks" || cfg["enable_observations"] != false {
+		t.Errorf("docs bank config %v", cfg)
+	}
+	if !strings.HasPrefix(strings.Join(f.calls, ", "), "PUT mem-docs /, PATCH mem-docs /config, ") {
+		t.Errorf("the bank must be set up before anything is retained: %v", f.calls)
+	}
+	for _, call := range f.calls {
+		if !strings.Contains(call, " mem-docs ") {
+			t.Errorf("indexing touched another bank: %s", call)
+		}
+	}
+	d := f.banks["mem-docs"]["docs:backup#restore-a-backup"]
+	s, _ := c.Section("backup#restore-a-backup")
+	if d == nil || d.content != s.Text || len(d.tags) != 1 || d.tags[0] != c.Tag() || d.meta["section_hash"] != s.Hash || d.meta["topic"] != "backup" || d.meta["heading"] != "Restore a backup" {
+		t.Errorf("document %+v", d)
+	}
+}
+
+func TestIndexSendsOnlyWhatChanged(t *testing.T) {
+	f, cl := newFake(t)
+	if _, err := Index(context.Background(), cl, "mem", load(t)); err != nil {
+		t.Fatal(err)
+	}
+	fs := fixture()
+	fs["install.md"] = &fstest.MapFile{Data: []byte("# Install\n\n## Requirements\n\nLinux, Docker, Claude Code and an LLM key.\n\n" +
+		"## Uninstall\n\nRun `backsight uninstall`; `--delete-data` also removes the server volumes.\n\n## Update\n\nRun `backsight update apply`.\n")}
+	c2, err := Load(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	res, err := Index(context.Background(), cl, "mem", c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.retains, ", "); got != "docs:install#requirements, docs:install#update" {
+		t.Errorf("sent %s: only the edited and the new section", got)
+	}
+	if res.Sent != 2 || res.Retagged != 4 || res.Deleted != 1 || res.Unchanged != 0 {
+		t.Errorf("%+v", res)
+	}
+	if _, ok := f.banks["mem-docs"]["docs:install#uninstall-1"]; ok {
+		t.Error("the removed section is still in the bank")
+	}
+	for id, d := range f.banks["mem-docs"] {
+		if len(d.tags) != 1 || d.tags[0] != c2.Tag() {
+			t.Errorf("%s tagged %v, want %s", id, d.tags, c2.Tag())
+		}
+	}
+	// Once more: nothing to send, retag or delete.
+	f.reset()
+	res, err = Index(context.Background(), cl, "mem", c2)
+	if err != nil || res.Sent+res.Retagged+res.Deleted != 0 || res.Unchanged != 6 || len(f.retains) != 0 {
+		t.Errorf("%v %+v %v", err, res, f.calls)
+	}
+}
+
+// Two clients refreshing at once: a document the other already deleted
+// is no failure.
+func TestIndexToleratesADocumentAlreadyDeleted(t *testing.T) {
+	f, cl := newFake(t)
+	f.phantom = []string{"docs:old#gone"}
+	res, err := Index(context.Background(), cl, "mem", load(t))
+	if err != nil || res.Deleted != 1 || res.Sent != 6 {
+		t.Errorf("%v %+v", err, res)
+	}
+	f.downAt = "DELETE /documents/"
+	if _, err := Index(context.Background(), cl, "mem", load(t)); err == nil {
+		t.Error("a delete the server refuses must fail the index")
+	}
+}
+
+func TestSearchOnAFreshBankOnlyReads(t *testing.T) {
+	f, cl := newFake(t)
+	c := load(t)
+	if _, err := Index(context.Background(), cl, "mem", c); err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	f.rank = []string{"docs:install#uninstall", "docs:backup#restore-a-backup"}
+	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "comment désinstaller ?", 3)
+	if err != nil || refreshed != nil {
+		t.Fatalf("%v %+v", err, refreshed)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Errorf("a search on a fresh bank wrote: %v", w)
+	}
+	if got := strings.Join(refs(hits), ", "); got != "install#uninstall, backup#restore-a-backup, backup" {
+		t.Errorf("hits %s: one per section, best first, limit 3", got)
+	}
+	if hits[0].Excerpt == "" || hits[0].Score != 0.9 || hits[0].Heading != "Uninstall" {
+		t.Errorf("hit %+v", hits[0])
+	}
+	req := f.recall[0]
+	if req["query"] != "comment désinstaller ?" || req["tags_match"] != "any_strict" || len(req["tags"].([]any)) != 1 || req["tags"].([]any)[0] != c.Tag() {
+		t.Errorf("recall %v: only this docs version", req)
+	}
+}
+
+func TestSearchRefreshesABankOnAnotherVersion(t *testing.T) {
+	f, cl := newFake(t)
+	old := load(t)
+	if _, err := Index(context.Background(), cl, "mem", old); err != nil {
+		t.Fatal(err)
+	}
+	fs := fixture()
+	fs["backup.md"].Data = append(fs["backup.md"].Data, []byte("\n## Verify a backup\n\nRun `backsight backup verify <file>`.\n")...)
+	c, _ := Load(fs)
+	f.reset()
+	f.rank = []string{"docs:backup#verify-a-backup"}
+	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "check an archive", 5)
+	if err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 6 {
+		t.Fatalf("%v %+v", err, refreshed)
+	}
+	if hits[0].Ref() != "backup#verify-a-backup" {
+		t.Errorf("hits %v", refs(hits))
+	}
+}
+
+func TestSearchIndexesAMissingBank(t *testing.T) {
+	f, cl := newFake(t)
+	c := load(t)
+	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "restore", 5)
+	if err != nil || refreshed == nil || refreshed.Sent != 6 || len(hits) == 0 {
+		t.Fatalf("%v %+v %v", err, refreshed, refs(hits))
+	}
+	if f.configs["mem-docs"]["retain_extraction_mode"] != "chunks" {
+		t.Error("a missing bank must be created quiet before the retain")
+	}
+}
+
+func TestSearchFailuresSayWhere(t *testing.T) {
+	f, cl := newFake(t)
+	c := load(t)
+	f.downAt = "POST /memories"
+	_, _, err := Search(context.Background(), cl, "mem", c, "restore", 5)
+	var se *SearchError
+	if !errors.As(err, &se) || se.Stage != "refresh" {
+		t.Errorf("a failed refresh: %v", err)
+	}
+	f.downAt = ""
+	if _, err := Index(context.Background(), cl, "mem", c); err != nil {
+		t.Fatal(err)
+	}
+	f.downAt = "POST /memories/recall"
+	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5); !errors.As(err, &se) || se.Stage != "recall" {
+		t.Errorf("a failed recall: %v", err)
+	}
+	f.downAt = "GET /documents"
+	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5); !errors.As(err, &se) || se.Stage != "check" {
+		t.Errorf("a failed listing: %v", err)
+	}
+}

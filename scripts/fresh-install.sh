@@ -109,6 +109,19 @@ done
 jq -e '(.data.checks | length > 0) and (.data.checks | map(select(.status == "error")) | length == 0)' "$work/doctor.json" >/dev/null ||
   { jq -c '.data.checks[]? | select(.status == "error")' "$work/doctor.json" >&2 || cat "$work/doctor.json" >&2; fail "doctor reports errors"; }
 
+# 5b. The docs (decision 0069): setup indexed them into the docs bank with
+# no LLM call (chunks only, like the control bank), and guide search
+# answers a French question from it.
+jq -e '[.data.steps[] | select(.name == "docs")][0].status == "done"' "$work/setup.json" >/dev/null || fail "setup did not index the docs"
+"$bin" guide search --json "comment désinstaller backsight ?" > "$work/guide.json" || { cat "$work/guide.json" >&2; fail "guide search failed"; }
+jq -e '.ok and .data.mode == "semantic" and (.data.hits | length > 0)' "$work/guide.json" >/dev/null ||
+  { cat "$work/guide.json" >&2; fail "guide search did not answer from the docs bank"; }
+docs_bank=$(sed -n "s/^bank *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/config.toml" | head -n 1)
+docs_bank=${docs_bank:-claude-memory}-docs
+docs_llm=$(curl -fsS -H "Authorization: Bearer $(sed -n "s/^api_key *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/secrets.toml" | head -n 1)" \
+  "http://127.0.0.1:$port/v1/default/banks/$docs_bank/llm-requests/stats?period=1d&call_type=llm" | jq '[.buckets[].total] | add // 0')
+[ "$docs_llm" = 0 ] || fail "the docs bank $docs_bank logged $docs_llm LLM call(s): indexing must only embed"
+
 # 6. A session goes out through the profile's transcripts before the
 # backup: the backup holds it, so the restore below must leave it alone.
 # A first jobs tick records retain_since: live retain takes the sessions

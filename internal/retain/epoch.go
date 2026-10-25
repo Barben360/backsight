@@ -438,10 +438,7 @@ func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch)
 		return err
 	}
 	cb := ControlBank(bank)
-	if err := cl.CreateBank(ctx, cb, "backsight control", "backsight's control records for bank "+bank+" (the restore epoch); no memory."); err != nil {
-		return err
-	}
-	if err := cl.PatchBankConfig(ctx, cb, controlConfig); err != nil {
+	if err := QuietBank(ctx, cl, cb, "backsight control", "backsight's control records for bank "+bank+" (the restore epoch); no memory."); err != nil {
 		return err
 	}
 	at, from := e.RestoredAt.UTC().Format(time.RFC3339), e.BackupCreatedAt.UTC().Format(time.RFC3339)
@@ -451,6 +448,16 @@ func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch)
 		Tags:       []string{},
 		Metadata:   map[string]string{"epoch": strconv.Itoa(e.Epoch), "restored_at": at, "backup_created_at": from, "history": string(rawHist)},
 	}})
+}
+
+// QuietBank creates bank, or refreshes its profile, with controlConfig:
+// what it stores costs no LLM call. The control bank and the docs bank
+// (decision 0069) are both set up through it, before anything is retained.
+func QuietBank(ctx context.Context, cl *hindsight.Client, bank, name, mission string) error {
+	if err := cl.CreateBank(ctx, bank, name, mission); err != nil {
+		return err
+	}
+	return cl.PatchBankConfig(ctx, bank, controlConfig)
 }
 
 // ControlBank is the bank holding bank's control records (the restore

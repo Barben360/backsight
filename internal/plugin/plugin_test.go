@@ -239,7 +239,7 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		"remember":     "",
 		"pause":        "Bash(/opt/b/current pause*)", // resume always asks
 		"memory-retro": "Bash(/opt/b/current search *), Bash(true)",
-		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*)",
+		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*), Bash(/opt/b/current guide*)",
 	}
 	for name, tools := range want {
 		raw, err := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", name, "SKILL.md"))
@@ -250,6 +250,11 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		if fm["name"] != name || fm["description"] == "" || fm["allowed-tools"] != tools {
 			t.Errorf("%s frontmatter %q", name, fm)
 		}
+	}
+	// Questions about backsight itself go to its docs (decision 0069).
+	if raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "memory", "SKILL.md")); !strings.Contains(string(raw), "`/opt/b/current guide search \"<question>\"`") ||
+		!strings.Contains(frontmatter(t, "memory", string(raw))["description"], "backsight itself") {
+		t.Errorf("memory skill lacks guide search:\n%s", raw)
 	}
 	// values YAML would misread unquoted come back intact
 	raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))

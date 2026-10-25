@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
@@ -52,6 +53,8 @@ func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 		_ = os.WriteFile(filepath.Join(run, "manifest.json"), []byte(`{"ts":"20261025T120000Z","files":[]}`), 0o600)
 		_ = state.Update(pathsOf(f.home), "client install", func(s *state.State) error { s.PluginVersion = "1.0.0"; return nil })
 		data = clientInstallResult{Profile: filepath.Join(f.home, ".claude"), Steps: []installStep{{Name: "plugin", Status: "done"}}}
+	case "guide index":
+		data = guide.IndexResult{Bank: "claude-memory-docs", Sections: 40, Sent: 40}
 	case "client retention":
 		data = retentionResult{Target: 3650}
 	case "jobs install":
@@ -214,7 +217,7 @@ func TestSetupStopsAtTheMissingKeyThenResumes(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("resume: exit %d\n%s\n%s", code, out, errOut)
 	}
-	want := []string{"server install", "client install", "client retention", "jobs install", "verify", "retain backfill --queue --projects-dir " + filepath.Join(home, ".claude", "projects")}
+	want := []string{"server install", "guide index", "client install", "client retention", "jobs install", "verify", "retain backfill --queue --projects-dir " + filepath.Join(home, ".claude", "projects")}
 	got := f.commands()
 	if len(got) != len(want) {
 		t.Fatalf("steps %q, want %q", got, want)
@@ -277,6 +280,39 @@ func TestSetupFailureAfterChangesIsPartialAndResumable(t *testing.T) {
 	}
 }
 
+// The docs step indexes the docs bank after the server step; when it
+// fails, setup goes on: guide search falls back to its keyword search.
+func TestSetupIndexesTheDocsAndGoesOnWhenItFails(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.OK || strings.Join(f.commands()[:2], ",") != "server install,guide index" || !hasStep(env.Data.Steps, "docs", "done", "40 documentation section(s) in bank claude-memory-docs") {
+		t.Fatalf("exit %d %v\n%s", code, f.commands(), out)
+	}
+
+	home, f = setupMachine(t)
+	withLLMKey(t, home)
+	f.fail["guide index"] = &output.Error{Code: output.Blocked, Message: "server unreachable"}
+	code, out, _ = run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env = parseSetup(t, out)
+	if code != output.OK || !hasStep(env.Data.Steps, "docs", "skipped", "not indexed (server unreachable)") || !strings.Contains(out, "keyword search") {
+		t.Errorf("a docs failure must not stop setup: exit %d\n%s", code, out)
+	}
+	if !strings.Contains(strings.Join(f.commands(), ","), "client install") {
+		t.Errorf("setup stopped after the docs step: %v", f.commands())
+	}
+}
+
+func hasStep(steps []setup.Step, name, status, detail string) bool {
+	for _, s := range steps {
+		if s.Name == name && s.Status == status && strings.Contains(s.Detail, detail) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSetupNeedsUserFromAStepStaysNeedsUser(t *testing.T) {
 	home, f := setupMachine(t)
 	withLLMKey(t, home)
@@ -331,7 +367,7 @@ func TestSetupRetentionAnswerPicksTheFlag(t *testing.T) {
 			if code != output.OK {
 				t.Fatalf("exit %d\n%s", code, out)
 			}
-			if got := f.commands()[2]; got != want {
+			if got := f.commands()[3]; got != want {
 				t.Errorf("%q, want %q", got, want)
 			}
 		})

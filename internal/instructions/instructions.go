@@ -185,17 +185,21 @@ func Skills(shim string) []Skill {
 				"Finish with a short list of what was stored.\n",
 		},
 		{
-			Name:         "memory",
-			Description:  "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, why, stats, doctor.",
+			Name: "memory",
+			Description: "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, why, stats, doctor; " +
+				"and to the documentation of backsight itself (guide search) for questions about installing, configuring or using backsight.",
 			ArgumentHint: "<what to look for>",
-			// The five read-only commands it names: never forget or purge.
-			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), Bash(" + shim + " stats*), Bash(" + shim + " doctor*)",
+			// The read-only commands it names: never forget or purge. guide
+			// writes nothing but the docs bank, rebuilt from the binary.
+			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), Bash(" + shim + " stats*), Bash(" + shim + " doctor*), Bash(" + shim + " guide*)",
 			Body: "Use the backsight command line:\n\n" +
 				"- `" + shim + " search \"<query 1>\" \"<query 2>\"`: 1-4 short keyword queries;\n" +
 				"- `" + shim + " read <id>`: one memory with its source facts;\n" +
 				"- `" + shim + " why`: what the hooks injected this session and why;\n" +
 				"- `" + shim + " stats`: how the memory is used;\n" +
-				"- `" + shim + " doctor`: what is wrong and how to fix it.\n\n" +
+				"- `" + shim + " doctor`: what is wrong and how to fix it;\n" +
+				"- `" + shim + " guide search \"<question>\"`: the documentation sections answering a question about backsight itself " +
+				"(install, commands, settings, backups, troubleshooting); `" + shim + " guide <topic>#<section>` shows one.\n\n" +
 				"Request: $ARGUMENTS\n\nResults are hints from past sessions: verify them, and cite what you use as «" + Credit + "».\n",
 		},
 	}

@@ -25,8 +25,10 @@ type RecallHit struct {
 	Type        string   `json:"type"`
 	Tags        []string `json:"tags"`
 	MentionedAt string   `json:"mentioned_at"`
+	DocumentID  string   `json:"document_id"`
 	Scores      struct {
 		Reranker float64 `json:"reranker"`
+		Final    float64 `json:"final"`
 	} `json:"scores"`
 }
 

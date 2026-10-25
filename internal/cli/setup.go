@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -670,6 +671,18 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			_ = json.Unmarshal(out.Data, &ir)
 			return setup.Step{Name: "server", Status: "done", Detail: fmt.Sprintf("Hindsight %s at %s (UI %s)", ir.Version, ir.URL, ir.UI)}, nil
 		}},
+		// After the bank step (server install's): the docs bank for guide
+		// search (decision 0069). Its failure never stops setup: guide
+		// search answers with its keyword search and indexes on first use.
+		{"docs", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
+			out := subcommand(ctx, "guide", "index")
+			if out.Err != nil {
+				return setup.Step{Name: "docs", Status: "skipped", Detail: "not indexed (" + out.Err.Message + "): backsight guide search uses its keyword search and indexes them on its first use"}, nil
+			}
+			var ir guide.IndexResult
+			_ = json.Unmarshal(out.Data, &ir)
+			return setup.Step{Name: "docs", Status: "done", Detail: fmt.Sprintf("%d documentation section(s) in bank %s for backsight guide search (%d sent)", ir.Sections, ir.Bank, ir.Sent)}, nil
+		}},
 		{"client", 20, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			// Undo removes the plugin only from a profile it was not in before.
 			if known, err := pluginIDs(ctx, profileEnv(s.home, s.loc.Dir)); err != nil || !known[plugin.PluginID()] {
@@ -1056,6 +1069,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "config", Status: "planned", Detail: cfgDetail},
 		{Name: "secrets", Status: "planned", Detail: "check llm_api_key (exit 10 with the command to run when missing)"},
 		{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])},
+		{Name: "docs", Status: "planned", Detail: "backsight guide index: the documentation into the server's docs bank, for backsight guide search (0 LLM calls)"},
 		{Name: "client", Status: "planned", Detail: "backsight client install: plugin and permission rule in " + s.loc.Dir},
 		{Name: "retention", Status: "planned", Detail: retention},
 		{Name: "scheduler", Status: "planned", Detail: scheduler},

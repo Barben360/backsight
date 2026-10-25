@@ -26,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/migrate"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -659,6 +660,7 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 	a.refreshScheduler(ctx, staged, true)
 	if why := serverStepSkipped(a.d, a.cfg); why != "" {
 		add("server", "skipped", why)
+		a.planDocs()
 		return nil
 	}
 	senv, err := runChild(ctx, staged, a.fl.serverUpgrade("--plan")...)
@@ -672,7 +674,14 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 	} else {
 		add("server", "planned", "the new binary pins "+sp.Target+", which the server runs already")
 	}
+	a.planDocs()
 	return nil
+}
+
+func (a *applyRun) planDocs() {
+	if _, err := os.Stat(a.d.ConfigFile()); err == nil {
+		a.add("docs", "planned", "would run the new binary's guide index: its docs into the server's docs bank (0 LLM calls)")
+	}
 }
 
 // steps runs the update from the shim switch on. Before the commit point
@@ -749,9 +758,12 @@ func (a *applyRun) steps(ctx context.Context) error {
 		// new pin. From here the update is never rolled back.
 		a.rb.committed, a.marker.Committed = true, true
 		_ = state.WriteUpdateMarker(a.d, a.marker)
+
+		// 7. The new binary's docs into the docs bank (decision 0069).
+		a.docs(ctx)
 	}
 
-	// 7. Recorded: the shim's target and the one to roll back to.
+	// 8. Recorded: the shim's target and the one to roll back to.
 	if err := state.UpdateWithin(a.d, "update apply", recordWait, func(s *state.State) error {
 		if s.Client == nil {
 			s.Client = &state.Client{}
@@ -765,6 +777,29 @@ func (a *applyRun) steps(ctx context.Context) error {
 	_ = state.ClearUpdateMarker(a.d)
 	add("done", "done", "backsight "+res.Target+" installed; restart Claude Code (or /reload-plugins) to load its plugin")
 	return nil
+}
+
+// docs runs the new binary's guide index: its docs into the server's docs
+// bank. A failure is a warning, never a rollback: guide search answers
+// with its keyword search meanwhile and refreshes the bank on first use.
+func (a *applyRun) docs(ctx context.Context) {
+	if _, err := os.Stat(a.d.ConfigFile()); err != nil {
+		a.add("docs", "skipped", "no server configured on this machine")
+		return
+	}
+	env, err := runChild(ctx, a.target, "guide", "index")
+	var ce *childError
+	switch {
+	case errors.As(err, &ce) && ce.code == output.Usage:
+		a.add("docs", "skipped", "the new binary has no guide index")
+	case err != nil:
+		a.res.Warnings = append(a.res.Warnings, "the docs were not indexed ("+err.Error()+"): backsight guide search indexes them on its first use")
+		a.add("docs", "failed", err.Error())
+	default:
+		var r guide.IndexResult
+		_ = json.Unmarshal(env.Data, &r)
+		a.add("docs", "done", fmt.Sprintf("%d section(s) in bank %s: %d sent, %d unchanged", r.Sections, r.Bank, r.Sent, r.Unchanged+r.Retagged))
+	}
 }
 
 // refreshScheduler runs the new binary's jobs refresh (with plan, its
