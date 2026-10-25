@@ -30,6 +30,7 @@ var (
 
 type backfillFlags struct {
 	plan, allowSubscription bool
+	queue                   bool // queue for jobs tick, send nothing now (setup)
 	since, project, dir     string
 	maxCost                 float64
 	maxTokens               int64
@@ -56,6 +57,7 @@ type backfillResult struct {
 	Paused   string          `json:"paused,omitempty"`
 	Results  []retain.Result `json:"results,omitempty"`
 	Finished bool            `json:"finished"`
+	Queued   bool            `json:"queued,omitempty"`
 }
 
 func newRetainBackfillCmd(e *env) *cobra.Command {
@@ -151,6 +153,10 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			if startErr != nil {
 				return blocked(startErr)
 			}
+			if fl.queue { // jobs tick sends it in the background (decision 0064)
+				res := backfillResult{Plan: plan, Total: len(queue), Queued: true}
+				return e.emit("retain backfill", res, func() string { return backfillText(res) + "queued: jobs tick sends it in the background\n" })
+			}
 			if !e.json { // the plan before a long run (decision 0051)
 				_, _ = io.WriteString(e.stdout, backfillText(backfillResult{Plan: plan}))
 			}
@@ -166,6 +172,8 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 	cmd.Flags().Int64Var(&fl.maxTokens, "max-tokens", 0, "token cap, for models without a price")
 	cmd.Flags().BoolVar(&fl.allowSubscription, "allow-subscription", false, "accept backfill on the Claude subscription lane")
 	cmd.Flags().StringVar(&fl.dir, "projects-dir", "", "read transcripts from another Claude Code profile's projects directory")
+	cmd.Flags().BoolVar(&fl.queue, "queue", false, "queue the backfill for jobs tick and return")
+	_ = cmd.Flags().MarkHidden("queue")
 	return cmd
 }
 

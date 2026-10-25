@@ -444,3 +444,23 @@ func TestJobsTickSendsThreeBackfillSessions(t *testing.T) {
 		t.Errorf("retained %d\n%s", retained.Load(), out)
 	}
 }
+
+func TestBackfillQueueLeavesTheSendingToTick(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "a", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	oldSession(t, home, "b", time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC), false)
+	before := retained.Load()
+	code, out, _ := run(t, "retain", "backfill", "--queue", "--json")
+	if code != output.OK || !strings.Contains(out, `"queued": true`) || retained.Load() != before {
+		t.Fatalf("--queue must send nothing: exit %d, %d sent\n%s", code, retained.Load()-before, out)
+	}
+	st, _ := state.Load(pathsOf(home).StateFile())
+	if st.Backfill == nil || len(st.Backfill.Sessions) != 2 || st.Backfill.MaxCost <= 0 {
+		t.Fatalf("not queued with its cap: %+v", st.Backfill)
+	}
+	if code, _, errOut := run(t, "jobs", "tick"); code != output.OK || retained.Load() != before+2 {
+		t.Errorf("tick did not send the queued backfill: exit %d, %d sent %s", code, retained.Load()-before, errOut)
+	}
+}
