@@ -91,7 +91,9 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Claude Code, pinned, in the job's own prefix (not the machine's)
+        # npm 12 blocks install scripts by default; the postinstall fetches
+        # the native binary.
         run: |
-          npm install -g --prefix "$RUNNER_TEMP/npm" @anthropic-ai/claude-code@2.1.310
+          npm install -g --prefix "$RUNNER_TEMP/npm" --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.310
           echo "$RUNNER_TEMP/npm/bin" >> "$GITHUB_PATH"
       - run: PROJECT="bs-fresh-${BACKSIGHT_CI_SLOT:-0}" WORK="$RUNNER_TEMP" scripts/fresh-install.sh $((38800 + ${BACKSIGHT_CI_SLOT:-0} * 10))
