@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/output"
@@ -130,6 +132,23 @@ func TestServerUpgradeDeploysThePinnedImage(t *testing.T) {
 	}
 }
 
+// A passed upgrade prunes the backups (its safety archive among them)
+// with the normal retention: an auto-apply a day must not pile them up.
+func TestServerUpgradePrunesWithTheBackupRetention(t *testing.T) {
+	home, _, _, _ := upgradeSetup(t)
+	configure(t, home, "[backup]\nkeep_daily = 1\nkeep_weekly = 1")
+	before := backupsIn(home)
+	code, out, _ := run(t, "server", "upgrade", "--json")
+	env := decodeUpgrade(t, out)
+	if code != output.OK || env.Data.Safety == "" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	after := backupsIn(home)
+	if len(before) != 1 || len(after) != 1 || after[0] != filepath.Base(env.Data.Safety) || !strings.Contains(out, before[0]) {
+		t.Errorf("backups %v → %v (safety %s)\n%s", before, after, env.Data.Safety, out)
+	}
+}
+
 func TestServerUpgradePlanChangesNothing(t *testing.T) {
 	home, dk, _, oldImage := upgradeSetup(t)
 	before := snapshot(t, pathsOf(home))
@@ -160,11 +179,49 @@ func TestServerUpgradeBadPinChangesNothing(t *testing.T) {
 	}
 }
 
+// The gates before the deploy: a safety backup that does not verify, or a
+// restore epoch that cannot be read (a rollback must go above it), refuse
+// with nothing deployed and no upgrade marked in progress.
+func TestServerUpgradeGatesChangeNothing(t *testing.T) {
+	for name, c := range map[string]struct {
+		setup func(t *testing.T, home string, dk *restoreDocker, port int)
+		want  string
+	}{
+		"safety backup does not verify": {func(_ *testing.T, _ string, dk *restoreDocker, _ int) { dk.badVerify = true }, "does not verify"},
+		"epoch unreadable": {func(t *testing.T, home string, dk *restoreDocker, port int) {
+			pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+				if r.Method == http.MethodGet && r.URL.Path == epochDocPath {
+					w.WriteHeader(http.StatusInternalServerError)
+					return true
+				}
+				return false
+			}))
+			dk.sqlFails = true
+		}, "restore epoch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, dk, port, oldImage := upgradeSetup(t)
+			c.setup(t, home, dk, port)
+			code, out, _ := run(t, "server", "upgrade", "--json")
+			env := decodeUpgrade(t, out)
+			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, c.want) || !strings.Contains(env.Error.Message, "nothing was changed") {
+				t.Fatalf("exit %d, want %q\n%s", code, c.want, out)
+			}
+			if deployedImage(t, home) != oldImage || len(dk.images) != 0 || len(dk.restores) != 0 || !dk.running || called(dk, " stop") {
+				t.Errorf("acted: image %s ups %v restores %v calls %q", deployedImage(t, home), dk.images, dk.restores, dk.calls)
+			}
+			if state.RestoreIncomplete(pathsOf(home)) {
+				t.Error("upgrade marked in progress")
+			}
+		})
+	}
+}
+
 // A new version that does not start: the safety dump goes back into the
 // previous version, with a new epoch (exit 30).
 func TestServerUpgradeFailedStartRestoresThePreviousVersion(t *testing.T) {
 	home, dk, port, oldImage := upgradeSetup(t)
-	dk.failImage = newImage
+	dk.failImage, dk.migrateImage = newImage, newImage
 	dk.rows = 25
 	code, out, errOut := run(t, "server", "upgrade", "--json")
 	env := decodeUpgrade(t, out)
@@ -197,17 +254,23 @@ func TestServerUpgradeFailedSmokeRollsBack(t *testing.T) {
 		}
 		return false
 	}))
+	// The proxy's port in the server's files, on the old pin.
 	pinImage(t, oldImage)
-	if code, out, _ := run(t, "server", "render"); code != output.OK { // the proxy's port, on the old pin
+	if code, out, _ := run(t, "server", "render"); code != output.OK {
 		t.Fatalf("render: %d %s", code, out)
 	}
 	pinImage(t, newImage)
+	dk.migrateImage = newImage // the new version starts and migrates the data
 	code, out, errOut := run(t, "server", "upgrade", "--json")
-	if code != output.RolledBack || !strings.Contains(out, "smoke") {
+	env := decodeUpgrade(t, out)
+	if code != output.RolledBack || !strings.Contains(out, "smoke") || !env.Data.RolledBack {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if deployedImage(t, home) != oldImage || len(dk.restores) != 1 || !dk.running {
-		t.Errorf("image %s restores %v", deployedImage(t, home), dk.restores)
+	if deployedImage(t, home) != oldImage || !dk.running || dk.rows != 25 || !slices.Equal(dk.restores, []int{25}) {
+		t.Errorf("image %s rows %d restores %v", deployedImage(t, home), dk.rows, dk.restores)
+	}
+	if e := epochOf(t, port); e.Epoch != 1 || env.Data.Epoch == nil || env.Data.Epoch.Epoch != 1 {
+		t.Errorf("rollback epoch %+v, reported %+v", e, env.Data.Epoch)
 	}
 }
 
@@ -231,15 +294,24 @@ func TestServerUpgradeLock(t *testing.T) {
 	home, dk, _, oldImage := upgradeSetup(t)
 	d := pathsOf(home)
 	// Someone else's maintenance: refused, nothing changed.
-	raw, _ := json.Marshal(state.Owner{PID: os.Getppid(), Command: "backup create"})
+	since := time.Now().UTC().Truncate(time.Second)
+	raw, _ := json.Marshal(state.Owner{PID: liveProcess(t), Command: "backup create", Since: since})
 	_ = os.WriteFile(d.MaintenanceLock(), raw, 0o600)
 	if code, out, _ := run(t, "server", "upgrade", "--json"); code != output.Blocked || !strings.Contains(out, "maintenance in progress") || len(dk.calls) != 0 {
 		t.Fatalf("exit %d, calls %q\n%s", code, dk.calls, out)
 	}
-	// update apply's (this process): the upgrade runs under it and leaves
-	// it held.
-	raw, _ = json.Marshal(state.Owner{PID: os.Getpid(), Command: "update apply"})
+	// A lock that says "update apply" with this process's PID, but that
+	// this process did not take (a dead update's, its PID reused): refused.
+	owner := state.Owner{PID: os.Getpid(), Command: "update apply", Since: since}
+	raw, _ = json.Marshal(owner)
 	_ = os.WriteFile(d.MaintenanceLock(), raw, 0o600)
+	if code, out, _ := run(t, "server", "upgrade", "--json"); code != output.Blocked || !strings.Contains(out, "maintenance in progress") || len(dk.calls) != 0 {
+		t.Fatalf("a lock this process did not take: exit %d, calls %q\n%s", code, dk.calls, out)
+	}
+	// update apply's (this process took it): the upgrade runs under it and
+	// leaves it held.
+	updateLock = &owner
+	t.Cleanup(func() { updateLock = nil })
 	if code, out, _ := run(t, "server", "upgrade", "--json"); code != output.OK {
 		t.Fatalf("under update apply's lock: exit %d\n%s", code, out)
 	}

@@ -67,11 +67,18 @@ func checkUpdateIncomplete(d paths.Dirs) Check {
 	}
 	c.Status = Error
 	c.Summary = fmt.Sprintf("an update from %s to %s did not finish (started %s)", m.From, m.To, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+	if m.Committed {
+		// Past its commit point (the server runs the new pin): it is
+		// finished, never undone.
+		c.Detail = "every step passed; only its record in state.json is missing, and sessions hold until it is written"
+		c.Fix = m.Binary + " update apply (it resumes the update)"
+		return c
+	}
 	c.Detail = "the shim may run " + m.Binary + " while the state or the plugin are the previous version's"
 	way := m.WayBack
 	if way == "" {
 		way = m.Previous + " client install"
 	}
-	c.Fix = way + " (back to " + m.From + "), then remove " + d.UpdateMarker() + "; or rerun backsight update apply"
+	c.Fix = m.Binary + " update apply (it resumes the update); or " + way + " (back to " + m.From + "), then remove " + d.UpdateMarker()
 	return c
 }

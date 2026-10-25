@@ -149,3 +149,38 @@ func TestJobsTickHoldsWhileARestoreIsIncomplete(t *testing.T) {
 		t.Errorf("after the marker: exit %d, %d retained\n%s", code, retained.Load()-before, out)
 	}
 }
+
+// While update-incomplete.json exists (an update killed half way, or one
+// whose rollback failed), sessions and the backfill hold as they do for a
+// restore: the shim may run a binary whose state is not its own.
+func TestJobsTickHoldsWhileAnUpdateIsIncomplete(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	queue := queueBackfill(t, home, "x1")
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	d := pathsOf(home)
+	if err := state.WriteUpdateMarker(d, state.UpdateMarker{From: "0.1.0", To: "0.2.0", Previous: "/b/0.1.0/backsight", Binary: "/b/0.2.0/backsight"}); err != nil {
+		t.Fatal(err)
+	}
+	before := retained.Load()
+	code, out, _ := run(t, "jobs", "tick", "--json")
+	var env tickEnvelope
+	_ = json.Unmarshal([]byte(out), &env)
+	if code == output.OK || !strings.Contains(env.Data.Epoch, "update is in progress") || env.Data.Backfill != "" || retained.Load() != before {
+		t.Fatalf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.Backfill == nil || !reflect.DeepEqual(st.Backfill.Sessions, queue) {
+		t.Errorf("queue changed: %+v", st.Backfill)
+	}
+	if code, out, errOut := run(t, "retain", "flush"); code == output.OK || retained.Load() != before {
+		t.Errorf("retain flush sent while the marker exists: exit %d\n%s\n%s", code, out, errOut)
+	}
+	_ = state.ClearUpdateMarker(d)
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || retained.Load() == before {
+		t.Errorf("after the marker: exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+}

@@ -33,7 +33,8 @@ type serverUpgradeResult struct {
 	Safety     string        `json:"safety_archive,omitempty"`
 	Steps      []step        `json:"steps"`
 	RolledBack bool          `json:"rolled_back,omitempty"`
-	Epoch      *retain.Epoch `json:"epoch,omitempty"` // the rollback's
+	Epoch      *retain.Epoch `json:"epoch,omitempty"`  // the rollback's
+	Pruned     []string      `json:"pruned,omitempty"` // backups beyond the retention, once the upgrade passed
 	Warnings   []string      `json:"warnings,omitempty"`
 	MS         int           `json:"ms"`
 }
@@ -226,6 +227,18 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 		return failed("smoke", err)
 	}
 	_ = state.ClearRestoreMarker(d)
+
+	// The safety archive is a backup like the others: the normal retention
+	// applies, so upgrades do not pile them up (the newest is kept).
+	dir := cfg.Backup.Dir
+	if dir == "" {
+		dir = filepath.Join(d.Data, "backups")
+	}
+	pruned, err := backup.Prune(dir, cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly)
+	res.Pruned = pruned
+	if err != nil {
+		res.Warnings = append(res.Warnings, "pruning the backups: "+err.Error())
+	}
 	return nil
 }
 

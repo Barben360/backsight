@@ -205,14 +205,17 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	})
 }
 
-// restoreHold is the restore-in-progress marker as an error: while it
-// exists nothing is sent, whatever the maintenance lock says (its owner may
-// be a restore killed half way).
+// restoreHold is the restore-in-progress marker, or update apply's, as an
+// error: while one exists nothing is sent, whatever the maintenance lock
+// says (its owner may be a restore or an update killed half way).
 func (f *Flusher) restoreHold() error {
-	if !state.RestoreIncomplete(f.Dirs) {
-		return nil
+	switch {
+	case state.RestoreIncomplete(f.Dirs):
+		return errors.New("a restore is in progress or did not finish (" + f.Dirs.RestoreMarker() + "): run backsight doctor")
+	case state.UpdateIncomplete(f.Dirs):
+		return errors.New("an update is in progress or did not finish (" + f.Dirs.UpdateMarker() + "): run backsight doctor")
 	}
-	return errors.New("a restore is in progress or did not finish (" + f.Dirs.RestoreMarker() + "): run backsight doctor")
+	return nil
 }
 
 // dropLost undoes, for each session of this bank sent after since, what

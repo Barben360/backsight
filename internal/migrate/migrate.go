@@ -4,11 +4,13 @@
 // after the shim switch; each is recorded in state.json
 // (applied_migrations) once it passed, so it never runs twice.
 //
-// A migration may change only state.json and config.toml (update apply
-// snapshots both and puts them back on a rollback) or files it edits
-// through the config editor (which keeps pre-images). It must be safe to
-// run again on files it already migrated, and on a fresh install's files,
-// which need no migration: setup does not mark them applied.
+// A migration may change only state.json and config.toml: update apply
+// snapshots both and puts them back on a rollback. Files of the config
+// editor (Claude Code's settings) are off limits until the rollback replays
+// their pre-images (decision 0067 block 2 review), so Env carries no home
+// directory. A migration must be safe to run again on files it already
+// migrated, and on a fresh install's files, which need no migration: setup
+// does not mark them applied.
 package migrate
 
 import (
@@ -22,10 +24,10 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
-// Env is what a migration works on.
+// Env is what a migration works on: backsight's own directories, where
+// it changes state.json and config.toml only.
 type Env struct {
 	Dirs paths.Dirs
-	Home string
 }
 
 // Migration is one numbered step: ID is "NNNN-slug", never reused.

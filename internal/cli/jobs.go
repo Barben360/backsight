@@ -61,7 +61,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				return err
 			}
 			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
-			res := tickResult{Status: "done", Binary: ensureSelfCheck(d)}
+			res := tickResult{Status: "done"}
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
@@ -86,6 +86,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				res.Status, res.Reason = "skipped", "maintenance in progress"
 				return finish(nil)
 			}
+			// After the maintenance check: it writes state.json, whose lock
+			// update apply needs to record the new binary.
+			res.Binary = ensureSelfCheck(d)
 
 			f, err := newFlusher(d, home, cfg, sec, true)
 			if err != nil {

@@ -44,6 +44,9 @@ type State struct {
 	// SelfCheck: the running binary's check of itself against the signed
 	// checksums.txt next to it (SPEC §11.1), made once per binary.
 	SelfCheck *SelfCheck `json:"self_check,omitempty"`
+	// AutoApply: the release jobs maintain failed to apply, skipped until
+	// a newer one appears or update apply is run by hand.
+	AutoApply *AutoApply `json:"auto_apply,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -118,6 +121,14 @@ type UpdateCheck struct {
 	Summary   string    `json:"summary,omitempty"` // Latest's one-line notes
 	Newer     int       `json:"newer,omitempty"`   // releases newer than Installed
 	Error     string    `json:"error,omitempty"`   // the check failed
+}
+
+// AutoApply is the last failed auto-apply of jobs maintain.
+type AutoApply struct {
+	Failed string    `json:"failed"` // the release version
+	Code   int       `json:"code"`   // update apply's exit code
+	Error  string    `json:"error"`
+	At     time.Time `json:"at"`
 }
 
 // SelfCheck is one binary's check of itself: the binary is named by its
@@ -232,4 +243,46 @@ func Update(d paths.Dirs, command string, fn func(*State) error) error {
 		return err
 	}
 	return Save(d.StateFile(), s)
+}
+
+// UpdateWithin is Update that waits for a held state lock, up to wait:
+// update apply's record and rollback must not fail on a tick or a hook
+// writing state.json at that moment. fn's own error is not retried.
+func UpdateWithin(d paths.Dirs, command string, wait time.Duration, fn func(*State) error) error {
+	deadline := time.Now().Add(wait)
+	for {
+		err := Update(d, command, fn)
+		var held *HeldError
+		if !errors.As(err, &held) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// SaveWithin writes raw as state.json under the state lock, waiting for it
+// up to wait (a rollback putting back the state as it was); nil removes it.
+func SaveWithin(d paths.Dirs, command string, wait time.Duration, raw []byte) error {
+	deadline := time.Now().Add(wait)
+	for {
+		l, _, err := Acquire(filepath.Join(d.LocksDir(), "state.lock"), command)
+		var held *HeldError
+		if errors.As(err, &held) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if raw == nil {
+			err = os.Remove(d.StateFile())
+			if errors.Is(err, fs.ErrNotExist) {
+				err = nil
+			}
+		} else {
+			err = fsutil.WriteAtomic(d.StateFile(), raw, 0o600)
+		}
+		_ = l.Release()
+		return err
+	}
 }

@@ -15,7 +15,9 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -55,9 +57,22 @@ type binaryRunner interface {
 // it comes (the child's JSON progress lines, with update apply --json).
 type execBinary struct{ Progress io.Writer }
 
+// childWaitDelay is how long a cancelled child has to finish once asked to
+// stop: a server upgrade's own rollback (the systemd units' TimeoutStopSec
+// covers it). Then it is killed.
+var childWaitDelay = 30 * time.Minute
+
 func (b execBinary) Run(ctx context.Context, exe string, args ...string) ([]byte, []byte, int, error) {
 	cmd := exec.CommandContext(ctx, exe, args...)
-	server.OwnGroup(cmd) // a Ctrl-C reaches update apply, which rolls back; a rollback's child is not killed with it
+	// In its own process group: a Ctrl-C at the terminal reaches update
+	// apply only. A cancel asks the child's group to stop (SIGTERM), so the
+	// child rolls itself back, and is waited for.
+	server.OwnGroup(cmd)
+	cmd.Cancel = func() error { return server.TerminateGroup(cmd.Process) }
+	cmd.WaitDelay = childWaitDelay
+	if updateLock != nil {
+		cmd.Env = append(os.Environ(), updateLockEnv+"="+lockToken(*updateLock))
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if b.Progress != nil {
@@ -86,9 +101,26 @@ type childEnvelope struct {
 	Error *output.Error   `json:"error"`
 }
 
-// runChild runs exe with args and --json; any exit but 0 is an error
-// carrying the child's message (or its stderr's end when it printed no
-// envelope).
+// childError is a child that exited with another code than 0: its code
+// and its envelope's error (needs_user actions included), when it printed
+// one.
+type childError struct {
+	cmdline string
+	code    int
+	env     *output.Error
+	msg     string
+}
+
+func (e *childError) Error() string {
+	if e.code == 0 {
+		return e.cmdline + ": unexpected output: " + e.msg
+	}
+	return fmt.Sprintf("%s: exit %d: %s", e.cmdline, e.code, e.msg)
+}
+
+// runChild runs exe with args and --json; any exit but 0 is a *childError
+// carrying the child's code and message (or its stderr's end when it
+// printed no envelope).
 func runChild(ctx context.Context, exe string, args ...string) (childEnvelope, error) {
 	stdout, stderr, code, err := binaryExec.Run(ctx, exe, append(args, "--json")...)
 	cmdline := exe + " " + strings.Join(args, " ")
@@ -100,16 +132,16 @@ func runChild(ctx context.Context, exe string, args ...string) (childEnvelope, e
 	if code == 0 && perr == nil {
 		return env, nil
 	}
-	msg := ""
+	ce := &childError{cmdline: cmdline, code: code}
 	if perr == nil && env.Error != nil {
-		msg = env.Error.Message
+		ce.env, ce.msg = env.Error, env.Error.Message
 	} else {
-		msg = tail(string(stderr)+string(stdout), 400)
+		ce.msg = tail(string(stderr)+string(stdout), 400)
+		if code == 0 {
+			ce.msg = perr.Error() + ": " + ce.msg
+		}
 	}
-	if code == 0 {
-		return env, fmt.Errorf("%s: unexpected output: %w: %s", cmdline, perr, msg)
-	}
-	return env, fmt.Errorf("%s: exit %d: %s", cmdline, code, msg)
+	return env, ce
 }
 
 func tail(s string, n int) string {
@@ -123,6 +155,7 @@ func tail(s string, n int) string {
 type updateApplyFlags struct {
 	plan            bool
 	version, source string
+	auto            bool // jobs maintain's auto-apply, not the user
 	allowUnordered  bool // passed to the new binary's server upgrade
 }
 
@@ -150,8 +183,10 @@ type updateApplyResult struct {
 	Server     *updateServer   `json:"server,omitempty"`
 	Steps      []step          `json:"steps"`
 	RolledBack bool            `json:"rolled_back,omitempty"`
+	Resumed    bool            `json:"resumed,omitempty"` // an unfinished update to this binary was finished
 	Warnings   []string        `json:"warnings,omitempty"`
 	MS         int             `json:"ms"`
+	changed    bool            // the update went past its install (the shim step started)
 }
 
 // updateServer is the server step: the version deployed and the new
@@ -161,6 +196,7 @@ type updateServer struct {
 	Target   string `json:"target"`
 	Upgrade  bool   `json:"upgrade"`
 	Upgraded bool   `json:"upgraded"`
+	Safety   string `json:"safety_archive,omitempty"` // the server as it was, from the new binary's upgrade
 }
 
 // serverStepSkipped says why update apply has no server to upgrade here:
@@ -183,11 +219,13 @@ func newUpdateApplyCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Install a newer release: verify, install, switch the shim, migrate, update the plugin; roll back on any failure",
-		Long: "Apply takes the maintenance lock, downloads the release archive with checksums.txt and its minisign signature, verifies both " +
-			"(nothing changes when they do not verify: exit 20), installs the binary under <data>/bin/ with its checksums, switches the shim, " +
-			"runs the new binary's pending client migrations and its client install (the plugin, then claude plugin update). Any failure after " +
-			"the switch puts back the shim, state.json, config.toml and the previous plugin, and exits 30. --plan downloads and verifies into a " +
-			"temporary directory, asks the new binary for its pending migrations, and changes nothing.",
+		Long: "Apply downloads the release archive with checksums.txt and its minisign signature and verifies both (nothing changes when they " +
+			"do not verify: exit 20), then takes the maintenance lock, installs the binary under <data>/bin/ with its checksums, switches the " +
+			"shim, and runs the new binary's pending client migrations, its client install (the plugin, then claude plugin update) and its " +
+			"server upgrade. Any failure before the server upgrade passed puts back state.json, config.toml, the server, the shim and the " +
+			"previous plugin, and exits 30. Once it passed the update is committed: a record that fails exits 40, and a rerun of the new " +
+			"binary finishes it, as it resumes any update to itself that did not finish. --plan downloads and verifies into a temporary " +
+			"directory, asks the new binary for its pending migrations and its server plan, and changes nothing.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if fl.version != "" {
@@ -237,7 +275,7 @@ func newUpdateMigrateCmd(e *env) *cobra.Command {
 		Hidden: true,
 		Args:   usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			d, home, err := machine()
+			d, _, err := machine()
 			if err != nil {
 				return err
 			}
@@ -271,7 +309,7 @@ func newUpdateMigrateCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			ran, err := migrate.Apply(cmd.Context(), migrate.Env{Dirs: d, Home: home}, list)
+			ran, err := migrate.Apply(cmd.Context(), migrate.Env{Dirs: d}, list)
 			res.Applied = append(res.Applied, ran...)
 			if err != nil {
 				err = blocked(err)
@@ -298,7 +336,8 @@ func maintenanceFor(d paths.Dirs, command string) (release func(), note string, 
 }
 
 // pickRelease is the release to install: --version, else the newest one
-// under the pre-release policy; nil when there is nothing newer.
+// under the pre-release policy; nil when there is nothing newer than
+// installed (the version the shim runs, not the binary running this).
 func pickRelease(rels []release.Release, installed, want string, optIn bool) (*release.Release, error) {
 	if want != "" {
 		r, ok := release.Find(rels, want)
@@ -322,6 +361,24 @@ func nothingChanged(format string, a ...any) error {
 	return &output.Error{Code: output.Blocked, Message: fmt.Sprintf(format, a...) + ": nothing was changed"}
 }
 
+// binaryDir matches <version>-<hash12>, the directory binaryPath installs
+// a build into.
+var binaryDir = regexp.MustCompile(`^(.+)-[0-9a-f]{12}$`)
+
+// installedVersion is the version of the binary at target (the shim's),
+// read from its directory; the running binary's when it does not say.
+func installedVersion(target string) string {
+	if m := binaryDir.FindStringSubmatch(filepath.Base(filepath.Dir(target))); m != nil {
+		return m[1]
+	}
+	return buildinfo.Version
+}
+
+// recordWait bounds the wait for state.json's lock (a tick or a hook
+// writing it) when update apply records the new binary or puts the
+// previous state back.
+var recordWait = 30 * time.Second
+
 func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyFlags, add func(name, status, detail string)) error {
 	d, cfg, err := updateConfig()
 	if err != nil {
@@ -343,18 +400,46 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 		}
 	}
 	if previous == "" {
-		return &output.Error{Code: output.Blocked, Message: "no installed backsight (no shim at " + shim + "): install it first, then backsight setup"}
+		return &output.Error{Code: output.NeedsUser, Message: "no installed backsight (no shim at " + shim + "): run backsight setup first",
+			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight setup", Why: "update apply updates an install, and there is none here"}}}
 	}
-	res.Previous = previous
+	res.Installed = installedVersion(previous)
 	if state.RestoreIncomplete(d) {
 		return nothingChanged("a restore did not finish (%s): run backsight doctor for the way back", d.RestoreMarker())
 	}
 	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale {
 		return nothingChanged("maintenance in progress: %s", held.Error())
 	}
-	if prev, _ := state.ReadUpdateMarker(d); prev != nil {
+
+	// An update that did not finish: resumed when this binary is its
+	// target, else replaced from the install it started from (its marker
+	// knows it; the shim may run the half-installed binary).
+	prev, merr := state.ReadUpdateMarker(d)
+	var saved map[string][]byte
+	switch {
+	case prev != nil && merr != nil:
+		res.Warnings = append(res.Warnings, fmt.Sprintf("%s cannot be read (%v); this update replaces it", d.UpdateMarker(), merr))
+		prev = nil
+	case prev != nil:
+		if prev.Previous != "" {
+			previous, res.Installed = prev.Previous, prev.From
+		}
+		if saved, err = state.ReadUpdateSnapshot(d); err != nil {
+			return nothingChanged("cannot read the unfinished update's snapshot (%v)", err)
+		}
+		_, wanted := release.Find([]release.Release{{Version: prev.To}}, fl.version)
+		if prev.To == buildinfo.Version && (fl.version == "" || wanted) {
+			if _, err := os.Stat(prev.Binary); err == nil {
+				return resumeUpdate(ctx, d, cfg, st, shim, *prev, saved, res, fl, add)
+			}
+		}
+		if prev.Committed {
+			return &output.Error{Code: output.NeedsUser, Message: fmt.Sprintf("the update to %s is installed and its server upgraded, only its record is missing: finish it with %s update apply", prev.To, prev.Binary),
+				Actions: []output.Action{{Kind: "run_as_user", Cmd: prev.Binary + " update apply", Why: "the new binary resumes its update; an older one must not roll it back"}}}
+		}
 		res.Warnings = append(res.Warnings, fmt.Sprintf("an update from %s to %s did not finish (started %s); this one replaces it", prev.From, prev.To, prev.StartedAt.Format(time.RFC3339)))
 	}
+	res.Previous = previous
 
 	rels, err := src.Releases(ctx)
 	if err != nil {
@@ -381,19 +466,6 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	}
 	add("check", "done", fmt.Sprintf("%s → %s on %s", res.Installed, rel.Version, res.Source))
 
-	// The lock, held to the end: hooks only queue, jobs skip, no backup
-	// or restore starts.
-	if !fl.plan {
-		l, note, err := acquireMaintenance(d, "update apply")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = l.Release() }()
-		if note != "" {
-			res.Warnings = append(res.Warnings, note)
-		}
-		removeStaleStaging(d)
-	}
 	if err := os.MkdirAll(d.State, 0o700); err != nil {
 		return blocked(err)
 	}
@@ -403,7 +475,8 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	}
 	defer func() { _ = os.RemoveAll(work) }()
 
-	// 1. Download and verify: a failure here changed nothing.
+	// 1. Download and verify, before the lock (hooks keep sending while a
+	// slow download runs): a failure here changed nothing.
 	staged, err := fetchVerified(ctx, src, *rel, archive.Name, work, res, add)
 	if err != nil {
 		return err
@@ -414,49 +487,26 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	}
 	target := binaryPath(d.Data, rel.Version, hash)
 	res.Binary = target
-	clientWired := st.PluginVersion != ""
-	clientArgs := []string{"client", "install"}
-	if st.Client != nil && st.Client.Profile != "" {
-		clientArgs = append(clientArgs, "--config-dir", st.Client.Profile)
-	}
-	wayBack := previous + " " + strings.Join(clientArgs, " ")
+	a := newApplyRun(d, cfg, st, shim, previous, target, res, add)
+	a.fl = fl
 
 	if fl.plan {
-		env, err := runChild(ctx, staged, "update", "migrate", "--plan")
-		if err != nil {
-			return nothingChanged("the new binary cannot list its migrations (%v)", err)
-		}
-		var mr struct {
-			Pending []string `json:"pending"`
-		}
-		_ = json.Unmarshal(env.Data, &mr)
-		res.Migrations = append(res.Migrations, mr.Pending...)
-		add("install", "planned", "would install "+target+" with "+selfcheck.ChecksumsFile+" and its signature")
-		add("shim", "planned", "would switch "+shim+" from "+previous+" to "+target)
-		add("migrations", "planned", migrationsText(res.Migrations, "would run"))
-		if clientWired {
-			res.Plugin = "planned"
-			add("plugin", "planned", "would run the new binary's "+strings.Join(clientArgs, " ")+" (plugin regenerated, claude plugin update)")
-		} else {
-			res.Plugin = "skipped: Claude Code is not wired on this machine"
-			add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
-		}
-		if why := serverStepSkipped(d, cfg); why != "" {
-			add("server", "skipped", why)
-			return nil
-		}
-		senv, err := runChild(ctx, staged, fl.serverUpgrade("--plan")...)
-		if err != nil {
-			return nothingChanged("the new binary cannot plan the server upgrade (%v)", err)
-		}
-		sp := decodeServerPlan(senv.Data)
-		res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
-		if sp.Upgrade {
-			add("server", "planned", "would run the new binary's server upgrade: "+sp.Current+" → "+sp.Target+" (backup and verify, pull, start, health, smoke)")
-		} else {
-			add("server", "planned", "the new binary pins "+sp.Target+", which the server runs already")
-		}
-		return nil
+		return a.plan(ctx, staged)
+	}
+
+	// The lock, held to the end: hooks only queue, jobs skip, no backup
+	// or restore starts.
+	unlock, err := takeUpdateLock(d, res)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	removeStaleStaging(d, work)
+	if state.RestoreIncomplete(d) {
+		return nothingChanged("a restore did not finish (%s): run backsight doctor for the way back", d.RestoreMarker())
+	}
+	if !fl.auto {
+		clearAutoApply(d)
 	}
 
 	// 2. Install the binary next to its signed checksums (the self-check).
@@ -478,102 +528,291 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	}
 	add("install", "done", target)
 
-	// From here a failure rolls back.
-	rb := &updateRollback{d: d, shim: shim, previous: previous, target: target, removeTarget: created && target != previous, clientArgs: clientArgs, wayBack: wayBack, add: add, res: res}
-	if err := rb.snapshot(); err != nil {
-		rb.removeBinary()
+	// From here a failure rolls back, from a snapshot that outlives this
+	// process: state.json and config.toml before the update (the unfinished
+	// one's, when this one replaces it).
+	// The unfinished update's binary is this one's: it goes with a
+	// rollback when that update installed it.
+	a.rb.removeTarget = (created || (prev != nil && prev.RemoveBinary && prev.Binary == target)) && target != previous
+	if saved == nil {
+		if saved, err = takeSnapshot(d); err != nil {
+			a.rb.removeBinary()
+			return nothingChanged("cannot save state.json and config.toml before the update (%v)", err)
+		}
+	}
+	a.rb.saved = saved
+	a.marker = state.UpdateMarker{From: res.Installed, To: rel.Version, Previous: previous, Binary: target, WayBack: a.rb.wayBack,
+		StartedAt: now().UTC().Truncate(time.Second), RemoveBinary: a.rb.removeTarget}
+	if err := state.WriteUpdateSnapshot(d, saved); err != nil {
+		a.rb.removeBinary()
 		return nothingChanged("cannot save state.json and config.toml before the update (%v)", err)
 	}
-	marker := state.UpdateMarker{From: res.Installed, To: rel.Version, Previous: previous, Binary: target, WayBack: wayBack, StartedAt: now().UTC().Truncate(time.Second)}
-	if err := state.WriteUpdateMarker(d, marker); err != nil {
-		rb.removeBinary()
+	if err := state.WriteUpdateMarker(d, a.marker); err != nil {
+		a.rb.removeBinary()
+		_ = state.ClearUpdateMarker(d)
 		return nothingChanged("cannot mark the update in progress (%v)", err)
 	}
-	failed := func(name string, err error) error {
-		add(name, "failed", err.Error())
-		return rb.run(ctx, fmt.Errorf("%s: %w", name, err))
-	}
+	res.changed = true
+	return a.steps(ctx)
+}
 
-	// 3. The shim.
-	if err := pointShim(target, shim); err != nil {
-		return failed("shim", err)
+// takeUpdateLock takes the maintenance lock for update apply and names it
+// for the binaries it runs (heldByUpdate).
+func takeUpdateLock(d paths.Dirs, res *updateApplyResult) (func(), error) {
+	l, note, err := acquireMaintenance(d, "update apply")
+	if err != nil {
+		return nil, err
 	}
-	add("shim", "done", shim+" → "+target)
-	if link, older := olderPathLink(d, shim); older && pointShim(shim, link) == nil { // the PATH command follows the shim
-		add("path", "done", link+" → "+shim)
+	if note != "" {
+		res.Warnings = append(res.Warnings, note)
 	}
-	if err := ctx.Err(); err != nil {
-		return failed("shim", err)
-	}
+	o := l.Owner()
+	updateLock = &o
+	return func() { updateLock = nil; _ = l.Release() }, nil
+}
 
-	// 4. The new binary's migrations.
-	env, err := runChild(ctx, target, "update", "migrate")
+// resumeUpdate finishes an update this binary is the target of, killed
+// half way or stopped at its record (exit 40): the steps after the
+// install run again (each is idempotent), rolling back to the marker's
+// previous install from the persisted snapshot until the commit point.
+func resumeUpdate(ctx context.Context, d paths.Dirs, cfg config.Config, st state.State, shim string, m state.UpdateMarker, saved map[string][]byte, res *updateApplyResult, fl updateApplyFlags, add func(name, status, detail string)) error {
+	res.Installed, res.Target, res.Binary, res.Previous, res.Resumed = m.From, m.To, m.Binary, m.Previous, true
+	add("check", "done", fmt.Sprintf("resuming the update from %s to %s started %s", m.From, m.To, m.StartedAt.Format(time.RFC3339)))
+	a := newApplyRun(d, cfg, st, shim, m.Previous, m.Binary, res, add)
+	a.fl, a.marker, a.rb.removeTarget, a.rb.committed = fl, m, m.RemoveBinary, m.Committed
+	if fl.plan {
+		add("resume", "planned", "would run the steps after the install again as "+m.Binary+": shim, migrations, plugin, server, record")
+		return nil
+	}
+	unlock, err := takeUpdateLock(d, res)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if state.RestoreIncomplete(d) {
+		return nothingChanged("a restore did not finish (%s): run backsight doctor for the way back", d.RestoreMarker())
+	}
+	if !fl.auto {
+		clearAutoApply(d)
+	}
+	if saved == nil && !m.Committed {
+		// A marker from before snapshots were kept: the files as they are
+		// now are the best way back there is.
+		if saved, err = takeSnapshot(d); err != nil {
+			return nothingChanged("cannot save state.json and config.toml (%v)", err)
+		}
+		res.Warnings = append(res.Warnings, "the unfinished update kept no snapshot of state.json and config.toml: a rollback puts back the current ones")
+	}
+	a.rb.saved = saved
+	res.changed = true
+	return a.steps(ctx)
+}
+
+// applyRun is one update past its install: the steps the new binary runs
+// and the rollback they share.
+type applyRun struct {
+	d           paths.Dirs
+	cfg         config.Config
+	shim        string
+	target      string
+	clientArgs  []string
+	clientWired bool
+	marker      state.UpdateMarker
+	rb          *updateRollback
+	fl          updateApplyFlags
+	res         *updateApplyResult
+	add         func(name, status, detail string)
+}
+
+func newApplyRun(d paths.Dirs, cfg config.Config, st state.State, shim, previous, target string, res *updateApplyResult, add func(name, status, detail string)) *applyRun {
+	clientArgs := []string{"client", "install"}
+	if st.Client != nil && st.Client.Profile != "" {
+		clientArgs = append(clientArgs, "--config-dir", st.Client.Profile)
+	}
+	wayBack := previous + " " + strings.Join(clientArgs, " ")
+	return &applyRun{d: d, cfg: cfg, shim: shim, target: target, clientArgs: clientArgs, clientWired: st.PluginVersion != "", res: res, add: add,
+		rb: &updateRollback{d: d, shim: shim, previous: previous, target: target, clientArgs: clientArgs, wayBack: wayBack, add: add, res: res}}
+}
+
+// plan asks the staged binary what it would do; nothing changes.
+func (a *applyRun) plan(ctx context.Context, staged string) error {
+	res, add := a.res, a.add
+	env, err := runChild(ctx, staged, "update", "migrate", "--plan")
+	if err != nil {
+		return nothingChanged("the new binary cannot list its migrations (%v)", err)
+	}
 	var mr struct {
-		Applied []string `json:"applied"`
+		Pending []string `json:"pending"`
 	}
 	_ = json.Unmarshal(env.Data, &mr)
-	res.Migrations = append(res.Migrations, mr.Applied...)
-	if err != nil {
-		return failed("migrations", err)
-	}
-	add("migrations", "done", migrationsText(res.Migrations, "ran"))
-	if err := ctx.Err(); err != nil {
-		return failed("migrations", err)
-	}
-
-	// 5. The new binary's plugin: generated, then claude plugin update.
-	if clientWired {
-		rb.pluginTouched = true
-		if _, err := runChild(ctx, target, clientArgs...); err != nil {
-			return failed("plugin", err)
-		}
-		res.Plugin = "updated"
-		add("plugin", "done", "the new binary's "+strings.Join(clientArgs, " ")+": plugin regenerated, claude plugin update")
+	res.Migrations = append(res.Migrations, mr.Pending...)
+	add("install", "planned", "would install "+a.target+" with "+selfcheck.ChecksumsFile+" and its signature")
+	add("shim", "planned", "would switch "+a.shim+" from "+a.rb.previous+" to "+a.target)
+	add("migrations", "planned", migrationsText(res.Migrations, "would run"))
+	if a.clientWired {
+		res.Plugin = "planned"
+		add("plugin", "planned", "would run the new binary's "+strings.Join(a.clientArgs, " ")+" (plugin regenerated, claude plugin update)")
 	} else {
 		res.Plugin = "skipped: Claude Code is not wired on this machine"
 		add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
 	}
-	if err := ctx.Err(); err != nil {
-		return failed("plugin", err)
-	}
-
-	// 6. The server, when the new binary pins another version than the
-	// one deployed: the new binary owns its pin, so it runs the upgrade
-	// (and its own rollback to the version deployed before).
-	if why := serverStepSkipped(d, cfg); why != "" {
+	if why := serverStepSkipped(a.d, a.cfg); why != "" {
 		add("server", "skipped", why)
+		return nil
+	}
+	senv, err := runChild(ctx, staged, a.fl.serverUpgrade("--plan")...)
+	if err != nil {
+		return nothingChanged("the new binary cannot plan the server upgrade (%v)", err)
+	}
+	sp := decodeServerPlan(senv.Data)
+	res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
+	if sp.Upgrade {
+		add("server", "planned", "would run the new binary's server upgrade: "+sp.Current+" → "+sp.Target+" (backup and verify, pull, start, health, smoke)")
 	} else {
-		senv, err := runChild(ctx, target, fl.serverUpgrade("--plan")...)
+		add("server", "planned", "the new binary pins "+sp.Target+", which the server runs already")
+	}
+	return nil
+}
+
+// steps runs the update from the shim switch on. Before the commit point
+// any failure, or a cancel between steps, rolls back; after it (the server
+// step passed) only the record is left, and its failure is exit 40.
+func (a *applyRun) steps(ctx context.Context) error {
+	res, add, target := a.res, a.add, a.target
+	failed := func(name string, err error) error {
+		add(name, "failed", err.Error())
+		return a.rb.run(ctx, fmt.Errorf("%s: %w", name, err))
+	}
+	if !a.rb.committed {
+		// 3. The shim.
+		if err := pointShim(target, a.shim); err != nil {
+			return failed("shim", err)
+		}
+		add("shim", "done", a.shim+" → "+target)
+		if link, older := olderPathLink(a.d, a.shim); older && pointShim(a.shim, link) == nil { // the PATH command follows the shim
+			add("path", "done", link+" → "+a.shim)
+		}
+		if err := ctx.Err(); err != nil {
+			return failed("shim", err)
+		}
+
+		// 4. The new binary's migrations.
+		env, err := runChild(ctx, target, "update", "migrate")
+		var mr struct {
+			Applied []string `json:"applied"`
+		}
+		_ = json.Unmarshal(env.Data, &mr)
+		res.Migrations = append(res.Migrations, mr.Applied...)
 		if err != nil {
+			return failed("migrations", err)
+		}
+		add("migrations", "done", migrationsText(res.Migrations, "ran"))
+		if err := ctx.Err(); err != nil {
+			return failed("migrations", err)
+		}
+
+		// 5. The new binary's plugin: generated, then claude plugin update.
+		if a.clientWired {
+			a.rb.pluginTouched = true
+			if _, err := runChild(ctx, target, a.clientArgs...); err != nil {
+				return failed("plugin", err)
+			}
+			res.Plugin = "updated"
+			add("plugin", "done", "the new binary's "+strings.Join(a.clientArgs, " ")+": plugin regenerated, claude plugin update")
+		} else {
+			res.Plugin = "skipped: Claude Code is not wired on this machine"
+			add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
+		}
+		if err := ctx.Err(); err != nil {
+			return failed("plugin", err)
+		}
+
+		// 6. The server, when the new binary pins another version than the
+		// one deployed: the new binary owns its pin, so it runs the upgrade
+		// (and its own rollback to the version deployed before).
+		if err := a.server(ctx); err != nil {
 			return failed("server", err)
 		}
-		sp := decodeServerPlan(senv.Data)
-		res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
-		if sp.Upgrade {
-			rb.serverTouched = true
-			if _, err := runChild(ctx, target, fl.serverUpgrade()...); err != nil {
-				return failed("server", err)
-			}
-			res.Server.Upgraded = true
-			add("server", "done", sp.Current+" → "+sp.Target)
-		} else {
-			add("server", "skipped", "the server runs "+sp.Target+" already")
-		}
+
+		// The commit point: every step passed, the server (if any) runs the
+		// new pin. From here the update is never rolled back.
+		a.rb.committed, a.marker.Committed = true, true
+		_ = state.WriteUpdateMarker(a.d, a.marker)
 	}
 
 	// 7. Recorded: the shim's target and the one to roll back to.
-	if err := state.Update(d, "update apply", func(s *state.State) error {
+	if err := state.UpdateWithin(a.d, "update apply", recordWait, func(s *state.State) error {
 		if s.Client == nil {
 			s.Client = &state.Client{}
 		}
-		s.ShimTarget, s.Client.ShimPrevious = target, previous
+		s.ShimTarget, s.Client.ShimPrevious = target, a.rb.previous
 		return nil
 	}); err != nil {
-		return failed("record", err)
+		add("record", "failed", err.Error())
+		return a.rb.run(ctx, fmt.Errorf("record: %w", err))
 	}
-	_ = state.ClearUpdateMarker(d)
-	add("done", "done", "backsight "+rel.Version+" installed; restart Claude Code (or /reload-plugins) to load its plugin")
+	_ = state.ClearUpdateMarker(a.d)
+	add("done", "done", "backsight "+res.Target+" installed; restart Claude Code (or /reload-plugins) to load its plugin")
 	return nil
+}
+
+// server runs the new binary's server step. Its upgrade passed when it
+// exits 0, or when it ended otherwise (killed after its last step, an
+// envelope that does not parse) with the server on the new pin and no
+// upgrade marked in progress: a server rollback re-renders nothing, it
+// only ever restores the safety archive (updateRollback.serverBack).
+func (a *applyRun) server(ctx context.Context) error {
+	res, add := a.res, a.add
+	if why := serverStepSkipped(a.d, a.cfg); why != "" {
+		add("server", "skipped", why)
+		return nil
+	}
+	senv, err := runChild(ctx, a.target, a.fl.serverUpgrade("--plan")...)
+	if err != nil {
+		return err
+	}
+	sp := decodeServerPlan(senv.Data)
+	res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
+	if !sp.Upgrade {
+		add("server", "skipped", "the server runs "+sp.Target+" already")
+		return nil
+	}
+	a.rb.serverTouched = true
+	uenv, err := runChild(ctx, a.target, a.fl.serverUpgrade()...)
+	var ur struct {
+		Safety string `json:"safety_archive"`
+	}
+	_ = json.Unmarshal(uenv.Data, &ur)
+	res.Server.Safety, a.marker.Safety = ur.Safety, ur.Safety
+	if err != nil {
+		if !upgradePassed(a.d, a.cfg, sp) {
+			return err
+		}
+		res.Warnings = append(res.Warnings, fmt.Sprintf("the new binary's server upgrade ended with an error (%v), but the server runs %s and no upgrade is in progress: it passed", err, sp.Target))
+	}
+	res.Server.Upgraded = true
+	add("server", "done", sp.Current+" → "+sp.Target)
+	return nil
+}
+
+// upgradePassed: no upgrade is marked in progress (the child clears its
+// restore marker once it passed, or once its rollback finished) and the
+// server's files name the new pin (a finished rollback names the old one).
+func upgradePassed(d paths.Dirs, cfg config.Config, sp serverPlan) bool {
+	if state.RestoreIncomplete(d) || sp.Target == sp.Current {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(cfg.Server.ComposeDir, "compose.yaml"))
+	return err == nil && server.ServiceImage(raw, "hindsight") == sp.Target
+}
+
+// clearAutoApply forgets a failed auto-apply: update apply run by hand
+// (decision 0067 block 2 review: skipped until then, or a newer release).
+func clearAutoApply(d paths.Dirs) {
+	if st, err := state.Load(d.StateFile()); err == nil && st.AutoApply == nil {
+		return
+	}
+	_ = state.UpdateWithin(d, "update apply", recordWait, func(s *state.State) error { s.AutoApply = nil; return nil })
 }
 
 func migrationsText(ids []string, verb string) string {
@@ -583,13 +822,22 @@ func migrationsText(ids []string, verb string) string {
 	return verb + " " + strings.Join(ids, ", ")
 }
 
+// staleStaging: an update- directory older than this is a killed update's
+// (a live one downloads for at most downloadTimeout).
+const staleStaging = 2 * time.Hour
+
 // removeStaleStaging removes what a killed update left under the state
-// directory (the caller holds the maintenance lock).
-func removeStaleStaging(d paths.Dirs) {
+// directory (the caller holds the maintenance lock), never keep (this
+// update's) nor one a concurrent update may still be downloading into.
+func removeStaleStaging(d paths.Dirs, keep string) {
 	ents, _ := os.ReadDir(d.State)
 	for _, e := range ents {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "update-") {
-			_ = os.RemoveAll(filepath.Join(d.State, e.Name()))
+		p := filepath.Join(d.State, e.Name())
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "update-") || p == keep {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > staleStaging {
+			_ = os.RemoveAll(p)
 		}
 	}
 }
@@ -601,13 +849,16 @@ func removeStaleStaging(d paths.Dirs) {
 // release's version. It returns the unpacked binary.
 func fetchVerified(ctx context.Context, src release.Source, rel release.Release, archive, work string, res *updateApplyResult, add func(name, status, detail string)) (string, error) {
 	names := []string{archive, selfcheck.ChecksumsFile, selfcheck.SignatureFile}
+	dctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
 	for _, name := range names {
-		if err := download(ctx, src, rel, name, filepath.Join(work, name)); err != nil {
+		if err := download(dctx, src, rel, name, filepath.Join(work, name)); err != nil {
 			return "", nothingChanged("cannot download %s (%v)", name, err)
 		}
 		a, _ := rel.Asset(name)
 		res.Assets = append(res.Assets, a)
 	}
+	cancel()
 	add("download", "done", strings.Join(names, ", "))
 	sums, err := os.ReadFile(filepath.Join(work, selfcheck.ChecksumsFile))
 	if err != nil {
@@ -634,7 +885,7 @@ func fetchVerified(ctx context.Context, src release.Source, rel release.Release,
 		return "", nothingChanged("cannot unpack %s (%v)", archive, err)
 	}
 	bare := selfcheck.BinaryName(rel.Version, runtime.GOOS, runtime.GOARCH)
-	if bytes.Contains(sums, []byte("  "+bare+"\n")) {
+	if listsFile(sums, bare) {
 		f, err := os.Open(staged)
 		if err != nil {
 			return "", blocked(err)
@@ -670,7 +921,35 @@ func binaryName() string {
 	return "backsight"
 }
 
+// listsFile reports whether checksums.txt lists name ("<hash>  <name>",
+// the last line with or without its newline).
+func listsFile(sums []byte, name string) bool {
+	for _, line := range strings.Split(string(sums), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
+			return true
+		}
+	}
+	return false
+}
+
+// downloadTimeout bounds the download of a release's three assets;
+// maxAsset bounds each one (an archive is ~5 MB).
+var (
+	downloadTimeout       = 15 * time.Minute
+	maxAsset        int64 = 256 << 20
+)
+
+// download copies one asset of rel to dst: no more than the size the
+// release lists (and maxAsset), and exactly that size when it lists one.
 func download(ctx context.Context, src release.Source, rel release.Release, name, dst string) error {
+	a, _ := rel.Asset(name)
+	if a.Size > maxAsset {
+		return fmt.Errorf("%s is %d bytes, more than the %d an asset may have", name, a.Size, maxAsset)
+	}
+	limit := maxAsset
+	if a.Size > 0 {
+		limit = a.Size
+	}
 	r, err := src.Open(ctx, rel, name)
 	if err != nil {
 		return err
@@ -680,15 +959,37 @@ func download(ctx context.Context, src release.Source, rel release.Release, name
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, r); err != nil {
-		_ = f.Close()
-		return err
+	n, err := io.Copy(f, io.LimitReader(ctxReader{ctx, r}, limit+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return f.Close()
+	switch {
+	case err != nil:
+		return err
+	case n > limit:
+		return fmt.Errorf("%s is larger than the %d bytes the release lists", name, limit)
+	case a.Size > 0 && n != a.Size:
+		return fmt.Errorf("%s is %d bytes, the release lists %d", name, n, a.Size)
+	}
+	return nil
+}
+
+// ctxReader stops a copy once ctx is done (a source that does not watch
+// it, a stalled stream between reads).
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // maxBinary bounds the unpacked binary (a release binary is ~14 MB).
-const maxBinary = 512 << 20
+var maxBinary int64 = 512 << 20
 
 // unpackBinary extracts the backsight binary of a goreleaser archive
 // (.tar.gz, or .zip on Windows) to dst.
@@ -763,25 +1064,27 @@ type updateRollback struct {
 	wayBack          string   // the previous binary's client install, by hand
 	pluginTouched    bool
 	serverTouched    bool              // the new binary's server upgrade ran
+	committed        bool              // past the commit point: never rolled back
 	saved            map[string][]byte // state.json and config.toml before the update (nil: absent)
 	add              func(name, status, detail string)
 	res              *updateApplyResult
 }
 
-func (r *updateRollback) snapshot() error {
-	r.saved = map[string][]byte{}
-	for _, p := range []string{r.d.StateFile(), r.d.ConfigFile()} {
+// takeSnapshot reads state.json and config.toml as they are.
+func takeSnapshot(d paths.Dirs) (map[string][]byte, error) {
+	saved := map[string][]byte{}
+	for _, p := range []string{d.StateFile(), d.ConfigFile()} {
 		raw, err := os.ReadFile(p)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			r.saved[p] = nil
+			saved[p] = nil
 		case err != nil:
-			return err
+			return nil, err
 		default:
-			r.saved[p] = raw
+			saved[p] = raw
 		}
 	}
-	return nil
+	return saved, nil
 }
 
 func (r *updateRollback) removeBinary() {
@@ -790,36 +1093,40 @@ func (r *updateRollback) removeBinary() {
 	}
 }
 
-// run puts back state.json and config.toml, the shim and, when the new
-// plugin was generated, the previous binary's (its own client install),
-// then removes the new binary: exit 30. A step that fails exits 20, keeps
-// the update marker, and names the way back. No step follows a cancel.
+// run rolls back, in the order the previous binary needs: state.json and
+// config.toml first (state.json under its lock), then the server (only
+// ever by restoring the new binary's safety archive with the previous
+// binary), the shim, and the previous binary's own client install when
+// the new plugin was generated, whatever failed before it. Then the new
+// binary is removed: exit 30, or 10 with the actions of a child that
+// needs the user. A step that fails exits 20, keeps the update marker,
+// and names the way back. Past the commit point nothing is rolled back:
+// exit 40, rerun update apply.
 func (r *updateRollback) run(ctx context.Context, cause error) error {
+	if r.committed {
+		return &output.Error{Code: output.Partial, Message: fmt.Sprintf("backsight %s is installed, but the update could not be recorded (%v): rerun backsight update apply", r.res.Target, cause)}
+	}
 	base := context.WithoutCancel(ctx)
 	var errs []string
+	files := make([]string, 0, len(r.saved))
+	for p := range r.saved {
+		files = append(files, p)
+	}
+	slices.Sort(files)
+	for _, p := range files {
+		if err := r.restoreFile(p, r.saved[p]); err != nil {
+			errs = append(errs, "restoring "+p+": "+err.Error())
+		}
+	}
 	if r.serverTouched {
 		if err := r.serverBack(base); err != nil {
 			errs = append(errs, "the server: "+err.Error())
 		}
 	}
-	for p, raw := range r.saved {
-		var err error
-		if raw == nil {
-			err = os.Remove(p)
-			if errors.Is(err, fs.ErrNotExist) {
-				err = nil
-			}
-		} else {
-			err = fsutil.WriteAtomic(p, raw, 0o600)
-		}
-		if err != nil {
-			errs = append(errs, "restoring "+p+": "+err.Error())
-		}
-	}
 	if err := pointShim(r.previous, r.shim); err != nil {
 		errs = append(errs, "switching the shim back: "+err.Error())
 	}
-	if r.pluginTouched && len(errs) == 0 {
+	if r.pluginTouched {
 		cctx, cancel := context.WithTimeout(base, 5*time.Minute)
 		_, err := runChild(cctx, r.previous, r.clientArgs...)
 		cancel()
@@ -836,47 +1143,52 @@ func (r *updateRollback) run(ctx context.Context, cause error) error {
 	_ = state.ClearUpdateMarker(r.d)
 	r.res.RolledBack = true
 	r.add("rollback", "done", "the shim runs "+r.previous+" again, state.json, config.toml and the plugin as they were")
-	return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("update to %s failed and was rolled back: %v", r.res.Target, cause)}
+	msg := fmt.Sprintf("update to %s failed and was rolled back: %v", r.res.Target, cause)
+	var ce *childError
+	if errors.As(cause, &ce) && ce.code == output.NeedsUser && ce.env != nil {
+		e := *ce.env
+		e.Code, e.Message = output.NeedsUser, msg
+		return &e
+	}
+	return &output.Error{Code: output.RolledBack, Message: msg}
 }
 
-// serverBack makes the server run this binary's pin again. The new
-// binary's server upgrade rolls itself back; if it died first, its marker
-// names the safety archive, which restore puts back (with this binary's
-// pin, under update apply's lock). Otherwise this binary's files are
-// rendered again, and the server started when they changed.
+// restoreFile puts one snapshotted file back (raw nil: it did not exist);
+// state.json under its lock.
+func (r *updateRollback) restoreFile(p string, raw []byte) error {
+	if p == r.d.StateFile() {
+		return state.SaveWithin(r.d, "update apply", recordWait, raw)
+	}
+	if raw == nil {
+		return removeIfExists(p)
+	}
+	return fsutil.WriteAtomic(p, raw, 0o600)
+}
+
+func removeIfExists(p string) error {
+	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// serverBack puts the server back when the new binary's server upgrade did
+// not: it rolls itself back, and only when it died first (or its rollback
+// failed) does its marker remain, naming the safety archive. The previous
+// binary's restore then puts that archive back on its own pin, under
+// update apply's lock, with a new restore epoch and a temporary key
+// (restore's rollback, decision 0044). Nothing is ever re-rendered: the
+// database may have migrated.
 func (r *updateRollback) serverBack(ctx context.Context) error {
-	if m, _ := state.ReadRestoreMarker(r.d); m != nil {
-		if m.Safety == "" {
-			return fmt.Errorf("a restore or upgrade did not finish and names no safety archive (%s)", r.d.RestoreMarker())
-		}
-		r.add("server", "rollback", "restoring the safety archive "+m.Safety)
-		rr := restoreResult{Archive: m.Safety, Steps: []step{}}
-		return runRestore(ctx, nil, &rr, restoreFlags{noSafety: true, nonInter: true}, r.add)
+	m, err := state.ReadRestoreMarker(r.d)
+	if m == nil {
+		return nil // the upgrade changed nothing, or rolled itself back
 	}
-	cfg, sec, err := loadServerConfig()
-	if err != nil {
-		return err
+	if err != nil || m.Safety == "" {
+		return fmt.Errorf("a restore or upgrade did not finish and names no safety archive (%s)", r.d.RestoreMarker())
 	}
-	sl, _, err := state.Acquire(filepath.Join(r.d.LocksDir(), "server.lock"), "update apply")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = sl.Release() }()
-	rt := ownGroupRuntime(cfg)
-	files, err := renderOn(rt, sec, "backsight server start")
-	if err != nil {
-		return err
-	}
-	ch, err := rt.Write(files)
-	if err != nil || (!ch.Compose && !ch.Env) {
-		return err
-	}
-	sctx, cancel := context.WithTimeout(ctx, rollbackStepTimeout)
-	defer cancel()
-	if err := rt.Start(sctx); err != nil {
-		return err
-	}
-	_, err = waitHealthy(sctx, cfg, sec)
+	r.add("server", "rollback", "restoring the safety archive "+m.Safety+" with "+r.previous)
+	_, err = runChild(ctx, r.previous, "restore", m.Safety, "--no-safety", "--non-interactive")
 	return err
 }
 

@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/release"
 	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/signing"
@@ -58,6 +59,10 @@ type fakeBinaries struct {
 	images map[string]string
 	// onFail runs when a fail prefix matches, before the failure returns.
 	onFail func(line string)
+	// before and after run around each call that is not failed (ctx is
+	// the call's).
+	before func(ctx context.Context, line string)
+	after  func(line string, code int)
 }
 
 func withBinaries(t *testing.T, d paths.Dirs) *fakeBinaries {
@@ -92,7 +97,11 @@ func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]b
 				f.onFail(line)
 			}
 			var out bytes.Buffer
-			_ = output.WriteJSON(&out, "test", nil, &output.Error{Code: code, Message: "failing on purpose: " + prefix})
+			e := &output.Error{Code: code, Message: "failing on purpose: " + prefix}
+			if code == output.NeedsUser {
+				e.Actions = []output.Action{{Kind: "install", Cmd: "npm install -g @anthropic-ai/claude-code", Why: "Claude Code is too old"}}
+			}
+			_ = output.WriteJSON(&out, "test", nil, e)
 			return out.Bytes(), []byte("progress\n"), code, nil
 		}
 	}
@@ -107,8 +116,14 @@ func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]b
 	selfExe = func() (string, error) { return exe, nil }
 	migrations = func() []migrate.Migration { return f.migrations[v] }
 	defer func() { buildinfo.Version, selfExe, migrations, server.HindsightImage = oldV, oldExe, oldMig, oldImg }()
+	if f.before != nil {
+		f.before(ctx, line)
+	}
 	var out, errb bytes.Buffer
 	code := Execute(args, &out, &errb)
+	if f.after != nil {
+		f.after(line, code)
+	}
 	return out.Bytes(), errb.Bytes(), code, nil
 }
 
@@ -138,11 +153,14 @@ func trustTestKey(t *testing.T) minisign.PrivateKey {
 
 type relOpts struct {
 	unsigned      bool                 // no checksums.txt.minisig
+	sig           []byte               // this checksums.txt.minisig instead
+	comment       string               // sign with this trusted comment
 	key           *minisign.PrivateKey // sign with this key instead
 	tamperArchive bool                 // the archive differs from its checksum
 	tamperBinary  bool                 // the archive's binary differs from the bare one's checksum
+	legacy        bool                 // a legacy (not prehashed) signature
 	noBareBinary  bool                 // checksums.txt lists no bare binary
-	body          []byte               // the binary, default fakeBody(v)
+	noNewline     bool                 // checksums.txt's last line has no newline
 }
 
 func sha(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -154,10 +172,7 @@ func signedRelease(t *testing.T, root, v string, key minisign.PrivateKey, o relO
 	t.Helper()
 	dir := filepath.Join(root, "v"+v)
 	_ = os.MkdirAll(dir, 0o755)
-	body := o.body
-	if body == nil {
-		body = fakeBody(v)
-	}
+	body := fakeBody(v)
 	inArchive := body
 	if o.tamperBinary {
 		inArchive = append(slices.Clone(body), []byte("# tampered\n")...)
@@ -177,6 +192,9 @@ func signedRelease(t *testing.T, root, v string, key minisign.PrivateKey, o relO
 	if !o.noBareBinary {
 		sums += sha(body) + "  " + bare + "\n"
 	}
+	if o.noNewline {
+		sums = strings.TrimSuffix(sums, "\n")
+	}
 	stored := tgz.Bytes()
 	if o.tamperArchive {
 		stored = append(slices.Clone(stored), 0)
@@ -188,9 +206,19 @@ func signedRelease(t *testing.T, root, v string, key minisign.PrivateKey, o relO
 		if o.key != nil {
 			k = *o.key
 		}
+		comment := "timestamp:1\tfile:checksums.txt\thashed"
+		if o.comment != "" {
+			comment = o.comment
+		}
 		r := minisign.NewReader(strings.NewReader(sums))
 		_, _ = io.Copy(io.Discard, r)
-		files["checksums.txt.minisig"] = r.SignWithComments(k, "timestamp:1\tfile:checksums.txt\thashed", "x")
+		files["checksums.txt.minisig"] = r.SignWithComments(k, comment, "x")
+		if o.legacy {
+			files["checksums.txt.minisig"] = minisign.SignWithComments(k, []byte(sums), comment, "x")
+		}
+		if o.sig != nil {
+			files["checksums.txt.minisig"] = o.sig
+		}
 	}
 	for name, b := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
@@ -260,9 +288,12 @@ type applyEnvelope struct {
 			Target   string `json:"target"`
 			Upgrade  bool   `json:"upgrade"`
 			Upgraded bool   `json:"upgraded"`
+			Safety   string `json:"safety_archive"`
 		} `json:"server"`
-		RolledBack bool   `json:"rolled_back"`
-		Steps      []step `json:"steps"`
+		RolledBack bool     `json:"rolled_back"`
+		Resumed    bool     `json:"resumed"`
+		Steps      []step   `json:"steps"`
+		Warnings   []string `json:"warnings"`
 	} `json:"data"`
 }
 
@@ -364,9 +395,11 @@ func TestUpdateApplyInstallsTheNewRelease(t *testing.T) {
 	if bins.ran("0.2.0 update migrate") != 1 || bins.ran("0.2.0 client install") != 1 {
 		t.Errorf("binary calls %q", bins.calls)
 	}
+	// The download and its checks (running the staged binary once) come
+	// before the lock; everything after the install runs under it.
 	for i, held := range bins.lockHeld {
-		if !held {
-			t.Errorf("%s ran without update apply's maintenance lock", bins.calls[i])
+		if staged := strings.HasPrefix(bins.calls[i], "0.2.0 version"); held == staged {
+			t.Errorf("%s ran with the lock %v", bins.calls[i], held)
 		}
 	}
 	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
@@ -395,22 +428,29 @@ func TestUpdateApplyInstallsTheNewRelease(t *testing.T) {
 
 func TestUpdateApplyRefusesABadSignatureBeforeAnythingChanges(t *testing.T) {
 	_, otherPriv, _ := minisign.GenerateKey(rand.Reader)
-	for name, o := range map[string]relOpts{
-		"unsigned":         {unsigned: true},
-		"untrusted key":    {key: &otherPriv},
-		"tampered archive": {tamperArchive: true},
-		"tampered binary":  {tamperBinary: true},
+	// want: what the refusal names (the check that caught it).
+	for name, c := range map[string]struct {
+		o    relOpts
+		want string
+	}{
+		"unsigned":                {relOpts{unsigned: true}, "has no checksums.txt.minisig"},
+		"empty signature":         {relOpts{sig: []byte{}}, "fails the signature check (" + signing.ErrUnsigned.Error()},
+		"untrusted key":           {relOpts{key: &otherPriv}, "fails the signature check (" + signing.ErrUntrustedKey.Error()},
+		"legacy signature":        {relOpts{legacy: true}, "fails the signature check (" + signing.ErrLegacySignature.Error()},
+		"signed for another file": {relOpts{comment: "timestamp:1\tfile:SHA256SUMS\thashed"}, "fails the signature check (" + signing.ErrWrongFile.Error()},
+		"tampered archive":        {relOpts{tamperArchive: true}, "fails the checksum check"},
+		"tampered binary":         {relOpts{tamperBinary: true}, "is not the release's"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home, claude, bins := installedAt(t, "0.1.0")
 			d := pathsOf(home)
 			src := t.TempDir()
-			signedRelease(t, src, "0.2.0", trustTestKey(t), o)
+			signedRelease(t, src, "0.2.0", trustTestKey(t), c.o)
 			before := snapshot(t, d)
 			code, out, _ := run(t, "update", "apply", "--source", src, "--json")
 			env := decodeApply(t, out)
-			if code != output.Blocked || env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "nothing was changed") {
-				t.Fatalf("exit %d\n%s", code, out)
+			if code != output.Blocked || env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "nothing was changed") || !strings.Contains(env.Error.Message, c.want) {
+				t.Fatalf("exit %d, want %q\n%s", code, c.want, out)
 			}
 			if after := snapshot(t, d); after != before {
 				t.Errorf("changed:\n%s\nwas:\n%s", after, before)
@@ -420,6 +460,40 @@ func TestUpdateApplyRefusesABadSignatureBeforeAnythingChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// checksums.txt without the bare binary (an older release layout): the
+// update installs with a warning, and the new binary's self-check fails
+// until a release lists it. A last line without its newline still counts.
+func TestUpdateApplyChecksTheBareBinaryWhenListed(t *testing.T) {
+	t.Run("not listed", func(t *testing.T) {
+		home, _, _ := installedAt(t, "0.1.0")
+		src := t.TempDir()
+		signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{noBareBinary: true})
+		code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+		env := decodeApply(t, out)
+		bare := selfcheck.BinaryName("0.2.0", runtime.GOOS, runtime.GOARCH)
+		if code != output.OK || !slices.ContainsFunc(env.Data.Warnings, func(w string) bool { return strings.Contains(w, "lists no "+bare) }) {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if rec := selfcheck.Check(shimOf(t, pathsOf(home)), "0.2.0", runtime.GOOS, runtime.GOARCH, time.Now()); rec.Status != selfcheck.Failed {
+			t.Errorf("self-check of a binary its release does not list: %+v", rec)
+		}
+	})
+	t.Run("last line without a newline", func(t *testing.T) {
+		home, _, _ := installedAt(t, "0.1.0")
+		d := pathsOf(home)
+		src := t.TempDir()
+		signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{noNewline: true, tamperBinary: true})
+		before := snapshot(t, d)
+		code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+		if code != output.Blocked || !strings.Contains(out, "is not the release's") {
+			t.Fatalf("the listed binary was not checked: exit %d\n%s", code, out)
+		}
+		if snapshot(t, d) != before {
+			t.Error("changed")
+		}
+	})
 }
 
 func TestUpdateApplyRefusesAnOlderOrEqualVersion(t *testing.T) {
@@ -533,6 +607,38 @@ func TestUpdateApplyInterruptedRollsBack(t *testing.T) {
 	}
 }
 
+// A Ctrl-C while the new binary installs its plugin: the rollback is not
+// cancelled with it, and puts the previous plugin back (exit 30).
+func TestUpdateApplyInterruptedDuringThePluginRollsBack(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bins.before = func(_ context.Context, line string) {
+		if strings.HasPrefix(line, "0.2.0 client install") {
+			cancel()
+		}
+	}
+	before := snapshot(t, d)
+	beforeState, _ := state.Load(d.StateFile())
+	var out, errb bytes.Buffer
+	code := ExecuteContext(ctx, []string{"update", "apply", "--source", src, "--json"}, &out, &errb)
+	if code != output.RolledBack || !decodeApply(t, out.String()).Data.RolledBack {
+		t.Fatalf("exit %d\n%s", code, out.String())
+	}
+	if bins.ran("0.1.0 client install") != 1 || bins.ran("0.2.0 server") != 0 {
+		t.Errorf("calls %q", bins.calls)
+	}
+	if st, _ := state.Load(d.StateFile()); st.PluginVersion != beforeState.PluginVersion {
+		t.Errorf("plugin %q, want %q", st.PluginVersion, beforeState.PluginVersion)
+	}
+	if after := snapshot(t, d); after != before {
+		t.Errorf("not rolled back:\n%s\nwas:\n%s", after, before)
+	}
+}
+
 // A failure in the plugin step, after the new plugin was generated, puts
 // the previous binary's plugin back through its own client install.
 func TestUpdateApplyFailingPluginStepRollsBack(t *testing.T) {
@@ -574,20 +680,26 @@ func TestUpdateApplyFailedRollbackKeepsTheMarker(t *testing.T) {
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
 	old := shimOf(t, d)
+	// Wired into a Claude Code profile: the way back names it.
+	_ = state.Update(d, "test", func(s *state.State) error { s.Client.Profile = "/p"; return nil })
+	way := old + " client install --config-dir /p"
 	bins.fail["0.2.0 client install"] = output.Partial
 	bins.fail["0.1.0 client install"] = output.Blocked
 	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
 	env := decodeApply(t, out)
-	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, old+" client install") {
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "run "+way+" to return") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
+	if bins.ran("0.2.0 client install --config-dir /p") != 1 || bins.ran("0.1.0 client install --config-dir /p") != 1 {
+		t.Errorf("calls %q", bins.calls)
+	}
 	m, err := state.ReadUpdateMarker(d)
-	if err != nil || m == nil || m.Previous != old || m.To != "0.2.0" {
+	if err != nil || m == nil || m.Previous != old || m.To != "0.2.0" || m.WayBack != way {
 		t.Fatalf("marker %+v %v", m, err)
 	}
 	rep := doctorReport(t)
 	c := findCheck(rep, "update-incomplete")
-	if c == nil || c.Status != doctor.Error || !strings.Contains(c.Fix, old+" client install") {
+	if c == nil || c.Status != doctor.Error || !strings.Contains(c.Fix, way+" (back to 0.1.0)") {
 		t.Errorf("doctor %+v", c)
 	}
 }
@@ -597,8 +709,8 @@ func TestUpdateApplyRefusesWhileMaintenanceRuns(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	// A live owner: this test's parent process.
-	raw, _ := json.Marshal(state.Owner{PID: os.Getppid(), Command: "backup create"})
+	// A live owner, someone else.
+	raw, _ := json.Marshal(state.Owner{PID: liveProcess(t), Command: "backup create", Since: time.Now().UTC().Truncate(time.Second)})
 	_ = os.MkdirAll(d.State, 0o700)
 	_ = os.WriteFile(d.MaintenanceLock(), raw, 0o600)
 	before := snapshot(t, d)
@@ -671,6 +783,64 @@ func TestMaintainAppliesOnlyWhenAutoApplyIsOn(t *testing.T) {
 	}
 }
 
+// A failing auto-apply never fails jobs maintain, and is not retried
+// every day (each try costs a safety backup and a rollback): the failed
+// release is recorded and skipped until a newer one appears or the user
+// runs update apply.
+func TestMaintainSkipsAReleaseWhoseAutoApplyFailed(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	key := trustTestKey(t)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", key, relOpts{})
+	configure(t, home, "[update]\nsource = \""+src+"\"\nauto_apply = true")
+	bins.migrations["0.2.0"] = []migrate.Migration{{ID: "0001-fails", Run: func(context.Context, migrate.Env) error { return errors.New("cannot migrate") }}}
+	old := shimOf(t, d)
+	maintain := func() string {
+		t.Helper()
+		code, out, _ := run(t, "jobs", "maintain", "--json")
+		var env struct {
+			Data maintainResult `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+			t.Fatalf("jobs maintain failed: exit %d %v\n%s", code, err, out)
+		}
+		return env.Data.Update
+	}
+	if u := maintain(); !strings.Contains(u, "auto-apply failed (exit 30)") || shimOf(t, d) != old {
+		t.Fatalf("update %q, shim %s", u, shimOf(t, d))
+	}
+	st, _ := state.Load(d.StateFile())
+	if st.AutoApply == nil || st.AutoApply.Failed != "0.2.0" || st.AutoApply.Code != output.RolledBack {
+		t.Fatalf("failure not recorded: %+v", st.AutoApply)
+	}
+	// The next day: skipped, nothing downloaded or run.
+	bins.calls = nil
+	if u := maintain(); !strings.Contains(u, "0.2.0 available, auto-apply skipped") || len(bins.calls) != 0 {
+		t.Errorf("retried: update %q, calls %q", u, bins.calls)
+	}
+	// update apply by hand clears the record (here it fails again), so
+	// the next maintain tries again.
+	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.RolledBack {
+		t.Fatalf("by hand: exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.AutoApply != nil {
+		t.Errorf("record kept after update apply by hand: %+v", st.AutoApply)
+	}
+	bins.calls = nil
+	if u := maintain(); !strings.Contains(u, "auto-apply failed") || bins.ran("0.2.0 update migrate") != 1 {
+		t.Errorf("not retried after update apply by hand: %q %q", u, bins.calls)
+	}
+	// A newer release is tried, and its success clears the record.
+	signedRelease(t, src, "0.3.0", key, relOpts{})
+	if u := maintain(); u != "applied 0.3.0" || !strings.HasPrefix(shimOf(t, d), filepath.Join(d.Data, "bin", "0.3.0-")) {
+		t.Errorf("newer release: %q, shim %s", u, shimOf(t, d))
+	}
+	if st, _ := state.Load(d.StateFile()); st.AutoApply != nil {
+		t.Errorf("record kept after a success: %+v", st.AutoApply)
+	}
+}
+
 func TestDoctorPointsAtUpdateApply(t *testing.T) {
 	home := devInstall(t, true)
 	setBuild(t, "0.1.0", "abc1234")
@@ -701,6 +871,69 @@ func TestExecBinaryRunsAProgram(t *testing.T) {
 	var progress bytes.Buffer
 	if _, stderr, _, _ := (execBinary{Progress: &progress}).Run(context.Background(), exe); string(stderr) != "progress\n" || progress.String() != "progress\n" {
 		t.Errorf("stderr %q, progress %q", stderr, progress.String())
+	}
+}
+
+// A cancelled update asks its child's process group to stop (SIGTERM) and
+// waits for it: the child's own rollback runs and its exit code comes
+// back. The child is told which maintenance lock its parent holds.
+func TestExecBinaryStopsTheChildGently(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script")
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "child")
+	_ = os.WriteFile(exe, []byte("#!/bin/sh\necho \"$"+updateLockEnv+"\" > "+dir+"/token\ntrap 'echo rolled back > "+dir+"/trap; exit 30' TERM\nsleep 30 &\nwait\n"), 0o755)
+	owner := state.Owner{PID: os.Getpid(), Command: "update apply", Since: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)}
+	updateLock = &owner
+	t.Cleanup(func() { updateLock = nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for i := 0; i < 250; i++ {
+			if _, err := os.Stat(filepath.Join(dir, "token")); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		cancel()
+	}()
+	start := time.Now()
+	_, _, code, err := execBinary{}.Run(ctx, exe)
+	if err != nil || code != 30 {
+		t.Fatalf("exit %d %v: the child was not left to roll back", code, err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "trap")); string(raw) != "rolled back\n" || time.Since(start) > 20*time.Second {
+		t.Errorf("trap %q after %s", raw, time.Since(start))
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "token")); strings.TrimSpace(string(raw)) != lockToken(owner) {
+		t.Errorf("the child's lock token %q, want %q", raw, lockToken(owner))
+	}
+}
+
+// heldByUpdate accepts the parent's lock only when the parent named that
+// very lock (PID and start time) in the child's environment.
+func TestHeldByUpdateNeedsTheParentsToken(t *testing.T) {
+	since := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	parent := state.Owner{PID: os.Getppid(), Command: "update apply", Since: since}
+	h := &state.HeldError{Owner: parent}
+	t.Setenv(updateLockEnv, "")
+	if heldByUpdate(h) {
+		t.Error("the parent's PID alone passed")
+	}
+	t.Setenv(updateLockEnv, lockToken(parent))
+	if !heldByUpdate(h) {
+		t.Error("the parent's own lock refused")
+	}
+	if heldByUpdate(&state.HeldError{Owner: state.Owner{PID: parent.PID, Command: "update apply", Since: since.Add(-time.Hour)}}) {
+		t.Error("an older lock of the same PID (reused) passed")
+	}
+	if heldByUpdate(&state.HeldError{Owner: state.Owner{PID: parent.PID, Command: "backup create", Since: since}}) {
+		t.Error("another command's lock passed")
+	}
+	other := state.Owner{PID: liveProcess(t), Command: "update apply", Since: since}
+	t.Setenv(updateLockEnv, lockToken(other))
+	if heldByUpdate(&state.HeldError{Owner: other}) {
+		t.Error("a lock neither this process's nor its parent's passed")
 	}
 }
 
@@ -783,14 +1016,14 @@ func TestUpdateApplyServerFailureRollsEverythingBack(t *testing.T) {
 	d := pathsOf(home)
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
-	dk.failImage = newImage
+	dk.failImage, dk.migrateImage = newImage, newImage // migrates the data, then does not start
 	old := shimOf(t, d)
 	beforeState, _ := state.Load(d.StateFile())
 	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
 	if code != output.RolledBack {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if deployedImage(t, home) != oldImage || dk.rows != 25 || !dk.running || len(dk.restores) != 1 {
+	if deployedImage(t, home) != oldImage || dk.rows != 25 || !dk.running || !slices.Equal(dk.restores, []int{25}) {
 		t.Errorf("server: image %s rows %d running %v restores %v", deployedImage(t, home), dk.rows, dk.running, dk.restores)
 	}
 	st, _ := state.Load(d.StateFile())
@@ -828,10 +1061,550 @@ func TestUpdateApplyRestoresWhenTheServerStepDied(t *testing.T) {
 	if code != output.RolledBack {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if deployedImage(t, home) != oldImage || dk.rows != 10 || !dk.running {
-		t.Errorf("image %s rows %d (want the archive's 10) running %v", deployedImage(t, home), dk.rows, dk.running)
+	if deployedImage(t, home) != oldImage || dk.rows != 10 || !dk.running || bins.ran("0.1.0 restore "+archive+" --no-safety --non-interactive") != 1 {
+		t.Errorf("image %s rows %d (want the archive's 10) running %v calls %q", deployedImage(t, home), dk.rows, dk.running, bins.calls)
 	}
 	if state.RestoreIncomplete(d) {
 		t.Error("marker left")
+	}
+}
+
+// holdStateLock makes state.json's lock someone else's (a live process),
+// as a tick or a hook writing state holds it.
+func holdStateLock(t *testing.T, d paths.Dirs) {
+	t.Helper()
+	raw, _ := json.Marshal(state.Owner{PID: liveProcess(t), Command: "jobs tick", Since: time.Now().UTC().Truncate(time.Second)})
+	_ = os.MkdirAll(d.LocksDir(), 0o700)
+	if err := os.WriteFile(filepath.Join(d.LocksDir(), "state.lock"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func shortRecordWait(t *testing.T, w time.Duration) {
+	t.Helper()
+	old := recordWait
+	recordWait = w
+	t.Cleanup(func() { recordWait = old })
+}
+
+// Once the new binary's server upgrade passed, the update is committed: a
+// record step that cannot get state.json's lock is never rolled back (the
+// old pin would start on a database the new Hindsight migrated). It exits
+// 40, keeps the marker, and a rerun of the new binary finishes it.
+func TestUpdateApplyIsCommittedOnceTheServerUpgraded(t *testing.T) {
+	home, _, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	shortRecordWait(t, 200*time.Millisecond)
+	bins.after = func(line string, code int) {
+		if line == "0.2.0 server upgrade --json" && code == output.OK {
+			holdStateLock(t, d)
+		}
+	}
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.Partial || env.Error == nil || !strings.Contains(env.Error.Message, "rerun backsight update apply") || env.Data.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if deployedImage(t, home) != newImage || len(dk.restores) != 0 || bins.ran("0.1.0") != 0 {
+		t.Errorf("rolled back: image %s (was %s), restores %v, calls %q", deployedImage(t, home), oldImage, dk.restores, bins.calls)
+	}
+	target := shimOf(t, d)
+	if !strings.HasPrefix(target, filepath.Join(d.Data, "bin", "0.2.0-")) {
+		t.Errorf("shim %s", target)
+	}
+	m, err := state.ReadUpdateMarker(d)
+	if err != nil || m == nil || !m.Committed || m.Safety == "" || m.Safety != env.Data.Server.Safety {
+		t.Fatalf("marker %+v %v (result safety %q)", m, err, env.Data.Server.Safety)
+	}
+	if c := findCheck(doctorReport(t), "update-incomplete"); c == nil || !strings.Contains(c.Fix, "update apply") || strings.Contains(c.Fix, "client install") {
+		t.Errorf("doctor %+v", c)
+	}
+	// The old binary must not roll a committed update back.
+	_ = os.Remove(filepath.Join(d.LocksDir(), "state.lock"))
+	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.NeedsUser || !strings.Contains(out, target+" update apply") {
+		t.Errorf("the old binary on a committed update: exit %d\n%s", code, out)
+	}
+	// The new binary resumes: only the record was left.
+	bins.calls = nil
+	setBuild(t, "0.2.0", "abc1234")
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
+	if env := decodeApply(t, out); code != output.OK || !env.Data.Resumed || env.Data.Target != "0.2.0" {
+		t.Fatalf("resume: exit %d\n%s", code, out)
+	}
+	if bins.ran("0.2.0 server upgrade --json") != 0 || bins.ran("0.2.0 client install") != 0 {
+		t.Errorf("a committed update ran its steps again: %q", bins.calls)
+	}
+	if st, _ := state.Load(d.StateFile()); st.ShimTarget != target || st.Client == nil || st.Client.ShimPrevious == "" {
+		t.Errorf("not recorded: %+v", st)
+	}
+	if state.UpdateIncomplete(d) {
+		t.Error("marker left")
+	}
+}
+
+// A state lock held for a moment is waited for.
+func TestUpdateApplyRecordWaitsForTheStateLock(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	shortRecordWait(t, 10*time.Second)
+	bins.after = func(line string, code int) {
+		if strings.HasPrefix(line, "0.2.0 client install") {
+			holdStateLock(t, d)
+			go func() { time.Sleep(300 * time.Millisecond); _ = os.Remove(filepath.Join(d.LocksDir(), "state.lock")) }()
+		}
+	}
+	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.ShimTarget != shimOf(t, d) {
+		t.Errorf("not recorded: %q", st.ShimTarget)
+	}
+}
+
+// The new binary's server upgrade dies after it passed (its marker
+// cleared, the server on the new pin): update apply sees the upgrade done
+// and finishes, without touching the server.
+func TestUpdateApplyKeepsAnUpgradeThatPassedBeforeItsChildDied(t *testing.T) {
+	home, _, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	bins.fail["0.2.0 server upgrade --json"] = -1
+	bins.onFail = func(string) {
+		raw, _ := os.ReadFile(filepath.Join(composeDir(home), "compose.yaml"))
+		_ = os.WriteFile(filepath.Join(composeDir(home), "compose.yaml"), []byte(strings.Replace(string(raw), oldImage, newImage, 1)), 0o644)
+		dk.rows = 99 // migrated by the new version
+	}
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || env.Data.Server == nil || !env.Data.Server.Upgraded || !strings.Contains(out, "it passed") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if deployedImage(t, home) != newImage || dk.rows != 99 || len(dk.restores) != 0 || bins.ran("0.1.0") != 0 {
+		t.Errorf("the server was rolled back: image %s rows %d restores %v calls %q", deployedImage(t, home), dk.rows, dk.restores, bins.calls)
+	}
+	if state.UpdateIncomplete(d) || !strings.HasPrefix(shimOf(t, d), filepath.Join(d.Data, "bin", "0.2.0-")) {
+		t.Errorf("not finished: shim %s", shimOf(t, d))
+	}
+}
+
+// The rollback puts state.json and config.toml back before the previous
+// binary restores the server: that binary cannot read the files the new
+// one migrated (here a renamed bank, which the safety archive's restore
+// refuses).
+func TestUpdateApplyRollbackRestoresTheFilesBeforeTheServer(t *testing.T) {
+	home, archive, dk, _, bins, oldImage := serverInstalledAt(t, "0.1.0", "0.2.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	beforeState, _ := os.ReadFile(d.StateFile())
+	beforeConfig, _ := os.ReadFile(d.ConfigFile())
+	bins.migrations["0.2.0"] = []migrate.Migration{{ID: "0001-newer-files", Run: func(_ context.Context, e migrate.Env) error {
+		raw, _ := os.ReadFile(e.Dirs.ConfigFile())
+		if err := os.WriteFile(e.Dirs.ConfigFile(), []byte(strings.Replace(string(raw), "[server]\n", "[server]\nbank = \"renamed\"\n", 1)), 0o600); err != nil {
+			return err
+		}
+		return state.Update(e.Dirs, "test", func(s *state.State) error { s.PluginVersion = "migrated"; return nil })
+	}}}
+	bins.fail["0.2.0 server upgrade --json"] = -1
+	bins.onFail = func(string) { // killed half way: new pin deployed, data migrated, marker left
+		raw, _ := os.ReadFile(filepath.Join(composeDir(home), "compose.yaml"))
+		_ = os.WriteFile(filepath.Join(composeDir(home), "compose.yaml"), []byte(strings.Replace(string(raw), oldImage, newImage, 1)), 0o644)
+		dk.rows = 99
+		_ = state.WriteRestoreMarker(d, state.RestoreMarker{Command: "server upgrade", Safety: archive, Archive: archive})
+	}
+	code, out, errOut := run(t, "update", "apply", "--source", src, "--json")
+	if code != output.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if bins.ran("0.1.0 restore "+archive+" --no-safety") != 1 || deployedImage(t, home) != oldImage || dk.rows != 10 || len(dk.restores) != 1 {
+		t.Errorf("server: calls %q image %s rows %d restores %v", bins.calls, deployedImage(t, home), dk.rows, dk.restores)
+	}
+	if st, _ := os.ReadFile(d.StateFile()); string(st) != string(beforeState) {
+		t.Errorf("state.json:\n%s", st)
+	}
+	if cfg, _ := os.ReadFile(d.ConfigFile()); string(cfg) != string(beforeConfig) {
+		t.Errorf("config.toml:\n%s", cfg)
+	}
+}
+
+// The rollback writes state.json under its lock: a tick holding it is
+// waited for, not overwritten.
+func TestUpdateApplyRollbackWritesTheStateUnderItsLock(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	before := snapshot(t, d)
+	var duringLock string
+	done := make(chan struct{})
+	bins.migrations["0.2.0"] = []migrate.Migration{{ID: "0001-fails", Run: func(_ context.Context, e migrate.Env) error {
+		_ = os.WriteFile(e.Dirs.StateFile(), []byte(`{"schema_version": 1, "plugin_version": "migrated"}`), 0o600)
+		holdStateLock(t, d)
+		go func() {
+			defer close(done)
+			time.Sleep(300 * time.Millisecond)
+			raw, _ := os.ReadFile(e.Dirs.StateFile())
+			duringLock = string(raw)
+			_ = os.Remove(filepath.Join(d.LocksDir(), "state.lock"))
+		}()
+		return errors.New("cannot migrate")
+	}}}
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	<-done
+	if code != output.RolledBack {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if !strings.Contains(duringLock, "migrated") {
+		t.Errorf("state.json written while someone else held its lock: %s", duringLock)
+	}
+	if after := snapshot(t, d); after != before {
+		t.Errorf("not rolled back:\n%s\nwas:\n%s", after, before)
+	}
+}
+
+// killedAfterTheShim leaves what an update apply from 0.1.0 to 0.2.0
+// killed right after its shim switch leaves: the new binary installed, its
+// marker and snapshot, the shim on it, and state.json changed since (a
+// migration that ran). It returns the previous binary, the new one and
+// state.json as it was before the update.
+func killedAfterTheShim(t *testing.T, d paths.Dirs, src string) (old, target string, beforeState []byte) {
+	t.Helper()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	old = shimOf(t, d)
+	target = binaryPath(d.Data, "0.2.0", sha(fakeBody("0.2.0")))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(target, fakeBody("0.2.0"), 0o755)
+	saved, err := takeSnapshot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeState = saved[d.StateFile()]
+	if err := state.WriteUpdateSnapshot(d, saved); err != nil {
+		t.Fatal(err)
+	}
+	m := state.UpdateMarker{From: "0.1.0", To: "0.2.0", Previous: old, Binary: target, WayBack: old + " client install", RemoveBinary: true, StartedAt: time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC)}
+	if err := state.WriteUpdateMarker(d, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := pointShim(target, filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))); err != nil {
+		t.Fatal(err)
+	}
+	_ = state.Update(d, "test", func(s *state.State) error { s.AppliedMigrations = []string{"0001-ran"}; return nil })
+	return old, target, beforeState
+}
+
+// The new binary, run on an update to itself that was killed half way,
+// resumes it (migrations, plugin, server, record) instead of answering
+// "up to date".
+func TestUpdateApplyResumesAnUpdateToItself(t *testing.T) {
+	home, claude, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	old, target, _ := killedAfterTheShim(t, d, src)
+	setBuild(t, "0.2.0", "abc1234") // the shim's binary
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || env.Data.UpToDate || !env.Data.Resumed || env.Data.Previous != old || env.Data.Installed != "0.1.0" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if bins.ran("0.2.0 update migrate") != 1 || bins.ran("0.2.0 client install") != 1 || !slices.Contains(mutating(claude), "plugin update "+plugin.PluginID()) {
+		t.Errorf("steps not run again: %q", bins.calls)
+	}
+	st, _ := state.Load(d.StateFile())
+	if st.ShimTarget != target || st.Client == nil || st.Client.ShimPrevious != old || shimOf(t, d) != target {
+		t.Errorf("record: %+v", st)
+	}
+	if state.UpdateIncomplete(d) {
+		t.Error("marker left")
+	}
+	if _, err := os.Stat(d.UpdateSnapshot()); err == nil {
+		t.Error("snapshot left")
+	}
+}
+
+// A resume that fails rolls back to the marker's previous install, with
+// state.json as the snapshot persisted before the update kept it.
+func TestUpdateApplyResumeRollsBackToTheSnapshot(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	old, target, beforeState := killedAfterTheShim(t, d, src)
+	bins.migrations["0.2.0"] = []migrate.Migration{{ID: "0002-fails", Run: func(context.Context, migrate.Env) error { return errors.New("cannot migrate") }}}
+	setBuild(t, "0.2.0", "abc1234")
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	if code != output.RolledBack || !decodeApply(t, out).Data.RolledBack {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if raw, _ := os.ReadFile(d.StateFile()); string(raw) != string(beforeState) {
+		t.Errorf("state.json is not the snapshot's:\n%s", raw)
+	}
+	if shimOf(t, d) != old || state.UpdateIncomplete(d) {
+		t.Errorf("shim %s, marker %v", shimOf(t, d), state.UpdateIncomplete(d))
+	}
+	if _, err := os.Stat(filepath.Dir(target)); err == nil {
+		t.Error("the new binary, installed by the update, was kept")
+	}
+}
+
+// The previous binary on an unfinished update replaces it from the
+// install it started from: the marker's previous binary (the shim runs
+// the half-installed one) and the persisted snapshot (state.json changed
+// since) are the way back.
+func TestUpdateApplyReplacesAnUnfinishedUpdateFromItsMarker(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	old, target, beforeState := killedAfterTheShim(t, d, src)
+	bins.migrations["0.2.0"] = []migrate.Migration{{ID: "0002-fails", Run: func(context.Context, migrate.Env) error { return errors.New("cannot migrate") }}}
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.RolledBack || env.Data.Previous != old || env.Data.Installed != "0.1.0" ||
+		!slices.ContainsFunc(env.Data.Warnings, func(w string) bool {
+			return strings.Contains(w, "did not finish") && strings.Contains(w, "this one replaces it")
+		}) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if raw, _ := os.ReadFile(d.StateFile()); string(raw) != string(beforeState) {
+		t.Errorf("state.json is not the snapshot's:\n%s", raw)
+	}
+	if shimOf(t, d) != old {
+		t.Errorf("shim %s, want %s", shimOf(t, d), old)
+	}
+	if _, err := os.Stat(filepath.Dir(target)); err == nil {
+		t.Error("the binary the unfinished update installed was kept")
+	}
+	// Now passing: the update replaces the unfinished one and records the
+	// marker's previous binary as the one to roll back to.
+	bins.migrations["0.2.0"] = nil
+	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.Client == nil || st.Client.ShimPrevious != old {
+		t.Errorf("previous %+v, want %s", st.Client, old)
+	}
+}
+
+// No shim: nothing to update, the user runs setup (exit 10).
+func TestUpdateApplyWithoutAnInstallNeedsSetup(t *testing.T) {
+	home := devInstall(t, true)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	setBuild(t, "0.1.0", "abc1234")
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.NeedsUser || env.Error == nil || len(env.Error.Actions) != 1 || env.Error.Actions[0].Cmd != "backsight setup" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(pathsOf(home).Data, "bin")); len(ents) != 0 {
+		t.Errorf("installed something: %v", ents)
+	}
+}
+
+// A child that needs the user (Claude Code too old for the new plugin):
+// after the rollback, update apply exits 10 with the child's actions and
+// says it rolled back.
+func TestUpdateApplyPassesOnAChildsNeedsUser(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	bins.fail["0.2.0 client install"] = output.NeedsUser
+	before := snapshot(t, d)
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.NeedsUser || !env.Data.RolledBack || env.Error == nil || len(env.Error.Actions) != 1 || env.Error.Actions[0].Cmd != "npm install -g @anthropic-ai/claude-code" ||
+		!strings.Contains(env.Error.Message, "rolled back") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if bins.ran("0.1.0 client install") != 1 || snapshot(t, d) != before {
+		t.Errorf("not rolled back: %q", bins.calls)
+	}
+}
+
+// A remote server is upgraded on its host: the server step is skipped.
+func TestUpdateApplySkipsARemoteServer(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	raw, _ := os.ReadFile(d.ConfigFile())
+	_ = os.WriteFile(d.ConfigFile(), []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.OK || bins.ran("0.2.0 server") != 0 ||
+		!slices.ContainsFunc(env.Data.Steps, func(s step) bool {
+			return s.Name == "server" && s.Status == "skipped" && strings.Contains(s.Detail, "remote")
+		}) {
+		t.Errorf("exit %d, calls %q\n%s", code, bins.calls, out)
+	}
+}
+
+// --plan verifies like the update: a release that fails it is refused.
+func TestUpdateApplyPlanRefusesAReleaseThatFailsVerification(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{tamperArchive: true})
+	before := snapshot(t, d)
+	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	if code != output.Blocked || !strings.Contains(out, "fails the checksum check") || len(bins.calls) != 0 || snapshot(t, d) != before {
+		t.Errorf("exit %d, calls %q\n%s", code, bins.calls, out)
+	}
+}
+
+// fakeSource serves one release whose assets are bodies, listed with the
+// sizes given (the body's own when absent); stall makes Open's reader
+// block until its context ends.
+type fakeSource struct {
+	rel   release.Release
+	body  map[string][]byte
+	stall bool
+}
+
+func (s fakeSource) Name() string { return "fake" }
+func (s fakeSource) Releases(context.Context) ([]release.Release, error) {
+	return []release.Release{s.rel}, nil
+}
+func (s fakeSource) Open(ctx context.Context, _ release.Release, name string) (io.ReadCloser, error) {
+	if s.stall {
+		return io.NopCloser(stalled{ctx}), nil
+	}
+	return io.NopCloser(bytes.NewReader(s.body[name])), nil
+}
+
+type stalled struct{ ctx context.Context }
+
+func (s stalled) Read([]byte) (int, error) { <-s.ctx.Done(); return 0, s.ctx.Err() }
+
+// download takes no more than the size the release lists, exactly that
+// size, never more than maxAsset, and gives up at its deadline.
+func TestDownloadBoundsTheAsset(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "a")
+	src := func(listed int64, body string) (fakeSource, release.Release) {
+		rel := release.Release{Version: "0.2.0", Assets: []release.Asset{{Name: "a", Size: listed}}}
+		return fakeSource{rel: rel, body: map[string][]byte{"a": []byte(body)}}, rel
+	}
+	s, rel := src(5, "hello")
+	if err := download(context.Background(), s, rel, "a", dst); err != nil {
+		t.Fatalf("an asset of its listed size: %v", err)
+	}
+	if raw, _ := os.ReadFile(dst); string(raw) != "hello" {
+		t.Errorf("%q", raw)
+	}
+	for name, c := range map[string]struct {
+		listed int64
+		body   string
+		want   string
+	}{
+		"longer than listed":   {3, "hello", "larger than the 3 bytes"},
+		"shorter than listed":  {9, "hello", "is 5 bytes, the release lists 9"},
+		"listed above the cap": {maxAsset + 1, "x", "more than the"},
+	} {
+		s, rel := src(c.listed, c.body)
+		if err := download(context.Background(), s, rel, "a", dst); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	old := maxAsset
+	maxAsset = 4
+	t.Cleanup(func() { maxAsset = old })
+	if s, rel := src(0, "hello"); download(context.Background(), s, rel, "a", dst) == nil {
+		t.Error("an unlisted size above the cap passed")
+	}
+	maxAsset = old
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	s, rel = src(5, "")
+	s.stall = true
+	start := time.Now()
+	if err := download(ctx, s, rel, "a", dst); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+		t.Errorf("a stalled download: %v after %s", err, time.Since(start))
+	}
+}
+
+// The archive must hold the binary as a regular file within the size
+// bound.
+func TestUnpackBinaryRefusals(t *testing.T) {
+	dir := t.TempDir()
+	tgz := func(name string, h tar.Header, body []byte) string {
+		var b bytes.Buffer
+		gz := gzip.NewWriter(&b)
+		tw := tar.NewWriter(gz)
+		_ = tw.WriteHeader(&h)
+		_, _ = tw.Write(body)
+		_ = tw.Close()
+		_ = gz.Close()
+		p := filepath.Join(dir, name+".tar.gz")
+		_ = os.WriteFile(p, b.Bytes(), 0o644)
+		return p
+	}
+	dst := filepath.Join(dir, "out", "backsight")
+	if err := unpackBinary(tgz("ok", tar.Header{Name: "backsight", Mode: 0o755, Size: 4, Typeflag: tar.TypeReg}, []byte("body")), dst); err != nil {
+		t.Fatalf("a good archive: %v", err)
+	}
+	if raw, _ := os.ReadFile(dst); string(raw) != "body" {
+		t.Errorf("%q", raw)
+	}
+	if err := unpackBinary(tgz("none", tar.Header{Name: "LICENSE", Mode: 0o644, Size: 3, Typeflag: tar.TypeReg}, []byte("MIT")), dst); err == nil || !strings.Contains(err.Error(), "no backsight") {
+		t.Errorf("no binary: %v", err)
+	}
+	if err := unpackBinary(tgz("link", tar.Header{Name: "backsight", Linkname: "/bin/sh", Typeflag: tar.TypeSymlink}, nil), dst); err == nil || !strings.Contains(err.Error(), "no backsight") {
+		t.Errorf("a symlink: %v", err)
+	}
+	old := maxBinary
+	maxBinary = 3
+	t.Cleanup(func() { maxBinary = old })
+	if err := unpackBinary(tgz("big", tar.Header{Name: "backsight", Mode: 0o755, Size: 4, Typeflag: tar.TypeReg}, []byte("body")), dst); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an oversized binary: %v", err)
+	}
+}
+
+// With auto_apply, jobs maintain (run by the shim, the new binary)
+// finishes an update to itself that did not finish.
+func TestMaintainResumesAnUnfinishedUpdate(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	d := pathsOf(home)
+	src := t.TempDir()
+	_, target, _ := killedAfterTheShim(t, d, src)
+	configure(t, home, "[update]\nsource = \""+src+"\"\nauto_apply = true")
+	setBuild(t, "0.2.0", "abc1234")
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	if code != output.OK || !strings.Contains(out, `"update": "applied 0.2.0"`) || bins.ran("0.2.0 client install") != 1 {
+		t.Fatalf("exit %d, calls %q\n%s", code, bins.calls, out)
+	}
+	if st, _ := state.Load(d.StateFile()); state.UpdateIncomplete(d) || st.ShimTarget != target {
+		t.Errorf("not finished: marker %v, shim target %q", state.UpdateIncomplete(d), st.ShimTarget)
+	}
+}
+
+// "Newer" is against the version the shim runs, not the binary running
+// update apply (an older one left on PATH): it never downgrades the shim.
+func TestUpdateApplyComparesWithTheShimsVersion(t *testing.T) {
+	home, _, bins := installedAt(t, "0.2.0")
+	d := pathsOf(home)
+	key := trustTestKey(t)
+	src := t.TempDir()
+	for _, v := range []string{"0.1.5", "0.2.0"} {
+		signedRelease(t, src, v, key, relOpts{})
+	}
+	setBuild(t, "0.1.0", "abc1234") // an older binary runs the command
+	before := snapshot(t, d)
+	code, out, _ := run(t, "update", "apply", "--source", src, "--version", "0.1.5", "--json")
+	if env := decodeApply(t, out); code != output.Usage || env.Error == nil || !strings.Contains(env.Error.Message, "not newer than the installed 0.2.0") {
+		t.Errorf("--version 0.1.5: exit %d\n%s", code, out)
+	}
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
+	if env := decodeApply(t, out); code != output.OK || !env.Data.UpToDate || env.Data.Installed != "0.2.0" {
+		t.Errorf("newest: exit %d\n%s", code, out)
+	}
+	if snapshot(t, d) != before || len(bins.calls) != 0 {
+		t.Errorf("changed (calls %q)", bins.calls)
 	}
 }

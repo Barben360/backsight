@@ -342,11 +342,28 @@ func ownGroupRuntime(cfg config.Config) server.Runtime {
 	return server.Docker{Compose: c, Cfg: cfg}
 }
 
-// heldByUpdate: the maintenance lock is update apply's, in this process or
-// its parent (update apply runs the new binary's server upgrade, and its
-// own rollback may restore).
+// updateLockEnv tells the binaries update apply runs which maintenance
+// lock it holds: "<pid>@<since, Unix seconds>", the lock's own record.
+const updateLockEnv = "BACKSIGHT_UPDATE_LOCK"
+
+// updateLock is the maintenance lock update apply took in this process.
+var updateLock *state.Owner
+
+func lockToken(o state.Owner) string { return fmt.Sprintf("%d@%d", o.PID, o.Since.Unix()) }
+
+// heldByUpdate: the maintenance lock is update apply's, in this process (the
+// lock it took) or in its parent (which named the lock in the child's
+// environment): update apply runs the new binary's server upgrade, and its
+// rollback the previous binary's restore. A PID alone is not enough: a
+// dead update's lock whose PID was reused must not pass.
 func heldByUpdate(h *state.HeldError) bool {
-	return h.Owner.Command == "update apply" && (h.Owner.PID == os.Getpid() || h.Owner.PID == os.Getppid())
+	if h.Owner.Command != "update apply" {
+		return false
+	}
+	if o := updateLock; o != nil && o.PID == h.Owner.PID && o.Since.Equal(h.Owner.Since) && o.PID == os.Getpid() {
+		return true
+	}
+	return h.Owner.PID == os.Getppid() && os.Getenv(updateLockEnv) == lockToken(h.Owner)
 }
 
 // epochBefore reads the server's restore epoch through the API, else read

@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/release"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -109,13 +110,19 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 
 // maintainUpdate runs the update check against the configured source and
 // records it; with update.auto_apply (off by default, SPEC §11.7) it then
-// applies the newest release. Its outcome is one line for the job's
-// report; a failed or rolled back apply never fails the job (doctor keeps
-// showing the update).
+// applies the newest release, or resumes an unfinished update to this
+// binary. Its outcome is one line for the job's report; a failed or rolled
+// back apply never fails the job (doctor keeps showing the update). A
+// release whose apply failed past its install is recorded and skipped
+// until a newer one appears or the user runs update apply: each try costs
+// a safety backup and a rollback.
 func maintainUpdate(ctx context.Context, d paths.Dirs) string {
 	_, cfg, err := updateConfig()
 	if err != nil {
 		return "failed: " + err.Error()
+	}
+	if m, err := state.ReadUpdateMarker(d); cfg.Update.AutoApply && err == nil && m != nil && m.To == buildinfo.Version {
+		return autoApply(ctx, d, m.To)
 	}
 	cctx, cancel := context.WithTimeout(ctx, updateCheckTimeout)
 	res, err := checkUpdates(cctx, releaseSource(cfg, ""), buildinfo.Version, cfg.Update.Prereleases)
@@ -129,14 +136,34 @@ func maintainUpdate(ctx context.Context, d paths.Dirs) string {
 	case !cfg.Update.AutoApply:
 		return res.Latest + " available"
 	}
+	if st, err := state.Load(d.StateFile()); err == nil && st.AutoApply != nil && !release.NewerThan(res.Latest, st.AutoApply.Failed) {
+		f := st.AutoApply
+		return fmt.Sprintf("%s available, auto-apply skipped: %s failed on %s (exit %d); run backsight update apply", res.Latest, f.Failed, f.At.UTC().Format("2006-01-02"), f.Code)
+	}
+	return autoApply(ctx, d, res.Latest)
+}
+
+// autoApply runs update apply for jobs maintain and records a failure
+// past the install (a resumable exit 40 is not one).
+func autoApply(ctx context.Context, d paths.Dirs, latest string) string {
 	ar := updateApplyResult{Installed: buildinfo.Version, Steps: []step{}, Migrations: []string{}}
-	if err := runUpdateApply(ctx, &ar, updateApplyFlags{}, func(string, string, string) {}); err != nil {
-		return res.Latest + " available, auto-apply failed (exit " + fmt.Sprint(output.CodeOf(err)) + "): " + err.Error()
-	}
-	if ar.UpToDate {
+	err := runUpdateApply(ctx, &ar, updateApplyFlags{auto: true}, func(string, string, string) {})
+	code := output.CodeOf(err)
+	switch {
+	case err == nil && ar.UpToDate:
 		return "up to date"
+	case err == nil:
+		if st, lerr := state.Load(d.StateFile()); lerr == nil && st.AutoApply != nil {
+			_ = state.UpdateWithin(d, "jobs maintain", recordWait, func(s *state.State) error { s.AutoApply = nil; return nil })
+		}
+		return "applied " + ar.Target
+	case ar.changed && code != output.Partial:
+		_ = state.UpdateWithin(d, "jobs maintain", recordWait, func(s *state.State) error {
+			s.AutoApply = &state.AutoApply{Failed: ar.Target, Code: code, Error: err.Error(), At: now().UTC().Truncate(time.Second)}
+			return nil
+		})
 	}
-	return "applied " + ar.Target
+	return latest + " available, auto-apply failed (exit " + fmt.Sprint(code) + "): " + err.Error()
 }
 
 // rotateTelemetry removes month files older than keep months (the current

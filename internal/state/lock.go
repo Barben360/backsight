@@ -143,6 +143,9 @@ func BreakStale(e *HeldError) error {
 	return os.Remove(e.Path)
 }
 
+// Owner is what the lock file holds.
+func (l *Lock) Owner() Owner { return l.owner }
+
 // Release removes the lock file if it still names this lock's owner.
 func (l *Lock) Release() error {
 	raw, err := os.ReadFile(l.path)

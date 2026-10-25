@@ -139,3 +139,57 @@ func TestUpdateCallbackErrorWritesNothing(t *testing.T) {
 		t.Error("state.json written despite the callback error")
 	}
 }
+
+// UpdateWithin waits for a held state lock up to its bound, then gives up
+// with the HeldError; fn's own error is never retried.
+func TestUpdateWithinWaitsForTheLock(t *testing.T) {
+	d := paths.Dirs{State: t.TempDir()}
+	l, err := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(150 * time.Millisecond); _ = l.Release() }()
+	if err := UpdateWithin(d, "test", 5*time.Second, func(s *State) error { s.PluginVersion = "0.2.0"; return nil }); err != nil {
+		t.Fatalf("not retried until the lock was free: %v", err)
+	}
+	if s, _ := Load(d.StateFile()); s.PluginVersion != "0.2.0" {
+		t.Errorf("not written: %+v", s)
+	}
+
+	l, _ = TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	defer func() { _ = l.Release() }()
+	start := time.Now()
+	var held *HeldError
+	if err := UpdateWithin(d, "test", 200*time.Millisecond, func(s *State) error { s.PluginVersion = "lost"; return nil }); !errors.As(err, &held) || time.Since(start) < 200*time.Millisecond {
+		t.Errorf("a lock held past the bound: %v after %s", err, time.Since(start))
+	}
+	_ = l.Release()
+	calls := 0
+	boom := errors.New("boom")
+	if err := UpdateWithin(d, "test", time.Second, func(*State) error { calls++; return boom }); !errors.Is(err, boom) || calls != 1 {
+		t.Errorf("fn's error: %v, %d calls", err, calls)
+	}
+}
+
+// SaveWithin writes the raw state only under the state lock.
+func TestSaveWithinTakesTheLock(t *testing.T) {
+	d := paths.Dirs{State: t.TempDir()}
+	l, _ := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	var held *HeldError
+	if err := SaveWithin(d, "test", 100*time.Millisecond, []byte(`{"plugin_version":"x"}`)); !errors.As(err, &held) {
+		t.Errorf("written under someone else's lock: %v", err)
+	}
+	if _, err := os.Stat(d.StateFile()); err == nil {
+		t.Error("state.json written without the lock")
+	}
+	go func() { time.Sleep(100 * time.Millisecond); _ = l.Release() }()
+	if err := SaveWithin(d, "test", 5*time.Second, []byte(`{"plugin_version":"x"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(d.StateFile()); string(raw) != `{"plugin_version":"x"}` {
+		t.Errorf("%s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(d.LocksDir(), "state.lock")); err == nil {
+		t.Error("lock left")
+	}
+}

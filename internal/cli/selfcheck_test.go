@@ -78,6 +78,35 @@ func TestJobsTickRecordsTheSelfCheck(t *testing.T) {
 	}
 }
 
+// A tick that finds maintenance in progress (update apply's first tick of
+// the new binary, say) writes nothing: the self-check waits for the next
+// tick, so state.json's lock stays free for the update.
+func TestJobsTickUnderMaintenanceDoesNotRunTheSelfCheck(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	setBuild(t, "0.5.0", "abc")
+	fakeRelease(t, filepath.Join(pathsOf(home).Data, "bin", "0.5.0"), "0.5.0", true)
+	d := pathsOf(home)
+	raw, _ := json.Marshal(state.Owner{PID: liveProcess(t), Command: "update apply", Since: time.Now().UTC().Truncate(time.Second)})
+	_ = os.MkdirAll(d.State, 0o700)
+	if err := os.WriteFile(d.MaintenanceLock(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(d.StateFile())
+	code, out, _ := run(t, "jobs", "tick", "--json")
+	if code != output.OK || !strings.Contains(out, "maintenance in progress") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if after, _ := os.ReadFile(d.StateFile()); string(after) != string(before) {
+		t.Errorf("the tick wrote state.json under maintenance:\n%s", after)
+	}
+	// Once the maintenance is over, the next tick checks the binary.
+	_ = os.Remove(d.MaintenanceLock())
+	if code, out, _ := run(t, "jobs", "tick", "--json"); code != output.OK || !strings.Contains(out, `"binary": "verified"`) {
+		t.Errorf("after the maintenance: exit %d\n%s", code, out)
+	}
+}
+
 // A binary that does not match its release is reported by tick and doctor,
 // and the tick still does its work.
 func TestATamperedBinaryIsADoctorErrorAndTheTickRuns(t *testing.T) {
@@ -87,8 +116,26 @@ func TestATamperedBinaryIsADoctorErrorAndTheTickRuns(t *testing.T) {
 	withDate(t, "2026-10-25T10:00:00Z")
 	exe := fakeRelease(t, filepath.Join(pathsOf(home).Data, "bin", "0.5.0"), "0.5.0", true)
 	_ = os.WriteFile(exe, []byte("#!/bin/sh\necho tampered\n"), 0o755)
-	if code, out, _ := run(t, "jobs", "tick", "--json"); code != output.OK || !strings.Contains(out, `"binary": "failed"`) {
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // the first tick: live retain starts from here
+	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	before := retained.Load()
+	code, out, _ := run(t, "jobs", "tick", "--json")
+	var env struct {
+		Data struct {
+			Status   string         `json:"status"`
+			Binary   string         `json:"binary"`
+			Sessions map[string]int `json:"sessions"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.OK || env.Data.Binary != "failed" || env.Data.Status != "done" {
 		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// The tick did its work: the settled session was sent.
+	if retained.Load() == before || env.Data.Sessions["sent"] != 1 {
+		t.Errorf("the tick sent nothing (%d retained): %s", retained.Load()-before, out)
 	}
 	e := doctor.Env{Dirs: pathsOf(home)}
 	realProbes(&e)
@@ -119,12 +166,39 @@ func TestDoctorProbeChecksTheBinaryReadOnly(t *testing.T) {
 // Hooks never hash the binary: no self-check is recorded by any hook.
 func TestHooksNeverRunTheSelfCheck(t *testing.T) {
 	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
 	childFromTestBinary(t, "")
+	d := pathsOf(home)
+	in := `{"session_id":"s1","source":"startup","cwd":"` + filepath.Join(home, "billing") + `","prompt":"how do we deploy billing?"}`
 	for _, ev := range []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "subagent-start", "subagent-stop", "stop", "session-end"} {
-		runHookCmd(t, `{"session_id":"s1","source":"startup"}`, ev)
+		code, out := runHookCmd(t, in, ev)
+		if code != 0 || (ev == "session-start" && !strings.Contains(out, "additionalContext")) {
+			t.Fatalf("%s: exit %d %q", ev, code, out)
+		}
 	}
-	if st, _ := state.Load(pathsOf(home).StateFile()); st.SelfCheck != nil {
+	// The hooks did their work (a session state, their telemetry)...
+	if _, err := os.Stat(filepath.Join(d.SessionsDir(), "s1.json")); err != nil {
+		t.Errorf("the hooks recorded no session: %v", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(d.TelemetryDir(), "*.jsonl"))
+	var events string
+	for _, f := range files {
+		raw, _ := os.ReadFile(f)
+		events += string(raw)
+	}
+	if !strings.Contains(events, `"event":"briefing"`) || !strings.Contains(events, `"event":"prompt"`) {
+		t.Errorf("hook telemetry: %s", events)
+	}
+	// ...without checking the binary.
+	if st, _ := state.Load(d.StateFile()); st.SelfCheck != nil {
 		t.Errorf("a hook ran the self-check: %+v", st.SelfCheck)
+	}
+	// The control: a tick on the same install does record it.
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK {
+		t.Fatalf("tick: exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.SelfCheck == nil {
+		t.Error("the tick recorded no self-check: this test reads the wrong state")
 	}
 }
 

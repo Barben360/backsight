@@ -46,6 +46,10 @@ func (d Dirs) RestoreMarker() string { return filepath.Join(d.State, "restore-in
 // back (SPEC §11.7).
 func (d Dirs) UpdateMarker() string { return filepath.Join(d.State, "update-incomplete.json") }
 
+// UpdateSnapshot holds state.json and config.toml as they were before the
+// update the marker names, for its rollback or its resume.
+func (d Dirs) UpdateSnapshot() string { return filepath.Join(d.State, "update-snapshot.json") }
+
 // Default resolves the directories of the running process.
 func Default() (Dirs, error) {
 	home, err := os.UserHomeDir()

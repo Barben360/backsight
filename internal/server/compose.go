@@ -182,3 +182,8 @@ func (c Compose) Logs(ctx context.Context, service string, n int) (string, error
 // reaches backsight only, which cancels its context (update apply runs the
 // binaries it installs and rolls back to this way).
 func OwnGroup(cmd *exec.Cmd) { ownGroup(cmd) }
+
+// TerminateGroup asks the process group of a child started with OwnGroup
+// to stop (SIGTERM; CTRL_BREAK on Windows): a backsight child cancels its
+// context and rolls back. A group already gone is os.ErrProcessDone.
+func TerminateGroup(p *os.Process) error { return terminateGroup(p) }

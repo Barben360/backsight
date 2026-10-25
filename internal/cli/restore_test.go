@@ -49,6 +49,10 @@ type restoreDocker struct {
 	pulls     []string       // images pulled
 	failPull  bool           // docker pull fails
 	failImage string         // compose up of this hindsight image fails
+	// migrateImage: compose up of this hindsight image migrates the
+	// database (its rows become 99), whether it then starts or not.
+	migrateImage string
+	badVerify    bool // the throwaway verify database counts one row less
 }
 
 // upImage reads the hindsight image of the compose.yaml a `compose ... up`
@@ -105,6 +109,8 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte("0.8.7\n"), nil
 	case strings.Contains(line, "pg_restore --data-only -t"):
 		return []byte(strconv.Itoa(f.rows) + "\n"), nil
+	case strings.Contains(line, "select count(*) from") && f.badVerify && strings.HasPrefix(args[1], "backsight-verify"):
+		return []byte(strconv.Itoa(f.rows-1) + "\n"), nil
 	case strings.Contains(line, "select count(*) from"):
 		if f.rows < 0 {
 			return []byte("database does not exist"), os.ErrNotExist
@@ -147,6 +153,9 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	case strings.HasSuffix(line, "up -d --wait"):
 		img := upImage(args)
 		f.images = append(f.images, img)
+		if f.migrateImage != "" && img == f.migrateImage && f.rows >= 0 {
+			f.rows = 99
+		}
 		if f.failImage != "" && img == f.failImage {
 			f.running = false
 			return []byte("container hindsight exited (1)"), os.ErrClosed

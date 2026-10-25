@@ -233,3 +233,17 @@ func TestAcquireTakesOverOnlyAStaleLock(t *testing.T) {
 		_ = l.Release()
 	}
 }
+
+// A lock knows the owner it wrote, for a child to be told which lock its
+// parent holds.
+func TestLockOwner(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "m.lock")
+	l, err := TryAcquire(p, "update apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Inspect(p)
+	if o := l.Owner(); h == nil || o != h.Owner || o.PID != os.Getpid() || o.Command != "update apply" {
+		t.Errorf("owner %+v, file %+v", o, h)
+	}
+}
