@@ -919,3 +919,20 @@ func TestSetupProjectAnswerNamesTheServerAndJobs(t *testing.T) {
 		t.Errorf("a new project once the server runs: exit %d %s", code, errOut)
 	}
 }
+
+func TestSetupSchedulerOffSkipsTheEntries(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "scheduler=off", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Contains(strings.Join(f.commands(), ","), "jobs install") {
+		t.Errorf("scheduler=off installed entries: %v", f.commands())
+	}
+	if rec, _ := setup.Load(pathsOf(home).SetupFile()); rec == nil || rec.Undo.Scheduler {
+		t.Errorf("undo would remove entries setup never wrote: %+v", rec)
+	}
+	if code, _, _ := run(t, "setup", "--answer", "scheduler=maybe", "--non-interactive"); code != output.Usage {
+		t.Errorf("scheduler=maybe: exit %d", code)
+	}
+}

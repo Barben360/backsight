@@ -708,6 +708,9 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "retention", Status: "done", Detail: detail}, nil
 		}},
 		{"scheduler", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
+			if answers["scheduler"] == "off" { // a container or CI runner without a user scheduler
+				return setup.Step{Name: "scheduler", Status: "skipped", Detail: "off as answered: run backsight jobs tick every 15 min and jobs maintain daily some other way"}, nil
+			}
 			if st, err := state.Load(s.dirs.StateFile()); err == nil && st.Scheduler == nil {
 				r.Undo.Scheduler = true
 				s.persist(r)

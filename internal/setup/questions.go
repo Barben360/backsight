@@ -101,10 +101,10 @@ type Inputs struct {
 }
 
 // Hidden answers have defaults and are never asked.
-var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight"}
+var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -263,7 +263,11 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		} else if s := in.Saved[k]; s != "" {
 			v = s
 		}
-		if k == "project" {
+		if k == "scheduler" {
+			if v != "on" && v != "off" {
+				return nil, nil, &UsageError{fmt.Sprintf("scheduler=%s: on or off", v)}
+			}
+		} else if k == "project" {
 			if !projectRE.MatchString(v) {
 				return nil, nil, &UsageError{fmt.Sprintf("project=%s: lowercase letters, digits, - and _", v)}
 			}

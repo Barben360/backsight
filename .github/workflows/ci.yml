@@ -35,3 +35,15 @@ jobs:
         with:
           go-version-file: go.mod
       - run: scripts/sandbox.sh 8888
+  fresh-install:
+    # M4 block 4: setup from nothing (isolated HOME and Claude Code
+    # profile), through verify, a stored memory found again, and undo.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: npm install -g @anthropic-ai/claude-code@2.1.310
+      - run: scripts/fresh-install.sh 38888
