@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,7 +40,8 @@ type fakeHS struct {
 	refuse  map[string]int  // retains into these documents answer with this status
 	// onRetain sees each item before it is stored.
 	onRetain func(hindsight.RetainItem)
-	gets     int // document reads
+	gets     int      // document reads
+	reads    []string // the documents read, in order
 	seenOps  map[string]bool
 	// epochStatus non-zero: reads of the restore epoch answer with it.
 	epochStatus int
@@ -94,6 +96,7 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
 		h.gets++
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
+		h.reads = append(h.reads, id)
 		if id == EpochDocument && h.epochStatus != 0 {
 			w.WriteHeader(h.epochStatus)
 			return
@@ -1247,12 +1250,13 @@ func TestALostSideDocumentIsResentFromItsFirstSegment(t *testing.T) {
 	}
 }
 
-// noName fails when a retained item names project p anywhere.
-func (e *env) noName(p string) {
+// noSecret fails when a retained item names the excluded project "secret"
+// anywhere.
+func (e *env) noSecret() {
 	e.t.Helper()
 	for _, it := range e.hs.retains {
-		if strings.Contains(it.DocumentID, p) || strings.Contains(strings.Join(it.Tags, ","), p) || strings.Contains(fmt.Sprint(it.Metadata, it.ObservationScopes), p) {
-			e.t.Errorf("%s leaked: %+v", p, it)
+		if strings.Contains(it.DocumentID, "secret") || strings.Contains(strings.Join(it.Tags, ","), "secret") || strings.Contains(fmt.Sprint(it.Metadata, it.ObservationScopes), "secret") {
+			e.t.Errorf("secret leaked: %+v", it)
 		}
 	}
 }
@@ -1273,7 +1277,12 @@ func TestAPlainDirectoryAfterAnExcludedRepositoryStaysOut(t *testing.T) {
 	e.recordIn(alpha, "s1", "u4", "user", 3, "alpha again")
 	expect(t, e.flush("s1", Options{}), Sent, 2, 2)
 	e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha again"})
-	e.noName("secret")
+	e.noSecret()
+	for _, id := range e.hs.reads {
+		if strings.Contains(id, "secret") {
+			t.Errorf("a kept-out project's document was read: %s", id)
+		}
+	}
 	for _, it := range e.hs.retains {
 		if strings.Contains(it.Content, "confidential") {
 			t.Errorf("sent: %s", it.Content)
@@ -1291,7 +1300,7 @@ func TestAPlainDirectoryAfterAnExcludedRepositoryStaysOut(t *testing.T) {
 	if it := e.hs.retains[from]; it.DocumentID != "conversation:s2@alpha" || it.Tags[0] != "project:alpha" || strings.Contains(it.Content, "confidential") {
 		t.Errorf("%+v", it)
 	}
-	e.noName("secret")
+	e.noSecret()
 }
 
 // An opt-out run last in a flush: the next flush, starting mid-file, still
@@ -1309,7 +1318,7 @@ func TestAnOptOutRunLastCarriesToTheNextFlush(t *testing.T) {
 	if r := e.flush("s1", Options{}); r.Status != OptedOut || len(e.hs.retains) != 1 {
 		t.Errorf("%+v, %d retains", r, len(e.hs.retains))
 	}
-	e.noName("secret")
+	e.noSecret()
 }
 
 // A resync with nothing left to send still records the last record's
@@ -1440,5 +1449,203 @@ func TestReplayedSavesFollowTheSessionsProjectRule(t *testing.T) {
 	notes := e.f.Notes("s1", recs)
 	if len(notes) != 1 || notes[0].Project != "alpha" || !strings.Contains(notes[0].Content, "export page") {
 		t.Errorf("%+v", notes)
+	}
+}
+
+// A plain directory named like an excluded repository (~/copies/secret
+// after ~/work/secret) does not take the excluded project back: only the
+// excluded directory itself, or a pause, could.
+func TestANamesakeOfAnExcludedRepositoryStaysOut(t *testing.T) {
+	e := newEnv(t)
+	alpha, secret := e.repo("alpha"), e.repo("secret")
+	copies := filepath.Join(filepath.Dir(filepath.Dir(e.cwd)), "copies", "secret")
+	_ = os.MkdirAll(copies, 0o700)
+	e.f.Exclude = []string{secret}
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(secret, "s1", "u2", "user", 1, "confidential repo")
+	e.recordIn(copies, "s1", "u3", "user", 2, "confidential copy")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.noSecret()
+	for _, it := range e.hs.retains {
+		if strings.Contains(it.Content, "confidential") {
+			t.Errorf("sent: %s", it.Content)
+		}
+	}
+}
+
+// The checkpoint between two segments cannot be saved: the cursor file is
+// removed, so a crash before the end resyncs instead of trusting it.
+func TestAFailedCheckpointRemovesTheCursor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("renaming onto a directory differs on Windows")
+	}
+	e := newEnv(t)
+	beta := e.repo("beta")
+	e.record("s1", "u1", "user", 0, "billing one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	p := filepath.Join(e.f.Dirs.CursorsDir(), "s1.json")
+	present := true
+	e.hs.onRetain = func(it hindsight.RetainItem) {
+		switch it.DocumentID {
+		case "conversation:s1":
+			_ = os.MkdirAll(p, 0o700) // the checkpoint's rename onto it fails
+		case "conversation:s1@beta":
+			_, err := os.Stat(p)
+			present = err == nil
+		}
+	}
+	if r := e.flush("s1", Options{}); r.Status != Sent || r.Records != 2 {
+		t.Fatalf("%+v", r)
+	}
+	if present {
+		t.Error("the cursor that could not be saved was left in place")
+	}
+}
+
+// Positions are per document in the restore reconcile too: a restore loses
+// beta's document while the home document still holds the cursor's last
+// record; beta's records are dropped and resent from its segment 1.
+func TestReconcileDropsWhatASideDocumentLost(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	e.recordIn(alpha, "s1", "u3", "user", 2, "alpha three")
+	expect(t, e.flush("s1", Options{}), Sent, 3, 2)
+	snap := e.hs.backup()
+	delete(snap.docs, "conversation:s1@beta")
+	snap.ops = map[string]bool{}
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(13, 30))
+	e.clock = clockAt(13, 30)
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || !reflect.DeepEqual(rec.Resend, []string{"s1"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	sent := len(e.hs.retains)
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.expectItems(sent, [4]string{"conversation:s1@beta", "", "1", "beta two"})
+}
+
+// A reconcile that stopped half way already dropped a record's session key
+// (its .dropped mark): the next run still counts the record as lost.
+func TestReconcileCountsWhatAnEarlierRunDropped(t *testing.T) {
+	e := newEnv(t)
+	alpha := e.repo("alpha")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	snap := e.hs.backup()
+	e.recordIn(alpha, "s1", "u2", "user", 60, "alpha two")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(13, 30))
+	e.clock = clockAt(13, 30)
+	// the earlier run: marked u2 dropped and removed its key, then stopped
+	if err := e.f.addDropped("s1", dropped{Records: map[string]bool{"u2": true}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.f.Index.Remove(sessionKey("claude-memory", "s1", "u2"))
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || !reflect.DeepEqual(rec.Resend, []string{"s1"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	sent := len(e.hs.retains)
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	e.expectItems(sent, [4]string{"conversation:s1", "append", "2", "alpha two"})
+}
+
+// A fork's copied parent records are never marked as the fork's own, not
+// even when its resync finds them before its document's position: a
+// restore that loses the fork's document resends only the fork's turns.
+func TestAForksCopiedRecordsStayTheParentsAfterARestore(t *testing.T) {
+	e := newEnv(t)
+	e.record("parent", "u1", "user", 0, "shared one")
+	e.record("parent", "u2", "user", 1, "shared two")
+	e.flush("parent", Options{})
+	snap := e.hs.backup()
+	raw, _ := os.ReadFile(filepath.Join(e.dir, "parent.jsonl"))
+	_ = os.WriteFile(filepath.Join(e.dir, "fork.jsonl"), raw, 0o600)
+	e.record("fork", "u9", "user", 30, "fork nine")
+	expect(t, e.flush("fork", Options{}), Sent, 1, 1)
+	_ = os.Remove(filepath.Join(e.f.Dirs.CursorsDir(), "fork.json"))
+	e.record("fork", "u10", "user", 60, "fork ten")
+	expect(t, e.flush("fork", Options{}), Sent, 1, 2) // resync: u1, u2 lie before conversation:fork's position
+	if e.f.Index.Has(sessionKey("claude-memory", "fork", "u1")) {
+		t.Error("the parent's record was marked as the fork's own")
+	}
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(13, 30))
+	e.clock = clockAt(13, 30)
+	if _, err := e.f.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sent := len(e.hs.retains)
+	e.flush("fork", Options{})
+	for _, it := range e.hs.retains[sent:] {
+		if strings.Contains(it.Content, "shared") {
+			t.Errorf("the parent's records went to the fork's document: %s", it.Content)
+		}
+	}
+	if n := e.hs.countIn("conversation:fork", "fork nine"); n != 1 {
+		t.Errorf("fork nine stored %d times", n)
+	}
+}
+
+// countIn counts the stored lines of doc that contain text.
+func (h *fakeHS) countIn(doc, text string) int {
+	n := 0
+	for _, l := range strings.Split(h.content[doc], "\n") {
+		if strings.Contains(l, text) {
+			n++
+		}
+	}
+	return n
+}
+
+// A resync keeps the home of a per-project cursor: when the first
+// directory's name changes (its linked worktree is gone, so its basename
+// names it now), the home project keeps conversation:<sid>.
+func TestAResyncKeepsTheCursorsHome(t *testing.T) {
+	e := newEnv(t)
+	alpha := e.repo("alpha")
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", alpha, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("commit", "-q", "--allow-empty", "-m", "init")
+	wt := filepath.Join(filepath.Dir(e.cwd), "alpha-fix")
+	git("worktree", "add", "-q", wt)
+	// the worktree turn was paused: never sent, but it names the home
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+		[]byte(`{"paused":false,"paused_spans":[{"from":"2026-10-24T08:59:00Z","to":"2026-10-24T09:01:00Z"}]}`), 0o600)
+	e.recordIn(wt, "s1", "u1", "user", 0, "private worktree turn")
+	e.recordIn(alpha, "s1", "u2", "user", 5, "alpha two")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha two"})
+	git("worktree", "remove", wt)
+	home := filepath.Dir(filepath.Dir(e.cwd))
+	e.f.Resolver = project.New(home, []string{".claude"}) // a later process: nothing cached
+	p := filepath.Join(e.dir, "s1.jsonl")
+	raw, _ := os.ReadFile(p)
+	_ = os.WriteFile(p, append([]byte(`{"type":"mode","sessionId":"s1"}`+"\n"), raw...), 0o600) // rewritten: resync
+	e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	e.expectItems(1, [4]string{"conversation:s1", "append", "2", "alpha three"})
+}
+
+// A resync that finds every record this session sent in its document
+// clears a stale <sid>.pending, even with nothing to send: a leftover
+// resend mark would later resend a merely pending document as segment 1,
+// replacing it.
+func TestAResyncClearsAStalePendingMark(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	e.flush("s1", Options{})
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	_ = os.MkdirAll(e.f.Dirs.CursorsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.CursorsDir(), "s1.pending"), []byte(resendMark), 0o600)
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	if _, err := os.Stat(filepath.Join(e.f.Dirs.CursorsDir(), "s1.pending")); !os.IsNotExist(err) {
+		t.Errorf("the stale mark outlived the resync: %v", err)
 	}
 }

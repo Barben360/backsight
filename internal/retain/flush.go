@@ -192,7 +192,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		if haveCursor && cur.Segments != nil {
 			home = cur.Home
 		}
-		cur = Cursor{Transcript: path, Bank: f.Bank, Home: home, Segments: map[string]int{}}
+		cur = Cursor{Transcript: path, Bank: f.Bank, Home: home, Segments: map[string]int{}, LastUUIDs: map[string]string{}}
 		if len(recs) == 0 {
 			return fail(Nothing, "")
 		}
@@ -200,7 +200,10 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if cur.Segments == nil {
 		cur.Segments = map[string]int{}
 	}
-	attrs := f.attribute(sid, recs, attr{project: cur.Project, namedOut: cur.OptOut})
+	if cur.LastUUIDs == nil {
+		cur.LastUUIDs = map[string]string{}
+	}
+	attrs := f.attribute(sid, recs, attr{project: cur.Project, namedOut: cur.OptOut, namedOutDir: cur.OptOutDir})
 	if resync {
 		if cur.Home == "" {
 			cur.Home = homeOf(recs, attrs)
@@ -259,7 +262,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 		return nil, f.quarantine(res, cur, bad), true
 	}
 	for p, seg := range pos.segments {
-		cur.Segments[p] = seg
+		cur.Segments[p], cur.LastUUIDs[p] = seg, pos.last[p]
 	}
 	cur.Legacy = pos.legacyUUID
 	// Released from quarantine after a first segment the server never
@@ -274,8 +277,12 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 		switch {
 		case pos.holds(i, a.project):
 			held = true
-			if !own(r.UUID) && !a.out {
-				mark = append(mark, key) // sent from another machine, or the index was lost
+			// Sent from another machine, or the index was lost: marked as
+			// this session's own. Not a record whose bare uuid is in the
+			// index: a fork's copy of its parent's records, or a record
+			// kept out, which a restore must never resend as this session's.
+			if !own(r.UUID) && !a.out && !sent(r.UUID) {
+				mark = append(mark, key)
 			}
 		case start < 0 && sent(r.UUID) && !own(r.UUID):
 			held = true // a fork copies its parent's records (decision 0038)
@@ -308,6 +315,13 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	if err := f.Index.Remove(unmark...); err != nil {
 		return retry(err.Error())
 	}
+	if len(unmark) == 0 {
+		// No document lacks a record this session sent: a pending first
+		// segment landed, or a resend mark has nothing left to resend. A
+		// stale mark would later resend a merely pending document as
+		// segment 1 (replacing it), or quarantine it at once.
+		_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), sid))
+	}
 	if start < 0 {
 		start = len(recs)
 	}
@@ -326,7 +340,8 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 // advance moves the cursor past r, whose attribution a carries to the next
 // record.
 func (c *Cursor) advance(r transcript.Record, a attr) {
-	c.Offset, c.LastUUID, c.LastTurnAt, c.Project, c.OptOut = r.End, r.UUID, r.Timestamp, a.project, a.namedOut
+	c.Offset, c.LastUUID, c.LastTurnAt = r.End, r.UUID, r.Timestamp
+	c.Project, c.OptOut, c.OptOutDir = a.project, a.namedOut, a.namedOutDir
 }
 
 // runKey groups consecutive records that go out together: same project
@@ -431,7 +446,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	}
 	cur.advance(last, attr{project: project})
 	cur.SentAt = now
-	cur.Segments[project] = segNo
+	cur.Segments[project], cur.LastUUIDs[project] = segNo, last.UUID
 	cur.Records += len(run)
 	res.Records += len(run)
 	if !slices.Contains(res.Documents, doc) {

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -143,11 +144,17 @@ type Cursor struct {
 	// cursor without it was written before per-project documents and
 	// resyncs once.
 	Segments map[string]int `json:"segments"`
-	// Project is the project of the record at Offset, and OptOut why the
-	// record that named it was kept out: the project rule carries both to
-	// the next record (attribute). Both are empty at the file's start.
-	Project string `json:"project,omitempty"`
-	OptOut  string `json:"opt_out,omitempty"`
+	// LastUUIDs is the last record sent to each document, by project: what
+	// its metadata's last_uuid must say (verify --live).
+	LastUUIDs map[string]string `json:"last_uuids,omitempty"`
+	// Project is the project of the record at Offset, OptOut why the
+	// record that named it was kept out, and OptOutDir that record's
+	// directory when its directory kept it out: the project rule carries
+	// them to the next record (attribute). All are empty at the file's
+	// start.
+	Project   string `json:"project,omitempty"`
+	OptOut    string `json:"opt_out,omitempty"`
+	OptOutDir string `json:"opt_out_dir,omitempty"`
 	// Legacy is the last record up to which conversation:<sid> holds the
 	// records of every project (sent by a build from before per-project
 	// documents); its later segments carry it as legacy_last_uuid.
@@ -161,6 +168,46 @@ type Cursor struct {
 	Backfill bool `json:"backfill,omitempty"`
 	// NotesReplayed: backfill replayed the session's explicit saves.
 	NotesReplayed bool `json:"notes_replayed,omitempty"`
+}
+
+// SentDocument is one document of a session this cursor sent to.
+type SentDocument struct {
+	Document string
+	Project  string
+	Segment  int
+	LastUUID string
+}
+
+// SentDocuments lists the documents of session sid this cursor sent a
+// segment to, the home one first: one per project (DocumentID). A cursor
+// from before per-project documents sent to Document alone.
+func (c Cursor) SentDocuments(sid string) []SentDocument {
+	if c.Segments == nil {
+		if c.Segment < 1 {
+			return nil
+		}
+		return []SentDocument{{Document: c.Document, Segment: c.Segment, LastUUID: c.LastUUID}}
+	}
+	projects := make([]string, 0, len(c.Segments))
+	for p, seg := range c.Segments {
+		if seg >= 1 {
+			projects = append(projects, p)
+		}
+	}
+	slices.SortFunc(projects, func(a, b string) int {
+		switch {
+		case a == c.Home:
+			return -1
+		case b == c.Home:
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
+	out := make([]SentDocument, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, SentDocument{Document: DocumentID(sid, c.Home, p), Project: p, Segment: c.Segments[p], LastUUID: c.LastUUIDs[p]})
+	}
+	return out
 }
 
 func cursorPath(dir, sid string) (string, error) {

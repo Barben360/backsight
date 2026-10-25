@@ -13,11 +13,14 @@ import (
 // attr is what the project rule says of one record: its project, whether
 // it is kept out of retain (and why), and namedOut, why the record that
 // named its project was kept out ("" when it was retained).
+// namedOutDir is that record's directory when its directory (not a pause)
+// kept it out.
 type attr struct {
-	project  string
-	out      bool
-	why      string
-	namedOut string
+	project     string
+	out         bool
+	why         string
+	namedOut    string
+	namedOutDir string
 }
 
 // attribute names the project of each record of recs, keyed by its End
@@ -27,7 +30,9 @@ type attr struct {
 //   - a record whose directory has a strong name (Resolver.Named: transverse
 //     path, .backsight.toml project, git repository) takes it; so does a
 //     session's first directory (no previous project) by its basename, and
-//     a directory whose basename is the current project already;
+//     a directory whose basename is the current project already, unless
+//     that project was named from a directory kept out and this is another
+//     directory (a plain ~/copies/secret after an excluded ~/work/secret);
 //   - any other keeps the previous record's project, so a cd into
 //     ~/.npm-global/... or /tmp does not start a project; a record with no
 //     directory keeps it too (it is kept out anyway);
@@ -61,14 +66,18 @@ func (f *Flusher) attribute(sid string, recs []transcript.Record, prev attr) map
 			}
 			dirs[r.CWD] = d
 		}
-		a := attr{project: prev.project, out: d.out, why: d.why, namedOut: prev.namedOut}
-		if paused, why := pauses(r); paused {
+		a := attr{project: prev.project, out: d.out, why: d.why, namedOut: prev.namedOut, namedOutDir: prev.namedOutDir}
+		if paused, why := pauses(r); paused && !a.out {
 			a.out, a.why = true, why
 		}
-		if d.name != "" && (d.strong || prev.project == "" || d.name == prev.project) {
-			a.project, a.namedOut = d.name, ""
+		namesake := d.name == prev.project && (prev.namedOutDir == "" || prev.namedOutDir == r.CWD)
+		if d.name != "" && (d.strong || prev.project == "" || namesake) {
+			a.project, a.namedOut, a.namedOutDir = d.name, "", ""
 			if a.out {
 				a.namedOut = a.why
+			}
+			if d.out {
+				a.namedOutDir = r.CWD
 			}
 		} else if a.namedOut != "" && !a.out {
 			a.out, a.why = true, a.namedOut
@@ -142,8 +151,9 @@ func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects 
 
 // position is what the server holds of a session, per document.
 type position struct {
-	at       map[string]int // project → index in recs of its document's last_uuid
-	segments map[string]int // project → its document's last segment
+	at       map[string]int    // project → index in recs of its document's last_uuid
+	segments map[string]int    // project → its document's last segment
+	last     map[string]string // project → its document's last_uuid
 	// legacy: the index up to which conversation:<sid> holds every
 	// project's records, -1 when it does not; legacyUUID that record.
 	legacy     int
@@ -162,7 +172,7 @@ func (p position) holds(i int, project string) bool {
 // position cannot be trusted (a record recs lack, an invalid segment): the
 // session is quarantined, since sending would duplicate or replace.
 func serverPosition(recs []transcript.Record, docs []serverDoc, homeDoc string) (position, string) {
-	pos := position{at: map[string]int{}, segments: map[string]int{}, legacy: -1}
+	pos := position{at: map[string]int{}, segments: map[string]int{}, last: map[string]string{}, legacy: -1}
 	for _, d := range docs {
 		if !d.found {
 			continue
@@ -175,7 +185,7 @@ func serverPosition(recs []transcript.Record, docs []serverDoc, homeDoc string) 
 		if err != nil || seg < 1 {
 			return pos, "the server's document " + d.id + " has no valid segment number; sending would replace it"
 		}
-		pos.at[d.project], pos.segments[d.project], pos.found = i, seg, true
+		pos.at[d.project], pos.segments[d.project], pos.last[d.project], pos.found = i, seg, d.lastUUID, true
 		if d.id == homeDoc && d.legacy != "" {
 			if pos.legacy = indexOf(recs, d.legacy); pos.legacy < 0 {
 				return pos, "the server holds this session up to record " + d.legacy + ", which this transcript does not contain"

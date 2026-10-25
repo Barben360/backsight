@@ -326,3 +326,57 @@ type erroringList struct{ *fakeServer }
 func (e *erroringList) ListMemories(context.Context, string, hindsight.MemoryQuery, func(hindsight.Memory) error) error {
 	return errors.New("500 internal error")
 }
+
+// sentTwo records that this machine sent sid's records of two projects:
+// alpha (the home, conversation:<sid>, segment 2) and beta (conversation:
+// <sid>@beta, segment 1), each with its own last record; the server holds
+// both as sent, with a consolidated fact each.
+func (w *world) sentTwo(sid string, sentAt time.Time) {
+	w.t.Helper()
+	p := filepath.Join(w.dir, "projects", "-work-api", sid+".jsonl")
+	fi, _ := os.Stat(p)
+	c := retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u9", Segment: 2, Document: "conversation:" + sid, Bank: "b", SentAt: sentAt,
+		Home: "alpha", Segments: map[string]int{"alpha": 2, "beta": 1}, LastUUIDs: map[string]string{"alpha": "u3", "beta": "u9"}}
+	if err := retain.SaveCursor(w.cursors, sid, c); err != nil {
+		w.t.Fatal(err)
+	}
+	w.srv.docs["conversation:"+sid] = hindsight.Document{ID: "conversation:" + sid, Metadata: map[string]string{"segment": "2", "last_uuid": "u3"}}
+	w.srv.docs["conversation:"+sid+"@beta"] = hindsight.Document{ID: "conversation:" + sid + "@beta", Metadata: map[string]string{"segment": "1", "last_uuid": "u9"}}
+	w.srv.memories = append(w.srv.memories,
+		hindsight.Memory{ID: "fa", FactType: "world", DocumentID: "conversation:" + sid, ConsolidatedAt: "2026-10-25T11:00:00+00:00"},
+		hindsight.Memory{ID: "fb", FactType: "world", DocumentID: "conversation:" + sid + "@beta", ConsolidatedAt: "2026-10-25T11:00:00+00:00"})
+}
+
+// A session with one document per project passes when every document
+// holds what this machine sent to it, and its facts are the documents'.
+func TestPassWhenEveryDocumentOfTheSessionMatches(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s1", now.Add(-2*time.Hour))
+	w.sentTwo("s1", now.Add(-90*time.Minute))
+	w.observation("o1", now.Add(-80*time.Minute), "fb")
+	r := w.check()
+	want(t, r, Pass, "conversation:s1@beta")
+	if r.Document != "conversation:s1" || r.Segment != 2 || r.ServerSegment != 2 || r.Facts != 2 || r.Observations != 1 {
+		t.Errorf("%+v", r)
+	}
+}
+
+// A document that is not the last one sent but does not match fails,
+// naming it, as does a missing one with nothing queued.
+func TestFailWhenAnyDocumentOfTheSessionDiffers(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s1", now.Add(-5*time.Hour))
+	w.sentTwo("s1", now.Add(-4*time.Hour))
+	w.observation("o1", now.Add(-3*time.Hour), "fa")
+	w.srv.docs["conversation:s1"].Metadata["last_uuid"] = "u2"
+	r := w.check()
+	want(t, r, Fail, "conversation:s1 does not match")
+	if r.Document != "conversation:s1" {
+		t.Errorf("%+v", r)
+	}
+	w.srv.docs["conversation:s1"].Metadata["last_uuid"] = "u3"
+	delete(w.srv.docs, "conversation:s1@beta")
+	if r = w.check(); r.Status != Fail || !strings.Contains(r.Summary, "no document conversation:s1@beta") || r.Document != "conversation:s1@beta" {
+		t.Errorf("%+v", r)
+	}
+}

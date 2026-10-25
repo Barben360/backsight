@@ -131,7 +131,7 @@ func Check(ctx context.Context, in Input) Result {
 			return Result{Status: Fail, Session: s.sid, Transcript: s.path, SettledAt: s.settledAt(),
 				Summary: "the latest settled session " + s.sid + " is quarantined: the server refused it",
 				Fix:     "backsight retain retry-quarantine (after fixing the reason shown by backsight doctor)"}
-		case ok && !cur.Quarantined && cur.Bank == in.Bank && cur.Segment >= 1:
+		case ok && !cur.Quarantined && cur.Bank == in.Bank && len(cur.SentDocuments(s.sid)) > 0:
 			if target == nil {
 				target = &s
 			} else {
@@ -178,7 +178,11 @@ func notSent(s session, now time.Time) Result {
 }
 
 func checkSent(ctx context.Context, in Input, s session, earlier []session) Result {
-	r := Result{Session: s.sid, Transcript: s.path, Document: s.cur.Document, Segment: s.cur.Segment, SettledAt: s.settledAt(), SentAt: s.cur.SentAt}
+	// A session has one document per project it sent records of (retain
+	// DocumentID): each must hold what this machine sent to it. The result
+	// names the home document, or the one that does not match.
+	docs := s.cur.SentDocuments(s.sid)
+	r := Result{Session: s.sid, Transcript: s.path, Document: docs[0].Document, Segment: docs[0].Segment, SettledAt: s.settledAt(), SentAt: s.cur.SentAt}
 	fail := func(summary, detail, fix string) Result {
 		r.Status, r.Summary, r.Detail, r.Fix = Fail, summary, detail, fix
 		return r
@@ -204,33 +208,41 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	}
 	recent := in.Now.Sub(s.cur.SentAt) < workWait
 
-	doc, err := in.Server.GetDocument(ctx, in.Bank, s.cur.Document)
-	var apiErr *hindsight.APIError
-	switch {
-	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-		if busy() || recent {
-			return pending(fmt.Sprintf("session %s was sent but is not stored yet (%d operation(s) queued on the server)", s.sid, max(queued, 0)))
+	homeSegment := 0
+	for i, sd := range docs {
+		r.Document, r.Segment = sd.Document, sd.Segment
+		doc, err := in.Server.GetDocument(ctx, in.Bank, sd.Document)
+		var apiErr *hindsight.APIError
+		switch {
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+			if busy() || recent {
+				return pending(fmt.Sprintf("session %s was sent but %s is not stored yet (%d operation(s) queued on the server)", s.sid, sd.Document, max(queued, 0)))
+			}
+			return fail("the server has no document "+sd.Document+", which this machine sent on "+s.cur.SentAt.UTC().Format("2006-01-02 15:04")+" UTC",
+				"nothing is queued on the server, so it is not coming",
+				"backsight doctor (restore-epoch, bank): after a restore, jobs tick re-sends what the server lacks")
+		case err != nil:
+			return unreadable(err)
 		}
-		return fail("the server has no document "+s.cur.Document+", which this machine sent on "+s.cur.SentAt.UTC().Format("2006-01-02 15:04")+" UTC",
-			"nothing is queued on the server, so it is not coming",
-			"backsight doctor (restore-epoch, bank): after a restore, jobs tick re-sends what the server lacks")
-	case err != nil:
-		return unreadable(err)
+		seg, _ := strconv.Atoi(doc.Metadata["segment"])
+		r.ServerSegment = seg
+		switch {
+		case seg < sd.Segment && (busy() || recent):
+			return pending(fmt.Sprintf("session %s: the server holds segment %d of %s, segment %d is still being stored", s.sid, seg, sd.Document, sd.Segment))
+		case seg != sd.Segment:
+			return fail(fmt.Sprintf("session %s: the server holds segment %d of %s, this machine sent segment %d", s.sid, seg, sd.Document, sd.Segment),
+				"the document "+sd.Document+" does not hold what this machine recorded as sent", "backsight doctor (restore-epoch, writes)")
+		case doc.Metadata["last_uuid"] != sd.LastUUID:
+			return fail("session "+s.sid+": the server's document "+sd.Document+" does not match what this machine sent",
+				fmt.Sprintf("segment %d ends at record %s on the server, %s here", seg, doc.Metadata["last_uuid"], sd.LastUUID), "backsight doctor (restore-epoch, writes)")
+		}
+		if i == 0 {
+			homeSegment = seg
+		}
 	}
-	seg, _ := strconv.Atoi(doc.Metadata["segment"])
-	r.ServerSegment = seg
-	switch {
-	case seg < s.cur.Segment && (busy() || recent):
-		return pending(fmt.Sprintf("session %s: the server holds segment %d, segment %d is still being stored", s.sid, seg, s.cur.Segment))
-	case seg != s.cur.Segment:
-		return fail(fmt.Sprintf("session %s: the server holds segment %d, this machine sent segment %d", s.sid, seg, s.cur.Segment),
-			"the document "+s.cur.Document+" does not hold what this machine recorded as sent", "backsight doctor (restore-epoch, writes)")
-	case doc.Metadata["last_uuid"] != s.cur.LastUUID:
-		return fail("session "+s.sid+": the server's document does not match what this machine sent",
-			fmt.Sprintf("segment %d ends at record %s on the server, %s here", seg, doc.Metadata["last_uuid"], s.cur.LastUUID), "backsight doctor (restore-epoch, writes)")
-	}
+	r.Document, r.Segment, r.ServerSegment = docs[0].Document, docs[0].Segment, homeSegment
 
-	facts, err := factsOf(ctx, in, s.cur.Document)
+	facts, err := sessionFacts(ctx, in, s)
 	if err != nil {
 		return unreadable(err)
 	}
@@ -264,14 +276,14 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	r.Observations = n
 	if n > 0 {
 		r.Status = Pass
-		r.Summary = fmt.Sprintf("session %s reached the server (document %s, segment %d) and %d observation(s) were consolidated from its %d fact(s)", s.sid, s.cur.Document, seg, n, len(facts))
+		r.Summary = fmt.Sprintf("session %s reached the server (%s) and %d observation(s) were consolidated from its %d fact(s)", s.sid, docList(docs), n, len(facts))
 		return r
 	}
 	// Its facts formed no new observation (none extracted, transient, or
 	// already known): an earlier session of this machine can still prove
 	// that consolidation works.
 	for _, e := range earlier {
-		ef, err := factsOf(ctx, in, e.cur.Document)
+		ef, err := sessionFacts(ctx, in, e)
 		if err != nil {
 			return unreadable(err)
 		}
@@ -281,7 +293,7 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		}
 		if m > 0 {
 			r.Status, r.Observations, r.ObservedIn = Pass, m, e.sid
-			r.Summary = fmt.Sprintf("session %s reached the server (document %s, segment %d); consolidation works", s.sid, s.cur.Document, seg)
+			r.Summary = fmt.Sprintf("session %s reached the server (%s); consolidation works", s.sid, docList(docs))
 			r.Detail = fmt.Sprintf("its %d fact(s) formed no new observation (transient or already known); %d observation(s) came from the earlier session %s", len(facts), m, e.sid)
 			return r
 		}
@@ -289,6 +301,28 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	return fail(fmt.Sprintf("no observation was consolidated from this machine's last %d sent session(s)", 1+len(earlier)),
 		fmt.Sprintf("session %s: %d fact(s), all consolidated, none in an observation", s.sid, len(facts)),
 		"backsight doctor (bank-config: the bank's missions decide what becomes an observation; backsight bank apply restores them)")
+}
+
+// sessionFacts lists the facts extracted from every document of a session.
+func sessionFacts(ctx context.Context, in Input, s session) ([]hindsight.Memory, error) {
+	var out []hindsight.Memory
+	for _, sd := range s.cur.SentDocuments(s.sid) {
+		f, err := factsOf(ctx, in, sd.Document)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f...)
+	}
+	return out, nil
+}
+
+// docList names a session's documents with their segments.
+func docList(docs []retain.SentDocument) string {
+	parts := make([]string, 0, len(docs))
+	for _, d := range docs {
+		parts = append(parts, fmt.Sprintf("document %s, segment %d", d.Document, d.Segment))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // factsOf lists the facts extracted from one document.
