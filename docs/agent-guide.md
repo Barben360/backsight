@@ -1,0 +1,65 @@
+# Installing backsight for a user: guide for coding agents
+
+You are a coding agent (Claude Code or another) asked to give your user a long-term memory with backsight. Follow these steps in order. Everything goes through `backsight` commands with `--json`; never edit backsight's files or Claude Code's settings by hand.
+
+## Rules
+
+- **Secrets never pass through you.** Never put a key in a command line, an answer or a file. When a key is needed, ask the user to type, in Claude Code: `! backsight secret set <name>` (the value is read without echo).
+- **The user decides.** Show each question with its options, costs and caveats, say which is recommended, and wait for the answer. Never answer `consent` yourself.
+- **Read the exit code and the JSON envelope** `{schema_version, command, ok, data | error}`:
+
+| Exit | Meaning | What you do |
+|---|---|---|
+| 0 | done | go on |
+| 2 | invalid invocation or answer | fix the command; `error.message` names the problem |
+| 10 | the user must act | ask each of `error.questions` that has `"asked": true`, ask the user to set each of `error.secrets`, show each of `error.actions` (`run_as_user`, `relogin`, `install`) with its `why`; then run `error.resume` |
+| 20 | blocked by the machine | show `error.message` and the failed pre-flight checks with their `fix`; rerun once fixed |
+| 40 | partly done, resumable | show the message, fix if asked, run `backsight setup --resume --non-interactive --json` |
+
+## 1. Install the binary
+
+If `backsight version` works, skip this step. Otherwise:
+
+```sh
+curl -fsSL https://<release-pages>/install.sh | sh
+```
+
+The script checks the release's minisign signature (with `minisign`, or `openssl` 3) and its checksum, then installs `~/.local/bin/backsight`. If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
+
+While the repository is private, the user downloads a release themselves (`gh release download <tag> -D <dir>`), then runs `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
+
+## 2. List the questions
+
+```sh
+backsight setup --questions --json
+```
+
+Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `default`, `recommended`, `required`, and `asked`. Questions with `"asked": false` are already settled by an existing install's config or an earlier run: tell the user, don't ask again. If the provider answer changes, list the questions again: the model and other questions follow the provider.
+
+Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install), `scheduler=off` (a container without a user scheduler).
+
+## 3. Show the plan, then run setup
+
+```sh
+backsight setup --plan --json --answer provider=<p> --answer <id>=<value> …
+```
+
+Show the user the pre-flight checks and the planned steps. When they agree, add `--answer consent=yes` and run:
+
+```sh
+backsight setup --non-interactive --json --answer provider=<p> … --answer consent=yes
+```
+
+Progress lines `{"event":"progress","step","pct","eta_s"}` arrive on stderr; stdout holds the one envelope. The first run downloads the server image (a few GB): tell the user it takes several minutes.
+
+Expect exit 10 the first time: the LLM key is not set. Ask the user to run `! backsight secret set llm_api_key` (with the `claude-code` provider, first `claude setup-token`), then run `backsight setup --resume --non-interactive --json`.
+
+## 4. Finish
+
+On exit 0, `data` holds:
+- `steps`: what was done;
+- `restart_required`: if true, tell the user to restart Claude Code (or run `/reload-plugins`);
+- `next_steps`: relay each one (the backup key to save, the background backfill);
+- `try_first`: suggest it.
+
+`backsight doctor --json` checks the whole install at any time. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
