@@ -20,7 +20,7 @@ func TestRecallSendsTheScopeAndReadsScores(t *testing.T) {
 	})
 	hits, err := c.Recall(context.Background(), "coding-agent::memoire", RecallRequest{Query: "postgres version", Types: []string{"observation"},
 		Budget: "low", MaxTokens: 1500, Tags: []string{"project:billing", "project:.claude"}, TagsMatch: "any_strict"})
-	want := `POST /v1/default/banks/coding-agent%3A%3Amemoire/memories/recall {"query":"postgres version","types":["observation"],"budget":"low","max_tokens":1500,"tags":["project:billing","project:.claude"],"tags_match":"any_strict"}`
+	want := `POST /v1/default/banks/coding-agent%3A%3Amemoire/memories/recall {"query":"postgres version","types":["observation"],"budget":"low","max_tokens":1500,"tags":["project:billing","project:.claude"],"tags_match":"any_strict","include":{"entities":null}}`
 	if err != nil || got != want {
 		t.Fatalf("err %v\ngot  %s\nwant %s", err, got, want)
 	}

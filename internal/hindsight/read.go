@@ -2,6 +2,7 @@ package hindsight
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +17,16 @@ type RecallRequest struct {
 	MaxTokens int      `json:"max_tokens,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
 	TagsMatch string   `json:"tags_match,omitempty"` // any_strict: tagged with one of Tags
+}
+
+// MarshalJSON adds include: entities null leaves out the entity payload
+// backsight never reads (−40 % of the response, same ranking: E30 V4).
+func (r RecallRequest) MarshalJSON() ([]byte, error) {
+	type plain RecallRequest
+	return json.Marshal(struct {
+		plain
+		Include map[string]any `json:"include"`
+	}{plain(r), map[string]any{"entities": nil}})
 }
 
 // RecallHit is one recalled memory.
