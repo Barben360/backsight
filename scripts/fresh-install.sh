@@ -248,6 +248,11 @@ for f in "${unit_files[@]}"; do
   [ ! -e "$f" ] || fail "uninstall left the jobs entry $f"
 done
 grep -q -- "disable.*$project-tick\.timer" <<< "$(sysctl_since "$mark")" || { cat "$sysctl_log" >&2; fail "uninstall did not disable the $project timers"; }
+# Then the services, once their timers are off (a running job is waited for
+# through its lock first).
+grep -q -- "stop .*$project-tick\.service.*$project-maintain\.service" <<< "$(sysctl_since "$mark")" || { cat "$sysctl_log" >&2; fail "uninstall did not stop the $project services"; }
+[ "$(sysctl_since "$mark" | grep -n -- "disable" | head -n 1 | cut -d: -f1)" -lt "$(sysctl_since "$mark" | grep -n -- "stop " | head -n 1 | cut -d: -f1)" ] ||
+  { cat "$sysctl_log" >&2; fail "uninstall stopped the $project services before disabling their timers"; }
 [ ! -e "$link" ] && [ ! -L "$link" ] || fail "uninstall left the PATH command $link"
 for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/bin" "$BACKSIGHT_HOME/data/marketplace" "$BACKSIGHT_HOME/data/server/compose.yaml"; do
   [ ! -e "$p" ] || fail "uninstall left $p"

@@ -945,7 +945,7 @@ func removeKeeping(root string, keeps []string) error {
 		}
 	}
 	if !inside {
-		return os.RemoveAll(root) // a link is removed, never what it points at
+		return removeAll(root) // a link is removed, never what it points at
 	}
 	ents, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -961,6 +961,26 @@ func removeKeeping(root string, keeps []string) error {
 	}
 	removeIfEmpty(root)
 	return nil
+}
+
+// removeAll is os.RemoveAll with an error that is safe to print: Go
+// 1.26.0's can return one whose Error() panics (an internal errSymlink,
+// for a link it could not remove from a read-only directory).
+func removeAll(p string) error {
+	if err := os.RemoveAll(p); err != nil {
+		return printable(err, p)
+	}
+	return nil
+}
+
+func printable(err error, p string) (out error) {
+	defer func() {
+		if recover() != nil {
+			out = fmt.Errorf("cannot remove everything under %s", p)
+		}
+	}()
+	_ = err.Error()
+	return err
 }
 
 func removeIfEmpty(dir string) {
