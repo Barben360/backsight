@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -165,6 +166,9 @@ func (h *hookEnv) stop() {
 // subagentStop queues the subagent's final report as a document (SPEC §6.2),
 // redacted and capped, honouring the session pause and opt-outs.
 func (h *hookEnv) subagentStop() {
+	if !subagentRan(h.in) {
+		return // an internal helper agent (a tool-call summary): no transcript, no result, no report
+	}
 	h.updateSession(func(s *session.State) error { s.SubagentDone = true; return nil }) // the approval detector (read side)
 	text := strings.TrimSpace(h.in.LastAssistantMessage)
 	if !h.cfg.Components.Write || text == "" || h.in.AgentID == "" {
@@ -183,7 +187,7 @@ func (h *hookEnv) subagentStop() {
 	if r := []rune(text); len(r) > reportChars {
 		text = string(r[:reportChars])
 	}
-	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, noteProject(h.home, h.cfg, h.project), text, now())
+	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, noteProject(h.home, h.cfg, h.project), text, now())
 	if _, err := notesOutbox(h.dirs).Append(n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})
 		return
@@ -203,4 +207,20 @@ func parentEntrypoint(path string) string {
 	}
 	defer func() { _ = f.Close() }()
 	return transcript.Entrypoint(f)
+}
+
+// subagentRan: the subagent wrote its own transcript. Claude Code's
+// internal helper agents (UI and Remote Control summaries of tool calls)
+// also fire SubagentStop, with a one-line status and no transcript: over
+// 1 000 such documents in a day on the author's machine (decision 0071).
+func subagentRan(in hookInput) bool {
+	p := in.AgentTranscriptPath
+	if p == "" && in.TranscriptPath != "" && session.ValidID(in.SessionID) && session.ValidID(in.AgentID) {
+		p = filepath.Join(strings.TrimSuffix(in.TranscriptPath, ".jsonl"), "subagents", "agent-"+in.AgentID+".jsonl")
+	}
+	if p == "" {
+		return false
+	}
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
 }

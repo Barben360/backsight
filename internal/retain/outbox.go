@@ -42,16 +42,17 @@ type Note struct {
 	Attempts    int       `json:"attempts"`
 	LastError   string    `json:"last_error,omitempty"`
 	Source      string    `json:"source,omitempty"` // "" (a note) | subagent
+	AgentType   string    `json:"agent_type,omitempty"`
 }
 
 // NewNote builds a note with its document and operation ids.
 // NewSubagentNote is a subagent's final report as document
 // subagent:<session>:<agent> (SPEC §6.2 SubagentStop).
-func NewSubagentNote(bank, sid, agentID, project, content string, at time.Time) Note {
+func NewSubagentNote(bank, sid, agentID, agentType, project, content string, at time.Time) Note {
 	doc := "subagent:" + sid + ":" + agentID
 	sum := sha256.Sum256([]byte(content))
 	return Note{OperationID: uuid5(nsBacksight, bank+"\n"+doc+"\n"+hex.EncodeToString(sum[:])), DocumentID: doc,
-		Source: "subagent", Project: project, Content: content, CreatedAt: at.UTC()}
+		Source: "subagent", AgentType: agentType, Project: project, Content: content, CreatedAt: at.UTC()}
 }
 
 func NewNote(bank, kind, project, content string, at time.Time) Note {
@@ -65,13 +66,19 @@ func NewNote(bank, kind, project, content string, at time.Time) Note {
 func (n Note) Item(machineID string) hindsight.RetainItem {
 	ts := n.CreatedAt
 	if n.Source == "subagent" {
-		return hindsight.RetainItem{
+		item := hindsight.RetainItem{
 			Content: n.Content, Context: "final report of a subagent", DocumentID: n.DocumentID, Strategy: "document",
 			Tags:              []string{"project:" + n.Project, "source:subagent", "harness:claude-code"},
 			ObservationScopes: [][]string{{"project:" + n.Project}},
 			Timestamp:         &ts,
 			Metadata:          map[string]string{"source": "subagent", "machine_id": machineID},
 		}
+		if t := n.AgentType; t != "" {
+			// On the raw facts only: the scope stays the project (decision 0071).
+			item.Tags = append(item.Tags, "agent:"+t)
+			item.Metadata["agent_type"] = t
+		}
+		return item
 	}
 	return hindsight.RetainItem{
 		Content: n.Content, Context: "note stored by the user or the agent", DocumentID: n.DocumentID, Strategy: "document",

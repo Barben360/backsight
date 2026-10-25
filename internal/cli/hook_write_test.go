@@ -78,12 +78,28 @@ func TestStopRecordsTheLastReply(t *testing.T) {
 	}
 }
 
+
+// subagentTranscript writes the transcript a real subagent leaves next to
+// its session's and returns the session transcript's path.
+func subagentTranscript(t *testing.T, sid, agentID string) string {
+	t.Helper()
+	dir := t.TempDir()
+	parent := filepath.Join(dir, sid+".jsonl")
+	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+sid+`","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+	sub := filepath.Join(dir, sid, "subagents")
+	_ = os.MkdirAll(sub, 0o700)
+	_ = os.WriteFile(filepath.Join(sub, "agent-"+agentID+".jsonl"), []byte(`{"type":"assistant"}`+"\n"), 0o600)
+	return parent
+}
+
 func TestSubagentStopQueuesItsReport(t *testing.T) {
 	home := hookHome(t)
-	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "agent-7", "cwd": filepath.Join(home, "billing"),
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "agent-7", "agent_type": "Explore", "cwd": filepath.Join(home, "billing"),
+		"transcript_path": subagentTranscript(t, "s1", "agent-7"),
 		"last_assistant_message": "Found the leak in pool.go. Token ghp_" + strings.Repeat("a1B2c3D4e5F6", 3) + " was in the log. " + strings.Repeat("x", 5000)})
 	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
 	if !strings.Contains(string(raw), `"document_id":"subagent:s1:agent-7"`) || !strings.Contains(string(raw), `"source":"subagent"`) ||
+		!strings.Contains(string(raw), `"agent_type":"Explore"`) ||
 		strings.Contains(string(raw), "a1B2c3D4e5F6a1B2") || !strings.Contains(string(raw), "pool.go") {
 		t.Fatalf("outbox:\n%.600s", raw)
 	}
@@ -102,14 +118,14 @@ func TestSubagentStopQueuesItsReport(t *testing.T) {
 func TestSubagentStopHonoursPauseAndTheWriteFlag(t *testing.T) {
 	home := hookHome(t)
 	_ = sessions(home).Update("s1", func(st *session.State) error { st.Paused = true; return nil })
-	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "last_assistant_message": "report"})
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "transcript_path": subagentTranscript(t, "s1", "a"), "last_assistant_message": "report"})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Error("paused session queued a report")
 	}
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("[components]\nwrite = false\n")...), 0o600)
-	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "last_assistant_message": "report"})
+	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"), "transcript_path": subagentTranscript(t, "s2", "a"), "last_assistant_message": "report"})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Error("write = false queued a report")
 	}
@@ -134,18 +150,38 @@ func TestSessionEndSpawnsADetachedFlush(t *testing.T) {
 
 func TestSubagentStopSkipsTheReportOfAHeadlessSession(t *testing.T) {
 	home := hookHome(t)
-	parent := filepath.Join(t.TempDir(), "s1.jsonl")
+	parent := subagentTranscript(t, "s1", "a") // a real subagent, of a headless session
 	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/w","entrypoint":"sdk-cli","message":{"role":"user","content":"cron digest"}}`+"\n"), 0o600)
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
 		"transcript_path": parent, "last_assistant_message": "All 11 workers exited with code 0."})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
 		t.Fatalf("a headless session's subagent report was queued:\n%s", raw)
 	}
-	interactive := filepath.Join(t.TempDir(), "s2.jsonl")
-	_ = os.WriteFile(interactive, []byte(`{"type":"user","uuid":"u1","sessionId":"s2","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"fix the leak"}}`+"\n"), 0o600)
+	interactive := subagentTranscript(t, "s2", "a")
 	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": filepath.Join(home, "billing"),
 		"transcript_path": interactive, "last_assistant_message": "Found the leak in pool.go."})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); !strings.Contains(string(raw), "pool.go") {
 		t.Errorf("an interactive session's report was not queued:\n%s", raw)
+	}
+}
+
+func TestSubagentStopIgnoresInternalHelperAgents(t *testing.T) {
+	home := hookHome(t)
+	parent := filepath.Join(t.TempDir(), "s1.jsonl") // the session's transcript, no subagents/ file for this agent
+	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "a1fc250e6b154ac35", "cwd": filepath.Join(home, "billing"),
+		"transcript_path": parent, "last_assistant_message": "Reviewing checkMention in docs_commands_test.go"})
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); len(raw) != 0 {
+		t.Fatalf("a helper agent's status line was queued:\n%s", raw)
+	}
+	if st, _ := sessions(home).Load("s1"); st.SubagentDone {
+		t.Error("a helper agent counted as a subagent result for the approval detector")
+	}
+	// agent_transcript_path, when Claude Code gives it, is the one checked.
+	real := subagentTranscript(t, "s3", "b")
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "x", "cwd": filepath.Join(home, "billing"),
+		"agent_transcript_path": filepath.Join(strings.TrimSuffix(real, ".jsonl"), "subagents", "agent-b.jsonl"), "last_assistant_message": "Found the leak in pool.go."})
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); !strings.Contains(string(raw), "pool.go") {
+		t.Errorf("a subagent with agent_transcript_path was not queued:\n%s", raw)
 	}
 }

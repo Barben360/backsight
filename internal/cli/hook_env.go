@@ -34,6 +34,7 @@ type hookInput struct {
 	ToolResponse         json.RawMessage `json:"tool_response"`
 	AgentID              string          `json:"agent_id"`
 	AgentType            string          `json:"agent_type"`
+	AgentTranscriptPath  string          `json:"agent_transcript_path"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
 	Reason               string          `json:"reason"`
 }

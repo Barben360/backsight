@@ -252,7 +252,7 @@ func TestApprovalDetectorCases(t *testing.T) {
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("[components]\nwrite = false\n")...), 0o600)
-	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": home, "last_assistant_message": "done"})
+	fire(t, "subagent-stop", map[string]any{"session_id": "s2", "agent_id": "a", "cwd": home, "transcript_path": subagentTranscript(t, "s2", "a"), "last_assistant_message": "done"})
 	if c := prompt(t, home, "s2", "parfait").Specific.Context; !strings.Contains(c, instructions.DetectorApproval) {
 		t.Errorf("approval after a subagent result with write=false:\n%s", c)
 	}

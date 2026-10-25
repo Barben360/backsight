@@ -247,11 +247,19 @@ func TestOutboxQuarantinesANoteThatKeepsFailing(t *testing.T) {
 	}
 }
 
+func TestSubagentNoteWithoutAgentTypeHasNoAgentTag(t *testing.T) {
+	it := NewSubagentNote("b", "s1", "agent-7", "", "billing", "Found the leak.", at).Item("m1")
+	if strings.Contains(strings.Join(it.Tags, ","), "agent:") || it.Metadata["agent_type"] != "" {
+		t.Errorf("%+v", it)
+	}
+}
+
 func TestSubagentNoteItem(t *testing.T) {
-	n := NewSubagentNote("b", "s1", "agent-7", "billing", "Found the leak in pool.go.", at)
+	n := NewSubagentNote("b", "s1", "agent-7", "Explore", "billing", "Found the leak in pool.go.", at)
 	it := n.Item("m1")
-	if n.DocumentID != "subagent:s1:agent-7" || it.Strategy != "document" || strings.Join(it.Tags, ",") != "project:billing,source:subagent,harness:claude-code" ||
-		it.ObservationScopes[0][0] != "project:billing" || it.Metadata["source"] != "subagent" {
+	if n.DocumentID != "subagent:s1:agent-7" || it.Strategy != "document" || strings.Join(it.Tags, ",") != "project:billing,source:subagent,harness:claude-code,agent:Explore" ||
+		len(it.ObservationScopes) != 1 || len(it.ObservationScopes[0]) != 1 || it.ObservationScopes[0][0] != "project:billing" ||
+		it.Metadata["source"] != "subagent" || it.Metadata["agent_type"] != "Explore" {
 		t.Errorf("%+v %+v", n, it)
 	}
 }
