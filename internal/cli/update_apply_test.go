@@ -1651,10 +1651,11 @@ func TestUpdateApplyRefreshesTheSchedulerEntries(t *testing.T) {
 	if s := schedulerStepIn(env.Data.Steps); code != output.OK || s.Status != "planned" || !strings.Contains(s.Detail, svc) {
 		t.Fatalf("plan: exit %d %+v\n%s", code, s, out)
 	}
-	if strings.Contains(readFile(t, svc), "KillMode") || len(sys.calls) != 0 || bins.ran("0.2.0 jobs refresh --plan") != 1 {
+	if strings.Contains(readFile(t, svc), "KillMode") || len(mutatingSys(sys)) != 0 || bins.ran("0.2.0 jobs refresh --plan") != 1 {
 		t.Fatalf("the plan changed the unit or ran %q / %q", sys.calls, bins.calls)
 	}
 
+	sys.calls, bins.calls = nil, nil
 	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
 	env = decodeApply(t, out)
 	if s := schedulerStepIn(env.Data.Steps); code != output.OK || s.Status != "done" || !strings.Contains(readFile(t, svc), "KillMode=mixed\nTimeoutStopSec=45min\n") {
@@ -1665,8 +1666,16 @@ func TestUpdateApplyRefreshesTheSchedulerEntries(t *testing.T) {
 			t.Errorf("a running job would be interrupted: %s", c)
 		}
 	}
-	if !slices.Contains(sys.calls, "systemctl --user daemon-reload") {
-		t.Errorf("not reloaded: %q", sys.calls)
+	// The new binary's client install refreshes the entries; update apply
+	// does not run a second jobs refresh of its own.
+	reloads := 0
+	for _, c := range sys.calls {
+		if c == "systemctl --user daemon-reload" {
+			reloads++
+		}
+	}
+	if reloads != 1 || bins.ran("0.2.0 jobs refresh") != 0 {
+		t.Errorf("refreshed %d times, %d jobs refresh runs: %q / %q", reloads, bins.ran("0.2.0 jobs refresh"), sys.calls, bins.calls)
 	}
 
 	// The next release finds entries it cannot refresh in place: the

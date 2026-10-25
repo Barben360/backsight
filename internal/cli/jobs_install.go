@@ -200,17 +200,20 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			files := p.Paths()
+			files, remove := p.Paths(), p.Remove
 			if st, err := state.Load(d.StateFile()); err == nil && st.Scheduler != nil && len(st.Scheduler.Files) > 0 {
-				files = st.Scheduler.Files // where they were written, whatever the paths are now
+				// Where they were written and the names they were written
+				// under, whatever the paths and the project are now.
+				files = st.Scheduler.Files
+				remove = scheduler.InstalledFrom(files).Remove(st.Scheduler.Kind, os.Getuid())
 			}
 			res := jobsInstallResult{Kind: p.Kind, Planned: plan}
-			for _, c := range p.Remove {
+			for _, c := range remove {
 				res.Commands = append(res.Commands, cmdLine(c))
 			}
 			var failed []string
 			if !plan {
-				for _, c := range p.Remove {
+				for _, c := range remove {
 					if out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...); err != nil && !notLoaded(string(out)) {
 						failed = append(failed, fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out))))
 					}

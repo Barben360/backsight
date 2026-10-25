@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,7 +63,7 @@ func TestJobsRefreshRewritesStaleUnits(t *testing.T) {
 	sys.calls = nil
 	code, out, _ := run(t, "jobs", "refresh", "--plan", "--json")
 	r := decodeRefresh(t, out)
-	if code != output.OK || r.Status != "planned" || len(r.Files) != 1 || r.Files[0].Target != svc || len(sys.calls) != 0 {
+	if code != output.OK || r.Status != "planned" || len(r.Files) != 1 || r.Files[0].Target != svc || len(mutatingSys(sys)) != 0 {
 		t.Fatalf("plan: exit %d, calls %q\n%s", code, sys.calls, out)
 	}
 	if strings.Contains(readFile(t, svc), "KillMode") {
@@ -72,6 +73,7 @@ func TestJobsRefreshRewritesStaleUnits(t *testing.T) {
 		t.Errorf("plan text:\n%s", out)
 	}
 
+	sys.calls = nil
 	code, out, _ = run(t, "jobs", "refresh", "--json")
 	r = decodeRefresh(t, out)
 	got := readFile(t, svc)
@@ -84,7 +86,7 @@ func TestJobsRefreshRewritesStaleUnits(t *testing.T) {
 	if readFile(t, timer) != timerBefore || readFile(t, filepath.Join(dir, "backsight-maintain.service")) != maintainBefore {
 		t.Error("an up-to-date file was rewritten")
 	}
-	want := []string{"systemctl --user daemon-reload", "systemctl --user enable --now backsight-tick.timer backsight-maintain.timer"}
+	want := []string{"systemctl --user is-enabled backsight-tick.timer", "systemctl --user daemon-reload", "systemctl --user enable --now backsight-tick.timer"}
 	if strings.Join(sys.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("calls %q, want %q", sys.calls, want)
 	}
@@ -101,6 +103,168 @@ func TestJobsRefreshRewritesStaleUnits(t *testing.T) {
 	code, out, _ = run(t, "jobs", "refresh", "--json")
 	if r := decodeRefresh(t, out); code != output.OK || r.Status != "unchanged" || len(sys.calls) != 0 {
 		t.Errorf("second refresh: exit %d, calls %q\n%s", code, sys.calls, out)
+	}
+}
+
+// mutatingSys are the scheduler calls that change something: all but the
+// read-only probes (is-enabled, launchctl print, schtasks /Query).
+func mutatingSys(f *fakeSys) []string {
+	var out []string
+	for _, c := range f.calls {
+		if !strings.HasPrefix(c, "systemctl --user is-enabled ") && !strings.HasPrefix(c, "launchctl print ") && !strings.HasPrefix(c, "schtasks /Query ") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// A timer the user disabled stays disabled: its units are rewritten and
+// re-read, and only the timers that were enabled are enabled again.
+func TestJobsRefreshKeepsADisabledTimerDisabled(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	if code, out, _ := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	dir := filepath.Join(home, "xdg", "systemd", "user")
+	for _, j := range []string{"tick", "maintain"} {
+		oldTemplate(t, filepath.Join(dir, "backsight-"+j+".service"), "KillMode=mixed\n")
+	}
+	sys.fail, sys.output = "systemctl --user is-enabled backsight-maintain.timer", "disabled"
+	sys.calls = nil
+	code, out, _ := run(t, "jobs", "refresh", "--json")
+	r := decodeRefresh(t, out)
+	if code != output.OK || r.Status != "done" || strings.Join(r.Disabled, ",") != "maintain" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, j := range []string{"tick", "maintain"} {
+		if !strings.Contains(readFile(t, filepath.Join(dir, "backsight-"+j+".service")), "KillMode=mixed\n") {
+			t.Errorf("%s not rewritten", j)
+		}
+	}
+	want := "systemctl --user daemon-reload|systemctl --user enable --now backsight-tick.timer"
+	if got := strings.Join(mutatingSys(sys), "|"); got != want {
+		t.Errorf("calls %q, want %q", got, want)
+	}
+	if _, out, _ := run(t, "jobs", "refresh", "--plan"); strings.Contains(out, "disabled") {
+		t.Errorf("an up-to-date plan names a disabled job:\n%s", out)
+	}
+	oldTemplate(t, filepath.Join(dir, "backsight-maintain.service"), "KillMode=mixed\n")
+	if _, out, _ := run(t, "jobs", "refresh"); !strings.Contains(out, "maintain") || !strings.Contains(out, "disabled") {
+		t.Errorf("text does not name the job left disabled:\n%s", out)
+	}
+}
+
+// An entry file deleted since the install is written again as installed
+// and loaded again: its timer was enabled by the install, and is-enabled
+// cannot tell for a unit with no file.
+func TestJobsRefreshRewritesADeletedEntryFile(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	run(t, "jobs", "install")
+	timer := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")
+	installed := readFile(t, timer)
+	if err := os.Remove(timer); err != nil {
+		t.Fatal(err)
+	}
+	sys.fail, sys.output = "systemctl --user is-enabled backsight-tick.timer", "Failed to get unit file state for backsight-tick.timer: No such file or directory"
+	sys.calls = nil
+	code, out, _ := run(t, "jobs", "refresh", "--json")
+	if r := decodeRefresh(t, out); code != output.OK || r.Status != "done" || len(r.Disabled) != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := readFile(t, timer); got != installed {
+		t.Errorf("rewritten as\n%s\nwant\n%s", got, installed)
+	}
+	if got := strings.Join(mutatingSys(sys), "|"); got != "systemctl --user daemon-reload|systemctl --user enable --now backsight-tick.timer" {
+		t.Errorf("calls %q", got)
+	}
+}
+
+// A reload that fails is refused (exit 20) after the files were
+// rewritten, naming the commands that load them: a rerun finds the files
+// up to date and would not reload them.
+func TestJobsRefreshReloadFailureIsBlocked(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	run(t, "jobs", "install")
+	svc := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.service")
+	oldTemplate(t, svc, "KillMode=mixed\n")
+	sys.fail, sys.output = "systemctl --user daemon-reload", "Failed to connect to bus: No medium found"
+	code, _, errOut := run(t, "jobs", "refresh")
+	if code != output.Blocked || !strings.Contains(errOut, "No medium found") ||
+		!strings.Contains(errOut, "run: systemctl --user daemon-reload; systemctl --user enable --now backsight-tick.timer") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+	if !strings.Contains(readFile(t, svc), "KillMode=mixed\n") {
+		t.Error("the files were not rewritten")
+	}
+}
+
+// An agent that is not loaded (the user booted it out) is rewritten and
+// left unloaded; the loaded one is loaded again.
+func TestJobsRefreshLeavesAnUnloadedLaunchdAgentUnloaded(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "darwin")
+	sys.fail = "launchctl bootout"
+	run(t, "jobs", "install")
+	agents := filepath.Join(home, "Library", "LaunchAgents")
+	tick, maintain := filepath.Join(agents, "tech.backsight.tick.plist"), filepath.Join(agents, "tech.backsight.maintain.plist")
+	stop := "<key>ExitTimeOut</key><integer>2700</integer>\n"
+	oldTemplate(t, tick, stop)
+	oldTemplate(t, maintain, stop)
+	uid := os.Getuid()
+	sys.fail, sys.output = fmt.Sprintf("launchctl print gui/%d/tech.backsight.tick", uid), "Could not find service \"tech.backsight.tick\" in domain for user gui: 501"
+	sys.calls = nil
+	code, out, _ := run(t, "jobs", "refresh", "--json")
+	if r := decodeRefresh(t, out); code != output.OK || r.Status != "done" || strings.Join(r.Disabled, ",") != "tick" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if !strings.Contains(readFile(t, tick), stop) || !strings.Contains(readFile(t, maintain), stop) {
+		t.Error("an agent file was not rewritten")
+	}
+	want := fmt.Sprintf("launchctl bootout gui/%d/tech.backsight.maintain|launchctl bootstrap gui/%d %s", uid, uid, maintain)
+	if got := strings.Join(mutatingSys(sys), "|"); got != want {
+		t.Errorf("calls %q, want %q", got, want)
+	}
+}
+
+// A running task is left for the next refresh: the other one is created
+// again, and the digest stays unrecorded until both are, so that the next
+// refresh takes the one left.
+func TestJobsRefreshDefersARunningTask(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "windows")
+	d := pathsOf(home)
+	_ = os.WriteFile(filepath.Join(d.Data, "bin", plugin.ShimName("windows")), []byte("MZ"), 0o700)
+	run(t, "jobs", "install")
+	_ = state.Update(d, "test", func(s *state.State) error { s.Scheduler.Digest = ""; return nil })
+	sys.out = map[string]string{`schtasks /Query /TN backsight\maintain /FO LIST`: "TaskName:      \\backsight\\maintain\r\nStatus:        Running\r\n"}
+	creates := func() []string {
+		var out []string
+		for _, c := range sys.calls {
+			if strings.HasPrefix(c, "schtasks /Create /F") {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	sys.calls = nil
+	code, out, _ := run(t, "jobs", "refresh", "--json")
+	r := decodeRefresh(t, out)
+	if c := creates(); code != output.OK || r.Status != "done" || strings.Join(r.Deferred, ",") != "maintain" || len(c) != 1 || !strings.Contains(c[0], `/TN backsight\tick `) {
+		t.Fatalf("exit %d, creates %q\n%s", code, c, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.Scheduler.Digest != "" {
+		t.Error("the digest was recorded while a task was left as it was")
+	}
+	sys.out, sys.calls = nil, nil
+	code, out, _ = run(t, "jobs", "refresh", "--json")
+	if c := creates(); code != output.OK || len(decodeRefresh(t, out).Deferred) != 0 || !slices.ContainsFunc(c, func(l string) bool { return strings.Contains(l, `/TN backsight\maintain `) }) {
+		t.Errorf("next refresh: exit %d, creates %q\n%s", code, c, out)
+	}
+	if st, _ := state.Load(d.StateFile()); st.Scheduler.Digest == "" {
+		t.Error("the next refresh did not record the digest")
 	}
 }
 

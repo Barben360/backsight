@@ -27,7 +27,9 @@ import (
 // config editor, and never stops a running job: systemd re-reads units on
 // daemon-reload and a running service keeps its process; an entry whose
 // reload would stop it (launchd's bootout, a replaced task) is left as it
-// is while its job runs.
+// is while its job runs. Only the entries that were enabled (a systemd
+// timer) or loaded (a launchd agent) are loaded again: one the user
+// disabled is rewritten and stays disabled.
 
 type jobsRefreshResult struct {
 	Kind     string                 `json:"kind,omitempty"`
@@ -35,6 +37,7 @@ type jobsRefreshResult struct {
 	Files    []claudecfg.FileResult `json:"files"`
 	Commands []string               `json:"commands"`
 	Deferred []string               `json:"deferred,omitempty"` // jobs left as they are: they were running
+	Disabled []string               `json:"disabled,omitempty"` // jobs rewritten and left disabled, as they were
 	Planned  bool                   `json:"planned,omitempty"`
 	Run      string                 `json:"run,omitempty"` // config editor run (undo)
 }
@@ -132,6 +135,7 @@ func refreshScheduler(ctx context.Context, plan bool) (jobsRefreshResult, error)
 	}
 	var edits []claudecfg.Edit
 	var reload [][]string
+	var enabled []scheduler.Entry
 	for _, e := range df.stale {
 		if e.Running != nil {
 			if out, err := sysRunner.Run(ctx, e.Running[0], e.Running[1:]...); err == nil && strings.Contains(string(out), e.RunningMark) {
@@ -144,13 +148,18 @@ func refreshScheduler(ctx context.Context, plan bool) (jobsRefreshResult, error)
 				edits = append(edits, wholeFile(f))
 			}
 		}
-		reload = append(reload, e.Reload...)
+		if wasEnabled(ctx, e) {
+			reload = append(reload, e.Reload...)
+			enabled = append(enabled, e)
+		} else {
+			res.Disabled = append(res.Disabled, e.Job)
+		}
 	}
 	if len(reload) == 0 && len(edits) == 0 {
 		res.Status = "deferred"
 		return res, nil
 	}
-	reload = append(reload, df.plan.Reload...)
+	reload = append(reload, df.plan.Reloaded(enabled)...)
 	for _, c := range reload {
 		res.Commands = append(res.Commands, cmdLine(c))
 	}
@@ -177,16 +186,39 @@ func refreshScheduler(ctx context.Context, plan bool) (jobsRefreshResult, error)
 			return res, blocked(err)
 		}
 	}
-	for _, c := range reload {
+	for i, c := range reload {
 		out, err := sysRunner.Run(ctx, c[0], c[1:]...)
 		// launchd's bootout of an agent not loaded fails: expected
 		if expected := df.plan.Kind == "launchd" && c[1] == "bootout"; err != nil && !expected {
-			return res, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s (the files are rewritten: backsight jobs refresh retries the reload)",
-				cmdLine(c), err, strings.TrimSpace(string(out)))}
+			// A rerun finds the files up to date and reloads nothing: the
+			// commands left are the user's to run.
+			left := make([]string, 0, len(reload)-i)
+			for _, l := range reload[i:] {
+				left = append(left, cmdLine(l))
+			}
+			return res, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s (the files are rewritten; to load them, run: %s)",
+				cmdLine(c), err, strings.TrimSpace(string(out)), strings.Join(left, "; "))}
 		}
 	}
 	res.Status = "done"
 	return res, nil
+}
+
+// wasEnabled asks the scheduler whether e is enabled (or loaded). An entry
+// with a file missing is taken as the install left it, enabled: the
+// scheduler cannot tell for a unit with no file, and deleting a file is
+// not how a timer is disabled.
+func wasEnabled(ctx context.Context, e scheduler.Entry) bool {
+	if e.Enabled == nil {
+		return true
+	}
+	for _, f := range e.Files {
+		if _, err := os.Lstat(f); err != nil {
+			return true
+		}
+	}
+	_, err := sysRunner.Run(ctx, e.Enabled[0], e.Enabled[1:]...)
+	return err == nil
 }
 
 // wholeFile is an edit that replaces a generated file.
@@ -233,6 +265,9 @@ func jobsRefreshText(r jobsRefreshResult) string {
 	for _, j := range r.Deferred {
 		fmt.Fprintf(&b, "%-12s %s: its job is running and reloading it would stop it; backsight jobs refresh once it ended\n", "left", j)
 	}
+	for _, j := range r.Disabled {
+		fmt.Fprintf(&b, "%-12s %s: it was disabled, it stays disabled\n", "left", j)
+	}
 	return b.String()
 }
 
@@ -248,6 +283,9 @@ func refreshDetail(r jobsRefreshResult) string {
 	}
 	if len(r.Deferred) > 0 {
 		s += "; left while running: " + strings.Join(r.Deferred, ", ") + " (backsight jobs refresh once it ended)"
+	}
+	if len(r.Disabled) > 0 {
+		s += "; left disabled: " + strings.Join(r.Disabled, ", ")
 	}
 	return s
 }

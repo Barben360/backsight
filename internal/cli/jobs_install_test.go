@@ -204,6 +204,36 @@ func TestJobsUninstallFailurePaths(t *testing.T) {
 	}
 }
 
+// A project renamed since the install keeps its entries' names: uninstall
+// deactivates the units recorded in state.json, not the new name's.
+func TestJobsUninstallOfARenamedProject(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	run(t, "jobs", "install")
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nproject = \"renamed\"\n", 1)), 0o600)
+	sys.calls = nil
+	code, out, _ := run(t, "jobs", "uninstall", "--plan")
+	if code != output.OK || !strings.Contains(out, "systemctl --user disable --now backsight-tick.timer backsight-maintain.timer") || strings.Contains(out, "renamed-") {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	if code, _, _ := run(t, "jobs", "uninstall"); code != output.OK {
+		t.Fatalf("uninstall: exit %d", code)
+	}
+	if len(sys.calls) == 0 || sys.calls[0] != "systemctl --user disable --now backsight-tick.timer backsight-maintain.timer" {
+		t.Errorf("calls %q", sys.calls)
+	}
+	for _, c := range sys.calls {
+		if strings.Contains(c, "renamed-") {
+			t.Errorf("deactivated the new name's units: %s", c)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")); err == nil {
+		t.Error("the recorded files were not removed")
+	}
+}
+
 // A reinstall keeps the first install time (doctor's grace period).
 func TestJobsReinstallKeepsTheInstallTime(t *testing.T) {
 	home := devInstall(t, true)

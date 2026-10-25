@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -165,8 +166,16 @@ func TestEntries(t *testing.T) {
 	if len(s.Entries) != 2 || len(s.Entries[0].Files) != 2 || s.Entries[0].Running != nil || len(s.Entries[0].Reload) != 0 {
 		t.Errorf("systemd entries %+v", s.Entries)
 	}
-	if strings.Join(s.Reload[0], " ") != "systemctl --user daemon-reload" {
-		t.Errorf("systemd reload %q", s.Reload)
+	if e := s.Entries[1]; strings.Join(e.Enabled, " ") != "systemctl --user is-enabled backsight-maintain.timer" {
+		t.Errorf("systemd enabled probe %q", e.Enabled)
+	}
+	// Only the timers that were enabled are enabled again: a timer the
+	// user disabled stays disabled, and the units are re-read anyway.
+	if got := fmt.Sprintf("%q", s.Reloaded(s.Entries[1:])); got != `[["systemctl" "--user" "daemon-reload"] ["systemctl" "--user" "enable" "--now" "backsight-maintain.timer"]]` {
+		t.Errorf("systemd reload of maintain: %s", got)
+	}
+	if got := fmt.Sprintf("%q", s.Reloaded(nil)); got != `[["systemctl" "--user" "daemon-reload"]]` {
+		t.Errorf("systemd reload with no timer enabled: %s", got)
 	}
 	l, _ := For("darwin", Options{Shim: "/s", Home: "/h", UID: 501, LogDir: "/l"})
 	e := l.Entries[1]
@@ -175,10 +184,16 @@ func TestEntries(t *testing.T) {
 		len(e.Reload) != 2 || strings.Join(e.Reload[1], " ") != "launchctl bootstrap gui/501 /h/Library/LaunchAgents/tech.backsight.maintain.plist" {
 		t.Errorf("launchd entry %+v", e)
 	}
+	if strings.Join(e.Enabled, " ") != "launchctl print gui/501/tech.backsight.maintain" || l.Reloaded(l.Entries) != nil {
+		t.Errorf("launchd loaded probe %q, plan reload %q", e.Enabled, l.Reloaded(l.Entries))
+	}
 	w, _ := For("windows", Options{Shim: `C:\s.exe`, Home: `C:\h`})
 	if e := w.Entries[0]; len(e.Files) != 0 || strings.Join(e.Running, " ") != `schtasks /Query /TN backsight\tick /FO LIST` ||
 		e.RunningMark != "Running" || strings.Join(e.Reload[0], " ") != strings.Join(w.Activate[0], " ") {
 		t.Errorf("schtasks entry %+v", e)
+	}
+	if w.Entries[0].Enabled != nil || w.Reloaded(w.Entries) != nil {
+		t.Errorf("tasks: enabled probe %q, plan reload %q", w.Entries[0].Enabled, w.Reloaded(w.Entries))
 	}
 	if w.Digest() == "" || w.Digest() == s.Digest() {
 		t.Error("digest")
@@ -186,5 +201,31 @@ func TestEntries(t *testing.T) {
 	w2, _ := For("windows", Options{Shim: `C:\other.exe`, Home: `C:\h`})
 	if w.Digest() == w2.Digest() {
 		t.Error("the digest ignores the commands")
+	}
+}
+
+// The entries a project installed keep the names they were installed
+// under: their removal is read from the recorded files, whatever the
+// project is called now.
+func TestInstalledFromRecordedFiles(t *testing.T) {
+	old, _ := For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u", Name: "old-name"})
+	in := InstalledFrom(old.Paths())
+	if strings.Join(in.Timers, " ") != "old-name-tick.timer old-name-maintain.timer" || strings.Join(in.Services, " ") != "old-name-tick.service old-name-maintain.service" {
+		t.Errorf("systemd names %+v", in)
+	}
+	if got := fmt.Sprintf("%q", in.Remove("systemd", 501)); got != fmt.Sprintf("%q", old.Remove) {
+		t.Errorf("systemd remove %s, want %q", got, old.Remove)
+	}
+	l, _ := For("darwin", Options{Shim: "/s", Home: "/h", UID: 501, LogDir: "/l", Name: "old-name"})
+	in = InstalledFrom(l.Paths())
+	if strings.Join(in.Labels, " ") != "tech.old-name.tick tech.old-name.maintain" {
+		t.Errorf("launchd labels %+v", in)
+	}
+	if got := fmt.Sprintf("%q", in.Remove("launchd", 501)); got != fmt.Sprintf("%q", l.Remove) {
+		t.Errorf("launchd remove %s, want %q", got, l.Remove)
+	}
+	// Files that are not entries name nothing.
+	if in := InstalledFrom([]string{"/u/notes.txt", "/u/x.conf"}); len(in.Timers)+len(in.Services)+len(in.Labels) != 0 || in.Remove("systemd", 1) != nil {
+		t.Errorf("foreign files %+v", in)
 	}
 }
