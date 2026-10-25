@@ -78,7 +78,6 @@ func TestStopRecordsTheLastReply(t *testing.T) {
 	}
 }
 
-
 // subagentTranscript writes the transcript a real subagent leaves next to
 // its session's and returns the session transcript's path.
 func subagentTranscript(t *testing.T, sid, agentID string) string {
@@ -95,7 +94,7 @@ func subagentTranscript(t *testing.T, sid, agentID string) string {
 func TestSubagentStopQueuesItsReport(t *testing.T) {
 	home := hookHome(t)
 	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "agent-7", "agent_type": "Explore", "cwd": filepath.Join(home, "billing"),
-		"transcript_path": subagentTranscript(t, "s1", "agent-7"),
+		"transcript_path":        subagentTranscript(t, "s1", "agent-7"),
 		"last_assistant_message": "Found the leak in pool.go. Token ghp_" + strings.Repeat("a1B2c3D4e5F6", 3) + " was in the log. " + strings.Repeat("x", 5000)})
 	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
 	if !strings.Contains(string(raw), `"document_id":"subagent:s1:agent-7"`) || !strings.Contains(string(raw), `"source":"subagent"`) ||
