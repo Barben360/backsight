@@ -38,7 +38,9 @@ jobs:
   fresh-install:
     # M4 block 4: setup from nothing (isolated HOME and Claude Code
     # profile), through verify, a stored memory found again, doctor, a
-    # backup verified against the real Postgres, and undo.
+    # backup verified against the real Postgres, that backup restored
+    # (M5 block 1: the session sent after it is re-sent once by jobs tick),
+    # and undo.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

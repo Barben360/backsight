@@ -2,8 +2,9 @@
 # The fresh-install proof (M4 block 4, plan 0063): backsight set up from
 # nothing by `setup --non-interactive`, in an isolated HOME and Claude Code
 # profile, on this machine's Docker with Hindsight's mock LLM, through to a
-# stored memory found again. No hand edit: the only inputs are the answers
-# and one `secret set`.
+# stored memory found again, a backup restored and the session it lacked
+# sent again (M5 block 1). No hand edit: the only inputs are the answers,
+# one `secret set` and the synthetic transcripts.
 #
 # Usage: scripts/fresh-install.sh [api port] (default 38888; the UI takes
 # port + 1111). PROJECT names the Compose project and scheduler entries
@@ -102,7 +103,13 @@ done
 jq -e '(.data.checks | length > 0) and (.data.checks | map(select(.status == "error")) | length == 0)' "$work/doctor.json" >/dev/null ||
   { jq -c '.data.checks[]? | select(.status == "error")' "$work/doctor.json" >&2 || cat "$work/doctor.json" >&2; fail "doctor reports errors"; }
 
-# 6. A backup of the real Postgres restores to the same row counts (SPEC §16).
+# 6. A session goes out through the profile's transcripts before the
+# backup: the backup holds it, so the restore below must leave it alone.
+# shellcheck source=scripts/restore-chain.sh
+. "$root/scripts/restore-chain.sh"
+rc_send restore-proof-kept
+
+# 7. A backup of the real Postgres restores to the same row counts (SPEC §16).
 "$bin" backup create --json > "$work/backup.json" || { cat "$work/backup.json" >&2; fail "backup create failed"; }
 archive=$(jq -r 'select(.ok and (.data.skipped // "") == "") | .data.path // empty' "$work/backup.json")
 [ -n "$archive" ] && [ -s "$archive" ] || { cat "$work/backup.json" >&2; fail "backup create wrote no archive"; }
@@ -110,11 +117,17 @@ archive=$(jq -r 'select(.ok and (.data.skipped // "") == "") | .data.path // emp
 jq -e '.ok and .data.ok and ([.data.restored[]] | add > 0)' "$work/backup-verify.json" >/dev/null ||
   { cat "$work/backup-verify.json" >&2; fail "the backup restored no rows"; }
 
-# 7. Undo unwires Claude Code, stops the server, and keeps config and data.
+# 8. Restore (decision 0044): a session sent after the backup is lost by
+# restoring it; the next jobs tick reconciles to the new epoch and sends it
+# again, once, while the one the backup holds is not sent again.
+rc_send restore-proof-lost
+rc_restore_resends "$archive" restore-proof-lost restore-proof-kept
+
+# 9. Undo unwires Claude Code, stops the server, and keeps config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
 if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") != null' >/dev/null; then fail "the plugin survived undo"; fi
 [ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "undo left settings.json changed"; }
 running=$(compose ps -q --status running) || fail "cannot list the install's containers"
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, undo) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, undo) on project $project"
