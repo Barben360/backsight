@@ -44,17 +44,34 @@ type jobsInstallResult struct {
 	Run      string                 `json:"run,omitempty"` // config editor run (undo)
 }
 
-func schedulerPlan() (scheduler.Plan, error) {
+// schedulerPlan builds the entries for this install. The job runs with
+// none of the installing shell's environment: the directories the install
+// resolved and PATH go into the entries.
+func schedulerPlan(ctx context.Context) (scheduler.Plan, error) {
 	d, home, err := machine()
 	if err != nil {
 		return scheduler.Plan{}, err
 	}
-	configDir := os.Getenv("XDG_CONFIG_HOME")
-	if configDir == "" {
-		configDir = filepath.Join(home, ".config")
+	o := scheduler.Options{Shim: filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS)), Home: home, UID: os.Getuid(),
+		LogDir: filepath.Join(d.State, "logs"), Env: map[string]string{}}
+	for _, k := range []string{"BACKSIGHT_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "PATH"} {
+		if v := os.Getenv(k); v != "" {
+			o.Env[k] = v
+		}
 	}
-	shim := filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS))
-	p, err := scheduler.For(schedulerGOOS, shim, home, configDir, os.Getuid())
+	if schedulerGOOS == "linux" {
+		// The user manager reads units from its own XDG_CONFIG_HOME, which
+		// a shell setting does not change.
+		o.UnitDir = filepath.Join(home, ".config", "systemd", "user")
+		if out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment"); err == nil {
+			for _, l := range strings.Split(string(out), "\n") {
+				if v, ok := strings.CutPrefix(strings.TrimSpace(l), "XDG_CONFIG_HOME="); ok && v != "" {
+					o.UnitDir = filepath.Join(v, "systemd", "user")
+				}
+			}
+		}
+	}
+	p, err := scheduler.For(schedulerGOOS, o)
 	if err != nil {
 		return p, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
@@ -77,9 +94,13 @@ func newJobsInstallCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p, err := schedulerPlan()
+			p, err := schedulerPlan(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if _, err := os.Stat(filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS))); err != nil {
+				return &output.Error{Code: output.NeedsUser, Message: "no backsight shim yet: the entries would run nothing. Run backsight client install first",
+					Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight client install", Why: "install the shim the scheduler calls"}}}
 			}
 			edits := make([]claudecfg.Edit, 0, len(p.Files))
 			for _, f := range p.Files {
@@ -108,18 +129,26 @@ func newJobsInstallCmd(e *env) *cobra.Command {
 			if res.Run, res.Files, err = runner.Apply(edits); err != nil {
 				return blocked(err)
 			}
+			// Recorded before activation: if it fails, uninstall still knows
+			// the files. A reinstall keeps the first install time, so that
+			// doctor's grace period is not reset.
+			if err := state.Update(d, "jobs install", func(s *state.State) error {
+				at := now().UTC()
+				if s.Scheduler != nil && s.Scheduler.Kind == p.Kind {
+					at = s.Scheduler.InstalledAt
+				}
+				s.Scheduler = &state.Scheduler{Kind: p.Kind, Files: p.Paths(), InstalledAt: at}
+				return nil
+			}); err != nil {
+				return blocked(err)
+			}
 			for _, c := range p.Activate {
 				out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...)
 				// launchd's bootout of an agent not loaded yet fails: expected
 				if expected := p.Kind == "launchd" && c[1] == "bootout"; err != nil && !expected {
-					return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out)))}
+					return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s (the files are written: backsight jobs uninstall removes them)",
+						cmdLine(c), err, strings.TrimSpace(string(out)))}
 				}
-			}
-			if err := state.Update(d, "jobs install", func(s *state.State) error {
-				s.Scheduler = &state.Scheduler{Kind: p.Kind, Files: p.Paths(), InstalledAt: now().UTC()}
-				return nil
-			}); err != nil {
-				return blocked(err)
 			}
 			return e.emit("jobs install", res, func() string { return jobsInstallText(res) })
 		},
@@ -158,19 +187,31 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p, err := schedulerPlan()
+			p, err := schedulerPlan(cmd.Context())
 			if err != nil {
 				return err
+			}
+			files := p.Paths()
+			if st, err := state.Load(d.StateFile()); err == nil && st.Scheduler != nil && len(st.Scheduler.Files) > 0 {
+				files = st.Scheduler.Files // where they were written, whatever the paths are now
 			}
 			res := jobsInstallResult{Kind: p.Kind, Planned: plan}
 			for _, c := range p.Remove {
 				res.Commands = append(res.Commands, cmdLine(c))
 			}
+			var failed []string
 			if !plan {
 				for _, c := range p.Remove {
-					_, _ = sysRunner.Run(cmd.Context(), c[0], c[1:]...) // an entry already gone is fine
+					if out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...); err != nil && !notLoaded(string(out)) {
+						failed = append(failed, fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out))))
+					}
 				}
-				for _, f := range p.Paths() {
+				if len(failed) > 0 {
+					// The entries may still be loaded: keep their files and the
+					// record, so that a rerun (with a user session) finishes.
+					return &output.Error{Code: output.Blocked, Message: "could not deactivate the entries: " + strings.Join(failed, "; ")}
+				}
+				for _, f := range files {
 					if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 						return blocked(err)
 					}
@@ -182,7 +223,7 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 					return blocked(err)
 				}
 			}
-			for _, f := range p.Paths() {
+			for _, f := range files {
 				res.Files = append(res.Files, claudecfg.FileResult{Target: f, Written: !plan})
 			}
 			return e.emit("jobs uninstall", res, func() string {
@@ -200,4 +241,12 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be removed")
 	return cmd
+}
+
+// notLoaded: the scheduler says the entry is not there, which uninstall
+// wants anyway.
+func notLoaded(out string) bool {
+	o := strings.ToLower(out)
+	return strings.Contains(o, "not loaded") || strings.Contains(o, "does not exist") || strings.Contains(o, "not found") ||
+		strings.Contains(o, "no such") || strings.Contains(o, "cannot find")
 }

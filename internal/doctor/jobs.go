@@ -1,7 +1,9 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
@@ -12,11 +14,16 @@ import (
 
 // checkJobs: each scheduled job ran within twice its cadence (SPEC §15),
 // read from the job events of the telemetry. Without scheduler entries
-// there is nothing to judge.
-func checkJobs(d paths.Dirs, now time.Time) Check {
+// there is nothing to judge. linger reports whether systemd keeps the
+// user's manager running when they are logged out (nil: unknown).
+func checkJobs(d paths.Dirs, now time.Time, linger func() (bool, error)) Check {
 	c := Check{ID: "jobs", Status: OK}
 	st, err := state.Load(d.StateFile())
-	if err != nil || st.Scheduler == nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		c.Status, c.Summary = Warn, "state.json unreadable: "+err.Error()
+		return c
+	}
+	if st.Scheduler == nil {
 		c.Status, c.Summary = Info, "no scheduler entries: sessions are sent when they end"
 		c.Fix = "backsight jobs install (setup does it)"
 		return c
@@ -53,5 +60,12 @@ func checkJobs(d paths.Dirs, now time.Time) Check {
 		return c
 	}
 	c.Summary = fmt.Sprintf("%s entries installed; jobs on time", st.Scheduler.Kind)
+	if st.Scheduler.Kind == "systemd" && linger != nil {
+		if on, err := linger(); err == nil && !on {
+			c.Status = Info
+			c.Detail = "user timers stop while you are logged out (no linger): sessions are sent at the next login"
+			c.Fix = "loginctl enable-linger (optional)"
+		}
+	}
 	return c
 }

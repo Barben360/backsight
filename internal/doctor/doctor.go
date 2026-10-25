@@ -67,6 +67,8 @@ type Env struct {
 	ClaudePlugins func(profile string) ([]byte, error)
 	Timeout       time.Duration    // per Hindsight call
 	Now           func() time.Time // nil: time.Now
+	// Linger reports systemd's linger for this user (nil: not asked).
+	Linger func() (bool, error)
 }
 
 const (
@@ -125,7 +127,7 @@ func Run(ctx context.Context, env Env) Report {
 		writeOff = !cfg.Components.Write
 	}
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
-	add(checkJobs(env.Dirs, now()))
+	add(checkJobs(env.Dirs, now(), env.Linger))
 	return r
 }
 
@@ -290,18 +292,14 @@ func checkWrites(d paths.Dirs) Check {
 // and a stale lock as such, never removed here.
 func checkMaintenance(d paths.Dirs) Check {
 	c := Check{ID: "maintenance", Status: OK, Summary: "no maintenance in progress"}
-	l, err := state.TryAcquire(d.MaintenanceLock(), "doctor")
-	var held *state.HeldError
-	switch {
-	case err == nil:
-		_ = l.Release()
-	case errors.As(err, &held) && held.Stale:
+	// Inspected, never taken: the daily snapshot must not pause the hooks.
+	switch held := state.Inspect(d.MaintenanceLock()); {
+	case held == nil:
+	case held.Stale:
 		c.Status, c.Summary, c.Detail = Warn, "stale maintenance lock", held.Error()
 		c.Fix = "check that no backsight update, backup or restore is running, then remove " + held.Path
-	case errors.As(err, &held):
-		c.Status, c.Summary = Info, fmt.Sprintf("maintenance in progress: %s (pid %d, since %s)", held.Owner.Command, held.Owner.PID, held.Owner.Since.Format(time.RFC3339))
 	default:
-		c.Status, c.Summary, c.Detail = Warn, "cannot check the maintenance lock", err.Error()
+		c.Status, c.Summary = Info, fmt.Sprintf("maintenance in progress: %s (pid %d, since %s)", held.Owner.Command, held.Owner.PID, held.Owner.Since.Format(time.RFC3339))
 	}
 	return c
 }

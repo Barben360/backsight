@@ -162,3 +162,25 @@ func TestFlushCountsUnknownTranscriptRecords(t *testing.T) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
 }
+
+// A scheduled job has no CLAUDE_CONFIG_DIR: the transcripts come from the
+// profile client install recorded, not from ~/.claude.
+func TestFlushReadsTheWiredProfile(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	profile := filepath.Join(home, ".claude-dev")
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.Client = &state.Client{Profile: profile}; return nil })
+	writeTranscript(t, home, "main", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)) // ~/.claude
+	p := filepath.Join(profile, "projects", "-home-u-billing", "wired.jsonl")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	raw, _ := os.ReadFile(filepath.Join(home, ".claude", "projects", "-home-u-billing", "main.jsonl"))
+	_ = os.WriteFile(p, []byte(strings.ReplaceAll(string(raw), "main", "wired")), 0o600)
+	withClock(t, time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	_, out, _ := run(t, "retain", "flush")
+	if !strings.Contains(out, "wired") || strings.Contains(out, "main (") {
+		t.Errorf("%s", out)
+	}
+}

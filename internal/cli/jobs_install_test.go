@@ -14,22 +14,38 @@ import (
 )
 
 type fakeSys struct {
-	calls []string
-	fail  string // a command line prefix that fails
+	calls  []string
+	fail   string // a command line prefix that fails
+	output string // what a failing command prints
+	xdg    string // the user manager's XDG_CONFIG_HOME
 }
 
 func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	if line == "systemctl --user show-environment" {
+		return []byte("HOME=/home/u\nXDG_CONFIG_HOME=" + f.xdg + "\n"), nil
+	}
 	f.calls = append(f.calls, line)
 	if f.fail != "" && strings.HasPrefix(line, f.fail) {
-		return []byte("unit failed"), errors.New("exit status 1")
+		out := f.output
+		if out == "" {
+			out = "unit failed"
+		}
+		return []byte(out), errors.New("exit status 1")
 	}
 	return nil, nil
 }
 
+// withSys fakes the OS scheduler for an install in home, with its shim.
 func withSys(t *testing.T, goos string) *fakeSys {
 	t.Helper()
 	f := &fakeSys{}
+	if home := os.Getenv("HOME"); home != "" {
+		f.xdg = filepath.Join(home, "xdg")
+		shim := filepath.Join(pathsOf(home).Data, "bin", "current")
+		_ = os.MkdirAll(filepath.Dir(shim), 0o700)
+		_ = os.WriteFile(shim, []byte("#!/bin/sh\n"), 0o700)
+	}
 	oldR, oldG := sysRunner, schedulerGOOS
 	sysRunner, schedulerGOOS = f, goos
 	t.Cleanup(func() { sysRunner, schedulerGOOS = oldR, oldG })
@@ -38,7 +54,7 @@ func withSys(t *testing.T, goos string) *fakeSys {
 
 func TestJobsInstallPlanThenInstallThenUninstall(t *testing.T) {
 	home := devInstall(t, true)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
 	sys := withSys(t, "linux")
 	timer := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")
 	code, out, _ := run(t, "jobs", "install", "--plan")
@@ -47,6 +63,10 @@ func TestJobsInstallPlanThenInstallThenUninstall(t *testing.T) {
 	}
 	if code, out, _ := run(t, "jobs", "install"); code != output.OK || !strings.Contains(readFile(t, timer), "OnCalendar=*:0/15") {
 		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	// the job runs with the install's directories, not the manager's
+	if svc := readFile(t, strings.TrimSuffix(timer, ".timer")+".service"); !strings.Contains(svc, "Environment=BACKSIGHT_HOME="+filepath.Join(home, "backsight")+"\n") {
+		t.Errorf("service:\n%s", svc)
 	}
 	if len(sys.calls) != 2 || sys.calls[1] != "systemctl --user enable --now backsight-tick.timer backsight-maintain.timer" {
 		t.Errorf("calls %q", sys.calls)
@@ -72,11 +92,12 @@ func TestJobsInstallPlanThenInstallThenUninstall(t *testing.T) {
 
 func TestJobsInstallReportsAFailingActivation(t *testing.T) {
 	home := devInstall(t, true)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	sys := withSys(t, "linux")
 	sys.fail = "systemctl --user enable"
 	code, _, errOut := run(t, "jobs", "install")
-	if st, _ := state.Load(pathsOf(home).StateFile()); code != output.Blocked || !strings.Contains(errOut, "unit failed") || st.Scheduler != nil {
+	// the files are recorded, so that uninstall finds them
+	if st, _ := state.Load(pathsOf(home).StateFile()); code != output.Blocked || !strings.Contains(errOut, "unit failed") || !strings.Contains(errOut, "jobs uninstall") ||
+		st.Scheduler == nil || len(st.Scheduler.Files) != 4 {
 		t.Errorf("exit %d %q, state %+v", code, errOut, st.Scheduler)
 	}
 }
@@ -142,5 +163,65 @@ func TestSessionStartSkipsTheServerWhileTheBreakerIsOpen(t *testing.T) {
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
 	if strings.Contains(h.Specific.Context, "PostgreSQL") || !strings.Contains(h.SystemMessage, "server failing") || len(mentalCalls) != 0 {
 		t.Errorf("%q %q", h.Specific.Context, h.SystemMessage)
+	}
+}
+
+func TestJobsInstallNeedsTheShim(t *testing.T) {
+	home := devInstall(t, true)
+	withSys(t, "linux")
+	_ = os.Remove(filepath.Join(pathsOf(home).Data, "bin", "current"))
+	if code, _, errOut := run(t, "jobs", "install"); code != output.NeedsUser || !strings.Contains(errOut, "client install") {
+		t.Errorf("exit %d %q", code, errOut)
+	}
+}
+
+// Uninstall removes the files where they were written, keeps them when the
+// entries could not be deactivated (no user session), and accepts entries
+// already gone.
+func TestJobsUninstallFailurePaths(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	run(t, "jobs", "install")
+	timer := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")
+	sys.xdg = filepath.Join(home, "elsewhere") // the manager's directory changed since
+	sys.fail, sys.output = "systemctl --user disable", "Failed to connect to bus: No medium found"
+	if code, _, errOut := run(t, "jobs", "uninstall"); code != output.Blocked || !strings.Contains(errOut, "bus") {
+		t.Errorf("no user session: exit %d %q", code, errOut)
+	}
+	if _, err := os.Stat(timer); err != nil {
+		t.Error("files removed while the entries may still be loaded")
+	}
+	sys.output = "Unit backsight-tick.timer does not exist."
+	if code, _, _ := run(t, "jobs", "uninstall"); code != output.OK {
+		t.Errorf("entries already gone: exit %d", code)
+	}
+	if _, err := os.Stat(timer); err == nil {
+		t.Error("the recorded file was not removed")
+	}
+}
+
+// A reinstall keeps the first install time (doctor's grace period).
+func TestJobsReinstallKeepsTheInstallTime(t *testing.T) {
+	home := devInstall(t, true)
+	withSys(t, "linux")
+	withClock(t, time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC))
+	run(t, "jobs", "install")
+	withClock(t, time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC))
+	run(t, "jobs", "install")
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.Scheduler == nil || st.Scheduler.InstalledAt.Day() != 20 {
+		t.Errorf("%+v", st.Scheduler)
+	}
+}
+
+// The launchd bootout of an agent not loaded yet fails, and is expected.
+func TestJobsInstallOnMacOS(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "darwin")
+	sys.fail = "launchctl bootout"
+	if code, _, errOut := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("exit %d %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, "Library", "LaunchAgents", "tech.backsight.tick.plist")); err != nil {
+		t.Error(err)
 	}
 }

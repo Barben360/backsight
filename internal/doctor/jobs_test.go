@@ -46,9 +46,23 @@ func TestJobsCadence(t *testing.T) {
 		{"never ran", 72 * time.Hour, nil, Warn},
 	}
 	for _, c := range cases {
-		got := checkJobs(jobsDirs(t, c.installed, c.runs), usageNow)
+		got := checkJobs(jobsDirs(t, c.installed, c.runs), usageNow, nil)
 		if got.Status != c.want {
 			t.Errorf("%s: %s (%s), want %s", c.name, got.Status, got.Summary, c.want)
 		}
+	}
+}
+
+func TestJobsLingerAndUnreadableState(t *testing.T) {
+	d := jobsDirs(t, 72*time.Hour, map[string]time.Duration{"tick": 10 * time.Minute, "maintain": 20 * time.Hour})
+	if c := checkJobs(d, usageNow, func() (bool, error) { return false, nil }); c.Status != Info || !strings.Contains(c.Detail, "logged out") {
+		t.Errorf("no linger: %+v", c)
+	}
+	if c := checkJobs(d, usageNow, func() (bool, error) { return true, nil }); c.Status != OK {
+		t.Errorf("linger: %+v", c)
+	}
+	_ = os.WriteFile(d.StateFile(), []byte("{not json"), 0o600)
+	if c := checkJobs(d, usageNow, nil); c.Status != Warn {
+		t.Errorf("unreadable state: %+v", c)
 	}
 }

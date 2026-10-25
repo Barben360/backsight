@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +24,12 @@ var probes = func(e *doctor.Env) {
 	e.Docker = doctor.DockerVersion
 	e.GPUs = doctor.LocalGPUs
 	e.FreeBytes = doctor.FreeBytes
+	if runtime.GOOS == "linux" {
+		e.Linger = func() (bool, error) {
+			out, err := exec.Command("loginctl", "show-user", strconv.Itoa(os.Getuid()), "-p", "Linger", "--value").Output()
+			return strings.TrimSpace(string(out)) == "yes", err
+		}
+	}
 	e.ClaudePlugins = func(profile string) ([]byte, error) {
 		var env []string
 		if profile != "" {

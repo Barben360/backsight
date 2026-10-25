@@ -73,6 +73,17 @@ func TryAcquire(path, command string) (*Lock, error) {
 	return &Lock{path: path, owner: owner}, nil
 }
 
+// Inspect reports who holds the lock at path, nil when nobody does; it
+// never takes the lock (a check must not look like maintenance to others).
+func Inspect(path string) *HeldError {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	var e *HeldError
+	errors.As(held(path), &e)
+	return e
+}
+
 func held(path string) error {
 	e := &HeldError{Path: path}
 	raw, err := os.ReadFile(path)

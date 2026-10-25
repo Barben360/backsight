@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 const (
@@ -35,11 +35,14 @@ func maintenanceRefusal() error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
-		owner, _ := os.ReadFile(d.MaintenanceLock())
-		return &output.Error{Code: output.Blocked, Message: "maintenance in progress (" + strings.TrimSpace(string(owner)) + "): try again when it is over"}
+	switch held := state.Inspect(d.MaintenanceLock()); {
+	case held == nil:
+		return nil
+	case held.Stale:
+		return &output.Error{Code: output.Blocked, Message: "a maintenance lock is left by " + held.Owner.Command + ", whose process is gone: backsight doctor tells how to clear it"}
+	default:
+		return &output.Error{Code: output.Blocked, Message: "maintenance in progress (" + held.Owner.Command + " since " + held.Owner.Since.Format(time.RFC3339) + "): try again when it is over"}
 	}
-	return nil
 }
 
 func curateClient() (*hindsight.Client, string, error) {

@@ -38,7 +38,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "maintain",
 		Short: "Daily upkeep: telemetry rotation, doctor snapshot",
-		Args:  cobra.NoArgs,
+		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			d, home, err := machine()
@@ -84,9 +84,13 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 					res.Backup = b.Path
 				}
 			}
+			// This run counts as maintain running: the snapshot must not
+			// find maintain late after a weekend off.
+			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
 			rep := runDoctor(cmd, d, home)
 			res.Doctor = fmt.Sprintf("%d error(s), %d warning(s)", rep.Errors, rep.Warnings)
-			if raw, err := json.MarshalIndent(rep, "", "  "); err == nil {
+			snapshot := map[string]any{"generated_at": now().UTC(), "binary_version": buildinfo.Version, "report": rep}
+			if raw, err := json.MarshalIndent(snapshot, "", "  "); err == nil {
 				_ = fsutil.WriteAtomic(filepath.Join(d.State, "doctor-snapshot.json"), raw, 0o600)
 			}
 			return finish()

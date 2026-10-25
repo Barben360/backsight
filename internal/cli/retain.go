@@ -70,8 +70,25 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 }
 
 // transcripts lists the session transcripts of this machine's Claude Code.
+// transcripts are the sessions of the Claude Code profile backsight is wired
+// to: CLAUDE_CONFIG_DIR when set (a hook, or the user's shell), else the
+// profile client install recorded, else ~/.claude. A scheduled job has no
+// CLAUDE_CONFIG_DIR: the recorded profile is how it reads the right one.
 func transcripts(home string) []string {
-	loc := claudecode.Locate(home, os.Getenv)
+	getenv := os.Getenv
+	if os.Getenv("CLAUDE_CONFIG_DIR") == "" {
+		if d, _, err := machine(); err == nil {
+			if st, err := state.Load(d.StateFile()); err == nil && st.Client != nil && st.Client.Profile != "" {
+				getenv = func(k string) string {
+					if k == "CLAUDE_CONFIG_DIR" {
+						return st.Client.Profile
+					}
+					return os.Getenv(k)
+				}
+			}
+		}
+	}
+	loc := claudecode.Locate(home, getenv)
 	files, _ := filepath.Glob(filepath.Join(loc.Projects, "*", "*.jsonl"))
 	sort.Strings(files)
 	return files
