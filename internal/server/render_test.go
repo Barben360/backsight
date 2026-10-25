@@ -239,6 +239,7 @@ func TestCompareImages(t *testing.T) {
 		{"ghcr.io/vectorize-io/hindsight:v1.1.1@sha256:dddd", 1, true},
 		{"ghcr.io/vectorize-io/hindsight@sha256:eeee", 0, false},
 		{"ghcr.io/vectorize-io/hindsight:1.1.0-rc1@sha256:ffff", 0, false},
+		{"ghcr.io/vectorize-io/hindsight:1.1.0@sha256:9999", 0, false}, // same tag, another digest: a rebuild
 		{"", 0, false},
 	} {
 		cmp, ok := CompareImages(c.archive, pinned)

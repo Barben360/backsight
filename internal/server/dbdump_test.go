@@ -35,8 +35,8 @@ func (s *scriptRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 func TestDBRestoreReplacesTheDatabase(t *testing.T) {
 	r := &scriptRunner{}
 	db := DB{Compose: Compose{Dir: t.TempDir(), Runner: r, Project: "p"}}
-	if err := db.Restore(context.Background(), "/state/staging/restore/db.dump"); err != nil {
-		t.Fatal(err)
+	if dropped, err := db.Restore(context.Background(), "/state/staging/restore/db.dump"); err != nil || !dropped {
+		t.Fatal(dropped, err)
 	}
 	var steps []string
 	for _, c := range r.calls {
@@ -58,8 +58,8 @@ func TestDBRestoreReplacesTheDatabase(t *testing.T) {
 
 	r = &scriptRunner{failOn: "pg_restore"}
 	db.Compose.Runner = r
-	if err := db.Restore(context.Background(), "/x.dump"); err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Errorf("a failed pg_restore: %v", err)
+	if dropped, err := db.Restore(context.Background(), "/x.dump"); err == nil || !strings.Contains(err.Error(), "boom") || !dropped {
+		t.Errorf("a failed pg_restore: %v (dropped %v)", err, dropped)
 	}
 	if last := r.calls[len(r.calls)-1]; !strings.Contains(last, "exec -T db rm -f /tmp/backsight-") {
 		t.Errorf("the copy was not removed after a failure: %q", r.calls)
@@ -75,5 +75,38 @@ func TestDBCounts(t *testing.T) {
 	r.out = map[string]string{"from memory_units": "ERROR\n"}
 	if _, err := (DB{Compose: Compose{Dir: t.TempDir(), Runner: r}}).Counts(context.Background(), []string{"memory_units"}); err == nil {
 		t.Error("a count that is not a number was accepted")
+	}
+}
+
+// A copy that fails leaves the database as it was: not dropped.
+func TestDBRestoreFailedCopyDropsNothing(t *testing.T) {
+	r := &scriptRunner{failOn: " cp "}
+	dropped, err := DB{Compose: Compose{Dir: t.TempDir(), Runner: r}}.Restore(context.Background(), "/x.dump")
+	if err == nil || dropped {
+		t.Errorf("%v dropped %v", err, dropped)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "dropdb") {
+			t.Errorf("dropped after a failed copy: %q", r.calls)
+		}
+	}
+}
+
+// The epoch document's metadata read from the database: the row's
+// retain_params.metadata, nil when there is no row; the ids are quoted.
+func TestDBDocumentMetadata(t *testing.T) {
+	r := &scriptRunner{out: map[string]string{"retain_params": `{"epoch": "3", "restored_at": "2026-10-25T12:00:00Z"}` + "\n"}}
+	db := DB{Compose: Compose{Dir: t.TempDir(), Runner: r}}
+	meta, err := db.DocumentMetadata(context.Background(), "it's-control", "backsight:epoch")
+	if err != nil || meta["epoch"] != "3" || !strings.Contains(r.calls[0], "bank_id = 'it''s-control' and id = 'backsight:epoch'") {
+		t.Errorf("%v %v %q", meta, err, r.calls)
+	}
+	r.out = map[string]string{"retain_params": "null\n"}
+	if meta, err := db.DocumentMetadata(context.Background(), "b", "d"); err != nil || meta != nil {
+		t.Errorf("no row: %v %v", meta, err)
+	}
+	r.failOn = "retain_params"
+	if _, err := db.DocumentMetadata(context.Background(), "b", "d"); err == nil {
+		t.Error("a failed query read as no document")
 	}
 }

@@ -19,11 +19,22 @@ type Runner interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
 }
 
-// DockerRunner runs the docker CLI (Compose v2 plugin).
-type DockerRunner struct{}
+// DockerRunner runs the docker CLI (Compose v2 plugin). OwnGroup runs each
+// docker command in its own process group: a Ctrl-C at the terminal then
+// reaches backsight only, which cancels its context, instead of killing
+// the docker compose a rollback is running.
+type DockerRunner struct{ OwnGroup bool }
 
-func (DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+func (r DockerRunner) command(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if r.OwnGroup {
+		ownGroup(cmd)
+	}
+	return cmd
+}
+
+func (r DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	return r.command(ctx, args...).CombinedOutput()
 }
 
 // StdoutRunner can return a command's stdout alone, stderr only in the
@@ -33,8 +44,8 @@ type StdoutRunner interface {
 	RunStdout(ctx context.Context, args ...string) ([]byte, error)
 }
 
-func (DockerRunner) RunStdout(ctx context.Context, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+func (r DockerRunner) RunStdout(ctx context.Context, args ...string) ([]byte, error) {
+	out, err := r.command(ctx, args...).Output()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))

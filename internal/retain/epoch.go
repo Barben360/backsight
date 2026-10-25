@@ -64,15 +64,24 @@ func ReadEpoch(ctx context.Context, cl *hindsight.Client, bank string) (Epoch, e
 	case err != nil:
 		return ep, errors.New(errSummary(err))
 	}
-	if ep.Epoch, err = strconv.Atoi(doc.Metadata["epoch"]); err != nil || ep.Epoch < 0 {
-		return ep, &EpochUnreadable{fmt.Sprintf("epoch %q is not a number", doc.Metadata["epoch"])}
+	return EpochFromMetadata(doc.Metadata)
+}
+
+// EpochFromMetadata reads the epoch document's metadata (what ReadEpoch
+// gets through the API, or restore reads from the database when the API is
+// down). Metadata that does not parse is *EpochUnreadable.
+func EpochFromMetadata(meta map[string]string) (Epoch, error) {
+	var ep Epoch
+	var err error
+	if ep.Epoch, err = strconv.Atoi(meta["epoch"]); err != nil || ep.Epoch < 0 {
+		return ep, &EpochUnreadable{fmt.Sprintf("epoch %q is not a number", meta["epoch"])}
 	}
 	for key, t := range map[string]*time.Time{"restored_at": &ep.RestoredAt, "backup_created_at": &ep.BackupCreatedAt} {
-		if *t, err = time.Parse(time.RFC3339, doc.Metadata[key]); err != nil {
-			return ep, &EpochUnreadable{fmt.Sprintf("%s %q is not an RFC 3339 time", key, doc.Metadata[key])}
+		if *t, err = time.Parse(time.RFC3339, meta[key]); err != nil {
+			return ep, &EpochUnreadable{fmt.Sprintf("%s %q is not an RFC 3339 time", key, meta[key])}
 		}
 	}
-	raw, ok := doc.Metadata["history"]
+	raw, ok := meta["history"]
 	if !ok {
 		ep.History = []EpochEntry{{Epoch: ep.Epoch, BackupCreatedAt: ep.BackupCreatedAt}}
 		return ep, nil

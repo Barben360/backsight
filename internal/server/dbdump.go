@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -69,7 +70,9 @@ func (d DB) Dump(ctx context.Context, dst string, tables []string) (map[string]i
 // database is dropped (any connection left is cut) and created empty, so
 // nothing a newer schema added survives, then the dump is restored into
 // it. The dump is copied into the container and removed afterwards.
-func (d DB) Restore(ctx context.Context, src string) error {
+// dropped reports that the database was dropped: a failure before leaves
+// it as it was.
+func (d DB) Restore(ctx context.Context, src string) (dropped bool, err error) {
 	tmp := "/tmp/backsight-" + randHex() + ".dump"
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
@@ -77,16 +80,42 @@ func (d DB) Restore(ctx context.Context, src string) error {
 		_, _ = d.Compose.Exec(cctx, "db", "rm", "-f", tmp)
 	}()
 	if _, err := d.Compose.run(ctx, "cp", src, "db:"+tmp); err != nil {
-		return err
+		return false, err
 	}
+	// From the drop on the database is not what it was, even when the
+	// command reports a failure (it may have dropped before failing).
 	if _, err := d.Compose.Exec(ctx, "db", "dropdb", "-U", dbUser, "--if-exists", "--force", dbName); err != nil {
-		return err
+		return true, err
 	}
 	if _, err := d.Compose.Exec(ctx, "db", "createdb", "-U", dbUser, dbName); err != nil {
-		return err
+		return true, err
 	}
-	_, err := d.Compose.Exec(ctx, "db", "pg_restore", "-U", dbUser, "-d", dbName, "--no-owner", "--exit-on-error", tmp)
+	_, err = d.Compose.Exec(ctx, "db", "pg_restore", "-U", dbUser, "-d", dbName, "--no-owner", "--exit-on-error", tmp)
+	return true, err
+}
+
+// RemoveStaleDumps removes the dumps a killed backup or restore left in the
+// database container (/tmp/backsight-*.dump: the memory in clear). The
+// caller holds the maintenance lock, so no dump is being made.
+func (d DB) RemoveStaleDumps(ctx context.Context) error {
+	_, err := d.Compose.Exec(ctx, "db", "sh", "-c", "rm -f /tmp/backsight-*.dump")
 	return err
+}
+
+// DocumentMetadata reads one document's metadata from the database, read
+// only, for when the API cannot answer (Hindsight 1.1.0 keeps it in
+// documents.retain_params.metadata). No such document is nil, nil.
+func (d DB) DocumentMetadata(ctx context.Context, bank, id string) (map[string]string, error) {
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	out, err := d.Query(ctx, "select coalesce((select (retain_params::jsonb)->'metadata' from documents where bank_id = "+q(bank)+" and id = "+q(id)+"), 'null'::jsonb)")
+	if err != nil {
+		return nil, err
+	}
+	var meta map[string]string
+	if err := json.Unmarshal([]byte(out), &meta); err != nil {
+		return nil, fmt.Errorf("document %s metadata %q: %w", id, out, err)
+	}
+	return meta, nil
 }
 
 // Counts returns the rows of tables in the database.
