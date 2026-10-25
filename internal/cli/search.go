@@ -45,9 +45,10 @@ func newEngine(cfg config.Config, sec config.Secrets) (*recall.Engine, error) {
 }
 
 // searchMemory is memory_search's engine, shared by the CLI and MCP: the
-// related scope adds asked-for projects and those whose names the queries
-// mention (entity index).
-func searchMemory(ctx context.Context, d paths.Dirs, cfg config.Config, eng *recall.Engine, current string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
+// project scope adds what cwd's .backsight.toml relates, the related scope
+// asked-for projects and those whose names the queries mention (entity
+// index).
+func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Config, eng *recall.Engine, current, cwd string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
 	for i, q := range queries {
 		queries[i], _ = redact.Text(q) // a key pasted into a query never leaves the machine
 	}
@@ -55,7 +56,8 @@ func searchMemory(ctx context.Context, d paths.Dirs, cfg config.Config, eng *rec
 	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil {
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
-	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
+	linked := project.New(home, cfg.Projects.Transverse).Related(cwd)
+	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
 }
 
 func newSearchCmd(e *env) *cobra.Command {
@@ -80,7 +82,8 @@ func newSearchCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res := searchMemory(cmd.Context(), d, cfg, eng, currentProject(home, cfg), args, projects, all, limit, minScore)
+			cwd, _ := os.Getwd()
+			res := searchMemory(cmd.Context(), d, home, cfg, eng, currentProject(home, cfg), cwd, args, projects, all, limit, minScore)
 			var failed error
 			if len(res.Hits) == 0 && !scopesOK(res) { // a failing scope alone is skipped (0054)
 				failed = &output.Error{Code: output.Blocked, Message: "memory unavailable: " + scopeErrors(res)}

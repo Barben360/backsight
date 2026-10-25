@@ -90,6 +90,23 @@ func TestGlobalHitsNeedTheHigherFloor(t *testing.T) {
 	}
 }
 
+// 0071 C3: the projects .backsight.toml relates join the project call and
+// skip that floor.
+func TestRelatedProjectsJoinTheProjectCall(t *testing.T) {
+	home := hookHome(t)
+	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(`related = ["ref-stack"]`+"\n"), 0o600)
+	recallAnswer = `[{"id":"linked","text":"spec fact","type":"observation","tags":["project:ref-stack"],"scores":{"reranker":0.55}},
+		{"id":"foreign-low","text":"foreign low","type":"observation","tags":["project:other"],"scores":{"reranker":0.55}}]`
+	recallTags = nil
+	c := prompt(t, home, "s1", longPrompt).Specific.Context
+	if !strings.Contains(c, "spec fact") || strings.Contains(c, "foreign low") {
+		t.Errorf("context:\n%s", c)
+	}
+	if j := strings.Join(recallTags, "|"); !strings.Contains(j, "project:billing,") || !strings.Contains(j, ",project:ref-stack") {
+		t.Errorf("project call %q", recallTags)
+	}
+}
+
 // Memory text is data: a crafted project tag cannot start its own line.
 func TestCraftedProjectTagsStayInsideTheirLine(t *testing.T) {
 	home := hookHome(t)

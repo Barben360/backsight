@@ -314,6 +314,23 @@ func TestMCPFollowsTheLiveProject(t *testing.T) {
 	}
 }
 
+// 0071 C3: memory_search adds what the live directory's .backsight.toml
+// relates to the project call.
+func TestMCPSearchAddsTheRelatedProjects(t *testing.T) {
+	mcpParentPID = 4646
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	_ = os.MkdirAll(filepath.Join(home, "billing"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(`related = ["ref-stack"]`+"\n"), 0o600)
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4646, session.Live{SessionID: "s1", Cwd: filepath.Join(home, "billing"), Project: "billing"})
+	recallTags = nil
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"spec"}})
+	if j := "|" + strings.Join(recallTags, "|"); !strings.Contains(j, "|project:billing,") || !strings.Contains(j, ",project:ref-stack") {
+		t.Errorf("project call %q", recallTags)
+	}
+}
+
 // Without a record (an older Claude Code, a manual run) the server keeps its
 // start project and has no session.
 func TestMCPWithoutALiveRecordKeepsItsStartProject(t *testing.T) {

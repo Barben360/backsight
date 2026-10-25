@@ -100,6 +100,49 @@ func TestBrokenBacksightTomlIsReported(t *testing.T) {
 	}
 }
 
+// Decision 0071 C3: the nearest file that sets related wins, blanks and
+// duplicates dropped, the first MaxRelated kept.
+func TestRelatedComesFromTheNearestFileThatSetsIt(t *testing.T) {
+	home, r := fixture(t)
+	repo := filepath.Join(home, "work", "billing")
+	write(t, filepath.Join(repo, ".backsight.toml"), `related = ["ref-stack", " ", "ref-stack", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]`+"\n")
+	want := "ref-stack,a,b,c,d,e,f,g,h,i"
+	for _, cwd := range []string{repo, filepath.Join(repo, "internal", "export")} {
+		if got := strings.Join(r.Related(cwd), ","); got != want {
+			t.Errorf("%s: related %q, want %q", cwd, got, want)
+		}
+	}
+	// a nearer file naming only the project keeps the repository's list;
+	// one that sets related, even empty, replaces it
+	write(t, filepath.Join(repo, "internal", ".backsight.toml"), "project = \"billing-core\"\n")
+	if got := r.Related(filepath.Join(repo, "internal", "export")); len(got) != MaxRelated {
+		t.Errorf("a file without related hid the parent's: %q", got)
+	}
+	write(t, filepath.Join(repo, "internal", ".backsight.toml"), "related = []\n")
+	if got := r.Related(filepath.Join(repo, "internal", "export")); len(got) != 0 {
+		t.Errorf("related = [] kept the parent's: %q", got)
+	}
+	if got := r.Related(filepath.Join(home, "notes")); got != nil {
+		t.Errorf("no file: %q", got)
+	}
+	if got := r.Related(""); got != nil {
+		t.Errorf("no directory: %q", got)
+	}
+}
+
+// A related that is not a list breaks the file: retain fails closed, recall
+// searches nothing extra.
+func TestBrokenRelatedFailsClosed(t *testing.T) {
+	home, r := fixture(t)
+	write(t, filepath.Join(home, "notes", ".backsight.toml"), "related = \"ref-stack\"\n")
+	if out, why := r.OptedOut(filepath.Join(home, "notes"), nil); !out || !strings.Contains(why, "cannot be read") {
+		t.Errorf("a broken related must fail closed (no retain): %v %q", out, why)
+	}
+	if got := r.Related(filepath.Join(home, "notes")); got != nil {
+		t.Errorf("related from a broken file: %q", got)
+	}
+}
+
 // A nearer file naming the project must not hide a parent's retain = false.
 func TestParentOptOutIsNeverHidden(t *testing.T) {
 	home, r := fixture(t)

@@ -10,15 +10,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
+// MaxRelated caps the projects a .backsight.toml relates (decision 0071
+// C3): the first ones are kept.
+const MaxRelated = 10
+
 // Settings is a repository's .backsight.toml.
 type Settings struct {
-	Project string `toml:"project"`
-	Retain  *bool  `toml:"retain"`
+	Project string   `toml:"project"`
+	Retain  *bool    `toml:"retain"`
+	Related []string `toml:"related"` // projects recall searches with this one
 }
 
 // Resolver caches git answers per directory.
@@ -55,9 +61,10 @@ func (r *Resolver) git(dir string) gitRoots {
 
 // view is what the .backsight.toml files above a directory say.
 type view struct {
-	project string // the nearest non-empty project
-	optOut  string // the first file that sets retain = false
-	broken  string // a file that cannot be read, with the reason
+	project string   // the nearest non-empty project
+	related []string // the nearest file's related, nil when none sets it
+	optOut  string   // the first file that sets retain = false
+	broken  string   // a file that cannot be read, with the reason
 }
 
 // settings reads every .backsight.toml from cwd up to the repository top,
@@ -82,6 +89,9 @@ func (r *Resolver) settings(cwd string) view {
 			} else {
 				if v.project == "" && s.Project != "" {
 					v.project = s.Project
+				}
+				if v.related == nil && s.Related != nil {
+					v.related = s.Related
 				}
 				if v.optOut == "" && s.Retain != nil && !*s.Retain {
 					v.optOut = p + " sets retain = false"
@@ -116,6 +126,21 @@ func (r *Resolver) Project(cwd string) string {
 		return filepath.Base(g.main)
 	}
 	return filepath.Base(cwd)
+}
+
+// Related lists the projects the nearest .backsight.toml that sets related
+// names, without blanks or duplicates, the first MaxRelated only.
+func (r *Resolver) Related(cwd string) []string {
+	if strings.TrimSpace(cwd) == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range r.settings(filepath.Clean(cwd)).related {
+		if p = strings.TrimSpace(p); p != "" && !slices.Contains(out, p) && len(out) < MaxRelated {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Root is the directory a project-wide setting applies to: the main

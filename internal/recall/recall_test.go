@@ -127,6 +127,36 @@ func TestRelatedScopeKeepsAskedProjectsAndCapsIndexMatches(t *testing.T) {
 	}
 }
 
+// Decision 0071 C3: linked projects join the current project's call, their
+// hits are near (no foreign floor, no boost), and the related scope does not
+// repeat them.
+func TestLinkedProjectsJoinTheProjectScopeAndAreNear(t *testing.T) {
+	linked := own + ",project:ref-stack"
+	f := &fakeBank{scopes: map[string][]hit{
+		linked: {{"l1", "Spec work happened in ref-stack.", "ref-stack", 0.55}},
+		"":     {{"l1", "Spec work happened in ref-stack.", "ref-stack", 0.55}, {"f1", "foreign", "infra", 0.55}, {"f2", "strong foreign", "infra", 0.65}},
+	}}
+	res := engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing",
+		Linked: []string{"ref-stack", "billing", ".claude"}, GlobalMinReranker: 0.6, MinReranker: 0.5})
+	var ids []string
+	for _, h := range res.Hits {
+		ids = append(ids, h.ID)
+	}
+	if strings.Join(ids, ",") != "f2,l1" || res.Hits[1].Score != 0.55 {
+		t.Errorf("hits %+v (linked kept unboosted under the foreign floor, foreign 0.55 dropped)", res.Hits)
+	}
+	f.requests = nil
+	engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing",
+		Linked: []string{"ref-stack"}, Related: []string{"ref-stack", "ops"}})
+	var tags []string
+	for _, r := range f.requests {
+		tags = append(tags, strings.Join(r.Tags, ","))
+	}
+	if j := "|" + strings.Join(tags, "|") + "|"; !strings.Contains(j, "|"+linked+"|") || !strings.Contains(j, "|project:ops|") {
+		t.Errorf("scopes %q: linked project in the project call, related scope without it", tags)
+	}
+}
+
 func TestAFailingScopeIsSkippedNotFatal(t *testing.T) {
 	f := &fakeBank{scopes: map[string][]hit{"": {{"g", "global hit", "x", 0.7}}}, fail: map[string]bool{own: true}}
 	res := engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})

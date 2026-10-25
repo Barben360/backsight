@@ -119,7 +119,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				minScore = *a.MinScore
 			}
 			live, found := deps.live()
-			res := searchMemory(ctx, deps.dirs, deps.cfg, deps.engine, live.Project, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			res := searchMemory(ctx, deps.dirs, deps.home, deps.cfg, deps.engine, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res), Live: found})
 			if len(res.Hits) == 0 && !scopesOK(res) {
 				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil

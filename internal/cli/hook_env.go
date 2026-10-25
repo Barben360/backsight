@@ -47,6 +47,7 @@ type hookEnv struct {
 	cfg     config.Config
 	sec     config.Secrets
 	project string
+	linked  []string // the projects cwd's .backsight.toml relates
 	store   session.Store
 	tw      *telemetry.Writer
 	client  *hindsight.Client
@@ -76,7 +77,8 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	h.project = project.New(h.home, h.cfg.Projects.Transverse).Project(cwd)
+	pr := project.New(h.home, h.cfg.Projects.Transverse)
+	h.project, h.linked = pr.Project(cwd), pr.Related(cwd)
 	// The live record is what lets pause and the MCP server find this
 	// session: written whatever the components (0056).
 	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {

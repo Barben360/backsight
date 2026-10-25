@@ -1,5 +1,6 @@
 // Package recall searches the memory across scopes (SPEC §4 Read scopes,
-// §10.2): the current project with the transverse aliases, the whole bank
+// §10.2): the current project with the transverse aliases and the projects
+// its .backsight.toml relates, the whole bank
 // and related projects, queried as separate calls so project memories are
 // not crowded out, then merged by best score with a boost for the current
 // project.
@@ -40,6 +41,7 @@ type Engine struct {
 type Query struct {
 	Queries     []string
 	Current     string   // the current project
+	Linked      []string // the repository's .backsight.toml related: searched with the current project
 	Projects    []string // projects asked for explicitly (all searched, up to MaxAsked)
 	Related     []string // projects matched in the entity index (up to MaxRelated)
 	All         bool     // the whole bank only, no project scopes
@@ -47,7 +49,7 @@ type Query struct {
 	MinScore    float64  // on the boosted score
 	MinReranker float64  // on the server's score (prompt recall: SPEC §10.2)
 	// GlobalMinReranker: hits of projects that are neither the current one,
-	// a transverse alias nor asked/related need this score (0046 poisoning
+	// a transverse alias nor linked/asked/related need this score (0046 poisoning
 	// defence: recall.global_min_score).
 	GlobalMinReranker float64
 }
@@ -92,9 +94,11 @@ func (e *Engine) scopes(q Query) []scope {
 		return []scope{{name: "global"}}
 	}
 	own := []string{q.Current}
-	for _, t := range e.Transverse {
-		if t != q.Current {
-			own = append(own, t)
+	for _, list := range [][]string{e.Transverse, q.Linked} {
+		for _, p := range list {
+			if p != "" && !contains(own, p) {
+				own = append(own, p)
+			}
 		}
 	}
 	out := []scope{{name: "project", tags: projectTags(own)}, {name: "global"}}
@@ -242,9 +246,9 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 	return answers
 }
 
-// near: the current project, a transverse alias, or asked/related.
+// near: the current project, a transverse alias, or linked/asked/related.
 func (e *Engine) near(q Query, project string) bool {
-	return project == q.Current || contains(e.Transverse, project) || contains(q.Projects, project) || contains(q.Related, project)
+	return project == q.Current || contains(e.Transverse, project) || contains(q.Linked, project) || contains(q.Projects, project) || contains(q.Related, project)
 }
 
 func (e *Engine) hit(r hindsight.RecallHit, scope, current string) Hit {
