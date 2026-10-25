@@ -177,7 +177,7 @@ func checkConfig(env Env) (Check, *target.Target) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		c.Status, c.Summary = Info, "backsight is not set up yet"
-		c.Detail = "expected at " + env.Dirs.ConfigFile() + "; until setup exists (M4) doctor inspects the reference install"
+		c.Detail = "expected at " + env.Dirs.ConfigFile() + "; run backsight setup. Until then doctor inspects the reference install, if Claude Code is wired to one"
 		return c, nil
 	case errors.As(err, &ce) && ce.File == env.Dirs.SecretsFile():
 		c.Status, c.Summary, c.Detail = Error, "secrets.toml cannot be used", err.Error()
@@ -232,7 +232,11 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 	case errors.Is(err, hindsight.ErrUnreachable), errors.Is(err, hindsight.ErrTimeout):
 		c.Status, c.Summary = Error, "Hindsight unreachable at "+t.Display()+from
 		c.Detail = err.Error()
-		c.Fix = "start the server (the reference stack: docker compose up -d in its directory)"
+		if t.Source == "reference" {
+			c.Fix = "start the reference server (docker compose up -d in its directory)"
+		} else {
+			c.Fix = "check it with backsight server status, start it with backsight server start (on the server's machine if it is remote)"
+		}
 		return c, nil
 	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.Unauthorized:
 		c.Status, c.Summary = Error, "the server rejected the API key"+from

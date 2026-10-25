@@ -137,7 +137,11 @@ const (
 func TestNothingInstalled(t *testing.T) {
 	f := newFixture(t)
 	r := f.run()
-	expect(t, check(t, r, "config"), Info, "not set up")
+	cfg := check(t, r, "config")
+	expect(t, cfg, Info, "not set up")
+	if !strings.Contains(cfg.Detail, "backsight setup") || strings.Contains(cfg.Detail, "M4") {
+		t.Errorf("config detail must point at setup: %q", cfg.Detail)
+	}
 	expect(t, check(t, r, "server"), Info, "no server")
 	expect(t, check(t, r, "reference"), OK, "no reference install")
 	expect(t, check(t, r, "docker"), OK, "28.1.1")
@@ -201,12 +205,38 @@ func TestServerDown(t *testing.T) {
 	srv.Close()
 	f.reference(url)
 	r := f.run()
-	expect(t, check(t, r, "server"), Error, "unreachable")
+	srvCheck := check(t, r, "server")
+	expect(t, srvCheck, Error, "unreachable")
+	// backsight server start manages backsight's own server, not this one.
+	if !strings.Contains(srvCheck.Fix, "reference") || strings.Contains(srvCheck.Fix, "backsight server") {
+		t.Errorf("fix for a reference server: %q", srvCheck.Fix)
+	}
 	for _, id := range []string{"bank", "untagged"} {
 		expect(t, check(t, r, id), Info, "skipped")
 	}
 	if r.Errors != 1 {
 		t.Errorf("errors = %d", r.Errors)
+	}
+}
+
+// The server setup configured is down: the fix names the commands that
+// manage it.
+func TestConfiguredServerDown(t *testing.T) {
+	f := newFixture(t)
+	srv := fakeServer(t)
+	url := srv.URL
+	srv.Close()
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+url+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	c := check(t, f.run(), "server")
+	expect(t, c, Error, "unreachable")
+	for _, want := range []string{"backsight server status", "backsight server start"} {
+		if !strings.Contains(c.Fix, want) {
+			t.Errorf("fix lacks %q: %q", want, c.Fix)
+		}
+	}
+	if strings.Contains(c.Fix, "docker compose") || strings.Contains(c.Fix, "reference") {
+		t.Errorf("fix still names the reference stack: %q", c.Fix)
 	}
 }
 
