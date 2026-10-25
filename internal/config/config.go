@@ -44,7 +44,10 @@ type Server struct {
 	Mode       string `toml:"mode" json:"mode"`
 	UIPort     int    `toml:"ui_port" json:"ui_port"`
 	ComposeDir string `toml:"compose_dir" json:"compose_dir"`
-	Digest     string `toml:"digest" json:"digest"` // empty: the binary's pin
+	// Project is the Compose project name, and the prefix of its volume:
+	// another name lets a second install run beside the first (tests).
+	Project string `toml:"project" json:"project"`
+	Digest  string `toml:"digest" json:"digest"` // empty: the binary's pin
 }
 
 // Client is what backsight keeps in Claude Code's own settings (0052).
@@ -132,7 +135,7 @@ func Default(d paths.Dirs, home string) Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
 		Server: Server{URL: "http://127.0.0.1:8888", Bank: "claude-memory", Mode: "local",
-			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server")},
+			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server"), Project: "backsight"},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}},
 		Components: Components{Read: true, Write: true},
@@ -234,6 +237,9 @@ func (c Config) Validate() error {
 	} else if p, err := c.APIPort(); err == nil && p == c.Server.UIPort {
 		bad("server.ui_port", "must differ from the API port %d", p)
 	}
+	if !projectRE.MatchString(c.Server.Project) {
+		bad("server.project", "%q: lowercase letters, digits, - and _, starting with a letter or digit", c.Server.Project)
+	}
 	if d := c.Server.Digest; d != "" && !digestRE.MatchString(d) {
 		bad("server.digest", "%q is not empty or sha256:<64 hex>", d)
 	}
@@ -291,7 +297,10 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var (
+	digestRE  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	projectRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+)
 
 // APIPort is the port of server.url, explicit or the scheme's default.
 func (c Config) APIPort() (int, error) {

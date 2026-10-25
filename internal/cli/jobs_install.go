@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/scheduler"
@@ -52,8 +53,12 @@ func schedulerPlan(ctx context.Context) (scheduler.Plan, error) {
 	if err != nil {
 		return scheduler.Plan{}, err
 	}
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return scheduler.Plan{}, &output.Error{Code: output.Usage, Message: err.Error()}
+	}
 	o := scheduler.Options{Shim: filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS)), Home: home, UID: os.Getuid(),
-		LogDir: filepath.Join(d.State, "logs"), Env: map[string]string{}}
+		LogDir: filepath.Join(d.State, "logs"), Env: map[string]string{}, Name: cfg.Server.Project}
 	for _, k := range []string{"BACKSIGHT_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "PATH"} {
 		if v := os.Getenv(k); v != "" {
 			o.Env[k] = v

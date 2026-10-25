@@ -200,7 +200,9 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	// A config.toml setup wrote and nobody edited since is setup's own:
 	// its answers stay open to change (an agent switching provider after
 	// the secrets exit must not need a hand edit).
-	if s.cfg != nil && s.saved != nil && s.saved.ConfigSHA != "" {
+	// Once a server runs from it, it is adopted: a new project or port would
+	// orphan that server.
+	if s.cfg != nil && s.saved != nil && s.saved.ConfigSHA != "" && !s.saved.Done("server") {
 		if sha, err := fsutil.HashFile(d.ConfigFile()); err == nil && sha == s.saved.ConfigSHA {
 			s.cfg, s.ownConfig = nil, sha
 		}
@@ -850,7 +852,7 @@ func newRuns(before, after []string) []string {
 func setupConfig(a map[string]string) []byte {
 	api, _ := strconv.Atoi(a["api_port"])
 	ui, _ := strconv.Atoi(a["ui_port"])
-	raw := string(initialConfig(installFlags{apiPort: api, uiPort: ui, provider: a["provider"], model: a["model"], base: a["base_url"]}))
+	raw := string(initialConfig(installFlags{apiPort: api, uiPort: ui, provider: a["provider"], model: a["model"], base: a["base_url"], project: a["project"]}))
 	raw = strings.Replace(raw, "# Written by backsight server install.", "# Written by backsight setup.", 1)
 	if a["backups"] == "off" {
 		raw += "\n[backup]\nenabled = false\n"

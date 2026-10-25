@@ -199,3 +199,22 @@ func TestWriteTightensALooseEnvFile(t *testing.T) {
 		t.Errorf(".env mode %v", fi.Mode().Perm())
 	}
 }
+
+func TestRenderAndComposeUseTheConfiguredProject(t *testing.T) {
+	cfg := devConfig()
+	cfg.Server.Project = "bs-fresh"
+	f, err := Render(cfg, secrets, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(f.Compose), "name: bs-fresh\n") {
+		t.Errorf("compose name:\n%s", f.Compose)
+	}
+	c := Compose{Dir: "/x", Project: "bs-fresh"}
+	if a := strings.Join(c.args("ps"), " "); !strings.Contains(a, "-p bs-fresh ") || c.DataVolume() != "bs-fresh_pg_data" {
+		t.Errorf("args %q, volume %q", a, c.DataVolume())
+	}
+	if (Compose{}).DataVolume() != "backsight_pg_data" {
+		t.Error("the default project changed")
+	}
+}

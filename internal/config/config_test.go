@@ -295,3 +295,13 @@ func TestSetExcludePathsWithHashesAndQuotesInValues(t *testing.T) {
 		t.Errorf("%q %v", got, err)
 	}
 }
+
+func TestServerProjectIsValidated(t *testing.T) {
+	for v, ok := range map[string]bool{"backsight": true, "bs-fresh_2": true, "": false, "Backsight": false, "-x": false, "a b": false} {
+		cfg := Default(dirs, "/home/u")
+		cfg.Server.Project = v
+		if err := cfg.Validate(); (err == nil) != ok {
+			t.Errorf("project %q: %v", v, err)
+		}
+	}
+}

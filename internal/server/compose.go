@@ -56,12 +56,20 @@ func (c Compose) stdout(ctx context.Context, sub ...string) ([]byte, error) {
 
 // Compose drives the backsight compose project in Dir.
 type Compose struct {
-	Dir    string
-	Runner Runner
+	Dir     string
+	Runner  Runner
+	Project string // "" is the default project
+}
+
+func (c Compose) project() string {
+	if c.Project == "" {
+		return Project
+	}
+	return c.Project
 }
 
 func (c Compose) args(sub ...string) []string {
-	a := []string{"compose", "-p", Project, "--project-directory", c.Dir, "-f", filepath.Join(c.Dir, "compose.yaml")}
+	a := []string{"compose", "-p", c.project(), "--project-directory", c.Dir, "-f", filepath.Join(c.Dir, "compose.yaml")}
 	if override := filepath.Join(c.Dir, "compose.override.yaml"); fileExists(override) {
 		a = append(a, "-f", override)
 	}
@@ -124,19 +132,19 @@ func (c Compose) PS(ctx context.Context) ([]Container, error) {
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // DataVolume is the database volume Compose creates for the project.
-const DataVolume = Project + "_pg_data"
+func (c Compose) DataVolume() string { return c.project() + "_pg_data" }
 
 // VolumeExists reports whether the project's database volume exists: its
 // password was fixed when it was created.
 func (c Compose) VolumeExists(ctx context.Context) (bool, error) {
-	out, err := c.Runner.Run(ctx, "volume", "inspect", DataVolume)
+	out, err := c.Runner.Run(ctx, "volume", "inspect", c.DataVolume())
 	switch {
 	case err == nil:
 		return true, nil
 	case strings.Contains(strings.ToLower(string(out)), "no such volume"):
 		return false, nil
 	}
-	return false, fmt.Errorf("docker volume inspect %s: %w: %s", DataVolume, err, strings.TrimSpace(string(out)))
+	return false, fmt.Errorf("docker volume inspect %s: %w: %s", c.DataVolume(), err, strings.TrimSpace(string(out)))
 }
 
 // Logs returns the last n lines of service's log.

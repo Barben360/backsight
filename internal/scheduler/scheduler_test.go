@@ -71,3 +71,25 @@ func TestScheduledTasks(t *testing.T) {
 		t.Error("an unknown system is refused")
 	}
 }
+
+// A second install (another Compose project) gets entries of its own.
+func TestEntriesAreNamedAfterTheProject(t *testing.T) {
+	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", Name: "bs-fresh"}
+	p, _ := For("linux", o)
+	got := strings.Join(p.Paths(), " ")
+	if !strings.Contains(got, "/u/bs-fresh-tick.timer") || strings.Contains(got, "backsight-") {
+		t.Errorf("systemd files %s", got)
+	}
+	if a := strings.Join(p.Activate[1], " "); !strings.Contains(a, "bs-fresh-maintain.timer") {
+		t.Errorf("activate %s", a)
+	}
+	if l, _ := For("darwin", o); !strings.Contains(strings.Join(l.Remove[0], " "), "tech.bs-fresh.tick") {
+		t.Errorf("launchd %v", l.Remove)
+	}
+	if w, _ := For("windows", o); !strings.Contains(strings.Join(w.Remove[0], " "), `bs-fresh\tick`) {
+		t.Errorf("schtasks %v", w.Remove)
+	}
+	if d, _ := For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u"}); !strings.Contains(strings.Join(d.Paths(), " "), "/u/backsight-tick.timer") {
+		t.Error("the default names changed")
+	}
+}

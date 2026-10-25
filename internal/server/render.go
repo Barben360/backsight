@@ -110,7 +110,11 @@ func Render(cfg config.Config, sec config.Secrets, host string) (Files, error) {
 	}
 	image := ImageFor(cfg)
 	var compose bytes.Buffer
-	if err := composeTmpl.Execute(&compose, map[string]any{"Project": Project, "Postgres": PostgresImage, "Hindsight": image,
+	project := cfg.Server.Project
+	if project == "" {
+		project = Project
+	}
+	if err := composeTmpl.Execute(&compose, map[string]any{"Project": project, "Postgres": PostgresImage, "Hindsight": image,
 		"Bind": bind, "APIPort": apiPort, "UIPort": cfg.Server.UIPort}); err != nil {
 		return Files{}, err
 	}

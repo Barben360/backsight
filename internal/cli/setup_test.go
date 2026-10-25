@@ -818,7 +818,7 @@ func TestSetupResumeWithNewAnswersAsksTheGoAgain(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	delete(f.fail, "client install")
-	code, out, _ := run(t, "setup", "--resume", "--answer", "backups=off", "--non-interactive", "--json")
+	code, out, _ := run(t, "setup", "--resume", "--answer", "retention=90", "--non-interactive", "--json")
 	if env := parseSetup(t, out); code != output.NeedsUser || !strings.Contains(env.Error.Message, "consent") {
 		t.Errorf("a changed plan must not run on the old go: exit %d\n%s", code, out)
 	}
@@ -895,5 +895,27 @@ func TestSetupAsksAgainAfterAnInvalidAnswer(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(pathsOf(home).ConfigFile()); !strings.Contains(string(raw), "enabled = false") {
 		t.Errorf("the second answer was not taken:\n%s", raw)
+	}
+}
+
+func TestSetupProjectAnswerNamesTheServerAndJobs(t *testing.T) {
+	home, _ := setupMachine(t)
+	withLLMKey(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "project=bs-fresh",
+		"--answer", "api_port=28888", "--answer", "ui_port=29999", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	cfg, err := config.Parse(raw, "config.toml", pathsOf(home), home)
+	if err != nil || cfg.Server.Project != "bs-fresh" || cfg.Server.URL != "http://127.0.0.1:28888" || cfg.Server.UIPort != 29999 {
+		t.Fatalf("config %+v %v\n%s", cfg.Server, err, raw)
+	}
+	p, err := schedulerPlan(context.Background())
+	if err != nil || !strings.Contains(strings.Join(p.Paths(), " "), "bs-fresh-tick.timer") {
+		t.Errorf("scheduler entries %v %v", p.Paths(), err)
+	}
+	// The server runs from this config now: it is adopted.
+	if code, _, errOut := run(t, "setup", "--answer", "project=other", "--answer", "consent=yes", "--non-interactive"); code != output.Usage || !strings.Contains(errOut, "server.project") {
+		t.Errorf("a new project once the server runs: exit %d %s", code, errOut)
 	}
 }

@@ -32,7 +32,7 @@ var (
 )
 
 func composeFor(cfg config.Config) server.Compose {
-	return server.Compose{Dir: cfg.Server.ComposeDir, Runner: composeRunner}
+	return server.Compose{Dir: cfg.Server.ComposeDir, Runner: composeRunner, Project: cfg.Server.Project}
 }
 
 func blocked(err error) error {
@@ -138,6 +138,7 @@ func configFromFlags(f installFlags, d paths.Dirs, home string) (config.Config, 
 type installFlags struct {
 	apiPort, uiPort       int
 	provider, model, base string
+	project               string // "" or "backsight": the default
 	plan                  bool
 }
 
@@ -146,6 +147,9 @@ func initialConfig(f installFlags) []byte {
 	var b strings.Builder
 	b.WriteString("# Written by backsight server install.\nschema_version = 1\n\n[server]\n")
 	fmt.Fprintf(&b, "url = \"http://127.0.0.1:%d\"\nui_port = %d\n", f.apiPort, f.uiPort)
+	if f.project != "" && f.project != "backsight" {
+		fmt.Fprintf(&b, "project = %s\n", strconv.Quote(f.project))
+	}
 	if f.provider != "" || f.model != "" || f.base != "" {
 		b.WriteString("\n[llm]\n")
 		if f.provider != "" {
@@ -264,9 +268,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 					return blocked(err)
 				}
 				if exists {
-					return &output.Error{Code: output.Blocked, Message: "the database volume " + server.DataVolume +
+					return &output.Error{Code: output.Blocked, Message: "the database volume " + c.DataVolume() +
 						" exists but secrets.toml has no db_password: restore the secrets.toml it was created with, or delete the volume and its memories (docker volume rm " +
-						server.DataVolume + ") before installing again"}
+						c.DataVolume() + ") before installing again"}
 				}
 			}
 			var made []string
@@ -307,7 +311,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			if err := c.Up(ctx); err != nil {
 				return fail(redacted(err, sec))
 			}
-			detail := "project " + server.Project
+			detail := "project " + cfg.Server.Project
 			if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
 				detail += ", with your compose.override.yaml"
 			}
@@ -363,7 +367,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 				if err != nil {
 					return blocked(err)
 				}
-				return e.emit("server start", map[string]any{"project": server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
+				return e.emit("server start", map[string]any{"project": cfg.Server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
 					func() string {
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
@@ -383,7 +387,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err := composeFor(cfg).Up(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
-			return e.emit("server start", map[string]string{"project": server.Project}, func() string { return "started\n" })
+			return e.emit("server start", map[string]string{"project": cfg.Server.Project}, func() string { return "started\n" })
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be rendered and started without doing it")
@@ -405,13 +409,13 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return err
 			}
 			if plan {
-				return e.emit("server stop", map[string]any{"project": server.Project, "plan": true},
-					func() string { return "would stop the containers of project " + server.Project + " (data kept)\n" })
+				return e.emit("server stop", map[string]any{"project": cfg.Server.Project, "plan": true},
+					func() string { return "would stop the containers of project " + cfg.Server.Project + " (data kept)\n" })
 			}
 			if err := composeFor(cfg).Stop(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
-			return e.emit("server stop", map[string]string{"project": server.Project}, func() string { return "stopped\n" })
+			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, func() string { return "stopped\n" })
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be stopped without doing it")

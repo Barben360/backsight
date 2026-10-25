@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -100,10 +101,10 @@ type Inputs struct {
 }
 
 // Hidden answers have defaults and are never asked.
-var hidden = map[string]string{"api_port": "8888", "ui_port": "9999"}
+var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -262,7 +263,11 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		} else if s := in.Saved[k]; s != "" {
 			v = s
 		}
-		if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {
+		if k == "project" {
+			if !projectRE.MatchString(v) {
+				return nil, nil, &UsageError{fmt.Sprintf("project=%s: lowercase letters, digits, - and _", v)}
+			}
+		} else if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {
 			return nil, nil, &UsageError{fmt.Sprintf("%s=%s is not a port", k, v)}
 		}
 		extra[k] = v
@@ -324,7 +329,7 @@ func orDefault(v, def string) string {
 
 // configKey names the config.toml key behind an answer.
 var configKey = map[string]string{"provider": "llm.provider", "model": "llm.model", "base_url": "llm.base_url",
-	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port"}
+	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project"}
 
 // configAnswers are the answers an existing config already gives.
 func configAnswers(c *config.Config) map[string]string {
@@ -344,6 +349,7 @@ func configAnswers(c *config.Config) map[string]string {
 		out["api_port"] = strconv.Itoa(p)
 	}
 	out["ui_port"] = strconv.Itoa(c.Server.UIPort)
+	out["project"] = c.Server.Project
 	for k, v := range out {
 		if v == "" && k != "base_url" {
 			delete(out, k)
@@ -351,6 +357,8 @@ func configAnswers(c *config.Config) map[string]string {
 	}
 	return out
 }
+
+var projectRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 // Keys returns the sorted ids of m.
 func Keys(m map[string]string) []string {
