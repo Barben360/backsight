@@ -67,7 +67,7 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 	ts := n.CreatedAt
 	if n.Source == "subagent" {
 		item := hindsight.RetainItem{
-			Content: n.Content, Context: "final report of a subagent", DocumentID: n.DocumentID, Strategy: "document",
+			Content: n.Content, Context: "final report of a subagent", DocumentID: n.DocumentID, Strategy: "subagent",
 			Tags:              []string{"project:" + n.Project, "source:subagent", "harness:claude-code"},
 			ObservationScopes: [][]string{{"project:" + n.Project}},
 			Timestamp:         &ts,

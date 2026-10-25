@@ -96,13 +96,17 @@ func TestApplyCreatesBankAndSendsTemplate(t *testing.T) {
 	}
 	var strategies map[string]map[string]any
 	_ = json.Unmarshal(p["retain_strategies"], &strategies)
-	for _, name := range []string{"conversation", "document"} {
+	for _, name := range []string{"conversation", "document", "subagent"} {
 		s := strategies[name]
 		instr, _ := s["retain_custom_instructions"].(string)
 		if s["retain_extraction_mode"] != "custom" || s["retain_chunk_size"] != float64(30000) ||
 			!strings.HasPrefix(instr, "Write every fact in English") || !strings.Contains(instr, "absolute dates") || !strings.Contains(instr, "kind") {
 			t.Errorf("%s strategy: %v", name, s)
 		}
+	}
+	sub, _ := strategies["subagent"]["retain_custom_instructions"].(string)
+	if !strings.Contains(sub, "final report of a sub-agent") || !strings.Contains(sub, "holds no fact") || strings.Contains(sub, "a note someone chose to store") {
+		t.Errorf("subagent strategy: %s", sub)
 	}
 }
 

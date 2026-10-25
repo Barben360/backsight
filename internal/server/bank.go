@@ -36,6 +36,11 @@ The source is a coding session between a developer and an AI coding agent: what 
 const documentRules = rules + `
 The source is a note someone chose to store: keep every durable statement in it, with its reason.`
 
+// subagentRules: a report is not a note someone chose to keep, and a bare
+// status ("monitoring CI") is no fact (decision 0071 C5, E30 V5).
+const subagentRules = rules + `
+The source is the final report of a sub-agent. A report that only says work is in progress, being monitored or waiting, with no finding, cause, decision or delivered result, holds no fact. Keep findings with their cause, decisions with their reason, and what was delivered and where.`
+
 var kindValues = [][2]string{
 	{"decision", "A choice that was made, with its reason."},
 	{"correction", "A fact that replaces or invalidates an earlier one."},
@@ -56,7 +61,8 @@ func bankTemplate() map[string]any {
 	return map[string]any{
 		"retain_mission":          bankMission,
 		"retain_default_strategy": "conversation",
-		"retain_strategies":       map[string]any{"conversation": strategy(conversationRules), "document": strategy(documentRules)},
+		"retain_strategies": map[string]any{"conversation": strategy(conversationRules), "document": strategy(documentRules),
+			"subagent": strategy(subagentRules)},
 		"entity_labels": []map[string]any{{"key": "kind", "tag": true, "type": "multi-values", "optional": true,
 			"description": "What kind of knowledge the fact is.", "values": values}},
 		"entities_allow_free_form": true,

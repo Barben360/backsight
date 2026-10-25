@@ -257,7 +257,7 @@ func TestSubagentNoteWithoutAgentTypeHasNoAgentTag(t *testing.T) {
 func TestSubagentNoteItem(t *testing.T) {
 	n := NewSubagentNote("b", "s1", "agent-7", "Explore", "billing", "Found the leak in pool.go.", at)
 	it := n.Item("m1")
-	if n.DocumentID != "subagent:s1:agent-7" || it.Strategy != "document" || strings.Join(it.Tags, ",") != "project:billing,source:subagent,harness:claude-code,agent:Explore" ||
+	if n.DocumentID != "subagent:s1:agent-7" || it.Strategy != "subagent" || strings.Join(it.Tags, ",") != "project:billing,source:subagent,harness:claude-code,agent:Explore" ||
 		len(it.ObservationScopes) != 1 || len(it.ObservationScopes[0]) != 1 || it.ObservationScopes[0][0] != "project:billing" ||
 		it.Metadata["source"] != "subagent" || it.Metadata["agent_type"] != "Explore" {
 		t.Errorf("%+v %+v", n, it)
