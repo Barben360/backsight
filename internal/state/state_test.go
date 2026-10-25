@@ -156,14 +156,14 @@ func TestUpdateWithinWaitsForTheLock(t *testing.T) {
 		t.Errorf("not written: %+v", s)
 	}
 
-	l, _ = TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
-	defer func() { _ = l.Release() }()
+	l2, _ := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	defer func() { _ = l2.Release() }()
 	start := time.Now()
 	var held *HeldError
 	if err := UpdateWithin(d, "test", 200*time.Millisecond, func(s *State) error { s.PluginVersion = "lost"; return nil }); !errors.As(err, &held) || time.Since(start) < 200*time.Millisecond {
 		t.Errorf("a lock held past the bound: %v after %s", err, time.Since(start))
 	}
-	_ = l.Release()
+	_ = l2.Release()
 	calls := 0
 	boom := errors.New("boom")
 	if err := UpdateWithin(d, "test", time.Second, func(*State) error { calls++; return boom }); !errors.Is(err, boom) || calls != 1 {
