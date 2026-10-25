@@ -150,33 +150,108 @@ running=$(compose ps -q --status running) || fail "cannot list the install's con
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
 
-# 11. Uninstall (SPEC §11.9): the plan changes nothing; the data goes only
-# with the bank id; config, state, binaries and the server go, the backups
-# stay. The shim runs the updated build.
+# 10b. Wired again by hand after undo (decision 0067 block 3), so that
+# uninstall's own client and scheduler removal is checked, not skipped:
+# the client (plugin and permission rule) and the jobs entries, through
+# the shim, which runs the updated build. The run has no systemd user
+# session (the runner is a system service, a hosted runner has none
+# either) and the machine's own user manager must stay untouched: from
+# here on a stand-in systemctl answers every call and records it. The
+# unit files are the real ones, in the isolated HOME; their activation by
+# a real user manager is not part of this proof.
 shim=$BACKSIGHT_HOME/data/bin/current
-tree() { find "$BACKSIGHT_HOME" "$HOME/.claude" \( -type f -o -type l \) -print0 | sort -z | xargs -0 sha256sum 2>/dev/null; }
-tree_before=$(tree)
+link=$(uc_path)
+mkdir -p "$work/stand-in"
+sysctl_log=$work/systemctl.log
+cat > "$work/stand-in/systemctl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> '$sysctl_log'
+EOF
+chmod +x "$work/stand-in/systemctl"
+: > "$sysctl_log"
+PATH=$work/stand-in:$PATH
+# sysctl_since <line>: the calls that change the scheduler's state since
+# that line of the log (queries such as show-environment are left out).
+sysctl_since() { tail -n +"$1" "$sysctl_log" | grep -E -- '(^| )(enable|disable|start|stop|restart|kill|daemon-reload|reset-failed)( |$)' || true; }
+sysctl_mark() { echo $(($(wc -l < "$sysctl_log") + 1)); }
+plugin_wired() { claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") != null' >/dev/null; }
+# rule_wired: exit 0 with the rule, 1 without it (no settings.json
+# counts as without), and the run fails on a settings.json jq cannot read.
+rule_wired() {
+  local f=$HOME/.claude/settings.json
+  [ -e "$f" ] || return 1
+  jq -e . "$f" >/dev/null || fail "$f is not JSON"
+  jq -e '(.permissions.allow // []) | map(select(startswith("mcp__plugin_backsight"))) | length > 0' "$f" >/dev/null
+}
+"$shim" client install --json > "$work/client-again.json" || { cat "$work/client-again.json" >&2; fail "client install after undo failed"; }
+# The entries' files must land in the isolated HOME: planned first.
+"$shim" jobs install --plan --json > "$work/jobs-plan.json" || { cat "$work/jobs-plan.json" >&2; fail "jobs install --plan failed"; }
+mapfile -t unit_files < <(jq -r '.data.files[].target' "$work/jobs-plan.json")
+[ "${#unit_files[@]}" -ge 4 ] || { cat "$work/jobs-plan.json" >&2; fail "jobs install plans ${#unit_files[@]} entry files, want the tick and maintain timers and services"; }
+for f in "${unit_files[@]}"; do
+  case $f in "$HOME"/*) ;; *) fail "jobs install would write $f, outside the isolated HOME" ;; esac
+done
+"$shim" jobs install --json > "$work/jobs-again.json" || { cat "$work/jobs-again.json" >&2; fail "jobs install after undo failed"; }
+# Positive controls: each piece uninstall must remove is there now.
+plugin_wired || fail "client install after undo did not install the plugin"
+rule_wired || fail "client install after undo wrote no mcp__plugin_backsight permission rule"
+for f in "${unit_files[@]}"; do
+  [ -f "$f" ] || fail "jobs install after undo did not write $f"
+done
+units=$(dirname "${unit_files[0]}")
+grep -q -- "enable.*$project-tick\.timer" <<< "$(sysctl_since 1)" || { cat "$sysctl_log" >&2; fail "jobs install did not enable the $project timers"; }
+[ -L "$link" ] && [ "$(readlink "$link")" = "$shim" ] || fail "the PATH command $link is not a link to the shim before uninstall"
+
+# 11. Uninstall (SPEC §11.9): the plan changes nothing; the data goes only
+# with the bank id; config, state, binaries, the PATH link, the plugin,
+# its rule, the jobs entries and the server go, the backups stay.
+# tree hashes every file uninstall may touch: one it cannot read fails the
+# run rather than dropping out of the comparison.
+tree() { find "$BACKSIGHT_HOME" "$HOME/.claude" "$units" \( -type f -o -type l \) -print0 | sort -z | xargs -0 -r sha256sum; }
+tree_now() { tree || fail "cannot hash every file of the install (above)"; }
+tree_before=$(tree_now)
 # The backups as they are now: earlier archives may have been pruned by
 # the update's server upgrade (backup retention), every one left must stay.
-backups_before=$(cd "$BACKSIGHT_HOME/data/backups" && find . -type f -print0 | sort -z | xargs -0 sha256sum)
+backups_dir=$BACKSIGHT_HOME/data/backups
+backups_before=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 [ -n "$backups_before" ] || fail "no backup left before uninstall: the check below would prove nothing"
+volume=$(sed -n 's/^name: *//p' "$BACKSIGHT_HOME/data/server/compose.yaml" | head -n 1)_pg_data
+docker volume inspect "$volume" >/dev/null || fail "no database volume $volume before uninstall: the --delete-data check would prove nothing"
+mark=$(sysctl_mark)
 "$shim" uninstall --plan --delete-data --purge-local --json > "$work/uninstall-plan.json" || { cat "$work/uninstall-plan.json" >&2; fail "uninstall --plan failed"; }
-[ "$(tree)" = "$tree_before" ] || fail "uninstall --plan changed files"
+[ "$(tree_now)" = "$tree_before" ] || fail "uninstall --plan changed files"
+[ -z "$(sysctl_since "$mark")" ] || { sysctl_since "$mark" >&2; fail "uninstall --plan changed the scheduler"; }
+mark=$(sysctl_mark)
 set +e
 "$shim" uninstall --delete-data --purge-local --non-interactive --json > "$work/uninstall-noid.json"
 code=$?
 set -e
 [ "$code" = 10 ] && jq -e '.error.questions | map(.id) | index("confirm_bank") != null' "$work/uninstall-noid.json" >/dev/null ||
   { cat "$work/uninstall-noid.json" >&2; fail "uninstall --delete-data without the bank id exited $code"; }
-[ "$(tree)" = "$tree_before" ] || fail "an unconfirmed uninstall changed files"
+[ "$(tree_now)" = "$tree_before" ] || fail "an unconfirmed uninstall changed files"
+[ -z "$(sysctl_since "$mark")" ] || { sysctl_since "$mark" >&2; fail "an unconfirmed uninstall changed the scheduler"; }
+docker volume inspect "$volume" >/dev/null || fail "an unconfirmed uninstall removed the database volume $volume"
+plugin_wired || fail "an unconfirmed uninstall removed the plugin"
 bank=$(sed -n 's/^bank *= *"\(.*\)"/\1/p' "$BACKSIGHT_HOME/config/config.toml" | head -n 1)
-volume=$(sed -n 's/^name: *//p' "$BACKSIGHT_HOME/data/server/compose.yaml" | head -n 1)_pg_data
+mark=$(sysctl_mark)
 "$shim" uninstall --delete-data --purge-local --answer "confirm_bank=${bank:-claude-memory}" --answer identity_saved=yes --json > "$work/uninstall.json" ||
   { cat "$work/uninstall.json" >&2; fail "uninstall failed"; }
+jq -e --arg backups "$backups_dir" '.ok and .data.server == "delete-data"
+    and (.data.steps | length > 0) and all(.data.steps[]; .status == "done")
+    and any(.data.kept[]; contains($backups))' "$work/uninstall.json" >/dev/null ||
+  { jq -c '.ok, .data.server, [.data.steps[] | {name, status}], .data.kept' "$work/uninstall.json" >&2; fail "uninstall.json: want ok, server delete-data, every step done, the backups kept"; }
 if docker volume inspect "$volume" >/dev/null 2>&1; then fail "the database volume $volume survived --delete-data"; fi
+if plugin_wired; then fail "the plugin survived uninstall"; fi
+if rule_wired; then fail "uninstall left the mcp__plugin_backsight permission rule"; fi
+[ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "uninstall left settings.json changed"; }
+for f in "${unit_files[@]}"; do
+  [ ! -e "$f" ] || fail "uninstall left the jobs entry $f"
+done
+grep -q -- "disable.*$project-tick\.timer" <<< "$(sysctl_since "$mark")" || { cat "$sysctl_log" >&2; fail "uninstall did not disable the $project timers"; }
+[ ! -e "$link" ] && [ ! -L "$link" ] || fail "uninstall left the PATH command $link"
 for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/bin" "$BACKSIGHT_HOME/data/marketplace" "$BACKSIGHT_HOME/data/server/compose.yaml"; do
   [ ! -e "$p" ] || fail "uninstall left $p"
 done
-backups_after=$(cd "$BACKSIGHT_HOME/data/backups" && find . -type f -print0 | sort -z | xargs -0 sha256sum)
+backups_after=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 [ "$backups_after" = "$backups_before" ] || { echo "before: $backups_before" >&2; echo "after:  $backups_after" >&2; fail "uninstall changed the backups"; }
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, uninstall) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, client and jobs wired again, uninstall) on project $project"
