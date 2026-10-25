@@ -87,9 +87,11 @@ type Result struct {
 	Segment    int    `json:"segment,omitempty"`
 	Chars      int    `json:"chars,omitempty"`
 	Project    string `json:"project,omitempty"`
-	// Unknown counts the record types of this read that Claude Code is not
-	// known to write (transcript.Known).
+	// Unknown counts the records of types Claude Code is not known to write
+	// (transcript.Known) that this flush moved the cursor past: each is
+	// counted once, however often the file is read.
 	Unknown map[string]int `json:"unknown,omitempty"`
+	read    transcript.Stats
 	// Stop tells the caller the server or setup is failing: later sessions
 	// would fail the same way, so the run ends here.
 	Stop bool `json:"-"`
@@ -153,9 +155,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if err != nil {
 		return fail(Retry, err.Error())
 	}
-	if u := st.UnknownTypes(); len(u) > 0 {
-		res.Unknown = u
-	}
+	res.read = st
 	now := f.Now()
 	for i := range recs {
 		recs[i].Timestamp = clampTime(recs[i].Timestamp, fi.ModTime(), now)
@@ -337,6 +337,9 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 
 func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 	res.Status, res.Detail = status, detail
+	if u := res.read.UnknownBefore(cur.Offset); len(u) > 0 {
+		res.Unknown = u
+	}
 	if status == Sent {
 		_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), res.Session)) // the document exists now
 	}

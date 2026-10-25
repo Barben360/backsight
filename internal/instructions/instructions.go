@@ -5,6 +5,8 @@
 package instructions
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -105,8 +107,25 @@ type Skill struct {
 	Name, Description, ArgumentHint, AllowedTools, Body string
 }
 
-// Skills are the plugin's skills, namespaced /backsight:<name>.
+// shellWord is p as one shell word, single-quoted when it holds anything
+// but path-safe characters: the macOS data directory has a space
+// ("Application Support"), Windows paths have backslashes.
+func shellWord(p string) string {
+	safe := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._+-@%", r)
+	}
+	for _, r := range p {
+		if !safe(r) {
+			return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
+		}
+	}
+	return p
+}
+
+// Skills are the plugin's skills, namespaced /backsight:<name>. Their
+// commands and allowed-tools carry the shim as one shell word.
 func Skills(shim string) []Skill {
+	shim = shellWord(shim)
 	return []Skill{
 		{
 			Name: "remember",
@@ -134,8 +153,10 @@ func Skills(shim string) []Skill {
 			Name: "memory-retro",
 			Description: "End-of-project retrospective into the user's long-term memory: the decisions, pitfalls, conventions and lessons of the work just " +
 				"finished. Use when the user says retro, rétrospective, post-mortem, wrap up, capitalise, or a project or milestone ends.",
-			AllowedTools: "Bash(" + shim + " search *)",
-			Body: "What the memory already holds about this project:\n\n!`" + shim + " search \"decisions\" \"pitfalls\" \"conventions\" --limit 12 || true`\n\n" +
+			// `|| true` keeps the skill loading when the server is down; true
+			// is a command of its own for the permission check.
+			AllowedTools: "Bash(" + shim + " search *), Bash(true)",
+			Body: "What the memory already holds about this project:\n\n!`" + shim + " search \"decision\" \"pitfall\" \"convention\" \"lesson\" --limit 12 || true`\n\n" +
 				"From this session and the work above, list the durable items a future session would need: decisions and their reasons, root causes, " +
 				"conventions, infrastructure facts, the project's state, lessons. Drop what the memory above already holds and anything not settled. " +
 				"Store each remaining item with `memory_store`, one fact per call, at most 10, in English with absolute dates. " +
@@ -145,7 +166,8 @@ func Skills(shim string) []Skill {
 			Name:         "memory",
 			Description:  "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, why, stats, doctor.",
 			ArgumentHint: "<what to look for>",
-			AllowedTools: "Bash(" + shim + " *)",
+			// The five read-only commands it names: never forget or purge.
+			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), Bash(" + shim + " stats*), Bash(" + shim + " doctor*)",
 			Body: "Use the backsight command line:\n\n" +
 				"- `" + shim + " search \"<query 1>\" \"<query 2>\"`: 1-4 short keyword queries;\n" +
 				"- `" + shim + " read <id>`: one memory with its source facts;\n" +
@@ -157,16 +179,26 @@ func Skills(shim string) []Skill {
 	}
 }
 
-// SkillFile renders a SKILL.md.
+// SkillFile renders a SKILL.md. Values are double-quoted: a plain YAML
+// scalar breaks on ": " (a description) or turns into a list ("[project]").
 func SkillFile(s Skill) string {
 	var b strings.Builder
-	b.WriteString("---\nname: " + s.Name + "\ndescription: " + s.Description + "\n")
+	b.WriteString("---\nname: " + yamlString(s.Name) + "\ndescription: " + yamlString(s.Description) + "\n")
 	if s.ArgumentHint != "" {
-		b.WriteString("argument-hint: " + s.ArgumentHint + "\n")
+		b.WriteString("argument-hint: " + yamlString(s.ArgumentHint) + "\n")
 	}
 	if s.AllowedTools != "" {
-		b.WriteString("allowed-tools: " + s.AllowedTools + "\n")
+		b.WriteString("allowed-tools: " + yamlString(s.AllowedTools) + "\n")
 	}
 	b.WriteString("---\n\n" + s.Body)
 	return b.String()
+}
+
+// yamlString is v as a double-quoted scalar: a JSON string is one in YAML.
+func yamlString(v string) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	return strings.TrimSuffix(b.String(), "\n")
 }

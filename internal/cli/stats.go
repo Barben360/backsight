@@ -22,6 +22,7 @@ type extraction struct {
 	Output   int64   `json:"output_tokens"`
 	Cost     float64 `json:"cost,omitempty"`
 	Currency string  `json:"currency,omitempty"`
+	Days     int     `json:"days"`            // the server keeps 30 days of daily buckets
 	Error    string  `json:"error,omitempty"` // the server could not be read
 }
 
@@ -58,15 +59,17 @@ func newStatsCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res := statsResult{Days: days, Report: stats.Compute(ev, from, to)}
-			res.Extraction = extractionOver(cmd, days)
+			res.Extraction = extractionOver(cmd, from, to, days)
 			return e.emit("stats", res, func() string { return statsText(res) })
 		},
 	}
 }
 
-// extractionOver reads Hindsight's LLM token use for the period; a server
-// that cannot be read leaves the rest of the report intact.
-func extractionOver(cmd *cobra.Command, days int) extraction {
+// extractionOver reads Hindsight's LLM token use over the window, from its
+// daily buckets: the server answers 1d or 30d only (anything else silently
+// gives 7 days), so 30d is asked and the days outside [from, to] dropped.
+// A server that cannot be read leaves the rest of the report intact.
+func extractionOver(cmd *cobra.Command, from, to time.Time, days int) extraction {
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return extraction{Error: err.Error()}
@@ -75,13 +78,21 @@ func extractionOver(cmd *cobra.Command, days int) extraction {
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	byDay, err := cl.LLMTokensByDay(cmd.Context(), cfg.Server.Bank, strconv.Itoa(days)+"d")
+	byDay, err := cl.LLMTokensByDay(cmd.Context(), cfg.Server.Bank, "30d")
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	var x extraction
+	x := extraction{Days: min(days, 30)}
+	first := from.UTC().Format("2006-01-02")
+	if days > 30 {
+		first = to.UTC().AddDate(0, 0, -29).Format("2006-01-02")
+	}
+	last := to.UTC().Format("2006-01-02")
 	var thoughts int64
-	for _, t := range byDay {
+	for day, t := range byDay {
+		if day < first || day > last {
+			continue
+		}
 		x.Input += t.Input
 		x.Cached += t.Cached
 		x.Output += t.Output
@@ -92,6 +103,14 @@ func extractionOver(cmd *cobra.Command, days int) extraction {
 		x.Cost, x.Currency = p.Cost(x.Input, x.Cached, x.Output, 0), p.Currency
 	}
 	return x
+}
+
+// serverDays notes when the server's 30 days of buckets cut the window.
+func serverDays(x extraction, days int) string {
+	if x.Days < days {
+		return fmt.Sprintf(" (last %d days: the server keeps no more)", x.Days)
+	}
+	return ""
 }
 
 func pct(n, of int) string {
@@ -132,7 +151,7 @@ func statsText(r statsResult) string {
 	fmt.Fprintf(&b, "Briefings    %d (%d empty): %d memories, %s returned again by a memory tool later\n",
 		r.Briefings.N, r.Briefings.Empty, r.Briefings.IDs, pct(r.Briefings.Used, r.Briefings.IDs))
 	fmt.Fprintf(&b, "Detector     fired %d, followed by a save %s\n", r.Detector.Fired, pct(r.Detector.Saved, r.Detector.Fired))
-	fmt.Fprintf(&b, "Context      %d session(s), recall text per session p95 %d chars\n", r.Budget.Sessions, r.Budget.P95Chars)
+	fmt.Fprintf(&b, "Context      %d session(s), prompt-hook text per session p95 %d chars\n", r.Budget.Sessions, r.Budget.P95Chars)
 	fmt.Fprintf(&b, "Gate         %s\n", counts(r.Gate))
 	fmt.Fprintf(&b, "MCP tools    %s; session found: %s\n", counts(r.Tools), counts(r.Live))
 	fmt.Fprintf(&b, "Retains      %s\n", counts(r.Retains))
@@ -142,9 +161,9 @@ func statsText(r statsResult) string {
 	case x.Error != "":
 		fmt.Fprintf(&b, "Extraction   unavailable: %s\n", x.Error)
 	case x.Currency != "":
-		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens: %.2f %s\n", x.Input, x.Cached, x.Output, x.Cost, x.Currency)
+		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens: %.2f %s%s\n", x.Input, x.Cached, x.Output, x.Cost, x.Currency, serverDays(x, r.Days))
 	default:
-		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens (no price known: set llm.price_* for a cost)\n", x.Input, x.Cached, x.Output)
+		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens (no price known: set llm.price_* for a cost)%s\n", x.Input, x.Cached, x.Output, serverDays(x, r.Days))
 	}
 	return b.String()
 }

@@ -53,12 +53,19 @@ var Known = map[string]bool{
 	"file-history-snapshot": true, "file-history-delta": true, "cost-state": true, "summary": true, "progress": true,
 }
 
-// UnknownTypes are the types of a read that are not Known.
-func (s Stats) UnknownTypes() map[string]int {
+// UnknownLine is a record of a type not in Known, and the offset after it.
+type UnknownLine struct {
+	Type string
+	End  int64
+}
+
+// UnknownBefore counts the unknown lines that end at or before offset:
+// the ones a cursor at offset has passed for good.
+func (s Stats) UnknownBefore(offset int64) map[string]int {
 	out := map[string]int{}
-	for t, n := range s.Unknown {
-		if !Known[t] {
-			out[t] += n
+	for _, u := range s.UnknownLines {
+		if u.End <= offset {
+			out[u.Type]++
 		}
 	}
 	return out
@@ -68,7 +75,9 @@ func (s Stats) UnknownTypes() map[string]int {
 type Stats struct {
 	Consumed int64          // offset after the last complete line
 	Unknown  map[string]int // record types that are neither user nor assistant
-	BadLines int            // lines that are not JSON
+	// UnknownLines are the records whose type is not even Known.
+	UnknownLines []UnknownLine
+	BadLines     int // lines that are not JSON
 }
 
 type rawRecord struct {
@@ -158,6 +167,9 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 		}
 		if rr.Type != "user" && rr.Type != "assistant" {
 			st.Unknown[rr.Type]++
+			if !Known[rr.Type] {
+				st.UnknownLines = append(st.UnknownLines, UnknownLine{Type: rr.Type, End: off})
+			}
 			continue
 		}
 		if rr.IsMeta || rr.IsSidechain || rr.IsCompactSummary || len(rr.Message) == 0 {

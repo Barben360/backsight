@@ -406,7 +406,11 @@ func (h *hookEnv) postToolUse() {
 		ids = uuidRE.FindAllString(text, -1)
 	}
 	subagent := h.in.AgentID != "" // a subagent's search is not the main thread's
-	n := 0
+	n := -1
+	// Parallel tool calls run their PostToolUse hooks at once, each with
+	// an fsync'd write under the session lock: this hook (deadline 1.5 s)
+	// waits up to 1 s rather than the prompt path's 100 ms.
+	h.store.Retry = time.Second
 	h.updateSession(func(s *session.State) error {
 		n = s.Prompts
 		if !subagent {
@@ -422,6 +426,10 @@ func (h *hookEnv) postToolUse() {
 	})
 	// The MCP server logs the call itself (tool event); this one only ties
 	// it to the session, so stats do not count calls twice.
+	if n < 0 { // the lock stayed busy: the prompt number, read without it
+		st, _ := h.store.Load(h.in.SessionID)
+		n = st.Prompts
+	}
 	// n ties it to the prompt (detector follow-up), memory_ids to the
 	// briefing (briefing use).
 	h.tw.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": h.in.ToolName, "ids": len(ids), "memory_ids": ids, "n": n, "subagent": subagent}})

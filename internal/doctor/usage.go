@@ -18,10 +18,12 @@ const (
 	promptP95MinN     = 20
 	searchDropMinN    = 10 // injections in each of the two weeks
 	learningQuietTime = 2 * time.Hour
+	unknownMinRise    = 5
 )
 
-// checkUsage judges the last 7 days of telemetry against the previous 7.
-func checkUsage(dir string, now time.Time) []Check {
+// checkUsage judges the last 7 days of telemetry against the previous 7;
+// writeOff: components.write is off (another integration writes).
+func checkUsage(dir string, now time.Time, writeOff bool) []Check {
 	week := 7 * 24 * time.Hour
 	ev, err := stats.Load(dir, now.Add(-2*week), now)
 	if err != nil {
@@ -43,7 +45,7 @@ func checkUsage(dir string, now time.Time) []Check {
 	return []Check{
 		checkRecallFailures(r),
 		checkLatency(r),
-		checkLearning(ev, now),
+		checkLearning(ev, now, writeOff),
 		checkSearchRate(r, p),
 		checkUnknownRecords(r, p),
 	}
@@ -78,11 +80,17 @@ func checkLatency(r stats.Report) Check {
 	return c
 }
 
-// checkLearning: sessions ran in the last 24 h (and had time to settle)
-// but nothing was accepted by the server: "memory not learning".
-func checkLearning(ev []stats.Event, now time.Time) Check {
+// checkLearning: "memory not learning" is sends that the server did not
+// accept in the last 24 h with none accepted. Prompts alone prove nothing:
+// a paused or excluded session sends nothing on purpose, and until a
+// scheduler exists (M4) a long session is sent only at its end.
+func checkLearning(ev []stats.Event, now time.Time, writeOff bool) Check {
 	c := Check{ID: "learning", Status: OK}
-	ran, accepted := 0, 0
+	if writeOff {
+		c.Status, c.Summary = Info, "components.write is off: another integration writes"
+		return c
+	}
+	ran, accepted, refused := 0, 0, 0
 	for _, e := range ev {
 		if e.TS.Before(now.Add(-24 * time.Hour)) {
 			continue
@@ -92,18 +100,22 @@ func checkLearning(ev []stats.Event, now time.Time) Check {
 			ran++
 		case e.Event == "retain" && e.Status == "ok":
 			accepted++
+		case e.Event == "retain":
+			refused++ // queued for a retry, or quarantined
 		case e.Event == "job" && notesSent(e.Details) > 0:
 			accepted++
 		}
 	}
 	switch {
-	case ran == 0:
-		c.Status, c.Summary = Info, "no settled session in the last 24 h"
-	case accepted == 0:
-		c.Status, c.Summary = Warn, fmt.Sprintf("memory not learning: %d prompt(s) in the last 24 h, nothing accepted by the server", ran)
+	case accepted > 0:
+		c.Summary = fmt.Sprintf("%d send(s) accepted in the last 24 h", accepted)
+	case refused > 0:
+		c.Status, c.Summary = Warn, fmt.Sprintf("memory not learning: %d send(s) in the last 24 h, none accepted by the server", refused)
 		c.Fix = "backsight retain flush (shows why), then backsight server status"
+	case ran > 0:
+		c.Status, c.Summary = Info, fmt.Sprintf("%d prompt(s) in the last 24 h and no send yet (sessions go out when they end or settle)", ran)
 	default:
-		c.Summary = fmt.Sprintf("%d session send(s) accepted in the last 24 h", accepted)
+		c.Status, c.Summary = Info, "no settled session in the last 24 h"
 	}
 	return c
 }
@@ -155,7 +167,15 @@ func checkUnknownRecords(r, p stats.Report) Check {
 	sort.Strings(types)
 	c.Summary = fmt.Sprintf("%d unknown transcript records this week (%d last week): %s", now, before, strings.Join(types, ", "))
 	c.Status = Info
-	if now > before {
+	// Rising: a type last week did not have, or at least twice as many
+	// records (and at least 5). One more record is noise.
+	fresh := false
+	for t := range r.Unknown {
+		if p.Unknown[t] == 0 {
+			fresh = true
+		}
+	}
+	if fresh || (now >= 2*before && now >= unknownMinRise) {
 		c.Status, c.Fix = Warn, "Claude Code's transcript format may have changed: check that these types carry no conversation, then report it"
 	}
 	return c

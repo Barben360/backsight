@@ -6,6 +6,8 @@ package stats
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -72,11 +74,18 @@ func Load(dir string, from, to time.Time) ([]Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for sc.Scan() {
+		rd := bufio.NewReader(f)
+		for {
+			raw, rerr := readLine(rd)
+			if rerr != nil && !errors.Is(rerr, io.EOF) {
+				_ = f.Close()
+				return nil, rerr
+			}
 			var l line
-			if json.Unmarshal(sc.Bytes(), &l) != nil {
+			if raw == nil || json.Unmarshal(raw, &l) != nil {
+				if errors.Is(rerr, io.EOF) {
+					break
+				}
 				continue
 			}
 			ts, err := time.Parse(time.RFC3339Nano, l.TS)
@@ -87,15 +96,38 @@ func Load(dir string, from, to time.Time) ([]Event, error) {
 			e.TS, e.MemoryIDs = ts, l.MemoryIDs
 			_ = json.Unmarshal(l.IDs, &e.IDs) // a count (tool_use) leaves it empty
 			out = append(out, e)
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
 		}
-		err = sc.Err()
 		_ = f.Close()
-		if err != nil {
-			return nil, err
-		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].TS.Before(out[j].TS) })
 	return out, nil
+}
+
+// maxLine: a longer line is no event this package writes; it is skipped.
+const maxLine = 1 << 20
+
+// readLine returns the next line, nil for one longer than maxLine (read
+// through and dropped), and io.EOF with the last line.
+func readLine(rd *bufio.Reader) ([]byte, error) {
+	var buf []byte
+	tooLong := false
+	for {
+		chunk, err := rd.ReadSlice('\n')
+		if !tooLong {
+			if len(buf)+len(chunk) > maxLine {
+				tooLong, buf = true, nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return buf, err
+	}
 }
 
 // Report is what `stats [days]` shows.
@@ -123,6 +155,9 @@ type Report struct {
 		// empty or silent.
 		Credit map[string]int `json:"credit"`
 	} `json:"turns"`
+	// Injections: recalls that injected memories, judged at the next
+	// prompt; searched means a memory_search or memory_read in that turn
+	// (a store is not a search), the same rule as Turns.
 	Injections struct {
 		N            int `json:"n"`
 		Searched     int `json:"searched"`
@@ -141,7 +176,7 @@ type Report struct {
 	} `json:"detector"`
 	Budget struct {
 		Sessions int `json:"sessions"`
-		P95Chars int `json:"p95_chars"` // recall text injected per session
+		P95Chars int `json:"p95_chars"` // text the prompt hook injected per session (recall, reminders, nudges)
 	} `json:"budget"`
 	Gate         map[string]int `json:"gate"`
 	Tools        map[string]int `json:"tools"`
@@ -155,6 +190,9 @@ type turn struct {
 	session string
 	n       int
 }
+
+// creditRank orders how a reply used memory, best last.
+var creditRank = map[string]int{"silent": 0, "empty": 1, "free": 2, "exact": 3}
 
 func isMemoryTool(name string) bool {
 	return strings.HasSuffix(name, "memory_search") || strings.HasSuffix(name, "memory_read") || strings.HasSuffix(name, "memory_store")
@@ -189,6 +227,7 @@ func Compute(events []Event, from, to time.Time) Report {
 	}
 	var ms []int
 	chars := map[string]int{}
+	credits := map[turn]string{}
 	for _, e := range events {
 		switch e.Event {
 		case "prompt":
@@ -228,16 +267,26 @@ func Compute(events []Event, from, to time.Time) Report {
 				}
 			}
 		case "reply":
-			if e.Searched {
+			// One credit per searched turn: a machine message (agent result,
+			// notification) adds a Stop under the same prompt number; the
+			// best credit of the turn is kept.
+			t := turn{e.Session, e.N}
+			if searched[t] {
 				c := e.Credit
 				if c == "" {
 					c = "silent"
 				}
-				r.Turns.Credit[c]++
+				if prev, ok := credits[t]; !ok || creditRank[c] > creditRank[prev] {
+					credits[t] = c
+				}
 			}
 		case "outcome":
+			// A recall that injected nothing has no outcome to judge.
+			if len(e.IDs) == 0 {
+				continue
+			}
 			r.Injections.N++
-			if e.Searched {
+			if searched[turn{e.Session, e.N}] {
 				r.Injections.Searched++
 			}
 			if e.Credited != nil && (*e.Credited == "exact" || *e.Credited == "free") {
@@ -273,6 +322,9 @@ func Compute(events []Event, from, to time.Time) Report {
 				r.Unknown[t] += n
 			}
 		}
+	}
+	for _, c := range credits {
+		r.Turns.Credit[c]++
 	}
 	r.Prompts.P50MS, r.Prompts.P95MS = Percentile(ms, 50), Percentile(ms, 95)
 	var per []int

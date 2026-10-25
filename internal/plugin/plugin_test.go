@@ -207,29 +207,54 @@ func TestANewBinaryVersionRewritesThePlugin(t *testing.T) {
 	}
 }
 
-// SPEC §17: the plugin ships remember, pause, memory-retro and memory; the
-// tools they may run are backsight's own commands only.
+// frontmatter parses a SKILL.md's frontmatter: every value must be a
+// double-quoted scalar, decoded here as the JSON string it also is.
+func frontmatter(t *testing.T, name, s string) map[string]string {
+	t.Helper()
+	body, ok := strings.CutPrefix(s, "---\n")
+	head, _, found := strings.Cut(body, "\n---\n")
+	if !ok || !found {
+		t.Fatalf("%s: no frontmatter:\n%s", name, s)
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(head, "\n") {
+		k, v, ok := strings.Cut(line, ": ")
+		var val string
+		if !ok || json.Unmarshal([]byte(v), &val) != nil {
+			t.Fatalf("%s: %q is not key: \"quoted value\"", name, line)
+		}
+		out[k] = val
+	}
+	return out
+}
+
+// SPEC §17: the plugin ships remember, pause, memory-retro and memory; each
+// skill may run exactly the backsight commands it names, nothing broader.
 func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 	dir := t.TempDir()
-	_, _ = Generate(dir, "/opt/b/current", "1.2.3")
-	for _, name := range []string{"remember", "pause", "memory-retro", "memory"} {
+	if _, err := Generate(dir, "/opt/b/current", "1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"remember":     "",
+		"pause":        "Bash(/opt/b/current pause*), Bash(/opt/b/current resume*)",
+		"memory-retro": "Bash(/opt/b/current search *), Bash(true)",
+		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*)",
+	}
+	for name, tools := range want {
 		raw, err := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", name, "SKILL.md"))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		s := string(raw)
-		if !strings.HasPrefix(s, "---\nname: "+name+"\ndescription: ") || !strings.Contains(s, "\n---\n") {
-			t.Errorf("%s frontmatter:\n%s", name, s)
+		fm := frontmatter(t, name, string(raw))
+		if fm["name"] != name || fm["description"] == "" || fm["allowed-tools"] != tools {
+			t.Errorf("%s frontmatter %q", name, fm)
 		}
-		for _, line := range strings.Split(s, "\n") {
-			if strings.HasPrefix(line, "allowed-tools:") {
-				for _, tool := range strings.Split(strings.TrimPrefix(line, "allowed-tools:"), ", ") {
-					if !strings.HasPrefix(strings.TrimSpace(tool), "Bash(/opt/b/current ") {
-						t.Errorf("%s allows %q", name, tool)
-					}
-				}
-			}
-		}
+	}
+	// values YAML would misread unquoted come back intact
+	raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))
+	if fm := frontmatter(t, "pause", string(raw)); fm["argument-hint"] != "[project] [resume]" {
+		t.Errorf("argument-hint %q", fm["argument-hint"])
 	}
 	pause, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))
 	if !strings.Contains(string(pause), "/opt/b/current pause --project") || !strings.Contains(string(pause), "resume") {
@@ -238,5 +263,26 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 	remember, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "remember", "SKILL.md"))
 	if strings.Contains(string(remember), "allowed-tools") || !strings.Contains(string(remember), "memory_store") {
 		t.Errorf("remember stores through the MCP tool, no shell:\n%s", remember)
+	}
+}
+
+// The macOS data directory has a space and Windows paths backslashes: the
+// skills carry the shim as one single-quoted shell word, in their commands
+// and in allowed-tools alike.
+func TestSkillsQuoteAShimThatNeedsIt(t *testing.T) {
+	for shim, word := range map[string]string{
+		"/Users/a/Library/Application Support/backsight/bin/current": "'/Users/a/Library/Application Support/backsight/bin/current'",
+		`C:\Users\a\AppData\Local\backsight\bin\current.exe`:         `'C:\Users\a\AppData\Local\backsight\bin\current.exe'`,
+		"/home/o'brien/.local/share/backsight/bin/current":           `'/home/o'\''brien/.local/share/backsight/bin/current'`,
+	} {
+		dir := t.TempDir()
+		if _, err := Generate(dir, shim, "1.2.3"); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))
+		fm := frontmatter(t, "pause", string(raw))
+		if fm["allowed-tools"] != "Bash("+word+" pause*), Bash("+word+" resume*)" || !strings.Contains(string(raw), "`"+word+" pause --project`") {
+			t.Errorf("%s:\n%s", shim, raw)
+		}
 	}
 }

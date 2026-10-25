@@ -140,9 +140,9 @@ func TestFlushRefusedCredentialsAreBlocked(t *testing.T) {
 	}
 }
 
-// Record types Claude Code is not known to write are counted once the
-// cursor moves (a format change shows in stats and doctor); known ones are
-// not.
+// Record types Claude Code is not known to write are counted once, when
+// the cursor passes them (a format change shows in stats and doctor);
+// known ones are not.
 func TestFlushCountsUnknownTranscriptRecords(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
@@ -154,9 +154,11 @@ func TestFlushCountsUnknownTranscriptRecords(t *testing.T) {
 	_, _ = f.WriteString(`{"type":"brand-new-kind","uuid":"z"}` + "\n" + `{"type":"ai-title","uuid":"y"}` + "\n")
 	_ = f.Close()
 	withClock(t, time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
-	run(t, "retain", "flush")
+	run(t, "retain", "flush") // sent: the cursor stops after the last turn
+	run(t, "retain", "flush") // the trailing records are passed now
+	run(t, "retain", "flush") // and never counted again
 	tel := telemetryText(t, home)
-	if !strings.Contains(tel, `"event":"transcript_unknown"`) || !strings.Contains(tel, `"brand-new-kind":1`) || strings.Contains(tel, `"ai-title"`) {
+	if strings.Count(tel, `"event":"transcript_unknown"`) != 1 || !strings.Contains(tel, `"brand-new-kind":1`) || strings.Contains(tel, `"ai-title"`) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
 }

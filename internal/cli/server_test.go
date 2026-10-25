@@ -168,6 +168,9 @@ var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCall
 // tags of every accepted item.
 var (
 	statsDown    atomic.Bool
+	llmThoughts  atomic.Int64 // thoughts tokens in /llm-requests/stats
+	llmPeriod    string       // the period of the last /llm-requests/stats
+	llmOldInput  atomic.Int64 // input tokens 10 days ago, in the 30d answer only
 	extractFails atomic.Bool
 	// queueAtRetain: pending + processing seen by each accepted retain.
 	queueAtRetain []int64
@@ -205,6 +208,9 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainStatus.Store(0)
 	recallStatus.Store(0)
 	statsDown.Store(false)
+	llmThoughts.Store(0)
+	llmOldInput.Store(0)
+	llmPeriod = ""
 	extractFails.Store(false)
 	retainedTags, queueAtRetain = nil, nil
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
@@ -368,8 +374,16 @@ func fakeHindsight(t *testing.T) (port int) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+			// Like Hindsight 1.1.0: 1d or 30d; any other period is 7 days.
+			llmPeriod = r.URL.Query().Get("period")
 			day := time.Now().UTC().Format("2006-01-02")
-			_, _ = w.Write([]byte(`{"buckets":[{"time":"` + day + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}]}`))
+			buckets := `{"time":"` + day + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmInput.Load(), 10) +
+				`,"output":0,"cached":0,"thoughts":` + strconv.FormatInt(llmThoughts.Load(), 10) + `}}`
+			if llmPeriod == "30d" {
+				old := time.Now().UTC().AddDate(0, 0, -10).Format("2006-01-02")
+				buckets += `,{"time":"` + old + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmOldInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}`
+			}
+			_, _ = w.Write([]byte(`{"buckets":[` + buckets + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/operations"):
 			// Pending and processing are reported separately, like Hindsight;
 			// only pending drains as it is polled.

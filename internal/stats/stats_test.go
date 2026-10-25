@@ -99,3 +99,106 @@ func TestPercentile(t *testing.T) {
 		t.Errorf("%d %d", Percentile(xs, 50), Percentile(xs, 95))
 	}
 }
+
+func write(t *testing.T, dir, month, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "events-"+month+".jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// [from, to): an event exactly at `to` is out; lines out of order come back
+// sorted; a line over 1 MiB is skipped, not fatal; December → January.
+func TestLoadEdgesOrderLongLinesAndYearRollover(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "2026-12", `{"ts":"2026-12-31T23:00:00.000Z","event":"gate","decision":"b"}
+{"ts":"2026-12-31T22:00:00.000Z","event":"gate","decision":"a"}
+{"ts":"2026-12-31T21:00:00.000Z","event":"gate","decision":"`+strings.Repeat("x", 2<<20)+`"}
+`)
+	write(t, dir, "2027-01", `{"ts":"2027-01-01T01:00:00.000Z","event":"gate","decision":"c"}
+{"ts":"2027-01-01T02:00:00.000Z","event":"gate","decision":"at-to"}`) // no final newline
+	from, to := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 2, 0, 0, 0, time.UTC)
+	ev, err := Load(dir, from, to)
+	var got []string
+	for _, e := range ev {
+		got = append(got, e.Decision)
+	}
+	if err != nil || strings.Join(got, ",") != "a,b,c" {
+		t.Errorf("%v %v", got, err)
+	}
+	ev, _ = Load(dir, from, to.Add(time.Second))
+	if len(ev) != 4 || ev[3].Decision != "at-to" {
+		t.Errorf("a last line without newline: %d events", len(ev))
+	}
+}
+
+func TestComputeBranches(t *testing.T) {
+	t0 := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	cr := func(s string) *string { return &s }
+	rule := cr("rule")
+	ev := []Event{
+		// a memory returned before its briefing is not briefing use
+		{TS: at(0), Event: "tool_use", Session: "s1", Name: "x__memory_search", N: 0, MemoryIDs: []string{"b1"}},
+		{TS: at(1), Event: "briefing", Session: "s1", IDs: []string{"b1"}, Source: "observations"},
+		{TS: at(1), Event: "briefing", Session: "s2", Source: "empty"},
+		// silent and free replies after a search; a reply without a search,
+		// or after a store only, is ignored; a turn's second reply (a
+		// machine message) keeps the best credit, once
+		{TS: at(2), Event: "tool_use", Session: "s1", Name: "x__memory_read", N: 1},
+		{TS: at(2), Event: "reply", Session: "s1", N: 1, Searched: true},
+		{TS: at(3), Event: "tool_use", Session: "s1", Name: "x__memory_search", N: 2},
+		{TS: at(3), Event: "reply", Session: "s1", N: 2, Searched: true, Credit: "free"},
+		{TS: at(3), Event: "reply", Session: "s1", N: 2, Searched: true},
+		{TS: at(3), Event: "reply", Session: "s1", N: 3, Searched: true, Credit: "exact"},
+		{TS: at(3), Event: "tool_use", Session: "s4", Name: "x__memory_store", N: 1},
+		{TS: at(3), Event: "reply", Session: "s4", N: 1, Searched: true, Credit: "exact"},
+		// outcomes: free counts as credited, empty does not; a recall that
+		// injected nothing is no injection; searched follows the turn's tools
+		{TS: at(4), Event: "outcome", Session: "s1", N: 1, IDs: []string{"m"}, Credited: cr("free")},
+		{TS: at(4), Event: "outcome", Session: "s1", N: 3, IDs: []string{"m"}, Credited: cr("empty"), Searched: true},
+		{TS: at(4), Event: "outcome", Session: "s1", N: 4, Credited: cr("exact")},
+		// detector: a store in another session, or two turns later, is no follow-up
+		{TS: at(5), Event: "prompt", Session: "s1", N: 5, Decision: "skip", Plen: 80, Detector: rule},
+		{TS: at(6), Event: "tool_use", Session: "s2", Name: "x__memory_store", N: 5},
+		{TS: at(7), Event: "tool_use", Session: "s1", Name: "x__memory_store", N: 7},
+		// a subagent's search on a long turn does not make it searched
+		{TS: at(8), Event: "prompt", Session: "s3", N: 1, Decision: "skip", Plen: 80},
+		{TS: at(8), Event: "tool_use", Session: "s3", Name: "x__memory_search", N: 1, Subagent: true},
+		// unknown records sum over events
+		{TS: at(9), Event: "transcript_unknown", Types: map[string]int{"k": 2}},
+		{TS: at(9), Event: "transcript_unknown", Types: map[string]int{"k": 3}},
+	}
+	r := Compute(ev, t0, at(60))
+	if r.Briefings.N != 2 || r.Briefings.Empty != 1 || r.Briefings.Used != 0 {
+		t.Errorf("briefings %+v", r.Briefings)
+	}
+	if r.Turns.Credit["silent"] != 1 || r.Turns.Credit["free"] != 1 || r.Turns.Credit["exact"] != 0 || len(r.Turns.Credit) != 2 {
+		t.Errorf("credit %+v", r.Turns.Credit)
+	}
+	if r.Injections.N != 2 || r.Injections.Credited != 1 || r.Injections.Searched != 1 {
+		t.Errorf("injections %+v", r.Injections)
+	}
+	if r.Detector.Fired != 1 || r.Detector.Saved != 0 {
+		t.Errorf("detector %+v", r.Detector)
+	}
+	if r.Turns.Long != 2 || r.Turns.Searched != 0 {
+		t.Errorf("turns %+v", r.Turns)
+	}
+	if r.Unknown["k"] != 5 {
+		t.Errorf("unknown %+v", r.Unknown)
+	}
+}
+
+func TestPercentileOnTwentyValuesLeavesTheInput(t *testing.T) {
+	xs := make([]int, 20)
+	for i := range xs {
+		xs[i] = 20 - i // 20 … 1
+	}
+	if p := Percentile(xs, 95); p != 19 {
+		t.Errorf("p95 of 1..20 = %d, want 19", p)
+	}
+	if xs[0] != 20 {
+		t.Error("the input was sorted in place")
+	}
+}

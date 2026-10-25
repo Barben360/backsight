@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -14,7 +18,8 @@ func TestStatsReportsTelemetryAndExtraction(t *testing.T) {
 	llmInput.Store(2_000_000)
 	tw := telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"})
 	tw.Emit(telemetry.Prompt{N: 1, Decision: "recall", Plen: 80, MS: 1200, Injected: 1, Scopes: map[string]telemetry.ScopeResult{"project": {OK: true}}})
-	tw.Emit(telemetry.Outcome{N: 1, Searched: true})
+	tw.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": "mcp__plugin_backsight_memory__memory_search", "n": 1}})
+	tw.Emit(telemetry.Outcome{N: 1, IDs: []string{"m1"}, Searched: true})
 	code, out, _ := run(t, "stats", "3")
 	if code != output.OK || !strings.Contains(out, "last 3 day(s)") || !strings.Contains(out, "1 typed") || !strings.Contains(out, "p50 1200 ms") ||
 		!strings.Contains(out, "followed by a search 100%") || !strings.Contains(out, "2000000 input") {
@@ -32,5 +37,101 @@ func TestStatsReportsTelemetryAndExtraction(t *testing.T) {
 	statsDown.Store(true)
 	if code, out, _ := run(t, "stats"); code != output.OK || !strings.Contains(out, "Extraction   unavailable") || !strings.Contains(out, "1 typed") {
 		t.Errorf("server down: exit %d\n%s", code, out)
+	}
+}
+
+// The window applies to local telemetry and to the server's daily buckets
+// (asked for 30d, the only long period Hindsight knows); thoughts are billed
+// as output; 1 and 365 are accepted.
+func TestStatsWindowPeriodAndCost(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	llmInput.Store(2_000_000)
+	llmThoughts.Store(1_000_000)
+	llmOldInput.Store(5_000_000) // 10 days ago
+	old := time.Now().Add(-5 * 24 * time.Hour).UTC()
+	dir := pathsOf(home).TelemetryDir()
+	_ = os.MkdirAll(dir, 0o700)
+	line := `{"ts":"` + old.Format("2006-01-02T15:04:05.000Z") + `","event":"prompt","decision":"recall","plen":80,"ms":700,"session":"old"}` + "\n"
+	_ = os.WriteFile(filepath.Join(dir, "events-"+old.Format("2006-01")+".jsonl"), []byte(line), 0o600)
+	if _, out, _ := run(t, "stats", "3"); !strings.Contains(out, "0 typed") || llmPeriod != "30d" || !strings.Contains(out, "2000000 input") {
+		t.Errorf("3 days: period %q\n%s", llmPeriod, out)
+	}
+	_, out, _ := run(t, "stats", "7")
+	if !strings.Contains(out, "1 typed") || !strings.Contains(out, "2000000 input") || !strings.Contains(out, "1000000 output tokens: 0.56 USD") {
+		t.Errorf("7 days:\n%s", out)
+	}
+	// the day 10 days ago is in a 14-day window, not in a 7-day one
+	if _, out, _ := run(t, "stats", "14"); !strings.Contains(out, "7000000 input") || strings.Contains(out, "server keeps no more") {
+		t.Errorf("14 days:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "90"); !strings.Contains(out, "7000000 input") || !strings.Contains(out, "last 30 days: the server keeps no more") {
+		t.Errorf("90 days:\n%s", out)
+	}
+	for _, ok := range []string{"1", "365"} {
+		if code, _, _ := run(t, "stats", ok); code != output.OK {
+			t.Errorf("stats %s: exit %d", ok, code)
+		}
+	}
+}
+
+// Producers to reader: what the hooks, the flush and the tick write is what
+// stats counts (a renamed field on either side fails here).
+func TestStatsReadsWhatTheProducersWrite(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = "[]"
+	withClock(t, time.Now().Add(-3*time.Hour))
+	run(t, "jobs", "tick") // retain_since
+	withClock(t, time.Now())
+	search := func(sid, agent string) {
+		in := map[string]any{"session_id": sid, "tool_name": "mcp__plugin_backsight_memory__memory_search",
+			"tool_response": "[billing] fact (2d ago, 0b4c2a52-0000-4000-8000-000000000001)"}
+		if agent != "" {
+			in["agent_id"] = agent
+		}
+		fire(t, "post-tool-use", in)
+	}
+	prompt(t, home, "s1", longPrompt)
+	search("s1", "")
+	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."})
+	prompt(t, home, "s1", longPrompt+" And the replica?")
+	search("s1", "") // turn 2
+	prompt(t, home, "s2", longPrompt)
+	search("s2", "agent-1") // a subagent's: s2 stays unsearched
+	credit := "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."
+	fire(t, "stop", map[string]any{"session_id": "s2", "last_assistant_message": credit}) // only a subagent searched
+	prompt(t, home, "s1", "A third question, not searched, about the billing replica lag.")
+	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": credit}) // the search was turns ago
+	fire(t, "stop", map[string]any{"session_id": "s9", "last_assistant_message": "no prompt was seen"})
+	writeTranscript(t, home, "settled", time.Now().Add(-2*time.Hour))
+	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", "settled.jsonl")
+	f, _ := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.WriteString(`{"type":"brand-new-kind","uuid":"z"}` + "\n")
+	_ = f.Close()
+	writeTranscript(t, home, "fresh", time.Now().Add(-time.Minute)) // waiting: read, not counted
+	f, _ = os.OpenFile(filepath.Join(home, ".claude", "projects", "-home-u-billing", "fresh.jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.WriteString(`{"type":"other-new-kind","uuid":"w"}` + "\n")
+	_ = f.Close()
+	_, _ = notesOutbox(pathsOf(home)).Append(newTestNote())
+	run(t, "jobs", "tick")
+	run(t, "jobs", "tick")                    // a second read of the waiting session counts nothing either
+	withClock(t, time.Now().Add(time.Minute)) // the window ends after the events
+	_, out, _ := run(t, "stats", "1", "--json")
+	var env struct {
+		Data statsResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	r := env.Data
+	if r.Turns.Long != 4 || r.Turns.Searched != 2 || r.Turns.Credit["exact"] != 1 || len(r.Turns.Credit) != 1 {
+		t.Errorf("turns %+v", r.Turns)
+	}
+	if r.Unknown["brand-new-kind"] != 1 || r.Unknown["other-new-kind"] != 0 || r.Retains["ok"] == 0 {
+		t.Errorf("unknown %+v retains %+v", r.Unknown, r.Retains)
+	}
+	tel := telemetryText(t, home)
+	if strings.Count(tel, `"event":"reply"`) != 3 || !strings.Contains(tel, `"notes_sent":1`) || !strings.Contains(tel, `"subagent":true`) {
+		t.Errorf("telemetry:\n%s", tel)
 	}
 }

@@ -188,3 +188,19 @@ func TestToolUsesAreKept(t *testing.T) {
 		t.Errorf("%+v", tu)
 	}
 }
+
+// Only types outside Known are unknown lines, each with the offset after it.
+func TestUnknownLinesAndTheCursor(t *testing.T) {
+	in := `{"type":"ai-title"}` + "\n" + `{"type":"new-a"}` + "\n" + `{"type":"user","uuid":"u","message":{"role":"user","content":"hi"}}` + "\n" + `{"type":"new-b"}` + "\n"
+	_, st, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(st.UnknownLines) != 2 {
+		t.Fatalf("%+v %v", st.UnknownLines, err)
+	}
+	mid := st.UnknownLines[0].End
+	if got := st.UnknownBefore(mid); got["new-a"] != 1 || got["new-b"] != 0 {
+		t.Errorf("before %d: %v", mid, got)
+	}
+	if got := st.UnknownBefore(st.Consumed); got["new-a"] != 1 || got["new-b"] != 1 || got["ai-title"] != 0 {
+		t.Errorf("all: %v", got)
+	}
+}

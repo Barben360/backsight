@@ -18,6 +18,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -119,7 +120,11 @@ func Run(ctx context.Context, env Env) Report {
 	if env.Now != nil {
 		now = env.Now
 	}
-	add(checkUsage(env.Dirs.TelemetryDir(), now())...)
+	writeOff := false
+	if cfg, err := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home); err == nil {
+		writeOff = !cfg.Components.Write
+	}
+	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	return r
 }
 
