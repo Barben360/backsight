@@ -69,6 +69,9 @@ type Flusher struct {
 	Now         func() time.Time
 	RetainSince time.Time // zero: no boundary
 	Index       *SentIndex
+	// Hold: the bank's restore epoch could not be reconciled (Reconcile):
+	// nothing is sent until a later run reconciles (decision 0044).
+	Hold string
 }
 
 // Options change the timing rules for explicit flushes.
@@ -108,6 +111,10 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return fail(Maintenance, "maintenance in progress")
+	}
+	if f.Hold != "" {
+		res.Stop = true // every session waits for the same reconcile
+		return fail(Retry, f.Hold)
 	}
 	unlock, err := f.lockSession(sid)
 	if err != nil {

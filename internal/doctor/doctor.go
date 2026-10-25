@@ -112,9 +112,13 @@ func Run(ctx context.Context, env Env) Report {
 		add(checkUntagged(ctx, cl, tg.Bank))
 		if tg.Source == "config" {
 			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs))
+			add(checkEpoch(ctx, cl, tg.Bank, env.Dirs))
 		}
 	} else {
 		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
+		if tg != nil && tg.Source == "config" {
+			add(Check{ID: "restore-epoch", Status: Info, Summary: "skipped: " + skipReason(srv)})
+		}
 	}
 	add(checkMaintenance(env.Dirs))
 	add(checkLocks(env.Dirs))
@@ -288,6 +292,36 @@ func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d p
 	if st, err := state.Load(d.StateFile()); err == nil && st.BankConfigHash != server.TemplateHash() {
 		c.Status, c.Summary = Warn, "this backsight's bank template was not applied yet"
 		c.Fix = "backsight bank apply"
+	}
+	return c
+}
+
+// checkEpoch reports a client still on an old restore epoch (decision
+// 0044): its cursors may hold as sent what the restore lost, until a flush
+// reconciles them.
+func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
+	c := Check{ID: "restore-epoch"}
+	ep, err := retain.ReadEpoch(ctx, cl, bank)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Info, "cannot read the bank's restore epoch", err.Error()
+		return c
+	}
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "cannot read the client's restore epoch", err.Error()
+		return c
+	}
+	switch local := st.EpochOf(bank); {
+	case local == ep.Epoch:
+		c.Status, c.Summary = OK, fmt.Sprintf("client on the bank's restore epoch %d", ep.Epoch)
+	case local < ep.Epoch:
+		c.Status = Warn
+		c.Summary = fmt.Sprintf("client on an old restore epoch (%d; the bank was restored to epoch %d on %s UTC)", local, ep.Epoch, ep.RestoredAt.UTC().Format("2006-01-02 15:04"))
+		c.Detail = "what this machine sent after the backup of " + ep.BackupCreatedAt.UTC().Format("2006-01-02 15:04") + " UTC is missing from the server until it reconciles"
+		c.Fix = "backsight jobs tick"
+	default:
+		c.Status, c.Summary = Warn, fmt.Sprintf("client on restore epoch %d, the bank on %d", local, ep.Epoch)
+		c.Fix = "backsight jobs tick"
 	}
 	return c
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,6 +124,21 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 type flushReport struct {
 	Results []retain.Result `json:"results"`
 	Counts  map[string]int  `json:"counts"`
+	Epoch   string          `json:"epoch,omitempty"`
+}
+
+// reconcile brings the cursors to the bank's restore epoch before any flush
+// (decision 0044); when it cannot, the flusher holds every session until a
+// later run. It returns a line for the report, "" when nothing changed.
+func reconcile(ctx context.Context, f *retain.Flusher) string {
+	rec, err := f.Reconcile(ctx)
+	switch {
+	case err != nil:
+		return "held: " + err.Error()
+	case rec.From == rec.To:
+		return ""
+	}
+	return fmt.Sprintf("restore epoch %d -> %d: %d session(s) resume from the server", rec.From, rec.To, len(rec.Resend))
 }
 
 func reportFlush(results []retain.Result) (flushReport, error) {
@@ -164,6 +180,9 @@ func flushText(rep flushReport) string {
 	if len(parts) == 0 {
 		parts = []string{"no transcript"}
 	}
+	if rep.Epoch != "" {
+		parts = append(parts, rep.Epoch)
+	}
 	b.WriteString(strings.Join(parts, ", ") + "\n")
 	return b.String()
 }
@@ -201,7 +220,9 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 				}
 				files, opt.IgnoreSince = match, true
 			}
+			epoch := reconcile(cmd.Context(), f)
 			rep, failed := reportFlush(flushAll(cmd, f, files, opt, d))
+			rep.Epoch = epoch
 			return e.report("retain flush", rep, func() string { return flushText(rep) }, failed)
 		},
 	}

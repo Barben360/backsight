@@ -35,6 +35,9 @@ type State struct {
 	Client      *Client    `json:"client,omitempty"`
 	// Scheduler: the OS entries `jobs install` wrote (decision 0025).
 	Scheduler *Scheduler `json:"scheduler,omitempty"`
+	// RestoreEpoch: the bank's restore epoch the cursors were last
+	// reconciled with (decision 0044).
+	RestoreEpoch *RestoreEpoch `json:"restore_epoch,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -97,6 +100,22 @@ type Scheduler struct {
 	Kind        string    `json:"kind"` // systemd | launchd | schtasks
 	Files       []string  `json:"files,omitempty"`
 	InstalledAt time.Time `json:"installed_at"`
+}
+
+// RestoreEpoch is the bank restore epoch this client reconciled with.
+type RestoreEpoch struct {
+	Bank         string    `json:"bank"`
+	Epoch        int       `json:"epoch"`
+	ReconciledAt time.Time `json:"reconciled_at"`
+}
+
+// EpochOf is the restore epoch recorded for bank: 0 when none was (every
+// install before M5, or another bank).
+func (s State) EpochOf(bank string) int {
+	if s.RestoreEpoch == nil || s.RestoreEpoch.Bank != bank {
+		return 0
+	}
+	return s.RestoreEpoch.Epoch
 }
 
 // Client remembers Claude Code settings as they were before backsight first

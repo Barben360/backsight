@@ -35,6 +35,30 @@ func TestJobsTickSendsSettledSessionsAndNotes(t *testing.T) {
 	}
 }
 
+// A tick that cannot read the bank's restore epoch sends no session (a
+// stale cursor would bake a restore's loss in); the next tick does.
+func TestJobsTickHoldsSessionsWhileTheEpochIsUnreadable(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	epochStatus.Store(500)
+	before := retained.Load()
+	if code, out, _ := run(t, "jobs", "tick"); code != output.Partial || !strings.Contains(out, "held: ") || retained.Load() != before {
+		t.Fatalf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	epochStatus.Store(0)
+	epochDoc = `{"epoch":"2","restored_at":"2026-10-24T09:50:00Z","backup_created_at":"2026-10-24T03:00:00Z"}`
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:1") || !strings.Contains(out, "restore epoch 0 -> 2") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.RestoreEpoch == nil || st.RestoreEpoch.Epoch != 2 {
+		t.Errorf("epoch not recorded: %+v", st.RestoreEpoch)
+	}
+}
+
 func TestJobsTickSkipsWhenAnotherRuns(t *testing.T) {
 	home := devInstall(t, true)
 	l, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "job-tick.lock"), "jobs tick")

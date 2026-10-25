@@ -33,6 +33,8 @@ type fakeHS struct {
 	hidden  bool // new documents not readable yet (their first async retain still running)
 	gets    int  // document reads
 	seenOps map[string]bool
+	// epochStatus non-zero: reads of the restore epoch answer with it.
+	epochStatus int
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +76,10 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
 		h.gets++
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
+		if id == EpochDocument && h.epochStatus != 0 {
+			w.WriteHeader(h.epochStatus)
+			return
+		}
 		meta, ok := h.docs[id]
 		if !ok || h.hidden {
 			w.WriteHeader(http.StatusNotFound)

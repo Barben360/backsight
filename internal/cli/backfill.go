@@ -87,6 +87,11 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !fl.plan && !fl.queue {
+				if reconcile(cmd.Context(), f); f.Hold != "" {
+					return &output.Error{Code: output.Partial, Message: f.Hold + "; rerun backsight retain backfill"}
+				}
+			}
 			prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 			files := transcripts(home)
 			if fl.dir != "" {

@@ -193,6 +193,8 @@ var (
 	mentalGetDelay     time.Duration     // a slow page read
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
+	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
+	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
@@ -230,6 +232,8 @@ func fakeHindsight(t *testing.T) (port int) {
 	mentalModels, mentalCalls, mentalGetDelay = map[string]string{}, nil, 0
 	mentalCreateStatus.Store(0)
 	docDeleteFails.Store(false)
+	epochDoc = ""
+	epochStatus.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	var mu sync.Mutex
 	banks := map[string]bool{}
@@ -421,6 +425,14 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
 			id := r.URL.Path[strings.Index(r.URL.Path, "/documents/")+len("/documents/"):]
+			if id == "backsight:epoch" && epochStatus.Load() != 0 {
+				w.WriteHeader(int(epochStatus.Load()))
+				return
+			}
+			if id == "backsight:epoch" && epochDoc != "" {
+				_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + epochDoc + `}`))
+				return
+			}
 			if n, ok := documentUnits[id]; ok {
 				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `}`))
 				return

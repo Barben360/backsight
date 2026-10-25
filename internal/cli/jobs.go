@@ -36,6 +36,7 @@ type tickResult struct {
 	Notes    retain.FlushResult `json:"notes"`
 	Backfill string             `json:"backfill,omitempty"`
 	Index    string             `json:"index,omitempty"` // entity index: rebuilt | failed: <why>
+	Epoch    string             `json:"epoch,omitempty"` // restore epoch reconcile (decision 0044)
 	Pruned   []string           `json:"briefings_pruned,omitempty"`
 	MS       int                `json:"ms"`
 }
@@ -60,7 +61,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -95,12 +96,13 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				pruneSessions(d)
 				return finish(nil)
 			}
+			res.Epoch = reconcile(cmd.Context(), f)
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
 			if n, err := dropSettled(d); err == nil && n > 0 {
 				res.Backfill = fmt.Sprintf("%d queued session(s) had nothing left to send", n)
 			}
-			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" &&
+			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" && f.Hold == "" &&
 				(cfg.LLM.Provider != "claude-code" || st.Backfill.AllowSubscription) {
 				prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 				if release, err := acquireBackfill(d); err != nil {
@@ -136,6 +138,9 @@ func tickText(r tickResult) string {
 	msg := fmt.Sprintf("%s: sessions %v, notes sent %d, queued %d (%d ms)", r.Status, r.Sessions, r.Notes.Sent, r.Notes.Kept, r.MS)
 	if r.Backfill != "" {
 		msg += ", backfill " + r.Backfill
+	}
+	if r.Epoch != "" {
+		msg += ", " + r.Epoch
 	}
 	return msg + "\n"
 }

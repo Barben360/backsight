@@ -256,6 +256,37 @@ func (s *SentIndex) Add(uuids ...string) error {
 	return f.Close()
 }
 
+// Remove drops uuids from the index: a restore lost what they marked as
+// sent (decision 0044). The file is rewritten from disk, so entries another
+// flusher appended since this index was loaded are kept.
+func (s *SentIndex) Remove(uuids ...string) error {
+	drop := map[uint64]bool{}
+	for _, u := range uuids {
+		drop[uuidKey(u)] = true
+	}
+	if len(drop) == 0 {
+		return nil
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	kept := make([]byte, 0, len(raw))
+	for i := 0; i+8 <= len(raw); i += 8 {
+		if k := binary.BigEndian.Uint64(raw[i:]); !drop[k] {
+			kept = append(kept, raw[i:i+8]...)
+			s.set[k] = true
+		}
+	}
+	if err := fsutil.WriteAtomic(s.path, kept, 0o600); err != nil {
+		return err
+	}
+	for k := range drop {
+		delete(s.set, k)
+	}
+	return nil
+}
+
 // MachineID is a random id created once in dir/machine_id.
 func MachineID(dir string) (string, error) {
 	p := filepath.Join(dir, "machine_id")

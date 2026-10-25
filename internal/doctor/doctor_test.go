@@ -624,3 +624,31 @@ func TestCheckBankConfigDrift(t *testing.T) {
 		}
 	}
 }
+
+// A client behind the bank's restore epoch warns with the fix (its cursors
+// may hold as sent what the restore lost); on the same epoch it is ok, and
+// an unreachable server skips the check.
+func TestCheckRestoreEpoch(t *testing.T) {
+	epochPath := "/v1/default/banks/coding-agent%3A%3Amemoire/documents/backsight%3Aepoch"
+	srv := fakeServerWith(t, map[string]reply{epochPath: {200, `{"id":"backsight:epoch","document_metadata":{"epoch":"2","restored_at":"2026-10-25T10:00:00Z","backup_created_at":"2026-10-25T03:00:00Z"}}`}})
+	f := newFixture(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	c := check(t, f.run(), "restore-epoch")
+	if c.Status != Warn || !strings.Contains(c.Summary, "client on an old restore epoch") || !strings.Contains(c.Summary, "epoch 2") || c.Fix != "backsight jobs tick" {
+		t.Errorf("behind: %+v", c)
+	}
+	if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+		RestoreEpoch: &state.RestoreEpoch{Bank: "coding-agent::memoire", Epoch: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, check(t, f.run(), "restore-epoch"), OK, "epoch 2")
+
+	g := newFixture(t) // no epoch document: epoch 0, which a new client is on
+	put(t, g.env.Dirs.ConfigFile(), "[server]\nurl = \""+fakeServer(t).URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, g.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	expect(t, check(t, g.run(), "restore-epoch"), OK, "epoch 0")
+
+	put(t, g.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	expect(t, check(t, g.run(), "restore-epoch"), Info, "skipped")
+}
