@@ -26,7 +26,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 |---|---|
 | `backsight setup` | Sets up everything: server, bank, Claude Code wiring, jobs, verify, backfill offer. Flags: `--plan`, `--questions` (list the questions), `--answer`, `--answers-file`, `--non-interactive`, `--resume`, `--config-dir <dir>` (another Claude Code profile). |
 | `backsight setup --undo` | Reverses setup; keeps config, secrets and the memory. `--plan`; `--force` restores files edited since. |
-| `backsight verify` | Runs every hook and the memory tools as Claude Code would, then a store-and-recall round trip in a scratch bank. `--no-round-trip` skips the round trip (no LLM call); `--config-dir <dir>`. |
+| `backsight verify` | Runs every hook and the memory tools as Claude Code would, then a store-and-recall round trip in a scratch bank. `--no-round-trip` skips the round trip (no LLM call); `--config-dir <dir>`. `--live` checks the real pipeline instead, read-only: this machine's latest settled session reached the server and an observation was consolidated from it (exit 0 pass, 40 not yet, 20 failed with a fix). |
 | `backsight client install` | Wires Claude Code: the plugin and its permission rule. `--plan`. |
 | `backsight client retention` | Keeps Claude Code transcripts 3650 days; `--days N` sets another value, `--keep` stops managing it. `--plan`. |
 | `backsight client retire` | Unwires another Hindsight integration from Claude Code. `--plan`. |

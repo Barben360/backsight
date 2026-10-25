@@ -117,7 +117,7 @@ The XDG variables (`XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`) move th
 
 If Claude Code is already wired to a Hindsight server through another integration (the Hindsight npm plugin, Python hooks, a retro timer), setup detects it. Once backsight's own wiring passes `verify`, setup unwires the old pieces from Claude Code, keeping a copy of each file it edits. Your CLAUDE.md is never edited.
 
-The old server and its data are left running and untouched: stop it yourself once you no longer need it as a fallback. Your past sessions reach the new memory through backfill. `backsight setup --undo` puts the old wiring back.
+The old server and its data are left running and untouched: stop it yourself once you no longer need it as a fallback. Once `backsight backup verify` passed on backsight's newest backup within the last 7 days, doctor's `reference-server` line says the old server can be stopped and gives the command; stopping keeps its data. Your past sessions reach the new memory through backfill. `backsight setup --undo` puts the old wiring back.
 
 ## Undo setup
 
