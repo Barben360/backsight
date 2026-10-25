@@ -293,7 +293,7 @@ func TestUninstallDeletesDataOnlyWithTheBankID(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("right id: exit %d\n%s", code, out)
 	}
-	if got := m.dk.subcommands(); !reflect.DeepEqual(got, []string{"down --volumes --remove-orphans"}) {
+	if got := m.dk.subcommands(); !reflect.DeepEqual(got, []string{"down --remove-orphans"}) {
 		t.Errorf("compose: %q", got)
 	}
 	for _, f := range []string{"compose.yaml", ".env"} {
@@ -329,7 +329,7 @@ func TestUninstallAsksForTheBankIDAtATerminal(t *testing.T) {
 	}
 	// The id, then Enter for the retention question (keep).
 	atTerminal(t, "claude-memory\n\n")
-	if code, out, errOut := run(t, "uninstall", "--delete-data"); code != output.OK || !reflect.DeepEqual(m.dk.subcommands(), []string{"down --volumes --remove-orphans"}) {
+	if code, out, errOut := run(t, "uninstall", "--delete-data"); code != output.OK || !reflect.DeepEqual(m.dk.subcommands(), []string{"down --remove-orphans"}) {
 		t.Fatalf("typed: exit %d %q\n%s%s", code, m.dk.subcommands(), out, errOut)
 	}
 	if !strings.Contains(readFile(t, m.settings), "3650") {

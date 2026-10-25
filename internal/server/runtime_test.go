@@ -102,12 +102,35 @@ func TestDockerEngine(t *testing.T) {
 	}
 }
 
-// Delete takes the project down with its volumes, then removes the files
-// Render wrote; a user's override stays. A failed down removes nothing.
+// scriptedRunner answers each docker command by its first words.
+type scriptedRunner struct {
+	calls   [][]string
+	answers map[string]struct {
+		out string
+		err error
+	}
+}
+
+func (r *scriptedRunner) Run(_ context.Context, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, args)
+	line := strings.Join(args, " ")
+	for prefix, a := range r.answers {
+		if strings.HasPrefix(line, prefix) {
+			return []byte(a.out), a.err
+		}
+	}
+	return nil, nil
+}
+
+// Delete takes the project down without its volumes, then removes the
+// data volume alone and the files Render wrote: a volume the user's
+// override declares stays, and so does the override. A failed down
+// removes nothing.
 func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 	dir := t.TempDir()
-	for _, f := range []string{"compose.yaml", ".env", "compose.override.yaml"} {
-		if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o600); err != nil {
+	for f, content := range map[string]string{"compose.yaml": "x\n", ".env": "x\n",
+		"compose.override.yaml": "services:\n  hindsight:\n    volumes:\n      - models:/models\nvolumes:\n  models:\n"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -115,21 +138,62 @@ func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 	if err := (Docker{Compose: Compose{Dir: dir, Runner: failing}}).Delete(context.Background()); err == nil || !strings.Contains(err.Error(), "Cannot connect") {
 		t.Fatalf("a failed down: %v", err)
 	}
+	if len(failing.calls) != 1 {
+		t.Errorf("went on after a failed down: %q", failing.calls)
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".env")); err != nil {
 		t.Fatal("a failed down removed the files")
 	}
-	r := &fakeRunner{}
-	if err := (Docker{Compose: Compose{Dir: dir, Runner: r}}).Delete(context.Background()); err != nil {
+	r := &scriptedRunner{}
+	if err := (Docker{Compose: Compose{Dir: dir, Runner: r, Project: "p1"}}).Delete(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.calls[0][len(r.calls[0])-3:]; !reflect.DeepEqual(got, []string{"down", "--volumes", "--remove-orphans"}) {
-		t.Errorf("down: %q", r.calls[0])
+	base := []string{"compose", "-p", "p1", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml")}
+	want := [][]string{append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Errorf("docker ran\n%q\nwant\n%q", r.calls, want)
 	}
 	for f, want := range map[string]bool{"compose.yaml": false, ".env": false, "compose.override.yaml": true} {
 		if _, err := os.Stat(filepath.Join(dir, f)); (err == nil) != want {
 			t.Errorf("%s present: %v, want %v", f, err == nil, want)
 		}
 	}
+}
+
+// A data volume already gone is what Delete wants; any other failure to
+// remove it is an error, and the files stay for a rerun.
+func TestDockerDeleteDataVolumeRemoval(t *testing.T) {
+	for _, c := range []struct {
+		name, out string
+		wantErr   bool
+	}{
+		{"already gone", "Error response from daemon: get p1_pg_data: no such volume", false},
+		{"in use", "Error response from daemon: remove p1_pg_data: volume is in use - [abc]", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range []string{"compose.yaml", ".env"} {
+				if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := &scriptedRunner{answers: map[string]struct {
+				out string
+				err error
+			}{"volume rm": {c.out, errors.New("exit status 1")}}}
+			err := (Docker{Compose: Compose{Dir: dir, Runner: r, Project: "p1"}}).Delete(context.Background())
+			if (err != nil) != c.wantErr || (err != nil && !strings.Contains(err.Error(), "in use")) {
+				t.Fatalf("err %v, want error %v", err, c.wantErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, ".env")); (statErr == nil) != c.wantErr {
+				t.Errorf(".env present %v after %v", statErr == nil, err)
+			}
+		})
+	}
+}
+
+func TestDockerStopCmd(t *testing.T) {
+	dir := t.TempDir()
 	if cmd := (Docker{Compose: Compose{Dir: dir, Project: "p1"}}).StopCmd(); !strings.Contains(cmd, "docker compose -p p1 ") || !strings.HasSuffix(cmd, " stop") {
 		t.Errorf("stop by hand: %q", cmd)
 	}

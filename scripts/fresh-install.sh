@@ -241,6 +241,8 @@ jq -e --arg backups "$backups_dir" '.ok and .data.server == "delete-data"
     and any(.data.kept[]; contains($backups))' "$work/uninstall.json" >/dev/null ||
   { jq -c '.ok, .data.server, [.data.steps[] | {name, status}], .data.kept' "$work/uninstall.json" >&2; fail "uninstall.json: want ok, server delete-data, every step done, the backups kept"; }
 if docker volume inspect "$volume" >/dev/null 2>&1; then fail "the database volume $volume survived --delete-data"; fi
+# --delete-data removes the database volume only; this run's model cache goes here.
+docker volume rm "${volume%_pg_data}_hf_cache" >/dev/null 2>&1 || true
 if plugin_wired; then fail "the plugin survived uninstall"; fi
 if rule_wired; then fail "uninstall left the mcp__plugin_backsight permission rule"; fi
 [ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "uninstall left settings.json changed"; }

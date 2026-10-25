@@ -172,6 +172,16 @@ func (c Compose) VolumeExists(ctx context.Context) (bool, error) {
 	return false, fmt.Errorf("docker volume inspect %s: %w: %s", c.DataVolume(), err, strings.TrimSpace(string(out)))
 }
 
+// RemoveDataVolume deletes the project's database volume; one already
+// gone is not an error.
+func (c Compose) RemoveDataVolume(ctx context.Context) error {
+	out, err := c.Runner.Run(ctx, "volume", "rm", c.DataVolume())
+	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no such volume") {
+		return fmt.Errorf("docker volume rm %s: %w: %s", c.DataVolume(), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Logs returns the last n lines of service's log.
 func (c Compose) Logs(ctx context.Context, service string, n int) (string, error) {
 	out, err := c.run(ctx, "logs", "--no-color", "--tail", strconv.Itoa(n), service)

@@ -54,7 +54,8 @@ type Runtime interface {
 	// StopCmd is how a user stops it by hand, once backsight is gone.
 	StopCmd() string
 	// Delete removes the server with its data (services, database) and
-	// the files Write installed; a user's own files beside them stay.
+	// the files Write installed; a user's own files and volumes beside them
+	// stay.
 	// Backups are not the runtime's and are never touched.
 	Delete(ctx context.Context) error
 	// Status lists the server's services and their state; none when it
@@ -188,10 +189,16 @@ func (d Docker) StopCmd() string {
 	return strings.Join(words, " ")
 }
 
-// Delete runs compose down with the volumes, then removes compose.yaml and
-// .env; compose.override.yaml is the user's.
+// Delete runs compose down without the volumes, removes the database
+// volume alone, then compose.yaml and .env. A volume the user's
+// compose.override.yaml declares stays, and so does the override; the
+// model cache (hf_cache) is downloaded data, like the images (decision
+// 0067 block 3 review).
 func (d Docker) Delete(ctx context.Context) error {
-	if _, err := d.Compose.run(ctx, "down", "--volumes", "--remove-orphans"); err != nil {
+	if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
+		return err
+	}
+	if err := d.Compose.RemoveDataVolume(ctx); err != nil {
 		return err
 	}
 	for _, f := range []string{"compose.yaml", ".env"} {
