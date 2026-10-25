@@ -34,6 +34,34 @@ If the server rejects the API key, the key in `secrets.toml` and the server's `.
 
 `backsight why` shows what the hooks injected in the latest session, and why.
 
+## Slow recall and GPU acceleration
+
+doctor's `latency` check warns when the prompt hook's p95 is over 2.5 s across 7 days. On CPU, the reranker takes nearly all of a recall: it scores each candidate memory against your prompt. Computing the prompt's embedding is a small part.
+
+**What a GPU changes in this version: nothing by itself.** The server runs embeddings and the reranker on the CPU. setup and doctor's `gpu` check only report the GPUs they find, and backsight installs no GPU driver, CUDA or other GPU runtime. Managed GPU acceleration is planned for a later version. The pinned server image (Hindsight 1.1.0) ships CPU-only builds of PyTorch and ONNX Runtime, so Hindsight's device options (`HINDSIGHT_API_EMBEDDINGS_ONNX_DEVICE=cuda`, for one) fail in it, and its local reranker finds no GPU.
+
+Two ways to make recall faster, both in the server's `compose.override.yaml`, next to its `compose.yaml` (`~/.local/share/backsight/server` on Linux). backsight never writes that file, and backups include it.
+
+**Fewer rerank candidates.** backsight sets `HINDSIGHT_API_RERANKER_MAX_CANDIDATES=30`. Fewer is faster, at the risk of missing a useful memory:
+
+```yaml
+services:
+  hindsight:
+    environment:
+      HINDSIGHT_API_RERANKER_MAX_CANDIDATES: "20"
+```
+
+**Your own GPU reranker.** Run a reranking service on the GPU (as another service in `compose.override.yaml`, or on the host) and point Hindsight at it:
+
+- `HINDSIGHT_API_RERANKER_PROVIDER: tei` with `HINDSIGHT_API_RERANKER_TEI_URL` for a Text Embeddings Inference server;
+- or `HINDSIGHT_API_RERANKER_PROVIDER: cohere` with `HINDSIGHT_API_RERANKER_COHERE_BASE_URL` and `HINDSIGHT_API_RERANKER_COHERE_MODEL` for a server with a Cohere-compatible rerank API (set the model: Hindsight's default, `rerank-english-v3.0`, is English-only). Hindsight requires `HINDSIGHT_API_RERANKER_COHERE_API_KEY` to be set, even when your server ignores it.
+
+Serve a multilingual reranker, ideally the same `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`, so prompts in any language still rank (see [daily-use.md](daily-use.md)). The service, its drivers and its GPU runtime are yours to install and keep: backsight does not check or manage them, and doctor's `latency` check tells you whether it helped.
+
+Leave the embeddings as backsight sets them: the stored memories were embedded with `multilingual-e5-small`, and another model's vectors do not match them.
+
+After editing the override, `backsight server start` recreates the server with it.
+
 ## Sessions are not saved
 
 A session is sent when it ends, or by the 15-minute job once its last turn is 30 minutes old. `backsight retain flush` sends every unsent session now.

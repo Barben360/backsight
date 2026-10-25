@@ -32,6 +32,18 @@ project = "my-project"
 # retain = false   # never record sessions in this repository
 ```
 
+## The language memories are written in
+
+You can work in any language. Memories are always written **in English**:
+
+- The server's extraction is told to write every fact and observation in English, whatever the language of the session, keeping identifiers, file paths, commands, versions and your quoted wording exactly as written. `/backsight:remember` asks Claude for English facts too.
+- Claude still **answers in your language**: its memory guide tells it to.
+- Search works across languages. Your prompts are searched as you type them, not translated, and the embedding and reranker models are multilingual (`multilingual-e5-small` and `mmarco-mMiniLMv2-L12-H384-v1`), so a French prompt finds English memories.
+
+French sessions are read and extracted like English ones; only the facts that come out are in English. In tests on real French and English sessions, English facts were recalled as well as French ones, and one fact language keeps a single set of instructions to test.
+
+There is no language setting. `backsight server llm check` checks that the extraction model writes English facts.
+
 ## Skills
 
 The plugin adds four skills you can call in Claude Code:
