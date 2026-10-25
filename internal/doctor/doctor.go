@@ -141,6 +141,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	add(checkBackup(env, now()))
 	add(checkJobs(env.Dirs, now(), env.Linger))
+	add(checkUpdate(env.Dirs, buildinfo.Version, now()))
 	return r
 }
 

@@ -38,6 +38,9 @@ type State struct {
 	// RestoreEpoch: the bank's restore epoch the cursors were last
 	// reconciled with (decision 0044).
 	RestoreEpoch *RestoreEpoch `json:"restore_epoch,omitempty"`
+	// UpdateCheck: the last release check of `jobs maintain` or `update
+	// check` (SPEC §11.7), read by the SessionStart banner and doctor.
+	UpdateCheck *UpdateCheck `json:"update_check,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -100,6 +103,18 @@ type Scheduler struct {
 	Kind        string    `json:"kind"` // systemd | launchd | schtasks
 	Files       []string  `json:"files,omitempty"`
 	InstalledAt time.Time `json:"installed_at"`
+}
+
+// UpdateCheck is the outcome of the last release check. A failed check
+// sets Error and keeps the newest release the last good one found.
+type UpdateCheck struct {
+	CheckedAt time.Time `json:"checked_at"`
+	Source    string    `json:"source"`
+	Installed string    `json:"installed"`         // the binary that checked
+	Latest    string    `json:"latest,omitempty"`  // the newest release newer than Installed
+	Summary   string    `json:"summary,omitempty"` // Latest's one-line notes
+	Newer     int       `json:"newer,omitempty"`   // releases newer than Installed
+	Error     string    `json:"error,omitempty"`   // the check failed
 }
 
 // RestoreEpoch is the bank restore epoch this client reconciled with.

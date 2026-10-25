@@ -25,5 +25,6 @@ func TestMain(m *testing.M) {
 		os.Exit(Execute(args, os.Stdout, os.Stderr))
 	}
 	composeRunner = refuseDocker{}
+	githubAPI = "http://127.0.0.1:1" // closed: no test reaches GitHub
 	os.Exit(m.Run())
 }

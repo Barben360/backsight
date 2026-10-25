@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -28,16 +30,18 @@ type maintainResult struct {
 	Rotated []string `json:"telemetry_rotated,omitempty"`
 	Doctor  string   `json:"doctor,omitempty"` // snapshot: N error(s), M warning(s)
 	Backup  string   `json:"backup,omitempty"` // the archive written, or why none
+	Update  string   `json:"update,omitempty"` // up to date | <v> available | failed: why
 	MS      int      `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
-// a backup (when backup.enabled) and a doctor snapshot; the update check
-// comes once releases are public (0063 Q2).
+// a backup (when backup.enabled), the update check and a doctor snapshot.
+// A failed update check is recorded for doctor and never fails the job
+// (decision 0067: the repository stays private until M7).
 func newJobsMaintainCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "maintain",
-		Short: "Daily upkeep: telemetry rotation, doctor snapshot",
+		Short: "Daily upkeep: telemetry rotation, backup, update check, doctor snapshot",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
@@ -50,7 +54,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			finish := func() error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "maintain", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "reason": res.Reason}})
+					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "update": res.Update, "reason": res.Reason}})
 				var failed error
 				if res.Status == "partial" {
 					failed = &output.Error{Code: output.Partial, Message: "the backup failed: " + res.Backup + "; the next run retries"}
@@ -87,6 +91,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 					}
 				}
 			}
+			res.Update = maintainUpdateCheck(cmd.Context(), d)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
@@ -99,6 +104,26 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			return finish()
 		},
 	}
+}
+
+// maintainUpdateCheck runs the update check against the configured source
+// and records it; its outcome is one line for the job's report.
+func maintainUpdateCheck(ctx context.Context, d paths.Dirs) string {
+	_, cfg, err := updateConfig()
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+	ctx, cancel := context.WithTimeout(ctx, updateCheckTimeout)
+	defer cancel()
+	res, err := checkUpdates(ctx, releaseSource(cfg, ""), buildinfo.Version, cfg.Update.Prereleases)
+	recordUpdateCheck(d, res, err)
+	switch {
+	case err != nil:
+		return "failed: " + err.Error()
+	case res.UpdateAvailable:
+		return res.Latest + " available"
+	}
+	return "up to date"
 }
 
 // rotateTelemetry removes month files older than keep months (the current
@@ -126,5 +151,5 @@ func maintainText(r maintainResult) string {
 	if r.Status == "skipped" {
 		return "skipped: " + r.Reason + "\n"
 	}
-	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated), map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Doctor, r.MS)
+	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated), map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Update, r.Doctor, r.MS)
 }

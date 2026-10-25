@@ -118,6 +118,9 @@ func (h *hookEnv) sessionStart() []byte {
 		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version); len(drift) > 0 {
 			banner += "\nbacksight: Claude Code wiring drifted (" + drift[0] + "): run `backsight client install`"
 		}
+		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
+			banner += "\n" + line
+		}
 	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
 		banner += fmt.Sprintf("\nbacksight: %d session(s) quarantined: run `backsight doctor`", len(held))

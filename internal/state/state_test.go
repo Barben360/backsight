@@ -29,7 +29,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	in := State{SchemaVersion: SchemaVersion, AppliedMigrations: []string{"0001"}, BankConfigHash: "abc",
 		PluginVersion: "0.1.0", ShimTarget: "/d/bin/0.1.0/backsight", ReplacedFrom: "ref-stack",
 		FirstSessionNoticeShown: true,
-		Backfill:                &Backfill{Done: 10, Total: 90, StartedAt: time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)}}
+		Backfill:                &Backfill{Done: 10, Total: 90, StartedAt: time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)},
+		UpdateCheck: &UpdateCheck{CheckedAt: time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC), Source: "github:Barben360/backsight",
+			Installed: "0.1.0", Latest: "0.2.0", Summary: "✨ Add update check", Newer: 1, Error: "unreachable"}}
 	if err := Save(p, in); err != nil {
 		t.Fatal(err)
 	}
