@@ -130,6 +130,7 @@ func TestValidate(t *testing.T) {
 		{"outbox order", func(c *Config) { c.Hooks.OutboxWarnMB = 600 }, "hooks.outbox_warn_mb"},
 		{"backup keep", func(c *Config) { c.Backup.KeepDaily = -1 }, "backup.keep_daily"},
 		{"retention", func(c *Config) { c.Client.RetentionDays = -1 }, "client.retention_days"},
+		{"relative update source", func(c *Config) { c.Update.Source = "dist" }, "update.source"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -140,6 +141,16 @@ func TestValidate(t *testing.T) {
 				t.Errorf("want an error naming %q, got %v", c.wantInErr, err)
 			}
 		})
+	}
+}
+
+func TestUpdateKeys(t *testing.T) {
+	cfg, err := Load(write(t, "[update]\nsource = \"/srv/releases\"\nprereleases = true\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Update.Source != "/srv/releases" || !cfg.Update.Prereleases || cfg.Update.AutoApply {
+		t.Errorf("%+v", cfg.Update)
 	}
 }
 

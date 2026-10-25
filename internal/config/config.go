@@ -126,8 +126,16 @@ type Backup struct {
 	KeepWeekly int    `toml:"keep_weekly" json:"keep_weekly"`
 }
 
+// Update: where releases come from and which ones count (SPEC §11.7,
+// decision 0067).
 type Update struct {
 	AutoApply bool `toml:"auto_apply" json:"auto_apply"`
+	// Source: "" = the GitHub releases of Barben360/backsight; else an
+	// absolute path to a local release directory (internal/release.Dir).
+	Source string `toml:"source" json:"source"`
+	// Prereleases: offer pre-releases even when the installed version is a
+	// stable one.
+	Prereleases bool `toml:"prereleases" json:"prereleases"`
 }
 
 // Default is the Appendix A.1 configuration for these directories and home.
@@ -293,6 +301,9 @@ func (c Config) Validate() error {
 	atLeast("client.retention_days", c.Client.RetentionDays, 0)
 	atLeast("backup.keep_daily", c.Backup.KeepDaily, 1) // 0 would prune the backup just written
 	atLeast("backup.keep_weekly", c.Backup.KeepWeekly, 0)
+	if c.Update.Source != "" && !filepath.IsAbs(c.Update.Source) {
+		bad("update.source", "%q must be empty (GitHub releases) or an absolute directory path", c.Update.Source)
+	}
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
 	return errors.Join(errs...)
 }
