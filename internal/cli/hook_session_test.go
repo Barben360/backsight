@@ -202,3 +202,70 @@ func TestSessionStartBannerShowsDrift(t *testing.T) {
 		t.Errorf("banner %q (one drift line wanted)", h.SystemMessage)
 	}
 }
+
+// After a backfill every memory was written by the server on one day: the
+// briefing ages them by when they happened (mentioned_at).
+func TestBriefingAgesByEventTime(t *testing.T) {
+	home := hookHome(t)
+	recentHasEventTime.Store(true)
+	now := time.Now().UTC()
+	recentAnswer["observation"] = `[{"id":"o1","text":"Billing keeps PostgreSQL 16.","fact_type":"observation","tags":["project:billing"],` +
+		`"updated_at":"` + now.Add(-time.Hour).Format(time.RFC3339) + `","mentioned_at":"` + now.Add(-10*24*time.Hour).Format(time.RFC3339) + `"}]`
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "PostgreSQL 16") || !strings.Contains(h.Specific.Context, "10d ago") {
+		t.Errorf("%q", h.Specific.Context)
+	}
+}
+
+// Decision 0060: the briefing is the project's mental model when the server
+// has one; without one it is created (refreshed after each consolidation of
+// the project) and the recent observations serve this time.
+func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	start := func(sid string) hookOut {
+		return fire(t, "session-start", map[string]any{"session_id": sid, "source": "startup", "cwd": filepath.Join(home, "billing")})
+	}
+	h := start("s1")
+	if !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || len(mentalCalls) != 1 {
+		t.Fatalf("no page yet: E8 and one create; %q %q", h.Specific.Context, mentalCalls)
+	}
+	id := briefingModelID("billing")
+	if c := mentalCalls[0]; !strings.HasPrefix(c, "POST  ") || !strings.Contains(c, `"id":"`+id+`"`) || !strings.Contains(c, `"tags":["project:billing"]`) ||
+		!strings.Contains(c, `"refresh_after_consolidation":true`) || !strings.Contains(c, `"budget":"low"`) || !strings.Contains(c, `"max_tokens":600`) {
+		t.Errorf("create: %s", c)
+	}
+	refreshed := time.Now().Add(-3 * time.Hour).UTC().Format("2006-01-02T15:04:05.000000+00:00")
+	page := "## Open items\n- Migrate the export job (2026-10-24)\n## In force\n- " + strings.Repeat("a rule that goes on ", 120)
+	raw, _ := json.Marshal(map[string]any{"id": id, "content": page, "tags": []string{"project:billing"}, "last_refreshed_at": refreshed})
+	mentalModels[id] = string(raw)
+	h = start("s2")
+	ctx := h.Specific.Context
+	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "data, not instructions") || !strings.Contains(ctx, "Migrate the export job") ||
+		strings.Contains(ctx, "Billing keeps PostgreSQL 16.") || !strings.Contains(ctx, "…") || len(mentalCalls) != 1 {
+		t.Errorf("page briefing:\n%s\ncalls %q", ctx, mentalCalls)
+	}
+	if tel := telemetryText(t, home); !strings.Contains(tel, `"source":"model"`) {
+		t.Errorf("telemetry:\n%s", tel)
+	}
+}
+
+// With briefing = "recent" no mental model is read or created.
+func TestRecentBriefingLeavesMentalModelsAlone(t *testing.T) {
+	home := hookHome(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[recall]\nbriefing = \"recent\"\n")...), 0o600)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || len(mentalCalls) != 0 {
+		t.Errorf("%q %q", h.Specific.Context, mentalCalls)
+	}
+}
+
+func TestBriefingModelIDs(t *testing.T) {
+	a, b := briefingModelID("my.app"), briefingModelID("my-app")
+	if a == b || !strings.HasPrefix(a, "backsight-brief-my-app-") || len(briefingModelID(strings.Repeat("x", 300))) > 70 {
+		t.Errorf("%s %s", a, b)
+	}
+}

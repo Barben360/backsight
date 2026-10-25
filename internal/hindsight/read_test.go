@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRecallSendsTheScopeAndReadsScores(t *testing.T) {
@@ -84,22 +85,36 @@ func TestTagsAndEntitiesPage(t *testing.T) {
 	}
 }
 
-func TestRecentAsksForTheLatestUpdatedOfOneProject(t *testing.T) {
+// Recent orders by event time; it falls back to updated_at only when no
+// memory has an event time (the server leaves those out of a mentioned_at
+// listing).
+func TestRecentAsksForTheLatestByEventTime(t *testing.T) {
+	var fields []string
 	var q url.Values
+	withEventTime := true
 	c := server(t, func(w http.ResponseWriter, r *http.Request) {
 		q = r.URL.Query()
-		_, _ = w.Write([]byte(`{"items":[{"id":"o1","text":"t","fact_type":"observation","updated_at":"2026-10-24T09:00:00Z"}]}`))
+		fields = append(fields, q.Get("time_field"))
+		if q.Get("time_field") == "mentioned_at" && !withEventTime {
+			_, _ = w.Write([]byte(`{"items":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"o1","text":"t","fact_type":"observation","updated_at":"2026-10-24T09:00:00Z","mentioned_at":"2026-10-04T13:30:50.397000+00:00"}]}`))
 	})
 	got, err := c.Recent(context.Background(), "b", "project:billing", "observation", 5)
-	if err != nil || len(got) != 1 || got[0].ID != "o1" {
+	if err != nil || len(got) != 1 || !got[0].When().Equal(time.Date(2026, 10, 4, 13, 30, 50, 397000000, time.UTC)) {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if q.Get("tags") != "project:billing" || q.Get("tags_match") != "any_strict" || q.Get("time_field") != "updated_at" || q.Get("limit") != "5" || q.Get("type") != "observation" {
-		t.Errorf("query %v", q)
+	if q.Get("tags") != "project:billing" || q.Get("tags_match") != "any_strict" || strings.Join(fields, ",") != "mentioned_at" || q.Get("limit") != "5" || q.Get("type") != "observation" {
+		t.Errorf("query %v, fields %v", q, fields)
 	}
-	_, _ = c.Recent(context.Background(), "b", "project:billing", "", 5)
-	if _, ok := q["type"]; ok {
-		t.Errorf("no type filter wanted: %v", q)
+	fields, withEventTime = nil, false
+	got, _ = c.Recent(context.Background(), "b", "project:billing", "", 5)
+	if _, ok := q["type"]; ok || strings.Join(fields, ",") != "mentioned_at,updated_at" || len(got) != 1 {
+		t.Errorf("fallback: fields %v, query %v", fields, q)
+	}
+	if (Memory{UpdatedAt: time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)}).When().Day() != 24 {
+		t.Error("no event time: When is updated_at")
 	}
 }
 

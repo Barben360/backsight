@@ -35,6 +35,7 @@ type tickResult struct {
 	Notes    retain.FlushResult `json:"notes"`
 	Backfill string             `json:"backfill,omitempty"`
 	Index    string             `json:"index,omitempty"` // entity index: rebuilt | failed: <why>
+	Pruned   []string           `json:"briefings_pruned,omitempty"`
 	MS       int                `json:"ms"`
 }
 
@@ -88,6 +89,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				res.Status, res.Reason = "skipped", "components.write is off"
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
+					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, cfg.Recall.Briefing, f.Client)
 				}
 				pruneSessions(d)
 				return finish(nil)
@@ -113,6 +115,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
+			if cfg.Components.Read {
+				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, cfg.Recall.Briefing, f.Client)
+			}
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -152,6 +157,36 @@ func pruneSessions(d paths.Dirs) {
 			_ = os.Remove(filepath.Join(d.SessionsDir(), e.Name()))
 		}
 	}
+}
+
+// pruneBriefings deletes backsight's briefing pages (decision 0060) of
+// projects with no memory in briefingIdleDays, and all of them when the
+// briefing is "recent": the server would keep refreshing them for nothing.
+// Other mental models are never touched. Best effort.
+func pruneBriefings(ctx context.Context, bank, briefing string, cl *hindsight.Client) []string {
+	models, err := cl.MentalModels(ctx, bank)
+	if err != nil {
+		return nil
+	}
+	var pruned []string
+	for _, m := range models {
+		if !strings.HasPrefix(m.ID, briefingModelPrefix) {
+			continue
+		}
+		idle := briefing != "model"
+		if !idle {
+			idle = true
+			for _, t := range m.Tags {
+				if mem, err := cl.Recent(ctx, bank, t, "", 1); err != nil || (len(mem) > 0 && now().Sub(mem[0].When()) < briefingIdleDays*24*time.Hour) {
+					idle = false // active, or unknown: kept
+				}
+			}
+		}
+		if idle && cl.DeleteMentalModel(ctx, bank, m.ID) == nil {
+			pruned = append(pruned, m.ID)
+		}
+	}
+	return pruned
 }
 
 // refreshIndex rebuilds the entity index when it is older than a day; best

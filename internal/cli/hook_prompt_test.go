@@ -299,6 +299,9 @@ func TestPromptLang(t *testing.T) {
 		"Peux-tu vérifier que le backup tourne bien sur la machine ?": "fr",
 		"Can you check that the backup runs on the machine?":          "en",
 		"kubectl get pods -n hindsight":                               "en",
+		"Look on GitHub":                                              "en",
+		"Vérifie si l'install marche et si c'est bon":                 "fr",
+		"On a un souci de build":                                      "fr",
 	} {
 		if got := promptLang(text); got != want {
 			t.Errorf("%q: %s, want %s", text, got, want)

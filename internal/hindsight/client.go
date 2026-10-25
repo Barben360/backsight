@@ -234,7 +234,16 @@ type Memory struct {
 	DocumentID      string    `json:"document_id"`
 	State           string    `json:"state"`
 	UpdatedAt       time.Time `json:"updated_at"`
+	MentionedAt     time.Time `json:"mentioned_at"`
 	SourceMemoryIDs []string  `json:"source_memory_ids"`
+}
+
+// When is the memory's event time, else when the server last wrote it.
+func (m Memory) When() time.Time {
+	if !m.MentionedAt.IsZero() {
+		return m.MentionedAt
+	}
+	return m.UpdatedAt
 }
 
 const pageSize = 200

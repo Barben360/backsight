@@ -66,6 +66,23 @@ func BriefingHeader(project string) string {
 	return "Where you left off on " + project + " " + HintsLine + ":"
 }
 
+// BriefingModelHeader introduces a briefing written by the server from the
+// project's memories (decision 0060).
+func BriefingModelHeader(project, age string) string {
+	when := ""
+	if age != "" {
+		when = " " + age + " ago"
+	}
+	return "Where you left off on " + project + ", summarised from memory" + when + " " + HintsLine + ":"
+}
+
+// BriefingQuery is the mental model's source query (E14): English, as the
+// facts are (0039), short, by section, every recent session.
+const BriefingQuery = "Briefing for an assistant starting a new work session on this project. In at most 1 200 characters, as short bullet lists under these headings, " +
+	"most recent first, with absolute dates: 'Open items' (unfinished work, questions left open, things to verify), 'Recent' (what was delivered " +
+	"in the last sessions), 'In force' (decisions, conventions and pitfalls that still apply, with exact values). Cover every recent session, " +
+	"not only the last one. State only what the memories support."
+
 const (
 	BriefingEmpty = "Memory is empty: it fills from this session (first facts a few minutes after the session ends or goes idle for 30 min)."
 	BriefingRaw   = "(raw facts: the memory is still being consolidated)"

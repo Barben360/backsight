@@ -63,3 +63,39 @@ func TestJobsTickServerDownIsPartial(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+// jobs tick deletes the briefing pages of projects quiet for 14 days, and
+// never a mental model backsight did not create.
+func TestTickPrunesIdleBriefingPages(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recentHasEventTime.Store(true)
+	page := func(id, project string) string {
+		return `{"id":"` + id + `","content":"x","tags":["project:` + project + `"]}`
+	}
+	active, idle := briefingModelID("billing"), briefingModelID("old")
+	mentalModels[active], mentalModels[idle], mentalModels["mine"] = page(active, "billing"), page(idle, "old"), page("mine", "old")
+	day := func(d int) string {
+		return time.Now().Add(-time.Duration(d) * 24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+	recentByTag["project:billing"] = `[{"id":"a","text":"t","mentioned_at":"` + day(2) + `"}]`
+	recentByTag["project:old"] = `[{"id":"b","text":"t","mentioned_at":"` + day(20) + `"}]`
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[idle]; ok {
+		t.Error("idle project's page kept")
+	}
+	if _, ok := mentalModels[active]; !ok {
+		t.Error("active project's page deleted")
+	}
+	if _, ok := mentalModels["mine"]; !ok {
+		t.Error("a mental model backsight did not create was deleted")
+	}
+	// back to the recent-observations briefing: every backsight page goes
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[recall]\nbriefing = \"recent\"\n")...), 0o600)
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[active]; ok || mentalModels["mine"] == "" {
+		t.Errorf("briefing = recent: %v", mentalModels)
+	}
+}

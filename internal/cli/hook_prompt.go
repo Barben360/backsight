@@ -360,8 +360,9 @@ func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 }
 
 var (
-	frWords    = wordSet("le la les des du une est sont pour dans avec sur par qui que pas ne au aux ce cette tu je on fait faire")
-	enWords    = wordSet("the is are was were for with on by which that not to of and has have this you we it do make")
+	// "on" is English and French alike: in neither list.
+	frWords    = wordSet("le la les des du de un une et est sont pour dans avec sur par qui que pas ne au aux ce cette tu je il elle nous vous fait faire si mais c'est ça")
+	enWords    = wordSet("the is are was were for with by which that not to of and has have this you we it do make if but")
 	langWordRE = regexp.MustCompile(`[a-zàâçéèêëîïôûùüÿœ']+`)
 )
 
@@ -374,7 +375,8 @@ func wordSet(s string) map[string]bool {
 }
 
 // promptLang is "fr" when French function words outnumber English ones in
-// the prompt's head, else "en" (the heuristic E23 and E26 sampled with).
+// the prompt's head, else "en" (E23's heuristic, with "on" dropped and the
+// commonest short French words added).
 // Telemetry only: E26 found no floor shift worth making (decision 0058),
 // and stats and E24 measure French prompts apart.
 func promptLang(prompt string) string {

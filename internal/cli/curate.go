@@ -379,7 +379,7 @@ func newProjectsCmd(e *env) *cobra.Command {
 					sem <- struct{}{}
 					defer func() { <-sem }()
 					if m, err := cl.Recent(ctx, bank, t.Tag, "", 1); err == nil && len(m) > 0 {
-						list[i].Last = m[0].UpdatedAt
+						list[i].Last = m[0].When()
 					}
 				}()
 			}

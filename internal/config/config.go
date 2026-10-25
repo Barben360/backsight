@@ -82,6 +82,9 @@ type Recall struct {
 	StickyWindowH      int     `toml:"sticky_window_h" json:"sticky_window_h"`
 	ProjectBoost       float64 `toml:"project_boost" json:"project_boost"`
 	SessionBudgetChars int     `toml:"session_budget_chars" json:"session_budget_chars"`
+	// Briefing: "model" (a per-project mental model the server keeps,
+	// decision 0060) or "recent" (the 5 latest observations, E8).
+	Briefing string `toml:"briefing" json:"briefing"`
 }
 
 type LLM struct {
@@ -135,7 +138,7 @@ func Default(d paths.Dirs, home string) Config {
 		Components: Components{Read: true, Write: true},
 		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
-			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000},
+			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model"},
 		LLM:        LLM{Provider: "deepseek", Model: "deepseek-v4-flash", Currency: "USD"},
 		Embeddings: Embeddings{Preset: "multilingual"},
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
@@ -248,6 +251,9 @@ func (c Config) Validate() error {
 	unit("recall.global_min_score", r.GlobalMinScore)
 	unit("recall.sticky_bypass", r.StickyBypass)
 	unit("recall.project_boost", r.ProjectBoost)
+	if r.Briefing != "model" && r.Briefing != "recent" {
+		bad("recall.briefing", "%q: \"model\" or \"recent\"", r.Briefing)
+	}
 	for key, v := range map[string]int{"recall.prompt_hits": r.PromptHits, "recall.query_chars": r.QueryChars,
 		"recall.prompt_chars": r.PromptChars, "recall.sticky_max": r.StickyMax, "recall.sticky_window_h": r.StickyWindowH,
 		"recall.session_budget_chars": r.SessionBudgetChars} {

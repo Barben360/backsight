@@ -2,6 +2,9 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/recall"
@@ -24,6 +28,14 @@ const (
 	briefingItemChars = 220
 	briefingChars     = 1200
 	briefingTimeout   = 5 * time.Second
+	// The mental-model briefing (decision 0060): its page is cut at a line
+	// past this many characters; the server writes it within 600 tokens.
+	briefingModelChars  = 1600
+	briefingModelTokens = 600
+	briefingModelPrefix = "backsight-brief-"
+	// briefingIdleDays: a project quiet this long loses its page (jobs tick),
+	// so the server stops refreshing it.
+	briefingIdleDays  = 14
 	compactReplay     = 6
 	compactStores     = 10
 	subagentItems     = 2
@@ -140,6 +152,11 @@ func (h *hookEnv) sessionStart() []byte {
 func (h *hookEnv) briefing() (text string, items []session.Injection, source string, err error) {
 	ctx, cancel := context.WithTimeout(h.ctx, briefingTimeout)
 	defer cancel()
+	if h.cfg.Recall.Briefing == "model" {
+		if text, ok := h.modelBriefing(ctx); ok {
+			return text, nil, "model", nil
+		}
+	}
 	tag := "project:" + h.project
 	mems, err := h.client.Recent(ctx, h.cfg.Server.Bank, tag, "observation", briefingItems)
 	if err != nil {
@@ -163,8 +180,8 @@ func (h *hookEnv) briefing() (text string, items []session.Injection, source str
 	at := now()
 	for _, m := range mems {
 		ago := ""
-		if !m.UpdatedAt.IsZero() {
-			ago = recall.Age(at.Sub(m.UpdatedAt))
+		if w := m.When(); !w.IsZero() {
+			ago = recall.Age(at.Sub(w))
 		}
 		line := "- " + clip(m.Text, briefingItemChars) + age(ago) + "\n"
 		if len([]rune(b.String()))+len([]rune(line)) > briefingChars {
@@ -174,6 +191,57 @@ func (h *hookEnv) briefing() (text string, items []session.Injection, source str
 		items = append(items, session.Injection{ID: m.ID, Text: m.Text, Project: h.project, Scope: "project", Prompt: 0, Rule: "briefing", At: at})
 	}
 	return strings.TrimRight(b.String(), "\n"), items, source, nil
+}
+
+// briefingModelID is the project's mental-model id: a readable slug and a
+// hash, so that two project names never share a page.
+func briefingModelID(project string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(project) {
+		if b.Len() >= 40 {
+			break
+		}
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	sum := sha256.Sum256([]byte(project))
+	return briefingModelPrefix + b.String() + "-" + hex.EncodeToString(sum[:4])
+}
+
+// modelBriefing is the project's mental model, cut at a line boundary. A
+// project without one gets it created (the server writes it in the
+// background, then refreshes it after each consolidation of the project's
+// memories) and the E8 briefing this time; any failure falls back to E8.
+func (h *hookEnv) modelBriefing(ctx context.Context) (string, bool) {
+	id := briefingModelID(h.project)
+	m, err := h.client.GetMentalModel(ctx, h.cfg.Server.Bank, id)
+	var apiErr *hindsight.APIError
+	if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
+		_ = h.client.CreateMentalModel(ctx, h.cfg.Server.Bank, id, "backsight briefing: "+h.project, instructions.BriefingQuery,
+			[]string{"project:" + h.project}, briefingModelTokens)
+		return "", false
+	}
+	content := strings.TrimSpace(m.Content)
+	if err != nil || content == "" {
+		return "", false
+	}
+	age := ""
+	if t, err := time.Parse(time.RFC3339Nano, m.LastRefreshedAt); err == nil {
+		age = recall.Age(now().Sub(t))
+	}
+	var b strings.Builder
+	b.WriteString(instructions.BriefingModelHeader(safeProject(h.project), age) + "\n")
+	for _, line := range strings.Split(content, "\n") {
+		if len([]rune(b.String()))+len([]rune(line)) > briefingModelChars {
+			b.WriteString("…\n")
+			break
+		}
+		b.WriteString(line + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n"), true
 }
 
 // writeEnvFile gives the CLI fallback its project and session (E15).

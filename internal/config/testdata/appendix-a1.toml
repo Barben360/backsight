@@ -30,6 +30,7 @@ sticky_bypass = 0.97
 sticky_window_h = 24
 project_boost = 0.05
 session_budget_chars = 6000
+briefing = "model"
 [llm]
 provider = "deepseek"
 model = "deepseek-v4-flash"

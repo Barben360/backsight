@@ -112,17 +112,26 @@ func (c *Client) Entities(ctx context.Context, bank, tag string, limit int) ([]E
 	return out.Items, c.get(ctx, bankPath(bank, "/entities"), query, &out)
 }
 
-// Recent lists up to limit memories tagged tag, most recently updated
-// first; factType "" lists every type.
+// Recent lists up to limit memories tagged tag, latest first by event time
+// (mentioned_at): after a backfill, updated_at is when the server
+// consolidated, all on one day. Memories with no event time are listed by
+// updated_at when none has one. factType "" lists every type.
 func (c *Client) Recent(ctx context.Context, bank, tag, factType string, limit int) ([]Memory, error) {
-	var out struct {
-		Items []Memory `json:"items"`
+	list := func(field string) ([]Memory, error) {
+		var out struct {
+			Items []Memory `json:"items"`
+		}
+		q := url.Values{"tags": {tag}, "tags_match": {"any_strict"}, "time_field": {field}, "limit": {strconv.Itoa(limit)}}
+		if factType != "" {
+			q.Set("type", factType)
+		}
+		return out.Items, c.get(ctx, bankPath(bank, "/memories/list"), q, &out)
 	}
-	q := url.Values{"tags": {tag}, "tags_match": {"any_strict"}, "time_field": {"updated_at"}, "limit": {strconv.Itoa(limit)}}
-	if factType != "" {
-		q.Set("type", factType)
+	items, err := list("mentioned_at")
+	if err != nil || len(items) > 0 {
+		return items, err
 	}
-	return out.Items, c.get(ctx, bankPath(bank, "/memories/list"), q, &out)
+	return list("updated_at")
 }
 
 // Invalidate soft-retires (or with valid=true restores) a memory: excluded
@@ -143,6 +152,43 @@ func (c *Client) ClearObservations(ctx context.Context, bank, id string) error {
 // DeleteDocument deletes a document and the memories extracted from it.
 func (c *Client) DeleteDocument(ctx context.Context, bank, id string) error {
 	return c.do(ctx, http.MethodDelete, bankPath(bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A")), nil, nil, nil)
+}
+
+// MentalModel is a page the server writes and refreshes from the memories
+// in its tags' scope.
+type MentalModel struct {
+	ID              string   `json:"id"`
+	Content         string   `json:"content"`
+	Tags            []string `json:"tags"`
+	LastRefreshedAt string   `json:"last_refreshed_at"`
+}
+
+// GetMentalModel reads one mental model (cached content, no LLM); an
+// *APIError of kind NotFound when absent.
+func (c *Client) GetMentalModel(ctx context.Context, bank, id string) (MentalModel, error) {
+	var m MentalModel
+	return m, c.get(ctx, bankPath(bank, "/mental-models/"+url.PathEscape(id)), nil, &m)
+}
+
+// CreateMentalModel creates a mental model; the server refreshes it in the
+// background, then again after each consolidation that touches its tags.
+func (c *Client) CreateMentalModel(ctx context.Context, bank, id, name, query string, tags []string, maxTokens int) error {
+	body := map[string]any{"id": id, "name": name, "source_query": query, "tags": tags, "max_tokens": maxTokens,
+		"trigger": map[string]any{"budget": "low", "mode": "full", "refresh_after_consolidation": true}}
+	return c.do(ctx, http.MethodPost, bankPath(bank, "/mental-models"), nil, body, nil)
+}
+
+// MentalModels lists the bank's mental models.
+func (c *Client) MentalModels(ctx context.Context, bank string) ([]MentalModel, error) {
+	var out struct {
+		Items []MentalModel `json:"items"`
+	}
+	return out.Items, c.get(ctx, bankPath(bank, "/mental-models"), nil, &out)
+}
+
+// DeleteMentalModel removes a mental model.
+func (c *Client) DeleteMentalModel(ctx context.Context, bank, id string) error {
+	return c.do(ctx, http.MethodDelete, bankPath(bank, "/mental-models/"+url.PathEscape(id)), nil, nil, nil)
 }
 
 // ReflectAnswer is Hindsight's reflect answer and its token use.

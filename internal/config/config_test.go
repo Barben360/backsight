@@ -105,6 +105,7 @@ func TestValidate(t *testing.T) {
 		{"digest short", func(c *Config) { c.Server.Digest = "sha256:abc" }, "server.digest"},
 		{"bank dotdot", func(c *Config) { c.Server.Bank = ".." }, "server.bank"},
 		{"global_min_score range", func(c *Config) { c.Recall.GlobalMinScore = 1.2 }, "recall.global_min_score"},
+		{"briefing source", func(c *Config) { c.Recall.Briefing = "both" }, "recall.briefing"},
 		{"negative min_score", func(c *Config) { c.Recall.MinScore = -0.1 }, "recall.min_score"},
 		{"sticky_bypass range", func(c *Config) { c.Recall.StickyBypass = 2 }, "recall.sticky_bypass"},
 		{"project_boost range", func(c *Config) { c.Recall.ProjectBoost = -1 }, "recall.project_boost"},

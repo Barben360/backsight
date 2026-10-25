@@ -54,7 +54,7 @@ func TestComputeFromRealEvents(t *testing.T) {
 		p.P50MS != 900 || p.P95MS != 3000 || p.ScopeCalls != 3 || p.ScopeFailures != 1 {
 		t.Errorf("prompts %+v", p)
 	}
-	if r.Prompts.ByLang["fr"] != [2]int{1, 1} || r.Prompts.ByLang["en"] != [2]int{1, 0} {
+	if r.Prompts.ByLang["fr"] != [2]int{1, 1} || r.Prompts.ByLang["en"] != [2]int{1, 0} || len(r.Prompts.ByLang) != 2 {
 		t.Errorf("by language %+v", r.Prompts.ByLang)
 	}
 	if r.Turns.Long != 3 || r.Turns.Searched != 1 || r.Turns.Credit["exact"] != 1 || len(r.Turns.Credit) != 1 {
@@ -168,6 +168,8 @@ func TestComputeBranches(t *testing.T) {
 		// a subagent's search on a long turn does not make it searched
 		{TS: at(8), Event: "prompt", Session: "s3", N: 1, Decision: "skip", Plen: 80},
 		{TS: at(8), Event: "tool_use", Session: "s3", Name: "x__memory_search", N: 1, Subagent: true},
+		// a recall written before prompts carried lang is in no language
+		{TS: at(8), Event: "prompt", Session: "s3", N: 2, Decision: "recall", Plen: 10},
 		// unknown records sum over events
 		{TS: at(9), Event: "transcript_unknown", Types: map[string]int{"k": 2}},
 		{TS: at(9), Event: "transcript_unknown", Types: map[string]int{"k": 3}},
@@ -187,6 +189,9 @@ func TestComputeBranches(t *testing.T) {
 	}
 	if r.Turns.Long != 2 || r.Turns.Searched != 0 {
 		t.Errorf("turns %+v", r.Turns)
+	}
+	if len(r.Prompts.ByLang) != 0 {
+		t.Errorf("by language %+v", r.Prompts.ByLang)
 	}
 	if r.Unknown["k"] != 5 {
 		t.Errorf("unknown %+v", r.Unknown)

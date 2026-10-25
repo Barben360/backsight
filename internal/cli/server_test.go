@@ -177,19 +177,22 @@ var (
 	// recallAnswer answers every recall (JSON results array); recallTags
 	// records the tags of each recall request; memories answers GET
 	// /memories/{id}; projectEntities answers /tags and /entities.
-	recallAnswer    string
-	recallTags      []string
-	recallQueries   []string
-	recentAnswer    map[string]string // memories/list items by type ("" = any)
-	recentByTag     map[string]string // memories/list items by tags (wins over recentAnswer)
-	tagCounts       map[string]int    // /tags count by project (default 1)
-	listAnswer      map[string]string // memories/list (paged listing) items by type; "invalidated:<type>" for the archive
-	documentUnits   map[string]int    // GET /documents/{id} memory_unit_count, for documents not retained in the test
-	curation        []string          // PATCH/DELETE calls on memories and documents
-	recentDown      atomic.Bool
-	memories        map[string]string
-	projectEntities map[string]string
-	retainedTags    []string
+	recallAnswer       string
+	recallTags         []string
+	recallQueries      []string
+	recentAnswer       map[string]string // memories/list items by type ("" = any)
+	recentByTag        map[string]string // memories/list items by tags (wins over recentAnswer)
+	tagCounts          map[string]int    // /tags count by project (default 1)
+	listAnswer         map[string]string // memories/list (paged listing) items by type; "invalidated:<type>" for the archive
+	documentUnits      map[string]int    // GET /documents/{id} memory_unit_count, for documents not retained in the test
+	curation           []string          // PATCH/DELETE calls on memories and documents
+	recentDown         atomic.Bool
+	recentHasEventTime atomic.Bool       // memories/list answers time_field=mentioned_at too
+	mentalModels       map[string]string // id → mental model JSON
+	mentalCalls        []string          // POST/DELETE on mental models, with the body
+	memories           map[string]string
+	projectEntities    map[string]string
+	retainedTags       []string
 )
 
 // fakeHindsight answers like a started server: health, version, banks and
@@ -218,6 +221,8 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
+	recentHasEventTime.Store(false)
+	mentalModels, mentalCalls = map[string]string{}, nil
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -261,7 +266,14 @@ func fakeHindsight(t *testing.T) (port int) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"results":` + recallAnswer + `}`))
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") == "updated_at":
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") != "":
+			// Like the server: only memories with a value on the asked
+			// time field (the fake's items carry updated_at, and
+			// mentioned_at when the test says so).
+			if f := r.URL.Query().Get("time_field"); f != "updated_at" && !recentHasEventTime.Load() {
+				_, _ = w.Write([]byte(`{"items":[]}`))
+				return
+			}
 			if recentDown.Load() {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
@@ -287,6 +299,33 @@ func fakeHindsight(t *testing.T) (port int) {
 				items = "[]"
 			}
 			_, _ = w.Write([]byte(`{"items":` + items + `,"total":` + strconv.Itoa(strings.Count(items, `"id"`)) + `}`))
+		case strings.Contains(r.URL.Path, "/mental-models"):
+			id := ""
+			if i := strings.Index(r.URL.Path, "/mental-models/"); i >= 0 {
+				id = r.URL.Path[i+len("/mental-models/"):]
+			}
+			body, _ := io.ReadAll(r.Body)
+			switch {
+			case r.Method == http.MethodGet && id == "":
+				var items []string
+				for _, m := range mentalModels {
+					items = append(items, m)
+				}
+				_, _ = w.Write([]byte(`{"items":[` + strings.Join(items, ",") + `]}`))
+			case r.Method == http.MethodGet:
+				m, ok := mentalModels[id]
+				if !ok {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(m))
+			default:
+				mentalCalls = append(mentalCalls, r.Method+" "+id+" "+string(body))
+				if r.Method == http.MethodDelete {
+					delete(mentalModels, id)
+				}
+				_, _ = w.Write([]byte(`{"operation_id":"op1"}`))
+			}
 		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
 			body, _ := io.ReadAll(r.Body)
 			// Strict like Hindsight 1.1.0: unknown memories are 404 and an
