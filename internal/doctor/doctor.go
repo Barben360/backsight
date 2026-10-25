@@ -377,16 +377,26 @@ func checkReference(in *reference.Install, err error) Check {
 		c.Status, c.Summary, c.Detail = Warn, "cannot read the Claude Code files", err.Error()
 	case in == nil || len(in.Pieces) == 0:
 		c.Status, c.Summary = OK, "no reference install wired into Claude Code"
-	default:
-		lines := make([]string, len(in.Pieces))
-		for i, p := range in.Pieces {
-			lines[i] = p.ID + " (" + p.Where + ")"
+		if in != nil && len(in.Leftovers) > 0 {
+			c.Detail = "left on disk: " + pieceList(in.Leftovers)
 		}
+	default:
 		c.Status = Info
 		c.Summary = fmt.Sprintf("%d reference pieces wired into Claude Code, retired at the %s cut-over", len(in.Pieces), in.Pieces[0].ReplacedIn)
-		c.Detail = strings.Join(lines, "; ")
+		c.Detail = pieceList(in.Pieces)
+		if len(in.Leftovers) > 0 {
+			c.Detail += "; left on disk: " + pieceList(in.Leftovers)
+		}
 	}
 	return c
+}
+
+func pieceList(ps []reference.Piece) string {
+	lines := make([]string, len(ps))
+	for i, p := range ps {
+		lines[i] = p.ID + " (" + p.Where + ")"
+	}
+	return strings.Join(lines, "; ")
 }
 
 func checkRetention(loc claudecode.Location, managedDir string) Check {

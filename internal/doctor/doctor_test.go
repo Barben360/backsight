@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -508,5 +509,20 @@ func TestWritesCheck(t *testing.T) {
 	expect(t, c, Warn, "1 note(s) queued, 1 session(s)")
 	if !strings.Contains(c.Fix, "retry-quarantine") {
 		t.Errorf("fix: %q", c.Fix)
+	}
+}
+
+// After the cut-over only leftovers remain: the check is OK, says the
+// timer is disabled, and counts nothing as wired.
+func TestCheckReferenceLeftovers(t *testing.T) {
+	timer := reference.Piece{ID: "python-retro-timer", Where: "systemd memory-retro.timer, disabled", ReplacedIn: "M4"}
+	c := checkReference(&reference.Install{Leftovers: []reference.Piece{timer}}, nil)
+	if c.Status != OK || strings.Contains(c.Summary, "pieces wired") || !strings.Contains(c.Detail, "left on disk: python-retro-timer (systemd memory-retro.timer, disabled)") {
+		t.Errorf("%+v", c)
+	}
+	hook := reference.Piece{ID: "python-search-hook", Where: "settings.json Stop", ReplacedIn: "M4"}
+	c = checkReference(&reference.Install{Pieces: []reference.Piece{hook}, Leftovers: []reference.Piece{timer}}, nil)
+	if c.Status != Info || !strings.HasPrefix(c.Summary, "1 reference pieces wired") || !strings.Contains(c.Detail, "python-search-hook (settings.json Stop); left on disk: python-retro-timer") {
+		t.Errorf("%+v", c)
 	}
 }

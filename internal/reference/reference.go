@@ -38,6 +38,9 @@ type Install struct {
 	Token             Secret  `json:"token,omitempty"`
 	ObservationScopes string  `json:"observation_scopes,omitempty"`
 	Pieces            []Piece `json:"pieces"`
+	// Leftovers are reference files nothing runs any more (the retro
+	// script and timer once the cut-over disabled the timer).
+	Leftovers []Piece `json:"leftovers,omitempty"`
 }
 
 // hookRules classify hook commands; the first match wins per rule, all
@@ -130,14 +133,32 @@ func Discover(home string, loc claudecode.Location) (*Install, error) {
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(loc.Dir, "hooks", "memory-retro.py")); err == nil {
-		add(Piece{"python-retro", ".claude/hooks/memory-retro.py", cutOver})
+	// The retro script and timer are wired only while the timer is enabled
+	// (a *.wants link) or a hook entry runs the script.
+	userUnits := filepath.Join(home, ".config", "systemd", "user")
+	_, timerErr := os.Stat(filepath.Join(userUnits, RetroTimer))
+	wants, _ := filepath.Glob(filepath.Join(userUnits, "*.wants", RetroTimer))
+	timerOn := timerErr == nil && len(wants) > 0
+	hookRuns := false
+	for _, p := range in.Pieces {
+		hookRuns = hookRuns || p.ID == "python-retro"
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", "memory-retro.timer")); err == nil {
-		add(Piece{"python-retro-timer", "systemd memory-retro.timer", cutOver})
+	if _, err := os.Stat(filepath.Join(loc.Dir, "hooks", "memory-retro.py")); err == nil {
+		p := Piece{"python-retro", ".claude/hooks/memory-retro.py", cutOver}
+		if timerOn || hookRuns {
+			add(p)
+		} else {
+			p.Where += ", not run"
+			in.Leftovers = append(in.Leftovers, p)
+		}
+	}
+	if timerOn {
+		add(Piece{"python-retro-timer", "systemd " + RetroTimer, cutOver})
+	} else if timerErr == nil {
+		in.Leftovers = append(in.Leftovers, Piece{"python-retro-timer", "systemd " + RetroTimer + ", disabled", cutOver})
 	}
 
-	if !found && len(in.Pieces) == 0 {
+	if !found && len(in.Pieces) == 0 && len(in.Leftovers) == 0 {
 		return nil, nil
 	}
 	sort.Slice(in.Pieces, func(i, j int) bool {

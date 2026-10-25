@@ -38,6 +38,7 @@ func authorHome(t *testing.T) string {
  "vfs":{"command":"vfs","args":["mcp"]}}}`)
 	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
 	put(t, home, ".config/systemd/user/memory-retro.timer", "[Timer]")
+	put(t, home, ".config/systemd/user/timers.target.wants/memory-retro.timer", "[Timer]") // enabled
 	return home
 }
 
@@ -204,5 +205,43 @@ func TestReferenceMatchers(t *testing.T) {
 	}
 	if !MCPServer("node /home/u/.hindsight/coding-agents/dist/mcp-server.js") || !MCPServer("python3 /home/u/.claude/hooks/hindsight-memory-mcp.py") || MCPServer("vfs mcp") {
 		t.Error("MCPServer misclassifies")
+	}
+}
+
+// After the cut-over the retro timer is disabled and no hook runs the
+// script: both are left on disk, and nothing is counted as wired.
+func TestDiscoverRetiredRetroIsALeftover(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, ".claude/settings.json", `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify-send done"}]}]}}`)
+	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
+	put(t, home, ".config/systemd/user/memory-retro.timer", "[Timer]")
+	in, err := Discover(home, at(home))
+	if err != nil || in == nil {
+		t.Fatalf("leftovers alone are still reported: %+v %v", in, err)
+	}
+	if len(in.Pieces) != 0 {
+		t.Errorf("a disabled timer and an unrun script are not wired: %+v", in.Pieces)
+	}
+	got := map[string]bool{}
+	for _, p := range in.Leftovers {
+		got[p.ID+"|"+p.Where] = true
+	}
+	if !got["python-retro|.claude/hooks/memory-retro.py, not run"] || !got["python-retro-timer|systemd memory-retro.timer, disabled"] || len(got) != 2 {
+		t.Errorf("leftovers %v", got)
+	}
+}
+
+// A hook entry still running the script keeps it wired, timer or not.
+func TestDiscoverRetroRunByAHookIsWired(t *testing.T) {
+	home := t.TempDir()
+	put(t, home, ".claude/settings.json", `{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"python3 ~/.claude/hooks/memory-retro.py"}]}]}}`)
+	put(t, home, ".claude/hooks/memory-retro.py", "# retro")
+	in, _ := Discover(home, at(home))
+	if in == nil || len(in.Leftovers) != 0 {
+		t.Fatalf("the script runs from a hook: %+v", in)
+	}
+	got := ids(in)
+	if got["python-retro|.claude/hooks/memory-retro.py"] != "M4" || got["python-retro|settings.json SessionEnd"] != "M4" {
+		t.Errorf("%v", got)
 	}
 }
