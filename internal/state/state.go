@@ -109,6 +109,9 @@ type Scheduler struct {
 	Kind        string    `json:"kind"` // systemd | launchd | schtasks
 	Files       []string  `json:"files,omitempty"`
 	InstalledAt time.Time `json:"installed_at"`
+	// Digest identifies the commands that created Task Scheduler tasks,
+	// which have no files to compare (scheduler.Plan.Digest).
+	Digest string `json:"commands_sha256,omitempty"`
 }
 
 // UpdateCheck is the outcome of the last release check. A failed check

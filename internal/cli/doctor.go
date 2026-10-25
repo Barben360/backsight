@@ -55,6 +55,11 @@ func realProbes(e *doctor.Env) {
 		}
 		return selfcheck.Current(e.Dirs, exe)
 	}
+	e.Scheduler = func() (doctor.SchedulerEntries, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return schedulerEntries(ctx, e.Dirs)
+	}
 }
 
 // doctorEnv is doctor's view of this machine.

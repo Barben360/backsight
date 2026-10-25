@@ -35,10 +35,10 @@ func checkUpdate(d paths.Dirs, running string, now time.Time) Check {
 		}
 	case release.NewerThan(uc.Latest, running):
 		pending()
+		// The version only, as the SessionStart banner: release notes are
+		// unsigned text (decision 0067 block 2 review).
 		c.Summary = "update " + uc.Latest + " available"
-		if uc.Summary != "" {
-			c.Summary += " (" + uc.Summary + ")"
-		}
+		c.Detail = "release notes: backsight changelog"
 	default:
 		c.Status, c.Fix = OK, ""
 		c.Summary = "up to date (checked " + uc.CheckedAt.UTC().Format("2006-01-02 15:04 UTC") + ")"

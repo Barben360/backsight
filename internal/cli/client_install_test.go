@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -443,5 +444,58 @@ func TestClientInstallRefusesAProfileWiredToAnotherInstall(t *testing.T) {
 	f.calls = nil
 	if code, out, _ := run(t, "client", "install"); code != output.OK || !strings.Contains(strings.Join(mutating(f), ","), "plugin marketplace remove backsight") {
 		t.Errorf("a moved data directory must be re-added: exit %d %v\n%s", code, mutating(f), out)
+	}
+}
+
+func schedulerStepOf(t *testing.T, out string) installStep {
+	t.Helper()
+	var env struct {
+		Data clientInstallResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, s := range env.Data.Steps {
+		if s.Name == "scheduler" {
+			return s
+		}
+	}
+	return installStep{}
+}
+
+// client install (so the new binary's, during an update apply) brings the
+// scheduler entries to its templates (SPEC §7 step 7, issue 222); --plan
+// only says so; a refresh that fails does not fail the install.
+func TestClientInstallRefreshesTheSchedulerEntries(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	sys := withSys(t, "linux")
+	if code, out, _ := run(t, "client", "install", "--json"); code != output.OK || schedulerStepOf(t, out).Name != "" {
+		t.Fatalf("no entries yet, no scheduler step: exit %d\n%s", code, out)
+	}
+	run(t, "jobs", "install")
+	svc := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.service")
+	oldTemplate(t, svc, "TimeoutStopSec=45min\n")
+
+	code, out, _ := run(t, "client", "install", "--plan", "--json")
+	if s := schedulerStepOf(t, out); code != output.OK || s.Status != "planned" || !strings.Contains(s.Detail, svc) || strings.Contains(readFile(t, svc), "TimeoutStopSec") {
+		t.Fatalf("plan: exit %d %+v", code, s)
+	}
+	sys.calls = nil
+	code, out, _ = run(t, "client", "install", "--json")
+	if s := schedulerStepOf(t, out); code != output.OK || s.Status != "done" || !strings.Contains(readFile(t, svc), "TimeoutStopSec=45min\n") {
+		t.Fatalf("install: exit %d %+v\n%s", code, s, readFile(t, svc))
+	}
+	if !slices.Contains(sys.calls, "systemctl --user daemon-reload") {
+		t.Errorf("calls %q", sys.calls)
+	}
+	if _, out, _ := run(t, "client", "install", "--json"); schedulerStepOf(t, out).Status != "unchanged" {
+		t.Errorf("rerun:\n%s", out)
+	}
+
+	sys.xdg = filepath.Join(home, "elsewhere") // entries this binary cannot refresh in place
+	code, out, _ = run(t, "client", "install", "--json")
+	if s := schedulerStepOf(t, out); code != output.OK || s.Status != "failed" || !strings.Contains(s.Detail, "jobs install") {
+		t.Errorf("failed refresh: exit %d %+v", code, s)
 	}
 }

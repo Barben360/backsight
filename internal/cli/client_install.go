@@ -64,7 +64,7 @@ var selfExe = os.Executable
 
 type installStep struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // done | skipped | planned
+	Status string `json:"status"` // done | skipped | planned | unchanged | failed | deferred
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -225,6 +225,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 			return res, editError(err)
 		}
 		add("permission rule", did(len(fr[0].Changes) > 0), c.loc.Settings)
+		schedulerStep(ctx, true, add)
 		return res, nil
 	}
 	run, files, err := c.runner("client install").Apply([]claudecfg.Edit{edit})
@@ -256,7 +257,26 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	}); err != nil {
 		return res, partialError(err)
 	}
+	schedulerStep(ctx, false, add)
 	return res, nil
+}
+
+// schedulerStep refreshes the installed scheduler entries (issue 222): the
+// new binary's client install is how an update apply brings them to its
+// templates, an older binary's update apply included. The entries are
+// independent of the plugin, so a failure is reported (and doctor flags
+// the entries) without failing the install, nor an update with it.
+func schedulerStep(ctx context.Context, plan bool, add func(name, status, detail string)) {
+	r, err := refreshScheduler(ctx, plan)
+	switch {
+	case err != nil:
+		add("scheduler", "failed", err.Error()+" (backsight jobs refresh retries)")
+	case r.Status == "none":
+	case r.Status == "unchanged":
+		add("scheduler", "unchanged", r.Kind+" entries up to date")
+	default:
+		add("scheduler", r.Status, refreshDetail(r))
+	}
 }
 
 // marketplacePath is where Claude Code reads backsight's marketplace from,

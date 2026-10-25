@@ -656,6 +656,7 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 		res.Plugin = "skipped: Claude Code is not wired on this machine"
 		add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
 	}
+	a.refreshScheduler(ctx, staged, true)
 	if why := serverStepSkipped(a.d, a.cfg); why != "" {
 		add("server", "skipped", why)
 		return nil
@@ -714,14 +715,24 @@ func (a *applyRun) steps(ctx context.Context) error {
 		// 5. The new binary's plugin: generated, then claude plugin update.
 		if a.clientWired {
 			a.rb.pluginTouched = true
-			if _, err := runChild(ctx, target, a.clientArgs...); err != nil {
+			cenv, err := runChild(ctx, target, a.clientArgs...)
+			if err != nil {
 				return failed("plugin", err)
 			}
 			res.Plugin = "updated"
 			add("plugin", "done", "the new binary's "+strings.Join(a.clientArgs, " ")+": plugin regenerated, claude plugin update")
+			// Its scheduler step (issue 222), shown as update apply's own.
+			var cr clientInstallResult
+			_ = json.Unmarshal(cenv.Data, &cr)
+			for _, st := range cr.Steps {
+				if st.Name == "scheduler" {
+					a.schedulerStep(st.Status, st.Detail)
+				}
+			}
 		} else {
 			res.Plugin = "skipped: Claude Code is not wired on this machine"
 			add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
+			a.refreshScheduler(ctx, target, false)
 		}
 		if err := ctx.Err(); err != nil {
 			return failed("plugin", err)
@@ -754,6 +765,48 @@ func (a *applyRun) steps(ctx context.Context) error {
 	_ = state.ClearUpdateMarker(a.d)
 	add("done", "done", "backsight "+res.Target+" installed; restart Claude Code (or /reload-plugins) to load its plugin")
 	return nil
+}
+
+// refreshScheduler runs the new binary's jobs refresh (with plan, its
+// --plan): the entries it renders are its own (issue 222). client install
+// runs it too, so it is called only when Claude Code is not wired, and
+// for a plan.
+func (a *applyRun) refreshScheduler(ctx context.Context, exe string, plan bool) {
+	args := []string{"jobs", "refresh"}
+	if plan {
+		args = append(args, "--plan")
+	}
+	env, err := runChild(ctx, exe, args...)
+	if err != nil {
+		if plan {
+			a.add("scheduler", "skipped", "the new binary cannot plan the refresh of the scheduler entries ("+err.Error()+")")
+			return
+		}
+		a.schedulerStep("failed", err.Error()+" (backsight jobs refresh retries)")
+		return
+	}
+	var r jobsRefreshResult
+	_ = json.Unmarshal(env.Data, &r)
+	switch r.Status {
+	case "none":
+	case "unchanged":
+		a.schedulerStep("unchanged", r.Kind+" entries up to date")
+	default:
+		a.schedulerStep(r.Status, refreshDetail(r))
+	}
+}
+
+// schedulerStep records the scheduler refresh. Its failure is a warning,
+// never a rollback: the entries run the shim whatever its version, and
+// doctor flags entries left stale.
+func (a *applyRun) schedulerStep(status, detail string) {
+	switch status {
+	case "unchanged":
+		status = "skipped"
+	case "failed":
+		a.res.Warnings = append(a.res.Warnings, "the scheduler entries were not refreshed: "+detail)
+	}
+	a.add("scheduler", status, detail)
 }
 
 // server runs the new binary's server step. Its upgrade passed when it

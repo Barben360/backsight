@@ -47,8 +47,9 @@ type jobsInstallResult struct {
 
 // schedulerPlan builds the entries for this install. The job runs with
 // none of the installing shell's environment: the directories the install
-// resolved and PATH go into the entries.
-func schedulerPlan(ctx context.Context) (scheduler.Plan, error) {
+// resolved and PATH go into the entries. tweak changes the options last
+// (a refresh keeps the environment the entries were installed with).
+func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (scheduler.Plan, error) {
 	d, home, err := machine()
 	if err != nil {
 		return scheduler.Plan{}, err
@@ -75,6 +76,9 @@ func schedulerPlan(ctx context.Context) (scheduler.Plan, error) {
 				}
 			}
 		}
+	}
+	for _, f := range tweak {
+		f(&o)
 	}
 	p, err := scheduler.For(schedulerGOOS, o)
 	if err != nil {
@@ -142,7 +146,7 @@ func newJobsInstallCmd(e *env) *cobra.Command {
 				if s.Scheduler != nil && s.Scheduler.Kind == p.Kind {
 					at = s.Scheduler.InstalledAt
 				}
-				s.Scheduler = &state.Scheduler{Kind: p.Kind, Files: p.Paths(), InstalledAt: at}
+				s.Scheduler = &state.Scheduler{Kind: p.Kind, Files: p.Paths(), InstalledAt: at, Digest: tasksDigest(p)}
 				return nil
 			}); err != nil {
 				return blocked(err)

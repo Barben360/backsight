@@ -74,6 +74,9 @@ type Env struct {
 	// SelfCheck is the running binary's check of itself against its signed
 	// checksums.txt (SPEC §11.1); nil: no binary check.
 	SelfCheck func() state.SelfCheck
+	// Scheduler compares the installed scheduler entries with this
+	// binary's templates (nil: not compared).
+	Scheduler func() (SchedulerEntries, error)
 }
 
 const (
@@ -148,6 +151,11 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	add(checkBackup(env, now()))
 	add(checkJobs(env.Dirs, now(), env.Linger))
+	if env.Scheduler != nil {
+		if c, ok := checkScheduler(env.Scheduler); ok {
+			add(c)
+		}
+	}
 	add(checkUpdate(env.Dirs, buildinfo.Version, now()))
 	return r
 }

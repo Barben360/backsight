@@ -39,7 +39,10 @@ func TestCheckUpdate(t *testing.T) {
 		t.Errorf("a release no newer than the running one is not named: %+v", c)
 	}
 	record(state.UpdateCheck{CheckedAt: now.Add(-3 * time.Hour), Latest: "0.2.0", Summary: "✨ Add update check"})
-	if c := checkUpdate(d, "0.1.0", now); c.Status != Info || c.Summary != "update 0.2.0 available (✨ Add update check)" {
+	// The version only: release notes are unsigned text (decision 0067
+	// block 2 review), shown by backsight changelog, never by doctor.
+	if c := checkUpdate(d, "0.1.0", now); c.Status != Info || c.Summary != "update 0.2.0 available" || c.Fix != "backsight update apply" ||
+		!strings.Contains(c.Detail, "backsight changelog") || strings.Contains(c.Summary+c.Detail+c.Fix, "Add update check") {
 		t.Errorf("available: %+v", c)
 	}
 	if c := checkUpdate(d, "0.2.0", now); c.Status != OK || !strings.Contains(c.Summary, "up to date") {

@@ -66,3 +66,48 @@ func TestJobsLingerAndUnreadableState(t *testing.T) {
 		t.Errorf("unreadable state: %+v", c)
 	}
 }
+
+// Entries rendered by an older template are a warning naming the refresh;
+// entries installed under other paths name the reinstall; a comparison
+// that could not run is information.
+func TestSchedulerEntriesCheck(t *testing.T) {
+	probe := func(s SchedulerEntries, err error) func() (SchedulerEntries, error) {
+		return func() (SchedulerEntries, error) { return s, err }
+	}
+	if _, ok := checkScheduler(probe(SchedulerEntries{}, nil)); ok {
+		t.Error("no entries installed: no line (the jobs check says it)")
+	}
+	c, ok := checkScheduler(probe(SchedulerEntries{Installed: true, Kind: "systemd"}, nil))
+	if !ok || c.ID != "scheduler" || c.Status != OK || c.Fix != "" {
+		t.Errorf("fresh: %+v", c)
+	}
+	c, _ = checkScheduler(probe(SchedulerEntries{Installed: true, Kind: "systemd", Stale: []string{"tick", "maintain"}}, nil))
+	if c.Status != Warn || !strings.Contains(c.Summary, "tick, maintain") || c.Fix != "backsight jobs refresh" {
+		t.Errorf("stale: %+v", c)
+	}
+	c, _ = checkScheduler(probe(SchedulerEntries{Installed: true, Kind: "systemd", Elsewhere: "the entries are /a; this install's would be /b"}, nil))
+	if c.Status != Warn || !strings.Contains(c.Detail, "/a") || !strings.Contains(c.Fix, "jobs uninstall") || !strings.Contains(c.Fix, "jobs install") {
+		t.Errorf("elsewhere: %+v", c)
+	}
+	c, ok = checkScheduler(probe(SchedulerEntries{}, fmt.Errorf("systemctl: no user bus")))
+	if !ok || c.Status != Info || !strings.Contains(c.Detail, "no user bus") {
+		t.Errorf("probe failed: %+v", c)
+	}
+}
+
+func TestRunReportsStaleSchedulerEntries(t *testing.T) {
+	f := newFixture(t)
+	f.env.Scheduler = func() (SchedulerEntries, error) {
+		return SchedulerEntries{Installed: true, Kind: "launchd", Stale: []string{"maintain"}}, nil
+	}
+	r := f.run()
+	if c := check(t, r, "scheduler"); c.Status != Warn || !strings.Contains(c.Summary, "maintain") {
+		t.Errorf("%+v", c)
+	}
+	f.env.Scheduler = nil
+	for _, c := range f.run().Checks {
+		if c.ID == "scheduler" {
+			t.Errorf("no probe, no line: %+v", c)
+		}
+	}
+}

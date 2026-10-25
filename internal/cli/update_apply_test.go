@@ -1608,3 +1608,95 @@ func TestUpdateApplyComparesWithTheShimsVersion(t *testing.T) {
 		t.Errorf("changed (calls %q)", bins.calls)
 	}
 }
+
+// fakeScheduler fakes the OS scheduler without touching the shim (withSys
+// writes one, which would overwrite the installed binary through it).
+func fakeScheduler(t *testing.T, home string) *fakeSys {
+	t.Helper()
+	f := &fakeSys{xdg: filepath.Join(home, "xdg")}
+	oldR, oldG := sysRunner, schedulerGOOS
+	sysRunner, schedulerGOOS = f, "linux"
+	t.Cleanup(func() { sysRunner, schedulerGOOS = oldR, oldG })
+	return f
+}
+
+func schedulerStepIn(steps []step) step {
+	for _, s := range steps {
+		if s.Name == "scheduler" {
+			return s
+		}
+	}
+	return step{}
+}
+
+// update apply brings the scheduler entries to the new binary's templates
+// through its client install (issue 222): --plan says so and writes
+// nothing; the update rewrites the stale unit and only reloads (never a
+// stop or restart); a refresh that fails is a warning, never a rollback.
+func TestUpdateApplyRefreshesTheSchedulerEntries(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	sys := fakeScheduler(t, home)
+	if code, out, _ := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("jobs install: exit %d\n%s", code, out)
+	}
+	svc := filepath.Join(home, "xdg", "systemd", "user", "backsight-maintain.service")
+	oldTemplate(t, svc, "KillMode=mixed\nTimeoutStopSec=45min\n")
+	src := t.TempDir()
+	key := trustTestKey(t)
+	signedRelease(t, src, "0.2.0", key, relOpts{})
+
+	sys.calls = nil
+	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if s := schedulerStepIn(env.Data.Steps); code != output.OK || s.Status != "planned" || !strings.Contains(s.Detail, svc) {
+		t.Fatalf("plan: exit %d %+v\n%s", code, s, out)
+	}
+	if strings.Contains(readFile(t, svc), "KillMode") || len(sys.calls) != 0 || bins.ran("0.2.0 jobs refresh --plan") != 1 {
+		t.Fatalf("the plan changed the unit or ran %q / %q", sys.calls, bins.calls)
+	}
+
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
+	env = decodeApply(t, out)
+	if s := schedulerStepIn(env.Data.Steps); code != output.OK || s.Status != "done" || !strings.Contains(readFile(t, svc), "KillMode=mixed\nTimeoutStopSec=45min\n") {
+		t.Fatalf("apply: exit %d %+v\n%s", code, s, out)
+	}
+	for _, c := range sys.calls {
+		if strings.Contains(c, "restart") || strings.Contains(c, " stop") || strings.Contains(c, ".service") {
+			t.Errorf("a running job would be interrupted: %s", c)
+		}
+	}
+	if !slices.Contains(sys.calls, "systemctl --user daemon-reload") {
+		t.Errorf("not reloaded: %q", sys.calls)
+	}
+
+	// The next release finds entries it cannot refresh in place: the
+	// update still passes, with a warning.
+	signedRelease(t, src, "0.3.0", key, relOpts{})
+	setBuild(t, "0.2.0", "abc1234")
+	sys.xdg = filepath.Join(home, "elsewhere")
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
+	env = decodeApply(t, out)
+	if s := schedulerStepIn(env.Data.Steps); code != output.OK || env.Data.RolledBack || s.Status != "failed" ||
+		!slices.ContainsFunc(env.Data.Warnings, func(w string) bool { return strings.Contains(w, "scheduler") }) {
+		t.Errorf("failed refresh: exit %d %+v\n%s", code, s, out)
+	}
+}
+
+// Without Claude Code wired there is no client install: the new binary's
+// own jobs refresh runs.
+func TestUpdateApplyRefreshesTheSchedulerWithoutAClient(t *testing.T) {
+	home, _, bins := installedAt(t, "0.1.0")
+	fakeScheduler(t, home)
+	run(t, "jobs", "install")
+	d := pathsOf(home)
+	_ = state.Update(d, "test", func(s *state.State) error { s.PluginVersion = ""; return nil })
+	svc := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.service")
+	oldTemplate(t, svc, "KillMode=mixed\n")
+	src := t.TempDir()
+	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if s := schedulerStepIn(env.Data.Steps); code != output.OK || s.Status != "done" || bins.ran("0.2.0 jobs refresh") != 1 || !strings.Contains(readFile(t, svc), "KillMode=mixed") {
+		t.Errorf("exit %d %+v calls %q\n%s", code, s, bins.calls, out)
+	}
+}

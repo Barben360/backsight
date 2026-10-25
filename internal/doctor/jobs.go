@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
@@ -68,4 +69,38 @@ func checkJobs(d paths.Dirs, now time.Time, linger func() (bool, error)) Check {
 		}
 	}
 	return c
+}
+
+// SchedulerEntries is how the installed scheduler entries compare with
+// this binary's templates.
+type SchedulerEntries struct {
+	Installed bool
+	Kind      string
+	Stale     []string // jobs whose entry differs
+	Elsewhere string   // why they cannot be refreshed in place
+}
+
+// checkScheduler: entries rendered by an older template lack what this
+// binary's carry (the stop timeout an update's rollback needs, issue 222).
+// ok is false when no entries are installed (checkJobs says so).
+func checkScheduler(probe func() (SchedulerEntries, error)) (Check, bool) {
+	c := Check{ID: "scheduler", Status: OK}
+	s, err := probe()
+	switch {
+	case err != nil:
+		c.Status, c.Summary, c.Detail = Info, "could not compare the scheduler entries with this binary's", err.Error()
+	case !s.Installed:
+		return c, false
+	case s.Elsewhere != "":
+		c.Status, c.Summary, c.Detail = Warn, s.Kind+" entries installed under other names or paths", s.Elsewhere
+		c.Fix = "backsight jobs uninstall, then backsight jobs install"
+	case len(s.Stale) > 0:
+		c.Status = Warn
+		c.Summary = s.Kind + " entries older than this binary's: " + strings.Join(s.Stale, ", ")
+		c.Detail = "an older template may lack the stop timeout an update's rollback needs"
+		c.Fix = "backsight jobs refresh"
+	default:
+		c.Summary = s.Kind + " entries match this binary's"
+	}
+	return c, true
 }

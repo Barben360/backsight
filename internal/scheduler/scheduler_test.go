@@ -119,3 +119,72 @@ func TestEntriesAreNamedAfterTheProject(t *testing.T) {
 		t.Error("the default names changed")
 	}
 }
+
+// A launchd stop waits as long as a systemd one before its SIGKILL, so an
+// update's rollback is not cut short (launchd's default is 20 s).
+func TestLaunchdStopTimeout(t *testing.T) {
+	p, _ := For("darwin", Options{Shim: "/s", Home: "/h", UID: 501, LogDir: "/l"})
+	for _, f := range p.Files {
+		if !strings.Contains(f.Content, "<key>ExitTimeOut</key><integer>2700</integer>") {
+			t.Errorf("%s:\n%s", f.Path, f.Content)
+		}
+	}
+}
+
+// The environment an entry was installed with is read back from its
+// files, so that a refresh renders the new template with it (and not
+// with the refreshing shell's PATH).
+func TestInstalledEnvRoundTrips(t *testing.T) {
+	env := map[string]string{"BACKSIGHT_HOME": `/srv/say "hi"\x 50%`, "PATH": "/opt/<x>&y:/usr/bin", "XDG_STATE_HOME": "/s t"}
+	for _, goos := range []string{"linux", "darwin"} {
+		p, _ := For(goos, Options{Shim: "/s", Home: "/h", UnitDir: "/u", UID: 501, LogDir: "/l", Env: env})
+		got, ok := InstalledEnv(p.Files[0].Path, p.Files[0].Content)
+		if !ok || len(got) != len(env) {
+			t.Fatalf("%s: %v %q", goos, ok, got)
+		}
+		for k, v := range env {
+			if got[k] != v {
+				t.Errorf("%s: %s = %q, want %q", goos, k, got[k], v)
+			}
+		}
+	}
+	// No environment at all is an environment (an empty one).
+	p, _ := For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u"})
+	if got, ok := InstalledEnv(p.Files[0].Path, p.Files[0].Content); !ok || len(got) != 0 {
+		t.Errorf("empty: %v %q", ok, got)
+	}
+	if _, ok := InstalledEnv("/u/backsight-tick.timer", p.Files[1].Content); ok {
+		t.Error("a timer carries no environment")
+	}
+}
+
+// Each entry names its files, how to reload them and, where reloading
+// stops a running job, how to tell that it runs.
+func TestEntries(t *testing.T) {
+	s, _ := For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u"})
+	if len(s.Entries) != 2 || len(s.Entries[0].Files) != 2 || s.Entries[0].Running != nil || len(s.Entries[0].Reload) != 0 {
+		t.Errorf("systemd entries %+v", s.Entries)
+	}
+	if strings.Join(s.Reload[0], " ") != "systemctl --user daemon-reload" {
+		t.Errorf("systemd reload %q", s.Reload)
+	}
+	l, _ := For("darwin", Options{Shim: "/s", Home: "/h", UID: 501, LogDir: "/l"})
+	e := l.Entries[1]
+	if e.Job != "maintain" || strings.Join(e.Files, " ") != "/h/Library/LaunchAgents/tech.backsight.maintain.plist" ||
+		strings.Join(e.Running, " ") != "launchctl print gui/501/tech.backsight.maintain" || e.RunningMark != "state = running" ||
+		len(e.Reload) != 2 || strings.Join(e.Reload[1], " ") != "launchctl bootstrap gui/501 /h/Library/LaunchAgents/tech.backsight.maintain.plist" {
+		t.Errorf("launchd entry %+v", e)
+	}
+	w, _ := For("windows", Options{Shim: `C:\s.exe`, Home: `C:\h`})
+	if e := w.Entries[0]; len(e.Files) != 0 || strings.Join(e.Running, " ") != `schtasks /Query /TN backsight\tick /FO LIST` ||
+		e.RunningMark != "Running" || strings.Join(e.Reload[0], " ") != strings.Join(w.Activate[0], " ") {
+		t.Errorf("schtasks entry %+v", e)
+	}
+	if w.Digest() == "" || w.Digest() == s.Digest() {
+		t.Error("digest")
+	}
+	w2, _ := For("windows", Options{Shim: `C:\other.exe`, Home: `C:\h`})
+	if w.Digest() == w2.Digest() {
+		t.Error("the digest ignores the commands")
+	}
+}
