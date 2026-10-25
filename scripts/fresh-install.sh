@@ -156,6 +156,10 @@ running=$(compose ps -q --status running) || fail "cannot list the install's con
 shim=$BACKSIGHT_HOME/data/bin/current
 tree() { find "$BACKSIGHT_HOME" "$HOME/.claude" \( -type f -o -type l \) -print0 | sort -z | xargs -0 sha256sum 2>/dev/null; }
 tree_before=$(tree)
+# The backups as they are now: earlier archives may have been pruned by
+# the update's server upgrade (backup retention), every one left must stay.
+backups_before=$(cd "$BACKSIGHT_HOME/data/backups" && find . -type f -print0 | sort -z | xargs -0 sha256sum)
+[ -n "$backups_before" ] || fail "no backup left before uninstall: the check below would prove nothing"
 "$shim" uninstall --plan --delete-data --purge-local --json > "$work/uninstall-plan.json" || { cat "$work/uninstall-plan.json" >&2; fail "uninstall --plan failed"; }
 [ "$(tree)" = "$tree_before" ] || fail "uninstall --plan changed files"
 set +e
@@ -173,5 +177,6 @@ if docker volume inspect "$volume" >/dev/null 2>&1; then fail "the database volu
 for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/bin" "$BACKSIGHT_HOME/data/marketplace" "$BACKSIGHT_HOME/data/server/compose.yaml"; do
   [ ! -e "$p" ] || fail "uninstall left $p"
 done
-[ -s "$archive" ] || fail "uninstall removed the backup $archive"
+backups_after=$(cd "$BACKSIGHT_HOME/data/backups" && find . -type f -print0 | sort -z | xargs -0 sha256sum)
+[ "$backups_after" = "$backups_before" ] || { echo "before: $backups_before" >&2; echo "after:  $backups_after" >&2; fail "uninstall changed the backups"; }
 echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, uninstall) on project $project"
