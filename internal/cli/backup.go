@@ -254,14 +254,11 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 			// Under the state directory (0700), not $TMPDIR; only the
 			// manifest and the dump are written: the archive's secrets
 			// and config are not needed to verify.
-			if err := os.MkdirAll(filepath.Join(d.State, "staging"), 0o700); err != nil {
-				return blocked(err)
-			}
-			work, err := os.MkdirTemp(filepath.Join(d.State, "staging"), "verify-")
+			work, done, err := backup.VerifyDir(filepath.Join(d.State, "staging"))
 			if err != nil {
 				return blocked(err)
 			}
-			defer func() { _ = os.RemoveAll(work) }()
+			defer done()
 			m, err := backup.Open(args[0], ids, work, func(string) bool { return false })
 			if err != nil {
 				return blocked(err)

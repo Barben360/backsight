@@ -1,11 +1,38 @@
 package cli
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/state"
 )
+
+// proxyHindsight fronts the fake server on port; a request answer reports
+// it answered itself is not forwarded.
+func proxyHindsight(t *testing.T, port int, answer func(w http.ResponseWriter, r *http.Request) bool) int {
+	t.Helper()
+	target, _ := url.Parse("http://127.0.0.1:" + strconv.Itoa(port))
+	rp := httputil.NewSingleHostReverseProxy(target)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !answer(w, r) {
+			rp.ServeHTTP(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	p, _ := strconv.Atoi(u.Port())
+	return p
+}
 
 func fact(id, doc string) string {
 	return `{"id":"` + id + `","text":"a fact","type":"world","tags":["project:billing"],"document_id":"` + doc + `"}`
@@ -232,5 +259,53 @@ func TestAPartialPurgeSaysWhatIsLeft(t *testing.T) {
 	code, _, errOut := run(t, "forget", "o1", "--purge", "--yes")
 	if code != output.Blocked || !strings.Contains(errOut, "documents left: conversation:s1, conversation:s2") || !strings.Contains(errOut, "backsight forget <fact id> --purge") {
 		t.Errorf("exit %d %q", code, errOut)
+	}
+}
+
+// The purge's writes hold the maintenance lock, so a backup cannot dump a
+// half-purged database; a backup that dumped before and is still being
+// encrypted is named with the finished ones.
+func TestPurgeHoldsTheMaintenanceLockAndNamesABackupInProgress(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	var mu sync.Mutex
+	var writes, locked int
+	pointAt(t, home, proxyHindsight(t, fakeHindsight(t), func(_ http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodGet {
+			mu.Lock()
+			writes++
+			if h := state.Inspect(d.MaintenanceLock()); h != nil && !h.Stale && h.Owner.Command == "forget --purge" {
+				locked++
+			}
+			mu.Unlock()
+		}
+		return false
+	}))
+	withClock(t, time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC))
+	backups := filepath.Join(d.Data, "backups")
+	_ = os.MkdirAll(backups, 0o700)
+	inProgress := filepath.Join(backups, "backsight-20261025T080000Z.tar.gz.age")
+	_ = os.WriteFile(inProgress+".partial", []byte("age-encryption.org/v1"), 0o600)
+	memories["f9"] = fact("f9", "conversation:s9")
+	documentUnits["conversation:s9"] = 1
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes")
+	if code != output.OK || !strings.Contains(out, "- "+inProgress+"\n") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	mu.Lock()
+	// observations cleared, fact retired, document and briefing page deleted
+	if writes != 4 || locked != writes {
+		t.Errorf("%d of %d writes under the maintenance lock", locked, writes)
+	}
+	mu.Unlock()
+	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+		t.Error("the maintenance lock was left behind")
+	}
+	// a backup holding the lock makes the purge wait, before any write
+	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"backup create","since":"2026-10-25T08:59:00Z"}`), 0o600)
+	curation = nil
+	if code, _, errOut := run(t, "forget", "f9", "--purge", "--yes"); code != output.Blocked || !strings.Contains(errOut, "backup create") || len(curation) != 0 {
+		t.Errorf("exit %d, calls %q: %s", code, curation, errOut)
 	}
 }

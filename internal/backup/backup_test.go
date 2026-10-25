@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"filippo.io/age"
+
+	"github.com/Barben360/backsight/internal/state"
 )
 
 type fakeDB struct{ dump string }
@@ -134,8 +137,123 @@ func TestPruneKeepsDailyAndWeekly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "mine.tar.gz.age")); err != nil {
 		t.Error("a foreign file was removed")
 	}
+	// the newest of each day and of each week: W42 (Oct 12-18) keeps Oct 18
+	// 16:00, not that day's 04:00 nor an earlier day
+	var kept []string
+	for _, e := range left {
+		if e.Ours {
+			kept = append(kept, e.Manifest.CreatedAt.Format("01-02T15"))
+		}
+	}
+	want := "10-25T16 10-24T16 10-23T16 10-22T16 10-21T16 10-20T16 10-19T16 10-18T16 10-11T16 10-04T16"
+	if strings.Join(kept, " ") != want {
+		t.Errorf("kept %v, want %s", kept, want)
+	}
+	// one sidecar per archive left, none orphaned
+	ents, _ := os.ReadDir(dir)
+	sidecars := 0
+	for _, e := range ents {
+		if archive, ok := strings.CutSuffix(e.Name(), ".json"); ok {
+			sidecars++
+			if _, err := os.Stat(filepath.Join(dir, archive)); err != nil {
+				t.Errorf("orphan sidecar %s", e.Name())
+			}
+		}
+	}
+	for _, e := range left {
+		if _, err := os.Stat(e.Path + ".json"); e.Ours && err != nil {
+			t.Errorf("no sidecar for %s", filepath.Base(e.Path))
+		}
+	}
+	if sidecars != len(kept) {
+		t.Errorf("%d sidecars for %d archives", sidecars, len(kept))
+	}
 	if b := Before(dir, start); len(b) != 10 {
 		t.Errorf("before: %d", len(b))
+	}
+}
+
+// From the moment the database lock is released, the archive being
+// encrypted is on disk: a purge then lists it (by its final path) among the
+// backups that still hold what it deletes.
+func TestBeforeListsAnArchiveInProgress(t *testing.T) {
+	dir := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	at := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
+	final := filepath.Join(dir, Name(at))
+	var during []Entry
+	_, _, err := Create(context.Background(), fakeDB{dump: "PGDMP"}, dir, t.TempDir(), Manifest{CreatedAt: at}, nil, []age.Recipient{id.Recipient()},
+		func() { during = Before(dir, at.Add(time.Minute)) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(during) != 1 || during[0].Path != final {
+		t.Errorf("before, while encrypting: %+v", during)
+	}
+	if after := Before(dir, at.Add(time.Minute)); len(after) != 1 || after[0].Path != final {
+		t.Errorf("before, once written: %+v", after)
+	}
+	if b := Before(dir, at); len(b) != 0 {
+		t.Errorf("an archive taken at t is not before t: %+v", b)
+	}
+}
+
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+// A killed verify leaves its clear dump in staging: the next backup or
+// verify removes it, never the directory of a verify still running.
+func TestDeadVerifiesAreRemoved(t *testing.T) {
+	staging := t.TempDir()
+	dead := map[string]string{
+		"verify-4242":        "", // no lock: an older layout, or killed between its steps
+		"verify-4243-777777": `{"pid":` + strconv.Itoa(deadPID(t)) + `,"command":"backup verify","since":"2026-10-25T03:00:00Z"}`,
+	}
+	plant := func() {
+		for name, lock := range dead {
+			_ = os.MkdirAll(filepath.Join(staging, name), 0o700)
+			_ = os.WriteFile(filepath.Join(staging, name, "db.dump"), []byte("PGDMP clear"), 0o600)
+			if lock != "" {
+				_ = os.WriteFile(filepath.Join(staging, name+".lock"), []byte(lock), 0o600)
+			}
+		}
+	}
+	plant()
+	running, done, err := VerifyDir(staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(running, "db.dump"), []byte("PGDMP clear"), 0o600)
+	for name := range dead {
+		if _, err := os.Stat(filepath.Join(staging, name)); err == nil {
+			t.Errorf("verify left %s", name)
+		}
+	}
+	plant()
+	id, _ := age.GenerateX25519Identity()
+	if _, _, err := Create(context.Background(), fakeDB{dump: "PGDMP"}, t.TempDir(), staging, Manifest{CreatedAt: time.Now()}, nil, []age.Recipient{id.Recipient()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ents, _ := os.ReadDir(staging)
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	if want := filepath.Base(running) + " " + filepath.Base(running) + ".lock"; strings.Join(names, " ") != want {
+		t.Errorf("staging after create: %v, want %s", names, want)
+	}
+	if h := state.Inspect(running + ".lock"); h == nil || h.Stale {
+		t.Errorf("the running verify's lock: %+v", h)
+	}
+	done()
+	if ents, _ := os.ReadDir(staging); len(ents) != 0 {
+		t.Errorf("staging after done: %v", ents)
 	}
 }
 

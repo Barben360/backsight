@@ -23,6 +23,8 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/agessh"
+
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // Format of the archive layout.
@@ -105,6 +107,7 @@ func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras 
 	}
 	removeStale(dir, ".work-")      // left by older versions, which staged in dir
 	removeStale(staging, "backup-") // left by a crash
+	removeDeadVerifies(staging)
 	work, err := os.MkdirTemp(staging, "backup-")
 	if err != nil {
 		return "", m, err
@@ -121,6 +124,15 @@ func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras 
 	if m.Counts, err = db.Dump(ctx, dump, Tables); err != nil {
 		return "", m, fmt.Errorf("dumping the database: %w", err)
 	}
+	// The archive exists before the lock is released: from then on a purge
+	// sees it (Before), though it holds the data as dumped.
+	final := filepath.Join(dir, Name(m.CreatedAt))
+	tmp := final + ".partial" // ciphertext only, renamed when complete
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", m, err
+	}
+	defer func() { _ = out.Close(); _ = os.Remove(tmp) }()
 	if afterDump != nil {
 		afterDump()
 	}
@@ -138,10 +150,7 @@ func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras 
 		return "", m, err
 	}
 
-	final := filepath.Join(dir, Name(m.CreatedAt))
-	tmp := final + ".partial" // ciphertext only, renamed when complete
-	defer func() { _ = os.Remove(tmp) }()
-	if err := writeArchive(tmp, recipients, man, dump, names, extras); err != nil {
+	if err := writeArchive(out, recipients, man, dump, names, extras); err != nil {
 		return "", m, err
 	}
 	if err := os.Rename(tmp, final); err != nil {
@@ -164,6 +173,49 @@ func removeStale(dir, prefix string) {
 	}
 }
 
+const verifyPrefix = "verify-"
+
+// VerifyDir makes the work directory of a verify under staging (0700), to
+// remove with done. Verify holds no maintenance lock, so each holds its own
+// lock beside its directory, taken first: a directory with no live lock is
+// a killed verify's, clear dump included, and removed here and by Create.
+func VerifyDir(staging string) (string, func(), error) {
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		return "", nil, err
+	}
+	removeDeadVerifies(staging)
+	work := filepath.Join(staging, fmt.Sprintf("%s%d-%d", verifyPrefix, os.Getpid(), time.Now().UnixNano()))
+	l, err := state.TryAcquire(work+".lock", "backup verify")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.Mkdir(work, 0o700); err != nil {
+		_ = l.Release()
+		return "", nil, err
+	}
+	return work, func() { _ = os.RemoveAll(work); _ = l.Release() }, nil
+}
+
+// removeDeadVerifies removes the verify directories under staging whose
+// lock is gone or stale, and those locks.
+func removeDeadVerifies(staging string) {
+	ents, _ := os.ReadDir(staging)
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), verifyPrefix) {
+			continue
+		}
+		work := filepath.Join(staging, strings.TrimSuffix(e.Name(), ".lock"))
+		held := state.Inspect(work + ".lock")
+		if held != nil && !held.Stale {
+			continue // running
+		}
+		_ = os.RemoveAll(work)
+		if held != nil {
+			_ = state.BreakStale(held)
+		}
+	}
+}
+
 func fileSum(path string) (string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -175,11 +227,7 @@ func fileSum(path string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, err
 }
 
-func writeArchive(path string, recipients []age.Recipient, manifest []byte, dump string, names []string, extras map[string][]byte) (err error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
+func writeArchive(f *os.File, recipients []age.Recipient, manifest []byte, dump string, names []string, extras map[string][]byte) (err error) {
 	defer func() {
 		if cerr := f.Close(); err == nil {
 			err = cerr
@@ -381,12 +429,27 @@ func Prune(dir string, keepDaily, keepWeekly int) ([]string, error) {
 }
 
 // Before lists the backups taken before t: the ones a purge at t cannot
-// reach.
+// reach, those still being encrypted included (by the path they will
+// have). The archives in progress are read first: one renamed meanwhile is
+// then found by List.
 func Before(dir string, t time.Time) []Entry {
+	var partial []Entry
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		name, ok := strings.CutSuffix(e.Name(), suffix+".partial")
+		if !ok || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if at, err := time.Parse("20060102T150405Z", strings.TrimPrefix(name, prefix)); err == nil {
+			partial = append(partial, Entry{Path: filepath.Join(dir, name+suffix), Manifest: Manifest{CreatedAt: at}})
+		}
+	}
 	list, _ := List(dir)
 	var out []Entry
-	for _, e := range list {
-		if e.Manifest.CreatedAt.Before(t) {
+	seen := map[string]bool{}
+	for _, e := range append(list, partial...) {
+		if e.Manifest.CreatedAt.Before(t) && !seen[e.Path] {
+			seen[e.Path] = true
 			out = append(out, e)
 		}
 	}

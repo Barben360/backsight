@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	agelib "filippo.io/age"
 
+	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 )
@@ -320,5 +323,56 @@ func TestIdentityImportRefusesToReplace(t *testing.T) {
 	}
 	if code, _, _ := run(t, "backup", "identity", "import", "--force", f); code != output.OK {
 		t.Errorf("--force: exit %d", code)
+	}
+	if after, _ := config.LoadSecrets(secretsFile(home)); after.BackupIdentity != second.String() {
+		t.Error("--force did not store the new identity")
+	}
+}
+
+// A backup holds, beside the dump, the files the install is rebuilt from,
+// as they were when it was taken.
+func TestBackupArchiveHoldsTheInstallFiles(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, proxyHindsight(t, fakeHindsight(t), func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/default/banks/claude-memory/config" {
+			_, _ = w.Write([]byte(`{"config":{"retain_mission":"keep the decisions"},"overrides":{}}`))
+			return true
+		}
+		return false
+	}))
+	withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	d := pathsOf(home)
+	override := filepath.Join(composeDir(home), "compose.override.yaml")
+	_ = os.MkdirAll(filepath.Dir(override), 0o700)
+	_ = os.WriteFile(override, []byte("services:\n  hindsight:\n    mem_limit: 4g\n"), 0o600)
+	_ = os.MkdirAll(filepath.Dir(d.StateFile()), 0o700)
+	_ = os.WriteFile(d.StateFile(), []byte(`{"schema_version":1,"welcomed":true}`+"\n"), 0o600)
+	if code, out, errOut := run(t, "backup", "create"); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	sec, _ := config.LoadSecrets(secretsFile(home))
+	id, err := agelib.ParseX25519Identity(sec.BackupIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	m, err := backup.Open(filepath.Join(d.Data, "backups", "backsight-20261025T040000Z.tar.gz.age"), []agelib.Identity{id}, out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(m.Files, " "); got != "manifest.json db.dump bank-config.json compose.override.yaml config.toml secrets.toml state.json" {
+		t.Errorf("manifest files: %s", got)
+	}
+	for name, src := range map[string]string{"config.toml": d.ConfigFile(), "secrets.toml": d.SecretsFile(), "state.json": d.StateFile(), "compose.override.yaml": override} {
+		want, _ := os.ReadFile(src)
+		if got, err := os.ReadFile(filepath.Join(out, name)); err != nil || len(want) == 0 || string(got) != string(want) {
+			t.Errorf("%s: %v\ngot  %q\nwant %q", name, err, got, want)
+		}
+	}
+	var bank map[string]any
+	raw, _ := os.ReadFile(filepath.Join(out, "bank-config.json"))
+	if err := json.Unmarshal(raw, &bank); err != nil || bank["retain_mission"] != "keep the decisions" {
+		t.Errorf("bank-config.json: %v %s", err, raw)
 	}
 }

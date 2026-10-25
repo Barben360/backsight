@@ -35,9 +35,14 @@ func maintenanceRefusal() error {
 	if err != nil {
 		return err
 	}
-	switch held := state.Inspect(d.MaintenanceLock()); {
-	case held == nil:
-		return nil
+	if held := state.Inspect(d.MaintenanceLock()); held != nil {
+		return heldRefusal(held)
+	}
+	return nil
+}
+
+func heldRefusal(held *state.HeldError) error {
+	switch {
 	case held.Stale:
 		return &output.Error{Code: output.Blocked, Message: "a maintenance lock is left by " + held.Owner.Command + ", whose process is gone: backsight doctor tells how to clear it"}
 	default:
@@ -202,6 +207,21 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 	if !yes {
 		return res, nil
 	}
+	// The writes hold the maintenance lock: a backup cannot dump a half-purged
+	// database, and one that dumped before is listed below, done or not.
+	d, _, err := machine()
+	if err != nil {
+		return res, err
+	}
+	l, err := state.TryAcquire(d.MaintenanceLock(), "forget --purge")
+	var held *state.HeldError
+	if errors.As(err, &held) {
+		return res, heldRefusal(held)
+	}
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = l.Release() }()
 	for _, f := range facts {
 		if f.State == "invalidated" {
 			continue // already archived: only its document can remove it
