@@ -105,4 +105,4 @@ backsight retain backfill --since 2026-01-01 --max-cost 2
 
 ## Browsing these docs
 
-`backsight guide` lists these documents and `backsight guide <topic>` shows one in the terminal. `backsight guide search <question>` finds the section that answers a question, also when it is phrased differently or asked in another language.
+`backsight guide` lists these documents and `backsight guide <topic>` shows one in the terminal. `backsight guide search <question>` finds the section that answers a question, also when it is phrased differently or asked in another language. It searches a docs bank on your server, which never mixes with your memories and costs no LLM call; when the server cannot answer, a keyword search over the docs in the binary answers instead, and the output says so.

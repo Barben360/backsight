@@ -48,7 +48,7 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 
 1. writes backsight's config and generates the server's keys;
 2. renders and starts the Hindsight server in Docker, on `127.0.0.1` only;
-3. configures the memory bank;
+3. configures the memory bank, and indexes these docs into a docs bank for `backsight guide search`;
 4. checks that your LLM provider can extract a memory;
 5. wires Claude Code: a plugin with the hooks, the memory tools and the skills, plus a permission rule for the memory tools;
 6. installs the background jobs (a timer every 15 minutes and a daily one);

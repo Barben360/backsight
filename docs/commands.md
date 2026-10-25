@@ -109,7 +109,8 @@ Details: [update.md](update.md).
 |---|---|
 | `backsight doctor` | Checks the whole install, read-only; each problem comes with its fix. |
 | `backsight report` | Prints a redacted diagnostic and links to search and file a GitHub issue. Sends nothing. |
-| `backsight guide` | Lists these documents; `backsight guide <topic>` shows one, `backsight guide search <question>` searches them. |
+| `backsight guide` | Lists these documents; `backsight guide <topic>` shows one (`<topic>#<section>` one section), `backsight guide search <question>` searches them: semantically on the server, with a keyword search when the server cannot answer (`--mode keyword` asks for it). |
+| `backsight guide index` | Indexes these documents into the server's docs bank (`<bank>-docs`, no LLM call). Setup and `update apply` run it, and `guide search` when the bank holds other docs. |
 
 Details: [troubleshooting.md](troubleshooting.md).
 
