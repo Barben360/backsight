@@ -114,9 +114,15 @@ func acquireMaintenance(d paths.Dirs, command string) (*state.Lock, string, erro
 	return l, "", nil
 }
 
+// safetyCopy makes createBackup take restore's safety archive: the caller
+// holds the maintenance lock, which is neither taken nor released here, the
+// clear dump is linked at dump to roll back to, and nothing is pruned (the
+// archive being restored may be one of the old ones).
+type safetyCopy struct{ dump string }
+
 // createBackup holds the maintenance lock for the database work only (hooks
 // queue, jobs skip), then encrypts, writes the archive and prunes old ones.
-func createBackup(ctx context.Context) (backupCreateResult, error) {
+func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, error) {
 	start := time.Now()
 	var res backupCreateResult
 	cfg, sec, err := loadServerConfig()
@@ -142,21 +148,25 @@ func createBackup(ctx context.Context) (backupCreateResult, error) {
 			res.Warnings = append(res.Warnings, "bank config not saved: "+err.Error())
 		}
 	}
-	l, note, err := acquireMaintenance(d, "backup create")
-	if err != nil {
-		return res, err
-	}
-	if note != "" {
-		res.Warnings = append(res.Warnings, note)
-	}
-	released := false
-	release := func() {
-		if !released {
-			released = true
-			_ = l.Release()
+	afterDump := func(dump string) error { return os.Link(dump, safety.dump) }
+	if safety == nil {
+		l, note, err := acquireMaintenance(d, "backup create")
+		if err != nil {
+			return res, err
 		}
+		if note != "" {
+			res.Warnings = append(res.Warnings, note)
+		}
+		released := false
+		release := func() {
+			if !released {
+				released = true
+				_ = l.Release()
+			}
+		}
+		defer release()
+		afterDump = func(string) error { release(); return nil }
 	}
-	defer release()
 	recipients, lines, _, err := backupKeys(d, cfg, sec, true)
 	if err != nil {
 		return res, err
@@ -179,7 +189,7 @@ func createBackup(ctx context.Context) (backupCreateResult, error) {
 	}
 	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, HindsightImage: server.ImageFor(cfg), PostgresImage: server.PostgresImage,
 		Embeddings: cfg.Embeddings.Preset + ": " + server.EmbeddingModels, Bank: cfg.Server.Bank, Recipients: lines}
-	path, m, err := backup.Create(ctx, server.DB{Compose: composeFor(cfg)}, dir, filepath.Join(d.State, "staging"), m, extras, recipients, release)
+	path, m, err := backup.Create(ctx, server.DB{Compose: composeFor(cfg)}, dir, filepath.Join(d.State, "staging"), m, extras, recipients, afterDump)
 	if err != nil {
 		return res, blocked(err)
 	}
@@ -187,8 +197,10 @@ func createBackup(ctx context.Context) (backupCreateResult, error) {
 	if fi, err := os.Stat(path); err == nil {
 		res.Bytes = fi.Size()
 	}
-	if res.Pruned, err = backup.Prune(dir, cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly); err != nil {
-		return res, blocked(err)
+	if safety == nil {
+		if res.Pruned, err = backup.Prune(dir, cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly); err != nil {
+			return res, blocked(err)
+		}
 	}
 	res.Duration = int(time.Since(start).Milliseconds())
 	return res, nil
@@ -200,7 +212,7 @@ func newBackupCreateCmd(e *env) *cobra.Command {
 		Short: "Dump the memory server into an encrypted archive (keeps 7 daily and 4 weekly)",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := createBackup(cmd.Context())
+			res, err := createBackup(cmd.Context(), nil)
 			if err != nil {
 				return err
 			}

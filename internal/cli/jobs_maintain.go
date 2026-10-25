@@ -78,7 +78,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
 				// create takes it for the dump itself.
-				if b, err := createBackup(cmd.Context()); err != nil {
+				if b, err := createBackup(cmd.Context(), nil); err != nil {
 					res.Status, res.Backup = "partial", "failed: "+err.Error()
 				} else {
 					res.Backup = b.Path

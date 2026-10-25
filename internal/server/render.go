@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -268,6 +269,52 @@ func ImageFor(cfg config.Config) string {
 		return "ghcr.io/vectorize-io/hindsight@" + cfg.Server.Digest
 	}
 	return HindsightImage
+}
+
+// CompareImages orders two Hindsight image references, by digest (the same
+// digest is the same image) or else by their version tags; comparable is
+// false when neither tells (a digest alone, a pre-release tag).
+func CompareImages(a, b string) (cmp int, comparable bool) {
+	digest := func(ref string) string { _, d, _ := strings.Cut(ref, "@"); return d }
+	if a != "" && (a == b || (digest(a) != "" && digest(a) == digest(b))) {
+		return 0, true
+	}
+	va, okA := imageVersion(a)
+	vb, okB := imageVersion(b)
+	if !okA || !okB {
+		return 0, false
+	}
+	for i := range va {
+		if va[i] != vb[i] {
+			if va[i] < vb[i] {
+				return -1, true
+			}
+			return 1, true
+		}
+	}
+	return 0, false // same version, different digests: a rebuild
+}
+
+// imageVersion reads the x.y.z tag of an image reference.
+func imageVersion(ref string) ([3]int, bool) {
+	var v [3]int
+	name, _, _ := strings.Cut(ref, "@")
+	i := strings.LastIndex(name, ":")
+	if i < 0 || strings.Contains(name[i:], "/") {
+		return v, false
+	}
+	parts := strings.Split(strings.TrimPrefix(name[i+1:], "v"), ".")
+	if len(parts) != 3 {
+		return v, false
+	}
+	for j, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return v, false
+		}
+		v[j] = n
+	}
+	return v, true
 }
 
 // EmbeddingModels are the models of the multilingual preset (the only one,

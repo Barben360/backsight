@@ -344,6 +344,13 @@ func (c *Client) Retain(ctx context.Context, bank string, items []RetainItem, op
 	return c.do(ctx, http.MethodPost, bankPath(bank, "/memories"), nil, body, nil)
 }
 
+// RetainNow retains items synchronously: the documents exist, with their
+// metadata, when it returns (an async retain creates them only once its
+// operation runs).
+func (c *Client) RetainNow(ctx context.Context, bank string, items []RetainItem) error {
+	return c.do(ctx, http.MethodPost, bankPath(bank, "/memories"), nil, map[string]any{"items": items, "async": false}, nil)
+}
+
 // Document is what backsight reads back of a stored document.
 type Document struct {
 	ID          string            `json:"id"`

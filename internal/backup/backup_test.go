@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,10 +48,11 @@ func TestCreateOpenRoundTrip(t *testing.T) {
 	id, _ := age.GenerateX25519Identity()
 	at := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
 	staging := t.TempDir()
-	dumped := false
+	var dumped string // the clear dump, as afterDump sees it
 	path, m, err := Create(context.Background(), fakeDB{dump: "PGDMP fake dump"}, dir, staging, Manifest{CreatedAt: at, Bank: "claude-memory", Recipients: []string{id.Recipient().String()}},
-		map[string][]byte{"secrets.toml": []byte("api_key = \"s3cr3t-value\"\n"), "config.toml": []byte("schema_version = 1\n")}, []age.Recipient{id.Recipient()}, func() { dumped = true })
-	if err != nil || filepath.Base(path) != "backsight-20261025T040000Z.tar.gz.age" || m.Counts["memory_units"] != 2204 || m.Alembic != "c7e2f9a4d1b8" || !dumped {
+		map[string][]byte{"secrets.toml": []byte("api_key = \"s3cr3t-value\"\n"), "config.toml": []byte("schema_version = 1\n")}, []age.Recipient{id.Recipient()},
+		func(dump string) error { raw, err := os.ReadFile(dump); dumped = string(raw); return err })
+	if err != nil || filepath.Base(path) != "backsight-20261025T040000Z.tar.gz.age" || m.Counts["memory_units"] != 2204 || m.Alembic != "c7e2f9a4d1b8" || dumped != "PGDMP fake dump" {
 		t.Fatalf("%s %+v %v", path, m, err)
 	}
 	// only ciphertext in the backup directory; nothing left in staging
@@ -183,7 +185,7 @@ func TestBeforeListsAnArchiveInProgress(t *testing.T) {
 	final := filepath.Join(dir, Name(at))
 	var during []Entry
 	_, _, err := Create(context.Background(), fakeDB{dump: "PGDMP"}, dir, t.TempDir(), Manifest{CreatedAt: at}, nil, []age.Recipient{id.Recipient()},
-		func() { during = Before(dir, at.Add(time.Minute)) })
+		func(string) error { during = Before(dir, at.Add(time.Minute)); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,5 +323,20 @@ func TestOpenRefusesHostileArchives(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "secrets.toml")); err == nil {
 		t.Error("an entry want refused was written")
+	}
+}
+
+// A failing afterDump (restore could not keep the dump it rolls back to)
+// fails the backup and leaves no archive.
+func TestCreateStopsWhenAfterDumpFails(t *testing.T) {
+	dir := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	_, _, err := Create(context.Background(), fakeDB{dump: "PGDMP"}, dir, t.TempDir(), Manifest{CreatedAt: time.Now()}, nil, []age.Recipient{id.Recipient()},
+		func(string) error { return os.ErrPermission })
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("error %v", err)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Errorf("left %v", ents)
 	}
 }

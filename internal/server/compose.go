@@ -93,8 +93,12 @@ func (c Compose) Up(ctx context.Context) error {
 	return err
 }
 
-// Stop stops the containers and keeps them and their volumes.
-func (c Compose) Stop(ctx context.Context) error { _, err := c.run(ctx, "stop"); return err }
+// Stop stops the containers of services (none: all) and keeps them and
+// their volumes.
+func (c Compose) Stop(ctx context.Context, services ...string) error {
+	_, err := c.run(ctx, append([]string{"stop"}, services...)...)
+	return err
+}
 
 // Container is one service's state as Compose reports it.
 type Container struct {

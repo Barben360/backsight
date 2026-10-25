@@ -218,3 +218,19 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor) (lost
 	early = last == "" && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
 	return true, early, nil
 }
+
+// WriteEpoch stores e as the bank's restore epoch (restore, once the
+// restored server passed its checks), synchronously: readers see it as soon
+// as it returns. Hindsight stores a document only through a retain, so its
+// one line goes through the document strategy's extraction.
+func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch) error {
+	at, from := e.RestoredAt.UTC().Format(time.RFC3339), e.BackupCreatedAt.UTC().Format(time.RFC3339)
+	return cl.RetainNow(ctx, bank, []hindsight.RetainItem{{
+		Content:    fmt.Sprintf("backsight control record: restore epoch %d (restored at %s from a backup of %s).", e.Epoch, at, from),
+		Context:    "backsight control record, not a memory",
+		DocumentID: EpochDocument,
+		Strategy:   "document",
+		Tags:       []string{"source:backsight"},
+		Metadata:   map[string]string{"epoch": strconv.Itoa(e.Epoch), "restored_at": at, "backup_created_at": from},
+	}})
+}

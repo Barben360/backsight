@@ -218,3 +218,32 @@ func TestRenderAndComposeUseTheConfiguredProject(t *testing.T) {
 		t.Error("the default project changed")
 	}
 }
+
+// A restore refuses an archive from a newer Hindsight than the one pinned,
+// and one it cannot place: a digest alone does not say which is newer.
+func TestCompareImages(t *testing.T) {
+	const (
+		pinned = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:bbbb"
+		older  = "ghcr.io/vectorize-io/hindsight:1.0.2@sha256:aaaa"
+		newer  = "ghcr.io/vectorize-io/hindsight:1.10.0@sha256:cccc"
+	)
+	for _, c := range []struct {
+		archive    string
+		cmp        int
+		comparable bool
+	}{
+		{pinned, 0, true},
+		{"ghcr.io/vectorize-io/hindsight@sha256:bbbb", 0, true}, // a digest set in config, same image
+		{older, -1, true},
+		{newer, 1, true},
+		{"ghcr.io/vectorize-io/hindsight:v1.1.1@sha256:dddd", 1, true},
+		{"ghcr.io/vectorize-io/hindsight@sha256:eeee", 0, false},
+		{"ghcr.io/vectorize-io/hindsight:1.1.0-rc1@sha256:ffff", 0, false},
+		{"", 0, false},
+	} {
+		cmp, ok := CompareImages(c.archive, pinned)
+		if cmp != c.cmp || ok != c.comparable {
+			t.Errorf("%q against %q: %d %v, want %d %v", c.archive, pinned, cmp, ok, c.cmp, c.comparable)
+		}
+	}
+}

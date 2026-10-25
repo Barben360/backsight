@@ -94,11 +94,13 @@ func Recipients(lines []string) ([]age.Recipient, error) {
 // Create dumps the database and writes the encrypted archive and its
 // sidecar into dir. The clear dump is staged under staging (the state
 // directory, 0700), never in dir: dir may be synced elsewhere, and only
-// ciphertext lands there. afterDump runs once the database work is done
-// (the caller releases the maintenance lock: encryption needs no lock). m
-// carries the fields the caller knows (versions, images, bank, recipients);
-// Create fills the rest. extras are the files stored beside the dump.
-func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras map[string][]byte, recipients []age.Recipient, afterDump func()) (string, Manifest, error) {
+// ciphertext lands there. afterDump runs once the database work is done,
+// with the clear dump's path: the caller releases the maintenance lock
+// (encryption needs no lock), or keeps a copy of the dump to roll back to
+// (restore); its error fails the backup. m carries the fields the caller
+// knows (versions, images, bank, recipients); Create fills the rest.
+// extras are the files stored beside the dump.
+func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras map[string][]byte, recipients []age.Recipient, afterDump func(dump string) error) (string, Manifest, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", m, err
 	}
@@ -134,7 +136,9 @@ func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras 
 	}
 	defer func() { _ = out.Close(); _ = os.Remove(tmp) }()
 	if afterDump != nil {
-		afterDump()
+		if err := afterDump(dump); err != nil {
+			return "", m, err
+		}
 	}
 	if m.DumpSHA256, m.DumpBytes, err = fileSum(dump); err != nil {
 		return "", m, err

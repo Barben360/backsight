@@ -65,6 +65,45 @@ func (d DB) Dump(ctx context.Context, dst string, tables []string) (map[string]i
 	return counts, err
 }
 
+// Restore replaces the database with the dump at src, the API stopped: the
+// database is dropped (any connection left is cut) and created empty, so
+// nothing a newer schema added survives, then the dump is restored into
+// it. The dump is copied into the container and removed afterwards.
+func (d DB) Restore(ctx context.Context, src string) error {
+	tmp := "/tmp/backsight-" + randHex() + ".dump"
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = d.Compose.Exec(cctx, "db", "rm", "-f", tmp)
+	}()
+	if _, err := d.Compose.run(ctx, "cp", src, "db:"+tmp); err != nil {
+		return err
+	}
+	if _, err := d.Compose.Exec(ctx, "db", "dropdb", "-U", dbUser, "--if-exists", "--force", dbName); err != nil {
+		return err
+	}
+	if _, err := d.Compose.Exec(ctx, "db", "createdb", "-U", dbUser, dbName); err != nil {
+		return err
+	}
+	_, err := d.Compose.Exec(ctx, "db", "pg_restore", "-U", dbUser, "-d", dbName, "--no-owner", "--exit-on-error", tmp)
+	return err
+}
+
+// Counts returns the rows of tables in the database.
+func (d DB) Counts(ctx context.Context, tables []string) (map[string]int64, error) {
+	counts := map[string]int64{}
+	for _, t := range tables {
+		out, err := d.Query(ctx, "select count(*) from "+t)
+		if err != nil {
+			return nil, fmt.Errorf("counting %s: %w", t, err)
+		}
+		if counts[t], err = strconv.ParseInt(out, 10, 64); err != nil {
+			return nil, fmt.Errorf("counting %s: %q", t, out)
+		}
+	}
+	return counts, nil
+}
+
 func randHex() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
