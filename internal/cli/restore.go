@@ -20,9 +20,9 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 )
 
-// epochTimeout bounds the epoch write: a synchronous retain, extraction
-// included.
-const epochTimeout = 3 * time.Minute
+// epochTimeout bounds each call of the epoch write: a synchronous retain
+// into the control bank (chunks: an embedding, no LLM call).
+const epochTimeout = time.Minute
 
 type restoreResult struct {
 	Archive    string           `json:"archive"`

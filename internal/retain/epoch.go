@@ -16,8 +16,9 @@ import (
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
-// EpochDocument holds the bank's restore epoch: `restore` writes it, every
-// client reads it before flushing (decision 0044).
+// EpochDocument holds the bank's restore epoch, in its control bank:
+// `restore` writes it, every client reads it before flushing (decision
+// 0044).
 const EpochDocument = "backsight:epoch"
 
 // Epoch is the bank's restore epoch; 0 when it was never restored.
@@ -27,12 +28,13 @@ type Epoch struct {
 	BackupCreatedAt time.Time `json:"backup_created_at"`
 }
 
-// ReadEpoch reads the bank's restore epoch. No document is epoch 0 (every
-// bank before M5); any other failure, or metadata that does not parse, is
-// an error: the caller must not act on a guess.
+// ReadEpoch reads the restore epoch of bank (the memory bank) from its
+// control bank. No control bank or no document is epoch 0 (every bank
+// before its first restore); any other failure, or metadata that does not
+// parse, is an error: the caller must not act on a guess.
 func ReadEpoch(ctx context.Context, cl *hindsight.Client, bank string) (Epoch, error) {
 	var ep Epoch
-	doc, err := cl.GetDocument(ctx, bank, EpochDocument)
+	doc, err := cl.GetDocument(ctx, ControlBank(bank), EpochDocument)
 	var apiErr *hindsight.APIError
 	switch {
 	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
@@ -219,18 +221,34 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor) (lost
 	return true, early, nil
 }
 
-// WriteEpoch stores e as the bank's restore epoch (restore, once the
-// restored server passed its checks), synchronously: readers see it as soon
-// as it returns. Hindsight stores a document only through a retain, so its
-// one line goes through the document strategy's extraction.
+// controlConfig keeps Hindsight's work on a control bank to the least
+// 1.1.0 allows (checked 2026-10-25): chunks are stored as they are, with no
+// LLM call, and no observation is consolidated; one unit per write remains.
+var controlConfig = map[string]any{"retain_extraction_mode": "chunks", "enable_observations": false}
+
+// WriteEpoch stores e as the restore epoch of bank (the memory bank) in its
+// control bank, synchronously: readers see it as soon as it returns
+// (restore writes it once the restored server passed its checks). The
+// control bank is set up first, every time: a retain into a missing bank
+// creates it with the default settings, an LLM extraction.
 func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch) error {
+	cb := ControlBank(bank)
+	if err := cl.CreateBank(ctx, cb, "backsight control", "backsight's control records for bank "+bank+" (the restore epoch); no memory."); err != nil {
+		return err
+	}
+	if err := cl.PatchBankConfig(ctx, cb, controlConfig); err != nil {
+		return err
+	}
 	at, from := e.RestoredAt.UTC().Format(time.RFC3339), e.BackupCreatedAt.UTC().Format(time.RFC3339)
-	return cl.RetainNow(ctx, bank, []hindsight.RetainItem{{
-		Content:    fmt.Sprintf("backsight control record: restore epoch %d (restored at %s from a backup of %s).", e.Epoch, at, from),
-		Context:    "backsight control record, not a memory",
+	return cl.RetainNow(ctx, cb, []hindsight.RetainItem{{
+		Content:    fmt.Sprintf("restore epoch %d (restored at %s from a backup of %s)", e.Epoch, at, from),
 		DocumentID: EpochDocument,
-		Strategy:   "document",
-		Tags:       []string{"source:backsight"},
+		Tags:       []string{},
 		Metadata:   map[string]string{"epoch": strconv.Itoa(e.Epoch), "restored_at": at, "backup_created_at": from},
 	}})
 }
+
+// ControlBank is the bank holding bank's control records (the restore
+// epoch), apart from the memories: whatever Hindsight makes of them never
+// reaches recall, doctor's counts or bank apply, which read bank alone.
+func ControlBank(bank string) string { return bank + "-control" }

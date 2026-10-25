@@ -180,6 +180,20 @@ func TestAllObservationsTagged(t *testing.T) {
 	expect(t, check(t, f.run(), "untagged"), OK, "every")
 }
 
+// The control bank holds restore's epoch line, untagged by design: the
+// untagged count reads the memory bank alone, so it never warns for it.
+func TestUntaggedIgnoresTheControlBank(t *testing.T) {
+	f := newFixture(t)
+	control := "/v1/default/banks/coding-agent%3A%3Amemoire-control/memories/list"
+	f.reference(fakeServerWith(t, map[string]reply{
+		"/v1/default/banks": {200, `{"banks":[{"bank_id":"coding-agent::memoire"},{"bank_id":"coding-agent::memoire-control"}]}`},
+		control:             {200, `{"items":[{"id":"c1","fact_type":"observation","tags":[]}],"total":1}`},
+	}, `["project:a"]`).URL)
+	r := f.run()
+	expect(t, check(t, r, "untagged"), OK, "every observation has a project tag (1)")
+	expect(t, check(t, r, "bank"), OK, "323")
+}
+
 func TestServerDown(t *testing.T) {
 	f := newFixture(t)
 	srv := fakeServer(t)
@@ -629,7 +643,7 @@ func TestCheckBankConfigDrift(t *testing.T) {
 // may hold as sent what the restore lost); on the same epoch it is ok, and
 // an unreachable server skips the check.
 func TestCheckRestoreEpoch(t *testing.T) {
-	epochPath := "/v1/default/banks/coding-agent%3A%3Amemoire/documents/backsight%3Aepoch"
+	epochPath := "/v1/default/banks/coding-agent%3A%3Amemoire-control/documents/backsight%3Aepoch"
 	srv := fakeServerWith(t, map[string]reply{epochPath: {200, `{"id":"backsight:epoch","document_metadata":{"epoch":"2","restored_at":"2026-10-25T10:00:00Z","backup_created_at":"2026-10-25T03:00:00Z"}}`}})
 	f := newFixture(t)
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)

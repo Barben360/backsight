@@ -190,7 +190,17 @@ func TestRestoreReplacesTheDatabaseAndStartsANewEpoch(t *testing.T) {
 	if _, err := os.Stat(archive); err != nil {
 		t.Errorf("the restored archive is gone: %v", err)
 	}
-	// The epoch the clients reconcile on (0044).
+	// The epoch the clients reconcile on (0044), in the control bank: the
+	// memory bank gets no retain and no setting from a restore.
+	var epochWrites []string
+	for _, c := range bankCalls {
+		if (strings.HasPrefix(c, "POST ") && !strings.HasSuffix(c, "/recall")) || strings.HasPrefix(c, "PUT ") || strings.HasPrefix(c, "PATCH ") {
+			epochWrites = append(epochWrites, c)
+		}
+	}
+	if got := strings.Join(epochWrites, ", "); got != "PUT claude-memory-control /, PATCH claude-memory-control /config, POST claude-memory-control /memories" {
+		t.Errorf("writes to the server: %s", got)
+	}
 	e := epochOf(t, port)
 	if e.Epoch != 1 || !e.BackupCreatedAt.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) || !e.RestoredAt.Equal(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)) ||
 		env.Data.Epoch.Epoch != 1 || env.Data.Epoch.BackupCreatedAt != "2026-10-25T04:00:00Z" {
@@ -268,7 +278,7 @@ func TestRestoreRollsBackWhenTheCountsDiffer(t *testing.T) {
 		t.Errorf("an epoch was written for a failed restore: %+v", e)
 	}
 	for _, c := range bankCalls {
-		if c == "POST claude-memory /memories" {
+		if strings.HasPrefix(c, "POST ") && strings.HasSuffix(c, " /memories") {
 			t.Errorf("retain during a failed restore: %q", bankCalls)
 		}
 	}
