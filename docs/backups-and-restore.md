@@ -6,6 +6,18 @@ How backsight backs up your memory, and how to bring a backup back.
 
 With backups on (setup's default), the daily job makes one backup and keeps **7 daily and 4 weekly** archives. They are written to `backups` under backsight's data directory (`~/.local/share/backsight/backups` on Linux).
 
+## Which archives are kept
+
+Each backup prunes the older ones. An archive stays when any of these holds:
+
+- it is **less than 24 hours old**, whatever the retention says;
+- it is the newest of one of the last `keep_daily` days;
+- it is the newest of one of the last `keep_weekly` ISO weeks.
+
+The 24-hour rule covers a second backup the same day: one you made by hand before a `forget`, and the safety archives of a restore or a server upgrade. The next backup does not delete them; they follow the daily and weekly slots once they are a day old.
+
+Only archives backsight wrote (with their `.json` sidecar) are pruned. Other files in the folder, and archives copied in from elsewhere, are never touched.
+
 Each archive is a dump of the server's database with a manifest (backsight version, server image, embedding models, bank), backsight's config, the server's Compose override and secrets. It is always encrypted.
 
 The archives are yours to copy anywhere: another disk, a NAS, a cloud drive. `backsight doctor` warns when the last backup is more than 2 days old.
@@ -35,7 +47,7 @@ To encrypt to a key you already keep elsewhere, set `backup.recipient` in `confi
 
 | Command | Does |
 |---|---|
-| `backsight backup create` | Makes a backup now, then prunes older ones with the retention. |
+| `backsight backup create` | Makes a backup now, then prunes older ones with the retention (never one less than 24 hours old). |
 | `backsight backup list` | Lists backups, newest first. |
 | `backsight backup verify <file>` | Decrypts the archive, restores it into a throwaway database, runs a recall and compares row counts. Your server is not touched. |
 

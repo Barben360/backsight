@@ -116,7 +116,8 @@ func TestPruneKeepsDailyAndWeekly(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "mine.tar.gz.age"), []byte("x"), 0o600)
 	// a copy brought from elsewhere, named like ours but with no sidecar
 	_ = os.WriteFile(filepath.Join(dir, Name(start.AddDate(-1, 0, 0))), []byte("x"), 0o600)
-	removed, err := Prune(dir, 7, 4)
+	// a month later: no archive is young enough for the 24 h rule
+	removed, err := Prune(dir, start.AddDate(0, 1, 0), 7, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +174,84 @@ func TestPruneKeepsDailyAndWeekly(t *testing.T) {
 	if b := Before(dir, start); len(b) != 10 {
 		t.Errorf("before: %d", len(b))
 	}
+}
+
+func writeOurs(t *testing.T, dir string, at time.Time) string {
+	t.Helper()
+	p := filepath.Join(dir, Name(at))
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p+".json", []byte(`{"format":1,"created_at":"`+at.Format(time.RFC3339)+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// An archive younger than 24 h is never pruned, whatever the daily and
+// weekly slots say: a second backup the same day (a safety archive before
+// a restore or an upgrade, a manual one before a forget) keeps the first.
+// Past 24 h, an archive outside the slots goes as before. Foreign files
+// are never touched.
+func TestPruneNeverRemovesAnArchiveYoungerThan24h(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 25, 22, 10, 8, 0, time.UTC)
+	first := writeOurs(t, dir, time.Date(2026, 10, 25, 21, 51, 10, 0, time.UTC)) // before a forget
+	second := writeOurs(t, dir, now)                                             // the daily job, same day
+	edge := writeOurs(t, dir, now.Add(-24*time.Hour).Add(time.Second))           // yesterday, still inside 24 h
+	old := writeOurs(t, dir, now.Add(-24*time.Hour).Add(-time.Minute))           // yesterday, just past 24 h
+	older := writeOurs(t, dir, now.Add(-24*time.Hour).Add(-2*time.Minute))       // same day as old, older
+	foreign := filepath.Join(dir, "mine.tar.gz.age")
+	_ = os.WriteFile(foreign, []byte("x"), 0o600)
+	notOurs := filepath.Join(dir, Name(now.Add(-time.Hour))) // named like ours, no sidecar
+	_ = os.WriteFile(notOurs, []byte("x"), 0o600)
+
+	// 1 daily, 1 weekly: the slots alone keep only the newest archive.
+	removed, err := Prune(dir, now, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{first, second, edge, foreign, notOurs} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s removed: %v", filepath.Base(p), err)
+		}
+	}
+	for _, p := range []string{first, second, edge} {
+		if _, err := os.Stat(p + ".json"); err != nil {
+			t.Errorf("sidecar of %s removed", filepath.Base(p))
+		}
+	}
+	for _, p := range []string{old, older} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s past 24 h and outside the slots was kept", filepath.Base(p))
+		}
+		if _, err := os.Stat(p + ".json"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("sidecar of %s left", filepath.Base(p))
+		}
+	}
+	if got := strings.Join(baseNames(removed), " "); got != filepath.Base(old)+" "+filepath.Base(older) {
+		t.Errorf("removed %s", got)
+	}
+
+	// A day later the same-day pair is past 24 h: the slot keeps the newest.
+	removed, err = Prune(dir, now.Add(25*time.Hour), 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(baseNames(removed), " "); got != filepath.Base(first)+" "+filepath.Base(edge) {
+		t.Errorf("a day later, removed %s", got)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Error("the newest archive was removed")
+	}
+}
+
+func baseNames(paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		out = append(out, filepath.Base(p))
+	}
+	return out
 }
 
 // From the moment the database lock is released, the archive being

@@ -100,6 +100,31 @@ func TestBackupCreateListVerify(t *testing.T) {
 	}
 }
 
+// A second backup the same day keeps the first (taken before a forget, say)
+// even with one daily slot; past 24 h the retention prunes it.
+func TestBackupCreateKeepsTheSameDaysEarlierArchive(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withBackupDocker(t)
+	configure(t, home, "[backup]\nkeep_daily = 1\nkeep_weekly = 1")
+	for i, c := range []struct {
+		at   time.Time
+		want string
+	}{
+		{time.Date(2026, 10, 25, 21, 51, 10, 0, time.UTC), "backsight-20261025T215110Z.tar.gz.age"},
+		{time.Date(2026, 10, 25, 22, 10, 8, 0, time.UTC), "backsight-20261025T215110Z.tar.gz.age backsight-20261025T221008Z.tar.gz.age"},
+		{time.Date(2026, 10, 26, 22, 0, 0, 0, time.UTC), "backsight-20261025T221008Z.tar.gz.age backsight-20261026T220000Z.tar.gz.age"},
+	} {
+		withClock(t, c.at)
+		if code, out, errOut := run(t, "backup", "create"); code != output.OK {
+			t.Fatalf("backup %d: exit %d\n%s%s", i, code, out, errOut)
+		}
+		if got := strings.Join(backupsIn(home), " "); got != c.want {
+			t.Errorf("after backup %d: %s, want %s", i, got, c.want)
+		}
+	}
+}
+
 func TestBackupRefusesDuringMaintenanceAndReportsAFailedDump(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))

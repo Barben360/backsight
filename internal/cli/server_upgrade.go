@@ -229,12 +229,13 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	_ = state.ClearRestoreMarker(d)
 
 	// The safety archive is a backup like the others: the normal retention
-	// applies, so upgrades do not pile them up (the newest is kept).
+	// applies, so upgrades do not pile them up (the newest is kept, and any
+	// archive younger than 24 h).
 	dir := cfg.Backup.Dir
 	if dir == "" {
 		dir = filepath.Join(d.Data, "backups")
 	}
-	pruned, err := backup.Prune(dir, cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly)
+	pruned, err := backup.Prune(dir, now(), cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly)
 	res.Pruned = pruned
 	if err != nil {
 		res.Warnings = append(res.Warnings, "pruning the backups: "+err.Error())

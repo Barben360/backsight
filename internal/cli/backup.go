@@ -212,7 +212,7 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 		res.Bytes = fi.Size()
 	}
 	if safety == nil {
-		if res.Pruned, err = backup.Prune(dir, cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly); err != nil {
+		if res.Pruned, err = backup.Prune(dir, now(), cfg.Backup.KeepDaily, cfg.Backup.KeepWeekly); err != nil {
 			return res, blocked(err)
 		}
 	}

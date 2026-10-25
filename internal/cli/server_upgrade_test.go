@@ -133,19 +133,37 @@ func TestServerUpgradeDeploysThePinnedImage(t *testing.T) {
 }
 
 // A passed upgrade prunes the backups (its safety archive among them)
-// with the normal retention: an auto-apply a day must not pile them up.
+// with the normal retention: an auto-apply a day must not pile them up. An
+// archive younger than 24 h stays whatever the retention: the backup taken
+// the same morning survives the upgrade's safety archive.
 func TestServerUpgradePrunesWithTheBackupRetention(t *testing.T) {
-	home, _, _, _ := upgradeSetup(t)
-	configure(t, home, "[backup]\nkeep_daily = 1\nkeep_weekly = 1")
-	before := backupsIn(home)
-	code, out, _ := run(t, "server", "upgrade", "--json")
-	env := decodeUpgrade(t, out)
-	if code != output.OK || env.Data.Safety == "" {
-		t.Fatalf("exit %d\n%s", code, out)
-	}
-	after := backupsIn(home)
-	if len(before) != 1 || len(after) != 1 || after[0] != filepath.Base(env.Data.Safety) || !strings.Contains(out, before[0]) {
-		t.Errorf("backups %v → %v (safety %s)\n%s", before, after, env.Data.Safety, out)
+	for name, c := range map[string]struct {
+		at       time.Time // the upgrade; the first backup is 2026-10-25T04:00Z
+		keepsOld bool
+	}{
+		"same day":  {time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC), true},
+		"next day":  {time.Date(2026, 10, 26, 3, 59, 0, 0, time.UTC), true},
+		"past 24 h": {time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, _, _, _ := upgradeSetup(t)
+			configure(t, home, "[backup]\nkeep_daily = 1\nkeep_weekly = 1")
+			withClock(t, c.at)
+			before := backupsIn(home)
+			code, out, _ := run(t, "server", "upgrade", "--json")
+			env := decodeUpgrade(t, out)
+			if code != output.OK || env.Data.Safety == "" {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			after := backupsIn(home)
+			want := []string{filepath.Base(env.Data.Safety)}
+			if c.keepsOld {
+				want = append(before, want...)
+			}
+			if len(before) != 1 || strings.Join(after, " ") != strings.Join(want, " ") || strings.Contains(out, before[0]) == c.keepsOld {
+				t.Errorf("backups %v → %v, want %v\n%s", before, after, want, out)
+			}
+		})
 	}
 }
 

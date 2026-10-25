@@ -393,10 +393,16 @@ func List(dir string) ([]Entry, error) {
 	return out, nil
 }
 
+// MinAge is how long an archive is kept whatever the retention: one taken
+// before a destructive step (forget, restore, upgrade) must outlive the
+// next backup of the same day.
+const MinAge = 24 * time.Hour
+
 // Prune deletes the backups (and sidecars) beyond the newest of each of the
 // last keepDaily days and of each of the last keepWeekly ISO weeks
-// (decision 0023: 7 daily + 4 weekly). It returns the deleted paths.
-func Prune(dir string, keepDaily, keepWeekly int) ([]string, error) {
+// (decision 0023: 7 daily + 4 weekly). An archive younger than MinAge at
+// now is never deleted. It returns the deleted paths.
+func Prune(dir string, now time.Time, keepDaily, keepWeekly int) ([]string, error) {
 	list, err := List(dir)
 	if err != nil {
 		return nil, err
@@ -408,6 +414,9 @@ func Prune(dir string, keepDaily, keepWeekly int) ([]string, error) {
 			continue
 		}
 		t := e.Manifest.CreatedAt.UTC()
+		if now.Sub(t) < MinAge {
+			keep[e.Path] = true
+		}
 		day := t.Format("2006-01-02")
 		y, w := t.ISOWeek()
 		week := fmt.Sprintf("%d-%02d", y, w)
