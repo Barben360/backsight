@@ -164,10 +164,11 @@ func Save(path string, s State) error {
 }
 
 // Update loads state.json, applies fn and saves it, under the state lock.
-// It never waits: a held lock returns the *HeldError. fn's error aborts
+// It never waits: a held lock returns the *HeldError (a stale one is
+// taken over). fn's error aborts
 // without writing.
 func Update(d paths.Dirs, command string, fn func(*State) error) error {
-	l, err := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), command)
+	l, _, err := Acquire(filepath.Join(d.LocksDir(), "state.lock"), command)
 	if err != nil {
 		return err
 	}

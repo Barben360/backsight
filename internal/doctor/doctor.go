@@ -112,7 +112,9 @@ func Run(ctx context.Context, env Env) Report {
 		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
 	}
 	add(checkMaintenance(env.Dirs))
+	add(checkLocks(env.Dirs))
 	add(checkWrites(env.Dirs))
+	add(checkBackfill(env.Dirs))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
@@ -300,6 +302,52 @@ func checkMaintenance(d paths.Dirs) Check {
 		c.Fix = "check that no backsight update, backup or restore is running, then remove " + held.Path
 	default:
 		c.Status, c.Summary = Info, fmt.Sprintf("maintenance in progress: %s (pid %d, since %s)", held.Owner.Command, held.Owner.PID, held.Owner.Since.Format(time.RFC3339))
+	}
+	return c
+}
+
+// checkLocks reports locks left by a process that is gone (a crash, an OOM
+// kill); the maintenance lock has its own check. The next run of the
+// command takes its lock over (state.Acquire): one that stays is worth a look.
+func checkLocks(d paths.Dirs) Check {
+	c := Check{ID: "locks", Status: OK, Summary: "no stale lock"}
+	files, _ := filepath.Glob(filepath.Join(d.LocksDir(), "*.lock"))
+	var stale []string
+	for _, p := range files {
+		if h := state.Inspect(p); h != nil && h.Stale {
+			stale = append(stale, fmt.Sprintf("%s (%s, pid %d)", filepath.Base(p), h.Owner.Command, h.Owner.PID))
+		}
+	}
+	if len(stale) > 0 {
+		c.Status, c.Summary, c.Detail = Warn, fmt.Sprintf("%d stale lock(s) left by a process that is gone", len(stale)), strings.Join(stale, "; ")
+		c.Fix = "the next run of that command takes its lock over; if one stays, check no backsight process runs and remove it from " + d.LocksDir()
+	}
+	return c
+}
+
+// checkBackfill reports the queued backfill: its progress while jobs tick
+// sends it, and a pause, which only a rerun lifts.
+func checkBackfill(d paths.Dirs) Check {
+	c := Check{ID: "backfill", Status: OK, Summary: "no backfill pending"}
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "cannot read the backfill state", err.Error()
+		return c
+	}
+	b := st.Backfill
+	switch {
+	case b == nil:
+	case len(b.Sessions) == 0:
+		c.Summary = fmt.Sprintf("backfill finished (%d/%d)", b.Done, b.Total)
+	case b.Paused == "budget":
+		c.Status, c.Summary = Warn, fmt.Sprintf("backfill paused at %d/%d: budget reached", b.Done, b.Total)
+		c.Detail = fmt.Sprintf("spent %.4f %s, %d tokens (the bank's whole extraction since it started)", b.SpentCost, b.Currency, b.SpentTokens)
+		c.Fix = "backsight retain backfill --plan, then backsight retain backfill --max-cost <higher>"
+	case b.Paused != "":
+		c.Status, c.Summary = Warn, fmt.Sprintf("backfill paused at %d/%d: %s", b.Done, b.Total, b.Paused)
+		c.Fix = "backsight retain backfill"
+	default:
+		c.Status, c.Summary = Info, fmt.Sprintf("backfill in progress: %d/%d, sent by jobs tick", b.Done, b.Total)
 	}
 	return c
 }

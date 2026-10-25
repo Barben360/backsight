@@ -648,7 +648,7 @@ func newServerLLMCmd(e *env) *cobra.Command {
 
 // serverLock serialises commands that rewrite the compose project.
 func serverLock(d paths.Dirs, command string) (func(), error) {
-	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "server.lock"), command)
+	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "server.lock"), command)
 	if err != nil {
 		return nil, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}

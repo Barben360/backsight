@@ -464,3 +464,69 @@ func TestBackfillQueueLeavesTheSendingToTick(t *testing.T) {
 		t.Errorf("tick did not send the queued backfill: exit %d, %d sent %s", code, retained.Load()-before, errOut)
 	}
 }
+
+// A queued transcript that is gone (Claude Code's cleanup, a moved profile)
+// and a session live retain took over with its saves replayed leave the
+// queue as done: they no longer hold the sessions behind them.
+func TestJobsTickDropsGoneAndSettledSessions(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	dir := filepath.Join(home, ".claude", "projects", "-home-u-billing")
+	oldSession(t, home, "live", time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC), false)
+	run(t, "retain", "flush", "--session", "live")
+	d := pathsOf(home)
+	if err := retain.MarkNotesReplayed(d.CursorsDir(), "live"); err != nil {
+		t.Fatal(err)
+	}
+	oldSession(t, home, "x1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	queue := []string{filepath.Join(dir, "gone.jsonl"), filepath.Join(dir, "live.jsonl"), filepath.Join(dir, "x1.jsonl")}
+	_ = state.Update(d, "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Total: 3, MaxCost: 10, Currency: "USD", StartDay: time.Now().UTC().Format("2006-01-02"), Sessions: queue}
+		return nil
+	})
+	before := retained.Load()
+	_, out, _ := run(t, "jobs", "tick")
+	st, _ := state.Load(d.StateFile())
+	if !strings.Contains(out, "backfill 3/3") || retained.Load() != before+1 || st.Backfill == nil || len(st.Backfill.Sessions) != 0 {
+		t.Errorf("retained %d, state %+v\n%s", retained.Load()-before, st.Backfill, out)
+	}
+}
+
+// The budget also counts live retain's spend: a budget pause holding only
+// sessions live retain took over, whose saves are all that is left to
+// send, is lifted by the next tick and the saves go out.
+func TestJobsTickLiftsABudgetPauseHoldingOnlySaves(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "live", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), true)
+	run(t, "retain", "flush", "--session", "live")
+	d := pathsOf(home)
+	queue := []string{filepath.Join(home, ".claude", "projects", "-home-u-billing", "live.jsonl")}
+	_ = state.Update(d, "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Total: 1, MaxCost: 0.01, Currency: "USD", StartDay: time.Now().UTC().Format("2006-01-02"), Paused: "budget", Sessions: queue}
+		return nil
+	})
+	llmInput.Store(50_000_000) // $7 measured since the start: far over the cap
+	before := retained.Load()
+	_, out, _ := run(t, "jobs", "tick")
+	st, _ := state.Load(d.StateFile())
+	if !strings.Contains(out, "backfill 1/1") || retained.Load() != before+1 || st.Backfill.Paused != "" {
+		t.Errorf("retained %d, state %+v\n%s", retained.Load()-before, st.Backfill, out)
+	}
+}
+
+// A backfill lock left by a dead process does not block every later run.
+func TestBackfillTakesOverAStaleLock(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.LocksDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.LocksDir(), "job-backfill.lock"), []byte(`{"pid":999999,"command":"retain backfill","since":"2026-10-25T03:00:00Z"}`), 0o600)
+	if code, out, errOut := run(t, "retain", "backfill", "--max-cost", "1"); code != output.OK || !strings.Contains(out, "finished") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}

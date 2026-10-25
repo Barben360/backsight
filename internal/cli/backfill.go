@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,7 +60,9 @@ type backfillResult struct {
 	Paused   string          `json:"paused,omitempty"`
 	Results  []retain.Result `json:"results,omitempty"`
 	Finished bool            `json:"finished"`
-	Queued   bool            `json:"queued,omitempty"`
+	// Dropped: queued sessions with nothing left to send (dropSettled).
+	Dropped int  `json:"dropped,omitempty"`
+	Queued  bool `json:"queued,omitempty"`
 }
 
 func newRetainBackfillCmd(e *env) *cobra.Command {
@@ -238,7 +243,7 @@ var errBackfillBusy = &output.Error{Code: output.Blocked, Message: "another back
 
 // acquireBackfill takes the backfill lock or reports another backfill.
 func acquireBackfill(d paths.Dirs) (func(), error) {
-	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "retain backfill")
+	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "retain backfill")
 	if err != nil {
 		return nil, errBackfillBusy
 	}
@@ -264,6 +269,11 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		res.Paused = reason
 		return res, &output.Error{Code: output.Partial, Message: "backfill paused: " + msg}
 	}
+	dropped, err := dropSettled(d)
+	if err != nil {
+		return res, blocked(err)
+	}
+	res.Dropped = dropped
 	sent := 0
 	for {
 		st, err := state.Load(d.StateFile())
@@ -308,7 +318,9 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		if err := measure(ctx, f.Client, cfg.Server.Bank, &b, prices); err != nil {
 			return pause("measure", "cannot measure the spend, so the cap cannot be enforced: "+err.Error())
 		}
-		over := (b.MaxCost > 0 && b.SpentCost >= b.MaxCost) || (b.MaxTokens > 0 && b.SpentTokens >= b.MaxTokens)
+		path := b.Sessions[0]
+		only, _ := notesOnly(d, path)
+		over := !only && ((b.MaxCost > 0 && b.SpentCost >= b.MaxCost) || (b.MaxTokens > 0 && b.SpentTokens >= b.MaxTokens))
 		if err := state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill = &b; return nil }); err != nil {
 			return res, blocked(err)
 		}
@@ -316,7 +328,6 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		if over {
 			return pause("budget", fmt.Sprintf("budget reached (%.4f %s, %d tokens); rerun with a higher --max-cost or --max-tokens", b.SpentCost, b.Currency, b.SpentTokens))
 		}
-		path := b.Sessions[0]
 		r := f.FlushFile(ctx, path, retain.Options{Force: true, IgnoreSince: true})
 		res.Results = append(res.Results, r)
 		switch r.Status {
@@ -352,6 +363,52 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		}
 		sent++
 	}
+}
+
+// notesOnly: live retain took the session over (a live cursor), so all a
+// backfill still sends is its explicit saves.
+func notesOnly(d paths.Dirs, path string) (only, replayed bool) {
+	cur, ok, _ := retain.LoadCursor(d.CursorsDir(), strings.TrimSuffix(filepath.Base(path), ".jsonl"))
+	return ok && !cur.Backfill && !cur.Quarantined, cur.NotesReplayed
+}
+
+// dropSettled removes from the backfill queue the sessions it has nothing
+// left to send: a transcript that is gone (Claude Code's cleanup, a moved
+// profile) and a session live retain took over whose saves were replayed.
+// They count as done. A budget pause holding only notes-only sessions is
+// lifted: the budget also counts live retain's spend (measure), which
+// would otherwise hold saves that cost next to nothing. It never calls the
+// server, so a tick runs it on a paused backfill too.
+func dropSettled(d paths.Dirs) (int, error) {
+	n := 0
+	err := state.Update(d, "retain backfill", func(s *state.State) error {
+		n = 0
+		b := s.Backfill
+		if b == nil || len(b.Sessions) == 0 {
+			return nil
+		}
+		var keep []string
+		allNotes := true
+		for _, p := range b.Sessions {
+			if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+				n++
+				continue
+			}
+			only, replayed := notesOnly(d, p)
+			if only && replayed {
+				n++
+				continue
+			}
+			allNotes = allNotes && only
+			keep = append(keep, p)
+		}
+		b.Sessions, b.Done = keep, b.Done+n
+		if len(keep) == 0 || (allNotes && b.Paused == "budget") {
+			b.Paused = ""
+		}
+		return nil
+	})
+	return n, err
 }
 
 // measure sets the spend from the bank's per-day token sums: the start

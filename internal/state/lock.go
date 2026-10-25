@@ -73,6 +73,19 @@ func TryAcquire(path, command string) (*Lock, error) {
 	return &Lock{path: path, owner: owner}, nil
 }
 
+// Acquire is TryAcquire that takes over a lock whose owner is gone (a
+// crash, an OOM kill, a timer's timeout): it breaks it once and retries.
+// broke reports the takeover, for the caller to say so.
+func Acquire(path, command string) (l *Lock, broke bool, err error) {
+	l, err = TryAcquire(path, command)
+	var held *HeldError
+	if errors.As(err, &held) && held.Stale && BreakStale(held) == nil {
+		l, err = TryAcquire(path, command)
+		broke = err == nil
+	}
+	return l, broke, err
+}
+
 // MaintenanceHeld reports whether a live process holds the maintenance lock
 // at path. A lock left by a dead owner (a crash mid-backup) does not stop
 // the hooks and jobs: doctor reports it, and the next backup breaks it.

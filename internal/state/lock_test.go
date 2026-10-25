@@ -208,3 +208,28 @@ func TestHeldErrorMessages(t *testing.T) {
 }
 
 func itoa(i int) string { b, _ := json.Marshal(i); return string(b) }
+
+// Acquire takes over a dead owner's lock and says so; a live owner's lock
+// stays held and untouched.
+func TestAcquireTakesOverOnlyAStaleLock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "job-backfill.lock")
+	_ = os.WriteFile(p, []byte(`{"pid":`+itoa(deadPID(t))+`,"command":"retain backfill","since":"2026-10-24T08:00:00Z"}`), 0o600)
+	l, broke, err := Acquire(p, "jobs tick")
+	if err != nil || !broke {
+		t.Fatalf("broke %v, err %v", broke, err)
+	}
+	if raw, _ := os.ReadFile(p); !strings.Contains(string(raw), `"jobs tick"`) {
+		t.Errorf("lock now %s", raw)
+	}
+	_, broke, err = Acquire(p, "retain backfill")
+	var held *HeldError
+	if !errors.As(err, &held) || held.Stale || broke {
+		t.Errorf("a live lock: broke %v, err %v", broke, err)
+	}
+	_ = l.Release()
+	if l, broke, err := Acquire(p, "x"); err != nil || broke {
+		t.Errorf("a free lock: broke %v, err %v", broke, err)
+	} else {
+		_ = l.Release()
+	}
+}

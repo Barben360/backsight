@@ -526,3 +526,53 @@ func TestCheckReferenceLeftovers(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+// A backfill paused on its budget is a warning with the way out; one in
+// progress is information; a finished or absent one is OK.
+func TestCheckBackfill(t *testing.T) {
+	d := paths.Dirs{State: t.TempDir()}
+	if c := checkBackfill(d); c.Status != OK || c.Summary != "no backfill pending" {
+		t.Errorf("none: %+v", c)
+	}
+	set := func(b *state.Backfill) {
+		if err := state.Update(d, "test", func(s *state.State) error { s.Backfill = b; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(&state.Backfill{Done: 0, Total: 2, Paused: "budget", SpentCost: 0.19, Currency: "USD", Sessions: []string{"a", "b"}})
+	if c := checkBackfill(d); c.Status != Warn || !strings.Contains(c.Summary, "paused at 0/2: budget reached") || !strings.Contains(c.Fix, "--max-cost") {
+		t.Errorf("budget: %+v", c)
+	}
+	set(&state.Backfill{Done: 1, Total: 2, Paused: "server", Sessions: []string{"b"}})
+	if c := checkBackfill(d); c.Status != Warn || !strings.Contains(c.Summary, "paused at 1/2: server") {
+		t.Errorf("server: %+v", c)
+	}
+	set(&state.Backfill{Done: 1, Total: 2, Sessions: []string{"b"}})
+	if c := checkBackfill(d); c.Status != Info || !strings.Contains(c.Summary, "1/2") {
+		t.Errorf("running: %+v", c)
+	}
+	set(&state.Backfill{Done: 2, Total: 2})
+	if c := checkBackfill(d); c.Status != OK || !strings.Contains(c.Summary, "finished (2/2)") {
+		t.Errorf("finished: %+v", c)
+	}
+}
+
+// Only a dead owner's lock is reported; a held one is not.
+func TestCheckLocks(t *testing.T) {
+	d := paths.Dirs{State: t.TempDir()}
+	if c := checkLocks(d); c.Status != OK {
+		t.Errorf("no locks dir: %+v", c)
+	}
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-tick.lock"), "jobs tick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	if c := checkLocks(d); c.Status != OK {
+		t.Errorf("a live lock: %+v", c)
+	}
+	put(t, filepath.Join(d.LocksDir(), "job-backfill.lock"), `{"pid":999999,"command":"retain backfill","since":"2026-10-25T03:00:00Z"}`, 0o600)
+	if c := checkLocks(d); c.Status != Warn || !strings.Contains(c.Detail, "job-backfill.lock (retain backfill, pid 999999)") || strings.Contains(c.Detail, "job-tick") {
+		t.Errorf("a stale lock: %+v", c)
+	}
+}

@@ -106,7 +106,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		return "unchanged"
 	}
 	if !plan {
-		l, err := state.TryAcquire(filepath.Join(c.dirs.LocksDir(), "client-install.lock"), "client install")
+		l, _, err := state.Acquire(filepath.Join(c.dirs.LocksDir(), "client-install.lock"), "client install")
 		if err != nil {
 			return res, &output.Error{Code: output.Blocked, Message: "another client install is running"}
 		}

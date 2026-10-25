@@ -97,6 +97,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
+			if n, err := dropSettled(d); err == nil && n > 0 {
+				res.Backfill = fmt.Sprintf("%d queued session(s) had nothing left to send", n)
+			}
 			if st, err := state.Load(d.StateFile()); err == nil && st.Backfill != nil && len(st.Backfill.Sessions) > 0 && st.Backfill.Paused == "" &&
 				(cfg.LLM.Provider != "claude-code" || st.Backfill.AllowSubscription) {
 				prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
