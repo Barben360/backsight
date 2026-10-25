@@ -77,6 +77,8 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `config`: secrets file readable by others | `chmod 600` on the file doctor names. |
 | `disk`: low free space | Free space where doctor says: the queues, backups and the server's database grow there. |
 | `untagged`: memories without a project tag | A server-side problem: report it (below). |
+| `noise-transverse`: over 20 % of the transverse pool's observations name another project | New sessions go to the right project. Older ones: `backsight forget --project <transverse alias> --source subagent --plan`, then decide, or leave them. |
+| `noise-headless`: headless (SDK) sessions were sent before they were skipped | `backsight forget --project <project> --plan` for each project doctor names, once the plan shows nothing else worth keeping. |
 
 ## Reporting a problem
 

@@ -129,6 +129,7 @@ func Run(ctx context.Context, env Env) Report {
 			add(Check{ID: "restore-epoch", Status: Info, Summary: "skipped: " + skipReason(srv)})
 		}
 	}
+	add(checkNoise(ctx, env, cl, tg, bank, srv)...)
 	add(checkMaintenance(env.Dirs))
 	add(checkRestore(env.Dirs))
 	add(checkUpdateIncomplete(env.Dirs))
