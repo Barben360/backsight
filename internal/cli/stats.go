@@ -90,7 +90,7 @@ func newStatsCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to)}
-			res.Extraction = extractionOver(cmd, from, to, days)
+			res.Extraction = extractionOver(cmd, from, to)
 			if parity {
 				res.Parity = stats.Parity(res.Report)
 			}
@@ -118,7 +118,7 @@ func parseWhen(s string) (time.Time, error) {
 // daily buckets: the server answers 1d or 30d only (anything else silently
 // gives 7 days), so 30d is asked and the days outside [from, to] dropped.
 // A server that cannot be read leaves the rest of the report intact.
-func extractionOver(cmd *cobra.Command, from, to time.Time, days int) extraction {
+func extractionOver(cmd *cobra.Command, from, to time.Time) extraction {
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return extraction{Error: err.Error()}
@@ -131,12 +131,15 @@ func extractionOver(cmd *cobra.Command, from, to time.Time, days int) extraction
 	if err != nil {
 		return extraction{Error: err.Error()}
 	}
-	x := extraction{Days: min(days, 30)}
-	first := from.UTC().Format("2006-01-02")
-	if days > 30 {
-		first = to.UTC().AddDate(0, 0, -29).Format("2006-01-02")
+	// The window's days are [from, to): a to at midnight leaves its day out.
+	// The server's 30 buckets count back from today, not from to.
+	firstDay := from.UTC().Truncate(24 * time.Hour)
+	lastDay := to.UTC().Add(-time.Nanosecond).Truncate(24 * time.Hour)
+	if kept := now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -29); firstDay.Before(kept) {
+		firstDay = kept
 	}
-	last := to.UTC().Format("2006-01-02")
+	x := extraction{Days: max(0, int(lastDay.Sub(firstDay)/(24*time.Hour))+1)}
+	first, last := firstDay.Format("2006-01-02"), lastDay.Format("2006-01-02")
 	var thoughts int64
 	for day, t := range byDay {
 		if day < first || day > last {
@@ -156,6 +159,9 @@ func extractionOver(cmd *cobra.Command, from, to time.Time, days int) extraction
 
 // serverDays notes when the server's 30 days of buckets cut the window.
 func serverDays(x extraction, days int) string {
+	if x.Days == 0 {
+		return " (none counted: the server keeps only the last 30 days)"
+	}
 	if x.Days < days {
 		return fmt.Sprintf(" (last %d days: the server keeps no more)", x.Days)
 	}

@@ -162,6 +162,9 @@ func TestComputeBranches(t *testing.T) {
 		{TS: at(4), Event: "outcome", Session: "s1", N: 1, IDs: []string{"m"}, Credited: cr("free")},
 		{TS: at(4), Event: "outcome", Session: "s1", N: 3, IDs: []string{"m"}, Credited: cr("empty"), Searched: true},
 		{TS: at(4), Event: "outcome", Session: "s1", N: 4, Credited: cr("exact")},
+		// C12's counts for parity: turn 1 was searched by a read only, turn
+		// 2 by a memory_search; only an exact credit counts
+		{TS: at(4), Event: "outcome", Session: "s1", N: 2, IDs: []string{"m"}, Credited: cr("exact")},
 		// detector: a store in another session, or two turns later, is no follow-up
 		{TS: at(5), Event: "prompt", Session: "s1", N: 5, Decision: "skip", Plen: 80, Detector: rule},
 		{TS: at(6), Event: "tool_use", Session: "s2", Name: "x__memory_store", N: 5},
@@ -182,7 +185,7 @@ func TestComputeBranches(t *testing.T) {
 	if r.Turns.Credit["silent"] != 1 || r.Turns.Credit["free"] != 1 || r.Turns.Credit["exact"] != 0 || len(r.Turns.Credit) != 2 {
 		t.Errorf("credit %+v", r.Turns.Credit)
 	}
-	if r.Injections.N != 2 || r.Injections.Credited != 1 || r.Injections.Searched != 1 {
+	if i := r.Injections; i.N != 3 || i.Credited != 2 || i.Searched != 2 || i.SearchedBySearch != 1 || i.Exact != 1 {
 		t.Errorf("injections %+v", r.Injections)
 	}
 	if r.Detector.Fired != 1 || r.Detector.Saved != 0 {

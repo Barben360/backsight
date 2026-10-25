@@ -12,10 +12,14 @@ const MinParity = 10
 // ParityLine is one metric of the comparison. Rates are N of Of; the
 // latency line carries milliseconds in N and the recall count in Of.
 type ParityLine struct {
-	Metric   string `json:"metric"`
-	Rule     string `json:"rule"` // ">=" or "<="
-	BaseN    int    `json:"baseline_n"`
-	BaseOf   int    `json:"baseline_of,omitempty"`
+	Metric string `json:"metric"`
+	Rule   string `json:"rule"` // ">=" or "<="
+	BaseN  int    `json:"baseline_n"`
+	BaseOf int    `json:"baseline_of,omitempty"`
+	// BarN/BarOf: the bar a rate is judged against, the baseline itself
+	// unless 0065 sets a tolerance.
+	BarN     int    `json:"bar_n"`
+	BarOf    int    `json:"bar_of,omitempty"`
 	N        int    `json:"n"`
 	Of       int    `json:"of"`
 	Latency  bool   `json:"latency,omitempty"`
@@ -40,9 +44,11 @@ func Parity(r Report) []ParityLine {
 	lines := []ParityLine{
 		rate("recalls that injected something", ">=", 16, 61, r.Prompts.WithHits, r.Prompts.Recalls),
 		{Metric: "prompt hook p95", Rule: "<=", BaseN: 4200, N: r.Prompts.P95MS, Of: r.Prompts.Recalls, Latency: true, Baseline: "4200 ms"},
-		rate("failed recall scope calls", "<=", 0, 124, r.Prompts.ScopeFailures, r.Prompts.ScopeCalls),
-		rate("injections followed by a search", ">=", 7, 16, r.Injections.Searched, r.Injections.N),
-		rate("injections credited", ">=", 3, 16, r.Injections.Credited, r.Injections.N),
+		// 0/124 in C12: one transient failure must not fail parity, so the
+		// bar is 1 % (doctor warns from 5 %).
+		withBar(rate("failed recall scope calls", "<=", 0, 124, r.Prompts.ScopeFailures, r.Prompts.ScopeCalls), 1, 100, "0% (0/124), up to 1%"),
+		rate("injections followed by a memory_search", ">=", 7, 16, r.Injections.SearchedBySearch, r.Injections.N),
+		rate("injections credited (exact)", ">=", 3, 16, r.Injections.Exact, r.Injections.N),
 		rate("replies after a search that cite the memory", ">=", 4, 17, cites, replies),
 	}
 	for i := range lines {
@@ -52,7 +58,12 @@ func Parity(r Report) []ParityLine {
 }
 
 func rate(metric, rule string, baseN, baseOf, n, of int) ParityLine {
-	return ParityLine{Metric: metric, Rule: rule, BaseN: baseN, BaseOf: baseOf, N: n, Of: of, Baseline: pctOf(baseN, baseOf)}
+	return ParityLine{Metric: metric, Rule: rule, BaseN: baseN, BaseOf: baseOf, BarN: baseN, BarOf: baseOf, N: n, Of: of, Baseline: pctOf(baseN, baseOf)}
+}
+
+func withBar(l ParityLine, n, of int, shown string) ParityLine {
+	l.BarN, l.BarOf, l.Baseline = n, of, shown
+	return l
 }
 
 func verdict(l ParityLine) string {
@@ -62,7 +73,7 @@ func verdict(l ParityLine) string {
 	// Rates compare n/of with baseN/baseOf by cross-multiplication.
 	got, want := l.N, l.BaseN
 	if !l.Latency {
-		got, want = l.N*l.BaseOf, l.BaseN*l.Of
+		got, want = l.N*l.BarOf, l.BarN*l.Of
 	}
 	if (l.Rule == ">=" && got >= want) || (l.Rule == "<=" && got <= want) {
 		return ParityPass

@@ -167,6 +167,10 @@ type Report struct {
 		Searched     int `json:"searched"`
 		Credited     int `json:"credited"` // exact or free
 		Contradicted int `json:"contradicted"`
+		// C12's own definitions, for parity (0065): followed by a
+		// memory_search (not a read), credited in the exact format.
+		SearchedBySearch int `json:"searched_by_search"`
+		Exact            int `json:"exact"`
 	} `json:"injections"`
 	Briefings struct {
 		N     int `json:"n"`
@@ -209,7 +213,7 @@ func Compute(events []Event, from, to time.Time) Report {
 	r.From, r.To = from, to
 	r.Prompts.Skips, r.Turns.Credit, r.Prompts.ByLang = map[string]int{}, map[string]int{}, map[string][2]int{}
 	r.Gate, r.Tools, r.Live, r.Retains, r.HookFailures, r.Unknown = map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
-	searched, stored := map[turn]bool{}, map[turn]bool{}
+	searched, stored, bySearch := map[turn]bool{}, map[turn]bool{}, map[turn]bool{}
 	returned := map[string]map[string]time.Time{} // session → memory id → first time a tool returned it
 	for _, e := range events {
 		if e.Event != "tool_use" || e.Subagent || !isMemoryTool(e.Name) {
@@ -220,6 +224,7 @@ func Compute(events []Event, from, to time.Time) Report {
 			stored[t] = true
 		} else {
 			searched[t] = true
+			bySearch[t] = bySearch[t] || strings.HasSuffix(e.Name, "memory_search")
 		}
 		if returned[e.Session] == nil {
 			returned[e.Session] = map[string]time.Time{}
@@ -300,8 +305,14 @@ func Compute(events []Event, from, to time.Time) Report {
 			if searched[turn{e.Session, e.N}] {
 				r.Injections.Searched++
 			}
+			if bySearch[turn{e.Session, e.N}] {
+				r.Injections.SearchedBySearch++
+			}
 			if e.Credited != nil && (*e.Credited == "exact" || *e.Credited == "free") {
 				r.Injections.Credited++
+			}
+			if e.Credited != nil && *e.Credited == "exact" {
+				r.Injections.Exact++
 			}
 			if e.Contradicted {
 				r.Injections.Contradicted++

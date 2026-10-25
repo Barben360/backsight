@@ -180,3 +180,29 @@ func TestStatsAbsoluteWindowAndParity(t *testing.T) {
 		}
 	}
 }
+
+// The server's buckets follow the same [since, until) window: an until at
+// midnight leaves its day out, and a window older than the server's 30
+// days says none were counted instead of showing 0 as a measure.
+func TestStatsAbsoluteWindowExtraction(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	llmInput.Store(2_000_000)    // today
+	llmOldInput.Store(5_000_000) // 10 days ago
+	day := func(back int) string { return time.Now().UTC().AddDate(0, 0, -back).Format("2006-01-02") }
+	if _, out, _ := run(t, "stats", "--since", day(10), "--until", day(9)); !strings.Contains(out, "5000000 input") {
+		t.Errorf("the day 10 days ago alone:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "--since", day(11), "--until", day(10)); !strings.Contains(out, " 0 input") {
+		t.Errorf("until at midnight leaves its day out:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "--since", day(10)); !strings.Contains(out, "7000000 input") || strings.Contains(out, "server keeps") {
+		t.Errorf("since alone runs to now:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "--since", day(60), "--until", day(50)); !strings.Contains(out, "none counted: the server keeps only the last 30 days") {
+		t.Errorf("a window older than the server's buckets:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "--since", day(40), "--until", day(9)); !strings.Contains(out, "5000000 input") || !strings.Contains(out, "(last 20 days: the server keeps no more)") {
+		t.Errorf("a window cut by the server's 30 days:\n%s", out)
+	}
+}

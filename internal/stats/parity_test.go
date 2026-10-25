@@ -5,8 +5,11 @@ import "testing"
 func parityReport() Report {
 	var r Report
 	r.Prompts.Recalls, r.Prompts.WithHits, r.Prompts.P95MS = 20, 6, 4200 // 30 % >= 26 %; 4.2 s is the bar itself
-	r.Prompts.ScopeCalls, r.Prompts.ScopeFailures = 40, 0
-	r.Injections.N, r.Injections.Searched, r.Injections.Credited = 16, 7, 3 // C12 exactly: equal passes
+	r.Prompts.ScopeCalls, r.Prompts.ScopeFailures = 100, 1               // 1 %: the tolerance itself
+	// C12 exactly: equal passes. Searched and Credited (any memory tool,
+	// exact or free) are looser than C12 and must not be what is judged.
+	r.Injections.N, r.Injections.SearchedBySearch, r.Injections.Exact = 16, 7, 3
+	r.Injections.Searched, r.Injections.Credited = 16, 16
 	r.Turns.Credit = map[string]int{"exact": 1, "free": 1, "empty": 1, "silent": 7}
 	return r
 }
@@ -19,7 +22,7 @@ func byMetric(lines []ParityLine) map[string]ParityLine {
 	return m
 }
 
-// Equal to the baseline passes; free and empty credits count as citing.
+// Equal to the bar passes; free and empty credits count as citing.
 func TestParityPassesAtTheBaseline(t *testing.T) {
 	lines := Parity(parityReport())
 	if len(lines) != 6 {
@@ -38,14 +41,15 @@ func TestParityPassesAtTheBaseline(t *testing.T) {
 	}
 }
 
-// One step past the baseline on each side fails, in the rule's direction.
+// One step past the bar on each side fails, in the rule's direction; the
+// looser counts (any memory tool, free credits) do not rescue it.
 func TestParityFailsJustPastTheBaseline(t *testing.T) {
 	r := parityReport()
 	r.Prompts.WithHits = 5                                   // 25 % < 26 %
 	r.Prompts.P95MS = 4201                                   // above 4.2 s
-	r.Prompts.ScopeFailures = 1                              // any failure is above 0 %
-	r.Injections.Searched = 6                                // 6/16 < 7/16
-	r.Injections.Credited = 2                                // 2/16 < 3/16
+	r.Prompts.ScopeFailures = 2                              // 2 % > 1 %
+	r.Injections.SearchedBySearch = 6                        // 6/16 < 7/16, though 16/16 searched with any tool
+	r.Injections.Exact = 2                                   // 2/16 < 3/16, though 16/16 credited exact or free
 	r.Turns.Credit["exact"], r.Turns.Credit["silent"] = 0, 8 // 2/10 = 20 % < 24 %
 	for _, l := range Parity(r) {
 		if l.Verdict != ParityFail {
@@ -61,9 +65,9 @@ func TestParityFailsJustPastTheBaseline(t *testing.T) {
 // decided; a fail still wins over too few.
 func TestParityTooFew(t *testing.T) {
 	r := parityReport()
-	r.Injections.N, r.Injections.Searched, r.Injections.Credited = 9, 9, 9
+	r.Injections.N, r.Injections.SearchedBySearch, r.Injections.Exact = 9, 9, 9
 	m := byMetric(Parity(r))
-	if m["injections followed by a search"].Verdict != ParityTooFew || m["injections credited"].Verdict != ParityTooFew {
+	if m["injections followed by a memory_search"].Verdict != ParityTooFew || m["injections credited (exact)"].Verdict != ParityTooFew {
 		t.Errorf("%+v", m)
 	}
 	if got := ParityOverall(Parity(r)); got != "not yet" {
@@ -76,5 +80,18 @@ func TestParityTooFew(t *testing.T) {
 	var empty Report
 	if got := ParityOverall(Parity(empty)); got != "not yet" {
 		t.Errorf("no events: %q", got)
+	}
+}
+
+// The latency line has its own gate: a fast p95 over 9 recalls is no pass.
+func TestParityLatencyNeedsEnoughRecalls(t *testing.T) {
+	r := parityReport()
+	r.Prompts.Recalls, r.Prompts.WithHits, r.Prompts.P95MS = 9, 9, 100
+	m := byMetric(Parity(r))
+	if m["prompt hook p95"].Verdict != ParityTooFew {
+		t.Errorf("%+v", m["prompt hook p95"])
+	}
+	if got := ParityOverall(Parity(r)); got != "not yet" {
+		t.Errorf("overall %q", got)
 	}
 }
