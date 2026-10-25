@@ -146,8 +146,8 @@ func pruneSessions(d paths.Dirs) {
 	for _, e := range ents {
 		if fi, err := e.Info(); err == nil && !e.IsDir() && now().Sub(fi.ModTime()) > sessionTTL {
 			id := strings.TrimSuffix(e.Name(), ".json")
-			if paused, _ := session.Paused(d.SessionsDir(), id); paused {
-				continue // a pause outlives the pruning: a resumed session stays paused
+			if st, err := (session.Store{Dir: d.SessionsDir()}).Load(id); err != nil || st.Paused || len(st.PausedSpans) > 0 {
+				continue // a pause, or a paused stretch not flushed yet, outlives the pruning
 			}
 			_ = os.Remove(filepath.Join(d.SessionsDir(), e.Name()))
 		}

@@ -150,3 +150,19 @@ func TestBareTildeAndEmptyCwd(t *testing.T) {
 		t.Error("a record without working directory must not be sent")
 	}
 }
+
+// pause --project writes the main checkout: a sibling worktree of the same
+// project is excluded too, a different directory is not.
+func TestExcludingTheMainCheckoutCoversItsWorktrees(t *testing.T) {
+	home, r := fixture(t)
+	main := r.Root(filepath.Join(home, "wt", "billing-fix"))
+	if main == filepath.Join(home, "wt", "billing-fix") {
+		t.Fatalf("fixture: the worktree is its own root (%s)", main)
+	}
+	if out, why := r.OptedOut(filepath.Join(home, "wt", "billing-fix"), []string{main}); !out || !strings.Contains(why, "main checkout") {
+		t.Errorf("worktree not excluded: %v %q", out, why)
+	}
+	if out, _ := r.OptedOut(filepath.Join(home, "wt"), []string{main}); out {
+		t.Error("a directory outside the project is excluded")
+	}
+}

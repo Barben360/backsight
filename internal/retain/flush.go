@@ -15,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
@@ -250,12 +251,16 @@ type runKey struct {
 // (a session can cd into an excluded path mid-way). It stops at the first
 // failure, with the cursor after the last run done.
 func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, now time.Time) Result {
-	paused, why := f.paused(sid)
+	paused, why, spans := f.pauseState(sid)
 	keys := map[string]runKey{}
-	key := func(cwd string) runKey {
-		if paused {
+	key := func(r transcript.Record) runKey {
+		switch {
+		case paused:
 			return runKey{optOut: true, reason: why}
+		case session.InSpans(spans, r.Timestamp):
+			return runKey{optOut: true, reason: "typed while the session was paused"}
 		}
+		cwd := r.CWD
 		if k, ok := keys[cwd]; ok {
 			return k
 		}
@@ -270,9 +275,9 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 	}
 	status, detail := Nothing, ""
 	for len(send) > 0 {
-		k := key(send[0].CWD)
+		k := key(send[0])
 		n := 1
-		for n < len(send) && key(send[n].CWD) == k {
+		for n < len(send) && key(send[n]) == k {
 			n++
 		}
 		run := send[:n]
@@ -395,17 +400,25 @@ func (f *Flusher) quarantine(res Result, cur *Cursor, why string) Result {
 // paused reads the session's pause flag; an unreadable file counts as
 // paused (fail closed).
 func (f *Flusher) paused(sid string) (bool, string) {
+	p, why, _ := f.pauseState(sid)
+	return p, why
+}
+
+// pauseState is the pause flag and the paused stretches of the session:
+// records typed during a stretch stay out even after a resume.
+func (f *Flusher) pauseState(sid string) (bool, string, []session.Span) {
 	var s struct {
-		Paused bool `json:"paused"`
+		Paused bool           `json:"paused"`
+		Spans  []session.Span `json:"paused_spans"`
 	}
 	raw, err := os.ReadFile(filepath.Join(f.Dirs.SessionsDir(), sid+".json"))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return false, ""
+		return false, "", nil
 	case err != nil || json.Unmarshal(raw, &s) != nil:
-		return true, "session state unreadable: treated as paused"
+		return true, "session state unreadable: treated as paused", nil
 	}
-	return s.Paused, "session paused"
+	return s.Paused, "session paused", s.Spans
 }
 
 // PendingLimit: how long a flush waits for a first segment the server has

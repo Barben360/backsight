@@ -49,6 +49,7 @@ type Tool struct {
 	MS   int    `json:"ms"`
 	Hits int    `json:"hits"`
 	OK   bool   `json:"ok"`
+	Live string `json:"live,omitempty"` // MCP: record | stale | none (how the server found its session)
 }
 
 type Gate struct {

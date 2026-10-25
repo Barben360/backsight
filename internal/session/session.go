@@ -32,11 +32,45 @@ type State struct {
 	SearchedPromptID int         `json:"searched_prompt_id"` // last prompt during which a memory tool ran
 	CharsInjected    int         `json:"chars_injected"`     // hook-injected text after the briefing
 	Paused           bool        `json:"paused"`
-	LastNudge        int         `json:"last_nudge"`           // prompt number of the last quiet-prompt nudge
-	Unavailable      bool        `json:"unavailable_notified"` // the visible failure was shown
-	LastAssistant    string      `json:"last_assistant"`       // the last reply, recorded at Stop
-	SubagentDone     bool        `json:"subagent_done"`        // a subagent finished since the last prompt
-	LastCredit       string      `json:"last_credit"`          // how the last reply cited memory: exact | empty | free | ""
+	// PausedSpans are the stretches the user paused, kept after a resume:
+	// a flush that runs later must still skip the records typed in them.
+	PausedSpans   []Span `json:"paused_spans,omitempty"`
+	LastNudge     int    `json:"last_nudge"`           // prompt number of the last quiet-prompt nudge
+	Unavailable   bool   `json:"unavailable_notified"` // the visible failure was shown
+	LastAssistant string `json:"last_assistant"`       // the last reply, recorded at Stop
+	SubagentDone  bool   `json:"subagent_done"`        // a subagent finished since the last prompt
+	LastCredit    string `json:"last_credit"`          // how the last reply cited memory: exact | empty | free | ""
+}
+
+// Span is one paused stretch; a zero To is still open.
+type Span struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to,omitzero"`
+}
+
+// SetPaused pauses or resumes the session at t, opening or closing a span;
+// it reports whether anything changed.
+func (s *State) SetPaused(on bool, t time.Time) bool {
+	if s.Paused == on {
+		return false
+	}
+	s.Paused = on
+	if on {
+		s.PausedSpans = append(s.PausedSpans, Span{From: t})
+	} else if n := len(s.PausedSpans); n > 0 && s.PausedSpans[n-1].To.IsZero() {
+		s.PausedSpans[n-1].To = t
+	}
+	return true
+}
+
+// InSpans reports whether t falls in a paused stretch.
+func InSpans(spans []Span, t time.Time) bool {
+	for _, sp := range spans {
+		if !t.Before(sp.From) && (sp.To.IsZero() || t.Before(sp.To)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Injection is one memory a hook put in the context, and the rule that let
@@ -155,6 +189,25 @@ func Paused(dir, id string) (bool, string) {
 		return true, "session state unreadable: treated as paused"
 	}
 	return st.Paused, "session paused"
+}
+
+// AnyPaused reports whether some session is paused now; an unreadable
+// state counts as paused (fail closed).
+func AnyPaused(dir string) bool {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if e.IsDir() || !ok {
+			continue
+		}
+		if p, _ := Paused(dir, id); p {
+			return true
+		}
+	}
+	return false
 }
 
 // Latest is the most recently written session id, "" when there is none.

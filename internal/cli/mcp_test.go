@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -17,8 +18,12 @@ import (
 // mcpSession starts the memory server on a fake bank and connects a client.
 func mcpSession(t *testing.T) *mcp.ClientSession { t.Helper(); return mcpSessionWith(t, "") }
 
-// mcpParentPID is the Claude Code pid the next mcpSession believes it has.
-var mcpParentPID int
+// mcpParentPID and mcpParentStart are the Claude Code pid the next
+// mcpSession believes it has, and when that process started.
+var (
+	mcpParentPID   int
+	mcpParentStart time.Time
+)
 
 // mcpSessionWith appends extra TOML to the config before the server starts.
 func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
@@ -39,7 +44,7 @@ func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID})
+	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID, parentStart: mcpParentStart})
 	ct, st := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {
@@ -318,5 +323,44 @@ func TestMCPWithoutALiveRecordKeepsItsStartProject(t *testing.T) {
 	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."})
 	if !strings.Contains(out, "project billing)") {
 		t.Errorf("%s", out)
+	}
+}
+
+// A record written before the parent process started belongs to an older
+// process that had the same pid: ignored.
+func TestMCPIgnoresARecordOlderThanItsParent(t *testing.T) {
+	mcpParentPID, mcpParentStart = 4545, time.Now()
+	t.Cleanup(func() { mcpParentPID, mcpParentStart = 0, time.Time{} })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4545, session.Live{SessionID: "old", Cwd: filepath.Join(home, "infra"), Project: "infra", At: time.Now().Add(-time.Hour)})
+	out, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."})
+	if !strings.Contains(out, "project billing)") || !strings.Contains(telemetryText(t, os.Getenv("HOME")), `"live":"stale"`) {
+		t.Errorf("%s\n%s", out, telemetryText(t, os.Getenv("HOME")))
+	}
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4545, session.Live{SessionID: "new", Cwd: filepath.Join(home, "infra"), Project: "infra", At: time.Now()})
+	if out, _ := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Infra keeps Traefik."}); !strings.Contains(out, "project infra)") {
+		t.Errorf("a current record is used: %s", out)
+	}
+}
+
+// Without its session the server cannot honour a pause: while any session
+// is paused, memory_store refuses; otherwise it stores.
+func TestMCPStoreFailsClosedWithoutItsSessionWhileOneIsPaused(t *testing.T) {
+	mcpParentPID = 4646
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	_ = sessions(home).Update("other", func(st *session.State) error { st.SetPaused(true, time.Now()); return nil })
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Keep 16."}); !isErr || !strings.Contains(out, "a session is paused") || retained.Load() != before {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if !strings.Contains(telemetryText(t, os.Getenv("HOME")), `"live":"none"`) {
+		t.Errorf("telemetry:\n%s", telemetryText(t, os.Getenv("HOME")))
+	}
+	_ = sessions(home).Update("other", func(st *session.State) error { st.SetPaused(false, time.Now()); return nil })
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Keep 16."}); isErr || retained.Load() == before {
+		t.Errorf("no pause on: stored normally: %v %s", isErr, out)
 	}
 }

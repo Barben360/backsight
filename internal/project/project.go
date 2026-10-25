@@ -135,6 +135,14 @@ func (r *Resolver) OptedOut(cwd string, exclude []string) (bool, string) {
 	}
 	cwd = filepath.Clean(cwd)
 	rcwd := resolved(cwd)
+	// A linked worktree lives outside its main checkout: excluding the
+	// project (its main checkout, what pause --project writes) covers it.
+	main := ""
+	if len(exclude) > 0 {
+		if m := r.Root(cwd); m != cwd {
+			main = m
+		}
+	}
 	for _, e := range exclude {
 		switch {
 		case e == "~":
@@ -148,6 +156,9 @@ func (r *Resolver) OptedOut(cwd string, exclude []string) (bool, string) {
 				if under(c, ex) {
 					return true, "privacy.exclude_paths contains " + e
 				}
+			}
+			if main != "" && under(main, ex) {
+				return true, "privacy.exclude_paths contains " + e + " (this worktree's main checkout)"
 			}
 		}
 	}

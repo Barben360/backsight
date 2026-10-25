@@ -144,3 +144,28 @@ func TestAnUnreadableStateIsNotOverwritten(t *testing.T) {
 		t.Errorf("%+v", st)
 	}
 }
+
+func TestPauseSpans(t *testing.T) {
+	t0 := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	var st State
+	if !st.SetPaused(true, t0) || st.SetPaused(true, t0.Add(time.Minute)) {
+		t.Fatal("pause, then a second pause, must change once")
+	}
+	if !InSpans(st.PausedSpans, t0.Add(time.Hour)) {
+		t.Error("an open span covers what comes after the pause")
+	}
+	st.SetPaused(false, t0.Add(10*time.Minute))
+	st.SetPaused(true, t0.Add(20*time.Minute))
+	st.SetPaused(false, t0.Add(30*time.Minute))
+	for _, c := range []struct {
+		min  int
+		want bool
+	}{{-1, false}, {0, true}, {9, true}, {10, false}, {15, false}, {20, true}, {30, false}, {40, false}} {
+		if got := InSpans(st.PausedSpans, t0.Add(time.Duration(c.min)*time.Minute)); got != c.want {
+			t.Errorf("minute %d: %v, want %v", c.min, got, c.want)
+		}
+	}
+	if st.Paused || len(st.PausedSpans) != 2 {
+		t.Errorf("%+v", st)
+	}
+}

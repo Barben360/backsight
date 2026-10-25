@@ -712,3 +712,25 @@ func TestBankSwitchSendsTheSessionToTheNewBank(t *testing.T) {
 		t.Fatalf("%+v %+v", r, e.hs.retains)
 	}
 }
+
+// pause → private talk → resume → flush: the paused stretch stays out even
+// though the session is no longer paused when the flush runs.
+func TestAPausedStretchStaysOutAfterAResume(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+		[]byte(`{"paused":false,"paused_spans":[{"from":"2026-10-24T09:05:00Z","to":"2026-10-24T09:15:00Z"}]}`), 0o600)
+	e.record("s1", "u1", "user", 0, "before the pause")
+	e.record("s1", "u2", "user", 10, "private matter")
+	e.record("s1", "a2", "assistant", 11, "private answer")
+	e.record("s1", "u3", "user", 20, "after the resume")
+	e.flush("s1", Options{Force: true})
+	var sent []string
+	for _, it := range e.hs.retains {
+		sent = append(sent, it.Content)
+	}
+	all := strings.Join(sent, "\n")
+	if strings.Contains(all, "private") || !strings.Contains(all, "before the pause") || !strings.Contains(all, "after the resume") {
+		t.Errorf("sent:\n%s", all)
+	}
+}

@@ -33,8 +33,16 @@ const (
 
 func init() {
 	handlers["session-start"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
-		h, ok := newHookEnv(ctx, input, readSide)
+		h, ok := newHookEnv(ctx, input, "")
 		if !ok {
+			return nil, nil
+		}
+		if !h.cfg.Components.Read {
+			// Write side only: no guide or briefing, but the env file, so
+			// that pause can name this session.
+			if h.in.Source != "compact" {
+				h.writeEnvFile()
+			}
 			return nil, nil
 		}
 		return h.sessionStart(), nil

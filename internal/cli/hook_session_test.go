@@ -171,8 +171,18 @@ func TestReadHooksRespectTheComponentsFlagAndAMissingConfig(t *testing.T) {
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("[components]\nread = false\n")...), 0o600)
+	envFile := filepath.Join(t.TempDir(), "env")
+	t.Setenv("CLAUDE_ENV_FILE", envFile)
+	t.Setenv(claudePIDEnv, "31338")
 	if h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": home}); h.Specific.Context != "" || h.SystemMessage != "" {
 		t.Errorf("read=false still injected: %+v", h)
+	}
+	// write side still on: pause and the MCP server must find the session
+	if env, _ := os.ReadFile(envFile); !strings.Contains(string(env), "BACKSIGHT_SESSION='s1'") {
+		t.Errorf("no env file with read=false: %q", env)
+	}
+	if _, ok := session.ReadLive(pathsOf(home).SessionsDir(), 31338); !ok {
+		t.Error("no live record with read=false")
 	}
 	_ = os.Remove(cfg)
 	if h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": home}); h.Specific.Context != "" {

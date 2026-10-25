@@ -71,22 +71,24 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	if h.cfg, h.sec, err = loadServerConfig(); err != nil {
 		return nil, false
 	}
-	c := h.cfg.Components
-	if (side == readSide && !c.Read) || (side == writeSide && !c.Write) || (side == "" && !c.Read && !c.Write) {
-		return nil, false
-	}
 	cwd := h.in.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
 	h.project = project.New(h.home, h.cfg.Projects.Transverse).Project(cwd)
+	// The live record is what lets pause and the MCP server find this
+	// session: written whatever the components (0056).
+	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {
+		_ = session.WriteLive(h.dirs.SessionsDir(), pid, session.Live{SessionID: h.in.SessionID, Cwd: cwd, Project: h.project, At: now()})
+	}
+	c := h.cfg.Components
+	if (side == readSide && !c.Read) || (side == writeSide && !c.Write) || (side == "" && !c.Read && !c.Write) {
+		return nil, false
+	}
 	// Hooks of one session can run in parallel: a short bounded retry
 	// instead of losing their updates (0054 amendment).
 	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir(), Retry: 100 * time.Millisecond}
 	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version})
-	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {
-		_ = session.WriteLive(h.dirs.SessionsDir(), pid, session.Live{SessionID: h.in.SessionID, Cwd: cwd, Project: h.project, At: now()})
-	}
 	// One deadline for every call of a hook: the supervisor's own is the
 	// hard stop, this one lets the handler finish with what it has.
 	h.client, err = hindsight.New(h.cfg.Server.URL, h.sec.APIKey, 30*time.Second)
