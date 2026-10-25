@@ -10,10 +10,14 @@
 #
 # BACKSIGHT_RELEASE_DIR  a local directory holding a release (checksums.txt,
 #                        its .minisig and the archives): no network
-# BACKSIGHT_RELEASE_URL  where the release files are (default: the latest
-#                        GitHub release)
+# BACKSIGHT_RELEASE_URL  where the release files are, as
+#                        https://github.com/Barben360/backsight/releases/download/<tag>
+#                        (default: the newest release, pre-releases included,
+#                        found through the GitHub API without a token)
 # BACKSIGHT_HOME         as for backsight itself: one directory for everything
 # BACKSIGHT_INSTALL_PUBKEY  tests only: another trusted key
+# BACKSIGHT_INSTALL_GITHUB  tests only: one https host standing in for
+#                        api.github.com and github.com
 #
 # macOS ships LibreSSL, which cannot check these signatures: install
 # minisign there (brew install minisign).
@@ -24,7 +28,10 @@ set -eu
 main() {
 # The release key (decision 0027). Changed only by a key rotation.
 PUBKEY=${BACKSIGHT_INSTALL_PUBKEY:-RWTezqkiNo2ey8msd7vpSC0+D6oghZ1/VwgXU6EqYRjlZzyd87+/03eG}
-URL=${BACKSIGHT_RELEASE_URL:-https://github.com/Barben360/backsight/releases/latest/download}
+REPO=Barben360/backsight
+API=${BACKSIGHT_INSTALL_GITHUB:-https://api.github.com}
+DOWNLOADS=${BACKSIGHT_INSTALL_GITHUB:-https://github.com}/$REPO/releases/download
+URL=${BACKSIGHT_RELEASE_URL:-}
 
 die() { echo "backsight install: $*" >&2; exit 1; }
 
@@ -87,10 +94,41 @@ verify() {
 		die "$(basename "$sigfile"): bad trusted comment signature"
 }
 
+# newest: the tag of the newest release, pre-releases included. GitHub's
+# /releases/latest skips pre-releases; the release list, newest first, does
+# not. No jq: the first "tag_name" key of the list is read with awk.
+newest() {
+	api=$API/repos/$REPO/releases?per_page=1
+	how="set BACKSIGHT_RELEASE_URL=$DOWNLOADS/<tag> (tags: https://github.com/$REPO/releases), or BACKSIGHT_RELEASE_DIR to a downloaded release"
+	curl -fsSL --proto '=https' --tlsv1.2 -H 'Accept: application/vnd.github+json' -o "$tmp/releases.json" "$api" ||
+		die "cannot list the releases at $api: $how"
+	tag=$(awk '
+		{ s = s $0 "\n" }
+		END {
+			k = "\"tag_name\""
+			while ((i = index(s, k)) > 0) {
+				s = substr(s, i + length(k))
+				sub(/^[ \t\r\n]*/, "", s)
+				if (substr(s, 1, 1) != ":") continue
+				s = substr(s, 2)
+				if (!sub(/^[ \t\r\n]*"/, "", s)) exit
+				print substr(s, 1, index(s, "\"") - 1)
+				exit
+			}
+		}' "$tmp/releases.json")
+	case $tag in
+	"") die "no release found at $api: $how" ;;
+	.* | *[!A-Za-z0-9._+-]*) die "unexpected release tag at $api: $how" ;;
+	esac
+	echo "newest release: $tag"
+	URL=$DOWNLOADS/$tag
+}
+
 sha256() {
 	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
+[ -n "${BACKSIGHT_RELEASE_DIR:-}" ] || [ -n "$URL" ] || newest
 fetch checksums.txt
 fetch checksums.txt.minisig
 verify "$tmp/checksums.txt"

@@ -21,18 +21,20 @@ curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/in
 
 The script:
 
-1. downloads the latest release for your OS and architecture;
+1. finds the newest release, pre-releases included, through GitHub's API (no account or token needed), and downloads it for your OS and architecture;
 2. checks the signature of its `checksums.txt` with the release key written in the script, then the archive's checksum, and stops if either fails;
 3. installs the binary under backsight's data directory, with the signed checksums next to it (the binary checks itself against them on its first run);
 4. links `~/.local/bin/backsight` to a shim that always points at the current version.
 
 If `~/.local/bin` is not on your PATH, the script prints the `export PATH=…` line to add to your shell profile.
 
-To install one given release instead of the latest, set its download URL:
+To install one given release instead of the newest, set its download URL:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | BACKSIGHT_RELEASE_URL=https://github.com/Barben360/backsight/releases/download/<tag> sh
 ```
+
+If the script cannot list the releases (no network to `api.github.com`, or GitHub's limit of 60 requests an hour for an address without a token), it stops and names `BACKSIGHT_RELEASE_URL`: set it as above, with a tag from the [releases page](https://github.com/Barben360/backsight/releases).
 
 To install from release files you downloaded yourself (`checksums.txt`, `checksums.txt.minisig` and the archive in one directory), run `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`. Nothing is downloaded then.
 

@@ -11,11 +11,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/crypto/blake2b"
@@ -370,5 +374,192 @@ func TestInstallPointsAnOlderPathLinkAtTheShim(t *testing.T) {
 	pathEntry(t, link, dataDir(home), installedBinary(home))
 	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight "+version+"\n" {
 		t.Errorf("the PATH command runs %q (%v)", run, err)
+	}
+}
+
+// github fakes api.github.com and github.com's release downloads on one
+// local HTTPS host (install.sh's BACKSIGHT_INSTALL_GITHUB), so the lookup of
+// the newest release runs without the network.
+type github struct {
+	srv *httptest.Server
+	ca  string // the server's certificate, for curl's CURL_CA_BUNDLE
+
+	mu        sync.Mutex
+	lookups   []*http.Request
+	downloads []string
+}
+
+// newGitHub answers the release list with status and body, and serves the
+// files of relDir under tag.
+func newGitHub(t *testing.T, status int, body, tag, relDir string) *github {
+	t.Helper()
+	g := &github{}
+	dl := "/Barben360/backsight/releases/download/" + tag + "/"
+	g.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		switch {
+		case r.URL.Path == "/repos/Barben360/backsight/releases":
+			g.lookups = append(g.lookups, r)
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		case strings.HasPrefix(r.URL.Path, dl) && relDir != "":
+			g.downloads = append(g.downloads, r.URL.Path)
+			http.ServeFile(w, r, filepath.Join(relDir, filepath.Base(r.URL.Path)))
+		default:
+			g.downloads = append(g.downloads, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(g.srv.Close)
+	g.ca = filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(g.ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: g.srv.Certificate().Raw}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// withCurl is toolsWithout plus curl, which the download path needs.
+func withCurl(t *testing.T) string {
+	t.Helper()
+	p, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("curl missing")
+	}
+	dir := toolsWithout(t)
+	if err := os.Symlink(p, filepath.Join(dir, "curl")); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// install runs install.sh with no release directory: it finds the
+// release through g.
+func (g *github) install(t *testing.T, pubkey string, env ...string) (home, out string, err error) {
+	t.Helper()
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("openssl missing")
+	}
+	home = t.TempDir()
+	cmd := exec.Command("sh", "install.sh")
+	cmd.Env = append([]string{"HOME=" + home, "PATH=" + withCurl(t), "BACKSIGHT_INSTALL_PUBKEY=" + pubkey,
+		"BACKSIGHT_INSTALL_GITHUB=" + g.srv.URL, "CURL_CA_BUNDLE=" + g.ca}, env...)
+	b, err := cmd.CombinedOutput()
+	return home, string(b), err
+}
+
+// A release as the API lists it: a pre-release, with decoys a careless
+// parser would take for its tag (a name equal to "tag_name", an escaped
+// "tag_name" in a string, nested objects).
+func releaseJSON(tag string, pretty bool) string {
+	s := `[{"url":"https://api.github.com/repos/Barben360/backsight/releases/1",` +
+		`"author":{"login":"Barben360","id":1,"type":"User"},` +
+		`"name":"tag_name","node_id":"RE_1","target_commitish":"the \"tag_name\": \"v0.0.1\" one",` +
+		`"tag_name":"` + tag + `","draft":false,"prerelease":true,` +
+		`"assets":[{"name":"checksums.txt","uploader":{"login":"x"}}],"body":"\"tag_name\":\"v0.0.2\""}]`
+	if pretty {
+		s = strings.NewReplacer(`[{`, "[\n  {\n    ", `,"`, ",\n    \"", `":`, `": `, `}]`, "\n  }\n]\n").Replace(s)
+	}
+	return s
+}
+
+// Without a release URL, install.sh takes the newest release from the API,
+// pre-releases included (GitHub's /releases/latest skips them), and still
+// verifies it.
+func TestInstallFindsTheNewestReleaseIncludingPreReleases(t *testing.T) {
+	for _, pretty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "compact", true: "pretty"}[pretty], func(t *testing.T) {
+			k := newKey(t)
+			dir, archive := release(t, k)
+			g := newGitHub(t, http.StatusOK, releaseJSON("v9.9.9-m5", pretty), "v9.9.9-m5", dir)
+			home, out, err := g.install(t, k.pub)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			pathEntry(t, filepath.Join(home, ".local", "bin", "backsight"), dataDir(home), installedBinary(home))
+			if !strings.Contains(out, "v9.9.9-m5") {
+				t.Errorf("output does not name the release it found:\n%s", out)
+			}
+			if len(g.lookups) != 1 {
+				t.Fatalf("%d lookups, want 1", len(g.lookups))
+			}
+			r := g.lookups[0]
+			if r.URL.Query().Get("per_page") != "1" || r.Header.Get("Authorization") != "" {
+				t.Errorf("lookup %s with Authorization %q: want per_page=1 and no token", r.URL, r.Header.Get("Authorization"))
+			}
+			want := []string{"checksums.txt", "checksums.txt.minisig", archive}
+			for i, w := range want {
+				want[i] = "/Barben360/backsight/releases/download/v9.9.9-m5/" + w
+			}
+			if strings.Join(g.downloads, " ") != strings.Join(want, " ") {
+				t.Errorf("downloads %v, want %v", g.downloads, want)
+			}
+		})
+	}
+}
+
+// The release found is verified as any other: a tampered archive is refused.
+func TestInstallRefusesAFoundReleaseThatDoesNotVerify(t *testing.T) {
+	k := newKey(t)
+	dir, archive := release(t, k)
+	_ = os.WriteFile(filepath.Join(dir, archive), []byte("not the signed archive"), 0o644)
+	g := newGitHub(t, http.StatusOK, releaseJSON("v9.9.9-m5", false), "v9.9.9-m5", dir)
+	home, out, err := g.install(t, k.pub)
+	if err == nil || !strings.Contains(out, "checksum mismatch") {
+		t.Errorf("want a checksum refusal, got %v\n%s", err, out)
+	}
+	if _, err := os.Stat(installedBinary(home)); err == nil {
+		t.Error("a refused release was installed")
+	}
+}
+
+// A failed lookup stops before any download and names the way around it.
+func TestInstallLookupFailureNamesTheReleaseURL(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"repository not found (private)", http.StatusNotFound, `{"message":"Not Found"}`},
+		{"rate limited", http.StatusForbidden, `{"message":"API rate limit exceeded"}`},
+		{"no release yet", http.StatusOK, "[]\n"},
+		{"not JSON", http.StatusOK, "<html>maintenance</html>"},
+		{"tag escaping the URL", http.StatusOK, releaseJSON("v1/../../evil", false)},
+		{"tag with a query", http.StatusOK, releaseJSON("v1?x=1", false)},
+		{"escaped tag", http.StatusOK, releaseJSON(`v1\u002e0`, false)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			k := newKey(t)
+			dir, _ := release(t, k)
+			g := newGitHub(t, c.status, c.body, "v9.9.9-m5", dir)
+			home, out, err := g.install(t, k.pub)
+			if err == nil || !strings.Contains(out, "BACKSIGHT_RELEASE_URL") {
+				t.Errorf("want a failure naming BACKSIGHT_RELEASE_URL, got %v\n%s", err, out)
+			}
+			if len(g.downloads) != 0 {
+				t.Errorf("downloaded %v after a failed lookup", g.downloads)
+			}
+			if _, err := os.Stat(installedBinary(home)); err == nil {
+				t.Error("installed without a release")
+			}
+		})
+	}
+}
+
+// BACKSIGHT_RELEASE_URL names the release: no lookup.
+func TestInstallWithAReleaseURLSkipsTheLookup(t *testing.T) {
+	k := newKey(t)
+	dir, _ := release(t, k)
+	g := newGitHub(t, http.StatusInternalServerError, "", "v9.9.8", dir)
+	home, out, err := g.install(t, k.pub, "BACKSIGHT_RELEASE_URL="+g.srv.URL+"/Barben360/backsight/releases/download/v9.9.8")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if len(g.lookups) != 0 {
+		t.Errorf("%d lookups with a release URL set", len(g.lookups))
+	}
+	if _, err := os.Stat(installedBinary(home)); err != nil {
+		t.Errorf("not installed: %v", err)
 	}
 }
