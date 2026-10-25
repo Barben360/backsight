@@ -156,7 +156,12 @@ func TestUpdateWithinWaitsForTheLock(t *testing.T) {
 		t.Errorf("not written: %+v", s)
 	}
 
-	l2, _ := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	// The lock is free again once UpdateWithin returned: taking it must
+	// succeed, or the bound below would be tested against no holder.
+	l2, err := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	if err != nil {
+		t.Fatalf("the lock was not released after the update: %v", err)
+	}
 	defer func() { _ = l2.Release() }()
 	start := time.Now()
 	var held *HeldError
@@ -174,7 +179,10 @@ func TestUpdateWithinWaitsForTheLock(t *testing.T) {
 // SaveWithin writes the raw state only under the state lock.
 func TestSaveWithinTakesTheLock(t *testing.T) {
 	d := paths.Dirs{State: t.TempDir()}
-	l, _ := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	l, err := TryAcquire(filepath.Join(d.LocksDir(), "state.lock"), "other")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var held *HeldError
 	if err := SaveWithin(d, "test", 100*time.Millisecond, []byte(`{"plugin_version":"x"}`)); !errors.As(err, &held) {
 		t.Errorf("written under someone else's lock: %v", err)

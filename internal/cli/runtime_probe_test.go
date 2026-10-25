@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,5 +76,35 @@ func TestDoctorDockerProbeAsksTheServerRuntime(t *testing.T) {
 	}
 	if len(f.calls) != 1 || !strings.HasPrefix(f.calls[0], "info ") {
 		t.Errorf("calls %q", f.calls)
+	}
+}
+
+// The server counts as installed once a compose.yaml backsight rendered
+// is there; one without a hindsight service (not backsight's) does not
+// count.
+func TestSetupProbesServerInstalled(t *testing.T) {
+	isolate(t)
+	withEngine(t, &engineDocker{info: "28.1.1\n"})
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "server")
+	cfg := config.Config{Server: config.Server{ComposeDir: dir, Project: "p1", Mode: "local", URL: "http://127.0.0.1:8888", UIPort: 9999},
+		Embeddings: config.Embeddings{Preset: "multilingual"}}
+	s := setupEnv{dirs: paths.Dirs{Data: tmp}, cfg: &cfg, loc: claudecode.Location{Dir: tmp, Settings: filepath.Join(tmp, "settings.json"), Projects: filepath.Join(tmp, "projects")}}
+	rt := runtimeFor(cfg)
+	f, err := rt.Render(config.Secrets{APIKey: "k", UIKey: "u", DBPassword: "p", LLMAPIKey: "l"}, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Write(f); err != nil {
+		t.Fatal(err)
+	}
+	if p := preflightProbes(context.Background(), s, map[string]string{"api_port": "8888", "ui_port": "9999"}); !p.ServerInstalled {
+		t.Error("a rendered compose.yaml does not count as installed")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx:1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p := preflightProbes(context.Background(), s, map[string]string{"api_port": "8888", "ui_port": "9999"}); p.ServerInstalled {
+		t.Error("a compose.yaml without a hindsight service counts as installed")
 	}
 }

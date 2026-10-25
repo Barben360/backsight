@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -131,6 +132,11 @@ func TestValidate(t *testing.T) {
 		{"backup keep", func(c *Config) { c.Backup.KeepDaily = -1 }, "backup.keep_daily"},
 		{"retention", func(c *Config) { c.Client.RetentionDays = -1 }, "client.retention_days"},
 		{"relative update source", func(c *Config) { c.Update.Source = "dist" }, "update.source"},
+		{"relative compose dir", func(c *Config) { c.Server.ComposeDir = "server" }, "server.compose_dir"},
+		{"empty compose dir", func(c *Config) { c.Server.ComposeDir = "" }, "server.compose_dir"},
+		{"home-relative compose dir", func(c *Config) { c.Server.ComposeDir = "~/server" }, "server.compose_dir"},
+		{"relative backup dir", func(c *Config) { c.Backup.Dir = "./backups" }, "backup.dir"},
+		{"empty backup dir", func(c *Config) { c.Backup.Dir = "" }, "backup.dir"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -314,5 +320,17 @@ func TestServerProjectIsValidated(t *testing.T) {
 		if err := cfg.Validate(); (err == nil) != ok {
 			t.Errorf("project %q: %v", v, err)
 		}
+	}
+}
+
+// Absolute directories are accepted, from the file as from the defaults.
+func TestAbsoluteDirectoriesAccepted(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(write(t, fmt.Sprintf("[server]\ncompose_dir = %q\n\n[backup]\ndir = %q\n", filepath.Join(dir, "srv"), filepath.Join(dir, "bk"))), dirs, "/home/u")
+	if err != nil || cfg.Server.ComposeDir != filepath.Join(dir, "srv") || cfg.Backup.Dir != filepath.Join(dir, "bk") {
+		t.Errorf("%v %+v %+v", err, cfg.Server, cfg.Backup)
+	}
+	if _, err := Load(write(t, "[backup]\ndir = \"backups\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "backup.dir") {
+		t.Errorf("a relative backup.dir in the file: %v", err)
 	}
 }

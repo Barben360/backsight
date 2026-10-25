@@ -301,6 +301,13 @@ func (c Config) Validate() error {
 	atLeast("client.retention_days", c.Client.RetentionDays, 0)
 	atLeast("backup.keep_daily", c.Backup.KeepDaily, 1) // 0 would prune the backup just written
 	atLeast("backup.keep_weekly", c.Backup.KeepWeekly, 0)
+	// A relative directory would follow whatever directory a command runs
+	// from (a hook, a timer, the shell): never the same server or backups.
+	for key, v := range map[string]string{"server.compose_dir": c.Server.ComposeDir, "backup.dir": c.Backup.Dir} {
+		if !filepath.IsAbs(v) {
+			bad(key, "%q must be an absolute directory path", v)
+		}
+	}
 	if c.Update.Source != "" && !filepath.IsAbs(c.Update.Source) {
 		bad("update.source", "%q must be empty (GitHub releases) or an absolute directory path", c.Update.Source)
 	}
