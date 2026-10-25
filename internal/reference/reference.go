@@ -184,18 +184,5 @@ func MCPServer(line string) bool {
 	return false
 }
 
-// referenceTools are the permission prefixes of the reference MCP servers.
-var referenceTools = []string{"mcp__user-memory__", "mcp__hindsight__"}
-
-// Permission reports whether a permission rule names a reference MCP tool.
-func Permission(rule string) bool {
-	for _, p := range referenceTools {
-		if strings.HasPrefix(rule, p) {
-			return true
-		}
-	}
-	return false
-}
-
 // RetroTimer is the reference retro's systemd user timer.
 const RetroTimer = "memory-retro.timer"

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
@@ -16,7 +18,7 @@ import (
 
 type undoAction struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // done | planned | refused | failed
+	Status string `json:"status"` // done | planned | refused | failed | lost
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -26,19 +28,26 @@ type undoResult struct {
 	Plan    bool         `json:"plan"`
 }
 
-// runSetupUndo reverses what setup changed, newest first (decision 0064):
-// the reference timers it stopped, the config-editor runs it made, the
-// scheduler entries, the plugin, and the server it started. Config,
-// secrets and the database volume are kept. Each action done is struck
-// from setup.json at once, so an interrupted undo continues where it
-// stopped.
+// runSetupUndo reverses what setup changed (decision 0064): the config
+// editor runs first, newest first, each by its inverse edit; then the
+// reference timers it stopped, the scheduler entries, the plugin in each
+// profile setup wired, and the server it started. Config, secrets and the
+// database volume are kept. Each action done is struck from setup.json at
+// once, so an interrupted undo continues where it stopped.
 func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, error) {
 	res := undoResult{Plan: f.plan, Actions: []undoAction{},
 		Kept: []string{"config.toml and secrets.toml: the database volume only opens with the password they hold",
 			"the memory server's data: backsight uninstall --delete-data removes it", "backups"}}
-	d, _, err := machine()
+	d, home, err := machine()
 	if err != nil {
 		return res, err
+	}
+	if !f.plan {
+		unlock, err := setupLock(d, "setup --undo")
+		if err != nil {
+			return res, err
+		}
+		defer unlock()
 	}
 	rec, err := setup.Load(d.SetupFile())
 	if err != nil {
@@ -48,69 +57,115 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 		res.Actions = append(res.Actions, undoAction{Name: "nothing", Status: "done", Detail: "setup changed nothing that is still in place"})
 		return res, nil
 	}
-	if !f.plan {
-		lock, err := state.TryAcquire(filepath.Join(d.LocksDir(), "setup.lock"), "setup --undo")
-		if err != nil {
-			return res, &output.Error{Code: output.Blocked, Message: "a setup is running"}
-		}
-		defer func() { _ = lock.Release() }()
-	}
 	add := func(a undoAction) { res.Actions = append(res.Actions, a) }
-	save := func() error { return rec.Save(d.SetupFile()) }
+	save := func() {
+		if !f.plan {
+			_ = rec.Save(d.SetupFile())
+		}
+	}
 	fail := func(name string, err error) (undoResult, error) {
 		add(undoAction{Name: name, Status: "failed", Detail: errMessage(err)})
-		_ = save()
+		save()
 		return res, &output.Error{Code: output.Partial, Message: name + ": " + errMessage(err), Resume: "backsight setup --undo"}
 	}
-	var env []string
-	if rec.Profile != "" {
-		env = []string{"CLAUDE_CONFIG_DIR=" + rec.Profile}
+	var lost []string
+
+	// 1. Config-editor runs, newest first. Every manifest is read before
+	// anything is changed; a run whose pre-images are gone is reported and
+	// skipped, never a reason to leave the rest wired.
+	runner := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: "setup --undo", Now: now}
+	type run struct {
+		ts string
+		m  claudecfg.Manifest
+	}
+	var runs []run
+	for _, ts := range rec.Undo.ConfigRuns {
+		m, err := claudecfg.LoadManifest(d.PreImagesDir(), ts)
+		if err != nil {
+			lost = append(lost, ts)
+			continue
+		}
+		runs = append(runs, run{ts, m})
+	}
+	for _, ts := range lost {
+		add(undoAction{Name: "restore " + ts, Status: "lost", Detail: "its pre-images are gone: check the files it edited by hand"})
+		if !f.plan {
+			rec.Undo.ConfigRuns = without(rec.Undo.ConfigRuns, ts)
+		}
+	}
+	save()
+	for i := len(runs) - 1; i >= 0; i-- {
+		r := runs[i]
+		name := "undo " + r.m.Command + " (" + r.ts + ")"
+		edits, whole, err := inverseEdits(d.PreImagesDir(), r.m)
+		if err != nil {
+			return fail(name, err)
+		}
+		var targets []string
+		for _, mf := range r.m.Files {
+			targets = append(targets, mf.Target)
+		}
+		if f.plan {
+			if whole {
+				pr, perr := runner.RestorePlan(r.ts, force)
+				status := "planned"
+				for _, x := range pr {
+					if x.Status == "refused" {
+						status = "refused"
+					}
+				}
+				detail := strings.Join(targets, ", ")
+				if perr != nil {
+					detail += ": " + perr.Error()
+				}
+				add(undoAction{Name: name, Status: status, Detail: detail})
+				continue
+			}
+			fr, err := claudecfg.Plan(edits)
+			if err != nil {
+				return fail(name, err)
+			}
+			add(undoAction{Name: name, Status: "planned", Detail: changedPaths(fr)})
+			continue
+		}
+		if whole {
+			for _, t := range targets {
+				if force && filepath.Base(t) == ".claude.json" {
+					return fail(name, errors.New("--force never puts back a whole ~/.claude.json: Claude Code rewrites it at every start"))
+				}
+			}
+			if _, _, err := runner.Restore(r.ts, force); err != nil {
+				if errors.Is(err, claudecfg.ErrChangedSince) {
+					add(undoAction{Name: name, Status: "refused", Detail: err.Error()})
+					save()
+					return res, &output.Error{Code: output.Partial, Resume: "backsight setup --undo --force",
+						Message: fmt.Sprintf("%s: %v (setup --undo --force puts the pre-image back over that edit)", name, err)}
+				}
+				return fail(name, err)
+			}
+			add(undoAction{Name: name, Status: "done", Detail: strings.Join(targets, ", ")})
+		} else {
+			_, fr, err := runner.Apply(edits)
+			if err != nil {
+				return fail(name, err)
+			}
+			add(undoAction{Name: name, Status: "done", Detail: changedPaths(fr)})
+		}
+		claudecfg.Unpin(d.PreImagesDir(), r.ts)
+		rec.Undo.ConfigRuns = without(rec.Undo.ConfigRuns, r.ts)
+		save()
 	}
 
-	for len(rec.Undo.Timers) > 0 {
-		t := rec.Undo.Timers[len(rec.Undo.Timers)-1]
+	// 2. The reference timers, once their hooks and servers are back.
+	for _, t := range append([]string(nil), rec.Undo.Timers...) {
 		if !f.plan {
 			if out, err := sysRunner.Run(ctx, "systemctl", "--user", "enable", "--now", t); err != nil {
 				return fail("timer "+t, fmt.Errorf("%w %s", err, strings.TrimSpace(string(out))))
 			}
+			rec.Undo.Timers = without(rec.Undo.Timers, t)
+			save()
 		}
 		add(undoAction{Name: "timer " + t, Status: done(f.plan), Detail: "systemd user timer started again"})
-		if f.plan {
-			break
-		}
-		rec.Undo.Timers = rec.Undo.Timers[:len(rec.Undo.Timers)-1]
-		_ = save()
-	}
-
-	runner := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: "setup --undo", Now: now}
-	runs := append([]string(nil), rec.Undo.ConfigRuns...)
-	for i := len(runs) - 1; i >= 0; i-- {
-		ts := runs[i]
-		m, err := claudecfg.LoadManifest(d.PreImagesDir(), ts)
-		if err != nil {
-			return fail("restore "+ts, fmt.Errorf("its pre-images are gone (%w): restore the files by hand", err))
-		}
-		var targets []string
-		for _, mf := range m.Files {
-			targets = append(targets, mf.Target)
-		}
-		name := "restore " + ts + " (" + m.Command + ")"
-		if f.plan {
-			add(undoAction{Name: name, Status: "planned", Detail: strings.Join(targets, ", ")})
-			continue
-		}
-		if _, _, err := runner.Restore(ts, force); err != nil {
-			if errors.Is(err, claudecfg.ErrChangedSince) {
-				add(undoAction{Name: name, Status: "refused", Detail: err.Error()})
-				_ = save()
-				return res, &output.Error{Code: output.Partial, Resume: "backsight setup --undo --force",
-					Message: fmt.Sprintf("%s: %v (backsight setup --undo --force puts the pre-image back over that edit)", name, err)}
-			}
-			return fail(name, err)
-		}
-		add(undoAction{Name: name, Status: "done", Detail: strings.Join(targets, ", ")})
-		rec.Undo.ConfigRuns = rec.Undo.ConfigRuns[:i]
-		_ = save()
 	}
 
 	if rec.Undo.Scheduler {
@@ -119,29 +174,31 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				return fail("scheduler", out.Err)
 			}
 			rec.Undo.Scheduler = false
-			_ = save()
+			save()
 		}
 		add(undoAction{Name: "scheduler", Status: done(f.plan), Detail: "jobs tick and jobs maintain entries removed"})
 	}
 
-	if rec.Undo.Client {
+	for _, prof := range append([]string(nil), rec.Undo.ClientProfiles...) {
 		if !f.plan {
-			if err := removePlugin(ctx, env); err != nil {
-				return fail("client", err)
+			if err := removePlugin(ctx, profileEnv(home, prof)); err != nil {
+				return fail("client "+prof, err)
 			}
 			if err := state.Update(d, "setup --undo", func(s *state.State) error {
-				s.PluginVersion = ""
-				if s.Client != nil {
-					s.Client.Profile = ""
+				if s.Client == nil || s.Client.Profile == "" || filepath.Clean(s.Client.Profile) == prof || (prof == filepath.Join(home, ".claude")) {
+					s.PluginVersion = ""
+					if s.Client != nil {
+						s.Client.Profile = ""
+					}
 				}
 				return nil
 			}); err != nil {
-				return fail("client", err)
+				return fail("client "+prof, err)
 			}
-			rec.Undo.Client = false
-			_ = save()
+			rec.Undo.ClientProfiles = without(rec.Undo.ClientProfiles, prof)
+			save()
 		}
-		add(undoAction{Name: "client", Status: done(f.plan), Detail: "plugin " + plugin.PluginID() + " and its marketplace removed from Claude Code"})
+		add(undoAction{Name: "client " + prof, Status: done(f.plan), Detail: "plugin " + plugin.PluginID() + " and its marketplace removed"})
 	}
 
 	if rec.Undo.ServerStarted {
@@ -150,20 +207,111 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 				return fail("server", out.Err)
 			}
 			rec.Undo.ServerStarted = false
-			_ = save()
+			save()
 		}
 		add(undoAction{Name: "server", Status: done(f.plan), Detail: "stopped; its data is kept"})
 	}
 	if !f.plan {
 		rec.Steps, rec.Finished = nil, false
-		if err := save(); err != nil {
+		if err := rec.Save(d.SetupFile()); err != nil {
 			return res, blocked(err)
 		}
+	}
+	if len(lost) > 0 && !f.plan {
+		return res, &output.Error{Code: output.Partial, Message: "undone, except the config runs whose pre-images are gone (" + strings.Join(lost, ", ") + "): check those files by hand"}
 	}
 	return res, nil
 }
 
+// inverseEdits are the edits that reverse run m (decision 0064
+// amendment); whole is true for a run of an unknown command, which only a
+// whole-file restore can reverse.
+func inverseEdits(dir string, m claudecfg.Manifest) (edits []claudecfg.Edit, whole bool, err error) {
+	pre := func(mf claudecfg.ManifestFile) ([]byte, error) {
+		if mf.PreImage == nil {
+			return nil, nil // the run created the file
+		}
+		return os.ReadFile(filepath.Join(dir, m.TS, *mf.PreImage))
+	}
+	switch m.Command {
+	case "client retire":
+		// The servers retired, read from the ~/.claude.json pre-image: their
+		// permission rules come back with them.
+		var servers []string
+		for _, mf := range m.Files {
+			if filepath.Base(mf.Target) == ".claude.json" && mf.PreImage != nil {
+				if servers, err = referenceServers(filepath.Join(dir, m.TS, *mf.PreImage)); err != nil {
+					return nil, false, err
+				}
+			}
+		}
+		for _, mf := range m.Files {
+			b, err := pre(mf)
+			if err != nil {
+				return nil, false, err
+			}
+			if filepath.Base(mf.Target) == ".claude.json" {
+				edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: unretireMCP(b)})
+			} else {
+				edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: unretireSettings(b, servers)})
+			}
+		}
+	case "client install":
+		for _, mf := range m.Files {
+			b, err := pre(mf)
+			if err != nil {
+				return nil, false, err
+			}
+			edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: removeAdded(b)})
+		}
+	case "client retention":
+		for _, mf := range m.Files {
+			b, err := pre(mf)
+			if err != nil {
+				return nil, false, err
+			}
+			edits = append(edits, claudecfg.Edit{Target: mf.Target, Apply: restoreKey(b, "cleanupPeriodDays")})
+		}
+	default:
+		return nil, true, nil
+	}
+	return edits, false, nil
+}
+
+func changedPaths(fr []claudecfg.FileResult) string {
+	var out []string
+	for _, f := range fr {
+		for _, ch := range f.Changes {
+			out = append(out, f.Target+": "+ch.Path)
+		}
+	}
+	if len(out) == 0 {
+		return "already as before"
+	}
+	return strings.Join(out, ", ")
+}
+
+func without(list []string, item string) []string {
+	out := list[:0:0]
+	for _, x := range list {
+		if x != item {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 func done(plan bool) string { return map[bool]string{true: "planned", false: "done"}[plan] }
+
+// profileEnv is the environment that points the claude CLI at profile:
+// none for the default ~/.claude (CLAUDE_CONFIG_DIR would move
+// .claude.json into it).
+func profileEnv(home, profile string) []string {
+	if profile == "" || filepath.Clean(profile) == filepath.Join(home, ".claude") {
+		return nil
+	}
+	return []string{"CLAUDE_CONFIG_DIR=" + profile}
+}
 
 // removePlugin uninstalls backsight's plugin and marketplace when present.
 func removePlugin(ctx context.Context, env []string) error {
@@ -186,6 +334,24 @@ func removePlugin(ctx context.Context, env []string) error {
 		}
 	}
 	return nil
+}
+
+// setupLock takes setup's lock; a stale one (its process gone) is broken
+// and said, a live one names its holder.
+func setupLock(d paths.Dirs, command string) (func(), error) {
+	path := filepath.Join(d.LocksDir(), "setup.lock")
+	l, err := state.TryAcquire(path, command)
+	if err != nil {
+		if held := state.Inspect(path); held != nil && held.Stale {
+			if state.BreakStale(held) == nil {
+				if l, err = state.TryAcquire(path, command); err == nil {
+					return func() { _ = l.Release() }, nil
+				}
+			}
+		}
+		return nil, &output.Error{Code: output.Blocked, Message: "another setup is running (" + err.Error() + "); if it is not, remove " + path}
+	}
+	return func() { _ = l.Release() }, nil
 }
 
 func undoText(r undoResult) string {

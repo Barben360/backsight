@@ -2,10 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -13,7 +17,9 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/setup"
 )
 
 type retireResult struct {
@@ -49,9 +55,13 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 	if err != nil {
 		return res, err
 	}
-	edits := []claudecfg.Edit{{Target: c.loc.Settings, Apply: retireSettings}, {Target: c.loc.State, Apply: retireMCP}}
+	edits, err := retireEdits(c.loc)
+	if err != nil {
+		return res, editError(err)
+	}
 	res.Kept = []string{"the reference server and its data: backsight doctor says when it can be stopped",
-		"files under ~/.claude/hooks and ~/.claude/skills, and your CLAUDE.md: personal files, never edited"}
+		"files under ~/.claude/hooks and ~/.claude/skills, and your CLAUDE.md: personal files, never edited",
+		"close or restart every Claude Code session: a running one may write the old MCP servers back (backsight doctor reports them)"}
 	timerOn := retroTimerOwned(ctx, c.loc)
 	if plan {
 		if res.Files, err = claudecfg.Plan(edits); err != nil {
@@ -108,11 +118,76 @@ func onlyChanged(fs []claudecfg.FileResult) []claudecfg.FileResult {
 	return out
 }
 
-// retireSettings removes the reference hook entries and permission rules.
-// A hook group holding only reference commands goes whole (its bytes
-// untouched around it); a group mixing them with others is rewritten
-// without them; an event left empty goes.
-func retireSettings(doc []byte) ([]byte, []claudecfg.Change, error) {
+// retireEdits are the edits that unwire the reference client pieces from
+// the profile at loc.
+func retireEdits(loc claudecode.Location) ([]claudecfg.Edit, error) {
+	names, err := referenceServers(loc.State)
+	if err != nil {
+		return nil, err
+	}
+	return []claudecfg.Edit{{Target: loc.Settings, Apply: retireSettings(names)}, {Target: loc.State, Apply: retireMCP}}, nil
+}
+
+// referenceServers names the reference MCP servers in ~/.claude.json, at
+// the top level and in every project; their permission rules go with them.
+func referenceServers(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		MCPServers map[string]any `json:"mcpServers"`
+		Projects   map[string]struct {
+			MCPServers map[string]any `json:"mcpServers"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	seen := map[string]bool{}
+	scan := func(m map[string]any) {
+		for name, v := range m {
+			if isReferenceServer(v) {
+				seen[name] = true
+			}
+		}
+	}
+	scan(doc.MCPServers)
+	for _, p := range doc.Projects {
+		scan(p.MCPServers)
+	}
+	return setup.Keys(boolKeys(seen)), nil
+}
+
+func boolKeys(m map[string]bool) map[string]string {
+	out := map[string]string{}
+	for k := range m {
+		out[k] = ""
+	}
+	return out
+}
+
+// toolRuleOf reports whether a permission rule names a tool of server:
+// "mcp__<server>" or "mcp__<server>__<tool>".
+func toolRuleOf(rule, server string) bool {
+	return rule == "mcp__"+server || strings.HasPrefix(rule, "mcp__"+server+"__")
+}
+
+// retireSettings removes the reference hook entries, and the permission
+// rules of the reference MCP servers being removed (servers). A hook group
+// holding only reference commands goes whole (its bytes untouched around
+// it); a group mixing them with others is rewritten without them; an event
+// left empty goes.
+func retireSettings(servers []string) func([]byte) ([]byte, []claudecfg.Change, error) {
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		return retireSettingsDoc(doc, servers)
+	}
+}
+
+func retireSettingsDoc(doc []byte, servers []string) ([]byte, []claudecfg.Change, error) {
 	var changes []claudecfg.Change
 	v, ok, err := claudecfg.Get(doc, []string{"hooks"})
 	if err != nil {
@@ -161,7 +236,15 @@ func retireSettings(doc []byte) ([]byte, []claudecfg.Change, error) {
 	}
 	doc, ch, err := claudecfg.RemoveWhere(doc, []string{"permissions", "allow"}, func(_ string, v any) bool {
 		s, ok := v.(string)
-		return ok && reference.Permission(s)
+		if !ok {
+			return false
+		}
+		for _, srv := range servers {
+			if toolRuleOf(s, srv) {
+				return true
+			}
+		}
+		return false
 	})
 	if err != nil {
 		return nil, nil, err
@@ -199,21 +282,218 @@ func splitGroup(g any) (all, some bool, rest map[string]any) {
 	return false, true, rest
 }
 
-// retireMCP removes the reference MCP servers from ~/.claude.json.
-func retireMCP(doc []byte) ([]byte, []claudecfg.Change, error) {
-	return claudecfg.RemoveWhere(doc, []string{"mcpServers"}, func(_ string, v any) bool {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return false
+func isReferenceServer(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	line := fmt.Sprint(m["command"])
+	if args, ok := m["args"].([]any); ok {
+		for _, a := range args {
+			line += " " + fmt.Sprint(a)
 		}
-		line := fmt.Sprint(m["command"])
-		if args, ok := m["args"].([]any); ok {
-			for _, a := range args {
-				line += " " + fmt.Sprint(a)
+	}
+	return reference.MCPServer(line)
+}
+
+// retireMCP removes the reference MCP servers from ~/.claude.json, at the
+// top level and in each project.
+func retireMCP(doc []byte) ([]byte, []claudecfg.Change, error) {
+	out, changes, err := claudecfg.RemoveWhere(doc, []string{"mcpServers"}, func(_ string, v any) bool { return isReferenceServer(v) })
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, p := range projectKeys(out) {
+		var ch []claudecfg.Change
+		if out, ch, err = claudecfg.RemoveWhere(out, []string{"projects", p, "mcpServers"}, func(_ string, v any) bool { return isReferenceServer(v) }); err != nil {
+			return nil, nil, err
+		}
+		changes = append(changes, ch...)
+	}
+	return out, changes, nil
+}
+
+func projectKeys(doc []byte) []string {
+	v, ok, err := claudecfg.Get(doc, []string{"projects"})
+	m, isObj := v.(map[string]any)
+	if err != nil || !ok || !isObj {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k, p := range m {
+		if pm, ok := p.(map[string]any); ok && pm["mcpServers"] != nil {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// The inverse edits undo uses (decision 0064 amendment): Claude Code
+// rewrites ~/.claude.json at every start and settings.json on many
+// changes, so putting back a whole pre-image would be refused, or with
+// --force would drop everything written since. Each inverse re-applies
+// only what its run removed or added, read from the run's pre-image.
+
+// unretireSettings puts back the reference hook entries pre held that doc
+// lacks (each as a group of its own with its original matcher, appended to
+// its event), and pre's permission rules for the servers retired.
+func unretireSettings(pre []byte, servers []string) func([]byte) ([]byte, []claudecfg.Change, error) {
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		var changes []claudecfg.Change
+		v, _, err := claudecfg.Get(pre, []string{"hooks"})
+		if err != nil {
+			return nil, nil, err
+		}
+		hooks, _ := v.(map[string]any)
+		events := make([]string, 0, len(hooks))
+		for ev := range hooks {
+			events = append(events, ev)
+		}
+		sort.Strings(events)
+		for _, ev := range events {
+			groups, _ := hooks[ev].([]any)
+			for _, g := range groups {
+				gm, _ := g.(map[string]any)
+				list, _ := gm["hooks"].([]any)
+				for _, h := range list {
+					hm, _ := h.(map[string]any)
+					cmd, _ := hm["command"].(string)
+					if !reference.HookCommand(cmd) || hasHookCommand(doc, ev, cmd) {
+						continue
+					}
+					group := map[string]any{"hooks": []any{h}}
+					if m, ok := gm["matcher"]; ok {
+						group["matcher"] = m
+					}
+					var ch claudecfg.Change
+					if doc, ch, err = claudecfg.EnsureInArray(doc, []string{"hooks", ev}, group); err != nil {
+						return nil, nil, err
+					}
+					changes = append(changes, ch)
+				}
 			}
 		}
-		return reference.MCPServer(line)
-	})
+		v, _, err = claudecfg.Get(pre, []string{"permissions", "allow"})
+		if err != nil {
+			return nil, nil, err
+		}
+		allow, _ := v.([]any)
+		for _, r := range allow {
+			rule, _ := r.(string)
+			ref := false
+			for _, srv := range servers {
+				ref = ref || toolRuleOf(rule, srv)
+			}
+			if !ref {
+				continue
+			}
+			var ch claudecfg.Change
+			if doc, ch, err = claudecfg.EnsureInArray(doc, []string{"permissions", "allow"}, rule); err != nil {
+				return nil, nil, err
+			}
+			if ch.New != nil {
+				changes = append(changes, ch)
+			}
+		}
+		return doc, changes, nil
+	}
+}
+
+func hasHookCommand(doc []byte, event, cmd string) bool {
+	v, ok, err := claudecfg.Get(doc, []string{"hooks", event})
+	groups, isArr := v.([]any)
+	if err != nil || !ok || !isArr {
+		return false
+	}
+	for _, g := range groups {
+		gm, _ := g.(map[string]any)
+		list, _ := gm["hooks"].([]any)
+		for _, h := range list {
+			if hm, _ := h.(map[string]any); hm["command"] == cmd {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// unretireMCP puts back the reference MCP servers pre held that doc
+// lacks, at the top level and in projects doc still has.
+func unretireMCP(pre []byte) func([]byte) ([]byte, []claudecfg.Change, error) {
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		var changes []claudecfg.Change
+		put := func(base []string) error {
+			v, _, err := claudecfg.Get(pre, base)
+			if err != nil {
+				return err
+			}
+			m, _ := v.(map[string]any)
+			names := make([]string, 0, len(m))
+			for n := range m {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				if !isReferenceServer(m[n]) {
+					continue
+				}
+				if _, there, _ := claudecfg.Get(doc, append(append([]string{}, base...), n)); there {
+					continue
+				}
+				var ch claudecfg.Change
+				if doc, ch, err = claudecfg.Set(doc, append(append([]string{}, base...), n), m[n]); err != nil {
+					return err
+				}
+				changes = append(changes, ch) // reported as paths only (changedPaths)
+			}
+			return nil
+		}
+		if err := put([]string{"mcpServers"}); err != nil {
+			return nil, nil, err
+		}
+		for _, p := range projectKeys(pre) {
+			if _, there, _ := claudecfg.Get(doc, []string{"projects", p}); !there {
+				continue // a project Claude Code dropped is not recreated
+			}
+			if err := put([]string{"projects", p, "mcpServers"}); err != nil {
+				return nil, nil, err
+			}
+		}
+		return doc, changes, nil
+	}
+}
+
+// removeAdded removes from settings.json's allow list the memory-tool
+// rules pre lacked (the inverse of client install's one edit).
+func removeAdded(pre []byte) func([]byte) ([]byte, []claudecfg.Change, error) {
+	had := map[string]bool{}
+	if v, _, _ := claudecfg.Get(pre, []string{"permissions", "allow"}); v != nil {
+		for _, r := range v.([]any) {
+			if s, ok := r.(string); ok {
+				had[s] = true
+			}
+		}
+	}
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		return claudecfg.RemoveWhere(doc, []string{"permissions", "allow"}, func(_ string, v any) bool {
+			s, _ := v.(string)
+			return slices.Contains(plugin.ToolNames, s) && !had[s]
+		})
+	}
+}
+
+// restoreKey puts key back to its value in pre, or removes it when pre
+// lacked it (the inverse of client retention's edit).
+func restoreKey(pre []byte, key string) func([]byte) ([]byte, []claudecfg.Change, error) {
+	v, had, _ := claudecfg.Get(pre, []string{key})
+	return func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		if had {
+			out, ch, err := claudecfg.Set(doc, []string{key}, v)
+			return out, []claudecfg.Change{ch}, err
+		}
+		return claudecfg.RemoveWhere(doc, nil, func(k string, _ any) bool { return k == key })
+	}
 }
 
 func retireText(r retireResult) string {
@@ -229,6 +509,10 @@ func retireText(r retireResult) string {
 	for _, t := range r.Timers {
 		fmt.Fprintf(&b, "%s systemd user timer %s\n", map[bool]string{true: "would stop", false: "stopped"}[r.Plan], t)
 	}
+	undoTimers := ""
+	if !r.Plan && len(r.Timers) > 0 {
+		undoTimers = " and systemctl --user enable --now " + strings.Join(r.Timers, " ")
+	}
 	if n == 0 && len(r.Timers) == 0 {
 		b.WriteString("no reference piece wired into Claude Code\n")
 	}
@@ -236,7 +520,7 @@ func retireText(r retireResult) string {
 		b.WriteString("kept: " + k + "\n")
 	}
 	if r.Run != "" {
-		fmt.Fprintf(&b, "undo with backsight client config restore %s\n", r.Run)
+		fmt.Fprintf(&b, "undo with backsight client config restore %s%s\n", r.Run, undoTimers)
 	}
 	return b.String()
 }

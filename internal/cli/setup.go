@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
@@ -257,11 +258,15 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		return res, nil
 	}
 
-	lock, err := state.TryAcquire(filepath.Join(d.LocksDir(), "setup.lock"), "setup")
+	unlock, err := setupLock(d, "setup")
 	if err != nil {
-		return res, &output.Error{Code: output.Blocked, Message: "another setup is running"}
+		return res, err
 	}
-	defer func() { _ = lock.Release() }()
+	defer unlock()
+	// Read again under the lock: an undo may have finished meanwhile.
+	if s.saved, err = setup.Load(d.SetupFile()); err != nil {
+		return res, blocked(err)
+	}
 	return s.execute(ctx, res, interactive)
 }
 
@@ -522,7 +527,10 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		before, _ := claudecfg.Runs(s.dirs.PreImagesDir())
 		out := fn()
 		after, _ := claudecfg.Runs(s.dirs.PreImagesDir())
-		r.Undo.AddRuns(newRuns(before, after)...)
+		for _, ts := range newRuns(before, after) {
+			_ = claudecfg.Pin(s.dirs.PreImagesDir(), ts) // pruning must not take what undo needs
+			r.Undo.AddRuns(ts)
+		}
 		return out
 	}
 	serverETA := 30
@@ -601,24 +609,25 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if cfg.Server.Mode != "local" {
 				return setup.Step{Name: "server", Status: "skipped", Detail: "remote server " + cfg.Server.URL + ": install it on its host"}, nil
 			}
-			wasUp := serverAnswers(ctx, cfg)
+			// Intent first: a failed or interrupted install may still have
+			// started containers, and stopping a stopped project is harmless.
+			if !serverAnswers(ctx, cfg) {
+				r.Undo.ServerStarted = true
+				s.persist(r)
+			}
 			out := subcommand(ctx, "server", "install")
 			if out.Err != nil {
-				if !wasUp && serverAnswers(ctx, cfg) {
-					r.Undo.ServerStarted = true
-				}
 				return setup.Step{}, out.Err
-			}
-			if !wasUp {
-				r.Undo.ServerStarted = true
 			}
 			var ir installResult
 			_ = json.Unmarshal(out.Data, &ir)
 			return setup.Step{Name: "server", Status: "done", Detail: fmt.Sprintf("Hindsight %s at %s (UI %s)", ir.Version, ir.URL, ir.UI)}, nil
 		}},
 		{"client", 20, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
-			if st, err := state.Load(s.dirs.StateFile()); err == nil && st.PluginVersion == "" {
-				r.Undo.Client = true
+			// Undo removes the plugin only from a profile it was not in before.
+			if known, err := listed(ctx, profileEnv(s.home, s.loc.Dir), "id", "plugin", "list", "--json"); err != nil || !known[plugin.PluginID()] {
+				r.Undo.ClientProfiles = appendNew(r.Undo.ClientProfiles, filepath.Clean(s.loc.Dir))
+				s.persist(r)
 			}
 			out := withRuns(r, func() subResult { return subcommand(ctx, clientArgs("client", "install")...) })
 			if out.Err != nil {
@@ -657,6 +666,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		{"scheduler", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			if st, err := state.Load(s.dirs.StateFile()); err == nil && st.Scheduler == nil {
 				r.Undo.Scheduler = true
+				s.persist(r)
 			}
 			// Not recorded as config runs: jobs uninstall also stops the timers.
 			out := subcommand(ctx, "jobs", "install")
@@ -737,7 +747,11 @@ func appendNew(list []string, items ...string) []string {
 // referenceCount is how many reference pieces a retire would unwire now
 // (read-only: a plan and systemctl is-enabled).
 func referenceCount(ctx context.Context, loc claudecode.Location) int {
-	files, err := claudecfg.Plan([]claudecfg.Edit{{Target: loc.Settings, Apply: retireSettings}, {Target: loc.State, Apply: retireMCP}})
+	edits, err := retireEdits(loc)
+	if err != nil {
+		return 0
+	}
+	files, err := claudecfg.Plan(edits)
 	if err != nil {
 		return 0
 	}
@@ -778,7 +792,7 @@ func setupConfig(a map[string]string) []byte {
 }
 
 func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive bool) (setupResult, error) {
-	rec := &setup.Record{SchemaVersion: setup.RecordVersion, Run: now().UTC().Format("20060102T150405Z"), StartedAt: now().UTC(), Profile: s.f.configDir}
+	rec := &setup.Record{SchemaVersion: setup.RecordVersion, Run: now().UTC().Format("20060102T150405Z"), StartedAt: now().UTC(), Profile: filepath.Clean(s.loc.Dir)}
 	answers := map[string]string{}
 	for k, v := range res.Answers {
 		answers[k] = v
@@ -895,6 +909,14 @@ func stepFailure(name string, err error, changed bool) error {
 		out.Code = output.Blocked
 	}
 	return &out
+}
+
+// persist saves the record without a journal line: an undo intent noted
+// before the step that acts on it.
+func (s *setupEnv) persist(r *setup.Record) {
+	if err := r.Save(s.dirs.SetupFile()); err != nil {
+		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
+	}
 }
 
 func (s *setupEnv) saveRecord(r *setup.Record) {

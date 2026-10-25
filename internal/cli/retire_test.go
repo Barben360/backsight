@@ -174,3 +174,25 @@ func TestClientRetireLeavesTheRetroTimerToTheDefaultProfile(t *testing.T) {
 		t.Errorf("CLAUDE_CONFIG_DIR profile: exit %d\n%s", code, out)
 	}
 }
+
+func TestClientRetireRemovesRulesOnlyForServersItRemoves(t *testing.T) {
+	settings, state := referenceProfile(t)
+	withSys(t, "linux")
+	// An HTTP hindsight server (no command) is not the reference plugin:
+	// it stays, and so do its rules. A project-level user-memory server
+	// goes, with its bare rule.
+	_ = os.WriteFile(settings, []byte(`{"permissions":{"allow":["mcp__hindsight__recall","mcp__user-memory","mcp__user-memory__memory_search","mcp__vfs__search"]}}`), 0o600)
+	_ = os.WriteFile(state, []byte(`{"mcpServers":{"hindsight":{"type":"http","url":"https://h.example/mcp"}},
+  "projects":{"/home/u/app":{"mcpServers":{"user-memory":{"command":"python3","args":["/home/u/.claude/hooks/hindsight-memory-mcp.py"]},"db":{"command":"pg-mcp"}}}}}`), 0o600)
+	if code, out, errOut := run(t, "client", "retire"); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	_, allow, _ := claudeSettings(t, settings)
+	if strings.Join(allow, ",") != "mcp__hindsight__recall,mcp__vfs__search" {
+		t.Errorf("permissions %v", allow)
+	}
+	raw, _ := os.ReadFile(state)
+	if strings.Contains(string(raw), "user-memory") || !strings.Contains(string(raw), `"db"`) || !strings.Contains(string(raw), "https://h.example/mcp") {
+		t.Errorf("~/.claude.json: %s", raw)
+	}
+}

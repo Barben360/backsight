@@ -276,6 +276,31 @@ func TestOnlyTheLastTwentyRunsAreKept(t *testing.T) {
 	}
 }
 
+func TestPinnedRunsSurvivePruning(t *testing.T) {
+	r, dir := runner(t)
+	target := filepath.Join(dir, "settings.json")
+	first, _, err := r.Apply([]Edit{{Target: target, Apply: retention(1)}})
+	if err != nil || Pin(r.PreImages, first) != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i <= 25; i++ {
+		if _, _, err := r.Apply([]Edit{{Target: target, Apply: retention(i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, _ := Runs(r.PreImages)
+	if len(runs) != 21 || runs[0] != first {
+		t.Fatalf("%d runs kept, oldest %s (pinned %s)", len(runs), runs[0], first)
+	}
+	Unpin(r.PreImages, first)
+	if _, _, err := r.Apply([]Edit{{Target: target, Apply: retention(26)}}); err != nil {
+		t.Fatal(err)
+	}
+	if runs, _ = Runs(r.PreImages); len(runs) != 20 || runs[0] == first {
+		t.Errorf("an unpinned run must be pruned again: %d runs, oldest %s", len(runs), runs[0])
+	}
+}
+
 func TestRestoreWithoutRuns(t *testing.T) {
 	r, _ := runner(t)
 	if _, _, err := r.Restore("", false); err == nil {

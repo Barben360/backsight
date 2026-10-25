@@ -39,8 +39,9 @@ type Undo struct {
 	ConfigRuns []string `json:"config_runs,omitempty"`
 	// CreatedConfig: setup wrote config.toml (undo keeps it, decision 0064).
 	CreatedConfig bool `json:"created_config,omitempty"`
-	// Client: the plugin was not installed before setup.
-	Client bool `json:"client,omitempty"`
+	// ClientProfiles: the Claude Code profiles (absolute) where setup
+	// installed the plugin, which was not there before.
+	ClientProfiles []string `json:"client_profiles,omitempty"`
 	// Scheduler: the scheduler entries were not installed before setup.
 	Scheduler bool `json:"scheduler,omitempty"`
 	// ServerStarted: the server was not answering before setup.
@@ -51,7 +52,7 @@ type Undo struct {
 
 // Empty reports whether there is nothing to undo.
 func (u Undo) Empty() bool {
-	return len(u.ConfigRuns) == 0 && !u.Client && !u.Scheduler && !u.ServerStarted && len(u.Timers) == 0
+	return len(u.ConfigRuns) == 0 && len(u.ClientProfiles) == 0 && !u.Scheduler && !u.ServerStarted && len(u.Timers) == 0
 }
 
 // RecordVersion of setup.json.

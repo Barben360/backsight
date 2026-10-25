@@ -205,7 +205,4 @@ func TestReferenceMatchers(t *testing.T) {
 	if !MCPServer("node /home/u/.hindsight/coding-agents/dist/mcp-server.js") || !MCPServer("python3 /home/u/.claude/hooks/hindsight-memory-mcp.py") || MCPServer("vfs mcp") {
 		t.Error("MCPServer misclassifies")
 	}
-	if !Permission("mcp__user-memory__memory_search") || !Permission("mcp__hindsight__hindsight_ingest_document") || Permission("mcp__plugin_backsight_memory__memory_search") || Permission("Bash(git *)") {
-		t.Error("Permission misclassifies")
-	}
 }

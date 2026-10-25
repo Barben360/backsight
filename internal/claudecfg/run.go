@@ -115,10 +115,32 @@ func (s *runState) finish() {
 		}
 	}
 	runs, _ := Runs(s.r.PreImages)
-	for len(runs) > keepRuns {
-		_ = os.RemoveAll(filepath.Join(s.r.PreImages, runs[0]))
-		runs = runs[1:]
+	var prunable []string
+	for _, r := range runs {
+		if !pinned(s.r.PreImages, r) {
+			prunable = append(prunable, r)
+		}
 	}
+	for len(prunable) > keepRuns {
+		_ = os.RemoveAll(filepath.Join(s.r.PreImages, prunable[0]))
+		prunable = prunable[1:]
+	}
+}
+
+// pinFile marks a run kept out of pruning: setup --undo needs it (0064).
+const pinFile = "pinned"
+
+// Pin keeps run ts out of pruning until Unpin.
+func Pin(dir, ts string) error {
+	return os.WriteFile(filepath.Join(dir, ts, pinFile), nil, 0o600)
+}
+
+// Unpin lets run ts be pruned again.
+func Unpin(dir, ts string) { _ = os.Remove(filepath.Join(dir, ts, pinFile)) }
+
+func pinned(dir, ts string) bool {
+	_, err := os.Stat(filepath.Join(dir, ts, pinFile))
+	return err == nil
 }
 
 type runState struct {
