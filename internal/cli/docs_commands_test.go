@@ -20,10 +20,9 @@ import (
 // fenced blocks), since prose says "backsight" as a name.
 
 // docsPending are commands the docs already name that another block-4
-// issue builds: `guide` is backsight issue 241. Each is accepted only while
-// it is missing; once built, it is checked like any other and the test asks
-// for its entry to be removed.
-var docsPending = []string{"guide", "guide search"}
+// issue builds. Each is accepted only while it is missing; once built, it
+// is checked like any other and the test asks for its entry to be removed.
+var docsPending = []string{}
 
 // docFiles lists the documents checked, relative to the repository root.
 func docFiles(t *testing.T) []string {
@@ -233,8 +232,8 @@ func TestCheckMention(t *testing.T) {
 		"<command> --help",
 		"<command> --json",
 		"client config restore",
-		"guide search why", // pending
-		"guide",            // pending
+		"guide search why", // positional words after a built command
+		"guide",
 	}
 	for _, m := range ok {
 		if err := checkMention(root, strings.Fields(m), docsPending); err != nil {

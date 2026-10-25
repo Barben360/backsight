@@ -14,6 +14,12 @@ import (
 // doctor, bank apply, stats and projects read bank alone).
 func Bank(bank string) string { return bank + "-docs" }
 
+// docsRetrieval ranks the docs by embeddings and the reranker alone
+// (experiment E31): links between chunks of documentation mean nothing,
+// dates neither, and the keyword arm, on English text, crowds a question
+// in another language out of the reranker's candidates.
+var docsRetrieval = map[string]any{"enable_graph_retrieval": false, "enable_temporal_retrieval": false, "enable_text_search": false}
+
 // sendBatch: sections per synchronous retain. In chunks mode a retain only
 // embeds, locally.
 const sendBatch = 16
@@ -75,6 +81,9 @@ func Index(ctx context.Context, cl *hindsight.Client, bank string, c Corpus) (In
 	db := Bank(bank)
 	res := IndexResult{Bank: db, DocsHash: c.Hash, Sections: len(c.Sections())}
 	if err := retain.QuietBank(ctx, cl, db, "backsight docs", "backsight's documentation, one document per section, for `backsight guide search`; no memory."); err != nil {
+		return res, err
+	}
+	if err := cl.PatchBankConfig(ctx, db, docsRetrieval); err != nil {
 		return res, err
 	}
 	have, err := cl.ListDocuments(ctx, db)

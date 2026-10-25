@@ -79,7 +79,12 @@ func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 			Updates map[string]any `json:"updates"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		f.configs[bank] = body.Updates
+		if f.configs[bank] == nil {
+			f.configs[bank] = map[string]any{}
+		}
+		for k, v := range body.Updates {
+			f.configs[bank][k] = v
+		}
 		_, _ = w.Write([]byte(`{}`))
 	case r.Method == http.MethodGet && sub == "/documents":
 		if r.URL.Query().Get("offset") != "0" {
@@ -204,10 +209,15 @@ func TestIndexSetsUpAQuietBankAndSendsEverySection(t *testing.T) {
 	if res.Bank != "mem-docs" || res.Sections != 6 || res.Sent != 6 || res.Unchanged != 0 || res.DocsHash != c.Hash {
 		t.Errorf("%+v", res)
 	}
-	if cfg := f.configs["mem-docs"]; cfg["retain_extraction_mode"] != "chunks" || cfg["enable_observations"] != false {
-		t.Errorf("docs bank config %v", cfg)
+	cfg := f.configs["mem-docs"]
+	if cfg["retain_extraction_mode"] != "chunks" || cfg["enable_observations"] != false {
+		t.Errorf("docs bank config %v: must cost no LLM call", cfg)
 	}
-	if !strings.HasPrefix(strings.Join(f.calls, ", "), "PUT mem-docs /, PATCH mem-docs /config, ") {
+	// Recall ranks by embeddings and the reranker only (E31).
+	if cfg["enable_graph_retrieval"] != false || cfg["enable_temporal_retrieval"] != false || cfg["enable_text_search"] != false {
+		t.Errorf("docs bank retrieval %v", cfg)
+	}
+	if !strings.HasPrefix(strings.Join(f.calls, ", "), "PUT mem-docs /, PATCH mem-docs /config, PATCH mem-docs /config, GET mem-docs /documents") {
 		t.Errorf("the bank must be set up before anything is retained: %v", f.calls)
 	}
 	for _, call := range f.calls {
