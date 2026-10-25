@@ -13,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -26,12 +27,13 @@ type maintainResult struct {
 	Reason  string   `json:"reason,omitempty"`
 	Rotated []string `json:"telemetry_rotated,omitempty"`
 	Doctor  string   `json:"doctor,omitempty"` // snapshot: N error(s), M warning(s)
+	Backup  string   `json:"backup,omitempty"` // the archive written, or why none
 	MS      int      `json:"ms"`
 }
 
-// newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation
-// and a doctor snapshot; backups join it with M4 block 2, the update check
-// once releases are public (0063 Q2).
+// newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
+// a backup (when backup.enabled) and a doctor snapshot; the update check
+// comes once releases are public (0063 Q2).
 func newJobsMaintainCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "maintain",
@@ -48,8 +50,12 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			finish := func() error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "maintain", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "reason": res.Reason}})
-				return e.emit("jobs maintain", res, func() string { return maintainText(res) })
+					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "reason": res.Reason}})
+				var failed error
+				if res.Status == "partial" {
+					failed = &output.Error{Code: output.Partial, Message: "the backup failed: " + res.Backup + "; the next run retries"}
+				}
+				return e.report("jobs maintain", res, func() string { return maintainText(res) }, failed)
 			}
 			l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-maintain.lock"), "jobs maintain")
 			var held *state.HeldError
@@ -69,6 +75,15 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				return finish()
 			}
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
+			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
+				// The maintenance lock above is checked, not held: backup
+				// create takes it for the dump itself.
+				if b, err := createBackup(cmd.Context()); err != nil {
+					res.Status, res.Backup = "partial", "failed: "+err.Error()
+				} else {
+					res.Backup = b.Path
+				}
+			}
 			rep := runDoctor(cmd, d, home)
 			res.Doctor = fmt.Sprintf("%d error(s), %d warning(s)", rep.Errors, rep.Warnings)
 			if raw, err := json.MarshalIndent(rep, "", "  "); err == nil {
@@ -104,5 +119,5 @@ func maintainText(r maintainResult) string {
 	if r.Status == "skipped" {
 		return "skipped: " + r.Reason + "\n"
 	}
-	return fmt.Sprintf("done: %d telemetry file(s) rotated, doctor %s (%d ms)\n", len(r.Rotated), r.Doctor, r.MS)
+	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated), map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Doctor, r.MS)
 }

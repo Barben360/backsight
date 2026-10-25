@@ -86,6 +86,9 @@ func TestJobsInstallReportsAFailingActivation(t *testing.T) {
 func TestJobsMaintain(t *testing.T) {
 	home := devInstall(t, true)
 	d := pathsOf(home)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600)
 	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
 	_ = os.MkdirAll(d.TelemetryDir(), 0o700)
 	for _, m := range []string{"2025-09", "2025-10", "2026-10"} {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/recall"
@@ -62,6 +64,7 @@ type forgetResult struct {
 	Documents   []purgeDoc `json:"documents,omitempty"`
 	Undeletable []string   `json:"undeletable,omitempty"` // facts with no document: retired, kept in Hindsight's archive
 	Pages       []string   `json:"pages,omitempty"`       // briefing pages deleted (they may quote the text; rewritten at the next session)
+	Backups     []string   `json:"backups,omitempty"`     // archives taken before the purge: they still hold it
 	Note        string     `json:"note,omitempty"`
 }
 
@@ -241,7 +244,8 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 	}
 	sort.Strings(res.Pages)
 	res.Action = "purged"
-	res.Note = "backups taken before now still hold it (backups come with M4): delete or re-key them if the text was a secret"
+	res.Note = "backups taken before now still hold it: delete them, or keep them out of reach, if the text was a secret"
+	res.Backups = backupsBefore(now())
 	if len(res.Undeletable) > 0 {
 		res.Action = "partly_purged"
 		res.Note = "the facts with no document are retired but stay in Hindsight's archive (no API deletes them); " + res.Note
@@ -286,6 +290,9 @@ func forgetText(r forgetResult) string {
 	}
 	if r.Note != "" {
 		b.WriteString(r.Note + "\n")
+	}
+	for _, p := range r.Backups {
+		fmt.Fprintf(&b, "- %s\n", p)
 	}
 	return b.String()
 }
@@ -470,4 +477,26 @@ func newProjectsCmd(e *env) *cobra.Command {
 			})
 		},
 	}
+}
+
+// backupsBefore lists the backups taken before t (decision 0056 block 1:
+// the purge says where the text still is).
+func backupsBefore(t time.Time) []string {
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		return nil
+	}
+	d, _, err := machine()
+	if err != nil {
+		return nil
+	}
+	dir := cfg.Backup.Dir
+	if dir == "" {
+		dir = filepath.Join(d.Data, "backups")
+	}
+	var out []string
+	for _, e := range backup.Before(dir, t) {
+		out = append(out, e.Path)
+	}
+	return out
 }
