@@ -123,6 +123,16 @@ func tail(s string, n int) string {
 type updateApplyFlags struct {
 	plan            bool
 	version, source string
+	allowUnordered  bool // passed to the new binary's server upgrade
+}
+
+// serverUpgrade is the new binary's server upgrade command line.
+func (fl updateApplyFlags) serverUpgrade(args ...string) []string {
+	args = append([]string{"server", "upgrade"}, args...)
+	if fl.allowUnordered {
+		args = append(args, "--allow-unordered")
+	}
+	return args
 }
 
 type updateApplyResult struct {
@@ -200,6 +210,7 @@ func newUpdateApplyCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&fl.plan, "plan", false, "download and verify into a temporary directory, list the steps, change nothing")
 	cmd.Flags().StringVar(&fl.version, "version", "", "install this version (default: the newest under the pre-release policy)")
 	cmd.Flags().StringVar(&fl.source, "source", "", "read releases from this local release directory instead of the configured source")
+	cmd.Flags().BoolVar(&fl.allowUnordered, "allow-unordered", false, "let the new binary's server upgrade deploy a pin it cannot order against the deployed version")
 	return cmd
 }
 
@@ -434,7 +445,7 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 			add("server", "skipped", why)
 			return nil
 		}
-		senv, err := runChild(ctx, staged, "server", "upgrade", "--plan")
+		senv, err := runChild(ctx, staged, fl.serverUpgrade("--plan")...)
 		if err != nil {
 			return nothingChanged("the new binary cannot plan the server upgrade (%v)", err)
 		}
@@ -529,7 +540,7 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	if why := serverStepSkipped(d, cfg); why != "" {
 		add("server", "skipped", why)
 	} else {
-		senv, err := runChild(ctx, target, "server", "upgrade", "--plan")
+		senv, err := runChild(ctx, target, fl.serverUpgrade("--plan")...)
 		if err != nil {
 			return failed("server", err)
 		}
@@ -537,7 +548,7 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 		res.Server = &updateServer{Current: sp.Current, Target: sp.Target, Upgrade: sp.Upgrade}
 		if sp.Upgrade {
 			rb.serverTouched = true
-			if _, err := runChild(ctx, target, "server", "upgrade"); err != nil {
+			if _, err := runChild(ctx, target, fl.serverUpgrade()...); err != nil {
 				return failed("server", err)
 			}
 			res.Server.Upgraded = true

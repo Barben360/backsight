@@ -197,11 +197,10 @@ func TestServerUpgradeFailedSmokeRollsBack(t *testing.T) {
 		}
 		return false
 	}))
+	pinImage(t, oldImage)
 	if code, out, _ := run(t, "server", "render"); code != output.OK { // the proxy's port, on the old pin
 		t.Fatalf("render: %d %s", code, out)
 	}
-	pinImage(t, oldImage)
-	_, _, _ = run(t, "server", "render")
 	pinImage(t, newImage)
 	code, out, errOut := run(t, "server", "upgrade", "--json")
 	if code != output.RolledBack || !strings.Contains(out, "smoke") {
@@ -256,11 +255,8 @@ func TestServerUpgradeLock(t *testing.T) {
 // downgrade the server.
 func TestServerUpgradeNeverDowngrades(t *testing.T) {
 	home, dk, _, _ := upgradeSetup(t)
-	pinImage(t, newImage)
-	if code, out, _ := run(t, "server", "render"); code != output.OK {
-		t.Fatal(out)
-	}
-	pinImage(t, "ghcr.io/vectorize-io/hindsight:1.0.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	redeploy(t, home, newImage) // as a newer binary's upgrade left it
+	pinImage(t, olderImage)
 	dk.calls = nil
 	if code, out, _ := run(t, "server", "upgrade", "--json"); code != output.Blocked || !strings.Contains(out, "newer than this binary") || len(dk.calls) != 0 {
 		t.Errorf("exit %d calls %q\n%s", code, dk.calls, out)

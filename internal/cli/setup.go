@@ -653,6 +653,11 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if cfg.Server.Mode != "local" {
 				return setup.Step{Name: "server", Status: "skipped", Detail: "remote server " + cfg.Server.URL + ": install it on its host"}, nil
 			}
+			// Another version deployed: server install would refuse it, and
+			// undo must not stop a server this run did not start.
+			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
+				return setup.Step{}, err
+			}
 			// Intent first: a failed or interrupted install may still have
 			// started containers, and stopping a stopped project is harmless.
 			if !serverAnswers(ctx, cfg) {

@@ -39,7 +39,7 @@ type serverUpgradeResult struct {
 }
 
 func newServerUpgradeCmd(e *env) *cobra.Command {
-	var plan bool
+	var plan, allowUnordered bool
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Move the local server to the version this binary pins, after a verified safety backup; roll back on any failure",
@@ -47,21 +47,23 @@ func newServerUpgradeCmd(e *env) *cobra.Command {
 			"the maintenance lock and server.lock, pulls the new image (a failure changes nothing), makes a safety backup and verifies it in a " +
 			"throwaway database, marks an upgrade in progress (every client holds its sends), deploys and starts the new version, waits for " +
 			"health and runs a recall. Any failure from the deploy on restores the safety dump into the previous version through restore's " +
-			"rollback (a new restore epoch, exit 30); a rollback that fails exits 20 and doctor names the way back.",
+			"rollback (a new restore epoch, exit 30); a rollback that fails exits 20 and doctor names the way back. It never downgrades, and " +
+			"refuses versions it cannot order (the same tag with another digest, a digest alone) unless --allow-unordered is given.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			res := serverUpgradeResult{Plan: plan, Steps: []step{}}
-			err := runServerUpgrade(cmd.Context(), &res, plan, streamStep(e, "server upgrade", &res.Steps))
+			err := runServerUpgrade(cmd.Context(), &res, plan, allowUnordered, streamStep(e, "server upgrade", &res.Steps))
 			res.MS = int(time.Since(start).Milliseconds())
 			return e.report("server upgrade", res, func() string { return serverUpgradeText(res) }, err)
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show the versions and the steps without acting")
+	cmd.Flags().BoolVar(&allowUnordered, "allow-unordered", false, "deploy this binary's pin even when it cannot be ordered against the deployed version (the same tag with another digest)")
 	return cmd
 }
 
-func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan bool, add func(name, status, detail string)) error {
+func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allowUnordered bool, add func(name, status, detail string)) error {
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return err
@@ -89,6 +91,10 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan bool, 
 	res.Upgrade = true
 	if comparable && cmp > 0 {
 		return nothingChanged("the server runs %s, newer than this binary's %s: update backsight instead", res.Current, res.Target)
+	}
+	if !comparable && !allowUnordered { // "never downgrades" cannot be told
+		return nothingChanged("the server runs %s and this binary pins %s, which cannot be ordered (the same version with another digest, or no version): "+
+			"rerun with --allow-unordered to deploy this binary's pin", res.Current, res.Target)
 	}
 	if state.RestoreIncomplete(d) {
 		return nothingChanged("a restore or upgrade did not finish (%s): run backsight doctor for the way back", d.RestoreMarker())

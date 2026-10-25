@@ -238,6 +238,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
+			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
+				return err
+			}
 
 			if f.plan {
 				prev, err := config.LoadSecrets(d.SecretsFile())
@@ -361,6 +364,9 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			if err := requireLocal(cfg); err != nil {
+				return err
+			}
+			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
 				return err
 			}
 			files, err := renderFiles(cfg, sec, "backsight server start")
@@ -523,6 +529,40 @@ func loadServerConfig() (config.Config, config.Secrets, error) {
 	return cfg, sec, nil
 }
 
+// pinGuard refuses to deploy this binary's pin over another deployed
+// version (decision 0067 block review): server start, install and render
+// would move the server without a safety backup or a rollback. server
+// upgrade moves it to a newer pin, update apply brings a binary pinning a
+// newer deployed version. A digest set in config.toml is the user's own
+// choice (restore names it for an archive of another version), and a
+// project not deployed yet has nothing to protect.
+func pinGuard(cfg config.Config, rt server.Runtime) error {
+	if cfg.Server.Digest != "" {
+		return nil
+	}
+	deployed, err := rt.Deployed()
+	if err != nil {
+		return blocked(err)
+	}
+	pin := rt.Version()
+	if deployed == "" {
+		return nil
+	}
+	cmp, ok := rt.ComparePins(deployed, pin)
+	var msg string
+	switch {
+	case ok && cmp == 0:
+		return nil
+	case ok && cmp < 0:
+		msg = fmt.Sprintf("the server runs %s, older than this binary's %s: run backsight server upgrade (a verified backup first, rolled back on any failure)", deployed, pin)
+	case ok:
+		msg = fmt.Sprintf("the server runs %s, newer than this binary's %s: run backsight update apply", deployed, pin)
+	default:
+		msg = fmt.Sprintf("the server runs %s and this binary pins %s, which cannot be ordered: run backsight server upgrade --allow-unordered to deploy this binary's pin, or backsight update apply if the server's is the newer", deployed, pin)
+	}
+	return &output.Error{Code: output.Blocked, Message: msg + ": nothing was changed"}
+}
+
 // renderFiles renders the project; missing secrets become a needs_user
 // error telling the user what to run and which command resumes.
 func renderFiles(cfg config.Config, sec config.Secrets, resume string) (server.Files, error) {
@@ -585,6 +625,9 @@ func newServerRenderCmd(e *env) *cobra.Command {
 				return err
 			}
 			if err := requireLocal(cfg); err != nil {
+				return err
+			}
+			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
 				return err
 			}
 			f, err := renderFiles(cfg, sec, "backsight server render")
