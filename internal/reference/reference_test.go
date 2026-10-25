@@ -190,3 +190,22 @@ func TestDiscoverCollapsesDuplicates(t *testing.T) {
 		t.Errorf("one piece per id and place: %+v", in)
 	}
 }
+
+func TestReferenceMatchers(t *testing.T) {
+	for cmd, want := range map[string]bool{
+		`python3 "$HOME/.claude/hooks/memory-search.py"`:                   true,
+		`node "/home/u/.hindsight/coding-agents/dist/claude-stop-hook.js"`: true,
+		`rtk hook claude`: false,
+		`/home/u/.local/share/backsight/bin/current hook user-prompt-submit`: false,
+	} {
+		if HookCommand(cmd) != want {
+			t.Errorf("HookCommand(%q) != %v", cmd, want)
+		}
+	}
+	if !MCPServer("node /home/u/.hindsight/coding-agents/dist/mcp-server.js") || !MCPServer("python3 /home/u/.claude/hooks/hindsight-memory-mcp.py") || MCPServer("vfs mcp") {
+		t.Error("MCPServer misclassifies")
+	}
+	if !Permission("mcp__user-memory__memory_search") || !Permission("mcp__hindsight__hindsight_ingest_document") || Permission("mcp__plugin_backsight_memory__memory_search") || Permission("Bash(git *)") {
+		t.Error("Permission misclassifies")
+	}
+}

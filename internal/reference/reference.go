@@ -161,3 +161,41 @@ func readJSON(path string, out any) (bool, error) {
 	}
 	return true, nil
 }
+
+// HookCommand reports whether a settings.json hook command belongs to the
+// reference install (SPEC §11.5).
+func HookCommand(cmd string) bool {
+	for _, r := range hookRules {
+		if strings.Contains(cmd, r.needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// MCPServer reports whether an mcpServers entry (command and arguments,
+// space-joined) is a reference MCP server.
+func MCPServer(line string) bool {
+	for _, r := range mcpRules {
+		if strings.Contains(line, r.needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// referenceTools are the permission prefixes of the reference MCP servers.
+var referenceTools = []string{"mcp__user-memory__", "mcp__hindsight__"}
+
+// Permission reports whether a permission rule names a reference MCP tool.
+func Permission(rule string) bool {
+	for _, p := range referenceTools {
+		if strings.HasPrefix(rule, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// RetroTimer is the reference retro's systemd user timer.
+const RetroTimer = "memory-retro.timer"
