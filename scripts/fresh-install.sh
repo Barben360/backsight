@@ -217,6 +217,8 @@ backups_before=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -
 [ -n "$backups_before" ] || fail "no backup left before uninstall: the check below would prove nothing"
 volume=$(sed -n 's/^name: *//p' "$BACKSIGHT_HOME/data/server/compose.yaml" | head -n 1)_pg_data
 docker volume inspect "$volume" >/dev/null || fail "no database volume $volume before uninstall: the --delete-data check would prove nothing"
+cache=${volume%_pg_data}_hf_cache
+docker volume inspect "$cache" >/dev/null || fail "no model cache volume $cache before uninstall: the --delete-data check would prove nothing"
 mark=$(sysctl_mark)
 "$shim" uninstall --plan --delete-data --purge-local --json > "$work/uninstall-plan.json" || { cat "$work/uninstall-plan.json" >&2; fail "uninstall --plan failed"; }
 [ "$(tree_now)" = "$tree_before" ] || fail "uninstall --plan changed files"
@@ -231,6 +233,7 @@ set -e
 [ "$(tree_now)" = "$tree_before" ] || fail "an unconfirmed uninstall changed files"
 [ -z "$(sysctl_since "$mark")" ] || { sysctl_since "$mark" >&2; fail "an unconfirmed uninstall changed the scheduler"; }
 docker volume inspect "$volume" >/dev/null || fail "an unconfirmed uninstall removed the database volume $volume"
+docker volume inspect "$cache" >/dev/null || fail "an unconfirmed uninstall removed the model cache volume $cache"
 plugin_wired || fail "an unconfirmed uninstall removed the plugin"
 bank=$(sed -n 's/^bank *= *"\(.*\)"/\1/p' "$BACKSIGHT_HOME/config/config.toml" | head -n 1)
 mark=$(sysctl_mark)
@@ -241,8 +244,7 @@ jq -e --arg backups "$backups_dir" '.ok and .data.server == "delete-data"
     and any(.data.kept[]; contains($backups))' "$work/uninstall.json" >/dev/null ||
   { jq -c '.ok, .data.server, [.data.steps[] | {name, status}], .data.kept' "$work/uninstall.json" >&2; fail "uninstall.json: want ok, server delete-data, every step done, the backups kept"; }
 if docker volume inspect "$volume" >/dev/null 2>&1; then fail "the database volume $volume survived --delete-data"; fi
-# --delete-data removes the database volume only; this run's model cache goes here.
-docker volume rm "${volume%_pg_data}_hf_cache" >/dev/null 2>&1 || true
+if docker volume inspect "$cache" >/dev/null 2>&1; then fail "the model cache volume $cache survived --delete-data"; fi
 if plugin_wired; then fail "the plugin survived uninstall"; fi
 if rule_wired; then fail "uninstall left the mcp__plugin_backsight permission rule"; fi
 [ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "uninstall left settings.json changed"; }

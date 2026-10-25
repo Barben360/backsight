@@ -122,17 +122,30 @@ func (r *scriptedRunner) Run(_ context.Context, args ...string) ([]byte, error) 
 	return nil, nil
 }
 
-// Delete takes the project down without its volumes, then removes the
-// data volume alone and the files Render wrote: a volume the user's
-// override declares stays, and so does the override. A failed down
-// removes nothing.
+// renderedProject writes the files Render builds for project p1 in dir.
+func renderedProject(t *testing.T, dir string) {
+	t.Helper()
+	d := Docker{Compose: Compose{Dir: dir, Project: "p1"}, Cfg: config.Config{Server: config.Server{URL: "http://127.0.0.1:8888", UIPort: 9999, Project: "p1"},
+		Embeddings: config.Embeddings{Preset: "multilingual"}}}
+	f, err := d.Render(config.Secrets{APIKey: "k", UIKey: "u", DBPassword: "p", LLMAPIKey: "l"}, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Write(f); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Delete takes the project down without its volumes, then removes each
+// volume backsight's compose.yaml declares and the files Render wrote: a
+// volume only the user's override declares stays, and so does the
+// override. A failed down removes nothing.
 func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 	dir := t.TempDir()
-	for f, content := range map[string]string{"compose.yaml": "x\n", ".env": "x\n",
-		"compose.override.yaml": "services:\n  hindsight:\n    volumes:\n      - models:/models\nvolumes:\n  models:\n"} {
-		if err := os.WriteFile(filepath.Join(dir, f), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	renderedProject(t, dir)
+	override := "services:\n  hindsight:\n    volumes:\n      - models:/models\nvolumes:\n  models:\n"
+	if err := os.WriteFile(filepath.Join(dir, "compose.override.yaml"), []byte(override), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	failing := &fakeRunner{out: []byte("Cannot connect to the Docker daemon"), err: errors.New("exit status 1")}
 	if err := (Docker{Compose: Compose{Dir: dir, Runner: failing}}).Delete(context.Background()); err == nil || !strings.Contains(err.Error(), "Cannot connect") {
@@ -149,7 +162,7 @@ func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := []string{"compose", "-p", "p1", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml")}
-	want := [][]string{append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}}
+	want := [][]string{append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Errorf("docker ran\n%q\nwant\n%q", r.calls, want)
 	}
@@ -157,6 +170,19 @@ func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, f)); (err == nil) != want {
 			t.Errorf("%s present: %v, want %v", f, err == nil, want)
 		}
+	}
+}
+
+// The volumes are read from the compose file's top-level volumes section,
+// whatever they are called; a service's own volumes list is no volume of
+// the project's, and a file without the section declares none.
+func TestDeclaredVolumes(t *testing.T) {
+	compose := "name: p1\n\nservices:\n  db:\n    volumes:\n      - pg_data:/var/lib/pg\n\nvolumes:\n  pg_data:\n  hf_cache:\n  extra: {}\n  # a comment\n\nnetworks:\n  default:\n"
+	if got := DeclaredVolumes([]byte(compose)); strings.Join(got, ",") != "pg_data,hf_cache,extra" {
+		t.Errorf("volumes %q", got)
+	}
+	if got := DeclaredVolumes([]byte("services:\n  web:\n    volumes:\n      - x:/x\n")); len(got) != 0 {
+		t.Errorf("no top-level section: %q", got)
 	}
 }
 

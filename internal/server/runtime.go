@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/config"
@@ -189,17 +190,30 @@ func (d Docker) StopCmd() string {
 	return strings.Join(words, " ")
 }
 
-// Delete runs compose down without the volumes, removes the database
-// volume alone, then compose.yaml and .env. A volume the user's
-// compose.override.yaml declares stays, and so does the override; the
-// model cache (hf_cache) is downloaded data, like the images (decision
-// 0067 block 3 review).
+// Delete runs compose down without the volumes, removes each volume
+// backsight's compose.yaml declares (the database, the model cache), then
+// compose.yaml and .env. A volume only the user's compose.override.yaml
+// declares stays, and so does the override (decision 0067 block 3
+// review).
 func (d Docker) Delete(ctx context.Context) error {
+	raw, err := os.ReadFile(filepath.Join(d.Compose.Dir, "compose.yaml"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	// The data goes whatever the file says.
+	volumes := []string{dataVolume}
+	for _, v := range DeclaredVolumes(raw) {
+		if !slices.Contains(volumes, v) {
+			volumes = append(volumes, v)
+		}
+	}
 	if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
 		return err
 	}
-	if err := d.Compose.RemoveDataVolume(ctx); err != nil {
-		return err
+	for _, v := range volumes {
+		if err := d.Compose.RemoveVolume(ctx, v); err != nil {
+			return err
+		}
 	}
 	for _, f := range []string{"compose.yaml", ".env"} {
 		if err := os.Remove(filepath.Join(d.Compose.Dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {

@@ -157,7 +157,10 @@ func (c Compose) PS(ctx context.Context) ([]Container, error) {
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // DataVolume is the database volume Compose creates for the project.
-func (c Compose) DataVolume() string { return c.project() + "_pg_data" }
+func (c Compose) DataVolume() string { return c.project() + "_" + dataVolume }
+
+// dataVolume is the database volume as compose.yaml declares it.
+const dataVolume = "pg_data"
 
 // VolumeExists reports whether the project's database volume exists: its
 // password was fixed when it was created.
@@ -172,14 +175,38 @@ func (c Compose) VolumeExists(ctx context.Context) (bool, error) {
 	return false, fmt.Errorf("docker volume inspect %s: %w: %s", c.DataVolume(), err, strings.TrimSpace(string(out)))
 }
 
-// RemoveDataVolume deletes the project's database volume; one already
-// gone is not an error.
-func (c Compose) RemoveDataVolume(ctx context.Context) error {
-	out, err := c.Runner.Run(ctx, "volume", "rm", c.DataVolume())
+// RemoveVolume deletes the project's volume name (as compose.yaml
+// declares it); one already gone is not an error.
+func (c Compose) RemoveVolume(ctx context.Context, name string) error {
+	v := c.project() + "_" + name
+	out, err := c.Runner.Run(ctx, "volume", "rm", v)
 	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no such volume") {
-		return fmt.Errorf("docker volume rm %s: %w: %s", c.DataVolume(), err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("docker volume rm %s: %w: %s", v, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// DeclaredVolumes lists the volumes of a compose file's top-level volumes
+// section, in order (a service's own volumes list declares none).
+func DeclaredVolumes(compose []byte) []string {
+	var out []string
+	in := false
+	sc := bufio.NewScanner(bytes.NewReader(compose))
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case line == "volumes:":
+			in = true
+		case line == "" || strings.HasPrefix(strings.TrimSpace(line), "#"):
+		case !strings.HasPrefix(line, " "):
+			in = false
+		case in && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   "):
+			if name, _, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && name != "" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 // Logs returns the last n lines of service's log.
