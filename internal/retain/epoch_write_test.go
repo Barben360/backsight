@@ -3,9 +3,11 @@ package retain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -111,7 +113,7 @@ func TestEpochLivesInTheControlBank(t *testing.T) {
 	if ControlBank("claude-memory") != "claude-memory-control" {
 		t.Errorf("control bank %q", ControlBank("claude-memory"))
 	}
-	if got := strings.Join(h.calls, ", "); got != "PUT claude-memory-control /, PATCH claude-memory-control /config, POST claude-memory-control /memories sync" {
+	if got := strings.Join(h.calls, ", "); got != "GET claude-memory-control /documents/backsight%3Aepoch, PUT claude-memory-control /, PATCH claude-memory-control /config, POST claude-memory-control /memories sync" {
 		t.Errorf("calls: %s", got)
 	}
 	if cfg := h.configs["claude-memory-control"]; cfg["retain_extraction_mode"] != "chunks" || cfg["enable_observations"] != false {
@@ -122,7 +124,8 @@ func TestEpochLivesInTheControlBank(t *testing.T) {
 	}
 	var meta map[string]string
 	_ = json.Unmarshal(h.docs["claude-memory-control"][EpochDocument], &meta)
-	if meta["epoch"] != "3" || meta["restored_at"] != "2026-10-25T12:00:00Z" || meta["backup_created_at"] != "2026-10-25T04:00:00Z" || len(meta) != 3 {
+	if meta["epoch"] != "3" || meta["restored_at"] != "2026-10-25T12:00:00Z" || meta["backup_created_at"] != "2026-10-25T04:00:00Z" ||
+		meta["history"] != `[{"epoch":3,"backup_created_at":"2026-10-25T04:00:00Z"}]` || len(meta) != 4 {
 		t.Errorf("metadata %v", meta)
 	}
 	got, err := ReadEpoch(ctx, cl, "claude-memory")
@@ -142,5 +145,49 @@ func TestNoControlBankIsEpochZero(t *testing.T) {
 	}
 	if got := strings.Join(h.calls, ", "); got != "GET claude-memory-control /documents/backsight%3Aepoch" {
 		t.Errorf("calls: %s", got)
+	}
+}
+
+// Each write appends to the epoch history, which keeps the last 10: the
+// document on the server (after a restore, the archive's), the history the
+// caller passes (the server's before the restore) and the new epoch.
+func TestEpochHistoryKeepsTheLastTen(t *testing.T) {
+	h := &banksHS{docs: map[string]map[string]json.RawMessage{"claude-memory": {}}, configs: map[string]map[string]any{}}
+	cl := h.client(t)
+	ctx := context.Background()
+	at := func(i int) time.Time { return time.Date(2026, 10, 1+i, 4, 0, 0, 0, time.UTC) }
+	for i := 1; i <= 12; i++ {
+		if err := WriteEpoch(ctx, cl, "claude-memory", Epoch{Epoch: i, RestoredAt: at(i).Add(time.Hour), BackupCreatedAt: at(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ReadEpoch(ctx, cl, "claude-memory")
+	if err != nil || got.Epoch != 12 || len(got.History) != 10 || got.History[0].Epoch != 3 || got.History[9].Epoch != 12 || !got.History[0].BackupCreatedAt.Equal(at(3)) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// A restore brought back an archive's document (epoch 2) and passes the
+	// server's history from before: both are kept with the new epoch.
+	h.docs["claude-memory-control"][EpochDocument] = json.RawMessage(`{"epoch":"2","restored_at":"2026-10-02T05:00:00Z","backup_created_at":"2026-10-02T04:00:00Z"}`)
+	if err := WriteEpoch(ctx, cl, "claude-memory", Epoch{Epoch: 13, RestoredAt: at(14), BackupCreatedAt: at(2), History: []EpochEntry{{Epoch: 12, BackupCreatedAt: at(12)}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = ReadEpoch(ctx, cl, "claude-memory")
+	var epochs []int
+	for _, e := range got.History {
+		epochs = append(epochs, e.Epoch)
+	}
+	if !reflect.DeepEqual(epochs, []int{2, 12, 13}) {
+		t.Errorf("history after a restore: %v", epochs)
+	}
+}
+
+// A history that does not parse is an unreadable epoch, like a bad number.
+func TestUnparsableEpochHistory(t *testing.T) {
+	bad := json.RawMessage(`{"epoch":"2","restored_at":"2026-10-25T12:00:00Z","backup_created_at":"2026-10-25T04:00:00Z","history":"[{oops"}`)
+	h := &banksHS{docs: map[string]map[string]json.RawMessage{"claude-memory-control": {EpochDocument: bad}}, configs: map[string]map[string]any{}}
+	_, err := ReadEpoch(context.Background(), h.client(t), "claude-memory")
+	var unreadable *EpochUnreadable
+	if !errors.As(err, &unreadable) || !strings.Contains(err.Error(), "history") {
+		t.Errorf("%v", err)
 	}
 }

@@ -209,7 +209,10 @@ func runRestore(ctx context.Context, res *restoreResult, identityFile string, ad
 	if err != nil {
 		return failed("epoch", err)
 	}
-	next := retain.Epoch{Epoch: max(before.Epoch, restored.Epoch) + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: m.CreatedAt.UTC().Truncate(time.Second)}
+	// The history goes on from the server's as it was: the restored
+	// document is the archive's, older than the restores since.
+	next := retain.Epoch{Epoch: max(before.Epoch, restored.Epoch) + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: m.CreatedAt.UTC().Truncate(time.Second),
+		History: before.History}
 	wcl, err := hindsight.New(cfg.Server.URL, sec.APIKey, epochTimeout)
 	if err == nil {
 		err = retain.WriteEpoch(ctx, wcl, cfg.Server.Bank, next)

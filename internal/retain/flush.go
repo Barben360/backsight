@@ -112,6 +112,10 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return fail(Maintenance, "maintenance in progress")
 	}
+	if err := f.restoreHold(); err != nil {
+		res.Stop = true // every session waits for the restore to finish
+		return fail(Retry, err.Error())
+	}
 	if f.Hold != "" {
 		res.Stop = true // every session waits for the same reconcile
 		return fail(Retry, f.Hold)
@@ -176,6 +180,13 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		if len(recs) == 0 {
 			return fail(Nothing, "")
 		}
+		// sent: already out, from this machine. The fork guard (a bare uuid
+		// in the index) does not count for the records a restore lost of
+		// this session's own sends (its .dropped mark), unless sent again.
+		lostOwn := f.loadDropped(sid)
+		sent := func(u string) bool {
+			return f.Index.Has(u) && (!lostOwn.Records[u] || f.Index.Has(sessionKey(f.Bank, sid, u)))
+		}
 		doc, err := f.Client.GetDocument(ctx, f.Bank, cur.Document)
 		var apiErr *hindsight.APIError
 		switch {
@@ -195,7 +206,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 			// server's metadata (async retain still running, or a crash
 			// before the cursor was saved): never send them twice.
 			skip := 0
-			for skip < len(recs) && f.Index.Has(recs[skip].UUID) {
+			for skip < len(recs) && sent(recs[skip].UUID) {
 				skip++
 			}
 			if skip > 0 {
@@ -207,7 +218,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 			// never stored: resend the whole session as segment 1.
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
 			skip := 0
-			for skip < len(recs) && f.Index.Has(recs[skip].UUID) {
+			for skip < len(recs) && sent(recs[skip].UUID) {
 				if f.Index.Has(sessionKey(f.Bank, sid, recs[skip].UUID)) {
 					// This session's own records went out, but the document
 					// is not readable yet (its async retain is still running):
@@ -224,7 +235,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 				cur.Offset, cur.LastUUID = recs[skip-1].End, recs[skip-1].UUID
 				recs = recs[skip:]
 			}
-			if len(recs) > 0 && !opt.IgnoreSince && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince) {
+			if len(recs) > 0 && !opt.IgnoreSince && !lostOwn.PastSince && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince) {
 				cur.Backfill = true
 				return f.save(res, cur, Backfill, "started before live retain began; backfill sends it")
 			}
@@ -354,6 +365,7 @@ func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 	}
 	if status == Sent {
 		_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), res.Session)) // the document exists now
+		f.pruneDropped(res.Session)
 	}
 	if fp, err := Fingerprint(cur.Transcript, cur.Offset); err == nil {
 		cur.Fingerprint = fp

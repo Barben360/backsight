@@ -104,7 +104,8 @@ func TestRestoreResendsWhatTheBackupLacks(t *testing.T) {
 }
 
 // An epoch that cannot be read, or a reconcile that cannot run now, drops
-// nothing and holds the flushes; the next run reconciles.
+// nothing and holds the flushes; the next run reconciles. A session being
+// flushed is TestReconcileStopsAtASessionBeingFlushed.
 func TestUnreadableEpochDropsNothing(t *testing.T) {
 	for name, breakIt := range map[string]func(e *env){
 		"server error": func(e *env) { e.hs.epochStatus = http.StatusInternalServerError },
@@ -118,11 +119,6 @@ func TestUnreadableEpochDropsNothing(t *testing.T) {
 		"maintenance": func(e *env) {
 			_ = os.MkdirAll(filepath.Dir(e.f.Dirs.MaintenanceLock()), 0o700)
 			_ = os.WriteFile(e.f.Dirs.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"restore"}`), 0o600)
-		},
-		"session being flushed": func(e *env) {
-			if _, err := state.TryAcquire(filepath.Join(e.f.Dirs.LocksDir(), "session-s1.lock"), "other flusher"); err != nil {
-				e.t.Fatal(err)
-			}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

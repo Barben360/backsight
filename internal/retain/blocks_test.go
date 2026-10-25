@@ -188,3 +188,20 @@ func TestSentIndexTornEntry(t *testing.T) {
 		t.Errorf("size %d", fi.Size())
 	}
 }
+
+// Remove rewrites the file from disk: an entry another flusher appended
+// after this index was loaded survives, and the removed ones are gone.
+func TestSentIndexRemoveKeepsEntriesAppendedMeanwhile(t *testing.T) {
+	dir := t.TempDir()
+	mine, _ := LoadSentIndex(dir)
+	_ = mine.Add("u1", "u2")
+	other, _ := LoadSentIndex(dir)
+	_ = other.Add("u3") // after mine was loaded
+	if err := mine.Remove("u1"); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := LoadSentIndex(dir)
+	if again.Has("u1") || !again.Has("u2") || !again.Has("u3") || mine.Has("u1") || !mine.Has("u3") {
+		t.Errorf("after Remove: disk u1=%v u2=%v u3=%v, in memory u1=%v u3=%v", again.Has("u1"), again.Has("u2"), again.Has("u3"), mine.Has("u1"), mine.Has("u3"))
+	}
+}

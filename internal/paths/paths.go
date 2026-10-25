@@ -39,6 +39,9 @@ func (d Dirs) TelemetryDir() string    { return filepath.Join(d.State, "telemetr
 func (d Dirs) EntitiesFile() string    { return filepath.Join(d.State, "entities.json") }
 func (d Dirs) SetupFile() string       { return filepath.Join(d.State, "setup.json") }
 
+// RestoreMarker exists while a restore has not finished (decision 0044).
+func (d Dirs) RestoreMarker() string { return filepath.Join(d.State, "restore-incomplete.json") }
+
 // Default resolves the directories of the running process.
 func Default() (Dirs, error) {
 	home, err := os.UserHomeDir()

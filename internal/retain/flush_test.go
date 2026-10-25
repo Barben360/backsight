@@ -35,6 +35,7 @@ type fakeHS struct {
 	seenOps map[string]bool
 	// epochStatus non-zero: reads of the restore epoch answer with it.
 	epochStatus int
+	queued      int // pending operations the bank reports
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +88,12 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		raw, _ := json.Marshal(map[string]any{"id": id, "document_metadata": meta})
 		_, _ = w.Write(raw)
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/operations"):
+		n := 0
+		if r.URL.Query().Get("status") == "pending" {
+			n = h.queued
+		}
+		_, _ = fmt.Fprintf(w, `{"total":%d,"operations":[]}`, n)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
