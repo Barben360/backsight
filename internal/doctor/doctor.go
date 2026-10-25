@@ -706,17 +706,3 @@ func detectGPUs(goos, goarch, devDir string) []string {
 
 // LocalGPUs probes this machine's devices.
 func LocalGPUs() []string { return detectGPUs(runtime.GOOS, runtime.GOARCH, "/dev") }
-
-// DockerVersion asks the Docker daemon for its version.
-func DockerVersion(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}").CombinedOutput()
-	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return "", err
-		}
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
-}

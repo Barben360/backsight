@@ -51,22 +51,21 @@ func blocked(err error) error {
 // waitHealthy polls /health until it answers or healthTimeout passes, and
 // fails early with the last log lines when the hindsight container exits or
 // restarts (a crash loop has no health to wait for).
-func waitHealthy(ctx context.Context, cfg config.Config, sec config.Secrets) (hindsight.Version, error) {
+func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec config.Secrets) (hindsight.Version, error) {
 	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
 	if err != nil {
 		return hindsight.Version{}, err
 	}
-	c := composeFor(cfg)
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	for {
 		if _, err := cl.Health(ctx); err == nil {
 			return cl.Version(ctx)
 		}
-		if list, err := c.PS(ctx); err == nil {
+		if list, err := rt.Status(ctx); err == nil {
 			for _, ct := range list {
 				if ct.Service == "hindsight" && (ct.State == "exited" || ct.State == "restarting" || ct.State == "dead") {
-					logs, _ := c.Logs(ctx, "hindsight", 20)
+					logs, _ := rt.Logs(ctx, "hindsight", 20)
 					return hindsight.Version{}, fmt.Errorf("the hindsight container is %s; last log lines:\n%s", ct.State, strings.TrimSpace(logs))
 				}
 			}
@@ -238,7 +237,8 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
-			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
+			rt := runtimeFor(cfg)
+			if err := pinGuard(cfg, rt); err != nil {
 				return err
 			}
 
@@ -268,17 +268,16 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			// 2. Secrets: server keys generated, the LLM key is the user's. A
 			// database volume keeps the password it was created with, so a
 			// lost db_password cannot be regenerated against it.
-			c := composeFor(cfg)
 			ctx := cmd.Context()
 			if prev, err := config.LoadSecrets(d.SecretsFile()); (err == nil || errors.Is(err, fs.ErrNotExist)) && prev.DBPassword == "" {
-				exists, err := c.VolumeExists(ctx)
+				exists, err := rt.DataExists(ctx)
 				if err != nil {
 					return blocked(err)
 				}
 				if exists {
-					return &output.Error{Code: output.Blocked, Message: "the database volume " + c.DataVolume() +
-						" exists but secrets.toml has no db_password: restore the secrets.toml it was created with, or delete the volume and its memories (docker volume rm " +
-						c.DataVolume() + ") before installing again"}
+					return &output.Error{Code: output.Blocked, Message: rt.DataName() +
+						" exists but secrets.toml has no db_password: restore the secrets.toml it was created with, or delete it and its memories (" +
+						rt.DataRemoveCmd() + ") before installing again"}
 				}
 			}
 			var made []string
@@ -296,11 +295,11 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 
 			// 3. Render.
-			files, err := renderFiles(cfg, sec, "backsight server install")
+			files, err := renderOn(rt, sec, "backsight server install")
 			if err != nil {
 				return err
 			}
-			ch, err := server.Write(cfg.Server.ComposeDir, files)
+			ch, err := rt.Write(files)
 			if err != nil {
 				return blocked(err)
 			}
@@ -312,11 +311,11 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return e.report("server install", res, func() string { return "" }, err)
 			}
 			res.Warnings = installWarnings(cfg)
-			if err := c.Pull(ctx); err != nil {
+			if err := rt.FetchAll(ctx); err != nil {
 				return fail(redacted(err, sec))
 			}
 			add("pull", "done", "")
-			if err := c.Up(ctx); err != nil {
+			if err := rt.Start(ctx); err != nil {
 				return fail(redacted(err, sec))
 			}
 			detail := "project " + cfg.Server.Project
@@ -324,7 +323,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				detail += ", with your compose.override.yaml"
 			}
 			add("start", "done", detail)
-			v, err := waitHealthy(ctx, cfg, sec)
+			v, err := waitHealthy(ctx, rt, cfg, sec)
 			if err != nil {
 				return fail(redacted(err, sec))
 			}
@@ -366,15 +365,16 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
-			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
+			rt := runtimeFor(cfg)
+			if err := pinGuard(cfg, rt); err != nil {
 				return err
 			}
-			files, err := renderFiles(cfg, sec, "backsight server start")
+			files, err := renderOn(rt, sec, "backsight server start")
 			if err != nil {
 				return err
 			}
 			if plan {
-				ch, err := server.Diff(cfg.Server.ComposeDir, files)
+				ch, err := rt.Diff(files)
 				if err != nil {
 					return blocked(err)
 				}
@@ -392,10 +392,10 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			if _, err := server.Write(cfg.Server.ComposeDir, files); err != nil {
+			if _, err := rt.Write(files); err != nil {
 				return blocked(err)
 			}
-			if err := composeFor(cfg).Up(cmd.Context()); err != nil {
+			if err := rt.Start(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
 			return e.emit("server start", map[string]string{"project": cfg.Server.Project}, func() string { return "started\n" })
@@ -432,7 +432,7 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			if err := composeFor(cfg).Stop(cmd.Context()); err != nil {
+			if err := runtimeFor(cfg).Stop(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
 			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, func() string { return "stopped\n" })
@@ -466,7 +466,7 @@ func newServerStatusCmd(e *env) *cobra.Command {
 				return err
 			}
 			var res statusResult
-			res.Containers, err = composeFor(cfg).PS(cmd.Context())
+			res.Containers, err = runtimeFor(cfg).Status(cmd.Context())
 			if err != nil {
 				return redacted(err, sec)
 			}
@@ -563,13 +563,9 @@ func pinGuard(cfg config.Config, rt server.Runtime) error {
 	return &output.Error{Code: output.Blocked, Message: msg + ": nothing was changed"}
 }
 
-// renderFiles renders the project; missing secrets become a needs_user
-// error telling the user what to run and which command resumes.
-func renderFiles(cfg config.Config, sec config.Secrets, resume string) (server.Files, error) {
-	return renderOn(runtimeFor(cfg), sec, resume)
-}
-
-// renderOn is renderFiles for a runtime and the version it deploys.
+// renderOn renders the server's files for rt and the version it deploys;
+// missing secrets become a needs_user error telling the user what to run
+// and which command resumes.
 func renderOn(rt server.Runtime, sec config.Secrets, resume string) (server.Files, error) {
 	host, _ := os.Hostname()
 	f, err := rt.Render(sec, host)
@@ -627,16 +623,17 @@ func newServerRenderCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
-			if err := pinGuard(cfg, runtimeFor(cfg)); err != nil {
+			rt := runtimeFor(cfg)
+			if err := pinGuard(cfg, rt); err != nil {
 				return err
 			}
-			f, err := renderFiles(cfg, sec, "backsight server render")
+			f, err := renderOn(rt, sec, "backsight server render")
 			if err != nil {
 				return err
 			}
 			res := renderResult{Dir: cfg.Server.ComposeDir, Plan: plan}
 			if plan {
-				res.Changes, err = server.Diff(res.Dir, f)
+				res.Changes, err = rt.Diff(f)
 			} else {
 				d, _, merr := machine()
 				if merr != nil {
@@ -647,7 +644,7 @@ func newServerRenderCmd(e *env) *cobra.Command {
 					return lerr
 				}
 				defer unlock()
-				res.Changes, err = server.Write(res.Dir, f)
+				res.Changes, err = rt.Write(f)
 			}
 			if err != nil {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}

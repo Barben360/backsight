@@ -402,7 +402,7 @@ func startOnKey(ctx context.Context, cfg config.Config, sec config.Secrets, rt s
 	if err := rt.Start(ctx); err != nil {
 		return err
 	}
-	_, err = waitHealthy(ctx, cfg, s)
+	_, err = waitHealthy(ctx, rt, cfg, s)
 	return err
 }
 

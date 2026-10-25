@@ -39,7 +39,8 @@ type Probes struct {
 	GOOS, GOARCH string
 	// Remote: the server runs elsewhere; the local Docker checks are skipped.
 	Remote bool
-	// Docker runs `docker info`; Compose `docker compose version --short`.
+	// Docker is the server runtime's engine version (" rootless" when
+	// so); Compose its orchestrator's version.
 	Docker  func(ctx context.Context) (string, error)
 	Compose func(ctx context.Context) (string, error)
 	// PortFree reports whether a loopback port can be bound.

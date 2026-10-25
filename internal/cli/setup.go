@@ -31,6 +31,7 @@ import (
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -454,22 +455,19 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 	ui, _ := strconv.Atoi(extra["ui_port"])
 	p := setup.Probes{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, APIPort: api, UIPort: ui, MinClaude: minClaude, AtLeast: atLeast,
 		Remote: s.cfg != nil && s.cfg.Server.Mode == "remote", GPUs: doctor.LocalGPUs()}
+	var cfg config.Config // the runtime's engine needs no config
+	if s.cfg != nil {
+		cfg = *s.cfg
+	}
+	rt := runtimeFor(cfg)
 	p.Docker = func(ctx context.Context) (string, error) {
-		out, err := sysRunner.Run(ctx, "docker", "info", "--format", "{{.ServerVersion}} {{range .SecurityOptions}}{{.}} {{end}}")
-		f := strings.Fields(string(out))
-		if err != nil || len(f) == 0 {
-			return strings.TrimSpace(string(out)), err
+		e, err := rt.Engine(ctx)
+		if e.Rootless {
+			e.Version += " rootless"
 		}
-		v := f[0]
-		if strings.Contains(string(out), "rootless") {
-			v += " rootless"
-		}
-		return v, nil
+		return e.Version, err
 	}
-	p.Compose = func(ctx context.Context) (string, error) {
-		out, err := sysRunner.Run(ctx, "docker", "compose", "version", "--short")
-		return string(out), err
-	}
+	p.Compose = rt.Orchestrator
 	p.PortFree = func(port int) bool {
 		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err != nil {
@@ -482,9 +480,9 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		// Ours only when our compose project runs a hindsight container:
 		// health alone would take the reference server on the same port
 		// for ours, and miss our own while it starts or fails.
-		p.OwnServer = composeRuns(ctx, *s.cfg)
-		_, err := os.Stat(filepath.Join(s.cfg.Server.ComposeDir, "compose.yaml"))
-		p.ServerInstalled = err == nil
+		p.OwnServer = serverRuns(ctx, rt)
+		v, err := rt.Deployed()
+		p.ServerInstalled = err == nil && v != ""
 	}
 	p.FreeBytes = func() (uint64, error) {
 		dir := s.dirs.Data
@@ -518,10 +516,10 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 	return p
 }
 
-// composeRuns reports whether backsight's compose project has a hindsight
-// container up (running, starting or restarting).
-func composeRuns(ctx context.Context, cfg config.Config) bool {
-	list, err := composeFor(cfg).PS(ctx)
+// serverRuns reports whether backsight's server has its hindsight service
+// up (running, starting or restarting).
+func serverRuns(ctx context.Context, rt server.Runtime) bool {
+	list, err := rt.Status(ctx)
 	if err != nil {
 		return false
 	}

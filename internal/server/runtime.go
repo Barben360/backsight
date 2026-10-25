@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,9 +17,8 @@ import (
 // Runtime runs the local Hindsight server (decision 0070). Docker Compose
 // is the only implementation; a native one (Hindsight from PyPI on an
 // embedded Postgres, under the OS's service manager, M7) comes behind the
-// same interface. It holds what `server upgrade` and `restore` need; other
-// commands still call Compose directly (listed in decision 0070's
-// follow-up).
+// same interface. Every command that installs, starts, stops, inspects or
+// deletes the server goes through it.
 type Runtime interface {
 	// Kind names the runtime ("docker").
 	Kind() string
@@ -38,12 +38,39 @@ type Runtime interface {
 	Render(sec config.Secrets, host string) (Files, error)
 	// Write installs files, only where they changed.
 	Write(f Files) (Changes, error)
+	// Diff reports what Write would change, writing nothing.
+	Diff(f Files) (Changes, error)
 	// Fetch downloads Version (an image pull) without changing what runs.
 	Fetch(ctx context.Context) error
+	// FetchAll downloads everything the written files run (the API and
+	// the database).
+	FetchAll(ctx context.Context) error
 	// Start starts the server as written and waits until it runs.
 	Start(ctx context.Context) error
 	// StopAPI stops the API server only; the database keeps running.
 	StopAPI(ctx context.Context) error
+	// Stop stops the whole server and keeps its data.
+	Stop(ctx context.Context) error
+	// Status lists the server's services and their state; none when it
+	// was never started.
+	Status(ctx context.Context) ([]Container, error)
+	// Logs returns the last n lines of service's log.
+	Logs(ctx context.Context, service string, n int) (string, error)
+	// DataExists reports whether the server's data exists (for Docker,
+	// the database volume): its database password was fixed when it was
+	// created.
+	DataExists(ctx context.Context) (bool, error)
+	// DataName names the server's data in messages; DataRemoveCmd is how a
+	// user deletes it by hand.
+	DataName() string
+	DataRemoveCmd() string
+	// Engine is what runs the server on this machine (Docker's daemon),
+	// for doctor and setup's pre-flight. Not installed wraps
+	// exec.ErrNotFound; not usable carries the engine's own output.
+	Engine(ctx context.Context) (Engine, error)
+	// Orchestrator is the version of what runs the server's services
+	// (Docker Compose), for setup's pre-flight.
+	Orchestrator(ctx context.Context) (string, error)
 	// Database is the server's Postgres.
 	Database() Database
 	// VerifyDump restores a dump into a throwaway database and counts the
@@ -62,6 +89,13 @@ type Database interface {
 	Counts(ctx context.Context, tables []string) (map[string]int64, error)
 	RemoveStaleDumps(ctx context.Context) error
 	DocumentMetadata(ctx context.Context, bank, id string) (map[string]string, error)
+}
+
+// Engine is a runtime's engine: its version, and whether it runs without
+// root privileges.
+type Engine struct {
+	Version  string
+	Rootless bool
 }
 
 // Docker is the Compose runtime: the project in Compose.Dir.
@@ -125,11 +159,51 @@ func (d Docker) Render(sec config.Secrets, host string) (Files, error) {
 
 func (d Docker) Write(f Files) (Changes, error) { return Write(d.Compose.Dir, f) }
 
+func (d Docker) Diff(f Files) (Changes, error) { return Diff(d.Compose.Dir, f) }
+
 func (d Docker) Fetch(ctx context.Context) error { return d.Compose.PullImage(ctx, d.Version()) }
+
+func (d Docker) FetchAll(ctx context.Context) error { return d.Compose.Pull(ctx) }
 
 func (d Docker) Start(ctx context.Context) error { return d.Compose.Up(ctx) }
 
 func (d Docker) StopAPI(ctx context.Context) error { return d.Compose.Stop(ctx, "hindsight") }
+
+func (d Docker) Stop(ctx context.Context) error { return d.Compose.Stop(ctx) }
+
+func (d Docker) Status(ctx context.Context) ([]Container, error) { return d.Compose.PS(ctx) }
+
+func (d Docker) Logs(ctx context.Context, service string, n int) (string, error) {
+	return d.Compose.Logs(ctx, service, n)
+}
+
+func (d Docker) DataExists(ctx context.Context) (bool, error) { return d.Compose.VolumeExists(ctx) }
+
+func (d Docker) DataName() string { return "the database volume " + d.Compose.DataVolume() }
+
+func (d Docker) DataRemoveCmd() string { return "docker volume rm " + d.Compose.DataVolume() }
+
+// Engine asks the Docker daemon for its version and security options.
+func (d Docker) Engine(ctx context.Context) (Engine, error) {
+	out, err := d.Compose.Runner.Run(ctx, "info", "--format", "{{.ServerVersion}} {{range .SecurityOptions}}{{.}} {{end}}")
+	if err != nil {
+		if text := strings.TrimSpace(string(out)); text != "" {
+			err = fmt.Errorf("%w: %s", err, text)
+		}
+		return Engine{}, err
+	}
+	f := strings.Fields(string(out))
+	if len(f) == 0 {
+		return Engine{}, nil
+	}
+	return Engine{Version: f[0], Rootless: strings.Contains(string(out), "rootless")}, nil
+}
+
+// Orchestrator is `docker compose version --short`.
+func (d Docker) Orchestrator(ctx context.Context) (string, error) {
+	out, err := d.Compose.Runner.Run(ctx, "compose", "version", "--short")
+	return strings.TrimSpace(string(out)), err
+}
 
 func (d Docker) Database() Database { return DB{Compose: d.Compose} }
 

@@ -211,7 +211,7 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 		return failed("start", err)
 	}
 	add("start", "done", "project "+cfg.Server.Project)
-	v, err := waitHealthy(ctx, cfg, sec)
+	v, err := waitHealthy(ctx, rt, cfg, sec)
 	if err != nil {
 		return failed("health", err)
 	}

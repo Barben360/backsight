@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -25,7 +26,13 @@ var probes = realProbes
 
 func realProbes(e *doctor.Env) {
 	e.ManagedDir = claudecode.ManagedDir(runtime.GOOS)
-	e.Docker = doctor.DockerVersion
+	e.Docker = func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		// The runtime's engine needs no config.
+		eng, err := runtimeFor(config.Config{}).Engine(ctx)
+		return eng.Version, err
+	}
 	e.GPUs = doctor.LocalGPUs
 	e.FreeBytes = doctor.FreeBytes
 	if runtime.GOOS == "linux" {
