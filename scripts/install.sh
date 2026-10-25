@@ -2,7 +2,8 @@
 # backsight bootstrap (SPEC §11.1): downloads the release for this machine,
 # checks its minisign signature against the key below and its checksum,
 # installs it with the signed checksums.txt (the binary re-verifies itself
-# against it), and says what to run next. POSIX sh; needs curl (or a local
+# against it), points the shim <data>/bin/current at it and the command on
+# PATH at the shim, and says what to run next. POSIX sh; needs curl (or a local
 # release directory), tar, and minisign or openssl (3.0+, for Ed25519).
 #
 #   curl -fsSL <url>/install.sh | sh
@@ -130,9 +131,18 @@ mv -f "$dest/backsight.tmp" "$dest/backsight" || die "cannot write $dest"
 for f in checksums.txt checksums.txt.minisig; do
 	{ cp "$tmp/$f" "$dest/$f.tmp" && mv -f "$dest/$f.tmp" "$dest/$f"; } || die "cannot write $dest"
 done
-rm -f "$bindir/backsight.tmp"
-ln -s "$dest/backsight" "$bindir/backsight.tmp" || die "cannot write $bindir"
-mv -f "$bindir/backsight.tmp" "$bindir/backsight" || die "cannot write $bindir"
+# The shim every generated file runs, then the command on PATH: a link to
+# the shim, never to a versioned binary (decision 0067 block review), so
+# it follows update apply and never dangles when old binaries are pruned.
+# Each link is swapped whole (ln -s then mv: no moment without one).
+shim=$data/bin/current
+link() { # link <target> <name>
+	rm -f "$2.tmp"
+	ln -s "$1" "$2.tmp" || die "cannot write $(dirname "$2")"
+	mv -f "$2.tmp" "$2" || die "cannot write $(dirname "$2")"
+}
+link "$dest/backsight" "$shim"
+link "$shim" "$bindir/backsight"
 
 echo "backsight $version installed: $bindir/backsight"
 case :$PATH: in

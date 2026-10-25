@@ -127,11 +127,29 @@ func installIn(t *testing.T, home, relDir, pubkey, path string, env ...string) (
 	return home, string(b), err
 }
 
-func installedBinary(home string) string {
+func dataDir(home string) string {
 	if goos() == "darwin" {
-		return filepath.Join(home, "Library", "Application Support", "backsight", "bin", version, "backsight")
+		return filepath.Join(home, "Library", "Application Support", "backsight")
 	}
-	return filepath.Join(home, ".local", "share", "backsight", "bin", version, "backsight")
+	return filepath.Join(home, ".local", "share", "backsight")
+}
+
+func installedBinary(home string) string {
+	return filepath.Join(dataDir(home), "bin", version, "backsight")
+}
+
+// pathEntry checks the command on PATH: link → the shim <data>/bin/current
+// (decision 0067 block review: an update moves the shim, so the PATH
+// command follows it, and pruning old binaries never breaks it) → binary.
+func pathEntry(t *testing.T, link, data, binary string) {
+	t.Helper()
+	shim := filepath.Join(data, "bin", "current")
+	if got, err := os.Readlink(link); err != nil || got != shim {
+		t.Errorf("%s → %q (%v), want the shim %s", link, got, err, shim)
+	}
+	if got, err := os.Readlink(shim); err != nil || got != binary {
+		t.Errorf("%s → %q (%v), want %s", shim, got, err, binary)
+	}
 }
 
 func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
@@ -142,11 +160,7 @@ func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	link := filepath.Join(home, ".local", "bin", "backsight")
-	target, lerr := filepath.EvalSymlinks(link)
-	want, _ := filepath.EvalSymlinks(installedBinary(home))
-	if lerr != nil || target != want {
-		t.Errorf("%s → %s (%v), want %s", link, target, lerr, want)
-	}
+	pathEntry(t, link, dataDir(home), installedBinary(home))
 	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight "+version+"\n" {
 		t.Errorf("installed binary: %q %v", run, err)
 	}
@@ -265,9 +279,7 @@ func TestInstallUnderBackSightHomeAndUpgrade(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	link := filepath.Join(bh, "bin", "backsight")
-	if target, _ := filepath.EvalSymlinks(link); !strings.HasPrefix(target, filepath.Join(bh, "data", "bin", version)) {
-		t.Fatalf("BACKSIGHT_HOME layout: %s → %s", link, target)
-	}
+	pathEntry(t, link, filepath.Join(bh, "data"), filepath.Join(bh, "data", "bin", version, "backsight"))
 	// A newer release replaces the link, the older binary stays in place.
 	old := version
 	version = "9.9.10"
@@ -279,6 +291,7 @@ func TestInstallUnderBackSightHomeAndUpgrade(t *testing.T) {
 	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight 9.9.10\n" {
 		t.Errorf("after the upgrade the link runs %q (%v)", run, err)
 	}
+	pathEntry(t, link, filepath.Join(bh, "data"), filepath.Join(bh, "data", "bin", "9.9.10", "backsight"))
 	if _, err := os.Stat(filepath.Join(bh, "data", "bin", old, "backsight")); err != nil {
 		t.Error("the previous binary was removed")
 	}
@@ -329,5 +342,33 @@ func TestInstallKeepsTheSignedChecksums(t *testing.T) {
 		if err != nil || len(want) == 0 || string(got) != string(want) {
 			t.Errorf("%s next to the binary: %v", f, err)
 		}
+	}
+}
+
+// An install.sh from before decision 0067's block review linked the PATH
+// command to a versioned binary: a new install points it at the shim.
+func TestInstallPointsAnOlderPathLinkAtTheShim(t *testing.T) {
+	k := newKey(t)
+	dir, _ := release(t, k)
+	home := t.TempDir()
+	old := filepath.Join(dataDir(home), "bin", "9.9.8", "backsight")
+	link := filepath.Join(home, ".local", "bin", "backsight")
+	for _, d := range []string{filepath.Dir(old), filepath.Dir(link)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(old, []byte("#!/bin/sh\necho fake backsight 9.9.8\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(old, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, out, err := installIn(t, home, dir, k.pub, toolsWithout(t)); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	pathEntry(t, link, dataDir(home), installedBinary(home))
+	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight "+version+"\n" {
+		t.Errorf("the PATH command runs %q (%v)", run, err)
 	}
 }

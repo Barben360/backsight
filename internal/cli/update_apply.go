@@ -499,6 +499,9 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 		return failed("shim", err)
 	}
 	add("shim", "done", shim+" → "+target)
+	if link, older := olderPathLink(d, shim); older && pointShim(shim, link) == nil { // the PATH command follows the shim
+		add("path", "done", link+" → "+shim)
+	}
 	if err := ctx.Err(); err != nil {
 		return failed("shim", err)
 	}

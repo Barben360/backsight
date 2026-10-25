@@ -24,7 +24,7 @@ If `backsight version` works, skip this step. Otherwise:
 curl -fsSL https://<release-pages>/install.sh | sh
 ```
 
-The script checks the release's minisign signature (with `minisign`, or `openssl` 3; on macOS, whose LibreSSL cannot, the user installs minisign first) and its checksum, then installs `~/.local/bin/backsight`. If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
+The script checks the release's minisign signature (with `minisign`, or `openssl` 3; on macOS, whose LibreSSL cannot, the user installs minisign first) and its checksum, then installs the binary under backsight's data directory and links `~/.local/bin/backsight` to its shim (`<data>/bin/current`, which `update apply` moves to each new version). If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
 
 While the repository is private, the user downloads a release themselves (`gh release download <tag> -D <dir>`), then runs `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
 

@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/state"
@@ -142,9 +143,20 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		if err := installShim(target, shim); err != nil {
 			return res, blocked(err)
 		}
-		pruneBinaries(c.dirs.Data, target, before.ShimTarget)
 	}
 	add("shim", did(shimChanged), shim+" → "+target)
+	// The command on PATH runs the shim (decision 0067 block review).
+	if link, older := olderPathLink(c.dirs, shim); older {
+		if !plan {
+			if err := pointShim(shim, link); err != nil {
+				return res, blocked(err)
+			}
+		}
+		add("path", did(true), link+" → "+shim)
+	}
+	if !plan {
+		pruneBinaries(c.dirs.Data, c.dirs.Bin, target, before.ShimTarget)
+	}
 
 	// 3. The plugin, generated whole in a local marketplace (E1).
 	mkt := filepath.Join(c.dirs.Data, "marketplace")
@@ -438,16 +450,49 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
+// olderPathLink reports the command on PATH (<bin>/backsight) when it is
+// a link to one of this install's versioned binaries, as install.sh made
+// it before decision 0067's block review: it then runs that version
+// whatever update apply installs, and dangles once pruning removes it.
+// Anything else there (none, a file, a link elsewhere: a developer's
+// build) is the user's and stays. Windows has no such link.
+func olderPathLink(d paths.Dirs, shim string) (string, bool) {
+	if runtime.GOOS == "windows" || d.Bin == "" {
+		return "", false
+	}
+	link := filepath.Join(d.Bin, "backsight")
+	dest, err := os.Readlink(link)
+	if err != nil {
+		return link, false
+	}
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(d.Bin, dest)
+	}
+	dest = filepath.Clean(dest)
+	return link, dest != filepath.Clean(shim) && strings.HasPrefix(dest, filepath.Join(d.Data, "bin")+string(filepath.Separator))
+}
+
 // keepBinaries: installed versions kept besides the current and previous.
 const keepBinaries = 3
 
 // pruneBinaries removes old <data>/bin/<version>/ directories, never the
-// shim's current or previous target.
-func pruneBinaries(data, current, previous string) {
+// shim's current or previous target, nor the binary the command on PATH
+// (<bin>/backsight) runs.
+func pruneBinaries(data, bin, current, previous string) {
 	dir := filepath.Join(data, "bin")
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
+	}
+	keep := []string{current, previous}
+	if p, err := filepath.EvalSymlinks(filepath.Join(bin, "backsight")); err == nil {
+		keep = append(keep, p)
+		// the same directory reached through a symlinked data directory
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			if rel, err := filepath.Rel(real, p); err == nil && !strings.HasPrefix(rel, "..") {
+				keep = append(keep, filepath.Join(dir, rel))
+			}
+		}
 	}
 	type ver struct {
 		path string
@@ -456,7 +501,11 @@ func pruneBinaries(data, current, previous string) {
 	var vs []ver
 	for _, e := range ents {
 		p := filepath.Join(dir, e.Name())
-		if !e.IsDir() || strings.HasPrefix(current, p+string(filepath.Separator)) || (previous != "" && strings.HasPrefix(previous, p+string(filepath.Separator))) {
+		kept := false
+		for _, k := range keep {
+			kept = kept || (k != "" && strings.HasPrefix(k, p+string(filepath.Separator)))
+		}
+		if !e.IsDir() || kept {
 			continue
 		}
 		if fi, err := e.Info(); err == nil {
