@@ -401,3 +401,22 @@ func TestDoctorAsksClaudeCodeWhetherThePluginIsEnabled(t *testing.T) {
 		t.Errorf("doctor:\n%s", out)
 	}
 }
+
+// Two installs cannot share a profile: a marketplace that still exists
+// elsewhere is another install's, a missing one is this install's, moved.
+func TestClientInstallRefusesAProfileWiredToAnotherInstall(t *testing.T) {
+	home := devInstall(t, true)
+	f := withClaude(t)
+	other := filepath.Join(home, "other-install", "marketplace")
+	_ = os.MkdirAll(filepath.Join(other, ".claude-plugin"), 0o700)
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + other + `"}]`
+	code, out, _ := run(t, "client", "install", "--json")
+	if code != output.Blocked || !strings.Contains(out, "another backsight install") || len(mutating(f)) > 0 {
+		t.Fatalf("exit %d, claude %v\n%s", code, mutating(f), out)
+	}
+	_ = os.RemoveAll(filepath.Join(home, "other-install")) // moved away: ours, re-added
+	f.calls = nil
+	if code, out, _ := run(t, "client", "install"); code != output.OK || !strings.Contains(strings.Join(mutating(f), ","), "plugin marketplace remove backsight") {
+		t.Errorf("a moved data directory must be re-added: exit %d %v\n%s", code, mutating(f), out)
+	}
+}

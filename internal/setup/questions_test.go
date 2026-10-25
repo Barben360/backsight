@@ -155,6 +155,9 @@ func TestInvalidAnswersAreUsageErrors(t *testing.T) {
 		{"consent": "sure"},
 		{"api_port": "70000"},
 		{"api_port": "9999"}, // equals the ui port
+		{"project": "Backsight"},
+		{"project": "../x"},
+		{"scheduler": "sometimes"},
 		{"provider": "claude-code", "ack_subscription": "no"},
 	} {
 		_, _, err := Resolve(Inputs{Answers: a})

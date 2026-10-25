@@ -169,6 +169,15 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	if err != nil {
 		return res, failAfterWrites(err)
 	}
+	// A marketplace at another path that still exists is another install's:
+	// two installs cannot share a profile (the plugin id is backsight's).
+	// A path that is gone is this install's data directory, moved.
+	if marketPath != "" && marketPath != "?" && marketPath != mkt {
+		if _, err := os.Stat(filepath.Join(marketPath, ".claude-plugin")); err == nil {
+			return res, &output.Error{Code: output.Blocked, Message: "this Claude Code profile (" + c.loc.Dir + ") is wired to another backsight install, whose marketplace is " +
+				marketPath + ": give this install its own profile (CLAUDE_CONFIG_DIR or --config-dir), or uninstall the other one first"}
+		}
+	}
 	var steps [][]string
 	switch {
 	case marketPath == "":

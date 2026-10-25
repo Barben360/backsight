@@ -229,3 +229,34 @@ func TestJobsInstallOnMacOS(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A second install's entries are its own: install and uninstall touch only
+// the project's units, never the first install's backsight-*.
+func TestJobsOfASecondInstallKeepToTheirProject(t *testing.T) {
+	home := devInstall(t, true)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nproject = \"bs-fresh\"\n", 1)), 0o600)
+	sys := withSys(t, "linux")
+	first := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")
+	_ = os.MkdirAll(filepath.Dir(first), 0o700)
+	_ = os.WriteFile(first, []byte("the first install's\n"), 0o644)
+	if code, out, _ := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "xdg", "systemd", "user", "bs-fresh-tick.timer")); err != nil {
+		t.Error("the project's timer was not written")
+	}
+	sys.calls = nil
+	if code, _, _ := run(t, "jobs", "uninstall"); code != output.OK {
+		t.Fatal("uninstall failed")
+	}
+	for _, c := range sys.calls {
+		if strings.Contains(c, "backsight-") {
+			t.Errorf("touched the first install's units: %s", c)
+		}
+	}
+	if readFile(t, first) != "the first install's\n" {
+		t.Error("the first install's timer was changed")
+	}
+}

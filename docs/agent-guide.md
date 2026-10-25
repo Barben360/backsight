@@ -24,7 +24,7 @@ If `backsight version` works, skip this step. Otherwise:
 curl -fsSL https://<release-pages>/install.sh | sh
 ```
 
-The script checks the release's minisign signature (with `minisign`, or `openssl` 3) and its checksum, then installs `~/.local/bin/backsight`. If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
+The script checks the release's minisign signature (with `minisign`, or `openssl` 3; on macOS, whose LibreSSL cannot, the user installs minisign first) and its checksum, then installs `~/.local/bin/backsight`. If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
 
 While the repository is private, the user downloads a release themselves (`gh release download <tag> -D <dir>`), then runs `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
 
@@ -36,7 +36,7 @@ backsight setup --questions --json
 
 Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `default`, `recommended`, `required`, and `asked`. Questions with `"asked": false` are already settled by an existing install's config or an earlier run: tell the user, don't ask again. If the provider answer changes, list the questions again: the model and other questions follow the provider.
 
-Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install), `scheduler=off` (a container without a user scheduler).
+Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a container without a user scheduler).
 
 ## 3. Show the plan, then run setup
 

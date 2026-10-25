@@ -11,8 +11,15 @@
 # BACKSIGHT_RELEASE_URL  where the release files are (default: the latest
 #                        GitHub release)
 # BACKSIGHT_HOME         as for backsight itself: one directory for everything
+# BACKSIGHT_INSTALL_PUBKEY  tests only: another trusted key
+#
+# macOS ships LibreSSL, which cannot check these signatures: install
+# minisign there (brew install minisign).
 set -eu
 
+# Everything runs from main, called on the last line: a download cut short
+# runs nothing.
+main() {
 # The release key (decision 0027). Changed only by a key rotation.
 PUBKEY=${BACKSIGHT_INSTALL_PUBKEY:-RWTezqkiNo2ey8msd7vpSC0+D6oghZ1/VwgXU6EqYRjlZzyd87+/03eG}
 URL=${BACKSIGHT_RELEASE_URL:-https://github.com/Barben360/backsight/releases/latest/download}
@@ -31,7 +38,8 @@ aarch64 | arm64) arch=arm64 ;;
 esac
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp"; exit 130' INT TERM
 
 fetch() { # fetch <name>: into $tmp
 	if [ -n "${BACKSIGHT_RELEASE_DIR:-}" ]; then
@@ -47,10 +55,15 @@ verify() {
 	f=$1
 	sigfile=$f.minisig
 	if command -v minisign >/dev/null 2>&1; then
-		minisign -Vq -P "$PUBKEY" -m "$f" -x "$sigfile" || die "$(basename "$f"): bad signature"
+		# -H: prehashed signatures only, as the openssl path accepts
+		minisign -VqH -P "$PUBKEY" -m "$f" -x "$sigfile" || die "$(basename "$f"): bad signature"
 		return
 	fi
 	command -v openssl >/dev/null 2>&1 || die "neither minisign nor openssl is installed: install one to check the release signature"
+	case $(openssl version 2>/dev/null) in
+	"OpenSSL "[3-9]*) ;;
+	*) die "$(openssl version 2>/dev/null | cut -d' ' -f1-2) cannot check Ed25519 signatures: install minisign (or OpenSSL 3)" ;;
+	esac
 	d=$tmp/verify
 	mkdir -p "$d"
 	printf '%s' "$PUBKEY" | base64 -d > "$d/pub.bin" 2>/dev/null || die "bad public key"
@@ -79,8 +92,13 @@ sha256() {
 fetch checksums.txt
 fetch checksums.txt.minisig
 verify "$tmp/checksums.txt"
+# The trusted comment is signed: it must name the file it was made for.
+case $(sed -n 3p "$tmp/checksums.txt.minisig") in
+*"file:checksums.txt"*) ;;
+*) die "checksums.txt.minisig was made for another file" ;;
+esac
 
-archive=$(awk -v s="_${os}_${arch}.tar.gz" '{ n = $2; if (substr(n, length(n) - length(s) + 1) == s) print n }' "$tmp/checksums.txt" | head -n 1)
+archive=$(awk -v s="_${os}_${arch}.tar.gz" '{ n = $2; if (index(n, "backsight_") == 1 && substr(n, length(n) - length(s) + 1) == s) print n }' "$tmp/checksums.txt" | head -n 1)
 [ -n "$archive" ] || die "the release has no archive for $os/$arch"
 case $archive in */* | .*) die "unexpected archive name $archive" ;; esac
 want=$(awk -v n="$archive" '$2 == n { print $1 }' "$tmp/checksums.txt")
@@ -104,9 +122,12 @@ else
 fi
 dest=$data/bin/$version
 mkdir -p "$dest" "$bindir"
-install -m 0755 "$tmp/x/backsight" "$dest/backsight.tmp"
-mv -f "$dest/backsight.tmp" "$dest/backsight"
-ln -sf "$dest/backsight" "$bindir/backsight.tmp" && mv -f "$bindir/backsight.tmp" "$bindir/backsight"
+[ -f "$tmp/x/backsight" ] && [ ! -L "$tmp/x/backsight" ] || die "$archive: backsight is not a regular file"
+install -m 0755 "$tmp/x/backsight" "$dest/backsight.tmp" || die "cannot write $dest"
+mv -f "$dest/backsight.tmp" "$dest/backsight" || die "cannot write $dest"
+rm -f "$bindir/backsight.tmp"
+ln -s "$dest/backsight" "$bindir/backsight.tmp" || die "cannot write $bindir"
+mv -f "$bindir/backsight.tmp" "$bindir/backsight" || die "cannot write $bindir"
 
 echo "backsight $version installed: $bindir/backsight"
 case :$PATH: in
@@ -114,3 +135,6 @@ case :$PATH: in
 *) echo "add it to your PATH first: export PATH=\"$bindir:\$PATH\" (in your shell's profile to keep it)" ;;
 esac
 echo "next: backsight setup"
+}
+
+main "$@"

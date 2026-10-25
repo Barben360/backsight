@@ -89,14 +89,15 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 // reference retro timer: it is machine-wide and reads the default
 // profile's transcripts, so only a setup of ~/.claude may stop it.
 func retroTimerOwned(ctx context.Context, loc claudecode.Location) bool {
-	home, err := os.UserHomeDir()
-	if err != nil || schedulerGOOS != "linux" || filepath.Clean(loc.Dir) != filepath.Join(home, ".claude") {
+	if schedulerGOOS != "linux" {
 		return false
 	}
-	// The profile must hold the retro script the timer runs: a HOME moved
-	// for a test install has no such file, while the real timer still runs
-	// from the real one (found by the agent-driven install run).
-	if _, err := os.Stat(filepath.Join(loc.Dir, "hooks", "memory-retro.py")); err != nil {
+	// The timer is this profile's only if its service runs this profile's
+	// retro script: a HOME moved for a test install, or a copied profile,
+	// is not where the real timer runs from (found by the agent-driven
+	// install run, block 4 review).
+	out, err := sysRunner.Run(ctx, "systemctl", "--user", "show", "-p", "ExecStart", strings.TrimSuffix(reference.RetroTimer, ".timer")+".service")
+	if err != nil || !strings.Contains(string(out), " "+filepath.Join(filepath.Clean(loc.Dir), "hooks", "memory-retro.py")+" ") {
 		return false
 	}
 	return retroTimerEnabled(ctx)

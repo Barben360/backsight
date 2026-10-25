@@ -57,21 +57,31 @@ func (k key) sign(t *testing.T, file, comment string) {
 	}
 }
 
-const version = "9.9.9"
+var version = "9.9.9"
 
 func goos() string { return runtime.GOOS }
 
 // release builds a release directory for this machine, signed by k.
 func release(t *testing.T, k key) (dir, archive string) {
 	t.Helper()
-	dir = t.TempDir()
-	archive = "backsight_" + version + "_" + goos() + "_" + runtime.GOARCH + ".tar.gz"
+	return releaseIn(t, t.TempDir(), k, false)
+}
+
+// releaseIn builds the release in dir; link makes the backsight member a
+// symlink, as a hostile archive could.
+func releaseIn(t *testing.T, dir string, k key, link bool) (string, string) {
+	t.Helper()
+	archive := "backsight_" + version + "_" + goos() + "_" + runtime.GOARCH + ".tar.gz"
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	body := []byte("#!/bin/sh\necho fake backsight\n")
-	_ = tw.WriteHeader(&tar.Header{Name: "backsight", Mode: 0o755, Size: int64(len(body))})
-	_, _ = tw.Write(body)
+	body := []byte("#!/bin/sh\necho fake backsight " + version + "\n")
+	if link {
+		_ = tw.WriteHeader(&tar.Header{Name: "backsight", Typeflag: tar.TypeSymlink, Linkname: "/bin/sh"})
+	} else {
+		_ = tw.WriteHeader(&tar.Header{Name: "backsight", Mode: 0o755, Size: int64(len(body))})
+		_, _ = tw.Write(body)
+	}
 	_ = tw.Close()
 	_ = gz.Close()
 	if err := os.WriteFile(filepath.Join(dir, archive), buf.Bytes(), 0o644); err != nil {
@@ -103,12 +113,16 @@ func toolsWithout(t *testing.T) string {
 
 func install(t *testing.T, relDir, pubkey, path string) (home, out string, err error) {
 	t.Helper()
+	return installIn(t, t.TempDir(), relDir, pubkey, path)
+}
+
+func installIn(t *testing.T, home, relDir, pubkey, path string, env ...string) (string, string, error) {
+	t.Helper()
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skip("openssl missing")
 	}
-	home = t.TempDir()
 	cmd := exec.Command("sh", "install.sh")
-	cmd.Env = []string{"HOME=" + home, "PATH=" + path, "BACKSIGHT_RELEASE_DIR=" + relDir, "BACKSIGHT_INSTALL_PUBKEY=" + pubkey}
+	cmd.Env = append([]string{"HOME=" + home, "PATH=" + path, "BACKSIGHT_RELEASE_DIR=" + relDir, "BACKSIGHT_INSTALL_PUBKEY=" + pubkey}, env...)
 	b, err := cmd.CombinedOutput()
 	return home, string(b), err
 }
@@ -133,7 +147,7 @@ func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
 	if lerr != nil || target != want {
 		t.Errorf("%s → %s (%v), want %s", link, target, lerr, want)
 	}
-	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight\n" {
+	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight "+version+"\n" {
 		t.Errorf("installed binary: %q %v", run, err)
 	}
 	for _, s := range []string{"backsight " + version + " installed", "export PATH=", "next: backsight setup"} {
@@ -151,6 +165,11 @@ func TestInstallWithMinisign(t *testing.T) {
 	dir, _ := release(t, k)
 	if _, out, err := install(t, dir, k.pub, os.Getenv("PATH")); err != nil {
 		t.Fatalf("%v\n%s", err, out)
+	}
+	arch := filepath.Join(dir, "backsight_"+version+"_"+goos()+"_"+runtime.GOARCH+".tar.gz")
+	_ = os.WriteFile(arch, []byte("swapped archive"), 0o644)
+	if _, out, err := install(t, dir, k.pub, os.Getenv("PATH")); err == nil || !strings.Contains(out, "checksum mismatch") {
+		t.Errorf("minisign path accepted a swapped archive: %v\n%s", err, out)
 	}
 	_ = os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte("tampered\n"), 0o644)
 	if _, out, err := install(t, dir, k.pub, os.Getenv("PATH")); err == nil || !strings.Contains(out, "bad signature") {
@@ -182,6 +201,36 @@ func TestInstallRefusesWhatDoesNotVerify(t *testing.T) {
 			_ = os.WriteFile(p, []byte(strings.Replace(string(b), "timestamp:1792845259", "timestamp:1792845260", 1)), 0o644)
 			return k.pub
 		}, "bad trusted comment signature"},
+		{"legacy signature", func(t *testing.T, dir, _ string, k key) string {
+			// "Ed": the signature over the file itself, not its prehash
+			f := filepath.Join(dir, "checksums.txt")
+			data, _ := os.ReadFile(f)
+			sig := ed25519.Sign(k.priv, data)
+			comment := "timestamp:1\tfile:checksums.txt"
+			global := ed25519.Sign(k.priv, append(append([]byte{}, sig...), comment...))
+			_ = os.WriteFile(f+".minisig", []byte("untrusted comment: x\n"+base64.StdEncoding.EncodeToString(append(append([]byte("Ed"), k.id...), sig...))+
+				"\ntrusted comment: "+comment+"\n"+base64.StdEncoding.EncodeToString(global)+"\n"), 0o644)
+			return k.pub
+		}, "not a prehashed"},
+		{"signature made for another file", func(t *testing.T, dir, _ string, k key) string {
+			k.sign(t, filepath.Join(dir, "checksums.txt"), "timestamp:1792845259\tfile:old-checksums.txt\thashed")
+			return k.pub
+		}, "made for another file"},
+		{"archive name escaping the directory", func(t *testing.T, dir, archive string, k key) string {
+			p := filepath.Join(dir, "checksums.txt")
+			b, _ := os.ReadFile(p)
+			_ = os.WriteFile(p, []byte(strings.ReplaceAll(string(b), archive, "backsight_../"+archive)), 0o644)
+			k.sign(t, p, "timestamp:1\tfile:checksums.txt\thashed")
+			return k.pub
+		}, "unexpected archive name"},
+		{"symlinked binary", func(t *testing.T, dir, _ string, k key) string {
+			_, _ = releaseIn(t, dir, k, true)
+			return k.pub
+		}, "not a regular file"},
+		{"missing signature", func(t *testing.T, dir, _ string, k key) string {
+			_ = os.Remove(filepath.Join(dir, "checksums.txt.minisig"))
+			return k.pub
+		}, "checksums.txt.minisig is not in"},
 		{"no archive for this machine", func(t *testing.T, dir, archive string, k key) string {
 			p := filepath.Join(dir, "checksums.txt")
 			b, _ := os.ReadFile(p)
@@ -203,5 +252,34 @@ func TestInstallRefusesWhatDoesNotVerify(t *testing.T) {
 				t.Error("a refused release was installed")
 			}
 		})
+	}
+}
+
+func TestInstallUnderBackSightHomeAndUpgrade(t *testing.T) {
+	k := newKey(t)
+	dir, _ := release(t, k)
+	path := toolsWithout(t)
+	home := t.TempDir()
+	bh := filepath.Join(home, "bs")
+	if _, out, err := installIn(t, home, dir, k.pub, path, "BACKSIGHT_HOME="+bh); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	link := filepath.Join(bh, "bin", "backsight")
+	if target, _ := filepath.EvalSymlinks(link); !strings.HasPrefix(target, filepath.Join(bh, "data", "bin", version)) {
+		t.Fatalf("BACKSIGHT_HOME layout: %s → %s", link, target)
+	}
+	// A newer release replaces the link, the older binary stays in place.
+	old := version
+	version = "9.9.10"
+	t.Cleanup(func() { version = old })
+	dir2, _ := release(t, k)
+	if _, out, err := installIn(t, home, dir2, k.pub, path, "BACKSIGHT_HOME="+bh); err != nil {
+		t.Fatalf("upgrade: %v\n%s", err, out)
+	}
+	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight 9.9.10\n" {
+		t.Errorf("after the upgrade the link runs %q (%v)", run, err)
+	}
+	if _, err := os.Stat(filepath.Join(bh, "data", "bin", old, "backsight")); err != nil {
+		t.Error("the previous binary was removed")
 	}
 }

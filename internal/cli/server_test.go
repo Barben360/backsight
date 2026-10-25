@@ -868,3 +868,31 @@ func TestServerLLMCheckMasksSecretsInErrors(t *testing.T) {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 }
+
+// A second install's server commands act on its own Compose project and
+// volume, never the first's (block 4 review).
+func TestServerCommandsUseTheConfiguredProject(t *testing.T) {
+	home := devInstall(t, true)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nproject = \"bs-fresh\"\n", 1)), 0o600)
+	f := withCompose(t)
+	if code, out, errOut := run(t, "server", "stop"); code != output.OK {
+		t.Fatalf("exit %d %s %s", code, out, errOut)
+	}
+	if len(f.calls) == 0 {
+		t.Fatal("no compose call")
+	}
+	for _, c := range f.calls {
+		if j := strings.Join(c, " "); c[0] == "compose" && !strings.Contains(j, "-p bs-fresh ") {
+			t.Errorf("compose call outside the project: %s", j)
+		}
+	}
+	// Without db_password, install checks the project's volume and names it.
+	_ = os.Remove(secretsFile(home))
+	f.volumeExists = true
+	code, out, errOut := run(t, "server", "install")
+	if code != output.Blocked || !strings.Contains(out+errOut, "bs-fresh_pg_data") || strings.Contains(out+errOut, "backsight_pg_data") {
+		t.Errorf("exit %d: %s %s", code, out, errOut)
+	}
+}

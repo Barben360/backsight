@@ -8,22 +8,30 @@
 # Usage: scripts/fresh-install.sh [api port] (default 38888; the UI takes
 # port + 1111). PROJECT names the Compose project and scheduler entries
 # (default bs-fresh) so a machine's own install is left alone; KEEP=1
-# leaves the stack and the work directory; WORK sets the work directory
-# (it must allow executables).
+# leaves the stack and the work directory; WORK is the parent of the run's
+# own directory (it must allow executables); only the run's is removed.
 set -euo pipefail
 port=${1:-38888}
 project=${PROJECT:-bs-fresh}
+[ "$project" != backsight ] || { echo "PROJECT=backsight would be the machine's own install" >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
-work=${WORK:-$(mktemp -d)}
-mkdir -p "$work"
+if [ -n "${WORK:-}" ]; then
+  mkdir -p "$WORK"
+  work=$(mktemp -d "$WORK/run.XXXXXX")
+else
+  work=$(mktemp -d)
+fi
 bin=$work/bin/backsight
 # Built before HOME moves: Go's caches stay the caller's.
 (cd "$root" && go build -o "$bin" ./cmd/backsight)
 export HOME=$work/home BACKSIGHT_HOME=$work/backsight
 unset CLAUDE_CONFIG_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
 mkdir -p "$HOME"
-compose() {
-  docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" "$@"
+compose() { # the project the install rendered, whatever PROJECT says now
+  local f=$BACKSIGHT_HOME/data/server/compose.yaml p
+  p=$(sed -n 's/^name: *//p' "$f" | head -n 1)
+  [ -n "$p" ] && [ "$p" != backsight ] || { echo "refusing compose project '$p'" >&2; return 1; }
+  docker compose -p "$p" -f "$f" --env-file "$BACKSIGHT_HOME/data/server/.env" "$@"
 }
 cleanup() {
   status=$?
@@ -81,7 +89,9 @@ for _ in $(seq 1 60); do
 done
 [ "${found:-}" = 1 ] || { cat "$work/store.json" "$work/search.json" >&2; fail "search never answered with hits"; }
 
-# 5. Undo leaves the profile as it found it, keeping config and data.
+# 5. Undo unwires Claude Code and keeps config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
+if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") != null' >/dev/null; then fail "the plugin survived undo"; fi
+[ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
 "$bin" doctor --json > "$work/doctor.json" || true
 echo "fresh-install: ok (setup with verify, store, search, undo) on project $project"

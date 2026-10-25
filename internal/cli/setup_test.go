@@ -505,8 +505,7 @@ func referenceSetup(t *testing.T) (home, settings, state string, f *fakeSteps, c
 	settings, state = filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")
 	_ = os.WriteFile(settings, []byte(referenceSettings), 0o600)
 	_ = os.WriteFile(state, []byte(referenceClaudeJSON), 0o600)
-	retroScript(home)
-	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	sys.out = retroTimer(os.Getenv("HOME"))
 	f.real["client install"], f.real["client retention"] = true, true
 	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
 	if code != output.OK {
@@ -782,7 +781,7 @@ func TestAnInterruptedUndoContinuesWhereItStopped(t *testing.T) {
 func TestClientRetireTellsHowToRestartTheTimer(t *testing.T) {
 	referenceProfile(t)
 	sys := withSys(t, "linux")
-	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	sys.out = retroTimer(os.Getenv("HOME"))
 	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "systemctl --user enable --now memory-retro.timer") {
 		t.Errorf("exit %d\n%s", code, out)
 	}

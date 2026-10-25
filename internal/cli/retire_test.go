@@ -50,14 +50,13 @@ func referenceProfile(t *testing.T) (settings, state string) {
 	_ = os.MkdirAll(filepath.Dir(settings), 0o700)
 	_ = os.WriteFile(settings, []byte(referenceSettings), 0o600)
 	_ = os.WriteFile(state, []byte(referenceClaudeJSON), 0o600)
-	retroScript(home)
 	return settings, state
 }
 
 func TestClientRetireRemovesOnlyReferencePieces(t *testing.T) {
 	settings, state := referenceProfile(t)
 	sys := withSys(t, "linux")
-	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	sys.out = retroTimer(os.Getenv("HOME"))
 	code, out, errOut := run(t, "client", "retire", "--json")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
@@ -109,7 +108,7 @@ func TestClientRetireRemovesOnlyReferencePieces(t *testing.T) {
 func TestClientRetirePlanWritesNothing(t *testing.T) {
 	settings, state := referenceProfile(t)
 	sys := withSys(t, "linux")
-	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	sys.out = retroTimer(os.Getenv("HOME"))
 	code, out, _ := run(t, "client", "retire", "--plan")
 	if code != output.OK || !strings.Contains(out, "would remove") || !strings.Contains(out, "mcpServers.user-memory") || !strings.Contains(out, "would stop systemd user timer") {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -158,7 +157,7 @@ func TestClientRetireIsUndoneByConfigRestore(t *testing.T) {
 func TestClientRetireLeavesTheRetroTimerToTheDefaultProfile(t *testing.T) {
 	home := isolate(t)
 	sys := withSys(t, "linux")
-	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	sys.out = retroTimer(os.Getenv("HOME"))
 	other := filepath.Join(home, ".claude-dev")
 	_ = os.MkdirAll(other, 0o700)
 	code, out, _ := run(t, "client", "retire", "--config-dir", other)
@@ -198,20 +197,22 @@ func TestClientRetireRemovesRulesOnlyForServersItRemoves(t *testing.T) {
 	}
 }
 
-// retroScript puts the reference retro script in home's default profile:
-// the retro timer counts only for a profile that holds it.
-func retroScript(home string) {
-	p := filepath.Join(home, ".claude", "hooks", "memory-retro.py")
-	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	_ = os.WriteFile(p, []byte("# reference retro\n"), 0o600)
+// retroTimer fakes systemctl for an enabled retro timer whose service runs
+// home's default profile's script, as on the author's machine.
+func retroTimer(home string) map[string]string {
+	return map[string]string{
+		"systemctl --user is-enabled memory-retro.timer": "enabled\n",
+		"systemctl --user show -p ExecStart memory-retro.service": "ExecStart={ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 " +
+			filepath.Join(home, ".claude", "hooks", "memory-retro.py") + " run ; ignore_errors=no }\n",
+	}
 }
 
-// A HOME moved for a test install has the default profile's path but not
-// its retro script: the machine's real timer must be left alone.
+// A HOME moved for a test install has the default profile's path, but the
+// machine's real timer runs another profile's script: it is left alone.
 func TestClientRetireLeavesTheTimerToTheProfileThatRunsIt(t *testing.T) {
 	isolate(t)
 	sys := withSys(t, "linux")
-	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	sys.out = retroTimer("/home/the-real-user")
 	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "no reference piece") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
