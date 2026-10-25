@@ -148,7 +148,7 @@ func TestUpdateWithinWaitsForTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { time.Sleep(150 * time.Millisecond); _ = l.Release() }()
+	go func(l *Lock) { time.Sleep(150 * time.Millisecond); _ = l.Release() }(l) // its own l: the test reuses the variable
 	if err := UpdateWithin(d, "test", 5*time.Second, func(s *State) error { s.PluginVersion = "0.2.0"; return nil }); err != nil {
 		t.Fatalf("not retried until the lock was free: %v", err)
 	}
