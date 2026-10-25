@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	agelib "filippo.io/age"
 	"filippo.io/age/agessh"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
 	"github.com/Barben360/backsight/internal/backup"
@@ -171,6 +174,9 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	if err != nil {
 		return res, err
 	}
+	// Under the maintenance lock: a dump left in the container by a killed
+	// backup or restore holds the memory in clear.
+	_ = server.DB{Compose: composeFor(cfg)}.RemoveStaleDumps(ctx)
 	extras := map[string][]byte{}
 	if bankConfig != nil {
 		extras["bank-config.json"] = bankConfig
@@ -257,8 +263,8 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 			}
 			var ids []agelib.Identity
 			if identityFile != "" {
-				if ids, err = readIdentities(identityFile); err != nil {
-					return &output.Error{Code: output.Usage, Message: err.Error()}
+				if ids, err = identitiesFrom(e, identityFile, !e.json, "backsight backup verify "+args[0]+" --identity "+identityFile); err != nil {
+					return err
 				}
 			} else if _, _, ids, err = backupKeys(d, cfg, sec, false); err != nil {
 				return err
@@ -298,19 +304,84 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 	return cmd
 }
 
-func readIdentities(path string) ([]agelib.Identity, error) {
+// errPassphrase: the SSH identity is passphrase-protected and there is no
+// terminal to ask for it.
+var errPassphrase = errors.New("the SSH key is protected by a passphrase")
+
+// readIdentities reads an age identity file or an SSH private key. A
+// passphrase-protected key asks prompt for its passphrase when it is first
+// needed; with no prompt it is errPassphrase.
+func readIdentities(path string, prompt func() ([]byte, error)) ([]agelib.Identity, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	if strings.Contains(string(raw), "PRIVATE KEY") {
 		id, err := agessh.ParseIdentity(raw)
-		if err != nil {
+		var missing *ssh.PassphraseMissingError
+		switch {
+		case errors.As(err, &missing) && prompt == nil:
+			return nil, errPassphrase
+		case errors.As(err, &missing) && missing.PublicKey != nil:
+			eid, err := agessh.NewEncryptedSSHIdentity(missing.PublicKey, raw, prompt)
+			if err != nil {
+				return nil, err
+			}
+			return []agelib.Identity{eid}, nil
+		case errors.As(err, &missing): // an old PEM key: no public key inside, decrypt now
+			pass, err := prompt()
+			if err != nil {
+				return nil, err
+			}
+			k, err := ssh.ParseRawPrivateKeyWithPassphrase(raw, pass)
+			if err != nil {
+				return nil, err
+			}
+			pemKey, err := ssh.MarshalPrivateKey(k.(crypto.Signer), "")
+			if err != nil {
+				return nil, err
+			}
+			id, err := agessh.ParseIdentity(pem.EncodeToMemory(pemKey))
+			if err != nil {
+				return nil, err
+			}
+			return []agelib.Identity{id}, nil
+		case err != nil:
 			return nil, err
 		}
 		return []agelib.Identity{id}, nil
 	}
 	return agelib.ParseIdentities(strings.NewReader(string(raw)))
+}
+
+// askPassphrase reads an SSH key's passphrase from the terminal; tests
+// replace it.
+var askPassphrase = func(stderr io.Writer, path string) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		fmt.Fprintf(stderr, "passphrase for %s (input hidden): ", path)
+		raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(stderr)
+		return raw, err
+	}
+}
+
+// identitiesFrom reads --identity for command (the command line to rerun
+// in a terminal): a passphrase is asked only when stdin is a terminal and
+// the run is interactive, otherwise the user runs it (needs_user).
+func identitiesFrom(e *env, path string, interactive bool, rerun string) ([]agelib.Identity, error) {
+	var prompt func() ([]byte, error)
+	if interactive && stdinIsTerminal() {
+		prompt = askPassphrase(e.stderr, path)
+	}
+	ids, err := readIdentities(path, prompt)
+	switch {
+	case errors.Is(err, errPassphrase):
+		return nil, &output.Error{Code: output.NeedsUser, Message: path + ": " + err.Error() + ": run the command in a terminal to type it",
+			Actions: []output.Action{{Kind: "run_as_user", Cmd: rerun, Why: "the passphrase of " + path + " is typed in a terminal, never passed to an agent"}}}
+	case err != nil:
+		return nil, &output.Error{Code: output.Usage, Message: err.Error()}
+	}
+	return ids, nil
 }
 
 func newBackupListCmd(e *env) *cobra.Command {

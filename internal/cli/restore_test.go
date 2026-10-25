@@ -37,8 +37,30 @@ type restoreDocker struct {
 	copies    map[string]int // dump copied into the container → its rows
 	restores  []int          // rows of each dump restored into the database
 	running   bool           // the hindsight service
-	loseRow   bool           // the next restore loses one row (a bad archive)
+	lose      int            // the next restores lose one row each (a bad archive)
 	failStart bool           // compose up fails
+	failStop  bool           // compose stop fails
+	failDump  bool           // pg_dump fails
+	failLoad  int            // the next pg_restore into the database fail (after dropdb)
+	sqlEpoch  string         // the epoch document's metadata read from the database ("" = no row)
+	sqlFails  bool           // reading the database fails
+	keys      []string       // HINDSIGHT_API_TENANT_API_KEY of each compose up
+}
+
+// upKey reads the API key the .env in the compose project directory of a
+// `compose ... up` call gives the server.
+func upKey(args []string) string {
+	for i, a := range args {
+		if a == "--project-directory" && i+1 < len(args) {
+			raw, _ := os.ReadFile(filepath.Join(args[i+1], ".env"))
+			for _, l := range strings.Split(string(raw), "\n") {
+				if v, ok := strings.CutPrefix(l, "HINDSIGHT_API_TENANT_API_KEY="); ok {
+					return strings.Trim(v, "'")
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
@@ -51,6 +73,16 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	}
 	last := args[len(args)-1]
 	switch {
+	case strings.Contains(line, "retain_params"):
+		if f.sqlFails {
+			return []byte("connection refused"), os.ErrClosed
+		}
+		if f.sqlEpoch == "" {
+			return []byte("null\n"), nil
+		}
+		return []byte(f.sqlEpoch + "\n"), nil
+	case strings.Contains(line, "pg_dump") && f.failDump:
+		return []byte("pg_dump: error"), os.ErrClosed
 	case strings.Contains(line, "alembic_version"):
 		return []byte("c7e2f9a4d1b8\n"), nil
 	case strings.Contains(line, "pg_extension"):
@@ -76,19 +108,32 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(line, "exec -T db createdb"):
 		f.rows = 0
 	case strings.Contains(line, "exec -T db pg_restore -U hindsight -d hindsight"):
+		if f.failLoad > 0 {
+			f.failLoad--
+			return []byte("pg_restore: error"), os.ErrClosed
+		}
 		f.rows = f.copies[last]
 		f.restores = append(f.restores, f.rows)
-		if f.loseRow {
-			f.loseRow = false
+		if f.lose > 0 {
+			f.lose--
 			f.rows--
 		}
 	case strings.HasSuffix(line, "stop hindsight"):
+		if f.failStop {
+			return []byte("cannot stop"), os.ErrClosed
+		}
 		f.running = false
 	case strings.HasSuffix(line, "up -d --wait"):
 		if f.failStart {
 			return []byte("container exited"), os.ErrClosed
 		}
 		f.running = true
+		if k := upKey(args); k != "" {
+			f.keys = append(f.keys, k)
+			if requireKey.Load() {
+				acceptedKey.Store(k)
+			}
+		}
 	case strings.Contains(line, " ps --all"):
 		st := "exited"
 		if f.running {
@@ -261,10 +306,10 @@ func TestRestoreHoldsTheLockUntilTheEpochIsWritten(t *testing.T) {
 }
 
 // A restore that does not verify puts the safety archive back (exit 30)
-// and writes no epoch: the clients' view still matches the server.
+// and writes an epoch above every one seen or attempted.
 func TestRestoreRollsBackWhenTheCountsDiffer(t *testing.T) {
 	home, archive, dk, port := restoreSetup(t)
-	dk.loseRow = true
+	dk.lose = 1
 	code, out, errOut := run(t, "restore", archive)
 	if code != output.RolledBack || !strings.Contains(errOut, "rolled back") || !strings.Contains(out, "rollback") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
@@ -274,12 +319,15 @@ func TestRestoreRollsBackWhenTheCountsDiffer(t *testing.T) {
 	if len(dk.restores) != 2 || dk.restores[0] != 10 || dk.restores[1] != 25 || dk.rows != 25 || !dk.running {
 		t.Errorf("restores %v, rows %d, running %v", dk.restores, dk.rows, dk.running)
 	}
-	if e := epochOf(t, port); e.Epoch != 0 {
-		t.Errorf("an epoch was written for a failed restore: %+v", e)
+	// The rollback writes an epoch too, from the safety dump's time: a
+	// client that sent to the restored data reconciles. The memory bank
+	// gets no retain.
+	if e := epochOf(t, port); e.Epoch != 1 || !e.BackupCreatedAt.Equal(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("rollback epoch %+v", e)
 	}
 	for _, c := range bankCalls {
-		if strings.HasPrefix(c, "POST ") && strings.HasSuffix(c, " /memories") {
-			t.Errorf("retain during a failed restore: %q", bankCalls)
+		if strings.HasPrefix(c, "POST ") && strings.HasSuffix(c, " /memories") && !strings.HasPrefix(c, "POST claude-memory-control ") {
+			t.Errorf("retain into the memory bank during a failed restore: %q", bankCalls)
 		}
 	}
 	if got := backupsIn(home); len(got) != 2 {
@@ -322,8 +370,8 @@ func TestRestoreRollsBackWhenTheRecallFails(t *testing.T) {
 	if dk.rows != 25 || !dk.running {
 		t.Errorf("rows %d, running %v", dk.rows, dk.running)
 	}
-	if e := epochOf(t, port); e.Epoch != 0 {
-		t.Errorf("epoch %+v", e)
+	if e := epochOf(t, port); e.Epoch != 1 {
+		t.Errorf("rollback epoch %+v", e)
 	}
 }
 
@@ -362,7 +410,7 @@ func TestRestoreRefusals(t *testing.T) {
 			_ = os.WriteFile(f, []byte(other.String()+"\n"), 0o600)
 			return []string{archive, "--identity", f}
 		}},
-		{"unreadable identity", output.Usage, "", func(t *testing.T, _, archive string) []string {
+		{"unreadable identity", output.Usage, "malformed secret key", func(t *testing.T, _, archive string) []string {
 			f := filepath.Join(t.TempDir(), "key.txt")
 			_ = os.WriteFile(f, []byte("not a key\n"), 0o600)
 			return []string{archive, "--identity", f}
@@ -456,7 +504,7 @@ func TestRestorePlanChangesNothing(t *testing.T) {
 			t.Errorf("step %+v", s)
 		}
 	}
-	if got := strings.Join(names, ","); got != "check,lock,safety backup,stop,restore,counts,start,health,recall,epoch" {
+	if got := strings.Join(names, ","); got != "check,lock,safety backup,stop,restore,counts,start,health,recall,epoch,key" {
 		t.Errorf("steps %s", got)
 	}
 	if len(dk.calls) != 0 {

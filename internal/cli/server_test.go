@@ -195,6 +195,8 @@ var (
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
 	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
 	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
+	requireKey         atomic.Bool       // the fake checks the bearer key against acceptedKey
+	acceptedKey        atomic.Value      // the API key the fake server runs on (a string), set by compose up
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
@@ -234,12 +236,19 @@ func fakeHindsight(t *testing.T) (port int) {
 	docDeleteFails.Store(false)
 	epochDoc = ""
 	epochStatus.Store(0)
+	requireKey.Store(false)
+	acceptedKey.Store("")
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
 	docs := map[string]json.RawMessage{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if k, _ := acceptedKey.Load().(string); requireKey.Load() && r.Header.Get("Authorization") != "Bearer "+k {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"invalid API key"}`))
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if rest, ok := strings.CutPrefix(r.URL.Path, "/v1/default/banks/"); ok {

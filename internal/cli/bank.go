@@ -21,6 +21,9 @@ func newBankCmd(e *env) *cobra.Command {
 
 // applyBank runs bank apply and records the template hash in state.json.
 func applyBank(cmd *cobra.Command, d paths.Dirs, cfg config.Config, sec config.Secrets, force bool) (server.BankResult, error) {
+	if err := refuseWhileBusy(d); err != nil {
+		return server.BankResult{}, err
+	}
 	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second)
 	if err != nil {
 		return server.BankResult{}, blocked(err)

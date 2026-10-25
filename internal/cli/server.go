@@ -412,6 +412,15 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return e.emit("server stop", map[string]any{"project": cfg.Server.Project, "plan": true},
 					func() string { return "would stop the containers of project " + cfg.Server.Project + " (data kept)\n" })
 			}
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			unlock, err := serverLock(d, "server stop")
+			if err != nil {
+				return err
+			}
+			defer unlock()
 			if err := composeFor(cfg).Stop(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
@@ -646,8 +655,13 @@ func newServerLLMCmd(e *env) *cobra.Command {
 	return llm
 }
 
-// serverLock serialises commands that rewrite the compose project.
+// serverLock serialises commands that rewrite the compose project; none
+// runs while maintenance or a restore is in progress (restore takes the
+// lock itself).
 func serverLock(d paths.Dirs, command string) (func(), error) {
+	if err := refuseWhileBusy(d); err != nil {
+		return nil, err
+	}
 	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "server.lock"), command)
 	if err != nil {
 		return nil, &output.Error{Code: output.Blocked, Message: err.Error()}
