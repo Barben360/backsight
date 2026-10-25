@@ -170,7 +170,7 @@ func TestValidateIntegerBoundaries(t *testing.T) {
 		"recall.recall_min_chars":     {0, func(c *Config, v int) { c.Recall.RecallMinChars = v }},
 		"recall.reminder_min_chars":   {0, func(c *Config, v int) { c.Recall.ReminderMinChars = v }},
 		"recall.quiet_prompts":        {0, func(c *Config, v int) { c.Recall.QuietPrompts = v }},
-		"backup.keep_daily":           {0, func(c *Config, v int) { c.Backup.KeepDaily = v }},
+		"backup.keep_daily":           {1, func(c *Config, v int) { c.Backup.KeepDaily = v }}, // 0 would prune the backup just written
 		"client.retention_days":       {0, func(c *Config, v int) { c.Client.RetentionDays = v }},
 		"backup.keep_weekly":          {0, func(c *Config, v int) { c.Backup.KeepWeekly = v }},
 	}

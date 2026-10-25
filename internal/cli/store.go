@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func notesOutbox(d paths.Dirs) retain.Outbox {
@@ -93,7 +94,7 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		res.Warning = "the notes outbox is over 50 MB: the server has not accepted notes for a while"
 	}
 	machineID, _ := retain.MachineID(d.State)
-	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+	if state.MaintenanceHeld(d.MaintenanceLock()) {
 		res.Warning = "maintenance in progress: the note goes out after it"
 	} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
 		fctx, cancel := context.WithTimeout(ctx, storeFlushBudget)

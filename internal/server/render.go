@@ -108,10 +108,7 @@ func Render(cfg config.Config, sec config.Secrets, host string) (Files, error) {
 	if strings.Contains(bind, ":") { // IPv6: Compose wants [addr]:port
 		bind = "[" + bind + "]"
 	}
-	image := HindsightImage
-	if cfg.Server.Digest != "" {
-		image = "ghcr.io/vectorize-io/hindsight@" + cfg.Server.Digest
-	}
+	image := ImageFor(cfg)
 	var compose bytes.Buffer
 	if err := composeTmpl.Execute(&compose, map[string]any{"Project": Project, "Postgres": PostgresImage, "Hindsight": image,
 		"Bind": bind, "APIPort": apiPort, "UIPort": cfg.Server.UIPort}); err != nil {
@@ -259,3 +256,16 @@ func Redact(text string, sec config.Secrets) string {
 	}
 	return text
 }
+
+// ImageFor is the Hindsight image the install runs: the pinned one, or the
+// digest config sets.
+func ImageFor(cfg config.Config) string {
+	if cfg.Server.Digest != "" {
+		return "ghcr.io/vectorize-io/hindsight@" + cfg.Server.Digest
+	}
+	return HindsightImage
+}
+
+// EmbeddingModels are the models of the multilingual preset (the only one,
+// decision 0049): recorded in backups so a restore can tell them apart.
+const EmbeddingModels = "multilingual-e5-small (onnx, 384 dims) + cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"

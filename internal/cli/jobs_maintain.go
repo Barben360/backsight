@@ -70,7 +70,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				return finish()
 			}
 			defer func() { _ = l.Release() }()
-			if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+			if state.MaintenanceHeld(d.MaintenanceLock()) {
 				res.Status, res.Reason = "skipped", "maintenance in progress"
 				return finish()
 			}
@@ -82,6 +82,9 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 					res.Status, res.Backup = "partial", "failed: "+err.Error()
 				} else {
 					res.Backup = b.Path
+					if b.Skipped != "" {
+						res.Backup = "skipped: " + b.Skipped
+					}
 				}
 			}
 			// This run counts as maintain running: the snapshot must not

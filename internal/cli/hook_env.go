@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -108,8 +109,7 @@ func (h *hookEnv) updateSession(fn func(*session.State) error) {
 
 // maintenance: a maintenance lock is held; hooks only queue (SPEC §14).
 func (h *hookEnv) maintenance() bool {
-	_, err := os.Stat(h.dirs.MaintenanceLock())
-	return err == nil
+	return state.MaintenanceHeld(h.dirs.MaintenanceLock())
 }
 
 // safeProject renders a project name that came from the server or a tool

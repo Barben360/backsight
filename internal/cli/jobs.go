@@ -77,7 +77,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				return finish(nil)
 			}
 			defer func() { _ = l.Release() }()
-			if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+			if state.MaintenanceHeld(d.MaintenanceLock()) {
 				res.Status, res.Reason = "skipped", "maintenance in progress"
 				return finish(nil)
 			}

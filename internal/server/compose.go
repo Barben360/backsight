@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,34 @@ type DockerRunner struct{}
 
 func (DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+}
+
+// StdoutRunner can return a command's stdout alone, stderr only in the
+// error: a value read from output must not catch a warning (Compose prints
+// them on stderr, e.g. an obsolete `version:` key in an override).
+type StdoutRunner interface {
+	RunStdout(ctx context.Context, args ...string) ([]byte, error)
+}
+
+func (DockerRunner) RunStdout(ctx context.Context, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+	}
+	return out, err
+}
+
+// stdout runs args and returns their stdout alone when the runner can.
+func (c Compose) stdout(ctx context.Context, sub ...string) ([]byte, error) {
+	if r, ok := c.Runner.(StdoutRunner); ok {
+		out, err := r.RunStdout(ctx, c.args(sub...)...)
+		if err != nil {
+			return out, fmt.Errorf("docker compose %s: %w", strings.Join(sub, " "), err)
+		}
+		return out, nil
+	}
+	return c.run(ctx, sub...)
 }
 
 // Compose drives the backsight compose project in Dir.

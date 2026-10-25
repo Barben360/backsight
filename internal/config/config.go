@@ -285,7 +285,7 @@ func (c Config) Validate() error {
 		bad("hooks.outbox_warn_mb", "(%d) must not exceed hooks.outbox_max_mb (%d)", c.Hooks.OutboxWarnMB, c.Hooks.OutboxMaxMB)
 	}
 	atLeast("client.retention_days", c.Client.RetentionDays, 0)
-	atLeast("backup.keep_daily", c.Backup.KeepDaily, 0)
+	atLeast("backup.keep_daily", c.Backup.KeepDaily, 1) // 0 would prune the backup just written
 	atLeast("backup.keep_weekly", c.Backup.KeepWeekly, 0)
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
 	return errors.Join(errs...)

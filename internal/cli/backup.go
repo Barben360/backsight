@@ -54,10 +54,21 @@ func backupKeys(d paths.Dirs, cfg config.Config, sec config.Secrets, create bool
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("backup_identity", id.String()) }); err != nil {
+		// Under the maintenance lock (the caller holds it): two first runs
+		// cannot both generate. A key set meanwhile is kept, never replaced.
+		if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error {
+			if s.BackupIdentity == "" {
+				return s.Set("backup_identity", id.String())
+			}
+			return nil
+		}); err != nil {
 			return nil, nil, nil, err
 		}
-		sec.BackupIdentity = id.String()
+		fresh, err := config.LoadSecrets(d.SecretsFile())
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sec.BackupIdentity = fresh.BackupIdentity
 	}
 	if sec.BackupIdentity != "" {
 		id, err := agelib.ParseX25519Identity(sec.BackupIdentity)
@@ -77,6 +88,8 @@ func backupKeys(d paths.Dirs, cfg config.Config, sec config.Secrets, create bool
 }
 
 type backupCreateResult struct {
+	Skipped  string           `json:"skipped,omitempty"` // why no backup was made here
+	Warnings []string         `json:"warnings,omitempty"`
 	Path     string           `json:"path"`
 	Bytes    int64            `json:"bytes"`
 	Counts   map[string]int64 `json:"counts"`
@@ -84,8 +97,25 @@ type backupCreateResult struct {
 	Duration int              `json:"ms"`
 }
 
-// createBackup takes the maintenance lock for the dump (hooks queue, jobs
-// skip), writes the archive and prunes old ones.
+// acquireMaintenance takes the maintenance lock, breaking one left by a dead
+// owner (a crash mid-backup), which is reported.
+func acquireMaintenance(d paths.Dirs, command string) (*state.Lock, string, error) {
+	l, err := state.TryAcquire(d.MaintenanceLock(), command)
+	var held *state.HeldError
+	if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
+		l, err = state.TryAcquire(d.MaintenanceLock(), command)
+		if err == nil {
+			return l, "a stale maintenance lock (" + held.Owner.Command + ", process gone) was removed", nil
+		}
+	}
+	if err != nil {
+		return nil, "", &output.Error{Code: output.Blocked, Message: "maintenance in progress: " + err.Error()}
+	}
+	return l, "", nil
+}
+
+// createBackup holds the maintenance lock for the database work only (hooks
+// queue, jobs skip), then encrypts, writes the archive and prunes old ones.
 func createBackup(ctx context.Context) (backupCreateResult, error) {
 	start := time.Now()
 	var res backupCreateResult
@@ -93,20 +123,48 @@ func createBackup(ctx context.Context) (backupCreateResult, error) {
 	if err != nil {
 		return res, err
 	}
+	if cfg.Server.Mode != "local" {
+		res.Skipped = "the server is remote: back it up on its host (backsight backup create there)"
+		return res, nil
+	}
 	d, _, err := machine()
 	if err != nil {
 		return res, err
 	}
+	// The bank config is read before the lock: a slow server must not
+	// stretch the window where hooks only queue.
+	var bankConfig []byte
+	if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second); err == nil {
+		bc, err := cl.BankConfig(ctx, cfg.Server.Bank)
+		if err == nil {
+			bankConfig, _ = json.MarshalIndent(bc, "", "  ")
+		} else {
+			res.Warnings = append(res.Warnings, "bank config not saved: "+err.Error())
+		}
+	}
+	l, note, err := acquireMaintenance(d, "backup create")
+	if err != nil {
+		return res, err
+	}
+	if note != "" {
+		res.Warnings = append(res.Warnings, note)
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			_ = l.Release()
+		}
+	}
+	defer release()
 	recipients, lines, _, err := backupKeys(d, cfg, sec, true)
 	if err != nil {
 		return res, err
 	}
-	l, err := state.TryAcquire(d.MaintenanceLock(), "backup create")
-	if err != nil {
-		return res, &output.Error{Code: output.Blocked, Message: "maintenance in progress: " + err.Error()}
-	}
-	defer func() { _ = l.Release() }()
 	extras := map[string][]byte{}
+	if bankConfig != nil {
+		extras["bank-config.json"] = bankConfig
+	}
 	for name, p := range map[string]string{"config.toml": d.ConfigFile(), "secrets.toml": d.SecretsFile(), "state.json": d.StateFile(),
 		"compose.override.yaml": filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")} {
 		if raw, err := os.ReadFile(p); err == nil {
@@ -115,20 +173,13 @@ func createBackup(ctx context.Context) (backupCreateResult, error) {
 			return res, blocked(err)
 		}
 	}
-	if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second); err == nil {
-		if bc, err := cl.BankConfig(ctx, cfg.Server.Bank); err == nil {
-			if raw, err := json.MarshalIndent(bc, "", "  "); err == nil {
-				extras["bank-config.json"] = raw
-			}
-		}
-	}
 	dir := cfg.Backup.Dir
 	if dir == "" {
 		dir = filepath.Join(d.Data, "backups")
 	}
-	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, HindsightImage: server.HindsightImage, PostgresImage: server.PostgresImage,
-		Embeddings: cfg.Embeddings.Preset, Bank: cfg.Server.Bank, Recipients: lines}
-	path, m, err := backup.Create(ctx, server.DB{Compose: composeFor(cfg)}, dir, m, extras, recipients)
+	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, HindsightImage: server.ImageFor(cfg), PostgresImage: server.PostgresImage,
+		Embeddings: cfg.Embeddings.Preset + ": " + server.EmbeddingModels, Bank: cfg.Server.Bank, Recipients: lines}
+	path, m, err := backup.Create(ctx, server.DB{Compose: composeFor(cfg)}, dir, filepath.Join(d.State, "staging"), m, extras, recipients, release)
 	if err != nil {
 		return res, blocked(err)
 	}
@@ -154,7 +205,13 @@ func newBackupCreateCmd(e *env) *cobra.Command {
 				return err
 			}
 			return e.emit("backup create", res, func() string {
+				if res.Skipped != "" {
+					return "no backup: " + res.Skipped + "\n"
+				}
 				s := fmt.Sprintf("backup %s (%d bytes, %v) in %d ms\n", res.Path, res.Bytes, res.Counts, res.Duration)
+				for _, w := range res.Warnings {
+					s += "warning: " + w + "\n"
+				}
 				for _, p := range res.Pruned {
 					s += "pruned " + p + "\n"
 				}
@@ -194,12 +251,18 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 			} else if _, _, ids, err = backupKeys(d, cfg, sec, false); err != nil {
 				return err
 			}
-			work, err := os.MkdirTemp("", "backsight-verify-")
+			// Under the state directory (0700), not $TMPDIR; only the
+			// manifest and the dump are written: the archive's secrets
+			// and config are not needed to verify.
+			if err := os.MkdirAll(filepath.Join(d.State, "staging"), 0o700); err != nil {
+				return blocked(err)
+			}
+			work, err := os.MkdirTemp(filepath.Join(d.State, "staging"), "verify-")
 			if err != nil {
 				return blocked(err)
 			}
 			defer func() { _ = os.RemoveAll(work) }()
-			m, err := backup.Open(args[0], ids, work)
+			m, err := backup.Open(args[0], ids, work, func(string) bool { return false })
 			if err != nil {
 				return blocked(err)
 			}
@@ -282,6 +345,7 @@ func newBackupListCmd(e *env) *cobra.Command {
 
 func newBackupIdentityCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "identity", Short: "The age identity that decrypts this install's backups", Args: cobra.NoArgs}
+	importCmd := newBackupIdentityImportCmd(e)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "show",
 		Short: "Print the backup identity, to keep somewhere else (terminal only)",
@@ -301,17 +365,29 @@ func newBackupIdentityCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, _, ids, err := backupKeys(d, cfg, sec, true); err != nil || len(ids) == 0 {
-				if err == nil {
-					err = &output.Error{Code: output.NeedsUser, Message: "backups go to backup.recipient: its private key is yours, not on this machine"}
-				}
+			if cfg.Backup.Recipient != "" {
+				return &output.Error{Code: output.NeedsUser, Message: "backups are encrypted to backup.recipient: the key that reads them is yours, not on this machine"}
+			}
+			l, _, err := acquireMaintenance(d, "backup identity show")
+			if err != nil {
+				return err
+			}
+			_, _, ids, err := backupKeys(d, cfg, sec, true)
+			_ = l.Release()
+			if err != nil || len(ids) == 0 {
 				return err
 			}
 			sec, _ = config.LoadSecrets(d.SecretsFile())
 			fmt.Fprintf(e.stdout, "%s\nKeep it somewhere safe and apart from this machine: without it the backups cannot be read.\n", sec.BackupIdentity)
 			return nil
 		},
-	}, &cobra.Command{
+	}, importCmd)
+	return cmd
+}
+
+func newBackupIdentityImportCmd(e *env) *cobra.Command {
+	var force bool
+	c := &cobra.Command{
 		Use:   "import [file|-]",
 		Short: "Store a backup identity (age) in secrets.toml, from a file or stdin",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
@@ -338,11 +414,22 @@ func newBackupIdentityCmd(e *env) *cobra.Command {
 			if _, err := agelib.ParseX25519Identity(key); err != nil {
 				return &output.Error{Code: output.Usage, Message: "no age identity (AGE-SECRET-KEY-…) in the input"}
 			}
-			if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("backup_identity", key) }); err != nil {
+			err = config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error {
+				if s.BackupIdentity != "" && s.BackupIdentity != key && !force {
+					return &output.Error{Code: output.Usage, Message: "another backup identity is set: the backups made with it could no longer be read here. Give --force to replace it (keep a copy of the old one)"}
+				}
+				return s.Set("backup_identity", key)
+			})
+			var oe *output.Error
+			if errors.As(err, &oe) {
+				return oe
+			}
+			if err != nil {
 				return blocked(err)
 			}
 			return e.emit("backup identity import", map[string]bool{"imported": true}, func() string { return "backup identity stored in secrets.toml\n" })
 		},
-	})
-	return cmd
+	}
+	c.Flags().BoolVar(&force, "force", false, "replace a different identity already set")
+	return c
 }

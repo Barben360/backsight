@@ -53,8 +53,9 @@ var Tables = []string{"memory_units", "documents", "mental_models"}
 type DB interface {
 	// Query runs one SQL statement and returns its single value.
 	Query(ctx context.Context, sql string) (string, error)
-	// Dump writes a custom-format pg_dump to dst and checks it lists.
-	Dump(ctx context.Context, dst string) error
+	// Dump writes a custom-format pg_dump to dst, checks it lists, and
+	// returns the rows of tables counted in the dump itself.
+	Dump(ctx context.Context, dst string, tables []string) (map[string]int64, error)
 }
 
 const prefix, suffix = "backsight-", ".tar.gz.age"
@@ -89,14 +90,22 @@ func Recipients(lines []string) ([]age.Recipient, error) {
 }
 
 // Create dumps the database and writes the encrypted archive and its
-// sidecar into dir. m carries the fields the caller knows (versions,
-// images, bank, recipients); Create fills the rest. extras are the files
-// stored beside the dump (config, secrets, state…), by archive name.
-func Create(ctx context.Context, db DB, dir string, m Manifest, extras map[string][]byte, recipients []age.Recipient) (string, Manifest, error) {
+// sidecar into dir. The clear dump is staged under staging (the state
+// directory, 0700), never in dir: dir may be synced elsewhere, and only
+// ciphertext lands there. afterDump runs once the database work is done
+// (the caller releases the maintenance lock: encryption needs no lock). m
+// carries the fields the caller knows (versions, images, bank, recipients);
+// Create fills the rest. extras are the files stored beside the dump.
+func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras map[string][]byte, recipients []age.Recipient, afterDump func()) (string, Manifest, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", m, err
 	}
-	work, err := os.MkdirTemp(dir, ".work-")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		return "", m, err
+	}
+	removeStale(dir, ".work-")      // left by older versions, which staged in dir
+	removeStale(staging, "backup-") // left by a crash
+	work, err := os.MkdirTemp(staging, "backup-")
 	if err != nil {
 		return "", m, err
 	}
@@ -108,21 +117,12 @@ func Create(ctx context.Context, db DB, dir string, m Manifest, extras map[strin
 	if m.PGVector, err = db.Query(ctx, "select extversion from pg_extension where extname = 'vector'"); err != nil {
 		return "", m, fmt.Errorf("reading pgvector's version: %w", err)
 	}
-	m.Counts = map[string]int64{}
-	for _, t := range Tables {
-		v, err := db.Query(ctx, "select count(*) from "+t)
-		if err != nil {
-			return "", m, fmt.Errorf("counting %s: %w", t, err)
-		}
-		var n int64
-		if _, err := fmt.Sscan(v, &n); err != nil {
-			return "", m, fmt.Errorf("counting %s: %q", t, v)
-		}
-		m.Counts[t] = n
-	}
 	dump := filepath.Join(work, "db.dump")
-	if err := db.Dump(ctx, dump); err != nil {
+	if m.Counts, err = db.Dump(ctx, dump, Tables); err != nil {
 		return "", m, fmt.Errorf("dumping the database: %w", err)
+	}
+	if afterDump != nil {
+		afterDump()
 	}
 	if m.DumpSHA256, m.DumpBytes, err = fileSum(dump); err != nil {
 		return "", m, err
@@ -139,7 +139,8 @@ func Create(ctx context.Context, db DB, dir string, m Manifest, extras map[strin
 	}
 
 	final := filepath.Join(dir, Name(m.CreatedAt))
-	tmp := filepath.Join(work, "archive")
+	tmp := final + ".partial" // ciphertext only, renamed when complete
+	defer func() { _ = os.Remove(tmp) }()
 	if err := writeArchive(tmp, recipients, man, dump, names, extras); err != nil {
 		return "", m, err
 	}
@@ -150,6 +151,17 @@ func Create(ctx context.Context, db DB, dir string, m Manifest, extras map[strin
 		return final, m, err
 	}
 	return final, m, nil
+}
+
+// removeStale removes entries of dir starting with prefix: work left by a
+// crash.
+func removeStale(dir, prefix string) {
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), prefix) && e.IsDir() {
+			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 func fileSum(path string) (string, int64, error) {
@@ -177,7 +189,7 @@ func writeArchive(path string, recipients []age.Recipient, manifest []byte, dump
 	if err != nil {
 		return err
 	}
-	gz := gzip.NewWriter(enc)
+	gz, _ := gzip.NewWriterLevel(enc, gzip.BestSpeed) // a -Fc dump is compressed already
 	tw := tar.NewWriter(gz)
 	add := func(name string, size int64, r io.Reader) error {
 		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: size, ModTime: time.Now()}); err != nil {
@@ -216,9 +228,12 @@ func writeArchive(path string, recipients []age.Recipient, manifest []byte, dump
 	return f.Sync()
 }
 
-// Open decrypts the archive at path into dir and checks its dump against
-// the manifest; it returns the manifest.
-func Open(path string, identities []age.Identity, dir string) (Manifest, error) {
+// Open decrypts the archive at path into dir, keeping the entries want
+// accepts (nil: all; the manifest and the dump always), checks the format
+// and the dump against the manifest, and returns the manifest. An archive
+// is only as trusted as whoever holds the public recipient: age gives
+// secrecy, not origin (restore, M5, treats its config as untrusted).
+func Open(path string, identities []age.Identity, dir string, want func(name string) bool) (Manifest, error) {
 	var m Manifest
 	f, err := os.Open(path)
 	if err != nil {
@@ -243,8 +258,11 @@ func Open(path string, identities []age.Identity, dir string) (Manifest, error) 
 			return m, err
 		}
 		name := filepath.Base(h.Name) // flat archive: no paths
-		if name != h.Name || name == "." || name == ".." {
+		if name != h.Name || name == "." || name == ".." || h.Typeflag != tar.TypeReg {
 			return m, fmt.Errorf("unexpected entry %q", h.Name)
+		}
+		if name != "manifest.json" && name != "db.dump" && want != nil && !want(name) {
+			continue // read through, not written
 		}
 		out, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
@@ -265,6 +283,9 @@ func Open(path string, identities []age.Identity, dir string) (Manifest, error) 
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return m, err
 	}
+	if m.Format != Format {
+		return m, fmt.Errorf("archive format %d: this binary reads format %d", m.Format, Format)
+	}
 	sum, _, err := fileSum(filepath.Join(dir, "db.dump"))
 	if err != nil {
 		return m, err
@@ -280,6 +301,9 @@ type Entry struct {
 	Path     string   `json:"path"`
 	Bytes    int64    `json:"bytes"`
 	Manifest Manifest `json:"manifest"`
+	// Ours: written here, with its sidecar. Prune touches only these; a
+	// copy brought from elsewhere is the user's.
+	Ours bool `json:"-"`
 }
 
 // List reads the backups in dir from their sidecars, newest first.
@@ -305,6 +329,7 @@ func List(dir string) ([]Entry, error) {
 		if raw, err := os.ReadFile(p + ".json"); err == nil {
 			_ = json.Unmarshal(raw, &en.Manifest)
 		}
+		en.Ours = en.Manifest.Format > 0
 		if en.Manifest.CreatedAt.IsZero() {
 			if t, err := time.Parse("20060102T150405Z", strings.TrimSuffix(strings.TrimPrefix(e.Name(), prefix), suffix)); err == nil {
 				en.Manifest.CreatedAt = t
@@ -327,6 +352,9 @@ func Prune(dir string, keepDaily, keepWeekly int) ([]string, error) {
 	keep := map[string]bool{}
 	days, weeks := map[string]bool{}, map[string]bool{}
 	for _, e := range list { // newest first
+		if !e.Ours {
+			continue
+		}
 		t := e.Manifest.CreatedAt.UTC()
 		day := t.Format("2006-01-02")
 		y, w := t.ISOWeek()
@@ -340,7 +368,7 @@ func Prune(dir string, keepDaily, keepWeekly int) ([]string, error) {
 	}
 	var removed []string
 	for _, e := range list {
-		if keep[e.Path] {
+		if keep[e.Path] || !e.Ours {
 			continue
 		}
 		if err := os.Remove(e.Path); err != nil && !errors.Is(err, os.ErrNotExist) {

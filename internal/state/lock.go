@@ -73,6 +73,14 @@ func TryAcquire(path, command string) (*Lock, error) {
 	return &Lock{path: path, owner: owner}, nil
 }
 
+// MaintenanceHeld reports whether a live process holds the maintenance lock
+// at path. A lock left by a dead owner (a crash mid-backup) does not stop
+// the hooks and jobs: doctor reports it, and the next backup breaks it.
+func MaintenanceHeld(path string) bool {
+	h := Inspect(path)
+	return h != nil && !h.Stale
+}
+
 // Inspect reports who holds the lock at path, nil when nobody does; it
 // never takes the lock (a check must not look like maintenance to others).
 func Inspect(path string) *HeldError {

@@ -20,26 +20,49 @@ type DB struct{ Compose Compose }
 
 const dbUser, dbName = "hindsight", "hindsight"
 
-// Query runs one statement and returns its single value.
+// cleanupTimeout bounds a cleanup run after a failure or a cancel.
+const cleanupTimeout = 20 * time.Second
+
+// Query runs one statement and returns its single value, from stdout only.
 func (d DB) Query(ctx context.Context, sql string) (string, error) {
-	out, err := d.Compose.Exec(ctx, "db", "psql", "-U", dbUser, "-d", dbName, "-At", "-v", "ON_ERROR_STOP=1", "-c", sql)
+	out, err := d.Compose.stdout(ctx, "exec", "-T", "db", "psql", "-U", dbUser, "-d", dbName, "-At", "-v", "ON_ERROR_STOP=1", "-c", sql)
 	return strings.TrimSpace(string(out)), err
 }
 
-// Dump writes a custom-format dump to dst: dumped to a file inside the
-// container (binary data never goes through a pipe that mixes stderr),
-// listed by pg_restore as a check, copied out, removed.
-func (d DB) Dump(ctx context.Context, dst string) error {
+// Dump writes a custom-format dump to dst and returns the rows of tables
+// counted from the dump itself (one snapshot: rows written by the server
+// meanwhile cannot make verify disagree). The dump is made into a file
+// inside the container (binary data never goes through a pipe that mixes
+// stderr), listed by pg_restore as a check, counted, copied out, removed.
+func (d DB) Dump(ctx context.Context, dst string, tables []string) (map[string]int64, error) {
 	tmp := "/tmp/backsight-" + randHex() + ".dump"
-	defer func() { _, _ = d.Compose.Exec(context.Background(), "db", "rm", "-f", tmp) }()
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = d.Compose.Exec(cctx, "db", "rm", "-f", tmp)
+	}()
 	if _, err := d.Compose.Exec(ctx, "db", "pg_dump", "-U", dbUser, "-d", dbName, "-Fc", "-f", tmp); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := d.Compose.Exec(ctx, "db", "pg_restore", "--list", tmp); err != nil {
-		return fmt.Errorf("the dump does not list: %w", err)
+		return nil, fmt.Errorf("the dump does not list: %w", err)
+	}
+	counts := map[string]int64{}
+	for _, t := range tables {
+		// The table's COPY block, from the dump: rows between "COPY …" and "\.".
+		script := "pg_restore --data-only -t " + t + " -f - " + tmp + ` | awk '/^COPY /{c=1;next} /^\\\.$/{c=0} c{n++} END{print n+0}'`
+		out, err := d.Compose.stdout(ctx, "exec", "-T", "db", "sh", "-c", script)
+		if err != nil {
+			return nil, fmt.Errorf("counting %s in the dump: %w", t, err)
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("counting %s in the dump: %q", t, out)
+		}
+		counts[t] = n
 	}
 	_, err := d.Compose.run(ctx, "cp", "db:"+tmp, dst)
-	return err
+	return counts, err
 }
 
 func randHex() string {
@@ -49,20 +72,25 @@ func randHex() string {
 }
 
 // RestoreCounts restores a dump into a throwaway Postgres container (the
-// pinned image, no network, removed afterwards) and counts the rows of
-// tables: what `backup verify` compares with the manifest.
+// pinned image, no network, the server's shared memory, removed afterwards
+// whatever happens) and counts the rows of tables: what `backup verify`
+// compares with the manifest.
 func RestoreCounts(ctx context.Context, r Runner, dump string, tables []string) (map[string]int64, error) {
 	name := "backsight-verify-" + randHex()
-	if out, err := r.Run(ctx, "run", "-d", "--network", "none", "--name", name, "-e", "POSTGRES_USER="+dbUser, "-e", "POSTGRES_DB="+dbName,
+	defer func() { // registered first: a cancel during run must remove it too
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = r.Run(cctx, "rm", "-f", "-v", name)
+	}()
+	if out, err := r.Run(ctx, "run", "-d", "--network", "none", "--shm-size", "1g", "--name", name, "-e", "POSTGRES_USER="+dbUser, "-e", "POSTGRES_DB="+dbName,
 		"-e", "POSTGRES_PASSWORD=verify-"+randHex(), PostgresImage); err != nil {
 		return nil, fmt.Errorf("starting a throwaway database: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	defer func() { _, _ = r.Run(context.Background(), "rm", "-f", "-v", name) }()
 	ready := false
-	for i := 0; i < 60 && !ready; i++ {
-		// pg_isready answers during the image's init run too: a query
-		// against the database proves the final server is up.
-		if _, err := r.Run(ctx, "exec", name, "psql", "-U", dbUser, "-d", dbName, "-At", "-c", "select 1"); err == nil {
+	for i := 0; i < 90 && !ready; i++ {
+		// Over TCP: the image's temporary init server listens on no port,
+		// so this answers only once the final server is up.
+		if _, err := r.Run(ctx, "exec", name, "psql", "-h", "127.0.0.1", "-U", dbUser, "-d", dbName, "-At", "-c", "select 1"); err == nil {
 			ready = true
 			break
 		}

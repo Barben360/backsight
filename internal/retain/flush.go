@@ -106,7 +106,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	res := Result{Session: sid, Transcript: path}
 	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }
 
-	if _, err := os.Stat(f.Dirs.MaintenanceLock()); err == nil {
+	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return fail(Maintenance, "maintenance in progress")
 	}
 	unlock, err := f.lockSession(sid)
