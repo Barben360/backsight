@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/session"
@@ -145,5 +146,52 @@ func TestPauseResumeRecordAStretch(t *testing.T) {
 	st, err := sessions(home).Load("s1")
 	if err != nil || st.Paused || len(st.PausedSpans) != 1 || st.PausedSpans[0].To.IsZero() {
 		t.Errorf("%+v %v", st, err)
+	}
+}
+
+// Outside a repository the project is the directory: in the home directory,
+// or above it, pause --project would stop all recording, so it refuses.
+func TestPauseProjectRefusesTheHomeDirectory(t *testing.T) {
+	home := devInstall(t, true)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	before, _ := os.ReadFile(cfg)
+	for _, dir := range []string{home, filepath.Dir(home)} {
+		t.Chdir(dir)
+		code, _, errOut := run(t, "pause", "--project")
+		if code != output.Usage || !strings.Contains(errOut, "home directory") {
+			t.Errorf("%s: exit %d %q", dir, code, errOut)
+		}
+	}
+	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
+		t.Error("config written")
+	}
+	sub := filepath.Join(home, "notes")
+	_ = os.MkdirAll(sub, 0o700)
+	t.Chdir(sub)
+	if code, _, _ := run(t, "pause", "--project"); code != output.OK {
+		t.Errorf("a directory under home: exit %d", code)
+	}
+}
+
+// "Don't record this: …" is itself private: the stretch starts at the prompt
+// that asked for the pause, not when the command ran.
+func TestPauseStartsAtTheAskingPrompt(t *testing.T) {
+	home := hookHome(t)
+	withClock(t, time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC))
+	prompt(t, home, "s1", "Ne retiens pas ça : le code du coffre est 4471, pause la mémoire stp.")
+	withClock(t, time.Date(2026, 10, 25, 9, 0, 40, 0, time.UTC))
+	t.Setenv("BACKSIGHT_SESSION", "s1")
+	run(t, "pause")
+	st, _ := sessions(home).Load("s1")
+	if len(st.PausedSpans) != 1 || !st.PausedSpans[0].From.Before(time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("%+v", st.PausedSpans)
+	}
+	// a prompt long ago does not pull the stretch back
+	withClock(t, time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC))
+	run(t, "resume")
+	run(t, "pause")
+	st, _ = sessions(home).Load("s1")
+	if got := st.PausedSpans[1].From; !got.Equal(time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC)) {
+		t.Errorf("second stretch from %v", got)
 	}
 }

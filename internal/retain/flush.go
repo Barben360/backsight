@@ -257,14 +257,11 @@ type runKey struct {
 // (a session can cd into an excluded path mid-way). It stops at the first
 // failure, with the cursor after the last run done.
 func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, now time.Time) Result {
-	paused, why, spans := f.pauseState(sid)
+	pauses := f.pauses(sid)
 	keys := map[string]runKey{}
 	key := func(r transcript.Record) runKey {
-		switch {
-		case paused:
+		if out, why := pauses(r); out {
 			return runKey{optOut: true, reason: why}
-		case session.InSpans(spans, r.Timestamp):
-			return runKey{optOut: true, reason: "typed while the session was paused"}
 		}
 		cwd := r.CWD
 		if k, ok := keys[cwd]; ok {
@@ -290,6 +287,14 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		send = send[n:]
 		last := run[len(run)-1]
 		if k.optOut {
+			// Handled for good: a fork's copy of these records skips them
+			// with the ones already sent (the fork guard's leading run),
+			// instead of sending them or stopping its run there.
+			handled := make([]string, 0, len(run))
+			for _, r := range run {
+				handled = append(handled, r.UUID)
+			}
+			_ = f.Index.Add(handled...)
 			cur.Offset, cur.LastUUID, cur.LastTurnAt = last.End, last.UUID, last.Timestamp
 			if status != Sent {
 				status, detail = OptedOut, k.reason
@@ -406,11 +411,50 @@ func (f *Flusher) quarantine(res Result, cur *Cursor, why string) Result {
 	return f.save(res, *cur, Quarantined, why)
 }
 
-// paused reads the session's pause flag; an unreadable file counts as
-// paused (fail closed).
-func (f *Flusher) paused(sid string) (bool, string) {
-	p, why, _ := f.pauseState(sid)
-	return p, why
+// pauses tells, per record, whether a pause keeps it out. A record is
+// judged by its own session's pause as well as the file's: a fork or a
+// resumed session copies its parent's records, which keep the parent's
+// session id, and a stretch the parent paused must stay out of the copy.
+func (f *Flusher) pauses(fileSID string) func(transcript.Record) (bool, string) {
+	type state struct {
+		whole bool
+		why   string
+		spans []session.Span
+	}
+	cache := map[string]state{}
+	get := func(sid string) state {
+		if st, ok := cache[sid]; ok {
+			return st
+		}
+		paused, why, spans := f.pauseState(sid)
+		st := state{wholePause(paused, spans), why, spans}
+		cache[sid] = st
+		return st
+	}
+	return func(r transcript.Record) (bool, string) {
+		sids := []string{fileSID}
+		if r.SessionID != "" && r.SessionID != fileSID && session.ValidID(r.SessionID) {
+			sids = append(sids, r.SessionID)
+		}
+		for _, sid := range sids {
+			st := get(sid)
+			switch {
+			case st.whole:
+				return true, st.why
+			case session.InSpans(st.spans, r.Timestamp):
+				return true, "typed while the session was paused"
+			}
+		}
+		return false, ""
+	}
+}
+
+// wholePause: a paused session with no open stretch (a state written before
+// stretches existed, or unreadable) keeps every record out. With an open
+// stretch, only the records typed after the pause are out: the turns before
+// it are sent as usual.
+func wholePause(paused bool, spans []session.Span) bool {
+	return paused && (len(spans) == 0 || !spans[len(spans)-1].To.IsZero())
 }
 
 // pauseState is the pause flag and the paused stretches of the session:

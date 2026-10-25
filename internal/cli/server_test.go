@@ -190,6 +190,9 @@ var (
 	recentHasEventTime atomic.Bool       // memories/list answers time_field=mentioned_at too
 	mentalModels       map[string]string // id → mental model JSON
 	mentalCalls        []string          // POST/DELETE on mental models, with the body
+	mentalGetDelay     time.Duration     // a slow page read
+	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
+	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
 	memories           map[string]string
 	projectEntities    map[string]string
 	retainedTags       []string
@@ -222,7 +225,9 @@ func fakeHindsight(t *testing.T) (port int) {
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
 	recentHasEventTime.Store(false)
-	mentalModels, mentalCalls = map[string]string{}, nil
+	mentalModels, mentalCalls, mentalGetDelay = map[string]string{}, nil, 0
+	mentalCreateStatus.Store(0)
+	docDeleteFails.Store(false)
 	var mu sync.Mutex
 	banks := map[string]bool{}
 	overrides := map[string]json.RawMessage{}
@@ -313,12 +318,22 @@ func fakeHindsight(t *testing.T) (port int) {
 				}
 				_, _ = w.Write([]byte(`{"items":[` + strings.Join(items, ",") + `]}`))
 			case r.Method == http.MethodGet:
+				if mentalGetDelay > 0 {
+					select {
+					case <-time.After(mentalGetDelay):
+					case <-r.Context().Done():
+						return
+					}
+				}
 				m, ok := mentalModels[id]
 				if !ok {
 					w.WriteHeader(http.StatusNotFound)
 					return
 				}
 				_, _ = w.Write([]byte(m))
+			case r.Method == http.MethodPost && mentalCreateStatus.Load() != 0:
+				mentalCalls = append(mentalCalls, r.Method+" "+id+" "+string(body))
+				w.WriteHeader(int(mentalCreateStatus.Load()))
 			default:
 				mentalCalls = append(mentalCalls, r.Method+" "+id+" "+string(body))
 				if r.Method == http.MethodDelete {
@@ -326,6 +341,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				}
 				_, _ = w.Write([]byte(`{"operation_id":"op1"}`))
 			}
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && docDeleteFails.Load():
+			w.WriteHeader(http.StatusInternalServerError)
 		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
 			body, _ := io.ReadAll(r.Body)
 			// Strict like Hindsight 1.1.0: unknown memories are 404 and an

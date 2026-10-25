@@ -42,6 +42,7 @@ type forgetResult struct {
 	Sources     []string   `json:"sources,omitempty"`
 	Documents   []purgeDoc `json:"documents,omitempty"`
 	Undeletable []string   `json:"undeletable,omitempty"` // facts with no document: retired, kept in Hindsight's archive
+	Pages       []string   `json:"pages,omitempty"`       // briefing pages deleted (they may quote the text; rewritten at the next session)
 	Note        string     `json:"note,omitempty"`
 }
 
@@ -187,13 +188,41 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 			return res, fmt.Errorf("retiring %s: %w", f.ID, err)
 		}
 	}
-	for _, d := range res.Documents {
+	for i, d := range res.Documents {
 		if err := cl.DeleteDocument(ctx, bank, d.ID); err != nil {
-			return res, fmt.Errorf("deleting document %s: %w", d.ID, err)
+			// The observation may be gone already (its facts were cleared):
+			// say what is left and how to finish.
+			left := make([]string, 0, len(res.Documents)-i)
+			for _, r := range res.Documents[i:] {
+				left = append(left, r.ID)
+			}
+			return res, fmt.Errorf("deleting document %s: %w; documents left: %s (rerun on one of the source facts: backsight forget <fact id> --purge)",
+				d.ID, err, strings.Join(left, ", "))
 		}
 	}
+	// A briefing page (decision 0060) may quote the purged text, and so may
+	// its history: deleting the page drops both; the next session rewrites it.
+	pages := map[string]bool{}
+	for _, f := range append([]hindsight.MemoryDetail{m}, facts...) {
+		for _, t := range f.Tags {
+			if p, ok := strings.CutPrefix(t, "project:"); ok {
+				pages[briefingModelID(p)] = true
+			}
+		}
+	}
+	for id := range pages {
+		var apiErr *hindsight.APIError
+		switch err := cl.DeleteMentalModel(ctx, bank, id); {
+		case err == nil:
+			res.Pages = append(res.Pages, id)
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		default:
+			return res, fmt.Errorf("deleting briefing page %s: %w", id, err)
+		}
+	}
+	sort.Strings(res.Pages)
 	res.Action = "purged"
-	res.Note = "backups taken before now still hold it (backups come with M5): delete or re-key them if the text was a secret"
+	res.Note = "backups taken before now still hold it (backups come with M4): delete or re-key them if the text was a secret"
 	if len(res.Undeletable) > 0 {
 		res.Action = "partly_purged"
 		res.Note = "the facts with no document are retired but stay in Hindsight's archive (no API deletes them); " + res.Note
@@ -232,6 +261,9 @@ func forgetText(r forgetResult) string {
 	}
 	if len(r.Undeletable) > 0 {
 		fmt.Fprintf(&b, "not deletable (no document, retired only): %s\n", strings.Join(r.Undeletable, ", "))
+	}
+	for _, p := range r.Pages {
+		fmt.Fprintf(&b, "- briefing page %s (rewritten at the next session)\n", p)
 	}
 	if r.Note != "" {
 		b.WriteString(r.Note + "\n")
@@ -278,13 +310,31 @@ func newMemoryCmd(e *env) *cobra.Command {
 					return blocked(err)
 				}
 			}
+			// Briefing pages are server-written from the memories: a secret
+			// can be quoted there (forget --purge on a source deletes them).
+			models, err := cl.MentalModels(cmd.Context(), bank)
+			if err != nil {
+				return blocked(err)
+			}
+			for _, m := range models {
+				if !strings.HasPrefix(m.ID, briefingModelPrefix) {
+					continue
+				}
+				if red, kinds := redact.Text(m.Content); len(kinds) > 0 {
+					findings = append(findings, scanFinding{ID: m.ID, Type: "briefing page", State: "live", Project: recall.ProjectOf(m.Tags), Kinds: kinds, Preview: clip(red, 100)})
+				}
+			}
 			return e.emit("memory scan", findings, func() string {
 				if len(findings) == 0 {
 					return "no secret shape found in the memory\n"
 				}
 				var b strings.Builder
 				for _, f := range findings {
-					fmt.Fprintf(&b, "%s (%s, %s, %s, %s): %s\n  backsight forget %s --purge\n", f.ID, f.Type, f.State, f.Project, strings.Join(f.Kinds, ", "), f.Preview, f.ID)
+					fix := "backsight forget " + f.ID + " --purge"
+					if f.Type == "briefing page" {
+						fix = "purge the memory it quotes (listed above or below); that deletes this page too"
+					}
+					fmt.Fprintf(&b, "%s (%s, %s, %s, %s): %s\n  %s\n", f.ID, f.Type, f.State, f.Project, strings.Join(f.Kinds, ", "), f.Preview, fix)
 				}
 				return b.String()
 			})

@@ -69,7 +69,7 @@ func TestUsageWarnsOnEachThreshold(t *testing.T) {
 	recall := `"event":"prompt","decision":"recall","plen":80,"ms":3000,"scopes":{"project":{"ok":true},"global":{"ok":true}}`
 	failing := `"event":"prompt","decision":"recall","plen":80,"ms":3000,"scopes":{"project":{"ok":false},"global":{"ok":true}}`
 	dir := events(t, map[time.Duration][]string{
-		3 * time.Hour: append(append(repeat(18, recall), repeat(2, failing)...), `"event":"retain","status":"queued"`,
+		3 * time.Hour: append(append(repeat(18, recall), repeat(2, failing)...), `"event":"retain","status":"retry"`,
 			`"event":"transcript_unknown","types":{"new-kind":5}`),
 		2 * day: injections(1, 10),
 		9 * day: append(injections(6, 10), `"event":"transcript_unknown","types":{"new-kind":1}`),
@@ -127,7 +127,7 @@ func TestRunIncludesTheUsageChecks(t *testing.T) {
 	tdir := f.env.Dirs.TelemetryDir()
 	_ = os.MkdirAll(tdir, 0o700)
 	_ = os.WriteFile(filepath.Join(tdir, "events-2026-10.jsonl"),
-		[]byte(fmt.Sprintf(`{"ts":%q,"event":"retain","status":"queued"}`+"\n", usageNow.Add(-5*time.Hour).Format(time.RFC3339))), 0o600)
+		[]byte(fmt.Sprintf(`{"ts":%q,"event":"retain","status":"retry"}`+"\n", usageNow.Add(-5*time.Hour).Format(time.RFC3339))), 0o600)
 	r := f.run()
 	c := check(t, r, "learning")
 	if c.Status != Warn {
@@ -227,8 +227,17 @@ func TestUsageLearningFilters(t *testing.T) {
 }
 
 func TestUsageLearningWithWritesOff(t *testing.T) {
-	dir := events(t, map[time.Duration][]string{time.Hour: {`"event":"retain","status":"queued"`}})
+	dir := events(t, map[time.Duration][]string{time.Hour: {`"event":"retain","status":"retry"`}})
 	if c := byID(checkUsage(dir, usageNow, true))["learning"]; c.Status != Info || !strings.Contains(c.Summary, "components.write") {
+		t.Errorf("%+v", c)
+	}
+}
+
+// A note or report put in the outbox ("queued") is the normal path, not a
+// refused send.
+func TestUsageQueuedOutboxNotesAreNotRefusals(t *testing.T) {
+	dir := events(t, map[time.Duration][]string{5 * time.Hour: {`"event":"prompt","decision":"skip","reason":"too_short","plen":5`, `"event":"retain","status":"queued"`}})
+	if c := byID(checkUsage(dir, usageNow, false))["learning"]; c.Status == Warn {
 		t.Errorf("%+v", c)
 	}
 }

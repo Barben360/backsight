@@ -61,6 +61,18 @@ func (d mcpDeps) live() (session.Live, string) {
 	return session.Live{Cwd: cwd, Project: d.current}, found
 }
 
+// freshPrivacy is the server's config with the privacy and components
+// sections read again: a pause --project or an opt-out taken during the
+// session applies to the next store, not to the next session. An
+// unreadable config keeps the one the server started with.
+func (d mcpDeps) freshPrivacy() config.Config {
+	cfg := d.cfg
+	if fresh, _, err := loadServerConfig(); err == nil {
+		cfg.Privacy, cfg.Components = fresh.Privacy, fresh.Components
+	}
+	return cfg
+}
+
 // mcpDeps is what the tools need, resolved once per server.
 type mcpDeps struct {
 	dirs        paths.Dirs
@@ -140,8 +152,9 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			start := time.Now()
 			// Refusals first: nothing leaves the machine for a refused note.
 			live, found := deps.live()
-			err := checkNote(deps.dirs, deps.home, deps.cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text)
-			if err == nil && found != "record" && session.AnyPaused(deps.dirs.SessionsDir()) {
+			cfg := deps.freshPrivacy()
+			err := checkNote(deps.dirs, deps.home, cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text)
+			if err == nil && found != "record" && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
 				// Without its session this server cannot honour a pause:
 				// while one is on, it fails closed.
 				err = errors.New("not stored: a session is paused and this server cannot tell which session it belongs to (no current hook record); resume it, or store from the shell with backsight store")
@@ -157,7 +170,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			proj = noteProject(deps.home, deps.cfg, proj)
 			// What this fact updates or repeats, before it is stored (SPEC §7).
 			similar := deps.engine.Search(ctx, recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3})
-			res, err := storeNote(ctx, deps.dirs, deps.home, deps.cfg, deps.sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
+			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, deps.sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found})
 			if res.Document == "" {
 				return errorResult(err.Error()), nil, nil

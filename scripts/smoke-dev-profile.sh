@@ -29,6 +29,7 @@ if [ -n "$had" ]; then cp -p "$profile/.credentials.json" "$had"; fi
 (cd "$root" && go build -o "$work/backsight" ./cmd/backsight)
 "$work/backsight" client install --config-dir "$profile"
 cp -p "$HOME/.claude/.credentials.json" "$profile/.credentials.json"
+started=$(date -u +%Y-%m-%dT%H:%M:%S)
 CLAUDE_CONFIG_DIR=$profile claude -p "Search your long-term memory for one decision about this project, then answer in one sentence and cite the memory exactly as your instructions say." \
   --output-format stream-json --verbose --max-turns 6 </dev/null >"$work/stream.jsonl"
 python3 - "$work/stream.jsonl" <<'PY'
@@ -52,5 +53,19 @@ for line in open(sys.argv[1]):
 print(ok)
 sys.exit(0 if all(ok.values()) else 1)
 PY
-# The MCP server read the live record of its Claude Code process.
-"$work/backsight" stats 1 --json | python3 -c 'import json,sys; live=json.load(sys.stdin)["data"]["live"]; print("mcp session:", live); sys.exit(0 if live.get("record") else 1)'
+# The MCP server read the live record of its Claude Code process, in this
+# run: tool events written since it started.
+state=$("$work/backsight" paths --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["state"])')
+python3 - "$state/telemetry" "$started" <<'PY'
+import glob, json, sys
+n = 0
+for f in glob.glob(sys.argv[1] + "/events-*.jsonl"):
+    for line in open(f):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        n += e.get("event") == "tool" and e.get("live") == "record" and e.get("ts", "") >= sys.argv[2]
+print("mcp tool calls that found their session in this run:", n)
+sys.exit(0 if n else 1)
+PY

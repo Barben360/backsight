@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -33,6 +34,9 @@ const (
 	briefingModelChars  = 1600
 	briefingModelTokens = 600
 	briefingModelPrefix = "backsight-brief-"
+	// briefingModelTimeout bounds the page read, and the page creation,
+	// within the briefing's own budget.
+	briefingModelTimeout = 1500 * time.Millisecond
 	// briefingIdleDays: a project quiet this long loses its page (jobs tick),
 	// so the server stops refreshing it.
 	briefingIdleDays  = 14
@@ -126,6 +130,9 @@ func (h *hookEnv) sessionStart() []byte {
 	h.updateSession(func(st *session.State) error {
 		st.Project = h.project
 		st.Unavailable = st.Unavailable || unavailable
+		if source == "model" {
+			st.BriefingPage = text
+		}
 		for _, it := range items {
 			if !slices.Contains(st.Seen, it.ID) {
 				st.Seen = append(st.Seen, it.ID)
@@ -152,11 +159,38 @@ func (h *hookEnv) sessionStart() []byte {
 func (h *hookEnv) briefing() (text string, items []session.Injection, source string, err error) {
 	ctx, cancel := context.WithTimeout(h.ctx, briefingTimeout)
 	defer cancel()
-	if h.cfg.Recall.Briefing == "model" {
-		if text, ok := h.modelBriefing(ctx); ok {
+	// An excluded project gets no page: creating one would send its name to
+	// the server and have the server's LLM summarise it.
+	optedOut, _ := project.New(h.home, h.cfg.Projects.Transverse).OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths)
+	missing := false
+	if h.cfg.Recall.Briefing == "model" && !optedOut {
+		// The page read has its own short budget: a slow server must leave
+		// the fallback briefing its time.
+		mctx, mcancel := context.WithTimeout(ctx, briefingModelTimeout)
+		text, ok, absent := h.modelBriefing(mctx)
+		mcancel()
+		if ok {
 			return text, nil, "model", nil
 		}
+		missing = absent
 	}
+	text, items, source, err = h.recentBriefing(ctx)
+	// A page is created only for a project with memories: an empty or new
+	// one would be summarised from nothing, then pruned, in a loop.
+	if missing && err == nil && source != "empty" {
+		pctx, pcancel := context.WithTimeout(ctx, briefingModelTimeout)
+		if cerr := h.client.CreateMentalModel(pctx, h.cfg.Server.Bank, briefingModelID(h.project), "backsight briefing: "+h.project, instructions.BriefingQuery,
+			[]string{"project:" + h.project}, briefingModelTokens); cerr != nil {
+			h.tw.Emit(telemetry.Raw{Name: "briefing_page_error", Fields: map[string]any{"error": cerr.Error()}})
+		}
+		pcancel()
+	}
+	return text, items, source, err
+}
+
+// recentBriefing is the E8 briefing: the project's most recent observations
+// by event time (raw facts while none is consolidated yet).
+func (h *hookEnv) recentBriefing(ctx context.Context) (text string, items []session.Injection, source string, err error) {
 	tag := "project:" + h.project
 	mems, err := h.client.Recent(ctx, h.cfg.Server.Bank, tag, "observation", briefingItems)
 	if err != nil {
@@ -211,22 +245,19 @@ func briefingModelID(project string) string {
 	return briefingModelPrefix + b.String() + "-" + hex.EncodeToString(sum[:4])
 }
 
-// modelBriefing is the project's mental model, cut at a line boundary. A
-// project without one gets it created (the server writes it in the
-// background, then refreshes it after each consolidation of the project's
-// memories) and the E8 briefing this time; any failure falls back to E8.
-func (h *hookEnv) modelBriefing(ctx context.Context) (string, bool) {
-	id := briefingModelID(h.project)
-	m, err := h.client.GetMentalModel(ctx, h.cfg.Server.Bank, id)
+// modelBriefing is the project's mental model, cut at a line boundary;
+// absent reports a project without one (the caller creates it: the server
+// writes it in the background, then refreshes it after each consolidation
+// of the project's memories). Any failure falls back to E8.
+func (h *hookEnv) modelBriefing(ctx context.Context) (text string, ok, absent bool) {
+	m, err := h.client.GetMentalModel(ctx, h.cfg.Server.Bank, briefingModelID(h.project))
 	var apiErr *hindsight.APIError
 	if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
-		_ = h.client.CreateMentalModel(ctx, h.cfg.Server.Bank, id, "backsight briefing: "+h.project, instructions.BriefingQuery,
-			[]string{"project:" + h.project}, briefingModelTokens)
-		return "", false
+		return "", false, true
 	}
 	content := strings.TrimSpace(m.Content)
 	if err != nil || content == "" {
-		return "", false
+		return "", false, false
 	}
 	age := ""
 	if t, err := time.Parse(time.RFC3339Nano, m.LastRefreshedAt); err == nil {
@@ -234,14 +265,26 @@ func (h *hookEnv) modelBriefing(ctx context.Context) (string, bool) {
 	}
 	var b strings.Builder
 	b.WriteString(instructions.BriefingModelHeader(safeProject(h.project), age) + "\n")
+	// Server-written text: every line quoted, headings flattened, and a
+	// closing line, so that the page reads as notes, not as instructions.
+	header := b.Len()
 	for _, line := range strings.Split(content, "\n") {
-		if len([]rune(b.String()))+len([]rune(line)) > briefingModelChars {
-			b.WriteString("…\n")
+		line = strings.TrimSpace(strings.TrimLeft(line, "# "))
+		if line == "" {
+			continue
+		}
+		if room := briefingModelChars - len([]rune(b.String())); len([]rune(line)) > room {
+			if b.Len() == header && room > 60 {
+				b.WriteString("> " + clip(line, room) + "\n") // a page written as one long line
+			} else {
+				b.WriteString("> …\n")
+			}
 			break
 		}
-		b.WriteString(line + "\n")
+		b.WriteString("> " + line + "\n")
 	}
-	return strings.TrimRight(b.String(), "\n"), true
+	b.WriteString(instructions.BriefingModelEnd)
+	return b.String(), true, false
 }
 
 // writeEnvFile gives the CLI fallback its project and session (E15).
@@ -278,10 +321,13 @@ func (h *hookEnv) firstSession() bool {
 // session, so a compaction does not lose them.
 func (h *hookEnv) compactReplay() string {
 	st, err := h.store.Load(h.in.SessionID)
-	if err != nil || (len(st.Injected) == 0 && len(st.Stored) == 0) {
+	if err != nil || (len(st.Injected) == 0 && len(st.Stored) == 0 && st.BriefingPage == "") {
 		return ""
 	}
 	var b strings.Builder
+	if st.BriefingPage != "" {
+		b.WriteString("\n\n" + st.BriefingPage + "\n")
+	}
 	if len(st.Injected) > 0 {
 		b.WriteString("\n\nMemories shown earlier in this session " + instructions.HintsLine + ":\n")
 		for _, in := range st.Injected[max(0, len(st.Injected)-compactReplay):] {
@@ -302,6 +348,12 @@ func (h *hookEnv) subagentStart() []byte {
 	}
 	text := instructions.SubagentGuide + " " + instructions.HintsLine
 	if st, err := h.store.Load(h.in.SessionID); err == nil {
+		if st.BriefingPage != "" { // the page's first lines, within the subagent budget
+			page := strings.SplitN(st.BriefingPage, "\n", 2)
+			if len(page) == 2 {
+				text += "\n" + clip(page[1], subagentChars-len([]rune(text)))
+			}
+		}
 		n := 0
 		for _, in := range st.Injected {
 			if in.Rule != "briefing" || n == subagentItems {

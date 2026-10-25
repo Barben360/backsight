@@ -73,7 +73,7 @@ func checkLatency(r stats.Report) Check {
 		c.Status, c.Summary = Info, fmt.Sprintf("%d prompt recalls in 7 days: too few for a p95", r.Prompts.Recalls)
 	case r.Prompts.P95MS > promptP95MaxMS:
 		c.Status, c.Summary = Warn, fmt.Sprintf("prompt hook p95 %d ms over 7 days (limit %d ms)", r.Prompts.P95MS, promptP95MaxMS)
-		c.Fix = "a GPU for the reranker, or fewer rerank candidates (recall settings in config.toml)"
+		c.Fix = "a GPU for the reranker, or fewer rerank candidates (HINDSIGHT_API_RERANKER_MAX_CANDIDATES in the server's compose.override.yaml)"
 	default:
 		c.Summary = fmt.Sprintf("prompt hook p95 %d ms over 7 days", r.Prompts.P95MS)
 	}
@@ -100,8 +100,8 @@ func checkLearning(ev []stats.Event, now time.Time, writeOff bool) Check {
 			ran++
 		case e.Event == "retain" && e.Status == "ok":
 			accepted++
-		case e.Event == "retain":
-			refused++ // queued for a retry, or quarantined
+		case e.Event == "retain" && (e.Status == "retry" || e.Status == "quarantined"):
+			refused++ // a send the server did not take (a queued outbox note is the normal path)
 		case e.Event == "job" && notesSent(e.Details) > 0:
 			accepted++
 		}

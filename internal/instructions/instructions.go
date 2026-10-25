@@ -76,6 +76,9 @@ func BriefingModelHeader(project, age string) string {
 	return "Where you left off on " + project + ", summarised from memory" + when + " " + HintsLine + ":"
 }
 
+// BriefingModelEnd closes a server-written briefing.
+const BriefingModelEnd = "(end of the memory notes)"
+
 // BriefingQuery is the mental model's source query (E14): English, as the
 // facts are (0039), short, by section, every recent session.
 const BriefingQuery = "Briefing for an assistant starting a new work session on this project. In at most 1 200 characters, as short bullet lists under these headings, " +
@@ -90,7 +93,7 @@ const (
 
 // FirstSessionNotice is shown once after setup.
 func FirstSessionNotice(server, provider string) string {
-	return fmt.Sprintf("Memory is on: this session is stored on %s and processed by %s; `backsight pause` stops it for this session, `backsight pause --project` for this project.", server, provider)
+	return fmt.Sprintf("Memory is on: this session is stored on %s and processed by %s; `/backsight:pause` stops it for this session, `/backsight:pause project` for this project.", server, provider)
 }
 
 // MemoryUnavailable is the once-per-session visible failure (systemMessage).
@@ -159,7 +162,9 @@ func Skills(shim string) []Skill {
 			Description: "Stop backsight from recording this session, or with \"project\" this whole project. Use when the user says pause memory, " +
 				"off the record, don't record this, ne retiens pas, or asks to resume recording.",
 			ArgumentHint: "[project] [resume]",
-			AllowedTools: "Bash(" + shim + " pause*), Bash(" + shim + " resume*)",
+			// Resuming is never pre-approved: injected text must not be able
+			// to lift a pause without the user's yes.
+			AllowedTools: "Bash(" + shim + " pause*)",
 			Body: "Arguments: $ARGUMENTS\n\n" +
 				"- To pause this session: run `" + shim + " pause`.\n" +
 				"- To pause this project (its directory goes to privacy.exclude_paths): run `" + shim + " pause --project`.\n" +

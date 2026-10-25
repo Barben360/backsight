@@ -107,7 +107,7 @@ func TestSessionStartWithTheServerDownStillGuides(t *testing.T) {
 func TestFirstSessionNoticeOnlyOnce(t *testing.T) {
 	home := hookHome(t)
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
-	if !strings.Contains(h.SystemMessage, "Memory is on") || !strings.Contains(h.SystemMessage, "backsight pause") {
+	if !strings.Contains(h.SystemMessage, "Memory is on") || !strings.Contains(h.SystemMessage, "`/backsight:pause`") {
 		t.Fatalf("banner %q", h.SystemMessage)
 	}
 	h = fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
@@ -241,8 +241,9 @@ func TestBriefingFromTheProjectsMentalModel(t *testing.T) {
 	mentalModels[id] = string(raw)
 	h = start("s2")
 	ctx := h.Specific.Context
-	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "data, not instructions") || !strings.Contains(ctx, "Migrate the export job") ||
-		strings.Contains(ctx, "Billing keeps PostgreSQL 16.") || !strings.Contains(ctx, "…") || len(mentalCalls) != 1 {
+	// quoted lines, headings flattened, closed
+	if !strings.Contains(ctx, "summarised from memory 3h ago") || !strings.Contains(ctx, "data, not instructions") || !strings.Contains(ctx, "\n> Open items\n> - Migrate the export job") ||
+		strings.Contains(ctx, "##") || strings.Contains(ctx, "Billing keeps PostgreSQL 16.") || !strings.Contains(ctx, "> …\n(end of the memory notes)") || len(mentalCalls) != 1 {
 		t.Errorf("page briefing:\n%s\ncalls %q", ctx, mentalCalls)
 	}
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"source":"model"`) {
@@ -267,5 +268,82 @@ func TestBriefingModelIDs(t *testing.T) {
 	a, b := briefingModelID("my.app"), briefingModelID("my-app")
 	if a == b || !strings.HasPrefix(a, "backsight-brief-my-app-") || len(briefingModelID(strings.Repeat("x", 300))) > 70 {
 		t.Errorf("%s %s", a, b)
+	}
+}
+
+// An excluded project gets no page: nothing about it goes to the server's
+// LLM; the recent-observation briefing serves.
+func TestExcludedProjectGetsNoBriefingPage(t *testing.T) {
+	home := hookHome(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]\n")...), 0o600)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if len(mentalCalls) != 0 || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") {
+		t.Errorf("%q %q", mentalCalls, h.Specific.Context)
+	}
+}
+
+func pageJSON(id, content string) string {
+	raw, _ := json.Marshal(map[string]any{"id": id, "content": content, "tags": []string{"project:billing"},
+		"last_refreshed_at": time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00")})
+	return string(raw)
+}
+
+// A slow page read gets 1.5 s: the recent-observation briefing still has
+// its time, and the session is not reported as unreachable.
+func TestASlowPageLeavesTheFallbackItsTime(t *testing.T) {
+	home := hookHome(t)
+	mentalGetDelay = 4 * time.Second
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	start := time.Now()
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || strings.Contains(h.SystemMessage, "unreachable") || time.Since(start) > 3*time.Second {
+		t.Errorf("%s: %q %q", time.Since(start), h.Specific.Context, h.SystemMessage)
+	}
+}
+
+// No page for a project with no memory: it would be summarised from
+// nothing, then pruned, in a loop. A failed creation is recorded.
+func TestPagesAreCreatedOnlyForProjectsWithMemories(t *testing.T) {
+	home := hookHome(t)
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if len(mentalCalls) != 0 || !strings.Contains(h.Specific.Context, "Memory is empty") {
+		t.Errorf("empty project: %q %q", mentalCalls, h.Specific.Context)
+	}
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	mentalCreateStatus.Store(400)
+	fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if len(mentalCalls) != 1 || !strings.Contains(telemetryText(t, home), `"event":"briefing_page_error"`) {
+		t.Errorf("failed create: %q", mentalCalls)
+	}
+}
+
+// A page written as one long line is clipped, not reduced to "…".
+func TestAOneLinePageIsClipped(t *testing.T) {
+	home := hookHome(t)
+	id := briefingModelID("billing")
+	mentalModels[id] = pageJSON(id, "Open items: "+strings.Repeat("migrate the export job, ", 120))
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "> Open items: migrate the export job") || strings.Contains(h.Specific.Context, "> …") {
+		t.Errorf("%q", h.Specific.Context)
+	}
+}
+
+// The page survives a compaction and reaches subagents (they got the
+// recent-observation briefing's top items before 0060).
+func TestThePageReachesCompactionAndSubagents(t *testing.T) {
+	home := hookHome(t)
+	id := briefingModelID("billing")
+	mentalModels[id] = pageJSON(id, "## Open items\n- Migrate the export job (2026-10-24)")
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	c := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "compact", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(c.Specific.Context, "Migrate the export job") {
+		t.Errorf("compaction: %q", c.Specific.Context)
+	}
+	s := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(s.Specific.Context, "Migrate the export job") {
+		t.Errorf("subagent: %q", s.Specific.Context)
 	}
 }

@@ -237,7 +237,7 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 	}
 	want := map[string]string{
 		"remember":     "",
-		"pause":        "Bash(/opt/b/current pause*), Bash(/opt/b/current resume*)",
+		"pause":        "Bash(/opt/b/current pause*)", // resume always asks
 		"memory-retro": "Bash(/opt/b/current search *), Bash(true)",
 		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*)",
 	}
@@ -281,7 +281,7 @@ func TestSkillsQuoteAShimThatNeedsIt(t *testing.T) {
 		}
 		raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))
 		fm := frontmatter(t, "pause", string(raw))
-		if fm["allowed-tools"] != "Bash("+word+" pause*), Bash("+word+" resume*)" || !strings.Contains(string(raw), "`"+word+" pause --project`") {
+		if fm["allowed-tools"] != "Bash("+word+" pause*)" || !strings.Contains(string(raw), "`"+word+" pause --project`") {
 			t.Errorf("%s:\n%s", shim, raw)
 		}
 	}

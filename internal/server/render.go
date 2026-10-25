@@ -146,6 +146,9 @@ func Render(cfg config.Config, sec config.Secrets, host string) (Files, error) {
 	env.plain("HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING", "true")
 	env.plain("HINDSIGHT_API_RERANKER_MAX_CANDIDATES", "30")
 	env.plain("HINDSIGHT_API_RERANKER_MAX_TOKENS_PER_CANDIDATE", "128")
+	env.comment("LLM request log: token rows kept 30 days for stats and the backfill budget; no prompt or memory text stored (decision 0061).")
+	env.plain("HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS", "30")
+	env.plain("HINDSIGHT_API_LLM_TRACE_MAX_CHARS", "1")
 	env.comment("Stable worker id: tasks in flight survive a container recreate.")
 	env.plain("HINDSIGHT_API_WORKER_ID", "backsight-"+workerName(host))
 	if env.err != nil {

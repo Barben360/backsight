@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -71,7 +72,8 @@ func TestTickPrunesIdleBriefingPages(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	recentHasEventTime.Store(true)
 	page := func(id, project string) string {
-		return `{"id":"` + id + `","content":"x","tags":["project:` + project + `"]}`
+		old := time.Now().Add(-20 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+		return `{"id":"` + id + `","content":"x","tags":["project:` + project + `"],"last_refreshed_at":"` + old + `"}`
 	}
 	active, idle := briefingModelID("billing"), briefingModelID("old")
 	mentalModels[active], mentalModels[idle], mentalModels["mine"] = page(active, "billing"), page(idle, "old"), page("mine", "old")
@@ -97,5 +99,71 @@ func TestTickPrunesIdleBriefingPages(t *testing.T) {
 	run(t, "jobs", "tick")
 	if _, ok := mentalModels[active]; ok || mentalModels["mine"] == "" {
 		t.Errorf("briefing = recent: %v", mentalModels)
+	}
+}
+
+// A page refreshed lately stays even if its project looks idle (a project
+// back after a break): deleting it would only recreate it next session.
+func TestTickKeepsARecentlyRefreshedPage(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recentHasEventTime.Store(true)
+	id := briefingModelID("old")
+	mentalModels[id] = `{"id":"` + id + `","content":"x","tags":["project:old"],"last_refreshed_at":"` + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano) + `"}`
+	recentByTag["project:old"] = `[{"id":"b","text":"t","mentioned_at":"` + time.Now().Add(-20*24*time.Hour).UTC().Format(time.RFC3339) + `"}]`
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; !ok {
+		t.Error("a page refreshed an hour ago was pruned")
+	}
+}
+
+// Paused sessions outlive the 30-day pruning, not the 90-day one.
+func TestPausedSessionsArePrunedAfterNinetyDays(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	for id, age := range map[string]int{"recent-pause": 40, "old-pause": 100} {
+		_ = sessions(home).Update(id, func(st *session.State) error { st.SetPaused(true, time.Now()); return nil })
+		at := time.Now().Add(-time.Duration(age) * 24 * time.Hour)
+		_ = os.Chtimes(filepath.Join(d.SessionsDir(), id+".json"), at, at)
+	}
+	pruneSessions(d)
+	if _, err := os.Stat(filepath.Join(d.SessionsDir(), "recent-pause.json")); err != nil {
+		t.Error("a 40-day-old pause was pruned")
+	}
+	if _, err := os.Stat(filepath.Join(d.SessionsDir(), "old-pause.json")); err == nil {
+		t.Error("a 100-day-old pause was kept")
+	}
+	if session.AnyPaused(d.SessionsDir(), 48*time.Hour) {
+		t.Error("old paused sessions count as paused now")
+	}
+}
+
+// With the read side off nothing reads the pages: they all go.
+func TestTickPrunesEveryPageWhenReadIsOff(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	id := briefingModelID("billing")
+	mentalModels[id] = `{"id":"` + id + `","content":"x","tags":["project:billing"],"last_refreshed_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[components]\nread = false\n")...), 0o600)
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; ok {
+		t.Error("page kept with read off")
+	}
+}
+
+// A page just created (no refresh yet) is kept even if its project looks
+// idle: the server is writing it.
+func TestTickKeepsANewPage(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recentHasEventTime.Store(true)
+	id := briefingModelID("old")
+	mentalModels[id] = `{"id":"` + id + `","content":"","tags":["project:old"]}`
+	recentByTag["project:old"] = `[{"id":"b","text":"t","mentioned_at":"` + time.Now().Add(-20*24*time.Hour).UTC().Format(time.RFC3339) + `"}]`
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; !ok {
+		t.Error("a page with no refresh yet was pruned")
 	}
 }

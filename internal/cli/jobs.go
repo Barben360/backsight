@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -89,8 +90,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				res.Status, res.Reason = "skipped", "components.write is off"
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
-					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, cfg.Recall.Briefing, f.Client)
 				}
+				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -115,9 +116,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
-			if cfg.Components.Read {
-				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, cfg.Recall.Briefing, f.Client)
-			}
+			res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -140,7 +139,10 @@ func tickText(r tickResult) string {
 
 // sessionTTL: session state older than this is deleted (it holds prompt
 // words and reply excerpts; a resumed session starts a fresh state).
-const sessionTTL = 30 * 24 * time.Hour
+const (
+	sessionTTL = 30 * 24 * time.Hour
+	pausedTTL  = 90 * 24 * time.Hour
+)
 
 func pruneSessions(d paths.Dirs) {
 	session.PruneLive(d.SessionsDir(), 7*24*time.Hour, now())
@@ -151,12 +153,24 @@ func pruneSessions(d paths.Dirs) {
 	for _, e := range ents {
 		if fi, err := e.Info(); err == nil && !e.IsDir() && now().Sub(fi.ModTime()) > sessionTTL {
 			id := strings.TrimSuffix(e.Name(), ".json")
-			if st, err := (session.Store{Dir: d.SessionsDir()}).Load(id); err != nil || st.Paused || len(st.PausedSpans) > 0 {
-				continue // a pause, or a paused stretch not flushed yet, outlives the pruning
+			// A pause, or a paused stretch not flushed yet, outlives the
+			// pruning, for pausedTTL: a session resumed weeks later stays
+			// paused; one never resumed does not hold its excerpts forever.
+			if st, err := (session.Store{Dir: d.SessionsDir()}).Load(id); err != nil || ((st.Paused || len(st.PausedSpans) > 0) && now().Sub(fi.ModTime()) < pausedTTL) {
+				continue
 			}
 			_ = os.Remove(filepath.Join(d.SessionsDir(), e.Name()))
 		}
 	}
+}
+
+// briefingFor is the briefing in force: none when the read side is off, so
+// that its pages go.
+func briefingFor(cfg config.Config) string {
+	if !cfg.Components.Read {
+		return "recent"
+	}
+	return cfg.Recall.Briefing
 }
 
 // pruneBriefings deletes backsight's briefing pages (decision 0060) of
@@ -174,6 +188,9 @@ func pruneBriefings(ctx context.Context, bank, briefing string, cl *hindsight.Cl
 			continue
 		}
 		idle := briefing != "model"
+		if t, err := time.Parse(time.RFC3339Nano, m.LastRefreshedAt); !idle && (err != nil || now().Sub(t) < briefingIdleDays*24*time.Hour) {
+			continue // new (first refresh pending) or refreshed lately: deleting would recreate it at the next session
+		}
 		if !idle {
 			idle = true
 			for _, t := range m.Tags {

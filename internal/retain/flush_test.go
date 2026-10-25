@@ -734,3 +734,81 @@ func TestAPausedStretchStaysOutAfterAResume(t *testing.T) {
 		t.Errorf("sent:\n%s", all)
 	}
 }
+
+// A session paused now (open stretch) still sends what was typed before the
+// pause: only the stretch stays out. A pause with no stretch (older state)
+// keeps everything out, as TestPausedSessionIsNotSent checks.
+func TestAnOpenPauseKeepsOnlyItsStretchOut(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+		[]byte(`{"paused":true,"paused_spans":[{"from":"2026-10-24T09:05:00Z"}]}`), 0o600)
+	e.record("s1", "u1", "user", 0, "before the pause")
+	e.record("s1", "u2", "user", 10, "private matter")
+	e.flush("s1", Options{Force: true})
+	var sent []string
+	for _, it := range e.hs.retains {
+		sent = append(sent, it.Content)
+	}
+	if all := strings.Join(sent, "\n"); !strings.Contains(all, "before the pause") || strings.Contains(all, "private") {
+		t.Errorf("sent:\n%s", all)
+	}
+	// later turns, still paused, stay out too
+	e.record("s1", "u3", "user", 20, "private again")
+	e.flush("s1", Options{Force: true})
+	for _, it := range e.hs.retains {
+		if strings.Contains(it.Content, "private") {
+			t.Errorf("sent while paused: %s", it.Content)
+		}
+	}
+}
+
+// A fork copies its parent's records, with the parent's session id: the
+// parent's paused stretch stays out of the copy, and the records the parent
+// already sent are not sent again.
+func TestAForkKeepsItsParentsPausedStretchOut(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+		[]byte(`{"paused":false,"paused_spans":[{"from":"2026-10-24T09:05:00Z","to":"2026-10-24T09:15:00Z"}]}`), 0o600)
+	e.record("s1", "u1", "user", 0, "before the pause")
+	e.record("s1", "u2", "user", 10, "private matter")
+	e.record("s1", "u3", "user", 20, "after the resume")
+	e.flush("s1", Options{Force: true})
+	sentByParent := len(e.hs.retains)
+	// the fork: the same records (parent's session id), then its own turn
+	raw, _ := os.ReadFile(filepath.Join(e.dir, "s1.jsonl"))
+	_ = os.WriteFile(filepath.Join(e.dir, "fork1.jsonl"), raw, 0o600)
+	e.recordIn(e.cwd, "fork1", "u4", "user", 30, "the fork's own turn")
+	e.flush("fork1", Options{Force: true})
+	var fork []string
+	for _, it := range e.hs.retains[sentByParent:] {
+		fork = append(fork, it.Content)
+	}
+	got := strings.Join(fork, "\n")
+	if strings.Contains(got, "private") || strings.Contains(got, "before the pause") || strings.Contains(got, "after the resume") || !strings.Contains(got, "the fork's own turn") {
+		t.Errorf("fork sent:\n%s", got)
+	}
+}
+
+// A fork taken while the parent is still paused: the copied stretch stays
+// out even though nothing was flushed for the parent yet.
+func TestAForkOfAPausedSessionKeepsTheStretchOut(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+		[]byte(`{"paused":true,"paused_spans":[{"from":"2026-10-24T09:05:00Z"}]}`), 0o600)
+	e.record("s1", "u1", "user", 0, "before the pause")
+	e.record("s1", "u2", "user", 10, "private matter")
+	raw, _ := os.ReadFile(filepath.Join(e.dir, "s1.jsonl"))
+	_ = os.WriteFile(filepath.Join(e.dir, "fork2.jsonl"), raw, 0o600)
+	e.recordIn(e.cwd, "fork2", "u3", "user", 30, "the fork's own turn")
+	e.flush("fork2", Options{Force: true})
+	var got []string
+	for _, it := range e.hs.retains {
+		got = append(got, it.Content)
+	}
+	if all := strings.Join(got, "\n"); strings.Contains(all, "private") || !strings.Contains(all, "the fork's own turn") {
+		t.Errorf("sent:\n%s", all)
+	}
+}

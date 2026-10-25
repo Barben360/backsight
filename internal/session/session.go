@@ -34,7 +34,13 @@ type State struct {
 	Paused           bool        `json:"paused"`
 	// PausedSpans are the stretches the user paused, kept after a resume:
 	// a flush that runs later must still skip the records typed in them.
-	PausedSpans   []Span `json:"paused_spans,omitempty"`
+	PausedSpans []Span `json:"paused_spans,omitempty"`
+	// LastPromptAt: when the prompt hook saw the last typed prompt. A pause
+	// asked for in a prompt starts there, so that prompt stays out too.
+	LastPromptAt time.Time `json:"last_prompt_at,omitzero"`
+	// BriefingPage: the mental-model briefing this session was given, for
+	// a compaction and for subagents (decision 0060).
+	BriefingPage  string `json:"briefing_page,omitempty"`
 	LastNudge     int    `json:"last_nudge"`           // prompt number of the last quiet-prompt nudge
 	Unavailable   bool   `json:"unavailable_notified"` // the visible failure was shown
 	LastAssistant string `json:"last_assistant"`       // the last reply, recorded at Stop
@@ -191,9 +197,10 @@ func Paused(dir, id string) (bool, string) {
 	return st.Paused, "session paused"
 }
 
-// AnyPaused reports whether some session is paused now; an unreadable
-// state counts as paused (fail closed).
-func AnyPaused(dir string) bool {
+// AnyPaused reports whether a session written in the last maxAge is paused;
+// an unreadable state counts as paused (fail closed). Older paused sessions
+// cannot be the caller's.
+func AnyPaused(dir string, maxAge time.Duration) bool {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return false
@@ -201,6 +208,9 @@ func AnyPaused(dir string) bool {
 	for _, e := range ents {
 		id, ok := strings.CutSuffix(e.Name(), ".json")
 		if e.IsDir() || !ok {
+			continue
+		}
+		if fi, err := e.Info(); err != nil || time.Since(fi.ModTime()) > maxAge {
 			continue
 		}
 		if p, _ := Paused(dir, id); p {

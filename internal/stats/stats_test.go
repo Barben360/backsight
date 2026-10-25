@@ -145,6 +145,7 @@ func TestComputeBranches(t *testing.T) {
 		{TS: at(0), Event: "tool_use", Session: "s1", Name: "x__memory_search", N: 0, MemoryIDs: []string{"b1"}},
 		{TS: at(1), Event: "briefing", Session: "s1", IDs: []string{"b1"}, Source: "observations"},
 		{TS: at(1), Event: "briefing", Session: "s2", Source: "empty"},
+		{TS: at(1), Event: "briefing", Session: "s5", Source: "model"},
 		// silent and free replies after a search; a reply without a search,
 		// or after a store only, is ignored; a turn's second reply (a
 		// machine message) keeps the best credit, once
@@ -175,7 +176,7 @@ func TestComputeBranches(t *testing.T) {
 		{TS: at(9), Event: "transcript_unknown", Types: map[string]int{"k": 3}},
 	}
 	r := Compute(ev, t0, at(60))
-	if r.Briefings.N != 2 || r.Briefings.Empty != 1 || r.Briefings.Used != 0 {
+	if r.Briefings.N != 3 || r.Briefings.Empty != 1 || r.Briefings.Model != 1 || r.Briefings.Used != 0 {
 		t.Errorf("briefings %+v", r.Briefings)
 	}
 	if r.Turns.Credit["silent"] != 1 || r.Turns.Credit["free"] != 1 || r.Turns.Credit["exact"] != 0 || len(r.Turns.Credit) != 2 {

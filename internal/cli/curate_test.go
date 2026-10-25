@@ -194,3 +194,43 @@ func TestProjectsListsTagsWithLastActivity(t *testing.T) {
 		}
 	}
 }
+
+// A briefing page may quote the purged text: the purge deletes the page of
+// every project involved (the next session rewrites it); memory scan reads
+// the pages too.
+func TestPurgeDeletesTheBriefingPagesAndScanReadsThem(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	memories["f9"] = fact("f9", "conversation:s9")
+	documentUnits["conversation:s9"] = 2
+	page := briefingModelID("billing")
+	mentalModels[page] = `{"id":"` + page + `","content":"In force: PGPASSWORD=Zz9yX8wV7u","tags":["project:billing"]}`
+	mentalModels["mine"] = `{"id":"mine","content":"PGPASSWORD=Zz9yX8wV7u","tags":["project:billing"]}`
+	listAnswer["world"] = ""
+	_, out, _ := run(t, "memory", "scan")
+	if !strings.Contains(out, page+" (briefing page") || strings.Contains(out, "Zz9yX8wV7u") || strings.Contains(out, "mine (") {
+		t.Errorf("scan:\n%s", out)
+	}
+	code, out, _ := run(t, "forget", "f9", "--purge", "--yes")
+	if _, kept := mentalModels[page]; code != output.OK || kept || !strings.Contains(out, "briefing page "+page) {
+		t.Errorf("exit %d, page kept %v\n%s", code, kept, out)
+	}
+	if _, ok := mentalModels["mine"]; !ok {
+		t.Error("a mental model backsight did not create was deleted")
+	}
+}
+
+// A purge cut short says which documents are left and how to finish: the
+// observation itself may be gone already.
+func TestAPartialPurgeSaysWhatIsLeft(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	memories["o1"] = `{"id":"o1","text":"obs","type":"observation","source_memories":[{"id":"f1","type":"world"},{"id":"f2","type":"world"}]}`
+	memories["f1"], memories["f2"] = fact("f1", "conversation:s1"), fact("f2", "conversation:s2")
+	documentUnits["conversation:s1"], documentUnits["conversation:s2"] = 1, 1
+	docDeleteFails.Store(true)
+	code, _, errOut := run(t, "forget", "o1", "--purge", "--yes")
+	if code != output.Blocked || !strings.Contains(errOut, "documents left: conversation:s1, conversation:s2") || !strings.Contains(errOut, "backsight forget <fact id> --purge") {
+		t.Errorf("exit %d %q", code, errOut)
+	}
+}

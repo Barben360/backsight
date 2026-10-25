@@ -177,6 +177,7 @@ func replyKind(text string) *string {
 func (h *hookEnv) userPrompt() []byte {
 	start := time.Now()
 	prompt := h.in.Prompt
+	promptAt := now()
 	ev := telemetry.Prompt{Plen: len([]rune(prompt)), IDs: []string{}, Lang: promptLang(prompt)}
 	if machineRE.MatchString(prompt) {
 		ev.Decision, ev.Reason = "skip", "machine"
@@ -276,6 +277,7 @@ func (h *hookEnv) userPrompt() []byte {
 	h.updateSession(func(s *session.State) error {
 		s.Project = h.project
 		s.Prompts = max(s.Prompts, n)
+		s.LastPromptAt = promptAt
 		s.SubagentDone = false
 		if nudged {
 			s.LastNudge = n

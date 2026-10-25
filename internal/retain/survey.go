@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -56,7 +55,7 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 			c.Chars += int64(len(t.Content))
 		}
 	}
-	if paused, why := f.paused(sid); paused {
+	if paused, why, spans := f.pauseState(sid); wholePause(paused, spans) {
 		c.Status, c.Reason = "opted_out", why
 		return c, recs
 	}
@@ -82,19 +81,14 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 // Notes are the explicit saves of a session that may be replayed: none for
 // a paused session, none from records in opted-out directories.
 func (f *Flusher) Notes(sid string, recs []transcript.Record) []Note {
-	paused, _, spans := f.pauseState(sid)
-	if paused {
-		return nil
-	}
-	if len(spans) > 0 {
-		var kept []transcript.Record
-		for _, r := range recs {
-			if !session.InSpans(spans, r.Timestamp) {
-				kept = append(kept, r)
-			}
+	pauses := f.pauses(sid)
+	var kept []transcript.Record
+	for _, r := range recs {
+		if out, _ := pauses(r); !out {
+			kept = append(kept, r)
 		}
-		recs = kept
 	}
+	recs = kept
 	return NotesFromRecords(f.Bank, sid, recs, func(cwd string) (string, bool) {
 		if out, _ := f.Resolver.OptedOut(cwd, f.Exclude); out {
 			return "", false

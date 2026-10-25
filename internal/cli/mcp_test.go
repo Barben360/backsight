@@ -364,3 +364,22 @@ func TestMCPStoreFailsClosedWithoutItsSessionWhileOneIsPaused(t *testing.T) {
 		t.Errorf("no pause on: stored normally: %v %s", isErr, out)
 	}
 }
+
+// A pause --project taken during the session applies to the next store:
+// the server reads the privacy settings again on each call.
+func TestMCPStoreFollowsAProjectPauseTakenDuringTheSession(t *testing.T) {
+	mcpParentPID = 4747
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	dir := filepath.Join(home, "billing")
+	_ = os.MkdirAll(dir, 0o700)
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4747, session.Live{SessionID: "s1", Cwd: dir, Project: "billing", At: time.Now()})
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = [\""+dir+"\"]\n")...), 0o600)
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."}); !isErr || !strings.Contains(out, "excluded") || retained.Load() != before {
+		t.Errorf("%v %s", isErr, out)
+	}
+}

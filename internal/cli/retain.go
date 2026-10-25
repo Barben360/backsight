@@ -77,7 +77,9 @@ func transcripts(home string) []string {
 	return files
 }
 
-var telemetryStatus = map[string]string{retain.Sent: "ok", retain.Retry: "queued", retain.Quarantined: "quarantined"}
+// A flush to retry is "retry": "queued" is a note or report put in the
+// outbox, which is the normal path.
+var telemetryStatus = map[string]string{retain.Sent: "ok", retain.Retry: "retry", retain.Quarantined: "quarantined"}
 
 // flushAll runs the flusher over every transcript and logs telemetry for
 // what was attempted.

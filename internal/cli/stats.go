@@ -151,8 +151,8 @@ func statsText(r statsResult) string {
 	i := r.Injections
 	fmt.Fprintf(&b, "Injections   %d: followed by a search %s, credited %s, contradicted next prompt %d\n",
 		i.N, pct(i.Searched, i.N), pct(i.Credited, i.N), i.Contradicted)
-	fmt.Fprintf(&b, "Briefings    %d (%d empty): %d memories, %s returned again by a memory tool later\n",
-		r.Briefings.N, r.Briefings.Empty, r.Briefings.IDs, pct(r.Briefings.Used, r.Briefings.IDs))
+	fmt.Fprintf(&b, "Briefings    %d (%d mental-model pages, %d empty): %d recent memories, %s returned again by a memory tool later\n",
+		r.Briefings.N, r.Briefings.Model, r.Briefings.Empty, r.Briefings.IDs, pct(r.Briefings.Used, r.Briefings.IDs))
 	fmt.Fprintf(&b, "Detector     fired %d, followed by a save %s\n", r.Detector.Fired, pct(r.Detector.Saved, r.Detector.Fired))
 	fmt.Fprintf(&b, "Context      %d session(s), prompt-hook text per session p95 %d chars\n", r.Budget.Sessions, r.Budget.P95Chars)
 	fmt.Fprintf(&b, "Gate         %s\n", counts(r.Gate))

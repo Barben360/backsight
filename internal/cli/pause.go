@@ -3,7 +3,9 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -66,6 +68,11 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 					return &output.Error{Code: output.Usage, Message: err.Error()}
 				}
 				res.Path = project.New(home, cfg.Projects.Transverse).Root(cwd)
+				if rel, err := filepath.Rel(res.Path, home); err == nil && !strings.HasPrefix(rel, "..") {
+					// Outside a repository the project is the directory: in the
+					// home directory (or above) it would stop all recording.
+					return &output.Error{Code: output.Usage, Message: res.Path + " holds your home directory: pausing it would stop memory everywhere. Run it inside the project's directory, or pause this session with backsight pause"}
+				}
 				paths := slices.Clone(cfg.Privacy.ExcludePaths)
 				has := slices.Contains(paths, res.Path)
 				switch {
@@ -110,7 +117,7 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 			res.Session = sid
 			store := session.Store{Dir: d.SessionsDir(), Locks: d.LocksDir(), Retry: time.Second}
 			err = store.Update(sid, func(st *session.State) error {
-				res.Changed = st.SetPaused(pause, now())
+				res.Changed = st.SetPaused(pause, pauseStart(*st, pause, now()))
 				return nil
 			})
 			if err != nil {
@@ -141,4 +148,15 @@ func pauseText(r pauseResult) string {
 		return fmt.Sprintf("session %s: %s\n", r.Session, state)
 	}
 	return fmt.Sprintf("session %s: already %s\n", r.Session, state)
+}
+
+// pauseStart is where a pause's stretch begins: at the prompt that asked
+// for it ("don't record this: …" is itself private) when that prompt is
+// recent, with a margin for the transcript's own timestamp; else now. A
+// resume ends the stretch now.
+func pauseStart(st session.State, pause bool, at time.Time) time.Time {
+	if pause && !st.LastPromptAt.IsZero() && at.Sub(st.LastPromptAt) < 30*time.Minute {
+		return st.LastPromptAt.Add(-5 * time.Second)
+	}
+	return at
 }

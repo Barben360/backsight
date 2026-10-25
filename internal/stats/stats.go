@@ -172,7 +172,8 @@ type Report struct {
 		N     int `json:"n"`
 		Empty int `json:"empty"`
 		IDs   int `json:"ids"`
-		Used  int `json:"used"` // briefed memories a memory tool returned later in the session
+		Used  int `json:"used"`  // briefed memories a memory tool returned later in the session (recent-observation briefings)
+		Model int `json:"model"` // mental-model pages (decision 0060)
 	} `json:"briefings"`
 	Detector struct {
 		Fired int `json:"fired"`
@@ -307,7 +308,10 @@ func Compute(events []Event, from, to time.Time) Report {
 			}
 		case "briefing":
 			r.Briefings.N++
-			if e.Source == "empty" || len(e.IDs) == 0 {
+			switch {
+			case e.Source == "model":
+				r.Briefings.Model++ // a page: no memory ids to follow
+			case e.Source == "empty" || len(e.IDs) == 0:
 				r.Briefings.Empty++
 			}
 			r.Briefings.IDs += len(e.IDs)
