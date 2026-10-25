@@ -102,9 +102,10 @@ func checkNoiseTransverse(ctx context.Context, cl *hindsight.Client, bank string
 		return c
 	}
 	if total == 0 {
-		c.Status, c.Summary = Info, "the transverse pool project:"+alias+" holds no observation"
+		c.Status, c.Summary, c.Projects = Info, "the transverse pool project:"+alias+" holds no observation", []string{alias}
 		return c
 	}
+	c.Projects = append([]string{alias}, sortedKeys(counts)...)
 	c.Summary = fmt.Sprintf("%d of %d transverse observations (project:%s) name another project", named, total, alias)
 	if top := topCounts(counts, 3); top != "" {
 		c.Summary += ": " + top
@@ -211,6 +212,9 @@ func checkNoiseHeadless(env Env, cfg config.Config) Check {
 	c.Detail = "check with --plan that a project holds nothing else worth keeping before forgetting it"
 	var fixes, kept []string
 	for _, p := range sortedKeys(perProject) {
+		if p != "(unknown project)" {
+			c.Projects = append(c.Projects, p)
+		}
 		switch {
 		case slices.Contains(cfg.Projects.Transverse, p):
 			kept = append(kept, p)

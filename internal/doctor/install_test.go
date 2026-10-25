@@ -45,6 +45,9 @@ func TestRemotesWarnsOnOneProjectNameWithTwoRemotes(t *testing.T) {
 	if !strings.Contains(c.Fix, "project = ") || !strings.Contains(c.Fix, ".backsight.toml") {
 		t.Errorf("fix %q", c.Fix)
 	}
+	if got := strings.Join(c.Projects, ","); got != "api" {
+		t.Errorf("projects %q, want the shared name report scrubs", got)
+	}
 	// A session without a remote does not count as another repository.
 	f.session("s7", "billing", "")
 	if c := checkRemotes(f.env.Dirs); !strings.Contains(c.Summary, "project:api") || strings.Contains(c.Summary, "billing") {

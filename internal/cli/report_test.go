@@ -458,3 +458,137 @@ func TestReportHidesProjectNamesAndRemotes(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(sessions, "s2.json"), []byte(`{"project":"skunkworks","remote":"gitlab.com/rival/stealth-skunkworks"}`), 0o600)
 	assertScrubbed(t, map[string]string{"project": "skunkworks", "remote": "annsco", "other remote": "rival/stealth"}, []string{"<remote>"})
 }
+
+// localProjects plants one project name in each local source report reads
+// (none of them a transverse alias): session states and their injections,
+// a live record whose directory's .backsight.toml names a project and a
+// related one, cursors, telemetry. An error names them all, and the
+// server-only extra names, so each shows unless report hides it.
+func localProjects(t *testing.T, home string, serverOnly ...string) []string {
+	t.Helper()
+	d := pathsOf(home)
+	put := func(p, body string) {
+		_ = os.MkdirAll(filepath.Dir(p), 0o700)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(filepath.Join(d.SessionsDir(), "s1.json"), `{"project":"brambleway","injected":[{"id":"m1","project":"fernhollow"}]}`)
+	repo := filepath.Join(home, "work", "mg")
+	put(filepath.Join(repo, ".backsight.toml"), "project = \"mossgarden\"\nrelated = [\"tidewater\"]\n")
+	put(filepath.Join(d.SessionsDir(), "by-pid", "4242.json"), `{"session_id":"s1","cwd":"`+repo+`","project":"brambleway"}`)
+	put(filepath.Join(d.CursorsDir(), "s9.json"), `{"transcript":"","document":"conversation:s9@cinderfield","home":"emberlane","segments":{"cinderfield":1,"emberlane":2}}`)
+	names := []string{"brambleway", "fernhollow", "mossgarden", "tidewater", "cinderfield", "emberlane", "quillpond"}
+	ts := time.Now().UTC().Add(-time.Hour)
+	var tel strings.Builder
+	for _, l := range []map[string]any{
+		{"ts": ts.Format(time.RFC3339Nano), "event": "prompt", "project": "quillpond", "decision": "skip"},
+		{"ts": ts.Format(time.RFC3339Nano), "event": "flush_failed", "project": "brambleway",
+			"error": "flush of " + strings.Join(append(append([]string{}, names...), serverOnly...), ", ") + " failed"},
+	} {
+		raw, _ := json.Marshal(l)
+		tel.Write(append(raw, '\n'))
+	}
+	put(filepath.Join(d.TelemetryDir(), "events-"+ts.Format("2006-01")+".jsonl"), tel.String())
+	return names
+}
+
+// projectBank answers doctor as a healthy server whose bank holds tags
+// and a transverse pool of 20 observations, each naming lanternfish.
+func projectBank(t *testing.T, bank string, tags ...string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := "/v1/default/banks/" + bank
+		switch r.URL.Path {
+		case "/health":
+			_, _ = w.Write([]byte(`{"status":"healthy"}`))
+		case "/version":
+			_, _ = w.Write([]byte(`{"api_version":"1.1.0"}`))
+		case "/v1/default/banks":
+			_, _ = w.Write([]byte(`{"banks":[{"bank_id":"` + bank + `"}]}`))
+		case base + "/stats":
+			_, _ = w.Write([]byte(`{"total_nodes":30,"total_documents":3}`))
+		case base + "/tags":
+			items := []map[string]any{}
+			for _, tg := range tags {
+				if strings.HasPrefix(tg, strings.TrimSuffix(r.URL.Query().Get("q"), "*")) {
+					items = append(items, map[string]any{"tag": tg, "count": 1})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+		case base + "/memories/list":
+			items := []map[string]any{}
+			if r.URL.Query().Get("tags") != "" && r.URL.Query().Get("offset") == "0" {
+				for i := range 20 {
+					items = append(items, map[string]any{"id": "o" + itoa(i), "fact_type": "observation", "text": "lanternfish deploys on Fridays.", "tags": []string{"project:workspace"}})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// Every project name the machine knows is hidden, whatever its source:
+// the bank's tags (one name only there), the local states (one only
+// there), a configured transverse alias, and the names doctor's checks
+// show, a short one included; check ids and error classes are unchanged.
+func TestReportHidesEveryKnownProjectName(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	url := projectBank(t, "ann-memory", "project:workspace", "project:.claude", "project:lanternfish", "project:saltmarsh", "project:ops")
+	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+url+"\"\nbank = \"ann-memory\"\nui_port = "+itoa(closedPort(t))+
+		"\n[projects]\ntransverse = [\"workspace\", \".claude\"]\n"), 0o600)
+	names := localProjects(t, home, "saltmarsh", "--project ops")
+	// doctor's remotes check names a short project: two repositories share api.
+	sessions := pathsOf(home).SessionsDir()
+	_ = os.WriteFile(filepath.Join(sessions, "s2.json"), []byte(`{"project":"api","remote":"github.com/annsco/api"}`), 0o600)
+	_ = os.WriteFile(filepath.Join(sessions, "s3.json"), []byte(`{"project":"api","remote":"gitlab.com/rival/api"}`), 0o600)
+
+	planted := map[string]string{"server-only project": "saltmarsh", "doctor-listed server project": "lanternfish", "transverse alias": "workspace",
+		"remote": "annsco", "other remote": "rival/api"}
+	for _, n := range names {
+		planted["local project "+n] = n
+	}
+	assertScrubbed(t, planted, []string{"two repositories share project:<project>", "(project:<project>) name another project: <project> (20)",
+		"--project <project> failed", "flush of <project>, <project>,"})
+	for _, args := range [][]string{{"report"}, {"report", "--json"}} {
+		_, out, _ := run(t, args...)
+		all := out + issueBodies(t, strings.NewReplacer(`\u003c`, "<", `\u003e`, ">", `\u0026`, "&").Replace(out))
+		for _, short := range []string{"project:api", "project%3Aapi", "--project ops"} {
+			if strings.Contains(all, short) {
+				t.Errorf("%v shows the short project %q:\n%s", args, short, out)
+			}
+		}
+	}
+	r := reportJSON(t)
+	if c := reportCheck(r, "remotes"); c.Status != doctor.Warn {
+		t.Errorf("remotes check %+v", c)
+	}
+	if c := reportCheck(r, "noise-transverse"); c.Status != doctor.Warn {
+		t.Errorf("noise-transverse check %+v", c)
+	}
+	if r.Diagnostic.Counts.ErrorClasses["flush_failed"] != 1 {
+		t.Errorf("classes %v", r.Diagnostic.Counts.ErrorClasses)
+	}
+}
+
+// With the server down the bank's tags are out of reach: the local names
+// are hidden all the same.
+func TestReportHidesLocalProjectsWithTheServerDown(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
+		"\n[projects]\ntransverse = [\"workspace\", \".claude\"]\n"), 0o600)
+	names := localProjects(t, home, "workspace")
+	planted := map[string]string{"transverse alias": "workspace"}
+	for _, n := range names {
+		planted["local project "+n] = n
+	}
+	assertScrubbed(t, planted, []string{"flush of <project>, <project>,", "doctor/server/error"})
+}

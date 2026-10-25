@@ -37,7 +37,8 @@ type Scrubber struct {
 	home     []string
 	prefixes []prefix // home and the roots, longest first
 	secrets  []string // longest first
-	names    []name
+	names    []name   // longest first
+	values   []string // every value given to Name
 }
 
 type prefix struct{ path, with string }
@@ -45,6 +46,7 @@ type prefix struct{ path, with string }
 type name struct {
 	re   *regexp.Regexp
 	with string
+	n    int // the length of the value it stands for
 }
 
 // NewScrubber scrubs home and its resolved form.
@@ -145,21 +147,76 @@ const minName = 4
 // (privacy over readability, decision 0067 block 3). A value of fewer than
 // minName characters is replaced only as a whole path segment: anywhere
 // else it would eat ordinary words.
+//
+// Names apply longest first, so a project named after the machine goes
+// whole; a value already given keeps its first placeholder.
 func (s *Scrubber) Name(v, placeholder string) {
-	if v == "" {
+	if v == "" || slices.Contains(s.values, v) {
 		return
 	}
+	s.values = append(s.values, v)
 	before, after := `(^|[^A-Za-z0-9])`, `($|[^A-Za-z0-9])`
 	if len(v) < minName {
 		before, after = `(^|[/\\])`, `($|[/\\])`
 	}
 	for _, f := range encodings(v) {
-		s.names = append(s.names, name{regexp.MustCompile(before + regexp.QuoteMeta(f) + after), "${1}" + placeholder + "${2}"})
+		s.addName(before+regexp.QuoteMeta(f)+after, placeholder, len(v))
 	}
 }
 
+func (s *Scrubber) addName(re, placeholder string, n int) {
+	s.names = append(s.names, name{regexp.MustCompile(re), "${1}" + placeholder + "${2}", n})
+	sort.SliceStable(s.names, func(i, j int) bool { return s.names[i].n > s.names[j].n })
+}
+
+// ProjectPlaceholder stands for a project name.
+const ProjectPlaceholder = "<project>"
+
+// publicNames are not a user's project names whatever the bank says:
+// names every install shares (Claude Code's directory, the default
+// transverse alias, the tools' own names) and the placeholders' words.
+// Hiding them would blank backsight's own paths and commands, not a user.
+var publicNames = []string{".claude", "claude", "backsight", "hindsight",
+	"project", "host", "user", "bank", "server", "remote", "data", "config", "state", "bin", "backups", "compose"}
+
+// projectPrefix is where a name of any length is a project's: a project:
+// tag, escaped or not, and a --project flag.
+const projectPrefix = `(project:|project%3[Aa]|--project[ =])`
+
+// projectEnd ends a project name: '-', '_' and '.' continue it, a '.' that
+// ends a sentence does not.
+const projectEnd = `($|[^A-Za-z0-9_.-]|\.(?:$|[^A-Za-z0-9_-]))`
+
+// Project hides a project name as <project>, the way Name does; a name
+// under minName characters is hidden after a project: tag or a --project
+// flag too (project:api), where it can be nothing but a project. Public
+// names are kept.
+func (s *Scrubber) Project(v string) {
+	if v == "" || slices.Contains(publicNames, strings.ToLower(v)) {
+		return
+	}
+	known := slices.Contains(s.values, v)
+	s.Name(v, ProjectPlaceholder)
+	if len(v) < minName && !known {
+		for _, f := range encodings(v) {
+			s.addName(projectPrefix+regexp.QuoteMeta(f)+projectEnd, ProjectPlaceholder, len(v))
+		}
+	}
+}
+
+// listedProject replaces a short project name as a whole word, in the
+// check that lists it (doctor.Check.Projects): there it is a name, not a
+// word of the text.
+func listedProject(text, p string) string {
+	re := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])` + regexp.QuoteMeta(p) + projectEnd)
+	return re.ReplaceAllString(re.ReplaceAllString(text, "${1}"+ProjectPlaceholder+"${2}"), "${1}"+ProjectPlaceholder+"${2}")
+}
+
 // String scrubs one value.
-func (s *Scrubber) String(v string) string {
+func (s *Scrubber) String(v string) string { return s.scrub(v, true) }
+
+// scrub scrubs v; names false keeps the names (an identifier).
+func (s *Scrubber) scrub(v string, names bool) string {
 	v = httpBody.ReplaceAllString(v, "$1 [server answer omitted]")
 	for _, sec := range s.secrets {
 		v = strings.ReplaceAll(v, sec, SecretPlaceholder)
@@ -169,6 +226,9 @@ func (s *Scrubber) String(v string) string {
 	}
 	v, _ = redact.Text(v)
 	for _, n := range s.names {
+		if !names {
+			break
+		}
 		// Twice: adjacent occurrences share their separator.
 		v = n.re.ReplaceAllString(n.re.ReplaceAllString(v, n.with), n.with)
 	}
@@ -201,8 +261,33 @@ func wordByte(c byte) bool {
 }
 
 // Diagnostic scrubs every string of d, map keys included, through its JSON
-// form: a field added later is scrubbed without anyone remembering to.
+// form: a field added later is scrubbed without anyone remembering to. The
+// project names doctor's checks list are hidden too, the short ones as
+// whole words in their own check, after the rest (a remote holding one
+// goes whole first); check ids and error classes keep every name (see
+// identifiers).
 func (s *Scrubber) Diagnostic(d Diagnostic) (Diagnostic, error) {
+	for _, c := range d.Doctor.Checks {
+		for _, p := range c.Projects {
+			s.Project(p)
+		}
+	}
+	out, err := s.diagnostic(d)
+	if err != nil || len(out.Doctor.Checks) != len(d.Doctor.Checks) {
+		return out, err
+	}
+	for i, c := range d.Doctor.Checks {
+		o := &out.Doctor.Checks[i]
+		for _, p := range c.Projects {
+			if p != "" && len(p) < minName && !slices.Contains(publicNames, strings.ToLower(p)) {
+				o.Summary, o.Detail, o.Fix = listedProject(o.Summary, p), listedProject(o.Detail, p), listedProject(o.Fix, p)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *Scrubber) diagnostic(d Diagnostic) (Diagnostic, error) {
 	raw, err := json.Marshal(d)
 	if err != nil {
 		return d, err
@@ -211,7 +296,7 @@ func (s *Scrubber) Diagnostic(d Diagnostic) (Diagnostic, error) {
 	if err := json.Unmarshal(raw, &tree); err != nil {
 		return d, err
 	}
-	if raw, err = json.Marshal(s.walk(tree)); err != nil {
+	if raw, err = json.Marshal(s.walk(tree, "")); err != nil {
 		return d, err
 	}
 	var out Diagnostic
@@ -219,19 +304,34 @@ func (s *Scrubber) Diagnostic(d Diagnostic) (Diagnostic, error) {
 	return out, err
 }
 
-func (s *Scrubber) walk(v any) any {
+// identifiers are the JSON paths of the diagnostic's fixed-vocabulary
+// strings: check ids, error classes (values, and the keys of the
+// error_classes map). Built by backsight from its own words (Errors keeps
+// free text out of a class), they are the same for every user, so the
+// search link finds duplicates; no name replaces a word in them (a project
+// called tick would rename job/tick/failed). Paths and secrets are still
+// scrubbed, and a value outside identifier characters is scrubbed whole.
+var identifiers = map[string]bool{"doctor.checks[].id": true, "recent_errors[].class": true, "counts.error_classes{}": true}
+
+var identifier = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
+
+func (s *Scrubber) field(v, path string) string {
+	return s.scrub(v, !identifiers[path] || !identifier.MatchString(v))
+}
+
+func (s *Scrubber) walk(v any, path string) any {
 	switch t := v.(type) {
 	case string:
-		return s.String(t)
+		return s.field(t, path)
 	case []any:
 		for i := range t {
-			t[i] = s.walk(t[i])
+			t[i] = s.walk(t[i], path+"[]")
 		}
 		return t
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, x := range t {
-			out[s.String(k)] = s.walk(x)
+			out[s.field(k, path+"{}")] = s.walk(x, strings.TrimPrefix(path+"."+k, "."))
 		}
 		return out
 	}

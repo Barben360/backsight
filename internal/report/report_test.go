@@ -330,3 +330,114 @@ func TestIssueURLFallsBackToTheHeadWhenTheVersionsAreHuge(t *testing.T) {
 		t.Errorf("the paste block lacks the versions")
 	}
 }
+
+// Names go longest first, so a project named after the host goes whole;
+// a value registered twice keeps its first placeholder.
+func TestScrubLongestNameFirstAndFirstPlaceholderWins(t *testing.T) {
+	s := NewScrubber("/home/ann")
+	s.Name("annsbox", "<host>")
+	s.Name("orchard", "<user>")
+	s.Project("annsbox-api")
+	s.Project("orchard")
+	if got, want := s.String("annsbox-api on annsbox for orchard"), "<project> on <host> for <user>"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A project name under 4 characters is a project name wherever a project:
+// tag or a --project flag names it, in its encoded forms too; elsewhere
+// only a whole path segment.
+func TestScrubShortProjectAfterItsPrefix(t *testing.T) {
+	s := NewScrubber("/home/ann")
+	s.Project("api")
+	s.Project("x.y")
+	for in, want := range map[string]string{
+		"two repositories share project:api":        "two repositories share project:<project>",
+		"project:api: github.com/acme/<remote>":     "project:<project>: github.com/acme/<remote>",
+		"backsight forget --project api --plan":     "backsight forget --project <project> --plan",
+		"forget --project=api.":                     "forget --project=<project>.",
+		"GET /tags?q=project%3Aapi: refused":        "GET /tags?q=project%3A<project>: refused",
+		"project:api-gateway and project:apis stay": "project:api-gateway and project:apis stay",
+		"the api answers in /srv/api/x":             "the api answers in /srv/<project>/x",
+		"project:x.y, project:xxy":                  "project:<project>, project:xxy",
+	} {
+		if got := s.String(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Names everyone's install shares, and the placeholders' own words, are
+// not a user's: hiding them would only blank backsight's own text.
+func TestScrubKeepsPublicNames(t *testing.T) {
+	s := NewScrubber("/home/ann")
+	for _, p := range []string{".claude", "claude", "backsight", "hindsight", "project", "bank"} {
+		s.Project(p)
+	}
+	s.Name("ann-notes", "<bank>")
+	in := "~/.claude/settings.json: claude plugin list; backsight forget --project .claude; hindsight bank ann-notes"
+	if got, want := s.String(in), "~/.claude/settings.json: claude plugin list; backsight forget --project .claude; hindsight bank <bank>"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// Check ids and error classes are the same for every user: no name
+// changes them (the search link finds duplicates by class), while the
+// text around them is scrubbed. The project names a check lists are
+// scrubbed in that check, the short ones as whole words too.
+func TestDiagnosticKeepsIdentifiersAndScrubsCheckProjects(t *testing.T) {
+	s := NewScrubber("/home/ann")
+	s.Project("tick")
+	s.Project("disk")
+	d := Diagnostic{
+		Doctor: Doctor{Checks: []doctor.Check{
+			{ID: "disk", Status: doctor.Warn, Summary: "disk is low", Detail: "headless: web (2), orchard (1)", Fix: "backsight forget --project web --plan", Projects: []string{"web", "orchard"}},
+			{ID: "server", Status: doctor.OK, Summary: "the web ui answers"},
+		}},
+		Counts:       Counts{ErrorClasses: map[string]int{"job/tick/failed": 2}},
+		RecentErrors: []ErrorEvent{{Class: "job/tick/failed", Message: "tick failed for orchard"}},
+	}
+	out, err := s.Diagnostic(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := out.Doctor.Checks[0]
+	if c.ID != "disk" || c.Summary != "<project> is low" || c.Detail != "headless: <project> (2), <project> (1)" || c.Fix != "backsight forget --project <project> --plan" {
+		t.Errorf("check %+v", c)
+	}
+	if got := out.Doctor.Checks[1].Summary; got != "the web ui answers" {
+		t.Errorf("a short name is a word outside the check that lists it: %q", got)
+	}
+	if out.Counts.ErrorClasses["job/tick/failed"] != 2 || out.RecentErrors[0].Class != "job/tick/failed" || out.RecentErrors[0].Message != "<project> failed for <project>" {
+		t.Errorf("classes %+v, recent %+v", out.Counts.ErrorClasses, out.RecentErrors)
+	}
+	if Class(out) != "job/tick/failed" {
+		t.Errorf("class %q", Class(out))
+	}
+}
+
+// A class is built from backsight's own vocabulary: the project every
+// telemetry line carries, and a failed scope, never reach it.
+func TestErrorClassesNeverHoldAProject(t *testing.T) {
+	ev := []stats.Event{
+		{Event: "prompt", Scopes: map[string]struct {
+			OK bool `json:"ok"`
+		}{"project": {OK: false}, "related": {OK: false}}},
+		{Event: "job", Name: "tick", Status: "partial", Details: map[string]any{"reason": "orchard: backup failed"}},
+		{Event: "retain_failed", Error: "orchard: refused"},
+	}
+	counts, recent := Errors(ev)
+	for k := range counts {
+		if strings.Contains(k, "orchard") {
+			t.Errorf("class %q", k)
+		}
+	}
+	for _, e := range recent {
+		if strings.Contains(e.Class, "orchard") {
+			t.Errorf("class %q", e.Class)
+		}
+	}
+	if counts["recall/scope_failed"] != 1 || counts["job/tick/partial"] != 1 || counts["retain_failed"] != 1 {
+		t.Errorf("counts %v", counts)
+	}
+}

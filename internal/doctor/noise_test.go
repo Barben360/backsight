@@ -124,6 +124,11 @@ func TestNoiseTransverseThreshold(t *testing.T) {
 	if strings.Contains(c.Summary, "crawler") || !strings.Contains(c.Fix, "backsight forget --project .claude --source subagent --plan") || !strings.Contains(c.Fix, "0071") {
 		t.Errorf("%+v", c)
 	}
+	// report scrubs the names the check counted, the ones left out of the
+	// summary too, and the alias its fix names.
+	if got, want := strings.Join(c.Projects, ","), ".claude,backsight,ironwood,crawler,trip-2031"; got != want {
+		t.Errorf("projects %q, want %q", got, want)
+	}
 
 	b = &noiseBank{tags: someProjects, observations: pool(20, append(named[:4:4], "ironwood and backsight share a VPS.")...)}
 	expect(t, check(t, noiseFixture(t, b).run(), "noise-transverse"), Warn, "5 of 20")
@@ -273,5 +278,8 @@ func TestNoiseHeadlessSessions(t *testing.T) {
 	expect(t, c, Warn, "3 headless session(s)")
 	if !strings.Contains(c.Summary, ".claude (1)") || strings.Contains(c.Fix, "--project .claude") || !strings.Contains(c.Detail, "not .claude") {
 		t.Errorf("%+v", c)
+	}
+	if got, want := strings.Join(c.Projects, ","), ".claude,notes-bot,crawler"; got != want {
+		t.Errorf("projects %q, want %q (what report scrubs)", got, want)
 	}
 }

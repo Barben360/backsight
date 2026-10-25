@@ -79,9 +79,12 @@ func realProbes(e *doctor.Env) {
 	}
 }
 
+// hindsightTimeout bounds each Hindsight call of doctor and report.
+const hindsightTimeout = 10 * time.Second
+
 // doctorEnv is doctor's view of this machine.
 func doctorEnv(d paths.Dirs, home string) doctor.Env {
-	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: 10 * time.Second}
+	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: hindsightTimeout}
 	probes(&denv)
 	return denv
 }

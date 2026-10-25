@@ -46,6 +46,9 @@ type Check struct {
 	Summary string `json:"summary"`
 	Detail  string `json:"detail,omitempty"`
 	Fix     string `json:"fix,omitempty"`
+	// Projects are the project names Summary, Detail and Fix show: report
+	// scrubs them, the short ones included (never printed).
+	Projects []string `json:"-"`
 }
 
 type Report struct {

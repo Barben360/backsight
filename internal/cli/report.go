@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,10 +22,14 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/report"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/stats"
 )
@@ -73,8 +78,11 @@ func newReportCmd(e *env) *cobra.Command {
 backsight errors, redacted: no memory text, prompt, transcript, secret
 (secrets.toml and the server's .env included) or server answer; your home
 shows as ~, backsight's directories outside it as <data>, <config>,
-<state>, <bin> and <backups>, and your user, machine, bank and remote
-server names as <user>, <host>, <bank> and <server>. It prints a link
+<state>, <bin> and <backups>, your user, machine, bank and remote
+server names as <user>, <host>, <bank> and <server>, git remotes as
+<remote> and every project name this machine knows (the bank's tags,
+local sessions, cursors, telemetry, .backsight.toml files, transverse
+aliases) as <project>. It prints a link
 to search existing issues for the same error class and a link that opens
 a new issue with a summary filled in, plus the full diagnostic to paste
 into it.
@@ -115,6 +123,9 @@ func buildReport(cmd *cobra.Command, d paths.Dirs, home string) (report.Report, 
 		sc.Name(t.Bank, "<bank>")
 		diag.Doctor.Server = srv
 	}
+	for _, p := range reportProjects(cmd.Context(), d, home, doc) {
+		sc.Project(p)
+	}
 
 	diag.Counts = reportCounts(d)
 	if ev, err := stats.Load(d.TelemetryDir(), now.AddDate(0, 0, -reportDays), now.Add(time.Minute)); err == nil {
@@ -152,13 +163,9 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 			sc.Name(short, "<host>")
 		}
 	}
-	// Remotes before projects: a remote holds its project's name.
-	remotes, projects := sessionNames(d)
-	for _, r := range remotes {
+	// A remote holds its project's name: longer, it goes first.
+	for _, r := range sessionRemotes(d) {
 		sc.Name(r, "<remote>")
-	}
-	for _, p := range projects {
-		sc.Name(p, "<project>")
 	}
 	if u := osUser(); u != "" {
 		sc.Name(u, "<user>")
@@ -170,33 +177,160 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 	return sc
 }
 
-// sessionNames are the git remotes and project names the session states
-// recorded (doctor's remotes check shows them; decision 0045).
-func sessionNames(d paths.Dirs) (remotes, projects []string) {
-	ents, _ := os.ReadDir(d.SessionsDir())
-	seen := map[string]bool{}
-	for _, e := range ents {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(d.SessionsDir(), e.Name()))
+// sessionRemotes are the git remotes the session states recorded
+// (doctor's remotes check shows them; decision 0045).
+func sessionRemotes(d paths.Dirs) []string {
+	var out []string
+	for _, raw := range jsonFiles(d.SessionsDir()) {
 		var s struct {
-			Project string `json:"project"`
-			Remote  string `json:"remote"`
+			Remote string `json:"remote"`
 		}
-		if err != nil || json.Unmarshal(raw, &s) != nil {
-			continue
-		}
-		if s.Remote != "" && !seen["r"+s.Remote] {
-			seen["r"+s.Remote] = true
-			remotes = append(remotes, s.Remote)
-		}
-		if s.Project != "" && !seen["p"+s.Project] {
-			seen["p"+s.Project] = true
-			projects = append(projects, s.Project)
+		if json.Unmarshal(raw, &s) == nil && s.Remote != "" && !slices.Contains(out, s.Remote) {
+			out = append(out, s.Remote)
 		}
 	}
-	return remotes, projects
+	return out
+}
+
+// jsonFiles reads dir's *.json files, the unreadable ones skipped.
+func jsonFiles(dir string) [][]byte {
+	m, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	var out [][]byte
+	for _, f := range m {
+		if raw, err := os.ReadFile(f); err == nil {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
+// reportProjects is every project name this machine knows, for report to
+// hide (backsight issue 266): the configured transverse aliases; the
+// projects of the session states (their injections' too), of the live
+// records under by-pid and of what the .backsight.toml files of their
+// directories name (project and related); the projects of the cursors and
+// of the telemetry; and the bank's project:* tags when doctor reached the
+// server. Doctor's checks list the names they show themselves
+// (doctor.Check.Projects). Transcripts are not read.
+func reportProjects(ctx context.Context, d paths.Dirs, home string, doc doctor.Report) []string {
+	cfg, _ := config.Load(d.ConfigFile(), d, home) // on error: the defaults
+	var out []string
+	add := func(ps ...string) {
+		for _, p := range ps {
+			if p = strings.TrimSpace(p); p != "" && !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	add(cfg.Projects.Transverse...)
+	for _, raw := range jsonFiles(d.SessionsDir()) {
+		var s struct {
+			Project  string `json:"project"`
+			Injected []struct {
+				Project string `json:"project"`
+			} `json:"injected"`
+		}
+		if json.Unmarshal(raw, &s) == nil {
+			add(s.Project)
+			for _, i := range s.Injected {
+				add(i.Project)
+			}
+		}
+	}
+	if len(cfg.Projects.Transverse) > 0 {
+		res := project.New(home, cfg.Projects.Transverse)
+		for _, raw := range jsonFiles(filepath.Join(d.SessionsDir(), "by-pid")) {
+			var l session.Live
+			if json.Unmarshal(raw, &l) != nil {
+				continue
+			}
+			add(l.Project)
+			if filepath.IsAbs(l.Cwd) {
+				add(res.Project(l.Cwd))
+				add(res.Related(l.Cwd)...)
+			}
+		}
+	}
+	for _, raw := range jsonFiles(d.CursorsDir()) {
+		// Per-project documents name conversation:<sid>@<project>, and
+		// their cursors the session's home and per-project segments.
+		var c struct {
+			Document string         `json:"document"`
+			Home     string         `json:"home"`
+			Project  string         `json:"project"`
+			Segments map[string]int `json:"segments"`
+		}
+		if json.Unmarshal(raw, &c) != nil {
+			continue
+		}
+		add(c.Home, c.Project)
+		if _, p, ok := strings.Cut(c.Document, "@"); ok {
+			add(p)
+		}
+		for p := range c.Segments {
+			add(p)
+		}
+	}
+	add(telemetryProjects(d.TelemetryDir())...)
+	add(bankProjects(ctx, doc)...)
+	return out
+}
+
+// telemetryProjects are the projects every telemetry line names, over the
+// whole telemetry (doctor and older errors may name any of them).
+func telemetryProjects(dir string) []string {
+	files, _ := filepath.Glob(filepath.Join(dir, "events-*.jsonl"))
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range files {
+		fh, err := os.Open(f)
+		if err != nil {
+			continue
+		}
+		rd := bufio.NewReader(fh)
+		for {
+			line, err := rd.ReadBytes('\n')
+			var e struct {
+				Project string `json:"project"`
+			}
+			if json.Unmarshal(line, &e) == nil && e.Project != "" && !seen[e.Project] {
+				seen[e.Project] = true
+				out = append(out, e.Project)
+			}
+			if err != nil {
+				break
+			}
+		}
+		_ = fh.Close()
+	}
+	return out
+}
+
+// bankProjects are the bank's project:* tags, asked only when doctor's
+// server check reached the server, with doctor's per-call timeout. A
+// failure keeps what came back: the local names are hidden anyway.
+func bankProjects(ctx context.Context, doc doctor.Report) []string {
+	t := doc.Server
+	if t == nil {
+		return nil
+	}
+	reached := false
+	for _, c := range doc.Checks {
+		reached = reached || c.ID == "server" && (c.Status == doctor.OK || c.Status == doctor.Warn)
+	}
+	if !reached {
+		return nil
+	}
+	cl, err := hindsight.New(t.URL, string(t.Token), hindsightTimeout)
+	if err != nil {
+		return nil
+	}
+	tags, _ := cl.Tags(ctx, t.Bank, "project:")
+	out := make([]string, 0, len(tags))
+	for _, tg := range tags {
+		out = append(out, strings.TrimPrefix(tg.Tag, "project:"))
+	}
+	return out
 }
 
 // envSecretKey names the .env entries that hold a secret even unquoted.

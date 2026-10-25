@@ -103,7 +103,7 @@ func checkRemotes(d paths.Dirs) Check {
 	}
 	sort.Strings(shared)
 	sort.Strings(detail)
-	c.Status = Warn
+	c.Status, c.Projects = Warn, shared
 	if len(shared) == 1 {
 		c.Summary = "two repositories share project:" + shared[0]
 	} else {

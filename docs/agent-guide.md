@@ -67,7 +67,7 @@ On exit 0, `data` holds:
 
 ## When something goes wrong
 
-`backsight report --json` builds a redacted diagnostic (versions, the doctor report, local counts, recent backsight errors; no memory text, prompt, transcript, secret or home path) with `data.search_url` (existing issues with the same error class), `data.issue_url` (a new issue with the title and a summary filled in) and `data.paste` (the full diagnostic to paste into it). It sends nothing. Show the user the diagnostic and both links; never open, submit or post them yourself: the user decides whether to report.
+`backsight report --json` builds a redacted diagnostic (versions, the doctor report, local counts, recent backsight errors; no memory text, prompt, transcript, secret, home path, project name or git remote) with `data.search_url` (existing issues with the same error class), `data.issue_url` (a new issue with the title and a summary filled in) and `data.paste` (the full diagnostic to paste into it). It sends nothing. Show the user the diagnostic and both links; never open, submit or post them yourself: the user decides whether to report.
 
 ## More
 
