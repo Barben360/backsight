@@ -64,16 +64,19 @@ set -e
 jq -e '.ok and ([.data.steps[] | select(.name == "verify")][0].status == "done")' "$work/setup.json" >/dev/null || fail "verify did not pass"
 grep -q '"event":"progress"' "$work/progress.jsonl" || fail "no progress lines on stderr"
 
-# 4. A memory stored now is found again.
-"$bin" store --kind decision "The fresh-install proof stores this decision: billing keeps PostgreSQL 16 with partial indexes." >/dev/null
+# 4. A memory stored now is found again (retrieval, not ranking: the mock
+# LLM echoes its input, so scores mean little).
+"$bin" store --json --kind decision "The fresh-install proof stores this decision: billing keeps PostgreSQL 16 with partial indexes." > "$work/store.json" ||
+  { cat "$work/store.json" >&2; fail "store failed"; }
 for _ in $(seq 1 60); do
-  if "$bin" search --json "Which PostgreSQL version does billing keep?" | jq -e '.data.hits | length > 0' >/dev/null 2>&1; then
+  "$bin" search --all --min-score 0 --json "Which PostgreSQL version does billing keep?" > "$work/search.json" 2>&1 || true
+  if jq -e '[.data.hits[]? | select(.text | test("PostgreSQL"))] | length > 0' "$work/search.json" >/dev/null 2>&1; then
     found=1
     break
   fi
   sleep 3
 done
-[ "${found:-}" = 1 ] || fail "the stored decision was never found"
+[ "${found:-}" = 1 ] || { cat "$work/store.json" "$work/search.json" >&2; fail "the stored decision was never found"; }
 
 # 5. Undo leaves the profile as it found it, keeping config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
