@@ -20,6 +20,8 @@ jobs:
           go-version-file: go.mod
           cache: false
       - run: make test
+      # The testhooks build's own code (CI's update proof), never in a release.
+      - run: go test -count=1 -tags testhooks ./internal/migrate/
       - run: make cross
   snapshot:
     # The release build, signed by minisign with a throwaway key: the
@@ -81,9 +83,11 @@ jobs:
     # profile), through verify, a stored memory found again, doctor, a
     # backup verified against the real Postgres, that backup restored
     # (M5 block 1: the session sent after it is re-sent once by jobs tick),
-    # and undo.
+    # an update from an old to a new signed test build after a failing one
+    # rolled back (M5 block 2: scripts/update-chain.sh, with a throwaway
+    # minisign key made in the run's own directory), and undo.
     runs-on: [self-hosted, backsight]
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -96,4 +100,5 @@ jobs:
         run: |
           npm install -g --prefix "$RUNNER_TEMP/npm" --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.310
           echo "$RUNNER_TEMP/npm/bin" >> "$GITHUB_PATH"
+      - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
       - run: PROJECT="bs-fresh-${BACKSIGHT_CI_SLOT:-0}" WORK="$RUNNER_TEMP" scripts/fresh-install.sh $((38800 + ${BACKSIGHT_CI_SLOT:-0} * 10))

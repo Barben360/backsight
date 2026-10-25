@@ -3,7 +3,8 @@
 # nothing by `setup --non-interactive`, in an isolated HOME and Claude Code
 # profile, on this machine's Docker with Hindsight's mock LLM, through to a
 # stored memory found again, a backup restored and the session it lacked
-# sent again (M5 block 1). No hand edit: the only inputs are the answers,
+# sent again (M5 block 1), then an update to a newer signed test build,
+# after a failing one rolled back (M5 block 2). No hand edit: the only inputs are the answers,
 # one `secret set` and the synthetic transcripts.
 #
 # Usage: scripts/fresh-install.sh [api port] (default 38888; the UI takes
@@ -23,8 +24,11 @@ else
   work=$(mktemp -d)
 fi
 bin=$work/bin/backsight
-# Built before HOME moves: Go's caches stay the caller's.
-(cd "$root" && go build -o "$bin" ./cmd/backsight)
+# Built before HOME moves: Go's caches stay the caller's. The install's
+# binary is the update proof's old test build (scripts/update-chain.sh).
+# shellcheck source=scripts/update-chain.sh
+. "$root/scripts/update-chain.sh"
+uc_build "$bin"
 export HOME=$work/home BACKSIGHT_HOME=$work/backsight
 unset CLAUDE_CONFIG_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
 mkdir -p "$HOME"
@@ -131,11 +135,15 @@ rc_send restore-proof-lost
 rc_live restore-proof-live 3 4 >/dev/null
 rc_restore_resends "$archive" restore-proof-lost restore-proof-kept restore-proof-live
 
-# 9. Undo unwires Claude Code, stops the server, and keeps config and data.
+# 9. Update (SPEC §11.7): a failing migration rolls back and leaves the
+# install working, then the update to the new signed build passes.
+uc_proof
+
+# 10. Undo unwires Claude Code, stops the server, and keeps config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
 if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") != null' >/dev/null; then fail "the plugin survived undo"; fi
 [ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "undo left settings.json changed"; }
 running=$(compose ps -q --status running) || fail "cannot list the install's containers"
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, undo) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new after a rolled back one, undo) on project $project"
