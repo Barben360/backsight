@@ -213,3 +213,109 @@ func TestErrorsKeepsTheNewest(t *testing.T) {
 		t.Errorf("counts %v, %d recent, newest %v", counts, len(recent), recent[0].TS)
 	}
 }
+
+func TestScrubDropsAServerAnswerThatSpansLines(t *testing.T) {
+	s := NewScrubber("")
+	got := s.String("GET /v1/default/banks/b/stats: HTTP 500 (server_error): {\"detail\":\"boom\nquokka trellis memory\r\nmore\"}")
+	if want := "GET /v1/default/banks/b/stats: HTTP 500 (server_error): [server answer omitted]"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestScrubNamesInTheirPercentEncodedForms(t *testing.T) {
+	s := NewScrubber("")
+	s.Name("coding-agent::memoire", "<bank>")
+	s.Name("ann notes", "<bank>")
+	for in, want := range map[string]string{
+		// hindsight's bankPath escapes ':' too.
+		"GET /v1/default/banks/coding-agent%3A%3Amemoire/stats: refused": "GET /v1/default/banks/<bank>/stats: refused",
+		"bank coding-agent::memoire":                                     "bank <bank>",
+		"?bank=coding-agent%3A%3Amemoire&x=1":                            "?bank=<bank>&x=1",
+		"/banks/ann%20notes/stats and ?q=ann+notes":                      "/banks/<bank>/stats and ?q=<bank>",
+	} {
+		if got := s.String(in); got != want {
+			t.Errorf("%q → %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestScrubShortNamesOnlyAsPathSegments(t *testing.T) {
+	s := NewScrubber("")
+	s.Name("jd", "<user>")
+	if got, want := s.String(`open /run/media/jd/usb and C:\Users\jd\x: jd is short`), `open /run/media/<user>/usb and C:\Users\<user>\x: jd is short`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestScrubRootsOutsideHome(t *testing.T) {
+	s := NewScrubber("/home/ann")
+	s.Root("/srv/bs", "<x>")
+	s.Root("/srv/bs/data", "<data>")
+	s.Root("/home/ann/.local/state/backsight", "<state>") // under home: shown as ~
+	s.Root(`D:\bs\cfg`, "<config>")
+	for in, want := range map[string]string{
+		"open /srv/bs/data/server/.env: denied": "open <data>/server/.env: denied",
+		"/srv/bs/database and /srv/bs/data":     "<x>/database and <data>",
+		"/home/ann/.local/state/backsight/x":    "~/.local/state/backsight/x",
+		`D:\bs\cfg\config.toml`:                 `<config>\config.toml`,
+	} {
+		if got := s.String(in); got != want {
+			t.Errorf("%q → %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestScrubSecretValuesAnywhere(t *testing.T) {
+	s := NewScrubber("")
+	s.Secret("plainwordsecretquokka")
+	s.Secret("pass phrase/with slash")
+	s.Secret("short") // too short to replace safely
+	for in, want := range map[string]string{
+		"dial plainwordsecretquokka.lan: refused":                   "dial [redacted:secret].lan: refused",
+		"xplainwordsecretquokkay":                                   "x[redacted:secret]y",
+		"a pass phrase/with slash b":                                "a [redacted:secret] b",
+		"q=pass+phrase%2Fwith+slash&p=pass%20phrase%2Fwith%20slash": "q=[redacted:secret]&p=[redacted:secret]",
+		"a short word": "a short word",
+	} {
+		if got := s.String(in); got != want {
+			t.Errorf("%q → %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIssueURLFallsBackToTheHeadWhenTheVersionsAreHuge(t *testing.T) {
+	huge := strings.Repeat("é", 400) // 6 bytes each once escaped
+	d := Diagnostic{
+		Versions: Versions{Binary: "v0.5.0", Commit: huge, Plugin: huge, HindsightPin: huge, HindsightDeployed: huge, ClaudeCode: huge, OSRelease: huge},
+		Doctor:   Doctor{Checks: []doctor.Check{{ID: "server", Status: doctor.Error, Summary: "Hindsight unreachable"}}, Errors: 1},
+		Counts:   Counts{ErrorClasses: map[string]int{"job/tick/partial": 2}, Days: 7},
+	}
+	r, err := Build(d, NewScrubber(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.IssueURL) > MaxURL {
+		t.Fatalf("issue link is %d bytes, over %d", len(r.IssueURL), MaxURL)
+	}
+	u, _ := url.Parse(r.IssueURL)
+	body := u.Query().Get("body")
+	for _, want := range []string{"**What happened**", pastePlaceholder, "left out to keep this link short"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "**Versions**") || strings.Contains(body, "Hindsight unreachable") {
+		t.Errorf("the fallback body keeps lines that do not fit:\n%s", body)
+	}
+	if got := u.Query().Get("title"); got != "report: doctor/server/error: Hindsight unreachable" {
+		t.Errorf("title %q", got)
+	}
+	// Left out: the class, versions and doctor lines, the check, the counts
+	// and the error class line; blank lines and headings are not counted.
+	if r.Omitted != 6 {
+		t.Errorf("omitted %d, want 6", r.Omitted)
+	}
+	if !strings.Contains(r.Paste, `"commit": "éé`) {
+		t.Errorf("the paste block lacks the versions")
+	}
+}

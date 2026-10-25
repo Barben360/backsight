@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/report"
 )
 
@@ -52,11 +54,12 @@ func plantedMachine(t *testing.T) reportPlant {
 		reqs = append(reqs, r.Method+" "+r.URL.Path)
 		mu.Unlock()
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"detail":"extraction failed on: ` + p.memory + ` api_key=` + p.secret + `"}`))
+		// A raw newline: the whole answer goes, not only its first line.
+		_, _ = w.Write([]byte("{\"detail\":\"extraction failed on:\n" + p.memory + " api_key=" + p.secret + "\"}"))
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nui_port = 19999\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 
 	d := pathsOf(home)
 	now := time.Now().UTC()
@@ -107,38 +110,51 @@ func issueBodies(t *testing.T, out string) string {
 	return b.String()
 }
 
-func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
+// encodedForms are the ways a value can show in a report: as is, and
+// escaped for a query or a path (hindsight's bankPath escapes ':' too).
+func encodedForms(v string) []string {
+	return []string{v, url.QueryEscape(v), url.PathEscape(v), strings.ReplaceAll(url.PathEscape(v), ":", "%3A")}
+}
+
+// assertScrubbed runs report with each output form and checks that no
+// planted value shows, in any encoded form, in the text, the JSON or the
+// decoded links, and that every placeholder that stands for them does.
+func assertScrubbed(t *testing.T, planted map[string]string, wants []string) {
+	t.Helper()
 	for _, args := range [][]string{{"report"}, {"report", "--json"}} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			p := plantedMachine(t)
-			code, out, stderr := run(t, args...)
-			if code != output.OK {
-				t.Fatalf("exit %d\n%s\n%s", code, out, stderr)
-			}
-			// JSON escapes <, > and &: compare the text they stand for.
-			plain := strings.NewReplacer(`\u003c`, "<", `\u003e`, ">", `\u0026`, "&").Replace(out)
-			bodies := issueBodies(t, plain)
-			if !strings.Contains(bodies, "**Versions**") {
-				t.Fatalf("no issue body found in:\n%s", out)
-			}
-			all := plain + stderr + bodies
-			for what, v := range map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
-				"host": "annsbox", "project": "ann-secret-project"} {
-				for _, form := range []string{v, url.QueryEscape(v)} {
-					if strings.Contains(all, form) {
-						t.Errorf("the report shows the planted %s %q:\n%s", what, form, out)
-					}
+		code, out, stderr := run(t, args...)
+		if code != output.OK {
+			t.Fatalf("%v: exit %d\n%s\n%s", args, code, out, stderr)
+		}
+		// JSON escapes <, > and &: compare the text they stand for.
+		plain := strings.NewReplacer(`\u003c`, "<", `\u003e`, ">", `\u0026`, "&").Replace(out)
+		bodies := issueBodies(t, plain)
+		if !strings.Contains(bodies, "**Versions**") {
+			t.Fatalf("%v: no issue body found in:\n%s", args, out)
+		}
+		all := plain + stderr + bodies
+		for what, v := range planted {
+			for _, form := range encodedForms(v) {
+				if strings.Contains(all, form) {
+					t.Errorf("%v shows the planted %s %q:\n%s", args, what, form, out)
 				}
 			}
-			// The planted values did reach the scrubber: what replaced them shows.
-			for _, want := range []string{"[redacted:", "~/backsight/config/config.toml", "~/work/<host>/state.json", "[server answer omitted]",
-				"doctor/server/error", "hook_failure/prompt/timeout", "recall/scope_failed", "session_state_error", "job/tick/partial"} {
-				if !strings.Contains(all, want) {
-					t.Errorf("the report lacks %q:\n%s", want, out)
-				}
+		}
+		// The planted values did reach the scrubber: what replaced them shows.
+		for _, want := range wants {
+			if !strings.Contains(all, want) {
+				t.Errorf("%v lacks %q:\n%s", args, want, out)
 			}
-		})
+		}
 	}
+}
+
+func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
+	p := plantedMachine(t)
+	assertScrubbed(t, map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
+		"host": "annsbox", "project": "ann-secret-project"},
+		[]string{"[redacted:", "~/backsight/config/config.toml", "~/work/<host>/state.json", "[server answer omitted]",
+			"doctor/server/error", "hook_failure/prompt/timeout", "recall/scope_failed", "session_state_error", "job/tick/partial"})
 }
 
 func TestReportJSONLinksAndSendsNothing(t *testing.T) {
@@ -178,6 +194,9 @@ func TestReportJSONLinksAndSendsNothing(t *testing.T) {
 	}
 	if r.Diagnostic.Doctor.Server == nil || !r.Diagnostic.Doctor.Server.Loopback || len(r.Diagnostic.Doctor.Checks) < 8 {
 		t.Errorf("doctor %+v", r.Diagnostic.Doctor)
+	}
+	if c := reportCheck(r, "server"); !strings.Contains(c.Detail, "HTTP 500") || !strings.Contains(c.Detail, "[server answer omitted]") || strings.Contains(c.Detail, "quokka") {
+		t.Errorf("server check %+v", c)
 	}
 	if c := r.Diagnostic.Counts; c.SessionsTracked != 1 || c.ErrorClasses["hook_failure/prompt/timeout"] != 1 || c.Days != 7 {
 		t.Errorf("counts %+v", c)
@@ -231,7 +250,7 @@ func TestReportHidesTheBankName(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"ann-private-notes\"\nui_port = 19999\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"ann-private-notes\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 	code, out, _ := run(t, "report")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -246,8 +265,11 @@ func TestReportHidesTheBankName(t *testing.T) {
 }
 
 func TestReportHealthyMachineHasNoClass(t *testing.T) {
-	isolate(t)
+	home := isolate(t)
 	withClaude(t)
+	// Transcripts kept long enough: isolate's machine warns about nothing else.
+	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"cleanupPeriodDays": 3650}`), 0o600)
 	code, out, _ := run(t, "report", "--json")
 	var env struct {
 		Data report.Report `json:"data"`
@@ -255,12 +277,19 @@ func TestReportHealthyMachineHasNoClass(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
 		t.Fatalf("exit %d, %v:\n%s", code, err, out)
 	}
-	// isolate's machine warns about the transcript retention only.
-	if env.Data.Class != "doctor/retention/warn" || env.Data.Diagnostic.Doctor.Errors != 0 {
-		t.Errorf("class %q, doctor %+v", env.Data.Class, env.Data.Diagnostic.Doctor)
+	r := env.Data
+	if r.Class != "" || r.SearchURL != "" || r.Diagnostic.Doctor.Errors != 0 || r.Diagnostic.Doctor.Warnings != 0 {
+		t.Errorf("class %q, search %q, doctor %+v", r.Class, r.SearchURL, r.Diagnostic.Doctor)
 	}
-	if env.Data.Diagnostic.RecentErrors == nil || len(env.Data.Diagnostic.RecentErrors) != 0 {
-		t.Errorf("recent errors %v, want an empty list", env.Data.Diagnostic.RecentErrors)
+	if r.Diagnostic.RecentErrors == nil || len(r.Diagnostic.RecentErrors) != 0 {
+		t.Errorf("recent errors %v, want an empty list", r.Diagnostic.RecentErrors)
+	}
+	if u, _ := url.Parse(r.IssueURL); !strings.HasPrefix(u.Query().Get("title"), "report: backsight ") {
+		t.Errorf("issue link %s", r.IssueURL)
+	}
+	code, out, _ = run(t, "report")
+	if code != output.OK || !strings.Contains(out, "doctor found no error and the telemetry holds no recent one.") || strings.Contains(out, "Error class:") {
+		t.Errorf("exit %d:\n%s", code, out)
 	}
 }
 
@@ -277,5 +306,143 @@ func TestReportRefusesArguments(t *testing.T) {
 	isolate(t)
 	if code, _, _ := run(t, "report", "send"); code != output.Usage {
 		t.Errorf("exit %d, want %d", code, output.Usage)
+	}
+}
+
+// reportCheck is the doctor check id of r ("" fields when absent).
+func reportCheck(r report.Report, id string) doctor.Check {
+	for _, c := range r.Diagnostic.Doctor.Checks {
+		if c.ID == id {
+			return c
+		}
+	}
+	return doctor.Check{}
+}
+
+// reportJSON runs report --json and decodes its data.
+func reportJSON(t *testing.T) report.Report {
+	t.Helper()
+	code, out, _ := run(t, "report", "--json")
+	var env struct {
+		Data report.Report `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+		t.Fatalf("exit %d, %v:\n%s", code, err, out)
+	}
+	return env.Data
+}
+
+func setUser(t *testing.T, name string) {
+	t.Helper()
+	old := osUser
+	osUser = func() string { return name }
+	t.Cleanup(func() { osUser = old })
+}
+
+func TestReportHidesARemoteServerHost(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
+	// .example never resolves: the lookup error names the host.
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://annsmemory.example:1\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	assertScrubbed(t, map[string]string{"server host": "annsmemory.example"}, []string{"<server>"})
+	r := reportJSON(t)
+	if s := r.Diagnostic.Doctor.Server; s == nil || s.Loopback || s.Scheme != "http" || s.Source != "config" {
+		t.Errorf("server %+v", s)
+	}
+}
+
+func TestReportHidesTheEscapedBankAndAMultiLineAnswer(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	memory := "the zebraumbrella ledger moved to quokkatrellis"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_, _ = w.Write([]byte(`{"status":"healthy"}`))
+		case "/version":
+			_, _ = w.Write([]byte(`{"api_version":"1.1.0"}`))
+		case "/v1/default/banks":
+			_, _ = w.Write([]byte(`{"banks":[{"bank_id":"coding-agent::memoire"}]}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("{\"detail\":\"stats failed\n" + memory + "\"}"))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	assertScrubbed(t, map[string]string{"bank": "coding-agent::memoire", "memory": memory, "memory word": "quokkatrellis"},
+		[]string{"/v1/default/banks/<bank>/stats: HTTP 500", "cannot read bank <bank>"})
+	if c := reportCheck(reportJSON(t), "bank"); !strings.HasSuffix(c.Detail, "HTTP 500 (server_error): [server answer omitted]") {
+		t.Errorf("bank check %+v", c)
+	}
+}
+
+func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	setUser(t, "annuser")
+	ext := t.TempDir()
+	bs := filepath.Join(ext, "run", "media", "annuser", "bs")
+	t.Setenv("BACKSIGHT_HOME", bs)
+	d, err := paths.Resolve("linux", home, os.Getenv)
+	if err != nil || d.Data != filepath.Join(bs, "data") {
+		t.Fatalf("dirs %+v, %v", d, err)
+	}
+	vault := filepath.Join(ext, "mnt", "annsvault", "backups")
+	// Secrets no redaction rule recognises: only secrets.toml and .env say
+	// they are secrets.
+	tomlKey, phrase, envKey := "quokkaplainwordtrellis", "pass phrase/with slash zebra", "staleumbrellaledgerkey"
+
+	_ = os.MkdirAll(d.Config, 0o700)
+	_ = os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
+		"\n[backup]\ndir = \""+vault+"\"\n"), 0o600)
+	_ = os.WriteFile(d.SecretsFile(), []byte("api_key = \""+tomlKey+"\"\nllm_api_key = \""+phrase+"\"\n"), 0o600)
+	_ = os.MkdirAll(filepath.Join(d.Data, "server"), 0o700)
+	_ = os.WriteFile(filepath.Join(d.Data, "server", ".env"), []byte("# old render\nHINDSIGHT_API_TENANT_API_KEY='"+envKey+"'\nHINDSIGHT_API_LLM_PROVIDER=openai\n"), 0o600)
+
+	now := time.Now().UTC()
+	var tel strings.Builder
+	for ev, msg := range map[string]string{
+		"open_failed":   "open /run/media/annuser/usb/notes.json: permission denied",
+		"dial_failed":   "dial " + tomlKey + ": refused",
+		"lookup_failed": "lookup " + url.QueryEscape(phrase) + ": no such host",
+		"stat_failed":   "stat " + envKey + ": gone",
+		"read_failed":   "read " + d.State + "/sessions/a.json and " + d.Bin + "/backsight",
+		"copy_failed":   "copy to " + vault + "/x.tar: no space",
+	} {
+		raw, _ := json.Marshal(map[string]any{"ts": now.Add(-time.Minute).Format(time.RFC3339Nano), "event": ev, "error": msg})
+		tel.Write(append(raw, '\n'))
+	}
+	_ = os.MkdirAll(d.TelemetryDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.TelemetryDir(), "events-"+now.Format("2006-01")+".jsonl"), []byte(tel.String()), 0o600)
+
+	assertScrubbed(t, map[string]string{"user": "annuser", "temp dir": ext, "BACKSIGHT_HOME": bs, "backup dir": vault,
+		"secrets.toml key": tomlKey, "secrets.toml phrase": phrase, ".env key": envKey},
+		[]string{"<config>/config.toml", "no backup in <backups>", "/run/media/<user>/usb/notes.json", "<state>/sessions/a.json and <bin>/backsight",
+			"copy to <backups>/x.tar", "dial [redacted:secret]: refused", "lookup [redacted:secret]: no such host", "stat [redacted:secret]: gone"})
+}
+
+func TestSecretValuesReadsWhatParsersRefuse(t *testing.T) {
+	dir := t.TempDir()
+	sec, env := filepath.Join(dir, "secrets.toml"), filepath.Join(dir, ".env")
+	// Invalid TOML and readable by others: doctor refuses it, the report
+	// still scrubs its values.
+	_ = os.WriteFile(sec, []byte("api_key = \"quokkaplainwordtrellis\"\n[[[ broken\nui_key = 'zebraumbrellaledger'\n"), 0o644)
+	_ = os.WriteFile(env, []byte("# HINDSIGHT_API_LLM_API_KEY='commentedoutvalue'\nMY_TOKEN=unquotedtokenvalue\nHINDSIGHT_API_LLM_PROVIDER=openai\nHINDSIGHT_API_LLM_BASE_URL='http://llm.example:8080/v1'\n"), 0o600)
+	got := strings.Join(secretValues(sec, env), " | ")
+	for _, want := range []string{"quokkaplainwordtrellis", "zebraumbrellaledger", "unquotedtokenvalue", "http://llm.example:8080/v1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("values %q lack %q", got, want)
+		}
+	}
+	for _, not := range []string{"openai", "commentedoutvalue", "broken"} {
+		if strings.Contains(got, not) {
+			t.Errorf("values %q hold %q", got, not)
+		}
+	}
+	if v := secretValues(filepath.Join(dir, "none"), filepath.Join(dir, "none")); len(v) != 0 {
+		t.Errorf("missing files gave %q", v)
 	}
 }

@@ -251,8 +251,14 @@ func issueURL(title string, d Diagnostic, class string) (string, int) {
 	if l := link(append(body, tail...)); len(l) <= MaxURL {
 		return l, omitted
 	}
-	// Even the head is too long (huge version strings): the bare minimum.
-	return link(append(head[:6:6], tail...)), omitted + len(head) - 6
+	// Even the head is too long (huge version strings): the bare minimum,
+	// counting the head lines left out like the others.
+	for _, l := range head[6:] {
+		if strings.TrimSpace(l) != "" {
+			omitted++
+		}
+	}
+	return link(append(append(head[:6:6], note), tail...)), omitted
 }
 
 func orNone(s string) string {
