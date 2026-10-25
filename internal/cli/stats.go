@@ -28,41 +28,90 @@ type extraction struct {
 
 type statsResult struct {
 	Days int `json:"days"`
+	// Window: set by --since, the report is [from, to) instead of the
+	// last Days days.
+	Window bool `json:"window,omitempty"`
 	stats.Report
-	Extraction extraction `json:"extraction"`
+	Extraction extraction         `json:"extraction"`
+	Parity     []stats.ParityLine `json:"parity,omitempty"`
 }
 
 // newStatsCmd is `stats [days]` (SPEC §15): the C12 report from local
-// telemetry, and the server's extraction tokens and cost.
+// telemetry, and the server's extraction tokens and cost. --since/--until
+// fix the window, --parity compares it with C12 (§1.2, decision 0065).
 func newStatsCmd(e *env) *cobra.Command {
-	return &cobra.Command{
+	var since, until string
+	var parity bool
+	cmd := &cobra.Command{
 		Use:   "stats [days]",
 		Short: "Show how memory was used over the last days (default 7): recalls, searches, credits, detector, cost",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			days := 7
 			if len(args) == 1 {
+				if since != "" || until != "" {
+					return &output.Error{Code: output.Usage, Message: "give either [days] or --since/--until"}
+				}
 				n, err := strconv.Atoi(args[0])
 				if err != nil || n < 1 || n > 365 {
 					return &output.Error{Code: output.Usage, Message: "days: a whole number from 1 to 365"}
 				}
 				days = n
 			}
+			to := now()
+			from := to.Add(-time.Duration(days) * 24 * time.Hour)
+			if until != "" {
+				if since == "" {
+					return &output.Error{Code: output.Usage, Message: "--until needs --since"}
+				}
+				t, err := parseWhen(until)
+				if err != nil {
+					return &output.Error{Code: output.Usage, Message: "--until: " + err.Error()}
+				}
+				to = t
+			}
+			if since != "" {
+				t, err := parseWhen(since)
+				if err != nil {
+					return &output.Error{Code: output.Usage, Message: "--since: " + err.Error()}
+				}
+				if !t.Before(to) || to.Sub(t) > 366*24*time.Hour {
+					return &output.Error{Code: output.Usage, Message: "--since must be before --until (or now), at most 366 days before"}
+				}
+				from = t
+				days = int((to.Sub(from) + 24*time.Hour - 1) / (24 * time.Hour))
+			}
 			d, _, err := machine()
 			if err != nil {
 				return err
 			}
-			to := now()
-			from := to.Add(-time.Duration(days) * 24 * time.Hour)
 			ev, err := stats.Load(d.TelemetryDir(), from, to)
 			if err != nil {
 				return blocked(err)
 			}
-			res := statsResult{Days: days, Report: stats.Compute(ev, from, to)}
+			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to)}
 			res.Extraction = extractionOver(cmd, from, to, days)
+			if parity {
+				res.Parity = stats.Parity(res.Report)
+			}
 			return e.emit("stats", res, func() string { return statsText(res) })
 		},
 	}
+	cmd.Flags().StringVar(&since, "since", "", "start of the window (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD, UTC) instead of [days]")
+	cmd.Flags().StringVar(&until, "until", "", "end of the window (default now), with --since")
+	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the reference stack's C12 baseline (SPEC §1.2)")
+	_ = cmd.Flags().MarkHidden("parity")
+	return cmd
+}
+
+// parseWhen reads a window bound; a date alone is midnight UTC.
+func parseWhen(s string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04Z07:00", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("%q is not a time (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD)", s)
 }
 
 // extractionOver reads Hindsight's LLM token use over the window, from its
@@ -139,7 +188,12 @@ func counts(m map[string]int) string {
 func statsText(r statsResult) string {
 	var b strings.Builder
 	p := r.Prompts
-	fmt.Fprintf(&b, "Memory over the last %d day(s), %s → %s (UTC)\n\n", r.Days, r.From.UTC().Format("2006-01-02 15:04"), r.To.UTC().Format("2006-01-02 15:04"))
+	span := r.From.UTC().Format("2006-01-02 15:04") + " → " + r.To.UTC().Format("2006-01-02 15:04")
+	if r.Window {
+		fmt.Fprintf(&b, "Memory from %s (UTC)\n\n", span)
+	} else {
+		fmt.Fprintf(&b, "Memory over the last %d day(s), %s (UTC)\n\n", r.Days, span)
+	}
 	fmt.Fprintf(&b, "Prompts      %d typed, %d machine messages; recalls %d (%s injected something); skipped: %s\n",
 		p.Human, p.Machine, p.Recalls, pct(p.WithHits, p.Recalls), counts(p.Skips))
 	fmt.Fprintf(&b, "Recall       p50 %d ms, p95 %d ms; scope calls failed %d / %d\n", p.P50MS, p.P95MS, p.ScopeFailures, p.ScopeCalls)
@@ -167,6 +221,17 @@ func statsText(r statsResult) string {
 		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens: %.2f %s%s\n", x.Input, x.Cached, x.Output, x.Cost, x.Currency, serverDays(x, r.Days))
 	default:
 		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens (no price known: set llm.price_* for a cost)%s\n", x.Input, x.Cached, x.Output, serverDays(x, r.Days))
+	}
+	if len(r.Parity) > 0 {
+		fmt.Fprintf(&b, "\nParity against the reference stack (SPEC §1.2, C12 on this machine; a verdict needs %d events)\n", stats.MinParity)
+		for _, l := range r.Parity {
+			got := pct(l.N, l.Of) + fmt.Sprintf(" (%d/%d)", l.N, l.Of)
+			if l.Latency {
+				got = fmt.Sprintf("%d ms (%d recalls)", l.N, l.Of)
+			}
+			fmt.Fprintf(&b, "  %-44s %s %-16s now %-22s %s\n", l.Metric, l.Rule, l.Baseline, got, l.Verdict)
+		}
+		fmt.Fprintf(&b, "Parity       %s\n", stats.ParityOverall(r.Parity))
 	}
 	return b.String()
 }

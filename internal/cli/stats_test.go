@@ -136,3 +136,47 @@ func TestStatsReadsWhatTheProducersWrite(t *testing.T) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
 }
+
+// --since/--until count only the events in [since, until), whenever stats
+// runs; --parity adds the C12 comparison (decision 0065).
+func TestStatsAbsoluteWindowAndParity(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	dir := pathsOf(home).TelemetryDir()
+	_ = os.MkdirAll(dir, 0o700)
+	var lines strings.Builder
+	for _, ts := range []string{"2026-09-30T23:59:59.000Z", "2026-10-01T00:00:00.000Z", "2026-10-01T12:00:00.000Z", "2026-10-02T00:00:00.000Z"} {
+		lines.WriteString(`{"ts":"` + ts + `","event":"prompt","decision":"recall","plen":80,"ms":700,"injected":1,"session":"w"}` + "\n")
+	}
+	_ = os.WriteFile(filepath.Join(dir, "events-2026-09.jsonl"), []byte(strings.SplitAfter(lines.String(), "\n")[0]), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "events-2026-10.jsonl"), []byte(strings.Join(strings.SplitAfter(lines.String(), "\n")[1:], "")), 0o600)
+
+	code, out, _ := run(t, "stats", "--since", "2026-10-01", "--until", "2026-10-02T00:00Z")
+	if code != output.OK || !strings.Contains(out, "Memory from 2026-10-01 00:00 → 2026-10-02 00:00 (UTC)") || !strings.Contains(out, "2 typed") || strings.Contains(out, "Parity") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	_, out, _ = run(t, "stats", "--since", "2026-09-30T23:00:00Z", "--until", "2026-10-02T00:00Z", "--parity", "--json")
+	var env struct {
+		Data statsResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if r := env.Data; r.Prompts.Human != 3 || !r.Window || r.Days != 2 || len(r.Parity) != 6 || r.Parity[0].Verdict != "too few" || r.Parity[0].N != 3 {
+		t.Errorf("%+v", r)
+	}
+	if _, out, _ := run(t, "stats", "--since", "2026-10-01", "--until", "2026-10-02", "--parity"); !strings.Contains(out, "recalls that injected something") || !strings.Contains(out, "26% (16/61)") || !strings.Contains(out, "Parity       not yet") {
+		t.Errorf("parity text:\n%s", out)
+	}
+	for _, bad := range [][]string{
+		{"7", "--since", "2026-10-01"},                     // both forms
+		{"--until", "2026-10-02"},                          // until alone
+		{"--since", "yesterday"},                           // not a time
+		{"--since", "2026-10-02", "--until", "2026-10-01"}, // reversed
+		{"--since", "2020-01-01", "--until", "2026-10-01"}, // over 366 days
+	} {
+		if code, _, _ := run(t, append([]string{"stats"}, bad...)...); code != output.Usage {
+			t.Errorf("stats %v: exit %d", bad, code)
+		}
+	}
+}
