@@ -8,8 +8,4 @@ package server
 // has no testhooks tag, so no such variable, and -X is then ignored.
 var TestImage string
 
-func init() {
-	if TestImage != "" {
-		HindsightImage = TestImage
-	}
-}
+func testImage() string { return TestImage }

@@ -24,9 +24,17 @@ const (
 	Project       = "backsight"
 )
 
-// HindsightImage is the pinned Hindsight image. A testhooks build may pin
-// another (CI's update proof); a release never does (make verify-keys).
-var HindsightImage = pinnedHindsight
+// HindsightImage is the pinned Hindsight image. init sets it after the
+// linker, so -X cannot change it; a testhooks build may pin another (CI's
+// update proof), and a release has no such tag (make verify-keys).
+var HindsightImage string
+
+func init() {
+	HindsightImage = pinnedHindsight
+	if t := testImage(); t != "" {
+		HindsightImage = t
+	}
+}
 
 const pinnedHindsight = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06"
 

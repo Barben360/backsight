@@ -18,8 +18,11 @@ builds:
       - -X github.com/Barben360/backsight/internal/buildinfo.Date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     targets: [linux_amd64, linux_arm64, darwin_arm64, windows_amd64]
-    # The binary this machine can run must trust the release keys only
-    # (decision 0067); a failure stops the release before it is published.
+    # Every target's build settings must be a release's (no testkey or
+    # testhooks tag), and the binary this machine can run must trust the
+    # release keys only and pin the source's Hindsight image (decision
+    # 0067 and its block review); a failure stops the release before it
+    # is published.
     hooks:
       post:
         - cmd: make -s verify-keys BIN={{ .Path }} TARGET={{ .Os }}_{{ .Arch }}

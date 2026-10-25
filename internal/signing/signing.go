@@ -17,18 +17,30 @@ import (
 	"aead.dev/minisign"
 )
 
+// The published keys, embedded as bytes: -X sets string variables only,
+// so a build cannot swap them (decision 0067 block review).
 var (
 	//go:embed keys/current.pub
-	Current string
+	currentPub []byte
 	//go:embed keys/next.pub
-	Next string
+	nextPub []byte
+)
+
+var (
+	// Current and Next are the release keys' files, set by init (after
+	// the linker: -X on them does nothing).
+	Current, Next string
 	// TestKey is a third trusted key, the base64 line of a minisign public
-	// key. Only test builds set it, with
-	// -ldflags "-X github.com/Barben360/backsight/internal/signing.TestKey=RW…";
-	// release builds leave it empty and the release pipeline fails when a
-	// release binary reports it (decision 0067).
+	// key. Only a build with the testkey tag has one, set with
+	// -ldflags "-X github.com/Barben360/backsight/internal/signing.LinkedTestKey=RW…"
+	// (make build TEST_KEY=…): init sets TestKey after the linker, so -X
+	// on TestKey itself does nothing, and the tag, which go version -m
+	// shows for every target, is the one way in. The release pipeline
+	// refuses the tag and a binary reporting a test key (decision 0067).
 	TestKey string
 )
+
+func init() { Current, Next, TestKey = string(currentPub), string(nextPub), linkedTestKey() }
 
 // Key is one trusted public key: its minisign id (hex, as minisign prints
 // it) and its role, current, next or test.
