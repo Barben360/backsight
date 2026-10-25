@@ -64,21 +64,24 @@ set -e
 jq -e '.ok and ([.data.steps[] | select(.name == "verify")][0].status == "done")' "$work/setup.json" >/dev/null || fail "verify did not pass"
 grep -q '"event":"progress"' "$work/progress.jsonl" || fail "no progress lines on stderr"
 
-# 4. A memory stored now is found again (retrieval, not ranking: the mock
-# LLM echoes its input, so scores mean little).
+# 4. The client's own paths reach the memory: a note is stored, and a
+# search answers with hits. Hindsight's mock LLM "extracts" the lines of
+# its own prompt, so the hits' content proves nothing here: recall of real
+# content is verify's round trip (step 3) and the live runs with a real LLM.
 "$bin" store --json --kind decision "The fresh-install proof stores this decision: billing keeps PostgreSQL 16 with partial indexes." > "$work/store.json" ||
   { cat "$work/store.json" >&2; fail "store failed"; }
+jq -e '.ok and .data.status == "stored"' "$work/store.json" >/dev/null || { cat "$work/store.json" >&2; fail "the note was not stored"; }
 for _ in $(seq 1 60); do
   "$bin" search --all --min-score 0 --json "Which PostgreSQL version does billing keep?" > "$work/search.json" 2>&1 || true
-  if jq -e '[.data.hits[]? | select(.text | test("PostgreSQL"))] | length > 0' "$work/search.json" >/dev/null 2>&1; then
+  if jq -e '.ok and (.data.hits | length > 0)' "$work/search.json" >/dev/null 2>&1; then
     found=1
     break
   fi
   sleep 3
 done
-[ "${found:-}" = 1 ] || { cat "$work/store.json" "$work/search.json" >&2; fail "the stored decision was never found"; }
+[ "${found:-}" = 1 ] || { cat "$work/store.json" "$work/search.json" >&2; fail "search never answered with hits"; }
 
 # 5. Undo leaves the profile as it found it, keeping config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
 "$bin" doctor --json > "$work/doctor.json" || true
-echo "fresh-install: ok (setup, verify, store, search, undo) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, undo) on project $project"
