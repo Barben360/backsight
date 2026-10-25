@@ -611,7 +611,7 @@ func checkProvider(ctx context.Context, cfg config.Config, sec config.Secrets) (
 	if err != nil {
 		return server.ProviderResult{}, blocked(err)
 	}
-	res, err := server.CheckProvider(ctx, cl, cfg.Server.Bank)
+	res, err := server.CheckProvider(ctx, cl, cfg.Server.Bank, cfg.LLM.Provider)
 	if err != nil {
 		return res, redacted(err, sec) // provider errors may echo a key
 	}

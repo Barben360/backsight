@@ -16,10 +16,12 @@ project=${PROJECT:-bs-fresh}
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=${WORK:-$(mktemp -d)}
 mkdir -p "$work"
+bin=$work/bin/backsight
+# Built before HOME moves: Go's caches stay the caller's.
+(cd "$root" && go build -o "$bin" ./cmd/backsight)
 export HOME=$work/home BACKSIGHT_HOME=$work/backsight
 unset CLAUDE_CONFIG_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
 mkdir -p "$HOME"
-bin=$work/bin/backsight
 compose() {
   docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" "$@"
 }
@@ -36,8 +38,6 @@ cleanup() {
 }
 trap cleanup EXIT
 fail() { echo "fresh-install: $*" >&2; exit 1; }
-
-(cd "$root" && go build -o "$bin" ./cmd/backsight)
 
 # 1. An agent's first call: the questions, then the answers.
 "$bin" setup --questions --json > "$work/questions.json"

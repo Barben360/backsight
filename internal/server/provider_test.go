@@ -31,7 +31,7 @@ func dryRun(t *testing.T, status int, body string) (*hindsight.Client, *map[stri
 
 func TestProviderCheckPasses(t *testing.T) {
 	c, req := dryRun(t, 200, `{"facts":[{"text":"The billing service keeps PostgreSQL 16 instead of MySQL because it needs partial indexes (decided 2026-10-24).","fact_type":"world"},{"text":"postgres:16 is pinned in billing/compose.yaml.","fact_type":"experience"}],"usage":{"input_tokens":900,"output_tokens":80}}`)
-	res, err := CheckProvider(context.Background(), c, "claude-memory")
+	res, err := CheckProvider(context.Background(), c, "claude-memory", "deepseek")
 	if err != nil || res.Facts != 2 || res.InputTokens != 900 || res.OutputTokens != 80 || len(res.Sample) != 2 || !strings.HasPrefix(res.Sample[1], "postgres:16 is pinned") {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -56,7 +56,7 @@ func TestProviderCheckFailures(t *testing.T) {
 	}
 	for name, c := range cases {
 		cl, _ := dryRun(t, c.status, c.body)
-		if _, err := CheckProvider(context.Background(), cl, "claude-memory"); err == nil || !strings.Contains(err.Error(), c.inErr) {
+		if _, err := CheckProvider(context.Background(), cl, "claude-memory", "deepseek"); err == nil || !strings.Contains(err.Error(), c.inErr) {
 			t.Errorf("%s: want an error containing %q, got %v", name, c.inErr, err)
 		}
 	}
@@ -74,5 +74,22 @@ func TestLooksEnglish(t *testing.T) {
 		if got := looksEnglish(text); got != want {
 			t.Errorf("%q: %v", text, got)
 		}
+	}
+}
+
+// The mock echoes the French sample: only its shape is checked; every
+// other provider still has to answer in English.
+func TestMockProviderSkipsOnlyTheLanguageCheck(t *testing.T) {
+	echo := `{"facts":[{"text":"user: On garde PostgreSQL 16 pour le service billing, pas MySQL : les index partiels sont indispensables.","fact_type":"world"}]}`
+	cl, _ := dryRun(t, 200, echo)
+	if _, err := CheckProvider(context.Background(), cl, "claude-memory", MockProvider); err != nil {
+		t.Errorf("mock: %v", err)
+	}
+	if _, err := CheckProvider(context.Background(), cl, "claude-memory", "openai"); err == nil {
+		t.Error("a real provider answering in French must fail")
+	}
+	bad, _ := dryRun(t, 200, `{"facts":[]}`)
+	if _, err := CheckProvider(context.Background(), bad, "claude-memory", MockProvider); err == nil {
+		t.Error("the mock returning no fact must still fail")
 	}
 }

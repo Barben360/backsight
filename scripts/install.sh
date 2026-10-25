@@ -1,0 +1,116 @@
+#!/bin/sh
+# backsight bootstrap (SPEC §11.1): downloads the release for this machine,
+# checks its minisign signature against the key below and its checksum,
+# installs it, and says what to run next. POSIX sh; needs curl (or a local
+# release directory), tar, and minisign or openssl (3.0+, for Ed25519).
+#
+#   curl -fsSL <url>/install.sh | sh
+#
+# BACKSIGHT_RELEASE_DIR  a local directory holding a release (checksums.txt,
+#                        its .minisig and the archives): no network
+# BACKSIGHT_RELEASE_URL  where the release files are (default: the latest
+#                        GitHub release)
+# BACKSIGHT_HOME         as for backsight itself: one directory for everything
+set -eu
+
+# The release key (decision 0027). Changed only by a key rotation.
+PUBKEY=${BACKSIGHT_INSTALL_PUBKEY:-RWTezqkiNo2ey8msd7vpSC0+D6oghZ1/VwgXU6EqYRjlZzyd87+/03eG}
+URL=${BACKSIGHT_RELEASE_URL:-https://github.com/Barben360/backsight/releases/latest/download}
+
+die() { echo "backsight install: $*" >&2; exit 1; }
+
+case $(uname -s) in
+Linux) os=linux ;;
+Darwin) os=darwin ;;
+*) die "unsupported system $(uname -s): on Windows use install.ps1" ;;
+esac
+case $(uname -m) in
+x86_64 | amd64) arch=amd64 ;;
+aarch64 | arm64) arch=arm64 ;;
+*) die "unsupported machine $(uname -m)" ;;
+esac
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+fetch() { # fetch <name>: into $tmp
+	if [ -n "${BACKSIGHT_RELEASE_DIR:-}" ]; then
+		cp "$BACKSIGHT_RELEASE_DIR/$1" "$tmp/$1" 2>/dev/null || die "$1 is not in $BACKSIGHT_RELEASE_DIR"
+	else
+		curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/$1" "$URL/$1" || die "cannot download $URL/$1"
+	fi
+}
+
+# verify <file>: <file>.minisig must be a prehashed minisign signature by
+# PUBKEY, over the file and over its trusted comment.
+verify() {
+	f=$1
+	sigfile=$f.minisig
+	if command -v minisign >/dev/null 2>&1; then
+		minisign -Vq -P "$PUBKEY" -m "$f" -x "$sigfile" || die "$(basename "$f"): bad signature"
+		return
+	fi
+	command -v openssl >/dev/null 2>&1 || die "neither minisign nor openssl is installed: install one to check the release signature"
+	d=$tmp/verify
+	mkdir -p "$d"
+	printf '%s' "$PUBKEY" | base64 -d > "$d/pub.bin" 2>/dev/null || die "bad public key"
+	sed -n 2p "$sigfile" | base64 -d > "$d/sig.bin" 2>/dev/null || die "$(basename "$sigfile"): unreadable"
+	[ "$(head -c 2 "$d/sig.bin")" = ED ] || die "$(basename "$sigfile"): not a prehashed minisign signature"
+	[ "$(head -c 10 "$d/sig.bin" | tail -c 8 | od -An -tx1)" = "$(head -c 10 "$d/pub.bin" | tail -c 8 | od -An -tx1)" ] ||
+		die "$(basename "$sigfile"): signed by another key"
+	{ printf '\060\052\060\005\006\003\053\145\160\003\041\000'; tail -c 32 "$d/pub.bin"; } > "$d/pub.der"
+	openssl pkey -pubin -inform DER -in "$d/pub.der" -out "$d/pub.pem" 2>/dev/null || die "openssl cannot read an Ed25519 key (needs OpenSSL 3)"
+	tail -c 64 "$d/sig.bin" > "$d/s.bin"
+	openssl dgst -blake2b512 -binary "$f" > "$d/hash.bin"
+	openssl pkeyutl -verify -pubin -inkey "$d/pub.pem" -rawin -in "$d/hash.bin" -sigfile "$d/s.bin" >/dev/null 2>&1 ||
+		die "$(basename "$f"): bad signature"
+	comment=$(sed -n 3p "$sigfile")
+	case $comment in "trusted comment: "*) ;; *) die "$(basename "$sigfile"): no trusted comment" ;; esac
+	{ cat "$d/s.bin"; printf '%s' "${comment#trusted comment: }"; } > "$d/global.bin"
+	sed -n 4p "$sigfile" | base64 -d > "$d/g.bin" 2>/dev/null || die "$(basename "$sigfile"): unreadable"
+	openssl pkeyutl -verify -pubin -inkey "$d/pub.pem" -rawin -in "$d/global.bin" -sigfile "$d/g.bin" >/dev/null 2>&1 ||
+		die "$(basename "$sigfile"): bad trusted comment signature"
+}
+
+sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+fetch checksums.txt
+fetch checksums.txt.minisig
+verify "$tmp/checksums.txt"
+
+archive=$(awk -v s="_${os}_${arch}.tar.gz" '{ n = $2; if (substr(n, length(n) - length(s) + 1) == s) print n }' "$tmp/checksums.txt" | head -n 1)
+[ -n "$archive" ] || die "the release has no archive for $os/$arch"
+case $archive in */* | .*) die "unexpected archive name $archive" ;; esac
+want=$(awk -v n="$archive" '$2 == n { print $1 }' "$tmp/checksums.txt")
+fetch "$archive"
+[ "$(sha256 "$tmp/$archive")" = "$want" ] || die "$archive: checksum mismatch"
+
+version=${archive#backsight_}
+version=${version%_"${os}"_"${arch}".tar.gz}
+mkdir "$tmp/x"
+tar -xzf "$tmp/$archive" -C "$tmp/x" backsight || die "$archive holds no backsight binary"
+
+if [ -n "${BACKSIGHT_HOME:-}" ]; then
+	data=$BACKSIGHT_HOME/data
+	bindir=$BACKSIGHT_HOME/bin
+elif [ "$os" = darwin ]; then
+	data=$HOME/Library/Application\ Support/backsight
+	bindir=$HOME/.local/bin
+else
+	data=${XDG_DATA_HOME:-$HOME/.local/share}/backsight
+	bindir=$HOME/.local/bin
+fi
+dest=$data/bin/$version
+mkdir -p "$dest" "$bindir"
+install -m 0755 "$tmp/x/backsight" "$dest/backsight.tmp"
+mv -f "$dest/backsight.tmp" "$dest/backsight"
+ln -sf "$dest/backsight" "$bindir/backsight.tmp" && mv -f "$bindir/backsight.tmp" "$bindir/backsight"
+
+echo "backsight $version installed: $bindir/backsight"
+case :$PATH: in
+*:"$bindir":*) ;;
+*) echo "add it to your PATH first: export PATH=\"$bindir:\$PATH\" (in your shell's profile to keep it)" ;;
+esac
+echo "next: backsight setup"

@@ -28,9 +28,14 @@ type ProviderResult struct {
 	Sample       []string `json:"sample_facts"`
 }
 
+// MockProvider is Hindsight's test LLM: it echoes its input, so the
+// language check cannot apply (CI's sandbox and fresh-install proof).
+const MockProvider = "mock"
+
 // CheckProvider proves auth, model, structured output and language end to
-// end with a dry-run extraction on bank (nothing is stored).
-func CheckProvider(ctx context.Context, c *hindsight.Client, bank string) (ProviderResult, error) {
+// end with a dry-run extraction on bank (nothing is stored). With the mock
+// provider only the shape of the facts is checked.
+func CheckProvider(ctx context.Context, c *hindsight.Client, bank, provider string) (ProviderResult, error) {
 	var res ProviderResult
 	out, err := c.DryRunExtract(ctx, bank, providerSample, "conversation", sampleTime)
 	if err != nil {
@@ -43,7 +48,7 @@ func CheckProvider(ctx context.Context, c *hindsight.Client, bank string) (Provi
 		if strings.TrimSpace(f.Text) == "" || !factTypes[f.FactType] {
 			return res, fmt.Errorf("the extraction LLM returned a malformed fact (type %q, text %q)", f.FactType, f.Text)
 		}
-		if !looksEnglish(f.Text) {
+		if provider != MockProvider && !looksEnglish(f.Text) {
 			return res, fmt.Errorf("fact not in English (decision 0039): %q", f.Text)
 		}
 		res.Sample = append(res.Sample, f.Text)
