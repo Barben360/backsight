@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -56,6 +57,9 @@ func (execClaude) Run(ctx context.Context, env []string, args ...string) ([]byte
 }
 
 var claudeRunner claudeCLI = execClaude{}
+
+// selfExe is the running binary; tests replace it.
+var selfExe = os.Executable
 
 type installStep struct {
 	Name   string `json:"name"`
@@ -298,7 +302,7 @@ func listed(ctx context.Context, env []string, field string, args ...string) (ma
 // so every distinct build (a rebuilt dev or dirty binary included) gets its
 // own directory and the shim always runs the binary that installed it.
 func shimTarget(data string) (string, error) {
-	exe, err := os.Executable()
+	exe, err := selfExe()
 	if err != nil {
 		return "", err
 	}
@@ -328,7 +332,7 @@ func shimTarget(data string) (string, error) {
 // Windows a copy, the running one renamed aside first (Windows lets a
 // running image be renamed, not replaced).
 func installShim(target, shim string) error {
-	exe, err := os.Executable()
+	exe, err := selfExe()
 	if err != nil {
 		return err
 	}
@@ -339,6 +343,20 @@ func installShim(target, shim string) error {
 	if got, _ := fsutil.HashFile(target); got != want {
 		if err := copyFile(exe, target, 0o755); err != nil {
 			return err
+		}
+	}
+	// The signed checksums.txt install.sh kept next to the binary goes with
+	// the copy, which checks itself against it (SPEC §11.1). A dev build
+	// has none.
+	if real, err := filepath.EvalSymlinks(exe); err == nil && filepath.Dir(real) != filepath.Dir(target) {
+		for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
+			src := filepath.Join(filepath.Dir(real), name)
+			if _, err := os.Stat(src); err != nil {
+				continue
+			}
+			if err := copyFile(src, filepath.Join(filepath.Dir(target), name), 0o644); err != nil {
+				return err
+			}
 		}
 	}
 	if runtime.GOOS == "windows" {

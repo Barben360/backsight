@@ -1,7 +1,8 @@
 #!/bin/sh
 # backsight bootstrap (SPEC §11.1): downloads the release for this machine,
 # checks its minisign signature against the key below and its checksum,
-# installs it, and says what to run next. POSIX sh; needs curl (or a local
+# installs it with the signed checksums.txt (the binary re-verifies itself
+# against it), and says what to run next. POSIX sh; needs curl (or a local
 # release directory), tar, and minisign or openssl (3.0+, for Ed25519).
 #
 #   curl -fsSL <url>/install.sh | sh
@@ -125,6 +126,10 @@ mkdir -p "$dest" "$bindir"
 [ -f "$tmp/x/backsight" ] && [ ! -L "$tmp/x/backsight" ] || die "$archive: backsight is not a regular file"
 install -m 0755 "$tmp/x/backsight" "$dest/backsight.tmp" || die "cannot write $dest"
 mv -f "$dest/backsight.tmp" "$dest/backsight" || die "cannot write $dest"
+# The binary checks itself against the signed checksums on its first run.
+for f in checksums.txt checksums.txt.minisig; do
+	{ cp "$tmp/$f" "$dest/$f.tmp" && mv -f "$dest/$f.tmp" "$dest/$f"; } || die "cannot write $dest"
+done
 rm -f "$bindir/backsight.tmp"
 ln -s "$dest/backsight" "$bindir/backsight.tmp" || die "cannot write $bindir"
 mv -f "$bindir/backsight.tmp" "$bindir/backsight" || die "cannot write $bindir"

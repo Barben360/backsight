@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -38,7 +39,10 @@ type tickResult struct {
 	Index    string             `json:"index,omitempty"` // entity index: rebuilt | failed: <why>
 	Epoch    string             `json:"epoch,omitempty"` // restore epoch reconcile (decision 0044)
 	Pruned   []string           `json:"briefings_pruned,omitempty"`
-	MS       int                `json:"ms"`
+	// Binary: the self-check of this binary, made on its first tick
+	// (verified | unsigned | failed; SPEC §11.1).
+	Binary string `json:"binary,omitempty"`
+	MS     int    `json:"ms"`
 }
 
 func newJobsTickCmd(e *env) *cobra.Command {
@@ -57,7 +61,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				return err
 			}
 			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
-			res := tickResult{Status: "done"}
+			res := tickResult{Status: "done", Binary: ensureSelfCheck(d)}
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
@@ -129,6 +133,18 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			return finish(failed)
 		},
 	}
+}
+
+// ensureSelfCheck: the first tick of a binary hashes it against its signed
+// checksums.txt and records the result; later ticks read the record. A
+// failure is doctor's to report: the tick goes on.
+func ensureSelfCheck(d paths.Dirs) string {
+	exe, err := selfExe()
+	if err != nil {
+		return selfcheck.Failed
+	}
+	rec, _ := selfcheck.Ensure(d, exe)
+	return rec.Status
 }
 
 func tickText(r tickResult) string {

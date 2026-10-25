@@ -16,10 +16,14 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/selfcheck"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // probes sets the machine probes; tests replace it.
-var probes = func(e *doctor.Env) {
+var probes = realProbes
+
+func realProbes(e *doctor.Env) {
 	e.ManagedDir = claudecode.ManagedDir(runtime.GOOS)
 	e.Docker = doctor.DockerVersion
 	e.GPUs = doctor.LocalGPUs
@@ -36,6 +40,13 @@ var probes = func(e *doctor.Env) {
 			env = []string{"CLAUDE_CONFIG_DIR=" + profile}
 		}
 		return claudeRunner.Run(context.Background(), env, "plugin", "list", "--json")
+	}
+	e.SelfCheck = func() state.SelfCheck {
+		exe, err := selfExe()
+		if err != nil {
+			return state.SelfCheck{Status: selfcheck.Failed, Detail: "cannot locate the running binary: " + err.Error()}
+		}
+		return selfcheck.Current(e.Dirs, exe)
 	}
 }
 

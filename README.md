@@ -33,4 +33,4 @@ minisign -Vm checksums.txt -p minisign.pub
 sha256sum -c --ignore-missing checksums.txt
 ```
 
-`minisign.next.pub` is the next key: binaries embed both (`internal/signing`) so a key rotation needs no trust reset. Releases are built only from tags on `main`, by actions pinned to commit SHAs. Maintainers: `make snapshot` builds and signs locally (key from `pass`), and tags `v*` publish through `.github/workflows/release.yml`.
+`checksums.txt` lists the archives and the bare binaries; `install.sh` keeps it with its signature next to the installed binary, which checks itself against it on its first run (`backsight doctor`, check `binary`). `minisign.next.pub` is the next key: binaries embed both (`internal/signing`, listed by `backsight version --json`) so a key rotation needs no trust reset; the release stops if its binary trusts any other key. Releases are built only from tags on `main`, by actions pinned to commit SHAs. Maintainers: `make snapshot` builds and signs locally (key from `pass`), and tags `v*` publish through `.github/workflows/release.yml`.

@@ -7,3 +7,7 @@ var (
 	Commit  = "none"
 	Date    = "unknown"
 )
+
+// Release reports a goreleaser build, which stamps Date (make build does
+// not): only such a build is expected to carry signed checksums.
+func Release() bool { return Date != "unknown" }

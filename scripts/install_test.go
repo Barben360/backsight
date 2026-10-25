@@ -313,3 +313,21 @@ func TestARefusedUpgradeKeepsTheWorkingInstall(t *testing.T) {
 		t.Errorf("the working %s binary is gone: %v", old, err)
 	}
 }
+
+// The verified checksums.txt and its signature stay next to the binary:
+// the binary checks itself against them on its first run (SPEC §11.1).
+func TestInstallKeepsTheSignedChecksums(t *testing.T) {
+	k := newKey(t)
+	dir, _ := release(t, k)
+	home, out, err := install(t, dir, k.pub, toolsWithout(t))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, f := range []string{"checksums.txt", "checksums.txt.minisig"} {
+		want, _ := os.ReadFile(filepath.Join(dir, f))
+		got, err := os.ReadFile(filepath.Join(filepath.Dir(installedBinary(home)), f))
+		if err != nil || len(want) == 0 || string(got) != string(want) {
+			t.Errorf("%s next to the binary: %v", f, err)
+		}
+	}
+}

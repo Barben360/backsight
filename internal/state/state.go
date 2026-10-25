@@ -41,6 +41,9 @@ type State struct {
 	// UpdateCheck: the last release check of `jobs maintain` or `update
 	// check` (SPEC §11.7), read by the SessionStart banner and doctor.
 	UpdateCheck *UpdateCheck `json:"update_check,omitempty"`
+	// SelfCheck: the running binary's check of itself against the signed
+	// checksums.txt next to it (SPEC §11.1), made once per binary.
+	SelfCheck *SelfCheck `json:"self_check,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -115,6 +118,20 @@ type UpdateCheck struct {
 	Summary   string    `json:"summary,omitempty"` // Latest's one-line notes
 	Newer     int       `json:"newer,omitempty"`   // releases newer than Installed
 	Error     string    `json:"error,omitempty"`   // the check failed
+}
+
+// SelfCheck is one binary's check of itself: the binary is named by its
+// path, version, size and modification time, so a replaced binary is
+// checked again.
+type SelfCheck struct {
+	Version   string    `json:"version"`
+	Exe       string    `json:"exe"`
+	Size      int64     `json:"size"`
+	ModTime   time.Time `json:"mod_time"`
+	Status    string    `json:"status"` // verified | unsigned | failed
+	Detail    string    `json:"detail,omitempty"`
+	KeyID     string    `json:"key_id,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // RestoreEpoch is the bank restore epoch this client reconciled with.

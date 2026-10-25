@@ -71,6 +71,9 @@ type Env struct {
 	Now           func() time.Time // nil: time.Now
 	// Linger reports systemd's linger for this user (nil: not asked).
 	Linger func() (bool, error)
+	// SelfCheck is the running binary's check of itself against its signed
+	// checksums.txt (SPEC §11.1); nil: no binary check.
+	SelfCheck func() state.SelfCheck
 }
 
 const (
@@ -96,6 +99,9 @@ func Run(ctx context.Context, env Env) Report {
 
 	cfgCheck, tg := checkConfig(env)
 	add(cfgCheck)
+	if env.SelfCheck != nil {
+		add(checkBinary(env.SelfCheck()))
+	}
 	add(checkDocker(ctx, env))
 
 	loc := claudecode.Locate(env.Home, env.Getenv)
