@@ -105,9 +105,15 @@ jq -e '(.data.checks | length > 0) and (.data.checks | map(select(.status == "er
 
 # 6. A session goes out through the profile's transcripts before the
 # backup: the backup holds it, so the restore below must leave it alone.
+# A first jobs tick records retain_since: live retain takes the sessions
+# started after it. The live session's first segment goes out before the
+# backup, its second after it.
 # shellcheck source=scripts/restore-chain.sh
 . "$root/scripts/restore-chain.sh"
+"$bin" jobs tick --json > "$work/tick-since.json" || { cat "$work/tick-since.json" >&2; fail "the first jobs tick failed"; }
+jq -e '.ok and .data.status == "done"' "$work/tick-since.json" >/dev/null || { cat "$work/tick-since.json" >&2; fail "the first jobs tick did not run"; }
 rc_send restore-proof-kept
+rc_live restore-proof-live 1 2 >/dev/null
 
 # 7. A backup of the real Postgres restores to the same row counts (SPEC §16).
 "$bin" backup create --json > "$work/backup.json" || { cat "$work/backup.json" >&2; fail "backup create failed"; }
@@ -119,9 +125,11 @@ jq -e '.ok and .data.ok and ([.data.restored[]] | add > 0)' "$work/backup-verify
 
 # 8. Restore (decision 0044): a session sent after the backup is lost by
 # restoring it; the next jobs tick reconciles to the new epoch and sends it
-# again, once, while the one the backup holds is not sent again.
+# again, once, while the one the backup holds is not sent again; the live
+# session's second segment, lost too, is appended again, alone.
 rc_send restore-proof-lost
-rc_restore_resends "$archive" restore-proof-lost restore-proof-kept
+rc_live restore-proof-live 3 4 >/dev/null
+rc_restore_resends "$archive" restore-proof-lost restore-proof-kept restore-proof-live
 
 # 9. Undo unwires Claude Code, stops the server, and keeps config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
@@ -130,4 +138,4 @@ if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") !=
 running=$(compose ps -q --status running) || fail "cannot list the install's containers"
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, undo) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, undo) on project $project"

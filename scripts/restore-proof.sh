@@ -38,6 +38,10 @@ for p in "$port" "$ui_port"; do
   case "$live_url" in *":$p" | *":$p/"*) fail "port $p is the live server's" ;; esac
   ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$p/" || fail "port $p is already in use"
 done
+# A project already in use would be taken down with its volumes on exit.
+in_use=$(docker ps -aq --filter "label=com.docker.compose.project=$project"; docker volume ls -q --filter "label=com.docker.compose.project=$project") ||
+  fail "cannot list Docker's containers and volumes"
+[ -z "$in_use" ] || fail "Compose project $project already has containers or volumes: pick another PROJECT, or remove it yourself (docker compose -p $project down -v)"
 newest=$("$live" backup list --json | jq -c '.data[0] // empty')
 [ -n "$newest" ] || fail "the live install has no backup"
 src=$(jq -r '.path' <<<"$newest")
@@ -62,7 +66,13 @@ cleanup() {
     compose logs --tail 40 hindsight >&2 || true
   fi
   if [ "${KEEP:-}" != 1 ]; then
-    [ -f "${BACKSIGHT_HOME:-/nonexistent}/data/server/compose.yaml" ] && compose down -v >/dev/null 2>&1 || true
+    # The scratch volumes hold a copy of the live memory: a failed removal
+    # is a failure of the run, never swallowed.
+    if [ -f "${BACKSIGHT_HOME:-/nonexistent}/data/server/compose.yaml" ] && ! compose down -v >"$work/down.log" 2>&1; then
+      cat "$work/down.log" >&2
+      echo "restore-proof: ERROR: 'compose down -v' of project $project failed: its volumes, a copy of the live data, are still there; remove them: docker compose -p $project down -v" >&2
+      [ $status -ne 0 ] || status=1
+    fi
     [ -e "$work/live/identity" ] && { shred -u "$work/live/identity" 2>/dev/null || rm -f "$work/live/identity"; }
     rm -rf "$work"
   fi
