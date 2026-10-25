@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
+	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/reference"
 )
 
@@ -49,7 +52,7 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 	edits := []claudecfg.Edit{{Target: c.loc.Settings, Apply: retireSettings}, {Target: c.loc.State, Apply: retireMCP}}
 	res.Kept = []string{"the reference server and its data: backsight doctor says when it can be stopped",
 		"files under ~/.claude/hooks and ~/.claude/skills, and your CLAUDE.md: personal files, never edited"}
-	timerOn := runtime.GOOS == "linux" && retroTimerEnabled(ctx)
+	timerOn := retroTimerOwned(ctx, c.loc)
 	if plan {
 		if res.Files, err = claudecfg.Plan(edits); err != nil {
 			return res, editError(err)
@@ -71,6 +74,17 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 		res.Timers = []string{reference.RetroTimer}
 	}
 	return res, nil
+}
+
+// retroTimerOwned reports whether retiring this profile stops the
+// reference retro timer: it is machine-wide and reads the default
+// profile's transcripts, so only a setup of ~/.claude may stop it.
+func retroTimerOwned(ctx context.Context, loc claudecode.Location) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || runtime.GOOS != "linux" || filepath.Clean(loc.Dir) != filepath.Join(home, ".claude") {
+		return false
+	}
+	return retroTimerEnabled(ctx)
 }
 
 func retroTimerEnabled(ctx context.Context) bool {

@@ -745,7 +745,7 @@ func referenceCount(ctx context.Context, loc claudecode.Location) int {
 	for _, f := range files {
 		n += len(f.Changes)
 	}
-	if runtime.GOOS == "linux" && retroTimerEnabled(ctx) {
+	if retroTimerOwned(ctx, loc) {
 		n++
 	}
 	return n

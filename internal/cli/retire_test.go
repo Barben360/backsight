@@ -151,3 +151,26 @@ func TestClientRetireIsUndoneByConfigRestore(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+// The retro timer is machine-wide and serves the default profile: a setup
+// of another profile (the dev install's) must leave it running.
+func TestClientRetireLeavesTheRetroTimerToTheDefaultProfile(t *testing.T) {
+	home := isolate(t)
+	sys := withSys(t, "linux")
+	sys.out = map[string]string{"systemctl --user is-enabled memory-retro.timer": "enabled\n"}
+	other := filepath.Join(home, ".claude-dev")
+	_ = os.MkdirAll(other, 0o700)
+	code, out, _ := run(t, "client", "retire", "--config-dir", other)
+	if code != output.OK || !strings.Contains(out, "no reference piece") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	for _, c := range sys.calls {
+		if strings.Contains(c, "memory-retro.timer") {
+			t.Errorf("another profile's retire touched the retro timer: %v", sys.calls)
+		}
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", other)
+	if code, out, _ := run(t, "client", "retire", "--plan"); code != output.OK || strings.Contains(out, "timer") {
+		t.Errorf("CLAUDE_CONFIG_DIR profile: exit %d\n%s", code, out)
+	}
+}
