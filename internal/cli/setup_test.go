@@ -25,7 +25,10 @@ type fakeSteps struct {
 
 func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 	f.calls = append(f.calls, args)
-	key := strings.Join(args[:2], " ")
+	key := strings.Join(args[:min(2, len(args))], " ")
+	if args[0] == "verify" {
+		key = "verify"
+	}
 	if e := f.fail[key]; e != nil {
 		return subResult{Err: e}
 	}
@@ -44,6 +47,8 @@ func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 		data = retentionResult{Target: 3650}
 	case "jobs install":
 		data = jobsInstallResult{Kind: "systemd"}
+	case "verify":
+		data = verifyResult{Checks: []verifyCheck{{ID: "mcp", Status: "ok"}}}
 	case "retain backfill":
 		data = backfillResult{Total: 2, Queued: true}
 	}
@@ -201,7 +206,7 @@ func TestSetupStopsAtTheMissingKeyThenResumes(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("resume: exit %d\n%s\n%s", code, out, errOut)
 	}
-	want := []string{"server install", "client install", "client retention", "jobs install", "retain backfill --queue --projects-dir " + filepath.Join(home, ".claude", "projects")}
+	want := []string{"server install", "client install", "client retention", "jobs install", "verify", "retain backfill --queue --projects-dir " + filepath.Join(home, ".claude", "projects")}
 	got := f.commands()
 	if len(got) != len(want) {
 		t.Fatalf("steps %q, want %q", got, want)
@@ -234,9 +239,9 @@ func TestSetupStopsAtTheMissingKeyThenResumes(t *testing.T) {
 		t.Error("a secret reached the output")
 	}
 
-	// A second resume of a finished run redoes nothing but stays OK.
+	// A second resume of a finished run only verifies again.
 	f.calls = nil
-	if code, _, _ := run(t, "setup", "--resume", "--non-interactive"); code != output.OK || len(f.calls) != 0 {
+	if code, _, _ := run(t, "setup", "--resume", "--non-interactive"); code != output.OK || strings.Join(f.commands(), ",") != "verify" {
 		t.Errorf("resume of a finished run: exit %d, steps %v", code, f.commands())
 	}
 }
@@ -255,7 +260,7 @@ func TestSetupFailureAfterChangesIsPartialAndResumable(t *testing.T) {
 	if code, out, _ := run(t, "setup", "--resume", "--non-interactive", "--json"); code != output.OK {
 		t.Fatalf("resume: exit %d\n%s", code, out)
 	}
-	if got := f.commands(); len(got) != 1 || got[0] != "jobs install" {
+	if got := strings.Join(f.commands(), ","); got != "jobs install,verify" {
 		t.Errorf("resume redid finished steps: %v", got)
 	}
 }
@@ -398,5 +403,23 @@ func TestParseAnswersFile(t *testing.T) {
 	}
 	if _, err := parseAnswers([]string{"novalue"}, ""); output.CodeOf(err) != output.Usage {
 		t.Errorf("malformed answer accepted: %v", err)
+	}
+}
+
+func TestSetupVerifyFailureNamesTheFailingChecks(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	inner := f.run
+	subcommand = func(ctx context.Context, args ...string) subResult {
+		if args[0] == "verify" {
+			raw, _ := json.Marshal(verifyResult{Failed: 1, Checks: []verifyCheck{{ID: "hook stop", Status: "ok"}, {ID: "round_trip", Status: "fail", Summary: "recall found nothing in the scratch bank"}}})
+			return subResult{Data: raw, Err: &output.Error{Code: output.Blocked, Message: "1 check(s) failed"}}
+		}
+		return inner(ctx, args...)
+	}
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.Partial || env.Error == nil || !strings.Contains(env.Error.Message, "verify: round_trip: recall found nothing") || strings.Contains(env.Error.Message, "hook stop") {
+		t.Errorf("exit %d\n%s", code, out)
 	}
 }

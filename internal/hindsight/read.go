@@ -210,3 +210,8 @@ func (c *Client) Reflect(ctx context.Context, bank, query string, tags []string,
 	var a ReflectAnswer
 	return a, c.do(ctx, http.MethodPost, bankPath(bank, "/reflect"), nil, body, &a)
 }
+
+// DeleteBank deletes bank and everything in it (setup's scratch bank only).
+func (c *Client) DeleteBank(ctx context.Context, bank string) error {
+	return c.do(ctx, http.MethodDelete, bankPath(bank, ""), nil, nil, nil)
+}

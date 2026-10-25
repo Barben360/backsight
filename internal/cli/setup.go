@@ -652,6 +652,26 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			_ = json.Unmarshal(out.Data, &jr)
 			return setup.Step{Name: "scheduler", Status: "done", Detail: jr.Kind + ": jobs tick every 15 min, jobs maintain daily"}, nil
 		}},
+		{"verify", 20, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
+			out := subcommand(ctx, clientArgs("verify")...)
+			var vr verifyResult
+			_ = json.Unmarshal(out.Data, &vr)
+			if out.Err != nil {
+				var failed []string
+				for _, c := range vr.Checks {
+					if c.Status == "fail" {
+						failed = append(failed, c.ID+": "+c.Summary)
+					}
+				}
+				if len(failed) > 0 {
+					e := *out.Err
+					e.Message = strings.Join(failed, "; ")
+					return setup.Step{}, &e
+				}
+				return setup.Step{}, out.Err
+			}
+			return setup.Step{Name: "verify", Status: "done", Detail: fmt.Sprintf("%d checks passed: every hook, the MCP server, a retain/recall round trip", len(vr.Checks))}, nil
+		}},
 		{"backfill", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
 			if answers["backfill"] != "yes" {
 				return setup.Step{Name: "backfill", Status: "skipped", Detail: "not asked for"}, nil
@@ -719,7 +739,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	}
 	left, did := total, false
 	for i, st := range steps {
-		if rec.Done(st.name) {
+		if rec.Done(st.name) && st.name != "verify" { // verify always reruns (decision 0064)
 			left -= st.eta
 			continue
 		}
@@ -858,6 +878,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "client", Status: "planned", Detail: "backsight client install: plugin and permission rule in " + s.loc.Dir},
 		{Name: "retention", Status: "planned", Detail: retention},
 		{Name: "scheduler", Status: "planned", Detail: "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"},
+		{Name: "verify", Status: "planned", Detail: "backsight verify: every hook, the MCP handshake, a round trip in a scratch bank"},
 		{Name: "backfill", Status: "planned", Detail: backfill},
 	}
 }

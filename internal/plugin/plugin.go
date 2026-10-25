@@ -56,6 +56,26 @@ var events = []event{
 	{"SessionEnd", "", "session-end", 1}, // 1.5 s total, not raisable from a plugin (C06)
 }
 
+// Hook is one backsight hook command the plugin wires, with Claude Code's
+// event name and its timeout in seconds.
+type Hook struct {
+	Event, Arg string
+	Timeout    int
+}
+
+// Hooks lists each hook command once (verify runs every one).
+func Hooks() []Hook {
+	var out []Hook
+	seen := map[string]bool{}
+	for _, e := range events {
+		if !seen[e.arg] {
+			seen[e.arg] = true
+			out = append(out, Hook{Event: e.name, Arg: e.arg, Timeout: e.timeout})
+		}
+	}
+	return out
+}
+
 // Version is the plugin version: the binary's, plus a hash of what the
 // generated files depend on (the shim path), so any change to them is an
 // update Claude Code applies (a moved data directory included).
