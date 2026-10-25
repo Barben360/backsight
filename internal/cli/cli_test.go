@@ -2,12 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"aead.dev/minisign"
+
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/signing"
 )
 
 func run(t *testing.T, args ...string) (int, string, string) {
@@ -108,5 +113,47 @@ func TestUnknownOrMissingSubcommandIsAUsageError(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.Usage || env.OK || env.Error.Code != output.Usage {
 		t.Errorf("exit %d envelope %s", code, out)
+	}
+}
+
+type versionKeys struct {
+	Data struct {
+		SigningKeys []signing.Key `json:"signing_keys"`
+		TestKey     bool          `json:"test_key"`
+	} `json:"data"`
+}
+
+// version --json lists the embedded keys; the release pipeline reads it.
+func TestVersionJSONListsTheSigningKeys(t *testing.T) {
+	old := signing.TestKey
+	t.Cleanup(func() { signing.TestKey = old })
+
+	signing.TestKey = ""
+	_, out, _ := run(t, "version", "--json")
+	var v versionKeys
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Data.SigningKeys) != 2 || v.Data.SigningKeys[0].Role != "current" || v.Data.SigningKeys[1].Role != "next" ||
+		v.Data.SigningKeys[0].ID == "" || v.Data.SigningKeys[0].ID == v.Data.SigningKeys[1].ID || v.Data.TestKey {
+		t.Errorf("release build: %s", out)
+	}
+
+	pub, _, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signing.TestKey = pub.String()
+	id := fmt.Sprintf("%016X", pub.ID())
+	_, out, _ = run(t, "version", "--json")
+	v = versionKeys{}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Data.SigningKeys) != 3 || v.Data.SigningKeys[2] != (signing.Key{ID: id, Role: "test"}) || !v.Data.TestKey {
+		t.Errorf("test build: %s", out)
+	}
+	if _, text, _ := run(t, "version"); !strings.Contains(text, "test signing key "+id) {
+		t.Errorf("the text output hides the test key: %q", text)
 	}
 }

@@ -15,6 +15,38 @@ jobs:
           go-version-file: go.mod
       - run: make test
       - run: make cross
+  snapshot:
+    # The release build, signed by minisign with a throwaway key: the
+    # pre-publish key check passes, every signature verifies, and the Go
+    # verifier accepts goreleaser's real output, the binary checking itself
+    # included (decision 0067).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+      - name: Throwaway signing key
+        run: minisign -G -W -p "$RUNNER_TEMP/test.pub" -s "$RUNNER_TEMP/test.key"
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: v2.14.0
+          args: release --snapshot --clean
+        env:
+          MINISIGN_KEY_FILE: ${{ runner.temp }}/test.key
+      - run: make verify-dist PUBKEY="$RUNNER_TEMP/test.pub"
+      - name: The Go verifier on goreleaser's output
+        env:
+          BACKSIGHT_TEST_DIST: ${{ github.workspace }}/dist
+          BACKSIGHT_TEST_DIST_PUBKEY: ${{ runner.temp }}/test.pub
+        run: |
+          go test -count=1 -v -run 'TestGoreleaserDist|TestMinisignCLI|TestRealMinisignFixture' ./internal/signing/ ./internal/selfcheck/ | tee "$RUNNER_TEMP/go-test.log"
+          for t in TestGoreleaserDist TestMinisignCLI; do grep -q -- "--- PASS: $t" "$RUNNER_TEMP/go-test.log" || { echo "::error::$t did not run"; exit 1; }; done
   lint:
     runs-on: ubuntu-latest
     steps:
