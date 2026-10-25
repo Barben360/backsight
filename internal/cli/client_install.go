@@ -310,7 +310,13 @@ func shimTarget(data string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	version := buildinfo.Version
+	return binaryPath(data, buildinfo.Version, h), nil
+}
+
+// binaryPath is <data>/bin/<version>-<hash[:12]>/backsight, where a
+// build of that version and SHA-256 is installed (client install, update
+// apply).
+func binaryPath(data, version, hash string) string {
 	if version == "" {
 		version = "dev"
 	}
@@ -324,7 +330,7 @@ func shimTarget(data string) (string, error) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join(data, "bin", version+"-"+h[:12], name), nil
+	return filepath.Join(data, "bin", version+"-"+hash[:12], name)
 }
 
 // installShim copies this binary to target (unless an identical copy is
@@ -359,6 +365,12 @@ func installShim(target, shim string) error {
 			}
 		}
 	}
+	return pointShim(target, shim)
+}
+
+// pointShim makes the shim run target: a symlink swapped atomically, or
+// on Windows a copy, the running one renamed aside first.
+func pointShim(target, shim string) error {
 	if runtime.GOOS == "windows" {
 		old := shim + ".old"
 		_ = os.Remove(old) // fails while a previous session still runs it: fine

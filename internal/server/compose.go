@@ -167,3 +167,8 @@ func (c Compose) Logs(ctx context.Context, service string, n int) (string, error
 	out, err := c.run(ctx, "logs", "--no-color", "--tail", strconv.Itoa(n), service)
 	return string(out), err
 }
+
+// OwnGroup runs cmd in its own process group: a Ctrl-C at the terminal
+// reaches backsight only, which cancels its context (update apply runs the
+// binaries it installs and rolls back to this way).
+func OwnGroup(cmd *exec.Cmd) { ownGroup(cmd) }

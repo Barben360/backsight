@@ -35,7 +35,8 @@ type maintainResult struct {
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
-// a backup (when backup.enabled), the update check and a doctor snapshot.
+// a backup (when backup.enabled), the update check (and its apply with
+// update.auto_apply) and a doctor snapshot.
 // A failed update check is recorded for doctor and never fails the job
 // (decision 0067: the repository stays private until M7).
 func newJobsMaintainCmd(e *env) *cobra.Command {
@@ -91,7 +92,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 					}
 				}
 			}
-			res.Update = maintainUpdateCheck(cmd.Context(), d)
+			res.Update = maintainUpdate(cmd.Context(), d)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
@@ -106,24 +107,36 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 	}
 }
 
-// maintainUpdateCheck runs the update check against the configured source
-// and records it; its outcome is one line for the job's report.
-func maintainUpdateCheck(ctx context.Context, d paths.Dirs) string {
+// maintainUpdate runs the update check against the configured source and
+// records it; with update.auto_apply (off by default, SPEC §11.7) it then
+// applies the newest release. Its outcome is one line for the job's
+// report; a failed or rolled back apply never fails the job (doctor keeps
+// showing the update).
+func maintainUpdate(ctx context.Context, d paths.Dirs) string {
 	_, cfg, err := updateConfig()
 	if err != nil {
 		return "failed: " + err.Error()
 	}
-	ctx, cancel := context.WithTimeout(ctx, updateCheckTimeout)
-	defer cancel()
-	res, err := checkUpdates(ctx, releaseSource(cfg, ""), buildinfo.Version, cfg.Update.Prereleases)
+	cctx, cancel := context.WithTimeout(ctx, updateCheckTimeout)
+	res, err := checkUpdates(cctx, releaseSource(cfg, ""), buildinfo.Version, cfg.Update.Prereleases)
+	cancel()
 	recordUpdateCheck(d, res, err)
 	switch {
 	case err != nil:
 		return "failed: " + err.Error()
-	case res.UpdateAvailable:
+	case !res.UpdateAvailable:
+		return "up to date"
+	case !cfg.Update.AutoApply:
 		return res.Latest + " available"
 	}
-	return "up to date"
+	ar := updateApplyResult{Installed: buildinfo.Version, Steps: []step{}, Migrations: []string{}}
+	if err := runUpdateApply(ctx, &ar, updateApplyFlags{}, func(string, string, string) {}); err != nil {
+		return res.Latest + " available, auto-apply failed (exit " + fmt.Sprint(output.CodeOf(err)) + "): " + err.Error()
+	}
+	if ar.UpToDate {
+		return "up to date"
+	}
+	return "applied " + ar.Target
 }
 
 // rotateTelemetry removes month files older than keep months (the current

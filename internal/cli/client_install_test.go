@@ -27,6 +27,8 @@ type fakeClaude struct {
 	plugins      string
 	missing      bool
 	failOn       string // a command line that fails
+	failOnly     int    // with failOn: fail that many times, then pass (0: always)
+	failed       int
 }
 
 func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byte, error) {
@@ -35,7 +37,8 @@ func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byt
 	}
 	f.calls = append(f.calls, args)
 	f.envs = append(f.envs, env)
-	if f.failOn != "" && strings.HasPrefix(strings.Join(args, " "), f.failOn) {
+	if f.failOn != "" && strings.HasPrefix(strings.Join(args, " "), f.failOn) && (f.failOnly == 0 || f.failed < f.failOnly) {
+		f.failed++
 		return nil, errors.New("claude failed: " + f.failOn)
 	}
 	switch strings.Join(args, " ") {

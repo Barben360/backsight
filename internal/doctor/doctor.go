@@ -128,6 +128,7 @@ func Run(ctx context.Context, env Env) Report {
 	}
 	add(checkMaintenance(env.Dirs))
 	add(checkRestore(env.Dirs))
+	add(checkUpdateIncomplete(env.Dirs))
 	add(checkLocks(env.Dirs))
 	add(checkWrites(env.Dirs))
 	add(checkBackfill(env.Dirs))

@@ -42,6 +42,10 @@ func (d Dirs) SetupFile() string       { return filepath.Join(d.State, "setup.js
 // RestoreMarker exists while a restore has not finished (decision 0044).
 func (d Dirs) RestoreMarker() string { return filepath.Join(d.State, "restore-incomplete.json") }
 
+// UpdateMarker exists while an update apply has not finished or rolled
+// back (SPEC §11.7).
+func (d Dirs) UpdateMarker() string { return filepath.Join(d.State, "update-incomplete.json") }
+
 // Default resolves the directories of the running process.
 func Default() (Dirs, error) {
 	home, err := os.UserHomeDir()

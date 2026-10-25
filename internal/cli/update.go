@@ -57,7 +57,7 @@ type changelogResult struct {
 }
 
 func newUpdateCmd(e *env) *cobra.Command {
-	cmd := &cobra.Command{Use: "update", Short: "Check for backsight releases (SPEC §11.7)", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "update", Short: "Check for and install backsight releases (SPEC §11.7)", Args: cobra.NoArgs}
 	var source string
 	check := &cobra.Command{
 		Use:   "check",
@@ -76,7 +76,7 @@ func newUpdateCmd(e *env) *cobra.Command {
 		},
 	}
 	check.Flags().StringVar(&source, "source", "", "read releases from this local release directory instead of the configured source")
-	cmd.AddCommand(check)
+	cmd.AddCommand(check, newUpdateApplyCmd(e), newUpdateMigrateCmd(e))
 	return cmd
 }
 
