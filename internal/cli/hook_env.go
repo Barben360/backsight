@@ -49,9 +49,13 @@ type hookEnv struct {
 	sec     config.Secrets
 	project string
 	linked  []string // the projects cwd's .backsight.toml relates
-	store   session.Store
-	tw      *telemetry.Writer
-	client  *hindsight.Client
+	// resolver named project from cwd; remote reads the repository's
+	// remote from it (decision 0045).
+	resolver *project.Resolver
+	cwd      string
+	store    session.Store
+	tw       *telemetry.Writer
+	client   *hindsight.Client
 }
 
 // Which component an event belongs to (A.1 components).
@@ -78,8 +82,8 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	pr := project.New(h.home, h.cfg.Projects.Transverse)
-	h.project, h.linked = pr.Project(cwd), pr.Related(cwd)
+	h.resolver, h.cwd = project.New(h.home, h.cfg.Projects.Transverse), cwd
+	h.project, h.linked = h.resolver.Project(cwd), h.resolver.Related(cwd)
 	// The live record is what lets pause and the MCP server find this
 	// session: written whatever the components (0056).
 	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {
@@ -98,6 +102,10 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	h.client, err = hindsight.New(h.cfg.Server.URL, h.sec.APIKey, 30*time.Second)
 	return h, err == nil
 }
+
+// remote is the normalised git remote of the session's directory, recorded
+// with its project so doctor can tell two repositories sharing a name.
+func (h *hookEnv) remote() string { return h.resolver.Remote(h.cwd) }
 
 // updateSession applies fn to this session's state; a busy state is
 // skipped, never waited for (SPEC §6.1).

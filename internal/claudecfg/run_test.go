@@ -386,10 +386,85 @@ func TestRestoreSkipsAFileAlreadyBackAndJournalsTheRestore(t *testing.T) {
 	if err != nil || res[0].Status != "unchanged" || res[1].Status != "restored" {
 		t.Fatalf("res %+v err %v", res, err)
 	}
+	// Two edits, then the restore: started, the one file it put back,
+	// finished.
 	j := journal(t, r)
-	last := j[len(j)-1]
-	if len(j) != 3 || last["action"] != "restore" || last["target"] != b || last["command"] != "client config restore" || last["status"] != "done" || last["ts"] == "" {
-		t.Errorf("journal %v", j)
+	if len(j) != 5 {
+		t.Fatalf("journal %v", j)
+	}
+	if put := j[3]; put["action"] != "restore" || put["target"] != b || put["command"] != "client config restore" || put["status"] != "done" || put["ts"] == "" {
+		t.Errorf("restore line %v", put)
+	}
+	if j[2]["status"] != "started" || j[2]["restores"] != ts || j[4]["status"] != "finished" || j[4]["restores"] != ts || j[4]["run"] == "" {
+		t.Errorf("start and finish lines %v, %v", j[2], j[4])
+	}
+}
+
+func TestARestoreThatStopsHalfwayStaysPendingUntilRerun(t *testing.T) {
+	r, dir := runner(t)
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, []byte(`{}`), 0o600)
+	_ = os.WriteFile(b, []byte(`{}`), 0o600)
+	ts, _, _ := r.Apply([]Edit{{Target: a, Apply: retention(1)}, {Target: b, Apply: retention(1)}})
+	// b changes between the check and its write: a is restored, b is not.
+	puts := 0
+	beforePut = func() {
+		if puts++; puts == 2 {
+			_ = os.WriteFile(b, []byte(`{"late": true}`), 0o600)
+		}
+	}
+	t.Cleanup(func() { beforePut = func() {} })
+	r.Command = "client config restore"
+	if _, _, err := r.Restore(ts, false); !errors.Is(err, ErrChangedSince) {
+		t.Fatalf("err %v", err)
+	}
+	lines, err := ReadJournal(r.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := PendingRestores(lines)
+	if len(pending) != 1 || pending[0].Restores != ts || pending[0].Command != "client config restore" {
+		t.Fatalf("pending %+v in %+v", pending, lines)
+	}
+	beforePut = func() {}
+	if _, _, err := r.Restore(ts, true); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ = ReadJournal(r.Journal)
+	if p := PendingRestores(lines); len(p) != 0 {
+		t.Errorf("a finished rerun leaves %+v pending", p)
+	}
+}
+
+func TestARefusedOrEmptyRestoreJournalsNothingPending(t *testing.T) {
+	r, dir := runner(t)
+	a := filepath.Join(dir, "a.json")
+	_ = os.WriteFile(a, []byte(`{}`), 0o600)
+	ts, _, _ := r.Apply([]Edit{{Target: a, Apply: retention(1)}})
+	_ = os.WriteFile(a, []byte(`{"user": 1}`), 0o600)
+	if _, _, err := r.Restore(ts, false); !errors.Is(err, ErrChangedSince) {
+		t.Fatalf("err %v", err)
+	}
+	_ = os.WriteFile(a, []byte(`{}`), 0o600) // back as before the run: nothing to do
+	if _, _, err := r.Restore(ts, false); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ := ReadJournal(r.Journal)
+	if p := PendingRestores(lines); len(p) != 0 || len(lines) != 1 {
+		t.Errorf("pending %+v, journal %+v", p, lines)
+	}
+}
+
+func TestReadJournalSkipsBrokenLinesAndAMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	if lines, err := ReadJournal(filepath.Join(dir, "none.jsonl")); err != nil || lines != nil {
+		t.Errorf("missing: %v %v", lines, err)
+	}
+	p := filepath.Join(dir, "journal.jsonl")
+	_ = os.WriteFile(p, []byte("{\"step\":\"server\",\"status\":\"done\"}\nnot json\n{\"step\":\"claude-config\",\"action\":\"edit\",\"target\":\"/s.json\",\"command\":\"client install\"}\n"), 0o600)
+	lines, err := ReadJournal(p)
+	if err != nil || len(lines) != 2 || lines[1].Target != "/s.json" || lines[1].Command != "client install" || lines[0].Step != "server" {
+		t.Errorf("lines %+v err %v", lines, err)
 	}
 }
 

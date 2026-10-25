@@ -303,6 +303,9 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 			if !res.OK {
 				failed = &output.Error{Code: output.Blocked, Message: fmt.Sprintf("restored counts %v differ from the manifest's %v", counts, m.Counts)}
 			}
+			if err := recordVerify(d, cfg.Backup.Dir, args[0], m, res.OK); err != nil && failed == nil {
+				failed = &output.Error{Code: output.Partial, Message: "verified, but the result was not recorded (doctor reads it): " + err.Error(), Resume: "backsight backup verify " + args[0]}
+			}
 			return e.report("backup verify", res, func() string {
 				return fmt.Sprintf("%s: restored %v, manifest %v: %s\n", res.Path, res.Restored, res.Expected, map[bool]string{true: "ok", false: "MISMATCH"}[res.OK])
 			}, failed)
@@ -520,4 +523,34 @@ func newBackupIdentityImportCmd(e *env) *cobra.Command {
 	}
 	c.Flags().BoolVar(&force, "force", false, "replace a different identity already set")
 	return c
+}
+
+// recordVerify keeps the outcome of a verify in state.json, replacing the
+// previous one: doctor offers to stop a reference server only after a
+// passed verify of backsight's newest archive (0067 block 4).
+func recordVerify(d paths.Dirs, dir, archive string, m backup.Manifest, ok bool) error {
+	abs, err := filepath.Abs(archive)
+	if err != nil {
+		return err
+	}
+	newest := false
+	if list, err := backup.List(dir); err == nil && len(list) > 0 {
+		newest = sameFile(list[0].Path, abs)
+	}
+	rec := &state.BackupVerify{Archive: abs, CreatedAt: m.CreatedAt, Newest: newest, OK: ok, VerifiedAt: now().UTC()}
+	return state.UpdateWithin(d, "backup verify", 10*time.Second, func(s *state.State) error {
+		s.BackupVerify = rec
+		return nil
+	})
+}
+
+// sameFile compares two paths after resolving symlinks (a backup.dir
+// behind a link names the same archives).
+func sameFile(a, b string) bool {
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
 }

@@ -47,6 +47,9 @@ type State struct {
 	// AutoApply: the release jobs maintain failed to apply, skipped until
 	// a newer one appears or update apply is run by hand.
 	AutoApply *AutoApply `json:"auto_apply,omitempty"`
+	// BackupVerify: the last `backup verify` that ran to its comparison
+	// (0067 block 4: doctor's reference-server check reads it).
+	BackupVerify *BackupVerify `json:"backup_verify,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -124,6 +127,17 @@ type UpdateCheck struct {
 	Summary   string    `json:"summary,omitempty"` // Latest's one-line notes
 	Newer     int       `json:"newer,omitempty"`   // releases newer than Installed
 	Error     string    `json:"error,omitempty"`   // the check failed
+}
+
+// BackupVerify is the outcome of one `backup verify`: the archive (an
+// absolute path), its manifest's creation time, and whether it was the
+// newest archive in backup.dir when it was verified.
+type BackupVerify struct {
+	Archive    string    `json:"archive"`
+	CreatedAt  time.Time `json:"created_at"`
+	Newest     bool      `json:"newest"`
+	OK         bool      `json:"ok"`
+	VerifiedAt time.Time `json:"verified_at"`
 }
 
 // AutoApply is the last failed auto-apply of jobs maintain.

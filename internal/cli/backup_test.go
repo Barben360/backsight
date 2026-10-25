@@ -376,3 +376,49 @@ func TestBackupArchiveHoldsTheInstallFiles(t *testing.T) {
 		t.Errorf("bank-config.json: %v %s", err, raw)
 	}
 }
+
+// backup verify records its outcome in state.json: doctor's
+// reference-server check reads it (0067 block 4).
+func TestBackupVerifyRecordsItsResultAndWhetherTheArchiveWasTheNewest(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	dk := withBackupDocker(t)
+	at := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	if code, out, errOut := run(t, "backup", "create"); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	older := filepath.Join(pathsOf(home).Data, "backups", "backsight-20261025T040000Z.tar.gz.age")
+	withClock(t, at.Add(24*time.Hour)) // a day later: pruning keeps one per day
+	if code, out, errOut := run(t, "backup", "create"); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	newest := filepath.Join(pathsOf(home).Data, "backups", "backsight-20261026T040000Z.tar.gz.age")
+
+	withClock(t, at.Add(26*time.Hour))
+	if code, out, errOut := run(t, "backup", "verify", older); code != output.OK {
+		t.Fatalf("verify: exit %d\n%s%s", code, out, errOut)
+	}
+	st, _ := stateLoad(home)
+	if v := st.BackupVerify; v == nil || v.Archive != older || !v.OK || v.Newest || !v.VerifiedAt.Equal(at.Add(26*time.Hour)) || !v.CreatedAt.Equal(at) {
+		t.Fatalf("after verifying the older archive: %+v", v)
+	}
+	// A relative path names the same archive.
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	_ = os.Chdir(filepath.Dir(newest))
+	if code, out, _ := run(t, "backup", "verify", filepath.Base(newest)); code != output.OK {
+		t.Fatalf("verify: exit %d\n%s", code, out)
+	}
+	if st, _ = stateLoad(home); st.BackupVerify == nil || st.BackupVerify.Archive != newest || !st.BackupVerify.Newest || !st.BackupVerify.OK {
+		t.Fatalf("after verifying the newest: %+v", st.BackupVerify)
+	}
+	// A mismatch replaces the pass: the last verify is what counts.
+	dk.restored = "41"
+	if code, _, _ := run(t, "backup", "verify", newest); code != output.Blocked {
+		t.Fatalf("a short restore: exit %d", code)
+	}
+	if st, _ = stateLoad(home); st.BackupVerify == nil || st.BackupVerify.OK {
+		t.Errorf("a failed verify left %+v", st.BackupVerify)
+	}
+}

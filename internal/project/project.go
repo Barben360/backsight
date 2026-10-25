@@ -4,8 +4,11 @@
 package project
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +37,7 @@ type Resolver struct {
 	roots      map[string]gitRoots
 }
 
-type gitRoots struct{ top, main string } // empty when not in a repository
+type gitRoots struct{ top, main, common string } // empty when not in a repository
 
 func New(home string, transverse []string) *Resolver {
 	return &Resolver{home: filepath.Clean(home), transverse: transverse, roots: map[string]gitRoots{}}
@@ -49,6 +52,7 @@ func (r *Resolver) git(dir string) gitRoots {
 	if lines := strings.Split(strings.TrimSpace(string(out)), "\n"); err == nil && len(lines) == 2 {
 		g.top = lines[0]
 		common := lines[1]
+		g.common = common
 		if filepath.Base(common) == ".git" {
 			g.main = filepath.Dir(common)
 		} else {
@@ -216,4 +220,78 @@ func under(p, dir string) bool {
 		p, dir = strings.ToLower(p), strings.ToLower(dir)
 	}
 	return within(p, dir)
+}
+
+// Remote is the normalised URL of cwd's repository remote (origin, else
+// the first one its config lists), "" outside git or without a remote.
+// Session state records it per project so doctor can tell two
+// repositories that share a project name (decision 0045). It reads the
+// repository's config file: no extra git process in the hook.
+func (r *Resolver) Remote(cwd string) string {
+	g := r.git(filepath.Clean(cwd))
+	if g.common == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(g.common, "config"))
+	if err != nil {
+		return ""
+	}
+	first, origin := "", ""
+	section := ""
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if strings.HasPrefix(line, "[") {
+			section = strings.ToLower(strings.Join(strings.Fields(strings.Trim(line, "[]")), " "))
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "url") || !strings.HasPrefix(section, "remote ") {
+			continue
+		}
+		u := strings.Trim(strings.TrimSpace(val), `"`)
+		if first == "" {
+			first = u
+		}
+		if section == `remote "origin"` && origin == "" {
+			origin = u
+		}
+	}
+	if origin != "" {
+		return NormaliseRemote(origin)
+	}
+	return NormaliseRemote(first)
+}
+
+// NormaliseRemote reduces a git remote URL to host/path, lower case,
+// without scheme, credentials, port, trailing slash or .git: the HTTPS and
+// SSH forms of one repository compare equal, and no token is ever kept.
+func NormaliseRemote(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	host, path := "", s
+	colon := strings.Index(s, ":")
+	switch {
+	case strings.Contains(s, "://"):
+		u, err := url.Parse(s)
+		if err != nil {
+			return ""
+		}
+		host, path = u.Hostname(), u.Path
+	case colon > 0 && !strings.Contains(s[:colon], "/"):
+		// scp-like: [user@]host:path
+		h, p, _ := strings.Cut(s, ":")
+		if i := strings.LastIndex(h, "@"); i >= 0 {
+			h = h[i+1:]
+		}
+		host, path = h, p
+	}
+	path = strings.TrimSuffix(strings.TrimRight(path, "/"), ".git")
+	path = strings.TrimRight(path, "/")
+	if host == "" {
+		return strings.ToLower(path)
+	}
+	return strings.ToLower(host + "/" + strings.TrimLeft(path, "/"))
 }

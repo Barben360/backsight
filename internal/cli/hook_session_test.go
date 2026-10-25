@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -345,5 +346,25 @@ func TestThePageReachesCompactionAndSubagents(t *testing.T) {
 	s := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
 	if !strings.Contains(s.Specific.Context, "Migrate the export job") {
 		t.Errorf("subagent: %q", s.Specific.Context)
+	}
+}
+
+func TestSessionStartAndPromptRecordTheRepositoryRemote(t *testing.T) {
+	home := hookHome(t)
+	repo := filepath.Join(home, "billing")
+	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", "git@github.com:Acme/billing.git"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": repo})
+	if st, _ := sessions(home).Load("s1"); st.Project != "billing" || st.Remote != "github.com/acme/billing" {
+		t.Errorf("after SessionStart: project %q remote %q", st.Project, st.Remote)
+	}
+	// A session started outside git and moved into the repository by the
+	// prompt hook gets the remote too.
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s2", "cwd": repo, "prompt": "hello there, what did we decide about billing?"})
+	if st, _ := sessions(home).Load("s2"); st.Remote != "github.com/acme/billing" {
+		t.Errorf("after the prompt hook: remote %q", st.Remote)
 	}
 }

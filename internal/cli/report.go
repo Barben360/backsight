@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -151,6 +152,14 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 			sc.Name(short, "<host>")
 		}
 	}
+	// Remotes before projects: a remote holds its project's name.
+	remotes, projects := sessionNames(d)
+	for _, r := range remotes {
+		sc.Name(r, "<remote>")
+	}
+	for _, p := range projects {
+		sc.Name(p, "<project>")
+	}
 	if u := osUser(); u != "" {
 		sc.Name(u, "<user>")
 		// Windows names DOMAIN\user.
@@ -159,6 +168,35 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 		}
 	}
 	return sc
+}
+
+// sessionNames are the git remotes and project names the session states
+// recorded (doctor's remotes check shows them; decision 0045).
+func sessionNames(d paths.Dirs) (remotes, projects []string) {
+	ents, _ := os.ReadDir(d.SessionsDir())
+	seen := map[string]bool{}
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(d.SessionsDir(), e.Name()))
+		var s struct {
+			Project string `json:"project"`
+			Remote  string `json:"remote"`
+		}
+		if err != nil || json.Unmarshal(raw, &s) != nil {
+			continue
+		}
+		if s.Remote != "" && !seen["r"+s.Remote] {
+			seen["r"+s.Remote] = true
+			remotes = append(remotes, s.Remote)
+		}
+		if s.Project != "" && !seen["p"+s.Project] {
+			seen["p"+s.Project] = true
+			projects = append(projects, s.Project)
+		}
+	}
+	return remotes, projects
 }
 
 // envSecretKey names the .env entries that hold a secret even unquoted.

@@ -77,6 +77,7 @@ type Env struct {
 	// Scheduler compares the installed scheduler entries with this
 	// binary's templates (nil: not compared).
 	Scheduler func() (SchedulerEntries, error)
+	InstallProbes
 }
 
 const (
@@ -158,6 +159,7 @@ func Run(ctx context.Context, env Env) Report {
 		}
 	}
 	add(checkUpdate(env.Dirs, buildinfo.Version, now()))
+	add(installChecks(ctx, env, ref, now())...)
 	return r
 }
 

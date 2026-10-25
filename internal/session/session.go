@@ -21,7 +21,10 @@ import (
 
 // State of one session.
 type State struct {
-	Project          string      `json:"project"`
+	Project string `json:"project"`
+	// Remote: the normalised git remote of the session's repository, ""
+	// outside git (decision 0045: doctor warns on one name, two remotes).
+	Remote           string      `json:"remote,omitempty"`
 	Prompts          int         `json:"prompts"`     // human prompts seen
 	LastInject       int         `json:"last_inject"` // prompt number of the last recall injection
 	LastWords        []string    `json:"last_words"`  // vocabulary of the last injected prompt (topic shift)

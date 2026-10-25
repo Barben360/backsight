@@ -446,3 +446,15 @@ func TestSecretValuesReadsWhatParsersRefuse(t *testing.T) {
 		t.Errorf("missing files gave %q", v)
 	}
 }
+
+// doctor's remotes check names projects and repositories: the report
+// shows neither (a private repository's name is the user's).
+func TestReportHidesProjectNamesAndRemotes(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	sessions := pathsOf(home).SessionsDir()
+	_ = os.MkdirAll(sessions, 0o700)
+	_ = os.WriteFile(filepath.Join(sessions, "s1.json"), []byte(`{"project":"skunkworks","remote":"github.com/annsco/skunkworks"}`), 0o600)
+	_ = os.WriteFile(filepath.Join(sessions, "s2.json"), []byte(`{"project":"skunkworks","remote":"gitlab.com/rival/stealth-skunkworks"}`), 0o600)
+	assertScrubbed(t, map[string]string{"project": "skunkworks", "remote": "annsco", "other remote": "rival/stealth"}, []string{"<remote>"})
+}

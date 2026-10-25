@@ -3,13 +3,17 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -106,5 +110,81 @@ func TestDoctorClientCheck(t *testing.T) {
 	_, out, _ = run(t, "doctor")
 	if !strings.Contains(out, "Claude Code wiring drifted") || !strings.Contains(out, "permission rule") {
 		t.Errorf("drift:\n%s", out)
+	}
+}
+
+// psRunner answers `docker ps` with ps and records the call.
+type psRunner struct {
+	ps    string
+	calls []string
+}
+
+func (p *psRunner) Run(_ context.Context, args ...string) ([]byte, error) {
+	p.calls = append(p.calls, strings.Join(args, " "))
+	return []byte(p.ps), nil
+}
+
+func TestReferenceServerProbeFindsTheComposeProjectByItsPort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"healthy"}`)) }))
+	t.Cleanup(srv.Close)
+	ps := &psRunner{ps: "hindsight\thindsight\nhindsight\thindsight-db\n"}
+	old := composeRunner
+	composeRunner = ps
+	t.Cleanup(func() { composeRunner = old })
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	got, err := referenceServer(context.Background(), srv.URL)
+	if err != nil || !got.Running || got.Stop != "docker compose -p hindsight stop" || got.Start != "docker compose -p hindsight start" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if len(ps.calls) != 1 || !strings.HasPrefix(ps.calls[0], "ps --filter publish="+port+" ") {
+		t.Errorf("docker calls %q", ps.calls)
+	}
+	// Nothing listens: stopped, and Docker is not asked.
+	ps.calls = nil
+	if got, err := referenceServer(context.Background(), "http://127.0.0.1:"+strconv.Itoa(closedPort(t))); err != nil || got.Running || len(ps.calls) != 0 {
+		t.Errorf("closed port: %+v %v %q", got, err, ps.calls)
+	}
+}
+
+func TestStopCommands(t *testing.T) {
+	for in, want := range map[string]string{
+		"hindsight\thindsight\n": "docker compose -p hindsight stop",
+		"\tmy-hindsight\n":       "docker stop my-hindsight",
+		"":                       "",
+	} {
+		if got, _ := stopCommands(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
+// doctor's ConfigEdits probe plans the edits client config apply makes,
+// in the profile asked for.
+func TestConfigEditsProbePlansBacksightsOwnEdits(t *testing.T) {
+	home := devInstall(t, true)
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.PluginVersion = "0.5.0"; return nil })
+	profile := filepath.Join(home, ".claude-work")
+	settings := filepath.Join(profile, "settings.json")
+	_ = os.MkdirAll(profile, 0o700)
+	_ = os.WriteFile(settings, []byte(`{"cleanupPeriodDays": 3650}`), 0o600)
+	var e doctor.Env
+	e.Dirs, e.Home = pathsOf(home), home
+	realProbes(&e)
+	e.ManagedDir = filepath.Join(home, "etc")
+	planned, err := e.ConfigEdits(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, fr := range planned {
+		for _, ch := range fr.Changes {
+			paths = append(paths, fr.Target+" "+ch.Path)
+		}
+	}
+	if len(paths) != len(plugin.ToolNames) || !strings.HasPrefix(paths[0], settings+" permissions.allow") {
+		t.Errorf("planned %q", paths)
+	}
+	if b, _ := os.ReadFile(settings); string(b) != `{"cleanupPeriodDays": 3650}` {
+		t.Errorf("the probe wrote %s", b)
 	}
 }

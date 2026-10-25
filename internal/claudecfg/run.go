@@ -1,6 +1,7 @@
 package claudecfg
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -315,9 +316,19 @@ func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) 
 	}
 	run := runState{r: r, action: "restore"}
 	defer run.finish()
+	started := false
 	for i, f := range m.Files {
 		if res[i].Status == "unchanged" {
 			continue
+		}
+		if !started {
+			// Journaled before the first write: a restore that stops
+			// half-way (a crash, a late change) stays pending in doctor
+			// until a rerun finishes it (SPEC §15).
+			if err := r.appendJournal(map[string]any{"action": "restore", "status": "started", "restores": ts}); err != nil {
+				return ts, res, err
+			}
+			started = true
 		}
 		var want []byte // nil: the run created the file, so restoring deletes it
 		if f.PreImage != nil {
@@ -337,6 +348,11 @@ func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) 
 			return run.done(), res, err
 		}
 		res[i].Status = map[bool]string{true: "deleted", false: "restored"}[want == nil]
+	}
+	if started {
+		if err := r.appendJournal(map[string]any{"action": "restore", "status": "finished", "restores": ts, "run": run.done()}); err != nil {
+			return run.done(), res, err
+		}
 	}
 	return run.done(), res, nil
 }
@@ -423,11 +439,16 @@ func (s *runState) put(target string, want []byte, expect string, force bool) er
 }
 
 func (r Runner) journal(ts, action, target string, pre *string) error {
-	line := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339Nano), "command": r.Command, "step": "claude-config",
-		"action": action, "target": target, "pre_image": nil, "status": "done", "run": ts}
+	line := map[string]any{"action": action, "target": target, "pre_image": nil, "status": "done", "run": ts}
 	if pre != nil {
 		line["pre_image"] = filepath.Join(r.PreImages, ts, *pre)
 	}
+	return r.appendJournal(line)
+}
+
+// appendJournal adds one claude-config line, synced, to the journal.
+func (r Runner) appendJournal(line map[string]any) error {
+	line["ts"], line["command"], line["step"] = time.Now().UTC().Format(time.RFC3339Nano), r.Command, "claude-config"
 	b, _ := json.Marshal(line)
 	if err := os.MkdirAll(filepath.Dir(r.Journal), 0o700); err != nil {
 		return err
@@ -470,4 +491,62 @@ func countStatus(rs []RestoreResult, s string) int {
 func hash(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// JournalLine is one line of <state>/journal.jsonl: a config-editor write
+// (step claude-config) or a setup step.
+type JournalLine struct {
+	TS       string  `json:"ts"`
+	Command  string  `json:"command"`
+	Step     string  `json:"step"`
+	Action   string  `json:"action"` // claude-config: edit | restore
+	Target   string  `json:"target"`
+	PreImage *string `json:"pre_image"`
+	Status   string  `json:"status"` // done; a whole restore: started | finished
+	Run      string  `json:"run"`
+	Restores string  `json:"restores"` // a whole restore: the run it puts back
+}
+
+// ReadJournal reads every line it can parse, in order; a missing journal
+// is empty.
+func ReadJournal(path string) ([]JournalLine, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []JournalLine
+	for _, l := range bytes.Split(raw, []byte("\n")) {
+		var jl JournalLine
+		if len(bytes.TrimSpace(l)) > 0 && json.Unmarshal(l, &jl) == nil {
+			out = append(out, jl)
+		}
+	}
+	return out, nil
+}
+
+// PendingRestores are the restores journaled as started that no later
+// restore of the same run finished.
+func PendingRestores(lines []JournalLine) []JournalLine {
+	var pending []JournalLine
+	for _, l := range lines {
+		if l.Step != "claude-config" || l.Action != "restore" || l.Restores == "" {
+			continue
+		}
+		switch l.Status {
+		case "started":
+			pending = append(pending, l)
+		case "finished":
+			kept := pending[:0]
+			for _, p := range pending {
+				if p.Restores != l.Restores {
+					kept = append(kept, p)
+				}
+			}
+			pending = kept
+		}
+	}
+	return pending
 }

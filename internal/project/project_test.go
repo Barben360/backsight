@@ -209,3 +209,47 @@ func TestExcludingTheMainCheckoutCoversItsWorktrees(t *testing.T) {
 		t.Error("a directory outside the project is excluded")
 	}
 }
+
+func TestRemoteIsTheNormalisedOriginOfTheRepository(t *testing.T) {
+	home, r := fixture(t)
+	repo := filepath.Join(home, "work", "billing")
+	git(t, repo, "remote", "add", "upstream", "https://github.com/acme/other.git")
+	git(t, repo, "remote", "add", "origin", "https://user:ghp_secret@GitHub.com/Acme/Billing.git/")
+	for _, cwd := range []string{repo, filepath.Join(repo, "internal", "export"), filepath.Join(home, "wt", "billing-fix")} {
+		if got := r.Remote(cwd); got != "github.com/acme/billing" {
+			t.Errorf("%s: remote %q", cwd, got)
+		}
+	}
+	if got := r.Remote(filepath.Join(home, "notes")); got != "" {
+		t.Errorf("a directory outside git has remote %q", got)
+	}
+}
+
+func TestRemoteWithoutOriginIsTheFirstOneAndNoneIsEmpty(t *testing.T) {
+	home, r := fixture(t)
+	repo := filepath.Join(home, "work", "billing")
+	if got := r.Remote(repo); got != "" {
+		t.Errorf("no remote: %q", got)
+	}
+	git(t, repo, "remote", "add", "mirror", "git@gitlab.com:acme/billing.git")
+	if got := New(home, []string{".claude"}).Remote(repo); got != "gitlab.com/acme/billing" {
+		t.Errorf("only remote: %q", got)
+	}
+}
+
+func TestNormaliseRemote(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@github.com:Acme/api.git":             "github.com/acme/api",
+		"ssh://git@github.com:22/acme/api.git":    "github.com/acme/api",
+		"https://github.com/acme/api":             "github.com/acme/api",
+		"https://tok:x-oauth@github.com/acme/api": "github.com/acme/api",
+		"git://example.org/team/api.git":          "example.org/team/api",
+		"/srv/git/api.git":                        "/srv/git/api",
+		"file:///srv/git/api.git/":                "/srv/git/api",
+		"  ":                                      "",
+	} {
+		if got := NormaliseRemote(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}

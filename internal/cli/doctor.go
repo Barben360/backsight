@@ -2,7 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -12,9 +15,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/selfcheck"
@@ -54,6 +59,18 @@ func realProbes(e *doctor.Env) {
 			return state.SelfCheck{Status: selfcheck.Failed, Detail: "cannot locate the running binary: " + err.Error()}
 		}
 		return selfcheck.Current(e.Dirs, exe)
+	}
+	e.ReferenceServer = referenceServer
+	e.ConfigEdits = func(profile string) ([]claudecfg.FileResult, error) {
+		c, err := newClientEnv(e.Dirs, e.Home, profile, e.ManagedDir)
+		if err != nil {
+			return nil, err
+		}
+		edits, _, err := c.ownedEdits()
+		if err != nil {
+			return nil, err
+		}
+		return claudecfg.Plan(edits)
 	}
 	e.Scheduler = func() (doctor.SchedulerEntries, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -110,4 +127,48 @@ func doctorText(r doctor.Report) string {
 // runDoctor runs every check (doctor and the jobs maintain snapshot).
 func runDoctor(cmd *cobra.Command, d paths.Dirs, home string) doctor.Report {
 	return doctor.Run(cmd.Context(), doctorEnv(d, home))
+}
+
+// referenceServer asks the reference server's /health, then, for a
+// loopback server, which Docker container publishes its port: its compose
+// project gives the stop command (0067 block 4). Read-only.
+func referenceServer(ctx context.Context, rawURL string) (doctor.RefServer, error) {
+	cl, err := hindsight.New(rawURL, "", 5*time.Second)
+	if err != nil {
+		return doctor.RefServer{}, err
+	}
+	if _, err := cl.Health(ctx); errors.Is(err, hindsight.ErrUnreachable) || errors.Is(err, hindsight.ErrTimeout) {
+		return doctor.RefServer{}, nil
+	}
+	srv := doctor.RefServer{Running: true} // it answered, healthy or not
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Port() == "" {
+		return srv, nil
+	}
+	if ip := net.ParseIP(u.Hostname()); u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return srv, nil // another machine: its Docker is not this one's
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := composeRunner.Run(ctx, "ps", "--filter", "publish="+u.Port(), "--format", `{{.Label "com.docker.compose.project"}}`+"\t"+`{{.Names}}`)
+	if err == nil {
+		srv.Stop, srv.Start = stopCommands(string(out))
+	}
+	return srv, nil
+}
+
+// stopCommands turns `docker ps` lines (compose project, tab, container
+// name) into the commands that stop and start that server: the whole
+// compose project when there is one, else the container.
+func stopCommands(ps string) (stop, start string) {
+	for _, line := range strings.Split(ps, "\n") {
+		project, name, _ := strings.Cut(strings.TrimRight(line, " \r"), "\t")
+		switch {
+		case project != "":
+			return "docker compose -p " + project + " stop", "docker compose -p " + project + " start"
+		case name != "":
+			return "docker stop " + name, "docker start " + name
+		}
+	}
+	return "", ""
 }

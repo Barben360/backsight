@@ -34,6 +34,14 @@ func loadClientEnv(configDir string) (clientEnv, error) {
 	if err != nil {
 		return clientEnv{}, err
 	}
+	var de doctor.Env
+	probes(&de)
+	return newClientEnv(d, home, configDir, de.ManagedDir)
+}
+
+// newClientEnv is loadClientEnv for known dirs and managed-settings
+// directory (doctor's probes use it).
+func newClientEnv(d paths.Dirs, home, configDir, managed string) (clientEnv, error) {
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if errors.Is(err, fs.ErrNotExist) {
 		cfg, err = config.Default(d, home), nil
@@ -50,9 +58,7 @@ func loadClientEnv(configDir string) (clientEnv, error) {
 			return os.Getenv(k)
 		}
 	}
-	var de doctor.Env
-	probes(&de)
-	return clientEnv{dirs: d, cfg: cfg, loc: claudecode.Locate(home, getenv), managed: de.ManagedDir}, nil
+	return clientEnv{dirs: d, cfg: cfg, loc: claudecode.Locate(home, getenv), managed: managed}, nil
 }
 
 func (c clientEnv) runner(command string) claudecfg.Runner {
