@@ -460,3 +460,20 @@ func TestListMemoriesFiltersByDocumentTypeAndUpdateTime(t *testing.T) {
 		t.Errorf("observation query %v", q)
 	}
 }
+
+// A session's per-project document id (conversation:<sid>@<project>) reaches
+// the server whole: "@" stays literal in the path segment, and the decoded
+// path is the id itself (what Hindsight looks up).
+func TestGetDocumentKeepsPerProjectIDs(t *testing.T) {
+	var escaped, decoded string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		escaped, decoded = r.URL.EscapedPath(), r.URL.Path
+		_, _ = w.Write([]byte(`{"id":"x","document_metadata":{}}`))
+	})
+	if _, err := c.GetDocument(context.Background(), "b", "conversation:s1@my project"); err != nil {
+		t.Fatal(err)
+	}
+	if escaped != "/v1/default/banks/b/documents/conversation%3As1@my%20project" || decoded != "/v1/default/banks/b/documents/conversation:s1@my project" {
+		t.Errorf("escaped %s, decoded %s", escaped, decoded)
+	}
+}

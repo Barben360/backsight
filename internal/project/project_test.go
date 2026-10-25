@@ -253,3 +253,30 @@ func TestNormaliseRemote(t *testing.T) {
 		}
 	}
 }
+
+// Only the basename fallback is weak: a session's later directories that
+// fall back to it keep the previous record's project (decision 0071, C2a).
+func TestNamedTellsStrongNamesFromBasenames(t *testing.T) {
+	home, r := fixture(t)
+	named := filepath.Join(home, "notes", "named")
+	_ = os.MkdirAll(named, 0o700)
+	write(t, filepath.Join(named, ".backsight.toml"), "project = \"journal\"\n")
+	cases := []struct {
+		cwd    string
+		name   string
+		strong bool
+	}{
+		{filepath.Join(home, "work", "billing", "internal"), "billing", true}, // git repository
+		{filepath.Join(home, "wt", "billing-fix"), "billing", true},           // linked worktree: its main checkout
+		{home, ".claude", true}, // transverse
+		{filepath.Join(home, ".claude", "skills"), ".claude", true},
+		{named, "journal", true},                       // .backsight.toml project, no repository
+		{filepath.Join(home, "notes"), "notes", false}, // basename only
+		{filepath.Join(home, "gone", "deleted-dir"), "deleted-dir", false},
+	}
+	for _, c := range cases {
+		if name, strong := r.Named(c.cwd); name != c.name || strong != c.strong {
+			t.Errorf("%s: (%q, %v), want (%q, %v)", c.cwd, name, strong, c.name, c.strong)
+		}
+	}
+}

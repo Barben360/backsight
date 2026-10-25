@@ -34,7 +34,9 @@ rc_session() {
 }
 
 # rc_doc <sid>: the server's conversation document of sid; empty when the
-# server answers 404. Any other answer (401, 5xx, no server) fails the run:
+# server answers 404. rc_session keeps every record in one directory, so the
+# session's records all go to its home document conversation:<sid> (other
+# projects' records would go to conversation:<sid>@<project>). Any other answer (401, 5xx, no server) fails the run:
 # it must never read as "absent".
 rc_doc() {
   local out code

@@ -68,12 +68,25 @@ type line struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
-// BuildSegment turns records of one session into a retain item; segment 1
-// creates the document, later ones append (decision 0050).
-// sid is the transcript file's session id, used for the document whatever
-// the records say (a resumed or forked file keeps one identity).
-func BuildSegment(bank, sid string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
-	doc := "conversation:" + sid
+// DocumentID is the document of a session's records of project: the
+// session's home project (its first record's) keeps conversation:<sid>,
+// every other project gets conversation:<sid>@<project>. One document never
+// mixes projects: Hindsight 1.1.0 relabels every unchanged unit of a
+// document with the tags and scopes of its latest append (decision 0071,
+// C2a; E30 V2).
+func DocumentID(sid, home, project string) string {
+	if project == home {
+		return "conversation:" + sid
+	}
+	return "conversation:" + sid + "@" + project
+}
+
+// BuildSegment turns records of one session and one project into a retain
+// item of document doc (DocumentID); segment 1 creates the document, later
+// ones append (decision 0050). sid is the transcript file's session id,
+// used whatever the records say (a resumed or forked file keeps one
+// identity).
+func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -111,13 +124,24 @@ func BuildSegment(bank, sid string, recs []transcript.Record, segment int, proje
 // Cursor is what this machine knows it sent of a session (a cache of the
 // server's document metadata, decision 0038).
 type Cursor struct {
-	Transcript  string    `json:"transcript"`
-	Offset      int64     `json:"offset"`
-	Fingerprint string    `json:"fingerprint"`
-	LastUUID    string    `json:"last_uuid"`
-	Records     int       `json:"records"`
-	Segment     int       `json:"segment"`
-	Document    string    `json:"document"`
+	Transcript  string `json:"transcript"`
+	Offset      int64  `json:"offset"`
+	Fingerprint string `json:"fingerprint"`
+	LastUUID    string `json:"last_uuid"`
+	Records     int    `json:"records"`
+	// Segment and Document are the home document's, what a build from
+	// before per-project documents reads and appends to.
+	Segment  int    `json:"segment"`
+	Document string `json:"document"`
+	// Home is the session's home project (DocumentID); a cursor without
+	// one was written before per-project documents and resyncs once.
+	Home string `json:"home,omitempty"`
+	// Segments is the last segment sent to each document, by project.
+	Segments map[string]int `json:"segments,omitempty"`
+	// Project is the project of the record at Offset, which the project
+	// rule carries to the next record (attribute); empty at the file's
+	// start.
+	Project     string    `json:"project,omitempty"`
 	Bank        string    `json:"bank"`
 	LastTurnAt  time.Time `json:"last_turn_at"`
 	SentAt      time.Time `json:"sent_at"`

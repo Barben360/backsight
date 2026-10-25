@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -182,5 +184,33 @@ func TestFlushReadsTheWiredProfile(t *testing.T) {
 	_, out, _ := run(t, "retain", "flush")
 	if !strings.Contains(out, "wired") || strings.Contains(out, "main (") {
 		t.Errorf("%s", out)
+	}
+}
+
+// One event per document a flush wrote, then one for the failed send: the
+// failing document, else the session's home document.
+func TestRetainEventsNameTheDocumentsWritten(t *testing.T) {
+	type ev struct{ doc, status string }
+	for _, c := range []struct {
+		name string
+		r    retain.Result
+		want []ev
+	}{
+		{"two documents", retain.Result{Session: "s1", Status: retain.Sent, Documents: []string{"conversation:s1", "conversation:s1@beta"}},
+			[]ev{{"conversation:s1", "ok"}, {"conversation:s1@beta", "ok"}}},
+		{"partly sent", retain.Result{Session: "s1", Status: retain.Sent, Documents: []string{"conversation:s1"}, FailedDocument: "conversation:s1@beta"},
+			[]ev{{"conversation:s1", "ok"}, {"conversation:s1@beta", "retry"}}},
+		{"refused after a send", retain.Result{Session: "s1", Status: retain.Quarantined, Documents: []string{"conversation:s1"}, FailedDocument: "conversation:s1@beta"},
+			[]ev{{"conversation:s1", "ok"}, {"conversation:s1@beta", "quarantined"}}},
+		{"server position unreadable", retain.Result{Session: "s1", Status: retain.Retry}, []ev{{"conversation:s1", "retry"}}},
+		{"nothing to send", retain.Result{Session: "s1", Status: retain.Nothing}, nil},
+	} {
+		var got []ev
+		for _, e := range retainEvents(c.r, 5) {
+			got = append(got, ev{e.Document, e.Status})
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }

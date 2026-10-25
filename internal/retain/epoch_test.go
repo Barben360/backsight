@@ -129,7 +129,7 @@ func TestUnreadableEpochDropsNothing(t *testing.T) {
 			if rec, err := e.f.Reconcile(context.Background()); err == nil || e.f.Hold == "" {
 				t.Fatalf("reconciled: %+v, hold %q", rec, e.f.Hold)
 			}
-			if cur, ok, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1"); !ok || cur != before {
+			if cur, ok, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1"); !ok || !reflect.DeepEqual(cur, before) {
 				t.Errorf("cursor dropped or changed: %+v", cur)
 			}
 			if idx, _ := LoadSentIndex(e.f.Dirs.SentIndexDir()); !idx.Has("u2") || !idx.Has(sessionKey("claude-memory", "s2", "w1")) {
@@ -241,5 +241,62 @@ func TestRestoreResendsAnOldSessionWithoutBackfillQueue(t *testing.T) {
 	expect(t, e.flush("old", Options{}), Nothing, 0, 0)
 	if len(e.hs.retains) != sent+1 {
 		t.Errorf("sent twice: %d", len(e.hs.retains)-sent)
+	}
+}
+
+// twoDocEnv: s1 sends alpha's u1 and beta's u2 (two documents) at 12:00,
+// the backup is taken at 12:30; lost, if set, then sends alpha's u3 at
+// 13:00. The server is restored from the backup at 13:30.
+func twoDocEnv(t *testing.T, lost bool) *env {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha before the backup")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta before the backup")
+	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	snap := e.hs.backup()
+	if lost {
+		e.clock = clockAt(13, 0)
+		e.recordIn(alpha, "s1", "u3", "user", 60, "alpha after the backup")
+		expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	}
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(13, 30))
+	e.clock = clockAt(13, 30)
+	return e
+}
+
+// The reconcile compares the cursor with the furthest record any of the
+// session's documents holds: here beta's, the latest send the backup kept.
+func TestReconcileAcrossTwoDocumentsDropsOnlyWhatFollowsTheFurthest(t *testing.T) {
+	e := twoDocEnv(t, true)
+	sent := len(e.hs.retains)
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || !reflect.DeepEqual(rec.Resend, []string{"s1"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	if !e.f.Index.Has(sessionKey("claude-memory", "s1", "u2")) || !e.f.Index.Has(sessionKey("claude-memory", "s1", "u1")) {
+		t.Error("records the server still holds (beta's u2, alpha's u1) lost their sent mark")
+	}
+	if e.f.Index.Has(sessionKey("claude-memory", "s1", "u3")) {
+		t.Error("u3, lost by the restore, is still marked sent")
+	}
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	again := e.hs.retains[sent:]
+	if len(again) != 1 || again[0].DocumentID != "conversation:s1" || again[0].UpdateMode != "append" ||
+		!strings.Contains(again[0].Content, "alpha after the backup") || strings.Contains(again[0].Content, "before the backup") {
+		t.Errorf("resent: %+v", again)
+	}
+}
+
+// Nothing lost: the cursor's last record is the side document's last_uuid,
+// although the home document's differs.
+func TestReconcileKeepsASessionWhoseLatestSendIsInASideDocument(t *testing.T) {
+	e := twoDocEnv(t, false)
+	before, _, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || len(rec.Resend) != 0 {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	if cur, ok, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1"); !ok || !reflect.DeepEqual(cur, before) {
+		t.Errorf("cursor dropped or changed: %+v", cur)
 	}
 }

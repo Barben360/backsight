@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,10 @@ type Result struct {
 	Segment    int    `json:"segment,omitempty"`
 	Chars      int    `json:"chars,omitempty"`
 	Project    string `json:"project,omitempty"`
+	// Documents are the documents this flush wrote a segment to, in order;
+	// FailedDocument is the one whose send failed (retried or refused).
+	Documents      []string `json:"documents,omitempty"`
+	FailedDocument string   `json:"failed_document,omitempty"`
 	// Unknown counts the records of types Claude Code is not known to write
 	// (transcript.Known) that this flush moved the cursor past: each is
 	// counted once, however often the file is read.
@@ -144,7 +149,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	if err != nil {
 		return fail(Retry, err.Error())
 	}
-	resync := !haveCursor || cur.Bank != f.Bank || cur.Backfill || fi.Size() < cur.Offset
+	// A cursor without Home predates per-project documents: its Segment
+	// counts every project's runs, all sent to the home document.
+	resync := !haveCursor || cur.Bank != f.Bank || cur.Backfill || cur.Home == "" || fi.Size() < cur.Offset
 	if haveCursor {
 		fp, err := Fingerprint(path, cur.Offset)
 		if err != nil {
@@ -179,10 +186,18 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	}
 
 	if resync {
-		cur = Cursor{Transcript: path, Document: "conversation:" + sid, Bank: f.Bank}
+		cur = Cursor{Transcript: path, Bank: f.Bank}
 		if len(recs) == 0 {
 			return fail(Nothing, "")
 		}
+	}
+	if cur.Segments == nil {
+		cur.Segments = map[string]int{}
+	}
+	projs := f.attribute(recs, cur.Project)
+	if resync {
+		cur.Home = homeOf(recs, projs)
+		cur.Document = DocumentID(sid, cur.Home, cur.Home)
 		// sent: already out, from this machine. The fork guard (a bare uuid
 		// in the index) does not count for the records a restore lost of
 		// this session's own sends (its .dropped mark), unless sent again.
@@ -190,61 +205,68 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		sent := func(u string) bool {
 			return f.Index.Has(u) && (!lostOwn.Records[u] || f.Index.Has(sessionKey(f.Bank, sid, u)))
 		}
-		doc, err := f.Client.GetDocument(ctx, f.Bank, cur.Document)
-		var apiErr *hindsight.APIError
-		switch {
-		case err == nil:
-			last := doc.Metadata["last_uuid"]
-			i := indexOf(recs, last)
-			if i < 0 {
-				return f.quarantine(res, &cur, "the server holds this session up to record "+last+", which this transcript does not contain")
+		docs, err := f.readDocuments(ctx, sid, cur.Home, projectsOf(cur.Home, recs, projs))
+		if err != nil {
+			res.Stop, res.NeedsFix = true, needsFix(err)
+			return fail(Retry, errSummary(err))
+		}
+		// The session resumes after the furthest record any of its
+		// documents holds: records go out in file order, so the server holds
+		// every earlier one (in its own document) or the restore lost it too.
+		at, unknown, ok := furthest(recs, docs)
+		if !ok {
+			return f.quarantine(res, &cur, "the server holds this session up to record "+unknown+", which this transcript does not contain")
+		}
+		found := map[string]bool{}
+		for _, d := range docs {
+			if !d.found {
+				continue
 			}
-			seg, err := strconv.Atoi(doc.Metadata["segment"])
+			seg, err := strconv.Atoi(d.segment)
 			if err != nil || seg < 1 {
-				return f.quarantine(res, &cur, "the server's document has no valid segment number; sending would replace it")
+				return f.quarantine(res, &cur, "the server's document "+d.id+" has no valid segment number; sending would replace it")
 			}
-			cur.Segment, cur.LastUUID, cur.Offset = seg, last, recs[i].End
-			recs = recs[i+1:]
-			// Records this machine already sent may be missing from the
-			// server's metadata (async retain still running, or a crash
-			// before the cursor was saved): never send them twice.
-			skip := 0
-			for skip < len(recs) && sent(recs[skip].UUID) {
-				skip++
-			}
-			if skip > 0 {
-				cur.Offset, cur.LastUUID = recs[skip-1].End, recs[skip-1].UUID
-				recs = recs[skip:]
-			}
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound && f.pendingMark(sid) == resendMark:
-			// Released from quarantine after a first segment the server
-			// never stored: resend the whole session as segment 1.
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-			skip := 0
-			for skip < len(recs) && sent(recs[skip].UUID) {
-				if f.Index.Has(sessionKey(f.Bank, sid, recs[skip].UUID)) {
-					// This session's own records went out, but the document
-					// is not readable yet (its async retain is still running):
-					// a new segment 1 would replace it (issue 101). After
-					// PendingLimit the retain is taken as lost: quarantine.
+			cur.Segments[d.project], found[d.project] = seg, true
+		}
+		if at >= 0 {
+			cur.Offset, cur.LastUUID, cur.Project = recs[at].End, recs[at].UUID, projs[recs[at].End]
+			recs = recs[at+1:]
+		}
+		// Released from quarantine after a first segment the server never
+		// stored: that document is resent whole, from segment 1.
+		resend := f.pendingMark(sid) == resendMark
+		// Records this machine already sent may be missing from the
+		// server's metadata (async retain still running, or a crash before
+		// the cursor was saved): never send them twice.
+		skip := 0
+		for skip < len(recs) && sent(recs[skip].UUID) {
+			r := recs[skip]
+			if !found[projs[r.End]] {
+				if resend {
+					break
+				}
+				if f.Index.Has(sessionKey(f.Bank, sid, r.UUID)) {
+					// This session's own record went out, but its document is
+					// not readable yet (its first async retain is still
+					// running): a new segment 1 would replace it (issue 101).
+					// After PendingLimit the retain is taken as lost.
 					if f.waitedTooLong(sid, now) {
-						return f.quarantine(res, &cur, "the server never stored this session's first segment; retain retry-quarantine resends the session")
+						return f.quarantine(res, &cur, "the server never stored the first segment of "+DocumentID(sid, cur.Home, projs[r.End])+"; retain retry-quarantine resends the session")
 					}
 					return fail(Retry, "the server has not stored this session's earlier segment yet; retried later")
 				}
-				skip++ // a fork copies its parent's records (decision 0038)
+				// else a fork copies its parent's records (decision 0038)
 			}
-			if skip > 0 {
-				cur.Offset, cur.LastUUID = recs[skip-1].End, recs[skip-1].UUID
-				recs = recs[skip:]
-			}
-			if len(recs) > 0 && !opt.IgnoreSince && !lostOwn.PastSince && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince) {
-				cur.Backfill = true
-				return f.save(res, cur, Backfill, "started before live retain began; backfill sends it")
-			}
-		default:
-			res.Stop, res.NeedsFix = true, needsFix(err)
-			return fail(Retry, errSummary(err))
+			skip++
+		}
+		if skip > 0 {
+			last := recs[skip-1]
+			cur.Offset, cur.LastUUID, cur.Project = last.End, last.UUID, projs[last.End]
+			recs = recs[skip:]
+		}
+		if at < 0 && !resend && len(recs) > 0 && !opt.IgnoreSince && !lostOwn.PastSince && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince) {
+			cur.Backfill = true
+			return f.save(res, cur, Backfill, "started before live retain began; backfill sends it")
 		}
 	}
 
@@ -263,23 +285,129 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		}
 		send = recs[:n]
 	}
-	return f.sendRuns(ctx, res, cur, sid, send, now)
+	return f.sendRuns(ctx, res, cur, sid, send, projs, now)
 }
 
-// runKey groups consecutive records that go out together: same project and
-// same opt-out answer for their working directory.
+// attribute names the project of each record of recs, keyed by its End
+// offset (unique in a file); prev is the project of the record before
+// recs[0], "" at the file's start. This is the one place the project rule
+// lives (decision 0071, C2a): a record whose directory has a strong name
+// (Resolver.Named: transverse path, .backsight.toml project, git
+// repository) takes it; any other keeps the previous record's project, so
+// a cd into ~/.npm-global/... or /tmp does not start a project. Only a
+// session's first directory (prev == "") may name one by its basename. A
+// record with no directory keeps prev too: it is never sent (OptedOut).
+// The rule reads the transcript alone, never pauses or opt-outs, so a
+// resync from offset 0 names every record as the incremental flushes did.
+func (f *Flusher) attribute(recs []transcript.Record, prev string) map[int64]string {
+	type name struct {
+		name   string
+		strong bool
+	}
+	names := map[string]name{}
+	out := make(map[int64]string, len(recs))
+	for _, r := range recs {
+		if strings.TrimSpace(r.CWD) != "" {
+			n, ok := names[r.CWD]
+			if !ok {
+				n.name, n.strong = f.Resolver.Named(r.CWD)
+				names[r.CWD] = n
+			}
+			if n.strong || prev == "" {
+				prev = n.name
+			}
+		}
+		out[r.End] = prev
+	}
+	return out
+}
+
+// homeOf is the session's home project: its first named record's.
+func homeOf(recs []transcript.Record, projs map[int64]string) string {
+	for _, r := range recs {
+		if p := projs[r.End]; p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// projectsOf lists home, then every other project of recs once, in order:
+// the documents a resync reads.
+func projectsOf(home string, recs []transcript.Record, projs map[int64]string) []string {
+	out := []string{home}
+	seen := map[string]bool{home: true}
+	for _, r := range recs {
+		if p := projs[r.End]; p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// serverDoc is what the server holds of one of a session's documents.
+type serverDoc struct {
+	project, id string
+	found       bool
+	lastUUID    string
+	segment     string
+}
+
+// readDocuments reads the session's document of each project; a missing
+// one is not an error, any other failure is.
+func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects []string) ([]serverDoc, error) {
+	out := make([]serverDoc, 0, len(projects))
+	for _, p := range projects {
+		d := serverDoc{project: p, id: DocumentID(sid, home, p)}
+		doc, err := f.Client.GetDocument(ctx, f.Bank, d.id)
+		var apiErr *hindsight.APIError
+		switch {
+		case err == nil:
+			d.found, d.lastUUID, d.segment = true, doc.Metadata["last_uuid"], doc.Metadata["segment"]
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		default:
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// furthest is the index in recs of the furthest last_uuid the documents
+// hold, -1 when none holds any. ok is false, with that last_uuid, when a
+// document holds a record recs lack: the position is unknown.
+func furthest(recs []transcript.Record, docs []serverDoc) (at int, unknown string, ok bool) {
+	at = -1
+	for _, d := range docs {
+		if !d.found {
+			continue
+		}
+		i := indexOf(recs, d.lastUUID)
+		if i < 0 {
+			return -1, d.lastUUID, false
+		}
+		at = max(at, i)
+	}
+	return at, "", true
+}
+
+// runKey groups consecutive records that go out together: same project
+// (so same document) and same opt-out answer for their working directory.
 type runKey struct {
 	optOut  bool
 	reason  string
 	project string
 }
 
-// sendRuns sends records in runs of one project, skipping opted-out runs
-// (a session can cd into an excluded path mid-way). It stops at the first
-// failure, with the cursor after the last run done.
-func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, now time.Time) Result {
+// sendRuns sends records in runs of one project, each to its project's
+// document, skipping opted-out runs (a session can cd into an excluded path
+// mid-way; opt-outs are still judged per record directory). projs names
+// each record's project (attribute). It stops at the first failure, with
+// the cursor after the last run done.
+func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, projs map[int64]string, now time.Time) Result {
 	pauses := f.pauses(sid)
-	keys := map[string]runKey{}
+	optOuts := map[string]runKey{}
 	key := func(r transcript.Record) runKey {
 		if out, why := pauses(r); out {
 			return runKey{optOut: true, reason: why}
@@ -287,17 +415,16 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		if f.headless(r.Entrypoint) {
 			return runKey{optOut: true, reason: "headless session (entrypoint " + r.Entrypoint + "): privacy.skip_entrypoints"}
 		}
-		cwd := r.CWD
-		if k, ok := keys[cwd]; ok {
-			return k
+		k, ok := optOuts[r.CWD]
+		if !ok {
+			if out, reason := f.Resolver.OptedOut(r.CWD, f.Exclude); out {
+				k.optOut, k.reason = true, reason
+			}
+			optOuts[r.CWD] = k
 		}
-		k := runKey{}
-		if out, reason := f.Resolver.OptedOut(cwd, f.Exclude); out {
-			k.optOut, k.reason = true, reason
-		} else {
-			k.project = f.Resolver.Project(cwd)
+		if !k.optOut {
+			k.project = projs[r.End]
 		}
-		keys[cwd] = k
 		return k
 	}
 	status, detail := Nothing, ""
@@ -319,7 +446,7 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 				handled = append(handled, r.UUID)
 			}
 			_ = f.Index.Add(handled...)
-			cur.Offset, cur.LastUUID, cur.LastTurnAt = last.End, last.UUID, last.Timestamp
+			cur.Offset, cur.LastUUID, cur.LastTurnAt, cur.Project = last.End, last.UUID, last.Timestamp, projs[last.End]
 			if status != Sent {
 				status, detail = OptedOut, k.reason
 			}
@@ -339,12 +466,15 @@ func (f *Flusher) headless(entrypoint string) bool {
 	return f.Headless != nil && f.Headless(entrypoint)
 }
 
-// sendPart sends one segment; done reports that the flush ended (error).
+// sendPart sends one segment to project's document; done reports that the
+// flush ended (error).
 func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid string, run []transcript.Record, project, status, detail string, now time.Time) (Result, Cursor, string, string, bool) {
 	last := run[len(run)-1]
-	segNo := cur.Segment + 1
-	seg := BuildSegment(f.Bank, sid, run, segNo, project, f.MachineID, f.Version)
+	doc := DocumentID(sid, cur.Home, project)
+	segNo := cur.Segments[project] + 1
+	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
 	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
+		res.FailedDocument = doc
 		if refusesDocument(err) {
 			return f.quarantine(res, &cur, errSummary(err)), cur, status, detail, true
 		}
@@ -361,9 +491,13 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	if err := f.Index.Add(uuids...); err != nil {
 		detail = "sent, but the fork-guard index was not updated: " + err.Error()
 	}
-	cur.Offset, cur.LastUUID, cur.Segment, cur.LastTurnAt, cur.SentAt = last.End, last.UUID, segNo, last.Timestamp, now
+	cur.Offset, cur.LastUUID, cur.LastTurnAt, cur.SentAt, cur.Project = last.End, last.UUID, last.Timestamp, now, project
+	cur.Segments[project] = segNo
 	cur.Records += len(run)
 	res.Records += len(run)
+	if !slices.Contains(res.Documents, doc) {
+		res.Documents = append(res.Documents, doc)
+	}
 	res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, project
 	return res, cur, Sent, detail, false
 }
@@ -379,6 +513,9 @@ func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 	}
 	if fp, err := Fingerprint(cur.Transcript, cur.Offset); err == nil {
 		cur.Fingerprint = fp
+	}
+	if cur.Segments != nil {
+		cur.Segment = cur.Segments[cur.Home] // what an older build appends to
 	}
 	if err := SaveCursor(f.Dirs.CursorsDir(), res.Session, cur); err != nil && status == Sent {
 		// A stale cursor would resend; without one the next flush resyncs

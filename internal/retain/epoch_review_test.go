@@ -59,7 +59,7 @@ func TestReconcileTakesOnlySessionsSentAfterTheBackup(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(rec.Resend, []string{"skew"}) {
 		t.Fatalf("%+v %v", rec, err)
 	}
-	if c, ok := cursorOf(t, e, "early"); !ok || c != before {
+	if c, ok := cursorOf(t, e, "early"); !ok || !reflect.DeepEqual(c, before) {
 		t.Errorf("the 10:00 cursor changed: %+v", c)
 	}
 	expect(t, e.flush("early", Options{}), Nothing, 0, 0)
@@ -81,7 +81,7 @@ func TestReconcileStopsAtASessionBeingFlushed(t *testing.T) {
 	if _, err := e.f.Reconcile(context.Background()); err == nil || e.f.Hold == "" {
 		t.Fatalf("reconciled while s2 is locked: hold %q", e.f.Hold)
 	}
-	if c, ok := cursorOf(t, e, "s2"); !ok || c != before {
+	if c, ok := cursorOf(t, e, "s2"); !ok || !reflect.DeepEqual(c, before) {
 		t.Errorf("s2's cursor dropped or changed: %+v", c)
 	}
 	if idx, _ := LoadSentIndex(e.f.Dirs.SentIndexDir()); !idx.Has(sessionKey("claude-memory", "s2", "w1")) {
@@ -126,7 +126,7 @@ func TestReconcileSkipsAnotherBanksCursor(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(rec.Resend, []string{"s1"}) {
 		t.Fatalf("%+v %v", rec, err)
 	}
-	if got, ok := cursorOf(t, e, "s2"); !ok || got != c {
+	if got, ok := cursorOf(t, e, "s2"); !ok || !reflect.DeepEqual(got, c) {
 		t.Errorf("the other bank's cursor changed: %+v", got)
 	}
 }
@@ -150,7 +150,7 @@ func TestReconcileLeavesWhatItCannotPlace(t *testing.T) {
 			t.Errorf("index entry %q dropped", k)
 		}
 	}
-	if c, ok := cursorOf(t, e, "s2"); !ok || c != s2 {
+	if c, ok := cursorOf(t, e, "s2"); !ok || !reflect.DeepEqual(c, s2) {
 		t.Errorf("s2's cursor (transcript gone) dropped: %+v", c)
 	}
 	if r := e.flush("s1", Options{}); r.Status != Quarantined {
@@ -279,7 +279,7 @@ func TestARestoreMarkerHoldsEverySend(t *testing.T) {
 	if _, err := e.f.Reconcile(context.Background()); err == nil || !strings.Contains(e.f.Hold, "restore") {
 		t.Fatalf("reconciled while the marker exists: hold %q", e.f.Hold)
 	}
-	if c, ok := cursorOf(t, e, "s1"); !ok || c != before {
+	if c, ok := cursorOf(t, e, "s1"); !ok || !reflect.DeepEqual(c, before) {
 		t.Errorf("cursor dropped while held: %+v", c)
 	}
 	if r := e.flush("s3", Options{}); r.Status == Sent || len(e.hs.retains) != sent {
@@ -312,7 +312,7 @@ func TestReconcileWaitsForTheBanksQueue(t *testing.T) {
 	if _, err := e.f.Reconcile(context.Background()); err == nil || !strings.Contains(e.f.Hold, "queued") {
 		t.Fatalf("reconciled with a queue: hold %q", e.f.Hold)
 	}
-	if c, ok := cursorOf(t, e, "s1"); !ok || c != before {
+	if c, ok := cursorOf(t, e, "s1"); !ok || !reflect.DeepEqual(c, before) {
 		t.Errorf("cursor dropped while waiting: %+v", c)
 	}
 	e.hs.queued = 0

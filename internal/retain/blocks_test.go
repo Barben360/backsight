@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -38,7 +39,7 @@ func lines(content string) []map[string]any {
 }
 
 func TestFirstSegment(t *testing.T) {
-	seg := BuildSegment("claude-memory", "s1", recs(), 1, "billing", "machine-1", "0.1.0")
+	seg := BuildSegment("claude-memory", "s1", "conversation:s1", recs(), 1, "billing", "machine-1", "0.1.0")
 	it := seg.Item
 	ls := lines(it.Content)
 	if len(ls) != 4 || ls[0]["role"] != "system" || ls[0]["content"] != "REF-ID: conversation:s1" {
@@ -66,23 +67,23 @@ func TestFirstSegment(t *testing.T) {
 }
 
 func TestLaterSegmentAppendsWithoutHeader(t *testing.T) {
-	seg := BuildSegment("claude-memory", "s1", recs()[1:], 3, "billing", "m", "v")
+	seg := BuildSegment("claude-memory", "s1", "conversation:s1", recs()[1:], 3, "billing", "m", "v")
 	if seg.Item.UpdateMode != "append" || strings.Contains(seg.Item.Content, "REF-ID") || seg.Item.Metadata["segment"] != "3" {
 		t.Errorf("%+v", seg.Item)
 	}
 }
 
 func TestOperationIDIsDeterministicAndContentBound(t *testing.T) {
-	a := BuildSegment("b", "s1", recs(), 1, "p", "m", "v").OperationID
-	if b := BuildSegment("b", "s1", recs(), 1, "p", "m", "v").OperationID; a != b {
+	a := BuildSegment("b", "s1", "conversation:s1", recs(), 1, "p", "m", "v").OperationID
+	if b := BuildSegment("b", "s1", "conversation:s1", recs(), 1, "p", "m", "v").OperationID; a != b {
 		t.Error("same segment, different id")
 	}
-	if c := BuildSegment("other-bank", "s1", recs(), 1, "p", "m", "v").OperationID; a == c {
+	if c := BuildSegment("other-bank", "s1", "conversation:s1", recs(), 1, "p", "m", "v").OperationID; a == c {
 		t.Error("the bank must be part of the id")
 	}
 	r := recs()
 	r[1].Turns[0].Content = "Done differently."
-	if d := BuildSegment("b", "s1", r, 1, "p", "m", "v").OperationID; a == d {
+	if d := BuildSegment("b", "s1", "conversation:s1", r, 1, "p", "m", "v").OperationID; a == d {
 		t.Error("the content must be part of the id")
 	}
 }
@@ -93,12 +94,13 @@ func TestCursorRoundTripAndMissing(t *testing.T) {
 		t.Fatalf("missing cursor: %v %v", ok, err)
 	}
 	c := Cursor{Transcript: "/t/s1.jsonl", Offset: 1234, Fingerprint: "abc", LastUUID: "a1", Records: 2, Segment: 1,
-		Document: "conversation:s1", Bank: "b", LastTurnAt: time.Date(2026, 10, 24, 9, 1, 0, 0, time.UTC)}
+		Document: "conversation:s1", Home: "billing", Segments: map[string]int{"billing": 1, "infra": 2}, Project: "infra",
+		Bank: "b", LastTurnAt: time.Date(2026, 10, 24, 9, 1, 0, 0, time.UTC)}
 	if err := SaveCursor(dir, "s1", c); err != nil {
 		t.Fatal(err)
 	}
 	got, ok, err := LoadCursor(dir, "s1")
-	if err != nil || !ok || got != c {
+	if err != nil || !ok || !reflect.DeepEqual(got, c) {
 		t.Errorf("%+v %v %v", got, ok, err)
 	}
 	if runtime.GOOS != "windows" {

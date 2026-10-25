@@ -118,18 +118,27 @@ func within(p, dir string) bool {
 
 // Project names the session run in cwd.
 func (r *Resolver) Project(cwd string) string {
+	name, _ := r.Named(cwd)
+	return name
+}
+
+// Named is Project, and whether the name is strong: a transverse path, a
+// .backsight.toml project or a git repository's main worktree. A weak name
+// is only cwd's basename, which a session's later directories do not get to
+// use (decision 0071, C2a).
+func (r *Resolver) Named(cwd string) (name string, strong bool) {
 	cwd = filepath.Clean(cwd)
 	claude := filepath.Join(r.home, ".claude")
 	if cwd == r.home || cwd == claude || strings.HasPrefix(cwd, claude+string(filepath.Separator)) {
-		return r.transverse[0]
+		return r.transverse[0], true
 	}
 	if v := r.settings(cwd); v.project != "" {
-		return v.project
+		return v.project, true
 	}
 	if g := r.git(cwd); g.main != "" {
-		return filepath.Base(g.main)
+		return filepath.Base(g.main), true
 	}
-	return filepath.Base(cwd)
+	return filepath.Base(cwd), false
 }
 
 // Related lists the projects the nearest .backsight.toml that sets related

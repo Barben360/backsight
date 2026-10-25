@@ -245,33 +245,44 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (r
 	return resend, nil
 }
 
-// dropSession compares one session's cursor with the server's document,
-// under the session's lock. When the server holds less, it records the
-// records this session sent after the server's last_uuid (all of them when
-// the document is gone) as its own to resend (the .dropped mark), removes
-// their "sent in this session" index entries, queues the session for
-// backfill when it belongs there, and only then removes the cursor: a
-// crash in between leaves the cursor, and the next run does it again.
-// The bare uuids stay in the index: they are the fork guard, so a fork
-// that copied these records still skips them, while this session's own
-// resync sends them (it reads its .dropped mark).
+// dropSession compares one session's cursor with the server's documents,
+// under the session's lock. The server's position is the furthest record
+// any of the session's documents holds (the one a resync resumes after).
+// When the server holds less, it records the records this session sent
+// after that position (all of them when no document is left) as its own to
+// resend (the .dropped mark), removes their "sent in this session" index
+// entries, queues the session for backfill when it belongs there, and only
+// then removes the cursor: a crash in between leaves the cursor, and the
+// next run does it again. The bare uuids stay in the index: they are the
+// fork guard, so a fork that copied these records still skips them, while
+// this session's own resync sends them (it reads its .dropped mark).
 func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queued bool) (lost bool, err error) {
 	unlock, err := f.lockSession(sid)
 	if err != nil {
 		return false, err
 	}
 	defer unlock()
-	last := ""
-	doc, err := f.Client.GetDocument(ctx, f.Bank, cur.Document)
-	var apiErr *hindsight.APIError
-	switch {
-	case err == nil:
-		if last = doc.Metadata["last_uuid"]; last == cur.LastUUID {
-			return false, nil
+	// The documents this cursor sent to: the home one and one per other
+	// project. A cursor from before per-project documents (no Home, no
+	// Segments) sent to conversation:<sid> alone, which DocumentID(sid, "",
+	// "") names.
+	projects := []string{cur.Home}
+	for p := range cur.Segments {
+		if p != cur.Home {
+			projects = append(projects, p)
 		}
-	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-	default:
+	}
+	slices.Sort(projects[1:])
+	docs, err := f.readDocuments(ctx, sid, cur.Home, projects)
+	if err != nil {
 		return false, errors.New(errSummary(err))
+	}
+	held := false
+	for _, d := range docs {
+		if d.found && d.lastUUID == cur.LastUUID {
+			return false, nil // the server holds the latest send: nothing lost
+		}
+		held = held || d.found
 	}
 	fh, err := os.Open(cur.Transcript)
 	if errors.Is(err, os.ErrNotExist) {
@@ -285,13 +296,12 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	if err != nil {
 		return false, err
 	}
-	// Records up to the server's last_uuid stay sent. A last_uuid the
+	// Records up to the server's position stay sent. A last_uuid the
 	// transcript lacks leaves the index alone: the resync quarantines.
-	from := 0
-	if last != "" {
-		if from = indexOf(recs, last) + 1; from == 0 {
-			from = len(recs)
-		}
+	at, _, ok := furthest(recs, docs)
+	from := at + 1
+	if !ok {
+		from = len(recs)
 	}
 	mark := dropped{Records: map[string]bool{}}
 	var keys []string
@@ -303,7 +313,7 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 			keys = append(keys, k)
 		}
 	}
-	early := last == "" && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
+	early := !held && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
 	mark.PastSince = early && !queued // resent by live retain, past retain_since
 	if err := f.addDropped(sid, mark); err != nil {
 		return false, err

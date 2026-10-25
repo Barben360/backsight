@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -28,10 +30,11 @@ type fakeHS struct {
 	content map[string]string
 	retains []hindsight.RetainItem
 	ops     []string
-	status  int  // non-zero: answer retains with this status
-	stale   bool // metadata not updated (async retain still running)
-	hidden  bool // new documents not readable yet (their first async retain still running)
-	gets    int  // document reads
+	status  int             // non-zero: answer retains with this status
+	stale   bool            // metadata not updated (async retain still running)
+	hidden  bool            // new documents not readable yet (their first async retain still running)
+	hide    map[string]bool // these documents not readable yet
+	gets    int             // document reads
 	seenOps map[string]bool
 	// epochStatus non-zero: reads of the restore epoch answer with it.
 	epochStatus int
@@ -82,7 +85,7 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		meta, ok := h.docs[id]
-		if !ok || h.hidden {
+		if !ok || h.hidden || h.hide[id] {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -396,16 +399,243 @@ func TestCwdChangeIntoExcludedPathMidSession(t *testing.T) {
 	}
 }
 
-// A session moving to another project sends one segment per project.
+// A session moving to another repository sends that project's records to
+// its own document: an append to one document relabels all of it (E30 V2).
 func TestProjectChangeMidSessionSplitsSegments(t *testing.T) {
 	e := newEnv(t)
-	other := filepath.Join(filepath.Dir(e.cwd), "infra")
-	_ = os.MkdirAll(other, 0o700)
+	infra := e.repo("infra")
 	e.record("s1", "u1", "user", 0, "billing question")
-	e.recordIn(other, "s1", "u2", "user", 1, "infra question")
+	e.recordIn(infra, "s1", "u2", "user", 1, "infra question")
 	e.flush("s1", Options{})
-	if len(e.hs.retains) != 2 || e.hs.retains[0].Tags[0] != "project:billing" || e.hs.retains[1].Tags[0] != "project:infra" {
+	if len(e.hs.retains) != 2 || e.hs.retains[0].Tags[0] != "project:billing" || e.hs.retains[1].Tags[0] != "project:infra" ||
+		e.hs.retains[0].DocumentID != "conversation:s1" || e.hs.retains[1].DocumentID != "conversation:s1@infra" || e.hs.retains[1].UpdateMode != "" {
 		t.Errorf("%+v", e.hs.retains)
+	}
+}
+
+// repo creates a git repository named name next to the session's default
+// directory: a strong project name (project.Resolver.Named).
+func (e *env) repo(name string) string {
+	e.t.Helper()
+	dir := filepath.Join(filepath.Dir(e.cwd), name)
+	_ = os.MkdirAll(dir, 0o700)
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		e.t.Fatalf("git init: %v\n%s", err, out)
+	}
+	return dir
+}
+
+// itemsOf lists the retained items of document doc.
+func (h *fakeHS) itemsOf(doc string) []hindsight.RetainItem {
+	var out []hindsight.RetainItem
+	for _, it := range h.retains {
+		if it.DocumentID == doc {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// A→B→A: each project's records go to its own document with its own
+// segments and metadata; B is never appended to A's document.
+func TestEachProjectGetsItsOwnDocument(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha question")
+	e.recordIn(alpha, "s1", "a1", "assistant", 1, "alpha answer")
+	e.recordIn(beta, "s1", "u2", "user", 2, "beta question")
+	e.recordIn(beta, "s1", "a2", "assistant", 3, "beta answer")
+	e.recordIn(alpha, "s1", "u3", "user", 4, "back in alpha")
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || r.Records != 5 || !reflect.DeepEqual(r.Documents, []string{"conversation:s1", "conversation:s1@beta"}) {
+		t.Fatalf("%+v", r)
+	}
+	home, side := e.hs.itemsOf("conversation:s1"), e.hs.itemsOf("conversation:s1@beta")
+	if len(home) != 2 || len(side) != 1 || len(e.hs.retains) != 3 {
+		t.Fatalf("home %d, side %d, all %d", len(home), len(side), len(e.hs.retains))
+	}
+	for _, it := range home {
+		if strings.Contains(it.Content, "beta") || it.Tags[0] != "project:alpha" || it.ObservationScopes[0][0] != "project:alpha" {
+			t.Errorf("alpha's document got %+v", it)
+		}
+	}
+	if home[0].UpdateMode != "" || !strings.Contains(home[0].Content, "REF-ID: conversation:s1\"") ||
+		home[1].UpdateMode != "append" || home[1].Metadata["segment"] != "2" || !strings.Contains(home[1].Content, "back in alpha") {
+		t.Errorf("alpha's segments: %+v", home)
+	}
+	if s := side[0]; s.UpdateMode != "" || s.Tags[0] != "project:beta" || !strings.Contains(s.Content, "REF-ID: conversation:s1@beta") ||
+		strings.Contains(s.Content, "alpha") || s.Metadata["segment"] != "1" {
+		t.Errorf("beta's segment: %+v", s)
+	}
+	if m := e.hs.docs["conversation:s1"]; m["last_uuid"] != "u3" || m["segment"] != "2" {
+		t.Errorf("alpha's metadata %v", m)
+	}
+	if m := e.hs.docs["conversation:s1@beta"]; m["last_uuid"] != "a2" || m["segment"] != "1" {
+		t.Errorf("beta's metadata %v", m)
+	}
+	cur, _, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+	if cur.Home != "alpha" || !reflect.DeepEqual(cur.Segments, map[string]int{"alpha": 2, "beta": 1}) || cur.Segment != 2 ||
+		cur.Document != "conversation:s1" || cur.Project != "alpha" {
+		t.Errorf("cursor %+v", cur)
+	}
+	// A later flush, starting mid-file, appends to beta's own document.
+	e.recordIn(beta, "s1", "u4", "user", 60, "beta again")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	if side = e.hs.itemsOf("conversation:s1@beta"); len(side) != 2 || side[1].UpdateMode != "append" || side[1].Metadata["segment"] != "2" ||
+		side[1].Metadata["last_uuid"] != "u4" || len(e.hs.itemsOf("conversation:s1")) != 2 {
+		t.Errorf("%+v", e.hs.retains)
+	}
+}
+
+// A directory outside any repository does not start a project mid-session:
+// a session started in ~ that cds into ~/.npm-global/.../dist stays
+// transverse (the live project:build), one in a repository stays in it.
+// Only a session's first directory may name a project by its basename.
+func TestANonRepoDirectoryKeepsThePreviousProject(t *testing.T) {
+	e := newEnv(t)
+	home := filepath.Dir(filepath.Dir(e.cwd))
+	dist := filepath.Join(home, ".npm-global", "lib", "node_modules", "crawler", "dist")
+	_ = os.MkdirAll(dist, 0o700)
+	e.recordIn(home, "s1", "u1", "user", 0, "in the home directory")
+	e.recordIn(dist, "s1", "u2", "user", 1, "reading the bundle")
+	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	if len(e.hs.retains) != 1 || e.hs.retains[0].Tags[0] != "project:.claude" || e.hs.retains[0].DocumentID != "conversation:s1" {
+		t.Errorf("%+v", e.hs.retains)
+	}
+
+	// Started in a plain directory: its basename names the session; a
+	// repository then starts its own project, which a later plain
+	// directory keeps, also across flushes (the cursor carries it).
+	e = newEnv(t)
+	welcome, beta, tmp := filepath.Join(home, "Documents", "Welcome"), e.repo("beta"), filepath.Join(home, "tmp")
+	_ = os.MkdirAll(welcome, 0o700)
+	_ = os.MkdirAll(tmp, 0o700)
+	e.recordIn(welcome, "s1", "u1", "user", 0, "welcome notes")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta work")
+	e.flush("s1", Options{})
+	e.recordIn(tmp, "s1", "u3", "user", 60, "beta scratch file in tmp")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	want := []struct{ doc, tag string }{{"conversation:s1", "project:Welcome"}, {"conversation:s1@beta", "project:beta"}, {"conversation:s1@beta", "project:beta"}}
+	if len(e.hs.retains) != len(want) {
+		t.Fatalf("%+v", e.hs.retains)
+	}
+	for i, w := range want {
+		if it := e.hs.retains[i]; it.DocumentID != w.doc || it.Tags[0] != w.tag {
+			t.Errorf("item %d: %s %v, want %s %s", i, it.DocumentID, it.Tags, w.doc, w.tag)
+		}
+	}
+}
+
+// With no cursor (new machine, lost state), the session resumes after the
+// furthest record any of its documents holds, whichever document that is.
+func TestResyncResumesAfterTheFurthestDocument(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		docs map[string]map[string]string
+		want []struct{ doc, text, mode, segment string }
+	}{
+		{"only the side document", map[string]map[string]string{"conversation:s1@beta": {"last_uuid": "u2", "segment": "1"}},
+			[]struct{ doc, text, mode, segment string }{{"conversation:s1", "alpha 3", "", "1"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
+		{"side further than home", map[string]map[string]string{"conversation:s1": {"last_uuid": "u1", "segment": "1"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1"}},
+			[]struct{ doc, text, mode, segment string }{{"conversation:s1", "alpha 3", "append", "2"}, {"conversation:s1@beta", "beta 4", "append", "2"}}},
+		{"home further than side", map[string]map[string]string{"conversation:s1": {"last_uuid": "u3", "segment": "2"}, "conversation:s1@beta": {"last_uuid": "u2", "segment": "1"}},
+			[]struct{ doc, text, mode, segment string }{{"conversation:s1@beta", "beta 4", "append", "2"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			alpha, beta := e.repo("alpha"), e.repo("beta")
+			e.recordIn(alpha, "s1", "u1", "user", 0, "alpha 1")
+			e.recordIn(beta, "s1", "u2", "user", 1, "beta 2")
+			e.recordIn(alpha, "s1", "u3", "user", 2, "alpha 3")
+			e.recordIn(beta, "s1", "u4", "user", 3, "beta 4")
+			e.hs.docs = c.docs // sent from another machine: no cursor, no index here
+			if r := e.flush("s1", Options{}); r.Status != Sent {
+				t.Fatalf("%+v", r)
+			}
+			if len(e.hs.retains) != len(c.want) {
+				t.Fatalf("%d items: %+v", len(e.hs.retains), e.hs.retains)
+			}
+			for i, w := range c.want {
+				it := e.hs.retains[i]
+				if it.DocumentID != w.doc || it.UpdateMode != w.mode || it.Metadata["segment"] != w.segment || !strings.Contains(it.Content, w.text) {
+					t.Errorf("item %d: %s %q segment %s %s", i, it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content)
+				}
+				for _, old := range []string{"alpha 1", "beta 2"} {
+					if strings.Contains(it.Content, old) {
+						t.Errorf("item %d resent %q", i, old)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A last_uuid this transcript lacks in any of the session's documents makes
+// the position unknown: quarantine.
+func TestUnknownPositionInASideDocumentQuarantines(t *testing.T) {
+	e := newEnv(t)
+	beta := e.repo("beta")
+	e.record("s1", "u1", "user", 0, "billing")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta")
+	e.hs.docs["conversation:s1"] = map[string]string{"last_uuid": "u1", "segment": "1"}
+	e.hs.docs["conversation:s1@beta"] = map[string]string{"last_uuid": "elsewhere", "segment": "1"}
+	if r := e.flush("s1", Options{}); r.Status != Quarantined || len(e.hs.retains) != 0 || !strings.Contains(r.Detail, "elsewhere") {
+		t.Errorf("%+v", r)
+	}
+}
+
+// A cursor written before per-project documents (no home) resyncs once from
+// the server, appends to the home document, then flushes as usual.
+func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	e.flush("s1", Options{})
+	cur, _, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+	cur.Home, cur.Segments, cur.Project = "", nil, "" // as an older build wrote it
+	if err := SaveCursor(e.f.Dirs.CursorsDir(), "s1", cur); err != nil {
+		t.Fatal(err)
+	}
+	e.record("s1", "u2", "user", 60, "second")
+	gets := e.hs.gets
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	if e.hs.gets != gets+1 {
+		t.Errorf("%d document reads, want one resync", e.hs.gets-gets)
+	}
+	if it := e.hs.retains[1]; it.DocumentID != "conversation:s1" || it.UpdateMode != "append" || strings.Contains(it.Content, "first") {
+		t.Errorf("%+v", it)
+	}
+	if cur, _, _ = LoadCursor(e.f.Dirs.CursorsDir(), "s1"); cur.Home != "billing" || cur.Segments["billing"] != 2 {
+		t.Errorf("cursor %+v", cur)
+	}
+	e.record("s1", "u3", "user", 120, "third")
+	gets = e.hs.gets
+	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
+	if e.hs.gets != gets {
+		t.Errorf("resynced again: %d reads", e.hs.gets-gets)
+	}
+}
+
+// Issue 101 for a side document: its first segment is not readable yet and
+// the cursor is lost; a new segment 1 would replace it, so the flush waits.
+func TestASideDocumentsPendingFirstSegmentWaits(t *testing.T) {
+	e := newEnv(t)
+	beta := e.repo("beta")
+	e.record("s1", "u1", "user", 0, "billing")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta first")
+	e.hs.hide = map[string]bool{"conversation:s1@beta": true}
+	e.flush("s1", Options{})
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.recordIn(beta, "s1", "u3", "user", 60, "beta second")
+	if r := e.flush("s1", Options{}); r.Status != Retry || len(e.hs.retains) != 2 {
+		t.Fatalf("%+v, %d retains", r, len(e.hs.retains))
+	}
+	e.hs.hide = nil // the first retain lands
+	if r := e.flush("s1", Options{}); r.Status != Sent || len(e.hs.retains) != 3 {
+		t.Fatalf("%+v", r)
+	}
+	if it := e.hs.retains[2]; it.DocumentID != "conversation:s1@beta" || it.UpdateMode != "append" || it.Metadata["segment"] != "2" ||
+		strings.Contains(it.Content, "beta first") {
+		t.Errorf("%+v", it)
 	}
 }
 

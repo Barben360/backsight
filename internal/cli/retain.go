@@ -107,8 +107,8 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 	for _, file := range files {
 		start := time.Now()
 		r := f.FlushFile(cmd.Context(), file, opt)
-		if st, ok := telemetryStatus[r.Status]; ok {
-			tw.Emit(telemetry.Retain{Document: "conversation:" + r.Session, Items: 1, Status: st, MS: int(time.Since(start).Milliseconds())})
+		for _, ev := range retainEvents(r, int(time.Since(start).Milliseconds())) {
+			tw.Emit(ev)
 		}
 		if len(r.Unknown) > 0 {
 			tw.Emit(telemetry.Raw{Name: "transcript_unknown", Fields: map[string]any{"types": r.Unknown}})
@@ -119,6 +119,32 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		}
 	}
 	return out
+}
+
+// retainEvents are one flush's telemetry: one event per document it wrote
+// (a session's records of each project have their own document, decision
+// 0071 C2a), then one for the document whose send failed, or for the
+// session's home document when the flush failed before sending (reading
+// the server's position). ms is the whole flush's duration.
+func retainEvents(r retain.Result, ms int) []telemetry.Retain {
+	var out []telemetry.Retain
+	for _, d := range r.Documents {
+		if d != r.FailedDocument {
+			out = append(out, telemetry.Retain{Document: d, Items: 1, Status: "ok", MS: ms})
+		}
+	}
+	st, ok := telemetryStatus[r.Status]
+	switch {
+	case r.FailedDocument != "" && st == "ok":
+		st = "retry" // partly sent: the rest waits for the next run
+	case !ok || st == "ok":
+		return out
+	}
+	doc := r.FailedDocument
+	if doc == "" {
+		doc = "conversation:" + r.Session
+	}
+	return append(out, telemetry.Retain{Document: doc, Items: 1, Status: st, MS: ms})
 }
 
 type flushReport struct {
