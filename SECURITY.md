@@ -69,7 +69,7 @@ Releases are signed with [minisign](https://jedisct1.github.io/minisign/) (Ed255
   ```
 
 - **Test keys never reach a release**: a binary trusts a test key only when built with the `testkey` build tag, which CI's tests use. Before a release is published, `make verify-keys` (run by goreleaser after each build) stops it if any target's binary was built with the `testkey` or `testhooks` tag, or if the binary the release machine can run trusts a key besides the two above or pins another Hindsight image than the source.
-- **Where the secret keys live**: the current key's secret half is in the maintainer's password store and in the release workflow's encrypted secret; the next key's is only in the maintainer's password store, never on CI. Releases are built only from tags on `main`, by GitHub Actions pinned to commit SHAs.
+- **Where the secret keys live**: the current key's secret half is in the maintainer's password store and in the release workflow's encrypted secret; the next key's is only in the maintainer's password store, never on CI. Releases are built only from tags on `main`, by a GitHub Actions workflow whose actions are pinned to commit SHAs. Until the repository becomes public, that workflow runs on the maintainer's self-hosted runner, a machine the maintainer controls: the release is built and signed there, and the current key's secret half reaches that machine only for the release job (written to the runner's temporary directory, then shredded). Once public, releases are built on GitHub-hosted runners.
 
 ### Key rotation
 

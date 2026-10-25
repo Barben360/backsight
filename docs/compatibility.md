@@ -8,7 +8,7 @@ What this source tree pins and requires. A release built from it ships exactly t
 
 | Component | Pinned or required | Enforced by |
 |---|---|---|
-| Hindsight server | `ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06` | the binary: `server render` writes this image, and `server start`, `server install` and setup refuse a deployed server on another pin (`server upgrade` moves to it) |
+| Hindsight server | `ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06` | the binary: `server render` writes this image; `server render`, `server start`, `server install` and setup refuse a deployed server on another pin (`server upgrade` and `update apply` move it) |
 | PostgreSQL | `pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11` | the binary: `server render` writes this image |
 | Claude Code | `2.1.309` or newer | setup's pre-flight and `client install` refuse an older version |
 | Docker | Docker Engine (Linux) or Docker Desktop, usable by your user without `sudo` (the `docker` group, or rootless Docker) | setup's pre-flight runs `docker info`; it checks no minimum version |
@@ -16,7 +16,7 @@ What this source tree pins and requires. A release built from it ships exactly t
 
 Both images are pinned by the digest of their multi-arch index, so the tag is only a label: a signed release fixes the digest, and Docker pulls exactly that image (no separate image signature).
 
-Tested on the author's machine with Docker 29.9 and Compose 5.6. CI installs the Claude Code version pinned in `.github/workflows/ci.yml`.
+Tested on the author's machine with Docker 29.9 and Compose 5.6 (as of 2026-10-25). CI installs the Claude Code version pinned in `.github/workflows/ci.yml`.
 
 ## Platforms
 
@@ -24,15 +24,15 @@ Release binaries are built for four targets. Linux is the only platform tested t
 
 | OS / arch | Release binary | Status |
 |---|---|---|
-| Linux amd64 | yes | **tested**: CachyOS (rolling, Arch-based; the author's machine and CI's runners), and Ubuntu 24.04 (see below) |
+| Linux amd64 | yes | **tested**: CachyOS (rolling, Arch-based; the author's machine and CI's runners). Ubuntu 24.04: tested by CI until 2026-10-25, untested since (see below) |
 | Linux arm64 | yes | built, not tested |
 | macOS arm64 (Apple silicon) | yes | built; validated at M7 |
 | Windows amd64 | yes | built; validated at M7 |
 
 Ubuntu 24.04:
 
-- CI's fresh-install chain ran on GitHub's `ubuntu-latest` runners (Ubuntu 24.04) until 2026-10-25, when CI moved to self-hosted runners on the author's CachyOS machine. It goes back to `ubuntu-latest` when the repository becomes public.
-- The author's work PC (Ubuntu 24.04) is the first preview install.
+- CI's fresh-install chain ran on GitHub's `ubuntu-latest` runners (Ubuntu 24.04) until 2026-10-25, when CI moved to self-hosted runners on the author's CachyOS machine. Ubuntu 24.04 is untested since: no CI job runs on it until CI goes back to `ubuntu-latest`, when the repository becomes public.
+- The author's work PC (Ubuntu 24.04) is the first preview install, and its first test since.
 
 Other targets (macOS on Intel, Windows on arm64, 32-bit) have no release binary.
 
