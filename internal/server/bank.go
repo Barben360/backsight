@@ -125,3 +125,62 @@ func ApplyBank(ctx context.Context, c *hindsight.Client, bank, appliedHash strin
 	}
 	return res, nil
 }
+
+// BankDrift lists the template keys bank no longer holds as backsight set
+// them (a hand edit in the UI, a server reset). A key matches when every
+// value the template sets is there: the server may add its own defaults.
+func BankDrift(ctx context.Context, c *hindsight.Client, bank string) ([]string, error) {
+	over, err := c.BankConfigOverrides(ctx, bank)
+	if err != nil {
+		return nil, err
+	}
+	var drift []string
+	for k, want := range bankTemplate() {
+		raw, ok := over[k]
+		var got any
+		if !ok || json.Unmarshal(raw, &got) != nil || !holds(normal(want), got) {
+			drift = append(drift, k)
+		}
+	}
+	sort.Strings(drift)
+	return drift, nil
+}
+
+// normal gives v the shape JSON decoding gives (maps, []any, float64).
+func normal(v any) any {
+	raw, _ := json.Marshal(v)
+	var out any
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+// holds reports whether got has every value of want; objects may carry
+// more keys, lists must match item by item.
+func holds(want, got any) bool {
+	switch w := want.(type) {
+	case map[string]any:
+		g, ok := got.(map[string]any)
+		if !ok {
+			return false
+		}
+		for k, v := range w {
+			if !holds(v, g[k]) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		g, ok := got.([]any)
+		if !ok || len(g) != len(w) {
+			return false
+		}
+		for i := range w {
+			if !holds(w[i], g[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return want == got
+	}
+}

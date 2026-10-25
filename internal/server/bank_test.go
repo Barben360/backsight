@@ -189,3 +189,36 @@ func TestMissionsStartWithTheEnglishRule(t *testing.T) {
 		}
 	}
 }
+
+// After apply nothing drifts, even with the server's own defaults added
+// inside a key; a changed value, a changed list item or a removed key does.
+func TestBankDrift(t *testing.T) {
+	f := &fakeBank{banks: []string{"b"}, overrides: map[string]json.RawMessage{}}
+	c := client(t, f)
+	ctx := context.Background()
+	if _, err := ApplyBank(ctx, c, "b", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if drift, err := BankDrift(ctx, c, "b"); err != nil || len(drift) != 0 {
+		t.Fatalf("right after apply: %v %v", drift, err)
+	}
+	var strategies map[string]map[string]any
+	_ = json.Unmarshal(f.overrides["retain_strategies"], &strategies)
+	strategies["conversation"]["server_default"] = 1 // added by the server: still holds
+	f.overrides["retain_strategies"], _ = json.Marshal(strategies)
+	if drift, _ := BankDrift(ctx, c, "b"); len(drift) != 0 {
+		t.Errorf("an extra key inside a value is no drift: %v", drift)
+	}
+	strategies["conversation"]["retain_chunk_size"] = 8000
+	f.overrides["retain_strategies"], _ = json.Marshal(strategies)
+	f.overrides["enable_observations"] = json.RawMessage(`false`)
+	var labels []map[string]any
+	_ = json.Unmarshal(f.overrides["entity_labels"], &labels)
+	labels[0]["values"] = labels[0]["values"].([]any)[1:] // one kind dropped
+	f.overrides["entity_labels"], _ = json.Marshal(labels)
+	delete(f.overrides, "retain_mission")
+	drift, err := BankDrift(ctx, c, "b")
+	if err != nil || strings.Join(drift, ",") != "enable_observations,entity_labels,retain_mission,retain_strategies" {
+		t.Errorf("drift %v %v", drift, err)
+	}
+}

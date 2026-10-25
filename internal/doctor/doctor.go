@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
@@ -24,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/target"
 )
@@ -108,6 +110,9 @@ func Run(ctx context.Context, env Env) Report {
 	add(bank)
 	if bank.Status == OK || bank.Status == Warn {
 		add(checkUntagged(ctx, cl, tg.Bank))
+		if tg.Source == "config" {
+			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs))
+		}
 	} else {
 		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
 	}
@@ -129,6 +134,7 @@ func Run(ctx context.Context, env Env) Report {
 		writeOff = !cfg.Components.Write
 	}
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
+	add(checkBackup(env, now()))
 	add(checkJobs(env.Dirs, now(), env.Linger))
 	return r
 }
@@ -260,6 +266,64 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Chec
 		c.Status = Warn
 		c.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
 		c.Fix = "open the Hindsight UI operations page to see the provider errors"
+	}
+	return c
+}
+
+// checkBankConfig compares the bank's settings with backsight's template
+// (SPEC §15 "bank config drift"): a key changed on the server, or a
+// template this binary carries that was never applied.
+func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
+	c := Check{ID: "bank-config", Status: OK, Summary: "bank settings match backsight's template"}
+	drift, err := server.BankDrift(ctx, cl, bank)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "cannot read the bank's settings", err.Error()
+		return c
+	}
+	if len(drift) > 0 {
+		c.Status, c.Summary, c.Detail = Warn, "bank settings differ from backsight's template", strings.Join(drift, ", ")
+		c.Fix = "backsight bank apply --force (puts backsight's values back)"
+		return c
+	}
+	if st, err := state.Load(d.StateFile()); err == nil && st.BankConfigHash != server.TemplateHash() {
+		c.Status, c.Summary = Warn, "this backsight's bank template was not applied yet"
+		c.Fix = "backsight bank apply"
+	}
+	return c
+}
+
+// checkBackup reports the newest backup's age (SPEC §15: > 2 days warns):
+// jobs maintain logs its run even when the backup in it fails.
+func checkBackup(env Env, now time.Time) Check {
+	c := Check{ID: "backup"}
+	cfg, err := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home)
+	switch {
+	case err != nil:
+		c.Status, c.Summary = Info, "skipped: no backsight config"
+		return c
+	case !cfg.Backup.Enabled:
+		c.Status, c.Summary = Info, "backups are off (backup.enabled = false)"
+		return c
+	}
+	list, err := backup.List(cfg.Backup.Dir)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "cannot list the backups", err.Error()
+		return c
+	}
+	var last time.Time
+	for _, e := range list {
+		if e.Manifest.CreatedAt.After(last) {
+			last = e.Manifest.CreatedAt
+		}
+	}
+	fix := "backsight backup create; if jobs maintain makes none, see its log (journalctl --user -u backsight-maintain)"
+	switch age := now.Sub(last); {
+	case last.IsZero():
+		c.Status, c.Summary, c.Fix = Warn, "no backup in "+cfg.Backup.Dir, fix
+	case age > 48*time.Hour:
+		c.Status, c.Summary, c.Fix = Warn, fmt.Sprintf("last backup %.0f days ago (%s)", age.Hours()/24, last.UTC().Format("2006-01-02 15:04")), fix
+	default:
+		c.Status, c.Summary = OK, fmt.Sprintf("last backup %s UTC, %d kept", last.UTC().Format("2006-01-02 15:04"), len(list))
 	}
 	return c
 }

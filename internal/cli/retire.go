@@ -58,7 +58,7 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 	if err != nil {
 		return res, editError(err)
 	}
-	res.Kept = []string{"the reference server and its data: backsight doctor says when it can be stopped",
+	res.Kept = []string{"the reference server and its data: left running as a fallback; stop it yourself when you no longer need it",
 		"files under ~/.claude/hooks and ~/.claude/skills, and your CLAUDE.md: personal files, never edited",
 		"close or restart every Claude Code session: a running one may write the old MCP servers back (backsight doctor reports them)"}
 	timerOn := retroTimerOwned(ctx, c.loc)

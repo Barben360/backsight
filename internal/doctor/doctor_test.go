@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/state"
@@ -574,5 +575,52 @@ func TestCheckLocks(t *testing.T) {
 	put(t, filepath.Join(d.LocksDir(), "job-backfill.lock"), `{"pid":999999,"command":"retain backfill","since":"2026-10-25T03:00:00Z"}`, 0o600)
 	if c := checkLocks(d); c.Status != Warn || !strings.Contains(c.Detail, "job-backfill.lock (retain backfill, pid 999999)") || strings.Contains(c.Detail, "job-tick") {
 		t.Errorf("a stale lock: %+v", c)
+	}
+}
+
+// The newest backup's age: none or over 2 days warns (jobs maintain logs
+// its run even when the backup in it fails); backups off is information.
+func TestCheckBackupAge(t *testing.T) {
+	f := newFixture(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	if c := checkBackup(f.env, now); c.Status != Info || !strings.Contains(c.Summary, "no backsight config") {
+		t.Errorf("no config: %+v", c)
+	}
+	dir := filepath.Join(f.home, "bk")
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	if c := checkBackup(f.env, now); c.Status != Warn || !strings.Contains(c.Summary, "no backup in") {
+		t.Errorf("none: %+v", c)
+	}
+	put(t, filepath.Join(dir, backup.Name(now.Add(-72*time.Hour))), "x", 0o600)
+	if c := checkBackup(f.env, now); c.Status != Warn || !strings.Contains(c.Summary, "last backup 3 days ago") || !strings.Contains(c.Fix, "backup create") {
+		t.Errorf("3 days: %+v", c)
+	}
+	put(t, filepath.Join(dir, backup.Name(now.Add(-47*time.Hour))), "x", 0o600)
+	if c := checkBackup(f.env, now); c.Status != OK || !strings.Contains(c.Summary, "2026-10-23 13:00 UTC, 2 kept") {
+		t.Errorf("47 h: %+v", c)
+	}
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\nenabled = false\n", 0o600)
+	if c := checkBackup(f.env, now); c.Status != Info || !strings.Contains(c.Summary, "backups are off") {
+		t.Errorf("off: %+v", c)
+	}
+}
+
+// With backsight's own config, a bank whose settings lost backsight's
+// template warns with the fix; the reference install's bank is not judged.
+func TestCheckBankConfigDrift(t *testing.T) {
+	f := newFixture(t)
+	srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, `{"config":{},"overrides":{"enable_observations":false}}`}})
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	c := check(t, f.run(), "bank-config")
+	if c.Status != Warn || !strings.Contains(c.Detail, "enable_observations") || !strings.Contains(c.Fix, "bank apply --force") {
+		t.Errorf("%+v", c)
+	}
+	g := newFixture(t)
+	g.reference(srv.URL)
+	for _, c := range g.run().Checks {
+		if c.ID == "bank-config" {
+			t.Errorf("reference bank judged: %+v", c)
+		}
 	}
 }
