@@ -59,7 +59,8 @@ type Options struct {
 	Name string
 	// Env is carried into the job: the directories the install resolved
 	// (BACKSIGHT_HOME, XDG_*_HOME) and PATH, so that the job finds the same
-	// config, state and docker as the shell that installed it.
+	// config, state and docker as the shell that installed it (not on
+	// Windows yet: see schtasks).
 	Env map[string]string
 }
 
@@ -179,6 +180,12 @@ func xmlEscape(s string) string {
 // TaskName is the Task Scheduler name of job j.
 func (o Options) TaskName(j Job) string { return o.name() + `\` + j.Name }
 
+// schtasks does not carry o.Env yet: the task runs with the user's own
+// environment, so a BACKSIGHT_HOME, XDG_*_HOME or PATH set only in the
+// installing shell is lost (systemd and launchd get them). /TR is capped
+// at 261 characters, too short for PATH inline; the fix is a generated
+// .cmd wrapper (set "K=V" lines, % doubled), deferred to M7 (Windows),
+// where it can be tried on Task Scheduler.
 func schtasks(o Options) Plan {
 	shim := o.Shim
 	p := Plan{Kind: "schtasks"}

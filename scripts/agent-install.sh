@@ -44,6 +44,13 @@ cleanup() {
 trap cleanup EXIT
 fail() { echo "agent-install: $*" >&2; exit 1; }
 cp -p "$real_home/.claude/.credentials.json" "$HOME/.claude/.credentials.json"
+# What setup edits in the profile's settings.json and undo must put back:
+# hooks, allow rules and the transcript retention ({} and [] count as absent).
+claude_rules() {
+  { cat "$HOME/.claude/settings.json" 2>/dev/null || echo '{}'; } |
+    jq -cS '{hooks: (.hooks // {}), allow: (.permissions.allow // []), cleanupPeriodDays}'
+}
+rules_before=$(claude_rules)
 
 guide=$root/docs/agent-guide.md
 agent() { # agent <out> <claude args…>
@@ -73,7 +80,11 @@ grep -qi "restart" "$work/round2.txt" || fail "round 2 did not relay restart_req
 # The transcripts hold every tool call and output, not only the replies.
 if grep -rqs "mock-not-a-key" "$HOME/.claude/projects" "$work/round1.json" "$work/round2.json"; then fail "the key passed through the agent"; fi
 [ -n "$(find "$HOME/.claude/projects" -name '*.jsonl' 2>/dev/null)" ] || fail "no agent transcript to check"
+[ "$(claude_rules)" != "$rules_before" ] || fail "setup left settings.json as it was: the undo check below would prove nothing"
 
 echo "== undo"
 backsight setup --undo --json >"$work/undo.json" || fail "setup --undo failed"
+[ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "undo left settings.json changed"; }
+running=$(compose ps -q --status running) || fail "cannot list the install's containers"
+[ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 echo "agent-install: ok (the agent asked for the key, then finished setup with verify passing)"

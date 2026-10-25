@@ -159,6 +159,9 @@ func TestVerifyFailsWhenRecallFindsNothing(t *testing.T) {
 	if c := parseVerify(t, out)["round_trip"]; code != output.Blocked || c.Status != "fail" || !strings.Contains(c.Summary, "recall found nothing") {
 		t.Errorf("exit %d %+v", code, c)
 	}
+	if deleted := scratchBankDeleted(); !strings.HasPrefix(deleted, "/v1/default/banks/backsight-verify-") {
+		t.Errorf("a recall that found nothing left its scratch bank (deleted %q)", deleted)
+	}
 }
 
 func TestVerifyWithoutRoundTripCallsNoLLM(t *testing.T) {

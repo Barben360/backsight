@@ -39,6 +39,10 @@ func TestSystemdUnits(t *testing.T) {
 			t.Errorf("a shim with a space and a %% is quoted and escaped:\n%s", f.Content)
 		}
 	}
+	p, _ = For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u", Env: map[string]string{"BACKSIGHT_HOME": `/srv/say "hi"\x`}})
+	if s := p.Files[0].Content; !strings.Contains(s, `Environment="BACKSIGHT_HOME=/srv/say \"hi\"\\x"`+"\n") {
+		t.Errorf("a quote and a backslash in an env value are escaped inside the quotes:\n%s", s)
+	}
 }
 
 func TestLaunchdAgents(t *testing.T) {
@@ -57,6 +61,18 @@ func TestLaunchdAgents(t *testing.T) {
 	if strings.Join(p.Activate[1], " ") != "launchctl bootstrap gui/501 /Users/a/Library/LaunchAgents/tech.backsight.tick.plist" {
 		t.Errorf("%q", p.Activate)
 	}
+	p, _ = For("darwin", Options{Shim: "/Users/a&b/bin/current", Home: "/Users/a&b", UID: 501, LogDir: "/Users/a&b/logs",
+		Env: map[string]string{"PATH": "/opt/<x>:/usr/bin"}})
+	c := p.Files[0].Content
+	for _, want := range []string{"<string>/Users/a&amp;b/bin/current</string>", "<string>/opt/&lt;x&gt;:/usr/bin</string>",
+		"<key>StandardOutPath</key><string>/Users/a&amp;b/logs/jobs-tick.log</string>"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("%s is not escaped for XML:\n%s", want, c)
+		}
+	}
+	if strings.Contains(c, "a&b") || strings.Contains(c, "<x>") {
+		t.Errorf("a raw & or < is left in the plist:\n%s", c)
+	}
 }
 
 func TestScheduledTasks(t *testing.T) {
@@ -66,6 +82,9 @@ func TestScheduledTasks(t *testing.T) {
 	}
 	if got := strings.Join(p.Activate[0], "|"); got != `schtasks|/Create|/F|/TN|backsight\tick|/TR|"C:\Users\a\AppData\Local\backsight\bin\current.exe" jobs tick|/SC|MINUTE|/MO|15` {
 		t.Errorf("%s", got)
+	}
+	if got := strings.Join(p.Activate[1], "|"); got != `schtasks|/Create|/F|/TN|backsight\maintain|/TR|"C:\Users\a\AppData\Local\backsight\bin\current.exe" jobs maintain|/SC|DAILY|/ST|04:00` {
+		t.Errorf("maintain: %s", got)
 	}
 	if _, err := For("plan9", Options{Shim: "/x"}); err == nil {
 		t.Error("an unknown system is refused")

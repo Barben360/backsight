@@ -46,6 +46,13 @@ cleanup() {
 }
 trap cleanup EXIT
 fail() { echo "fresh-install: $*" >&2; exit 1; }
+# What setup edits in the profile's settings.json and undo must put back:
+# hooks, allow rules and the transcript retention ({} and [] count as absent).
+claude_rules() {
+  { cat "$HOME/.claude/settings.json" 2>/dev/null || echo '{}'; } |
+    jq -cS '{hooks: (.hooks // {}), allow: (.permissions.allow // []), cleanupPeriodDays}'
+}
+rules_before=$(claude_rules)
 
 # 1. An agent's first call: the questions, then the answers.
 "$bin" setup --questions --json > "$work/questions.json"
@@ -71,6 +78,7 @@ set -e
 [ $code -eq 0 ] || { cat "$work/setup.json" >&2; fail "setup --resume: exit $code"; }
 jq -e '.ok and ([.data.steps[] | select(.name == "verify")][0].status == "done")' "$work/setup.json" >/dev/null || fail "verify did not pass"
 grep -q '"event":"progress"' "$work/progress.jsonl" || fail "no progress lines on stderr"
+[ "$(claude_rules)" != "$rules_before" ] || fail "setup left settings.json as it was: the undo check below would prove nothing"
 
 # 4. The client's own paths reach the memory: a note is stored, and a
 # search answers with hits. Hindsight's mock LLM "extracts" the lines of
@@ -89,9 +97,24 @@ for _ in $(seq 1 60); do
 done
 [ "${found:-}" = 1 ] || { cat "$work/store.json" "$work/search.json" >&2; fail "search never answered with hits"; }
 
-# 5. Undo unwires Claude Code and keeps config and data.
+# 5. doctor finds nothing broken in the fresh install.
+"$bin" doctor --json > "$work/doctor.json" || true
+jq -e '(.data.checks | length > 0) and (.data.checks | map(select(.status == "error")) | length == 0)' "$work/doctor.json" >/dev/null ||
+  { jq -c '.data.checks[]? | select(.status == "error")' "$work/doctor.json" >&2 || cat "$work/doctor.json" >&2; fail "doctor reports errors"; }
+
+# 6. A backup of the real Postgres restores to the same row counts (SPEC §16).
+"$bin" backup create --json > "$work/backup.json" || { cat "$work/backup.json" >&2; fail "backup create failed"; }
+archive=$(jq -r 'select(.ok and (.data.skipped // "") == "") | .data.path // empty' "$work/backup.json")
+[ -n "$archive" ] && [ -s "$archive" ] || { cat "$work/backup.json" >&2; fail "backup create wrote no archive"; }
+"$bin" backup verify --json "$archive" > "$work/backup-verify.json" || { cat "$work/backup-verify.json" >&2; fail "backup verify failed"; }
+jq -e '.ok and .data.ok and ([.data.restored[]] | add > 0)' "$work/backup-verify.json" >/dev/null ||
+  { cat "$work/backup-verify.json" >&2; fail "the backup restored no rows"; }
+
+# 7. Undo unwires Claude Code, stops the server, and keeps config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
 if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") != null' >/dev/null; then fail "the plugin survived undo"; fi
+[ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "undo left settings.json changed"; }
+running=$(compose ps -q --status running) || fail "cannot list the install's containers"
+[ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
-"$bin" doctor --json > "$work/doctor.json" || true
-echo "fresh-install: ok (setup with verify, store, search, undo) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, undo) on project $project"

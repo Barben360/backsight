@@ -283,3 +283,33 @@ func TestInstallUnderBackSightHomeAndUpgrade(t *testing.T) {
 		t.Error("the previous binary was removed")
 	}
 }
+
+// A newer release that does not verify leaves the working install alone.
+func TestARefusedUpgradeKeepsTheWorkingInstall(t *testing.T) {
+	k := newKey(t)
+	dir, _ := release(t, k)
+	path := toolsWithout(t)
+	home, out, err := install(t, dir, k.pub, path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	good := installedBinary(home)
+	old := version
+	version = "9.9.10"
+	t.Cleanup(func() { version = old })
+	dir2, archive := release(t, k)
+	_ = os.WriteFile(filepath.Join(dir2, archive), []byte("not the signed archive"), 0o644)
+	if _, out, err := installIn(t, home, dir2, k.pub, path); err == nil || !strings.Contains(out, "checksum mismatch") {
+		t.Fatalf("the tampered 9.9.10 was not refused: %v\n%s", err, out)
+	}
+	link := filepath.Join(home, ".local", "bin", "backsight")
+	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight "+old+"\n" {
+		t.Errorf("after the refused upgrade the link runs %q (%v), want %s", run, err, old)
+	}
+	if _, err := os.Stat(installedBinary(home)); err == nil {
+		t.Error("the refused 9.9.10 was installed")
+	}
+	if _, err := os.Stat(good); err != nil {
+		t.Errorf("the working %s binary is gone: %v", old, err)
+	}
+}

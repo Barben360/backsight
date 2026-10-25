@@ -37,7 +37,8 @@ jobs:
       - run: scripts/sandbox.sh 8888
   fresh-install:
     # M4 block 4: setup from nothing (isolated HOME and Claude Code
-    # profile), through verify, a stored memory found again, and undo.
+    # profile), through verify, a stored memory found again, doctor, a
+    # backup verified against the real Postgres, and undo.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
