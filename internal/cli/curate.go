@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -24,7 +25,25 @@ const (
 	projectsTimeout = 20 * time.Second
 )
 
+// maintenanceRefusal: curation waits while an update, a backup or a restore
+// holds the maintenance lock (SPEC §11.4); a purge during a restore could
+// be undone silently.
+func maintenanceRefusal() error {
+	d, _, err := machine()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(d.MaintenanceLock()); err == nil {
+		owner, _ := os.ReadFile(d.MaintenanceLock())
+		return &output.Error{Code: output.Blocked, Message: "maintenance in progress (" + strings.TrimSpace(string(owner)) + "): try again when it is over"}
+	}
+	return nil
+}
+
 func curateClient() (*hindsight.Client, string, error) {
+	if err := maintenanceRefusal(); err != nil {
+		return nil, "", err
+	}
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return nil, "", err
@@ -358,6 +377,9 @@ func newAskCmd(e *env) *cobra.Command {
 		Short: "Ask the server's LLM a question over the memory (an LLM loop over many memories: costly, tokens shown)",
 		Args:  usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := maintenanceRefusal(); err != nil {
+				return err
+			}
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
 				return err

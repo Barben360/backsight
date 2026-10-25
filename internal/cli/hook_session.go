@@ -105,6 +105,8 @@ func (h *hookEnv) sessionStart() []byte {
 	switch {
 	case h.maintenance():
 		banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("maintenance in progress"), true
+	case h.breakerOpen(): // the server failed again and again: no calls for a while
+		banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("server failing, retried in a few minutes"), true
 	default:
 		text, items, source, err = h.briefing()
 		if err != nil {

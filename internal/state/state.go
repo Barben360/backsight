@@ -33,6 +33,8 @@ type State struct {
 	// ones belong to backfill (decision 0050).
 	RetainSince *time.Time `json:"retain_since,omitempty"`
 	Client      *Client    `json:"client,omitempty"`
+	// Scheduler: the OS entries `jobs install` wrote (decision 0025).
+	Scheduler *Scheduler `json:"scheduler,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -87,6 +89,14 @@ func knownKeys() []string {
 		}
 	}
 	return keys
+}
+
+// Scheduler is what `jobs install` set up: the scheduler kind and the files
+// it wrote, so that `jobs uninstall` and doctor know them.
+type Scheduler struct {
+	Kind        string    `json:"kind"` // systemd | launchd | schtasks
+	Files       []string  `json:"files,omitempty"`
+	InstalledAt time.Time `json:"installed_at"`
 }
 
 // Client remembers Claude Code settings as they were before backsight first

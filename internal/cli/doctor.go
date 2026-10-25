@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 // probes sets the machine probes; tests replace it.
@@ -30,6 +31,13 @@ var probes = func(e *doctor.Env) {
 	}
 }
 
+// doctorEnv is doctor's view of this machine.
+func doctorEnv(d paths.Dirs, home string) doctor.Env {
+	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: 10 * time.Second}
+	probes(&denv)
+	return denv
+}
+
 func newDoctorCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
@@ -40,9 +48,7 @@ func newDoctorCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: 10 * time.Second}
-			probes(&denv)
-			rep := doctor.Run(cmd.Context(), denv)
+			rep := runDoctor(cmd, d, home)
 			var failed error
 			if rep.Errors > 0 {
 				failed = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}}
@@ -68,4 +74,9 @@ func doctorText(r doctor.Report) string {
 	}
 	fmt.Fprintf(&b, "\n%d error(s), %d warning(s)\n", r.Errors, r.Warnings)
 	return b.String()
+}
+
+// runDoctor runs every check (doctor and the jobs maintain snapshot).
+func runDoctor(cmd *cobra.Command, d paths.Dirs, home string) doctor.Report {
+	return doctor.Run(cmd.Context(), doctorEnv(d, home))
 }

@@ -125,6 +125,7 @@ func Run(ctx context.Context, env Env) Report {
 		writeOff = !cfg.Components.Write
 	}
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
+	add(checkJobs(env.Dirs, now()))
 	return r
 }
 

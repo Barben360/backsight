@@ -25,7 +25,7 @@ import (
 
 func newJobsCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "jobs", Short: "Periodic jobs run by the OS scheduler", Args: cobra.NoArgs}
-	cmd.AddCommand(newJobsTickCmd(e))
+	cmd.AddCommand(newJobsTickCmd(e), newJobsMaintainCmd(e), newJobsInstallCmd(e), newJobsUninstallCmd(e))
 	return cmd
 }
 
