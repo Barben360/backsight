@@ -252,6 +252,15 @@ const pageSize = 200
 // "experience"), page by page; state "invalidated" lists the archive of
 // soft-forgotten facts instead of the live rows.
 func (c *Client) EachMemory(ctx context.Context, bank, factType, state string, fn func(Memory) error) error {
+	return c.eachMemory(ctx, bank, factType, state, "", fn)
+}
+
+// EachTagged is EachMemory over the memories tagged tag only.
+func (c *Client) EachTagged(ctx context.Context, bank, factType, state, tag string, fn func(Memory) error) error {
+	return c.eachMemory(ctx, bank, factType, state, tag, fn)
+}
+
+func (c *Client) eachMemory(ctx context.Context, bank, factType, state, tag string, fn func(Memory) error) error {
 	for offset, pages := 0, 0; ; pages++ {
 		if pages == maxPages {
 			return fmt.Errorf("listing %s memories: more than %d pages, stopping", factType, maxPages)
@@ -263,6 +272,10 @@ func (c *Client) EachMemory(ctx context.Context, bank, factType, state string, f
 		q := url.Values{"type": {factType}, "limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}}
 		if state != "" {
 			q.Set("state", state) // "invalidated": the archive; default: live rows
+		}
+		if tag != "" {
+			q.Set("tags", tag)
+			q.Set("tags_match", "any_strict")
 		}
 		if err := c.get(ctx, bankPath(bank, "/memories/list"), q, &page); err != nil {
 			return err

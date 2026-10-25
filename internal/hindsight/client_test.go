@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -268,6 +269,29 @@ func TestPostSendsJSONBody(t *testing.T) {
 	var out struct{ Success bool }
 	if err := c.do(context.Background(), http.MethodPost, "/x", nil, map[string][]string{"items": {"a", "b"}}, &out); err != nil || !out.Success {
 		t.Errorf("%v %+v", err, out)
+	}
+}
+
+// EachTagged asks the server for the tag only (strict: untagged memories
+// are left out) and keeps the type and state filters.
+func TestEachTaggedFiltersOnTheServer(t *testing.T) {
+	var queries []url.Values
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		_, _ = w.Write([]byte(`{"items":[{"id":"a"}],"total":1}`))
+	})
+	n := 0
+	if err := c.EachTagged(context.Background(), "b", "world", "invalidated", "project:billing", func(Memory) error { n++; return nil }); err != nil || n != 1 {
+		t.Fatalf("%d seen, err %v", n, err)
+	}
+	q := queries[0]
+	if len(queries) != 1 || q.Get("tags") != "project:billing" || q.Get("tags_match") != "any_strict" || q.Get("type") != "world" || q.Get("state") != "invalidated" {
+		t.Errorf("queries: %v", queries)
+	}
+	queries = nil
+	_ = c.EachMemory(context.Background(), "b", "world", "", func(Memory) error { return nil })
+	if q := queries[0]; q.Has("tags") || q.Has("tags_match") {
+		t.Errorf("EachMemory filters on tags: %v", q)
 	}
 }
 

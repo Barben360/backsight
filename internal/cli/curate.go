@@ -81,19 +81,44 @@ type forgetResult struct {
 type purgeDoc struct {
 	ID       string `json:"id"`
 	Memories int    `json:"memories"`
+	Selected int    `json:"selected,omitempty"` // forget --project: the selected raw facts in it
 }
 
-// newForgetCmd is `forget <id> [--purge [--yes]] [--restore]` (SPEC §2,
-// §13): the only way memory is deleted, always by the user.
+// newForgetCmd is `forget <id> [--purge [--yes]] [--restore]` and `forget
+// --project P [--source S] [--purge] [--plan]` (SPEC §2, §13, decision 0071
+// C7): the only way memory is deleted, always by the user.
 func newForgetCmd(e *env) *cobra.Command {
 	var purge, yes, restore bool
+	var pf forgetProjectFlags
 	cmd := &cobra.Command{
-		Use:   "forget <id>",
-		Short: "Retire a memory (reversible), or with --purge delete it with its source facts and documents",
-		Args:  usageArgs(cobra.ExactArgs(1)),
+		Use:   "forget <id> | --project <name> [--source <s>]",
+		Short: "Retire a memory or a whole project (reversible), or with --purge delete it with its source facts and documents",
+		Long: "forget <id> retires one memory; --purge deletes it with its source facts and documents (confirmed with --yes). " +
+			"forget --project P retires every memory of project P (with --source S, only its raw facts tagged source:S and the observations drawn from them); " +
+			"--purge deletes their documents and observations. --plan lists the documents and counts; the write needs --answer confirm_project=P.",
+		Args: usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if purge && restore {
 				return &output.Error{Code: output.Usage, Message: "--purge and --restore exclude each other"}
+			}
+			if pf.project != "" || cmd.Flags().Changed("project") {
+				switch {
+				case len(args) > 0:
+					return &output.Error{Code: output.Usage, Message: "forget <id> and --project exclude each other"}
+				case restore:
+					return &output.Error{Code: output.Usage, Message: "--restore undoes one forget: backsight forget --restore <id>"}
+				case yes:
+					return &output.Error{Code: output.Usage, Message: "--project is confirmed with --answer confirm_project=<name>, not --yes"}
+				}
+				pf.purge = purge
+				res, err := runForgetProject(cmd.Context(), pf)
+				return e.report("forget", res, func() string { return forgetProjectText(res) }, err)
+			}
+			switch {
+			case pf.source != "" || pf.plan || len(pf.answers) > 0:
+				return &output.Error{Code: output.Usage, Message: "--source, --plan and --answer go with --project"}
+			case len(args) != 1:
+				return &output.Error{Code: output.Usage, Message: "forget needs a memory id, or --project <name>"}
 			}
 			cl, bank, err := curateClient()
 			if err != nil {
@@ -136,6 +161,10 @@ func newForgetCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&purge, "purge", false, "delete the memory, its source facts and the documents they came from (leaked secret)")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm --purge")
 	cmd.Flags().BoolVar(&restore, "restore", false, "undo a plain forget")
+	cmd.Flags().StringVar(&pf.project, "project", "", "every memory of this project, on the configured bank")
+	cmd.Flags().StringVar(&pf.source, "source", "", "with --project: only the raw facts tagged source:<s> (chat, subagent, note…) and the observations drawn from them")
+	cmd.Flags().BoolVar(&pf.plan, "plan", false, "with --project: list the documents and counts, changing nothing")
+	cmd.Flags().StringArrayVar(&pf.answers, "answer", nil, "with --project: confirm_project=<name>")
 	return cmd
 }
 
@@ -162,11 +191,9 @@ func curatable(ctx context.Context, cl *hindsight.Client, bank, id string) ([]st
 
 // purgeMemory plans, and with yes performs, the purge (Hindsight 1.1.0
 // has no single-memory delete). The raw facts behind id are read one by
-// one, since an observation's source list carries no document. Each live
-// fact has its observations cleared while the API still sees it, then is
-// retired; last, the documents go, and with them every fact, live or
-// archived, extracted from them. A fact with no document stays in the
-// archive: the purge says so instead of claiming it.
+// one, since an observation's source list carries no document; purgeWrite
+// does the writes. A fact with no document stays in the archive: the purge
+// says so instead of claiming it.
 func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes bool) (forgetResult, error) {
 	res := forgetResult{ID: id, Action: "purge_planned"}
 	m, err := cl.GetMemory(ctx, bank, id)
@@ -188,84 +215,14 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 			return res, fmt.Errorf("observation %s lists no source facts to purge", id)
 		}
 	}
-	docs := map[string]bool{}
-	for _, f := range facts {
-		if f.DocumentID == "" {
-			res.Undeletable = append(res.Undeletable, f.ID)
-		} else {
-			docs[f.DocumentID] = true
-		}
+	if res.Documents, res.Undeletable, err = purgeDocuments(ctx, cl, bank, facts); err != nil || !yes {
+		return res, err
 	}
-	for d := range docs {
-		doc, err := cl.GetDocument(ctx, bank, d)
-		if err != nil {
-			return res, fmt.Errorf("reading document %s: %w", d, err)
-		}
-		res.Documents = append(res.Documents, purgeDoc{ID: d, Memories: doc.MemoryUnits})
-	}
-	sort.Slice(res.Documents, func(i, j int) bool { return res.Documents[i].ID < res.Documents[j].ID })
-	if !yes {
-		return res, nil
-	}
-	// The writes hold the maintenance lock: a backup cannot dump a half-purged
-	// database, and one that dumped before is listed below, done or not.
-	d, _, err := machine()
+	res.Pages, err = purgeWrite(ctx, cl, bank, facts, res.Documents, projectsOf(append([]hindsight.MemoryDetail{m}, facts...)),
+		"rerun on one of the source facts: backsight forget <fact id> --purge")
 	if err != nil {
 		return res, err
 	}
-	l, err := state.TryAcquire(d.MaintenanceLock(), "forget --purge")
-	var held *state.HeldError
-	if errors.As(err, &held) {
-		return res, heldRefusal(held)
-	}
-	if err != nil {
-		return res, err
-	}
-	defer func() { _ = l.Release() }()
-	for _, f := range facts {
-		if f.State == "invalidated" {
-			continue // already archived: only its document can remove it
-		}
-		if err := cl.ClearObservations(ctx, bank, f.ID); err != nil {
-			return res, fmt.Errorf("clearing the observations of %s: %w", f.ID, err)
-		}
-		if err := cl.Invalidate(ctx, bank, f.ID, "purged by the user (backsight forget --purge)", false); err != nil {
-			return res, fmt.Errorf("retiring %s: %w", f.ID, err)
-		}
-	}
-	for i, d := range res.Documents {
-		if err := cl.DeleteDocument(ctx, bank, d.ID); err != nil {
-			// The observation may be gone already (its facts were cleared):
-			// say what is left and how to finish.
-			left := make([]string, 0, len(res.Documents)-i)
-			for _, r := range res.Documents[i:] {
-				left = append(left, r.ID)
-			}
-			return res, fmt.Errorf("deleting document %s: %w; documents left: %s (rerun on one of the source facts: backsight forget <fact id> --purge)",
-				d.ID, err, strings.Join(left, ", "))
-		}
-	}
-	// A briefing page (decision 0060) may quote the purged text, and so may
-	// its history: deleting the page drops both; the next session rewrites it.
-	pages := map[string]bool{}
-	for _, f := range append([]hindsight.MemoryDetail{m}, facts...) {
-		for _, t := range f.Tags {
-			if p, ok := strings.CutPrefix(t, "project:"); ok {
-				pages[briefingModelID(p)] = true
-			}
-		}
-	}
-	for id := range pages {
-		var apiErr *hindsight.APIError
-		switch err := cl.DeleteMentalModel(ctx, bank, id); {
-		case err == nil:
-			res.Pages = append(res.Pages, id)
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-		default:
-			return res, fmt.Errorf("deleting briefing page %s: %w", id, err)
-		}
-	}
-	sort.Strings(res.Pages)
 	res.Action = "purged"
 	res.Note = "backups taken before now still hold it: delete them, or keep them out of reach, if the text was a secret"
 	res.Backups = backupsBefore(now())
@@ -274,6 +231,107 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 		res.Note = "the facts with no document are retired but stay in Hindsight's archive (no API deletes them); " + res.Note
 	}
 	return res, nil
+}
+
+// purgeDocuments are the documents a purge of facts deletes, each read for
+// its memory count, and the facts with no document, which no API deletes.
+func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail) ([]purgeDoc, []string, error) {
+	var out []purgeDoc
+	var undeletable []string
+	docs := map[string]bool{}
+	for _, f := range facts {
+		if f.DocumentID == "" {
+			undeletable = append(undeletable, f.ID)
+		} else {
+			docs[f.DocumentID] = true
+		}
+	}
+	for d := range docs {
+		doc, err := cl.GetDocument(ctx, bank, d)
+		if err != nil {
+			return out, undeletable, fmt.Errorf("reading document %s: %w", d, err)
+		}
+		out = append(out, purgeDoc{ID: d, Memories: doc.MemoryUnits})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, undeletable, nil
+}
+
+// projectsOf are the projects ms are tagged with.
+func projectsOf(ms []hindsight.MemoryDetail) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range ms {
+		for _, t := range m.Tags {
+			if p, ok := strings.CutPrefix(t, "project:"); ok {
+				out[p] = true
+			}
+		}
+	}
+	return out
+}
+
+// purgeWrite performs a planned purge and returns the briefing pages it
+// deleted. Each live fact has its observations cleared while the API still
+// sees it, then is retired; last, the documents go, and with them every
+// fact, live or archived, extracted from them. rerun says how to finish
+// when a document delete fails.
+func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, error) {
+	// The writes hold the maintenance lock: a backup cannot dump a half-purged
+	// database, and one that dumped before is listed below, done or not.
+	d, _, err := machine()
+	if err != nil {
+		return nil, err
+	}
+	l, err := state.TryAcquire(d.MaintenanceLock(), "forget --purge")
+	var held *state.HeldError
+	if errors.As(err, &held) {
+		return nil, heldRefusal(held)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = l.Release() }()
+	for _, f := range facts {
+		if f.State == "invalidated" {
+			continue // already archived: only its document can remove it
+		}
+		if err := cl.ClearObservations(ctx, bank, f.ID); err != nil {
+			return nil, fmt.Errorf("clearing the observations of %s: %w", f.ID, err)
+		}
+		if err := cl.Invalidate(ctx, bank, f.ID, "purged by the user (backsight forget --purge)", false); err != nil {
+			return nil, fmt.Errorf("retiring %s: %w", f.ID, err)
+		}
+	}
+	for i, d := range docs {
+		if err := cl.DeleteDocument(ctx, bank, d.ID); err != nil {
+			// The observation may be gone already (its facts were cleared):
+			// say what is left and how to finish.
+			left := make([]string, 0, len(docs)-i)
+			for _, r := range docs[i:] {
+				left = append(left, r.ID)
+			}
+			if len(left) > 10 {
+				left = append(left[:10], fmt.Sprintf("and %d more", len(left)-10))
+			}
+			return nil, fmt.Errorf("deleting document %s: %w; documents left: %s (%s)", d.ID, err, strings.Join(left, ", "), rerun)
+		}
+	}
+	// A briefing page (decision 0060) may quote the purged text, and so may
+	// its history: deleting the page drops both; the next session rewrites it.
+	var pages []string
+	for p := range projects {
+		id := briefingModelID(p)
+		var apiErr *hindsight.APIError
+		switch err := cl.DeleteMentalModel(ctx, bank, id); {
+		case err == nil:
+			pages = append(pages, id)
+		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		default:
+			return pages, fmt.Errorf("deleting briefing page %s: %w", id, err)
+		}
+	}
+	sort.Strings(pages)
+	return pages, nil
 }
 
 func curateError(err error, id string) error {
