@@ -53,6 +53,8 @@ type Event struct {
 	Kind         string
 	Types        map[string]int
 	Details      map[string]any
+	Hook         string // hook_failure
+	Error        string // the *_error and *_failed events
 }
 
 // line decodes "ids", an array in most events and a count in tool_use.
