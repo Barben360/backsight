@@ -101,3 +101,40 @@ func TestDockerEngine(t *testing.T) {
 		t.Errorf("not installed: %v", err)
 	}
 }
+
+// Delete takes the project down with its volumes, then removes the files
+// Render wrote; a user's override stays. A failed down removes nothing.
+func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"compose.yaml", ".env", "compose.override.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failing := &fakeRunner{out: []byte("Cannot connect to the Docker daemon"), err: errors.New("exit status 1")}
+	if err := (Docker{Compose: Compose{Dir: dir, Runner: failing}}).Delete(context.Background()); err == nil || !strings.Contains(err.Error(), "Cannot connect") {
+		t.Fatalf("a failed down: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".env")); err != nil {
+		t.Fatal("a failed down removed the files")
+	}
+	r := &fakeRunner{}
+	if err := (Docker{Compose: Compose{Dir: dir, Runner: r}}).Delete(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.calls[0][len(r.calls[0])-3:]; !reflect.DeepEqual(got, []string{"down", "--volumes", "--remove-orphans"}) {
+		t.Errorf("down: %q", r.calls[0])
+	}
+	for f, want := range map[string]bool{"compose.yaml": false, ".env": false, "compose.override.yaml": true} {
+		if _, err := os.Stat(filepath.Join(dir, f)); (err == nil) != want {
+			t.Errorf("%s present: %v, want %v", f, err == nil, want)
+		}
+	}
+	if cmd := (Docker{Compose: Compose{Dir: dir, Project: "p1"}}).StopCmd(); !strings.Contains(cmd, "docker compose -p p1 ") || !strings.HasSuffix(cmd, " stop") {
+		t.Errorf("stop by hand: %q", cmd)
+	}
+	// macOS's data directory has a space: the command stays one word per path.
+	if cmd := (Docker{Compose: Compose{Dir: "/Users/u/Library/Application Support/backsight/server"}}).StopCmd(); !strings.Contains(cmd, "'/Users/u/Library/Application Support/backsight/server'") {
+		t.Errorf("unquoted path: %q", cmd)
+	}
+}

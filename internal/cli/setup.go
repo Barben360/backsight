@@ -672,7 +672,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		{"client", 20, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			// Undo removes the plugin only from a profile it was not in before.
-			if known, err := listed(ctx, profileEnv(s.home, s.loc.Dir), "id", "plugin", "list", "--json"); err != nil || !known[plugin.PluginID()] {
+			if known, err := pluginIDs(ctx, profileEnv(s.home, s.loc.Dir)); err != nil || !known[plugin.PluginID()] {
 				r.Undo.ClientProfiles = appendNew(r.Undo.ClientProfiles, filepath.Clean(s.loc.Dir))
 				s.persist(r)
 			}

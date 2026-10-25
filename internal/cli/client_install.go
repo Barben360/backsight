@@ -177,7 +177,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		}
 		return partialError(err)
 	}
-	known, err := listed(ctx, env, "id", "plugin", "list", "--json")
+	known, err := pluginIDs(ctx, env)
 	if err != nil {
 		return res, failAfterWrites(err)
 	}
@@ -311,8 +311,9 @@ func needsClaude(msg string) error {
 	}, Resume: "backsight client install"}
 }
 
-// listed runs a claude list command and returns the set of field values.
-func listed(ctx context.Context, env []string, field string, args ...string) (map[string]bool, error) {
+// pluginIDs is the set of plugin ids `claude plugin list` reports.
+func pluginIDs(ctx context.Context, env []string) (map[string]bool, error) {
+	args := []string{"plugin", "list", "--json"}
 	raw, err := claudeRunner.Run(ctx, env, args...)
 	if err != nil {
 		return nil, err
@@ -323,7 +324,7 @@ func listed(ctx context.Context, env []string, field string, args ...string) (ma
 	}
 	out := map[string]bool{}
 	for _, it := range items {
-		if v, ok := it[field].(string); ok {
+		if v, ok := it["id"].(string); ok {
 			out[v] = true
 		}
 	}

@@ -149,4 +149,29 @@ if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") !=
 running=$(compose ps -q --status running) || fail "cannot list the install's containers"
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo) on project $project"
+
+# 11. Uninstall (SPEC §11.9): the plan changes nothing; the data goes only
+# with the bank id; config, state, binaries and the server go, the backups
+# stay. The shim runs the updated build.
+shim=$BACKSIGHT_HOME/data/bin/current
+tree() { find "$BACKSIGHT_HOME" "$HOME/.claude" \( -type f -o -type l \) -print0 | sort -z | xargs -0 sha256sum 2>/dev/null; }
+tree_before=$(tree)
+"$shim" uninstall --plan --delete-data --purge-local --json > "$work/uninstall-plan.json" || { cat "$work/uninstall-plan.json" >&2; fail "uninstall --plan failed"; }
+[ "$(tree)" = "$tree_before" ] || fail "uninstall --plan changed files"
+set +e
+"$shim" uninstall --delete-data --purge-local --non-interactive --json > "$work/uninstall-noid.json"
+code=$?
+set -e
+[ "$code" = 10 ] && jq -e '.error.questions | map(.id) | index("confirm_bank") != null' "$work/uninstall-noid.json" >/dev/null ||
+  { cat "$work/uninstall-noid.json" >&2; fail "uninstall --delete-data without the bank id exited $code"; }
+[ "$(tree)" = "$tree_before" ] || fail "an unconfirmed uninstall changed files"
+bank=$(sed -n 's/^bank *= *"\(.*\)"/\1/p' "$BACKSIGHT_HOME/config/config.toml" | head -n 1)
+volume=$(sed -n 's/^name: *//p' "$BACKSIGHT_HOME/data/server/compose.yaml" | head -n 1)_pg_data
+"$shim" uninstall --delete-data --purge-local --answer "confirm_bank=${bank:-claude-memory}" --answer identity_saved=yes --json > "$work/uninstall.json" ||
+  { cat "$work/uninstall.json" >&2; fail "uninstall failed"; }
+if docker volume inspect "$volume" >/dev/null 2>&1; then fail "the database volume $volume survived --delete-data"; fi
+for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/bin" "$BACKSIGHT_HOME/data/marketplace" "$BACKSIGHT_HOME/data/server/compose.yaml"; do
+  [ ! -e "$p" ] || fail "uninstall left $p"
+done
+[ -s "$archive" ] || fail "uninstall removed the backup $archive"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, uninstall) on project $project"

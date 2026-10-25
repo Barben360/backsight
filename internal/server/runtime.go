@@ -51,6 +51,12 @@ type Runtime interface {
 	StopAPI(ctx context.Context) error
 	// Stop stops the whole server and keeps its data.
 	Stop(ctx context.Context) error
+	// StopCmd is how a user stops it by hand, once backsight is gone.
+	StopCmd() string
+	// Delete removes the server with its data (services, database) and
+	// the files Write installed; a user's own files beside them stay.
+	// Backups are not the runtime's and are never touched.
+	Delete(ctx context.Context) error
 	// Status lists the server's services and their state; none when it
 	// was never started.
 	Status(ctx context.Context) ([]Container, error)
@@ -170,6 +176,31 @@ func (d Docker) Start(ctx context.Context) error { return d.Compose.Up(ctx) }
 func (d Docker) StopAPI(ctx context.Context) error { return d.Compose.Stop(ctx, "hindsight") }
 
 func (d Docker) Stop(ctx context.Context) error { return d.Compose.Stop(ctx) }
+
+func (d Docker) StopCmd() string {
+	words := []string{"docker"}
+	for _, a := range d.Compose.args("stop") {
+		if strings.ContainsAny(a, " '\"$\\") {
+			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+		words = append(words, a)
+	}
+	return strings.Join(words, " ")
+}
+
+// Delete runs compose down with the volumes, then removes compose.yaml and
+// .env; compose.override.yaml is the user's.
+func (d Docker) Delete(ctx context.Context) error {
+	if _, err := d.Compose.run(ctx, "down", "--volumes", "--remove-orphans"); err != nil {
+		return err
+	}
+	for _, f := range []string{"compose.yaml", ".env"} {
+		if err := os.Remove(filepath.Join(d.Compose.Dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
 
 func (d Docker) Status(ctx context.Context) ([]Container, error) { return d.Compose.PS(ctx) }
 

@@ -367,7 +367,7 @@ func profileEnv(home, profile string) []string {
 
 // removePlugin uninstalls backsight's plugin and marketplace when present.
 func removePlugin(ctx context.Context, env []string) error {
-	known, err := listed(ctx, env, "id", "plugin", "list", "--json")
+	known, err := pluginIDs(ctx, env)
 	if err != nil {
 		return err
 	}
