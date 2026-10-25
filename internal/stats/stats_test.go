@@ -22,7 +22,7 @@ func TestComputeFromRealEvents(t *testing.T) {
 	// s1: briefing of b1, b2; prompt 1 recalls (one scope fails) and is
 	// searched; the detector fires on prompt 2 and a store follows in turn 3.
 	s1.Emit(telemetry.Briefing{IDs: []string{"b1", "b2"}, Source: "observations"})
-	s1.Emit(telemetry.Prompt{N: 1, Decision: "recall", Plen: long, MS: 900, Injected: 2, Chars: 300,
+	s1.Emit(telemetry.Prompt{N: 1, Decision: "recall", Plen: long, MS: 900, Injected: 2, Chars: 300, Lang: "fr",
 		Scopes: map[string]telemetry.ScopeResult{"project": {OK: true}, "global": {OK: false}}})
 	s1.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": "mcp__plugin_backsight_memory__memory_search", "ids": 2, "memory_ids": []string{"b2", "x"}, "n": 1}})
 	s1.Emit(telemetry.Reply{N: 1, Credit: "exact", Searched: true})
@@ -35,7 +35,7 @@ func TestComputeFromRealEvents(t *testing.T) {
 	s1.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": "mcp__plugin_backsight_memory__memory_search", "memory_ids": []string{"b1"}, "n": 3, "subagent": true}})
 	// s2: a machine message, a long prompt never searched, a slow recall
 	s2.Emit(telemetry.Prompt{Decision: "skip", Reason: "machine"})
-	s2.Emit(telemetry.Prompt{N: 1, Decision: "recall", Plen: long, MS: 3000, Chars: 100, Detector: ptr("approval"),
+	s2.Emit(telemetry.Prompt{N: 1, Decision: "recall", Plen: long, MS: 3000, Chars: 100, Detector: ptr("approval"), Lang: "en",
 		Scopes: map[string]telemetry.ScopeResult{"project": {OK: true}}})
 	s2.Emit(telemetry.Tool{Name: "memory_search", Live: "none"})
 	s2.Emit(telemetry.Gate{Decision: "deny"})
@@ -53,6 +53,9 @@ func TestComputeFromRealEvents(t *testing.T) {
 	if p.Human != 4 || p.Machine != 1 || p.Recalls != 2 || p.WithHits != 1 || p.Skips["same_topic"] != 1 || p.Skips["too_short"] != 1 ||
 		p.P50MS != 900 || p.P95MS != 3000 || p.ScopeCalls != 3 || p.ScopeFailures != 1 {
 		t.Errorf("prompts %+v", p)
+	}
+	if r.Prompts.ByLang["fr"] != [2]int{1, 1} || r.Prompts.ByLang["en"] != [2]int{1, 0} {
+		t.Errorf("by language %+v", r.Prompts.ByLang)
 	}
 	if r.Turns.Long != 3 || r.Turns.Searched != 1 || r.Turns.Credit["exact"] != 1 || len(r.Turns.Credit) != 1 {
 		t.Errorf("turns %+v", r.Turns)

@@ -177,7 +177,7 @@ func replyKind(text string) *string {
 func (h *hookEnv) userPrompt() []byte {
 	start := time.Now()
 	prompt := h.in.Prompt
-	ev := telemetry.Prompt{Plen: len([]rune(prompt)), IDs: []string{}}
+	ev := telemetry.Prompt{Plen: len([]rune(prompt)), IDs: []string{}, Lang: promptLang(prompt)}
 	if machineRE.MatchString(prompt) {
 		ev.Decision, ev.Reason = "skip", "machine"
 		h.tw.Emit(ev)
@@ -357,6 +357,43 @@ func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 	}
 	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost}
 	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
+}
+
+var (
+	frWords    = wordSet("le la les des du une est sont pour dans avec sur par qui que pas ne au aux ce cette tu je on fait faire")
+	enWords    = wordSet("the is are was were for with on by which that not to of and has have this you we it do make")
+	langWordRE = regexp.MustCompile(`[a-zàâçéèêëîïôûùüÿœ']+`)
+)
+
+func wordSet(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		m[w] = true
+	}
+	return m
+}
+
+// promptLang is "fr" when French function words outnumber English ones in
+// the prompt's head, else "en" (the heuristic E23 and E26 sampled with).
+// Telemetry only: E26 found no floor shift worth making (decision 0058),
+// and stats and E24 measure French prompts apart.
+func promptLang(prompt string) string {
+	fr, en := 0, 0
+	if len(prompt) > maxWordChars {
+		prompt = prompt[:maxWordChars] // a cut rune is no function word
+	}
+	for _, w := range langWordRE.FindAllString(strings.ToLower(prompt), -1) {
+		switch {
+		case frWords[w]:
+			fr++
+		case enWords[w]:
+			en++
+		}
+	}
+	if fr > en {
+		return "fr"
+	}
+	return "en"
 }
 
 // selectHits keeps up to PromptHits hits that skip does not drop, within

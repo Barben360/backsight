@@ -30,6 +30,7 @@ type Event struct {
 	Decision string
 	Reason   string
 	Plen     int
+	Lang     string
 	Scopes   map[string]struct {
 		OK bool `json:"ok"`
 	}
@@ -145,6 +146,9 @@ type Report struct {
 		P95MS         int            `json:"p95_ms"`
 		ScopeCalls    int            `json:"scope_calls"`
 		ScopeFailures int            `json:"scope_failures"`
+		// ByLang: recalls and recalls that injected something, per prompt
+		// language (French prompts meet English facts, 0039, 0058).
+		ByLang map[string][2]int `json:"by_lang"`
 	} `json:"prompts"`
 	// Turns: human prompts of at least LongPrompt characters, and whether a
 	// memory tool ran before the next one (C12's search rate).
@@ -202,7 +206,7 @@ func isMemoryTool(name string) bool {
 func Compute(events []Event, from, to time.Time) Report {
 	var r Report
 	r.From, r.To = from, to
-	r.Prompts.Skips, r.Turns.Credit = map[string]int{}, map[string]int{}
+	r.Prompts.Skips, r.Turns.Credit, r.Prompts.ByLang = map[string]int{}, map[string]int{}, map[string][2]int{}
 	r.Gate, r.Tools, r.Live, r.Retains, r.HookFailures, r.Unknown = map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
 	searched, stored := map[turn]bool{}, map[turn]bool{}
 	returned := map[string]map[string]time.Time{} // session → memory id → first time a tool returned it
@@ -257,8 +261,14 @@ func Compute(events []Event, from, to time.Time) Report {
 			}
 			r.Prompts.Recalls++
 			ms = append(ms, e.MS)
+			l := r.Prompts.ByLang[e.Lang]
+			l[0]++
 			if e.Injected > 0 {
 				r.Prompts.WithHits++
+				l[1]++
+			}
+			if e.Lang != "" {
+				r.Prompts.ByLang[e.Lang] = l
 			}
 			for _, sc := range e.Scopes {
 				r.Prompts.ScopeCalls++
@@ -302,7 +312,7 @@ func Compute(events []Event, from, to time.Time) Report {
 			}
 			r.Briefings.IDs += len(e.IDs)
 			for _, id := range e.IDs {
-				if at, ok := returned[e.Session][id]; ok && at.After(e.TS) {
+				if at, ok := returned[e.Session][id]; ok && !at.Before(e.TS) { // telemetry times are in ms: the same ms counts
 					r.Briefings.Used++
 				}
 			}

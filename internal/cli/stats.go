@@ -143,6 +143,9 @@ func statsText(r statsResult) string {
 	fmt.Fprintf(&b, "Prompts      %d typed, %d machine messages; recalls %d (%s injected something); skipped: %s\n",
 		p.Human, p.Machine, p.Recalls, pct(p.WithHits, p.Recalls), counts(p.Skips))
 	fmt.Fprintf(&b, "Recall       p50 %d ms, p95 %d ms; scope calls failed %d / %d\n", p.P50MS, p.P95MS, p.ScopeFailures, p.ScopeCalls)
+	if fr, en := p.ByLang["fr"], p.ByLang["en"]; fr[0]+en[0] > 0 {
+		fmt.Fprintf(&b, "By language  French %d recalls (%s injected), English %d (%s)\n", fr[0], pct(fr[1], fr[0]), en[0], pct(en[1], en[0]))
+	}
 	fmt.Fprintf(&b, "Searches     %d of %d prompts ≥ %d chars (%s); replies after a search: %s\n",
 		r.Turns.Searched, r.Turns.Long, stats.LongPrompt, pct(r.Turns.Searched, r.Turns.Long), counts(r.Turns.Credit))
 	i := r.Injections

@@ -282,3 +282,26 @@ func TestReplyAndToolUseEventsCarryTheTurn(t *testing.T) {
 		t.Errorf("reply:\n%s", tel)
 	}
 }
+
+// The prompt event records the prompt's language (decision 0058).
+func TestPromptEventsCarryTheLanguage(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = "[]"
+	prompt(t, home, "s1", "Quelle version de PostgreSQL est-ce que le service de facturation utilise, et pourquoi on l'a choisie ?")
+	prompt(t, home, "s2", longPrompt)
+	if tel := telemetryText(t, home); !strings.Contains(tel, `"lang":"fr"`) || !strings.Contains(tel, `"lang":"en"`) {
+		t.Errorf("telemetry:\n%s", tel)
+	}
+}
+
+func TestPromptLang(t *testing.T) {
+	for text, want := range map[string]string{
+		"Peux-tu vérifier que le backup tourne bien sur la machine ?": "fr",
+		"Can you check that the backup runs on the machine?":          "en",
+		"kubectl get pods -n hindsight":                               "en",
+	} {
+		if got := promptLang(text); got != want {
+			t.Errorf("%q: %s, want %s", text, got, want)
+		}
+	}
+}

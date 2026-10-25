@@ -13,6 +13,7 @@ type Prompt struct {
 	Decision string                 `json:"decision"` // recall | skip
 	Reason   string                 `json:"reason,omitempty"`
 	Plen     int                    `json:"plen"`
+	Lang     string                 `json:"lang,omitempty"` // fr | en (decision 0058)
 	Scopes   map[string]ScopeResult `json:"scopes,omitempty"`
 	Above    int                    `json:"above"`
 	Injected int                    `json:"injected"`
