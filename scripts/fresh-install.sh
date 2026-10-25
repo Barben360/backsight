@@ -135,8 +135,9 @@ rc_send restore-proof-lost
 rc_live restore-proof-live 3 4 >/dev/null
 rc_restore_resends "$archive" restore-proof-lost restore-proof-kept restore-proof-live
 
-# 9. Update (SPEC §11.7): a failing migration rolls back and leaves the
-# install working, then the update to the new signed build passes.
+# 9. Update (SPEC §11.7): a failing migration and a failing server smoke
+# each roll back and leave the install working, then the update to the new
+# signed build, server upgrade included, passes.
 uc_proof
 
 # 10. Undo unwires Claude Code, stops the server, and keeps config and data.
@@ -146,4 +147,4 @@ if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") !=
 running=$(compose ps -q --status running) || fail "cannot list the install's containers"
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new after a rolled back one, undo) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo) on project $project"

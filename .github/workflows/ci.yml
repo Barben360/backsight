@@ -83,7 +83,8 @@ jobs:
     # profile), through verify, a stored memory found again, doctor, a
     # backup verified against the real Postgres, that backup restored
     # (M5 block 1: the session sent after it is re-sent once by jobs tick),
-    # an update from an old to a new signed test build after a failing one
+    # an update from an old to a new signed test build, server upgrade
+    # included, after a failing migration and a failing server smoke each
     # rolled back (M5 block 2: scripts/update-chain.sh, with a throwaway
     # minisign key made in the run's own directory), and undo.
     runs-on: [self-hosted, backsight]
