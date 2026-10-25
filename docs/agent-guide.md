@@ -14,6 +14,7 @@ You are a coding agent (Claude Code or another) asked to give your user a long-t
 | 2 | invalid invocation or answer | fix the command; `error.message` names the problem |
 | 10 | the user must act | ask each of `error.questions` that has `"asked": true`, ask the user to set each of `error.secrets`, show each of `error.actions` (`run_as_user`, `relogin`, `install`) with its `why`; then run `error.resume` |
 | 20 | blocked by the machine | show `error.message` and the failed pre-flight checks with their `fix`; rerun once fixed |
+| 30 | failed and rolled back | show `error.message`: the machine is as before; rerun once the cause is fixed |
 | 40 | partly done, resumable | show the message, fix if asked, run `backsight setup --resume --non-interactive --json` |
 
 ## 1. Install the binary
@@ -21,12 +22,12 @@ You are a coding agent (Claude Code or another) asked to give your user a long-t
 If `backsight version` works, skip this step. Otherwise:
 
 ```sh
-curl -fsSL https://<release-pages>/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh
 ```
 
 The script checks the release's minisign signature (with `minisign`, or `openssl` 3; on macOS, whose LibreSSL cannot, the user installs minisign first) and its checksum, then installs the binary under backsight's data directory and links `~/.local/bin/backsight` to its shim (`<data>/bin/current`, which `update apply` moves to each new version). If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
 
-While the repository is private, the user downloads a release themselves (`gh release download <tag> -D <dir>`), then runs `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
+To install one given release, add `BACKSIGHT_RELEASE_URL=https://github.com/Barben360/backsight/releases/download/<tag>` before `sh`. From release files already downloaded into a directory: `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
 
 ## 2. List the questions
 
@@ -67,3 +68,7 @@ On exit 0, `data` holds:
 ## When something goes wrong
 
 `backsight report --json` builds a redacted diagnostic (versions, the doctor report, local counts, recent backsight errors; no memory text, prompt, transcript, secret or home path) with `data.search_url` (existing issues with the same error class), `data.issue_url` (a new issue with the title and a summary filled in) and `data.paste` (the full diagnostic to paste into it). It sends nothing. Show the user the diagnostic and both links; never open, submit or post them yourself: the user decides whether to report.
+
+## More
+
+The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md).
