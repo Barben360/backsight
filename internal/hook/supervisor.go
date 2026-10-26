@@ -14,13 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 )
 
 const (
 	// ChaosEnv makes the child fail on purpose (chaos tests, SPEC §16):
-	// panic | fatal | hang | kill | exit2.
+	// panic | fatal | hang | kill | exit2. Only a testhooks build honours
+	// it (chaos_testhooks.go); a release ignores it.
 	ChaosEnv = "BACKSIGHT_HOOK_CHAOS"
 	// MaxInput caps the event JSON read from stdin.
 	MaxInput  = 16 << 20
@@ -114,10 +114,10 @@ func (s Supervisor) Run(ctx context.Context, event string, input []byte) ([]byte
 // Handler answers one event in the child: the JSON to print, or nothing.
 type Handler func(ctx context.Context, event string, input []byte) ([]byte, error)
 
-// RunChild is the child side: chaos first (tests), then the handler. It
-// returns the process exit code.
+// RunChild is the child side: chaos first (a testhooks build only), then
+// the handler. It returns the process exit code.
 func RunChild(ctx context.Context, event string, stdin io.Reader, stdout io.Writer, h Handler) int {
-	chaos(os.Getenv(ChaosEnv))
+	chaos()
 	input, err := io.ReadAll(io.LimitReader(stdin, MaxInput))
 	if err != nil {
 		return 1
@@ -133,25 +133,6 @@ func RunChild(ctx context.Context, event string, stdin io.Reader, stdout io.Writ
 		}
 	}
 	return 0
-}
-
-func chaos(mode string) {
-	switch mode {
-	case "panic":
-		panic("chaos test")
-	case "fatal":
-		var mu sync.Mutex
-		mu.Unlock() // "fatal error: sync: unlock of unlocked mutex": not recoverable
-	case "hang":
-		time.Sleep(time.Hour)
-	case "kill":
-		if p, err := os.FindProcess(os.Getpid()); err == nil {
-			_ = p.Kill()
-		}
-		time.Sleep(time.Hour)
-	case "exit2":
-		os.Exit(2)
-	}
 }
 
 func firstLine(s string) string {

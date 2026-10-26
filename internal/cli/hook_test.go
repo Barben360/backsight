@@ -9,19 +9,18 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/Barben360/backsight/internal/hook"
 )
 
 // childFromTestBinary makes the supervisor's child this test binary, which
-// TestMain turns into `backsight hook-child <event>`.
-func childFromTestBinary(t *testing.T, chaos string) {
+// TestMain turns into `backsight hook-child <event>`, failing as fault
+// asks first (testHookFault).
+func childFromTestBinary(t *testing.T, fault string) {
 	t.Helper()
 	exe, _ := os.Executable()
 	old := hookChildCommand
 	hookChildCommand = func(ctx context.Context, event string) *exec.Cmd {
 		c := exec.CommandContext(ctx, exe, "-test.run=^$", "hook-child", event)
-		c.Env = append(os.Environ(), "BACKSIGHT_TEST_HOOK_CHILD=1", hook.ChaosEnv+"="+chaos)
+		c.Env = append(os.Environ(), "BACKSIGHT_TEST_HOOK_CHILD=1", testHookFault+"="+fault)
 		return c
 	}
 	t.Cleanup(func() { hookChildCommand = old })
