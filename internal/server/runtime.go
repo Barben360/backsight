@@ -167,14 +167,15 @@ func (d Docker) Downloads(ctx context.Context) ([]string, bool, error) {
 }
 
 // Download pulls each image outside the project (nothing that runs
-// changes), Docker's progress going to w. A failure carries Docker's last
-// line, which w may not show.
+// changes), Docker's progress going to w: given as is, a terminal gets
+// Docker's progress bars. A failure carries Docker's last error line,
+// which w may not show.
 func (d Docker) Download(ctx context.Context, images []string, w io.Writer) error {
 	for _, im := range images {
 		var err error
 		last := &lastLine{}
 		if st, ok := d.Compose.Runner.(Streamer); ok {
-			err = st.Stream(ctx, io.MultiWriter(w, last), "pull", im)
+			err = st.Stream(ctx, w, io.MultiWriter(w, last), "pull", im)
 		} else {
 			var out []byte
 			out, err = d.Compose.Runner.Run(ctx, "pull", im)
