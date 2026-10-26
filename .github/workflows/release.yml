@@ -19,10 +19,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # No cache (security review M4): setup-go's cache key is shared with
+      # every main-branch CI job, some of which run third-party code (the
+      # lint binary, Claude Code's npm package, containers), and a tag run
+      # may restore the default branch's caches. go mod verify re-checks
+      # the module cache, but compiled objects in GOCACHE are trusted on a
+      # hit, so a poisoned cache would land in a signed binary. The release
+      # builds from scratch: modules from the proxy, checked against go.sum.
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          cache: false
       - name: Refuse tags that are not on main
         run: |
           git fetch -q origin main
