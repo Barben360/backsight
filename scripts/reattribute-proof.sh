@@ -186,5 +186,5 @@ echo "== re-sent: $home_doc $shop_doc; LLM calls $before -> $after, extraction $
 reattr
 [ "$code" = 0 ] && jq -e '.data.action == "nothing" and (.data.plan.retags | length) == 0 and (.data.plan.resends | length) == 0' "$work/out.json" > /dev/null ||
   { cat "$work/out.json"; fail "a second run is not empty (exit $code)"; }
-grep -c '"action":"retag"' "$BACKSIGHT_HOME/state/reattribute.jsonl" | grep -qx 2 || fail "journal: $(cat "$BACKSIGHT_HOME/state/reattribute.jsonl")"
+[ "$(grep '"action":"retag"' "$BACKSIGHT_HOME/state/reattribute.jsonl" | grep -c '"phase":"done"')" = 2 ] || fail "journal: $(cat "$BACKSIGHT_HOME/state/reattribute.jsonl")"
 echo "reattribute-proof: ok"
