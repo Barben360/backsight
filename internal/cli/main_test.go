@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // refuseDocker stands in for the real runner: a test that reaches Docker
@@ -35,6 +37,31 @@ func refuseSpawn(args ...string) error {
 	return fmt.Errorf("test reached a detached backsight %v without a fake spawn", args)
 }
 
+// testHookFault makes the test binary, run as `hook-child`, fail before
+// the handler as a crashing child would: panic | fatal | hang | kill |
+// exit2. Test code only; the binary's own chaos switch exists in testhooks
+// builds alone.
+const testHookFault = "BACKSIGHT_TEST_HOOK_FAULT"
+
+func hookChildFault(mode string) {
+	switch mode {
+	case "panic":
+		panic("test fault")
+	case "fatal":
+		var mu sync.Mutex
+		mu.Unlock() // "fatal error: sync: unlock of unlocked mutex": not recoverable
+	case "hang":
+		time.Sleep(time.Hour)
+	case "kill":
+		if p, err := os.FindProcess(os.Getpid()); err == nil {
+			_ = p.Kill()
+		}
+		time.Sleep(time.Hour)
+	case "exit2":
+		os.Exit(2)
+	}
+}
+
 // goraceSet: the caller chose the race options, which TestMain keeps.
 var goraceSet bool
 
@@ -49,6 +76,9 @@ func TestMain(m *testing.M) {
 		args := os.Args[1:]
 		for len(args) > 0 && strings.HasPrefix(args[0], "-test.") {
 			args = args[1:]
+		}
+		if len(args) > 0 && args[0] == "hook-child" {
+			hookChildFault(os.Getenv(testHookFault))
 		}
 		os.Exit(Execute(args, os.Stdout, os.Stderr))
 	}

@@ -19,14 +19,36 @@ OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
-.PHONY: build test lint cross leaks licenses snapshot verify-dist verify-keys
+.PHONY: build check test test-hooks lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
+
+# The gate before every commit, as CI runs it: formatting, vet, lint, the
+# tests (the testhooks ones too), the release targets, and a secret scan of
+# the working tree when gitleaks is installed (CI always runs it).
+check:
+	@files=$$(gofmt -l . | grep -v '^dist/' || true); \
+		if [ -n "$$files" ]; then echo "gofmt: run gofmt -w on:"; echo "$$files"; exit 1; fi
+	go vet ./...
+	@$(MAKE) --no-print-directory lint
+	@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory test-hooks
+	scripts/third-party-licenses.sh --check
+	@$(MAKE) --no-print-directory cross >/dev/null
+	@if command -v gitleaks >/dev/null 2>&1; then gitleaks dir . --no-banner --redact; \
+		else echo "gitleaks is not installed: secret scan skipped (CI runs it)"; fi
+	@echo "check: all passed"
 
 # atexit_sleep_ms=0: no race runtime sleep (1 s) as each test binary and
 # hook child exits; a GORACE of the caller's wins.
 test:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race ./...
+
+# The packages with test-only code behind the testhooks tag (the failing
+# migration and server smoke of CI's update proof, the hook chaos switch),
+# built and tested with it. A release never has the tag (verify-keys).
+test-hooks:
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/cli/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
 # instead of failing on its lock.

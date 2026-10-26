@@ -12,12 +12,33 @@ How to build, test and change backsight. User documentation is in [docs/](docs/)
 
 ## Development
 
-You need Go (the version in `go.mod`), Docker with Compose v2 for the integration scripts, [golangci-lint](https://golangci-lint.run/) v2 and [gitleaks](https://github.com/gitleaks/gitleaks).
+You need:
+
+| Tool | Why |
+|---|---|
+| Go, the `toolchain` version in `go.mod` | builds and tests; an older Go downloads that toolchain by itself |
+| a C compiler (`gcc` or `clang`) | `make test` runs the race detector, which needs cgo |
+| `git` | some tests create repositories (project detection, transcript flush) |
+| [golangci-lint](https://golangci-lint.run/) v2 | `make lint`; CI's version is in `.github/workflows/ci.yml` |
+| `make` and `bash` | the Makefile and the scripts |
+
+Optional:
+
+| Tool | Without it |
+|---|---|
+| [gitleaks](https://github.com/gitleaks/gitleaks) | `make check` skips the secret scan and says so; CI runs it |
+| `minisign` | the tests that check signatures with the real minisign skip; CI installs it |
+| `openssl`, `curl` | the `install.sh` tests that use them skip |
+| Docker with Compose v2 | needed only by the scripts that start a server (`scripts/sandbox.sh`, `scripts/fresh-install.sh` and the other proofs); `make test` and `make check` never touch Docker |
+
+The first `make check` downloads the modules and builds the race runtime: count a few minutes; later runs take about a minute and a half.
 
 | Command | Does |
 |---|---|
+| `make check` | the whole gate below, in one command |
 | `make build` | builds `bin/backsight` |
 | `make test` | runs every test with the race detector |
+| `make test-hooks` | runs the packages with test-only code (the `testhooks` build tag) with that tag |
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |
 | `make leaks` | scans the Git history for secrets |
@@ -37,16 +58,12 @@ Scripts that start a server (`scripts/sandbox.sh`, `scripts/fresh-install.sh` an
 
 ## The gate
 
-Before every commit, all of these must pass:
+Before every commit, `make check` must pass. It runs, and stops at the first failure:
 
-```sh
-test -z "$(gofmt -l .)"
-go vet ./...
-CGO_ENABLED=1 go test -race -count=1 ./...
-golangci-lint run ./...
-make cross
-gitleaks dir . --no-banner --redact
-```
+- `gofmt -l .` (it must list nothing) and `go vet ./...`;
+- `make lint`, `make test` and `make test-hooks`;
+- `make cross`;
+- `gitleaks dir . --no-banner --redact`, when gitleaks is installed.
 
 Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) runs the tests, a signed snapshot release with a throwaway key, the sandbox tests and the fresh-install chain: setup from nothing, verify, store and search, backup and restore, update with rolled-back failures, undo and uninstall.
 
@@ -55,7 +72,7 @@ Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) 
 - Each test must fail when the behaviour it guards is missing or wrong: assert the observable outcome (exit code, output, files written), not the implementation.
 - Cover the refusals and edge cases, not only the happy path.
 - Write the test first and watch it fail.
-- Build tags `testkey` and `testhooks` exist only for tests and CI; a release build refuses both (`make verify-keys`).
+- Build tags `testkey` and `testhooks` exist only for tests and CI; a release build refuses both (`make verify-keys`). Code that makes backsight fail on purpose (a failing migration or server smoke, the `BACKSIGHT_HOOK_CHAOS` switch of hook children) lives in `testhooks` files with a no-op twin, so no environment variable can trigger it in a release.
 
 ## Documentation
 

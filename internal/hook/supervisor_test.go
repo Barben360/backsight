@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,6 +37,9 @@ func TestMain(m *testing.M) {
 			case "slow":
 				time.Sleep(300 * time.Millisecond)
 				return []byte(`{"systemMessage":"late but in time"}`), nil
+			}
+			if mode, ok := strings.CutPrefix(os.Getenv("HOOK_TEST_BEHAVIOUR"), "fault-"); ok {
+				fault(mode)
 			}
 			return nil, nil
 		}))
@@ -73,28 +77,49 @@ func TestChildOutputPassesThroughWhenValid(t *testing.T) {
 	}
 }
 
-// Chaos (SPEC §6.1): every failure prints nothing and is reported once.
+// Every failure of the child prints nothing and is reported once (SPEC
+// §6.1): the handler fails here as a bug would, in every build.
 func TestEveryChildFailurePrintsNothing(t *testing.T) {
 	for _, c := range []struct {
-		behaviour, chaos, kind string
-		deadline               time.Duration
+		behaviour, kind string
+		deadline        time.Duration
 	}{
-		{"echo", "panic", "panic", 5 * time.Second},
-		{"echo", "fatal", "fatal", 5 * time.Second},
-		{"echo", "hang", "timeout", 400 * time.Millisecond},
-		{"echo", "kill", "killed", 5 * time.Second},
-		{"echo", "exit2", "exit", 5 * time.Second},
-		{"garbage", "", "invalid_output", 5 * time.Second},
-		{"array", "", "invalid_output", 5 * time.Second},
+		{"fault-panic", "panic", 5 * time.Second},
+		{"fault-fatal", "fatal", 5 * time.Second},
+		{"fault-hang", "timeout", 400 * time.Millisecond},
+		{"fault-kill", "killed", 5 * time.Second},
+		{"fault-exit2", "exit", 5 * time.Second},
+		{"garbage", "invalid_output", 5 * time.Second},
+		{"array", "invalid_output", 5 * time.Second},
 	} {
 		start := time.Now()
-		out, f := super(t, c.behaviour, c.chaos, c.deadline)
+		out, f := super(t, c.behaviour, "", c.deadline)
 		if len(out) != 0 || f == nil || f.Kind != c.kind {
-			t.Errorf("%s/%s: out %q failure %+v", c.behaviour, c.chaos, out, f)
+			t.Errorf("%s: out %q failure %+v", c.behaviour, out, f)
 		}
-		if c.chaos == "hang" && time.Since(start) > 3*time.Second {
+		if c.behaviour == "fault-hang" && time.Since(start) > 3*time.Second {
 			t.Errorf("hang not cut at the deadline: %s", time.Since(start))
 		}
+	}
+}
+
+// fault fails the test child the ways a hook child can fail.
+func fault(mode string) {
+	switch mode {
+	case "panic":
+		panic("test fault")
+	case "fatal":
+		var mu sync.Mutex
+		mu.Unlock() // "fatal error: sync: unlock of unlocked mutex": not recoverable
+	case "hang":
+		time.Sleep(time.Hour)
+	case "kill":
+		if p, err := os.FindProcess(os.Getpid()); err == nil {
+			_ = p.Kill()
+		}
+		time.Sleep(time.Hour)
+	case "exit2":
+		os.Exit(2)
 	}
 }
 

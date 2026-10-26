@@ -29,8 +29,9 @@ jobs:
       - run: make test
       # The license texts shipped with the binary cover the current go.mod.
       - run: scripts/third-party-licenses.sh --check
-      # The testhooks build's own code (CI's update proof), never in a release.
-      - run: go test -count=1 -tags testhooks ./internal/migrate/
+      # The testhooks build's own code (CI's update proof, the hook chaos
+      # switch), never in a release.
+      - run: make test-hooks
       - run: make cross
   snapshot:
     # The release build, signed by minisign with a throwaway key: the

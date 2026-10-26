@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
-	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -228,7 +227,7 @@ func TestVerifyCatchesAHookFailingBehindTheSupervisor(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	asShim(t)
-	verifyEnv = append(verifyEnv, hook.ChaosEnv+"=panic")
+	verifyEnv = append(verifyEnv, testHookFault+"=panic")
 	code, out, _ := run(t, "verify", "--no-round-trip", "--json")
 	c := parseVerify(t, out)["hook stop"]
 	if code != output.Blocked || c.Status != "fail" || !strings.Contains(c.Summary, "behind the supervisor") {
