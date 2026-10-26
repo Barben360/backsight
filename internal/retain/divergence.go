@@ -21,6 +21,27 @@ type ReattributionStatus struct {
 	Pending  []Resend  `json:"pending"`  // sessions still to send again
 	Cost     Estimate  `json:"cost"`
 	Declined bool      `json:"declined,omitempty"` // the user answered resend=no
+	// Skipped: why the last daily run did not judge (backups off, a remote
+	// server, a backup that did not verify…), "" when it did; SkippedAt when.
+	Skipped   string    `json:"skipped,omitempty"`
+	SkippedAt time.Time `json:"skipped_at,omitempty"`
+}
+
+// SamePending says whether a and b leave the same sessions to send again.
+func SamePending(a, b []Resend) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, r := range a {
+		seen[r.Session] = true
+	}
+	for _, r := range b {
+		if !seen[r.Session] {
+			return false
+		}
+	}
+	return true
 }
 
 // ReattributionStatusFile is where it is kept.
@@ -78,11 +99,12 @@ func NoiseHistoryFile(stateDir string) string { return filepath.Join(stateDir, "
 // noiseKeep: readings kept (about four months of daily ones).
 const noiseKeep = 120
 
-// RecordNoise appends p to the history, keeping the last noiseKeep.
+// RecordNoise appends p to the history, keeping the last noiseKeep. A
+// history that cannot be read is left as it is (nothing recorded).
 func RecordNoise(stateDir string, p NoisePoint) error {
 	all, err := LoadNoise(stateDir)
 	if err != nil {
-		all = nil // an unreadable history starts again
+		return err
 	}
 	all = append(all, p)
 	if len(all) > noiseKeep {

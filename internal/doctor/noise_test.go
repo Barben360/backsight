@@ -357,23 +357,31 @@ func TestDocSessionOfASuccessorID(t *testing.T) {
 }
 
 // The transverse noise is compared with the reading jobs maintain kept a
-// week ago: a rise of 5 points or more warns, even under the 20 % bar.
+// week ago: a rise of 5 points that is also 3 observations or more warns,
+// even under the 20 % bar; small pools give no trend.
 func TestNoiseTransverseWarnsWhenItGrows(t *testing.T) {
-	named := []string{"trip-2031 uses Astro.", "Trip-2031's deploy is manual.", "ironwood runs on k3s.", "backsight is written in Go."}
+	var named []string
+	for i := range 12 {
+		named = append(named, fmt.Sprintf("trip-2031 step %d uses Astro.", i))
+	}
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	week := now.Add(-7 * 24 * time.Hour)
 	for _, c := range []struct {
 		name    string
+		pool    []string
 		history []retain.NoisePoint
 		status  Status
 		summary string
 	}{
-		{"no history", nil, OK, "4 of 20 transverse observations (project:.claude) name another project: trip-2031 (2), backsight (1), ironwood (1)"},
-		{"from 3 of 20 a week ago: +5 points", []retain.NoisePoint{{At: now.Add(-7 * 24 * time.Hour), Named: 3, Total: 20}}, Warn, "(20%, 15% a week ago): growing"},
-		{"steady", []retain.NoisePoint{{At: now.Add(-7 * 24 * time.Hour), Named: 4, Total: 20}}, OK, "(20%, 20% a week ago)"},
-		{"the closest to a week is used", []retain.NoisePoint{{At: now.Add(-9 * 24 * time.Hour), Named: 0, Total: 20}, {At: now.Add(-7 * 24 * time.Hour), Named: 4, Total: 20}, {At: now.Add(-24 * time.Hour), Named: 0, Total: 20}}, OK, "(20%, 20% a week ago)"},
-		{"a reading too old is no comparison", []retain.NoisePoint{{At: now.Add(-20 * 24 * time.Hour), Named: 0, Total: 20}}, OK, "name another project: trip-2031 (2)"},
+		{"no history", pool(60, named...), nil, OK, "12 of 60 transverse observations (project:.claude) name another project: trip-2031 (12)"},
+		{"from 9 of 60 a week ago: +5 points, +3 observations", pool(60, named...), []retain.NoisePoint{{At: week, Named: 9, Total: 60}}, Warn, "(20%, 15% a week ago): growing"},
+		{"steady", pool(60, named...), []retain.NoisePoint{{At: week, Named: 12, Total: 60}}, OK, "(20%, 20% a week ago)"},
+		{"the closest to a week is used", pool(60, named...), []retain.NoisePoint{{At: now.Add(-9 * 24 * time.Hour), Named: 0, Total: 60}, {At: week, Named: 12, Total: 60}, {At: now.Add(-24 * time.Hour), Named: 0, Total: 60}}, OK, "(20%, 20% a week ago)"},
+		{"a reading too old is no comparison", pool(60, named...), []retain.NoisePoint{{At: now.Add(-20 * 24 * time.Hour), Named: 0, Total: 60}}, OK, "name another project: trip-2031 (12)"},
+		{"a small pool: one more observation is no trend", pool(20, named[:4]...), []retain.NoisePoint{{At: week, Named: 3, Total: 20}}, OK, "4 of 20"},
+		{"+5 points but 2 observations", pool(60, named...), []retain.NoisePoint{{At: week, Named: 10, Total: 90}}, OK, "(20%, 11% a week ago)"},
 	} {
-		f := noiseFixture(t, &noiseBank{tags: someProjects, observations: pool(20, named...)})
+		f := noiseFixture(t, &noiseBank{tags: someProjects, observations: c.pool})
 		f.env.Now = func() time.Time { return now }
 		for _, p := range c.history {
 			if err := retain.RecordNoise(f.env.Dirs.State, p); err != nil {
@@ -387,7 +395,7 @@ func TestNoiseTransverseWarnsWhenItGrows(t *testing.T) {
 		if c.status == Warn && !strings.Contains(got.Fix, "retain reattribute --plan") {
 			t.Errorf("%s: fix %q", c.name, got.Fix)
 		}
-		if got.Measure["named"] != 4 || got.Measure["total"] != 20 {
+		if got.Measure["total"] != float64(len(c.pool)) {
 			t.Errorf("%s: measure %v", c.name, got.Measure)
 		}
 	}
@@ -407,8 +415,13 @@ func TestReattributionCheckShowsWhatIsLeft(t *testing.T) {
 		{"pending", &retain.ReattributionStatus{JudgedAt: at, Pending: []retain.Resend{{Session: "s1"}, {Session: "s2"}},
 			Cost: retain.Estimate{InputTokens: 120000, Cost: 0.42}}, Warn, "2 session(s) mix projects in their documents (judged 2026-10-25): sending them again per project costs about 120000 input tokens, 0.42", "--answer resend=yes"},
 		{"declined", &retain.ReattributionStatus{JudgedAt: at, Pending: []retain.Resend{{Session: "s1"}}, Declined: true}, Info, "sending them again was declined", ""},
+		{"backups off", &retain.ReattributionStatus{Skipped: "backup.enabled is off, and the moves wait for a backup", SkippedAt: at}, Warn,
+			"the daily re-attribution does not run (2026-10-25): backup.enabled is off", "retain reattribute --plan"},
+		{"another integration writes", &retain.ReattributionStatus{Skipped: "components.write is off"}, Info, "does not run: components.write is off", ""},
+		{"judged long ago", &retain.ReattributionStatus{JudgedAt: at.Add(-5 * 24 * time.Hour)}, Warn, "last judged against today's project rules on 2026-10-20", "jobs"},
 	} {
 		f := newFixture(t)
+		f.env.Now = func() time.Time { return at.Add(time.Hour) }
 		if c.st != nil {
 			if err := retain.SaveReattributionStatus(f.env.Dirs.State, *c.st); err != nil {
 				t.Fatal(err)

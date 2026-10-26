@@ -211,11 +211,12 @@ func TestMaintainWithBackupsOff(t *testing.T) {
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600)
-	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "backup off") || !strings.Contains(out, "re-attribution skipped: no backup today") {
+	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "backup off") || !strings.Contains(out, "re-attribution skipped: backup.enabled is off") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
-	if _, ok, _ := retain.LoadReattributionStatus(pathsOf(home).State); ok {
-		t.Error("the memory was re-attributed without a backup")
+	// not judged, and the reason is kept for doctor
+	if st, ok, _ := retain.LoadReattributionStatus(pathsOf(home).State); !ok || !st.JudgedAt.IsZero() || !strings.Contains(st.Skipped, "backup.enabled is off") {
+		t.Errorf("status %+v %v", st, ok)
 	}
 }
 
