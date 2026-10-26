@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -270,9 +271,22 @@ func TestGuideDocsBankOnTheRealServer(t *testing.T) {
 	if n := llmCalls(t, cfg, db); n != 0 {
 		t.Errorf("indexing and searching the docs made %d LLM call(s)", n)
 	}
+	// Six sections and the record of both versions' first index times.
 	st, err := cl.BankStats(ctx, db)
-	if err != nil || st.NodesByFactType["observation"] != 0 || st.TotalDocuments != 6 {
+	if err != nil || st.NodesByFactType["observation"] != 0 || st.TotalDocuments != 7 {
 		t.Errorf("docs bank stats %+v %v", st, err)
+	}
+	docs, err := cl.ListDocuments(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range docs {
+		if d.ID == guide.VersionsID && (d.Metadata["docs-version-at:"+c.Hash[:16]] == "" || d.Metadata["docs-version-at:"+c2.Hash[:16]] == "" || len(d.Tags) != 0) {
+			t.Errorf("versions record %+v: both versions' times, no tag", d)
+		}
+	}
+	if !slices.ContainsFunc(docs, func(d hindsight.DocumentItem) bool { return d.ID == guide.VersionsID }) {
+		t.Errorf("no %s among %d documents", guide.VersionsID, len(docs))
 	}
 }
 
