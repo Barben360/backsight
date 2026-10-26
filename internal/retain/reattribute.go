@@ -34,13 +34,17 @@ import (
 // session's turns (the path rule only runs in shadow on them) and the path
 // rule for subagent reports, from the decision kept when the report was
 // filed (its evidence, judged again) or from its transcript. Notes are
-// never moved: their project was chosen. Only documents whose transcript
+// never moved to another project (theirs was chosen); only a note tagged
+// with the transverse keyword or a non-canonical alias is folded into the
+// canonical alias, a label fix (issue 33). Only conversation and subagent
+// documents whose transcript
 // is on this machine are judged.
 
 // Kinds of document a re-attribution judges.
 const (
 	KindSubagent     = "subagent"
 	KindConversation = "conversation"
+	KindNote         = "note" // a transverse label folded into the canonical alias
 )
 
 // Why a session is sent again.
@@ -194,6 +198,17 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 	}
 	cache := map[string]*sessionRepos{}
 	a := f.Attribution
+	// Notes: the keyword or an alias folds into the canonical alias; a
+	// real project is never touched, and a note is not "judged".
+	for _, d := range docs {
+		from := tagProject(d.Tags)
+		if !strings.HasPrefix(d.ID, "note:") || from == "" {
+			continue
+		}
+		if to := CanonicalProject(a.Transverse, from); to != from {
+			plan.Retags = append(plan.Retags, Retag{Document: d.ID, Kind: KindNote, From: from, To: to, Tags: retagged(d.Tags, to)})
+		}
+	}
 	for _, d := range docs {
 		sid, agent, ok := subagentDoc(d.ID)
 		if !ok {

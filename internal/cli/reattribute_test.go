@@ -350,3 +350,69 @@ func TestADeclinedResendIsRemembered(t *testing.T) {
 		t.Errorf("with a new session to send again: %+v", st)
 	}
 }
+
+// putNotes stores notes documents tagged with the given projects.
+func putNotes(t *testing.T, port int, projects map[string]string) {
+	t.Helper()
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	for id, p := range projects {
+		if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "Rule " + id, DocumentID: id,
+			Tags: []string{"project:" + p, "source:note"}, Metadata: map[string]string{"source": "note"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func noteTags(t *testing.T, port int, id string) []string {
+	t.Helper()
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	d, err := cl.GetDocument(context.Background(), "claude-memory", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.Tags
+}
+
+// Issue 33: retain reattribute folds a note tagged with the transverse
+// keyword into the canonical alias and never touches a real project's.
+func TestReattributeFoldsTransverseNotes(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	putNotes(t, port, map[string]string{"note:kw": "transverse", "note:real": "billing"})
+	code, out, _ := run(t, "retain", "reattribute")
+	if code != output.OK || !strings.Contains(out, "moved note:kw: transverse → .claude") || !slices.Equal(docPatches, []string{"note:kw"}) {
+		t.Fatalf("exit %d, patches %v\n%s", code, docPatches, out)
+	}
+	if got := noteTags(t, port, "note:kw"); !slices.Contains(got, "project:.claude") || slices.Contains(got, "project:transverse") {
+		t.Errorf("tags %v", got)
+	}
+	if got := noteTags(t, port, "note:real"); !slices.Contains(got, "project:billing") {
+		t.Errorf("a real project's note: %v", got)
+	}
+	if code, out, _ := run(t, "retain", "reattribute"); code != output.OK || !strings.Contains(out, "nothing to move") || len(docPatches) != 1 {
+		t.Errorf("a second run: exit %d, patches %v\n%s", code, docPatches, out)
+	}
+}
+
+// The daily pass folds them too, and leaves real projects alone.
+func TestMaintainFoldsTransverseNotes(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	putNotes(t, port, map[string]string{"note:kw": "transverse", "note:real": "billing"})
+	code, out, _ := run(t, "jobs", "maintain")
+	if code != output.OK || !strings.Contains(out, "re-attribution 1 moved") || !slices.Equal(docPatches, []string{"note:kw"}) {
+		t.Fatalf("exit %d, patches %v\n%s", code, docPatches, out)
+	}
+	if got := noteTags(t, port, "note:kw"); !slices.Contains(got, "project:.claude") {
+		t.Errorf("tags %v", got)
+	}
+	if got := noteTags(t, port, "note:real"); !slices.Contains(got, "project:billing") {
+		t.Errorf("a real project's note: %v", got)
+	}
+}

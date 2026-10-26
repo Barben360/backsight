@@ -94,8 +94,8 @@ func TestNotesCheckSkippedWithoutAServer(t *testing.T) {
 }
 
 // Issue 33: a document tagged project:transverse (a replay that kept the
-// keyword) is named, with the by-hand fix, since retain reattribute does
-// not move notes; a bank without one is fine.
+// keyword) is named, with the command that folds it; a bank without one is
+// fine.
 func TestLiteralTransverseTagIsNamed(t *testing.T) {
 	b := &notesBank{}
 	f := b.fixture(t)
@@ -103,12 +103,10 @@ func TestLiteralTransverseTagIsNamed(t *testing.T) {
 	b.notes = append(b.notes, note{"billing", time.Now()}, note{"transverse", time.Now()})
 	c := check(t, f.run(), "transverse-keyword")
 	expect(t, c, Warn, "1 document tagged project:transverse")
-	for _, want := range []string{"note:n1", "PATCH", "project:.claude", "source:note", "/documents/note%3An1"} {
-		if !strings.Contains(c.Fix+c.Detail, want) {
-			t.Errorf("%q missing from %q / %q", want, c.Fix, c.Detail)
-		}
+	if !strings.HasPrefix(c.Fix, "backsight retain reattribute") {
+		t.Errorf("fix %q", c.Fix)
 	}
-	if strings.Contains(c.Fix, "note:n0") || strings.Contains(c.Fix, `"project:transverse"`) {
-		t.Errorf("fix names a healthy note or keeps the bad tag: %q", c.Fix)
+	if !strings.Contains(c.Detail, "note:n1") || strings.Contains(c.Detail, "note:n0") {
+		t.Errorf("detail %q names the wrong documents", c.Detail)
 	}
 }
