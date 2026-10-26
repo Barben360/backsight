@@ -274,7 +274,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	// in the index) does not count for the records a restore lost of
 	// this session's own sends (its .dropped mark), unless sent again.
 	lostOwn := f.loadDropped(sid)
-	cur.Generation = max(cur.Generation, lostOwn.Generation)
+	cur.Generation = max(cur.Generation, lostOwn.Generation, f.generation(sid))
 	own := func(u string) bool { return f.Index.Has(sessionKey(f.Bank, sid, u)) }
 	sent := func(u string) bool { return f.Index.Has(u) && (!lostOwn.Records[u] || own(u)) }
 	tombs, err := f.tombstones()

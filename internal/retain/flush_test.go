@@ -54,6 +54,9 @@ type fakeHS struct {
 	deleted      []string            // documents deleted, in order
 	tags         map[string][]string // each document's tags (its items' last, or a PATCH's)
 	patched      []string            // documents whose tags a PATCH replaced, in order
+	patchStatus  int                 // non-zero: PATCH /documents answers with it
+	staleUnits   map[string][]string // a document's memories keep these tags whatever a PATCH says
+	failDelete   map[string]bool     // deletes of these documents answer 503
 	deleteStatus int                 // non-zero: document deletes answer with it
 	failGet      map[string]bool     // reads of these documents answer 500
 }
@@ -136,6 +139,8 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 		raw, _ := json.Marshal(map[string]any{"items": items, "total": len(items)})
 		_, _ = w.Write(raw)
+	case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/documents/") && h.patchStatus != 0:
+		w.WriteHeader(h.patchStatus)
 	case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/documents/"):
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
 		if _, ok := h.docs[id]; !ok {
@@ -170,8 +175,10 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		raw, _ := json.Marshal(map[string]any{"id": id, "document_metadata": meta})
+		raw, _ := json.Marshal(map[string]any{"id": id, "document_metadata": meta, "tags": h.tags[id]})
 		_, _ = w.Write(raw)
+	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && h.failDelete[docOf(r)]:
+		w.WriteHeader(http.StatusServiceUnavailable)
 	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && h.deleteStatus != 0:
 		w.WriteHeader(h.deleteStatus)
 	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/"):
@@ -181,6 +188,11 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		delete(h.content, id)
 		_, _ = w.Write([]byte(`{"success":true}`))
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list"):
+		if tags, ok := h.staleUnits[r.URL.Query().Get("document_id")]; ok && r.URL.Query().Get("offset") == "0" {
+			raw, _ := json.Marshal(map[string]any{"items": []map[string]any{{"id": "u1", "tags": tags}}, "total": 1})
+			_, _ = w.Write(raw)
+			return
+		}
 		_, _ = w.Write([]byte(`{"items":[],"total":0}`)) // no fact extracted in this fake
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/operations"):
 		n := 0
@@ -1852,4 +1864,10 @@ func TestAPausedFirstDirectoryIsRetainedOnceResumed(t *testing.T) {
 	if it := e.hs.retains[0]; it.Tags[0] != "project:billing" || strings.Contains(it.Content, "private") {
 		t.Errorf("%+v", it)
 	}
+}
+
+// docOf is the document id a /documents/{id} request names.
+func docOf(r *http.Request) string {
+	id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
+	return id
 }

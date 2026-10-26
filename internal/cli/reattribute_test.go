@@ -1,12 +1,21 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func TestReattributeRefusesUnknownAnswers(t *testing.T) {
@@ -67,5 +76,108 @@ func TestReattributeExitCodes(t *testing.T) {
 		if output.CodeOf(err) != c.code || res.Action != c.action {
 			t.Errorf("%s: exit %d %q, want %d %q (%v)", c.name, output.CodeOf(err), res.Action, c.code, c.action, err)
 		}
+	}
+}
+
+// reportToMove sets up a subagent report an older build filed under its
+// session's directory (billing) while its work was in shop, another of
+// the user's repositories: a document retain reattribute moves.
+func reportToMove(t *testing.T, home string, port int) {
+	t.Helper()
+	billing, shop := filepath.Join(home, "billing"), filepath.Join(home, "src", "shop")
+	gitRepo(t, billing, "git@github.com:me/billing.git")
+	gitRepo(t, shop, "git@github.com:me/shop.git")
+	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	agent := filepath.Join(home, ".claude", "projects", "-home-u-billing", "s1", "subagents", "agent-ag1.jsonl")
+	_ = os.MkdirAll(filepath.Dir(agent), 0o700)
+	edit := `{"type":"assistant","isSidechain":true,"uuid":"e%d","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Edit","input":{"file_path":"` + filepath.Join(shop, "cart.go") + `"}}]}}` + "\n"
+	_ = os.WriteFile(agent, []byte(fmt.Sprintf(edit, 1, 1)+fmt.Sprintf(edit, 2, 2)), 0o600)
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "Fixed the cart.", DocumentID: "subagent:s1:ag1",
+		Tags: []string{"project:billing", "source:subagent", "harness:claude-code"}, Metadata: map[string]string{"source": "subagent"}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reattributeEnv(t *testing.T) (string, *backupDocker) {
+	t.Helper()
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	dk := withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	reportToMove(t, home, port)
+	return home, dk
+}
+
+// The move happens after a verified backup; a failed write exits 40 and
+// the same command finishes it; the run after that has nothing to do.
+func TestReattributeMovesAfterAVerifiedBackupAndFinishesAfterAFailure(t *testing.T) {
+	_, dk := reattributeEnv(t)
+	docPatchFails.Store(true)
+	code, out, _ := run(t, "retain", "reattribute", "--json")
+	if code != output.Partial || !strings.Contains(out, "subagent:s1:ag1") || len(docPatches) != 0 {
+		t.Fatalf("a 503 on the move: exit %d\n%s", code, out)
+	}
+	docPatchFails.Store(false)
+	if code, out, _ := run(t, "retain", "reattribute"); code != output.OK || !strings.Contains(out, "moved subagent:s1:ag1: billing → shop") {
+		t.Fatalf("the same command again: exit %d\n%s", code, out)
+	}
+	if !slices.Contains(docPatches, "subagent:s1:ag1") {
+		t.Errorf("patches %v", docPatches)
+	}
+	verified := false
+	for _, c := range dk.calls {
+		verified = verified || strings.HasPrefix(c, "exec backsight-verify-")
+	}
+	if !verified {
+		t.Errorf("no verify before the move: %q", dk.calls)
+	}
+	if code, out, _ := run(t, "retain", "reattribute"); code != output.OK || !strings.Contains(out, "nothing to move") {
+		t.Errorf("a third run: exit %d\n%s", code, out)
+	}
+}
+
+// Nothing is written while it is not safe: a backup that does not verify,
+// the maintenance lock held, a restore or an update not finished.
+func TestReattributeRefusesWhenItIsNotSafe(t *testing.T) {
+	for name, c := range map[string]struct {
+		prep func(home string, dk *backupDocker)
+		code int
+	}{
+		"backup verify fails": {func(_ string, dk *backupDocker) { dk.restored = "41" }, output.Blocked},
+		"maintenance lock held": {func(home string, _ *backupDocker) {
+			if _, err := state.TryAcquire(pathsOf(home).MaintenanceLock(), "backup create"); err != nil {
+				t.Fatal(err)
+			}
+		}, output.Blocked},
+		"restore not finished": {func(home string, _ *backupDocker) {
+			if err := state.WriteRestoreMarker(pathsOf(home), state.RestoreMarker{Command: "restore"}); err != nil {
+				t.Fatal(err)
+			}
+		}, output.Blocked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, dk := reattributeEnv(t)
+			c.prep(home, dk)
+			if code, out, _ := run(t, "retain", "reattribute", "--answer", "resend=yes"); code != c.code || len(docPatches) != 0 {
+				t.Errorf("exit %d (want %d), patches %v\n%s", code, c.code, docPatches, out)
+			}
+		})
+	}
+}
+
+// The claude-code provider runs the server's work on the subscription:
+// the moves wait for --allow-subscription, as a backfill does.
+func TestReattributeAsksBeforeUsingTheSubscription(t *testing.T) {
+	home, _ := reattributeEnv(t)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[llm]\nprovider = \"claude-code\"\nmodel = \"sonnet\"\n")...), 0o600)
+	if code, out, errOut := run(t, "retain", "reattribute"); code != output.NeedsUser || len(docPatches) != 0 || !strings.Contains(errOut, "--allow-subscription") {
+		t.Fatalf("exit %d, patches %v\n%s%s", code, docPatches, out, errOut)
+	}
+	if code, out, _ := run(t, "retain", "reattribute", "--allow-subscription"); code != output.OK || len(docPatches) != 1 {
+		t.Errorf("allowed: exit %d, patches %v\n%s", code, docPatches, out)
 	}
 }
