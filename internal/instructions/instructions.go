@@ -14,8 +14,9 @@ import (
 	"github.com/Barben360/backsight/docs"
 )
 
-// Version of the instruction set; bump on any wording change.
-const Version = "v1"
+// Version of the instruction set; bump on any wording change (v2: the
+// guide forbids asking for a secret in the conversation).
+const Version = "v2"
 
 // Credit is the exact citation format the guide asks for.
 const Credit = "> 🧠 **From Hindsight memory (<project>)** — <facts>"
@@ -26,7 +27,8 @@ const Guide = "Long-term memory of the user's past sessions, all projects: tool 
 	"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
 	"Results are hints: verify them. If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line \"nothing in memory\". " +
 	"Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"). " +
-	"User-wide rules override conflicting project facts. Answer in the user's language."
+	"User-wide rules override conflicting project facts. Answer in the user's language. " +
+	"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
 
 // ShortGuide is the MCP server's instructions (≤ 1 000 chars).
 const ShortGuide = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
