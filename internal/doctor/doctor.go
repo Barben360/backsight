@@ -133,11 +133,13 @@ func Run(ctx context.Context, env Env) Report {
 		if tg.Source == "config" {
 			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs))
 			add(checkEpoch(ctx, cl, tg.Bank, env.Dirs))
+			add(checkPurged(ctx, cl, tg.Bank, env))
 		}
 	} else {
 		add(Check{ID: "untagged", Status: Info, Summary: "skipped: " + skipReason(srv)})
 		if tg != nil && tg.Source == "config" {
 			add(Check{ID: "restore-epoch", Status: Info, Summary: "skipped: " + skipReason(srv)})
+			add(Check{ID: "purged-documents", Status: Info, Summary: "skipped: " + skipReason(srv)})
 		}
 	}
 	add(checkNoise(ctx, env, cl, tg, bank, srv)...)

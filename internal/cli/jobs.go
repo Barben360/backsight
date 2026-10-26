@@ -40,6 +40,9 @@ type tickResult struct {
 	Epoch    string             `json:"epoch,omitempty"` // restore epoch reconcile (decision 0044)
 	Pruned   []string           `json:"briefings_pruned,omitempty"`
 	Families string             `json:"families,omitempty"` // project families: recomputed | failed: <why>
+	// Purges: the look for purged documents an older client wrote again
+	// (backsight issue 5), "" when it found none.
+	Purges string `json:"purges,omitempty"`
 	// Binary: the self-check of this binary, made on its first tick
 	// (verified | unsigned | failed; SPEC §11.1).
 	Binary string `json:"binary,omitempty"`
@@ -66,7 +69,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -105,6 +108,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				return finish(nil)
 			}
 			res.Epoch = reconcile(cmd.Context(), f)
+			res.Purges = guardTick(cmd.Context(), f, cfg)
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
 			tags, terr := f.Client.Tags(cmd.Context(), cfg.Server.Bank, "project:")
@@ -166,6 +170,9 @@ func tickText(r tickResult) string {
 	}
 	if r.Epoch != "" {
 		msg += ", " + r.Epoch
+	}
+	if r.Purges != "" {
+		msg += ", " + r.Purges
 	}
 	return msg + "\n"
 }

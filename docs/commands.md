@@ -68,6 +68,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight retain flush` | Sends the unsent turns of every session now, without the 30-minute wait. `--session <id>`. |
 | `backsight retain backfill` | Imports past sessions within a spending cap. `--plan`, `--since YYYY-MM-DD`, `--project <name>`, `--max-cost X`, `--max-tokens N`, `--allow-subscription`, `--projects-dir <dir>`. |
 | `backsight retain retry-quarantine` | Gives quarantined sessions and notes another try. `--session <id>`, `--notes`. |
+| `backsight retain purge-again` | Purges again every purged document the server holds again: an older backsight, or any client unaware of purges, appended to its id and the server recreated it. Each goes as with `forget --purge` (the observations of its facts, its facts, the document, then the briefing pages of its projects). `jobs tick` does it on its own; with the `claude-code` provider it waits for this command with `--allow-subscription` (the server consolidates again after a purge). A document an append is queued for waits for it. `--plan` lists them. A second run does nothing. Exit 10 while the consent is needed, 20 under maintenance, 40 when one waits (run it again later). |
 | `backsight retain reattribute` | Files the memory already sent under the projects today's rules give. A document whose whole content belongs to another project is moved in place, with no extraction (the server then consolidates the moved memories again, a few LLM calls each), at most 50 per run. A session whose documents mix projects is sent again per project, at its extraction cost, only with `--answer resend=yes`. It waits for a verified backup, a server with nothing queued and no restore or update in progress; sessions still being sent, quarantined, continued on another machine or whose directories are gone are left alone. With the `claude-code` provider it needs `--allow-subscription`. A second run does nothing. `--plan` lists the moves and the cost. Exit 10 while an answer is needed, 20 when it is not safe now, 40 when a write failed (run it again). |
 
 ## Server
@@ -123,7 +124,7 @@ The OS scheduler (systemd user timers on Linux) runs these; you rarely need them
 
 | Command | Does |
 |---|---|
-| `backsight jobs tick` | Every 15 minutes: sends settled sessions and queued notes, paces the backfill. |
+| `backsight jobs tick` | Every 15 minutes: sends settled sessions and queued notes, paces the backfill, and purges again a purged document an older client wrote again (`retain purge-again`). |
 | `backsight jobs maintain` | Daily: rotation of the local usage log, backup, then the in-place moves of `retain reattribute` (never a re-send, which costs extraction: doctor shows the ones waiting), update check (and update with `update.auto_apply`), doctor snapshot (it keeps the transverse pool's noise reading, so doctor sees it grow). |
 | `backsight jobs install` | Installs the scheduler entries (setup does it). `--plan`. |
 | `backsight jobs uninstall` | Removes them. `--plan`. |

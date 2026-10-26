@@ -534,3 +534,26 @@ func (c *Client) QueuedOperations(ctx context.Context, bank string) (int, error)
 	}
 	return n, nil
 }
+
+// QueuedOperationsOf lists the operations of bank with status, 100 per
+// page, up to pages pages; complete is false when the queue is longer.
+func (c *Client) QueuedOperationsOf(ctx context.Context, bank, status string, pages int) (ops []Operation, complete bool, err error) {
+	for page := 0; page < pages; page++ {
+		var out struct {
+			Total      int         `json:"total"`
+			Operations []Operation `json:"operations"`
+		}
+		q := url.Values{"status": {status}, "limit": {"100"}, "offset": {strconv.Itoa(len(ops))}}
+		if err := c.get(ctx, bankPath(bank, "/operations"), q, &out); err != nil {
+			return ops, false, err
+		}
+		ops = append(ops, out.Operations...)
+		if len(ops) >= out.Total {
+			return ops, true, nil
+		}
+		if len(out.Operations) == 0 { // the queue moved under the paging: not read whole
+			return ops, false, nil
+		}
+	}
+	return ops, false, nil
+}

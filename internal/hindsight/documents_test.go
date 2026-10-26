@@ -135,3 +135,90 @@ func TestTaggedDocumentsSinceFiltersOnTheServerAndSortsNewestFirst(t *testing.T)
 		t.Errorf("count %d %v (%v)", n, err, queries)
 	}
 }
+
+// The documents created since a time are asked of the server by their
+// creation time, page by page, with no tag filter: one row is the whole
+// answer, in the server's clock.
+func TestDocumentsCreatedSinceFiltersOnTheServer(t *testing.T) {
+	var queries []string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		queries = append(queries, r.URL.RawQuery)
+		if r.URL.EscapedPath() != "/v1/default/banks/b/documents" || q.Get("time_field") != "created_at" || q.Get("start_date") != "2026-10-26T09:00:00Z" || q.Has("tags") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		off, _ := strconv.Atoi(q.Get("offset"))
+		if off >= 200 {
+			_, _ = w.Write([]byte(`{"items":[{"id":"conversation:s1","created_at":"2026-10-26T10:00:00.5"}],"total":201}`))
+			return
+		}
+		items := `{"id":"d0","created_at":"2026-10-26T09:30:00+00:00"}`
+		for i := 1; i < 200; i++ {
+			items += `,{"id":"d` + strconv.Itoa(i) + `"}`
+		}
+		_, _ = w.Write([]byte(`{"items":[` + items + `],"total":201}`))
+	})
+	docs, err := c.DocumentsCreatedSince(context.Background(), "b", time.Date(2026, 10, 26, 10, 0, 0, 0, time.FixedZone("CET", 3600)))
+	if err != nil || len(docs) != 201 || docs[200].ID != "conversation:s1" || !docs[200].CreatedAt.Equal(time.Date(2026, 10, 26, 10, 0, 0, 5e8, time.UTC)) {
+		t.Fatalf("%v %d %v", err, len(docs), queries)
+	}
+	if len(queries) != 2 {
+		t.Errorf("pages %v", queries)
+	}
+}
+
+// The newest document and the count come in one request: the listing by
+// creation time, newest first, one row.
+func TestNewestDocumentReadsOneRow(t *testing.T) {
+	calls := 0
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		q := r.URL.Query()
+		if q.Get("time_field") != "created_at" || q.Get("limit") != "1" || q.Has("start_date") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"d9","created_at":"2026-10-26T11:00:00Z"}],"total":4321}`))
+	})
+	n, newest, err := c.NewestDocument(context.Background(), "b")
+	if err != nil || n != 4321 || !newest.Equal(time.Date(2026, 10, 26, 11, 0, 0, 0, time.UTC)) || calls != 1 {
+		t.Fatalf("%d %v %v (%d calls)", n, newest, err, calls)
+	}
+	empty := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"items":[],"total":0}`)) })
+	if n, newest, err := empty.NewestDocument(context.Background(), "b"); err != nil || n != 0 || !newest.IsZero() {
+		t.Errorf("empty bank: %d %v %v", n, newest, err)
+	}
+}
+
+// The queued operations of one status come page by page (100, the API's
+// most), up to the pages asked; a longer queue says it was not read whole.
+func TestQueuedOperationsOfPagesAndSaysWhenCut(t *testing.T) {
+	var offsets []string
+	total := 150
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("status") != "processing" || q.Get("limit") != "100" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		offsets = append(offsets, q.Get("offset"))
+		off, _ := strconv.Atoi(q.Get("offset"))
+		ops := ""
+		for i := off; i < min(off+100, total); i++ {
+			if ops != "" {
+				ops += ","
+			}
+			ops += `{"id":"op` + strconv.Itoa(i) + `","operation_type":"batch_retain","status":"processing","document_id":"conversation:s` + strconv.Itoa(i) + `"}`
+		}
+		_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(total) + `,"operations":[` + ops + `]}`))
+	})
+	ops, complete, err := c.QueuedOperationsOf(context.Background(), "b", "processing", 5)
+	if err != nil || !complete || len(ops) != 150 || ops[149].DocumentID != "conversation:s149" || ops[0].Type != "batch_retain" || len(offsets) != 2 {
+		t.Fatalf("%v %v %d %v", err, complete, len(ops), offsets)
+	}
+	total, offsets = 1000, nil
+	if ops, complete, err := c.QueuedOperationsOf(context.Background(), "b", "processing", 2); err != nil || complete || len(ops) != 200 || len(offsets) != 2 {
+		t.Errorf("cut: %v %v %d %v", err, complete, len(ops), offsets)
+	}
+}

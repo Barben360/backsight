@@ -59,6 +59,9 @@ type State struct {
 	// documents the server holds; every send holds until one does
 	// (issue 285 review LOW-4). Doctor shows it.
 	PurgeHold *PurgeHold `json:"purge_hold,omitempty"`
+	// PurgeGuard: the periodic look for tombstoned documents a client
+	// unaware of tombstones wrote again (backsight issue 5).
+	PurgeGuard *PurgeGuard `json:"purge_guard,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -180,6 +183,36 @@ type PurgeHold struct {
 	Unchecked bool      `json:"unchecked,omitempty"`
 	Error     string    `json:"error"`
 	At        time.Time `json:"at"`
+}
+
+// PurgeGuard is where the look for recreated purged documents stands:
+// Hindsight 1.1.0 recreates a deleted document on append, so an older
+// binary, or any client unaware of tombstones, can bring a purged id back.
+type PurgeGuard struct {
+	Bank string `json:"bank"`
+	// Newest: the creation time, in the server's clock, of the newest
+	// document seen; the next look lists the documents created since, less
+	// an overlap.
+	Newest time.Time `json:"newest,omitempty"`
+	// FullAt: the last look at every tombstone; Tombstones: how many
+	// tombstoned documents there were then (more now: look at all again).
+	FullAt     time.Time `json:"full_at,omitempty"`
+	Tombstones int       `json:"tombstones,omitempty"`
+	CheckedAt  time.Time `json:"checked_at"`
+	// Waiting: tombstoned documents the server holds again, not purged
+	// again yet, and why. Each look reads them again.
+	Waiting []Recreated `json:"waiting,omitempty"`
+	// Purged: the documents the last purge again removed, and when.
+	Purged   []string  `json:"purged,omitempty"`
+	PurgedAt time.Time `json:"purged_at,omitempty"`
+}
+
+// Recreated is a tombstoned document the server holds again.
+type Recreated struct {
+	Document string `json:"document"`
+	Session  string `json:"session,omitempty"`
+	Project  string `json:"project,omitempty"`
+	Why      string `json:"why,omitempty"`
 }
 
 // RestoreEpoch is the bank restore epoch this client reconciled with.
