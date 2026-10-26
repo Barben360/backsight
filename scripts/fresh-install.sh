@@ -12,6 +12,8 @@
 # (default bs-fresh) so a machine's own install is left alone; KEEP=1
 # leaves the stack and the work directory; WORK is the parent of the run's
 # own directory (it must allow executables); only the run's is removed.
+# BACKSIGHT_HF_CACHE (scripts/hf-cache.sh) seeds the server's model cache
+# from a tar and saves it there.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck source=scripts/ports.sh
@@ -31,6 +33,8 @@ bin=$work/bin/backsight
 # shellcheck source=scripts/update-chain.sh
 . "$root/scripts/update-chain.sh"
 uc_build "$bin"
+# shellcheck source=scripts/hf-cache.sh
+. "$root/scripts/hf-cache.sh"
 export HOME=$work/home BACKSIGHT_HOME=$work/backsight
 unset CLAUDE_CONFIG_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
 mkdir -p "$HOME"
@@ -47,6 +51,7 @@ cleanup() {
   fi
   if [ "${KEEP:-}" != 1 ]; then
     [ -f "$BACKSIGHT_HOME/data/server/compose.yaml" ] && compose down -v >/dev/null 2>&1 || true
+    [ -z "${BACKSIGHT_HF_CACHE:-}" ] || docker volume rm -f "${project}_hf_cache" >/dev/null 2>&1 || true # seeded, if setup never ran
     rm -rf "$work"
   fi
   exit $status
@@ -78,6 +83,7 @@ jq -e '.error.secrets == ["llm_api_key"]' "$work/needs-key.json" >/dev/null || f
 
 # 3. The user types the key (here: the mock's placeholder), the agent resumes.
 printf 'mock-not-a-key\n' | "$bin" secret set llm_api_key >/dev/null
+hfc_seed "$project"
 set +e
 "$bin" setup --resume --non-interactive --json > "$work/setup.json" 2> "$work/progress.jsonl"
 code=$?
@@ -86,6 +92,7 @@ set -e
 jq -e '.ok and ([.data.steps[] | select(.name == "verify")][0].status == "done")' "$work/setup.json" >/dev/null || fail "verify did not pass"
 grep -q '"event":"progress"' "$work/progress.jsonl" || fail "no progress lines on stderr"
 [ "$(claude_rules)" != "$rules_before" ] || fail "setup left settings.json as it was: the undo check below would prove nothing"
+hfc_save "$project"
 
 # 4. The client's own paths reach the memory: a note is stored, and a
 # search answers with hits. Hindsight's mock LLM "extracts" the lines of

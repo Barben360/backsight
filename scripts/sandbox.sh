@@ -5,11 +5,14 @@
 # BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; the UI takes port + 1111).
 # SANDBOX_PROJECT names the compose project (default bs-sandbox; never
 # backsight, the machine's own install, which cleanup would wipe); KEEP=1
-# leaves the stack running.
+# leaves the stack running. BACKSIGHT_HF_CACHE (scripts/hf-cache.sh) seeds
+# the server's model cache from a tar and saves it there.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck source=scripts/ports.sh
 . "$root/scripts/ports.sh"
+# shellcheck source=scripts/hf-cache.sh
+. "$root/scripts/hf-cache.sh"
 port=$(slot_port 28300 "${1:-}")
 project=${SANDBOX_PROJECT:-bs-sandbox}
 [ "$project" != backsight ] || { echo "SANDBOX_PROJECT=backsight would be the machine's own install" >&2; exit 2; }
@@ -42,11 +45,13 @@ for name in api_key ui_key db_password; do
   openssl rand -hex 24 | "$bin" secret set "$name" >/dev/null
 done
 "$bin" server render >/dev/null
+hfc_seed "$project"
 docker compose -p "$project" -f "$BACKSIGHT_HOME/data/server/compose.yaml" --env-file "$BACKSIGHT_HOME/data/server/.env" up -d --quiet-pull
 for _ in $(seq 1 120); do
   curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 && break
   sleep 5
 done
 curl -fsS "http://127.0.0.1:$port/health" >/dev/null
+hfc_save "$project"
 "$bin" bank apply
 (cd "$root" && SANDBOX_HOME="$BACKSIGHT_HOME" go test -tags sandbox -count=1 -v ./internal/sandbox/)
