@@ -197,6 +197,11 @@ type Cursor struct {
 	Backfill bool `json:"backfill,omitempty"`
 	// NotesReplayed: backfill replayed the session's explicit saves.
 	NotesReplayed bool `json:"notes_replayed,omitempty"`
+	// Generation: how many times a re-attribution sent this session again
+	// (retain reattribute). It salts the operation ids, which Hindsight
+	// collapses when repeated: the same records sent again to a deleted
+	// document must not read as the original send.
+	Generation int `json:"generation,omitempty"`
 	// SegmentDocs: the document each project's Segments count is of, when
 	// it is not DocumentID's (a purge moved the project to a successor id,
 	// LiveDocumentID).

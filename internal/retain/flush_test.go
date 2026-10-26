@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,9 +51,11 @@ type fakeHS struct {
 	// control: the items retained into a control bank (kept out of
 	// retains, which are the sessions' sends).
 	control      []hindsight.RetainItem
-	deleted      []string        // documents deleted, in order
-	deleteStatus int             // non-zero: document deletes answer with it
-	failGet      map[string]bool // reads of these documents answer 500
+	deleted      []string            // documents deleted, in order
+	tags         map[string][]string // each document's tags (its items' last, or a PATCH's)
+	patched      []string            // documents whose tags a PATCH replaced, in order
+	deleteStatus int                 // non-zero: document deletes answer with it
+	failGet      map[string]bool     // reads of these documents answer 500
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +106,10 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		h.seenOps[body.OperationID] = true
 		for _, it := range body.Items {
 			h.retains = append(h.retains, it)
+			if h.tags == nil {
+				h.tags = map[string][]string{}
+			}
+			h.tags[it.DocumentID] = it.Tags
 			if !h.stale || h.docs[it.DocumentID] == nil {
 				h.docs[it.DocumentID] = it.Metadata
 			}
@@ -113,6 +120,34 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.ops = append(h.ops, body.OperationID)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/documents"):
+		type item struct {
+			ID       string            `json:"id"`
+			Tags     []string          `json:"tags"`
+			Metadata map[string]string `json:"document_metadata"`
+		}
+		var items []item
+		for id, meta := range h.docs {
+			if strings.HasPrefix(id, "conversation:") || strings.HasPrefix(id, "subagent:") || strings.HasPrefix(id, "note:") {
+				items = append(items, item{ID: id, Tags: h.tags[id], Metadata: meta})
+			}
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+		raw, _ := json.Marshal(map[string]any{"items": items, "total": len(items)})
+		_, _ = w.Write(raw)
+	case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/documents/"):
+		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
+		if _, ok := h.docs[id]; !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body struct {
+			Tags []string `json:"tags"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		h.tags[id] = body.Tags // the metadata stays (E32)
+		h.patched = append(h.patched, id)
 		_, _ = w.Write([]byte(`{"success":true}`))
 	case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):
 		h.gets++

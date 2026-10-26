@@ -407,6 +407,8 @@ type dropped struct {
 	// PastSince: the session started before retain_since but no backfill
 	// queue takes it back: live retain resends it.
 	PastSince bool `json:"past_since,omitempty"`
+	// Generation: a re-attribution's re-send (Cursor.Generation).
+	Generation int `json:"generation,omitempty"`
 }
 
 func droppedPath(cursorDir, sid string) string { return filepath.Join(cursorDir, sid+".dropped") }
@@ -431,6 +433,7 @@ func (f *Flusher) addDropped(sid string, m dropped) error {
 		d.Records[u] = true
 	}
 	d.PastSince = d.PastSince || m.PastSince
+	d.Generation = max(d.Generation, m.Generation)
 	if len(d.Records) == 0 && !d.PastSince {
 		return nil
 	}
@@ -458,7 +461,7 @@ func (f *Flusher) pruneDropped(sid string) {
 		}
 	}
 	if len(d.Records) == 0 {
-		_ = os.Remove(p)
+		_ = os.Remove(p) // the cursor keeps the generation
 		return
 	}
 	d.PastSince = false // the document exists now
