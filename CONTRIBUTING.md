@@ -88,4 +88,4 @@ sha256sum -c --ignore-missing checksums.txt
 
 `minisign.next.pub` is the next key. Binaries embed both (`internal/signing`, listed by `backsight version --json`), so a key rotation needs no trust reset; the release stops if its binary trusts any other key. Releases are built only from tags on `main`, by actions pinned to commit SHAs. See [SECURITY.md](SECURITY.md#release-signing) for key rotation.
 
-Maintainers: `make snapshot` builds and signs locally (the key comes from `pass`), and tags `v*` publish through `.github/workflows/release.yml`.
+Maintainers: `make snapshot` builds and signs locally with a throwaway key (never the release key, which only `.github/workflows/release.yml` holds), and tags `v*` publish through that workflow.
