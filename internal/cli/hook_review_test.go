@@ -360,3 +360,28 @@ func TestFamiliesJoinTheProjectCallWhenOn(t *testing.T) {
 		t.Errorf("a stale families file was used: %q", j)
 	}
 }
+
+// A family member kept out of memory since the families file was built is
+// not searched; related and family together stay within 10 projects.
+func TestFamiliesLeaveOutExcludedMembersAndStayCapped(t *testing.T) {
+	home := hookHome(t)
+	spec := filepath.Join(home, "billing-spec")
+	_ = os.MkdirAll(spec, 0o700)
+	raw, _ := json.Marshal(retain.Families{BuiltAt: time.Now(), Of: map[string][]string{"billing": {"billing-spec", "fam-a", "fam-b"}},
+		Roots: map[string]string{"billing-spec": spec}})
+	_ = os.MkdirAll(pathsOf(home).State, 0o700)
+	_ = os.WriteFile(pathsOf(home).FamiliesFile(), raw, 0o600)
+	related := `related = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]` + "\n"
+	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(related), 0o600)
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	base, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(base, []byte("[recall]\nfamilies = true\n[privacy]\nexclude_paths = ["+strconvQuote(spec)+"]\n")...), 0o600)
+	_, out, _ := run(t, "recall-prompt", "--cwd", filepath.Join(home, "billing"), "--json", longPrompt)
+	var env struct {
+		Data recallPromptResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if got := strings.Join(env.Data.Linked, ","); got != "r1,r2,r3,r4,r5,r6,r7,r8,r9,fam-a" {
+		t.Errorf("linked %q: the excluded member left out, the union capped at 10", got)
+	}
+}

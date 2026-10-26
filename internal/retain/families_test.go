@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func TestFamiliesLinkProjectsWorkedOnTogether(t *testing.T) {
 	// spec and old-stack linked too: pairwise, backsight does not get old-stack.
 	add(turns("s9", 3, at, "spec", "old-stack"))
 	add(turns("s10", 3, at, "old-stack", "spec"))
-	f := ComputeFamilies(all)
+	f := ComputeFamilies(all, nil)
 	want := map[string][]string{"backsight": {"spec"}, "spec": {"backsight", "old-stack"}, "old-stack": {"spec"}}
 	if !reflect.DeepEqual(f.Of, want) {
 		t.Errorf("families %v, want %v; links %+v", f.Of, want, f.Links)
@@ -72,7 +73,7 @@ func TestAFamilyKeepsItsTenMostCoTouchedProjects(t *testing.T) {
 	for i := range 12 {
 		all = append(all, turns("c", i, at, "app", fmt.Sprintf("lib%02d", i))...)
 	}
-	f := ComputeFamilies(all)
+	f := ComputeFamilies(all, nil)
 	got := f.Of["app"]
 	if len(got) != MaxFamily || got[0] != "lib11" || got[9] != "lib02" {
 		t.Errorf("app's family %v", got)
@@ -86,7 +87,9 @@ func TestFamiliesComeFromTheLastSixtyDays(t *testing.T) {
 	write := func(ts []TurnEntry) {
 		for _, x := range ts {
 			x.Agent = x.Turn
-			e.f.Attribution.saveAgent(x)
+			if _, err := e.f.Attribution.keepAgent(x); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	now := clockAt(12, 0)
@@ -95,7 +98,7 @@ func TestFamiliesComeFromTheLastSixtyDays(t *testing.T) {
 	write(turns("s3", 3, now.Add(-70*24*time.Hour), "clinic", "site"))
 	write(turns("s4", 3, now.Add(-70*24*time.Hour), "clinic", "site"))
 	path := filepath.Join(t.TempDir(), "families.json")
-	f, err := RefreshFamilies(e.f.Attribution, path, now)
+	f, err := RefreshFamilies(e.f.Attribution, path, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,5 +115,65 @@ func TestFamiliesComeFromTheLastSixtyDays(t *testing.T) {
 	_ = os.WriteFile(path, []byte("{"), 0o600)
 	if _, err := LoadFamilies(path); err == nil {
 		t.Error("a broken file read as empty")
+	}
+}
+
+// The thresholds hold at their bounds: exactly 5 turns of exactly 2
+// sessions making exactly 20 % of the larger project's turns link; one
+// turn, one session or one percent less does not.
+func TestFamilyThresholdsAtTheirBounds(t *testing.T) {
+	at := clockAt(9, 0)
+	pair := func(coA, coB, alone int, sessB string) Families {
+		all := append(turns("s1", coA, at, "app", "lib"), turns(sessB, coB, at, "lib", "app")...)
+		return ComputeFamilies(append(all, turns("s3", alone, at, "app")...), nil)
+	}
+	for _, c := range []struct {
+		name            string
+		coA, coB, alone int
+		sessB           string
+		linked          bool
+	}{
+		{"5 turns, 2 sessions, 20 %", 3, 2, 20, "s2", true},
+		{"4 turns", 2, 2, 16, "s2", false},
+		{"one session", 3, 2, 20, "s1", false},
+		{"under 20 % (5 of 26)", 3, 2, 21, "s2", false},
+	} {
+		f := pair(c.coA, c.coB, c.alone, c.sessB)
+		if got := len(f.Of["app"]) == 1; got != c.linked {
+			t.Errorf("%s: linked %v, want %v (%+v)", c.name, got, c.linked, f.Links)
+		}
+	}
+}
+
+// A project kept out of memory or forgotten since its turns were recorded
+// is no member, whatever its co-touch.
+func TestFamiliesLeaveOutProjectsExcludedOrForgottenSince(t *testing.T) {
+	e := newEnv(t)
+	e.attributed()
+	secret := e.ownRepo("secret-plans", "")
+	now := clockAt(12, 0)
+	for _, sid := range []string{"s1", "s2"} {
+		for _, x := range turns(sid, 3, now.Add(-time.Hour), "backsight", "secret-plans", "spec") {
+			x.Agent = x.Turn
+			x.Votes.Roots = map[string]string{"secret-plans": secret}
+			if _, err := e.f.Attribution.keepAgent(x); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "families.json")
+	f, _ := RefreshFamilies(e.f.Attribution, path, now, nil)
+	if !slices.Contains(f.Of["backsight"], "secret-plans") || f.Roots["secret-plans"] != secret {
+		t.Fatalf("before: %+v", f)
+	}
+	e.f.Attribution.Exclude = []string{secret} // backsight pause --project, later
+	f, _ = RefreshFamilies(e.f.Attribution, path, now, nil)
+	if slices.Contains(f.Of["backsight"], "secret-plans") || len(f.Of["secret-plans"]) != 0 || !slices.Contains(f.Of["backsight"], "spec") {
+		t.Errorf("after the exclusion: %+v", f.Of)
+	}
+	e.f.Attribution.Exclude = nil
+	f, _ = RefreshFamilies(e.f.Attribution, path, now, func(p string) bool { return p != "spec" }) // forget --project spec
+	if slices.Contains(f.Of["backsight"], "spec") || !slices.Contains(f.Of["backsight"], "secret-plans") {
+		t.Errorf("after forgetting spec: %+v", f.Of)
 	}
 }
