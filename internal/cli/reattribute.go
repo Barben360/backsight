@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,12 +15,16 @@ import (
 )
 
 type reattributeFlags struct {
-	plan    bool
-	answers []string
+	plan              bool
+	allowSubscription bool
+	answers           []string
 }
 
 func (f reattributeFlags) resume() string {
 	cmd := "backsight retain reattribute"
+	if f.allowSubscription {
+		cmd += " --allow-subscription"
+	}
 	for _, a := range f.answers {
 		cmd += " --answer " + shellWord(a)
 	}
@@ -38,10 +43,11 @@ type reattributeResult struct {
 	// Action: planned | nothing | done | resends_pending
 	Action   string                   `json:"action"`
 	Plan     retain.ReattributionPlan `json:"plan"`
-	Backup   string                   `json:"backup,omitempty"` // the verified archive taken first
-	Retagged []string                 `json:"retagged"`         // documents moved in place
-	Queued   []string                 `json:"queued"`           // sessions to be sent again by the next flush
-	Failed   []string                 `json:"failed,omitempty"` // "<document or session>: <why>"
+	Backup   string                   `json:"backup,omitempty"`   // the verified archive taken first
+	Retagged []string                 `json:"retagged"`           // documents moved in place
+	Deferred int                      `json:"deferred,omitempty"` // moves left to a later run (MaxRetags)
+	Queued   []string                 `json:"queued"`             // sessions to be sent again by the next flush
+	Failed   []string                 `json:"failed,omitempty"`   // "<document or session>: <why>"
 	Note     string                   `json:"note,omitempty"`
 }
 
@@ -52,7 +58,8 @@ func newRetainReattributeCmd(e *env) *cobra.Command {
 		Short: "File the memory already sent under the projects today's rules give",
 		Long: `Judges every document sent from this machine against today's project rules.
 A document whose whole content belongs to another project is re-tagged in
-place, with no extraction (the server rebuilds its observations). A session whose documents mix projects is sent again per
+place, with no extraction; the server then consolidates the moved memories
+again (a few LLM calls each), at most ` + strconv.Itoa(maxRetags) + ` documents per run. A session whose documents mix projects is sent again per
 project, which costs extraction: it waits for --answer resend=yes.
 A verified backup comes first. Running it again does nothing more.`,
 		Args: usageArgs(cobra.NoArgs),
@@ -63,6 +70,7 @@ A verified backup comes first. Running it again does nothing more.`,
 	}
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list what would move and what a re-send would cost, change nothing")
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: resend=yes|no, backup=done (a remote server, backed up on its host)")
+	cmd.Flags().BoolVar(&f.allowSubscription, "allow-subscription", false, "with the claude-code provider, let the server's work after the moves use your Claude subscription")
 	return cmd
 }
 
@@ -97,6 +105,18 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 		return res, err
 	}
 	res.Bank = cfg.Server.Bank
+	// Never on a half-restored or half-updated server, nor before the
+	// restore epoch is reconciled (as a flush).
+	if f.plan {
+		if err := fl.ReattributionGuard(ctx); err != nil {
+			return res, &output.Error{Code: output.Blocked, Message: "not judged now: " + err.Error()}
+		}
+	} else {
+		reconcile(ctx, fl)
+		if err := fl.ReattributionGuard(ctx); err != nil {
+			return res, &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
+		}
+	}
 	prices := retain.PricesFor(cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 	plan := func() (retain.ReattributionPlan, map[string][]string, error) {
 		docs, err := fl.Client.ListDocuments(ctx, cfg.Server.Bank)
@@ -118,6 +138,16 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 	if len(p.Retags) == 0 && (!resend || len(p.Resends) == 0) {
 		fl.KeepDecisions(p)
 		return finishReattribute(res, f, opt, answers)
+	}
+	// The moves make the server consolidate again: on a subscription that
+	// is the user's to allow, as for a backfill.
+	if cfg.LLM.Provider == "claude-code" && !f.allowSubscription {
+		return res, &output.Error{Code: output.NeedsUser, Resume: f.resume() + " --allow-subscription",
+			Message: "the moves make the server consolidate the moved memories again, which the claude-code provider runs on your Claude subscription: add --allow-subscription to go on; nothing was changed"}
+	}
+	answered := map[string]bool{} // the sessions the cost was shown for
+	for _, r := range p.Resends {
+		answered[r.Session] = true
 	}
 	if !opt.backedUp {
 		b, err := createBackup(ctx, nil)
@@ -155,13 +185,21 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 	}
 	defer func() { _ = l.Release() }()
 	res.Note = note
-	// Under the lock: no flush runs, so the plan applied is the server's now.
+	// Under the lock: no flush runs, and nothing is queued on the server,
+	// so the plan applied is the server's now.
+	if err := fl.ReattributionGuard(ctx); err != nil {
+		return res, &output.Error{Code: output.Blocked, Message: "nothing was changed: " + err.Error()}
+	}
 	p, tags, err := plan()
 	res.Plan = p
 	if err != nil {
 		return res, err
 	}
-	for _, r := range p.Retags {
+	for i, r := range p.Retags {
+		if i == maxRetags {
+			res.Deferred = len(p.Retags) - maxRetags
+			break
+		}
 		if err := fl.ApplyRetag(ctx, r, tags[r.Document]); err != nil {
 			res.Failed = append(res.Failed, r.Document+": "+err.Error())
 			continue
@@ -171,6 +209,9 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 	fl.KeepDecisions(p)
 	if resend {
 		for _, r := range p.Resends {
+			if !answered[r.Session] {
+				continue // planned after the answer: its cost was not shown
+			}
 			if err := fl.ApplyResend(ctx, r); err != nil {
 				res.Failed = append(res.Failed, r.Session+": "+err.Error())
 				continue
@@ -181,11 +222,15 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 	return finishReattribute(res, f, opt, answers)
 }
 
+// maxRetags caps the moves of one run: each makes the server consolidate
+// the moved memories again; the rest waits for the next run.
+const maxRetags = 50
+
 // finishReattribute gives the run's outcome its exit code: 40 when a write
 // failed (the same command finishes it), 10 when re-sends wait for an
 // answer, else 0.
 func finishReattribute(res reattributeResult, f reattributeFlags, opt reattributeOptions, answers map[string]string) (reattributeResult, error) {
-	pending := len(res.Plan.Resends) > 0 && len(res.Queued) == 0
+	pending := len(res.Plan.Resends) > len(res.Queued)
 	switch {
 	case len(res.Failed) > 0:
 		res.Action = "partial"
@@ -198,7 +243,7 @@ func finishReattribute(res reattributeResult, f reattributeFlags, opt reattribut
 			Questions: []setup.Question{{ID: "resend", Required: true, Options: []setup.Option{
 				{Value: "yes", Label: "send them again per project", Cost: estimateText(c)},
 				{Value: "no", Label: "leave them as they are"}},
-				Prompt: fmt.Sprintf("%d session(s) hold documents that mix projects: send them again per project (their documents are deleted first)?", len(res.Plan.Resends))}},
+				Prompt: fmt.Sprintf("%d session(s) hold documents that mix projects: send them again per project? Their documents are deleted first; %d record(s) now kept out of memory (an excluded path, a pause) are not sent again and so leave the memory for good", len(res.Plan.Resends), keptOut(res.Plan))}},
 			Message: fmt.Sprintf("%d session(s) wait for --answer resend=yes (%s); the moves in place are done", len(res.Plan.Resends), estimateText(c))}
 	case pending:
 		res.Action = "resends_pending"
@@ -208,6 +253,15 @@ func finishReattribute(res reattributeResult, f reattributeFlags, opt reattribut
 		res.Action = "done"
 	}
 	return res, nil
+}
+
+// keptOut counts the records a plan's re-sends leave out.
+func keptOut(p retain.ReattributionPlan) int {
+	n := 0
+	for _, r := range p.Resends {
+		n += r.KeptOut
+	}
+	return n
 }
 
 // estimateText: an estimate's tokens and, when prices are known, cost.
@@ -246,6 +300,12 @@ func reattributeText(r reattributeResult) string {
 	}
 	if len(r.Queued) > 0 {
 		fmt.Fprintf(&b, "%d session(s) queued: the next jobs tick sends them again\n", len(r.Queued))
+	}
+	if r.Deferred > 0 {
+		fmt.Fprintf(&b, "%d move(s) left to the next run (at most %d per run)\n", r.Deferred, maxRetags)
+	}
+	for _, h := range p.Held {
+		fmt.Fprintf(&b, "left alone: session %s (%s)\n", h.Session, h.Reason)
 	}
 	for _, f := range r.Failed {
 		fmt.Fprintf(&b, "failed %s\n", f)

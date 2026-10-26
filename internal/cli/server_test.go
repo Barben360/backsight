@@ -209,6 +209,8 @@ var (
 	mentalGetDelay     time.Duration     // a slow page read
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
+	docPatchFails      atomic.Bool       // PATCH /documents/… answers 503
+	docPatches         []string          // documents whose tags a PATCH replaced
 	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
 	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
 	requireKey         atomic.Bool       // the fake checks the bearer key against acceptedKey
@@ -259,6 +261,8 @@ func fakeHindsight(t *testing.T) (port int) {
 	mentalModels, mentalCalls, mentalGetDelay = map[string]string{}, nil, 0
 	mentalCreateStatus.Store(0)
 	docDeleteFails.Store(false)
+	docPatchFails.Store(false)
+	docPatches = nil
 	epochDoc = ""
 	epochStatus.Store(0)
 	requireKey.Store(false)
@@ -352,7 +356,12 @@ func fakeHindsight(t *testing.T) (port int) {
 			bank := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents")
 			var items []string
 			for id := range bankDocs[bank] {
-				items = append(items, `{"id":"`+id+`","tags":[]}`)
+				tags, _ := json.Marshal(docInfos[bank+"/"+id].tags)
+				meta := docs[bank+"/"+id]
+				if len(meta) == 0 {
+					meta = json.RawMessage(`{}`)
+				}
+				items = append(items, `{"id":"`+id+`","tags":`+string(tags)+`,"document_metadata":`+string(meta)+`}`)
 			}
 			if epochDoc != "" && strings.HasSuffix(bank, "-control") && !bankDocs[bank]["backsight:epoch"] {
 				items = append(items, `{"id":"backsight:epoch","tags":[]}`)
@@ -473,6 +482,25 @@ func fakeHindsight(t *testing.T) (port int) {
 				}
 				_, _ = w.Write([]byte(`{"operation_id":"op1"}`))
 			}
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/documents/"):
+			bank, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
+			in, ok := docInfos[bank+"/"+id]
+			switch {
+			case docPatchFails.Load():
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			case !ok:
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			var body struct {
+				Tags []string `json:"tags"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			in.tags = body.Tags
+			docInfos[bank+"/"+id] = in
+			docPatches = append(docPatches, id)
+			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && docDeleteFails.Load():
 			w.WriteHeader(http.StatusInternalServerError)
 		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
@@ -580,7 +608,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				return
 			}
 			text, _ := json.Marshal(docInfos[bank+"/"+id].text)
-			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `,"original_text":` + string(text) + `}`))
+			tags, _ := json.Marshal(docInfos[bank+"/"+id].tags)
+			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `,"original_text":` + string(text) + `,"tags":` + string(tags) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/llm-requests/stats"):
 			calls := statsCalls.Add(1)
 			if statsDown.Load() || (statsFailAfter.Load() > 0 && calls > statsFailAfter.Load()) {

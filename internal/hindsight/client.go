@@ -420,6 +420,7 @@ func (c *Client) RetainNow(ctx context.Context, bank string, items []RetainItem)
 // Document is what backsight reads back of a stored document.
 type Document struct {
 	ID          string            `json:"id"`
+	Tags        []string          `json:"tags"`
 	Metadata    map[string]string `json:"document_metadata"`
 	MemoryUnits int               `json:"memory_unit_count"`
 	// OriginalText: the text retained (a purge hashes a note's, M5 review
