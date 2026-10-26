@@ -13,6 +13,20 @@ You use Claude Code as usual. backsight works through hooks and memory tools:
 
 Hooks never block Claude Code: if the server is down, recall is skipped and writes wait in a local queue. When memory is unavailable, you see one message in the session.
 
+## The line at session start
+
+Each session starts with one line from backsight (Claude Code shows it after `SessionStart:startup says:`). Its first emoji tells the memory's state, and 🗂️ names the project:
+
+| Line | Means |
+|---|---|
+| 🧠 backsight · 🗂️ my-project · memory on | Recall and recording are on. |
+| ⏸️ backsight · 🗂️ my-project · recall on, this project is not recorded | The project is excluded: `backsight pause --project`, `privacy.exclude_paths`, or a `.backsight.toml` with `retain = false`. Memories are still recalled. |
+| 🔕 backsight · 🗂️ my-project · recall on, recording off | `components.write = false` in `config.toml`: no session is recorded. |
+| ⚠️ backsight · 🗂️ my-project · memory unavailable (server unreachable) · run `backsight doctor` | No recall in this session for now; sessions are sent later. See [the server is down](troubleshooting.md#the-server-is-down). |
+| 🛠️ backsight · 🗂️ my-project · memory unavailable (maintenance in progress), back when it ends | A backup, restore or update is running. |
+
+More lines may follow: ⬆️ a newer release ([update](update.md)), ⚠️ Claude Code's wiring drifted (run `backsight client install`), ⚠️ sessions quarantined (run `backsight doctor`). The first session after setup also starts with 👋 and says where sessions are stored. If memory fails later in a session, one ⚠️ or 🛠️ line says so, once.
+
 ## Recognizing a memory
 
 When Claude uses a memory, it cites it on its own line:
