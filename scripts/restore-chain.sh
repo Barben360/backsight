@@ -15,10 +15,11 @@ rc_toml() { sed -n "s/^$1 *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$2" | head -n 1; 
 rc_bank() { local b; b=$(rc_toml bank "$BACKSIGHT_HOME/config/config.toml"); echo "${b:-claude-memory}"; }
 rc_key() { rc_toml api_key "$BACKSIGHT_HOME/config/secrets.toml"; }
 
-# rc_session <sid>: a settled three-record session (two hours old, so the
-# tick's 30-minute wait is over) in the scratch profile's transcripts.
+# rc_session <sid> [project]: a settled three-record session (two hours
+# old, so the tick's 30-minute wait is over) in the scratch profile's
+# transcripts, in directory ~/work/<project> (default restore-proof).
 rc_session() {
-  local sid=$1 dir=$HOME/.claude/projects/-restore-proof cwd=$HOME/work/restore-proof i ts role content
+  local sid=$1 dir=$HOME/.claude/projects/-restore-proof cwd=$HOME/work/${2:-restore-proof} i ts role content
   mkdir -p "$dir" "$cwd"
   : > "$dir/$sid.jsonl"
   for i in 1 2 3; do

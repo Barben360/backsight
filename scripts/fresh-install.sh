@@ -163,7 +163,33 @@ jq -e '.ok and .data.ok and ([.data.restored[]] | add > 0)' "$work/backup-verify
 # session's second segment, lost too, is appended again, alone.
 rc_send restore-proof-lost
 rc_live restore-proof-live 3 4 >/dev/null
+
+# 8a. A purge made after the backup survives the restore (M5 review rules):
+# a session of its own project goes out, is purged with forget --project,
+# and must not come back, neither from the restore nor from the ticks after.
+purged=restore-proof-purged
+rc_session "$purged" purge-proof
+"$bin" retain flush --json --session "$purged" > "$work/flush-$purged.json" || { cat "$work/flush-$purged.json" >&2; fail "retain flush of $purged failed"; }
+rc_wait "$purged" >/dev/null
+rc_queue_wait # its facts extracted, tagged project:purge-proof
+"$bin" forget --json --project purge-proof --purge --answer confirm_project=purge-proof > "$work/forget-purge.json" ||
+  { cat "$work/forget-purge.json" >&2; fail "forget --project purge-proof --purge failed"; }
+jq -e --arg d "conversation:$purged" '.ok and (.data.action == "purged") and ([.data.documents[].id] | index($d) != null) and ((.data.note // "") | contains("not yet in bank") | not)' \
+  "$work/forget-purge.json" >/dev/null || { cat "$work/forget-purge.json" >&2; fail "the purge did not delete conversation:$purged and record it in the control bank"; }
+[ -z "$(rc_meta "$purged")" ] || fail "conversation:$purged survived its purge"
+jq -e --arg d "conversation:$purged" '[.tombstones[]?.document] | index($d) != null' "$BACKSIGHT_HOME/state/state.json" >/dev/null || fail "no tombstone for $purged in state.json"
+purged_cursor=$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$purged.json")
+"$bin" restore --plan --json "$archive" > "$work/restore-plan.json" || { cat "$work/restore-plan.json" >&2; fail "restore --plan failed"; }
+jq -e --arg d "conversation:$purged" '([.data.purged_after_archive[]?.document] | index($d) != null) and ([.data.steps[].name] | index("purges") != null)' \
+  "$work/restore-plan.json" >/dev/null || { cat "$work/restore-plan.json" >&2; fail "restore --plan does not list the purge made after the archive"; }
+
 rc_restore_resends "$archive" restore-proof-lost restore-proof-kept restore-proof-live
+# The restored control bank got the purge back, and the ticks sent nothing of it.
+curl -fsS -H "Authorization: Bearer $(rc_key)" "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)-control/documents/backsight%3Atombstones" |
+  jq -e --arg d "conversation:$purged" '.document_metadata.tombstones | fromjson | map(.document) | index($d) != null' >/dev/null ||
+  fail "the restored control bank lacks the purge of $purged"
+[ -z "$(rc_meta "$purged")" ] || fail "the purged session $purged was sent again after the restore"
+[ "$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$purged.json")" = "$purged_cursor" ] || fail "the purged session $purged's cursor moved after the restore"
 
 # 9. Update (SPEC §11.7): a failing migration and a failing server smoke
 # each roll back and leave the install working, then the update to the new
@@ -291,4 +317,4 @@ for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/
 done
 backups_after=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 [ "$backups_after" = "$backups_before" ] || { echo "before: $backups_before" >&2; echo "after:  $backups_after" >&2; fail "uninstall changed the backups"; }
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once and the live segment re-appended, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, client and jobs wired again, uninstall) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-appended and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, client and jobs wired again, uninstall) on project $project"
