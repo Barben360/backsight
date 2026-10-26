@@ -1,6 +1,9 @@
 package instructions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -103,5 +106,46 @@ func TestMemorySkillRunsTheReadingGuideCommandsOnly(t *testing.T) {
 		if allows(tools, cmd) {
 			t.Errorf("%q runs unprompted: %s", cmd, tools)
 		}
+	}
+}
+
+// The docs promise that Claude is told never to ask for a key in the
+// conversation: the session guide, which every session gets, says so and
+// names the command that takes a secret instead.
+func TestGuideTellsClaudeNeverToAskForASecret(t *testing.T) {
+	for _, want := range []string{"Never ask the user for a key, token or password", "`backsight secret set`", "terminal"} {
+		if !strings.Contains(Guide, want) {
+			t.Errorf("guide lacks %q: %s", want, Guide)
+		}
+	}
+}
+
+// wordings records the hash of every instruction text per Version: a
+// change of wording without a new Version fails here, so telemetry never
+// mixes two wordings under one version.
+var wordings = map[string]string{
+	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
+}
+
+func wordingHash() string {
+	h := sha256.New()
+	texts := []string{Credit, Guide, ShortGuide, Reminder, Nudge(nil), Nudge([]string{"a", "b"}), DetectorRule, DetectorApproval, GateReason,
+		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
+		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription}
+	for _, s := range Skills("/s") {
+		// AllowedTools lists one entry per docs topic: a new docs page is
+		// not a change of wording.
+		texts = append(texts, s.Name, s.Description, s.ArgumentHint, s.Body)
+	}
+	for _, s := range texts {
+		fmt.Fprintf(h, "%d:%s\n", len(s), s)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func TestVersionMatchesTheWording(t *testing.T) {
+	want, ok := wordings[Version]
+	if got := wordingHash(); !ok || got != want {
+		t.Errorf("instruction texts hash to %s, recorded for %s: %q (ok %v); a wording change needs a new Version and its hash in wordings", got, Version, want, ok)
 	}
 }
