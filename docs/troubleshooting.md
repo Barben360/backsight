@@ -91,6 +91,8 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `restore` | A restore did not finish. | Run the command doctor gives: rerun the restore, or put the safety archive back with `backsight restore <safety archive> --no-safety`. See [backups-and-restore.md](backups-and-restore.md). |
 | `update-incomplete` | An update did not finish. | Run the command doctor gives, usually `backsight update apply`, which resumes it. See [update.md](update.md). |
 | `restore-epoch` | The server was restored and this machine has not caught up. | `backsight jobs tick` (the 15-minute job does it). |
+| `pending-restore` | Putting Claude Code's files back (`setup --undo` or `client config restore`) stopped midway: some files are as they were before that run, others not. | Run the command doctor gives: `backsight setup --undo` resumes the undo; `backsight client config restore <run>` finishes the restore (add `--force` if it refuses a file changed since). |
+| `pending-restore`: files no longer hold backsight's edits | Something rewrote a Claude Code file backsight edited. | `backsight client config apply` puts the edits back, each file backed up first. |
 
 ## Other doctor warnings
 
@@ -107,6 +109,9 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `untagged`: memories without a project tag | A server-side problem: report it (below). |
 | `noise-transverse`: over 20 % of the transverse pool's observations name another project | New sessions go to the right project. Older ones: `backsight forget --project <transverse alias> --source subagent --plan`, then decide, or leave them. |
 | `noise-headless`: headless (SDK) sessions were sent before they were skipped | `backsight forget --project <project> --plan` for each project doctor names, once the plan shows nothing else worth keeping. |
+| `noise-subagent` (info): the share of raw facts that came from subagent reports | Information, not a fault. If one project's subagent reports drown its memories: `backsight forget --project <project> --source subagent --plan`, then decide. |
+| `remotes`: two repositories share a project name | Their memories mix in one pool. Give one of them its own name: `project = "<another name>"` in a `.backsight.toml` at its root, committed so every clone uses it. |
+| `reference-server` (info): the old Hindsight server can be stopped | Shown once `backsight backup verify` passed on backsight's newest backup within the last 7 days. Run the stop command doctor gives: the old server's data is kept, and its start command brings it back. See [install.md](install.md#replacing-an-existing-hindsight-install). |
 
 ## Reporting a problem
 

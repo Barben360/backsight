@@ -5,7 +5,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 ## Conventions
 
 - `--json` (every command): print one JSON envelope `{schema_version, command, ok, data | error}` instead of text. Coding agents use it.
-- `--plan`: show what the command would do, changing nothing. Every command that changes configuration, your files or the server has it.
+- `--plan`: show what the command would do, changing nothing. Commands that change configuration, your files or the server's setup have it. Data operations do not: `secret set`, `backup create`, `store`, `forget <id>` and `retain flush` do what you asked; `retain backfill --plan` and `forget --project --plan` preview the larger ones.
 - `--non-interactive`: never prompt; when an answer or a secret is missing, exit 10 and say what is needed.
 - `--answer id=value` (repeatable) or `--answers-file <file>`: answers for commands that ask questions (`setup`, `uninstall`). Never secrets.
 
@@ -52,6 +52,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight read <id>` | Shows one memory with the facts it was built from. |
 | `backsight store --kind <kind> <text>` | Stores one durable fact. `--project <name>`. |
 | `backsight forget <id>` | Retires a memory (reversible with `--restore`); `--purge --yes` deletes it with its source facts and documents. |
+| `backsight forget --project <name>` | Retires every raw fact of a project in the configured bank (each reversible with `backsight forget <id> --restore`); `--purge` deletes its documents and observations for good. `--source <s>` keeps to the facts of one source (`chat`, `subagent`, `note`) and the observations drawn from them. `--plan` lists the documents and counts; the write needs `--answer confirm_project=<name>`. |
 | `backsight memory scan` | Lists stored memories that look like they hold a secret, with the purge command for each. |
 | `backsight ask <question>` | The server's LLM answers over many memories (costs tokens). `--all` for the whole memory. |
 | `backsight projects` | Lists projects with their memory counts and last activity. |

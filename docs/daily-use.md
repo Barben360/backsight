@@ -25,12 +25,15 @@ If Claude searched and found nothing, it says so. Memories are hints from past s
 
 Each memory belongs to a project: the Git repository you worked in (a worktree counts as its main repository), or the directory outside one. Recall searches the current project together with the transverse project, which holds rules valid everywhere (your preferences, your conventions), and also the whole memory and related projects, with a boost for the current project.
 
-To give a repository another project name, or to keep it out of memory, commit a `.backsight.toml` at its root:
+To give a repository another project name, to search other projects with it, or to keep it out of memory, commit a `.backsight.toml` at its root:
 
 ```toml
 project = "my-project"
+related = ["shared-lib", "infra"]   # projects searched with this one
 # retain = false   # never record sessions in this repository
 ```
+
+`related` lists at most 10 projects, which prompt recall, `memory_search` and `backsight search` search together with the current one, without its boost. The nearest `.backsight.toml` that sets `related` wins (a subdirectory's file over the repository's), and `related = []` clears a parent's list.
 
 ## The language memories are written in
 
@@ -86,6 +89,15 @@ backsight forget <id>
 This retires the memory: recall stops returning it. `backsight forget <id> --restore` brings it back.
 
 For a leaked secret, `backsight forget <id> --purge --yes` deletes the memory, its source facts and the session documents they came from. Backups made before still hold it; the command lists them. `backsight memory scan` lists stored memories that look like they hold a secret, with the purge command for each.
+
+To forget a whole project, start with its plan:
+
+```sh
+backsight forget --project old-prototype --plan
+backsight forget --project old-prototype --answer confirm_project=old-prototype
+```
+
+The plan lists the project's documents and memory counts, changing nothing. The second command retires every raw fact of the project; `--purge` deletes its documents and observations for good instead. `--source subagent` (or `chat`, `note`) keeps to the facts of one source. See [privacy.md](privacy.md#removing-what-was-stored).
 
 ## Pausing memory
 

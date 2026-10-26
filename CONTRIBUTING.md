@@ -67,7 +67,7 @@ Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) 
 
 ## The agent contract
 
-Every command accepts `--json` and prints one envelope `{schema_version, command, ok, data | error}`. Exit codes: `0` ok, `2` invalid invocation, `10` needs the user, `20` blocked by the environment, `30` failed and rolled back, `40` partial and resumable. Commands that change configuration, user files or the server take `--plan`; commands that can prompt take `--non-interactive`. Details for users: [docs/commands.md](docs/commands.md#conventions).
+Every command accepts `--json` and prints one envelope `{schema_version, command, ok, data | error}`. Exit codes: `0` ok, `2` invalid invocation, `10` needs the user, `20` blocked by the environment, `30` failed and rolled back, `40` partial and resumable. Commands that change configuration, user files or the server's setup take `--plan`; data operations (`secret set`, `backup create`, `store`, `forget <id>`) do not; commands that can prompt take `--non-interactive`. Details for users: [docs/commands.md](docs/commands.md#conventions).
 
 ## Commits and pull requests
 

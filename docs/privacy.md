@@ -34,13 +34,17 @@ Redaction can miss a secret in an unusual format. `backsight memory scan` re-che
 | This session, from now on | `/backsight:pause` in Claude Code (or `backsight pause`); `/backsight:pause` again with "resume", or `backsight resume`, to record again. Turns typed while paused are never sent. |
 | A project, on this machine | `backsight pause --project` in its directory: adds it to `privacy.exclude_paths` in `config.toml`. `backsight resume --project` removes it. |
 | A repository, for everyone who clones it | commit a `.backsight.toml` with `retain = false` at its root. |
+| Headless runs, on this machine | `privacy.skip_entrypoints` in `config.toml`: turns Claude Code recorded under one of these entrypoints (glob patterns) are never sent. The default, `["sdk-*"]`, skips Agent SDK runs (`sdk-cli`, `sdk-ts`, `sdk-py`); `[]` sends them too. |
 
 An excluded project gets no briefing either.
+
+doctor's `noise-headless` check names the projects that got headless sessions sent before they were skipped, for `forget --project` below.
 
 ## Removing what was stored
 
 - `backsight forget <id>` retires a memory; recall stops returning it, and `--restore` brings it back.
 - `backsight forget <id> --purge --yes` deletes the memory, its source facts and the documents they came from. Backups made before the purge still hold them; the command lists those backups, which you can delete yourself.
+- `backsight forget --project <name> --plan` lists what a whole project holds in the bank: its documents and its memory counts. Without `--purge`, `backsight forget --project <name>` then retires every raw fact of it (each can be brought back with `backsight forget <id> --restore`); with `--purge`, it deletes those documents and the project's observations for good, and lists the older backups that still hold them. `--source <s>` keeps to one source (`chat`, `subagent`, `note`) and the observations drawn from it. Either way it asks you to type the project name: `--answer confirm_project=<name>`.
 
 ## Secrets on disk
 

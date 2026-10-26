@@ -15,7 +15,7 @@ You are a coding agent (Claude Code or another) asked to give your user a long-t
 | 10 | the user must act | ask each of `error.questions` that has `"asked": true`, ask the user to set each of `error.secrets`, show each of `error.actions` (`run_as_user`, `relogin`, `install`) with its `why`; then run `error.resume` |
 | 20 | blocked by the machine | show `error.message` and the failed pre-flight checks with their `fix`; rerun once fixed |
 | 30 | failed and rolled back | show `error.message`: the machine is as before; rerun once the cause is fixed |
-| 40 | partly done, resumable | show the message, fix if asked, run `backsight setup --resume --non-interactive --json` |
+| 40 | partly done, resumable | show the message, fix if asked, then run `error.resume` with `--json` (setup's is `backsight setup --resume`: add `--non-interactive` too); `verify --live` waits `data.wait_s` seconds first |
 
 ## 1. Install the binary
 

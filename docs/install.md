@@ -48,12 +48,15 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 
 1. writes backsight's config and generates the server's keys;
 2. renders and starts the Hindsight server in Docker, on `127.0.0.1` only;
-3. configures the memory bank, and indexes these docs into a docs bank for `backsight guide search`;
+3. configures the memory bank;
 4. checks that your LLM provider can extract a memory;
-5. wires Claude Code: a plugin with the hooks, the memory tools and the skills, plus a permission rule for the memory tools;
-6. installs the background jobs (a timer every 15 minutes and a daily one);
-7. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
-8. offers to import your past sessions (backfill).
+5. indexes these docs into a docs bank for `backsight guide search`;
+6. wires Claude Code: a plugin with the hooks, the memory tools and the skills, plus a permission rule for the memory tools;
+7. sets how long Claude Code keeps its transcripts, as you answered;
+8. installs the background jobs (a timer every 15 minutes and a daily one);
+9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
+10. unwires an older Hindsight integration from Claude Code, if you chose to (see below);
+11. queues your past sessions for import (backfill), if you accepted.
 
 The first run downloads the server image, a few GB: expect several minutes. Every step is journaled: if setup stops, `backsight setup --resume` continues where it stopped.
 
@@ -67,6 +70,8 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 | `model` | depends on the provider | the provider's preset |
 | `retention`: how long Claude Code keeps transcripts | `3650` days, or `keep` (leave Claude Code's setting) | `3650` |
 | `backups`: daily encrypted backups | `on`, `off` | `on` |
+| `reference`, only when another Hindsight integration is wired: unwire it | `retire`, `keep` | `retire` |
+| `backfill`, only when Claude Code keeps past sessions: import them in the background | `yes`, `no` | `yes` (`no` with `claude-code`) |
 | `consent`: go ahead with the plan | `yes`, `no` | none, you must answer |
 
 Notes on the choices:
