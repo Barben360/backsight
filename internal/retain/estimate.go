@@ -17,8 +17,17 @@ func (p Prices) Known() bool { return p.Input > 0 || p.Output > 0 }
 
 // priceTable holds defaults for models whose prices were checked
 // (decision 0051); config values override them.
+//
+// DeepSeek bills half price off-peak and double at peak (01:00-04:00 and
+// 06:00-10:00 UTC on weekdays). Nothing here models the time of day, and
+// the spending cap must never under-count, so the table holds the peak
+// prices (checked 2026-10-26, api-docs.deepseek.com/quick_start/pricing):
+// estimates may over-state an off-peak spend by up to 2x, never the reverse.
+// The retired name deepseek-v4-flash is still accepted by DeepSeek, served
+// and billed as deepseek-flash, so existing installs keep a price.
 var priceTable = map[string]Prices{
-	"deepseek-v4-flash": {Input: 0.14, Cached: 0.0028, Output: 0.28, Currency: "USD"},
+	"deepseek-flash":    {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
+	"deepseek-v4-flash": {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
 }
 
 // PricesFor returns the configured prices, else the table's for model.

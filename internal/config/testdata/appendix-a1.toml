@@ -35,7 +35,7 @@ session_budget_chars = 6000
 briefing = "model"
 [llm]
 provider = "deepseek"
-model = "deepseek-v4-flash"
+model = "deepseek-flash"
 base_url = ""
 price_input = 0.0
 price_cached = 0.0

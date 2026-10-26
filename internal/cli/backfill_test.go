@@ -96,7 +96,7 @@ func TestBackfillStopsAtTheBudgetAndResumes(t *testing.T) {
 	fastBackfill(t)
 	oldSession(t, home, "a", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
 	oldSession(t, home, "b", time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC), false)
-	// Each accepted item costs 10M input tokens ($1.40) on the fake bank.
+	// Each accepted item costs 10M input tokens ($3.00 at the peak price) on the fake bank.
 	llmPerRetain.Store(10_000_000)
 	t.Cleanup(func() { llmPerRetain.Store(0) })
 	before := retained.Load()
@@ -105,7 +105,7 @@ func TestBackfillStopsAtTheBudgetAndResumes(t *testing.T) {
 		t.Fatalf("exit %d, retained %d\n%s", code, retained.Load()-before, out)
 	}
 	st, _ := state.Load(pathsOf(home).StateFile())
-	if st.Backfill == nil || st.Backfill.Paused != "budget" || len(st.Backfill.Sessions) != 1 || st.Backfill.SpentCost < 1.39 {
+	if st.Backfill == nil || st.Backfill.Paused != "budget" || len(st.Backfill.Sessions) != 1 || st.Backfill.SpentCost < 2.99 {
 		t.Errorf("state %+v", st.Backfill)
 	}
 	// A plain rerun does not grant a new cap.
@@ -359,7 +359,7 @@ func TestBackfillFilterChangeKeepsTheSpend(t *testing.T) {
 	run(t, "retain", "backfill", "--max-cost", "1") // pauses after "sep" ($1.40)
 	code, _, _ := run(t, "retain", "backfill", "--since", "2026-10-01", "--max-cost", "1")
 	st, _ := state.Load(pathsOf(home).StateFile())
-	if code != output.Partial || st.Backfill.Paused != "budget" || st.Backfill.SpentCost < 1.39 {
+	if code != output.Partial || st.Backfill.Paused != "budget" || st.Backfill.SpentCost < 2.99 {
 		t.Errorf("exit %d, state %+v", code, st.Backfill)
 	}
 }

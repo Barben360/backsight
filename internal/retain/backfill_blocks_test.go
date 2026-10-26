@@ -59,12 +59,17 @@ func TestKindFromTitle(t *testing.T) {
 }
 
 func TestPricesAndCost(t *testing.T) {
-	p := PricesFor("deepseek-v4-flash", 0, 0, 0, "USD")
-	if !p.Known() || p.Input != 0.14 || p.Output != 0.28 {
+	p := PricesFor("deepseek-flash", 0, 0, 0, "USD")
+	// DeepSeek's peak prices (the conservative ones): the cap must never under-count.
+	if !p.Known() || p.Input != 0.30 || p.Cached != 0.006 || p.Output != 1.20 {
 		t.Fatalf("%+v", p)
 	}
+	// The retired name is still accepted by DeepSeek and billed the same.
+	if old := PricesFor("DeepSeek-V4-Flash", 0, 0, 0, "USD"); old != p {
+		t.Errorf("legacy name: %+v", old)
+	}
 	// 1M fresh input + 1M cached + 0.5M output + 0.5M thoughts.
-	if got := p.Cost(2_000_000, 1_000_000, 500_000, 500_000); got < 0.4227 || got > 0.4229 {
+	if got := p.Cost(2_000_000, 1_000_000, 500_000, 500_000); got < 1.5059 || got > 1.5061 {
 		t.Errorf("cost %v", got)
 	}
 	if q := PricesFor("deepseek-v4-flash", 1, 0, 2, "EUR"); q.Input != 1 || q.Cached != 1 || q.Currency != "EUR" {
@@ -83,7 +88,7 @@ func TestEstimateSession(t *testing.T) {
 	e := EstimateSession(60000, p)
 	// 2 chunks × 3300 + 60000/3.5 + 100 facts × 1600 = 6600 + 17142 + 160000
 	if e.InputTokens != 183742 || e.OutputTokens != 27561 || e.Duration != 2*time.Minute+50*time.Second ||
-		e.Cost < 0.0334 || e.Cost > 0.0335 {
+		e.Cost < 0.0881 || e.Cost > 0.0883 {
 		t.Errorf("%+v", e)
 	}
 	if small := EstimateSession(0, p); small.InputTokens != 3300 {

@@ -33,7 +33,7 @@ backsight is free. The server's LLM is not: it reads each session to extract mem
 
 | Provider | Per session | 5 sessions a day, 22 days a month |
 |---|---|---|
-| DeepSeek (`deepseek`, the default) | about $0.05; $0.10 at DeepSeek's peak hours | about $5, up to $11 |
+| DeepSeek V4.1 Flash (`deepseek`, the default; model `deepseek-flash`, not the Pro model) | about $0.05; $0.10 at DeepSeek's peak hours | about $5, up to $11 |
 | Anthropic API with Claude Haiku 5.5 (`anthropic`) | about $0.04 | about $4 |
 | Ollama on your machine (`ollama`) | nothing, but slow on a CPU and lower quality | nothing |
 | Your Claude subscription (`claude-code`) | counts against your plan; [not recommended](docs/privacy.md#the-claude-subscription-lane) | |

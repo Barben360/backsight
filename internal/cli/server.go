@@ -371,7 +371,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().IntVar(&f.apiPort, "api-port", 8888, "API port published on the host")
 	cmd.Flags().IntVar(&f.uiPort, "ui-port", 9999, "control plane port published on the host")
 	cmd.Flags().StringVar(&f.provider, "provider", "", "Hindsight LLM provider (default deepseek)")
-	cmd.Flags().StringVar(&f.model, "model", "", "LLM model (default deepseek-v4-flash)")
+	cmd.Flags().StringVar(&f.model, "model", "", "LLM model (default deepseek-flash)")
 	cmd.Flags().StringVar(&f.base, "base-url", "", "LLM base URL for compatible endpoints")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list the steps without acting")
 	return cmd

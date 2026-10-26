@@ -59,7 +59,7 @@ func TestStatsWindowPeriodAndCost(t *testing.T) {
 		t.Errorf("3 days: period %q\n%s", llmPeriod, out)
 	}
 	_, out, _ := run(t, "stats", "7")
-	if !strings.Contains(out, "1 typed") || !strings.Contains(out, "2000000 input") || !strings.Contains(out, "1000000 output tokens: 0.56 USD") {
+	if !strings.Contains(out, "1 typed") || !strings.Contains(out, "2000000 input") || !strings.Contains(out, "1000000 output tokens: 1.80 USD") {
 		t.Errorf("7 days:\n%s", out)
 	}
 	// the day 10 days ago is in a 14-day window, not in a 7-day one

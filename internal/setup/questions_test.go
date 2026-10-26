@@ -55,7 +55,7 @@ func TestFreshInstallAsksEverythingWithRecommendations(t *testing.T) {
 	if p := find(t, qs, "provider"); p.Recommended != "deepseek" || !p.Required {
 		t.Errorf("provider: %+v", p)
 	}
-	if m := find(t, qs, "model"); m.Default != "deepseek-v4-flash" {
+	if m := find(t, qs, "model"); m.Default != "deepseek-flash" {
 		t.Errorf("model default %q", m.Default)
 	}
 	if b := find(t, qs, "backfill"); b.Options[0].Cost != "≈ $0.40" || !strings.Contains(b.Prompt, "12") {
@@ -87,7 +87,7 @@ func TestProviderShapesTheFollowUpQuestions(t *testing.T) {
 		baseURL, ack    bool
 		backfillDefault string
 	}{
-		{"deepseek", "deepseek-v4-flash", false, false, "yes"},
+		{"deepseek", "deepseek-flash", false, false, "yes"},
 		{"ollama", "qwen3:8b", true, false, "yes"},
 		{"anthropic", "claude-haiku-5-5", true, false, "yes"},
 		{"claude-code", "claude-haiku-5-5", false, true, "no"},
