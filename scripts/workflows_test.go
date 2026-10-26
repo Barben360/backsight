@@ -2,6 +2,7 @@ package scripts
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -363,5 +364,93 @@ func TestDependabotTracksModulesAndActions(t *testing.T) {
 		if !seen[eco] {
 			t.Errorf("dependabot.yml does not track %s (found %v)", eco, seen)
 		}
+	}
+}
+
+// releaseNotesStep is the release job's step that refuses a tag without
+// its hand-written notes, and the goreleaser step that publishes them.
+func releaseNotesStep(t *testing.T) (check, goreleaser string, order []int) {
+	t.Helper()
+	for _, w := range workflows(t) {
+		if w.name != "release.yml" {
+			continue
+		}
+		for _, j := range w.jobs {
+			for i, step := range j.steps {
+				switch {
+				case strings.Contains(step, `notes="docs/releases/$GITHUB_REF_NAME.md"`):
+					check = step
+					order = append(order, i)
+				case strings.Contains(step, "uses: goreleaser/goreleaser-action@"):
+					goreleaser = step
+					order = append(order, i)
+				}
+			}
+		}
+	}
+	if check == "" || goreleaser == "" {
+		t.Fatalf("release.yml: notes step found %v, goreleaser step found %v", check != "", goreleaser != "")
+	}
+	return check, goreleaser, order
+}
+
+// A release publishes its hand-written notes (docs/releases/<tag>.md), not
+// goreleaser's list of commit subjects, and a tag without them, or without
+// its row in docs/compatibility.md, stops before anything is built.
+func TestReleasePublishesHandWrittenNotes(t *testing.T) {
+	check, goreleaser, order := releaseNotesStep(t)
+	if len(order) != 2 || order[0] > order[1] {
+		t.Errorf("release.yml: the notes check must come before goreleaser (steps %v)", order)
+	}
+	if !regexp.MustCompile(`(?m)^\s+args: release --clean --release-notes docs/releases/\$\{\{ github\.ref_name \}\}\.md\s*$`).MatchString(goreleaser) {
+		t.Errorf("release.yml: goreleaser does not publish docs/releases/<tag>.md:\n%s", goreleaser)
+	}
+	gr, err := os.ReadFile("../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// changelog.disable would skip --release-notes too (goreleaser 2.14).
+	if regexp.MustCompile(`(?m)^changelog:\n(?:  .*\n)*  disable:`).Match(gr) {
+		t.Error(".goreleaser.yaml disables the changelog: that drops --release-notes, and the release would have no notes")
+	}
+
+	_, body, ok := strings.Cut(check, "run: |\n")
+	if !ok {
+		t.Fatalf("the notes step has no run block:\n%s", check)
+	}
+	script := regexp.MustCompile(`(?m)^ {10}`).ReplaceAllString(body, "")
+	const row = "| Release | x |\n|---|---|\n| v9.8.7 | 1.1.0 |\n"
+	cases := []struct {
+		name, notes, compat string
+		ok                  bool
+		says                string
+	}{
+		{"notes and row", "What it is.\n", row, true, ""},
+		{"no notes", "", row, false, "docs/releases/v9.8.7.md is missing or empty"},
+		{"empty notes", "-", row, false, "docs/releases/v9.8.7.md is missing or empty"},
+		{"no row", "What it is.\n", "| v9.8.70 | 1.1.0 |\n", false, "docs/compatibility.md has no row for v9.8.7"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "docs", "releases"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			switch c.notes {
+			case "":
+			case "-":
+				_ = os.WriteFile(filepath.Join(dir, "docs", "releases", "v9.8.7.md"), nil, 0o644)
+			default:
+				_ = os.WriteFile(filepath.Join(dir, "docs", "releases", "v9.8.7.md"), []byte(c.notes), 0o644)
+			}
+			_ = os.WriteFile(filepath.Join(dir, "docs", "compatibility.md"), []byte(c.compat), 0o644)
+			cmd := exec.Command("bash", "-eo", "pipefail", "-c", script)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GITHUB_REF_NAME=v9.8.7")
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != c.ok || !strings.Contains(string(out), c.says) {
+				t.Errorf("ok %v, want %v; output %q, want it to say %q", err == nil, c.ok, out, c.says)
+			}
+		})
 	}
 }

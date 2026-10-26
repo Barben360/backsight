@@ -64,6 +64,7 @@ Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) 
 - A test (`internal/cli/docs_commands_test.go`) checks that every backsight command and flag written in code (inline or in a code block) in `README.md`, `CONTRIBUTING.md`, `SECURITY.md` and `docs/*.md` exists in the command tree. Rename a command or a flag, and the docs must follow.
 - `docs/compatibility.md`'s `## Current` section and `SECURITY.md`'s keys are checked against what the binary pins and trusts (`internal/cli/release_docs_test.go`). The README's Hindsight badge is checked against the same pin.
 - `docs/agent-guide.md` is for coding agents that install backsight; keep it in line with the other docs.
+- Text a user sees (help, setup questions, errors, doctor checks, generated files, release notes) names no design record, experiment, milestone or spec section: users cannot look them up. Say the reason in plain words instead. `internal/cli/publictext_test.go` enforces it; code comments may cite them.
 
 ## The agent contract
 
@@ -88,4 +89,4 @@ sha256sum -c --ignore-missing checksums.txt
 
 `minisign.next.pub` is the next key. Binaries embed both (`internal/signing`, listed by `backsight version --json`), so a key rotation needs no trust reset; the release stops if its binary trusts any other key. Releases are built only from tags on `main`, by actions pinned to commit SHAs. See [SECURITY.md](SECURITY.md#release-signing) for key rotation.
 
-Maintainers: `make snapshot` builds and signs locally with a throwaway key (never the release key, which only `.github/workflows/release.yml` holds), and tags `v*` publish through that workflow.
+Maintainers: `make snapshot` builds and signs locally with a throwaway key (never the release key, which only `.github/workflows/release.yml` holds), and tags `v*` publish through that workflow. Before tagging, write the release notes in `docs/releases/<tag>.md` (what changed for users, requirements, known limits) and add the tag's row to `docs/compatibility.md`'s Releases table: the workflow refuses a tag without either, and publishes the notes as the release's description.
