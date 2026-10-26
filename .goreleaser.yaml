@@ -4,6 +4,9 @@ project_name: backsight
 
 before:
   hooks:
+    # A snapshot is never signed with a release key, and only the release
+    # workflow signs with one (security review M3).
+    - scripts/release-key-guard.sh {{ if .IsSnapshot }}--snapshot{{ end }}
     - go mod verify
 
 builds:
@@ -44,8 +47,9 @@ checksum:
   name_template: checksums.txt
 
 # Every archive and the checksums file get a minisign signature. The secret
-# key comes from MINISIGN_KEY_FILE (written from an Actions secret, or from
-# pass by `make snapshot`); it has no password, the store protects it.
+# key comes from MINISIGN_KEY_FILE: the release key written from the release
+# environment's secret, or the throwaway key `make snapshot` and CI's
+# snapshot job make; it has no password, the store protects it.
 signs:
   - id: minisign
     cmd: minisign

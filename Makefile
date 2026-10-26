@@ -43,13 +43,18 @@ cross:
 leaks:
 	gitleaks git . --no-banner --redact
 
-# Signed local release build; the key comes from pass and never touches the
-# repository (decision 0027).
+# Local release build, signed with a throwaway key made for it and gone
+# once it is verified (security review M3): only the release workflow ever
+# signs with the release key, so no install or update accepts a snapshot.
+# A release key in MINISIGN_KEY_FILE or MINISIGN_SECRET_KEY is refused, not
+# set aside (scripts/release-key-guard.sh; RELEASE_PUBKEYS, for its tests:
+# other public keys than minisign.pub and minisign.next.pub to refuse).
 snapshot:
-	@set -e; d=$$(mktemp -d); trap 'shred -u "$$d/key" 2>/dev/null; rm -rf "$$d"' EXIT; \
-	pass show backsight/minisign-secret-key > "$$d/key"; \
-	MINISIGN_KEY_FILE="$$d/key" goreleaser release --snapshot --clean
-	@$(MAKE) --no-print-directory verify-dist
+	@set -e; scripts/release-key-guard.sh --snapshot $(RELEASE_PUBKEYS); \
+	d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; \
+	minisign -G -W -p "$$d/snapshot.pub" -s "$$d/snapshot.key" >/dev/null; \
+	MINISIGN_KEY_FILE="$$d/snapshot.key" goreleaser release --snapshot --clean; \
+	$(MAKE) --no-print-directory verify-dist PUBKEY="$$d/snapshot.pub"
 
 # Every artifact in dist/ (the archives, checksums.txt and the bare
 # binaries in their build directories) must verify against the committed
