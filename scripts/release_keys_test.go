@@ -23,14 +23,49 @@ func buildFor(t *testing.T, dist, goos, goarch, ldflags string, extra ...string)
 		name += ".exe"
 	}
 	out := filepath.Join(dist, "backsight_"+goos+"_"+goarch+"_v1", name)
+	env := append(os.Environ(), "CGO_ENABLED=0", "GOOS="+goos, "GOARCH="+goarch)
+	sourcesAreInputs(t, env, extra...)
 	// -trimpath as goreleaser builds: the build info then has no -ldflags.
 	cmd := exec.Command("go", append(append([]string{"build", "-trimpath"}, extra...), "-o", out, "-ldflags", ldflags, "./cmd/backsight")...)
 	cmd.Dir = ".."
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+goos, "GOARCH="+goarch)
+	cmd.Env = env
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, b)
 	}
 	return out
+}
+
+// sourcesAreInputs stats every file of this module that the build of
+// ./cmd/backsight with these flags compiles or embeds (go.mod and go.sum
+// too): Go's test cache keys on the files a test opens or stats, never on
+// what a go build child reads, so a source change reruns these tests.
+func sourcesAreInputs(t *testing.T, env []string, flags ...string) {
+	t.Helper()
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := `{{$d := .Dir}}{{range .GoFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}`
+	cmd := exec.Command("go", append(append([]string{"list", "-deps"}, flags...), "-f", tmpl, "./cmd/backsight")...)
+	cmd.Dir, cmd.Env = root, env
+	raw, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	files := []string{filepath.Join(root, "go.mod"), filepath.Join(root, "go.sum")}
+	for _, f := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.HasPrefix(f, root+string(filepath.Separator)) {
+			files = append(files, f)
+		}
+	}
+	if len(files) < 10 {
+		t.Fatalf("go list found %d source files of the module", len(files))
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func buildInto(t *testing.T, dist, ldflags string, extra ...string) string {
@@ -40,6 +75,11 @@ func buildInto(t *testing.T, dist, ldflags string, extra ...string) string {
 
 func verifyKeys(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	for _, f := range []string{"../Makefile", "verify-keys.sh"} { // inputs of the cache key, as above
+		if _, err := os.Stat(f); err != nil {
+			t.Fatal(err)
+		}
+	}
 	b, err := exec.Command("make", append([]string{"-s", "-C", "..", "verify-keys"}, args...)...).CombinedOutput()
 	return string(b), err
 }

@@ -116,6 +116,21 @@ func toolsWithout(t *testing.T) string {
 	return dir
 }
 
+// installScript runs install.sh as its users do, piped into sh. The test
+// reads the script itself, so Go's test cache keys on its content: an
+// edited script is never served an old pass (a child's reads are not
+// tracked).
+func installScript(t *testing.T) *exec.Cmd {
+	t.Helper()
+	src, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-s")
+	cmd.Stdin = bytes.NewReader(src)
+	return cmd
+}
+
 func install(t *testing.T, relDir, pubkey, path string) (home, out string, err error) {
 	t.Helper()
 	return installIn(t, t.TempDir(), relDir, pubkey, path)
@@ -126,7 +141,7 @@ func installIn(t *testing.T, home, relDir, pubkey, path string, env ...string) (
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skip("openssl missing")
 	}
-	cmd := exec.Command("sh", "install.sh")
+	cmd := installScript(t)
 	cmd.Env = append([]string{"HOME=" + home, "PATH=" + path, "BACKSIGHT_RELEASE_DIR=" + relDir, "BACKSIGHT_INSTALL_PUBKEY=" + pubkey}, env...)
 	b, err := cmd.CombinedOutput()
 	return home, string(b), err
@@ -442,7 +457,7 @@ func (g *github) install(t *testing.T, pubkey string, env ...string) (home, out 
 		t.Skip("openssl missing")
 	}
 	home = t.TempDir()
-	cmd := exec.Command("sh", "install.sh")
+	cmd := installScript(t)
 	cmd.Env = append([]string{"HOME=" + home, "PATH=" + withCurl(t), "BACKSIGHT_INSTALL_PUBKEY=" + pubkey,
 		"BACKSIGHT_INSTALL_GITHUB=" + g.srv.URL, "CURL_CA_BUNDLE=" + g.ca}, env...)
 	b, err := cmd.CombinedOutput()

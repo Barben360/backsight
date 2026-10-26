@@ -20,7 +20,13 @@ func slotPort(t *testing.T, slot string, args ...string) (string, error) {
 // slotPortEnv is slotPort with CI=ci ("" leaves it unset) and stderr.
 func slotPortEnv(t *testing.T, slot, ci string, args ...string) (string, string, error) {
 	t.Helper()
-	cmd := exec.Command("bash", append([]string{"-c", `. ./ports.sh && slot_port "$@"`, "slot_port"}, args...)...)
+	// The script's content, not its path: Go's test cache then keys on it
+	// (what a child reads is not tracked).
+	src, err := os.ReadFile("ports.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", append([]string{"-c", string(src) + "\nslot_port \"$@\"", "slot_port"}, args...)...)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "BACKSIGHT_CI_SLOT=") && !strings.HasPrefix(kv, "CI=") {
 			cmd.Env = append(cmd.Env, kv)
