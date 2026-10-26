@@ -74,3 +74,21 @@ func TestCheckRestoreIncomplete(t *testing.T) {
 		t.Errorf("a torn marker: %+v", c)
 	}
 }
+
+// A reconcile that could not purge again what the server still holds left
+// a hold: doctor names the bank and how many documents, whatever the
+// epochs say (issue 285 review LOW-4).
+func TestCheckRestoreEpochShowsAPurgeHold(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{epochPath: {200, `{"id":"backsight:epoch","document_metadata":{"epoch":"2","restored_at":"2026-10-25T10:00:00Z","backup_created_at":"2026-10-25T03:00:00Z"}}`}})
+	f := configured(t, srv.URL)
+	if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+		RestoreEpoch: &state.RestoreEpoch{Bank: "coding-agent::memoire", Epoch: 1},
+		PurgeHold:    &state.PurgeHold{Bank: "coding-agent::memoire", Documents: 3, Error: "DELETE: 500"}}); err != nil {
+		t.Fatal(err)
+	}
+	c := check(t, f.run(), "restore-epoch")
+	expect(t, c, Error, "3 purged document(s) of bank coding-agent::memoire")
+	if !strings.Contains(c.Detail, "DELETE: 500") || c.Fix == "" {
+		t.Errorf("%+v", c)
+	}
+}

@@ -203,7 +203,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	// it only after the restore, and roll back). A server that cannot
 	// answer is left to the epoch read below, which falls back on the
 	// database.
-	if _, _, err := retain.OwnedBank(ctx, cl, retain.ControlBank(cfg.Server.Bank), retain.ControlMarker); err != nil {
+	if _, _, err := retain.OwnedControl(ctx, cl, cfg.Server.Bank); err != nil {
 		if foreign := (*retain.ForeignBank)(nil); errors.As(err, &foreign) {
 			return &output.Error{Code: output.Blocked, Message: err.Error() + "; the restore epoch could not be written there: nothing was changed"}
 		}
@@ -449,7 +449,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			if len(b.tombs) == 0 || !b.epoch || b.foreign {
 				continue
 			}
-			err := writeTombstonesOn(ctx, cfg, tmp, b.bank, b.tombs)
+			err := writeTombstonesOn(ctx, cfg, tmp, b.bank, b.tombs, i > 0 && !b.control)
 			if foreign := (*retain.ForeignBank)(nil); i > 0 && errors.As(err, &foreign) {
 				res.Warnings = append(res.Warnings, "bank "+b.bank+": "+err.Error()+": its purges were not written back")
 				continue
@@ -473,7 +473,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	next := retain.Epoch{Epoch: rb.highest + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: m.CreatedAt.UTC().Truncate(time.Second),
 		History: before.History}
 	rb.highest = next.Epoch // attempted: the rollback's goes above it
-	if err := writeEpochOn(ctx, cfg, tmp, cfg.Server.Bank, next); err != nil {
+	if err := writeEpochOn(ctx, cfg, tmp, cfg.Server.Bank, next, false); err != nil {
 		return failed("epoch", err)
 	}
 	res.Epoch = &next
@@ -490,7 +490,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		o.highest = max(o.highest, restored.Epoch)
 		e := retain.Epoch{Epoch: o.highest + 1, RestoredAt: next.RestoredAt, BackupCreatedAt: next.BackupCreatedAt, History: o.history}
 		o.highest = e.Epoch
-		err = writeEpochOn(ctx, cfg, tmp, o.bank, e)
+		err = writeEpochOn(ctx, cfg, tmp, o.bank, e, !o.control) // not proven: adopted, never proof
 		if foreign := (*retain.ForeignBank)(nil); errors.As(err, &foreign) {
 			// unproven while the API was down: someone else's after all
 			o.foreign = true
@@ -516,9 +516,18 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	// its document when it runs, and Hindsight 1.1.0 recreates a deleted
 	// document on append (issue 285 review M1). Bounded: what a late one
 	// recreates, each client's reconcile on the new epoch purges again.
+	// It does not finish while one is not done (review MED-1): the marker
+	// holds every client at the purge step, the server stays on the
+	// temporary key, and an interrupted wait exits 40 for server start to
+	// resume.
 	banks := append([]otherBank{{bank: cfg.Server.Bank, tombs: tombs, epoch: true}}, rb.others...)
-	if w := waitQueues(ctx, tcl, banks); w != "" {
-		res.Warnings = append(res.Warnings, w)
+	if pb := purgeBanks(banks); len(pb) > 0 {
+		markStep(d, state.PurgeStep, rt.Version(), false, pb)
+		if err := waitQueues(ctx, tcl, banks, func(detail string) { add("purge", "waiting", detail) }); err != nil {
+			return &output.Error{Code: output.Partial, Resume: "backsight server start",
+				Message: fmt.Sprintf("restored (epoch %d), but %v: the restore waits at its purge step, every client held; backsight server start resumes it "+
+					"(it waits for the queues, purges again, then starts the server on its API key)", next.Epoch, err)}
+		}
 	}
 	again, detail, err := purgeAgain(ctx, tcl, banks, cfg.Server.Bank)
 	if err != nil {
@@ -536,7 +545,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 
 	// 9. The server on its own key again; the marker goes only then
 	// (issue 285): until that, server start finishes the restore.
-	markKeyStep(d, rt.Version(), false)
+	markStep(d, state.KeyStep, rt.Version(), false, nil)
 	if err := startOnKey(ctx, cfg, sec, rt, sec.APIKey); err != nil {
 		add("key", "failed", server.Redact(err.Error(), sec))
 		return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("restored (epoch %d), but the server did not start again on its API key (%v): run backsight server start", next.Epoch, err), sec)}
@@ -613,11 +622,20 @@ func otherBanks(ctx context.Context, cl *hindsight.Client, db server.Database, o
 		case strings.HasSuffix(id, "-control"):
 			b := strings.TrimSuffix(id, "-control")
 			ok, err := owned(id, retain.ControlMarker)
-			switch {
-			case err != nil:
+			if err != nil {
 				return nil, "", err
+			}
+			adopted := false
+			if !ok && proven {
+				if adopted, err = owned(id, retain.AdoptedControlMarker); err != nil {
+					return nil, "", err
+				}
+			}
+			switch {
 			case ok:
 				add(b).control = true
+			case adopted:
+				add(b) // backsight adopted it, which proves nothing: asked again
 			case !proven:
 				add(b) // its control bank cannot be checked: asked
 			default: // someone else's bank: asked, and no epoch in it
@@ -678,16 +696,21 @@ func readOthers(ctx context.Context, cl *hindsight.Client, db server.Database, s
 	return nil
 }
 
-// queueWait bounds how long restore waits for the restored banks' queues
-// before purging again; queuePoll is how often it looks. Tests shorten
-// them.
-var queueWait, queuePoll = 2 * time.Minute, time.Second
+// queueWait, when not zero, bounds the wait for the restored queues (tests:
+// the wait has no deadline otherwise, only a cancel stops it); queuePoll
+// is how often it looks.
+var queueWait, queuePoll time.Duration = 0, time.Second
 
-// waitQueues waits, within queueWait, until no memory bank of banks has a
-// queued operation; it returns a warning when some still do (or cannot be
-// read).
-func waitQueues(ctx context.Context, cl *hindsight.Client, banks []otherBank) string {
-	deadline := time.Now().Add(queueWait)
+// waitQueues waits until no bank of banks with tombstones has a queued
+// operation, telling progress each time what it waits for changes. A
+// queue that cannot be read is waited for too. It returns an error only
+// when ctx is done or queueWait passed.
+func waitQueues(ctx context.Context, cl *hindsight.Client, banks []otherBank, progress func(string)) error {
+	var deadline time.Time
+	if queueWait > 0 {
+		deadline = time.Now().Add(queueWait)
+	}
+	last := ""
 	for {
 		var busy []string
 		for _, b := range banks {
@@ -697,20 +720,25 @@ func waitQueues(ctx context.Context, cl *hindsight.Client, banks []otherBank) st
 			n, err := cl.QueuedOperations(ctx, b.bank)
 			switch {
 			case err != nil:
-				busy = append(busy, fmt.Sprintf("%s (%v)", b.bank, err))
+				busy = append(busy, fmt.Sprintf("bank %s (queue unreadable: %v)", b.bank, err))
 			case n > 0:
-				busy = append(busy, fmt.Sprintf("%s (%d queued)", b.bank, n))
+				busy = append(busy, fmt.Sprintf("bank %s (%d queued)", b.bank, n))
 			}
 		}
 		if len(busy) == 0 {
-			return ""
+			return nil
 		}
-		if !time.Now().Before(deadline) || ctx.Err() != nil {
-			return "the restored queue of bank(s) " + strings.Join(busy, ", ") + " was not done within " + queueWait.String() +
-				": a queued retain may recreate a purged document after this restore; each client's reconcile on the new epoch purges it again"
+		now := strings.Join(busy, ", ")
+		if now != last {
+			progress("waiting for the restored queue of " + now + " before purging again (a queued retain would recreate a purged document)")
+			last = now
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return fmt.Errorf("the restored queue of %s is not done", now)
 		}
 		select {
 		case <-ctx.Done():
+			return fmt.Errorf("the restored queue of %s is not done (%w)", now, context.Cause(ctx))
 		case <-time.After(queuePoll):
 		}
 	}
@@ -743,15 +771,26 @@ func purgeAgain(ctx context.Context, cl *hindsight.Client, banks []otherBank, ow
 	return names, strings.Join(details, "; "), nil
 }
 
-// markKeyStep records in the marker that only the start on the API key is
-// left, the image the server's data is for, and whether a rollback put
-// the safety archive back: server start then finishes on that image
-// (issue 285, review M4).
-func markKeyStep(d paths.Dirs, image string, rolledBack bool) {
+// markStep records in the marker the step left (state.PurgeStep, then
+// state.KeyStep), the image the server's data is for, whether a rollback
+// put the safety archive back, and the banks still to purge again: server
+// start resumes from there on that image (issue 285, review M4, MED-1).
+func markStep(d paths.Dirs, step, image string, rolledBack bool, banks []string) {
 	if m, err := state.ReadRestoreMarker(d); err == nil && m != nil {
-		m.Step, m.Image, m.RolledBack = state.KeyStep, image, rolledBack
+		m.Step, m.Image, m.RolledBack, m.PurgeBanks = step, image, rolledBack, banks
 		_ = state.WriteRestoreMarker(d, *m)
 	}
+}
+
+// purgeBanks are the banks of banks with tombstones to purge again.
+func purgeBanks(banks []otherBank) []string {
+	var out []string
+	for _, b := range banks {
+		if b.epoch && !b.foreign && len(b.tombs) > 0 {
+			out = append(out, b.bank)
+		}
+	}
+	return out
 }
 
 // ownGroupRuntime is cfg's runtime with Docker children in their own
@@ -844,12 +883,12 @@ func startOnTemporaryKey(ctx context.Context, cfg config.Config, sec config.Secr
 	return key, cl, err
 }
 
-func writeTombstonesOn(ctx context.Context, cfg config.Config, key, bank string, ts []state.Tombstone) error {
+func writeTombstonesOn(ctx context.Context, cfg config.Config, key, bank string, ts []state.Tombstone, adopt bool) error {
 	cl, err := hindsight.New(cfg.Server.URL, key, epochTimeout)
 	if err != nil {
 		return err
 	}
-	_, err = retain.WriteTombstones(ctx, cl, bank, ts)
+	_, err = retain.WriteTombstonesAs(ctx, cl, bank, ts, adopt)
 	return err
 }
 
@@ -913,12 +952,15 @@ func documentList(ts []state.Tombstone) string {
 	return strings.Join(ids, ", ")
 }
 
-func writeEpochOn(ctx context.Context, cfg config.Config, key, bank string, e retain.Epoch) error {
+// writeEpochOn writes e as bank's epoch on the server running on key;
+// adopt: a control bank it creates is adopted (bank not proven
+// backsight's, issue 285 review MED-2).
+func writeEpochOn(ctx context.Context, cfg config.Config, key, bank string, e retain.Epoch, adopt bool) error {
 	cl, err := hindsight.New(cfg.Server.URL, key, epochTimeout)
 	if err != nil {
 		return err
 	}
-	return retain.WriteEpoch(ctx, cl, bank, e)
+	return retain.WriteEpochAs(ctx, cl, bank, e, adopt)
 }
 
 // restorable refuses, before anything stops, an archive this install
@@ -1016,7 +1058,7 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 	}
 	epoch := retain.Epoch{Epoch: r.highest + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: r.safetyAt, History: r.history}
 	if err == nil {
-		err = step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, r.cfg.Server.Bank, epoch) })
+		err = step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, r.cfg.Server.Bank, epoch, false) })
 	}
 	// The other banks' epochs only warn: the server holds the safety
 	// archive's data whatever they say, and starting it on its key matters
@@ -1026,7 +1068,7 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 			continue
 		}
 		e := retain.Epoch{Epoch: o.highest + 1, RestoredAt: epoch.RestoredAt, BackupCreatedAt: r.safetyAt, History: o.history}
-		if werr := step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, o.bank, e) }); werr != nil {
+		if werr := step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, o.bank, e, !o.control) }); werr != nil {
 			r.res.Warnings = append(r.res.Warnings, server.Redact(fmt.Sprintf("rollback: no restore epoch written in bank %s (%v): its clients do not re-read the server", o.bank, werr), r.sec))
 		}
 	}
@@ -1034,7 +1076,7 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 		// The marker goes once the server runs on its key: until then,
 		// server start finishes the rollback, on the image it rolled
 		// back to.
-		markKeyStep(r.d, r.rt.Version(), true)
+		markStep(r.d, state.KeyStep, r.rt.Version(), true, nil)
 		err = step(func(ctx context.Context) error { return startOnKey(ctx, r.cfg, r.sec, r.rt, r.sec.APIKey) })
 		if err == nil {
 			_ = state.ClearRestoreMarker(r.d)
@@ -1083,4 +1125,57 @@ func restoreSummary(r restoreResult) string {
 			r.Archive, r.Restored, r.Epoch.Epoch, r.Safety)
 	}
 	return b.String()
+}
+
+// resumePurge is server start on a restore held at its purge step (issue
+// 285 review MED-1): under the maintenance lock, on a new temporary key, it
+// waits for the queues of the marker's banks with no deadline, purges
+// again the tombstoned documents they hold (the control banks' tombstones
+// and this machine's), then moves the marker to its key step, which
+// server start finishes. An interrupted wait exits 40, the marker as it
+// was.
+func resumePurge(ctx context.Context, e *env, cfg config.Config, sec config.Secrets, rt server.Runtime, d paths.Dirs, m state.RestoreMarker) (string, error) {
+	l, note, err := acquireMaintenance(d, "server start")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = l.Release() }()
+	_ = note
+	progress := func(detail string) {
+		if e.json {
+			b, _ := json.Marshal(map[string]any{"event": "progress", "command": "server start", "step": "purge", "status": "waiting", "detail": detail})
+			fmt.Fprintln(e.stderr, string(b))
+			return
+		}
+		fmt.Fprintln(e.stderr, "waiting  "+detail)
+	}
+	_, tcl, err := startOnTemporaryKey(ctx, cfg, sec, rt)
+	if err != nil {
+		return "", redacted(fmt.Errorf("cannot start the server on a temporary key to finish the %s's purge step: %w", m.Command, err), sec)
+	}
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		return "", blocked(err)
+	}
+	banks := make([]otherBank, 0, len(m.PurgeBanks))
+	for _, b := range m.PurgeBanks {
+		ts, err := retain.ReadTombstones(ctx, tcl, b)
+		if err != nil {
+			return "", redacted(fmt.Errorf("cannot read the purge tombstones of bank %s (%w): the %s stays at its purge step; rerun backsight server start", b, err, m.Command), sec)
+		}
+		banks = append(banks, otherBank{bank: b, epoch: true, tombs: mergeTombstones(ts, st.TombstonesOf(b))})
+	}
+	if err := waitQueues(ctx, tcl, banks, progress); err != nil {
+		return "", &output.Error{Code: output.Partial, Resume: "backsight server start",
+			Message: fmt.Sprintf("%v: the %s waits at its purge step, every client held; rerun backsight server start", err, m.Command)}
+	}
+	names, detail, err := purgeAgain(ctx, tcl, banks, cfg.Server.Bank)
+	if err != nil {
+		return "", redacted(fmt.Errorf("purging again (%w): the %s stays at its purge step; rerun backsight server start", err, m.Command), sec)
+	}
+	markStep(d, state.KeyStep, m.Image, m.RolledBack, nil)
+	if len(names) == 0 {
+		return "the " + m.Command + "'s queues are done: no purged document came back", nil
+	}
+	return "purged again, as forget --purge does, what the " + m.Command + " brought back: " + detail, nil
 }

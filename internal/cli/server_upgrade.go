@@ -207,6 +207,7 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 		add(name, "failed", server.Redact(err.Error(), sec))
 		rerr := rb.run(ctx, fmt.Errorf("%s: %w", name, err))
 		res.RolledBack, res.Epoch = rres.RolledBack, rres.Epoch
+		res.Warnings = append(res.Warnings, rres.Warnings...) // the rollback's, other banks' epochs included
 		return rerr
 	}
 

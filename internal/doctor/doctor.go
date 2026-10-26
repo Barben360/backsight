@@ -378,6 +378,15 @@ func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.
 		c.Status, c.Summary, c.Detail = Warn, "cannot read the client's restore epoch", err.Error()
 		return c
 	}
+	if h := st.PurgeHold; h != nil && h.Bank == bank {
+		// A reconcile found purged documents on the server it could not
+		// purge again: every send holds until one does (issue 285).
+		c.Status = Error
+		c.Summary = fmt.Sprintf("%d purged document(s) of bank %s are on the server again and could not be purged again: sessions are held", h.Documents, h.Bank)
+		c.Detail = h.Error
+		c.Fix = "check backsight server status; the next backsight jobs tick purges them again (as forget --purge does) and reconciles"
+		return c
+	}
 	switch local := st.EpochOf(bank); {
 	case local == ep.Epoch:
 		c.Status, c.Summary = OK, fmt.Sprintf("client on the bank's restore epoch %d", ep.Epoch)
@@ -487,6 +496,17 @@ func checkRestore(d paths.Dirs) Check {
 	}
 	c.Status = Error
 	c.Summary = fmt.Sprintf("a restore did not finish (%s, started %s): sessions are held", m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+	if m.Step == state.PurgeStep {
+		c.Summary = fmt.Sprintf("a restore (%s, started %s) wrote its epochs and waits for queued retains before purging again: sessions are held",
+			m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+		c.Detail = "a queued retain would recreate a purged document of bank(s) " + strings.Join(m.PurgeBanks, ", ") + "; the archive restored is " + m.Archive +
+			"; the server as it was before is in the safety archive " + m.Safety
+		c.Fix = "backsight server start (it waits for the queues, purges again, then starts the server on its API key)"
+		if m.Safety != "" {
+			c.Fix += ", or else backsight restore " + m.Safety + " --no-safety"
+		}
+		return c
+	}
 	if m.Step == state.KeyStep {
 		c.Summary = fmt.Sprintf("a restore (%s, started %s) wrote its epoch but did not start the server again on its API key: sessions are held",
 			m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))

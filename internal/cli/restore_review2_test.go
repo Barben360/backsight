@@ -323,3 +323,125 @@ func TestRestoreOtherBankEpochIsAboveThisClientsToo(t *testing.T) {
 		t.Errorf("team-memory epoch %d, want 8", got)
 	}
 }
+
+// The control bank restore creates for a bank it could not prove its own
+// is adopted, never proof: the next restore asks about that bank again
+// (issue 285 review MED-2). A server upgrade's rollback adopts too.
+func TestAdoptedControlBankIsNeverProof(t *testing.T) {
+	_, archive, _, port := restoreSetup(t)
+	cl := clientOn(port)
+	if err := cl.CreateBank(context.Background(), "notes", "notes", ""); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := run(t, "restore", archive, "--answer", "other_banks=revert"); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if b, found, err := cl.FindBank(context.Background(), "notes-control"); err != nil || !found || b.Name != retain.AdoptedControlMarker.Name {
+		t.Fatalf("notes-control %+v %v %v", b, found, err)
+	}
+	if got := bankEpoch(t, port, "notes"); got != 1 {
+		t.Errorf("notes epoch %d", got)
+	}
+	code, out, _ := run(t, "restore", archive, "--json")
+	if code != output.NeedsUser || !strings.Contains(out, "bank(s) notes,") {
+		t.Errorf("the second restore does not ask about notes: exit %d\n%s", code, out)
+	}
+	// Answered again, its epoch moves on in the adopted bank.
+	if code, out, errOut := run(t, "restore", archive, "--answer", "other_banks=revert"); code != output.OK || bankEpoch(t, port, "notes") != 2 {
+		t.Errorf("exit %d, notes epoch %d\n%s%s", code, bankEpoch(t, port, "notes"), out, errOut)
+	}
+}
+
+func TestServerUpgradeRollbackAdoptsUnprovenBanks(t *testing.T) {
+	_, dk, port, _ := upgradeSetup(t)
+	cl := clientOn(port)
+	if err := cl.CreateBank(context.Background(), "notes", "notes", ""); err != nil {
+		t.Fatal(err)
+	}
+	dk.failImage, dk.migrateImage = newImage, newImage
+	if code, out, errOut := run(t, "server", "upgrade"); code != output.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if b, _, _ := cl.FindBank(context.Background(), "notes-control"); b.Name != retain.AdoptedControlMarker.Name {
+		t.Errorf("notes-control named %q", b.Name)
+	}
+}
+
+// A server upgrade's rollback that cannot write another bank's epoch says
+// so in the upgrade's own report (issue 285 review MED-3).
+func TestServerUpgradeRollbackShowsTheOtherBanksWarnings(t *testing.T) {
+	home, dk, port, oldImage := upgradeSetup(t)
+	if err := clientOn(port).CreateBank(context.Background(), "notes", "notes", ""); err != nil {
+		t.Fatal(err)
+	}
+	pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/notes-control/memories") {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return true
+		}
+		return false
+	}))
+	pinImage(t, oldImage) // the proxy's port in the server's files, on the old pin
+	if code, out, _ := run(t, "server", "render"); code != output.OK {
+		t.Fatalf("render: %d %s", code, out)
+	}
+	pinImage(t, newImage)
+	dk.failImage, dk.migrateImage = newImage, newImage
+	code, out, errOut := run(t, "server", "upgrade", "--json")
+	if code != output.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	var env struct {
+		Data struct {
+			Warnings []string `json:"warnings"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if !strings.Contains(strings.Join(env.Data.Warnings, "\n"), "rollback: no restore epoch written in bank notes") {
+		t.Errorf("warnings %q", env.Data.Warnings)
+	}
+}
+
+// At the key step, server start takes the marker's image only when it is
+// the image the server's files deploy; a marker without one, or with
+// another, goes through the pin guard (issue 285 review LOW-2).
+func TestServerStartKeyStepImageMustBeTheDeployedOne(t *testing.T) {
+	for name, image := range map[string]string{"no image": "", "another image": "ghcr.io/vectorize-io/hindsight:0.9.0@sha256:cccc"} {
+		t.Run(name, func(t *testing.T) {
+			home, dk, _, _ := upgradeSetup(t) // deployed: the old pin; this binary pins newImage
+			if err := state.WriteRestoreMarker(pathsOf(home), state.RestoreMarker{Command: "restore", Safety: "/b/s.age", Archive: "/b/a.age",
+				Step: state.KeyStep, Image: image}); err != nil {
+				t.Fatal(err)
+			}
+			code, _, errOut := run(t, "server", "start")
+			if code != output.Blocked || !strings.Contains(errOut, "older than this binary's") || called(dk, "up -d") {
+				t.Errorf("exit %d %s", code, errOut)
+			}
+		})
+	}
+}
+
+// server start at the key step still refuses while a live process holds
+// the maintenance lock.
+func TestServerStartKeyStepRefusesALiveMaintenanceLock(t *testing.T) {
+	home := devInstall(t, true)
+	f := withCompose(t)
+	pointAt(t, home, fakeHindsight(t))
+	d := pathsOf(home)
+	if err := state.WriteRestoreMarker(d, state.RestoreMarker{Command: "restore", Safety: "/b/s.age", Archive: "/b/a.age", Step: state.KeyStep}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := state.TryAcquire(d.MaintenanceLock(), "backup create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Release() })
+	if code, _, errOut := run(t, "server", "start"); code != output.Blocked || !strings.Contains(errOut, "maintenance in progress") {
+		t.Errorf("exit %d %s", code, errOut)
+	}
+	for _, c := range f.calls {
+		if slices.Contains(c, "up") {
+			t.Errorf("started anyway: %q", c)
+		}
+	}
+}

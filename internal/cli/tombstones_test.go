@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -269,11 +270,20 @@ func TestRestorePurgesAgainLikeAPurge(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	got := strings.Join(curation, "\n")
-	for _, want := range []string{"DELETE /v1/default/banks/claude-memory/memories/f8/observations", "DELETE /v1/default/banks/claude-memory/documents/conversation%3As8"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("no %q in\n%s", want, got)
+	// In forget --purge's order: the observations while the fact is still
+	// seen, the fact retired, then the document.
+	at := func(prefix string) int {
+		for i, c := range curation {
+			if strings.HasPrefix(c, prefix) {
+				return i
+			}
 		}
+		return -1
+	}
+	obs, retire, doc := at("DELETE /v1/default/banks/claude-memory/memories/f8/observations"), at(`PATCH /v1/default/banks/claude-memory/memories/f8 {"reason":"purged by the user`),
+		at("DELETE /v1/default/banks/claude-memory/documents/conversation%3As8")
+	if obs < 0 || retire < 0 || doc < 0 || obs >= retire || retire >= doc {
+		t.Errorf("observations %d, retire %d, document %d in\n%s", obs, retire, doc, strings.Join(curation, "\n"))
 	}
 	if !strings.Contains(strings.Join(mentalCalls, "\n"), "DELETE "+page) {
 		t.Errorf("the briefing page that may quote it is kept: %q", mentalCalls)
@@ -291,48 +301,111 @@ func TestRestorePurgesAgainLikeAPurge(t *testing.T) {
 
 // A retain queued in the archive runs once the restored server starts, and
 // would recreate a purged document after it was purged again (append
-// recreates it): restore waits for the queues first, within a bound, and
-// says so when they are not done (issue 285 review M1).
+// recreates it): restore waits for the queues first, with no deadline,
+// still on the temporary key and with the marker at its purge step; it
+// prints its progress (issue 285 review M1, MED-1).
 func TestRestoreWaitsForTheRestoredQueueBeforePurgingAgain(t *testing.T) {
-	for name, c := range map[string]struct {
-		queued int
-		warn   bool
-	}{"drains": {3, false}, "never drains": {1 << 30, true}} {
-		t.Run(name, func(t *testing.T) {
-			home, archive, dk, port := restoreSetup(t)
-			seedTombstones(t, home, port)
-			documentUnits["conversation:s8"] = 1
-			oldWait, oldPoll := queueWait, queuePoll
-			queueWait, queuePoll = 200*time.Millisecond, time.Millisecond
-			t.Cleanup(func() { queueWait, queuePoll = oldWait, oldPoll })
-			var mu sync.Mutex
-			left, atDelete := c.queued, -1
-			pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
-				mu.Lock()
-				defer mu.Unlock()
-				if dk.restored() == 0 {
-					return false
-				}
-				switch {
-				case strings.HasSuffix(r.URL.Path, "/claude-memory/operations") && r.URL.Query().Get("status") == "pending":
-					_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(left) + `,"operations":[]}`))
-					if left > 0 && left < 1<<30 {
-						left--
-					}
-					return true
-				case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/documents/conversation:s8"):
-					atDelete = left
-				}
-				return false
-			}))
-			code, env, out, errOut := runRestoreJSON(t, archive)
-			if code != output.OK {
-				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	home, archive, dk, port := restoreSetup(t)
+	seedTombstones(t, home, port)
+	documentUnits["conversation:s8"] = 1
+	oldPoll := queuePoll
+	queuePoll = time.Millisecond
+	t.Cleanup(func() { queuePoll = oldPoll })
+	var mu sync.Mutex
+	left, atDelete := 3, -1
+	var markerAtWait string
+	pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if dk.restored() == 0 {
+			return false
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/claude-memory/operations") && r.URL.Query().Get("status") == "pending":
+			if m, _ := state.ReadRestoreMarker(pathsOf(home)); m != nil && left > 0 {
+				markerAtWait = m.Step
 			}
-			warned := strings.Contains(strings.Join(env.Data.Warnings, "\n"), "was not done within")
-			if c.warn != warned || (!c.warn && atDelete != 0) || atDelete < 0 {
-				t.Errorf("queue left at the delete %d, warned %v: %q", atDelete, warned, env.Data.Warnings)
+			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(left) + `,"operations":[]}`))
+			if left > 0 {
+				left--
 			}
-		})
+			return true
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/documents/conversation:s8"):
+			atDelete = left
+		}
+		return false
+	}))
+	code, env, out, errOut := runRestoreJSON(t, archive)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if atDelete != 0 || markerAtWait != state.PurgeStep || !strings.Contains(stepsOf(env), "purge waiting") {
+		t.Errorf("queue at the delete %d, marker step while waiting %q, steps %s", atDelete, markerAtWait, stepsOf(env))
+	}
+}
+
+// Interrupted while it waits (a timeout, Ctrl-C), restore leaves the
+// server on its temporary key, the marker at its purge step, and exits 40
+// naming server start, which resumes: it waits, purges again on a
+// temporary key, then starts the server on its API key and finishes
+// (issue 285 review MED-1). Doctor names it too.
+func TestRestoreInterruptedWhileWaitingResumesWithServerStart(t *testing.T) {
+	home, archive, dk, port := restoreSetup(t)
+	seedTombstones(t, home, port)
+	documentUnits["conversation:s8"] = 1
+	sec, _ := config.LoadSecrets(secretsFile(home))
+	oldWait, oldPoll := queueWait, queuePoll
+	queueWait, queuePoll = 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { queueWait, queuePoll = oldWait, oldPoll })
+	var mu sync.Mutex
+	drained := false
+	var deletes []string // the key each purge-again delete came with
+	pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if dk.restored() == 0 {
+			return false
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/claude-memory/operations") && r.URL.Query().Get("status") == "pending":
+			n := 1
+			if drained {
+				n = 0
+			}
+			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(n) + `,"operations":[]}`))
+			return true
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/documents/conversation:s8"):
+			deletes = append(deletes, strconv.FormatBool(r.Header.Get("Authorization") == "Bearer "+sec.APIKey))
+		}
+		return false
+	}))
+	code, env, out, errOut := runRestoreJSON(t, archive)
+	if code != output.Partial || !strings.Contains(out, `"resume": "backsight server start"`) {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	d := pathsOf(home)
+	m, err := state.ReadRestoreMarker(d)
+	if err != nil || m == nil || m.Step != state.PurgeStep || !slices.Contains(m.PurgeBanks, "claude-memory") || len(deletes) != 0 {
+		t.Fatalf("marker %+v %v, deletes %v", m, err, deletes)
+	}
+	if k := dk.keys[len(dk.keys)-1]; k == sec.APIKey {
+		t.Error("the server runs on its API key while the purge waits")
+	}
+	if env.Data.Epoch.Epoch != 1 {
+		t.Errorf("epoch %+v", env.Data.Epoch)
+	}
+	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "backsight server start (it waits for the queues") {
+		t.Errorf("doctor:\n%s", out)
+	}
+	mu.Lock()
+	drained = true
+	mu.Unlock()
+	queueWait = 0
+	code, out, errOut = run(t, "server", "start")
+	if code != output.OK || !strings.Contains(out, "is finished") || !strings.Contains(out, "conversation:s8") {
+		t.Fatalf("server start: exit %d\n%s%s", code, out, errOut)
+	}
+	if !slices.Equal(deletes, []string{"false"}) || state.RestoreIncomplete(d) || dk.keys[len(dk.keys)-1] != sec.APIKey {
+		t.Errorf("deletes (on the API key?) %v, marker %v, key %v", deletes, state.RestoreIncomplete(d), dk.keys[len(dk.keys)-1] == sec.APIKey)
 	}
 }

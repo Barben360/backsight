@@ -247,3 +247,51 @@ func TestWriteEpochLeavesAForeignControlBankAlone(t *testing.T) {
 		}
 	}
 }
+
+// A control bank backsight creates for a bank it cannot prove its own is
+// adopted: named apart, written to like its own, never proof of
+// ownership (issue 285 review MED-2). An existing adopted bank stays
+// adopted; an existing proven one stays proven.
+func TestAdoptedControlBank(t *testing.T) {
+	ctx := context.Background()
+	h := &banksHS{docs: map[string]map[string]json.RawMessage{}, configs: map[string]map[string]any{}}
+	cl := h.client(t)
+	banks := func() map[string]string {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		out := map[string]string{}
+		for k, v := range h.names {
+			out[k] = v
+		}
+		return out
+	}
+	if err := WriteEpochAs(ctx, cl, "notes", Epoch{Epoch: 1}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := banks()["notes-control"]; got != AdoptedControlMarker.Name {
+		t.Fatalf("adopted control bank named %q", got)
+	}
+	if _, _, err := OwnedBank(ctx, cl, "notes-control", ControlMarker); err == nil {
+		t.Error("an adopted control bank passes as proof")
+	}
+	// Later writes, adopted or not, keep it adopted.
+	if _, err := WriteTombstones(ctx, cl, "notes", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := banks()["notes-control"]; got != AdoptedControlMarker.Name {
+		t.Errorf("after a plain write: %q", got)
+	}
+	if adopted, exists, err := OwnedControl(ctx, cl, "notes"); err != nil || !exists || !adopted {
+		t.Errorf("OwnedControl: adopted %v exists %v %v", adopted, exists, err)
+	}
+	// A proven control bank stays proven when an adopting write reaches it.
+	if err := WriteEpoch(ctx, cl, "mine", Epoch{Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteEpochAs(ctx, cl, "mine", Epoch{Epoch: 2}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := banks()["mine-control"]; got != ControlMarker.Name {
+		t.Errorf("proven control bank renamed %q", got)
+	}
+}

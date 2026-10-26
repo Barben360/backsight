@@ -49,20 +49,28 @@ type PurgeFact struct {
 // to finish when a document delete fails. It returns the facts whose
 // observations were cleared and the pages deleted.
 func PurgeWrites(ctx context.Context, cl *hindsight.Client, bank string, facts []PurgeFact, docs []string, projects map[string]bool, rerun string) (cleared int, pages []string, err error) {
+	// "Not found" is done: a purge stopped half way and done again finds
+	// some of it gone already (issue 285 review LOW-4).
+	gone := func(err error) bool {
+		var apiErr *hindsight.APIError
+		return errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound
+	}
 	for _, f := range facts {
 		if f.State == "invalidated" {
 			continue
 		}
-		if err := cl.ClearObservations(ctx, bank, f.ID); err != nil {
+		if err := cl.ClearObservations(ctx, bank, f.ID); gone(err) {
+			continue // the fact itself is gone
+		} else if err != nil {
 			return cleared, nil, fmt.Errorf("clearing the observations of %s: %w", f.ID, err)
 		}
 		cleared++
-		if err := cl.Invalidate(ctx, bank, f.ID, "purged by the user (backsight forget --purge)", false); err != nil {
+		if err := cl.Invalidate(ctx, bank, f.ID, "purged by the user (backsight forget --purge)", false); err != nil && !gone(err) {
 			return cleared, nil, fmt.Errorf("retiring %s: %w", f.ID, err)
 		}
 	}
 	for i, d := range docs {
-		if err := cl.DeleteDocument(ctx, bank, d); err != nil {
+		if err := cl.DeleteDocument(ctx, bank, d); err != nil && !gone(err) {
 			// The observation may be gone already (its facts were cleared):
 			// say what is left and how to finish.
 			left := slicesClone(docs[i:])
@@ -91,7 +99,9 @@ func slicesClone(s []string) []string { return append([]string(nil), s...) }
 
 // Repurged is what PurgeAgain removed.
 type Repurged struct {
-	Documents    []string `json:"documents,omitempty"`
+	Documents []string `json:"documents,omitempty"`
+	// Left: on an error, the tombstoned documents not known gone yet.
+	Left         int      `json:"left,omitempty"`
 	Observations int      `json:"observations_cleared,omitempty"` // facts whose observations were cleared
 	Pages        []string `json:"pages,omitempty"`
 }
@@ -117,18 +127,26 @@ func (r Repurged) String() string {
 func PurgeAgain(ctx context.Context, cl *hindsight.Client, bank string, tombs []state.Tombstone) (Repurged, error) {
 	var res Repurged
 	seen := map[string]bool{}
+	var docs []state.Tombstone
 	for _, t := range tombs {
 		if seen[t.Document] || (t.Bank != "" && t.Bank != bank) {
 			continue
 		}
 		seen[t.Document] = true
+		docs = append(docs, t)
+	}
+	fail := func(i int, err error) (Repurged, error) {
+		res.Left = len(docs) - i
+		return res, err
+	}
+	for i, t := range docs {
 		_, err := cl.GetDocument(ctx, bank, t.Document)
 		var apiErr *hindsight.APIError
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
 			continue
 		case err != nil:
-			return res, fmt.Errorf("bank %s, document %s: %w", bank, t.Document, err)
+			return fail(i, fmt.Errorf("bank %s, document %s: %w", bank, t.Document, err))
 		}
 		var facts []PurgeFact
 		projects := map[string]bool{}
@@ -144,13 +162,13 @@ func PurgeAgain(ctx context.Context, cl *hindsight.Client, bank string, tombs []
 			}
 			return nil
 		}); err != nil {
-			return res, fmt.Errorf("bank %s, the facts of document %s: %w", bank, t.Document, err)
+			return fail(i, fmt.Errorf("bank %s, the facts of document %s: %w", bank, t.Document, err))
 		}
 		cleared, pages, err := PurgeWrites(ctx, cl, bank, facts, []string{t.Document}, projects, "it is purged again on the next restore or reconcile")
 		res.Observations += cleared
 		res.Pages = append(res.Pages, pages...)
 		if err != nil {
-			return res, fmt.Errorf("bank %s: %w", bank, err)
+			return fail(i, fmt.Errorf("bank %s: %w", bank, err))
 		}
 		res.Documents = append(res.Documents, t.Document)
 	}

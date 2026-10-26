@@ -55,6 +55,10 @@ type State struct {
 	// mirrored into the bank's control bank (M5 review rules): what they
 	// held is never sent again, after a restore or a reinstall either.
 	Tombstones []Tombstone `json:"tombstones,omitempty"`
+	// PurgeHold: the last reconcile could not purge again the tombstoned
+	// documents the server holds; every send holds until one does
+	// (issue 285 review LOW-4). Doctor shows it.
+	PurgeHold *PurgeHold `json:"purge_hold,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -165,6 +169,14 @@ type SelfCheck struct {
 	Detail    string    `json:"detail,omitempty"`
 	KeyID     string    `json:"key_id,omitempty"`
 	CheckedAt time.Time `json:"checked_at"`
+}
+
+// PurgeHold is what a failed purge again left on the server.
+type PurgeHold struct {
+	Bank      string    `json:"bank"`
+	Documents int       `json:"documents"` // tombstoned documents left to purge again
+	Error     string    `json:"error"`
+	At        time.Time `json:"at"`
 }
 
 // RestoreEpoch is the bank restore epoch this client reconciled with.

@@ -101,6 +101,12 @@ func TombstonesFromMetadata(bank string, meta map[string]string) ([]state.Tombst
 // is not backsight's is left alone (*ForeignBank). A broken document is
 // replaced.
 func WriteTombstones(ctx context.Context, cl *hindsight.Client, bank string, ts []state.Tombstone) (int, error) {
+	return WriteTombstonesAs(ctx, cl, bank, ts, false)
+}
+
+// WriteTombstonesAs is WriteTombstones; adopt: a control bank it creates
+// is adopted (AdoptedControlMarker).
+func WriteTombstonesAs(ctx context.Context, cl *hindsight.Client, bank string, ts []state.Tombstone, adopt bool) (int, error) {
 	cur, err := ReadTombstones(ctx, cl, bank)
 	var unreadable *TombstonesUnreadable
 	switch {
@@ -117,7 +123,7 @@ func WriteTombstones(ctx context.Context, cl *hindsight.Client, bank string, ts 
 		return 0, err
 	}
 	cb := ControlBank(bank)
-	if _, err := QuietBank(ctx, cl, cb, ControlMarker, controlMission(bank)); err != nil {
+	if err := quietControl(ctx, cl, bank, adopt); err != nil {
 		return 0, err
 	}
 	return len(all.Tombstones), cl.RetainNow(ctx, cb, []hindsight.RetainItem{{

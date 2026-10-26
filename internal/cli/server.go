@@ -425,9 +425,15 @@ func newServerStartCmd(e *env) *cobra.Command {
 			// before, which this binary's pin would refuse): the marker
 			// goes once the server is healthy on that key (issue 285).
 			m, _ := state.ReadRestoreMarker(d)
-			keyStep := m != nil && m.Step == state.KeyStep
+			purgeStep := m != nil && m.Step == state.PurgeStep
+			keyStep := m != nil && (m.Step == state.KeyStep || purgeStep)
+			// The marker's image counts only when it is the one the server's
+			// files deploy (what restore or its rollback rendered last);
+			// anything else goes through the pin guard (issue 285 review
+			// LOW-2).
 			rt := runtimeFor(cfg)
-			if keyStep && m.Image != "" {
+			deployed, _ := rt.Deployed()
+			if keyStep && m.Image != "" && m.Image == deployed {
 				rt = rt.WithVersion(m.Image)
 			} else if err := pinGuard(cfg, rt); err != nil {
 				return err
@@ -459,6 +465,13 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
+			if purgeStep {
+				note, err := resumePurge(cmd.Context(), e, cfg, sec, rt, d, *m)
+				if err != nil {
+					return err
+				}
+				notes = append(notes, note)
+			}
 			if _, err := rt.Write(files); err != nil {
 				return blocked(err)
 			}

@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestRestoreMarkerRoundTrip(t *testing.T) {
 		t.Errorf("path %s", d.RestoreMarker())
 	}
 	m, err := ReadRestoreMarker(d)
-	if err != nil || m == nil || *m != in || !RestoreIncomplete(d) {
+	if err != nil || m == nil || !reflect.DeepEqual(*m, in) || !RestoreIncomplete(d) {
 		t.Fatalf("read back %+v %v", m, err)
 	}
 	raw, _ := os.ReadFile(d.RestoreMarker())
