@@ -124,7 +124,7 @@ const storeFlushBudget = 10 * time.Second
 
 // TransverseKeyword names the transverse project in tool calls, whatever
 // the configured aliases are.
-const TransverseKeyword = "transverse"
+const TransverseKeyword = retain.TransverseKeyword
 
 // checkNote refuses a note before anything leaves the machine: bad kind,
 // empty text, a secret, or a session or directory opted out of memory (SPEC
@@ -188,16 +188,13 @@ func noteTarget(cfg config.Config, asked, current, how string) (string, error) {
 
 // isPool: p names the transverse pool (the keyword or an alias).
 func isPool(cfg config.Config, p string) bool {
-	return len(cfg.Projects.Transverse) > 0 && (p == TransverseKeyword || slices.Contains(cfg.Projects.Transverse, p))
+	return retain.IsPool(cfg.Projects.Transverse, p)
 }
 
 // canonicalProject maps the keyword and every transverse alias to the first
 // alias (one pool, SPEC §4); any other name is kept.
 func canonicalProject(cfg config.Config, p string) string {
-	if isPool(cfg, p) {
-		return cfg.Projects.Transverse[0]
-	}
-	return p
+	return retain.CanonicalProject(cfg.Projects.Transverse, p)
 }
 
 func storeText(res storeResult) string {

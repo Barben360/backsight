@@ -2,9 +2,11 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -77,7 +79,62 @@ func checkNoise(ctx context.Context, env Env, cl *hindsight.Client, tg *target.T
 	if env.Now != nil {
 		now = env.Now
 	}
-	return append(out, checkNotes(ctx, cl, tg.Bank, cfg.Projects.Transverse[0], now()))
+	out = append(out, checkNotes(ctx, cl, tg.Bank, cfg.Projects.Transverse[0], now()))
+	return append(out, checkLiteralTransverse(ctx, cl, tg, cfg.Projects.Transverse[0]))
+}
+
+// checkLiteralTransverse names the documents tagged project:transverse, the
+// keyword as written: a replay of memory_store calls that named it used to
+// keep it (issue 33), and recall's transverse scope searches the aliases,
+// never that tag. retain reattribute leaves notes where they are (their
+// project was chosen), so the fix is a re-tag of each document.
+func checkLiteralTransverse(ctx context.Context, cl *hindsight.Client, tg *target.Target, alias string) Check {
+	c := Check{ID: "transverse-keyword"}
+	if alias == retain.TransverseKeyword {
+		c.Status, c.Summary = OK, "the canonical transverse alias is the keyword itself"
+		return c
+	}
+	docs, err := cl.TaggedDocumentsSince(ctx, tg.Bank, time.Unix(0, 0), "project:"+retain.TransverseKeyword)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Info, "cannot list the documents tagged project:"+retain.TransverseKeyword, err.Error()
+		return c
+	}
+	if len(docs) == 0 {
+		c.Status, c.Summary = OK, "no document is tagged project:"+retain.TransverseKeyword
+		return c
+	}
+	c.Status = Warn
+	c.Projects = []string{alias}
+	c.Summary = fmt.Sprintf("%d document%s tagged project:%s, a pool recall never searches (the transverse pool is project:%s)",
+		len(docs), map[bool]string{true: "", false: "s"}[len(docs) == 1], retain.TransverseKeyword, alias)
+	var lines []string
+	for i, d := range docs {
+		if i == headlessFixesMax {
+			lines = append(lines, fmt.Sprintf("... and %d more", len(docs)-i))
+			break
+		}
+		tags := make([]string, len(d.Tags))
+		for j, t := range d.Tags {
+			if t == "project:"+retain.TransverseKeyword {
+				t = "project:" + alias
+			}
+			tags[j] = t
+		}
+		body, _ := json.Marshal(map[string][]string{"tags": tags})
+		lines = append(lines, fmt.Sprintf("curl -X PATCH -H 'Authorization: Bearer $API_KEY' -H 'Content-Type: application/json' -d '%s' '%s%s'",
+			body, strings.TrimRight(tg.URL, "/"), "/v1/default/banks/"+strings.ReplaceAll(url.PathEscape(tg.Bank), ":", "%3A")+"/documents/"+strings.ReplaceAll(url.PathEscape(d.ID), ":", "%3A")))
+	}
+	c.Detail = "documents: " + strings.Join(docIDs(docs), ", ")
+	c.Fix = "backsight retain reattribute does not move notes (their project was chosen): re-tag each document by hand (PATCH replaces the tags; API_KEY is in secrets.toml), then the server consolidates it again:\n" + strings.Join(lines, "\n")
+	return c
+}
+
+func docIDs(docs []hindsight.DocumentItem) []string {
+	ids := make([]string, 0, len(docs))
+	for _, d := range docs {
+		ids = append(ids, d.ID)
+	}
+	return ids
 }
 
 // notesWindow: doctor counts the notes stored in the last week.

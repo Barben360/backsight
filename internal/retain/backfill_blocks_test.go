@@ -2,6 +2,7 @@ package retain
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestNotesFromRecords(t *testing.T) {
 		{ID: "t4", Name: "mcp__user-memory__memory_store", Input: map[string]json.RawMessage{"kind": raw("idea"), "text": raw("Unknown kind falls back.")}},
 	}}}
 	all := func(transcript.Record) (string, bool) { return "workspace", true }
-	notes := NotesFromRecords("b", "s1", recs, all)
+	notes := NotesFromRecords("b", "s1", recs, nil, all)
 	if len(notes) != 3 {
 		t.Fatalf("%d notes: %+v", len(notes), notes)
 	}
@@ -36,14 +37,14 @@ func TestNotesFromRecords(t *testing.T) {
 	if c.Kind != "lesson" {
 		t.Errorf("unknown kind: %+v", c)
 	}
-	again := NotesFromRecords("b", "s1", recs, all)
+	again := NotesFromRecords("b", "s1", recs, nil, all)
 	if again[0].DocumentID != a.DocumentID || again[0].OperationID != a.OperationID {
 		t.Error("ids must be deterministic so a rerun collapses")
 	}
-	if other := NotesFromRecords("b", "s2", recs, all); other[0].DocumentID == a.DocumentID {
+	if other := NotesFromRecords("b", "s2", recs, nil, all); other[0].DocumentID == a.DocumentID {
 		t.Error("the session must be part of the id")
 	}
-	if none := NotesFromRecords("b", "s1", recs, func(transcript.Record) (string, bool) { return "", false }); len(none) != 0 {
+	if none := NotesFromRecords("b", "s1", recs, nil, func(transcript.Record) (string, bool) { return "", false }); len(none) != 0 {
 		t.Errorf("records in an opted-out directory must give no note: %+v", none)
 	}
 }
@@ -116,8 +117,48 @@ func TestNoteProjectPrecedence(t *testing.T) {
 		{ID: "t2", Name: "mcp__hindsight__hindsight_ingest_document", Input: map[string]json.RawMessage{
 			"title": raw("Leçon : x"), "content": raw("y"), "tags": raw([]string{"kind:lesson"})}},
 	}}}
-	notes := NotesFromRecords("b", "s1", recs, func(transcript.Record) (string, bool) { return "billing", true })
+	notes := NotesFromRecords("b", "s1", recs, nil, func(transcript.Record) (string, bool) { return "billing", true })
 	if len(notes) != 2 || notes[0].Project != "infra" || notes[1].Project != "billing" {
 		t.Errorf("%+v", notes)
+	}
+}
+
+// A replayed save naming the transverse pool goes to the canonical alias, as
+// a live one does; a real project is untouched; a save without project in a
+// pool directory keeps its record's project, folded to the canonical alias
+// (issue 33).
+func TestReplayedTransverseNotesGetTheAlias(t *testing.T) {
+	ts := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	store := func(id string, in map[string]any) transcript.ToolUse {
+		m := map[string]json.RawMessage{"kind": raw("convention"), "text": raw("Rule " + id)}
+		for k, v := range in {
+			m[k] = raw(v)
+		}
+		return transcript.ToolUse{ID: id, Name: "mcp__plugin_backsight_memory__memory_store", Input: m}
+	}
+	recs := []transcript.Record{{UUID: "a1", Timestamp: ts, Tools: []transcript.ToolUse{
+		store("keyword", map[string]any{"project": "transverse"}),
+		store("alias", map[string]any{"project": "home"}),
+		store("real", map[string]any{"project": "billing"}),
+		store("none", nil),
+		{ID: "ingest", Name: "mcp__hindsight__hindsight_ingest_document", Input: map[string]json.RawMessage{
+			"title": raw("Leçon : x"), "content": raw("y"), "tags": raw([]string{"project:transverse"})}},
+	}}}
+	aliases := []string{".claude", "home"}
+	notes := NotesFromRecords("b", "s1", recs, aliases, func(transcript.Record) (string, bool) { return "home", true })
+	got := []string{}
+	for _, n := range notes {
+		got = append(got, n.Project)
+	}
+	if want := []string{".claude", ".claude", "billing", ".claude", ".claude"}; !slices.Equal(got, want) {
+		t.Errorf("projects %v, want %v", got, want)
+	}
+	if tags := notes[0].Item("m").Tags; !slices.Contains(tags, "project:.claude") || slices.Contains(tags, "project:transverse") {
+		t.Errorf("tags %v", tags)
+	}
+	// Outside a pool directory, a save without project takes its record's.
+	notes = NotesFromRecords("b", "s1", recs, aliases, func(transcript.Record) (string, bool) { return "billing", true })
+	if notes[3].Project != "billing" {
+		t.Errorf("%+v", notes[3])
 	}
 }
