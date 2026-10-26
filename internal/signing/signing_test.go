@@ -212,7 +212,9 @@ func TestMinisignCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("minisign -S output refused: %v", err)
 	}
-	if want := strings.TrimPrefix(lines(t, pubFile)[0], "untrusted comment: minisign public key "); id != want {
+	// Some minisign builds print the id without its leading zeros.
+	want := strings.TrimPrefix(lines(t, pubFile)[0], "untrusted comment: minisign public key ")
+	if len(id) != 16 || strings.TrimLeft(id, "0") != strings.TrimLeft(want, "0") {
 		t.Errorf("key id %q, minisign says %q", id, want)
 	}
 }
