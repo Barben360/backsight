@@ -204,6 +204,7 @@ case :$PATH: in
 *) echo "add it to your PATH first: export PATH=\"$bindir:\$PATH\" (in your shell's profile to keep it)" ;;
 esac
 echo "next: backsight setup"
+echo "a coding agent installing for you: backsight guide agent-guide"
 }
 
 main "$@"

@@ -256,18 +256,23 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		return res, preflightError(class, failed)
 	}
 	if len(missing) > 0 {
-		e := &output.Error{Code: output.NeedsUser, Questions: qs, Resume: "backsight setup --answer id=value …",
+		ne := &output.Error{Code: output.NeedsUser, Questions: qs, Resume: "backsight setup --answer id=value …",
 			Message: "setup needs answers to " + strings.Join(missing, ", ") + ": list the questions with backsight setup --questions --json, then rerun with --answer id=value"}
+		if !e.json && !f.nonInteractive && (!stdinIsTerminal() || !stdoutIsTerminal()) {
+			ne.Message = "setup asks its questions at a terminal and there is no terminal here. " +
+				"A coding agent installing for a user: read backsight guide agent-guide, then run backsight setup --questions --json and rerun with --answer id=value --non-interactive --json. " +
+				"Missing answers: " + strings.Join(missing, ", ")
+		}
 		if !slices.Contains(missing, "provider") {
 			if names, _, _ := s.missingSecrets(res.Answers); len(names) > 0 {
 				ns := needSecrets(names, "backsight setup --answer id=value …")
 				var se *output.Error
 				if errors.As(ns, &se) {
-					e.Secrets, e.Actions = se.Secrets, se.Actions
+					ne.Secrets, ne.Actions = se.Secrets, se.Actions
 				}
 			}
 		}
-		return res, e
+		return res, ne
 	}
 	if interactive && res.Answers["consent"] == "" {
 		fmt.Fprint(e.stdout, setupPlanText(s.planSteps(res.Answers)))
