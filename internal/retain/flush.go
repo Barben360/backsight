@@ -205,10 +205,6 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 	}
 	attrs := f.attribute(sid, recs, attr{project: cur.Project, namedOut: cur.OptOut, namedOutDir: cur.OptOutDir})
 	if resync {
-		if cur.Home == "" {
-			cur.Home = homeOf(recs, attrs)
-		}
-		cur.Document = DocumentID(sid, cur.Home, cur.Home)
 		var done bool
 		if recs, res, done = f.resync(ctx, res, &cur, sid, recs, attrs, opt, now); done {
 			return res
@@ -252,7 +248,23 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	lostOwn := f.loadDropped(sid)
 	own := func(u string) bool { return f.Index.Has(sessionKey(f.Bank, sid, u)) }
 	sent := func(u string) bool { return f.Index.Has(u) && (!lostOwn.Records[u] || own(u)) }
-	docs, err := f.readDocuments(ctx, sid, cur.Home, projectsOf(cur.Home, recs, attrs))
+	known := map[string]serverDoc{}
+	if cur.Home == "" {
+		// No cursor to keep the home from: conversation:<sid> says which
+		// project it was sent for, which the directories may no longer say
+		// (a linked worktree removed since); else the records name it.
+		base, err := f.readDocument(ctx, DocumentID(sid, "", ""))
+		if err != nil {
+			res.Stop, res.NeedsFix = true, needsFix(err)
+			return retry(errSummary(err))
+		}
+		if cur.Home = base.named; cur.Home == "" {
+			cur.Home = homeOf(recs, attrs)
+		}
+		known[base.id] = base
+	}
+	cur.Document = DocumentID(sid, cur.Home, cur.Home)
+	docs, err := f.readDocuments(ctx, sid, cur.Home, projectsOf(cur.Home, recs, attrs), known)
 	if err != nil {
 		res.Stop, res.NeedsFix = true, needsFix(err)
 		return retry(errSummary(err))
@@ -269,7 +281,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	// stored: that document is resent whole, from its segment 1.
 	resend := f.pendingMark(sid) == resendMark
 	start := -1 // the first record to send
-	var mark, unmark []string
+	var mark, unmark, resent []string
 	for i, r := range recs {
 		a, key := attrs[r.End], sessionKey(f.Bank, sid, r.UUID)
 		_, found := pos.at[a.project]
@@ -294,7 +306,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 			// never send it twice.
 			held = true
 		case own(r.UUID) && resend:
-			unmark = append(unmark, key)
+			unmark, resent = append(unmark, key), append(resent, r.UUID)
 		case own(r.UUID):
 			// This session's own record went out, but its document is not
 			// readable yet (its first async retain is still running): a new
@@ -311,6 +323,19 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	}
 	if err := f.Index.Add(mark...); err != nil {
 		return retry(err.Error())
+	}
+	// The records resent lose their session key; the .dropped mark keeps
+	// them this session's own to resend (as after a restore), should this
+	// resend be refused or stopped: without it, their bare uuid alone would
+	// read as a fork's copy, and they would never go out.
+	if len(resent) > 0 {
+		lost := dropped{Records: map[string]bool{}}
+		for _, u := range resent {
+			lost.Records[u] = true
+		}
+		if err := f.addDropped(sid, lost); err != nil {
+			return retry(err.Error())
+		}
 	}
 	if err := f.Index.Remove(unmark...); err != nil {
 		return retry(err.Error())

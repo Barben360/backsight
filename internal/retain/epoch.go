@@ -271,7 +271,7 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 		}
 	}
 	slices.Sort(projects[1:])
-	docs, err := f.readDocuments(ctx, sid, cur.Home, projects)
+	docs, err := f.readDocuments(ctx, sid, cur.Home, projects, nil)
 	if err != nil {
 		return false, errors.New(errSummary(err))
 	}
@@ -298,7 +298,14 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	var keys []string
 	lostAny := bad != ""
 	for i, r := range recs {
-		if bad != "" || pos.holds(i, attrs[r.End].project) {
+		p := attrs[r.End].project
+		if bad != "" || pos.holds(i, p) {
+			continue
+		}
+		if _, sentTo := cur.Segments[p]; cur.Segments != nil && !sentTo {
+			// Named now for a project this cursor never sent to: its
+			// directory changed since (a linked worktree removed). The
+			// position cannot tell; the resync does, from the server.
 			continue
 		}
 		// Only this session's own sends: a fork's copied records stay

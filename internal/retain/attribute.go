@@ -123,30 +123,49 @@ type serverDoc struct {
 	// legacy: the record up to which this document holds every project's
 	// records (a build from before per-project documents wrote it).
 	legacy string
+	// named: the project its last segment was sent for (metadata), "" for
+	// a legacy document.
+	named string
 }
 
 // readDocuments reads the session's document of each project; a missing
-// one is not an error, any other failure is.
-func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects []string) ([]serverDoc, error) {
+// one is not an error, any other failure is. known are documents already
+// read, by id.
+func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects []string, known map[string]serverDoc) ([]serverDoc, error) {
 	out := make([]serverDoc, 0, len(projects))
 	for _, p := range projects {
-		d := serverDoc{project: p, id: DocumentID(sid, home, p)}
-		doc, err := f.Client.GetDocument(ctx, f.Bank, d.id)
-		var apiErr *hindsight.APIError
-		switch {
-		case err == nil:
-			m := doc.Metadata
-			d.found, d.lastUUID, d.segment, d.legacy = true, m["last_uuid"], m["segment"], m["legacy_last_uuid"]
-			if _, layout := m["project"]; !layout {
-				d.legacy = d.lastUUID // written before per-project documents
+		id := DocumentID(sid, home, p)
+		d, ok := known[id]
+		if !ok {
+			var err error
+			if d, err = f.readDocument(ctx, id); err != nil {
+				return nil, err
 			}
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-		default:
-			return nil, err
 		}
+		d.project = p
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+// readDocument reads one document; a missing one is not found, not an
+// error.
+func (f *Flusher) readDocument(ctx context.Context, id string) (serverDoc, error) {
+	d := serverDoc{id: id}
+	doc, err := f.Client.GetDocument(ctx, f.Bank, id)
+	var apiErr *hindsight.APIError
+	switch {
+	case err == nil:
+		m := doc.Metadata
+		d.found, d.lastUUID, d.segment, d.legacy, d.named = true, m["last_uuid"], m["segment"], m["legacy_last_uuid"], m["project"]
+		if _, layout := m["project"]; !layout {
+			d.legacy = d.lastUUID // written before per-project documents
+		}
+	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+	default:
+		return d, err
+	}
+	return d, nil
 }
 
 // position is what the server holds of a session, per document.

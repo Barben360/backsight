@@ -1599,12 +1599,14 @@ func (h *fakeHS) countIn(doc, text string) int {
 	return n
 }
 
-// A resync keeps the home of a per-project cursor: when the first
-// directory's name changes (its linked worktree is gone, so its basename
-// names it now), the home project keeps conversation:<sid>.
-func TestAResyncKeepsTheCursorsHome(t *testing.T) {
-	e := newEnv(t)
-	alpha := e.repo("alpha")
+// worktreeSession: a repository alpha with a linked worktree alpha-fix;
+// the session's first record is in the worktree (in a paused stretch when
+// paused), its second in alpha, both flushed. gone removes the worktree
+// and starts a fresh resolver (a later process): the worktree's directory
+// is then named by its basename.
+func worktreeSession(t *testing.T, paused bool) (e *env, alpha string, gone func()) {
+	e = newEnv(t)
+	alpha = e.repo("alpha")
 	git := func(args ...string) {
 		t.Helper()
 		if out, err := exec.Command("git", append([]string{"-C", alpha, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput(); err != nil {
@@ -1614,23 +1616,66 @@ func TestAResyncKeepsTheCursorsHome(t *testing.T) {
 	git("commit", "-q", "--allow-empty", "-m", "init")
 	wt := filepath.Join(filepath.Dir(e.cwd), "alpha-fix")
 	git("worktree", "add", "-q", wt)
-	// the worktree turn was paused: never sent, but it names the home
-	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
-	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
-		[]byte(`{"paused":false,"paused_spans":[{"from":"2026-10-24T08:59:00Z","to":"2026-10-24T09:01:00Z"}]}`), 0o600)
-	e.recordIn(wt, "s1", "u1", "user", 0, "private worktree turn")
+	if paused {
+		_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+		_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+			[]byte(`{"paused":false,"paused_spans":[{"from":"2026-10-24T08:59:00Z","to":"2026-10-24T09:01:00Z"}]}`), 0o600)
+	}
+	e.recordIn(wt, "s1", "u1", "user", 0, "worktree one")
 	e.recordIn(alpha, "s1", "u2", "user", 5, "alpha two")
-	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
-	e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha two"})
-	git("worktree", "remove", wt)
-	home := filepath.Dir(filepath.Dir(e.cwd))
-	e.f.Resolver = project.New(home, []string{".claude"}) // a later process: nothing cached
-	p := filepath.Join(e.dir, "s1.jsonl")
-	raw, _ := os.ReadFile(p)
-	_ = os.WriteFile(p, append([]byte(`{"type":"mode","sessionId":"s1"}`+"\n"), raw...), 0o600) // rewritten: resync
-	e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
-	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
-	e.expectItems(1, [4]string{"conversation:s1", "append", "2", "alpha three"})
+	e.flush("s1", Options{})
+	return e, alpha, func() {
+		git("worktree", "remove", wt)
+		e.f.Resolver = project.New(filepath.Dir(filepath.Dir(e.cwd)), []string{".claude"})
+	}
+}
+
+// A resync keeps the session's home when the first directory's name
+// changed since (its linked worktree is gone): from the cursor when the
+// transcript was rewritten, from conversation:<sid>'s metadata when the
+// cursor is lost. The worktree turn was paused: never sent, it only names
+// the home.
+func TestAResyncKeepsTheSessionsHome(t *testing.T) {
+	for name, lose := range map[string]func(e *env){
+		"transcript rewritten": func(e *env) {
+			p := filepath.Join(e.dir, "s1.jsonl")
+			raw, _ := os.ReadFile(p)
+			_ = os.WriteFile(p, append([]byte(`{"type":"mode","sessionId":"s1"}`+"\n"), raw...), 0o600)
+		},
+		"cursor lost": func(e *env) { _ = os.RemoveAll(e.f.Dirs.CursorsDir()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, alpha, gone := worktreeSession(t, true)
+			e.expectItems(0, [4]string{"conversation:s1", "", "1", "alpha two"})
+			gone()
+			lose(e)
+			e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
+			expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+			e.expectItems(1, [4]string{"conversation:s1", "append", "2", "alpha three"})
+		})
+	}
+}
+
+// A reconcile after the session's first directory changed name (its
+// linked worktree is gone), while the server still holds everything:
+// records now named for a project the cursor never sent to are left to
+// the resync, so nothing is dropped and nothing resent.
+func TestAReconcileAfterAWorktreeIsRemovedDropsNothing(t *testing.T) {
+	e, _, gone := worktreeSession(t, false)
+	e.expectItems(0, [4]string{"conversation:s1", "", "1", "worktree one"})
+	gone()
+	e.hs.restore(e.hs.backup(), 1, clockAt(12, 30), clockAt(13, 30))
+	e.clock = clockAt(13, 30)
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || len(rec.Resend) != 0 {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	if !e.f.Index.Has(sessionKey("claude-memory", "s1", "u1")) {
+		t.Error("the worktree record lost its sent mark")
+	}
+	if r := e.flush("s1", Options{}); r.Status != Nothing || len(e.hs.retains) != 1 {
+		t.Errorf("%+v, %d retains", r, len(e.hs.retains))
+	}
 }
 
 // A resync that finds every record this session sent in its document
@@ -1647,5 +1692,90 @@ func TestAResyncClearsAStalePendingMark(t *testing.T) {
 	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
 	if _, err := os.Stat(filepath.Join(e.f.Dirs.CursorsDir(), "s1.pending")); !os.IsNotExist(err) {
 		t.Errorf("the stale mark outlived the resync: %v", err)
+	}
+}
+
+// A resend refused (or stopped) after its records lost their session key:
+// the .dropped mark keeps them this session's own, so the next release
+// resends them; their bare uuid alone would read as a fork's copy.
+func TestARefusedResendIsResentOnTheNextRelease(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	e.hs.hide = map[string]bool{"conversation:s1": true}
+	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	e.recordIn(alpha, "s1", "u3", "user", 60, "alpha three")
+	e.waitThenQuarantine(2)
+	e.hs.refuse = map[string]int{"conversation:s1": http.StatusUnprocessableEntity}
+	if r := e.releaseAndResend("conversation:s1"); r.Status != Quarantined {
+		t.Fatalf("%+v", r)
+	}
+	e.hs.refuse = nil
+	if r := e.releaseAndResend(); r.Status != Sent {
+		t.Fatalf("%+v", r)
+	}
+	e.expectItems(2, [4]string{"conversation:s1", "", "1", "alpha one"}, [4]string{"conversation:s1", "append", "2", "alpha three"})
+}
+
+// sentDocsMatch: what the cursor says it sent to each document is what
+// the server holds, document by document (what verify --live checks).
+func (e *env) sentDocsMatch(step string) {
+	e.t.Helper()
+	cur, _, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+	docs := cur.SentDocuments("s1")
+	got := map[string][2]string{}
+	for _, d := range docs {
+		got[d.Document] = [2]string{strconv.Itoa(d.Segment), d.LastUUID}
+	}
+	want := map[string][2]string{}
+	for id, m := range e.hs.docs {
+		if strings.HasPrefix(id, "conversation:s1") {
+			want[id] = [2]string{m["segment"], m["last_uuid"]}
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		e.t.Errorf("%s: cursor %v, server %v", step, got, want)
+	}
+}
+
+// The cursor's per-document record of what was sent follows the server
+// through a partial failure, its retry, a lost-cursor resync and a send
+// after it.
+func TestTheCursorsSentDocumentsMatchTheServer(t *testing.T) {
+	e := newEnv(t)
+	alpha, beta := e.repo("alpha"), e.repo("beta")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	e.recordIn(alpha, "s1", "u3", "user", 2, "alpha three")
+	e.hs.refuse = map[string]int{"conversation:s1@beta": http.StatusServiceUnavailable}
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.sentDocsMatch("partly sent")
+	e.hs.refuse = nil
+	expect(t, e.flush("s1", Options{}), Sent, 2, 2)
+	e.sentDocsMatch("retried")
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	e.sentDocsMatch("resynced")
+	e.recordIn(beta, "s1", "u4", "user", 60, "beta four")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	e.sentDocsMatch("sent after the resync")
+}
+
+// A pause keeps the project it names out only while paused: the same
+// directory, resumed, is retained again (a pause, unlike an excluded
+// directory, leaves no name to protect).
+func TestAPausedFirstDirectoryIsRetainedOnceResumed(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "s1.json"),
+		[]byte(`{"paused":false,"paused_spans":[{"from":"2026-10-24T08:59:00Z","to":"2026-10-24T09:01:00Z"}]}`), 0o600)
+	e.record("s1", "u1", "user", 0, "private start")
+	e.record("s1", "u2", "user", 5, "after the resume")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.expectItems(0, [4]string{"conversation:s1", "", "1", "after the resume"})
+	if it := e.hs.retains[0]; it.Tags[0] != "project:billing" || strings.Contains(it.Content, "private") {
+		t.Errorf("%+v", it)
 	}
 }
