@@ -491,10 +491,10 @@ func TestReportHidesANonLoopbackReferenceServer(t *testing.T) {
 	ref := filepath.Join(home, ".hindsight", "coding-agent.json")
 	_ = os.MkdirAll(filepath.Dir(ref), 0o700)
 	_ = os.WriteFile(ref, []byte(`{"apiUrl":"http://annsref.example:8888","bankId":"coding-agent::memoire"}`), 0o600)
-	assertScrubbed(t, map[string]string{"reference host": "annsref"}, []string{"the reference server at http://<server>:8888 is still running"})
+	assertScrubbed(t, map[string]string{"reference host": "annsref"}, []string{"the older Hindsight server at http://<server>:8888 is still running"})
 
 	_ = os.WriteFile(ref, []byte(`{"apiUrl":"http://localhost:8888","bankId":"coding-agent::memoire"}`), 0o600)
-	if c := reportCheck(reportJSON(t), "reference-server"); !strings.Contains(c.Summary, "the reference server at http://localhost:8888 is still running") {
+	if c := reportCheck(reportJSON(t), "reference-server"); !strings.Contains(c.Summary, "the older Hindsight server at http://localhost:8888 is still running") {
 		t.Errorf("reference-server check %+v", c)
 	}
 }

@@ -183,7 +183,7 @@ func checkConfig(env Env) (Check, *target.Target) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		c.Status, c.Summary = Info, "backsight is not set up yet"
-		c.Detail = "expected at " + env.Dirs.ConfigFile() + "; run backsight setup. Until then doctor inspects the reference install, if Claude Code is wired to one"
+		c.Detail = "expected at " + env.Dirs.ConfigFile() + "; run backsight setup. Until then doctor inspects an older Hindsight install, if Claude Code is wired to one"
 		return c, nil
 	case errors.As(err, &ce) && ce.File == env.Dirs.SecretsFile():
 		c.Status, c.Summary, c.Detail = Error, "secrets.toml cannot be used", err.Error()
@@ -239,7 +239,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 		c.Status, c.Summary = Error, "Hindsight unreachable at "+t.Display()+from
 		c.Detail = err.Error()
 		if t.Source == "reference" {
-			c.Fix = "start the reference server (docker compose up -d in its directory)"
+			c.Fix = "start the older Hindsight server (docker compose up -d in its directory)"
 		} else {
 			c.Fix = "check it with backsight server status, start it with backsight server start (on the server's machine if it is remote)"
 		}
@@ -645,8 +645,8 @@ func checkUntagged(ctx context.Context, cl *hindsight.Client, bank string) Check
 		c.Status, c.Summary, c.Detail = Error, "cannot list observations", err.Error()
 	case untagged > 0:
 		c.Status, c.Summary = Warn, fmt.Sprintf("%d of %d observations have no project tag", untagged, total)
-		c.Detail = "untagged observations are invisible to project recall (SPEC §4)"
-		c.Fix = "report it upstream (backsight report, M5); a fresh backsight bank prevents it for its own writes"
+		c.Detail = "untagged observations are invisible to project recall: it searches by project tag"
+		c.Fix = "report it upstream (backsight report); a fresh backsight bank prevents it for its own writes"
 	default:
 		c.Status, c.Summary = OK, fmt.Sprintf("every observation has a project tag (%d)", total)
 	}
@@ -659,13 +659,13 @@ func checkReference(in *reference.Install, err error) Check {
 	case err != nil:
 		c.Status, c.Summary, c.Detail = Warn, "cannot read the Claude Code files", err.Error()
 	case in == nil || len(in.Pieces) == 0:
-		c.Status, c.Summary = OK, "no reference install wired into Claude Code"
+		c.Status, c.Summary = OK, "no older Hindsight install wired into Claude Code"
 		if in != nil && len(in.Leftovers) > 0 {
 			c.Detail = "left on disk: " + pieceList(in.Leftovers)
 		}
 	default:
 		c.Status = Info
-		c.Summary = fmt.Sprintf("%d reference pieces wired into Claude Code, retired at the %s cut-over", len(in.Pieces), in.Pieces[0].ReplacedIn)
+		c.Summary = fmt.Sprintf("%d piece(s) of an older Hindsight install wired into Claude Code: backsight client retire unwires them", len(in.Pieces))
 		c.Detail = pieceList(in.Pieces)
 		if len(in.Leftovers) > 0 {
 			c.Detail += "; left on disk: " + pieceList(in.Leftovers)
@@ -703,7 +703,7 @@ func checkRetention(loc claudecode.Location, managedDir string) Check {
 		return c
 	}
 	c.Status = Warn
-	c.Detail += "; transcripts are the only source for backfill and rebuilds (decision 0041)"
+	c.Detail += "; transcripts are the only source for backfill and memory rebuilds"
 	if ret.Source == "managed" {
 		c.Fix = "the value is set by policy in " + managedDir + ": ask your administrator"
 	} else {
@@ -769,10 +769,10 @@ func checkClient(env Env, loc claudecode.Location) Check {
 func checkGPU(gpus []string) Check {
 	c := Check{ID: "gpu", Status: Info}
 	if len(gpus) == 0 {
-		c.Summary = "no GPU detected; acceleration comes in v2 (decision 0035)"
+		c.Summary = "no GPU detected; backsight runs on the CPU"
 		return c
 	}
-	c.Summary = strings.Join(gpus, ", ") + "; used from v2 (decision 0035)"
+	c.Summary = strings.Join(gpus, ", ") + "; not used: backsight runs on the CPU"
 	return c
 }
 

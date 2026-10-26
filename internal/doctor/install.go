@@ -129,7 +129,7 @@ func checkRemotes(d paths.Dirs, now time.Time) Check {
 	} else {
 		c.Summary = fmt.Sprintf("%d project names are shared by several repositories: %s", len(shared), strings.Join(shared, ", "))
 	}
-	c.Detail = strings.Join(detail, "; ") + "; their memories mix in one pool (decision 0045)"
+	c.Detail = strings.Join(detail, "; ") + "; their memories mix in one pool"
 	c.Fix = `if they are different projects: set project = "<another name>" in a .backsight.toml at the root of one repository, and commit it so every clone uses it. ` +
 		`If the repository was renamed or moved, or the name is shared on purpose: set project = "<that name>" in a committed .backsight.toml in each of them ` +
 		`(an old remote stops counting 7 days after its last session)`
@@ -225,11 +225,11 @@ func checkReferenceServer(ctx context.Context, env Env, ref *reference.Install, 
 		return c
 	}
 	if ref == nil || ref.URL == "" {
-		c.Summary = "no reference server configured"
+		c.Summary = "no older Hindsight server configured"
 		return c
 	}
 	if sameServer(ref.URL, cfg.Server.URL) {
-		c.Summary = "the reference config points at backsight's own server"
+		c.Summary = "the older Hindsight install's config points at backsight's own server"
 		return c
 	}
 	probe := env.ReferenceServer
@@ -245,14 +245,14 @@ func checkReferenceServer(ctx context.Context, env Env, ref *reference.Install, 
 	}
 	srv, err := probe(ctx, ref.URL)
 	if err != nil {
-		c.Summary, c.Detail = "cannot tell whether the reference server at "+ref.URL+" runs", err.Error()
+		c.Summary, c.Detail = "cannot tell whether the older Hindsight server at "+ref.URL+" runs", err.Error()
 		return c
 	}
 	if !srv.Running {
-		c.Summary = "the reference server at " + ref.URL + " is not running"
+		c.Summary = "the older Hindsight server at " + ref.URL + " is not running"
 		return c
 	}
-	c.Summary = "the reference server at " + ref.URL + " is still running"
+	c.Summary = "the older Hindsight server at " + ref.URL + " is still running"
 	var newest string
 	if list, err := backup.List(cfg.Backup.Dir); err == nil && len(list) > 0 {
 		newest = list[0].Path
@@ -282,8 +282,8 @@ func checkReferenceServer(ctx context.Context, env Env, ref *reference.Install, 
 		return c
 	}
 	c.Status = Info
-	c.Summary = "the reference server at " + ref.URL + " can be stopped: backsight's newest archive passed backup verify on " + v.VerifiedAt.UTC().Format("2006-01-02")
-	c.Detail = "backsight's own server holds the memory now; the reference stays a fallback until you stop it"
+	c.Summary = "the older Hindsight server at " + ref.URL + " can be stopped: backsight's newest archive passed backup verify on " + v.VerifiedAt.UTC().Format("2006-01-02")
+	c.Detail = "backsight's own server holds the memory now; the older one stays a fallback until you stop it"
 	if srv.Stop != "" {
 		c.Fix = srv.Stop + " (its data is kept: the database volume stays"
 		if srv.Start != "" {

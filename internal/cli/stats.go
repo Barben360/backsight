@@ -99,7 +99,7 @@ func newStatsCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&since, "since", "", "start of the window (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD, UTC) instead of [days]")
 	cmd.Flags().StringVar(&until, "until", "", "end of the window (default now), with --since")
-	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the reference stack's C12 baseline (SPEC §1.2)")
+	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the baseline measured on the Hindsight integration backsight replaced")
 	_ = cmd.Flags().MarkHidden("parity")
 	return cmd
 }
@@ -229,7 +229,7 @@ func statsText(r statsResult) string {
 		fmt.Fprintf(&b, "Extraction   %d input (%d cached), %d output tokens (no price known: set llm.price_* for a cost)%s\n", x.Input, x.Cached, x.Output, serverDays(x, r.Days))
 	}
 	if len(r.Parity) > 0 {
-		fmt.Fprintf(&b, "\nParity against the reference stack (SPEC §1.2, C12 on this machine; a verdict needs %d events)\n", stats.MinParity)
+		fmt.Fprintf(&b, "\nParity against the baseline of the Hindsight integration backsight replaced (a verdict needs %d events)\n", stats.MinParity)
 		for _, l := range r.Parity {
 			got := pct(l.N, l.Of) + fmt.Sprintf(" (%d/%d)", l.N, l.Of)
 			if l.Latency {

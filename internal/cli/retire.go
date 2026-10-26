@@ -37,7 +37,7 @@ func newClientRetireCmd(e *env, configDir *string) *cobra.Command {
 	var plan bool
 	cmd := &cobra.Command{
 		Use:   "retire",
-		Short: "Unwire the reference Hindsight install from Claude Code (pre-images kept; client config restore undoes it)",
+		Short: "Unwire an older Hindsight install from Claude Code (backup copies kept; client config restore undoes it)",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			res, err := clientRetire(cmd.Context(), *configDir, plan)
@@ -58,7 +58,7 @@ func clientRetire(ctx context.Context, configDir string, plan bool) (retireResul
 	if err != nil {
 		return res, editError(err)
 	}
-	res.Kept = []string{"the reference server and its data: left running as a fallback; stop it yourself when you no longer need it",
+	res.Kept = []string{"the older Hindsight server and its data: left running as a fallback; stop it yourself when you no longer need it",
 		"files under ~/.claude/hooks and ~/.claude/skills, and your CLAUDE.md: personal files, never edited",
 		"close or restart every Claude Code session: a running one may write the old MCP servers back (backsight doctor reports them)"}
 	timerOn := retroTimerOwned(ctx, c.loc)
@@ -550,7 +550,7 @@ func retireText(r retireResult) string {
 		undoTimers = " and systemctl --user enable --now " + strings.Join(r.Timers, " ")
 	}
 	if n == 0 && len(r.Timers) == 0 {
-		b.WriteString("no reference piece wired into Claude Code\n")
+		b.WriteString("no piece of an older Hindsight install wired into Claude Code\n")
 	}
 	for _, k := range r.Kept {
 		b.WriteString("kept: " + k + "\n")

@@ -251,9 +251,9 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 				output.Action{Kind: "run_as_user", Cmd: "backsight backup identity show", Why: "print the backup identity to keep it somewhere safe: without it the backups cannot be restored"})
 		}
 		if retired > 0 {
-			purgeAsk("pre_images_ack", "--purge-local deletes the pre-images of setup's reference retire, the only way to put the reference install's hooks and MCP servers back (backsight setup --undo)",
-				"the reference install is not wanted back, or setup --undo already ran",
-				output.Action{Kind: "run_as_user", Cmd: "backsight setup --undo", Why: "put the reference install's pieces back before their pre-images go"})
+			purgeAsk("pre_images_ack", "--purge-local deletes the backup copies setup kept when it retired an older Hindsight install, the only way to put its hooks and MCP servers back (backsight setup --undo)",
+				"the older Hindsight install is not wanted back, or setup --undo already ran",
+				output.Action{Kind: "run_as_user", Cmd: "backsight setup --undo", Why: "put the older Hindsight install's pieces back before their backup copies go"})
 		}
 		if queued.total() > 0 {
 			purgeAsk("drop_queued", "--purge-local deletes "+queued.String()+", never sent to the server",
@@ -403,7 +403,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		if err != nil {
 			return fail("claude settings", editError(err))
 		}
-		add(undoAction{Name: "claude settings", Status: "done", Detail: changedPaths(fr) + " (pre-images: run " + run + ")"})
+		add(undoAction{Name: "claude settings", Status: "done", Detail: changedPaths(fr) + " (backup copies: run " + run + ")"})
 	}
 	if offer != nil && offer.Action == "restore" && !f.plan {
 		offer.Action = "restored"
@@ -462,7 +462,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}
 	default:
 		add(undoAction{Name: "local files", Status: map[bool]string{true: "planned", false: "kept"}[f.plan], Detail: "kept: " + strings.Join(local, ", ")})
-		res.Kept = append(res.Kept, "config.toml and secrets.toml in "+d.Config+" (the server's keys, the LLM key and the backup identity)", "the state in "+d.State+", the config editor's pre-images included")
+		res.Kept = append(res.Kept, "config.toml and secrets.toml in "+d.Config+" (the server's keys, the LLM key and the backup identity)", "the state in "+d.State+", the backup copies of the files backsight edited included")
 	}
 
 	// 6. Last, the command on PATH, the shim, the binaries and the
@@ -485,7 +485,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	res.Kept = append(res.Kept, "backups in "+backups+": never deleted")
 
 	if rec != nil && (len(rec.Undo.Timers) > 0 || retired > 0) {
-		res.Warnings = append(res.Warnings, "setup retired a reference install's pieces (hooks, MCP servers or timers): uninstall does not bring them back; run backsight setup --undo first to put them back")
+		res.Warnings = append(res.Warnings, "setup retired an older Hindsight install's pieces (hooks, MCP servers or timers): uninstall does not bring them back; run backsight setup --undo first to put them back")
 	}
 	if f.purgeLocal && res.Server != "delete-data" && deployed != "" {
 		res.Warnings = append(res.Warnings, "the kept server's database password now lives only in "+filepath.Join(cfg.Server.ComposeDir, ".env")+": keep that file to reach its data again")

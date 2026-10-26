@@ -120,7 +120,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.resume, "resume", false, "continue the last run with its saved answers")
 	cmd.Flags().BoolVar(&f.questions, "questions", false, "list the questions and exit")
 	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
-	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: restore pre-images over files edited since")
+	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	return cmd
 }
@@ -774,7 +774,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		{"reference", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			if answers["reference"] != "retire" {
-				return setup.Step{Name: "reference", Status: "skipped", Detail: map[bool]string{true: "kept, as answered", false: "no reference piece wired"}[answers["reference"] == "keep"]}, nil
+				return setup.Step{Name: "reference", Status: "skipped", Detail: map[bool]string{true: "kept, as answered", false: "no older Hindsight install wired"}[answers["reference"] == "keep"]}, nil
 			}
 			// After verify: the old memory is unwired only once backsight works.
 			out := withRuns(r, func() subResult { return subcommand(ctx, clientArgs("client", "retire")...) })
@@ -789,7 +789,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 				n += len(f.Changes)
 			}
 			*restart = *restart || n > 0
-			return setup.Step{Name: "reference", Status: "done", Detail: fmt.Sprintf("%d reference piece(s) unwired; the old server is untouched", n)}, nil
+			return setup.Step{Name: "reference", Status: "done", Detail: fmt.Sprintf("%d piece(s) of the older Hindsight install unwired; its server is untouched", n)}, nil
 		}},
 		{"backfill", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
 			if answers["backfill"] != "yes" {
@@ -1058,9 +1058,9 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	reference := "nothing to retire"
 	switch a["reference"] {
 	case "retire":
-		reference = fmt.Sprintf("backsight client retire: unwire %d reference piece(s) after verify passes", s.refs)
+		reference = fmt.Sprintf("backsight client retire: unwire %d piece(s) of the older Hindsight install after verify passes", s.refs)
 	case "keep":
-		reference = "keep the reference pieces"
+		reference = "keep the older Hindsight install wired"
 	}
 	backfill := "start empty"
 	if a["backfill"] == "yes" {

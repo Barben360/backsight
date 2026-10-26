@@ -76,7 +76,7 @@ func newRestoreCmd(e *env) *cobra.Command {
 		Long: "Restore takes the maintenance lock and server.lock, backs the server up (the safety archive), marks a restore in progress " +
 			"(every client holds its sends), stops Hindsight, replaces its database with the archive's, starts it again on a temporary API key " +
 			"only restore knows and checks the row counts, health and a recall. It then writes back the purge tombstones and a new restore epoch " +
-			"in every memory bank of the server (the database holds them all), so every client re-reads what the server holds (decision 0044), " +
+			"in every memory bank of the server (the database holds them all), so every client re-reads what the server holds instead of trusting its own cursors, " +
 			"deletes again the purged documents the archive brought back, and starts the server again on its API key. A bank without a " +
 			"backsight control bank goes back to the archive only with --answer other_banks=revert. Any failure after the stop restores the " +
 			"safety archive and writes an epoch too (exit 30); a rollback that fails exits 20 and doctor names the way back. " +

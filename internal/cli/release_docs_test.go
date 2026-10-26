@@ -153,3 +153,68 @@ func TestDocValueReadsOneRowOfItsSection(t *testing.T) {
 		t.Error("a missing document read as a value")
 	}
 }
+
+// releaseRows lists the first cell of each row of docs/compatibility.md's
+// "## Releases" table.
+func releaseRows(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(compatibilityDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(raw), "\n## Releases\n")
+	if !ok {
+		t.Fatal("docs/compatibility.md has no ## Releases section")
+	}
+	if i := strings.Index(section, "\n## "); i >= 0 {
+		section = section[:i]
+	}
+	var rows []string
+	for _, line := range strings.Split(section, "\n") {
+		cells := strings.Split(line, "|")
+		if len(cells) < 3 || !strings.HasPrefix(line, "|") {
+			continue
+		}
+		if c := strings.TrimSpace(cells[1]); c != "Release" && !strings.HasPrefix(c, "---") {
+			rows = append(rows, c)
+		}
+	}
+	return rows
+}
+
+// Each release has its hand-written notes (docs/releases/<tag>.md, what
+// the release workflow publishes) and its row in docs/compatibility.md,
+// and nothing else is listed: no row for a version never released here.
+func TestEveryReleaseHasItsNotesAndItsRow(t *testing.T) {
+	tag := regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9a-z.]+)?$`)
+	files, err := filepath.Glob(filepath.Join("..", "..", "docs", "releases", "*"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no release notes in docs/releases: %v", err)
+	}
+	notes := map[string]bool{}
+	for _, f := range files {
+		name, isMD := strings.CutSuffix(filepath.Base(f), ".md")
+		if !isMD || !tag.MatchString(name) {
+			t.Errorf("docs/releases/%s: want <tag>.md, a tag like v1.2.3 or v1.2.3-rc.1", filepath.Base(f))
+			continue
+		}
+		raw, err := os.ReadFile(f)
+		if err != nil || len(strings.TrimSpace(string(raw))) < 200 {
+			t.Errorf("docs/releases/%s is empty or a stub (%v)", filepath.Base(f), err)
+		}
+		notes[name] = true
+	}
+	rows := releaseRows(t)
+	if len(rows) == 0 {
+		t.Fatal("docs/compatibility.md lists no release")
+	}
+	for _, r := range rows {
+		if !notes[r] {
+			t.Errorf("docs/compatibility.md lists %s, which has no docs/releases/%s.md", r, r)
+		}
+		delete(notes, r)
+	}
+	for n := range notes {
+		t.Errorf("docs/releases/%s.md has no row in docs/compatibility.md's Releases table", n)
+	}
+}
