@@ -498,3 +498,37 @@ func TestAFailedReadBackStillKeepsTheReportsDecision(t *testing.T) {
 		t.Errorf("the kept decision did not follow the tags: %+v", kept)
 	}
 }
+
+// Issue 33: a note tagged with the transverse keyword (or a non-canonical
+// alias) is folded into the canonical alias, in place; a note of a real
+// project is never touched; the second run finds nothing.
+func TestReattributeFoldsTransverseNotes(t *testing.T) {
+	e := newEnv(t)
+	e.attributed()
+	e.f.Attribution.Transverse = []string{".claude", "home"}
+	e.hs.mu.Lock()
+	if e.hs.tags == nil {
+		e.hs.tags = map[string][]string{}
+	}
+	for id, tag := range map[string]string{"note:kw": "transverse", "note:alias": "home", "note:ok": ".claude", "note:real": "billing"} {
+		e.hs.docs[id] = map[string]string{"source": "note"}
+		e.hs.tags[id] = []string{"project:" + tag, "source:note"}
+	}
+	e.hs.mu.Unlock()
+	p := e.plan()
+	if len(p.Retags) != 2 || p.Judged != 0 || p.Unchanged != 0 {
+		t.Fatalf("plan %+v", p)
+	}
+	if len(e.hs.patched) != 0 {
+		t.Fatal("planning wrote to the server")
+	}
+	e.apply(p)
+	for doc, want := range map[string]string{"note:kw": ".claude", "note:alias": ".claude", "note:ok": ".claude", "note:real": "billing"} {
+		if got := e.tagsOf(doc); !reflect.DeepEqual(got, []string{"project:" + want, "source:note"}) {
+			t.Errorf("%s: %v", doc, got)
+		}
+	}
+	if again := e.plan(); len(again.Retags) != 0 {
+		t.Errorf("a second run: %+v", again.Retags)
+	}
+}

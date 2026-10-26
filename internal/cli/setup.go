@@ -482,6 +482,15 @@ func readLine() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// estimateFlusher is the survey-only flusher of the backfill estimate. It
+// knows the transverse aliases, so the notes it counts are the ones a real
+// replay would send (a note naming the pool goes to the canonical alias).
+func estimateFlusher(d paths.Dirs, home string, cfg config.Config, since time.Time, idx *retain.SentIndex) *retain.Flusher {
+	return &retain.Flusher{Bank: cfg.Server.Bank, Dirs: d, Resolver: project.New(home, cfg.Projects.Transverse),
+		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, Now: now, RetainSince: since, Index: idx, Outbox: notesOutboxFor(d, cfg),
+		Attribution: retain.Attributor{Transverse: cfg.Projects.Transverse}}
+}
+
 // backfillEstimate counts the sessions backfill would send and prices
 // them for model; it reads the transcripts only, never the server.
 func (s *setupEnv) backfillEstimate(model string) (int, string) {
@@ -498,8 +507,7 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	if st, err := state.Load(s.dirs.StateFile()); err == nil && st.RetainSince != nil {
 		since = *st.RetainSince
 	}
-	fl := &retain.Flusher{Bank: cfg.Server.Bank, Dirs: s.dirs, Resolver: project.New(s.home, cfg.Projects.Transverse),
-		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, Now: now, RetainSince: since, Index: idx, Outbox: notesOutboxFor(s.dirs, cfg)}
+	fl := estimateFlusher(s.dirs, s.home, cfg, since, idx)
 	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 	if model != cfg.LLM.Model {
 		prices = retain.PricesFor(model, 0, 0, 0, cfg.LLM.Currency)
