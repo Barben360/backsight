@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,16 +49,80 @@ func TestProviderCheckFailures(t *testing.T) {
 		body   string
 		inErr  string
 	}{
-		"no fact":       {200, `{"facts":[]}`, "no fact"},
-		"empty text":    {200, `{"facts":[{"text":" ","fact_type":"world"}]}`, "malformed"},
-		"unknown type":  {200, `{"facts":[{"text":"Billing keeps PostgreSQL 16.","fact_type":"banana"}]}`, "malformed"},
-		"french fact":   {200, `{"facts":[{"text":"Le service billing garde PostgreSQL 16 pour les index partiels.","fact_type":"world"}]}`, "not in English"},
-		"provider auth": {500, `{"detail":"LLM authentication failed: invalid api key"}`, "invalid api key"},
+		"no fact":      {200, `{"facts":[]}`, "no fact"},
+		"empty text":   {200, `{"facts":[{"text":" ","fact_type":"world"}]}`, "malformed"},
+		"unknown type": {200, `{"facts":[{"text":"Billing keeps PostgreSQL 16.","fact_type":"banana"}]}`, "malformed"},
+		"french fact":  {200, `{"facts":[{"text":"Le service billing garde PostgreSQL 16 pour les index partiels.","fact_type":"world"}]}`, "not in English"},
 	}
 	for name, c := range cases {
 		cl, _ := dryRun(t, c.status, c.body)
 		if _, err := CheckProvider(context.Background(), cl, "claude-memory", "deepseek"); err == nil || !strings.Contains(err.Error(), c.inErr) {
 			t.Errorf("%s: want an error containing %q, got %v", name, c.inErr, err)
+		}
+	}
+}
+
+// The body Hindsight 1.1 returns for a mistyped DeepSeek key, cut at 300
+// bytes as the client keeps it.
+const deepseek401 = `{"detail":"Fact extraction rejected by provider authentication: Error code: 401 - {'error': {'message': 'Authentication Fails, Your api key: ****-key is invalid', 'type': 'authentication_error', 'param': None, 'code': 'invalid_request_error'}}"}`
+
+// A provider refusing the key is told apart from any other failure, and
+// neither carries the raw HTTP body.
+func TestProviderCheckTellsARejectedKey(t *testing.T) {
+	for name, c := range map[string]struct {
+		status int
+		body   string
+	}{
+		"hindsight 500 wrapping a 401": {500, deepseek401},
+		"openai wording":               {500, `{"detail":"Incorrect API key provided: sk-proj-****"}`},
+		"plain 401":                    {401, `{"detail":"unauthorized"}`},
+	} {
+		cl, _ := dryRun(t, c.status, c.body)
+		_, err := CheckProvider(context.Background(), cl, "claude-memory", "deepseek")
+		var pe *ProviderError
+		if !errors.As(err, &pe) || !pe.KeyRejected {
+			t.Errorf("%s: %v, want a rejected key", name, err)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "deepseek") || !strings.Contains(msg, "llm_api_key") {
+			t.Errorf("%s: %q does not name the provider and the key", name, msg)
+		}
+		for _, raw := range []string{"HTTP", "{", "detail", "server_error", "dry-run-extract"} {
+			if strings.Contains(msg, raw) {
+				t.Errorf("%s: raw response %q in %q", name, raw, msg)
+			}
+		}
+	}
+}
+
+func TestProviderCheckOtherFailuresSayWhatToCheck(t *testing.T) {
+	long := `{"detail":"Fact extraction failed: model deepseek-v9 does not exist or you do not have access to it; see the list of models available to your account at https://api-docs.deepseek.com/quick_start/pricing for the names this endpoint accepts today, and pick one of those listed there before you try the request again"}`
+	for name, c := range map[string]struct {
+		status int
+		body   string
+		reason string
+	}{
+		"unknown model": {500, long, "model deepseek-v9 does not exist"},
+		"no credit":     {500, `{"detail":"Insufficient Balance"}`, "Insufficient Balance"},
+		"not JSON":      {502, `Bad Gateway`, "Bad Gateway"},
+	} {
+		cl, _ := dryRun(t, c.status, c.body)
+		_, err := CheckProvider(context.Background(), cl, "claude-memory", "deepseek")
+		var pe *ProviderError
+		if !errors.As(err, &pe) || pe.KeyRejected {
+			t.Errorf("%s: %v, want another failure", name, err)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, c.reason) || !strings.Contains(msg, "model") || !strings.Contains(msg, "credit") {
+			t.Errorf("%s: %q", name, msg)
+		}
+		if strings.Contains(msg, `{"detail"`) || strings.Contains(msg, "server_error") {
+			t.Errorf("%s: raw body in %q", name, msg)
+		}
+		if strings.HasSuffix(strings.TrimSuffix(msg, "…"), " i") {
+			t.Errorf("%s: cut mid-word: %q", name, msg)
 		}
 	}
 }

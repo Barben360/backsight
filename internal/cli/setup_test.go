@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	agelib "filippo.io/age"
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
@@ -24,6 +29,7 @@ import (
 
 // fakeSteps stands in for the commands setup chains.
 type fakeSteps struct {
+	slow  time.Duration // how long server install takes
 	calls [][]string
 	fail  map[string]*output.Error // by command ("client install")
 	real  map[string]bool          // commands run for real (config-editor runs to undo)
@@ -35,6 +41,9 @@ func (f *fakeSteps) run(_ context.Context, args ...string) subResult {
 	key := strings.Join(args[:min(2, len(args))], " ")
 	if args[0] == "verify" {
 		key = "verify"
+	}
+	if key == "server install" {
+		time.Sleep(f.slow)
 	}
 	if e := f.fail[key]; e != nil {
 		return subResult{Err: e}
@@ -83,6 +92,8 @@ func setupMachine(t *testing.T) (string, *fakeSteps) {
 	home := isolate(t)
 	withSys(t, "linux") // the reference count asks systemctl about the retro timer
 	withClaude(t)       // the client step asks claude which plugins a profile has
+	// Never the real Docker: the server step asks it what to download.
+	withEngine(t, &engineDocker{info: "28.1.1\n"})
 	f := &fakeSteps{fail: map[string]*output.Error{}, real: map[string]bool{"client retire": true}, home: home}
 	oldSub, oldProbes, oldUp := subcommand, preflightProbes, serverAnswers
 	subcommand = f.run
@@ -1169,5 +1180,402 @@ func TestSetupWithoutTerminalNamesTheAgentPath(t *testing.T) {
 		if !strings.Contains(out+errOut, want) {
 			t.Errorf("message lacks %q:\n%s\n%s", want, out, errOut)
 		}
+	}
+}
+
+// freePort is a loopback port nothing listens on now.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// The documented recovery from a mistyped LLM key, in order: setup's
+// server step starts the server, its LLM check is refused and the server
+// keeps running on its ports; the failure says once what failed, the
+// command that fixes it and how to go on; secret set says how to go on;
+// setup --resume takes the running server for its own and finishes.
+func TestSetupRecoversFromARejectedKeyWithSecretSetAndResume(t *testing.T) {
+	real := preflightProbes
+	home, f := setupMachine(t)
+	withLLMKey(t, home) // the mistyped key
+	// The real probes, on a fake Docker: the ports and the own server are
+	// what this test is about.
+	engine := &engineDocker{info: "26.1.5 name=seccomp\n"}
+	withEngine(t, engine)
+	preflightProbes = func(ctx context.Context, s setupEnv, x map[string]string) setup.Probes {
+		p := real(ctx, s, x)
+		p.Claude = func(context.Context) (string, error) { return "2.1.400", nil }
+		p.FreeBytes = func() (uint64, error) { return 50 << 30, nil }
+		return p
+	}
+	// What server install answers when the provider refuses the key: the
+	// real check against Hindsight's answer for a mistyped DeepSeek key.
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte(`{"detail":"Fact extraction rejected by provider authentication: Error code: 401 - {'error': {'message': 'Authentication Fails, Your api key: ****-key is invalid'}}"}`))
+	}))
+	defer hs.Close()
+	_, checkErr := checkProvider(context.Background(), config.Config{Server: config.Server{URL: hs.URL, Bank: "claude-memory"}, LLM: config.LLM{Provider: "deepseek"}}, config.Secrets{})
+	var rejected *output.Error
+	if !errors.As(checkErr, &rejected) || rejected.Code != output.NeedsUser {
+		t.Fatalf("provider check: %v", checkErr)
+	}
+	f.fail["server install"] = rejected
+
+	api, ui := freePort(t), freePort(t)
+	ports := []string{"--answer", fmt.Sprintf("api_port=%d", api), "--answer", fmt.Sprintf("ui_port=%d", ui)}
+	code, out, errOut := run(t, append([]string{"setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"}, ports...)...)
+	if code != output.NeedsUser {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	text := out + errOut
+	for _, want := range []string{"failed", "server", "the deepseek API rejected the key in llm_api_key", "backsight secret set llm_api_key", "then run: backsight setup --resume"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the failure does not say %q:\n%s", want, text)
+		}
+	}
+	if n := strings.Count(text, "rejected the key"); n != 1 {
+		t.Errorf("the failure is printed %d times:\n%s", n, text)
+	}
+	for _, raw := range []string{"HTTP 500", "server_error", `{"detail"`, "dry-run-extract"} {
+		if strings.Contains(text, raw) {
+			t.Errorf("raw response %q in:\n%s", raw, text)
+		}
+	}
+
+	// The server it started keeps running on its ports.
+	for _, p := range []int{api, ui} {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = ln.Close() }()
+	}
+	engine.ps = `{"Service":"db","State":"running","Health":"healthy"}` + "\n" + `{"Service":"hindsight","State":"running","Health":"healthy"}` + "\n"
+
+	withStdin(t, "the-right-key\n")
+	code, out, errOut = run(t, "secret", "set", "llm_api_key")
+	if code != output.OK || !strings.Contains(out, "then run: backsight setup --resume") {
+		t.Fatalf("secret set: exit %d\n%s%s", code, out, errOut)
+	}
+
+	delete(f.fail, "server install")
+	f.calls = nil
+	code, out, errOut = run(t, "setup", "--resume", "--non-interactive")
+	if code != output.OK {
+		t.Fatalf("resume: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if got := f.commands(); len(got) == 0 || got[0] != "server install" {
+		t.Errorf("resume did not run the server step again: %v", got)
+	}
+	if !strings.Contains(out, "backsight is set up") {
+		t.Errorf("resume output:\n%s", out)
+	}
+}
+
+// Another program on the ports is still refused on a resume, and so is
+// backsight's own server when the answers move it to another project: a
+// second server would start beside it.
+func TestSetupResumeRefusesPortsBacksightDoesNotHold(t *testing.T) {
+	real := preflightProbes
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	engine := &engineDocker{info: "29.0.1 name=seccomp\n"}
+	withEngine(t, engine)
+	preflightProbes = func(ctx context.Context, s setupEnv, x map[string]string) setup.Probes {
+		p := real(ctx, s, x)
+		p.Claude = func(context.Context) (string, error) { return "2.1.400", nil }
+		p.FreeBytes = func() (uint64, error) { return 50 << 30, nil }
+		return p
+	}
+	f.fail["server install"] = &output.Error{Code: output.NeedsUser, Message: "the deepseek API rejected the key in llm_api_key", Secrets: []string{"llm_api_key"}}
+	api, ui := freePort(t), freePort(t)
+	ports := []string{"--answer", fmt.Sprintf("api_port=%d", api), "--answer", fmt.Sprintf("ui_port=%d", ui)}
+	if code, out, errOut := run(t, append([]string{"setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"}, ports...)...); code != output.NeedsUser {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	delete(f.fail, "server install")
+	for _, p := range []int{api, ui} {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = ln.Close() }()
+	}
+	// Nothing of backsight's runs: another program holds the ports.
+	f.calls = nil
+	if code, out, errOut := run(t, "setup", "--resume", "--non-interactive"); code != output.Blocked || !strings.Contains(out+errOut, "taken by another program") || len(f.calls) > 0 {
+		t.Errorf("another program's ports: exit %d %v\n%s%s", code, f.commands(), out, errOut)
+	}
+	// backsight's server runs, but the answers name another project.
+	engine.ps = `{"Service":"hindsight","State":"running","Health":"healthy"}` + "\n"
+	if code, out, errOut := run(t, append([]string{"setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "project=other", "--non-interactive"}, ports...)...); code != output.Blocked || len(f.calls) > 0 {
+		t.Errorf("another project on our ports: exit %d %v\n%s%s", code, f.commands(), out, errOut)
+	}
+}
+
+func fastBeats(t *testing.T) {
+	t.Helper()
+	oldJ, oldT, oldE := jsonBeat, textBeat, stepElapsed
+	jsonBeat, textBeat = 5*time.Millisecond, 5*time.Millisecond
+	// A millisecond of the test is about five seconds of a real download.
+	stepElapsed = func(t0 time.Time) time.Duration { return time.Since(t0) * 5000 }
+	t.Cleanup(func() { jsonBeat, textBeat, stepElapsed = oldJ, oldT, oldE })
+}
+
+// On a machine that never ran the server, setup says what it downloads
+// and how much, shows Docker's pull progress, then keeps showing that the
+// server's first start (the model download) still works.
+func TestSetupShowsTheDownloadAndTheFirstStart(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	fastBeats(t)
+	engine := &engineDocker{info: "28.1.1\n", fresh: true}
+	withEngine(t, engine)
+	f.slow = 60 * time.Millisecond
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"downloading 2 server image(s), then the embedding models at its first start: about 2.4 GB",
+		"Downloading [=====>",
+		"… starting the server; its first start downloads the embedding models (about 1.2 GB): ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in:\n%s", want, out)
+		}
+	}
+	pulls := 0
+	for _, c := range engine.calls {
+		if strings.HasPrefix(c, "pull ") {
+			pulls++
+		}
+	}
+	if pulls != 2 {
+		t.Errorf("%d pulls: %q", pulls, engine.calls)
+	}
+	// Everything cached: no download announced, no pull.
+	home, _ = setupMachine(t)
+	withLLMKey(t, home)
+	cached := &engineDocker{info: "28.1.1\n"}
+	withEngine(t, cached)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.OK || strings.Contains(out, "downloading") {
+		t.Errorf("cached: exit %d\n%s", code, out)
+	}
+	for _, c := range cached.calls {
+		if strings.HasPrefix(c, "pull ") {
+			t.Errorf("pulled a cached image: %q", c)
+		}
+	}
+}
+
+type progressEvent struct {
+	Event  string `json:"event"`
+	Step   string `json:"step"`
+	Pct    int    `json:"pct"`
+	ETA    int    `json:"eta_s"`
+	Detail string `json:"detail"`
+}
+
+// With --json the progress keeps moving through the download and the
+// first start, inside the server step's share, with nothing of Docker's
+// output in the stream.
+func TestSetupJSONProgressMovesDuringTheDownload(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	fastBeats(t)
+	withEngine(t, &engineDocker{info: "28.1.1\n", fresh: true, pullTime: 40 * time.Millisecond})
+	f.slow = 40 * time.Millisecond
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	parseSetup(t, out)
+	var server []progressEvent
+	next := -1
+	for _, line := range strings.Split(strings.TrimSpace(errOut), "\n") {
+		var ev progressEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.Event != "progress" {
+			t.Fatalf("not a progress line on stderr: %q", line)
+		}
+		if ev.Step == "server" {
+			server = append(server, ev)
+		} else if len(server) > 0 && next < 0 {
+			next = ev.Pct
+		}
+	}
+	var downloading, starting int
+	for i, ev := range server {
+		if strings.Contains(ev.Detail, "downloading") {
+			downloading++
+		}
+		if strings.Contains(ev.Detail, "starting the server") {
+			starting++
+		}
+		if i > 0 && (ev.Pct < server[i-1].Pct || ev.ETA > server[i-1].ETA) {
+			t.Errorf("progress went back: %+v then %+v", server[i-1], ev)
+		}
+		if ev.Pct >= next {
+			t.Errorf("the server step reached the next step's %d%%: %+v", next, ev)
+		}
+	}
+	if downloading < 2 || starting < 2 || server[len(server)-1].Pct <= server[0].Pct {
+		t.Errorf("the progress did not move during the server step: %+v", server)
+	}
+	if strings.Contains(out+errOut, "Downloading [") {
+		t.Error("Docker's output reached the JSON streams")
+	}
+}
+
+// A pull that fails stops the server step with Docker's reason.
+func TestSetupDownloadFailureSaysWhy(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	withEngine(t, &engineDocker{info: "28.1.1\n", fresh: true, pullErr: errors.New("exit status 1")})
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code == output.OK || env.Error == nil || !strings.Contains(env.Error.Message, "no such host") || env.Error.Resume != setupResume {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, c := range f.commands() {
+		if c == "server install" {
+			t.Error("server install ran after a failed download")
+		}
+	}
+}
+
+// Setup generates the backup identity when backups are on, as the docs
+// say, never over one already there, and not when backups are off.
+func TestSetupGeneratesTheBackupIdentity(t *testing.T) {
+	home, _ := setupMachine(t)
+	withLLMKey(t, home)
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.OK || !hasStep(env.Data.Steps, "scheduler", "done", "generated backup_identity") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	sec, err := config.LoadSecrets(secretsFile(home))
+	if err != nil || !strings.HasPrefix(sec.BackupIdentity, "AGE-SECRET-KEY-1") {
+		t.Fatalf("no identity after setup: %v", err)
+	}
+	if strings.Contains(out, sec.BackupIdentity) {
+		t.Error("the identity reached the output")
+	}
+
+	// One already there is kept.
+	home, _ = setupMachine(t)
+	withLLMKey(t, home)
+	id, _ := agelib.GenerateX25519Identity()
+	mine := id.String()
+	if err := config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("backup_identity", mine) }); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if sec, _ := config.LoadSecrets(secretsFile(home)); sec.BackupIdentity != mine {
+		t.Error("setup replaced the identity already there")
+	}
+
+	// Without the scheduler (a container), backups still need their key.
+	home, _ = setupMachine(t)
+	withLLMKey(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "scheduler=off", "--answer", "consent=yes", "--non-interactive"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if sec, _ := config.LoadSecrets(secretsFile(home)); sec.BackupIdentity == "" {
+		t.Error("no identity with scheduler=off")
+	}
+
+	// A failure before the server runs generates nothing: it changed
+	// nothing.
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	f.fail["server install"] = &output.Error{Code: output.Blocked, Message: "docker gone"}
+	_, _, _ = run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive")
+	if sec, _ := config.LoadSecrets(secretsFile(home)); sec.BackupIdentity != "" {
+		t.Error("an identity generated before the server ran")
+	}
+
+	// Backups off: nothing to encrypt for.
+	home, _ = setupMachine(t)
+	withLLMKey(t, home)
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "backups=off", "--answer", "consent=yes", "--non-interactive"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if sec, _ := config.LoadSecrets(secretsFile(home)); sec.BackupIdentity != "" {
+		t.Error("an identity generated with backups off")
+	}
+}
+
+func atATerminal(t *testing.T, input string) {
+	t.Helper()
+	withStdin(t, input)
+	stdinIsTerminal = func() bool { return true }
+	oldOut := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdoutIsTerminal = oldOut })
+}
+
+// A rerun at a terminal reuses the saved answers and says how to change
+// them; --reconfigure asks again with the saved answers as defaults.
+func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	// The server step fails: the config stays setup's own, its answers open.
+	f.fail["server install"] = &output.Error{Code: output.NeedsUser, Message: "the deepseek API rejected the key in llm_api_key", Secrets: []string{"llm_api_key"}}
+	atATerminal(t, "1\n\n\n\ny\n") // deepseek, its model, retention, backups, go
+	if code, out, errOut := run(t, "setup"); code != output.NeedsUser {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	delete(f.fail, "server install")
+
+	// A rerun asks nothing, and says how to change an answer.
+	atATerminal(t, "n\n")
+	code, out, _ := run(t, "setup")
+	if code != output.OK || strings.Contains(out, "Which LLM") || !strings.Contains(out, "backsight setup --reconfigure") {
+		t.Fatalf("rerun: exit %d\n%s", code, out)
+	}
+
+	// --reconfigure asks again; Enter keeps the saved answer, a new one
+	// replaces it: openai (3), its model, its base URL, retention kept,
+	// backups off (2), go.
+	atATerminal(t, "3\n\n\n\n2\ny\n")
+	code, out, errOut := run(t, "setup", "--reconfigure")
+	if code != output.OK || !strings.Contains(out, "Which LLM") {
+		t.Fatalf("reconfigure: exit %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "choice [deepseek]") || !strings.Contains(out, "choice [3650]") || !strings.Contains(out, "choice [on]") {
+		t.Errorf("the saved answers are not the defaults:\n%s", out)
+	}
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), "enabled = false") {
+		t.Errorf("new answers not applied:\n%s", raw)
+	}
+
+	// Once the server runs, the answers in config.toml are the server's:
+	// --reconfigure says where to change them, and asks the rest (the
+	// retention, then the go).
+	atATerminal(t, "\nn\n")
+	if code, out, _ := run(t, "setup", "--reconfigure"); code != output.OK || !strings.Contains(out, "kept from "+pathsOf(home).ConfigFile()+": provider=openai") {
+		t.Errorf("finished install: exit %d\n%s", code, out)
+	}
+
+	// Without a terminal or with --resume, --reconfigure is refused.
+	for _, args := range [][]string{{"--reconfigure", "--non-interactive"}, {"--reconfigure", "--json"}, {"--reconfigure", "--resume"}, {"--reconfigure", "--plan"}} {
+		atATerminal(t, "")
+		if code, out, errOut := run(t, append([]string{"setup"}, args...)...); code != output.Usage || !strings.Contains(out+errOut, "--reconfigure") {
+			t.Errorf("%v: exit %d\n%s%s", args, code, out, errOut)
+		}
+	}
+	stdinIsTerminal = func() bool { return false }
+	if code, out, errOut := run(t, "setup", "--reconfigure"); code != output.Usage || !strings.Contains(out+errOut, "--answer id=value") {
+		t.Errorf("no terminal: exit %d\n%s%s", code, out, errOut)
 	}
 }

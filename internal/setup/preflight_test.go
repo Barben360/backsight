@@ -95,13 +95,19 @@ func TestAdoptedServerOwnsItsPortsAndDisk(t *testing.T) {
 	p := healthy()
 	p.PortFree = func(int) bool { return false }
 	p.FreeBytes = func() (uint64, error) { return 3 << 30, nil }
-	p.OwnServer, p.ServerInstalled = true, true
+	p.OwnPorts, p.ServerInstalled = []int{8888, 9999}, true
 	cs := Preflight(context.Background(), p)
 	if class, failed := Verdict(cs); class != "" {
 		t.Fatalf("adoption blocked: %+v", failed)
 	}
 	if byID(cs)["disk"].Status != Warn {
 		t.Errorf("low disk on an installed server must warn: %+v", byID(cs)["disk"])
+	}
+	// A port backsight's server does not publish stays another program's.
+	p.UIPort = 9998
+	cs = Preflight(context.Background(), p)
+	if c := byID(cs)["ui_port"]; c.Status != Fail || !strings.Contains(c.Fix, "--answer ui_port=") {
+		t.Errorf("a taken port backsight does not hold passed: %+v", c)
 	}
 }
 

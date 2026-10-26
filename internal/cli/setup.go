@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -44,6 +45,7 @@ type setupFlags struct {
 	answersFile                  string
 	nonInteractive, plan, resume bool
 	questions, undo, force       bool
+	reconfigure                  bool
 	configDir                    string
 }
 
@@ -119,6 +121,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "show the checks, answers and steps without changing anything")
 	cmd.Flags().BoolVar(&f.resume, "resume", false, "continue the last run with its saved answers")
 	cmd.Flags().BoolVar(&f.questions, "questions", false, "list the questions and exit")
+	cmd.Flags().BoolVar(&f.reconfigure, "reconfigure", false, "at a terminal, ask every question again, the last run's answers as defaults")
 	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
@@ -179,6 +182,17 @@ type setupEnv struct {
 	f         setupFlags
 	e         *env
 	answer    map[string]string
+	// cur is the step running: its share of the progress and the time
+	// left, for the heartbeat of a long step.
+	cur stepSpan
+}
+
+// stepSpan is where a step sits in the run's progress.
+type stepSpan struct {
+	name      string
+	pct, span int // the step starts at pct and owns span points
+	eta, left int // seconds: the step's own, and the run's from its start
+	start     time.Time
 }
 
 func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
@@ -228,11 +242,30 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	s.refs = referenceCount(ctx, s.loc)
 
 	interactive := !e.json && !f.nonInteractive && !f.plan && !f.questions && stdinIsTerminal() && stdoutIsTerminal()
+	if f.reconfigure {
+		switch {
+		case f.resume:
+			return res, &output.Error{Code: output.Usage, Message: "--reconfigure asks the questions again, --resume keeps the last run's answers: use one"}
+		case !interactive:
+			return res, &output.Error{Code: output.Usage, Message: "--reconfigure asks at a terminal; without one, change an answer with --answer id=value"}
+		}
+	}
 	qs, extra, err := s.resolve(interactive)
 	if err != nil {
 		return res, err
 	}
 	res.Questions = qs
+	if f.reconfigure {
+		var fixed []string
+		for _, q := range qs {
+			if q.Source == "config" {
+				fixed = append(fixed, q.ID+"="+q.Value)
+			}
+		}
+		if len(fixed) > 0 { // the installed server runs from them
+			fmt.Fprintf(e.stdout, "\nkept from %s: %s (edit that file to change them)\n", d.ConfigFile(), strings.Join(fixed, ", "))
+		}
+	}
 	if f.questions {
 		res.Answers, res.listing = extra, true
 		return res, nil
@@ -276,6 +309,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	}
 	if interactive && res.Answers["consent"] == "" {
 		fmt.Fprint(e.stdout, setupPlanText(s.planSteps(res.Answers)))
+		fmt.Fprint(e.stdout, reuseHint(qs))
 		if !confirm(e, "Go ahead with this plan? [y/N] ") {
 			res.Answers["consent"] = "no"
 		} else {
@@ -313,6 +347,27 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 		}
 	}
 	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, ReferencePieces: s.refs}
+	// --reconfigure: the questions the last run answered are asked again,
+	// their answers the defaults; the hidden answers (ports, project) stay.
+	prev := map[string]string{}
+	if s.f.reconfigure {
+		prev = maps.Clone(saved)
+		in.Saved = maps.Clone(saved)
+		for again := true; again; {
+			qs, _, err := setup.Resolve(in)
+			if err != nil {
+				break
+			}
+			again = false
+			for _, q := range qs {
+				if q.Source == "saved" {
+					delete(in.Saved, q.ID)
+					again = true
+				}
+			}
+		}
+		saved = in.Saved
+	}
 	for {
 		qs, extra, err := setup.Resolve(in)
 		var ue *setup.UsageError
@@ -332,7 +387,14 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 		if next == nil {
 			return qs, extra, nil
 		}
-		v, err := ask(s.e, *next)
+		q := *next
+		if v := prev[q.ID]; v != "" && (q.Free || slices.ContainsFunc(q.Options, func(o setup.Option) bool { return o.Value == v })) {
+			// The last run's answer, unless it belonged to another provider.
+			if !slices.Contains([]string{"model", "base_url", "ack_subscription"}, q.ID) || in.Answers["provider"] == prev["provider"] {
+				q.Default = v
+			}
+		}
+		v, err := ask(s.e, q)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -482,12 +544,29 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		_ = ln.Close()
 		return true
 	}
-	if s.cfg != nil {
+	// The server the config on disk describes: adopted, or written by an
+	// earlier run of setup and still open to new answers (s.cfg is nil
+	// then), whose server may run though a later check failed (a rejected
+	// LLM key) and must not count as another program on its ports.
+	srv := s.cfg
+	if srv == nil && s.ownConfig != "" {
+		if c, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home); err == nil {
+			srv = &c
+		}
+	}
+	if srv != nil && srv.Server.Mode == "local" {
+		own := runtimeFor(*srv)
 		// Ours only when our compose project runs a hindsight container:
 		// health alone would take the reference server on the same port
-		// for ours, and miss our own while it starts or fails.
-		p.OwnServer = serverRuns(ctx, rt)
-		v, err := rt.Deployed()
+		// for ours, and miss our own while it starts or fails. Another
+		// project answered would start a second server beside it.
+		if (extra["project"] == "" || extra["project"] == srv.Server.Project) && serverRuns(ctx, own) {
+			if api, err := srv.APIPort(); err == nil {
+				p.OwnPorts = append(p.OwnPorts, api)
+			}
+			p.OwnPorts = append(p.OwnPorts, srv.Server.UIPort)
+		}
+		v, err := own.Deployed()
 		p.ServerInstalled = err == nil && v != ""
 	}
 	p.FreeBytes = func() (uint64, error) {
@@ -668,7 +747,17 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 				r.Undo.ServerStarted = true
 				s.persist(r)
 			}
+			models, err := s.download(ctx, runtimeFor(cfg))
+			if err != nil {
+				return setup.Step{}, err
+			}
+			starting := "starting the server"
+			if models {
+				starting = fmt.Sprintf("starting the server; its first start downloads the embedding models (about %.1f GB)", float64(server.ModelsMB)/1000)
+			}
+			stop := s.heartbeat(ctx, starting, true)
 			out := subcommand(ctx, "server", "install")
+			stop()
 			if out.Err != nil {
 				return setup.Step{}, out.Err
 			}
@@ -741,8 +830,19 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "retention", Status: "done", Detail: detail}, nil
 		}},
 		{"scheduler", 2, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
+			// The key the daily backups encrypt to, with the jobs that make
+			// them (and only once the server runs: an earlier failure stays
+			// one that changed nothing).
+			identity, err := s.backupIdentity(answers)
+			if err != nil {
+				return setup.Step{}, err
+			}
 			if answers["scheduler"] == "off" { // a container or CI runner without a user scheduler
-				return setup.Step{Name: "scheduler", Status: "skipped", Detail: "off as answered: run backsight jobs tick every 15 min and jobs maintain daily some other way"}, nil
+				st := setup.Step{Name: "scheduler", Status: "skipped", Detail: "off as answered: run backsight jobs tick every 15 min and jobs maintain daily some other way" + identity}
+				if identity != "" {
+					st.Status = "done"
+				}
+				return st, nil
 			}
 			if st, err := state.Load(s.dirs.StateFile()); err == nil && st.Scheduler == nil {
 				r.Undo.Scheduler = true
@@ -755,7 +855,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			var jr jobsInstallResult
 			_ = json.Unmarshal(out.Data, &jr)
-			return setup.Step{Name: "scheduler", Status: "done", Detail: jr.Kind + ": jobs tick every 15 min, jobs maintain daily"}, nil
+			return setup.Step{Name: "scheduler", Status: "done", Detail: jr.Kind + ": jobs tick every 15 min, jobs maintain daily" + identity}, nil
 		}},
 		{"verify", 20, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
 			out := subcommand(ctx, clientArgs("verify")...)
@@ -813,6 +913,64 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "backfill", Status: "done", Detail: fmt.Sprintf("%d session(s) queued: jobs tick sends them in the background", br.Total)}, nil
 		}},
 	}
+}
+
+// backupIdentity generates the backup identity when backups are on and
+// no recipient is configured, and says so ("" when none was made).
+func (s *setupEnv) backupIdentity(answers map[string]string) (string, error) {
+	cfg, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home)
+	if err != nil {
+		return "", &output.Error{Code: output.Usage, Message: err.Error()}
+	}
+	if answers["backups"] != "on" || !cfg.Backup.Enabled || cfg.Backup.Recipient != "" {
+		return "", nil
+	}
+	made, err := ensureBackupIdentity(s.dirs)
+	if err != nil || !made {
+		return "", err
+	}
+	return "; generated backup_identity, the key of your backups (save it: backsight backup identity show)", nil
+}
+
+// download fetches the server images the machine lacks before the server
+// step installs it: at a terminal Docker's own progress shows, with --json
+// the progress lines keep coming. It reports whether the server's first
+// start still downloads its models. A runtime that cannot tell leaves it
+// all to server install.
+func (s *setupEnv) download(ctx context.Context, rt server.Runtime) (models bool, err error) {
+	dl, ok := rt.(server.Downloader)
+	if !ok {
+		return false, nil
+	}
+	images, models, err := dl.Downloads(ctx)
+	if err != nil || (len(images) == 0 && !models) {
+		return false, nil // server install says what is wrong with Docker
+	}
+	what := "the embedding models at the server's first start"
+	if len(images) > 0 {
+		what = fmt.Sprintf("%d server image(s)", len(images))
+		if models {
+			what += ", then the embedding models at its first start"
+		}
+	}
+	about := fmt.Sprintf("downloading %s: about %.1f GB, several minutes on a home connection", what, float64(server.DownloadMB(images, models))/1000)
+	if !s.e.json {
+		fmt.Fprintln(s.e.stdout, about)
+	}
+	if len(images) == 0 {
+		return models, nil
+	}
+	w := io.Discard
+	if !s.e.json {
+		w = s.e.stdout
+	}
+	stop := s.heartbeat(ctx, about, false)
+	err = dl.Download(ctx, images, w)
+	stop()
+	if err != nil {
+		return models, &output.Error{Code: output.Blocked, Message: "the download stopped: " + err.Error() + " (check the network)"}
+	}
+	return models, nil
 }
 
 // missingSecrets lists the keys the configuration these answers give
@@ -923,17 +1081,26 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 			left -= st.eta
 			continue
 		}
-		s.progress(st.name, i*100/len(steps), left)
+		s.cur = stepSpan{name: st.name, pct: i * 100 / len(steps), span: 100 / len(steps), eta: st.eta, left: left, start: time.Now()}
+		s.progress(st.name, s.cur.pct, left, "")
 		step, err := st.run(ctx, rec)
 		left -= st.eta
 		if err != nil {
 			rec.Set(setup.Step{Name: st.name, Status: "failed", Detail: errMessage(err), At: now().UTC()})
 			s.saveRecord(rec)
 			res.Steps = rec.Steps
-			if !s.e.json {
-				fmt.Fprint(s.e.stdout, stepLine(step2line(rec.Steps[len(rec.Steps)-1])))
+			failure := stepFailure(st.name, err, did || doneBefore(rec, st.name))
+			if s.e.json {
+				return res, failure
 			}
-			return res, stepFailure(st.name, err, did || doneBefore(rec, st.name))
+			// Once: the step line says what failed and how to fix it, then
+			// how to go on.
+			fmt.Fprint(s.e.stdout, stepLine(step2line(rec.Steps[len(rec.Steps)-1])))
+			var oe *output.Error
+			if errors.As(failure, &oe) && oe.Resume != "" {
+				fmt.Fprintf(s.e.stdout, "then run: %s\n", oe.Resume)
+			}
+			return res, shownError{oe}
 		}
 		step.At = now().UTC()
 		did = did || step.Status == "done"
@@ -943,7 +1110,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 			fmt.Fprint(s.e.stdout, stepLine(step2line(step)))
 		}
 	}
-	s.progress("summary", 100, 0)
+	s.progress("summary", 100, 0, "")
 	rec.Finished = true
 	if err := rec.Save(s.dirs.SetupFile()); err != nil {
 		fmt.Fprintf(s.e.stderr, "backsight: setup.json not saved: %v\n", err)
@@ -1037,13 +1204,72 @@ func (s *setupEnv) saveRecord(r *setup.Record) {
 	}
 }
 
-// progress streams one JSON line on stderr with --json (decision 0064).
-func (s *setupEnv) progress(step string, pct, eta int) {
+// progress streams one JSON line on stderr with --json (decision 0064);
+// detail says what a long step is doing.
+func (s *setupEnv) progress(step string, pct, eta int, detail string) {
 	if !s.e.json {
 		return
 	}
-	b, _ := json.Marshal(map[string]any{"event": "progress", "step": step, "pct": pct, "eta_s": eta})
+	ev := map[string]any{"event": "progress", "step": step, "pct": pct, "eta_s": eta}
+	if detail != "" {
+		ev["detail"] = detail
+	}
+	b, _ := json.Marshal(ev)
 	fmt.Fprintln(s.e.stderr, string(b))
+}
+
+// Heartbeat periods of a long step: a JSON progress line, a text line;
+// stepElapsed is the time a step has run (tests speed it up).
+var (
+	jsonBeat    = 5 * time.Second
+	textBeat    = 30 * time.Second
+	stepElapsed = time.Since
+)
+
+// heartbeat shows that the running step still works until the returned
+// stop is called: with --json, a progress line every jsonBeat whose pct
+// moves through the step's share (never reaching the next step's) and
+// whose eta counts down; at a terminal, when text is true, a line every
+// textBeat with the time spent. stop returns once nothing more is written.
+func (s *setupEnv) heartbeat(ctx context.Context, detail string, text bool) (stop func()) {
+	every := textBeat
+	if s.e.json {
+		every = jsonBeat
+	} else if !text {
+		return func() {}
+	}
+	cur, start := s.cur, time.Now()
+	if !cur.start.IsZero() { // the step's time, across its phases
+		start = cur.start
+	}
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			elapsed := stepElapsed(start)
+			if !s.e.json {
+				fmt.Fprintf(s.e.stdout, "         … %s: %s\n", detail, elapsed.Round(time.Second))
+				continue
+			}
+			// The step's share fills as its estimate runs out, up to 95 %:
+			// a slow link stays inside the step.
+			frac := elapsed.Seconds() / float64(max(cur.eta, 1))
+			frac = min(frac, 0.95)
+			pct := cur.pct + int(frac*float64(cur.span))
+			eta := max(cur.left-int(elapsed.Seconds()), cur.left-cur.eta+1)
+			s.progress(cur.name, pct, eta, detail)
+		}
+	}()
+	return func() { close(done); <-finished }
 }
 
 // planSteps lists what a run would do with these answers.
@@ -1057,6 +1283,9 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		retention = "leave Claude Code's setting as it is"
 	}
 	scheduler := "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"
+	if a["backups"] == "on" {
+		scheduler += "; generate the backup identity if there is none"
+	}
 	if a["scheduler"] == "off" {
 		scheduler = "none (scheduler=off): run jobs tick and jobs maintain some other way"
 	}
@@ -1083,6 +1312,20 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "reference", Status: "planned", Detail: reference},
 		{Name: "backfill", Status: "planned", Detail: backfill},
 	}
+}
+
+// reuseHint says how to change answers a rerun took from the last run.
+func reuseHint(qs []setup.Question) string {
+	var ids []string
+	for _, q := range qs {
+		if q.Source == "saved" && q.ID != "consent" {
+			ids = append(ids, q.ID+"="+q.Value)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return "\nanswers from your last run: " + strings.Join(ids, ", ") + "\nto change them: backsight setup --reconfigure (asks again), or --answer id=value\n"
 }
 
 func setupPlanText(steps []setup.Step) string {
@@ -1116,6 +1359,7 @@ func setupText(r setupResult) string {
 			}
 		}
 		b.WriteString(setupPlanText(r.Steps))
+		b.WriteString(reuseHint(r.Questions))
 		return b.String()
 	}
 	for _, c := range r.Preflight {

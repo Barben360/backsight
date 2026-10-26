@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -72,6 +74,9 @@ type Runtime interface {
 	// user deletes it by hand.
 	DataName() string
 	DataRemoveCmd() string
+	// ImagesRemoveCmd is how a user frees the disk space of what the
+	// server ran (for Docker, its images), once it is deleted.
+	ImagesRemoveCmd() string
 	// Engine is what runs the server on this machine (Docker's daemon),
 	// for doctor and setup's pre-flight. Not installed wraps
 	// exec.ErrNotFound; not usable carries the engine's own output.
@@ -98,6 +103,110 @@ type Database interface {
 	RemoveStaleDumps(ctx context.Context) error
 	DocumentMetadata(ctx context.Context, bank, id string) (map[string]string, error)
 	BankIDs(ctx context.Context) ([]string, error)
+}
+
+// Downloader is a runtime that can say what its first start still has
+// to download and show the download as it goes (setup's server step).
+type Downloader interface {
+	// Downloads lists the images not on this machine yet, and whether the
+	// embedding models are still to download (at the server's first
+	// start, inside it).
+	Downloads(ctx context.Context) (images []string, models bool, err error)
+	// Download fetches images, the progress going to w.
+	Download(ctx context.Context, images []string, w io.Writer) error
+}
+
+// Approximate download sizes, in MB, for the messages that announce them.
+const (
+	HindsightImageMB = 1000
+	PostgresImageMB  = 160
+	ModelsMB         = 1200
+)
+
+// DownloadMB is about how much images and models download.
+func DownloadMB(images []string, models bool) int {
+	mb := 0
+	for _, im := range images {
+		if im == PostgresImage {
+			mb += PostgresImageMB
+		} else {
+			mb += HindsightImageMB
+		}
+	}
+	if models {
+		mb += ModelsMB
+	}
+	return mb
+}
+
+var _ Downloader = Docker{}
+
+// Downloads asks Docker for each image the server runs and for the model
+// cache volume.
+func (d Docker) Downloads(ctx context.Context) ([]string, bool, error) {
+	var missing []string
+	for _, im := range []string{d.Version(), PostgresImage} {
+		out, err := d.Compose.Runner.Run(ctx, "image", "inspect", "--format", "{{.Id}}", im)
+		switch {
+		case err == nil:
+		case strings.Contains(strings.ToLower(string(out)), "no such image"):
+			missing = append(missing, im)
+		default:
+			return nil, false, fmt.Errorf("docker image inspect %s: %w: %s", im, err, strings.TrimSpace(string(out)))
+		}
+	}
+	vol := d.Compose.project() + "_" + modelsVolume
+	out, err := d.Compose.Runner.Run(ctx, "volume", "inspect", vol)
+	switch {
+	case err == nil:
+		return missing, false, nil
+	case strings.Contains(strings.ToLower(string(out)), "no such volume"):
+		return missing, true, nil
+	}
+	return nil, false, fmt.Errorf("docker volume inspect %s: %w: %s", vol, err, strings.TrimSpace(string(out)))
+}
+
+// Download pulls each image outside the project (nothing that runs
+// changes), Docker's progress going to w. A failure carries Docker's last
+// line, which w may not show.
+func (d Docker) Download(ctx context.Context, images []string, w io.Writer) error {
+	for _, im := range images {
+		var err error
+		last := &lastLine{}
+		if st, ok := d.Compose.Runner.(Streamer); ok {
+			err = st.Stream(ctx, io.MultiWriter(w, last), "pull", im)
+		} else {
+			var out []byte
+			out, err = d.Compose.Runner.Run(ctx, "pull", im)
+			_, _ = w.Write(out)
+			_, _ = last.Write(out)
+		}
+		if err != nil {
+			return fmt.Errorf("docker pull %s: %w: %s", im, err, last.String())
+		}
+	}
+	return nil
+}
+
+// lastLine keeps the last non-empty line written to it.
+type lastLine struct{ buf []byte }
+
+func (l *lastLine) Write(p []byte) (int, error) {
+	l.buf = append(l.buf, p...)
+	if len(l.buf) > 4096 {
+		l.buf = l.buf[len(l.buf)-4096:]
+	}
+	return len(p), nil
+}
+
+func (l *lastLine) String() string {
+	lines := strings.FieldsFunc(string(l.buf), func(r rune) bool { return r == '\n' || r == '\r' })
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // Engine is a runtime's engine: its version, and whether it runs without
@@ -191,11 +300,12 @@ func (d Docker) StopCmd() string {
 	return strings.Join(words, " ")
 }
 
-// Delete runs compose down without the volumes, removes each volume
-// backsight's compose.yaml declares (the database, the model cache), then
-// compose.yaml and .env. A volume only the user's compose.override.yaml
-// declares stays, and so does the override (decision 0067 block 3
-// review).
+// Delete removes the containers with their anonymous volumes (the
+// database image declares one at /var/lib/postgresql), runs compose down
+// without the named volumes, removes each volume backsight's compose.yaml
+// declares (the database, the model cache), then compose.yaml and .env.
+// A volume only the user's compose.override.yaml declares stays, and so
+// does the override (decision 0067 block 3 review).
 func (d Docker) Delete(ctx context.Context) error {
 	raw, err := os.ReadFile(filepath.Join(d.Compose.Dir, "compose.yaml"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -207,6 +317,9 @@ func (d Docker) Delete(ctx context.Context) error {
 		if !slices.Contains(volumes, v) {
 			volumes = append(volumes, v)
 		}
+	}
+	if _, err := d.Compose.run(ctx, "rm", "--stop", "--force", "-v"); err != nil {
+		return err
 	}
 	if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
 		return err
@@ -236,6 +349,30 @@ func (d Docker) DataName() string { return "the database volume " + d.Compose.Da
 
 func (d Docker) DataRemoveCmd() string { return "docker volume rm " + d.Compose.DataVolume() }
 
+// ImagesRemoveCmd names the images by digest: pulled by digest, they
+// carry no tag ("<none>" in docker image ls). The Hindsight image is the
+// one deployed, else the one this runtime deploys.
+func (d Docker) ImagesRemoveCmd() string {
+	hs, err := d.Deployed()
+	if err != nil || hs == "" {
+		hs = d.Version()
+	}
+	return "docker image rm " + byDigest(hs) + " " + byDigest(PostgresImage)
+}
+
+// byDigest drops the tag of repo:tag@sha256:… (Docker accepts either, not
+// both, to remove an untagged image).
+func byDigest(ref string) string {
+	repo, digest, ok := strings.Cut(ref, "@")
+	if !ok {
+		return ref
+	}
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	return repo + "@" + digest
+}
+
 // Engine asks the Docker daemon for its version and security options.
 func (d Docker) Engine(ctx context.Context) (Engine, error) {
 	out, err := d.Compose.Runner.Run(ctx, "info", "--format", "{{.ServerVersion}} {{range .SecurityOptions}}{{.}} {{end}}")
@@ -245,12 +382,21 @@ func (d Docker) Engine(ctx context.Context) (Engine, error) {
 		}
 		return Engine{}, err
 	}
+	// Docker CLI 26 exits 0 when it cannot reach the daemon and prints the
+	// error in place of the version: only a version is one.
 	f := strings.Fields(string(out))
-	if len(f) == 0 {
-		return Engine{}, nil
+	if len(f) == 0 || !engineVersion.MatchString(f[0]) {
+		text := strings.TrimSpace(string(out))
+		if text == "" {
+			text = "docker info printed no version"
+		}
+		return Engine{}, fmt.Errorf("docker info: %s", text)
 	}
 	return Engine{Version: f[0], Rootless: strings.Contains(string(out), "rootless")}, nil
 }
+
+// engineVersion is how a Docker server version starts (26.1.5, 28.1.1-rd).
+var engineVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+`)
 
 // Orchestrator is `docker compose version --short`.
 func (d Docker) Orchestrator(ctx context.Context) (string, error) {

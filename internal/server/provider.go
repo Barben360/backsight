@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -39,7 +41,7 @@ func CheckProvider(ctx context.Context, c *hindsight.Client, bank, provider stri
 	var res ProviderResult
 	out, err := c.DryRunExtract(ctx, bank, providerSample, "conversation", sampleTime)
 	if err != nil {
-		return res, fmt.Errorf("the extraction LLM failed: %w", err)
+		return res, providerError(provider, err)
 	}
 	if len(out.Facts) == 0 {
 		return res, fmt.Errorf("the extraction LLM returned no fact from the sample: check the model and its structured-output support")
@@ -55,6 +57,66 @@ func CheckProvider(ctx context.Context, c *hindsight.Client, bank, provider stri
 	}
 	res.Facts, res.InputTokens, res.OutputTokens = len(out.Facts), out.Usage.InputTokens, out.Usage.OutputTokens
 	return res, nil
+}
+
+// ProviderError is a provider check the LLM failed: KeyRejected when the
+// provider refused llm_api_key, else Reason says what it answered (never
+// the raw HTTP body).
+type ProviderError struct {
+	Provider    string
+	KeyRejected bool
+	Reason      string
+	err         error
+}
+
+func (e *ProviderError) Error() string {
+	if e.KeyRejected {
+		return "the " + e.Provider + " API rejected the key in llm_api_key"
+	}
+	return "the extraction LLM (" + e.Provider + ") failed: " + e.Reason + ": check the model name, the base URL and your account's credit with the provider"
+}
+
+func (e *ProviderError) Unwrap() error { return e.err }
+
+// keyRejected matches a provider's refusal of the key, which Hindsight
+// passes on in an HTTP 500's detail.
+var keyRejected = regexp.MustCompile(`(?i)authenticat|unauthori[sz]ed|\b401\b|(invalid|incorrect|wrong|missing)[ _-]?api[ _-]?key|invalid_api_key`)
+
+// detailRE takes Hindsight's {"detail": "…"}, cut or not.
+var detailRE = regexp.MustCompile(`"detail"\s*:\s*"((?:[^"\\]|\\.)*)`)
+
+func providerError(provider string, err error) error {
+	pe := &ProviderError{Provider: provider, err: err}
+	var ae *hindsight.APIError
+	if !errors.As(err, &ae) {
+		pe.Reason = "no answer (" + err.Error() + ")"
+		return pe
+	}
+	if ae.Status == 401 || ae.Status == 403 || keyRejected.MatchString(ae.Body) {
+		pe.KeyRejected = true
+		return pe
+	}
+	reason := strings.TrimSpace(ae.Body)
+	cut := len(reason) >= 300 // the client keeps the first 300 bytes
+	if m := detailRE.FindStringSubmatch(reason); m != nil {
+		reason = strings.ReplaceAll(m[1], `\"`, `"`)
+	}
+	reason = strings.TrimPrefix(reason, "Fact extraction failed: ")
+	const most = 160
+	if len(reason) > most {
+		reason, cut = reason[:most], true
+	}
+	if cut { // never end on a cut word
+		if i := strings.LastIndexAny(reason, " ,;:"); i > 0 {
+			reason = reason[:i]
+		}
+		reason = strings.TrimRight(reason, " ,;:") + "…"
+	}
+	if reason == "" {
+		reason = fmt.Sprintf("HTTP %d", ae.Status)
+	}
+	pe.Reason = reason
+	return pe
 }
 
 var frenchWords = map[string]bool{
