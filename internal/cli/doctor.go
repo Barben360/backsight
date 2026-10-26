@@ -86,6 +86,7 @@ const hindsightTimeout = 10 * time.Second
 // doctorEnv is doctor's view of this machine.
 func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: hindsightTimeout}
+	denv.Cwd, _ = os.Getwd()
 	probes(&denv)
 	return denv
 }
