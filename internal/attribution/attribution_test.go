@@ -2,6 +2,7 @@ package attribution
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,18 +124,18 @@ func TestOnlyOwnRepositoriesAreEvidence(t *testing.T) {
 		filepath.Join(w.home, "missing", "x"):      "",      // nothing on disk, nothing learnt
 	}
 	for p, want := range cases {
-		if got := r.Project(p); got != want {
+		if got := r.Project(p, nil); got != want {
 			t.Errorf("%s: %q, want %q", p, got, want)
 		}
 	}
-	if got := w.repos(w.alpha, "github.com/acme").Project(filepath.Join(w.acme, "src")); got != "billing" {
+	if got := w.repos(w.alpha, "github.com/acme").Project(filepath.Join(w.acme, "src"), nil); got != "billing" {
 		t.Errorf("projects.own_owners did not make acme's repository own: %q", got)
 	}
-	if got := w.repos(w.alpha, "https://GitHub.com/Acme/").Project(filepath.Join(w.acme, "src")); got != "billing" {
+	if got := w.repos(w.alpha, "https://GitHub.com/Acme/").Project(filepath.Join(w.acme, "src"), nil); got != "billing" {
 		t.Errorf("an owner written as a URL is not normalised: %q", got)
 	}
 	// Launched in a plain directory: no owner is known, so only configured ones count.
-	if got := w.repos(w.plain).Project(filepath.Join(w.beta, "src")); got != "" {
+	if got := w.repos(w.plain).Project(filepath.Join(w.beta, "src"), nil); got != "" {
 		t.Errorf("a session launched outside any repository took %q as own", got)
 	}
 }
@@ -142,33 +143,83 @@ func TestOnlyOwnRepositoriesAreEvidence(t *testing.T) {
 func TestAnExcludedRepositoryIsNeverEvidence(t *testing.T) {
 	w := newWorld(t)
 	r := NewRepos(w.res, w.home, w.transverse, w.alpha, nil, []string{w.beta})
-	if got := r.Project(filepath.Join(w.beta, "src", "main.go")); got != "" {
+	if got := r.Project(filepath.Join(w.beta, "src", "main.go"), nil); got != "" {
 		t.Errorf("an excluded repository was evidence: %q", got)
 	}
 	_ = os.WriteFile(filepath.Join(w.alpha, ".backsight.toml"), []byte("retain = false\n"), 0o600)
 	r = NewRepos(project.New(w.home, w.transverse), w.home, w.transverse, w.beta, nil, nil)
-	if got := r.Project(filepath.Join(w.alpha, "src")); got != "" {
+	if got := r.Project(filepath.Join(w.alpha, "src"), nil); got != "" {
 		t.Errorf("a repository with retain = false was evidence: %q", got)
 	}
 }
 
-func TestThrowawayClonesCountForTheirOwnRemoteOrNothing(t *testing.T) {
+// A throwaway clone is one repository with its kept checkout: it counts
+// under the kept checkout's name (never the remote's), and for nothing
+// when no kept checkout of that remote is known.
+func TestThrowawayClonesCountForTheirKeptCheckout(t *testing.T) {
 	w := newWorld(t)
 	cache := filepath.Join(w.home, ".cache")
+	kept := repo(t, filepath.Join(w.home, "src", "tool-main"), "git@github.com:me/Tool.git") // kept checkout named otherwise
 	review := repo(t, filepath.Join(cache, "review-a1"), "git@github.com:me/alpha.git")
-	other := repo(t, filepath.Join(cache, "bs"), "git@github.com:me/Backsight.git")
+	bs := repo(t, filepath.Join(cache, "bs"), "https://github.com/me/tool")
 	stranger := repo(t, filepath.Join(cache, "aur-pkg"), "https://aur.example.org/pkg/thing.git")
 	r := w.repos(w.alpha)
-	for p, want := range map[string]string{review: "alpha", other: "Backsight", stranger: ""} {
-		if got := r.Project(filepath.Join(p, "src", "main.go")); got != want {
-			t.Errorf("clone %s: %q, want %q (never its directory's name)", filepath.Base(p), got, want)
+	file := func(p string) string { return filepath.Join(p, "src", "main.go") }
+	for p, want := range map[string]string{review: "alpha", bs: "", stranger: ""} {
+		if got := r.Project(file(p), nil); got != want {
+			t.Errorf("clone %s with only the launch checkout known: %q, want %q", filepath.Base(p), got, want)
 		}
+	}
+	known := r.Kept([]string{file(kept), file(w.beta)})
+	if got := r.Project(file(bs), known); got != "tool-main" {
+		t.Errorf("a clone of a kept checkout: %q, want its name tool-main (one repository, one project)", got)
+	}
+	if got := r.Project(file(stranger), known); got != "" {
+		t.Errorf("a third-party clone: %q", got)
 	}
 	// A linked worktree under ~/.cache is its main checkout's.
 	wt := filepath.Join(cache, "wt-beta")
 	git(t, w.beta, "worktree", "add", "-q", wt, "-b", "fix")
-	if got := r.Project(filepath.Join(wt, "src")); got != "beta" {
+	if got := r.Project(filepath.Join(wt, "src"), nil); got != "beta" {
 		t.Errorf("a worktree under ~/.cache: %q", got)
+	}
+	// Tally finds the kept checkout among the turn's own paths.
+	v := Tally(calls(read(file(kept)), write(file(bs)), write(file(bs))), r)
+	if got := v.Projects(); len(got) != 1 || got[0] != "tool-main" || v.Roots["tool-main"] != kept {
+		t.Errorf("tally %+v", v)
+	}
+}
+
+// A clone of a repository kept out of memory never names nor receives it,
+// live or removed since.
+func TestAnExcludedRepositorysClonesAreNeverEvidence(t *testing.T) {
+	w := newWorld(t)
+	private := repo(t, filepath.Join(w.home, "src", "private-notes"), "git@github.com:me/private-notes.git")
+	live := repo(t, filepath.Join(w.home, ".cache", "pn"), "git@github.com:me/private-notes.git")
+	r := NewRepos(w.res, w.home, w.transverse, w.alpha, nil, []string{private})
+	known := r.Kept([]string{filepath.Join(private, "src")})
+	if got := r.Project(filepath.Join(live, "src", "main.go"), known); got != "" {
+		t.Errorf("a live clone of an excluded repository: %q", got)
+	}
+	gone := filepath.Join(w.home, ".cache", "pn-gone")
+	r.Learn("git clone git@github.com:me/private-notes.git "+gone, w.alpha)
+	if got := r.Project(filepath.Join(gone, "notes.md"), known); got != "" {
+		t.Errorf("a removed clone of an excluded repository: %q", got)
+	}
+	// launched in an excluded directory: its clones and its name are out too
+	r = NewRepos(w.res, w.home, w.transverse, private, nil, []string{private})
+	if got := r.Project(filepath.Join(live, "src", "main.go"), nil); got != "" || r.Launch() != "" {
+		t.Errorf("clone %q, launch %q", got, r.Launch())
+	}
+}
+
+// One repository is the launch one by its checkout or remote, not by its
+// name: a third-party checkout named like the launch project is not own.
+func TestALaunchNamesakeIsNotOwn(t *testing.T) {
+	w := newWorld(t)
+	namesake := repo(t, filepath.Join(w.home, "build", "alpha"), "https://github.com/someone/alpha.git")
+	if got := w.repos(w.alpha).Project(filepath.Join(namesake, "src"), nil); got != "" {
+		t.Errorf("a third-party checkout named alpha: %q", got)
 	}
 }
 
@@ -176,7 +227,7 @@ func TestRemovedWorktreesStillCountFromTheSessionsCommands(t *testing.T) {
 	w := newWorld(t)
 	gone := filepath.Join(w.home, ".cache", "dev", "wt-feature")
 	r := w.repos(w.alpha)
-	if got := r.Project(filepath.Join(gone, "src", "x.go")); got != "" {
+	if got := r.Project(filepath.Join(gone, "src", "x.go"), nil); got != "" {
 		t.Fatalf("before learning: %q", got)
 	}
 	r = w.repos(w.alpha)
@@ -190,8 +241,24 @@ func TestRemovedWorktreesStillCountFromTheSessionsCommands(t *testing.T) {
 		"/tmp/review-alpha/src/main.go":                               "alpha",
 		"/tmp/vendor-copy/x":                                          "",
 	} {
-		if got := r.Project(p); got != want {
+		if got := r.Project(p, nil); got != want {
 			t.Errorf("%s: %q, want %q", p, got, want)
+		}
+	}
+}
+
+// What Learn does not parse stays unknown: a relative git -C, a command
+// built in a variable. The removed directory is then no evidence, never a
+// guess.
+func TestLearnMissesGiveNoEvidence(t *testing.T) {
+	w := newWorld(t)
+	r := w.repos(w.alpha)
+	r.Learn("git -C ../beta worktree add /tmp/wt-rel -b x", w.alpha)
+	r.Learn(`d=/tmp/wt-var; git -C `+w.beta+` worktree add "$d" -b y`, w.alpha)
+	r.Learn("bash -c 'git clone git@github.com:me/beta.git /tmp/in-shell'", w.alpha)
+	for _, p := range []string{"/tmp/wt-rel/a.go", "/tmp/wt-var/a.go"} {
+		if got := r.Project(p, nil); got != "" {
+			t.Errorf("%s: %q", p, got)
 		}
 	}
 }
@@ -301,15 +368,20 @@ func TestMentionsAndContinuityInTransverseSessions(t *testing.T) {
 	}
 }
 
-func TestTheSameTurnGetsTheSameAnswer(t *testing.T) {
-	w := newWorld(t)
-	turn := calls(read(filepath.Join(w.beta, "a")), write(filepath.Join(w.alpha, "b")), read(filepath.Join(w.beta, "c")), write(filepath.Join(w.beta, "d")))
-	first := Tally(turn, w.repos(w.alpha))
-	p1, s1 := Decide("alpha", false, first, nil, Previous{})
-	for range 5 {
-		v := Tally(turn, w.repos(w.alpha))
-		if p, s := Decide("alpha", false, v, nil, Previous{}); p != p1 || s != s1 || !slices.Equal(v.Projects(), first.Projects()) {
-			t.Fatalf("another run answered %q %s, first %q %s", p, s, p1, s1)
+// CallOf reads the same input the same way whatever the map order: a
+// tool call with many string inputs lists its paths in one order.
+func TestCallOfIsIndependentOfInputOrder(t *testing.T) {
+	kv := []string{"command", "cd /home/u/a && ls", "file_path", "/home/u/b/x.go"}
+	for i := range 20 {
+		kv = append(kv, fmt.Sprintf("note%02d", i), fmt.Sprintf("see /home/u/r%02d/file", i))
+	}
+	first := CallOf("Bash", input(kv...), "/home/u", "/home/u")
+	for range 50 {
+		if got := CallOf("Bash", input(kv...), "/home/u", "/home/u"); !slices.Equal(got.Paths, first.Paths) {
+			t.Fatalf("another order: %q, first %q", got.Paths, first.Paths)
 		}
+	}
+	if len(first.Paths) != 23 {
+		t.Errorf("paths %q", first.Paths)
 	}
 }

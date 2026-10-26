@@ -252,7 +252,7 @@ func TestAgentTranscriptsAndScans(t *testing.T) {
 		t.Fatalf("ReadAgent: %+v %v", recs, err)
 	}
 	var seen []string
-	Scan(strings.NewReader(agent), []string{"worktree"}, func(r Record) { seen = append(seen, r.UUID) })
+	Scan(strings.NewReader(agent), []string{"worktree"}, func(r Record) bool { seen = append(seen, r.UUID); return true })
 	if len(seen) != 1 || seen[0] != "e" {
 		t.Errorf("Scan matched %v", seen)
 	}

@@ -172,6 +172,7 @@ const (
 )
 
 func pruneSessions(d paths.Dirs) {
+	(retain.Attributor{Dir: d.AttributionDir()}).PruneAttribution(now(), retain.AttributionKeep)
 	session.PruneLive(d.SessionsDir(), 7*24*time.Hour, now())
 	ents, err := os.ReadDir(d.SessionsDir())
 	if err != nil {

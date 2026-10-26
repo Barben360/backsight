@@ -372,20 +372,6 @@ func (r *Resolver) Remote(cwd string) string {
 	return NormaliseRemote(r.rawRemote(cwd))
 }
 
-// RepoName is the repository name its remote gives (the URL's last path
-// segment, case kept, without .git), "" without a remote.
-func (r *Resolver) RepoName(cwd string) string {
-	u := strings.TrimRight(r.rawRemote(cwd), "/")
-	u = strings.TrimSuffix(u, ".git")
-	if i := strings.LastIndexAny(u, "/:"); i >= 0 {
-		u = u[i+1:]
-	}
-	if NormaliseRemote(r.rawRemote(cwd)) == "" {
-		return "" // a malformed URL: nothing taken from it
-	}
-	return u
-}
-
 // rawRemote is the URL of cwd's repository remote as its config writes it.
 func (r *Resolver) rawRemote(cwd string) string {
 	g := r.git(filepath.Clean(cwd))

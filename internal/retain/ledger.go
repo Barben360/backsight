@@ -52,27 +52,83 @@ type Attributor struct {
 	Owners     []string // projects.own_owners
 	Exclude    []string // privacy.exclude_paths
 	Dir        string   // <state>/attribution
+	// Deadline, when set, bounds a decision's reading (SubagentStop has
+	// 3 s): past it, the report keeps its session's project.
+	Deadline time.Time
+}
+
+// Sources a subagent's decision can also have.
+const (
+	SourceIncomplete = "incomplete" // its transcript lagged behind its report
+	SourceUnread     = "unread"     // its transcript could not be read
+	SourceTimeout    = "timeout"    // no time left to read it
+	SourceExcluded   = "excluded"   // its repository was kept out of memory since
+)
+
+// ownersFile keeps the remote owners learnt from retained sessions'
+// launch repositories (an own owner's repositories are the user's, as in
+// E32: the union over every session). It only grows, by that one rule.
+func (a Attributor) ownersFile() string { return filepath.Join(a.Dir, "owners.json") }
+
+// owners are the own owners besides a session's launch repository's:
+// projects.own_owners and those learnt.
+func (a Attributor) owners() []string {
+	out := slices.Clone(a.Owners)
+	if raw, err := os.ReadFile(a.ownersFile()); err == nil {
+		var learnt []string
+		if json.Unmarshal(raw, &learnt) == nil {
+			out = append(out, learnt...)
+		}
+	}
+	return out
+}
+
+// learnOwner adds the owner of a retained launch directory to the owners
+// learnt; the caller holds the session's flush lock (one writer at a time
+// per session; a lost race only delays the owner to the next session).
+func (a Attributor) learnOwner(launchDir string) {
+	o := attribution.LaunchOwner(a.Resolver, a.Resolver.Home(), launchDir, a.Exclude)
+	if o == "" || a.Dir == "" {
+		return
+	}
+	var learnt []string
+	if raw, err := os.ReadFile(a.ownersFile()); err == nil {
+		_ = json.Unmarshal(raw, &learnt)
+	}
+	if slices.Contains(learnt, o) {
+		return
+	}
+	learnt = append(learnt, o)
+	slices.Sort(learnt)
+	raw, _ := json.Marshal(learnt)
+	_ = fsutil.WriteAtomic(a.ownersFile(), raw, 0o600)
 }
 
 // repos is the evidence namer of a session launched in launchDir, having
 // learnt the worktrees and clones its transcripts made (the session's
-// and its subagents').
-func (a Attributor) repos(launchDir, sessionTranscript string) *attribution.Repos {
-	r := attribution.NewRepos(a.Resolver, a.Resolver.Home(), a.Transverse, launchDir, a.Owners, a.Exclude)
+// and its subagents'). ok is false when the deadline passed.
+func (a Attributor) repos(launchDir, sessionTranscript string) (*attribution.Repos, bool) {
+	r := attribution.NewRepos(a.Resolver, a.Resolver.Home(), a.Transverse, launchDir, a.owners(), a.Exclude)
 	files := []string{sessionTranscript}
 	agents, _ := filepath.Glob(filepath.Join(strings.TrimSuffix(sessionTranscript, ".jsonl"), "subagents", "agent-*.jsonl"))
 	for _, p := range append(files, agents...) {
+		if a.late() {
+			return r, false
+		}
 		fh, err := os.Open(p)
 		if err != nil {
 			continue
 		}
-		transcript.Scan(fh, attribution.LearnWords, func(rec transcript.Record) {
+		transcript.Scan(fh, attribution.LearnWords, func(rec transcript.Record) bool {
 			r.LearnAll([]transcript.Record{rec}, launchDir)
+			return !a.late()
 		})
 		_ = fh.Close()
 	}
-	return r
+	return r, !a.late()
 }
+
+func (a Attributor) late() bool { return !a.Deadline.IsZero() && time.Now().After(a.Deadline) }
 
 func (a Attributor) transverse(p string) bool { return slices.Contains(a.Transverse, p) }
 
@@ -85,42 +141,117 @@ func (a Attributor) ReportProject(e TurnEntry) string {
 	return e.Applied
 }
 
-// Subagent is the attribution of subagent agentID's report: the path rule
-// over the subagent's own transcript, from base (what its session's
-// directory names). A report already decided keeps its answer, so a
-// report rebuilt after a restore lands where the first one did, whatever
-// was removed from disk since. sessionTranscript is the parent session's.
-func (a Attributor) Subagent(sid, agentID, sessionTranscript, agentTranscript, base string, at time.Time) TurnEntry {
-	if e, ok := a.loadAgent(sid, agentID); ok {
+// honour applies today's exclusions to a decision: a report moved to a
+// repository kept out of memory since (privacy.exclude_paths, pause
+// --project, retain = false) goes back to its session's project.
+func (a Attributor) honour(e TurnEntry) TurnEntry {
+	if e.Applied == e.Base {
 		return e
 	}
+	if root := e.Votes.Roots[e.Applied]; root != "" {
+		if out, _ := a.Resolver.OptedOut(root, a.Exclude); out {
+			e.Applied, e.Source = e.Base, SourceExcluded
+		}
+	}
+	return e
+}
+
+// Subagent is the attribution of subagent agentID's report: the path rule
+// over the subagent's own transcript, from base (what its session's
+// directory names). The first decision is kept (one per report, whoever
+// decides first), so a report rebuilt after a restore lands where the
+// first one did, whatever was removed from disk since; only a later
+// exclusion of its repository changes it (honour). lastReply is the report
+// as the hook got it: a transcript whose last reply differs lags behind,
+// and the report then keeps its session's project rather than a decision
+// on partial evidence. sessionTranscript is the parent session's. err is
+// a decision that could not be kept.
+func (a Attributor) Subagent(sid, agentID, sessionTranscript, agentTranscript, base, lastReply string, at time.Time) (TurnEntry, error) {
+	if e, ok := a.loadAgent(sid, agentID); ok {
+		return a.honour(e), nil
+	}
+	launch := launchDir(sessionTranscript)
+	var repos *attribution.Repos
+	e := a.computeSubagent(sid, agentID, launch, func() (*attribution.Repos, bool) {
+		if repos == nil {
+			r, ok := a.repos(launch, sessionTranscript)
+			repos = r
+			return r, ok
+		}
+		return repos, !a.late()
+	}, agentTranscript, base, lastReply, at)
+	kept, err := a.keepAgent(e)
+	return a.honour(kept), err
+}
+
+// computeSubagent applies the path rule to a subagent's transcript, with
+// the session's evidence namer (made only when the transcript is read).
+func (a Attributor) computeSubagent(sid, agentID, launch string, repos func() (*attribution.Repos, bool), agentTranscript, base, lastReply string, at time.Time) TurnEntry {
 	e := TurnEntry{Session: sid, Turn: "agent:" + agentID, Agent: agentID, At: at.UTC(), Base: base, Applied: base, PathRule: base, Source: attribution.SourceCWD}
 	if a.transverse(base) {
 		e.Source = attribution.SourceNone
 	}
 	fh, err := os.Open(agentTranscript)
 	if err != nil {
-		return e // nothing to read: the report stays with its session's project
+		e.Source = SourceUnread // kept: a later reader decides the same
+		return e
 	}
 	recs, _, err := transcript.ReadAgent(fh)
 	_ = fh.Close()
 	if err != nil {
+		e.Source = SourceUnread
 		return e
 	}
-	launch := launchDir(sessionTranscript)
-	repos := a.repos(launch, sessionTranscript)
-	e.Votes = attribution.Tally(attribution.Calls(recs, launch, a.Resolver.Home()), repos)
+	if lastReply != "" && strings.TrimSpace(lastAssistant(recs)) != strings.TrimSpace(lastReply) {
+		e.Source = SourceIncomplete
+		return e
+	}
+	r, ok := repos()
+	if !ok {
+		e.Source = SourceTimeout
+		return e
+	}
+	e.Votes = attribution.Tally(attribution.Calls(recs, launch, a.Resolver.Home()), r)
+	if a.late() {
+		e.Votes, e.Source = attribution.Votes{}, SourceTimeout
+		return e
+	}
 	prompt := ""
 	if len(recs) > 0 && attribution.IsPrompt(recs[0]) {
 		prompt = attribution.PromptText(recs[0])
 	}
-	e.Mentions = attribution.Mentions(prompt, a.names(repos.Launch(), nil, e.Votes))
+	e.Mentions = attribution.Mentions(prompt, a.names(r.Launch(), nil, e.Votes))
 	// A subagent does not inherit its session's previous turn: its own
 	// transcript decides, or its session's directory does.
 	e.PathRule, e.Source = attribution.Decide(base, a.transverse(base), e.Votes, e.Mentions, attribution.Previous{})
 	e.Applied = e.PathRule
-	a.saveAgent(e)
 	return e
+}
+
+// lastAssistant is the text of the last assistant record of recs.
+func lastAssistant(recs []transcript.Record) string {
+	for i := len(recs) - 1; i >= 0; i-- {
+		for _, t := range recs[i].Turns {
+			if t.Role == "assistant" {
+				return t.Content
+			}
+		}
+	}
+	return ""
+}
+
+// Redecide applies the current path rule to a recorded subagent turn's
+// evidence again, with no transcript read, and today's exclusions: what
+// a re-attribution moves a report by. A decision taken without evidence
+// (incomplete, unread, timeout) stays as it is.
+func (a Attributor) Redecide(e TurnEntry) TurnEntry {
+	switch e.Source {
+	case SourceIncomplete, SourceUnread, SourceTimeout:
+		return e
+	}
+	e.PathRule, e.Source = attribution.Decide(e.Base, a.transverse(e.Base), e.Votes, e.Mentions, attribution.Previous{})
+	e.Applied = e.PathRule
+	return a.honour(e)
 }
 
 // names are the project names a prompt may mention: the launch project,
@@ -158,13 +289,44 @@ func (a Attributor) loadAgent(sid, agentID string) (TurnEntry, bool) {
 	return e, true
 }
 
-func (a Attributor) saveAgent(e TurnEntry) {
+// keepAgent stores e as the report's decision unless one is stored
+// already, which then wins: one decision per report whoever decides first
+// (the hook and a rebuild may race). It returns the stored decision.
+func (a Attributor) keepAgent(e TurnEntry) (TurnEntry, error) {
 	p, ok := a.agentPath(e.Session, e.Agent)
 	if !ok {
-		return
+		return e, nil
 	}
-	raw, _ := json.Marshal(e)
-	_ = fsutil.WriteAtomic(p, raw, 0o600)
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return e, err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return e, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".agent-*.tmp")
+	if err != nil {
+		return e, err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return e, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return e, err
+	}
+	if err := tmp.Close(); err != nil {
+		return e, err
+	}
+	if err := os.Link(tmp.Name(), p); err != nil {
+		if stored, found := a.loadAgent(e.Session, e.Agent); found {
+			return stored, nil // another writer decided first
+		}
+		return e, err
+	}
+	return e, nil
 }
 
 // launchDir is the directory a session started in: its first main record
@@ -245,6 +407,7 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 				break
 			}
 		}
+		a.learnOwner(st.Launch)
 	}
 	now := f.Now()
 	attrs := f.attribute(sid, recs, attr{project: st.Project, namedOut: st.OptOut, namedOutDir: st.OptOutDir})
@@ -281,7 +444,7 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 			continue
 		}
 		if repos == nil {
-			repos = a.repos(st.Launch, path)
+			repos, _ = a.repos(st.Launch, path) // no deadline in a flush
 		}
 		e := TurnEntry{Session: sid, Turn: turn[0].UUID, At: turn[0].Timestamp.UTC(), Base: baseOf(turn, attrs)}
 		e.Applied = e.Base
@@ -414,4 +577,34 @@ func (a Attributor) Turns(since time.Time) ([]TurnEntry, error) {
 		}
 	}
 	return out, nil
+}
+
+// AttributionKeep is how long a session's recorded turns and decisions
+// are kept after its last change: longer than the families' window, and
+// a report's decision also travels in its document's metadata.
+const AttributionKeep = 120 * 24 * time.Hour
+
+// PruneAttribution removes the records of sessions untouched since
+// before now - keep.
+func (a Attributor) PruneAttribution(now time.Time, keep time.Duration) {
+	dirs, err := os.ReadDir(a.Dir)
+	if err != nil {
+		return
+	}
+	for _, d := range dirs {
+		if !d.IsDir() || !session.ValidID(d.Name()) {
+			continue
+		}
+		p := filepath.Join(a.Dir, d.Name())
+		newest := time.Time{}
+		files, _ := os.ReadDir(p)
+		for _, f := range files {
+			if fi, err := f.Info(); err == nil && fi.ModTime().After(newest) {
+				newest = fi.ModTime()
+			}
+		}
+		if !newest.IsZero() && now.Sub(newest) > keep {
+			_ = os.RemoveAll(p)
+		}
+	}
 }

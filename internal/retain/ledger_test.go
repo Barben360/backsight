@@ -8,11 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/attribution"
+	"github.com/Barben360/backsight/internal/project"
 )
 
 // ownRepo is e.repo with an origin remote: owner me unless given.
@@ -242,7 +245,7 @@ func TestSubagentReportsFollowTheirWork(t *testing.T) {
 		e.f.Attribution.Owners = c.owners
 		sess := filepath.Join(e.dir, sid+".jsonl")
 		p := e.agent(sid, "ag1", c.launch, c.prompt, c.calls...)
-		got := e.f.Attribution.Subagent(sid, "ag1", sess, p, c.base, clockAt(10, 5))
+		got, _ := e.f.Attribution.Subagent(sid, "ag1", sess, p, c.base, "", clockAt(10, 5))
 		if got.Applied != c.want || got.Source != c.source || got.Base != c.base {
 			t.Errorf("%s: %q (%s) from %q, want %q (%s); votes %+v", c.name, got.Applied, got.Source, got.Base, c.want, c.source, got.Votes)
 		}
@@ -272,7 +275,7 @@ func TestARebuiltReportKeepsItsProject(t *testing.T) {
 	sess := filepath.Join(e.dir, "s1.jsonl")
 	p := e.agent("s1", "ag1", wt, "Fix the cart.", [3]string{"Edit", "file_path", filepath.Join(wt, "a.go")}, [3]string{"Bash", "command", "git -C " + wt + " commit -am fix"})
 	e.subagentReply("s1", "ag1", wt, "Fixed the cart rounding.")
-	first := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", clockAt(12, 50))
+	first, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(12, 50))
 	if first.Applied != "shop" {
 		t.Fatalf("first answer %+v", first)
 	}
@@ -282,7 +285,7 @@ func TestARebuiltReportKeepsItsProject(t *testing.T) {
 	// own worktree command still names the removed directory.
 	fresh := e.f.Attribution
 	fresh.Dir = t.TempDir()
-	if again := fresh.Subagent("s1", "ag1", sess, p, "billing", clockAt(12, 50)); again.Applied != "shop" || !reflect.DeepEqual(again.Votes, first.Votes) {
+	if again, _ := fresh.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(12, 50)); again.Applied != "shop" || !reflect.DeepEqual(again.Votes, first.Votes) {
 		t.Errorf("recomputed after the worktree was removed: %+v, first %+v", again, first)
 	}
 	// The restore lost the report, and nothing on disk names the worktree
@@ -293,7 +296,7 @@ func TestARebuiltReportKeepsItsProject(t *testing.T) {
 	}
 	if lost := fresh; true {
 		lost.Dir = t.TempDir()
-		if got := lost.Subagent("s1", "ag1", sess, p, "billing", clockAt(12, 50)); got.Applied == "shop" {
+		if got, _ := lost.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(12, 50)); got.Applied == "shop" {
 			t.Fatalf("the fixture still names the worktree: %+v", got)
 		}
 	}
@@ -313,4 +316,171 @@ func (e *env) subagentReply(sid, agent, cwd, reply string) {
 	fh, _ := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	_, _ = fh.WriteString(line)
 	_ = fh.Close()
+}
+
+// A report whose evidence lies in a repository kept out of memory, by a
+// path, a retain = false file or a paused project, stays with its
+// session's project, and never names that repository.
+func TestSubagentReportsNeverMoveToAnExcludedRepository(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	edit := [3]string{"Edit", "file_path", filepath.Join(shop, "cart.go")}
+	for i, setup := range []func(){
+		func() { e.f.Attribution.Exclude = []string{shop} }, // privacy.exclude_paths, and pause --project
+		func() {
+			e.f.Attribution.Exclude = nil
+			_ = os.WriteFile(filepath.Join(shop, ".backsight.toml"), []byte("retain = false\n"), 0o600)
+		},
+	} {
+		setup()
+		sid := fmt.Sprintf("x%d", i)
+		e.recordIn(billing, sid, "u1", "user", 0, "go")
+		p := e.agent(sid, "ag1", billing, "Fix the cart.", edit, edit)
+		got, err := e.f.Attribution.Subagent(sid, "ag1", filepath.Join(e.dir, sid+".jsonl"), p, "billing", "", clockAt(10, 5))
+		if err != nil || got.Applied != "billing" || slices.Contains(got.Votes.Projects(), "shop") {
+			t.Errorf("case %d: %+v %v", i, got, err)
+		}
+	}
+}
+
+// A decision kept before the user excluded its repository gives way to
+// the exclusion: a rebuilt report never goes to a project now kept out.
+func TestAKeptDecisionHonoursALaterExclusion(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	e.recordIn(billing, "s1", "u1", "user", 0, "go")
+	sess := filepath.Join(e.dir, "s1.jsonl")
+	p := e.agent("s1", "ag1", billing, "Fix the cart.", [3]string{"Edit", "file_path", filepath.Join(shop, "cart.go")})
+	if first, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(10, 5)); first.Applied != "shop" {
+		t.Fatalf("first %+v", first)
+	}
+	e.f.Attribution.Exclude = []string{shop} // backsight pause --project, later
+	if again, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(10, 5)); again.Applied != "billing" || again.Source != SourceExcluded {
+		t.Errorf("after the exclusion: %+v", again)
+	}
+	if r := e.f.Attribution.Redecide(TurnEntry{Base: "billing", Votes: attribution.Votes{Explicit: []attribution.Count{{Project: "shop", N: 9}}, Roots: map[string]string{"shop": shop}}}); r.Applied != "billing" {
+		t.Errorf("redecided %+v", r)
+	}
+}
+
+// A transcript behind the report, or one that cannot be read, is never
+// judged on partial evidence; the fallback is kept like any decision, so
+// a later reader (a rebuild) files the report the same way.
+func TestALaggingOrUnreadableTranscriptKeepsTheBase(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	e.recordIn(billing, "s1", "u1", "user", 0, "go")
+	sess := filepath.Join(e.dir, "s1.jsonl")
+	p := e.agent("s1", "ag1", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	got, err := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "Fixed the cart.", clockAt(10, 5))
+	if err != nil || got.Applied != "billing" || got.Source != SourceIncomplete {
+		t.Fatalf("lagging: %+v %v", got, err)
+	}
+	e.subagentReply("s1", "ag1", billing, "Fixed the cart.") // the transcript catches up
+	if later, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "Fixed the cart.", clockAt(10, 5)); later.Applied != "billing" {
+		t.Errorf("a later reader decided otherwise: %+v", later)
+	}
+	missing := filepath.Join(e.dir, "s1", "subagents", "agent-ag2.jsonl")
+	got, _ = e.f.Attribution.Subagent("s1", "ag2", sess, missing, "billing", "", clockAt(10, 5))
+	if got.Source != SourceUnread {
+		t.Errorf("unreadable: %+v", got)
+	}
+	e.agent("s1", "ag2", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	if later, _ := e.f.Attribution.Subagent("s1", "ag2", sess, missing, "billing", "", clockAt(10, 5)); later.Applied != "billing" {
+		t.Errorf("a later reader decided otherwise: %+v", later)
+	}
+}
+
+// The hook and a rebuild may decide the same report at once: one decision
+// is kept and both get it.
+func TestOneDecisionPerReportUnderConcurrentWriters(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	e.recordIn(billing, "s1", "u1", "user", 0, "go")
+	sess := filepath.Join(e.dir, "s1.jsonl")
+	p := e.agent("s1", "ag1", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	var wg sync.WaitGroup
+	got := make([]TurnEntry, 8)
+	for i := range got {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a := e.f.Attribution
+			a.Resolver = project.New(filepath.Dir(filepath.Dir(billing)), []string{".claude"}) // a resolver per process
+			base := "billing"
+			if i%2 == 1 {
+				base = "other" // the rebuild's base differs: whoever is first wins
+			}
+			got[i], _ = a.Subagent("s1", "ag1", sess, p, base, "", clockAt(10, 5))
+		}()
+	}
+	wg.Wait()
+	for _, g := range got[1:] {
+		if g.Base != got[0].Base || g.Applied != got[0].Applied {
+			t.Fatalf("two decisions for one report: %+v and %+v", got[0], g)
+		}
+	}
+}
+
+// Own owners are the union over this machine's retained sessions (E32):
+// once a session launched in a repository of owner me was recorded, a
+// session started in ~/.claude can move a report to another of me's
+// repositories; an excluded launch teaches nothing.
+func TestOwnersAreLearntFromRetainedLaunches(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	home := filepath.Dir(filepath.Dir(billing))
+	claude := filepath.Join(home, ".claude")
+	_ = os.MkdirAll(claude, 0o700)
+	edits := [][3]string{{"Edit", "file_path", filepath.Join(shop, "a.go")}, {"Edit", "file_path", filepath.Join(shop, "b.go")}}
+	decide := func(sid string) TurnEntry {
+		e.recordIn(claude, sid, "u1", "user", 0, "go")
+		p := e.agent(sid, "ag1", claude, "Set up.", edits...)
+		got, _ := e.f.Attribution.Subagent(sid, "ag1", filepath.Join(e.dir, sid+".jsonl"), p, ".claude", "", clockAt(10, 5))
+		return got
+	}
+	if got := decide("c1"); got.Applied != ".claude" {
+		t.Fatalf("no owner known yet: %+v", got)
+	}
+	// an excluded launch repository teaches nothing
+	e.f.Attribution.Exclude = []string{billing}
+	e.recordIn(billing, "r0", "u1", "user", 0, "go")
+	e.flush("r0", Options{})
+	if got := decide("c2"); got.Applied != ".claude" {
+		t.Fatalf("learnt from an excluded launch: %+v", got)
+	}
+	e.f.Attribution.Exclude = nil
+	e.recordIn(billing, "r1", "u1", "user", 0, "go")
+	e.flush("r1", Options{})
+	if got := decide("c3"); got.Applied != "shop" {
+		t.Errorf("after a retained session of owner me: %+v", got)
+	}
+}
+
+// The decision travels in the report's document metadata with its project.
+func TestAReportCarriesItsDecision(t *testing.T) {
+	n := NewSubagentNote("b", "s1", "ag1", "Explore", "shop", "Fixed.", clockAt(10, 0))
+	if _, ok := n.Item("m").Metadata["attribution"]; ok {
+		t.Error("a report with no decision claims one")
+	}
+	n.Attribution = "evidence"
+	if m := n.Item("m").Metadata; m["attribution"] != "evidence" || m["project"] != "shop" {
+		t.Errorf("metadata %v", m)
+	}
+}
+
+func TestOldSessionsRecordsArePruned(t *testing.T) {
+	dir := t.TempDir()
+	a := Attributor{Dir: dir}
+	for _, sid := range []string{"old", "fresh"} {
+		_ = os.MkdirAll(filepath.Join(dir, sid), 0o700)
+		_ = os.WriteFile(filepath.Join(dir, sid, "main.jsonl"), []byte("{}\n"), 0o600)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "owners.json"), []byte(`["github.com/me"]`), 0o600)
+	old := time.Now().Add(-200 * 24 * time.Hour)
+	_ = os.Chtimes(filepath.Join(dir, "old", "main.jsonl"), old, old)
+	a.PruneAttribution(time.Now(), AttributionKeep)
+	if _, err := os.Stat(filepath.Join(dir, "old")); err == nil {
+		t.Error("an old session's records were kept")
+	}
+	for _, p := range []string{filepath.Join(dir, "fresh", "main.jsonl"), filepath.Join(dir, "owners.json")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was pruned", p)
+		}
+	}
 }
