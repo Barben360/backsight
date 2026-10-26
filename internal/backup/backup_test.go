@@ -191,14 +191,15 @@ func writeOurs(t *testing.T, dir string, at time.Time) string {
 // An archive younger than 24 h is never pruned, whatever the daily and
 // weekly slots say: a second backup the same day (a safety archive before
 // a restore or an upgrade, a manual one before a forget) keeps the first.
-// Past 24 h, an archive outside the slots goes as before. Foreign files
-// are never touched.
+// From 24 h on (exactly 24 h included), an archive outside the slots goes
+// as before. Foreign files are never touched.
 func TestPruneNeverRemovesAnArchiveYoungerThan24h(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 10, 25, 22, 10, 8, 0, time.UTC)
 	first := writeOurs(t, dir, time.Date(2026, 10, 25, 21, 51, 10, 0, time.UTC)) // before a forget
 	second := writeOurs(t, dir, now)                                             // the daily job, same day
 	edge := writeOurs(t, dir, now.Add(-24*time.Hour).Add(time.Second))           // yesterday, still inside 24 h
+	exact := writeOurs(t, dir, now.Add(-24*time.Hour))                           // exactly 24 h: no longer younger
 	old := writeOurs(t, dir, now.Add(-24*time.Hour).Add(-time.Minute))           // yesterday, just past 24 h
 	older := writeOurs(t, dir, now.Add(-24*time.Hour).Add(-2*time.Minute))       // same day as old, older
 	foreign := filepath.Join(dir, "mine.tar.gz.age")
@@ -221,7 +222,7 @@ func TestPruneNeverRemovesAnArchiveYoungerThan24h(t *testing.T) {
 			t.Errorf("sidecar of %s removed", filepath.Base(p))
 		}
 	}
-	for _, p := range []string{old, older} {
+	for _, p := range []string{exact, old, older} {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s past 24 h and outside the slots was kept", filepath.Base(p))
 		}
@@ -229,7 +230,7 @@ func TestPruneNeverRemovesAnArchiveYoungerThan24h(t *testing.T) {
 			t.Errorf("sidecar of %s left", filepath.Base(p))
 		}
 	}
-	if got := strings.Join(baseNames(removed), " "); got != filepath.Base(old)+" "+filepath.Base(older) {
+	if got := strings.Join(baseNames(removed), " "); got != filepath.Base(exact)+" "+filepath.Base(old)+" "+filepath.Base(older) {
 		t.Errorf("removed %s", got)
 	}
 

@@ -429,9 +429,7 @@ func TestBackupVerifyRecordsItsResultAndWhetherTheArchiveWasTheNewest(t *testing
 		t.Fatalf("after verifying the older archive: %+v", v)
 	}
 	// A relative path names the same archive.
-	wd, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(wd) })
-	_ = os.Chdir(filepath.Dir(newest))
+	t.Chdir(filepath.Dir(newest))
 	if code, out, _ := run(t, "backup", "verify", filepath.Base(newest)); code != output.OK {
 		t.Fatalf("verify: exit %d\n%s", code, out)
 	}

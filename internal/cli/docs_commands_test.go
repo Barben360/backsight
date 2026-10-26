@@ -179,17 +179,26 @@ func checkMention(root *cobra.Command, args []string, pending []string) error {
 	return nil
 }
 
+// builtPending returns the pending entries the tree now has.
+func builtPending(root *cobra.Command, pending []string) []string {
+	var out []string
+	for _, p := range pending {
+		c, rest, err := root.Find(strings.Fields(p))
+		if err == nil && len(rest) == 0 && c.CommandPath() == "backsight "+p {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func docsRoot() *cobra.Command {
 	return newRoot(&env{stdout: io.Discard, stderr: io.Discard})
 }
 
 func TestDocsNameOnlyExistingCommandsAndFlags(t *testing.T) {
 	root := docsRoot()
-	for _, p := range docsPending {
-		c, rest, err := root.Find(strings.Fields(p))
-		if err == nil && len(rest) == 0 && c.CommandPath() == "backsight "+p {
-			t.Errorf("backsight %s is built now: remove it from docsPending", p)
-		}
+	for _, p := range builtPending(root, docsPending) {
+		t.Errorf("backsight %s is built now: remove it from docsPending", p)
 	}
 	perFile := map[string]int{}
 	for _, f := range docFiles(t) {
@@ -257,6 +266,34 @@ func TestCheckMention(t *testing.T) {
 		if err == nil || err.Error() != want {
 			t.Errorf("`backsight %s`: got %v, want %s", m, err, want)
 		}
+	}
+}
+
+// A pending command is accepted only while it is missing, and only that
+// command: a neighbour's typo still fails, and so does the same mention
+// once the entry is gone. A pending entry the tree has is reported.
+func TestCheckMentionPendingCommands(t *testing.T) {
+	root := docsRoot()
+	pending := []string{"backup prune"}
+	for _, m := range []string{"backup prune", "backup prune --older-than 30d", "backup create|prune"} {
+		if err := checkMention(root, strings.Fields(m), pending); err != nil {
+			t.Errorf("pending `backsight %s`: %v", m, err)
+		}
+		if err := checkMention(root, strings.Fields(m), nil); err == nil || err.Error() != `"backsight backup" has no subcommand "prune"` {
+			t.Errorf("`backsight %s` with nothing pending: got %v", m, err)
+		}
+	}
+	for m, want := range map[string]string{
+		"backup prnue":        `"backsight backup" has no subcommand "prnue"`,
+		"backup create|prnue": `"backsight backup" has no subcommand "prnue"`,
+		"backup prune2":       `"backsight backup" has no subcommand "prune2"`,
+	} {
+		if err := checkMention(root, strings.Fields(m), pending); err == nil || err.Error() != want {
+			t.Errorf("`backsight %s` with backup prune pending: got %v, want %s", m, err, want)
+		}
+	}
+	if got := builtPending(root, []string{"backup prune", "backup create", "guide index"}); !slices.Equal(got, []string{"backup create", "guide index"}) {
+		t.Errorf("builtPending = %q, want the two built commands", got)
 	}
 }
 
