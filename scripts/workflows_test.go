@@ -454,3 +454,26 @@ func TestReleasePublishesHandWrittenNotes(t *testing.T) {
 		})
 	}
 }
+
+// A stalled step ends its job instead of holding a runner for hours (an apt
+// mirror once kept the test job waiting 2 h): every job has a time limit,
+// and minisign comes from its pinned, checksummed release, never from apt.
+func TestWorkflowsBoundEveryJob(t *testing.T) {
+	limit := regexp.MustCompile(`(?m)^    timeout-minutes: \d+\s*$`)
+	jobs, minisign := 0, 0
+	for _, w := range workflows(t) {
+		for _, j := range w.jobs {
+			jobs++
+			if !limit.MatchString(j.raw) {
+				t.Errorf("%s job %s: no job-level timeout-minutes", w.name, j.name)
+			}
+			if strings.Contains(j.raw, "apt-get") && strings.Contains(j.raw, "minisign") {
+				t.Errorf("%s job %s: installs minisign through apt", w.name, j.name)
+			}
+			minisign += strings.Count(j.raw, "scripts/ci-minisign.sh")
+		}
+	}
+	if jobs < 7 || minisign < 4 {
+		t.Errorf("%d jobs and %d ci-minisign.sh steps found, want the 7 jobs and the 4 minisign installs: the check proves nothing", jobs, minisign)
+	}
+}

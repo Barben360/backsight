@@ -10,6 +10,7 @@ env:
   BACKSIGHT_CI_SLOT: "1"
 jobs:
   release:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     # The signing key is a secret of this environment, which only v* tags
     # may deploy to (repository settings, not this file).
@@ -41,7 +42,7 @@ jobs:
           notes="docs/releases/$GITHUB_REF_NAME.md"
           [ -s "$notes" ] || { echo "::error::$notes is missing or empty: write the release notes first"; exit 1; }
           grep -qF "| $GITHUB_REF_NAME |" docs/compatibility.md || { echo "::error::docs/compatibility.md has no row for $GITHUB_REF_NAME"; exit 1; }
-      - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
+      - run: scripts/ci-minisign.sh
       - run: CGO_ENABLED=1 go test -race ./...
       - name: Write the signing key
         env:
