@@ -217,6 +217,7 @@ var (
 	memories           map[string]string
 	projectEntities    map[string]string
 	retainedTags       []string
+	retainedContents   []string     // the content of every accepted item
 	bankConfigStatus   atomic.Int32 // non-zero: bank claude-memory's /config answers this status
 	// bankOverrides reads a bank's config overrides on the fake server,
 	// after replacing them with set when it is not nil.
@@ -243,7 +244,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	llmOldInput.Store(0)
 	llmPeriod = ""
 	extractFails.Store(false)
-	retainedTags, queueAtRetain = nil, nil
+	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	recallQueries = nil
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
@@ -480,6 +481,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			var body struct {
 				Items []struct {
 					DocumentID string          `json:"document_id"`
+					Content    string          `json:"content"`
 					Metadata   json.RawMessage `json:"metadata"`
 					Tags       []string        `json:"tags"`
 				} `json:"items"`
@@ -505,6 +507,7 @@ func fakeHindsight(t *testing.T) (port int) {
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())
 				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))
+				retainedContents = append(retainedContents, it.Content)
 			}
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/documents/"):

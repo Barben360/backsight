@@ -13,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/redact"
 )
 
 // env is what every command needs: where to write and whether to emit JSON.
@@ -135,6 +136,9 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 
 // ExecuteContext is Execute with a context commands can watch (Ctrl-C).
 func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// Redaction also replaces the exact values of the secret stores, read
+	// once at the first redaction of this command (H1, security review).
+	redact.SetLocalSecrets(localSecretValues)
 	// Hooks bypass the command parser: no usage error (exit 2 blocks in
 	// Claude Code) can come out of a hook call, whatever its arguments.
 	if len(args) > 0 && args[0] == "hook" {

@@ -2,6 +2,7 @@ package redact
 
 import (
 	"encoding/base64"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,17 @@ var (
 	google    = "AI" + "za" + rep("Sy9xK2m4P7", 3) + "abcde"
 	jwt       = "ey" + "JhbGciOiJIUzI1NiJ9" + ".ey" + "JzdWIiOiIxMjM0NTY3ODkwIn0" + "." + rep("dBjftJeZ4C", 3)
 	privKey   = "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nQyNTUxOQAAACD\n-----END " + "OPENSSH PRIVATE KEY-----"
+
+	// Security review H1 and M1 shapes.
+	ageKey    = "AGE-" + "SECRET-KEY-1" + rep("QZ7X9KMPL2", 5) + "W3RTY4UV"
+	ageRecip  = "age1" + rep("qz7x9kmpl2", 5) + "w3rty4uv7a9s"
+	hex64     = rep("3f9a1c7e5b2d4f60", 4)
+	hex32     = rep("9e8d7c6b5a4f3e2d", 2)
+	b64       = "Kq9/z" + "Lm+3XwP7rT0vN8yB2" + "cD/4eF6gH1jK5lM9nQ" + "+sU7wY0aZ3bE6iO/K1SZFPTOtr/KBHBeksoGMGw=="
+	sasSig    = "Kq9" + "z%2BLm3XwP7rT0vN8yB2cD%2F4eF6gH1jK5lM9nQ%3D"
+	pgpBlock  = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----\n\nlQOYBGXk8bQBCADn\n/K1SZFPTOtr/KBHBeks\n=Qx7a\n-----END " + "PGP PRIVATE KEY BLOCK-----"
+	totpSeed  = "JBSW" + "Y3DPEHPK3PXP" + "JBSWY3DPEHPK3PXP"
+	dockerB64 = base64.StdEncoding.EncodeToString([]byte("bob:" + "hunter2hunter2"))
 )
 
 func TestTruePositives(t *testing.T) {
@@ -100,6 +112,50 @@ func TestTruePositives(t *testing.T) {
 		{"short letters after --password", "mytool --password hunterxyz login", "cli_password", "hunterxyz"},
 		{"short basic auth", "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("bob:pw")), "basic_auth", base64.StdEncoding.EncodeToString([]byte("bob:pw"))},
 		{"short padded basic auth", "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("a:bc")), "basic_auth", base64.StdEncoding.EncodeToString([]byte("a:bc"))},
+		// Security review H1: backsight's own backup key (an age identity).
+		{"age identity bare", "here is my key " + ageKey + " from the vault", "age_identity", ageKey},
+		{"age identity file", "# created: 2026-10-25T10:00:00Z\n# public key: " + ageRecip + "\n" + ageKey + "\n", "age_identity", ageKey},
+		{"age identity in secrets.toml", `backup_identity = "` + ageKey + `"`, "age_identity", ageKey},
+		{"age identity piped", "echo " + ageKey + " | backsight backup identity import", "age_identity", ageKey},
+		{"age identity cut short", "AGE-" + "SECRET-KEY-1" + rep("QZ7X9KMPL2", 3), "age_identity", "QZ7X9KMPL2QZ7X9KMPL2"},
+		{"identity key random value", "SIGNING_IDENTITY=" + rep("q8Zr4Lm2Vn7T", 3), "secret_value", "q8Zr4Lm2Vn7T"},
+		// Security review M1.
+		{"netrc one line", "machine github.com login bob password s3cr3tP4ssw0rd", "netrc_password", "s3cr3tP4ssw0rd"},
+		{"netrc lines", "machine api.heroku.com\n  login bob@example.com\n  password hunter2xyz\n", "netrc_password", "hunter2xyz"},
+		{"netrc no login", "machine nas.example.org password hunter2xyz", "netrc_password", "hunter2xyz"},
+		{"netrc default", "default login anonymous password hunter2xyz", "netrc_password", "hunter2xyz"},
+		{"docker config auth", `{"auths":{"ghcr.io":{"auth":"` + dockerB64 + `"}}}`, "docker_auth", dockerB64},
+		{"docker config auth spaced", `"auth": "` + dockerB64 + `"`, "docker_auth", dockerB64},
+		{"docker login -p", "docker login -u bob -p hunter2hunter2 ghcr.io", "cli_password", "hunter2hunter2"},
+		{"docker login -p=", "docker login -u bob -p=hunter2hunter2", "cli_password", "hunter2hunter2"},
+		{"podman login -p", "podman login quay.io -u bob -p 'hunter2 two'", "cli_password", "hunter2 two"},
+		{"docker login --password", "docker login --username bob --password hunter2hunter2", "cli_password", "hunter2hunter2"},
+		{"slack webhook", "curl -X POST https://hooks.slack.com/services/" + "T024BE7LD/B01ABCDEF/" + rep("aB3dE5gH9k", 2) + "xyzw -d @x", "slack_webhook", rep("aB3dE5gH9k", 2)},
+		{"discord webhook", "https://discord.com/api/webhooks/" + "112233445566778899/" + rep("Zx9-kLmQ2_wP", 5), "discord_webhook", "Zx9-kLmQ2_wP"},
+		{"discordapp webhook", "https://discordapp.com/api/webhooks/" + "112233445566778899/" + rep("Zx9kLmQ2wP", 6), "discord_webhook", "Zx9kLmQ2wP"},
+		{"digitalocean", "DO token dop" + "_v1_" + hex64, "digitalocean_token", hex64},
+		{"shopify access", "shp" + "at_" + hex32, "shopify_token", hex32},
+		{"shopify shared secret", "shp" + "ss_" + hex32, "shopify_token", hex32},
+		{"twilio api key sid", "key SK" + hex32 + " for the app", "twilio_key", hex32},
+		{"twilio auth", "TWILIO_AUTH=" + hex32, "secret_value", hex32},
+		{"twilio auth token", "TWILIO_AUTH_TOKEN=" + hex32, "secret_value", hex32},
+		{"hex secret key", "ENCRYPTION_KEY=" + hex64, "secret_value", hex64},
+		{"hex secret in yaml", "master_key: " + hex64 + "\n", "secret_value", hex64},
+		{"hex after token word", "the token is " + hex64, "hex_secret", hex64},
+		{"hex after api key words", "my API key: " + hex32, "secret_value", hex32},
+		{"hex after secret word", "client secret " + hex64 + " rotated", "hex_secret", hex64},
+		{"totp otpauth", "otpauth://totp/ACME:bob?secret=" + totpSeed + "&issuer=ACME", "totp_seed", totpSeed},
+		{"totp otpauth secret not first", "otpauth://totp/ACME:bob?issuer=ACME&secret=" + totpSeed, "totp_seed", totpSeed},
+		{"totp prose", "TOTP secret " + totpSeed, "totp_seed", totpSeed},
+		{"2fa seed", "2FA seed: " + totpSeed, "totp_seed", totpSeed},
+		{"secret= base32", "secret=" + totpSeed, "secret_value", totpSeed},
+		{"pgp private key", "gpg --export-secret-keys -a:\n" + pgpBlock + "\n", "private_key", "/K1SZFPTOtr/KBHBeks"},
+		{"pgp private key cut", "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----\nlQOYBGXk8bQBCADn\n/K1SZFPTOtr/KBHBeks", "private_key", "/K1SZFPTOtr/KBHBeks"},
+		{"azure account key", "DefaultEndpointsProtocol=https;AccountName=acme;AccountKey=" + b64 + ";EndpointSuffix=core.windows.net", "secret_value", "/K1SZFPTOtr/KBHBeksoGMGw=="},
+		{"azure shared access key", "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=root;SharedAccessKey=" + b64, "secret_value", "/K1SZFPTOtr/KBHBeksoGMGw=="},
+		{"azure sas sig", "https://acme.blob.core.windows.net/c/x?sv=2022-11-02&sp=r&se=2026-11-01&sig=" + sasSig + "&spr=https", "secret_value", "eF6gH1jK5lM9nQ%3D"},
+		{"kubeconfig client key", "    client-key-data: " + "LS0tLS1CRUdJTiBSU0Eg" + b64, "secret_value", "/K1SZFPTOtr/KBHBeksoGMGw=="},
+		{"aws signature", "X-Amz-Signature=" + hex64, "secret_value", hex64},
 	}
 	for _, c := range cases {
 		out, kinds := Text(c.in)
@@ -198,6 +254,52 @@ func TestLookAlikesSurvive(t *testing.T) {
 		"mytool --password PASSWORD --token TOKEN",
 		"set it with --token values from the vault",
 		"DEBUG=pw:browser npx playwright test",
+		// Security review H1/M1 rules: what they must leave alone.
+		"commit " + hex64[:40] + " fixed it",
+		"git checkout " + hex64[:40],
+		"image ghcr.io/vectorize-io/hindsight@sha256:" + hex64,
+		"sha256 " + hex64 + "  backsight_linux_amd64.tar.gz",
+		hex64 + "  checksums.txt",
+		"digest: sha256:" + hex64,
+		`"sha256": "` + hex64 + `"`,
+		"checksum=" + hex64,
+		"cache_key=" + hex64,
+		"session 88cf850f-c82e-4b79-b1d7-ecc3af0e50a9 resumed",
+		"request_key=88cf850f-c82e-4b79-b1d7-ecc3af0e50a9",
+		"md5 " + hex32 + " of the file",
+		"# public key: " + ageRecip,
+		"recipient = \"" + ageRecip + "\"",
+		"AGE-SECRET-KEY-1 is how an age identity starts",
+		"identity_file = ~/.ssh/id_ed25519",
+		"IdentityFile ~/.ssh/id_ed25519",
+		"identity_provider=okta-prod",
+		"auth: true",
+		"auth=oauth2",
+		`"auth": "basic"`,
+		"primary_key=user_id",
+		"public_key = " + ageRecip,
+		"monkey=banana",
+		"sig=v1",
+		"the machine learning password field",
+		"machine github.com login bob password $GH_PASSWORD",
+		"docker login -u bob --password-stdin ghcr.io",
+		"docker run -p 8080:80 nginx and docker login ghcr.io",
+		"https://hooks.slack.com/services/",
+		"https://discord.com/api/webhooks",
+		"the totp secret is in 1Password",
+		"TOTP secret: see the vault",
+		"-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBGXk8bQBCADn\n-----END PGP PUBLIC KEY BLOCK-----",
+		"-----BEGIN PGP SIGNATURE-----",
+		"AccountName=acme;EndpointSuffix=core.windows.net",
+		"shpat_ is the prefix of Shopify admin tokens",
+		"SKU 12345 and SKIP_TESTS=1",
+		"the token is valid for one hour",
+		// Seen in real transcripts: identifiers after a key word.
+		"key: cleColonneEnTeteJour(i),",
+		"key: cleInterrupteurConsentementSentry,",
+		"Current model identity: claude-cli/claude-sonnet-4-6.",
+		"netrc `machine … login … password X` and `docker login -p X`",
+		"netrc `machine … login … password …`",
 	} {
 		out, kinds := Text(s)
 		if out != s || len(kinds) != 0 {
@@ -220,4 +322,37 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// The exact values of the secret stores go whatever their shape, in their
+// URL-escaped forms too, read once.
+func TestLocalSecrets(t *testing.T) {
+	plain := "correct" + "horsebatterystaple" // no rule knows this shape
+	odd := "pa:ss/" + "word with spaces"      // escaped differently in URLs and paths
+	short := "abc" + "1234"                   // under MinSecret: ordinary text
+	calls := 0
+	SetLocalSecrets(func() []string { calls++; return []string{plain, odd, short, ""} })
+	t.Cleanup(func() { SetLocalSecrets(nil) })
+	for _, in := range []string{
+		"the llm key is " + plain + " now",
+		"see https://x/?k=" + url.QueryEscape(odd) + "&a=1",
+		"GET /banks/" + url.PathEscape(odd) + "/memories",
+		"GET /banks/" + strings.ReplaceAll(url.PathEscape(odd), ":", "%3A") + "/memories",
+		"quoted: '" + odd + "'",
+	} {
+		out, kinds := Text(in)
+		if strings.Contains(out, plain) || strings.Contains(out, "word") || !strings.Contains(out, "[redacted:local_secret]") || !contains(kinds, LocalKind) {
+			t.Errorf("%q -> %q %v", in, out, kinds)
+		}
+	}
+	if out, kinds := Text("build abc1234 passed"); out != "build abc1234 passed" || len(kinds) != 0 {
+		t.Errorf("a value under MinSecret was redacted: %q %v", out, kinds)
+	}
+	if calls != 1 {
+		t.Errorf("the secret stores were read %d times, want once", calls)
+	}
+	SetLocalSecrets(nil)
+	if out, _ := Text("the llm key is " + plain); !strings.Contains(out, plain) {
+		t.Errorf("a cleared source still redacts: %q", out)
+	}
 }

@@ -23,9 +23,23 @@ Nothing else leaves the machine:
 
 ## Redaction
 
-Before anything is written to memory, backsight replaces secrets with `[redacted:<kind>]`: private keys, known token prefixes (`sk-`, `sk-ant-`, `ghp_`, `github_pat_`, `AKIA`, JWTs and others), bearer and Basic auth headers, passwords in URLs (an empty user included), `KEY=secret` lines (`pw`, `pass`, `passphrase` and `api key` keys included, and a short plain password after a password or token key), password options of command lines (`--password`, `--pass`, `--passphrase`, `--pw`, `--secret`, `--token`, `curl -u`, `mysql -p`, `sshpass -p`, `redis-cli -a`, `-U user%password`), and high-entropy values next to secret-like names. This applies to session text, subagent reports and stored facts. `memory_store` and `backsight store` refuse text that still looks like a secret.
+Before anything is written to memory, backsight replaces secrets with `[redacted:<kind>]`:
 
-Redaction can miss a secret in an unusual format. `backsight memory scan` re-checks what is already stored and gives the purge command for each match.
+- **backsight's own secrets**: the exact values of `secrets.toml` and of the secret-named entries of the server's `.env`, in their URL-escaped forms too, whatever their shape; and any age identity (`AGE-SECRET-KEY-1…`), the shape of your backup key;
+- **private keys**: PEM blocks (`-----BEGIN … PRIVATE KEY-----`) and PGP private key blocks, whole;
+- **known token shapes**: `sk-` and `sk-ant-`, Stripe (`sk_live_`, `rk_test_`…), GitHub (`ghp_`, `github_pat_`…), GitLab (`glpat-`…), npm, Slack (`xoxb-`…), AWS (`AKIA`, `ASIA`), Google (`AIza`), DigitalOcean (`dop_v1_`, `doo_v1_`, `dor_v1_`), Shopify (`shpat_`, `shpca_`, `shppa_`, `shpss_`), Twilio API key SIDs (`SK` and 32 hex), JWTs, and Slack and Discord webhook URLs;
+- **authorization**: Bearer, Basic and other `Authorization:` schemes, and a Docker config's `"auth"` (base64 of user:password);
+- **passwords in URLs** (an empty user included) and in netrc entries (`machine … login … password …`, `default login … password …`);
+- **values of secret-named keys** (`KEY=secret`, `key: secret`, JSON): `password`, `pass`, `pw`, `passphrase`, `secret`, `token`, `api key`, `private_key`, `access_key`, `credentials` and their variants, a short plain password after a password or token key included; and random-looking values (32 hex characters or more, or base64 with `+`, `/`, `=` or percent escapes) of keys ending in `key`, `auth`, `sig`, `signature` or `identity` (`AccountKey=`, SAS `sig=`, `X-Amz-Signature=`, `client-key-data:`, `TWILIO_AUTH=`);
+- **long hex after the words naming a secret** ("the token is …"), and TOTP seeds (upper-case base32) in `otpauth://` URLs or after `TOTP secret`, `2FA seed` and the like;
+- **password options of command lines**: `--password`, `--pass`, `--passphrase`, `--pw`, `--secret`, `--token`, `curl -u`, `mysql -p`, `sshpass -p`, `redis-cli -a`, `-U user%password`, and `-p` of `docker login` (podman, nerdctl, buildah, skopeo, oras and `helm registry login` too);
+- **high-entropy tokens anywhere**: 32 characters or more mixing upper case, lower case and digits.
+
+Bare hex stays, because commits, sha256 digests and checksums look the same; so do UUIDs. A password written in a sentence ("my password is …") is not recognised.
+
+This applies to session text, tool action lines, subagent reports, stored facts and recall queries. `memory_store` and `backsight store` refuse text that still looks like a secret.
+
+Redaction can miss a secret in an unusual format. `backsight memory scan` re-checks what is already stored, with the same rules, and gives the purge command for each match.
 
 ## Keeping things out of memory
 
