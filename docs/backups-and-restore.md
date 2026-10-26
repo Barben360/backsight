@@ -1,6 +1,6 @@
 # Backups and restore
 
-How backsight backs up your memory, and how to bring a backup back.
+How backsight backs up your memory, and how to bring a backup back. Words such as [tombstone](glossary.md#tombstone) and [epoch](glossary.md#epoch) are in the [glossary](glossary.md).
 
 ## Automatic backups
 

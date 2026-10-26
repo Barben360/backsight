@@ -1,6 +1,6 @@
 # Privacy
 
-What backsight stores, where it goes, and how to keep things out of memory.
+What backsight stores, where it goes, and how to keep things out of memory. Words you may not know are in the [glossary](glossary.md).
 
 ## What is stored
 
@@ -10,16 +10,36 @@ What backsight stores, where it goes, and how to keep things out of memory.
 
 The server turns this text into memories: short facts tagged with their project, kept with the documents they came from.
 
-## Where it goes
+## What leaves the machine
 
-- **Your Hindsight server**, which runs in Docker on your machine and listens on `127.0.0.1` only. Its API and web UI always require a key.
-- **The LLM provider you chose at setup**: the server sends it session text to extract memories. With `ollama`, nothing leaves your machine. Setup shows this data flow and asks for your consent before anything is stored.
+| To | What | When |
+|---|---|---|
+| **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only; its API and web UI always require a key. | Each session, report and stored fact. |
+| **The LLM provider you chose at setup** | Session text, reports and stored facts, which the server sends it to extract and consolidate memories, and the server's own summaries (the briefing pages). With `ollama`, nothing: the model runs on your machine. | In the background, after each send. |
+| **Hugging Face** (`huggingface.co`) | Nothing of yours: the server downloads its embedding model and its reranker from there, into a Docker volume. | The server's first start, and after its model cache is deleted. |
+| **The image registries** (`ghcr.io` for Hindsight, Docker Hub for pgvector) | Nothing of yours: Docker pulls the server's images, by digest. | Setup, and server upgrades. |
+| **GitHub** | Nothing of yours: the install script and `update` download releases, and the binary checks once a day for a newer one. | Install, updates, the daily check. |
 
-Nothing else leaves the machine:
+Setup shows the provider data flow and asks for your consent before anything is stored. Nothing else leaves the machine:
 
 - backsight's own logs and usage events stay in local files (`backsight paths` shows the state directory); they are never sent;
 - `backsight report` builds a diagnostic for a bug report but sends nothing: you read it and decide;
-- the binary also contacts GitHub once a day to check for releases, with no memory or usage data.
+- backsight turns on none of Hindsight's optional tracing or metrics exporters.
+
+## Your LLM provider
+
+The provider receives the text of your sessions and handles it under its own terms, which you accept with your account: read them, and your employer's policy before you send work sessions.
+
+| Provider | Where your data is processed and stored | Terms | Privacy |
+|---|---|---|---|
+| `deepseek` | **In the People's Republic of China**, as DeepSeek's privacy policy says. | [Open platform terms](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) | [Privacy policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html) |
+| `anthropic` | As Anthropic's commercial terms set. | [Commercial terms](https://www.anthropic.com/legal/commercial-terms) | [Privacy policy](https://www.anthropic.com/legal/privacy) |
+| `openai` | As OpenAI's services agreement sets. | [Services agreement](https://openai.com/policies/services-agreement/) | [Privacy policy](https://openai.com/policies/privacy-policy/) |
+| `ollama` | On your machine: nothing is sent. | The model's licence ([Qwen3 8B](https://huggingface.co/Qwen/Qwen3-8B): Apache-2.0) | n/a |
+| `claude-code` | Anthropic, under your Claude plan's consumer terms; see [the subscription lane](#the-claude-subscription-lane). | [Consumer terms](https://www.anthropic.com/legal/consumer-terms) | [Privacy policy](https://www.anthropic.com/legal/privacy) |
+| A compatible endpoint (`--answer base_url=…`) | Wherever its operator runs it. | Its operator's | Its operator's |
+
+The third-party software and models the server runs come under their own licences: see [Third-party components](../README.md#third-party-components) in the README.
 
 ## Redaction
 
@@ -60,7 +80,7 @@ doctor's `noise-headless` check names the projects that got headless sessions se
 - `backsight forget <id> --purge --yes` deletes the memory, its source facts and the documents they came from. Backups made before the purge still hold them; the command lists those backups, which you can delete yourself.
 - `backsight forget --project <name> --plan` lists what a whole project holds in the bank: its documents and its memory counts. Without `--purge`, `backsight forget --project <name>` then retires every raw fact of it (each can be brought back with `backsight forget <id> --restore`); with `--purge`, it deletes those documents and the project's observations for good, and lists the older backups that still hold them. `--source <s>` keeps to one source (`chat`, `subagent`, `note`) and the observations drawn from it. Either way it asks you to type the project name: `--answer confirm_project=<name>`.
 
-A purge stays a purge. Before deleting, it writes a **tombstone** for each document: its id, its session and project, and the last turn it held (for a note, a hash of its text, never the text). Tombstones are kept for good in `state.json` and copied to the document `backsight:tombstones` of the `<bank>-control` bank, so your other machines and a reinstall know them too. The turns a tombstone covers are never sent again from your transcripts: not after a restore, not by `retain retry-quarantine`, not by `retain backfill`, and the saves made in them are not replayed. Later turns of the same session are still sent, to a new document (`conversation:<session>#2`, then `#3` after another purge): a purged document id is never written again, so a restore that brings the purged document back deletes it again without losing them. If the control bank cannot be written at that moment, the purge says so, and the next `jobs tick` writes the tombstone there.
+A purge stays a purge. Before deleting, it writes a **[tombstone](glossary.md#tombstone)** for each document: its id, its session and project, and the last turn it held (for a note, a hash of its text, never the text). Tombstones are kept for good in `state.json` and copied to the document `backsight:tombstones` of the `<bank>-control` bank, so your other machines and a reinstall know them too. The turns a tombstone covers are never sent again from your transcripts: not after a restore, not by `retain retry-quarantine`, not by `retain backfill`, and the saves made in them are not replayed. Later turns of the same session are still sent, to a new document (`conversation:<session>#2`, then `#3` after another purge): a purged document id is never written again, so a restore that brings the purged document back deletes it again without losing them. If the control bank cannot be written at that moment, the purge says so, and the next `jobs tick` writes the tombstone there.
 
 ## Secrets on disk
 
@@ -72,4 +92,6 @@ Backups contain your whole memory and the server's secrets, so they are always e
 
 ## The Claude subscription lane
 
-With the `claude-code` provider, the server extracts memories through your Claude subscription. Anthropic's terms restrict routing subscription credentials through third-party tools and automated use, and the usage counts against your plan. Backfill on this lane is refused unless you pass `--allow-subscription`.
+The `claude-code` provider has the server extract memories through your Claude subscription, with a token from `claude setup-token` that backsight stores for the server. It works, but Anthropic's terms are against it. The [Claude Code legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) says that developers building products "should use API key authentication", and that they "may not collect, store, or intermediate Claude.ai credentials or session tokens"; Anthropic may enforce this without notice. The [consumer terms](https://www.anthropic.com/legal/consumer-terms) (section 3) also forbid accessing the services "through automated or non-human means, whether through a bot, script, or otherwise", except with an API key or where Anthropic allows it.
+
+So **use an Anthropic API key instead** (the `anthropic` provider): it is the supported way, billed separately from your plan, and about $0.04 a session with Claude Haiku 5.5. If you keep the subscription lane, you accept the risk to your account; its usage also counts against your plan, and backfill on it is refused unless you pass `--allow-subscription`.

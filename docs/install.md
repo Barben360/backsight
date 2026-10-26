@@ -1,13 +1,19 @@
 # Install
 
-How to install backsight and set it up for Claude Code.
+How to install backsight and set it up for Claude Code. The short path is in the [README](../README.md#before-you-start); words you may not know are in the [glossary](glossary.md).
 
 ## Requirements
 
 - **Linux**, amd64 (the arm64 binary is built but not tested). macOS and Windows binaries are built but not tested yet.
-- **Docker**, usable by your user without `sudo` (the `docker` group, or rootless Docker), with **Docker Compose v2** (the `docker compose` plugin, not the old `docker-compose`).
-- **Claude Code** 2.1.309 or newer, with the `claude` command on your PATH.
-- **An LLM provider for the memory server**: a DeepSeek, Anthropic or OpenAI API key (or a compatible endpoint), a local Ollama, or your Claude subscription. The server uses it to extract memories from your sessions.
+- **Docker**, usable by your user without `sudo`, with **Docker Compose v2** (the `docker compose` plugin, not the old `docker-compose`):
+  - install Docker Engine: [docs.docker.com/engine/install](https://docs.docker.com/engine/install/) (on Debian and Ubuntu, the distribution's `docker.io` package with its Compose v2 package works too);
+  - let your user run it: `sudo usermod -aG docker $USER`, then log out and back in ([Linux post-install steps](https://docs.docker.com/engine/install/linux-postinstall/)). Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) avoids that and works too;
+  - check with `docker compose version`, without `sudo`.
+- **Claude Code** 2.1.309 or newer, with the `claude` command on your PATH: [install Claude Code](https://code.claude.com/docs/en/setup).
+- **An LLM provider for the memory server**, which extracts memories from your sessions ([cost](../README.md#what-it-costs), [terms and data location](privacy.md#your-llm-provider)):
+  - an API key from a pay-as-you-go account: [DeepSeek](https://platform.deepseek.com/api_keys) (top up a few dollars first), [Anthropic](https://platform.claude.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys), or a compatible endpoint;
+  - or [Ollama](https://ollama.com/download) on this machine, with no key;
+  - or your Claude subscription, which Anthropic's terms are against: see [the subscription lane](privacy.md#the-claude-subscription-lane).
 - About **6 GB of free disk** for the server image and its models.
 - `curl`, `tar`, and `minisign` or OpenSSL 3 to check the release signature.
 
@@ -24,7 +30,7 @@ The script:
 1. finds the newest release, pre-releases included, through GitHub's API (no account or token needed), and downloads it for your OS and architecture;
 2. checks the signature of its `checksums.txt` with the release key written in the script, then the archive's checksum, and stops if either fails;
 3. installs the binary under backsight's data directory, with the signed checksums next to it (the binary checks itself against them on its first run);
-4. links `~/.local/bin/backsight` to a shim that always points at the current version.
+4. links `~/.local/bin/backsight` to a [shim](glossary.md#shim) that always points at the current version.
 
 If `~/.local/bin` is not on your PATH, the script prints the `export PATH=…` line to add to your shell profile.
 
@@ -50,13 +56,13 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 2. renders and starts the Hindsight server in Docker, on `127.0.0.1` only;
 3. configures the memory bank;
 4. checks that your LLM provider can extract a memory;
-5. indexes these docs into a docs bank for `backsight guide search`;
+5. indexes these docs into a docs [bank](glossary.md#bank) for `backsight guide search`;
 6. wires Claude Code: a plugin with the hooks, the memory tools and the skills, plus a permission rule for the memory tools;
 7. sets how long Claude Code keeps its transcripts, as you answered;
 8. installs the background jobs (a timer every 15 minutes and a daily one);
 9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
 10. unwires an older Hindsight integration from Claude Code, if you chose to (see below);
-11. queues your past sessions for import (backfill), if you accepted.
+11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted.
 
 The first run downloads the server image, a few GB: expect several minutes. Every step is journaled: if setup stops, `backsight setup --resume` continues where it stopped.
 
@@ -76,23 +82,24 @@ When it finishes, restart Claude Code (or run `/reload-plugins`) so the plugin l
 
 Notes on the choices:
 
-- **deepseek** is the cheapest measured option. **ollama** keeps everything on your machine, with lower quality memories and slow extraction on a CPU. **claude-code** uses your Claude subscription: Anthropic's terms restrict routing subscription credentials through third-party tools, and the usage counts against your plan.
+- **deepseek** is the default and among the cheapest; DeepSeek processes and stores data **in the People's Republic of China**. **anthropic** (Claude Haiku 5.5) costs about the same per session. **ollama** keeps everything on your machine, with lower quality memories and slow extraction on a CPU. **claude-code** uses your Claude subscription: Anthropic's terms say developers "may not collect, store, or intermediate Claude.ai credentials or session tokens" ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), so an Anthropic API key is recommended instead; the usage also counts against your plan. Costs: [README](../README.md#what-it-costs); each provider's terms: [privacy.md](privacy.md#your-llm-provider).
 - **retention**: Claude Code deletes transcripts after 30 days by default. Transcripts are the only source for importing past sessions and rebuilding memory, so setup offers to keep them ten years.
 - `backsight setup --plan` shows the checks, answers and steps without changing anything.
 
 ## Secrets
 
-Setup never takes a key as an argument or an answer. When the LLM key is missing, setup stops and tells you to set it:
+Setup never takes a key as an argument or an answer. In a terminal, after your consent, it asks for the LLM key at a hidden prompt. Run without a terminal (`--non-interactive`, or by an agent), it stops with exit code 10 and tells you to set it yourself:
 
 ```sh
 backsight secret set llm_api_key
+backsight setup --resume
 ```
 
-The value is read at a prompt, without echo (or from a pipe, `--from-env VAR` or `--from-file FILE`). Then run `backsight setup --resume`.
+`secret set` reads the value at a prompt, without echo (or from a pipe, `--from-env VAR` or `--from-file FILE`). The same two commands replace a wrong key.
 
-With the `claude-code` provider, run `claude setup-token` first and set its token the same way.
+With the `claude-code` provider, run `claude setup-token` first and set its token as `llm_api_key`.
 
-`backsight secret list` shows which secrets are set, never their values. Setup generates the others (the server's API key, its web UI key, the database password, the backup identity).
+`backsight secret list` shows which secrets are set, never their values. Setup generates the server's API key, its web UI key and the database password. The backup identity is generated with the first backup (or by `backsight backup identity show`).
 
 ## After setup
 
