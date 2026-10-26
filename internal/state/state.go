@@ -194,28 +194,27 @@ type PurgeGuard struct {
 	// document seen; the next look lists the documents created since, less
 	// an overlap.
 	Newest time.Time `json:"newest,omitempty"`
-	// FullAt: the last look at every tombstone; Tombstones: how many
-	// tombstoned documents there were then (more now: look at all again).
-	FullAt     time.Time `json:"full_at,omitempty"`
-	Tombstones int       `json:"tombstones,omitempty"`
-	CheckedAt  time.Time `json:"checked_at"`
+	// FullAt: the last look at every tombstone (jobs maintain, retain
+	// purge-again), for the record: the daily job makes one whatever it
+	// says. CheckedAt: the last look of any kind.
+	FullAt    time.Time `json:"full_at,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 	// Waiting: tombstoned documents the server holds again, not purged
 	// again yet, and why. Each look reads them again.
 	Waiting []Recreated `json:"waiting,omitempty"`
 	// Purged: the documents the last purge again removed, and when.
 	Purged   []string  `json:"purged,omitempty"`
 	PurgedAt time.Time `json:"purged_at,omitempty"`
-	// Repeats: how many times each document was purged again since Since
-	// (within the last day): an older client that keeps writing to one is
-	// left to the user past a few.
+	// Repeats: when each document was purged again unattended, within the
+	// last day (a sliding window): an older client that keeps writing to
+	// one is left to the user past a few.
 	Repeats []Repurge `json:"repeats,omitempty"`
 }
 
-// Repurge counts the purges again of one document.
+// Repurge is when one document was purged again, oldest first.
 type Repurge struct {
-	Document string    `json:"document"`
-	Count    int       `json:"count"`
-	Since    time.Time `json:"since"`
+	Document string      `json:"document"`
+	At       []time.Time `json:"at"`
 }
 
 // Recreated is a tombstoned document the server holds again.

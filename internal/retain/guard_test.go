@@ -325,7 +325,7 @@ func TestGuardIncrementalLookCostsOneListing(t *testing.T) {
 	if err != nil || !got.Full || !slices.Equal(got.Purged.Documents, []string{"conversation:s3"}) || g.exists("conversation:s3") || !g.exists("conversation:s1#2") {
 		t.Fatalf("full look: %+v %v", got, err)
 	}
-	if pg := guardOf(t, e); !pg.FullAt.Equal(clockAt(13, 0)) || pg.Tombstones != 2 {
+	if pg := guardOf(t, e); !pg.FullAt.Equal(clockAt(13, 0)) {
 		t.Errorf("state %+v", pg)
 	}
 }
@@ -750,10 +750,10 @@ func TestGuardQuietLookWritesNoState(t *testing.T) {
 	if !bytes.Equal(before, stateBytes(t, e)) {
 		t.Error("state.json rewritten by a quiet look")
 	}
-	e.clock = clockAt(14, 0)
+	e.clock = clockAt(12, 30).Add(LookRecordEvery)
 	_, _ = e.f.GuardPurges(context.Background(), GuardOptions{})
 	if bytes.Equal(before, stateBytes(t, e)) {
-		t.Error("the time of the look never recorded")
+		t.Error("the time of the look not recorded after LookRecordEvery")
 	}
 }
 
@@ -762,7 +762,7 @@ func TestGuardQuietLookWritesNoState(t *testing.T) {
 func TestReconcileResetsTheLookAfterARestore(t *testing.T) {
 	e := purgedEnv(t)
 	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
-		s.PurgeGuard = &state.PurgeGuard{Bank: "claude-memory", Newest: serverAt(13, 0), FullAt: clockAt(13, 0), Tombstones: 1,
+		s.PurgeGuard = &state.PurgeGuard{Bank: "claude-memory", Newest: serverAt(13, 0), FullAt: clockAt(13, 0),
 			Waiting: []state.Recreated{{Document: "conversation:s1"}}}
 		return nil
 	}); err != nil {
@@ -799,7 +799,9 @@ func TestTurnsAnOlderBinarySentToAPurgedIDGoAgainToTheLiveDocument(t *testing.T)
 	e.record("s1", "u1", "user", 0, "the deploy token is hunter2-leaked")
 	e.record("s1", "a1", "assistant", 1, "Noted the hunter2 token.")
 	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	e.clock = clockAt(9, 5) // the purge, before the later turns
 	e.purge("conversation:s1")
+	e.clock = clockAt(12, 0)
 	e.record("s1", "u2", "user", 10, "a later turn after the purge")
 	expect(t, e.flush("s1", Options{}), Sent, 1, 1) // to conversation:s1#2
 	// The rollback: the older binary's flush of u3, a3.
@@ -846,4 +848,77 @@ func TestTurnsAnOlderBinarySentToAPurgedIDGoAgainToTheLiveDocument(t *testing.T)
 		t.Error("the purged id was written again")
 	}
 	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+}
+
+// A turn this binary sent before the purge, whose async retain was still
+// queued (the document's metadata did not name it yet), is past the
+// tombstone's last record; the queued retain then recreates the document
+// with it, and the look purges that again. It is never sent again to the
+// live document: the user purged the session as it stood. A turn written
+// after the purge still goes.
+func TestATurnQueuedAtThePurgeIsNeverSentAgain(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u0", "user", 0, "a plain first turn")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	e.record("s1", "u1", "user", 10, "the deploy token is hunter2-leaked")
+	e.hs.mu.Lock()
+	e.hs.stale = true // the retain of u1 is queued: the metadata still names u0
+	e.hs.mu.Unlock()
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	e.hs.mu.Lock()
+	e.hs.stale = false
+	e.hs.mu.Unlock()
+	e.clock = clockAt(12, 5)
+	e.purge("conversation:s1") // last record u0: u1 is not in the metadata yet
+	// The queued retain runs: the document is back, holding u1.
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u1", "segment": "2", "project": "billing"}
+	e.hs.content["conversation:s1"] = "user: the deploy token is hunter2-leaked"
+	e.hs.mu.Unlock()
+	if got, err := e.f.GuardPurges(context.Background(), GuardOptions{Full: true}); err != nil || !slices.Equal(got.Purged.Documents, []string{"conversation:s1"}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	sent := len(e.hs.retains)
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	if e.sentText(sent, "hunter2") {
+		t.Fatal("the purged turn was sent again")
+	}
+	// A turn written after the purge goes, to the live document, alone.
+	e.record("s1", "u2", "user", 200, "a turn after the purge")
+	e.clock = clockAt(13, 0)
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1#2" || e.sentText(sent, "hunter2") {
+		t.Errorf("%+v", it)
+	}
+}
+
+// The cap counts the purges of the last 24 hours, sliding: a day after
+// the first of three, one more is allowed, and the next one waits again
+// while the other two are within the day.
+func TestGuardRepeatCapSlides(t *testing.T) {
+	e, g := guardEnv(t)
+	look := func(after time.Duration) Guarded {
+		t.Helper()
+		e.clock = clockAt(12, 30).Add(after)
+		g.recreate("conversation:s1", serverAt(12, 25).Add(after), "f")
+		got, err := e.f.GuardPurges(context.Background(), GuardOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	for _, after := range []time.Duration{0, time.Hour, 2 * time.Hour} {
+		if got := look(after); !slices.Equal(got.Purged.Documents, []string{"conversation:s1"}) {
+			t.Fatalf("+%v: %+v", after, got)
+		}
+	}
+	if got := look(3 * time.Hour); !got.Purged.Empty() {
+		t.Fatalf("a fourth within the day: %+v", got)
+	}
+	if got := look(24*time.Hour + 30*time.Minute); !slices.Equal(got.Purged.Documents, []string{"conversation:s1"}) {
+		t.Fatalf("the first left the window: %+v", got)
+	}
+	if got := look(24*time.Hour + 40*time.Minute); !got.Purged.Empty() || len(got.Waiting) != 1 || !got.Waiting[0].NeedsUser {
+		t.Errorf("three within the last day again: %+v", got)
+	}
 }

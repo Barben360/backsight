@@ -201,6 +201,14 @@ state_newest=$(jq -r .purge_guard.newest "$BACKSIGHT_HOME/state/state.json")
 [ "$(epoch_of "$server_newest")" = "$(epoch_of "$state_newest")" ] || fail "window's newest $state_newest, the server's $server_newest"
 echo "== jobs tick (incremental look): $(jq -r .data.purges "$work/tick1.json"); its $recreated_units fact(s) gone (bank $before_all -> $after_all memories); $D1#2 kept ($successor_units fact(s)); newest $state_newest = the server's $server_newest"
 
+# The session's next send puts nothing purged in its current document:
+# the appended turns are not in its transcript, and its own turns before
+# the purge stay covered.
+"$bin" retain flush --session "$S1" --json > "$work/flush-after.json" || { cat "$work/flush-after.json"; fail "retain flush failed"; }
+idle
+api "$B/documents/$(enc "$D1#2")" | jq -e '.original_text | (test("hunter2") or test("hunter3")) | not' > /dev/null || fail "purged text reached $D1#2"
+[ "$(doc "$D1")" = 404 ] || fail "the flush wrote the purged id"
+
 # 6. Nothing more to do.
 "$bin" jobs tick --json > "$work/tick2.json" || { cat "$work/tick2.json"; fail "second tick failed"; }
 jq -e '(.data.purges // "") == ""' "$work/tick2.json" > /dev/null || { cat "$work/tick2.json"; fail "the second tick did something"; }

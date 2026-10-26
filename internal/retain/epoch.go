@@ -241,7 +241,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		// Another server state: the look for recreated purged documents
 		// starts again from its newest document, and looks at all once.
 		if g := s.PurgeGuard; g != nil && g.Bank == f.Bank {
-			g.Newest, g.FullAt, g.Tombstones = time.Time{}, time.Time{}, 0
+			g.Newest, g.FullAt = time.Time{}, time.Time{}
 		}
 		if s.PurgeHold != nil && s.PurgeHold.Bank == f.Bank {
 			s.PurgeHold = nil

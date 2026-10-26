@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -150,4 +151,17 @@ func TestCheckPurgedUnreadableState(t *testing.T) {
 	f := configured(t, fakeServerWith(t, nil).URL)
 	put(t, f.env.Dirs.StateFile(), "{torn", 0o600)
 	expect(t, check(t, f.run(), "purged-documents"), Warn, "cannot read the purge tombstones")
+}
+
+// A quiet tick records its look at most LookRecordEvery apart, ticks run
+// every 15 minutes: the recorded look is never older than doctor's
+// staleness while they run, so a document the next tick will purge is a
+// warning, not an error.
+func TestCheckPurgedStalenessCoversQuietTicks(t *testing.T) {
+	if oldest := retain.LookRecordEvery + 15*time.Minute; oldest >= purgeLookStale {
+		t.Fatalf("a running tick's record can be %v old, doctor calls %v stale", oldest, purgeLookStale)
+	}
+	f := configured(t, fakeServerWith(t, map[string]reply{docsListPath: {200, listS1}}).URL)
+	purgedS1(t, f, doctorAt.Add(-(retain.LookRecordEvery + 15*time.Minute)))
+	expect(t, check(t, f.run(), "purged-documents"), Warn, "conversation:s1 (session s1)")
 }
