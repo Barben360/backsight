@@ -557,3 +557,57 @@ func TestRestoreAfterAnUnfinishedOne(t *testing.T) {
 		t.Error("marker left")
 	}
 }
+
+// A `<bank>-control` backsight did not make refuses the restore before
+// anything changes (exit 20): no lock, no Docker call (no stop, no dump),
+// no safety archive, no marker, no write to the server; the plan too
+// (issue 279).
+func TestRestoreRefusesAForeignControlBankUpFront(t *testing.T) {
+	for _, plan := range []bool{false, true} {
+		t.Run("plan="+strconv.FormatBool(plan), func(t *testing.T) {
+			home, archive, dk, port := restoreSetup(t)
+			var mu sync.Mutex
+			var seen []string
+			pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+				mu.Lock()
+				seen = append(seen, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+				if r.Method == http.MethodGet && r.URL.Path == "/v1/default/banks" {
+					_, _ = w.Write([]byte(`{"banks":[{"bank_id":"claude-memory-control","name":"team control"}],"total":1}`))
+					return true
+				}
+				return false
+			}))
+			before := backupsIn(home)
+			bankCalls = nil
+			args := []string{archive}
+			if plan {
+				args = append(args, "--plan")
+			}
+			code, env, out, errOut := runRestoreJSON(t, args...)
+			if code != output.Blocked || !strings.Contains(env.Error.Message, "claude-memory-control") || !strings.Contains(env.Error.Message, `"team control"`) ||
+				!strings.Contains(env.Error.Message, "nothing was changed") {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			if len(dk.calls) != 0 || !dk.running || dk.rows != 25 {
+				t.Errorf("docker calls %q, running %v, rows %d", dk.calls, dk.running, dk.rows)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, c := range append(seen, bankCalls...) {
+				if !strings.HasPrefix(c, "GET ") {
+					t.Errorf("a write to the server: %s", c)
+				}
+			}
+			if got := backupsIn(home); len(got) != len(before) {
+				t.Errorf("backups %v, before %v", got, before)
+			}
+			if state.RestoreIncomplete(pathsOf(home)) {
+				t.Error("restore marked in progress")
+			}
+			if _, err := os.Stat(pathsOf(home).MaintenanceLock()); err == nil {
+				t.Error("lock left")
+			}
+		})
+	}
+}

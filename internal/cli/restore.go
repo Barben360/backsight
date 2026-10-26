@@ -168,6 +168,16 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if err != nil {
 		return blocked(err)
 	}
+	// The epoch goes into <bank>-control: one backsight did not make
+	// refuses here, before anything stops (the epoch write would refuse
+	// it only after the restore, and roll back). A server that cannot
+	// answer is left to the epoch read below, which falls back on the
+	// database.
+	if _, _, err := retain.OwnedBank(ctx, cl, retain.ControlBank(cfg.Server.Bank), retain.ControlMarker); err != nil {
+		if foreign := (*retain.ForeignBank)(nil); errors.As(err, &foreign) {
+			return &output.Error{Code: output.Blocked, Message: err.Error() + "; the restore epoch could not be written there: nothing was changed"}
+		}
+	}
 	if res.Plan {
 		res.Safety = filepath.Join(dir, backup.Name(now()))
 		if fl.noSafety {

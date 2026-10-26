@@ -71,12 +71,12 @@ Restore replaces the local server's memory with the archive's. In order, it:
 
 After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts. Facts stored with `memory_store` after the backup was made cannot be recovered that way.
 
-Restore applies the archive's database only, never its config or secrets. It refuses an archive from another bank, with other embedding models, or made by a newer Hindsight than the one this binary pins (update backsight first). An archive from an older Hindsight is migrated when the server starts.
+Restore applies the archive's database only, never its config or secrets. It refuses an archive from another bank, with other embedding models, or made by a newer Hindsight than the one this binary pins (update backsight first). It also refuses, before anything stops, when the server's `<bank>-control` bank (where the restore epoch is written) is not backsight's: another bank name than backsight's, or documents that are not its own. An archive from an older Hindsight is migrated when the server starts.
 
 ## When a restore fails
 
 - **Exit 30**: something failed after the server stopped. Restore put the safety backup back, so the server is as it was. The output says what failed.
-- **Exit 20 before anything changed**: a check failed (a lock held, Docker not running, a refused archive). Fix the cause and rerun.
+- **Exit 20 before anything changed**: a check failed (a lock held, Docker not running, a refused archive, a `<bank>-control` bank that is not backsight's). Fix the cause and rerun.
 - **Exit 20 after a failed rollback**: the server may be stopped or partly restored. `backsight doctor` shows a `restore` error naming the safety archive. Run what it says: `backsight restore <safety archive> --no-safety` puts the server back as it was, or rerun the restore you wanted.
 
 `--no-safety` skips the safety backup: use it only to restore a safety archive by hand.
