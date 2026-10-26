@@ -1,6 +1,6 @@
 # Daily use
 
-What backsight does during your Claude Code sessions, and the commands you use day to day.
+What backsight does during your Claude Code sessions, and the commands you use day to day. The details of each step, with what it costs in time and context, are in [how-it-works.md](how-it-works.md); words you may not know are in the [glossary](glossary.md).
 
 ## What happens in a session
 
@@ -9,6 +9,8 @@ You use Claude Code as usual. backsight works through hooks and memory tools:
 - **At session start**, Claude gets a short guide on using the memory, and a briefing for the current project: a page the server keeps from the project's memories (open items, recent work, rules in force).
 - **On each prompt**, backsight searches the memory with your prompt and adds the few most relevant memories to Claude's context, framed as notes to verify.
 - **Claude searches and stores** with three memory tools: `memory_search`, `memory_read` and `memory_store`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls.
+- **Before Claude asks you a question** with its question tool, it must have searched the memory during this prompt: the first attempt is sent back once, with the memories that match the question ([details](how-it-works.md#before-claude-asks-you-a-question)).
+- **When you state a rule or approve something** ("from now on…", "we decided…", "ok"), a line asks Claude to store it if it is durable ([the save detector](how-it-works.md#the-save-detector)).
 - **When the session ends**, or once its last turn is 30 minutes old, its text is redacted and sent to your server, which extracts memories from it in the background.
 
 Hooks never block Claude Code: if the server is down, recall is skipped and writes wait in a local queue. When memory is unavailable, you see one message in the session.
@@ -37,7 +39,7 @@ If Claude searched and found nothing, it says so. Memories are hints from past s
 
 ## Projects and the transverse memory
 
-Each memory belongs to a project: the Git repository you worked in (a worktree counts as its main repository), or the directory outside one. Recall searches the current project together with the transverse project, which holds rules valid everywhere (your preferences, your conventions), and also the whole memory and related projects, with a boost for the current project.
+Each memory belongs to a project: the Git repository you worked in (a worktree counts as its main repository), or the directory outside one. Recall searches the current project together with the [transverse project](glossary.md#transverse-pool), which holds rules valid everywhere (your preferences, your conventions), and also the whole memory and related projects, with a boost for the current project.
 
 To give a repository another project name, to search other projects with it, or to keep it out of memory, commit a `.backsight.toml` at its root:
 
@@ -92,7 +94,7 @@ Each argument is one short keyword query (at most 4). It searches like recall (t
 backsight store --kind decision "The billing service keeps PostgreSQL 16 for partial indexes (2026-10-24)."
 ```
 
-Kinds: `decision`, `correction`, `convention`, `pitfall`, `state`, `lesson`. One fact per call, with the why and absolute dates. `--project <name>` stores it in another project; a transverse alias stores a user-wide rule. Text that looks like a secret is refused.
+Kinds: `decision`, `correction`, `convention`, `pitfall`, `state`, `lesson`. One fact per call, with the why and absolute dates. `--project <name>` stores it in another project; `--project transverse` stores a user-wide rule in the transverse pool (any of its names in `projects.transverse` works too, see [configuration.md](configuration.md#projects)). Text that looks like a secret is refused.
 
 ## Forgetting a memory
 
@@ -100,7 +102,7 @@ Kinds: `decision`, `correction`, `convention`, `pitfall`, `state`, `lesson`. One
 backsight forget <id>
 ```
 
-This retires the memory: recall stops returning it. `backsight forget <id> --restore` brings it back.
+This retires the [memory](glossary.md#memory): recall stops returning it. `backsight forget <id> --restore` brings it back.
 
 For a leaked secret, `backsight forget <id> --purge --yes` deletes the memory, its source facts and the session documents they came from. Backups made before still hold it; the command lists them. `backsight memory scan` lists stored memories that look like they hold a secret, with the purge command for each.
 
@@ -111,7 +113,7 @@ backsight forget --project old-prototype --plan
 backsight forget --project old-prototype --answer confirm_project=old-prototype
 ```
 
-The plan lists the project's documents and memory counts, changing nothing. The second command retires every raw fact of the project; `--purge` deletes its documents and observations for good instead. `--source subagent` (or `chat`, `note`) keeps to the facts of one source. See [privacy.md](privacy.md#removing-what-was-stored).
+The plan lists the project's documents and memory counts, changing nothing. The second command retires every [raw fact](glossary.md#fact) of the project; `--purge` deletes its documents and [observations](glossary.md#observation) for good instead. `--source subagent` (or `chat`, `note`) keeps to the facts of one source. See [privacy.md](privacy.md#removing-what-was-stored).
 
 ## Pausing memory
 
@@ -126,7 +128,7 @@ See [privacy.md](privacy.md) for the other opt-outs.
 
 ## Importing past sessions
 
-Setup offers to import the sessions Claude Code still keeps (backfill). You can also run it later:
+Setup offers to import the sessions Claude Code still keeps ([backfill](glossary.md#backfill)). You can also run it later:
 
 ```sh
 backsight retain backfill --plan
@@ -143,4 +145,4 @@ backsight retain backfill --since 2026-01-01 --max-cost 2
 
 ## Browsing these docs
 
-`backsight guide` lists these documents and `backsight guide <topic>` shows one in the terminal. `backsight guide search <question>` finds the section that answers a question, also when it is phrased differently or asked in another language. It searches a docs bank on your server, which never mixes with your memories and costs no LLM call; when the server cannot answer, a keyword search over the docs in the binary answers instead, and the output says so.
+`backsight guide` lists these documents and `backsight guide <topic>` shows one in the terminal. `backsight guide search <question>` finds the section that answers a question, also when it is phrased differently or asked in another language. It searches a docs [bank](glossary.md#bank) on your server, which never mixes with your memories and costs no LLM call; when the server cannot answer, a keyword search over the docs in the binary answers instead, and the output says so.

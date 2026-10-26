@@ -1,6 +1,6 @@
 # Commands
 
-Every backsight command, grouped by use. `backsight <command> --help` shows the same flags with their defaults.
+Every backsight command, grouped by use. `backsight <command> --help` shows the same flags with their defaults. Words you may not know are in the [glossary](glossary.md); `config.toml` keys are in [configuration.md](configuration.md).
 
 ## Conventions
 
@@ -122,7 +122,7 @@ The OS scheduler (systemd user timers on Linux) runs these; you rarely need them
 | Command | Does |
 |---|---|
 | `backsight jobs tick` | Every 15 minutes: sends settled sessions and queued notes, paces the backfill. |
-| `backsight jobs maintain` | Daily: telemetry rotation, backup, update check (and update with `update.auto_apply`), doctor snapshot. |
+| `backsight jobs maintain` | Daily: rotation of the local usage log, backup, update check (and update with `update.auto_apply`), doctor snapshot. |
 | `backsight jobs install` | Installs the scheduler entries (setup does it). `--plan`. |
 | `backsight jobs uninstall` | Removes them. `--plan`. |
 | `backsight jobs refresh` | Rewrites entries whose template changed, without stopping a running job (updates do it). `--plan`. |

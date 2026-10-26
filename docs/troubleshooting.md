@@ -1,6 +1,6 @@
 # Troubleshooting
 
-What to do when memory stops working, and how to report a problem.
+What to do when setup or memory stops working, and how to report a problem. Words you may not know are in the [glossary](glossary.md).
 
 ## Start with doctor
 
@@ -11,6 +11,52 @@ backsight doctor
 doctor checks the whole install and changes nothing: the server, the bank, Claude Code's wiring, the jobs, the queues, backups, updates, disk and recent usage. Each line is `ok`, `info`, `WARN` or `ERROR`, and every problem comes with a `fix:` line, usually a command to run. `backsight doctor --json` gives the same report as JSON.
 
 `backsight verify` goes further: it runs every hook and the memory tools as Claude Code does, then a store-and-recall round trip (`--no-round-trip` skips the round trip and its LLM call). `backsight verify --live` checks real use, read-only: your latest session, 30 minutes after its last turn, reached the server and gave at least one observation. "pending" means not yet, with how long to wait; "fail" comes with a fix.
+
+## Setup stopped
+
+Setup records each step it finished. Whatever stopped it, fix the cause it names, then:
+
+```sh
+backsight setup --resume
+```
+
+It goes on from the step that failed, with your earlier answers. `backsight setup --plan` shows the checks and steps without changing anything, and `backsight doctor` checks what is already installed.
+
+### Docker refuses your user
+
+Setup's check or its server step says `permission denied` about `/var/run/docker.sock`: your user cannot use Docker without `sudo`.
+
+```sh
+sudo usermod -aG docker $USER
+```
+
+Log out and back in (a new terminal is not enough), check that `docker info` works without `sudo`, then `backsight setup --resume`. Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) is the alternative. If Docker is not running: `sudo systemctl enable --now docker`. If `docker compose` is unknown, install the Compose v2 plugin ([docs.docker.com/compose/install](https://docs.docker.com/compose/install/)).
+
+### A port is taken
+
+Setup says `port 8888 is taken by another program` (or `9999`, the web UI's).
+
+- **backsight's own server, from the run that stopped**, may hold it: `backsight server status` shows it running. Stop it with `backsight server stop`, then `backsight setup --resume`; setup starts it again.
+- **Another program**: `ss -ltnp` shows which one. Stop it, or give backsight other ports: `backsight setup --answer api_port=<port> --answer ui_port=<port>`.
+
+### The provider rejected the key
+
+The server step fails on its LLM check: the provider answered 401 or 403, or the message says the key is invalid or unauthorized. Set the key again, then resume:
+
+```sh
+backsight secret set llm_api_key
+backsight setup --resume
+```
+
+If the resume then stops on a taken port, that is backsight's own server: see [above](#a-port-is-taken). Other provider answers mean other fixes: a balance to top up (DeepSeek answers 402), a model name the provider does not know, or a wrong base URL. `backsight server llm check` tests the provider again, storing nothing.
+
+### Setup seems stuck
+
+On the first run, the server step downloads the server image and its models, about 2.3 GB: several minutes on a home connection, longer on a slow one. `docker images` in another terminal shows the images arriving. If it really stops, interrupt it and run `backsight setup --resume`.
+
+### Claude Code is missing or too old
+
+Setup needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup).
 
 ## The server is down
 
@@ -69,7 +115,7 @@ A session is sent when it ends, or by the 15-minute job once its last turn is 30
 doctor's `writes` check counts what is waiting:
 
 - **Queued notes** wait for the server: bring it back, then `backsight jobs tick`.
-- **Quarantined sessions or notes** were refused by the server. The reasons are in the quarantine folder doctor names. Fix the cause, then `backsight retain retry-quarantine`.
+- **[Quarantined](glossary.md#quarantine) sessions or notes** were refused by the server. The reasons are in the quarantine folder doctor names. Fix the cause, then `backsight retain retry-quarantine`.
 - **The notes queue is full** (500 MB): an error. Bring the server back, then `backsight jobs tick`.
 
 doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl --user list-timers 'backsight-*'` shows the timers. User timers stop while you are logged out unless lingering is on (`loginctl enable-linger`); sessions are then sent at the next login.
@@ -127,4 +173,4 @@ backsight report
 - a link that opens a new issue with a title and a summary filled in;
 - the full diagnostic to paste into it.
 
-It sends nothing. Read the diagnostic, then decide whether to file it. Security problems go through GitHub's private vulnerability reporting instead, see [SECURITY.md](../SECURITY.md).
+It sends nothing. Read the diagnostic, then decide whether to file it. Security problems go through GitHub's private vulnerability reporting instead, see [SECURITY.md](https://github.com/Barben360/backsight/blob/main/SECURITY.md).
