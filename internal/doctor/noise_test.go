@@ -433,3 +433,16 @@ func TestReattributionCheckShowsWhatIsLeft(t *testing.T) {
 		}
 	}
 }
+
+// A noise history that cannot be read makes the trend blind: doctor says
+// so instead of staying quiet.
+func TestAnUnreadableNoiseHistoryIsReported(t *testing.T) {
+	f := noiseFixture(t, &noiseBank{tags: someProjects, observations: pool(60)})
+	if err := os.MkdirAll(retain.NoiseHistoryFile(f.env.Dirs.State), 0o700); err != nil { // a directory: unreadable as a file
+		t.Fatal(err)
+	}
+	c := check(t, f.run(), "noise-transverse")
+	if c.Status != Warn || !strings.Contains(c.Summary, "daily readings cannot be read") || !strings.Contains(c.Fix, "noise-history.jsonl") {
+		t.Errorf("%+v", c)
+	}
+}

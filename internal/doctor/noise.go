@@ -51,12 +51,19 @@ func checkNoise(ctx context.Context, env Env, cl *hindsight.Client, tg *target.T
 	var out []Check
 	usable := bank.Status == OK || bank.Status == Warn
 	if usable {
-		history, _ := retain.LoadNoise(env.Dirs.State)
+		history, herr := retain.LoadNoise(env.Dirs.State)
 		now := time.Now
 		if env.Now != nil {
 			now = env.Now
 		}
-		out = append(out, noiseTrend(checkNoiseTransverse(ctx, cl, tg.Bank, cfg.Projects.Transverse), history, now()))
+		c := noiseTrend(checkNoiseTransverse(ctx, cl, tg.Bank, cfg.Projects.Transverse), history, now())
+		if herr != nil {
+			// the trend is blind: say so rather than stay quiet
+			c.Status = Warn
+			c.Summary += "; its daily readings cannot be read (" + herr.Error() + "), so a growth would go unseen"
+			c.Fix = "remove " + retain.NoiseHistoryFile(env.Dirs.State) + ": jobs maintain starts it again"
+		}
+		out = append(out, c)
 		out = append(out, checkNoiseSubagent(ctx, cl, tg.Bank))
 	} else {
 		why := "skipped: " + skipReason(srv)
