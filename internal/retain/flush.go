@@ -84,6 +84,10 @@ type Flusher struct {
 	// ReportProject names a rebuilt report's project from its directory as
 	// SubagentStop does; nil: Resolver.Project.
 	ReportProject func(cwd string) string
+	// Attribution records each main turn's path-rule answer beside the
+	// applied one, and decides rebuilt reports' projects as SubagentStop
+	// does (decision 0072); a zero Dir records nothing.
+	Attribution Attributor
 }
 
 // Options change the timing rules for explicit flushes.
@@ -117,12 +121,14 @@ type Result struct {
 	// NeedsFix: the server refused backsight itself (credentials, redirect,
 	// missing bank); retrying cannot help until the user fixes it.
 	NeedsFix bool `json:"-"`
+	// Turns are the main turns this flush recorded (Flusher.Attribution).
+	Turns []TurnEntry `json:"-"`
 }
 
 // FlushFile sends what is settled and unsent in one transcript.
-func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Result {
+func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res Result) {
 	sid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	res := Result{Session: sid, Transcript: path}
+	res = Result{Session: sid, Transcript: path}
 	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }
 
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
@@ -141,6 +147,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		return fail(Locked, err.Error())
 	}
 	defer unlock()
+	// Under the session's lock, whatever the flush did: the path rule's
+	// shadow answers are local and never wait for the server.
+	defer func() { res.Turns = f.recordTurns(sid, path, opt.Force) }()
 
 	cursorDir := f.Dirs.CursorsDir()
 	cur, haveCursor, err := LoadCursor(cursorDir, sid)

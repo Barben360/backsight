@@ -48,7 +48,31 @@ func checkUsage(dir string, now time.Time, writeOff bool) []Check {
 		checkLearning(ev, now, writeOff),
 		checkSearchRate(r, p),
 		checkUnknownRecords(r, p),
+		checkAttribution(r),
 	}
+}
+
+// checkAttribution shows how often the path rule, which files subagent
+// reports, would file main turns elsewhere than the record rule does: it
+// runs on them in shadow until a blind grading of fresh turns passes
+// (decision 0072).
+func checkAttribution(r stats.Report) Check {
+	a := r.Attribution
+	c := Check{ID: "attribution", Status: Info}
+	if a.Main+a.Subagents == 0 {
+		c.Summary = "no turn attributed in 7 days"
+		return c
+	}
+	c.Summary = fmt.Sprintf("over 7 days the path rule would file %d of %d main turns elsewhere (%s, shadow only); %d of %d subagent reports went to another repository than their session's",
+		a.Disagree, a.Main, percent(a.Disagree, a.Main), a.Moved, a.Subagents)
+	return c
+}
+
+func percent(n, of int) string {
+	if of == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d%%", (100*n+of/2)/of)
 }
 
 func checkRecallFailures(r stats.Report) Check {

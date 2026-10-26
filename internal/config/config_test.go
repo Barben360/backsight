@@ -113,6 +113,8 @@ func TestValidate(t *testing.T) {
 		{"sticky_bypass range", func(c *Config) { c.Recall.StickyBypass = 2 }, "recall.sticky_bypass"},
 		{"project_boost range", func(c *Config) { c.Recall.ProjectBoost = -1 }, "recall.project_boost"},
 		{"empty canonical alias", func(c *Config) { c.Projects.Transverse = []string{""} }, "projects.transverse"},
+		{"own owner without its host", func(c *Config) { c.Projects.OwnOwners = []string{"acme"} }, "projects.own_owners"},
+		{"own owner empty", func(c *Config) { c.Projects.OwnOwners = []string{" "} }, "projects.own_owners"},
 		{"loopback bind for private", func(c *Config) { c.Network.Exposure, c.Network.BindIP = "private", "127.0.0.1" }, "network.bind_ip"},
 		{"cgnat below", func(c *Config) { c.Network.Exposure, c.Network.BindIP = "private", "100.63.255.255" }, "network.bind_ip"},
 		{"cgnat above", func(c *Config) { c.Network.Exposure, c.Network.BindIP = "private", "100.128.0.1" }, "network.bind_ip"},
@@ -347,5 +349,15 @@ func TestSkipsEntrypoint(t *testing.T) {
 	p.SkipEntrypoints = []string{}
 	if p.SkipsEntrypoint("sdk-ts") {
 		t.Error("an empty list must keep every entrypoint")
+	}
+}
+
+func TestOwnOwnersAreRead(t *testing.T) {
+	cfg, err := Load(write(t, "[projects]\nown_owners = [\"github.com/acme\", \"https://gitlab.com/team/sub\"]\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Projects.OwnOwners) != 2 || cfg.Projects.OwnOwners[0] != "github.com/acme" || len(cfg.Projects.Transverse) == 0 {
+		t.Errorf("%+v", cfg.Projects)
 	}
 }

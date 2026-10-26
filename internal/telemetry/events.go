@@ -74,6 +74,19 @@ type Retain struct {
 	MS       int    `json:"ms"`
 }
 
+// Attribution is one turn's project: the one it was filed under and the
+// one the path rule gives (decision 0072). On main turns the path rule
+// only runs in shadow; on subagent reports it is applied, and Base is the
+// project the session's directory gave.
+type Attribution struct {
+	Turn     string `json:"turn"`
+	Subagent bool   `json:"subagent"`
+	Base     string `json:"base"`
+	Applied  string `json:"applied"`
+	PathRule string `json:"path_rule"`
+	Source   string `json:"source"`
+}
+
 type HookFailure struct {
 	Hook string `json:"hook"`
 	Kind string `json:"kind"` // panic | fatal | timeout | invalid_output
@@ -102,5 +115,6 @@ func (Tool) EventName() string            { return "tool" }
 func (Gate) EventName() string            { return "gate" }
 func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }
+func (Attribution) EventName() string     { return "attribution" }
 func (Job) EventName() string             { return "job" }
 func (r Raw) EventName() string           { return r.Name }

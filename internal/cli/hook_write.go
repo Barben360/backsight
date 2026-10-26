@@ -183,7 +183,16 @@ func (h *hookEnv) subagentStop() {
 		return // a headless session's subagent (decision 0071 C1)
 	}
 	text = retain.SubagentReport(text) // redacted and capped, as a reconcile rebuilds it
-	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, canonicalProject(h.cfg, h.project), text, now())
+	proj := canonicalProject(h.cfg, h.project)
+	// The report goes to the own repository the subagent's work is in
+	// (the path rule, decision 0072), else to its session's project.
+	if p := agentTranscriptPath(h.in); p != "" {
+		a := attributor(h.dirs, h.cfg, h.resolver)
+		e := a.Subagent(h.in.SessionID, h.in.AgentID, h.in.TranscriptPath, p, proj, now())
+		proj = a.ReportProject(e)
+		h.tw.Emit(attributionEvent(e))
+	}
+	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, proj, text, now())
 	if _, err := notesOutboxFor(h.dirs, h.cfg).Append(n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})
 		return
@@ -210,13 +219,21 @@ func parentEntrypoint(path string) string {
 // also fire SubagentStop, with a one-line status and no transcript: over
 // 1 000 such documents in a day on the author's machine (decision 0071).
 func subagentRan(in hookInput) bool {
+	return agentTranscriptPath(in) != ""
+}
+
+// agentTranscriptPath is the subagent's own transcript, "" when it has
+// none.
+func agentTranscriptPath(in hookInput) string {
 	p := in.AgentTranscriptPath
 	if p == "" && in.TranscriptPath != "" && session.ValidID(in.SessionID) && session.ValidID(in.AgentID) {
 		p = filepath.Join(strings.TrimSuffix(in.TranscriptPath, ".jsonl"), "subagents", "agent-"+in.AgentID+".jsonl")
 	}
 	if p == "" {
-		return false
+		return ""
 	}
-	fi, err := os.Stat(p)
-	return err == nil && fi.Mode().IsRegular()
+	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return p
 }
