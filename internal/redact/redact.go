@@ -4,7 +4,9 @@
 package redact
 
 import (
+	"encoding/base64"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -15,19 +17,43 @@ type rule struct {
 	// group is the submatch replaced (0: the whole match).
 	group int
 	// keep decides, for a matched value, that it is not a secret.
-	keep func(key, value string) bool
+	keep func(h hit) bool
 }
+
+// hit is a rule's match: the value, and for the key rules the key, what
+// separates them (quotes and ':' or '='), and the text after the value.
+type hit struct{ key, value, sep, rest string }
 
 // keyRE is a secret-named key: any identifier containing one of the
 // keywords, with prefixes and suffixes (SECRET_KEY, GITHUB_TOKEN_PROD,
-// apiToken).
-const keyRE = `[a-zA-Z0-9_.-]*(?:secret|token|passw(?:or)?d|pwd|api[_-]?key|private[_-]?key|access[_-]?key|credentials?|auth[_-]?key)[a-zA-Z0-9_.-]*`
+// apiToken), and "api key" spelt with a space.
+const keyRE = `[a-zA-Z0-9_.-]*(?:secret|token|passw(?:or)?d|passphrase|pwd|api[_ -]?key|private[_-]?key|access[_-]?key|credentials?|auth[_-]?key)[a-zA-Z0-9_.-]*`
 
-// passKeyRE is PASS as a whole segment of a key (DB_PASS, PASS, pass-db),
-// not inside a word (bypass, passport).
-const passKeyRE = `(?:[a-zA-Z0-9]+[_-])*pass(?:[_-][a-zA-Z0-9]+)*`
+// passKeyRE is PASS or PW as a whole segment of a key (DB_PASS, PASS,
+// pass-db, db_pw, MYSQL_ROOT_PW), not inside a word (bypass, passport).
+const passKeyRE = `(?:[a-zA-Z0-9]+[_-])*(?:pass|pw)(?:[_-][a-zA-Z0-9]+)*`
 
-var rules = []rule{
+// flagRE names a command-line option whose value is a secret.
+const flagRE = `--(?:password|passwd|passphrase|pass|pw|secret|token)`
+
+// keyRules are the rules for a value assigned to a key matching key:
+// double-quoted (spaces allowed), JSON-escaped inside a string
+// ({\"api_key\": \"value\"}), single-quoted, then bare.
+func keyRules(key string) []rule {
+	return []rule{
+		{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + key + `)\b["']?\s*[:=]\s*"([^"\n]{6,})"`), group: 2, keep: keepValue},
+		{kind: "secret_value", re: regexp.MustCompile(`(?i)\\"(` + key + `)\\"\s*:\s*\\"([^"\\\n]{6,})\\"`), group: 2, keep: keepValue},
+		{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + key + `)\b["']?\s*[:=]\s*'([^'\n]{6,})'`), group: 2, keep: keepValue},
+		{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + key + `)\b["']?\s*[:=]\s*["']?([^\s"',;}]{6,})`), group: 2, keep: keepValue},
+	}
+}
+
+// cliRule is a command-line secret: re's first group is the value.
+func cliRule(re string) rule {
+	return rule{kind: "cli_password", re: regexp.MustCompile(re), group: 1, keep: keepFlag}
+}
+
+var rules = slices.Concat([]rule{
 	{kind: "private_key", re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)`)},
 	{kind: "anthropic_key", re: regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}`)},
 	{kind: "openai_key", re: regexp.MustCompile(`\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}`)},
@@ -43,31 +69,139 @@ var rules = []rule{
 	// Basic have their own kinds below.
 	{kind: "auth_header", re: regexp.MustCompile(`(?i)\bauthorization["']?\s*[:=]\s*["']?(?:token|apikey|api-key|key)\s+([A-Za-z0-9._~+/-]{16,}=*)`), group: 1},
 	{kind: "bearer", re: regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9._~+/-]{16,}=*)`), group: 1},
-	{kind: "basic_auth", re: regexp.MustCompile(`(?i)\bbasic\s+([A-Za-z0-9+/]{12,}=*)`), group: 1},
-	// The password of user:pass@host runs to the last @ before whitespace.
-	{kind: "url_password", re: regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:(\S+)@[^\s@]+`), group: 1},
-	{kind: "cli_password", re: regexp.MustCompile(`(?:\s|^)(?:-u|--user)\s+[^\s:-][^\s:]*:(\S+)`), group: 1},
-	{kind: "cli_password", re: regexp.MustCompile(`--password[=\s]+(\S+)`), group: 1},
-	{kind: "cli_password", re: regexp.MustCompile(`\b(?:mysql|mysqldump|mariadb|mysqladmin)\b[^\n]*?\s-p(\S{4,})`), group: 1},
-	// A value assigned to a secret-named key: quoted (spaces allowed) or bare.
-	{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + keyRE + `)\b["']?\s*[:=]\s*"([^"\n]{6,})"`), group: 2, keep: keepValue},
-	// JSON escaped inside a string: {\"api_key\": \"value\"}.
-	{kind: "secret_value", re: regexp.MustCompile(`(?i)\\"(` + keyRE + `)\\"\s*:\s*\\"([^"\\\n]{6,})\\"`), group: 2, keep: keepValue},
-	{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + passKeyRE + `)\b["']?\s*[:=]\s*["']?([^\s"',;}]{6,})`), group: 2, keep: keepValue},
-	{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + keyRE + `)\b["']?\s*[:=]\s*'([^'\n]{6,})'`), group: 2, keep: keepValue},
-	{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + keyRE + `)\b["']?\s*[:=]\s*([^\s"',;}]{6,})`), group: 2, keep: keepValue},
-	// A long mixed-case alphanumeric token anywhere (hex, UUIDs, digests and
-	// identifiers made of words are kept).
-	{kind: "high_entropy", re: regexp.MustCompile(`\b[A-Za-z0-9_-]{32,}\b`), keep: func(_, v string) bool { return !highEntropy(v) }},
+	{kind: "basic_auth", re: regexp.MustCompile(`(?i)\bbasic\s+([A-Za-z0-9+/]{4,}=*)`), group: 1, keep: keepBasic},
+	// The password of user:pass@host runs to the last @ before whitespace;
+	// the user may be empty (redis://:pass@host).
+	{kind: "url_password", re: regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]*:(\S+)@[^\s@]+`), group: 1},
+	cliRule(`(?:\s|^)(?:-u|--user)\s+[^\s:-][^\s:]*:(\S+)`),
+	// --password and its kin, = or a space, the value quoted or bare; a
+	// bare value after a space never starts with '-' (the next option).
+	cliRule(flagRE + `(?:=|\s+)"([^"\n]+)"`),
+	cliRule(flagRE + `(?:=|\s+)'([^'\n]+)'`),
+	cliRule(flagRE + `=([^\s"']\S*)`),
+	cliRule(flagRE + `\s+([^\s"'-]\S*)`),
+	cliRule(`\b(?:mysql|mysqldump|mariadb|mysqladmin)\b[^\n]*?\s-p(\S{4,})`),
+	cliRule(`\bsshpass\b[^\n]*?\s-p\s*["']?([^\s"']+)`),
+	cliRule(`\bredis-cli\b[^\n]*?\s-a\s+["']?([^\s"']+)`),
+	// Samba's user%password (smbclient, rpcclient, net).
+	cliRule(`(?:\s|^)(?:-U|--user(?:name)?)(?:=|\s+)["']?[^\s%"']+%([^\s"']+)`),
+},
+	// A value assigned to a secret-named key, each form for both key
+	// shapes before the next form.
+	interleave(keyRules(keyRE), keyRules(passKeyRE)),
+	[]rule{
+		// A long mixed-case alphanumeric token anywhere (hex, UUIDs, digests and
+		// identifiers made of words are kept).
+		{kind: "high_entropy", re: regexp.MustCompile(`\b[A-Za-z0-9_-]{32,}\b`), keep: func(h hit) bool { return !highEntropy(h.value) }},
+	})
+
+// interleave is a[0], b[0], a[1], b[1]...
+func interleave(a, b []rule) []rule {
+	var out []rule
+	for i := range a {
+		out = append(out, a[i], b[i])
+	}
+	return out
 }
 
-var passwordKeys = regexp.MustCompile(`(?i)passw(?:or)?d|pwd|secret|(?:^|[_-])pass(?:$|[_-])`)
+// keepBasic decides that the word after "Basic" is not credentials: a
+// long one always is (base64 of user:password), a short one only when it
+// decodes to printable text holding the ':' (Basic settings, basic flow).
+func keepBasic(h hit) bool {
+	v := h.value
+	if len(v) >= 12 {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		if raw, err = base64.RawStdEncoding.DecodeString(v); err != nil {
+			return true
+		}
+	}
+	for _, c := range raw {
+		if c < 0x20 || c > 0x7e {
+			return true
+		}
+	}
+	return !strings.Contains(string(raw), ":")
+}
 
-// strongKeys name a secret on their own: any 6+ character value is one.
-var strongKeys = regexp.MustCompile(`(?i)passw(?:or)?d|pwd|secret|token|private[_-]?key|credentials?|(?:^|[_-])pass(?:$|[_-])`)
+// placeholder: a value standing for a secret, not one ($VAR, <your key>,
+// {{ .Token }}, an earlier redaction, a mask).
+func placeholder(v string) bool {
+	return strings.HasPrefix(v, "$") || strings.HasPrefix(v, "<") || strings.HasPrefix(v, "{{") || strings.HasPrefix(v, "[redacted") ||
+		strings.HasPrefix(v, "***") || strings.HasPrefix(v, "%")
+}
+
+var passwordKeys = regexp.MustCompile(`(?i)passw(?:or)?d|passphrase|pwd|secret|(?:^|[_-])(?:pass|pw)(?:$|[_-])`)
+
+// strongKeys name a secret on their own: a credential-like or long value
+// is one.
+var strongKeys = regexp.MustCompile(`(?i)passw(?:or)?d|passphrase|pwd|secret|token|private[_-]?key|credentials?|(?:^|[_-])(?:pass|pw)(?:$|[_-])`)
+
+// secretEnd: the key ends with the word naming the secret (DB_PASSWORD,
+// client_secret, apiToken, MYSQL_ROOT_PW), so its value is the secret,
+// not a setting about it (token_type, password_auth); group 1 is a
+// password's word.
+var secretEnd = regexp.MustCompile(`(?i)(passw(?:or)?d|passphrase|pwd|secret|(?:^|[_.-])(?:pass|pw))$|token$`)
+
+// keepFlag decides that an option's value is not a secret: a placeholder,
+// a usage metavariable (--token TOKEN) or a prose word after a bare
+// option (--token values).
+func keepFlag(h hit) bool {
+	v := h.value
+	if placeholder(v) {
+		return true
+	}
+	if !letters(v) {
+		return false
+	}
+	return strings.ToUpper(v) == v || notSecretWords[strings.ToLower(v)]
+}
+
+// notSecretWords name a type, the secret itself or a state, or are prose
+// function words: as the short plain value of a secret-named key or
+// option, they are not the secret (token: string, password=password,
+// --token values).
+var notSecretWords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`string number boolean object secret secrets password passwd passphrase token tokens
+		private public required optional hidden masked redacted missing example sample value values
+		and or the to is as in of for with from flag flags option here there when if then only also`) {
+		notSecretWords[w] = true
+	}
+}
+
+// letters: ASCII letters only.
+func letters(v string) bool {
+	for _, r := range v {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return v != ""
+}
+
+// assigned: the value is written as one, not as prose or code after the
+// key: quoted, after a tight '=' (pass=hunter, -e PW=hunter), or after
+// ": " ending its line (YAML). "db_password: restore it", "token: string;"
+// and "in.Token = cfgTok" are not.
+func assigned(h hit) bool {
+	if q := strings.TrimLeft(h.sep, " \t:="); q != "" && strings.HasPrefix(h.rest, q[len(q)-1:]) {
+		return true // "value" or 'value'
+	}
+	core := strings.Trim(h.sep, `"'`)
+	if core == "=" {
+		return true
+	}
+	end := h.rest == "" || h.rest[0] == '\n' || h.rest[0] == '\r'
+	return strings.HasPrefix(core, ":") && strings.TrimSpace(core) == ":" && len(core) > 1 && end
+}
 
 // keepValue decides that a secret-named key's value is not a secret.
-func keepValue(key, v string) bool {
+func keepValue(h hit) bool {
+	key, v := h.key, h.value
 	v = strings.Trim(v, "`") // markdown code spans in prose
 	if len(v) < 6 {
 		return true
@@ -75,8 +209,7 @@ func keepValue(key, v string) bool {
 	if strings.Contains(v, "://") {
 		return true // a URL named after a token page, not a token
 	}
-	if strings.HasPrefix(v, "$") || strings.HasPrefix(v, "<") || strings.HasPrefix(v, "{{") || strings.HasPrefix(v, "[redacted") ||
-		strings.HasPrefix(v, "***") || strings.HasPrefix(v, "%") || strings.ContainsAny(v, `*\^`) {
+	if placeholder(v) || strings.ContainsAny(v, `*\^`) {
 		return true
 	}
 	if numeric(v) {
@@ -93,10 +226,37 @@ func keepValue(key, v string) bool {
 			return true // accented words are prose ("token : Paramètres")
 		}
 	}
+	if letters(strings.TrimRight(v, ")]")) && namesNoSecret(key, v) {
+		return true
+	}
 	if strongKeys.MatchString(key) && (credentialLike(v) || len(v) >= 12) {
-		return false // a short plain word after "token :" is prose
+		return false
+	}
+	// A short plain word as the secret itself (pass=hunter, token: abcdefgh,
+	// PASSWORD=Summer), when written as a value and not a word naming the
+	// secret or a type; a capitalised word after a token is prose
+	// ("token : Profil").
+	if m := secretEnd.FindStringSubmatch(key); m != nil && (m[1] != "" || !capitalised(v)) && assigned(h) {
+		return false
 	}
 	return !credentialLike(v)
+}
+
+// namesNoSecret: v names the key or a type (password=password),
+// whatever closing bracket follows it (password=password)).
+func namesNoSecret(key, v string) bool {
+	w := strings.ToLower(strings.TrimRight(v, ")]"))
+	return notSecretWords[w] || strings.Contains(strings.ToLower(key), w)
+}
+
+// capitalised: one upper-case letter then lower-case letters (Profil).
+func capitalised(v string) bool {
+	for i, r := range v {
+		if i == 0 && (r < 'A' || r > 'Z') || i > 0 && (r < 'a' || r > 'z') {
+			return false
+		}
+	}
+	return len(v) > 1
 }
 
 func numeric(v string) bool {
@@ -171,25 +331,30 @@ func highEntropy(v string) bool {
 func Text(s string) (string, []string) {
 	found := map[string]bool{}
 	for _, r := range rules {
-		s = r.re.ReplaceAllStringFunc(s, func(m string) string {
-			sub := r.re.FindStringSubmatchIndex(m)
+		var b strings.Builder
+		last, changed := 0, false
+		for _, sub := range r.re.FindAllStringSubmatchIndex(s, -1) {
 			start, end := sub[2*r.group], sub[2*r.group+1]
 			if start < 0 {
-				return m
+				continue
 			}
-			v := m[start:end]
 			if r.keep != nil {
-				key := ""
+				h := hit{value: s[start:end], rest: s[end:]}
 				if r.group == 2 && sub[2] >= 0 {
-					key = m[sub[2]:sub[3]]
+					h.key, h.sep = s[sub[2]:sub[3]], s[sub[3]:start]
 				}
-				if r.keep(key, v) {
-					return m
+				if r.keep(h) {
+					continue
 				}
 			}
-			found[r.kind] = true
-			return m[:start] + "[redacted:" + r.kind + "]" + m[end:]
-		})
+			found[r.kind], changed = true, true
+			b.WriteString(s[last:start] + "[redacted:" + r.kind + "]")
+			last = end
+		}
+		if changed {
+			b.WriteString(s[last:])
+			s = b.String()
+		}
 	}
 	kinds := make([]string, 0, len(found))
 	for k := range found {

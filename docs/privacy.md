@@ -23,7 +23,7 @@ Nothing else leaves the machine:
 
 ## Redaction
 
-Before anything is written to memory, backsight replaces secrets with `[redacted:<kind>]`: private keys, known token prefixes (`sk-`, `sk-ant-`, `ghp_`, `github_pat_`, `AKIA`, JWTs and others), bearer headers, passwords in URLs, `KEY=secret` lines, and high-entropy values next to secret-like names. This applies to session text, subagent reports and stored facts. `memory_store` and `backsight store` refuse text that still looks like a secret.
+Before anything is written to memory, backsight replaces secrets with `[redacted:<kind>]`: private keys, known token prefixes (`sk-`, `sk-ant-`, `ghp_`, `github_pat_`, `AKIA`, JWTs and others), bearer and Basic auth headers, passwords in URLs (an empty user included), `KEY=secret` lines (`pw`, `pass`, `passphrase` and `api key` keys included, and a short plain password after a password or token key), password options of command lines (`--password`, `--pass`, `--passphrase`, `--pw`, `--secret`, `--token`, `curl -u`, `mysql -p`, `sshpass -p`, `redis-cli -a`, `-U user%password`), and high-entropy values next to secret-like names. This applies to session text, subagent reports and stored facts. `memory_store` and `backsight store` refuse text that still looks like a secret.
 
 Redaction can miss a secret in an unusual format. `backsight memory scan` re-checks what is already stored and gives the purge command for each match.
 

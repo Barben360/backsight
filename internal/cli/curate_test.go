@@ -181,6 +181,29 @@ func TestMemoryScanFindsSecretShapes(t *testing.T) {
 	}
 }
 
+// memory scan uses the redaction rules themselves: the forms added by the
+// M5 review rules are found in stored memories too.
+func TestMemoryScanFindsTheM5RedactionForms(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	pw := "hunter" + "xyz" // assembled: not a literal secret for gitleaks
+	listAnswer["world"] = `[{"id":"s1","text":"ssh with sshpass -p ` + pw + ` ssh nas","fact_type":"world","tags":["project:infra"]},
+		{"id":"s2","text":"redis at redis://:` + pw + `@cache:6379/0","fact_type":"world","tags":["project:infra"]},
+		{"id":"s3","text":"the NAS share needs smbclient -U bob%` + pw + `","fact_type":"world","tags":["project:infra"]},
+		{"id":"s4","text":"set pw=` + pw + ` on the box","fact_type":"world","tags":["project:infra"]},
+		{"id":"s5","text":"the pw field is required and api key rotation is planned","fact_type":"world","tags":["project:infra"]}]`
+	t.Cleanup(func() { listAnswer["world"] = "" })
+	code, out, _ := run(t, "memory", "scan")
+	for _, id := range []string{"s1", "s2", "s3", "s4"} {
+		if !strings.Contains(out, "backsight forget "+id+" --purge") {
+			t.Errorf("scan misses %s:\n%s", id, out)
+		}
+	}
+	if code != output.OK || strings.Contains(out, pw) || strings.Contains(out, "s5 (") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
 func TestAskReflectsOnTheProjectAndShowsTokens(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))

@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,47 @@ func TestTruePositives(t *testing.T) {
 		{"escaped json", `{\"api_key\": \"q8Fh2LmZp0Xr7Tn\"}`, "secret_value", "q8Fh2LmZp0Xr7Tn"},
 		{"authorization token", "Authorization: Token " + rep("0123456789abcdef", 2), "auth_header", "0123456789abcdef0123"},
 		{"gitlab", "remote https://oauth2:x@h " + "gl" + "pat-" + rep("xY7kQ2mZ9p", 2), "gitlab_token", "xY7kQ2mZ9pxY7kQ2mZ9p"},
+		// M5 review rules (§13 redaction)
+		{"pw key", "pw=hunter2xyz", "secret_value", "hunter2xyz"},
+		{"pw key with colon", "PW: hunter2xyz", "secret_value", "hunter2xyz"},
+		{"db_pw key", "export db_pw=Zx9kLmQ2", "secret_value", "Zx9kLmQ2"},
+		{"pw suffix segment", "MYSQL_ROOT_PW: hunter2xyz", "secret_value", "hunter2xyz"},
+		{"docker -e PW=", "docker run -e PW=hunter2xyz app", "secret_value", "hunter2xyz"},
+		{"quoted pw with spaces", `PW="hunter two xyz"`, "secret_value", "hunter two xyz"},
+		{"url password empty user", "redis://:hunter2xyz@10.0.0.7:6379/0", "url_password", "hunter2xyz"},
+		{"http url password empty user", "http://:s3cr3tpw@10.1.2.3:8888", "url_password", "s3cr3tpw"},
+		{"--passwd=", "tool --passwd=hunter2xyz", "cli_password", "hunter2xyz"},
+		{"--passwd space", "tool --passwd hunter2xyz", "cli_password", "hunter2xyz"},
+		{"--pass=", "tool --pass=hunter2xyz", "cli_password", "hunter2xyz"},
+		{"--pass space", "tool --pass hunter2xyz -v", "cli_password", "hunter2xyz"},
+		{"--passphrase quoted", `gpg --batch --passphrase "correct horse" -d x.gpg`, "cli_password", "correct horse"},
+		{"--passphrase=", "gpg --passphrase=correct-horse -d x.gpg", "cli_password", "correct-horse"},
+		{"--pw space", "app --pw hunter2xyz", "cli_password", "hunter2xyz"},
+		{"--pw=", "app --pw=hunter2xyz", "cli_password", "hunter2xyz"},
+		{"--secret space", "vault --secret s3cr3tvalue", "cli_password", "s3cr3tvalue"},
+		{"--secret=", "vault --secret=s3cr3tvalue", "cli_password", "s3cr3tvalue"},
+		{"--token space", "gh auth --token abcdefgh", "cli_password", "abcdefgh"},
+		{"--token=", "cli --token=abcdefgh", "cli_password", "abcdefgh"},
+		{"sshpass -p", "sshpass -p hunter2xyz ssh bob@nas", "cli_password", "hunter2xyz"},
+		{"sshpass -p glued", "sshpass -phunter2xyz ssh bob@nas", "cli_password", "hunter2xyz"},
+		{"redis-cli -a", "redis-cli -h 10.0.0.7 -a hunter2xyz ping", "cli_password", "hunter2xyz"},
+		{"smbclient -U user%pass", "smbclient //nas/share -U bob%hunter2xyz", "cli_password", "hunter2xyz"},
+		{"--user=user%pass", "rpcclient --user=bob%hunter2xyz nas", "cli_password", "hunter2xyz"},
+		{"passphrase key", "passphrase=correct-horse-battery", "secret_value", "correct-horse-battery"},
+		{"passphrase short letters", "PASSPHRASE: hunterxyz", "secret_value", "hunterxyz"},
+		{"api key with a space", "API key: q8Zr4Lm2Vn7T", "secret_value", "q8Zr4Lm2Vn7T"},
+		{"api key with spaced equals", "api key = q8Zr4Lm2Vn7T", "secret_value", "q8Zr4Lm2Vn7T"},
+		{"short letters after token", "token: abcdefgh", "secret_value", "abcdefgh"},
+		{"short letters after password", "password: abcdefgh", "secret_value", "abcdefgh"},
+		{"short letters after pass", "pass=hunter", "secret_value", "hunter"},
+		{"short letters after secret", "secret: abcdefgh", "secret_value", "abcdefgh"},
+		{"capitalised word after password", "PASSWORD=Summer", "secret_value", "Summer"},
+		{"short letters after client_secret", "client_secret=hunterxyz", "secret_value", "hunterxyz"},
+		{"short letters in yaml", "db:\n  password: hunterxyz\n  user: app\n", "secret_value", "hunterxyz"},
+		{"short letters quoted in json", `{"password": "hunterxyz", "user": "app"}`, "secret_value", "hunterxyz"},
+		{"short letters after --password", "mytool --password hunterxyz login", "cli_password", "hunterxyz"},
+		{"short basic auth", "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("bob:pw")), "basic_auth", base64.StdEncoding.EncodeToString([]byte("bob:pw"))},
+		{"short padded basic auth", "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("a:bc")), "basic_auth", base64.StdEncoding.EncodeToString([]byte("a:bc"))},
 	}
 	for _, c := range cases {
 		out, kinds := Text(c.in)
@@ -125,6 +167,37 @@ func TestLookAlikesSurvive(t *testing.T) {
 		"use the --pass-through flag",
 		"Authorization: header missing",
 		"PASS=1",
+		// M5 review rules: prose around the new forms
+		"the pw field is required",
+		"PW=1",
+		"pw: n/a",
+		"api key rotation is planned",
+		"the api key: see below",
+		"API key: <your key here>",
+		"--pass-through and --passive stay",
+		"gh auth --token-file ~/.config/gh/x and --secret-name prod",
+		"vault --secret $VAULT_SECRET",
+		"redis-cli -h 10.0.0.7 ping",
+		"smbclient -U bob //nas/share",
+		"sshpass -f ~/.sshpw ssh bob@nas",
+		"Basic settings live in config.toml",
+		"basic flow and basic auth",
+		"token_type: bearer",
+		"password_auth: enabled",
+		"passphrase-protected keys are fine",
+		// Short plain words that are prose, code or usage, not a secret
+		// (seen in real transcripts).
+		"secrets.toml has no db_password: restore it from the backup",
+		"interface Login { token: string; password: string }",
+		"--- PASS: TestFoo (0.00s)",
+		"in.Token = cfgTok",
+		"Second pass: thoughts on the design",
+		"A secret: printed once, then gone.",
+		"connect(user=user, password=password)",
+		`{"password": "string", "token": "secret"}`,
+		"mytool --password PASSWORD --token TOKEN",
+		"set it with --token values from the vault",
+		"DEBUG=pw:browser npx playwright test",
 	} {
 		out, kinds := Text(s)
 		if out != s || len(kinds) != 0 {
