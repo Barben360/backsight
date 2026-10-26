@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ type reattributeResult struct {
 	Backup   string                   `json:"backup,omitempty"`   // the verified archive taken first
 	Retagged []string                 `json:"retagged"`           // documents moved in place
 	Deferred int                      `json:"deferred,omitempty"` // moves left to a later run (MaxRetags)
+	Waiting  []string                 `json:"waiting,omitempty"`  // re-sends that waited for the server's queue: nothing changed for them
 	Queued   []string                 `json:"queued"`             // sessions to be sent again by the next flush
 	Failed   []string                 `json:"failed,omitempty"`   // "<document or session>: <why>"
 	Note     string                   `json:"note,omitempty"`
@@ -195,6 +197,24 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 	if err != nil {
 		return res, err
 	}
+	// Re-sends first: a re-tag makes the server consolidate (operations
+	// queued), and a re-send waits for an empty queue.
+	if resend {
+		for _, r := range p.Resends {
+			if !answered[r.Session] {
+				continue // planned after the answer: its cost was not shown
+			}
+			err := fl.ApplyResend(ctx, r)
+			switch {
+			case errors.Is(err, retain.ErrQueued):
+				res.Waiting = append(res.Waiting, r.Session)
+			case err != nil:
+				res.Failed = append(res.Failed, r.Session+": "+err.Error())
+			default:
+				res.Queued = append(res.Queued, r.Session)
+			}
+		}
+	}
 	for i, r := range p.Retags {
 		if i == maxRetags {
 			res.Deferred = len(p.Retags) - maxRetags
@@ -207,18 +227,6 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 		res.Retagged = append(res.Retagged, r.Document)
 	}
 	fl.KeepDecisions(p)
-	if resend {
-		for _, r := range p.Resends {
-			if !answered[r.Session] {
-				continue // planned after the answer: its cost was not shown
-			}
-			if err := fl.ApplyResend(ctx, r); err != nil {
-				res.Failed = append(res.Failed, r.Session+": "+err.Error())
-				continue
-			}
-			res.Queued = append(res.Queued, r.Session)
-		}
-	}
 	return finishReattribute(res, f, opt, answers)
 }
 
@@ -232,6 +240,10 @@ const maxRetags = 50
 func finishReattribute(res reattributeResult, f reattributeFlags, opt reattributeOptions, answers map[string]string) (reattributeResult, error) {
 	pending := len(res.Plan.Resends) > len(res.Queued)
 	switch {
+	case len(res.Waiting) > 0 && len(res.Failed) == 0:
+		res.Action = "resends_waiting"
+		return res, &output.Error{Code: output.Blocked, Resume: f.resume(),
+			Message: fmt.Sprintf("%d re-send(s) wait for the server's queue to empty, nothing was changed for them: run the same command again later", len(res.Waiting))}
 	case len(res.Failed) > 0:
 		res.Action = "partial"
 		return res, &output.Error{Code: output.Partial, Resume: f.resume(),
