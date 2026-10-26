@@ -12,6 +12,11 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
+// purgeLookStale: no tick looked for this long: a recreated document the
+// tick has not seen yet is an error. Ticks record their look at least every
+// retain.LookRecordEvery, 15 minutes apart.
+const purgeLookStale = 2 * retain.LookRecordEvery
+
 // checkPurged looks, as jobs tick does, for purged documents the server
 // holds again (backsight issue 5): an older client, or any client unaware
 // of tombstones, appended to a purged id and Hindsight 1.1.0 recreated it.
@@ -67,7 +72,7 @@ func checkPurged(ctx context.Context, cl *hindsight.Client, bank string, env Env
 	for _, w := range st.PurgeGuard.Waiting {
 		waiting[w.Document] = w
 	}
-	stale := at.Sub(st.PurgeGuard.CheckedAt) >= time.Hour
+	stale := at.Sub(st.PurgeGuard.CheckedAt) >= purgeLookStale
 	c.Status = Warn
 	var names, details []string
 	for i, t := range sc.Found {
@@ -89,6 +94,13 @@ func checkPurged(ctx context.Context, cl *hindsight.Client, bank string, env Env
 	c.Detail = "a client unaware of purges (an older backsight on another machine, or a rollback) appended to their ids, and the server recreated them with what it sent; until purged again, recall can return it"
 	if len(details) > 0 {
 		c.Detail += "; " + strings.Join(details, "; ")
+	}
+	if c.Status == Error {
+		// The turns such a client wrote after the purge are sent again to
+		// the session's current document at the next send, so none is
+		// lost; until the recreated one is purged again, recall can find
+		// them twice.
+		c.Detail += "; the turns written after the purge are also in the session's current document, so recall can return them twice until it is purged again"
 	}
 	cfg, cerr := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home)
 	switch {

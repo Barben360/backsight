@@ -214,7 +214,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 
 	// Read before the cursor is rebuilt: the projects whose last sends
 	// went to a purged id (lostToPurged).
-	var lostTo map[string]bool
+	var lostTo map[string]time.Time
 	if haveCursor {
 		lostTo = lostToPurged(sid, cur, tombs)
 	}
@@ -274,8 +274,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 //
 // lostTo are the projects whose last sends, as the cursor read before
 // this resync says, went to a purged id (lostToPurged): this session's own
-// records there that the purge did not cover go again.
-func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid string, recs []transcript.Record, attrs map[int64]attr, opt Options, now time.Time, lostTo map[string]bool) ([]transcript.Record, Result, bool) {
+// records there written after the purge go again; the earlier ones stay
+// held (lostAfter).
+func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid string, recs []transcript.Record, attrs map[int64]attr, opt Options, now time.Time, lostTo map[string]time.Time) ([]transcript.Record, Result, bool) {
 	retry := func(detail string) ([]transcript.Record, Result, bool) {
 		res.Status, res.Detail = Retry, detail
 		return nil, res, true
@@ -333,6 +334,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	resend := f.pendingMark(sid) == resendMark
 	start := -1 // the first record to send
 	var mark, unmark, resent []string
+	lostIn := func(r transcript.Record, p string) bool { in, _ := lostAfter(lostTo, p, r); return in }
 	for i, r := range recs {
 		a, key := attrs[r.End], sessionKey(f.Bank, sid, r.UUID)
 		_, found := pos.at[a.project]
@@ -351,11 +353,16 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 			held = true // a fork copies its parent's records (decision 0038)
 		case a.out:
 			// never sent: sendRuns keeps it out again
-		case own(r.UUID) && (lostTo[a.project] || lostTo[""]):
-			// Sent after the purge to the purged id, which is purged again
-			// (or will be): it goes again to the live document. What the
-			// purge itself covered is held above (pos.purged).
-			unmark, resent = append(unmark, key), append(resent, r.UUID)
+		case own(r.UUID) && lostIn(r, a.project):
+			// Sent to the purged id, which is purged again (or will be).
+			// Written after the purge: an older binary's turn, it goes again
+			// to the live document. Written before: the purge was meant to
+			// cover it (its retain was still queued), it stays held.
+			if _, after := lostAfter(lostTo, a.project, r); after {
+				unmark, resent = append(unmark, key), append(resent, r.UUID)
+			} else {
+				held = true
+			}
 		case own(r.UUID) && found:
 			// Sent, but missing from the server's metadata (async retain
 			// still running, or a crash before the cursor was saved):

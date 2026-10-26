@@ -29,6 +29,9 @@ type recreatedServer struct {
 	// hang: the document listing answers only once the client gave up.
 	hang   bool
 	writes []string // every request but a GET
+	// order: "send" for each retain into the memory bank, "look" for each
+	// listing of new documents, in arrival order.
+	order []string
 }
 
 func withRecreated(t *testing.T, home string) *recreatedServer {
@@ -43,8 +46,12 @@ func withRecreated(t *testing.T, home string) *recreatedServer {
 			rs.writes = append(rs.writes, r.Method+" "+r.URL.Path)
 		}
 		path := r.URL.Path
+		if r.Method == http.MethodPost && path == "/v1/default/banks/claude-memory/memories" {
+			rs.order = append(rs.order, "send")
+		}
 		switch {
 		case r.Method == http.MethodGet && path == "/v1/default/banks/claude-memory/documents" && r.URL.Query().Get("time_field") == "created_at" && !r.URL.Query().Has("tags"):
+			rs.order = append(rs.order, "look")
 			if rs.listStatus != 0 {
 				w.WriteHeader(rs.listStatus)
 				return true
@@ -152,11 +159,18 @@ func TestJobsTickSendsWhenTheLookFails(t *testing.T) {
 	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
 	before := retained.Load()
+	rs.set(func() { rs.order = nil })
 	code, out, errOut := run(t, "jobs", "tick", "--json")
 	var env tickEnvelope
 	_ = json.Unmarshal([]byte(out), &env)
 	if code != output.OK || retained.Load() != before+1 || !strings.HasPrefix(env.Data.Purges, "not looked at:") {
 		t.Fatalf("exit %d, %d retained, purges %q\n%s\n%s", code, retained.Load()-before, env.Data.Purges, out, errOut)
+	}
+	rs.mu.Lock()
+	order := strings.Join(rs.order, ",")
+	rs.mu.Unlock()
+	if !strings.HasPrefix(order, "send") || !strings.Contains(order, "look") {
+		t.Errorf("the look ran before the sends: %s", order)
 	}
 	if exists, _ := rs.state(); !exists {
 		t.Error("purged without a look")

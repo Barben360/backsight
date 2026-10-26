@@ -232,29 +232,51 @@ func (f *Flusher) tombstones() ([]state.Tombstone, error) {
 }
 
 // lostToPurged are the projects of cursor cur (session sid) whose
-// document is a tombstoned id: this binary never writes to one, so their
-// last sends came from a binary unaware of tombstones (a rollback, or this
-// machine before it learned another's purge), and went to a document a
-// purge again deletes. A cursor from before per-project documents sent
-// every project to conversation:<sid>.
-func lostToPurged(sid string, cur Cursor, tombs []state.Tombstone) map[string]bool {
-	purged := map[string]bool{}
+// document is a tombstoned id, each with when that id was purged (the
+// latest purge of it). Their last sends went to a document a purge again
+// deletes: either a binary unaware of tombstones wrote them after the
+// purge (a rollback, or this machine before it learned another's purge),
+// or this binary sent them before the purge and their async retain was
+// still queued. Only the records written after the purge are the first
+// kind (lostAfter). A cursor from before per-project documents sent every
+// project to conversation:<sid> (key "").
+func lostToPurged(sid string, cur Cursor, tombs []state.Tombstone) map[string]time.Time {
+	purged := map[string]time.Time{}
 	for _, t := range tombs {
-		purged[t.Document] = true
+		if at, ok := purged[t.Document]; !ok || t.PurgedAt.After(at) {
+			purged[t.Document] = t.PurgedAt
+		}
 	}
-	out := map[string]bool{}
+	out := map[string]time.Time{}
 	if cur.Segments == nil {
-		if cur.Bank != "" && purged[DocumentID(sid, "", "")] {
-			out[""] = true // read as every project by the caller
+		if at, ok := purged[DocumentID(sid, "", "")]; ok && cur.Bank != "" {
+			out[""] = at
 		}
 		return out
 	}
 	for p := range cur.Segments {
-		if purged[cur.docOf(sid, p)] {
-			out[p] = true
+		if at, ok := purged[cur.docOf(sid, p)]; ok {
+			out[p] = at
 		}
 	}
 	return out
+}
+
+// lostAfter says whether record r of project p was lost to a purge again
+// of what a binary unaware of tombstones wrote after the purge: its
+// project's last sends went to a purged id (lost), and it was written
+// after that purge. A record written before it, or with no time, stays
+// held: the user purged the session as it stood, and a retain still queued
+// at that time may have carried it.
+func lostAfter(lost map[string]time.Time, p string, r transcript.Record) (inLost, after bool) {
+	at, ok := lost[p]
+	if !ok {
+		at, ok = lost[""]
+	}
+	if !ok {
+		return false, false
+	}
+	return true, !r.Timestamp.IsZero() && !at.IsZero() && r.Timestamp.After(at)
 }
 
 // homeOfPurged is the project of session sid's purged home document, ""

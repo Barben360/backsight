@@ -207,9 +207,9 @@ func TestSaveWithinTakesTheLock(t *testing.T) {
 func TestPurgeGuardRoundTrips(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "state.json")
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
-	g := &PurgeGuard{Bank: "claude-memory", Newest: at, FullAt: at, Tombstones: 4, CheckedAt: at,
+	g := &PurgeGuard{Bank: "claude-memory", Newest: at, FullAt: at, CheckedAt: at,
 		Waiting: []Recreated{{Document: "conversation:s1", Session: "s1", Project: "billing", Why: "consent", NeedsUser: true}},
-		Purged:  []string{"conversation:s3"}, PurgedAt: at, Repeats: []Repurge{{Document: "conversation:s3", Count: 2, Since: at}}}
+		Purged:  []string{"conversation:s3"}, PurgedAt: at, Repeats: []Repurge{{Document: "conversation:s3", At: []time.Time{at, at.Add(time.Hour)}}}}
 	raw, _ := json.Marshal(map[string]any{"schema_version": SchemaVersion, "purge_guard": g, "from_a_newer_minor": true})
 	if err := os.WriteFile(p, raw, 0o600); err != nil {
 		t.Fatal(err)

@@ -58,6 +58,12 @@ const (
 	repeatWindow = 24 * time.Hour
 )
 
+// LookRecordEvery: a look that changed nothing records its time only
+// when the last record is this old. With a tick every 15 minutes, the
+// recorded time is then never more than 45 minutes old while the ticks
+// run (doctor's staleness is twice this).
+const LookRecordEvery = 30 * time.Minute
+
 // Lookup says where FindRecreated looks.
 type Lookup struct {
 	// Since: zero looks for every tombstoned document; else only among the
@@ -316,7 +322,7 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 	case opt.Full:
 		// A full look sets the newest again, never only forward: a wrong
 		// date seen once must not pin the window.
-		next.Newest, next.FullAt, next.Tombstones = time.Time{}, at, sc.Checked
+		next.Newest, next.FullAt = time.Time{}, at
 		for _, t := range []time.Time{newest, sc.Newest} {
 			if sane(t) && t.After(next.Newest) {
 				next.Newest = t
@@ -333,7 +339,14 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 		}
 	}
 	// The repeats of the last day.
-	next.Repeats = slices.DeleteFunc(slices.Clone(prev.Repeats), func(r state.Repurge) bool { return at.Sub(r.Since) >= repeatWindow })
+	// The repeats within the last day, a sliding window.
+	next.Repeats = nil
+	for _, r := range prev.Repeats {
+		r.At = slices.DeleteFunc(slices.Clone(r.At), func(t time.Time) bool { return at.Sub(t) >= repeatWindow })
+		if len(r.At) > 0 {
+			next.Repeats = append(next.Repeats, r)
+		}
+	}
 	repeat := func(doc string) *state.Repurge {
 		for i := range next.Repeats {
 			if next.Repeats[i].Document == doc {
@@ -368,9 +381,9 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 				waiting[t.Document] = hold{w, true}
 			case w != "":
 				waiting[t.Document] = hold{w, false}
-			case !opt.Manual && r != nil && r.Count >= repeatMax:
+			case !opt.Manual && r != nil && len(r.At) >= repeatMax:
 				waiting[t.Document] = hold{fmt.Sprintf("an older client keeps writing to it (purged again %d times since %s UTC): update backsight on every machine that writes to this bank, then run backsight retain purge-again",
-					r.Count, r.Since.Format("2006-01-02 15:04")), true}
+					len(r.At), r.At[0].Format("2006-01-02 15:04")), true}
 			case len(purge) >= perLook:
 				waiting[t.Document] = hold{fmt.Sprintf("at most %d documents are purged again per look: the next one does it", perLook), false}
 			default:
@@ -394,9 +407,9 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 		}
 		g.Purged.Documents = append(g.Purged.Documents, t.Document)
 		if r := repeat(t.Document); r != nil {
-			r.Count++
+			r.At = append(r.At, at)
 		} else {
-			next.Repeats = append(next.Repeats, state.Repurge{Document: t.Document, Count: 1, Since: at})
+			next.Repeats = append(next.Repeats, state.Repurge{Document: t.Document, At: []time.Time{at}})
 		}
 	}
 	sort.Strings(g.Purged.Pages)
@@ -415,11 +428,11 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 		return g, nil
 	}
 	// Nothing but the time of the look changed, and that was recorded
-	// within the hour: state.json is left alone (it is written under a
-	// lock other commands wait on).
+	// within LookRecordEvery: state.json is left alone (it is written under
+	// a lock other commands wait on).
 	quiet, was := next, prev
 	quiet.CheckedAt, was.CheckedAt = time.Time{}, time.Time{}
-	if reflect.DeepEqual(quiet, was) && at.Sub(prev.CheckedAt) < time.Hour {
+	if reflect.DeepEqual(quiet, was) && at.Sub(prev.CheckedAt) < LookRecordEvery {
 		return g, nil
 	}
 	return g, state.Update(f.Dirs, "purge guard", func(s *state.State) error {
