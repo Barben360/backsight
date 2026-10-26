@@ -86,9 +86,9 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 
 | doctor check | Meaning | What to do |
 |---|---|---|
-| `maintenance` | An update, backup or restore holds the maintenance lock. | Wait for it. If no backsight command runs, the lock is stale: doctor names the file to remove. |
+| `maintenance` | An update, backup or restore holds the maintenance lock. | Wait for it. If no backsight command runs, the lock is stale: doctor names the file to remove, and `backsight server start` removes a lock whose process is gone. |
 | `locks` | A stale lock from a command that died. | The next run of that command takes it over. |
-| `restore` | A restore did not finish. | Run the command doctor gives: rerun the restore, or put the safety archive back with `backsight restore <safety archive> --no-safety`. See [backups-and-restore.md](backups-and-restore.md). |
+| `restore` | A restore did not finish. | Run the command doctor gives: rerun the restore, or put the safety archive back with `backsight restore <safety archive> --no-safety`; when only the start on the API key failed, `backsight server start` finishes it. See [backups-and-restore.md](backups-and-restore.md). |
 | `update-incomplete` | An update did not finish. | Run the command doctor gives, usually `backsight update apply`, which resumes it. See [update.md](update.md). |
 | `restore-epoch` | The server was restored and this machine has not caught up. | `backsight jobs tick` (the 15-minute job does it). |
 | `pending-restore` | Putting Claude Code's files back (`setup --undo` or `client config restore`) stopped midway: some files are as they were before that run, others not. | Run the command doctor gives: `backsight setup --undo` resumes the undo; `backsight client config restore <run>` finishes the restore (add `--force` if it refuses a file changed since). |
