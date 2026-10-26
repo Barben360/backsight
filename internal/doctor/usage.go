@@ -73,7 +73,7 @@ func checkLatency(r stats.Report) Check {
 		c.Status, c.Summary = Info, fmt.Sprintf("%d prompt recalls in 7 days: too few for a p95", r.Prompts.Recalls)
 	case r.Prompts.P95MS > promptP95MaxMS:
 		c.Status, c.Summary = Warn, fmt.Sprintf("prompt hook p95 %d ms over 7 days (limit %d ms)", r.Prompts.P95MS, promptP95MaxMS)
-		c.Fix = "a GPU for the reranker, or fewer rerank candidates (HINDSIGHT_API_RERANKER_MAX_CANDIDATES in the server's compose.override.yaml)"
+		c.Fix = "fewer rerank candidates, or your own GPU reranker, in the server's compose.override.yaml: backsight guide troubleshooting#slow-recall-and-gpu-acceleration"
 	default:
 		c.Summary = fmt.Sprintf("prompt hook p95 %d ms over 7 days", r.Prompts.P95MS)
 	}

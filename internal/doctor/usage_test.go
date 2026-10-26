@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/guide"
 )
 
 var usageNow = time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
@@ -240,4 +242,28 @@ func TestUsageQueuedOutboxNotesAreNotRefusals(t *testing.T) {
 	if c := byID(checkUsage(dir, usageNow, false))["learning"]; c.Status == Warn {
 		t.Errorf("%+v", c)
 	}
+}
+
+// A slow recall's fix points at the docs section that explains what helps
+// (0067 block 4): a GPU alone changes nothing in this version, so the fix
+// must not offer one.
+func TestLatencyFixPointsAtTheGPUSection(t *testing.T) {
+	recall := `"event":"prompt","decision":"recall","plen":80,"ms":3000,"scopes":{"project":{"ok":true}}`
+	c := byID(checkUsage(events(t, map[time.Duration][]string{time.Hour: repeat(20, recall)}), usageNow, false))["latency"]
+	const ref = "troubleshooting#slow-recall-and-gpu-acceleration"
+	if c.Status != Warn || !strings.Contains(c.Fix, "backsight guide "+ref) || strings.Contains(c.Fix, "a GPU for the reranker") {
+		t.Fatalf("%+v", c)
+	}
+	corpus, err := guide.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tp := range corpus.Topics {
+		for _, s := range tp.Sections {
+			if s.Ref() == ref {
+				return
+			}
+		}
+	}
+	t.Errorf("the docs have no section %s", ref)
 }

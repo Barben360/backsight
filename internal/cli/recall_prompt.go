@@ -36,7 +36,7 @@ func newRecallPromptCmd(e *env) *cobra.Command {
 			input, _ := json.Marshal(map[string]string{"cwd": cwd})
 			h, ok := newHookEnv(cmd.Context(), input, "")
 			if !ok {
-				return &output.Error{Code: output.NeedsUser, Message: "no usable config: run backsight server install"}
+				return &output.Error{Code: output.NeedsUser, Message: "no usable config: run backsight setup"}
 			}
 			prompt := strings.Join(args, " ")
 			if fromStdin { // keeps the prompt out of the process list

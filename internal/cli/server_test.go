@@ -123,7 +123,17 @@ func TestServerRenderMissingSecretNeedsUser(t *testing.T) {
 
 func TestServerRenderWithoutConfig(t *testing.T) {
 	isolate(t)
-	if code, _, errOut := run(t, "server", "render"); code != output.NeedsUser || !strings.Contains(errOut, "server install") {
+	if code, _, errOut := run(t, "server", "render"); code != output.NeedsUser || !strings.Contains(errOut, "run backsight setup") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+}
+
+// With no config, the hint names setup (0067 block 4), the command that
+// writes one; server install alone leaves Claude Code unwired.
+func TestRecallPromptWithoutConfigNamesSetup(t *testing.T) {
+	home := isolate(t)
+	code, _, errOut := run(t, "recall-prompt", "--cwd", home, "a prompt")
+	if code != output.NeedsUser || !strings.Contains(errOut, "run backsight setup") || strings.Contains(errOut, "server install") {
 		t.Errorf("exit %d: %s", code, errOut)
 	}
 }

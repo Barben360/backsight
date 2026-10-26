@@ -517,7 +517,7 @@ func loadServerConfig() (config.Config, config.Secrets, error) {
 	}
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if errors.Is(err, fs.ErrNotExist) {
-		return cfg, config.Secrets{}, &output.Error{Code: output.NeedsUser, Message: "no config at " + d.ConfigFile() + ": run backsight server install"}
+		return cfg, config.Secrets{}, &output.Error{Code: output.NeedsUser, Message: "no config at " + d.ConfigFile() + ": run backsight setup"}
 	}
 	if err != nil {
 		return cfg, config.Secrets{}, &output.Error{Code: output.Blocked, Message: err.Error()}
