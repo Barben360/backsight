@@ -277,34 +277,9 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 			} else if _, _, ids, err = backupKeys(d, cfg, sec, false); err != nil {
 				return err
 			}
-			// Under the state directory (0700), not $TMPDIR; only the
-			// manifest and the dump are written: the archive's secrets
-			// and config are not needed to verify.
-			work, done, err := backup.VerifyDir(filepath.Join(d.State, "staging"))
-			if err != nil {
-				return blocked(err)
-			}
-			defer done()
-			m, err := backup.Open(args[0], ids, work, func(string) bool { return false })
-			if err != nil {
-				return blocked(err)
-			}
-			counts, err := runtimeFor(cfg).VerifyDump(cmd.Context(), filepath.Join(work, "db.dump"), backup.Tables)
-			if err != nil {
-				return blocked(err)
-			}
-			res := backupVerifyResult{Path: args[0], Expected: m.Counts, Restored: counts, OK: true}
-			for _, t := range backup.Tables {
-				if counts[t] != m.Counts[t] {
-					res.OK = false
-				}
-			}
-			var failed error
-			if !res.OK {
-				failed = &output.Error{Code: output.Blocked, Message: fmt.Sprintf("restored counts %v differ from the manifest's %v", counts, m.Counts)}
-			}
-			if err := recordVerify(d, cfg.Backup.Dir, args[0], m, res.OK); err != nil && failed == nil {
-				failed = &output.Error{Code: output.Partial, Message: "verified, but the result was not recorded (doctor reads it): " + err.Error(), Resume: "backsight backup verify " + args[0]}
+			res, failed := verifyArchive(cmd.Context(), d, cfg, ids, args[0])
+			if res.Path == "" {
+				return failed
 			}
 			return e.report("backup verify", res, func() string {
 				return fmt.Sprintf("%s: restored %v, manifest %v: %s\n", res.Path, res.Restored, res.Expected, map[bool]string{true: "ok", false: "MISMATCH"}[res.OK])
@@ -313,6 +288,44 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&identityFile, "identity", "", "age identity file or SSH private key (default: the identity in secrets.toml)")
 	return cmd
+}
+
+// verifyArchive decrypts archive with ids, restores its dump into a
+// throwaway database, compares the row counts with its manifest and
+// records the result (doctor reads it). A zero result's Path means
+// nothing was verified (err says why); otherwise err is a mismatch or a
+// result that could not be recorded.
+func verifyArchive(ctx context.Context, d paths.Dirs, cfg config.Config, ids []agelib.Identity, archive string) (backupVerifyResult, error) {
+	// Under the state directory (0700), not $TMPDIR; only the manifest and
+	// the dump are written: the archive's secrets and config are not
+	// needed to verify.
+	work, done, err := backup.VerifyDir(filepath.Join(d.State, "staging"))
+	if err != nil {
+		return backupVerifyResult{}, blocked(err)
+	}
+	defer done()
+	m, err := backup.Open(archive, ids, work, func(string) bool { return false })
+	if err != nil {
+		return backupVerifyResult{}, blocked(err)
+	}
+	counts, err := runtimeFor(cfg).VerifyDump(ctx, filepath.Join(work, "db.dump"), backup.Tables)
+	if err != nil {
+		return backupVerifyResult{}, blocked(err)
+	}
+	res := backupVerifyResult{Path: archive, Expected: m.Counts, Restored: counts, OK: true}
+	for _, t := range backup.Tables {
+		if counts[t] != m.Counts[t] {
+			res.OK = false
+		}
+	}
+	var failed error
+	if !res.OK {
+		failed = &output.Error{Code: output.Blocked, Message: fmt.Sprintf("restored counts %v differ from the manifest's %v", counts, m.Counts)}
+	}
+	if err := recordVerify(d, cfg.Backup.Dir, archive, m, res.OK); err != nil && failed == nil {
+		failed = &output.Error{Code: output.Partial, Message: "verified, but the result was not recorded (doctor reads it): " + err.Error(), Resume: "backsight backup verify " + archive}
+	}
+	return res, failed
 }
 
 // errPassphrase: the SSH identity is passphrase-protected and there is no
