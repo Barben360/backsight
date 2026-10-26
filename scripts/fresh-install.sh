@@ -217,6 +217,7 @@ kept_password=$(env_password)
   { cat "$work/uninstall-keep.json" >&2; fail "uninstall --stop --purge-local failed"; }
 [ ! -e "$BACKSIGHT_HOME/config/secrets.toml" ] && [ ! -e "$(uc_path)" ] || fail "uninstall --purge-local kept secrets.toml or the PATH command"
 [ "$(env_password)" = "$kept_password" ] || fail "uninstall --purge-local did not keep the server's .env"
+[ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "uninstall --purge-local left settings.json changed"; }
 printf 'mock-not-a-key\n' | "$new" secret set llm_api_key >/dev/null
 "$new" setup --non-interactive --json "${answers[@]}" --answer backfill=no > "$work/setup-again.json" 2>/dev/null ||
   { cat "$work/setup-again.json" >&2; fail "setup over the kept data failed"; }
@@ -226,6 +227,9 @@ grep -qxF "db_password = '$kept_password'" "$BACKSIGHT_HOME/config/secrets.toml"
 "$new" search --all --min-score 0 --json "Which PostgreSQL version does billing keep?" > "$work/search-again.json" 2>&1 || true
 jq -e '.ok and (.data.hits | length > 0)' "$work/search-again.json" >/dev/null || { cat "$work/search-again.json" >&2; fail "the kept memory is not found after setting up again"; }
 [ -L "$(uc_path)" ] && [ "$(readlink "$(uc_path)")" = "$(uc_shim)" ] || fail "client install did not make the PATH command $(uc_path)"
+# Undone again, so 10b and 11 start from the state step 10 left.
+"$new" setup --undo --json > "$work/undo-again.json" || { cat "$work/undo-again.json" >&2; fail "setup --undo after setting up again failed"; }
+[ "$(claude_rules)" = "$rules_before" ] || { echo "before: $rules_before" >&2; echo "after:  $(claude_rules)" >&2; fail "the second undo left settings.json changed"; }
 
 # 10b. Wired again by hand after undo (decision 0067 block 3), so that
 # uninstall's own client and scheduler removal is checked, not skipped:
