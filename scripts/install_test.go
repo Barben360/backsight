@@ -616,3 +616,59 @@ func TestInstallRefusesAnUnexpectedVersion(t *testing.T) {
 		})
 	}
 }
+
+// Windows (Git Bash, MSYS, Cygwin) and other systems are refused with a
+// pointer to the platform page, never to an installer that does not exist
+// (security review L3: a user sent looking for "install.ps1" may find an
+// unofficial one).
+func TestInstallRefusesAnUnsupportedSystemWithThePlatformPage(t *testing.T) {
+	for _, system := range []string{"MINGW64_NT-10.0-26100", "MSYS_NT-10.0", "CYGWIN_NT-10.0", "FreeBSD"} {
+		t.Run(system, func(t *testing.T) {
+			path := toolsWithout(t)
+			fake := filepath.Join(path, "uname")
+			_ = os.Remove(fake)
+			if err := os.WriteFile(fake, []byte("#!/bin/sh\necho '"+system+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			k := newKey(t)
+			dir, _ := release(t, k)
+			home, out, err := install(t, dir, k.pub, path)
+			if err == nil || !strings.Contains(out, "unsupported system "+system) ||
+				!strings.Contains(out, "https://github.com/Barben360/backsight/blob/main/docs/compatibility.md") || strings.Contains(out, "install.ps1") {
+				t.Errorf("%v\n%s", err, out)
+			}
+			if _, err := os.Stat(dataDir(home)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s written (%v)", dataDir(home), err)
+			}
+		})
+	}
+}
+
+// The test-only overrides of the trusted key and of GitHub stay in the
+// published script, so that these tests run the very script users get.
+// They come from the environment of whoever runs it, who already controls
+// every tool it calls; still, either one set says so loudly, so a user or
+// an agent told to set one sees the install is not checked against
+// backsight's release key or GitHub (security review L3).
+func TestInstallSaysWhenItsTrustIsOverridden(t *testing.T) {
+	warnKey, warnHost := "BACKSIGHT_INSTALL_PUBKEY is set", "BACKSIGHT_INSTALL_GITHUB is set"
+	k := newKey(t)
+	dir, _ := release(t, k)
+	_, out, err := install(t, dir, k.pub, toolsWithout(t))
+	if err != nil || !strings.Contains(out, warnKey) || !strings.Contains(out, k.pub) || strings.Contains(out, warnHost) {
+		t.Errorf("another key, no warning naming it: %v\n%s", err, out)
+	}
+
+	g := newGitHub(t, http.StatusOK, releaseJSON("v"+version, false), "v"+version, dir)
+	_, out, err = g.install(t, k.pub)
+	if err != nil || !strings.Contains(out, warnHost) || !strings.Contains(out, g.srv.URL) {
+		t.Errorf("another GitHub, no warning naming it: %v\n%s", err, out)
+	}
+
+	// Neither set: the release key, no warning, and a release signed by
+	// any other key is refused.
+	_, out, err = install(t, dir, "", toolsWithout(t))
+	if err == nil || !strings.Contains(out, "signed by another key") || strings.Contains(out, "is set") {
+		t.Errorf("no override: %v\n%s", err, out)
+	}
+}

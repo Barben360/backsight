@@ -19,6 +19,14 @@
 # BACKSIGHT_INSTALL_GITHUB  tests only: one https host standing in for
 #                        api.github.com and github.com
 #
+# The two test-only overrides stay in the published script so that its
+# tests run the very script users get. They are read from the environment
+# of whoever runs it, never from the network or a file, and whoever sets
+# that environment already controls every tool this script calls (PATH:
+# minisign, openssl, tar). Either one set, the script says so on stderr,
+# naming the key or host, so nobody installs unknowingly from another
+# source (security review L3).
+#
 # macOS ships LibreSSL, which cannot check these signatures: install
 # minisign there (brew install minisign).
 set -eu
@@ -34,11 +42,17 @@ DOWNLOADS=${BACKSIGHT_INSTALL_GITHUB:-https://github.com}/$REPO/releases/downloa
 URL=${BACKSIGHT_RELEASE_URL:-}
 
 die() { echo "backsight install: $*" >&2; exit 1; }
+warn() { echo "backsight install: WARNING: $*" >&2; }
+
+[ -z "${BACKSIGHT_INSTALL_PUBKEY:-}" ] ||
+	warn "BACKSIGHT_INSTALL_PUBKEY is set: the release is checked against $PUBKEY, not backsight's release key (a test setting: unset it unless you are testing)"
+[ -z "${BACKSIGHT_INSTALL_GITHUB:-}" ] ||
+	warn "BACKSIGHT_INSTALL_GITHUB is set: the release comes from $BACKSIGHT_INSTALL_GITHUB, not GitHub (a test setting: unset it unless you are testing)"
 
 case $(uname -s) in
 Linux) os=linux ;;
 Darwin) os=darwin ;;
-*) die "unsupported system $(uname -s): on Windows use install.ps1" ;;
+*) die "unsupported system $(uname -s): backsight installs on Linux and macOS only for now (platforms: https://github.com/$REPO/blob/main/docs/compatibility.md)" ;;
 esac
 case $(uname -m) in
 x86_64 | amd64) arch=amd64 ;;
