@@ -33,6 +33,11 @@ func TestJobsTickSendsSettledSessionsAndNotes(t *testing.T) {
 	if !strings.Contains(string(raw), `"event":"job"`) || !strings.Contains(string(raw), `"name":"tick"`) {
 		t.Errorf("telemetry: %s", raw)
 	}
+	// the tick recorded the settled session's turn and rebuilt the families
+	fam, err := os.ReadFile(pathsOf(home).FamiliesFile())
+	if err != nil || !strings.Contains(string(fam), `"turns":1`) || !strings.Contains(string(raw), `"event":"attribution"`) {
+		t.Errorf("families %s %v; telemetry %s", fam, err, raw)
+	}
 }
 
 // A tick that cannot read the bank's restore epoch sends no session (a

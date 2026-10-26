@@ -115,6 +115,11 @@ type Recall struct {
 	// Briefing: "model" (a per-project mental model the server keeps,
 	// decision 0060) or "recent" (the 5 latest observations, E8).
 	Briefing string `toml:"briefing" json:"briefing"`
+	// Families: search the projects worked on together with the current
+	// one (computed on this machine from the recorded turns) in its
+	// project scope, without its boost (decision 0072). Off until a recall
+	// replay validates it.
+	Families bool `toml:"families" json:"families"`
 }
 
 type LLM struct {

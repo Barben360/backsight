@@ -37,6 +37,7 @@ func (d Dirs) JournalFile() string     { return filepath.Join(d.State, "journal.
 func (d Dirs) PreImagesDir() string    { return filepath.Join(d.State, "pre-images") }
 func (d Dirs) TelemetryDir() string    { return filepath.Join(d.State, "telemetry") }
 func (d Dirs) AttributionDir() string  { return filepath.Join(d.State, "attribution") }
+func (d Dirs) FamiliesFile() string    { return filepath.Join(d.State, "families.json") }
 func (d Dirs) EntitiesFile() string    { return filepath.Join(d.State, "entities.json") }
 func (d Dirs) SetupFile() string       { return filepath.Join(d.State, "setup.json") }
 

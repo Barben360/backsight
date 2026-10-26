@@ -14,7 +14,11 @@ import (
 )
 
 type recallPromptResult struct {
-	Project  string       `json:"project"`
+	Project string   `json:"project"`
+	Linked  []string `json:"linked"` // searched with it in the project scope: related, then its family
+	// Family: the project's family from the families file, whether
+	// recall.families searches it or not (a replay compares both).
+	Family   []string     `json:"family"`
 	Query    string       `json:"query"`
 	Ranked   []recall.Hit `json:"ranked"`   // after the floors, best first (top 10)
 	Injected []string     `json:"injected"` // what the hook would inject, before seen/sticky
@@ -51,7 +55,7 @@ func newRecallPromptCmd(e *env) *cobra.Command {
 			}
 			q, res := h.searchPrompt(prompt)
 			block, chosen := selectHits(res.Hits, h.cfg.Recall, func(recall.Hit) bool { return false })
-			out := recallPromptResult{Project: h.project, Query: q, Ranked: res.Hits, Injected: []string{}, Block: block}
+			out := recallPromptResult{Project: h.project, Linked: append([]string{}, h.linked...), Family: append([]string{}, familyOf(h.dirs, h.project)...), Query: q, Ranked: res.Hits, Injected: []string{}, Block: block}
 			if len(out.Ranked) > 10 {
 				out.Ranked = out.Ranked[:10]
 			}

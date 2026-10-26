@@ -62,6 +62,8 @@ own_owners = ["github.com/your-org"]
 
 A clone of someone else's repository (a package build, a framework checkout) never becomes a project, nor does a directory kept out of memory or a copy of it. A temporary clone of one of your repositories counts for that repository, under its usual name. A report keeps the project it was filed under, unless you exclude that repository later. For the main conversation, backsight only records which project this rule would have chosen; `backsight stats` and `backsight doctor` show how often it differs.
 
+backsight also notes which of your repositories are worked on together: two projects touched in the same turns, in at least 5 turns of 2 sessions over the last 60 days, making at least a fifth of the busier project's turns. `backsight projects` lists them ("worked on with"). With `recall.families = true` in `config.toml`, recall searches a project's family together with it, like `related`, without its boost. It is off by default until it is shown to improve recall.
+
 ## The language memories are written in
 
 You can work in any language. Memories are always written **in English**:
