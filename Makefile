@@ -19,7 +19,7 @@ OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
-.PHONY: build test lint cross leaks snapshot verify-dist verify-keys
+.PHONY: build test lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
@@ -42,6 +42,12 @@ cross:
 
 leaks:
 	gitleaks git . --no-banner --redact
+
+# The third-party license texts embedded in the binary and shipped in every
+# archive, regenerated from go.mod: run it after a dependency change and
+# commit the file (CI and the release check it).
+licenses:
+	scripts/third-party-licenses.sh
 
 # Local release build, signed with a throwaway key made for it and gone
 # once it is verified (security review M3): only the release workflow ever

@@ -11,6 +11,7 @@ import (
 	"aead.dev/minisign"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/licenses"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/signing"
 )
@@ -155,5 +156,33 @@ func TestVersionJSONListsTheSigningKeys(t *testing.T) {
 	}
 	if _, text, _ := run(t, "version"); !strings.Contains(text, "test signing key "+id) {
 		t.Errorf("the text output hides the test key: %q", text)
+	}
+}
+
+// version --licenses prints the third-party license texts embedded in the
+// binary: bare binaries ship without the archive's THIRD_PARTY_LICENSES.
+func TestVersionLicenses(t *testing.T) {
+	code, out, _ := run(t, "version", "--licenses")
+	if code != output.OK || out != licenses.Text {
+		t.Fatalf("exit %d, output is not the embedded file (%d bytes, want %d)", code, len(out), len(licenses.Text))
+	}
+	for _, want := range []string{"Go standard library", "github.com/spf13/cobra", "github.com/modelcontextprotocol/go-sdk", "Apache License", "MIT License"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--licenses lacks %q", want)
+		}
+	}
+	code, out, _ = run(t, "version", "--licenses", "--json")
+	var env struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			ThirdPartyLicenses string `json:"third_party_licenses"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK || !env.OK || env.Data.ThirdPartyLicenses != licenses.Text {
+		t.Errorf("--licenses --json: exit %d, %v, %.200s", code, err, out)
+	}
+	// The plain version says where the texts are.
+	if _, text, _ := run(t, "version"); !strings.Contains(text, "backsight version --licenses") {
+		t.Errorf("version does not point at --licenses: %q", text)
 	}
 }

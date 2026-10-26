@@ -1,14 +1,20 @@
 package selfcheck
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/licenses"
 	"github.com/Barben360/backsight/internal/signing"
 )
 
@@ -80,6 +86,97 @@ func TestGoreleaserDist(t *testing.T) {
 	}
 	if got := Check(filepath.Join(dir, "backsight"), meta.Version, runtime.GOOS, runtime.GOARCH, time.Now()); got.Status != Verified {
 		t.Errorf("the released binary does not verify itself: %+v", got)
+	}
+}
+
+// TestGoreleaserDistLicenses: every archive of the same release directory
+// carries THIRD_PARTY_LICENSES at its root, and this machine's bare binary
+// prints the same text (version --licenses): both are the committed file.
+func TestGoreleaserDistLicenses(t *testing.T) {
+	dist := os.Getenv("BACKSIGHT_TEST_DIST")
+	if dist == "" {
+		t.Skip("BACKSIGHT_TEST_DIST is not set (CI's snapshot job sets it)")
+	}
+	var artifacts []struct{ Name, Path, Type, Goos, Goarch string }
+	if err := json.Unmarshal(read(t, filepath.Join(dist, "artifacts.json")), &artifacts); err != nil {
+		t.Fatal(err)
+	}
+	archives, bin := 0, ""
+	for _, a := range artifacts {
+		path := filepath.Join(dist, "..", a.Path)
+		switch {
+		case a.Type == "Archive":
+			archives++
+			if got := archiveFile(t, path, "THIRD_PARTY_LICENSES"); got != licenses.Text {
+				t.Errorf("%s: THIRD_PARTY_LICENSES is not the committed file (%d bytes, want %d)", a.Name, len(got), len(licenses.Text))
+			}
+		case a.Type == "Binary" && a.Goos == runtime.GOOS && a.Goarch == runtime.GOARCH:
+			bin = path
+		}
+	}
+	if archives != 4 {
+		t.Errorf("%d archives, want 4", archives)
+	}
+	if bin == "" {
+		t.Fatal("no bare binary for this machine")
+	}
+	out, err := exec.Command(bin, "version", "--licenses").Output()
+	if err != nil || string(out) != licenses.Text {
+		t.Errorf("%s version --licenses: %v, %d bytes, want the committed file (%d)", bin, err, len(out), len(licenses.Text))
+	}
+}
+
+// archiveFile returns the content of name in a .tar.gz or .zip archive
+// ("" when it is not there).
+func archiveFile(t *testing.T, path, name string) string {
+	t.Helper()
+	if strings.HasSuffix(path, ".zip") {
+		z, err := zip.OpenReader(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = z.Close() }()
+		for _, f := range z.File {
+			if f.Name == name {
+				r, err := f.Open()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = r.Close() }()
+				b, err := io.ReadAll(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(b)
+			}
+		}
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == name {
+			b, err := io.ReadAll(tr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(b)
+		}
 	}
 }
 
