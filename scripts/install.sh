@@ -147,6 +147,8 @@ fetch "$archive"
 
 version=${archive#backsight_}
 version=${version%_"${os}"_"${arch}".tar.gz}
+# The version names the install directory, <data>/bin/<version>.
+case $version in "" | .* | *[!A-Za-z0-9._+-]*) die "unexpected release version in $archive" ;; esac
 mkdir "$tmp/x"
 tar -xzf "$tmp/$archive" -C "$tmp/x" backsight || die "$archive holds no backsight binary"
 

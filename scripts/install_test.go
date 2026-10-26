@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -513,20 +514,23 @@ func TestInstallRefusesAFoundReleaseThatDoesNotVerify(t *testing.T) {
 	}
 }
 
-// A failed lookup stops before any download and names the way around it.
+// A failed lookup stops before any download, says why, and names the way
+// around it.
 func TestInstallLookupFailureNamesTheReleaseURL(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
 		body   string
+		want   string
 	}{
-		{"repository not found (private)", http.StatusNotFound, `{"message":"Not Found"}`},
-		{"rate limited", http.StatusForbidden, `{"message":"API rate limit exceeded"}`},
-		{"no release yet", http.StatusOK, "[]\n"},
-		{"not JSON", http.StatusOK, "<html>maintenance</html>"},
-		{"tag escaping the URL", http.StatusOK, releaseJSON("v1/../../evil", false)},
-		{"tag with a query", http.StatusOK, releaseJSON("v1?x=1", false)},
-		{"escaped tag", http.StatusOK, releaseJSON(`v1\u002e0`, false)},
+		{"repository not found (private)", http.StatusNotFound, `{"message":"Not Found"}`, "cannot list the releases at"},
+		{"rate limited", http.StatusForbidden, `{"message":"API rate limit exceeded"}`, "cannot list the releases at"},
+		{"no release yet", http.StatusOK, "[]\n", "no release found at"},
+		{"not JSON", http.StatusOK, "<html>maintenance</html>", "no release found at"},
+		{"tag escaping the URL", http.StatusOK, releaseJSON("v1/../../evil", false), "unexpected release tag at"},
+		{"tag with a query", http.StatusOK, releaseJSON("v1?x=1", false), "unexpected release tag at"},
+		{"escaped tag", http.StatusOK, releaseJSON(`v1\u002e0`, false), "unexpected release tag at"},
+		{"dot-dot tag", http.StatusOK, releaseJSON("..", false), "unexpected release tag at"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -534,8 +538,11 @@ func TestInstallLookupFailureNamesTheReleaseURL(t *testing.T) {
 			dir, _ := release(t, k)
 			g := newGitHub(t, c.status, c.body, "v9.9.9-m5", dir)
 			home, out, err := g.install(t, k.pub)
-			if err == nil || !strings.Contains(out, "BACKSIGHT_RELEASE_URL") {
-				t.Errorf("want a failure naming BACKSIGHT_RELEASE_URL, got %v\n%s", err, out)
+			if err == nil || !strings.Contains(out, c.want) || !strings.Contains(out, "BACKSIGHT_RELEASE_URL") {
+				t.Errorf("want a failure saying %q and naming BACKSIGHT_RELEASE_URL, got %v\n%s", c.want, err, out)
+			}
+			if len(g.lookups) != 1 {
+				t.Errorf("%d lookups, want 1: the failure must come from the lookup", len(g.lookups))
 			}
 			if len(g.downloads) != 0 {
 				t.Errorf("downloaded %v after a failed lookup", g.downloads)
@@ -561,5 +568,31 @@ func TestInstallWithAReleaseURLSkipsTheLookup(t *testing.T) {
 	}
 	if _, err := os.Stat(installedBinary(home)); err != nil {
 		t.Errorf("not installed: %v", err)
+	}
+}
+
+// The version taken from the archive name names the install directory: an
+// empty one, one starting with a dot or one with another character would
+// install outside <data>/bin/<version>, so it is refused before anything
+// is written.
+func TestInstallRefusesAnUnexpectedVersion(t *testing.T) {
+	for _, v := range []string{"..", "", ".9", "9.9.9~1"} {
+		t.Run("version "+v, func(t *testing.T) {
+			old := version
+			version = v
+			t.Cleanup(func() { version = old })
+			k := newKey(t)
+			dir, _ := release(t, k)
+			home, out, err := install(t, dir, k.pub, toolsWithout(t))
+			if err == nil || !strings.Contains(out, "unexpected release version") {
+				t.Fatalf("version %q: want a refusal, got %v\n%s", v, err, out)
+			}
+			if _, err := os.Stat(dataDir(home)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("version %q: %s written (%v)", v, dataDir(home), err)
+			}
+			if _, err := os.Lstat(filepath.Join(home, ".local", "bin", "backsight")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("version %q: the PATH link was made (%v)", v, err)
+			}
+		})
 	}
 }
