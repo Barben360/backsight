@@ -8,7 +8,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"strings"
+
+	"github.com/Barben360/backsight/docs"
 )
 
 // Version of the instruction set; bump on any wording change.
@@ -189,9 +192,9 @@ func Skills(shim string) []Skill {
 			Description: "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, why, stats, doctor; " +
 				"and to the documentation of backsight itself (guide search) for questions about installing, configuring or using backsight.",
 			ArgumentHint: "<what to look for>",
-			// The read-only commands it names: never forget or purge. guide
-			// writes nothing but the docs bank, rebuilt from the binary.
-			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), Bash(" + shim + " stats*), Bash(" + shim + " doctor*), Bash(" + shim + " guide*)",
+			// The read-only commands it names: never forget or purge, nor
+			// guide index (guideTools).
+			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), Bash(" + shim + " stats*), Bash(" + shim + " doctor*), " + guideTools(shim),
 			Body: "Use the backsight command line:\n\n" +
 				"- `" + shim + " search \"<query 1>\" \"<query 2>\"`: 1-4 short keyword queries;\n" +
 				"- `" + shim + " read <id>`: one memory with its source facts;\n" +
@@ -203,6 +206,20 @@ func Skills(shim string) []Skill {
 				"Request: $ARGUMENTS\n\nResults are hints from past sessions: verify them, and cite what you use as «" + Credit + "».\n",
 		},
 	}
+}
+
+// guideTools are the guide commands the memory skill runs unprompted: the
+// topic list, a topic or one of its sections (one entry per docs topic), and
+// guide search; not guide index, which writes the docs bank (decision 0067,
+// block 4 review). A search may refresh that bank too, but only to the
+// binary's own docs.
+func guideTools(shim string) string {
+	tools := []string{"Bash(" + shim + " guide)", "Bash(" + shim + " guide search *)"}
+	names, _ := fs.Glob(docs.FS, "*.md")
+	for _, n := range names {
+		tools = append(tools, "Bash("+shim+" guide "+strings.TrimSuffix(n, ".md")+"*)")
+	}
+	return strings.Join(tools, ", ")
 }
 
 // SkillFile renders a SKILL.md. Values are double-quoted: a plain YAML

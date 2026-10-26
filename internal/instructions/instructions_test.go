@@ -1,6 +1,7 @@
 package instructions
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -62,5 +63,45 @@ func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
 func TestNudgeNamesTermsOnlyWhenKnown(t *testing.T) {
 	if strings.Contains(Nudge(nil), "knows about") || !strings.Contains(Nudge([]string{"Grafana"}), "knows about: Grafana") {
 		t.Errorf("%q / %q", Nudge(nil), Nudge([]string{"Grafana"}))
+	}
+}
+
+// allows says whether a Claude Code allowed-tools list lets cmd run
+// unprompted. Each `*` matches any text, a superset of Claude Code's own
+// matching, so what this refuses Claude Code refuses too.
+func allows(tools, cmd string) bool {
+	for _, t := range strings.Split(tools, ", ") {
+		pat, ok := strings.CutPrefix(t, "Bash(")
+		if !ok {
+			continue
+		}
+		re := "^" + strings.ReplaceAll(regexp.QuoteMeta(strings.TrimSuffix(pat, ")")), `\*`, ".*") + "$"
+		if regexp.MustCompile(re).MatchString(cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+// The memory skill reads the docs unprompted (the topics, a topic, a
+// section, a search) but never runs guide index, which writes the docs
+// bank (decision 0067, block 4 review).
+func TestMemorySkillRunsTheReadingGuideCommandsOnly(t *testing.T) {
+	var tools string
+	for _, s := range Skills("/s") {
+		if s.Name == "memory" {
+			tools = s.AllowedTools
+		}
+	}
+	for _, cmd := range []string{"/s guide", `/s guide search "comment restaurer ?"`, "/s guide install", "/s guide install#requirements",
+		"/s guide troubleshooting#slow-recall-and-gpu-acceleration", "/s guide commands --json"} {
+		if !allows(tools, cmd) {
+			t.Errorf("%q needs a prompt: %s", cmd, tools)
+		}
+	}
+	for _, cmd := range []string{"/s guide index", "/s guide index --plan", "/s guide index --json", "/s forget 1", "/s guide; rm x"} {
+		if allows(tools, cmd) {
+			t.Errorf("%q runs unprompted: %s", cmd, tools)
+		}
 	}
 }

@@ -239,7 +239,9 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		"remember":     "",
 		"pause":        "Bash(/opt/b/current pause*)", // resume always asks
 		"memory-retro": "Bash(/opt/b/current search *), Bash(true)",
-		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*), Bash(/opt/b/current guide*)",
+		// then one guide entry per docs topic (instructions' test: never guide index)
+		"memory": "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*), " +
+			"Bash(/opt/b/current guide), Bash(/opt/b/current guide search *), Bash(/opt/b/current guide agent-guide*), ",
 	}
 	for name, tools := range want {
 		raw, err := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", name, "SKILL.md"))
@@ -247,7 +249,15 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		fm := frontmatter(t, name, string(raw))
-		if fm["name"] != name || fm["description"] == "" || fm["allowed-tools"] != tools {
+		ok := fm["allowed-tools"] == tools
+		if name == "memory" {
+			var rest string
+			rest, ok = strings.CutPrefix(fm["allowed-tools"], tools)
+			for _, e := range strings.Split(rest, ", ") {
+				ok = ok && strings.HasPrefix(e, "Bash(/opt/b/current guide ") && strings.HasSuffix(e, "*)")
+			}
+		}
+		if fm["name"] != name || fm["description"] == "" || !ok {
 			t.Errorf("%s frontmatter %q", name, fm)
 		}
 	}
