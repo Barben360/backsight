@@ -15,9 +15,14 @@ import (
 // checkPurged looks, as jobs tick does, for purged documents the server
 // holds again (backsight issue 5): an older client, or any client unaware
 // of tombstones, appended to a purged id and Hindsight 1.1.0 recreated it.
-// The tombstones are this machine's and the control bank's; the look
-// starts where the tick's last one did (a full one when it never ran or a
-// day went by), so it costs one listing most days. Read-only.
+// The tombstones are this machine's and the control bank's. It never looks
+// at every tombstone itself: it lists the documents created since the
+// tick's last look, and reads the ones recorded as waiting; before any
+// look was recorded, it says so. Read-only.
+//
+// A document waiting for the user (consent, an older client that keeps
+// writing to it) is an error; one waiting for the queue or the next look
+// is a warning, unless the tick has not looked for an hour.
 func checkPurged(ctx context.Context, cl *hindsight.Client, bank string, env Env) Check {
 	c := Check{ID: "purged-documents"}
 	st, err := state.Load(env.Dirs.StateFile())
@@ -41,8 +46,15 @@ func checkPurged(ctx context.Context, cl *hindsight.Client, bank string, env Env
 	if env.Now != nil {
 		now = env.Now
 	}
-	since, recheck := retain.LookSince(st, bank, len(docs), now().UTC(), false)
-	sc, err := retain.FindRecreated(ctx, cl, bank, all.Tombstones, since, recheck)
+	at := now().UTC()
+	since, recheck := retain.LookSince(st, bank, at)
+	if since.IsZero() {
+		c.Status = Info
+		c.Summary = fmt.Sprintf("%d purged document(s), not looked for on the server yet", len(docs))
+		c.Fix = "jobs maintain looks for every one once a day; backsight retain purge-again --plan looks now"
+		return c
+	}
+	sc, err := retain.FindRecreated(ctx, cl, bank, all.Tombstones, retain.Lookup{Since: since, Recheck: recheck, Documents: -1})
 	if err != nil {
 		c.Status, c.Summary, c.Detail = Info, "cannot look for purged documents on the server again", err.Error()
 		return c
@@ -51,33 +63,41 @@ func checkPurged(ctx context.Context, cl *hindsight.Client, bank string, env Env
 		c.Status, c.Summary = OK, fmt.Sprintf("none of the %d purged document(s) is on the server again", len(docs))
 		return c
 	}
-	why := map[string]string{}
-	if st.PurgeGuard != nil && st.PurgeGuard.Bank == bank {
-		for _, w := range st.PurgeGuard.Waiting {
-			why[w.Document] = w.Why
-		}
+	waiting := map[string]state.Recreated{}
+	for _, w := range st.PurgeGuard.Waiting {
+		waiting[w.Document] = w
 	}
+	stale := at.Sub(st.PurgeGuard.CheckedAt) >= time.Hour
+	c.Status = Warn
 	var names, details []string
 	for i, t := range sc.Found {
 		if i < 5 {
 			names = append(names, fmt.Sprintf("%s (session %s)", t.Document, t.Session))
 		}
-		if w := why[t.Document]; w != "" {
-			details = append(details, t.Document+": "+w)
+		w, ok := waiting[t.Document]
+		if w.Why != "" {
+			details = append(details, t.Document+": "+w.Why)
+		}
+		if w.NeedsUser || (!ok && stale) {
+			c.Status = Error
 		}
 	}
 	if len(sc.Found) > 5 {
 		names = append(names, fmt.Sprintf("and %d more", len(sc.Found)-5))
 	}
-	c.Status = Error
 	c.Summary = fmt.Sprintf("%d purged document(s) of bank %s are on the server again, not purged again yet: %s", len(sc.Found), bank, strings.Join(names, ", "))
-	c.Detail = "a client unaware of purges (an older backsight on another machine, or a rollback) appended to their ids, and the server recreated them with what it sent"
+	c.Detail = "a client unaware of purges (an older backsight on another machine, or a rollback) appended to their ids, and the server recreated them with what it sent; until purged again, recall can return it"
 	if len(details) > 0 {
 		c.Detail += "; " + strings.Join(details, "; ")
 	}
-	c.Fix = "backsight retain purge-again (jobs tick also does it every 15 minutes); update backsight on every machine that writes to this bank"
-	if cfg, err := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home); err == nil && cfg.LLM.Provider == "claude-code" {
-		c.Fix = "backsight retain purge-again --allow-subscription (the server consolidates again after a purge, on your Claude subscription with the claude-code provider); update backsight on every machine that writes to this bank"
+	cfg, cerr := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home)
+	switch {
+	case c.Status == Warn:
+		c.Fix = "the next backsight jobs tick purges them again; backsight retain purge-again does it now"
+	case cerr == nil && (cfg.LLM.Provider == "claude-code" || cfg.Server.Mode == "remote"):
+		c.Fix = "backsight retain purge-again --allow-subscription (the server consolidates again after a purge: on your Claude subscription with the claude-code provider, or on its owner's provider for a server this machine does not run); update backsight on every machine that writes to this bank"
+	default:
+		c.Fix = "backsight retain purge-again; update backsight on every machine that writes to this bank"
 	}
 	return c
 }

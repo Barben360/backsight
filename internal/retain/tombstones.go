@@ -231,6 +231,32 @@ func (f *Flusher) tombstones() ([]state.Tombstone, error) {
 	return st.TombstonesOf(f.Bank), nil
 }
 
+// lostToPurged are the projects of cursor cur (session sid) whose
+// document is a tombstoned id: this binary never writes to one, so their
+// last sends came from a binary unaware of tombstones (a rollback, or this
+// machine before it learned another's purge), and went to a document a
+// purge again deletes. A cursor from before per-project documents sent
+// every project to conversation:<sid>.
+func lostToPurged(sid string, cur Cursor, tombs []state.Tombstone) map[string]bool {
+	purged := map[string]bool{}
+	for _, t := range tombs {
+		purged[t.Document] = true
+	}
+	out := map[string]bool{}
+	if cur.Segments == nil {
+		if cur.Bank != "" && purged[DocumentID(sid, "", "")] {
+			out[""] = true // read as every project by the caller
+		}
+		return out
+	}
+	for p := range cur.Segments {
+		if purged[cur.docOf(sid, p)] {
+			out[p] = true
+		}
+	}
+	return out
+}
+
 // homeOfPurged is the project of session sid's purged home document, ""
 // when none was purged: without a cursor, it names the home a resync would
 // otherwise take from that document.

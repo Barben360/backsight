@@ -84,6 +84,8 @@ Setup adds a permission rule that lets Claude call these three tools without ask
 
 A session is sent when it ends (Claude Code's `SessionEnd`), or by the background job every 15 minutes once its last turn is 30 minutes old. A resumed session sends its new turns the same way. Facts stored with `memory_store` are sent at once, or queued while the server is unreachable. The first memories of a session appear a few minutes after it is sent, once extraction ran.
 
+After a purge (`forget --purge`), the session's later turns go to a new document (`conversation:<session>#2`): the purged one is never written again. A client that does not know about purges (an older backsight on another machine, or a rollback) can still append to the purged document, and the server then recreates it. The background job looks for that after it sent the sessions: every 15 minutes among the documents created since its last look (one request), and once a day, in `jobs maintain`, for every purged document. It purges such a document again, with what was extracted from it, and the next send puts the turns that client wrote there into the new document, so none is lost.
+
 ## Time and context it costs
 
 **Time.** Only prompts that recall wait for the server; the others add a few milliseconds. On a CPU, nearly all of a recall is the reranker: about 1.5 s typical and 2 to 2.5 s at worst, measured on a desktop CPU with a memory of several thousand items. It grows with the memory. doctor's `latency` check warns when the prompt hook's 95th percentile is over 2.5 s across 7 days; [troubleshooting.md](troubleshooting.md#slow-recall-and-gpu-acceleration) has the levers. After 3 recalls in a row fail, recall pauses for 5 minutes (`network.breaker_*`).

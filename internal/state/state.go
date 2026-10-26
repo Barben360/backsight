@@ -205,6 +205,17 @@ type PurgeGuard struct {
 	// Purged: the documents the last purge again removed, and when.
 	Purged   []string  `json:"purged,omitempty"`
 	PurgedAt time.Time `json:"purged_at,omitempty"`
+	// Repeats: how many times each document was purged again since Since
+	// (within the last day): an older client that keeps writing to one is
+	// left to the user past a few.
+	Repeats []Repurge `json:"repeats,omitempty"`
+}
+
+// Repurge counts the purges again of one document.
+type Repurge struct {
+	Document string    `json:"document"`
+	Count    int       `json:"count"`
+	Since    time.Time `json:"since"`
 }
 
 // Recreated is a tombstoned document the server holds again.
@@ -213,6 +224,9 @@ type Recreated struct {
 	Session  string `json:"session,omitempty"`
 	Project  string `json:"project,omitempty"`
 	Why      string `json:"why,omitempty"`
+	// NeedsUser: it waits for the user (consent, an older client to
+	// update), not for the next look.
+	NeedsUser bool `json:"needs_user,omitempty"`
 }
 
 // RestoreEpoch is the bank restore epoch this client reconciled with.

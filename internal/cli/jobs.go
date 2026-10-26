@@ -108,7 +108,6 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				return finish(nil)
 			}
 			res.Epoch = reconcile(cmd.Context(), f)
-			res.Purges = guardTick(cmd.Context(), f, cfg)
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
 			tags, terr := f.Client.Tags(cmd.Context(), cfg.Server.Bank, "project:")
@@ -137,6 +136,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if err != nil || res.Notes.Kept > 0 {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 			}
+			// After the sends: a slow server delays this look, never them.
+			res.Purges = guardTick(cmd.Context(), f, cfg)
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			pruneSessions(d)
