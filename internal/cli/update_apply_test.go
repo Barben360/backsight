@@ -462,6 +462,37 @@ func TestUpdateApplyRefusesABadSignatureBeforeAnythingChanges(t *testing.T) {
 	}
 }
 
+// A local snapshot (make snapshot: goreleaser's incpatch version, newer
+// than the installed pre-release, signed with a throwaway key) is refused
+// by a binary that trusts the release keys only, before anything changes
+// (security review M3).
+func TestUpdateApplyRefusesASnapshotSignedByAThrowawayKey(t *testing.T) {
+	old := signing.TestKey
+	signing.TestKey = "" // a release binary: minisign.pub and minisign.next.pub only
+	t.Cleanup(func() { signing.TestKey = old })
+	home, claude, bins := installedAt(t, "0.1.0-m5")
+	d := pathsOf(home)
+	_, throwaway, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	signedRelease(t, src, "0.1.1-snapshot+1300233", throwaway, relOpts{})
+	before := snapshot(t, d)
+	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	env := decodeApply(t, out)
+	if code != output.Blocked || env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "0.1.1-snapshot+1300233") ||
+		!strings.Contains(env.Error.Message, "fails the signature check ("+signing.ErrUntrustedKey.Error()) || !strings.Contains(env.Error.Message, "nothing was changed") {
+		t.Fatalf("exit %d, want the snapshot refused for its key\n%s", code, out)
+	}
+	if after := snapshot(t, d); after != before {
+		t.Errorf("changed:\n%s\nwas:\n%s", after, before)
+	}
+	if len(bins.calls) != 0 || len(mutating(claude)) != 0 {
+		t.Errorf("ran %q, claude %q", bins.calls, mutating(claude))
+	}
+}
+
 // checksums.txt without the bare binary (an older release layout): the
 // update installs with a warning, and the new binary's self-check fails
 // until a release lists it. A last line without its newline still counts.
