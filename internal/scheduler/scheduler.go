@@ -1,14 +1,18 @@
 // Package scheduler describes the two OS scheduler entries (decision 0025):
 // `jobs tick` every 15 minutes and `jobs maintain` daily, as systemd user
 // timers (Linux), launchd agents (macOS) or Task Scheduler tasks (Windows).
-// It only builds files and commands; the caller writes the files through
+// It builds files and commands (and reads whether a timer is enabled);
+// the caller writes the files through
 // the config editor (pre-images, undo) and runs the commands.
 package scheduler
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -274,6 +278,23 @@ func InstalledFrom(files []string) Installed {
 		}
 	}
 	return in
+}
+
+// TimersEnabled reports whether a systemd timer among files may be
+// enabled: enable links it into timers.target.wants beside the units. It
+// reads the disk only, so it answers without a user session; a link it
+// cannot read counts as enabled.
+func TimersEnabled(files []string) bool {
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".timer") {
+			continue
+		}
+		_, err := os.Lstat(filepath.Join(filepath.Dir(f), "timers.target.wants", filepath.Base(f)))
+		if !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 // Remove deactivates the entries for kind (none for tasks: they have no

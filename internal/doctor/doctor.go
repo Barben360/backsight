@@ -168,7 +168,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkBackup(env, now()))
 	add(checkJobs(env.Dirs, now(), env.Linger))
 	if env.Scheduler != nil {
-		if c, ok := checkScheduler(env.Scheduler); ok {
+		if c, ok := checkScheduler(env.Scheduler, schedulerModeOf(env.Dirs)); ok {
 			add(c)
 		}
 	}
@@ -458,7 +458,7 @@ func checkBackup(env Env, now time.Time) Check {
 	if foreign > 0 {
 		c.Detail = fmt.Sprintf("%d archive(s) in %s were made for another backup key: this machine cannot decrypt them (backsight backup identity import adds that key)", foreign, cfg.Backup.Dir)
 	}
-	fix := "backsight backup create; if jobs maintain makes none, see its log (journalctl --user -u backsight-maintain)"
+	fix := "backsight backup create; " + maintainLog(env.Dirs)
 	switch age := now.Sub(last); {
 	case last.IsZero() && foreign > 0:
 		c.Status, c.Summary, c.Fix = Warn, "no backup of this install yet", fix
@@ -470,6 +470,34 @@ func checkBackup(env Env, now time.Time) Check {
 		c.Status, c.Summary = OK, fmt.Sprintf("last backup %s UTC, %d kept", last.UTC().Format("2006-01-02 15:04"), kept)
 	}
 	return c
+}
+
+// maintainLog says where to see why jobs maintain made no backup: its
+// journal or log files, or that it runs only by hand (scheduler=off).
+func maintainLog(d paths.Dirs) string {
+	st, err := state.Load(d.StateFile())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "if jobs maintain makes none, run backsight jobs maintain to see why"
+	}
+	switch modeOf(d, st.Scheduler) {
+	case schedulerOff:
+		return "the scheduler is off, so " + byHand
+	case schedulerIdle:
+		return "no timer runs jobs maintain: see the jobs check"
+	}
+	if st.Scheduler != nil {
+		switch st.Scheduler.Kind {
+		case "systemd":
+			for _, f := range st.Scheduler.Files {
+				if b := filepath.Base(f); strings.HasSuffix(b, "-maintain.service") {
+					return "if jobs maintain makes none, see its log (journalctl --user -u " + strings.TrimSuffix(b, ".service") + ")"
+				}
+			}
+		case "launchd":
+			return "if jobs maintain makes none, see its log in " + filepath.Join(d.State, "logs")
+		}
+	}
+	return "if jobs maintain makes none, run backsight jobs maintain to see why"
 }
 
 // backupRecipients are the recipients this install's backups are made

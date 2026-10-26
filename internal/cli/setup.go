@@ -279,7 +279,17 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		res.Answers[k] = v
 	}
 
-	res.Preflight = setup.Preflight(ctx, preflightProbes(ctx, s, extra))
+	probes := preflightProbes(ctx, s, extra)
+	probes.SchedulerOff = extra["scheduler"] == "off"
+	if schedulerGOOS == "linux" && !s.schedulerSettled(extra) {
+		probes.UserScheduler = userSession
+	}
+	res.Preflight = setup.Preflight(ctx, probes)
+	for _, c := range res.Preflight {
+		if c.ID == "scheduler" && c.Action != nil {
+			c.Action.Cmd = s.rerunWith("scheduler=off")
+		}
+	}
 	class, failed := setup.Verdict(res.Preflight)
 	if f.plan {
 		res.Steps = s.planSteps(res.Answers)
@@ -333,6 +343,52 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	return s.execute(ctx, res, interactive)
 }
 
+// userSession reaches systemd's user manager, as the scheduler step's
+// systemctl --user calls will.
+func userSession(ctx context.Context) error {
+	out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment")
+	if err == nil {
+		return nil
+	}
+	if msg, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n"); msg != "" {
+		return errors.New(msg)
+	}
+	return err
+}
+
+// schedulerSettled: a resume whose scheduler step finished with the same
+// answer, so that it does not run again.
+func (s *setupEnv) schedulerSettled(extra map[string]string) bool {
+	return s.f.resume && s.saved != nil && s.saved.Done("scheduler") && s.saved.Answers["scheduler"] == extra["scheduler"]
+}
+
+// rerunWith is the command this run was, with one more answer.
+func (s *setupEnv) rerunWith(answer string) string {
+	key, _, _ := strings.Cut(answer, "=")
+	parts := []string{"backsight", "setup"}
+	if s.f.resume {
+		parts = append(parts, "--resume")
+	}
+	for _, a := range s.f.answers {
+		if k, _, _ := strings.Cut(a, "="); strings.TrimSpace(k) != key {
+			parts = append(parts, "--answer", shellWord(a))
+		}
+	}
+	if s.f.answersFile != "" {
+		parts = append(parts, "--answers-file", shellWord(s.f.answersFile))
+	}
+	if s.f.configDir != "" {
+		parts = append(parts, "--config-dir", shellWord(s.f.configDir))
+	}
+	if s.f.nonInteractive {
+		parts = append(parts, "--non-interactive")
+	}
+	if s.e.json {
+		parts = append(parts, "--json")
+	}
+	return strings.Join(append(parts, "--answer", answer), " ")
+}
+
 // resolve builds the questions; at a terminal it asks each open one in
 // turn (an answer can change the next questions: provider → model).
 func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]string, error) {
@@ -341,7 +397,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 	saved := map[string]string{}
 	if s.saved != nil {
 		for k, v := range s.saved.Answers {
-			if k != "consent" || (s.f.resume && len(s.answer) == 0) {
+			if k != "consent" || (s.f.resume && doesLess(s.saved.Answers, s.answer)) {
 				saved[k] = v
 			}
 		}
@@ -639,6 +695,9 @@ func preflightError(class string, failed []setup.Check) error {
 	e := &output.Error{Code: output.Blocked, Resume: "backsight setup"}
 	var parts []string
 	for _, c := range failed {
+		if c.ID == "scheduler" && c.Action != nil { // the same command with the answer
+			e.Resume = c.Action.Cmd
+		}
 		parts = append(parts, c.Summary+" ("+c.Fix+")")
 		if c.Action != nil {
 			e.Actions = append(e.Actions, *c.Action)
@@ -849,6 +908,15 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 				st := setup.Step{Name: "scheduler", Status: "skipped", Detail: "off as answered: run backsight jobs tick every 15 min and jobs maintain daily some other way" + identity}
 				if identity != "" {
 					st.Status = "done"
+				}
+				if r.Undo.Scheduler { // entries an earlier run wrote (its activation may have failed)
+					if rec, err := state.Load(s.dirs.StateFile()); err == nil && rec.Scheduler != nil {
+						if out := subcommand(ctx, "jobs", "uninstall"); out.Err != nil {
+							return setup.Step{}, out.Err
+						}
+						st.Status, st.Detail = "done", "off as answered: removed the entries an earlier run wrote; run backsight jobs tick every 15 min and jobs maintain daily some other way"+identity
+					}
+					r.Undo.Scheduler = false
 				}
 				return st, nil
 			}
@@ -1071,8 +1139,14 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	if s.saved != nil {
 		rec.Undo = s.saved.Undo // undo reverses every setup since the last undo
 		rec.ConfigSHA = s.saved.ConfigSHA
-		if s.f.resume && sameAnswers(s.saved.Answers, answers) {
+		if s.f.resume && len(s.saved.Answers) == len(answers) && doesLess(s.saved.Answers, answers) {
 			rec.Run, rec.StartedAt, rec.Steps = s.saved.Run, s.saved.StartedAt, s.saved.Steps
+			if s.saved.Answers["scheduler"] != answers["scheduler"] { // its step runs again, in its place, to remove the entries
+				rec.Steps = slices.Clone(rec.Steps)
+				if i := slices.IndexFunc(rec.Steps, func(st setup.Step) bool { return st.Name == "scheduler" }); i >= 0 {
+					rec.Steps[i] = setup.Step{Name: "scheduler", Status: "planned"}
+				}
+			}
 		}
 	}
 	rec.Answers = answers
@@ -1151,12 +1225,12 @@ func doneBefore(r *setup.Record, name string) bool {
 
 func step2line(s setup.Step) step { return step{Name: s.Name, Status: s.Status, Detail: s.Detail} }
 
-func sameAnswers(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
+// doesLess reports whether a resume's answers keep the saved run's plan
+// or only turn the scheduler off: its go and its finished steps stand.
+// Any other change is a new plan, asked again (decision 0064).
+func doesLess(saved, answers map[string]string) bool {
+	for k, v := range answers {
+		if saved[k] != v && (k != "scheduler" || v != "off") {
 			return false
 		}
 	}
@@ -1296,6 +1370,9 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	}
 	if a["scheduler"] == "off" {
 		scheduler = "none (scheduler=off): run jobs tick and jobs maintain some other way"
+		if st, err := state.Load(s.dirs.StateFile()); err == nil && st.Scheduler != nil && s.saved != nil && s.saved.Undo.Scheduler {
+			scheduler = "none (scheduler=off): remove the entries an earlier run wrote; run jobs tick and jobs maintain some other way"
+		}
 	}
 	reference := "nothing to retire"
 	switch a["reference"] {

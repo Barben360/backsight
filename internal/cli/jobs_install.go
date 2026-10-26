@@ -155,6 +155,12 @@ func newJobsInstallCmd(e *env) *cobra.Command {
 				out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...)
 				// launchd's bootout of an agent not loaded yet fails: expected
 				if expected := p.Kind == "launchd" && c[1] == "bootout"; err != nil && !expected {
+					if noUserBus(string(out)) {
+						// A rerun from this shell fails the same way.
+						return &output.Error{Code: output.NeedsUser, Message: fmt.Sprintf("%s: %s: %s (the files are written: backsight jobs uninstall removes them)",
+							cmdLine(c), strings.TrimSpace(string(out)), noBusHint),
+							Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight setup --resume --answer scheduler=off", Why: "without a user session the timers cannot load; this goes on without them"}}}
+					}
 					return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s (the files are written: backsight jobs uninstall removes them)",
 						cmdLine(c), err, strings.TrimSpace(string(out)))}
 				}
@@ -213,12 +219,28 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 			}
 			var failed []string
 			if !plan {
+				noBus := false
 				for _, c := range remove {
-					if out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...); err != nil && !notLoaded(string(out)) {
+					out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...)
+					switch {
+					case err == nil:
+					case noUserBus(string(out)):
+						noBus = true
+						failed = append(failed, fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out))))
+					case !notLoaded(string(out)):
 						failed = append(failed, fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out))))
 					}
 				}
+				if noBus && p.Kind == "systemd" && !scheduler.TimersEnabled(files) {
+					// No manager to ask, and no timer was ever enabled (an
+					// install whose activation failed): nothing can be
+					// loaded, the files go.
+					failed = nil
+				}
 				if len(failed) > 0 {
+					if noBus {
+						return &output.Error{Code: output.Blocked, Message: "could not deactivate the entries: " + strings.Join(failed, "; ") + ": " + noBusHint}
+					}
 					// The entries may still be loaded: keep their files and the
 					// record, so that a rerun (with a user session) finishes.
 					return &output.Error{Code: output.Blocked, Message: "could not deactivate the entries: " + strings.Join(failed, "; ")}
@@ -253,6 +275,18 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be removed")
 	return cmd
+}
+
+// noBusHint says where systemd's user manager can be reached.
+const noBusHint = "no systemd user session is reachable from this shell: run it from a login session of this user (an ssh login, not su or sudo); " +
+	"on a machine without one (a container), setup takes --answer scheduler=off"
+
+// noUserBus: systemctl --user found no user manager to talk to (a
+// container without systemd, a shell started by su or sudo).
+func noUserBus(out string) bool {
+	o := strings.ToLower(out)
+	return strings.Contains(o, "failed to connect to bus") || strings.Contains(o, "failed to connect to user scope bus") ||
+		strings.Contains(o, "not been booted with systemd")
 }
 
 // notLoaded: the scheduler says the entry is not there, which uninstall

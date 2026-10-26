@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -227,5 +229,25 @@ func TestInstalledFromRecordedFiles(t *testing.T) {
 	// Files that are not entries name nothing.
 	if in := InstalledFrom([]string{"/u/notes.txt", "/u/x.conf"}); len(in.Timers)+len(in.Services)+len(in.Labels) != 0 || in.Remove("systemd", 1) != nil {
 		t.Errorf("foreign files %+v", in)
+	}
+}
+
+// Only a timer linked into timers.target.wants beside it is enabled;
+// services and a missing link are not.
+func TestTimersEnabled(t *testing.T) {
+	dir := t.TempDir()
+	files := []string{filepath.Join(dir, "bs-tick.service"), filepath.Join(dir, "bs-tick.timer"), filepath.Join(dir, "bs-maintain.timer")}
+	if TimersEnabled(files) {
+		t.Error("no link, yet enabled")
+	}
+	wants := filepath.Join(dir, "timers.target.wants")
+	_ = os.MkdirAll(wants, 0o700)
+	_ = os.Symlink("../bs-tick.service", filepath.Join(wants, "bs-tick.service"))
+	if TimersEnabled(files) {
+		t.Error("a service link counts as an enabled timer")
+	}
+	_ = os.Symlink("../bs-maintain.timer", filepath.Join(wants, "bs-maintain.timer"))
+	if !TimersEnabled(files) {
+		t.Error("the linked timer is not seen")
 	}
 }

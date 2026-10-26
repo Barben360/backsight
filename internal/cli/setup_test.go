@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -1577,5 +1578,120 @@ func TestSetupSaysHowToChangeAnAnswerAndReasksWithReconfigure(t *testing.T) {
 	stdinIsTerminal = func() bool { return false }
 	if code, out, errOut := run(t, "setup", "--reconfigure"); code != output.Usage || !strings.Contains(out+errOut, "--answer id=value") {
 		t.Errorf("no terminal: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// Without a systemd user session, setup stops before writing anything
+// with exit 10: the message names scheduler=off and what stops without
+// it, and the action is the same command with that answer, which works.
+func TestSetupWithoutAUserSessionAsksForSchedulerOff(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	sys := withSys(t, "linux")
+	sys.noBus = true
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.NeedsUser || env.Error == nil {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, s := range []string{"scheduler=off", "jobs tick", "jobs maintain", "No medium found"} {
+		if !strings.Contains(env.Error.Message, s) {
+			t.Errorf("message lacks %q: %s", s, env.Error.Message)
+		}
+	}
+	want := "backsight setup --answer provider=deepseek --answer consent=yes --non-interactive --json --answer scheduler=off"
+	if len(env.Error.Actions) != 1 || env.Error.Actions[0].Cmd != want || env.Error.Resume != want {
+		t.Errorf("actions %+v, resume %q, want %q", env.Error.Actions, env.Error.Resume, want)
+	}
+	if _, err := os.Stat(pathsOf(home).ConfigFile()); err == nil || len(f.calls) > 0 {
+		t.Fatalf("setup acted without a user session: %v", f.commands())
+	}
+	args := strings.Fields(strings.TrimPrefix(want, "backsight "))
+	if code, out, _ := run(t, args...); code != output.OK {
+		t.Fatalf("with scheduler=off: exit %d\n%s", code, out)
+	}
+	if strings.Contains(strings.Join(f.commands(), ","), "jobs") {
+		t.Errorf("scheduler=off touched the scheduler: %v", f.commands())
+	}
+}
+
+// The plan shows the missing session as a failed check with its fix.
+func TestSetupPlanShowsTheMissingUserSession(t *testing.T) {
+	setupMachine(t)
+	withSys(t, "linux").noBus = true
+	code, out, _ := run(t, "setup", "--plan", "--answer", "provider=deepseek")
+	if code != output.OK || !strings.Contains(out, "fail   scheduler") || !strings.Contains(out, "scheduler=off") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+// A run whose scheduler step failed for want of a user session (an older
+// binary) left its entries: a resume answering scheduler=off keeps the
+// go and the finished steps, shows its progress, and removes them.
+func TestSetupResumeWithSchedulerOffRemovesTheEntriesItWrote(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	sys := withSys(t, "linux")
+	f.real["jobs install"], f.real["jobs uninstall"] = true, true
+	sys.fail, sys.output = "systemctl --user daemon-reload", busError
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json"); code == output.OK {
+		t.Fatalf("the scheduler step passed without a user session\n%s", out)
+	}
+	timer := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")
+	if st, _ := stateLoad(home); st.Scheduler == nil {
+		t.Fatal("no entries recorded: nothing to test")
+	}
+	if _, err := os.Stat(timer); err != nil {
+		t.Fatal("no entries written: nothing to test")
+	}
+	sys.fail, sys.noBus = "", true
+	f.calls = nil
+	code, out, errOut := run(t, "setup", "--resume", "--answer", "scheduler=off", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.OK {
+		t.Fatalf("resume: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if got := strings.Join(f.commands(), ","); got != "jobs uninstall,verify" {
+		t.Errorf("steps %q, want the scheduler's removal then verify", got)
+	}
+	if !strings.Contains(errOut, `"step":"scheduler"`) {
+		t.Errorf("no progress on stderr:\n%s", errOut)
+	}
+	if !hasStep(env.Data.Steps, "scheduler", "done", "removed") {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+	if _, err := os.Stat(timer); err == nil {
+		t.Error("the entries stay on disk")
+	}
+	if st, _ := stateLoad(home); st.Scheduler != nil {
+		t.Errorf("the record stays: %+v", st.Scheduler)
+	}
+	if rec, _ := setup.Load(pathsOf(home).SetupFile()); rec == nil || rec.Undo.Scheduler || rec.Answers["scheduler"] != "off" || !rec.Finished {
+		t.Errorf("record %+v", rec)
+	}
+}
+
+// A finished run turned to scheduler=off by a resume removes its working
+// entries too, and keeps the scheduler step in its place.
+func TestSetupResumeWithSchedulerOffAfterAFinishedRun(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	withSys(t, "linux")
+	f.real["jobs install"], f.real["jobs uninstall"] = true, true
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	f.calls = nil
+	code, out, _ := run(t, "setup", "--resume", "--answer", "scheduler=off", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.OK || strings.Join(f.commands(), ",") != "jobs uninstall,verify" {
+		t.Fatalf("exit %d, steps %v\n%s", code, f.commands(), out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")); err == nil {
+		t.Error("the entries stay")
+	}
+	i := slices.IndexFunc(env.Data.Steps, func(s setup.Step) bool { return s.Name == "scheduler" })
+	if i < 0 || env.Data.Steps[i+1].Name != "verify" || env.Data.Steps[i].Status != "done" {
+		t.Errorf("steps %+v", env.Data.Steps)
 	}
 }
