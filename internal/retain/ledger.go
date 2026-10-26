@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -39,6 +40,9 @@ type TurnEntry struct {
 	Source   string            `json:"source"`
 	Votes    attribution.Votes `json:"votes"`
 	Mentions []string          `json:"mentions,omitempty"`
+	// Provisional: decided without the evidence (a transcript behind its
+	// report, unreadable, or no time left): a later reader decides again.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // Subagent says whether e is a subagent's report.
@@ -50,6 +54,7 @@ type Attributor struct {
 	Resolver   *project.Resolver
 	Transverse []string
 	Owners     []string // projects.own_owners
+	Deny       []string // projects.deny_owners
 	Exclude    []string // privacy.exclude_paths
 	Dir        string   // <state>/attribution
 	// Deadline, when set, bounds a decision's reading (SubagentStop has
@@ -71,37 +76,66 @@ const (
 func (a Attributor) ownersFile() string { return filepath.Join(a.Dir, "owners.json") }
 
 // owners are the own owners besides a session's launch repository's:
-// projects.own_owners and those learnt.
+// projects.own_owners and those learnt, but the denied ones.
 func (a Attributor) owners() []string {
 	out := slices.Clone(a.Owners)
-	if raw, err := os.ReadFile(a.ownersFile()); err == nil {
-		var learnt []string
-		if json.Unmarshal(raw, &learnt) == nil {
-			out = append(out, learnt...)
-		}
+	out = append(out, a.Learnt()...)
+	deny := map[string]bool{}
+	for _, o := range a.Deny {
+		deny[attribution.OwnerOf(o)] = true
 	}
-	return out
+	return slices.DeleteFunc(out, func(o string) bool { return deny[attribution.OwnerOf(o)] })
 }
 
-// learnOwner adds the owner of a retained launch directory to the owners
-// learnt; the caller holds the session's flush lock (one writer at a time
-// per session; a lost race only delays the owner to the next session).
-func (a Attributor) learnOwner(launchDir string) {
-	o := attribution.LaunchOwner(a.Resolver, a.Resolver.Home(), launchDir, a.Exclude)
-	if o == "" || a.Dir == "" {
-		return
-	}
+// Learnt lists the owners learnt from retained sessions.
+func (a Attributor) Learnt() []string {
 	var learnt []string
 	if raw, err := os.ReadFile(a.ownersFile()); err == nil {
 		_ = json.Unmarshal(raw, &learnt)
 	}
+	return learnt
+}
+
+// learnOwner adds the owner a retained session's launch directory teaches
+// (attribution.LaunchOwner: a repository the user committed to) to the
+// owners learnt. The file is shared by every session's flush: written
+// under its own lock, atomically; it only grows. ok is false when the
+// owner could not be recorded (retried at the session's next turn).
+func (a Attributor) learnOwner(launchDir string) (ok bool) {
+	o := attribution.LaunchOwner(a.Resolver, a.Resolver.Home(), launchDir, a.Exclude)
+	if o == "" || a.Dir == "" {
+		return true
+	}
+	if slices.Contains(a.Learnt(), o) {
+		return true
+	}
+	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
+		return false
+	}
+	var l *state.Lock
+	var err error
+	for range 50 {
+		if l, err = state.TryAcquire(a.ownersFile()+".lock", "learn owner"); err == nil {
+			break
+		}
+		var held *state.HeldError
+		if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
+			continue
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		return false
+	}
+	defer func() { _ = l.Release() }()
+	learnt := a.Learnt()
 	if slices.Contains(learnt, o) {
-		return
+		return true
 	}
 	learnt = append(learnt, o)
 	slices.Sort(learnt)
 	raw, _ := json.Marshal(learnt)
-	_ = fsutil.WriteAtomic(a.ownersFile(), raw, 0o600)
+	return fsutil.WriteAtomic(a.ownersFile(), raw, 0o600) == nil
 }
 
 // repos is the evidence namer of a session launched in launchDir, having
@@ -109,6 +143,8 @@ func (a Attributor) learnOwner(launchDir string) {
 // and its subagents'). ok is false when the deadline passed.
 func (a Attributor) repos(launchDir, sessionTranscript string) (*attribution.Repos, bool) {
 	r := attribution.NewRepos(a.Resolver, a.Resolver.Home(), a.Transverse, launchDir, a.owners(), a.Exclude)
+	r.Deny(a.Deny)
+	r.Deadline = a.Deadline
 	files := []string{sessionTranscript}
 	agents, _ := filepath.Glob(filepath.Join(strings.TrimSuffix(sessionTranscript, ".jsonl"), "subagents", "agent-*.jsonl"))
 	for _, p := range append(files, agents...) {
@@ -150,7 +186,11 @@ func (a Attributor) honour(e TurnEntry) TurnEntry {
 	}
 	if root := e.Votes.Roots[e.Applied]; root != "" {
 		if out, _ := a.Resolver.OptedOut(root, a.Exclude); out {
-			e.Applied, e.Source = e.Base, SourceExcluded
+			gone := e.Applied
+			e.Applied, e.PathRule, e.Source = e.Base, e.Base, SourceExcluded
+			// nothing of the decision names the project kept out any more
+			e.Votes = e.Votes.Without(gone)
+			e.Mentions = slices.DeleteFunc(slices.Clone(e.Mentions), func(m string) bool { return m == gone })
 		}
 	}
 	return e
@@ -167,8 +207,9 @@ func (a Attributor) honour(e TurnEntry) TurnEntry {
 // on partial evidence. sessionTranscript is the parent session's. err is
 // a decision that could not be kept.
 func (a Attributor) Subagent(sid, agentID, sessionTranscript, agentTranscript, base, lastReply string, at time.Time) (TurnEntry, error) {
-	if e, ok := a.loadAgent(sid, agentID); ok {
-		return a.honour(e), nil
+	stored, found := a.loadAgent(sid, agentID)
+	if found && !stored.Provisional {
+		return a.honour(stored), nil
 	}
 	launch := launchDir(sessionTranscript)
 	var repos *attribution.Repos
@@ -180,6 +221,13 @@ func (a Attributor) Subagent(sid, agentID, sessionTranscript, agentTranscript, b
 		}
 		return repos, !a.late()
 	}, agentTranscript, base, lastReply, at)
+	if found {
+		// a provisional decision: replaced only by one on the evidence
+		if e.Provisional {
+			return a.honour(stored), nil
+		}
+		return a.honour(e), a.replaceAgent(e)
+	}
 	kept, err := a.keepAgent(e)
 	return a.honour(kept), err
 }
@@ -191,30 +239,37 @@ func (a Attributor) computeSubagent(sid, agentID, launch string, repos func() (*
 	if a.transverse(base) {
 		e.Source = attribution.SourceNone
 	}
+	fallback := func(why string) TurnEntry {
+		e.Source, e.Provisional = why, true // a later reader decides again
+		return e
+	}
+	fi, err := os.Stat(agentTranscript)
+	if err != nil {
+		return fallback(SourceUnread)
+	}
+	if !a.Deadline.IsZero() && fi.Size() > hookReadMax {
+		return fallback(SourceTimeout) // too long to read within the hook's budget
+	}
 	fh, err := os.Open(agentTranscript)
 	if err != nil {
-		e.Source = SourceUnread // kept: a later reader decides the same
-		return e
+		return fallback(SourceUnread)
 	}
 	recs, _, err := transcript.ReadAgent(fh)
 	_ = fh.Close()
 	if err != nil {
-		e.Source = SourceUnread
-		return e
+		return fallback(SourceUnread)
 	}
 	if lastReply != "" && strings.TrimSpace(lastAssistant(recs)) != strings.TrimSpace(lastReply) {
-		e.Source = SourceIncomplete
-		return e
+		return fallback(SourceIncomplete)
 	}
 	r, ok := repos()
 	if !ok {
-		e.Source = SourceTimeout
-		return e
+		return fallback(SourceTimeout)
 	}
 	e.Votes = attribution.Tally(attribution.Calls(recs, launch, a.Resolver.Home()), r)
 	if a.late() {
-		e.Votes, e.Source = attribution.Votes{}, SourceTimeout
-		return e
+		e.Votes = attribution.Votes{}
+		return fallback(SourceTimeout)
 	}
 	prompt := ""
 	if len(recs) > 0 && attribution.IsPrompt(recs[0]) {
@@ -227,6 +282,11 @@ func (a Attributor) computeSubagent(sid, agentID, launch string, repos func() (*
 	e.Applied = e.PathRule
 	return e
 }
+
+// hookReadMax: a subagent transcript longer than this is not read within
+// SubagentStop's budget; its report keeps its session's project until a
+// later reader (a rebuild, retain reattribute) decides.
+const hookReadMax = 16 << 20
 
 // lastAssistant is the text of the last assistant record of recs.
 func lastAssistant(recs []transcript.Record) string {
@@ -329,6 +389,21 @@ func (a Attributor) keepAgent(e TurnEntry) (TurnEntry, error) {
 	return e, nil
 }
 
+// replaceAgent stores e as the report's decision over any earlier one: a
+// decision on the evidence replacing a provisional one, or a
+// re-attribution's explicit re-decision (under the maintenance lock).
+func (a Attributor) replaceAgent(e TurnEntry) error {
+	p, ok := a.agentPath(e.Session, e.Agent)
+	if !ok {
+		return nil
+	}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(p, raw, 0o600)
+}
+
 // launchDir is the directory a session started in: its first main record
 // with one.
 func launchDir(sessionTranscript string) string {
@@ -352,6 +427,10 @@ type mainLedger struct {
 	OptOutDir string               `json:"opt_out_dir,omitempty"`
 	Previous  attribution.Previous `json:"previous"`
 	Names     []string             `json:"names,omitempty"`
+	// OwnerLearnt: the launch directory's owner was offered to the owners
+	// learnt, at the session's first retained turn (never from a paused,
+	// excluded or headless one).
+	OwnerLearnt bool `json:"owner_learnt,omitempty"`
 }
 
 func (a Attributor) mainPaths(sid string) (state, turns string) {
@@ -407,7 +486,6 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 				break
 			}
 		}
-		a.learnOwner(st.Launch)
 	}
 	now := f.Now()
 	attrs := f.attribute(sid, recs, attr{project: st.Project, namedOut: st.OptOut, namedOutDir: st.OptOutDir})
@@ -442,6 +520,9 @@ func (f *Flusher) recordTurns(sid, path string, force bool) []TurnEntry {
 		if f.keptOut(turn, attrs) {
 			st.Previous = attribution.Previous{} // never carried past a kept-out turn
 			continue
+		}
+		if !st.OwnerLearnt {
+			st.OwnerLearnt = a.learnOwner(st.Launch)
 		}
 		if repos == nil {
 			repos, _ = a.repos(st.Launch, path) // no deadline in a flush

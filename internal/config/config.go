@@ -64,6 +64,9 @@ type Projects struct {
 	// a session starts in. A subagent's report goes to the own repository
 	// its work is in (decision 0072); other repositories never count.
 	OwnOwners []string `toml:"own_owners" json:"own_owners"`
+	// DenyOwners: remote owners whose repositories are never the user's,
+	// even when backsight learnt them from a session started in one.
+	DenyOwners []string `toml:"deny_owners" json:"deny_owners"`
 }
 
 type Privacy struct {
@@ -284,9 +287,11 @@ func (c Config) Validate() error {
 	if len(c.Projects.Transverse) == 0 || c.Projects.Transverse[0] == "" {
 		bad("projects.transverse", "needs at least one alias (the first is canonical)")
 	}
-	for _, o := range c.Projects.OwnOwners {
-		if n := project.NormaliseRemote(o); n == "" || !strings.Contains(strings.Trim(n, "/"), "/") {
-			bad("projects.own_owners", "%q is not a host and owner, such as github.com/acme", o)
+	for key, list := range map[string][]string{"projects.own_owners": c.Projects.OwnOwners, "projects.deny_owners": c.Projects.DenyOwners} {
+		for _, o := range list {
+			if n := project.NormaliseRemote(o); n == "" || !strings.Contains(strings.Trim(n, "/"), "/") {
+				bad(key, "%q is not a host and owner, such as github.com/acme", o)
+			}
 		}
 	}
 	for _, pat := range c.Privacy.SkipEntrypoints {

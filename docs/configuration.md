@@ -48,7 +48,8 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 | Key | Default | Effect |
 |---|---|---|
 | `projects.transverse` | `[".claude", "<user>"]` | Names of the [transverse](glossary.md#transverse-pool) project: sessions in a directory with one of these names (your home, `~/.claude`) store user-wide memories, and `--project transverse` means it (a stored fact goes there only when named). The first name is the one memories are stored under. |
-| `projects.own_owners` | `[]` | Remote owners whose repositories are yours, written `host/owner` (`github.com/your-org`). backsight already counts the owner of every repository you started a recorded session in; list here the others. A subagent's report goes to the repository its work was in only when that repository is yours: a clone of someone else's code never becomes a project. |
+| `projects.own_owners` | `[]` | Remote owners whose repositories are yours, written `host/owner` (`github.com/your-org`). backsight already counts the owner of a repository you committed to and started a recorded session in (`backsight doctor` lists them); list here the others. A subagent's report goes to the repository its work was in only when that repository is yours: a clone of someone else's code never becomes a project. |
+| `projects.deny_owners` | `[]` | Remote owners whose repositories are never yours, even when backsight learnt them from a session (`host/owner`). It wins over `own_owners` and what was learnt. |
 
 ## `[privacy]`
 

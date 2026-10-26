@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/project"
 )
@@ -45,6 +46,9 @@ type Repos struct {
 	// add, git clone) and that are removed since.
 	gone  map[string]resolved
 	cache map[string]resolved
+	// Deadline, when set, stops resolving paths (no git process) once
+	// passed: the caller then falls back.
+	Deadline time.Time
 }
 
 // resolved is what a path names: an own repository (project, main), or a
@@ -84,9 +88,10 @@ func NewRepos(res *project.Resolver, home string, transverse []string, launchDir
 // ("github.com/Acme", "https://github.com/acme/") to the Owner form.
 func OwnerOf(o string) string { return Owner(project.NormaliseRemote(o) + "/x") }
 
-// LaunchOwner is the remote owner of a retained launch directory, "" for
-// one kept out of memory, outside git, without a remote or in a throwaway
-// place: what Owners learns from each session.
+// LaunchOwner is the remote owner a retained launch directory teaches: ""
+// for one kept out of memory, outside git, in a throwaway place, without a
+// remote owner (a host alone is no owner), or whose repository the user's
+// own git identity never committed to (a checkout of someone else's code).
 func LaunchOwner(res *project.Resolver, home, launchDir string, exclude []string) string {
 	if strings.TrimSpace(launchDir) == "" {
 		return ""
@@ -98,7 +103,20 @@ func LaunchOwner(res *project.Resolver, home, launchDir string, exclude []string
 	if main == "" || (&Repos{home: filepath.Clean(home), throwaway: []string{filepath.Join(filepath.Clean(home), ".cache"), "/tmp", filepath.Clean(os.TempDir())}}).under(main) {
 		return ""
 	}
-	return Owner(res.Remote(launchDir))
+	o := Owner(res.Remote(launchDir))
+	if !strings.Contains(o, "/") || !res.Authored(launchDir) {
+		return ""
+	}
+	return o
+}
+
+// Deny removes owners from the own ones (projects.deny_owners): their
+// repositories are not the user's, whatever was learnt or configured.
+// The launch repository itself stays its session's.
+func (r *Repos) Deny(owners []string) {
+	for _, o := range owners {
+		delete(r.owners, OwnerOf(o))
+	}
 }
 
 // Launch is the session's launch project, "" when its directory is kept
@@ -172,6 +190,9 @@ func (r *Repos) resolve(path string) resolved {
 	p := filepath.Clean(path)
 	if v, ok := r.cache[p]; ok {
 		return v
+	}
+	if !r.Deadline.IsZero() && time.Now().After(r.Deadline) {
+		return resolved{}
 	}
 	v := r.lookup(p)
 	r.cache[p] = v

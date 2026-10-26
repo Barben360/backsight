@@ -135,6 +135,7 @@ func Run(ctx context.Context, env Env) Report {
 		}
 	}
 	add(checkNoise(ctx, env, cl, tg, bank, srv)...)
+	add(checkOwners(env))
 	add(checkMaintenance(env.Dirs))
 	add(checkRestore(env.Dirs))
 	add(checkUpdateIncomplete(env.Dirs))
