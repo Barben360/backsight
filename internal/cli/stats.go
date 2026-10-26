@@ -218,6 +218,10 @@ func statsText(r statsResult) string {
 	fmt.Fprintf(&b, "Gate         %s\n", counts(r.Gate))
 	fmt.Fprintf(&b, "MCP tools    %s; session found: %s\n", counts(r.Tools), counts(r.Live))
 	fmt.Fprintf(&b, "Retains      %s\n", counts(r.Retains))
+	if a := r.Attribution; a.Main+a.Subagents > 0 {
+		fmt.Fprintf(&b, "Attribution  main turns %d, the path rule would file %d elsewhere (%s, not applied); subagent reports %d, %d filed in another repository than their session's\n",
+			a.Main, a.Disagree, pct(a.Disagree, a.Main), a.Subagents, a.Moved)
+	}
 	fmt.Fprintf(&b, "Hook failures %s; unknown transcript records: %s\n", counts(r.HookFailures), counts(r.Unknown))
 	x := r.Extraction
 	switch {

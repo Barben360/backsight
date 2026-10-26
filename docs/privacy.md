@@ -22,7 +22,7 @@ The server turns this text into memories: short facts tagged with their project,
 
 Setup shows the provider data flow and asks for your consent before anything is stored. Nothing else leaves the machine:
 
-- backsight's own logs and usage events stay in local files (`backsight paths` shows the state directory); they are never sent;
+- backsight's own logs and usage events stay in local files (`backsight paths` shows the state directory); they are never sent. So does the record of which project each turn was filed under and which repositories its tool calls named (project names and counts, no text), which files subagent reports and shows how often the main conversation would have been filed elsewhere;
 - `backsight report` builds a diagnostic for a bug report but sends nothing: you read it and decide;
 - backsight turns on none of Hindsight's optional tracing or metrics exporters.
 

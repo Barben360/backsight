@@ -18,6 +18,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/project"
 )
 
 // SchemaVersion this binary reads and writes.
@@ -58,6 +59,11 @@ type Client struct {
 
 type Projects struct {
 	Transverse []string `toml:"transverse" json:"transverse"`
+	// OwnOwners: remote owners (host/owner, such as github.com/acme) whose
+	// repositories are the user's own, besides the owner of the repository
+	// a session starts in. A subagent's report goes to the own repository
+	// its work is in (decision 0072); other repositories never count.
+	OwnOwners []string `toml:"own_owners" json:"own_owners"`
 }
 
 type Privacy struct {
@@ -277,6 +283,11 @@ func (c Config) Validate() error {
 	}
 	if len(c.Projects.Transverse) == 0 || c.Projects.Transverse[0] == "" {
 		bad("projects.transverse", "needs at least one alias (the first is canonical)")
+	}
+	for _, o := range c.Projects.OwnOwners {
+		if n := project.NormaliseRemote(o); n == "" || !strings.Contains(strings.Trim(n, "/"), "/") {
+			bad("projects.own_owners", "%q is not a host and owner, such as github.com/acme", o)
+		}
 	}
 	for _, pat := range c.Privacy.SkipEntrypoints {
 		if _, err := path.Match(pat, ""); err != nil || pat == "" {

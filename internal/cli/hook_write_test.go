@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -182,5 +183,55 @@ func TestSubagentStopIgnoresInternalHelperAgents(t *testing.T) {
 		"agent_transcript_path": filepath.Join(strings.TrimSuffix(real, ".jsonl"), "subagents", "agent-b.jsonl"), "last_assistant_message": "Found the leak in pool.go."})
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")); !strings.Contains(string(raw), "pool.go") {
 		t.Errorf("a subagent with agent_transcript_path was not queued:\n%s", raw)
+	}
+}
+
+// gitRepo makes dir a git repository with origin remote.
+func gitRepo(t *testing.T, dir, remote string) {
+	t.Helper()
+	_ = os.MkdirAll(dir, 0o700)
+	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", remote}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// A subagent's report goes to the own repository its work was in, and
+// the hook records the decision; a third-party clone's work stays with
+// the session's project.
+func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
+	home := hookHome(t)
+	billing, shop, vendor := filepath.Join(home, "billing"), filepath.Join(home, "src", "shop"), filepath.Join(home, "build", "vendor-tool")
+	gitRepo(t, billing, "git@github.com:me/billing.git")
+	gitRepo(t, shop, "git@github.com:me/shop.git")
+	gitRepo(t, vendor, "https://github.com/someone/vendor-tool")
+	for _, c := range []struct{ sid, edits, want string }{{"s1", shop, "shop"}, {"s2", vendor, "billing"}} {
+		parent := subagentTranscript(t, c.sid, "ag1")
+		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+billing+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+		agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
+		line := func(uuid, file string) string {
+			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + filepath.Join(file, "x.go") + `"}}]}}` + "\n"
+		}
+		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+billing+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)), 0o600)
+		fire(t, "subagent-stop", map[string]any{"session_id": c.sid, "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
+			"transcript_path": parent, "last_assistant_message": "Fixed in " + c.sid})
+	}
+	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
+	got := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var n struct {
+			DocumentID string `json:"document_id"`
+			Project    string `json:"project"`
+		}
+		_ = json.Unmarshal([]byte(l), &n)
+		got[n.DocumentID] = n.Project
+	}
+	if got["subagent:s1:ag1"] != "shop" || got["subagent:s2:ag1"] != "billing" {
+		t.Errorf("report projects %v", got)
+	}
+	tel := telemetryText(t, home)
+	if !strings.Contains(tel, `"event":"attribution"`) || !strings.Contains(tel, `"path_rule":"shop"`) || !strings.Contains(tel, `"base":"billing"`) {
+		t.Errorf("the decision was not recorded:\n%s", tel)
 	}
 }

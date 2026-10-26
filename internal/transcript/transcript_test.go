@@ -239,3 +239,28 @@ func TestLastReplyOfASubagentTranscript(t *testing.T) {
 		t.Errorf("no reply: %+v", got)
 	}
 }
+
+func TestAgentTranscriptsAndScans(t *testing.T) {
+	agent := `{"type":"user","isSidechain":true,"uuid":"p","cwd":"/w/a","message":{"role":"user","content":"Fix it."}}
+{"type":"assistant","isSidechain":true,"uuid":"e","cwd":"/w/a","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"git worktree add /tmp/x"}}]}}
+`
+	if recs, _, _ := Read(strings.NewReader(agent), 0); len(recs) != 0 {
+		t.Errorf("Read kept sidechain records: %d", len(recs))
+	}
+	recs, _, err := ReadAgent(strings.NewReader(agent))
+	if err != nil || len(recs) != 2 || recs[1].Tools[0].Name != "Bash" {
+		t.Fatalf("ReadAgent: %+v %v", recs, err)
+	}
+	var seen []string
+	Scan(strings.NewReader(agent), []string{"worktree"}, func(r Record) { seen = append(seen, r.UUID) })
+	if len(seen) != 1 || seen[0] != "e" {
+		t.Errorf("Scan matched %v", seen)
+	}
+	main := `{"type":"summary"}
+{"type":"user","isSidechain":true,"cwd":"/side","message":{"role":"user","content":"x"}}
+{"type":"user","uuid":"u","cwd":"/home/u/src/a","message":{"role":"user","content":"go"}}
+`
+	if got := FirstCWD(strings.NewReader(main)); got != "/home/u/src/a" {
+		t.Errorf("FirstCWD %q", got)
+	}
+}

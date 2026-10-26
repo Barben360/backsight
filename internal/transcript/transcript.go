@@ -140,6 +140,16 @@ func readLine(br *bufio.Reader) (line []byte, n int64, tooLong bool, err error) 
 // Read normalises the complete lines of r, which starts at byte offset from
 // in the transcript. A last line without newline is left for a later read.
 func Read(r io.Reader, from int64) ([]Record, Stats, error) {
+	return readRecords(r, from, false)
+}
+
+// ReadAgent is Read for a subagent's own transcript
+// (subagents/agent-<id>.jsonl), whose records are all sidechain ones.
+func ReadAgent(r io.Reader) ([]Record, Stats, error) {
+	return readRecords(r, 0, true)
+}
+
+func readRecords(r io.Reader, from int64, sidechain bool) ([]Record, Stats, error) {
 	st := Stats{Consumed: from, Unknown: map[string]int{}}
 	br := bufio.NewReaderSize(r, 1<<16)
 	var recs []Record
@@ -176,7 +186,7 @@ func Read(r io.Reader, from int64) ([]Record, Stats, error) {
 			}
 			continue
 		}
-		if rr.IsMeta || rr.IsSidechain || rr.IsCompactSummary || len(rr.Message) == 0 {
+		if rr.IsMeta || (rr.IsSidechain && !sidechain) || rr.IsCompactSummary || len(rr.Message) == 0 {
 			continue
 		}
 		ts := parseTime(rr.Timestamp)
@@ -347,4 +357,51 @@ func replyText(raw json.RawMessage) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(texts, "\n"))
+}
+
+// Scan calls fn with every user or assistant record of r, sidechain ones
+// included, whose line contains one of words: a cheap pass over a whole
+// transcript for a few commands (decision 0072 reads the worktrees and
+// clones a session made). Lines without any of words are not decoded.
+func Scan(r io.Reader, words []string, fn func(Record)) {
+	br := bufio.NewReaderSize(r, 1<<16)
+	for {
+		line, _, tooLong, err := readLine(br)
+		if !tooLong && len(line) > 0 && containsAny(line, words) {
+			var rr rawRecord
+			if json.Unmarshal(bytes.TrimSpace(line), &rr) == nil && (rr.Type == "user" || rr.Type == "assistant") && len(rr.Message) > 0 {
+				turns, tools := normalise(rr, parseTime(rr.Timestamp))
+				fn(Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Entrypoint: rr.Entrypoint, Timestamp: parseTime(rr.Timestamp), Turns: turns, Tools: tools})
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func containsAny(line []byte, words []string) bool {
+	for _, w := range words {
+		if bytes.Contains(line, []byte(w)) {
+			return true
+		}
+	}
+	return false
+}
+
+// FirstCWD is the directory of the first main (not sidechain) user or
+// assistant record of r that has one: where the session started.
+func FirstCWD(r io.Reader) string {
+	br := bufio.NewReaderSize(r, 1<<16)
+	for {
+		line, _, tooLong, err := readLine(br)
+		var rr rawRecord
+		if !tooLong && json.Unmarshal(bytes.TrimSpace(line), &rr) == nil && (rr.Type == "user" || rr.Type == "assistant") &&
+			!rr.IsSidechain && rr.CWD != "" {
+			return rr.CWD
+		}
+		if err != nil {
+			return ""
+		}
+	}
 }

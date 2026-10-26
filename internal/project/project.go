@@ -53,8 +53,28 @@ func New(home string, transverse []string) *Resolver {
 	return &Resolver{home: filepath.Clean(home), transverse: transverse, roots: map[string]gitRoots{}, tracked: map[string]bool{}, trackedProbe: gitTracked}
 }
 
+// Home is the home directory the resolver names projects under.
+func (r *Resolver) Home() string { return r.home }
+
 func (r *Resolver) git(dir string) gitRoots {
 	if g, ok := r.roots[dir]; ok {
+		return g
+	}
+	// git finds a repository through a .git entry in dir or above it: a
+	// directory with none is answered without a process, and every
+	// directory of one repository shares its top's answer (a turn's tool
+	// calls name many directories, decision 0072).
+	top := ""
+	if fi, err := os.Stat(dir); err == nil && fi.IsDir() { // git -C fails on anything else
+		top = gitEntry(dir)
+	}
+	if top == "" {
+		r.roots[dir] = gitRoots{}
+		return gitRoots{}
+	}
+	if top != dir {
+		g := r.git(top)
+		r.roots[dir] = g
 		return g
 	}
 	var g gitRoots
@@ -72,6 +92,23 @@ func (r *Resolver) git(dir string) gitRoots {
 	r.roots[dir] = g
 	return g
 }
+
+// gitEntry is the nearest directory from dir up that holds a .git entry
+// (a repository, a linked worktree or a submodule), "" when none does.
+func gitEntry(dir string) string {
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		if d == filepath.Dir(d) {
+			return ""
+		}
+	}
+}
+
+// Main is the main worktree of dir's repository (a linked worktree's main
+// checkout), "" outside git.
+func (r *Resolver) Main(dir string) string { return r.git(filepath.Clean(dir)).main }
 
 // view is what the .backsight.toml files above a directory say.
 type view struct {
@@ -332,6 +369,25 @@ func under(p, dir string) bool {
 // repositories that share a project name (decision 0045). It reads the
 // repository's config file: no extra git process in the hook.
 func (r *Resolver) Remote(cwd string) string {
+	return NormaliseRemote(r.rawRemote(cwd))
+}
+
+// RepoName is the repository name its remote gives (the URL's last path
+// segment, case kept, without .git), "" without a remote.
+func (r *Resolver) RepoName(cwd string) string {
+	u := strings.TrimRight(r.rawRemote(cwd), "/")
+	u = strings.TrimSuffix(u, ".git")
+	if i := strings.LastIndexAny(u, "/:"); i >= 0 {
+		u = u[i+1:]
+	}
+	if NormaliseRemote(r.rawRemote(cwd)) == "" {
+		return "" // a malformed URL: nothing taken from it
+	}
+	return u
+}
+
+// rawRemote is the URL of cwd's repository remote as its config writes it.
+func (r *Resolver) rawRemote(cwd string) string {
 	g := r.git(filepath.Clean(cwd))
 	if g.common == "" {
 		return ""
@@ -362,9 +418,9 @@ func (r *Resolver) Remote(cwd string) string {
 		}
 	}
 	if origin != "" {
-		return NormaliseRemote(origin)
+		return origin
 	}
-	return NormaliseRemote(first)
+	return first
 }
 
 // NormaliseRemote reduces a git remote URL to host/path, lower case,

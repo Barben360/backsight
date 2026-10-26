@@ -70,7 +70,19 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: res,
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx,
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
-		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) }}, nil
+		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
+		Attribution: attributor(d, cfg, res)}, nil
+}
+
+// attributor applies the path rule with this configuration (decision 0072).
+func attributor(d paths.Dirs, cfg config.Config, res *project.Resolver) retain.Attributor {
+	return retain.Attributor{Resolver: res, Transverse: cfg.Projects.Transverse, Owners: cfg.Projects.OwnOwners,
+		Exclude: cfg.Privacy.ExcludePaths, Dir: d.AttributionDir()}
+}
+
+// attributionEvent is the telemetry of one recorded turn.
+func attributionEvent(e retain.TurnEntry) telemetry.Attribution {
+	return telemetry.Attribution{Turn: e.Turn, Subagent: e.Subagent(), Base: e.Base, Applied: e.Applied, PathRule: e.PathRule, Source: e.Source}
 }
 
 // transcripts lists the session transcripts of this machine's Claude Code.
@@ -115,6 +127,12 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		}
 		if len(r.Unknown) > 0 {
 			tw.Emit(telemetry.Raw{Name: "transcript_unknown", Fields: map[string]any{"types": r.Unknown}})
+		}
+		if len(r.Turns) > 0 {
+			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
+			for _, t := range r.Turns {
+				sw.Emit(attributionEvent(t))
+			}
 		}
 		out = append(out, r)
 		if r.Stop {

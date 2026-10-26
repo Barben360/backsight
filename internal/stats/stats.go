@@ -55,6 +55,10 @@ type Event struct {
 	Details      map[string]any
 	Hook         string // hook_failure
 	Error        string // the *_error and *_failed events
+	// attribution
+	Base     string
+	Applied  string
+	PathRule string `json:"path_rule"`
 }
 
 // line decodes "ids", an array in most events and a count in tool_use.
@@ -195,6 +199,16 @@ type Report struct {
 	Retains      map[string]int `json:"retains"`
 	HookFailures map[string]int `json:"hook_failures"`
 	Unknown      map[string]int `json:"unknown_records"`
+	// Attribution: the path rule (decision 0072). On main turns it runs in
+	// shadow: Disagree counts the turns it would file elsewhere than the
+	// applied project. On subagent reports it is applied: Moved counts the
+	// reports it filed elsewhere than their session's directory.
+	Attribution struct {
+		Main      int `json:"main"`
+		Disagree  int `json:"disagree"`
+		Subagents int `json:"subagents"`
+		Moved     int `json:"moved"`
+	} `json:"attribution"`
 }
 
 type turn struct {
@@ -344,6 +358,19 @@ func Compute(events []Event, from, to time.Time) Report {
 			r.Retains[e.Status]++
 		case "hook_failure":
 			r.HookFailures[e.Kind]++
+		case "attribution":
+			a := &r.Attribution
+			if e.Subagent {
+				a.Subagents++
+				if e.Applied != e.Base {
+					a.Moved++
+				}
+				continue
+			}
+			a.Main++
+			if e.PathRule != e.Applied {
+				a.Disagree++
+			}
 		case "transcript_unknown":
 			for t, n := range e.Types {
 				r.Unknown[t] += n

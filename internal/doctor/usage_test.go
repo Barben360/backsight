@@ -267,3 +267,31 @@ func TestLatencyFixPointsAtTheGPUSection(t *testing.T) {
 	}
 	t.Errorf("the docs have no section %s", ref)
 }
+
+// The attribution check reads the shadow answers of main turns and the
+// moves of subagent reports from the week's telemetry.
+func TestUsageShowsThePathRulesDisagreement(t *testing.T) {
+	h := time.Hour
+	dir := events(t, map[time.Duration][]string{h: {
+		`"event":"attribution","turn":"u1","subagent":false,"base":"billing","applied":"billing","path_rule":"shop","source":"evidence"`,
+		`"event":"attribution","turn":"u2","subagent":false,"base":"billing","applied":"billing","path_rule":"billing","source":"cwd"`,
+		`"event":"attribution","turn":"u3","subagent":false,"base":"billing","applied":"billing","path_rule":"billing","source":"cwd"`,
+		`"event":"attribution","turn":"u4","subagent":false,"base":".claude","applied":".claude","path_rule":"shop","source":"evidence"`,
+		`"event":"attribution","turn":"agent:a1","subagent":true,"base":"billing","applied":"shop","path_rule":"shop","source":"evidence"`,
+		`"event":"attribution","turn":"agent:a2","subagent":true,"base":"billing","applied":"billing","path_rule":"billing","source":"cwd"`,
+	}, 9 * 24 * h: {
+		`"event":"attribution","turn":"old","subagent":false,"base":"billing","applied":"billing","path_rule":"shop","source":"evidence"`,
+	}})
+	var c Check
+	for _, x := range checkUsage(dir, usageNow, false) {
+		if x.ID == "attribution" {
+			c = x
+		}
+	}
+	if c.Status != Info || !strings.Contains(c.Summary, "2 of 4 main turns elsewhere (50%") || !strings.Contains(c.Summary, "1 of 2 subagent reports") {
+		t.Errorf("%+v", c)
+	}
+	if strings.Contains(c.Summary, "shop") || strings.Contains(c.Summary, "billing") {
+		t.Errorf("a project name in the check: %q", c.Summary)
+	}
+}
