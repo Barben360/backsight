@@ -132,8 +132,8 @@ func updateConfig() (paths.Dirs, config.Config, error) {
 }
 
 // releaseSource is the --source directory, else update.source, else the
-// GitHub releases (with GH_TOKEN or GITHUB_TOKEN while the repository is
-// private, decision 0063 Q2).
+// GitHub releases (public, decision 0068; GH_TOKEN or GITHUB_TOKEN, when
+// set, only raises the API's rate limit).
 func releaseSource(cfg config.Config, flag string) release.Source {
 	dir := cfg.Update.Source
 	if flag != "" {

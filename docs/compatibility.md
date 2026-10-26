@@ -24,15 +24,15 @@ Release binaries are built for four targets. Linux is the only platform tested t
 
 | OS / arch | Release binary | Status |
 |---|---|---|
-| Linux amd64 | yes | **tested**: CachyOS (rolling, Arch-based; the author's machine and CI's runners). Ubuntu 24.04: tested by CI until 2026-10-25, untested since (see below) |
+| Linux amd64 | yes | **tested**: Ubuntu 24.04 (CI, on GitHub's `ubuntu-latest` runners) and CachyOS (rolling, Arch-based; the author's machine) |
 | Linux arm64 | yes | built, not tested |
 | macOS arm64 (Apple silicon) | yes | built; validated at M7 |
 | Windows amd64 | yes | built; validated at M7 |
 
 Ubuntu 24.04:
 
-- CI's fresh-install chain ran on GitHub's `ubuntu-latest` runners (Ubuntu 24.04) until 2026-10-25, when CI moved to self-hosted runners on the author's CachyOS machine. Ubuntu 24.04 is untested since: no CI job runs on it until CI goes back to `ubuntu-latest`, when the repository becomes public.
-- The author's work PC (Ubuntu 24.04) is the first preview install, and its first test since.
+- CI runs every check, the fresh-install chain included, on GitHub's `ubuntu-latest` runners (Ubuntu 24.04). From 2026-10-25 until the repository became public, CI ran on self-hosted runners on the author's CachyOS machine instead.
+- The author's work PC (Ubuntu 24.04) is the first preview install.
 
 Other targets (macOS on Intel, Windows on arm64, 32-bit) have no release binary.
 

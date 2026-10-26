@@ -21,8 +21,9 @@ const GitHubAPI = "https://api.github.com"
 const listLimit = 16 << 20
 
 // GitHub reads the releases of one repository through the REST API. With a
-// Token (needed while the repository is private, decision 0063 Q2) every
-// API request carries it; without one no Authorization header is sent.
+// Token (optional: the repository is public, decision 0068; a token only
+// raises the API's rate limit) every API request carries it; without one
+// no Authorization header is sent.
 type GitHub struct {
 	Owner, Repo string
 	Token       string

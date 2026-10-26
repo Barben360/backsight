@@ -38,8 +38,8 @@ type maintainResult struct {
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
 // a backup (when backup.enabled), the update check (and its apply with
 // update.auto_apply) and a doctor snapshot.
-// A failed update check is recorded for doctor and never fails the job
-// (decision 0067: the repository stays private until M7).
+// A failed update check (offline, rate limited) is recorded for doctor and
+// never fails the job.
 func newJobsMaintainCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "maintain",

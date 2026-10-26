@@ -12,9 +12,8 @@ import (
 )
 
 // checkUpdate reports the last update check of jobs maintain (SPEC §11.7)
-// as information: a pending release, or why the check failed (decision
-// 0067: the repository is private until M7, so a check without a token
-// fails, and that is no fault of the install).
+// as information: a pending release, or why the check failed (offline or
+// rate limited, which is no fault of the install).
 func checkUpdate(d paths.Dirs, running string, now time.Time) Check {
 	c := Check{ID: "update", Status: Info, Fix: "backsight update check"}
 	pending := func() { c.Fix = "backsight update apply" }
