@@ -272,13 +272,15 @@ func TestDockerStopCmd(t *testing.T) {
 type streamRunner struct {
 	scriptedRunner
 	pullErr error
+	stdout  io.Writer
 }
 
-func (r *streamRunner) Stream(_ context.Context, w io.Writer, args ...string) error {
+func (r *streamRunner) Stream(_ context.Context, w, errw io.Writer, args ...string) error {
 	r.calls = append(r.calls, args)
+	r.stdout = w
 	_, _ = io.WriteString(w, "a1b2: Pulling fs layer\na1b2: Downloading [=====>     ]  52MB/1GB\n")
 	if r.pullErr != nil {
-		_, _ = io.WriteString(w, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
+		_, _ = io.WriteString(errw, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
 		return r.pullErr
 	}
 	_, _ = io.WriteString(w, "a1b2: Pull complete\n")
@@ -314,6 +316,11 @@ func TestDockerDownloads(t *testing.T) {
 	}
 	if last := r.calls[len(r.calls)-1]; strings.Join(last, " ") != "pull "+HindsightImage {
 		t.Errorf("pull %q", last)
+	}
+	// Docker's stdout is the writer itself: a terminal (an *os.File) stays
+	// one, and Docker draws its progress bars.
+	if r.stdout != io.Writer(&shown) {
+		t.Errorf("stdout wrapped: %T", r.stdout)
 	}
 	r.pullErr = errors.New("exit status 1")
 	if err := d.Download(ctx, images, io.Discard); err == nil || !strings.Contains(err.Error(), "no such host") {

@@ -30,12 +30,12 @@ type engineDocker struct {
 	pullErr  error
 }
 
-func (f *engineDocker) Stream(_ context.Context, w io.Writer, args ...string) error {
+func (f *engineDocker) Stream(_ context.Context, w, errw io.Writer, args ...string) error {
 	f.calls = append(f.calls, strings.Join(args, " "))
 	_, _ = io.WriteString(w, "a1b2: Downloading [=====>      ]  52.4MB/1GB\n")
 	time.Sleep(f.pullTime)
 	if f.pullErr != nil {
-		_, _ = io.WriteString(w, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
+		_, _ = io.WriteString(errw, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
 		return f.pullErr
 	}
 	_, _ = io.WriteString(w, "a1b2: Pull complete\n")

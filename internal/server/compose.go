@@ -38,17 +38,17 @@ func (r DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	return r.command(ctx, args...).CombinedOutput()
 }
 
-// Streamer runs a command with its output going to w as it comes (an
-// image pull's progress at a terminal).
+// Streamer runs a command with its output going to stdout and stderr as
+// it comes (an image pull's progress at a terminal).
 type Streamer interface {
-	Stream(ctx context.Context, w io.Writer, args ...string) error
+	Stream(ctx context.Context, stdout, stderr io.Writer, args ...string) error
 }
 
-// Stream runs docker with stdout and stderr on w: a terminal gets
-// Docker's own progress bars.
-func (r DockerRunner) Stream(ctx context.Context, w io.Writer, args ...string) error {
+// Stream runs docker on stdout and stderr: a terminal as stdout (an
+// *os.File) gets Docker's own progress bars.
+func (r DockerRunner) Stream(ctx context.Context, stdout, stderr io.Writer, args ...string) error {
 	cmd := r.command(ctx, args...)
-	cmd.Stdout, cmd.Stderr = w, w
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
 }
 
