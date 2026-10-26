@@ -20,6 +20,7 @@ type fakeServer struct {
 	docs     map[string]hindsight.Document
 	memories []hindsight.Memory
 	queued   int
+	queueErr error
 	docErr   error
 	calls    []string
 }
@@ -53,7 +54,7 @@ func (f *fakeServer) ListMemories(_ context.Context, bank string, q hindsight.Me
 
 func (f *fakeServer) QueuedOperations(_ context.Context, bank string) (int, error) {
 	f.calls = append(f.calls, "QUEUE "+bank)
-	return f.queued, nil
+	return f.queued, f.queueErr
 }
 
 var now = time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
@@ -71,12 +72,21 @@ func newWorld(t *testing.T) *world {
 	return &world{t: t, dir: dir, cursors: filepath.Join(dir, "cursors"), srv: &fakeServer{docs: map[string]hindsight.Document{}}}
 }
 
+// prompt is one typed prompt: a record jobs tick sends.
+const prompt = `{"type":"user","uuid":"u1","message":{"role":"user","content":"why does the export job stall?"}}` + "\n"
+
 // transcript writes a session's transcript last written at lastWrite.
 func (w *world) transcript(sid string, lastWrite time.Time) string {
 	w.t.Helper()
+	return w.transcriptOf(sid, prompt, lastWrite)
+}
+
+// transcriptOf writes a session's transcript holding body.
+func (w *world) transcriptOf(sid, body string, lastWrite time.Time) string {
+	w.t.Helper()
 	p := filepath.Join(w.dir, "projects", "-work-api", sid+".jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	if err := os.WriteFile(p, []byte(`{"type":"user"}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		w.t.Fatal(err)
 	}
 	if err := os.Chtimes(p, lastWrite, lastWrite); err != nil {
@@ -292,7 +302,8 @@ func TestAQuarantinedLatestSessionFails(t *testing.T) {
 	// A later segment refused after earlier ones went out: still held.
 	_ = retain.SaveCursor(w.cursors, "s1", retain.Cursor{Bank: "b", Segment: 2, Document: "conversation:s1", Quarantined: true})
 	w.stored("s1", 2)
-	want(t, w.check(), Fail, "quarantined")
+	r = w.check()
+	want(t, r, Fail, "quarantined")
 	if !strings.Contains(r.Fix, "backsight retain retry-quarantine") {
 		t.Errorf("fix %q", r.Fix)
 	}
@@ -378,5 +389,180 @@ func TestFailWhenAnyDocumentOfTheSessionDiffers(t *testing.T) {
 	delete(w.srv.docs, "conversation:s1@beta")
 	if r = w.check(); r.Status != Fail || !strings.Contains(r.Summary, "no document conversation:s1@beta") || r.Document != "conversation:s1@beta" {
 		t.Errorf("%+v", r)
+	}
+}
+
+// called reports whether the server was asked for its queue.
+func (f *fakeServer) called(prefix string) bool {
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Sent long ago (no grace left): the server's queue decides between
+// pending and fail.
+func TestTheServersQueueDecidesOnceTheSendIsOld(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s1", now.Add(-3*time.Hour))
+	w.sent("s1", 2, now.Add(-2*time.Hour))
+	w.srv.queued = 3
+	want(t, w.check(), Pending, "not stored")
+	if !w.srv.called("QUEUE b") {
+		t.Errorf("queue not asked: %q", w.srv.calls)
+	}
+	w.srv.queued = 0
+	want(t, w.check(), Fail, "no document")
+
+	w.srv.queued = 3
+	w.stored("s1", 1) // the server is still on an earlier segment
+	want(t, w.check(), Pending, "segment 2 is still being stored")
+	w.srv.queued = 0
+	want(t, w.check(), Fail, "this machine sent segment 2")
+
+	w.srv.queued = 3
+	w.stored("s1", 2)
+	want(t, w.check(), Pending, "extract")
+	w.fact("s1", "f1", false)
+	want(t, w.check(), Pending, "not consolidated yet")
+	w.srv.queued = 0
+	r := w.check()
+	want(t, r, Fail, "not consolidated")
+	if !strings.Contains(r.Detail, "nothing is queued") {
+		t.Errorf("detail %q", r.Detail)
+	}
+}
+
+// Sent minutes ago: a server segment behind is still on its way, one
+// ahead of what this machine sent is not.
+func TestASegmentBehindIsPendingOnlyWhileRecent(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s1", now.Add(-time.Hour))
+	w.sent("s1", 2, now.Add(-10*time.Minute))
+	w.stored("s1", 1)
+	want(t, w.check(), Pending, "segment 2 is still being stored")
+	w.stored("s1", 3)
+	want(t, w.check(), Fail, "server holds segment 3")
+}
+
+// A queue that cannot be read never reads as "nothing is queued": the
+// check stays pending and says why (0067 block 4 review rules).
+func TestAnUnreadableQueueIsPendingNeverNothingQueued(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s1", now.Add(-5*time.Hour))
+	w.sent("s1", 1, now.Add(-4*time.Hour))
+	w.srv.queueErr = errors.New("502 bad gateway")
+	for _, c := range []struct {
+		name  string
+		setup func()
+	}{
+		{"document missing", func() {}},
+		{"facts unconsolidated", func() {
+			w.stored("s1", 1)
+			w.fact("s1", "f1", false)
+		}},
+	} {
+		name := c.name
+		c.setup()
+		r := w.check()
+		want(t, r, Pending, "could not read the server's queue")
+		if strings.Contains(r.Summary+r.Detail, "nothing is queued") || strings.Contains(r.Summary, "0 operation") || !strings.Contains(r.Detail, "502") || r.WaitS <= 0 {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	// No fact extracted yet, queue unknown: pending too, not a verdict on
+	// consolidation.
+	w.srv.memories = nil
+	want(t, w.check(), Pending, "could not read the server's queue")
+}
+
+// A transcript with nothing jobs tick would send (only slash or ! commands)
+// is skipped: flush saves no cursor for it, so it is never "not sent".
+func TestATranscriptWithNothingToSendIsSkipped(t *testing.T) {
+	commands := `{"type":"user","uuid":"c1","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>"}}` + "\n" +
+		`{"type":"user","uuid":"c2","message":{"role":"user","content":"<bash-input>ls</bash-input>"}}` + "\n" +
+		`{"type":"user","uuid":"c3","message":{"role":"user","content":"<bash-stdout>a b</bash-stdout><bash-stderr></bash-stderr>"}}` + "\n"
+	w := newWorld(t)
+	w.transcript("s0", now.Add(-6*time.Hour))
+	w.sent("s0", 1, now.Add(-5*time.Hour))
+	w.stored("s0", 1)
+	w.fact("s0", "f0", true)
+	w.observation("o0", now.Add(-5*time.Hour+time.Minute), "f0")
+	w.transcriptOf("cmds", commands, now.Add(-3*time.Hour)) // settled, newer, no cursor
+	w.transcriptOf("live-cmds", commands, now.Add(-time.Minute))
+	r := w.check()
+	want(t, r, Pass, "s0")
+	// Alone, it leaves nothing to check.
+	w = newWorld(t)
+	w.transcriptOf("cmds", commands, now.Add(-3*time.Hour))
+	want(t, w.check(), Pending, "no session")
+	// Nor is a live one of only commands the session to wait for.
+	w.transcriptOf("live-cmds", commands, now.Add(-time.Minute))
+	want(t, w.check(), Pending, "no session")
+	w.transcript("live", now.Add(-2*time.Minute))
+	want(t, w.check(), Pending, "the latest session live is not settled")
+}
+
+// At most 5 earlier sessions may prove consolidation.
+func TestTheEarlierProofLooksBackFiveSessions(t *testing.T) {
+	build := func(withObservationIn int) *world {
+		w := newWorld(t)
+		for i := 0; i <= 6; i++ { // s0 newest … s6 oldest
+			sid := "s" + strconv.Itoa(i)
+			at := now.Add(-time.Duration(2+i) * time.Hour)
+			w.transcript(sid, at)
+			w.sent(sid, 1, at.Add(10*time.Minute))
+			w.stored(sid, 1)
+			w.fact(sid, "f"+sid, true)
+			if i == withObservationIn {
+				w.observation("o"+sid, at.Add(20*time.Minute), "f"+sid)
+			}
+		}
+		return w
+	}
+	r := build(5).check()
+	want(t, r, Pass, "s0")
+	if r.ObservedIn != "s5" {
+		t.Errorf("%+v", r)
+	}
+	r = build(6).check()
+	want(t, r, Fail, "last 6 sent session(s)")
+}
+
+// A cursor that cannot be read: the latest settled session's fails the
+// check; an earlier one's is only left out of the proof.
+func TestACorruptCursor(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s1", now.Add(-2*time.Hour))
+	if err := os.MkdirAll(w.cursors, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(w.cursors, "s1.json"), []byte("{not json"), 0o600)
+	r := w.check()
+	want(t, r, Fail, "cannot read the cursor of session s1")
+	if r.Fix != "backsight doctor" || r.Detail == "" {
+		t.Errorf("%+v", r)
+	}
+	w.transcript("s2", now.Add(-time.Hour))
+	w.sent("s2", 1, now.Add(-50*time.Minute))
+	w.stored("s2", 1)
+	w.fact("s2", "f2", true)
+	w.observation("o2", now.Add(-40*time.Minute), "f2")
+	want(t, w.check(), Pass, "s2")
+}
+
+// A session sent to another bank was not sent to this one: once the
+// grace is over, it fails as not sent.
+func TestASessionSentToAnotherBankIsNotSentHere(t *testing.T) {
+	w := newWorld(t)
+	p := w.transcript("s1", now.Add(-3*time.Hour))
+	fi, _ := os.Stat(p)
+	_ = retain.SaveCursor(w.cursors, "s1", retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u1", Segment: 1, Document: "conversation:s1", Bank: "other", SentAt: now.Add(-2 * time.Hour)})
+	w.stored("s1", 1)
+	want(t, w.check(), Fail, "not sent")
+	if w.srv.called("GET ") {
+		t.Errorf("read another bank's document: %q", w.srv.calls)
 	}
 }

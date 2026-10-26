@@ -3,6 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // asShim makes verify run this test binary as the shim: TestMain turns it
@@ -284,7 +289,7 @@ func liveSession(t *testing.T, home, sid string, written time.Time) string {
 	t.Helper()
 	p := filepath.Join(home, ".claude", "projects", "-work-api", sid+".jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	_ = os.WriteFile(p, []byte(`{"type":"user"}`+"\n"), 0o600)
+	_ = os.WriteFile(p, []byte(`{"type":"user","uuid":"u1","message":{"role":"user","content":"why does the export job stall?"}}`+"\n"), 0o600)
 	_ = os.Chtimes(p, written, written)
 	return p
 }
@@ -355,5 +360,135 @@ func TestVerifyLiveRefusesNoRoundTrip(t *testing.T) {
 	withLiveServer(t, &liveFake{})
 	if code, _, _ := run(t, "verify", "--live", "--no-round-trip"); code != output.Usage {
 		t.Errorf("exit %d", code)
+	}
+}
+
+// --config-dir reads that profile's transcripts, and the rerun keeps it.
+func TestVerifyLiveConfigDirIsReadAndKeptInTheResume(t *testing.T) {
+	home := devInstall(t, true)
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	withLiveServer(t, &liveFake{docs: map[string]hindsight.Document{}})
+	profile := filepath.Join(home, "profiles", "work dir")
+	p := filepath.Join(profile, "projects", "-work-api", "w1.jsonl")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	_ = os.WriteFile(p, []byte(`{"type":"user","uuid":"u1","message":{"role":"user","content":"why does the export job stall?"}}`+"\n"), 0o600)
+	_ = os.Chtimes(p, at.Add(-40*time.Minute), at.Add(-40*time.Minute))
+	liveSession(t, home, "default", at.Add(-41*time.Minute)) // ~/.claude's: not this profile's
+
+	code, out, _ := run(t, "verify", "--live", "--json", "--config-dir", profile)
+	res, e := parseLive(t, out)
+	wantResume := "backsight verify --live --config-dir '" + profile + "'"
+	if code != output.Partial || res.Session != "w1" || e == nil || e.Resume != wantResume {
+		t.Fatalf("exit %d, session %q, error %+v, want resume %q\n%s", code, res.Session, e, wantResume, out)
+	}
+	code, out, _ = run(t, "verify", "--live", "--config-dir", profile)
+	if code != output.Partial || !strings.Contains(out, "rerun in about 5 min: "+wantResume+"\n") {
+		t.Errorf("text: exit %d\n%s", code, out)
+	}
+	// Without the flag: ~/.claude's session, plain rerun.
+	_, out, _ = run(t, "verify", "--live", "--json")
+	if res, e = parseLive(t, out); res.Session != "default" || e == nil || e.Resume != "backsight verify --live" {
+		t.Errorf("default profile: %+v %+v", res, e)
+	}
+}
+
+// Sessions last written before retain_since are backfill's.
+func TestVerifyLiveLeavesSessionsBeforeRetainSinceToBackfill(t *testing.T) {
+	home := devInstall(t, true)
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	withLiveServer(t, &liveFake{docs: map[string]hindsight.Document{}})
+	liveSession(t, home, "old", at.Add(-5*time.Hour))
+	since := at.Add(-2 * time.Hour)
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.RetainSince = &since; return nil })
+	code, out, _ := run(t, "verify", "--live", "--json")
+	if res, _ := parseLive(t, out); code != output.Partial || res.Status != livecheck.Pending || !strings.Contains(res.Summary, "no session") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestVerifyLiveServerClientErrorFailsAndNoConfigNeedsTheUser(t *testing.T) {
+	devInstall(t, true)
+	old := liveServer
+	liveServer = func(string, string) (livecheck.Server, error) { return nil, errors.New("bad server url") }
+	t.Cleanup(func() { liveServer = old })
+	if code, _, errOut := run(t, "verify", "--live"); code != output.Blocked || !strings.Contains(errOut, "bad server url") {
+		t.Errorf("client error: exit %d, stderr %q", code, errOut)
+	}
+
+	isolate(t) // no config at all
+	code, out, errOut := run(t, "verify", "--live")
+	if code != output.NeedsUser || !strings.Contains(errOut, "no config") {
+		t.Errorf("no config: exit %d, stderr %q", code, errOut)
+	}
+	if out != "" {
+		t.Errorf("no config: stdout must stay empty, got %q", out)
+	}
+	code, out, _ = run(t, "verify", "--live", "--json")
+	if _, e := parseLive(t, out); code != output.NeedsUser || e == nil || e.Code != output.NeedsUser {
+		t.Errorf("no config json: exit %d\n%s", code, out)
+	}
+}
+
+// Against a real client, verify --live only reads: every request it
+// sends to the server is a GET.
+func TestVerifyLiveSendsOnlyGetRequests(t *testing.T) {
+	home := devInstall(t, true)
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	var reqs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqs = append(reqs, r.Method+" "+r.URL.Path)
+		switch {
+		case strings.Contains(r.URL.Path, "/documents/conversation%3As1") || strings.HasSuffix(r.URL.Path, "/documents/conversation:s1"):
+			_, _ = w.Write([]byte(`{"id":"conversation:s1","document_metadata":{"segment":"1","last_uuid":"u9"}}`))
+		case strings.Contains(r.URL.Path, "/documents/"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"not found"}`))
+		case strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("type") == "observation":
+			_, _ = w.Write([]byte(`{"items":[{"id":"o1","fact_type":"observation","source_memory_ids":["f1"],"updated_at":"2026-10-25T10:30:00Z"}],"total":1}`))
+		case strings.HasSuffix(r.URL.Path, "/memories/list"):
+			_, _ = w.Write([]byte(`{"items":[{"id":"f1","fact_type":"world","document_id":"conversation:s1","consolidated_at":"2026-10-25T10:20:00+00:00"}],"total":1}`))
+		case strings.HasSuffix(r.URL.Path, "/operations"):
+			_, _ = w.Write([]byte(`{"total":0}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	pointAt(t, home, port)
+	p := liveSession(t, home, "s1", at.Add(-2*time.Hour))
+	fi, _ := os.Stat(p)
+	_ = retain.SaveCursor(pathsOf(home).CursorsDir(), "s1", retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u9", Segment: 1,
+		Document: "conversation:s1", Bank: "claude-memory", SentAt: at.Add(-100 * time.Minute)})
+	code, out, errOut := run(t, "verify", "--live", "--json")
+	if res, _ := parseLive(t, out); code != output.OK || res.Status != livecheck.Pass {
+		t.Fatalf("pass: exit %d\n%s%s\nrequests %q", code, out, errOut, reqs)
+	}
+	// The document gone, two hours on: the queue is read too.
+	_ = retain.SaveCursor(pathsOf(home).CursorsDir(), "s1", retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u9", Segment: 1,
+		Document: "conversation:s2", Bank: "claude-memory", SentAt: at.Add(-100 * time.Minute)})
+	if code, out, _ := run(t, "verify", "--live", "--json"); code != output.Blocked {
+		t.Errorf("missing document: exit %d\n%s", code, out)
+	}
+	var docs, lists, ops int
+	for _, r := range reqs {
+		if !strings.HasPrefix(r, "GET ") {
+			t.Errorf("a write: %s", r)
+		}
+		switch {
+		case strings.Contains(r, "/documents/"):
+			docs++
+		case strings.HasSuffix(r, "/memories/list"):
+			lists++
+		case strings.HasSuffix(r, "/operations"):
+			ops++
+		}
+	}
+	if docs < 2 || lists < 2 || ops < 1 {
+		t.Errorf("not every read was exercised: %q", reqs)
 	}
 }

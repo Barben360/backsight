@@ -68,7 +68,7 @@ func newVerifyCmd(e *env) *cobra.Command {
 					return &output.Error{Code: output.Usage, Message: "--live reads the real bank and makes no round trip: drop --no-round-trip"}
 				}
 				res, err := runVerifyLive(cmd.Context(), configDir)
-				return e.report("verify", res, func() string { return liveText(res) }, err)
+				return e.report("verify", res, func() string { return liveText(res, liveResume(configDir)) }, err)
 			}
 			res, err := runVerify(cmd.Context(), configDir, noRoundTrip)
 			if err == nil && res.Failed > 0 {
@@ -352,14 +352,27 @@ func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, err
 	res := livecheck.Check(ctx, in)
 	switch res.Status {
 	case livecheck.Pending:
-		return res, shownError{&output.Error{Code: output.Partial, Message: res.Summary, Resume: "backsight verify --live"}}
+		return res, shownError{&output.Error{Code: output.Partial, Message: res.Summary, Resume: liveResume(configDir)}}
 	case livecheck.Fail:
 		return res, shownError{&output.Error{Code: output.Blocked, Message: res.Summary}}
 	}
 	return res, nil
 }
 
-func liveText(r livecheck.Result) string {
+// liveResume is the rerun of verify --live with the flags it was given.
+func liveResume(configDir string) string {
+	if configDir == "" {
+		return "backsight verify --live"
+	}
+	return "backsight verify --live --config-dir " + shellQuote(configDir)
+}
+
+// liveText is the check's verdict; nothing when the check did not run
+// (no config: the error on stderr says why).
+func liveText(r livecheck.Result, resume string) string {
+	if r.Status == "" {
+		return ""
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %s\n", r.Status, r.Summary)
 	if r.Detail != "" {
@@ -369,7 +382,7 @@ func liveText(r livecheck.Result) string {
 		fmt.Fprintf(&b, "  fix: %s\n", r.Fix)
 	}
 	if r.Status == livecheck.Pending && r.WaitS > 0 {
-		fmt.Fprintf(&b, "  rerun in about %d min: backsight verify --live\n", (r.WaitS+59)/60)
+		fmt.Fprintf(&b, "  rerun in about %d min: %s\n", (r.WaitS+59)/60, resume)
 	}
 	return b.String()
 }

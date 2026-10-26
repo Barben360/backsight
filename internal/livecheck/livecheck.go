@@ -17,6 +17,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/transcript"
 )
 
 // Server is what the check reads; *hindsight.Client is one.
@@ -91,8 +92,7 @@ func (s session) settledAt() time.Time { return s.written.Add(retain.SettleAfter
 
 // Check runs the live check. It only reads.
 func Check(ctx context.Context, in Input) Result {
-	var settled []session
-	var live *session
+	var settled, unsettled []session
 	for _, p := range in.Transcripts {
 		fi, err := os.Stat(p)
 		if err != nil || fi.IsDir() {
@@ -103,14 +103,23 @@ func Check(ctx context.Context, in Input) Result {
 			continue // backfill's
 		}
 		if in.Now.Sub(s.written) < retain.SettleAfter {
-			if live == nil || s.written.After(live.written) {
-				live = &s
-			}
+			unsettled = append(unsettled, s)
 			continue
 		}
 		settled = append(settled, s)
 	}
-	sort.Slice(settled, func(i, j int) bool { return settled[i].written.After(settled[j].written) })
+	newestFirst := func(ss []session) {
+		sort.Slice(ss, func(i, j int) bool { return ss[i].written.After(ss[j].written) })
+	}
+	newestFirst(settled)
+	newestFirst(unsettled)
+	var live *session
+	for i := range unsettled {
+		if sendable(unsettled[i].path) {
+			live = &unsettled[i]
+			break
+		}
+	}
 
 	var target *session
 	var earlier []session
@@ -141,6 +150,8 @@ func Check(ctx context.Context, in Input) Result {
 			continue // only sent sessions help an earlier proof
 		case ok && cur.Bank == in.Bank && cur.Offset >= s.size:
 			continue // handled without sending: opted out or paused
+		case !ok && !sendable(s.path):
+			continue // only slash or ! commands: nothing for jobs tick to send
 		default:
 			return notSent(s, in.Now)
 		}
@@ -159,6 +170,19 @@ func Check(ctx context.Context, in Input) Result {
 			Fix:     "use Claude Code in a project, then rerun backsight verify --live 45 min after the last turn"}
 	}
 	return checkSent(ctx, in, *target, earlier)
+}
+
+// sendable reports whether a transcript holds a record jobs tick would
+// send: a session of only slash or ! commands has none, and flush saves no
+// cursor for it. An unreadable transcript counts as sendable: it is judged.
+func sendable(path string) bool {
+	fh, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = fh.Close() }()
+	recs, _, err := transcript.Read(fh, 0)
+	return err != nil || len(recs) > 0
 }
 
 // notSent: a settled session with nothing sent. The next tick sends it;
@@ -195,18 +219,36 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	unreadable := func(err error) Result {
 		return fail("cannot read the server", err.Error(), "backsight server status")
 	}
+	// The server's queue, read once: -1 until read. A queue that cannot be
+	// read is never taken as empty (0067 block 4 review rules).
 	queued := -1
+	var queueErr error
 	busy := func() bool {
-		if queued < 0 {
-			n, err := in.Server.QueuedOperations(ctx, in.Bank)
-			if err != nil {
-				n = 0
+		if queued < 0 && queueErr == nil {
+			queued, queueErr = in.Server.QueuedOperations(ctx, in.Bank)
+			if queueErr != nil {
+				queued = -1
 			}
-			queued = n
 		}
 		return queued > 0
 	}
 	recent := in.Now.Sub(s.cur.SentAt) < workWait
+	// mayWork: the server may still be on it, so a missing step is pending.
+	mayWork := func() bool { return busy() || recent || queueErr != nil }
+	waiting := func(summary string) Result {
+		res := pending(summary)
+		if queueErr != nil && !recent {
+			res.Summary += "; could not read the server's queue, so it may still be working on it"
+			res.Detail = queueErr.Error()
+		}
+		return res
+	}
+	queuedNote := func() string {
+		if queued < 0 {
+			return ""
+		}
+		return fmt.Sprintf(" (%d operation(s) queued on the server)", queued)
+	}
 
 	homeSegment := 0
 	for i, sd := range docs {
@@ -215,8 +257,8 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		var apiErr *hindsight.APIError
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-			if busy() || recent {
-				return pending(fmt.Sprintf("session %s was sent but %s is not stored yet (%d operation(s) queued on the server)", s.sid, sd.Document, max(queued, 0)))
+			if mayWork() {
+				return waiting(fmt.Sprintf("session %s was sent but %s is not stored yet%s", s.sid, sd.Document, queuedNote()))
 			}
 			return fail("the server has no document "+sd.Document+", which this machine sent on "+s.cur.SentAt.UTC().Format("2006-01-02 15:04")+" UTC",
 				"nothing is queued on the server, so it is not coming",
@@ -227,8 +269,8 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		seg, _ := strconv.Atoi(doc.Metadata["segment"])
 		r.ServerSegment = seg
 		switch {
-		case seg < sd.Segment && (busy() || recent):
-			return pending(fmt.Sprintf("session %s: the server holds segment %d of %s, segment %d is still being stored", s.sid, seg, sd.Document, sd.Segment))
+		case seg < sd.Segment && mayWork():
+			return waiting(fmt.Sprintf("session %s: the server holds segment %d of %s, segment %d is still being stored", s.sid, seg, sd.Document, sd.Segment))
 		case seg != sd.Segment:
 			return fail(fmt.Sprintf("session %s: the server holds segment %d of %s, this machine sent segment %d", s.sid, seg, sd.Document, sd.Segment),
 				"the document "+sd.Document+" does not hold what this machine recorded as sent", "backsight doctor (restore-epoch, writes)")
@@ -258,13 +300,13 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		}
 	}
 	switch {
-	case len(facts) == 0 && (busy() || recent):
-		return pending("session " + s.sid + " is stored; its facts are still being extracted")
+	case len(facts) == 0 && mayWork():
+		return waiting("session " + s.sid + " is stored; its facts are still being extracted")
 	case failed > 0:
 		return fail(fmt.Sprintf("consolidation failed for %d of %d fact(s) of session %s", failed, len(facts), s.sid), "",
 			"backsight server llm check; the Hindsight UI's operations page shows the provider's error")
-	case unconsolidated > 0 && (busy() || recent):
-		return pending(fmt.Sprintf("%d of %d fact(s) of session %s are not consolidated yet", unconsolidated, len(facts), s.sid))
+	case unconsolidated > 0 && mayWork():
+		return waiting(fmt.Sprintf("%d of %d fact(s) of session %s are not consolidated yet", unconsolidated, len(facts), s.sid))
 	case unconsolidated > 0:
 		return fail(fmt.Sprintf("%d of %d fact(s) of session %s are not consolidated, %s after it was sent", unconsolidated, len(facts), s.sid, in.Now.Sub(s.cur.SentAt).Round(time.Minute)),
 			"nothing is queued on the server", "backsight doctor (bank); the Hindsight UI's operations page")
