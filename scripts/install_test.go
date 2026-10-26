@@ -184,7 +184,7 @@ func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
 	if run, err := exec.Command(link).Output(); err != nil || string(run) != "fake backsight "+version+"\n" {
 		t.Errorf("installed binary: %q %v", run, err)
 	}
-	for _, s := range []string{"backsight " + version + " installed", "export PATH=", "next: backsight setup"} {
+	for _, s := range []string{"backsight " + version + " installed", "export PATH=", "next: backsight setup", "a coding agent installing for you: backsight guide agent-guide"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("output lacks %q:\n%s", s, out)
 		}

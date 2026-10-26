@@ -67,6 +67,14 @@ You need:
 
 ## Install
 
+**Let your coding agent install it.** Paste this into Claude Code or any coding agent:
+
+```text
+Install Backsight for me by following https://raw.githubusercontent.com/Barben360/backsight/main/docs/agent-guide.md — ask me before every choice.
+```
+
+The agent never sees your LLM key: you type it yourself. Or install by hand:
+
 1. Install the binary. The script checks the release's signature and checksum before installing anything:
 
    ```sh
@@ -85,7 +93,7 @@ You need:
 
 3. Restart Claude Code (or run `/reload-plugins` in it).
 
-A coding agent can do the install for you: point it at [docs/agent-guide.md](docs/agent-guide.md). Every detail: [docs/install.md](docs/install.md).
+Every detail: [docs/install.md](docs/install.md).
 
 ## Check it works
 

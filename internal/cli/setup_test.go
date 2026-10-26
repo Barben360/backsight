@@ -1153,3 +1153,21 @@ func TestSetupUndoKeepsThePluginStateOfAnotherProfile(t *testing.T) {
 		t.Errorf("undo of ~/.claude cleared the dev profile's plugin state: %+v %+v", st.PluginVersion, st.Client)
 	}
 }
+
+// Run by an agent with no terminal and no --json/--non-interactive, setup
+// must not hang: it exits 10 and names the agent path.
+func TestSetupWithoutTerminalNamesTheAgentPath(t *testing.T) {
+	_, _ = setupMachine(t)
+	oldIn, oldOut := stdinIsTerminal, stdoutIsTerminal
+	stdinIsTerminal, stdoutIsTerminal = func() bool { return false }, func() bool { return false }
+	t.Cleanup(func() { stdinIsTerminal, stdoutIsTerminal = oldIn, oldOut })
+	code, out, errOut := run(t, "setup")
+	if code != output.NeedsUser {
+		t.Fatalf("exit %d, want %d\n%s\n%s", code, output.NeedsUser, out, errOut)
+	}
+	for _, want := range []string{"no terminal", "backsight guide agent-guide", "backsight setup --questions --json"} {
+		if !strings.Contains(out+errOut, want) {
+			t.Errorf("message lacks %q:\n%s\n%s", want, out, errOut)
+		}
+	}
+}
