@@ -186,3 +186,14 @@ func TestNoUserSessionIsTheUsersChoice(t *testing.T) {
 		t.Errorf("reachable: %+v", c)
 	}
 }
+
+// A user session that does not answer in time is retried from a login
+// session (blocked), scheduler=off only the last resort.
+func TestSlowUserSessionIsRetried(t *testing.T) {
+	p := healthy()
+	p.UserScheduler = func(context.Context) error { return fmt.Errorf("probe: %w", ErrSessionSlow) }
+	c := byID(Preflight(context.Background(), p))["scheduler"]
+	if c.Status != Fail || c.Class != "blocked" || c.Action != nil || !strings.HasPrefix(c.Fix, "retry, from a login session") || !strings.Contains(c.Fix, "jobs tick") {
+		t.Errorf("%+v", c)
+	}
+}

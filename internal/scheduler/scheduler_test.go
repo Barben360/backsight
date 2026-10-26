@@ -251,3 +251,18 @@ func TestTimersEnabled(t *testing.T) {
 		t.Error("the linked timer is not seen")
 	}
 }
+
+// A link that cannot be read may be there: it counts as enabled.
+func TestTimersEnabledUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	dir := t.TempDir()
+	wants := filepath.Join(dir, "timers.target.wants")
+	_ = os.MkdirAll(wants, 0o700)
+	_ = os.Chmod(wants, 0)
+	t.Cleanup(func() { _ = os.Chmod(wants, 0o700) })
+	if !TimersEnabled([]string{filepath.Join(dir, "bs-tick.timer")}) {
+		t.Error("an unreadable link counts as not enabled")
+	}
+}

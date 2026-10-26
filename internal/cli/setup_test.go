@@ -1623,6 +1623,11 @@ func TestSetupPlanShowsTheMissingUserSession(t *testing.T) {
 	if code != output.OK || !strings.Contains(out, "fail   scheduler") || !strings.Contains(out, "scheduler=off") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
+	withSys(t, "linux") // a user session answers
+	code, out, _ = run(t, "setup", "--plan", "--answer", "provider=deepseek")
+	if code != output.OK || !strings.Contains(out, "ok     scheduler   systemd user session reachable") {
+		t.Errorf("with a session: exit %d\n%s", code, out)
+	}
 }
 
 // A run whose scheduler step failed for want of a user session (an older
@@ -1693,5 +1698,107 @@ func TestSetupResumeWithSchedulerOffAfterAFinishedRun(t *testing.T) {
 	i := slices.IndexFunc(env.Data.Steps, func(s setup.Step) bool { return s.Name == "scheduler" })
 	if i < 0 || env.Data.Steps[i+1].Name != "verify" || env.Data.Steps[i].Status != "done" {
 		t.Errorf("steps %+v", env.Data.Steps)
+	}
+}
+
+// A resume reuses the go only when it does less: a new provider or port,
+// even beside scheduler=off, asks for consent again (exit 10, nothing
+// run); an explicit no declines; the saved provider repeated keeps it.
+func TestSetupResumeConsentRules(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	f.fail["server install"] = &output.Error{Code: output.Blocked, Message: "docker gone"}
+	if code, _, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.Partial {
+		t.Fatalf("exit %d", code)
+	}
+	delete(f.fail, "server install")
+	for _, extra := range [][]string{
+		{"--answer", "provider=anthropic"},
+		{"--answer", "scheduler=off", "--answer", "api_port=28888"},
+	} {
+		f.calls = nil
+		code, out, _ := run(t, append(append([]string{"setup", "--resume"}, extra...), "--non-interactive", "--json")...)
+		env := parseSetup(t, out)
+		if code != output.NeedsUser || env.Error == nil || !strings.Contains(env.Error.Message, "consent") || len(f.calls) > 0 {
+			t.Errorf("%v: exit %d, steps %v\n%s", extra, code, f.commands(), out)
+		}
+	}
+	f.calls = nil
+	code, out, _ := run(t, "setup", "--resume", "--answer", "consent=no", "--non-interactive", "--json")
+	if env := parseSetup(t, out); code != output.OK || !env.Data.Declined || len(f.calls) > 0 {
+		t.Errorf("consent=no: exit %d, steps %v\n%s", code, f.commands(), out)
+	}
+	f.calls = nil
+	code, out, _ = run(t, "setup", "--resume", "--answer", "provider=deepseek", "--non-interactive", "--json")
+	if code != output.OK || !strings.HasPrefix(strings.Join(f.commands(), ","), "server install,") {
+		t.Errorf("the saved provider repeated: exit %d, steps %v\n%s", code, f.commands(), out)
+	}
+}
+
+// Entries a manual jobs install made before setup are not setup's:
+// scheduler=off leaves them in place.
+func TestSetupSchedulerOffLeavesManualEntries(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	withSys(t, "linux")
+	f.real["jobs uninstall"] = true
+	if code, out, _ := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("jobs install: exit %d %s", code, out)
+	}
+	if code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "scheduler=off", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Contains(strings.Join(f.commands(), ","), "jobs uninstall") {
+		t.Errorf("removed entries setup never wrote: %v", f.commands())
+	}
+	if _, err := os.Stat(filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")); err != nil {
+		t.Error("the manual entries are gone")
+	}
+	if st, _ := stateLoad(home); st.Scheduler == nil {
+		t.Error("the manual entries' record is gone")
+	}
+}
+
+// A resume whose scheduler step is done does not probe the user session
+// again: an su shell can finish it.
+func TestSetupResumeAfterTheSchedulerSkipsTheProbe(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	sys := withSys(t, "linux")
+	f.fail["verify"] = &output.Error{Code: output.Blocked, Message: "mcp down"}
+	if code, _, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"); code != output.Partial {
+		t.Fatalf("exit %d", code)
+	}
+	delete(f.fail, "verify")
+	sys.noBus = true
+	code, out, _ := run(t, "setup", "--resume", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, c := range env.Data.Preflight {
+		if c.ID == "scheduler" {
+			t.Errorf("probed again: %+v", c)
+		}
+	}
+	if slices.Contains(sys.calls, "systemctl --user show-environment") {
+		t.Errorf("calls %q", sys.calls)
+	}
+}
+
+// A user manager that does not answer in time is retried from a login
+// session (exit 20), not answered away with scheduler=off alone.
+func TestSetupSlowUserSessionSaysRetry(t *testing.T) {
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	withSys(t, "linux").hang = true
+	old := userSessionWait
+	userSessionWait = 20 * time.Millisecond
+	t.Cleanup(func() { userSessionWait = old })
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseSetup(t, out)
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "did not answer") ||
+		!strings.Contains(env.Error.Message, "retry, from a login session") || len(env.Error.Actions) != 0 || len(f.calls) > 0 {
+		t.Errorf("exit %d, steps %v\n%s", code, f.commands(), out)
 	}
 }

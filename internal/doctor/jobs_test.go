@@ -176,12 +176,12 @@ func TestJobsWhenTheSchedulerIsOff(t *testing.T) {
 func TestSchedulerCheckWhenOff(t *testing.T) {
 	none := func() (SchedulerEntries, error) { return SchedulerEntries{}, nil }
 	c, ok := checkScheduler(none, schedulerOff)
-	if !ok || c.Status != Info || !strings.Contains(c.Summary, "off") {
+	if !ok || c.Status != Info || c.Summary != "off: setup was answered scheduler=off" {
 		t.Errorf("off: %v %+v", ok, c)
 	}
 	installed := func() (SchedulerEntries, error) { return SchedulerEntries{Installed: true, Kind: "systemd"}, nil }
 	c, ok = checkScheduler(installed, schedulerIdle)
-	if !ok || c.Status != Info || strings.Contains(c.Summary, "match") {
+	if !ok || c.Status != Info || c.Summary != "systemd entries not enabled: see the jobs check" {
 		t.Errorf("not enabled: %+v", c)
 	}
 }

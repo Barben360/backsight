@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -21,12 +23,18 @@ type fakeSys struct {
 	out    map[string]string // what a command line prints
 	// noBus: no systemd user session, every systemctl --user call fails
 	noBus bool
+	// hang: the user manager never answers show-environment
+	hang bool
 }
 
 const busError = "Failed to connect to bus: No medium found"
 
-func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+func (f *fakeSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	if f.hang && line == "systemctl --user show-environment" {
+		<-ctx.Done()
+		return nil, errors.New("signal: killed")
+	}
 	if f.noBus && strings.HasPrefix(line, "systemctl --user") {
 		f.calls = append(f.calls, line)
 		return []byte(busError + "\n"), errors.New("exit status 1")
@@ -348,6 +356,73 @@ func TestJobsWithoutAUserSession(t *testing.T) {
 	}
 	if st, _ := state.Load(pathsOf(home).StateFile()); st.Scheduler != nil {
 		t.Errorf("the record stays: %+v", st.Scheduler)
+	}
+
+	// The reload passes and the enable finds no session: the same.
+	sys.noBus, sys.fail, sys.output = false, "systemctl --user enable", busError
+	if code, out, _ := run(t, "jobs", "install", "--json"); code != output.NeedsUser || !strings.Contains(out, "scheduler=off") {
+		t.Fatalf("enable without a session: exit %d %s", code, out)
+	}
+	sys.fail, sys.noBus = "", true
+	if code, _, errOut := run(t, "jobs", "uninstall"); code != output.OK {
+		t.Fatalf("uninstall after a failed enable: exit %d %s", code, errOut)
+	}
+	if _, err := os.Stat(timer); err == nil {
+		t.Error("the entries a failed enable wrote stay on disk")
+	}
+}
+
+// Without a session, a standalone install says to run it again from a
+// login session or remove what it wrote; after a setup run, the resume
+// without the scheduler.
+func TestJobsInstallWithoutASessionNamesTheWayOn(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	sys.fail, sys.output = "systemctl --user daemon-reload", busError
+	cmds := func() []string {
+		t.Helper()
+		_, out, _ := run(t, "jobs", "install", "--json")
+		var env struct{ Error *output.Error }
+		if err := json.Unmarshal([]byte(out), &env); err != nil || env.Error == nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		var c []string
+		for _, a := range env.Error.Actions {
+			c = append(c, a.Cmd)
+		}
+		return c
+	}
+	if got := strings.Join(cmds(), ","); got != "backsight jobs install,backsight jobs uninstall" {
+		t.Errorf("standalone: %q", got)
+	}
+	r := setup.Record{SchemaVersion: setup.RecordVersion, Run: "r1", Answers: map[string]string{"scheduler": "on"}}
+	if err := r.Save(pathsOf(home).SetupFile()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cmds(), ","); got != "backsight setup --resume --answer scheduler=off" {
+		t.Errorf("after setup: %q", got)
+	}
+}
+
+// A failure other than the missing session keeps the entries, though no
+// timer was enabled; the missing session alone does not.
+func TestStillLoadedKeepsOtherFailures(t *testing.T) {
+	files := []string{filepath.Join(t.TempDir(), "bs-tick.timer")}
+	bus := deactivation{cmd: []string{"systemctl", "--user", "disable", "--now", "bs-tick.timer"}, out: busError, err: errors.New("exit status 1")}
+	other := deactivation{cmd: []string{"systemctl", "--user", "stop", "bs-tick.service"}, out: "Access denied", err: errors.New("exit status 4")}
+	gone := deactivation{cmd: []string{"systemctl", "--user", "stop", "x"}, out: "Unit x does not exist.", err: errors.New("exit status 5")}
+	if failed, noBus := stillLoaded([]deactivation{bus, gone}, "systemd", files); len(failed) != 0 || noBus {
+		t.Errorf("never enabled, no session: %q %v", failed, noBus)
+	}
+	failed, _ := stillLoaded([]deactivation{bus, other}, "systemd", files)
+	if len(failed) != 1 || !strings.Contains(failed[0], "Access denied") {
+		t.Errorf("mixed: %q", failed)
+	}
+	wants := filepath.Join(filepath.Dir(files[0]), "timers.target.wants")
+	_ = os.MkdirAll(wants, 0o700)
+	_ = os.Symlink("../bs-tick.timer", filepath.Join(wants, "bs-tick.timer"))
+	if failed, noBus := stillLoaded([]deactivation{bus, other}, "systemd", files); len(failed) != 2 || !noBus {
+		t.Errorf("enabled, mixed: %q %v", failed, noBus)
 	}
 }
 
