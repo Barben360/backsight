@@ -306,9 +306,10 @@ func checkNoiseHeadless(ctx context.Context, env Env, cfg config.Config, cl *hin
 }
 
 // docSession is the session id of a session's document (conversation:<sid>,
-// conversation:<sid>@<project>, subagent:<sid>:<agent>), "" for any other.
+// conversation:<sid>@<project>, either with a purge's #<n>,
+// subagent:<sid>:<agent>), "" for any other.
 func docSession(id string) string {
-	if rest, ok := strings.CutPrefix(id, "conversation:"); ok {
+	if rest, ok := strings.CutPrefix(retain.BaseDocumentID(id), "conversation:"); ok {
 		sid, _, _ := strings.Cut(rest, "@")
 		return sid
 	}

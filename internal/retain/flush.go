@@ -75,6 +75,9 @@ type Flusher struct {
 	// Hold: the bank's restore epoch could not be reconciled (Reconcile):
 	// nothing is sent until a later run reconciles (decision 0044).
 	Hold string
+	// Outbox takes the subagent reports a reconcile rebuilds; zero: the
+	// notes outbox of Dirs (NotesOutbox).
+	Outbox Outbox
 }
 
 // Options change the timing rules for explicit flushes.
@@ -158,6 +161,15 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		}
 		resync = resync || cur.Fingerprint != fp
 	}
+	tombs, err := f.tombstones()
+	if err != nil {
+		return fail(Retry, err.Error())
+	}
+	// A purge deleted a document this cursor appends to: its segments
+	// start again in the successor id, which the resync reads.
+	for p := range cur.Segments {
+		resync = resync || cur.docOf(sid, p) != LiveDocumentID(sid, cur.Home, p, tombs)
+	}
 	from := cur.Offset
 	if resync {
 		from = 0
@@ -226,7 +238,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) Resul
 		}
 		send = recs[:n]
 	}
-	return f.sendRuns(ctx, res, cur, sid, send, attrs, now)
+	return f.sendRuns(ctx, res, cur, sid, send, attrs, tombs, now)
 }
 
 // resync rebuilds the cursor from the server's documents (decision 0038):
@@ -271,8 +283,8 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 		}
 		known[base.id] = base
 	}
-	cur.Document = DocumentID(sid, cur.Home, cur.Home)
-	docs, err := f.readDocuments(ctx, sid, cur.Home, projectsOf(cur.Home, recs, attrs), known)
+	cur.Document = LiveDocumentID(sid, cur.Home, cur.Home, tombs)
+	docs, err := f.readDocuments(ctx, sid, cur.Home, projectsOf(cur.Home, recs, attrs), known, tombs)
 	if err != nil {
 		res.Stop, res.NeedsFix = true, needsFix(err)
 		return retry(errSummary(err))
@@ -286,6 +298,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	pos.purged = purgedOf(sid, recs, tombs)
 	for p, seg := range pos.segments {
 		cur.Segments[p], cur.LastUUIDs[p] = seg, pos.last[p]
+		cur.setDoc(sid, p, LiveDocumentID(sid, cur.Home, p, tombs))
 	}
 	cur.Legacy = pos.legacyUUID
 	// Released from quarantine after a first segment the server never
@@ -324,7 +337,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 			// segment 1 would replace it (issue 101). After PendingLimit
 			// the retain is taken as lost.
 			if f.waitedTooLong(sid, now) {
-				return nil, f.quarantine(res, cur, "the server never stored the first segment of "+DocumentID(sid, cur.Home, a.project)+"; retain retry-quarantine resends the session"), true
+				return nil, f.quarantine(res, cur, "the server never stored the first segment of "+LiveDocumentID(sid, cur.Home, a.project, tombs)+"; retain retry-quarantine resends the session"), true
 			}
 			return retry("the server has not stored this session's earlier segment yet; retried later")
 		}
@@ -393,7 +406,7 @@ type runKey struct {
 // document, skipping held runs (sent already: the sent index's session key)
 // and opted-out ones (attribute). It stops at the first failure, with the
 // cursor after the last run done; the cursor is saved after every segment.
-func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, now time.Time) Result {
+func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone, now time.Time) Result {
 	key := func(r transcript.Record) runKey {
 		a := attrs[r.End]
 		switch {
@@ -437,7 +450,7 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		}
 		for _, part := range chunk(run) {
 			var done bool
-			if res, cur, status, detail, done = f.sendPart(ctx, res, cur, sid, part, k.project, status, detail, now); done {
+			if res, cur, status, detail, done = f.sendPart(ctx, res, cur, sid, part, k.project, status, detail, tombs, now); done {
 				return res
 			}
 			f.checkpoint(res.Session, &cur)
@@ -450,12 +463,15 @@ func (f *Flusher) headless(entrypoint string) bool {
 	return f.Headless != nil && f.Headless(entrypoint)
 }
 
-// sendPart sends one segment to project's document; done reports that the
-// flush ended (error).
-func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid string, run []transcript.Record, project, status, detail string, now time.Time) (Result, Cursor, string, string, bool) {
+// sendPart sends one segment to project's document (never one a purge
+// deleted: LiveDocumentID); done reports that the flush ended (error).
+func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid string, run []transcript.Record, project, status, detail string, tombs []state.Tombstone, now time.Time) (Result, Cursor, string, string, bool) {
 	last := run[len(run)-1]
-	doc := DocumentID(sid, cur.Home, project)
+	doc := LiveDocumentID(sid, cur.Home, project, tombs)
 	segNo := cur.Segments[project] + 1
+	if cur.Segments[project] > 0 && cur.docOf(sid, project) != doc {
+		segNo = 1 // the segments counted were of a purged document
+	}
 	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
 	if doc == cur.Document && cur.Legacy != "" {
 		// carried forward: a later resync still knows that this document
@@ -483,6 +499,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	cur.advance(last, attr{project: project})
 	cur.SentAt = now
 	cur.Segments[project], cur.LastUUIDs[project] = segNo, last.UUID
+	cur.setDoc(sid, project, doc)
 	cur.Records += len(run)
 	res.Records += len(run)
 	if !slices.Contains(res.Documents, doc) {

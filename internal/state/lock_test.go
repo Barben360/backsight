@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -245,5 +246,35 @@ func TestLockOwner(t *testing.T) {
 	h := Inspect(p)
 	if o := l.Owner(); h == nil || o != h.Owner || o.PID != os.Getpid() || o.Command != "update apply" {
 		t.Errorf("owner %+v, file %+v", o, h)
+	}
+}
+
+// A live PID whose process started after the lock was taken is not the
+// owner: the owner died and its PID was reused (issue 285). The same PID
+// with a Since after its start is a live owner.
+func TestReusedPIDIsStale(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("start times are read from /proc")
+	}
+	p := filepath.Join(t.TempDir(), "maintenance.lock")
+	start, ok := processStart(os.Getpid())
+	if !ok {
+		t.Fatal("cannot read this process's start time")
+	}
+	writeOwner(t, p, Owner{PID: os.Getpid(), Command: "restore", Since: start.Add(-time.Hour).UTC().Truncate(time.Second)})
+	if h := Inspect(p); h == nil || !h.Stale {
+		t.Errorf("a lock older than its PID's process: %+v", h)
+	}
+	if MaintenanceHeld(p) {
+		t.Error("a reused PID holds maintenance")
+	}
+	writeOwner(t, p, Owner{PID: os.Getpid(), Command: "restore", Since: time.Now().UTC().Truncate(time.Second)})
+	if h := Inspect(p); h == nil || h.Stale {
+		t.Errorf("the live owner's lock: %+v", h)
+	}
+	// No Since: the PID alone, as before.
+	writeOwner(t, p, Owner{PID: os.Getpid(), Command: "restore"})
+	if h := Inspect(p); h == nil || h.Stale {
+		t.Errorf("a lock without since: %+v", h)
 	}
 }

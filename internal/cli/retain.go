@@ -164,7 +164,11 @@ func reconcile(ctx context.Context, f *retain.Flusher) string {
 	case rec.From == rec.To:
 		return ""
 	}
-	return fmt.Sprintf("restore epoch %d -> %d: %d session(s) resume from the server", rec.From, rec.To, len(rec.Resend))
+	line := fmt.Sprintf("restore epoch %d -> %d: %d session(s) resume from the server", rec.From, rec.To, len(rec.Resend))
+	if len(rec.Reports) > 0 {
+		line += fmt.Sprintf(", %d subagent report(s) queued again", len(rec.Reports))
+	}
+	return line
 }
 
 func reportFlush(results []retain.Result) (flushReport, error) {

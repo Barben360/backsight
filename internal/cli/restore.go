@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -47,14 +49,22 @@ type restoreResult struct {
 	RolledBack bool             `json:"rolled_back,omitempty"`
 	// Purged: the purges made after the archive was taken (tombstones):
 	// their records are never sent again, but the archive may hold them.
-	Purged   []state.Tombstone `json:"purged_after_archive,omitempty"`
-	Warnings []string          `json:"warnings,omitempty"`
-	MS       int               `json:"ms"`
+	Purged []state.Tombstone `json:"purged_after_archive,omitempty"`
+	// PurgedAgain: the purged documents the archive brought back, which
+	// restore deleted again (issue 285).
+	PurgedAgain []string `json:"purged_again,omitempty"`
+	// OtherBanks: the server's other memory banks, which the archive's
+	// database reverts too: each gets a new epoch (M5 review rules).
+	OtherBanks []string       `json:"other_banks,omitempty"`
+	Epochs     map[string]int `json:"other_epochs,omitempty"`
+	Warnings   []string       `json:"warnings,omitempty"`
+	MS         int            `json:"ms"`
 }
 
 type restoreFlags struct {
 	identity                 string
 	plan, noSafety, nonInter bool
+	answers                  []string
 }
 
 func newRestoreCmd(e *env) *cobra.Command {
@@ -64,8 +74,10 @@ func newRestoreCmd(e *env) *cobra.Command {
 		Short: "Restore a backup into the local server, after a safety backup, and start a new restore epoch",
 		Long: "Restore takes the maintenance lock and server.lock, backs the server up (the safety archive), marks a restore in progress " +
 			"(every client holds its sends), stops Hindsight, replaces its database with the archive's, starts it again on a temporary API key " +
-			"only restore knows and checks the row counts, health and a recall. It then writes a new restore epoch, so every client re-reads " +
-			"what the server holds (decision 0044), and starts the server again on its API key. Any failure after the stop restores the " +
+			"only restore knows and checks the row counts, health and a recall. It then writes back the purge tombstones and a new restore epoch " +
+			"in every memory bank of the server (the database holds them all), so every client re-reads what the server holds (decision 0044), " +
+			"deletes again the purged documents the archive brought back, and starts the server again on its API key. A bank without a " +
+			"backsight control bank goes back to the archive only with --answer other_banks=revert. Any failure after the stop restores the " +
 			"safety archive and writes an epoch too (exit 30); a rollback that fails exits 20 and doctor names the way back. " +
 			"--no-safety skips the safety backup: to restore a safety archive by hand.",
 		Args: usageArgs(cobra.ExactArgs(1)),
@@ -95,6 +107,7 @@ func newRestoreCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&fl.plan, "plan", false, "show the steps, the archive's manifest and the safety archive without acting")
 	cmd.Flags().BoolVar(&fl.noSafety, "no-safety", false, "make no safety backup first (restoring a safety archive by hand)")
 	cmd.Flags().BoolVar(&fl.nonInter, "non-interactive", false, "never prompt (a passphrase-protected SSH key then exits 10)")
+	cmd.Flags().StringArrayVar(&fl.answers, "answer", nil, "answer a question: other_banks=revert (the server's other banks go back to the archive too)")
 	return cmd
 }
 
@@ -111,6 +124,18 @@ func refuseWhileBusy(d paths.Dirs) error {
 }
 
 func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags, add func(name, status, detail string)) error {
+	answers, err := parseAnswers(fl.answers, "")
+	if err != nil {
+		return err
+	}
+	for k, v := range answers {
+		switch {
+		case k != "other_banks":
+			return &output.Error{Code: output.Usage, Message: "unknown answer " + k + ": restore asks other_banks"}
+		case v != "revert":
+			return &output.Error{Code: output.Usage, Message: "other_banks=" + v + ": the only answer is revert (else do not restore this archive)"}
+		}
+	}
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return err
@@ -182,6 +207,49 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			return &output.Error{Code: output.Blocked, Message: err.Error() + "; the restore epoch could not be written there: nothing was changed"}
 		}
 	}
+	// The archive's database holds every bank of the server: the other
+	// memory banks go back to it too, so each gets an epoch. One that has
+	// no control bank may not be backsight's: asked first (M5 review
+	// rules), before anything changes.
+	var listDB server.Database
+	if !res.Plan {
+		listDB = ownGroupRuntime(cfg).Database()
+	}
+	others, how, err := otherBanks(ctx, cl, listDB, cfg.Server.Bank)
+	switch {
+	case err != nil && res.Plan:
+		res.Warnings = append(res.Warnings, "cannot list the server's banks ("+err.Error()+"): the other banks, which the archive reverts too, are not listed")
+	case err != nil:
+		return &output.Error{Code: output.Blocked, Message: server.Redact("cannot list the server's banks ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
+	}
+	if how != "" {
+		res.Warnings = append(res.Warnings, how)
+	}
+	var unmarked []string
+	for _, o := range others {
+		res.OtherBanks = append(res.OtherBanks, o.bank)
+		if !o.control {
+			unmarked = append(unmarked, o.bank)
+		}
+	}
+	// update apply's rollback restores the safety archive the upgrade took
+	// minutes before, through the previous binary: nobody to ask there, and
+	// the other banks only go back those minutes.
+	byUpdate := false
+	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale && heldByUpdate(held) {
+		byUpdate = true
+	}
+	if len(unmarked) > 0 && answers["other_banks"] != "revert" && !byUpdate {
+		what := fmt.Sprintf("the archive replaces the server's whole database: bank(s) %s, which have no backsight control bank, go back to the archive's state too "+
+			"(what they got since is lost) and get a restore epoch", strings.Join(unmarked, ", "))
+		if !res.Plan {
+			return &output.Error{Code: output.NeedsUser, Resume: "backsight restore " + res.Archive + " --answer other_banks=revert",
+				Questions: []setup.Question{{ID: "other_banks", Required: true, Options: []setup.Option{{Value: "revert", Label: "restore and revert them too"}},
+					Prompt: what + ": answer revert to go on"}},
+				Message: "restore needs an answer to other_banks (--answer other_banks=revert): nothing was changed"}
+		}
+		res.Warnings = append(res.Warnings, what+": restore asks --answer other_banks=revert")
+	}
 	if res.Plan {
 		res.Safety = filepath.Join(dir, backup.Name(now()))
 		if fl.noSafety {
@@ -199,10 +267,19 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		if err != nil {
 			res.Warnings = append(res.Warnings, "cannot read the purge tombstones of the server ("+err.Error()+"): only this machine's purges are listed")
 		}
-		if st, err := state.Load(d.StateFile()); err == nil {
-			tombs = mergeTombstones(tombs, st.TombstonesOf(cfg.Server.Bank))
+		st, _ := state.Load(d.StateFile())
+		tombs = mergeTombstones(tombs, st.TombstonesOf(cfg.Server.Bank))
+		for _, o := range others {
+			ts, err := retain.ReadTombstones(ctx, cl, o.bank)
+			if err != nil {
+				res.Warnings = append(res.Warnings, "cannot read the purge tombstones of bank "+o.bank+" ("+err.Error()+")")
+			}
+			tombs = append(tombs, mergeTombstones(ts, st.TombstonesOf(o.bank))...)
 		}
 		res.Purged = purgedAfter(tombs, m.CreatedAt)
+		if len(others) > 0 {
+			epoch += " in bank " + cfg.Server.Bank + ", and a new epoch in bank(s) " + strings.Join(res.OtherBanks, ", ")
+		}
 		for _, s := range [][2]string{
 			{"check", fmt.Sprintf("archive of %s, Hindsight %s, bank %s, counts %v", m.CreatedAt.Format(time.RFC3339), m.HindsightImage, m.Bank, m.Counts)},
 			{"lock", "would take the maintenance lock and server.lock until the end (hooks queue, jobs skip)"},
@@ -220,6 +297,9 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			add(s[0], "planned", s[1])
 			if s[0] == "recall" && len(res.Purged) > 0 {
 				add("purges", "planned", purgesPlanned(res.Purged))
+			}
+			if s[0] == "epoch" && len(res.Purged) > 0 {
+				add("purge again", "planned", "would delete again those of the "+strconv.Itoa(len(res.Purged))+" document(s) purged after the archive was taken that it brings back: "+documentList(res.Purged))
 			}
 		}
 		return nil
@@ -272,9 +352,32 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		res.Warnings = append(res.Warnings, how)
 	}
 	tombs = mergeTombstones(tombs, st.TombstonesOf(cfg.Server.Bank))
-	res.Purged = purgedAfter(tombs, m.CreatedAt)
+	all := slices.Clone(tombs)
+	for i := range others {
+		o := &others[i]
+		if o.foreign {
+			res.Warnings = append(res.Warnings, "bank "+o.bank+": its control bank "+retain.ControlBank(o.bank)+" is not backsight's, so no restore epoch is written there")
+			continue
+		}
+		ep, how, err := epochBefore(ctx, cl, db, o.bank)
+		if err != nil {
+			return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the restore epoch of bank "+o.bank+" ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
+		}
+		ts, how2, err := tombstonesBefore(ctx, cl, db, o.bank)
+		if err != nil {
+			return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the purge tombstones of bank "+o.bank+" ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
+		}
+		for _, w := range []string{how, how2} {
+			if w != "" {
+				res.Warnings = append(res.Warnings, "bank "+o.bank+": "+w)
+			}
+		}
+		o.highest, o.history, o.tombs = ep.Epoch, ep.History, mergeTombstones(ts, st.TombstonesOf(o.bank))
+		all = append(all, o.tombs...)
+	}
+	res.Purged = purgedAfter(all, m.CreatedAt)
 	rb := &rollback{res: res, cfg: cfg, sec: sec, rt: rt, db: db, d: d, highest: max(before.Epoch, st.EpochOf(cfg.Server.Bank)), history: before.History,
-		safetyAt: now().UTC().Truncate(time.Second), add: add}
+		safetyAt: now().UTC().Truncate(time.Second), add: add, others: others}
 
 	// 3. The safety archive, its clear dump kept to roll back to.
 	marker := state.RestoreMarker{Command: "restore", Safety: res.Archive, Archive: res.Archive, StartedAt: now().UTC().Truncate(time.Second)}
@@ -342,21 +445,22 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	add("recall", "done", "answered")
 	rb.tempKey = tmp
 
-	// 6. The purges, before the epoch tells the clients to re-read.
-	if len(tombs) > 0 {
-		if err := writeTombstonesOn(ctx, cfg, tmp, tombs); err != nil {
-			return failed("purges", err)
-		}
-		add("purges", "done", fmt.Sprintf("%d purge(s) kept, %d of them made after the archive", len(tombs), len(res.Purged)))
-		for _, t := range res.Purged {
-			if _, err := tcl.GetDocument(ctx, cfg.Server.Bank, t.Document); err == nil {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("document %s, purged at %s, came back with the archive: its records are not sent again, "+
-					"but purge it again (backsight forget <id> --purge on one of its memories)", t.Document, t.PurgedAt.Format(time.RFC3339)))
+	// 6. The purges, before the epoch tells the clients to re-read: the
+	// restored control banks lack those made since the archive.
+	if len(all) > 0 {
+		for _, b := range append([]otherBank{{bank: cfg.Server.Bank, tombs: tombs}}, others...) {
+			if len(b.tombs) == 0 || b.foreign {
+				continue
+			}
+			if err := writeTombstonesOn(ctx, cfg, tmp, b.bank, b.tombs); err != nil {
+				return failed("purges", fmt.Errorf("bank %s: %w", b.bank, err))
 			}
 		}
+		add("purges", "done", fmt.Sprintf("%d purge(s) kept, %d of them made after the archive", len(all), len(res.Purged)))
 	}
 
-	// 7. The new epoch, last: only a restore that passed tells the clients.
+	// 7. The new epochs, last: only a restore that passed tells the
+	// clients, of this bank and of every other the archive reverted.
 	restored, err := retain.ReadEpoch(ctx, tcl, cfg.Server.Bank)
 	if err != nil {
 		return failed("epoch", err)
@@ -367,25 +471,179 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	next := retain.Epoch{Epoch: rb.highest + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: m.CreatedAt.UTC().Truncate(time.Second),
 		History: before.History}
 	rb.highest = next.Epoch // attempted: the rollback's goes above it
-	if err := writeEpochOn(ctx, cfg, tmp, next); err != nil {
+	if err := writeEpochOn(ctx, cfg, tmp, cfg.Server.Bank, next); err != nil {
 		return failed("epoch", err)
 	}
 	res.Epoch = &next
-	add("epoch", "done", fmt.Sprintf("restore epoch %d", next.Epoch))
+	detail := fmt.Sprintf("restore epoch %d", next.Epoch)
+	for i := range rb.others {
+		o := &rb.others[i]
+		if o.foreign {
+			continue
+		}
+		restored, err := retain.ReadEpoch(ctx, tcl, o.bank)
+		if err != nil {
+			return failed("epoch", fmt.Errorf("bank %s: %w", o.bank, err))
+		}
+		o.highest = max(o.highest, restored.Epoch)
+		e := retain.Epoch{Epoch: o.highest + 1, RestoredAt: next.RestoredAt, BackupCreatedAt: next.BackupCreatedAt, History: o.history}
+		o.highest = e.Epoch
+		if err := writeEpochOn(ctx, cfg, tmp, o.bank, e); err != nil {
+			return failed("epoch", fmt.Errorf("bank %s: %w", o.bank, err))
+		}
+		if res.Epochs == nil {
+			res.Epochs = map[string]int{}
+		}
+		res.Epochs[o.bank] = e.Epoch
+		detail += fmt.Sprintf(", bank %s at %d", o.bank, e.Epoch)
+	}
+	add("epoch", "done", detail)
+
+	// 8. The purged documents the archive brought back, deleted again
+	// (privacy first, issue 285): still on the temporary key, so no client
+	// reads them meanwhile. A failure rolls back to the safety archive,
+	// which does not hold them.
+	again, err := purgeAgain(ctx, tcl, append([]otherBank{{bank: cfg.Server.Bank, tombs: tombs}}, rb.others...), cfg.Server.Bank)
+	if err != nil {
+		return failed("purge again", err)
+	}
+	if res.PurgedAgain = again; len(again) > 0 {
+		add("purge again", "done", fmt.Sprintf("%d purged document(s) the archive brought back, deleted again: %s", len(again), strings.Join(again, ", ")))
+	}
+
 	// The bank's settings, still on the temporary key: after the epoch, so
 	// a rollback never leaves a hash recorded for settings it put back.
 	if w := restoreBank(ctx, tcl, d, cfg.Server.Bank, add); w != "" {
 		res.Warnings = append(res.Warnings, w)
 	}
-	_ = state.ClearRestoreMarker(d)
 
-	// 8. The server on its own key again.
+	// 9. The server on its own key again; the marker goes only then
+	// (issue 285): until that, server start finishes the restore.
+	markKeyStep(d)
 	if err := startOnKey(ctx, cfg, sec, rt, sec.APIKey); err != nil {
 		add("key", "failed", server.Redact(err.Error(), sec))
 		return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("restored (epoch %d), but the server did not start again on its API key (%v): run backsight server start", next.Epoch, err), sec)}
 	}
+	_ = state.ClearRestoreMarker(d)
 	add("key", "done", "the server runs on its API key again")
 	return nil
+}
+
+// otherBank is a memory bank of the server besides this install's: the
+// archive's database reverts it too (M5 review rules).
+type otherBank struct {
+	bank    string
+	control bool // its <bank>-control is backsight's
+	foreign bool // its <bank>-control exists and is not backsight's
+	highest int  // the highest epoch seen or attempted
+	history []retain.EpochEntry
+	tombs   []state.Tombstone
+}
+
+// otherBanks are the server's memory banks besides own: each bank whose
+// <bank>-control is backsight's, and every bank listed but control banks
+// and docs banks (decision 0069). The listing comes from the API, else
+// (db not nil) read only from the database, where a control bank counts as
+// backsight's; how names that fallback.
+func otherBanks(ctx context.Context, cl *hindsight.Client, db server.Database, own string) ([]otherBank, string, error) {
+	ids, apiErr := cl.BankIDs(ctx)
+	how := ""
+	if apiErr != nil {
+		if db == nil {
+			return nil, "", apiErr
+		}
+		var err error
+		if ids, err = db.BankIDs(ctx); err != nil {
+			return nil, "", fmt.Errorf("API: %w; database: %w", apiErr, err)
+		}
+		how = "the server's banks were read from the database (the API: " + apiErr.Error() + ")"
+	}
+	listed := map[string]bool{}
+	for _, id := range ids {
+		listed[id] = true
+	}
+	byName := map[string]*otherBank{}
+	add := func(b string) *otherBank {
+		if byName[b] == nil {
+			byName[b] = &otherBank{bank: b}
+		}
+		return byName[b]
+	}
+	for _, id := range ids {
+		switch {
+		case strings.HasSuffix(id, "-control"):
+			b := strings.TrimSuffix(id, "-control")
+			owned := true
+			if apiErr == nil {
+				_, _, err := retain.OwnedBank(ctx, cl, id, retain.ControlMarker)
+				if foreign := (*retain.ForeignBank)(nil); errors.As(err, &foreign) {
+					owned = false
+				} else if err != nil {
+					return nil, "", fmt.Errorf("bank %s: %w", id, err)
+				}
+			}
+			if owned {
+				add(b).control = true
+			} else if listed[b] {
+				add(b).foreign = true
+			}
+		case strings.HasSuffix(id, "-docs"):
+		default:
+			add(id)
+		}
+	}
+	delete(byName, own)
+	out := make([]otherBank, 0, len(byName))
+	for _, b := range byName {
+		out = append(out, *b)
+	}
+	slices.SortFunc(out, func(a, b otherBank) int { return strings.Compare(a.bank, b.bank) })
+	return out, how, nil
+}
+
+// purgeAgain deletes the documents of each bank's tombstones that the
+// server holds (the archive brought them back), and names them: the
+// document id, after "<bank>/" for a bank other than own.
+func purgeAgain(ctx context.Context, cl *hindsight.Client, banks []otherBank, own string) ([]string, error) {
+	var out []string
+	for _, b := range banks {
+		if b.foreign {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, t := range b.tombs {
+			if seen[t.Document] {
+				continue
+			}
+			seen[t.Document] = true
+			_, err := cl.GetDocument(ctx, b.bank, t.Document)
+			var apiErr *hindsight.APIError
+			switch {
+			case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+				continue
+			case err != nil:
+				return out, fmt.Errorf("bank %s, document %s: %w", b.bank, t.Document, err)
+			}
+			if err := cl.DeleteDocument(ctx, b.bank, t.Document); err != nil && (!errors.As(err, &apiErr) || apiErr.Kind != hindsight.NotFound) {
+				return out, fmt.Errorf("bank %s, document %s: %w", b.bank, t.Document, err)
+			}
+			name := t.Document
+			if b.bank != own {
+				name = b.bank + "/" + name
+			}
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// markKeyStep records in the marker that only the start on the API key is
+// left: server start then finishes the restore (issue 285).
+func markKeyStep(d paths.Dirs) {
+	if m, err := state.ReadRestoreMarker(d); err == nil && m != nil {
+		m.Step = state.KeyStep
+		_ = state.WriteRestoreMarker(d, *m)
+	}
 }
 
 // ownGroupRuntime is cfg's runtime with Docker children in their own
@@ -478,12 +736,12 @@ func startOnTemporaryKey(ctx context.Context, cfg config.Config, sec config.Secr
 	return key, cl, err
 }
 
-func writeTombstonesOn(ctx context.Context, cfg config.Config, key string, ts []state.Tombstone) error {
+func writeTombstonesOn(ctx context.Context, cfg config.Config, key, bank string, ts []state.Tombstone) error {
 	cl, err := hindsight.New(cfg.Server.URL, key, epochTimeout)
 	if err != nil {
 		return err
 	}
-	_, err = retain.WriteTombstones(ctx, cl, cfg.Server.Bank, ts)
+	_, err = retain.WriteTombstones(ctx, cl, bank, ts)
 	return err
 }
 
@@ -530,6 +788,13 @@ func purgedAfter(ts []state.Tombstone, t time.Time) []state.Tombstone {
 // archive: kept, so their records are not sent again; the archive itself
 // may still hold the documents.
 func purgesPlanned(ts []state.Tombstone) string {
+	return fmt.Sprintf("%d document(s) purged after the archive was taken: %s. Their records would not be sent again; "+
+		"those the archive holds would be deleted again once it is restored", len(ts), documentList(ts))
+}
+
+// documentList names the documents of ts with their purge time, the first
+// ten, then how many more.
+func documentList(ts []state.Tombstone) string {
 	ids := make([]string, 0, min(len(ts), 10))
 	for _, t := range ts[:min(len(ts), 10)] {
 		ids = append(ids, t.Document+" ("+t.PurgedAt.Format(time.RFC3339)+")")
@@ -537,16 +802,15 @@ func purgesPlanned(ts []state.Tombstone) string {
 	if len(ts) > 10 {
 		ids = append(ids, fmt.Sprintf("and %d more", len(ts)-10))
 	}
-	return fmt.Sprintf("%d document(s) purged after the archive was taken: %s. Their records would not be sent again; "+
-		"if the archive holds them, they come back with it and need purging again", len(ts), strings.Join(ids, ", "))
+	return strings.Join(ids, ", ")
 }
 
-func writeEpochOn(ctx context.Context, cfg config.Config, key string, e retain.Epoch) error {
+func writeEpochOn(ctx context.Context, cfg config.Config, key, bank string, e retain.Epoch) error {
 	cl, err := hindsight.New(cfg.Server.URL, key, epochTimeout)
 	if err != nil {
 		return err
 	}
-	return retain.WriteEpoch(ctx, cl, cfg.Server.Bank, e)
+	return retain.WriteEpoch(ctx, cl, bank, e)
 }
 
 // restorable refuses, before anything stops, an archive this install
@@ -589,6 +853,9 @@ type rollback struct {
 	tempKey  string
 	add      func(name, status, detail string)
 	op       string // what failed: "restore" (default) or "server upgrade"
+	// others: the server's other memory banks, which the restore reverted
+	// too: each gets an epoch above its highest.
+	others []otherBank
 }
 
 func (r *rollback) what() string {
@@ -641,11 +908,25 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 	}
 	epoch := retain.Epoch{Epoch: r.highest + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: r.safetyAt, History: r.history}
 	if err == nil {
-		err = step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, epoch) })
+		err = step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, r.cfg.Server.Bank, epoch) })
+	}
+	for _, o := range r.others {
+		if err != nil || o.foreign {
+			continue
+		}
+		e := retain.Epoch{Epoch: o.highest + 1, RestoredAt: epoch.RestoredAt, BackupCreatedAt: r.safetyAt, History: o.history}
+		if err = step(func(ctx context.Context) error { return writeEpochOn(ctx, r.cfg, key, o.bank, e) }); err != nil {
+			err = fmt.Errorf("bank %s: %w", o.bank, err)
+		}
 	}
 	if err == nil {
-		_ = state.ClearRestoreMarker(r.d)
+		// The marker goes once the server runs on its key: until then,
+		// server start finishes the rollback.
+		markKeyStep(r.d)
 		err = step(func(ctx context.Context) error { return startOnKey(ctx, r.cfg, r.sec, r.rt, r.sec.APIKey) })
+		if err == nil {
+			_ = state.ClearRestoreMarker(r.d)
+		}
 		if err != nil {
 			r.add("rollback", "failed", server.Redact(err.Error(), r.sec))
 			return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("%s failed (%v) and was rolled back (epoch %d), but the server did not start again on its API key (%v): run backsight server start",

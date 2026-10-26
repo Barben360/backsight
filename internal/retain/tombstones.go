@@ -37,7 +37,7 @@ func TombstoneOf(bank, doc string, meta map[string]string, at time.Time) state.T
 		PurgedAt: at.UTC().Truncate(time.Second)}
 	switch {
 	case strings.HasPrefix(doc, "conversation:"):
-		sid, project, scoped := strings.Cut(strings.TrimPrefix(doc, "conversation:"), "@")
+		sid, project, scoped := strings.Cut(strings.TrimPrefix(BaseDocumentID(doc), "conversation:"), "@")
 		if t.Session == "" {
 			t.Session = sid
 		}
@@ -191,10 +191,12 @@ func purgedOf(sid string, recs []transcript.Record, tombs []state.Tombstone) pur
 	home := "conversation:" + sid
 	for _, t := range tombs {
 		project, scoped := "", false
-		switch {
-		case t.Document == home:
-		case strings.HasPrefix(t.Document, home+"@"):
-			project, scoped = strings.TrimPrefix(t.Document, home+"@"), true
+		// A successor id (LiveDocumentID) is its base's: the same
+		// session's records of the same project.
+		switch doc := BaseDocumentID(t.Document); {
+		case doc == home:
+		case strings.HasPrefix(doc, home+"@"):
+			project, scoped = strings.TrimPrefix(doc, home+"@"), true
 		default:
 			continue
 		}
@@ -223,21 +225,12 @@ func (f *Flusher) tombstones() ([]state.Tombstone, error) {
 	return st.TombstonesOf(f.Bank), nil
 }
 
-// purged is purgedOf with this client's tombstones.
-func (f *Flusher) purged(sid string, recs []transcript.Record) (purge, error) {
-	ts, err := f.tombstones()
-	if err != nil {
-		return purge{all: -1}, err
-	}
-	return purgedOf(sid, recs, ts), nil
-}
-
 // homeOfPurged is the project of session sid's purged home document, ""
 // when none was purged: without a cursor, it names the home a resync would
 // otherwise take from that document.
 func homeOfPurged(sid string, tombs []state.Tombstone) string {
 	for _, t := range tombs {
-		if t.Document == "conversation:"+sid && t.Project != "" {
+		if BaseDocumentID(t.Document) == "conversation:"+sid && t.Project != "" {
 			return t.Project
 		}
 	}

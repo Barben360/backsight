@@ -437,7 +437,20 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			unlock, err := serverLock(d, "server start")
+			// A maintenance lock whose owner is dead (its PID gone, or reused
+			// by a process started after the lock) is taken over: nothing
+			// else removes it (issue 285).
+			var notes []string
+			if h := state.Inspect(d.MaintenanceLock()); h != nil && h.Stale && state.BreakStale(h) == nil {
+				notes = append(notes, fmt.Sprintf("removed a maintenance lock left by %q (pid %d, since %s), whose process is gone",
+					h.Owner.Command, h.Owner.PID, h.Owner.Since.Format(time.RFC3339)))
+			}
+			// A restore that wrote its epoch but did not start the server
+			// on its API key again is finished here: the marker goes once
+			// the server is healthy on that key.
+			m, _ := state.ReadRestoreMarker(d)
+			keyStep := m != nil && m.Step == state.KeyStep
+			unlock, err := serverLockFor(d, "server start", keyStep)
 			if err != nil {
 				return err
 			}
@@ -448,7 +461,26 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err := rt.Start(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
-			return e.emit("server start", map[string]string{"project": cfg.Server.Project}, func() string { return "started\n" })
+			if keyStep {
+				if _, err := waitHealthy(cmd.Context(), rt, cfg, sec); err != nil {
+					return redacted(fmt.Errorf("started, but not healthy on its API key (%w): the "+m.Command+" stays unfinished (%s)", err, d.RestoreMarker()), sec)
+				}
+				if err := state.ClearRestoreMarker(d); err != nil {
+					return blocked(err)
+				}
+				notes = append(notes, "the "+m.Command+" of "+m.Archive+" is finished: the server runs on its API key again")
+			}
+			out := map[string]any{"project": cfg.Server.Project}
+			if len(notes) > 0 {
+				out["notes"] = notes
+			}
+			return e.emit("server start", out, func() string {
+				text := "started\n"
+				for _, n := range notes {
+					text += "note: " + n + "\n"
+				}
+				return text
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be rendered and started without doing it")
@@ -759,7 +791,16 @@ func newServerLLMCmd(e *env) *cobra.Command {
 // runs while maintenance or a restore is in progress (restore takes the
 // lock itself).
 func serverLock(d paths.Dirs, command string) (func(), error) {
-	if err := refuseWhileBusy(d); err != nil {
+	return serverLockFor(d, command, false)
+}
+
+// serverLockFor is serverLock; keyStep lets a restore's marker at its key
+// step through (server start finishes that restore).
+func serverLockFor(d paths.Dirs, command string, keyStep bool) (func(), error) {
+	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale {
+		return nil, &output.Error{Code: output.Blocked, Message: "maintenance in progress: " + held.Error()}
+	}
+	if err := refuseWhileBusy(d); err != nil && !keyStep {
 		return nil, err
 	}
 	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "server.lock"), command)

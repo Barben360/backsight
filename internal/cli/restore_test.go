@@ -52,7 +52,8 @@ type restoreDocker struct {
 	// migrateImage: compose up of this hindsight image migrates the
 	// database (its rows become 99), whether it then starts or not.
 	migrateImage string
-	badVerify    bool // the throwaway verify database counts one row less
+	badVerify    bool   // the throwaway verify database counts one row less
+	failKey      string // compose up on this API key fails
 }
 
 // upImage reads the hindsight image of the compose.yaml a `compose ... up`
@@ -161,6 +162,10 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 			return []byte("container hindsight exited (1)"), os.ErrClosed
 		}
 		if f.failStart {
+			return []byte("container exited"), os.ErrClosed
+		}
+		if f.failKey != "" && upKey(args) == f.failKey {
+			f.running = false
 			return []byte("container exited"), os.ErrClosed
 		}
 		f.running = true

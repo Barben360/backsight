@@ -294,3 +294,57 @@ func Entrypoint(r io.Reader) string {
 		}
 	}
 }
+
+// Reply is an assistant message's text, when and where it was written.
+type Reply struct {
+	Text string
+	At   time.Time
+	CWD  string
+}
+
+// LastReply is the last assistant message of r with text, sidechain
+// records included: a subagent's transcript (subagents/agent-<id>.jsonl)
+// is all sidechain, and its last reply is the report SubagentStop got as
+// last_assistant_message. Zero when there is none.
+func LastReply(r io.Reader) Reply {
+	br := bufio.NewReaderSize(r, 1<<16)
+	var last Reply
+	for {
+		line, _, tooLong, err := readLine(br)
+		var rr rawRecord
+		if !tooLong && json.Unmarshal(bytes.TrimSpace(line), &rr) == nil && rr.Type == "assistant" && len(rr.Message) > 0 {
+			if text := replyText(rr.Message); text != "" {
+				last = Reply{Text: text, At: parseTime(rr.Timestamp), CWD: rr.CWD}
+			}
+		}
+		if err != nil {
+			return last
+		}
+	}
+}
+
+// replyText is the text of a message: its string content, or its text
+// blocks joined by newlines.
+func replyText(raw json.RawMessage) string {
+	var msg struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &msg) != nil {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(msg.Content, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var blocks []block
+	if json.Unmarshal(msg.Content, &blocks) != nil {
+		return ""
+	}
+	var texts []string
+	for _, b := range blocks {
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			texts = append(texts, b.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(texts, "\n"))
+}

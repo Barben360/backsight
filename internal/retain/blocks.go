@@ -24,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/redact"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -80,6 +81,34 @@ func DocumentID(sid, home, project string) string {
 		return "conversation:" + sid
 	}
 	return "conversation:" + sid + "@" + project
+}
+
+// LiveDocumentID is DocumentID(sid, home, project) or, once a purge deleted
+// that document, the first of its successors <id>#2, <id>#3… that no
+// tombstone names. A purged id is never written again: Hindsight 1.1.0
+// recreates a deleted document on append (measured for issue 285), and a
+// restore deletes a tombstoned id again, which must not take the turns
+// sent since with it.
+func LiveDocumentID(sid, home, project string, tombs []state.Tombstone) string {
+	base := DocumentID(sid, home, project)
+	id := base
+	for n := 2; slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == id }); n++ {
+		id = base + "#" + strconv.Itoa(n)
+	}
+	return id
+}
+
+// BaseDocumentID is the DocumentID a successor id (LiveDocumentID) follows:
+// id without its #<n>, n ≥ 2; any other id as it is.
+func BaseDocumentID(id string) string {
+	i := strings.LastIndexByte(id, '#')
+	if i < 0 {
+		return id
+	}
+	if n, err := strconv.Atoi(id[i+1:]); err != nil || n < 2 || id[i+1] == '+' || id[i+1] == '0' {
+		return id
+	}
+	return id[:i]
 }
 
 // BuildSegment turns records of one session and one project into a retain
@@ -168,6 +197,31 @@ type Cursor struct {
 	Backfill bool `json:"backfill,omitempty"`
 	// NotesReplayed: backfill replayed the session's explicit saves.
 	NotesReplayed bool `json:"notes_replayed,omitempty"`
+	// SegmentDocs: the document each project's Segments count is of, when
+	// it is not DocumentID's (a purge moved the project to a successor id,
+	// LiveDocumentID).
+	SegmentDocs map[string]string `json:"segment_documents,omitempty"`
+}
+
+// setDoc records doc as project p's document (kept only when it is not
+// DocumentID's).
+func (c *Cursor) setDoc(sid, p, doc string) {
+	if doc == DocumentID(sid, c.Home, p) {
+		delete(c.SegmentDocs, p)
+		return
+	}
+	if c.SegmentDocs == nil {
+		c.SegmentDocs = map[string]string{}
+	}
+	c.SegmentDocs[p] = doc
+}
+
+// docOf is the document project p's segments were sent to.
+func (c Cursor) docOf(sid, p string) string {
+	if d := c.SegmentDocs[p]; d != "" {
+		return d
+	}
+	return DocumentID(sid, c.Home, p)
 }
 
 // SentDocument is one document of a session this cursor sent to.
@@ -205,7 +259,7 @@ func (c Cursor) SentDocuments(sid string) []SentDocument {
 	})
 	out := make([]SentDocument, 0, len(projects))
 	for _, p := range projects {
-		out = append(out, SentDocument{Document: DocumentID(sid, c.Home, p), Project: p, Segment: c.Segments[p], LastUUID: c.LastUUIDs[p]})
+		out = append(out, SentDocument{Document: c.docOf(sid, p), Project: p, Segment: c.Segments[p], LastUUID: c.LastUUIDs[p]})
 	}
 	return out
 }

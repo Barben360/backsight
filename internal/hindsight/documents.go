@@ -58,6 +58,31 @@ func (c *Client) SetDocumentTags(ctx context.Context, bank, id string, tags []st
 	return c.do(ctx, http.MethodPatch, bankPath(bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A")), nil, map[string]any{"tags": tags}, nil)
 }
 
+// BankIDs lists the id of every bank on the server, page by page.
+func (c *Client) BankIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	for offset, pages := 0, 0; ; pages++ {
+		if pages == maxPages {
+			return ids, fmt.Errorf("listing the banks: more than %d pages, stopping", maxPages)
+		}
+		var page struct {
+			Banks []Bank `json:"banks"`
+			Total int    `json:"total"`
+		}
+		q := url.Values{"limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}}
+		if err := c.get(ctx, "/v1/default/banks", q, &page); err != nil {
+			return ids, err
+		}
+		for _, b := range page.Banks {
+			ids = append(ids, b.ID)
+		}
+		offset += len(page.Banks)
+		if len(page.Banks) == 0 || offset >= page.Total {
+			return ids, nil
+		}
+	}
+}
+
 // FindBank reads bank's entry in the bank listing (its name: the profile
 // read endpoint is gone in 1.1.0), searching by id page by page; found is
 // false when the server has no such bank.

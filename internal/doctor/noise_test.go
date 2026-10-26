@@ -345,3 +345,12 @@ func TestNoiseHeadlessSessions(t *testing.T) {
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	expect(t, check(t, f.run(), "noise-headless"), Info, "5 headless session(s) were sent before privacy.skip_entrypoints; the bank was not read: server not usable")
 }
+
+// A purge's successor id (conversation:<sid>#<n>) is the same session's.
+func TestDocSessionOfASuccessorID(t *testing.T) {
+	for id, want := range map[string]string{"conversation:s1#2": "s1", "conversation:s1@infra#3": "s1", "conversation:s1@infra": "s1", "subagent:s1:a1": "s1", "note:x": ""} {
+		if got := docSession(id); got != want {
+			t.Errorf("docSession(%s) = %q, want %q", id, got, want)
+		}
+	}
+}

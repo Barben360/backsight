@@ -24,7 +24,6 @@ import (
 const (
 	gateRecallBudget = 6 * time.Second // SPEC §6.2: hits only when they arrive within 6 s
 	gateHits         = 2
-	reportChars      = 4000 // subagent report kept (SPEC §6.2)
 	lastReplyChars   = 1000 // the end of the last reply, for the detector and outcomes
 )
 
@@ -183,10 +182,7 @@ func (h *hookEnv) subagentStop() {
 	if h.cfg.Privacy.SkipsEntrypoint(parentEntrypoint(h.in.TranscriptPath)) {
 		return // a headless session's subagent (decision 0071 C1)
 	}
-	text, _ = redact.Text(text)
-	if r := []rune(text); len(r) > reportChars {
-		text = string(r[:reportChars])
-	}
+	text = retain.SubagentReport(text) // redacted and capped, as a reconcile rebuilds it
 	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, noteProject(h.home, h.cfg, h.project), text, now())
 	if _, err := notesOutbox(h.dirs).Append(n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})

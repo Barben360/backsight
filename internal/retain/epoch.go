@@ -127,6 +127,9 @@ type Reconciled struct {
 	// Resend: sessions the server holds less of than their cursor said;
 	// the cursor is gone, so the next flush resumes them from the server.
 	Resend []string `json:"resend,omitempty"`
+	// Reports: the subagent reports of those sessions the server lacked,
+	// rebuilt from their transcripts into the notes outbox.
+	Reports []string `json:"reports,omitempty"`
 }
 
 // epochSkew widens "sent after the backup": the backup's time comes from
@@ -201,7 +204,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		if st.RestoreEpoch != nil && st.RestoreEpoch.Bank == f.Bank {
 			reconciledAt = st.RestoreEpoch.ReconciledAt
 		}
-		if rec.Resend, err = f.dropLost(ctx, ep.since(rec.From, reconciledAt), st.Backfill != nil); err != nil {
+		if rec.Resend, rec.Reports, err = f.dropLost(ctx, ep.since(rec.From, reconciledAt), st.Backfill != nil); err != nil {
 			return rec, err
 		}
 	}
@@ -229,10 +232,10 @@ func (f *Flusher) restoreHold() error {
 // back the lost sessions that started before retain_since; without one,
 // the user sent them by hand (`retain flush --session`) and the next live
 // flush sends them again whole.
-func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (resend []string, err error) {
+func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (resend, reports []string, err error) {
 	files, err := filepath.Glob(filepath.Join(f.Dirs.CursorsDir(), "*.json"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, p := range files {
 		sid := strings.TrimSuffix(filepath.Base(p), ".json")
@@ -240,30 +243,32 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (r
 		if err != nil || !ok || cur.Bank != f.Bank || !cur.SentAt.After(since) {
 			continue // an unreadable cursor, or another bank's, resyncs anyway
 		}
-		lost, err := f.dropSession(ctx, sid, cur, queued)
+		lost, rebuilt, err := f.dropSession(ctx, sid, cur, queued)
 		if err != nil {
-			return nil, fmt.Errorf("session %s: %w", sid, err)
+			return nil, nil, fmt.Errorf("session %s: %w", sid, err)
 		}
 		if lost {
 			resend = append(resend, sid)
 		}
+		reports = append(reports, rebuilt...)
 	}
-	return resend, nil
+	return resend, reports, nil
 }
 
 // dropSession compares what one session sent with the server's documents,
 // under the session's lock. When a document no longer holds records this
 // session sent to it, it records them as its own to resend (the .dropped
 // mark), removes their "sent in this session" index
-// entries, queues the session for backfill when it belongs there, and only
-// then removes the cursor: a crash in between leaves the cursor, and the
-// next run does it again. The bare uuids stay in the index: they are the
+// entries, queues the session for backfill when it belongs there, rebuilds
+// the subagent reports the server lacks (rebuildReports), and only then
+// removes the cursor: a crash in between leaves the cursor, and the next
+// run does it again. The bare uuids stay in the index: they are the
 // fork guard, so a fork that copied these records still skips them, while
 // this session's own resync sends them (it reads its .dropped mark).
-func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queued bool) (lost bool, err error) {
+func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queued bool) (lost bool, reports []string, err error) {
 	unlock, err := f.lockSession(sid)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer unlock()
 	// The documents this cursor sent to: the home one and one per other
@@ -277,32 +282,34 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 		}
 	}
 	slices.Sort(projects[1:])
-	docs, err := f.readDocuments(ctx, sid, cur.Home, projects, nil)
+	tombs, err := f.tombstones()
 	if err != nil {
-		return false, errors.New(errSummary(err))
+		return false, nil, err
+	}
+	docs, err := f.readDocuments(ctx, sid, cur.Home, projects, nil, tombs)
+	if err != nil {
+		return false, nil, errors.New(errSummary(err))
 	}
 	fh, err := os.Open(cur.Transcript)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil // nothing left to resend from
+		return false, nil, nil // nothing left to resend from
 	}
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	recs, _, err := transcript.Read(fh, 0)
 	_ = fh.Close()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	// A record is lost when this session sent it (its session key) and its
 	// project's document no longer holds it: positions are per document, as
 	// the resync reads them. A position that cannot be trusted leaves the
 	// index alone: the resync quarantines.
 	attrs := f.attribute(sid, recs, attr{})
-	pos, bad := serverPosition(recs, docs, DocumentID(sid, cur.Home, cur.Home))
+	pos, bad := serverPosition(recs, docs, LiveDocumentID(sid, cur.Home, cur.Home, tombs))
 	// A record a purge deleted is not lost: never resent (M5 review rules).
-	if pos.purged, err = f.purged(sid, recs); err != nil {
-		return false, err
-	}
+	pos.purged = purgedOf(sid, recs, tombs)
 	mark := dropped{Records: map[string]bool{}}
 	earlier := f.loadDropped(sid) // a run stopped half way already dropped these
 	var keys []string
@@ -329,15 +336,15 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 		}
 	}
 	if !lostAny {
-		return false, nil // the server holds every record this session sent
+		return false, nil, nil // the server holds every record this session sent
 	}
 	early := !pos.found && len(recs) > 0 && !f.RetainSince.IsZero() && recs[0].Timestamp.Before(f.RetainSince)
 	mark.PastSince = early && !queued // resent by live retain, past retain_since
 	if err := f.addDropped(sid, mark); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := f.Index.Remove(keys...); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if early && queued {
 		if err := state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error {
@@ -347,14 +354,18 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 			}
 			return nil
 		}); err != nil {
-			return false, err
+			return false, nil, err
 		}
+	}
+	// Its subagents' reports sent after the backup are lost with it.
+	if reports, err = f.rebuildReports(ctx, sid, cur.Transcript, tombs); err != nil {
+		return false, nil, err
 	}
 	p, _ := cursorPath(f.Dirs.CursorsDir(), sid)
 	if err := os.Remove(p); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return true, nil
+	return true, reports, nil
 }
 
 // dropped is <sid>.dropped: what a restore lost of this session's own
