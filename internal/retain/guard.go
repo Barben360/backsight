@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -18,7 +19,9 @@ import (
 // segment. A client unaware of tombstones (an older binary on another
 // machine, a rollback to an older release, any other writer) appending to
 // a purged session's id therefore brings that id back with whatever it
-// sends next. A current binary purges it again, as forget --purge did.
+// sends next. A current binary purges it again, as forget --purge did;
+// the turns that older binary sent after the purge go again to the live
+// document (resync, lostToPurged), so none is lost.
 
 // guardOverlap: how far before the newest document seen the next look
 // starts. A document's created_at is its transaction's start (PostgreSQL
@@ -26,9 +29,11 @@ import (
 // seen.
 const guardOverlap = time.Hour
 
-// guardFullEvery: how often the look reads every tombstone, not only the
-// documents created since the last look.
-const guardFullEvery = 24 * time.Hour
+// clockMargin: a creation time further than this past this machine's
+// clock is taken for a wrong clock (a server host's clock jump, a volume
+// from another host), never for the window's start: it would pin every
+// later look in the future.
+const clockMargin = 24 * time.Hour
 
 // directLookups: up to this many tombstoned documents are read one by one
 // with no other request (a purged document is a short 404).
@@ -40,6 +45,32 @@ const documentsPerPage = 200
 // queuePages: how many pages of 100 operations, per status, the look reads
 // to know which documents an append is queued for.
 const queuePages = 5
+
+// perLook: the most documents one look purges again, each under its own
+// hold of the maintenance lock; the rest wait for the next look.
+const perLook = 10
+
+// repeatMax purges again of one document within repeatWindow, unattended:
+// past that, an older client keeps writing to it, and purging it every
+// look would only cost consolidation and briefing pages each time.
+const (
+	repeatMax    = 3
+	repeatWindow = 24 * time.Hour
+)
+
+// Lookup says where FindRecreated looks.
+type Lookup struct {
+	// Since: zero looks for every tombstoned document; else only among the
+	// documents created since then (the server's clock).
+	Since time.Time
+	// Recheck: documents found before, read again whatever their age.
+	Recheck []string
+	// Documents: the bank's document count when the caller has it, -1
+	// when not (a full look then asks for it when it needs it).
+	Documents int
+	// NotAfter: creation times past it are left out of Scan.Newest.
+	NotAfter time.Time
+}
 
 // Scan is what FindRecreated found.
 type Scan struct {
@@ -56,11 +87,12 @@ type Scan struct {
 	Newest time.Time
 }
 
-// tombstonedDocs is one tombstone per document of bank, by id.
+// tombstonedDocs is one tombstone per document of bank, by id; a
+// tombstone of another bank, or of none, is left out.
 func tombstonedDocs(bank string, tombs []state.Tombstone) map[string]state.Tombstone {
 	out := map[string]state.Tombstone{}
 	for _, t := range tombs {
-		if _, ok := out[t.Document]; !ok && t.Document != "" && (t.Bank == "" || t.Bank == bank) {
+		if _, ok := out[t.Document]; !ok && t.Document != "" && t.Bank == bank {
 			out[t.Document] = t
 		}
 	}
@@ -73,15 +105,14 @@ func notFound(err error) bool {
 }
 
 // FindRecreated looks for the documents of bank that tombs name and that
-// the server holds. With since zero, every tombstoned document is looked
-// for: read one by one, or compared with the bank's whole listing when
-// that takes fewer requests. Otherwise only the documents created since
-// then (the server's clock) are compared, in one listing, and recheck
-// (documents found before and not purged again yet) is read one by one.
-// Only exact ids match: a successor (<id>#2) is a document of its own,
-// found only when a tombstone names it. A bank the server does not have
-// holds nothing.
-func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs []state.Tombstone, since time.Time, recheck []string) (Scan, error) {
+// the server holds. With lk.Since zero, every tombstoned document is
+// looked for: read one by one, or compared with the bank's whole listing
+// when that takes fewer requests. Otherwise only the documents created
+// since then are compared, in one listing, and lk.Recheck is read one by
+// one. Only exact ids match: a successor (<id>#2) is a document of its
+// own, found only when a tombstone names it. A bank the server does not
+// have holds nothing.
+func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs []state.Tombstone, lk Lookup) (Scan, error) {
 	want := tombstonedDocs(bank, tombs)
 	sc := Scan{Checked: len(want)}
 	if len(want) == 0 {
@@ -106,7 +137,7 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 			if _, ok := want[it.ID]; ok {
 				found[it.ID] = true
 			}
-			if it.CreatedAt.After(sc.Newest) {
+			if it.CreatedAt.After(sc.Newest) && (lk.NotAfter.IsZero() || !it.CreatedAt.After(lk.NotAfter)) {
 				sc.Newest = it.CreatedAt
 			}
 		}
@@ -116,17 +147,20 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	if since.IsZero() {
+	if lk.Since.IsZero() {
 		sc.Full = true
 		direct := len(want) <= directLookups
 		if !direct {
-			sc.Requests++
-			n, _, err := cl.NewestDocument(ctx, bank)
-			switch {
-			case notFound(err):
-				return sc, nil
-			case err != nil:
-				return sc, fmt.Errorf("bank %s, counting its documents: %w", bank, err)
+			n := lk.Documents
+			if n < 0 {
+				sc.Requests++
+				var err error
+				switch n, _, err = cl.NewestDocument(ctx, bank); {
+				case notFound(err):
+					return sc, nil
+				case err != nil:
+					return sc, fmt.Errorf("bank %s, counting its documents: %w", bank, err)
+				}
 			}
 			direct = len(want) <= (n+documentsPerPage-1)/documentsPerPage
 		}
@@ -147,7 +181,7 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 			match(items)
 		}
 	} else {
-		items, err := cl.DocumentsCreatedSince(ctx, bank, since)
+		items, err := cl.DocumentsCreatedSince(ctx, bank, lk.Since)
 		switch {
 		case notFound(err):
 			return sc, nil
@@ -155,7 +189,7 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 			return sc, fmt.Errorf("bank %s, listing its new documents: %w", bank, err)
 		}
 		match(items)
-		for _, id := range recheck {
+		for _, id := range lk.Recheck {
 			if _, ok := want[id]; ok && !found[id] {
 				if err := get(id); err != nil {
 					return sc, err
@@ -173,16 +207,21 @@ func FindRecreated(ctx context.Context, cl *hindsight.Client, bank string, tombs
 
 // GuardOptions say how a look runs.
 type GuardOptions struct {
-	// All: look for every tombstoned document, whatever earlier looks saw
-	// (retain purge-again).
-	All bool
+	// Full: look for every tombstoned document (jobs maintain, retain
+	// purge-again); else only among the documents created since the
+	// newest one seen (jobs tick), plus the ones waiting.
+	Full bool
 	// Hold: find and record, purge nothing; the reason goes with each
-	// document found (the claude-code provider without the user's consent,
-	// or a plan).
+	// document found, as one the user must act on (the claude-code
+	// provider, or a server this machine does not run, without consent).
 	Hold string
-	// Plan: find only, as Hold, and record nothing (retain purge-again
-	// --plan).
+	// Plan: find only, and write nothing (retain purge-again --plan).
 	Plan bool
+	// Manual: the user asked (retain purge-again): no cap on repeats.
+	Manual bool
+	// Remote: tombstones to add to state's, in memory only (a plan reads
+	// the control bank's without writing them).
+	Remote []state.Tombstone
 }
 
 // Guarded is what a look did.
@@ -197,18 +236,23 @@ type Guarded struct {
 
 // GuardPurges looks for tombstoned documents of the bank that the server
 // holds again and purges them again, as forget --purge does (PurgeFound).
-// A full look (every tombstone) runs on the first look, when a tombstone
-// was learned since the last full one, once a day, and with All; the
-// looks between list only the documents created since the newest one
-// seen (less guardOverlap), one request whatever the tombstones' number.
+// A full look (opt.Full) compares every tombstone; the others list only
+// the documents created since the newest one seen (less guardOverlap),
+// one request whatever the tombstones' number, and read again the
+// documents still waiting. The first one, with no newest seen yet, asks
+// the server for it first.
 //
 // It never runs under the maintenance lock or a restore or update marker
 // (an error, nothing done). A document an append is queued or running for
 // waits: purging under it would let it recreate the document, with facts
 // the purge never saw. So does each found document when a retain names no
-// single document, or the queue is too long to read. The purge itself
-// takes the maintenance lock, as forget --purge does. What waits is kept
-// in state, read again by the next look, and shown by doctor.
+// single document, or the queue is too long to read. Each purge takes the
+// maintenance lock, as forget --purge does (a stale one is broken), one
+// document at a time, at most perLook per look. Unattended, one document
+// is purged again at most repeatMax times in repeatWindow: past that, an
+// older client keeps writing to it, and it waits for the user. What waits
+// is kept in state, read again by the next look, and shown by doctor. A
+// failed read changes nothing in state.
 func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, error) {
 	var g Guarded
 	if err := f.restoreHold(); err != nil {
@@ -221,9 +265,10 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 	if err != nil {
 		return g, err
 	}
-	tombs := st.TombstonesOf(f.Bank)
-	want := tombstonedDocs(f.Bank, tombs)
-	if len(want) == 0 {
+	all := state.State{Tombstones: st.TombstonesOf(f.Bank)}
+	all.AddTombstones(opt.Remote...)
+	tombs := all.TombstonesOf(f.Bank)
+	if len(tombstonedDocs(f.Bank, tombs)) == 0 {
 		return g, nil
 	}
 	prev := state.PurgeGuard{Bank: f.Bank}
@@ -231,34 +276,77 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 		prev = *st.PurgeGuard
 	}
 	at := f.Now().UTC()
-	since, recheck := LookSince(st, f.Bank, len(want), at, opt.All)
-	var newest time.Time
-	if g.Full = since.IsZero(); g.Full {
+	notAfter := at.Add(clockMargin)
+	sane := func(t time.Time) bool { return !t.IsZero() && !t.After(notAfter) }
+	lk := Lookup{Documents: -1, NotAfter: notAfter}
+	for _, w := range prev.Waiting {
+		lk.Recheck = append(lk.Recheck, w.Document)
+	}
+	newest := prev.Newest
+	if opt.Full || !sane(newest) {
 		// The newest document first: one created during the look falls in
 		// the next one's window.
-		_, t, err := f.Client.NewestDocument(ctx, f.Bank)
+		n, t, err := f.Client.NewestDocument(ctx, f.Bank)
+		g.Requests++
 		if err != nil && !notFound(err) {
 			return g, fmt.Errorf("bank %s, its newest document: %w", f.Bank, err)
 		}
-		newest = t
-		g.Requests++
+		lk.Documents, newest = n, t
 	}
-	sc, err := FindRecreated(ctx, f.Client, f.Bank, tombs, since, recheck)
-	g.Checked, g.Requests = sc.Checked, g.Requests+sc.Requests
+	switch {
+	case opt.Full:
+	case sane(newest):
+		lk.Since = newest.Add(-guardOverlap)
+	case newest.IsZero():
+		// The bank holds no document: only the waiting ones can be back.
+		lk.Since = notAfter
+	default:
+		// Its newest document is dated past this machine's clock: the last
+		// day, by this machine's clock, until it is behind.
+		lk.Since = at.Add(-clockMargin)
+	}
+	sc, err := FindRecreated(ctx, f.Client, f.Bank, tombs, lk)
+	g.Full, g.Checked, g.Requests = sc.Full, sc.Checked, g.Requests+sc.Requests
 	if err != nil {
 		return g, err
 	}
 	next := prev
 	next.CheckedAt = at
-	if g.Full {
-		next.FullAt, next.Tombstones = at, len(want)
-	}
-	for _, t := range []time.Time{newest, sc.Newest} {
-		if t.After(next.Newest) {
-			next.Newest = t
+	switch {
+	case opt.Full:
+		// A full look sets the newest again, never only forward: a wrong
+		// date seen once must not pin the window.
+		next.Newest, next.FullAt, next.Tombstones = time.Time{}, at, sc.Checked
+		for _, t := range []time.Time{newest, sc.Newest} {
+			if sane(t) && t.After(next.Newest) {
+				next.Newest = t
+			}
+		}
+	default:
+		if !sane(next.Newest) {
+			next.Newest = time.Time{}
+		}
+		for _, t := range []time.Time{newest, sc.Newest} {
+			if sane(t) && t.After(next.Newest) {
+				next.Newest = t
+			}
 		}
 	}
-	waiting := map[string]string{}
+	// The repeats of the last day.
+	next.Repeats = slices.DeleteFunc(slices.Clone(prev.Repeats), func(r state.Repurge) bool { return at.Sub(r.Since) >= repeatWindow })
+	repeat := func(doc string) *state.Repurge {
+		for i := range next.Repeats {
+			if next.Repeats[i].Document == doc {
+				return &next.Repeats[i]
+			}
+		}
+		return nil
+	}
+	type hold struct {
+		why  string
+		user bool
+	}
+	waiting := map[string]hold{}
 	var purge []state.Tombstone
 	if len(sc.Found) > 0 {
 		var why map[string]string
@@ -269,38 +357,54 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 			why = map[string]string{"": "a plan purges nothing"}
 		default:
 			why, err = queuedAppends(ctx, f.Client, f.Bank, sc.Found)
-		}
-		if err != nil {
-			why = map[string]string{"": "cannot read the bank's queue: " + errSummary(err)}
+			if err != nil {
+				why = map[string]string{"": "cannot read the bank's queue: " + errSummary(err)}
+			}
 		}
 		for _, t := range sc.Found {
-			if w := why[""] + why[t.Document]; w != "" {
-				waiting[t.Document] = w
-			} else {
+			r := repeat(t.Document)
+			switch w := why[""] + why[t.Document]; {
+			case opt.Hold != "":
+				waiting[t.Document] = hold{w, true}
+			case w != "":
+				waiting[t.Document] = hold{w, false}
+			case !opt.Manual && r != nil && r.Count >= repeatMax:
+				waiting[t.Document] = hold{fmt.Sprintf("an older client keeps writing to it (purged again %d times since %s UTC): update backsight on every machine that writes to this bank, then run backsight retain purge-again",
+					r.Count, r.Since.Format("2006-01-02 15:04")), true}
+			case len(purge) >= perLook:
+				waiting[t.Document] = hold{fmt.Sprintf("at most %d documents are purged again per look: the next one does it", perLook), false}
+			default:
 				purge = append(purge, t)
 			}
 		}
 	}
-	if len(purge) > 0 {
-		l, err := state.TryAcquire(f.Dirs.MaintenanceLock(), "purge again (recreated purged documents)")
+	for _, t := range purge {
+		l, _, err := state.Acquire(f.Dirs.MaintenanceLock(), "purge again (recreated purged documents)")
 		if err != nil {
-			for _, t := range purge {
-				waiting[t.Document] = "maintenance in progress: " + errSummary(err)
-			}
+			waiting[t.Document] = hold{"maintenance in progress: " + errSummary(err), false}
+			continue
+		}
+		done, err := PurgeFound(ctx, f.Client, f.Bank, []state.Tombstone{t})
+		_ = l.Release()
+		g.Purged.Observations += done.Observations
+		g.Purged.Pages = append(g.Purged.Pages, done.Pages...)
+		if err != nil {
+			waiting[t.Document] = hold{errSummary(err), false}
+			continue
+		}
+		g.Purged.Documents = append(g.Purged.Documents, t.Document)
+		if r := repeat(t.Document); r != nil {
+			r.Count++
 		} else {
-			g.Purged, err = PurgeFound(ctx, f.Client, f.Bank, purge)
-			_ = l.Release()
-			for _, t := range purge {
-				if err != nil && !slices.Contains(g.Purged.Documents, t.Document) {
-					waiting[t.Document] = errSummary(err)
-				}
-			}
+			next.Repeats = append(next.Repeats, state.Repurge{Document: t.Document, Count: 1, Since: at})
 		}
 	}
+	sort.Strings(g.Purged.Pages)
+	g.Purged.Pages = compactStrings(g.Purged.Pages)
 	next.Waiting = nil
 	for _, t := range sc.Found {
 		if w, ok := waiting[t.Document]; ok {
-			next.Waiting = append(next.Waiting, state.Recreated{Document: t.Document, Session: t.Session, Project: t.Project, Why: w})
+			next.Waiting = append(next.Waiting, state.Recreated{Document: t.Document, Session: t.Session, Project: t.Project, Why: w.why, NeedsUser: w.user})
 		}
 	}
 	g.Waiting = next.Waiting
@@ -310,18 +414,25 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 	if opt.Plan {
 		return g, nil
 	}
+	// Nothing but the time of the look changed, and that was recorded
+	// within the hour: state.json is left alone (it is written under a
+	// lock other commands wait on).
+	quiet, was := next, prev
+	quiet.CheckedAt, was.CheckedAt = time.Time{}, time.Time{}
+	if reflect.DeepEqual(quiet, was) && at.Sub(prev.CheckedAt) < time.Hour {
+		return g, nil
+	}
 	return g, state.Update(f.Dirs, "purge guard", func(s *state.State) error {
 		s.PurgeGuard = &next
 		return nil
 	})
 }
 
-// LookSince is where the next look at bank starts, given the last one
-// recorded in st: zero for a full look (the first, one with more
-// tombstoned documents than the last full look saw, a day after it, or
-// all), else an overlap before the newest document seen; recheck are the
-// documents found before and still waiting.
-func LookSince(st state.State, bank string, tombstoned int, at time.Time, all bool) (since time.Time, recheck []string) {
+// LookSince is where an incremental look at bank, given the last one
+// recorded in st, would start: zero when none was recorded (no newest
+// seen, or another bank's); recheck are the documents found before and
+// still waiting.
+func LookSince(st state.State, bank string, at time.Time) (since time.Time, recheck []string) {
 	prev := st.PurgeGuard
 	if prev == nil || prev.Bank != bank {
 		return time.Time{}, nil
@@ -329,7 +440,7 @@ func LookSince(st state.State, bank string, tombstoned int, at time.Time, all bo
 	for _, w := range prev.Waiting {
 		recheck = append(recheck, w.Document)
 	}
-	if all || prev.Newest.IsZero() || tombstoned > prev.Tombstones || at.Sub(prev.FullAt) >= guardFullEvery {
+	if prev.Newest.IsZero() || prev.Newest.After(at.Add(clockMargin)) {
 		return time.Time{}, recheck
 	}
 	return prev.Newest.Add(-guardOverlap), recheck

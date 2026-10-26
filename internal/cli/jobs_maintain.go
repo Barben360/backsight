@@ -38,7 +38,10 @@ type maintainResult struct {
 	// Reattribute: the free moves made after the backup, what is left to
 	// send again, or why it did not run.
 	Reattribute string `json:"reattribute,omitempty"`
-	MS          int    `json:"ms"`
+	// Purges: the daily look at every purge tombstone for a document an
+	// older client wrote again, "" when none was found.
+	Purges string `json:"purges,omitempty"`
+	MS     int    `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -62,7 +65,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			finish := func() error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "maintain", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "reattribute": res.Reattribute, "update": res.Update, "reason": res.Reason}})
+					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "reattribute": res.Reattribute, "purges": res.Purges, "update": res.Update, "reason": res.Reason}})
 				var failed error
 				if res.Status == "partial" {
 					failed = &output.Error{Code: output.Partial, Message: "the backup failed: " + res.Backup + "; the next run retries"}
@@ -105,6 +108,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			}
 			var moved int
 			res.Reattribute, moved = maintainReattribute(cmd.Context(), d, archive, noBackup)
+			res.Purges = guardMaintain(cmd.Context(), d, home)
 			res.Update = maintainUpdate(cmd.Context(), d)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
@@ -208,8 +212,12 @@ func maintainText(r maintainResult) string {
 	if r.Status == "skipped" {
 		return "skipped: " + r.Reason + "\n"
 	}
-	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, re-attribution %s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated),
-		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, r.Update, r.Doctor, r.MS)
+	purges := ""
+	if r.Purges != "" {
+		purges = ", " + r.Purges
+	}
+	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, re-attribution %s%s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated),
+		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, r.MS)
 }
 
 // maintainReattribute applies the moves in place of retain reattribute

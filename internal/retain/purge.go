@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
@@ -128,7 +127,7 @@ func (r Repurged) String() string {
 // (FindRecreated): a long tombstone list costs the bank's listing, not a
 // read per tombstone.
 func PurgeAgain(ctx context.Context, cl *hindsight.Client, bank string, tombs []state.Tombstone) (Repurged, error) {
-	sc, err := FindRecreated(ctx, cl, bank, tombs, time.Time{}, nil)
+	sc, err := FindRecreated(ctx, cl, bank, tombs, Lookup{Documents: -1})
 	if err != nil {
 		return Repurged{Left: sc.Checked, Unread: true}, err
 	}
@@ -161,7 +160,18 @@ func PurgeFound(ctx context.Context, cl *hindsight.Client, bank string, found []
 		if t.Project != "" {
 			projects[t.Project] = true
 		}
+		var foreign []string
 		if err := cl.ListMemories(ctx, bank, hindsight.MemoryQuery{DocumentID: t.Document}, func(m hindsight.Memory) error {
+			// Only the raw facts of this document: an observation is
+			// cleared through its sources, and a fact of another document
+			// (a listing that did not filter) is never touched.
+			switch {
+			case m.DocumentID != t.Document:
+				foreign = append(foreign, m.ID)
+				return nil
+			case m.FactType == "observation":
+				return nil
+			}
 			facts = append(facts, PurgeFact{ID: m.ID, State: m.State})
 			for _, tag := range m.Tags {
 				if p, ok := strings.CutPrefix(tag, "project:"); ok {
@@ -172,6 +182,10 @@ func PurgeFound(ctx context.Context, cl *hindsight.Client, bank string, found []
 		}); err != nil {
 			res.Unread = true
 			return fail(i, fmt.Errorf("bank %s, the facts of document %s: %w", bank, t.Document, err))
+		}
+		if len(foreign) > 0 {
+			res.Unread = true
+			return fail(i, fmt.Errorf("bank %s: the listing of document %s's facts named %d memory(ies) of other documents (%s): nothing purged", bank, t.Document, len(foreign), foreign[0]))
 		}
 		cleared, pages, err := PurgeWrites(ctx, cl, bank, facts, []string{t.Document}, projects, "it is purged again on the next restore or reconcile")
 		res.Observations += cleared

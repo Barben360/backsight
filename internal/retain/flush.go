@@ -212,6 +212,12 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 		}
 	}
 
+	// Read before the cursor is rebuilt: the projects whose last sends
+	// went to a purged id (lostToPurged).
+	var lostTo map[string]bool
+	if haveCursor {
+		lostTo = lostToPurged(sid, cur, tombs)
+	}
 	if resync {
 		// A cursor in the per-project layout keeps its home: the documents
 		// already written are named after it. Only a session with no such
@@ -234,7 +240,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	attrs := f.attribute(sid, recs, attr{project: cur.Project, namedOut: cur.OptOut, namedOutDir: cur.OptOutDir})
 	if resync {
 		var done bool
-		if recs, res, done = f.resync(ctx, res, &cur, sid, recs, attrs, opt, now); done {
+		if recs, res, done = f.resync(ctx, res, &cur, sid, recs, attrs, opt, now, lostTo); done {
 			return res
 		}
 	}
@@ -265,7 +271,11 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 // its legacy position. The records left that this session already sent are
 // marked held in the sent index; sendRuns skips them, in this flush and in
 // the next one should this one stop half way.
-func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid string, recs []transcript.Record, attrs map[int64]attr, opt Options, now time.Time) ([]transcript.Record, Result, bool) {
+//
+// lostTo are the projects whose last sends, as the cursor read before
+// this resync says, went to a purged id (lostToPurged): this session's own
+// records there that the purge did not cover go again.
+func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid string, recs []transcript.Record, attrs map[int64]attr, opt Options, now time.Time, lostTo map[string]bool) ([]transcript.Record, Result, bool) {
 	retry := func(detail string) ([]transcript.Record, Result, bool) {
 		res.Status, res.Detail = Retry, detail
 		return nil, res, true
@@ -341,6 +351,11 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 			held = true // a fork copies its parent's records (decision 0038)
 		case a.out:
 			// never sent: sendRuns keeps it out again
+		case own(r.UUID) && (lostTo[a.project] || lostTo[""]):
+			// Sent after the purge to the purged id, which is purged again
+			// (or will be): it goes again to the live document. What the
+			// purge itself covered is held above (pos.purged).
+			unmark, resent = append(unmark, key), append(resent, r.UUID)
 		case own(r.UUID) && found:
 			// Sent, but missing from the server's metadata (async retain
 			// still running, or a crash before the cursor was saved):

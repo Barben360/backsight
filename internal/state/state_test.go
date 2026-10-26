@@ -201,3 +201,28 @@ func TestSaveWithinTakesTheLock(t *testing.T) {
 		t.Error("lock left")
 	}
 }
+
+// The look for recreated purged documents survives a save and a load
+// whole, beside fields a newer minor version wrote.
+func TestPurgeGuardRoundTrips(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	g := &PurgeGuard{Bank: "claude-memory", Newest: at, FullAt: at, Tombstones: 4, CheckedAt: at,
+		Waiting: []Recreated{{Document: "conversation:s1", Session: "s1", Project: "billing", Why: "consent", NeedsUser: true}},
+		Purged:  []string{"conversation:s3"}, PurgedAt: at, Repeats: []Repurge{{Document: "conversation:s3", Count: 2, Since: at}}}
+	raw, _ := json.Marshal(map[string]any{"schema_version": SchemaVersion, "purge_guard": g, "from_a_newer_minor": true})
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Load(p)
+	if err != nil || !reflect.DeepEqual(st.PurgeGuard, g) {
+		t.Fatalf("%+v %v", st.PurgeGuard, err)
+	}
+	if err := Save(p, st); err != nil {
+		t.Fatal(err)
+	}
+	back, _ := os.ReadFile(p)
+	if again, _ := Load(p); !reflect.DeepEqual(again.PurgeGuard, g) || !strings.Contains(string(back), "from_a_newer_minor") {
+		t.Errorf("%s", back)
+	}
+}

@@ -7,10 +7,17 @@
 #   2. An older client, unaware of tombstones, appends to the purged id as
 #      it always did: Hindsight 1.1.0 recreates the document, holding only
 #      the new segment, and extracts facts from it.
-#   3. doctor names the recreated document and its session.
-#   4. jobs tick purges it again: the document and the facts extracted from
-#      the append are gone; the successor stays.
-#   5. A second tick and retain purge-again do nothing.
+#   A tick has looked before (its window starts at the server's newest
+#   document), so only its incremental look can find the recreated one.
+#   3. The server's operation rows name the document of a one-document
+#      retain, and none for a batch of several (the queue-wait rule).
+#   4. doctor names it; retain purge-again --plan lists it and writes
+#      nothing; with the claude-code provider, purge-again exits 10 and the
+#      tick only records it.
+#   5. jobs tick purges it again, by its incremental look: the document
+#      and the facts extracted from the append are gone; the successor
+#      stays; the window's newest is the server's.
+#   6. A second tick and retain purge-again do nothing.
 #
 # Usage: scripts/purge-guard-proof.sh [api port] (default 28550 +
 # BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; the UI takes port + 1111).
@@ -78,6 +85,9 @@ idle() { for _ in $(seq 1 90); do n=$(( $(api "$B/operations?status=pending&limi
 units() { api "$B/memories/list?document_id=$(enc "$1")&limit=100" | jq '.total'; }
 unit_ids() { api "$B/memories/list?document_id=$(enc "$1")&limit=100" | jq -r '[.items[].id] | sort | join(",")'; }
 doc() { status "$B/documents/$(enc "$1")"; }
+state_sum() { sha256sum "$BACKSIGHT_HOME/state/state.json" | cut -d' ' -f1; }
+epoch_of() { date -u -d "$1" +%s; }
+set_provider() { sed -i "s/^provider = .*/provider = \"$1\"/" "$BACKSIGHT_HOME/config/config.toml"; }
 all_units() { api "$B/memories/list?limit=1" | jq '.total'; }
 
 project_dir=$HOME/src/billing
@@ -116,6 +126,13 @@ idle
 successor_units=$(units "$D1#2")
 echo "== sent and purged: $D1 had $sent_units fact(s), purged; later turns in $D1#2 ($successor_units fact(s))"
 
+# The tick looks before anything is recreated: its window starts at the
+# server's newest document.
+"$bin" jobs tick --json > "$work/tick0.json" || { cat "$work/tick0.json"; fail "jobs tick failed"; }
+jq -e '.purge_guard.newest != null and ((.purge_guard.full_at // "0001") | startswith("0001"))' "$BACKSIGHT_HOME/state/state.json" > /dev/null ||
+  fail "the first tick recorded no window: $(jq -c .purge_guard "$BACKSIGHT_HOME/state/state.json")"
+sleep 2
+
 # 2. An older client appends to the purged id, as builds before tombstones
 # did (async, update_mode append): the server recreates the document.
 api -X POST "$B/memories" -d "$(jq -nc --arg d "$D1" --arg s "$S1" '{async: true, items: [{
@@ -128,30 +145,63 @@ recreated_units=$(units "$D1") recreated_ids=$(unit_ids "$D1")
 [ "$recreated_units" -gt 0 ] || fail "no fact extracted from the append"
 api "$B/documents/$(enc "$D1")" | jq -e '.original_text | test("hunter3") and (test("hunter2") | not)' > /dev/null ||
   fail "the recreated document does not hold only the appended segment"
-before_all=$(all_units)
-echo "== recreated by an older client: $D1 holds only the appended segment, $recreated_units fact(s) ($recreated_ids); bank $before_all fact(s)"
+echo "== recreated by an older client: $D1 holds only the appended segment, $recreated_units fact(s)"
 
-# 3. doctor names it.
+# 3. What the queue-wait rule reads: a one-document retain names its
+# document in the operation rows, a batch of several names none.
+api "$B/operations?status=completed&limit=20" | jq -e --arg d "$D1" '[.operations[] | select(.document_id == $d)] | length >= 1' > /dev/null ||
+  fail "the operation rows do not name the recreated document: $(api "$B/operations?status=completed&limit=5" | jq -c '[.operations[] | {operation_type, document_id}]')"
+api -X POST "$B/memories" -d '{"async": true, "items": [
+  {"content": "Other client note one.", "document_id": "proof-batch-a", "tags": []},
+  {"content": "Other client note two.", "document_id": "proof-batch-b", "tags": []}]}' > /dev/null
+idle
+batch=$(api "$B/operations?status=completed&limit=20" | jq -c '[.operations[] | select(.operation_type | test("retain"))][0] | {operation_type, document_id, items_count}')
+[ "$(jq -r .items_count <<< "$batch")" = 2 ] || fail "the newest retain is not the batch of two: $batch"
+[ "$(jq -r .document_id <<< "$batch")" = null ] || fail "a batch of two documents names one: $batch"
+echo "== operation rows: a one-document retain names $D1; a batch of two names none ($batch)"
+
+# 4. doctor names it (a warning: the tick looked within the hour); a plan
+# lists it and writes nothing; with the claude-code provider nothing is
+# purged unattended and purge-again asks for the consent.
 "$bin" doctor --json > "$work/doctor.json" || true
-jq -e --arg s "$S1" '.data.checks[] | select(.id == "purged-documents") | .status == "error" and (.summary | contains("session " + $s))' "$work/doctor.json" > /dev/null ||
+jq -e --arg s "$S1" '.data.checks[] | select(.id == "purged-documents") | .status == "warn" and (.summary | contains("session " + $s))' "$work/doctor.json" > /dev/null ||
   { jq '.data.checks[] | select(.id == "purged-documents")' "$work/doctor.json"; fail "doctor did not name the recreated document"; }
 echo "== doctor: $(jq -r '.data.checks[] | select(.id == "purged-documents") | .status + ": " + .summary' "$work/doctor.json")"
+sum=$(state_sum)
+"$bin" retain purge-again --plan --json > "$work/plan.json" || { cat "$work/plan.json"; fail "--plan failed"; }
+jq -e --arg d "$D1" '.data.action == "planned" and ([.data.waiting[].document] == [$d])' "$work/plan.json" > /dev/null || { cat "$work/plan.json"; fail "--plan did not list it"; }
+[ "$(state_sum)" = "$sum" ] && [ "$(doc "$D1")" = 200 ] || fail "--plan wrote"
+set_provider claude-code
+set +e; "$bin" retain purge-again --json > "$work/gate.json"; code=$?; set -e
+[ "$code" = 10 ] && [ "$(doc "$D1")" = 200 ] || { cat "$work/gate.json"; fail "claude-code without consent: exit $code"; }
+"$bin" jobs tick --json > "$work/tick-cc.json" || { cat "$work/tick-cc.json"; fail "jobs tick failed"; }
+[ "$(doc "$D1")" = 200 ] || fail "the claude-code tick purged unattended"
+jq -e '.purge_guard.waiting[0].needs_user == true' "$BACKSIGHT_HOME/state/state.json" > /dev/null || fail "the claude-code tick did not record it"
+set_provider mock
+echo "== --plan: listed, state.json unchanged; claude-code: purge-again exit 10, tick: $(jq -r .data.purges "$work/tick-cc.json")"
 
-# 4. jobs tick purges it again, with the facts drawn from the append.
+# 5. jobs tick purges it again, by its incremental look, with the facts
+# drawn from the append.
+before_all=$(all_units)
+# (purge-again's look above was a full one: the tick must not make one.)
+full_at=$(jq -r .purge_guard.full_at "$BACKSIGHT_HOME/state/state.json")
 "$bin" jobs tick --json > "$work/tick1.json" || { cat "$work/tick1.json"; fail "jobs tick failed"; }
 jq -e --arg d "$D1" '.data.purges | contains("purged again") and contains($d)' "$work/tick1.json" > /dev/null || { cat "$work/tick1.json"; fail "the tick did not purge it again"; }
+[ "$(jq -r .purge_guard.full_at "$BACKSIGHT_HOME/state/state.json")" = "$full_at" ] || fail "the tick made a full look"
 idle
-[ "$(doc "$D1")" = 404 ] || fail "the recreated document is still there"
+[ "$(doc "$D1")" = 200 ] && fail "the recreated document is still there"
 [ "$(units "$D1")" = 0 ] || fail "facts of the recreated document survived"
 for id in ${recreated_ids//,/ }; do
   [ "$(status "$B/memories/$id")" = 404 ] || fail "fact $id of the recreated document survived"
 done
 [ "$(doc "$D1#2")" = 200 ] && [ "$(units "$D1#2")" = "$successor_units" ] || fail "the successor was touched"
 after_all=$(all_units)
-jq -e --arg d "$D1" '.purge_guard.purged == [$d] and (.purge_guard.waiting // []) == []' "$BACKSIGHT_HOME/state/state.json" > /dev/null || fail "state: $(jq -c .purge_guard "$BACKSIGHT_HOME/state/state.json")"
-echo "== jobs tick: $(jq -r .data.purges "$work/tick1.json"); its $recreated_units fact(s) gone (bank $before_all -> $after_all); $D1#2 kept ($successor_units fact(s))"
+server_newest=$(api "$B/documents?time_field=created_at&limit=1" | jq -r '.items[0].created_at')
+state_newest=$(jq -r .purge_guard.newest "$BACKSIGHT_HOME/state/state.json")
+[ "$(epoch_of "$server_newest")" = "$(epoch_of "$state_newest")" ] || fail "window's newest $state_newest, the server's $server_newest"
+echo "== jobs tick (incremental look): $(jq -r .data.purges "$work/tick1.json"); its $recreated_units fact(s) gone (bank $before_all -> $after_all memories); $D1#2 kept ($successor_units fact(s)); newest $state_newest = the server's $server_newest"
 
-# 5. Nothing more to do.
+# 6. Nothing more to do.
 "$bin" jobs tick --json > "$work/tick2.json" || { cat "$work/tick2.json"; fail "second tick failed"; }
 jq -e '(.data.purges // "") == ""' "$work/tick2.json" > /dev/null || { cat "$work/tick2.json"; fail "the second tick did something"; }
 "$bin" retain purge-again --json > "$work/again.json" || { cat "$work/again.json"; fail "retain purge-again failed"; }
