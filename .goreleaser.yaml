@@ -66,6 +66,11 @@ release:
   # A rerun of the release workflow replaces its own unpublished draft.
   replace_existing_draft: true
 
+# The release notes are hand-written, one file per tag: the release
+# workflow passes docs/releases/<tag>.md with --release-notes, which takes
+# the place of the changelog below, and refuses a tag without it. The
+# changelog stays enabled because disabling it also drops --release-notes;
+# it only ever reaches a local `goreleaser release` run without the flag.
 changelog:
   use: git
   sort: asc

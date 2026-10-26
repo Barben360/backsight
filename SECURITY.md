@@ -22,8 +22,6 @@ backsight is a one-person preview project: reports are answered on a best-effort
 
 backsight is a preview. Only the latest release, pre-releases included, gets security fixes: there are no backports. `backsight update check` tells you when a newer release exists, and `backsight update apply` installs it.
 
-The `v0.0.1-m0` and `v0.0.2-m0` releases are early skeletons with no server or client, and are not supported.
-
 ## Threat model
 
 What backsight defends against:

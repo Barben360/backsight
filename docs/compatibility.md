@@ -16,31 +16,25 @@ What this source tree pins and requires. A release built from it ships exactly t
 
 Both images are pinned by the digest of their multi-arch index, so the tag is only a label: a signed release fixes the digest, and Docker pulls exactly that image (no separate image signature).
 
-Tested on the author's machine with Docker 29.9 and Compose 5.6 (as of 2026-10-25). CI installs the Claude Code version pinned in `.github/workflows/ci.yml`.
+Tested with Docker 29.9 and Compose 5.6 (as of 2026-10-25), and on every change with the Docker of GitHub's `ubuntu-latest` runners. CI installs the Claude Code version pinned in `.github/workflows/ci.yml`.
 
 ## Platforms
 
-Release binaries are built for four targets. Linux is the only platform tested today; the macOS and Windows binaries are compiled on every change and validated at milestone M7.
+Release binaries are built for four targets. Linux amd64 is the only platform tested today; the other binaries are compiled on every change but not tested yet.
 
 | OS / arch | Release binary | Status |
 |---|---|---|
-| Linux amd64 | yes | **tested**: Ubuntu 24.04 (CI, on GitHub's `ubuntu-latest` runners) and CachyOS (rolling, Arch-based; the author's machine) |
+| Linux amd64 | yes | **tested**: Ubuntu 24.04 (CI, on every change, the fresh-install chain included) and CachyOS (rolling, Arch-based) |
 | Linux arm64 | yes | built, not tested |
-| macOS arm64 (Apple silicon) | yes | built; validated at M7 |
-| Windows amd64 | yes | built; validated at M7 |
-
-Ubuntu 24.04:
-
-- CI runs every check, the fresh-install chain included, on GitHub's `ubuntu-latest` runners (Ubuntu 24.04). From 2026-10-25 until the repository became public, CI ran on self-hosted runners on the author's CachyOS machine instead.
-- The author's work PC (Ubuntu 24.04) is the first preview install.
+| macOS arm64 (Apple silicon) | yes | built, not tested |
+| Windows amd64 | yes | built, not tested |
 
 Other targets (macOS on Intel, Windows on arm64, 32-bit) have no release binary.
 
 ## Releases
 
-One row per release, added when it is tagged. The current section above is what the next release ships.
+One row per release, newest first, added with the release's notes in `docs/releases/<tag>.md`: the release workflow refuses a tag without both. The current section above is what the next release ships.
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
-| v0.0.2-m0 | none | none | M0 skeleton: no server, no client; not usable |
-| v0.0.1-m0 | none | none | M0 skeleton: no server, no client; not usable |
+| v0.1.0-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | first public pre-release; Linux amd64 tested ([notes](releases/v0.1.0-m5.md)) |
