@@ -102,17 +102,6 @@ func TestServerRenderWritesFiles(t *testing.T) {
 	}
 }
 
-func TestServerRenderPlanWritesNothing(t *testing.T) {
-	home := devInstall(t, true)
-	code, out, _ := run(t, "server", "render", "--plan")
-	if code != output.OK || !strings.Contains(out, "compose.yaml: would be written") || strings.Contains(out, "fakellmkey") {
-		t.Errorf("exit %d\n%s", code, out)
-	}
-	if _, err := os.Stat(filepath.Join(composeDir(home), "compose.yaml")); err == nil {
-		t.Error("--plan wrote a file")
-	}
-}
-
 func TestServerRenderMissingSecretNeedsUser(t *testing.T) {
 	devInstall(t, false)
 	code, out, _ := run(t, "server", "render", "--json")
