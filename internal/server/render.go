@@ -105,7 +105,7 @@ func Render(cfg config.Config, sec config.Secrets, host string) (Files, error) {
 // rollback renders the image the server ran before.
 func RenderImage(cfg config.Config, sec config.Secrets, host, image string) (Files, error) {
 	if cfg.Embeddings.Preset != "multilingual" {
-		return Files{}, fmt.Errorf("embeddings preset %q is not available yet (decision 0049): use multilingual", cfg.Embeddings.Preset)
+		return Files{}, fmt.Errorf("embeddings preset %q is not available yet: use multilingual", cfg.Embeddings.Preset)
 	}
 	var missing []string
 	have := sec.Names()
@@ -158,17 +158,17 @@ func RenderImage(cfg config.Config, sec config.Secrets, host, image string) (Fil
 		env.quoted("HINDSIGHT_API_LLM_BASE_URL", cfg.LLM.BaseURL)
 	}
 	env.plain("HINDSIGHT_API_LLM_TIMEOUT", "300")
-	env.comment("Facts, observations and reflect answers always in English (decision 0039).")
+	env.comment("Facts, observations and reflect answers always in English, whatever language you write in: English facts are recalled better.")
 	env.plain("HINDSIGHT_API_LLM_OUTPUT_LANGUAGE", "English")
 	env.comment("Multilingual preset: multilingual-e5-small (onnx default) + mmarco reranker.")
-	env.comment("On CPU reranking is ~98 % of a recall: 30 candidates of at most 128 tokens keep the prompt hook p95 under 2.5 s (E25, decision 0057).")
+	env.comment("On CPU reranking is ~98 % of a recall: 30 candidates of at most 128 tokens keep the prompt hook p95 under 2.5 s.")
 	env.plain("HINDSIGHT_API_EMBEDDINGS_PROVIDER", "onnx")
 	env.plain("HINDSIGHT_API_RERANKER_PROVIDER", "local")
 	env.plain("HINDSIGHT_API_RERANKER_LOCAL_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 	env.plain("HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING", "true")
 	env.plain("HINDSIGHT_API_RERANKER_MAX_CANDIDATES", "30")
 	env.plain("HINDSIGHT_API_RERANKER_MAX_TOKENS_PER_CANDIDATE", "128")
-	env.comment("LLM request log: token rows kept 30 days for stats and the backfill budget; no prompt or memory text stored (decision 0061).")
+	env.comment("LLM request log: token rows kept 30 days for stats and the backfill budget; no prompt or memory text stored.")
 	env.plain("HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS", "30")
 	env.plain("HINDSIGHT_API_LLM_TRACE_MAX_CHARS", "1")
 	env.comment("Stable worker id: tasks in flight survive a container recreate.")

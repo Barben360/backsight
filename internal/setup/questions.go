@@ -64,13 +64,13 @@ type Preset struct {
 // Presets are the providers setup offers, recommended first. Any other
 // Hindsight provider id is accepted as free text (listed, untested).
 var Presets = []Preset{
-	{Provider: "deepseek", Model: "deepseek-v4-flash", Label: "DeepSeek API (the reference install)", Cost: "cheapest measured (E7): about $0.14 per million input tokens"},
+	{Provider: "deepseek", Model: "deepseek-v4-flash", Label: "DeepSeek API", Cost: "the cheapest provider tested: about $0.14 per million input tokens"},
 	{Provider: "anthropic", Model: "claude-haiku-5-5", Label: "Anthropic API key, or an Anthropic-compatible URL"},
 	{Provider: "openai", Model: "gpt-5.4-mini", Label: "OpenAI API key, or an OpenAI-compatible URL"},
 	{Provider: "ollama", Model: "qwen3:8b", BaseURL: "http://host.docker.internal:11434", Label: "Ollama on this machine (private, lower quality)",
-		Caveat: "an 8B model writes narrative, partly transient facts and takes about 2 min per tranche on CPU (E13); 3B and smaller fail"},
+		Caveat: "an 8B model writes wordier facts, some only true for a while, and takes about 2 min per part of a session on CPU; 3B and smaller models fail"},
 	{Provider: "claude-code", Model: "claude-haiku-5-5", Label: "Your Claude subscription (claude setup-token)",
-		Caveat: "Anthropic's terms restrict routing subscription credentials through third-party tools and automated use; usage counts against your plan (decision 0032)"},
+		Caveat: "Anthropic's terms restrict routing subscription credentials through third-party tools and automated use; usage counts against your plan"},
 }
 
 // PresetFor returns provider's preset, false for a provider setup does not list.
@@ -199,13 +199,13 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 	if provider == "claude-code" {
-		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes (decision 0043). Accept?",
+		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
 			Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}); err != nil {
 			return nil, nil, err
 		}
 	}
 
-	rq := Question{ID: "retention", Prompt: "How long should Claude Code keep its transcripts? Backfill and rebuilds read them (decision 0041).",
+	rq := Question{ID: "retention", Prompt: "How long should Claude Code keep its transcripts? Backfill and memory rebuilds read them.",
 		Free: true, Default: RecommendedRetention, Recommended: RecommendedRetention,
 		Options: []Option{{Value: RecommendedRetention, Label: "ten years"}, {Value: "keep", Label: "leave Claude Code's setting as it is", Caveat: "Claude Code deletes transcripts after 30 days by default"}}}
 	if err := add(rq); err != nil {
@@ -224,7 +224,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	if in.ReferencePieces > 0 {
 		if err := add(Question{ID: "reference", Prompt: fmt.Sprintf("%d pieces of an older Hindsight install are wired into Claude Code. Retire them once backsight is installed (undoable; the old server is left untouched)?", in.ReferencePieces),
 			Default: "retire", Recommended: "retire",
-			Options: []Option{{Value: "retire", Label: "retire them (pre-images kept, setup --undo restores them)"}, {Value: "keep", Label: "leave them", Caveat: "both memories then inject into every prompt"}}}); err != nil {
+			Options: []Option{{Value: "retire", Label: "retire them (backup copies kept, setup --undo restores them)"}, {Value: "keep", Label: "leave them", Caveat: "both memories then inject into every prompt"}}}); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -238,7 +238,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 				Options: []Option{{Value: "yes", Label: "backfill in the background (jobs tick), within a spending cap", Cost: cost}, {Value: "no", Label: "start empty"}}}
 			if provider == "claude-code" {
 				bq.Default, bq.Recommended = "no", "no"
-				bq.Options[0].Caveat = "months of sessions replayed unattended on your subscription (decision 0043)"
+				bq.Options[0].Caveat = "months of sessions replayed unattended on your subscription"
 			}
 			if err := add(bq); err != nil {
 				return nil, nil, err

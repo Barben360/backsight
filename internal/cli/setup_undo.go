@@ -90,7 +90,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 		runs = append(runs, run{ts, m})
 	}
 	for _, ts := range lost {
-		add(undoAction{Name: "restore " + ts, Status: "lost", Detail: "its pre-images are gone: check the files it edited by hand"})
+		add(undoAction{Name: "restore " + ts, Status: "lost", Detail: "its backup copies are gone: check the files it edited by hand"})
 		if !f.plan {
 			rec.Undo.ConfigRuns = without(rec.Undo.ConfigRuns, ts)
 			delete(rec.Undo.Retention, ts)
@@ -144,7 +144,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 					add(undoAction{Name: name, Status: "refused", Detail: err.Error()})
 					save()
 					return res, &output.Error{Code: output.Partial, Resume: "backsight setup --undo --force",
-						Message: fmt.Sprintf("%s: %v (setup --undo --force puts the pre-image back over that edit)", name, err)}
+						Message: fmt.Sprintf("%s: %v (setup --undo --force puts the backup copy back over that edit)", name, err)}
 				}
 				return fail(name, err)
 			}
@@ -241,7 +241,7 @@ func runSetupUndo(ctx context.Context, f setupFlags, force bool) (undoResult, er
 	}
 	var except []string
 	if len(lost) > 0 {
-		except = append(except, "the config runs whose pre-images are gone ("+strings.Join(lost, ", ")+"): check those files by hand")
+		except = append(except, "the config runs whose backup copies are gone ("+strings.Join(lost, ", ")+"): check those files by hand")
 	}
 	if len(lostTimers) > 0 {
 		except = append(except, "the timers whose unit files are gone ("+strings.Join(lostTimers, ", ")+")")

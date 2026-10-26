@@ -81,7 +81,7 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 				return err
 			}
 			if cfg.LLM.Provider == "claude-code" && !fl.allowSubscription && !fl.plan {
-				return &output.Error{Code: output.Usage, Message: "the server extracts with your Claude subscription: backfill would replay months of sessions unattended (decision 0043); rerun with --allow-subscription to accept"}
+				return &output.Error{Code: output.Usage, Message: "the server extracts with your Claude subscription: backfill would replay months of sessions unattended, the automated use its terms restrict; rerun with --allow-subscription to accept"}
 			}
 			f, err := newFlusher(d, home, cfg, sec, false)
 			if err != nil {

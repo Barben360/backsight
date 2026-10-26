@@ -49,7 +49,7 @@ func CheckProvider(ctx context.Context, c *hindsight.Client, bank, provider stri
 			return res, fmt.Errorf("the extraction LLM returned a malformed fact (type %q, text %q)", f.FactType, f.Text)
 		}
 		if provider != MockProvider && !looksEnglish(f.Text) {
-			return res, fmt.Errorf("fact not in English (decision 0039): %q", f.Text)
+			return res, fmt.Errorf("fact not in English (backsight asks the extraction LLM for English facts): %q", f.Text)
 		}
 		res.Sample = append(res.Sample, f.Text)
 	}

@@ -134,7 +134,7 @@ func TestNoiseTransverseThreshold(t *testing.T) {
 	c = check(t, noiseFixture(t, b).run(), "noise-transverse")
 	// Top 3 only: crawler (1) is left out of the summary.
 	expect(t, c, Warn, "7 of 20 transverse observations (project:.claude) name another project: trip-2031 (3), backsight (2), ironwood (2)")
-	if strings.Contains(c.Summary, "crawler") || !strings.Contains(c.Fix, "backsight forget --project .claude --source subagent --plan") || !strings.Contains(c.Fix, "0071") {
+	if strings.Contains(c.Summary, "crawler") || !strings.Contains(c.Fix, "backsight forget --project .claude --source subagent --plan") || !strings.Contains(c.Fix, "new sessions are attributed to their repository") {
 		t.Errorf("%+v", c)
 	}
 	// report scrubs the names the check counted, the ones left out of the

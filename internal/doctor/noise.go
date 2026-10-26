@@ -123,8 +123,8 @@ func checkNoiseTransverse(ctx context.Context, cl *hindsight.Client, bank string
 		c.Status, c.Summary = Info, c.Summary+"; too few to judge"
 	case 100*named > transverseNamedPct*total:
 		c.Status = Warn
-		c.Detail = strings.TrimPrefix(c.Detail+"; the transverse pool is searched with every project (decision 0071, E30 V3)", "; ")
-		c.Fix = "new sessions are attributed to their repository (decision 0071); clean older ones with backsight forget --project " + alias + " --source subagent --plan, or leave them"
+		c.Detail = strings.TrimPrefix(c.Detail+"; the transverse pool is searched with every project, so another project's notes there reach every prompt", "; ")
+		c.Fix = "new sessions are attributed to their repository; clean older ones with backsight forget --project " + alias + " --source subagent --plan, or leave them"
 	default:
 		c.Status = OK
 	}

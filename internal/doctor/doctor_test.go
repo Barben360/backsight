@@ -145,7 +145,7 @@ func TestNothingInstalled(t *testing.T) {
 		t.Errorf("config detail must point at setup: %q", cfg.Detail)
 	}
 	expect(t, check(t, r, "server"), Info, "no server")
-	expect(t, check(t, r, "reference"), OK, "no reference install")
+	expect(t, check(t, r, "reference"), OK, "no older Hindsight install")
 	expect(t, check(t, r, "docker"), OK, "28.1.1")
 	ret := check(t, r, "retention")
 	expect(t, ret, Warn, "30 days")
@@ -170,7 +170,7 @@ func TestReferenceInstallHealthy(t *testing.T) {
 	expect(t, check(t, r, "bank"), OK, "323")
 	expect(t, check(t, r, "untagged"), Warn, "2 of 3")
 	ref := check(t, r, "reference")
-	expect(t, ref, Info, "M4")
+	expect(t, ref, Info, "backsight client retire unwires them")
 	if !strings.Contains(ref.Detail, "npm-plugin-hook") {
 		t.Errorf("pieces missing from detail: %q", ref.Detail)
 	}
@@ -210,7 +210,7 @@ func TestServerDown(t *testing.T) {
 	srvCheck := check(t, r, "server")
 	expect(t, srvCheck, Error, "unreachable")
 	// backsight server start manages backsight's own server, not this one.
-	if !strings.Contains(srvCheck.Fix, "reference") || strings.Contains(srvCheck.Fix, "backsight server") {
+	if !strings.Contains(srvCheck.Fix, "older Hindsight server") || strings.Contains(srvCheck.Fix, "backsight server") {
 		t.Errorf("fix for a reference server: %q", srvCheck.Fix)
 	}
 	for _, id := range []string{"bank", "untagged"} {
@@ -341,8 +341,8 @@ func TestGPUReported(t *testing.T) {
 	f.env.GPUs = func() []string { return []string{"AMD ROCm (/dev/kfd)"} }
 	c := check(t, f.run(), "gpu")
 	expect(t, c, Info, "AMD ROCm")
-	if !strings.Contains(c.Summary, "v2") {
-		t.Errorf("must say GPU use comes in v2: %q", c.Summary)
+	if !strings.Contains(c.Summary, "not used: backsight runs on the CPU") {
+		t.Errorf("must say the GPU is not used: %q", c.Summary)
 	}
 }
 
@@ -564,12 +564,12 @@ func TestWritesCheck(t *testing.T) {
 func TestCheckReferenceLeftovers(t *testing.T) {
 	timer := reference.Piece{ID: "python-retro-timer", Where: "systemd memory-retro.timer, disabled", ReplacedIn: "M4"}
 	c := checkReference(&reference.Install{Leftovers: []reference.Piece{timer}}, nil)
-	if c.Status != OK || strings.Contains(c.Summary, "pieces wired") || !strings.Contains(c.Detail, "left on disk: python-retro-timer (systemd memory-retro.timer, disabled)") {
+	if c.Status != OK || strings.Contains(c.Summary, "piece(s)") || !strings.Contains(c.Detail, "left on disk: python-retro-timer (systemd memory-retro.timer, disabled)") {
 		t.Errorf("%+v", c)
 	}
 	hook := reference.Piece{ID: "python-search-hook", Where: "settings.json Stop", ReplacedIn: "M4"}
 	c = checkReference(&reference.Install{Pieces: []reference.Piece{hook}, Leftovers: []reference.Piece{timer}}, nil)
-	if c.Status != Info || !strings.HasPrefix(c.Summary, "1 reference pieces wired") || !strings.Contains(c.Detail, "python-search-hook (settings.json Stop); left on disk: python-retro-timer") {
+	if c.Status != Info || !strings.HasPrefix(c.Summary, "1 piece(s) of an older Hindsight install wired") || !strings.Contains(c.Detail, "python-search-hook (settings.json Stop); left on disk: python-retro-timer") {
 		t.Errorf("%+v", c)
 	}
 }

@@ -34,7 +34,7 @@ import (
 var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 func newBackupCmd(e *env) *cobra.Command {
-	cmd := &cobra.Command{Use: "backup", Short: "Encrypted backups of the memory server (SPEC §11.8)", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "backup", Short: "Encrypted backups of the memory server", Args: cobra.NoArgs}
 	cmd.AddCommand(newBackupCreateCmd(e), newBackupVerifyCmd(e), newBackupListCmd(e), newBackupIdentityCmd(e))
 	return cmd
 }

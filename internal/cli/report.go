@@ -81,7 +81,7 @@ backsight errors, redacted: no memory text, prompt, transcript, secret
 (secrets.toml and the server's .env included) or server answer; your home
 shows as ~, backsight's directories outside it as <data>, <config>,
 <state>, <bin> and <backups>, your user, machine, bank and remote
-server hosts (backsight's and the reference's) as <user>, <host>,
+server hosts (backsight's and an older Hindsight install's) as <user>, <host>,
 <bank> and <server>, git remotes (whole, scp form, without host, owner)
 as <remote> and every project name this machine knows (the bank's tags,
 local sessions, cursors, telemetry, .backsight.toml files, transverse
@@ -89,7 +89,7 @@ aliases) as <project>. It prints a link
 to search existing issues for the same error class and a link that opens
 a new issue with a summary filled in, plus the full diagnostic to paste
 into it.
-It sends nothing: you read it and decide (decision 0002).`,
+It sends nothing: you read it and decide.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d, home, err := machine()

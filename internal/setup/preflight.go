@@ -92,7 +92,7 @@ func Preflight(ctx context.Context, p Probes) []Check {
 	}
 	add(claudeCheck(ctx, p))
 	if p.Reference > 0 {
-		add(Check{ID: "reference", Status: Info, Summary: fmt.Sprintf("%d reference pieces wired into Claude Code (see the reference question)", p.Reference)})
+		add(Check{ID: "reference", Status: Info, Summary: fmt.Sprintf("%d piece(s) of an older Hindsight install wired into Claude Code (see the reference question)", p.Reference)})
 	}
 	if p.Retention != "" {
 		add(Check{ID: "retention", Status: Info, Summary: p.Retention})
@@ -102,7 +102,7 @@ func Preflight(ctx context.Context, p Probes) []Check {
 	}
 	gpu := Check{ID: "gpu", Status: Info, Summary: "no GPU found: CPU inference"}
 	if len(p.GPUs) > 0 {
-		gpu.Summary = "GPU found (" + strings.Join(p.GPUs, ", ") + "): reported only, acceleration comes in v2"
+		gpu.Summary = "GPU found (" + strings.Join(p.GPUs, ", ") + "): reported only, backsight runs on the CPU"
 	}
 	add(gpu)
 	return out

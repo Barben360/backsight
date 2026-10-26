@@ -362,7 +362,7 @@ func TestReferenceServerStoppedOrAbsentOrOursIsOK(t *testing.T) {
 	if c := checkReferenceServer(context.Background(), f.env, ref, now); c.Status != OK || !strings.Contains(c.Detail, "permission denied") {
 		t.Errorf("probe error: %+v", c)
 	}
-	if c := checkReferenceServer(context.Background(), f.env, nil, now); c.Status != OK || !strings.Contains(c.Summary, "no reference server") {
+	if c := checkReferenceServer(context.Background(), f.env, nil, now); c.Status != OK || !strings.Contains(c.Summary, "no older Hindsight server") {
 		t.Errorf("no reference: %+v", c)
 	}
 	// The reference config pointing at backsight's own server (same host

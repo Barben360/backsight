@@ -147,7 +147,7 @@ func TestClientRetireIsUndoneByConfigRestore(t *testing.T) {
 	// Retiring again after nothing is wired changes nothing.
 	_ = os.WriteFile(settings, []byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}]}}`), 0o600)
 	_ = os.WriteFile(state, []byte(`{"mcpServers":{}}`), 0o600)
-	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "no reference piece") {
+	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "no piece of an older Hindsight install") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
@@ -161,7 +161,7 @@ func TestClientRetireLeavesTheRetroTimerToTheDefaultProfile(t *testing.T) {
 	other := filepath.Join(home, ".claude-dev")
 	_ = os.MkdirAll(other, 0o700)
 	code, out, _ := run(t, "client", "retire", "--config-dir", other)
-	if code != output.OK || !strings.Contains(out, "no reference piece") {
+	if code != output.OK || !strings.Contains(out, "no piece of an older Hindsight install") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 	for _, c := range sys.calls {
@@ -213,7 +213,7 @@ func TestClientRetireLeavesTheTimerToTheProfileThatRunsIt(t *testing.T) {
 	isolate(t)
 	sys := withSys(t, "linux")
 	sys.out = retroTimer("/home/the-real-user")
-	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "no reference piece") {
+	if code, out, _ := run(t, "client", "retire"); code != output.OK || !strings.Contains(out, "no piece of an older Hindsight install") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 	for _, c := range sys.calls {
