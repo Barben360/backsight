@@ -19,11 +19,29 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
+// isolatedEnv are the variables of the shell running the tests (a hook,
+// verify, a scratch stack, an XDG layout) that would point backsight at
+// the real machine; isolate unsets them.
+var isolatedEnv = []string{
+	"BACKSIGHT_STATE_DIR", "BACKSIGHT_SESSION", "BACKSIGHT_PROJECT", "CLAUDE_ENV_FILE", "DOCKER_HOST", claudePIDEnv,
+	updateLockEnv, "BACKSIGHT_HOOK_CHAOS", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+}
+
+// unsetMachineEnv unsets isolatedEnv for the test (t.Setenv restores it).
+func unsetMachineEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range isolatedEnv {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+}
+
 // isolate points backsight and Claude Code at empty temp dirs and fakes the
 // probes, so the doctor never touches the real machine.
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	unsetMachineEnv(t)
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")

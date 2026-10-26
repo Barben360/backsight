@@ -17,6 +17,24 @@ func (refuseDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	return nil, fmt.Errorf("test reached docker %v without a fake runner", args)
 }
 
+// refuseSys, refuseClaude and refuseSpawn do the same for systemctl and
+// launchctl, claude and the detached flush.
+type refuseSys struct{}
+
+func (refuseSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	return nil, fmt.Errorf("test reached %s %v without a fake runner", name, args)
+}
+
+type refuseClaude struct{}
+
+func (refuseClaude) Run(_ context.Context, _ []string, args ...string) ([]byte, error) {
+	return nil, fmt.Errorf("test reached claude %v without a fake runner", args)
+}
+
+func refuseSpawn(args ...string) error {
+	return fmt.Errorf("test reached a detached backsight %v without a fake spawn", args)
+}
+
 // goraceSet: the caller chose the race options, which TestMain keeps.
 var goraceSet bool
 
@@ -35,6 +53,7 @@ func TestMain(m *testing.M) {
 		os.Exit(Execute(args, os.Stdout, os.Stderr))
 	}
 	composeRunner = refuseDocker{}
+	sysRunner, claudeRunner, spawnDetached = refuseSys{}, refuseClaude{}, refuseSpawn
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
 	os.Exit(m.Run())
 }
@@ -51,8 +70,7 @@ func TestRaceChildrenSkipTheExitSleep(t *testing.T) {
 	}
 }
 
-// liveProcess is the PID
- of a process that runs until the test ends and is
+// liveProcess is the PID of a process that runs until the test ends and is
 // neither this process nor its parent: a lock owner that is alive and
 // someone else.
 func liveProcess(t *testing.T) int {

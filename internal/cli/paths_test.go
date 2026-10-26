@@ -11,6 +11,7 @@ import (
 )
 
 func TestPathsJSON(t *testing.T) {
+	unsetMachineEnv(t)
 	home := t.TempDir()
 	t.Setenv("BACKSIGHT_HOME", home)
 	if err := os.MkdirAll(filepath.Join(home, "config"), 0o700); err != nil {
@@ -52,6 +53,7 @@ func TestPathsRefusesRelativeHome(t *testing.T) {
 }
 
 func TestPathsText(t *testing.T) {
+	unsetMachineEnv(t)
 	home := t.TempDir()
 	t.Setenv("BACKSIGHT_HOME", home)
 	code, out, _ := run(t, "paths")
