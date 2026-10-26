@@ -237,6 +237,19 @@ func maintainReattribute(ctx context.Context, d paths.Dirs, archive, noBackup st
 	case archive == "":
 		return skip(noBackup)
 	}
+	// Nothing to move: no verification (a throwaway restore) needed; the
+	// run still judges and records what is left.
+	if p, perr := runReattribute(ctx, reattributeFlags{plan: true}, reattributeOptions{backedUp: true, freeOnly: true}); perr == nil && len(p.Plan.Retags) == 0 {
+		r, err := runReattribute(ctx, reattributeFlags{}, reattributeOptions{backedUp: true, freeOnly: true})
+		if err != nil {
+			return "failed: " + err.Error(), 0
+		}
+		out := "0 moved"
+		if n := len(r.Plan.Resends); n > 0 {
+			out += fmt.Sprintf(", %d session(s) to send again (%s): backsight retain reattribute --plan", n, estimateText(r.Plan.Cost))
+		}
+		return out, 0
+	}
 	_, _, ids, err := backupKeys(d, cfg, sec, false)
 	if err == nil {
 		var v backupVerifyResult

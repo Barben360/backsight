@@ -187,11 +187,17 @@ func TestBackupIdentityShowAndImport(t *testing.T) {
 func TestMaintainBacksUpAndPurgeNamesTheBackups(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
-	withBackupDocker(t)
+	dk := withBackupDocker(t)
 	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
 	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "done:") || !strings.Contains(out, "backsight-20261025T040000Z.tar.gz.age") ||
 		!strings.Contains(out, "re-attribution 0 moved") {
 		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// nothing to move: no throwaway restore to verify the backup
+	for _, c := range dk.calls {
+		if strings.HasPrefix(c, "exec backsight-verify-") {
+			t.Errorf("verified a backup with nothing to move: %s", c)
+		}
 	}
 	// after its backup, the daily job judged the memory and recorded it
 	if st, ok, err := retain.LoadReattributionStatus(pathsOf(home).State); !ok || err != nil || !st.JudgedAt.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) {
