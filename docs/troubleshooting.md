@@ -36,23 +36,23 @@ Log out and back in (a new terminal is not enough), check that `docker info` wor
 
 Setup says `port 8888 is taken by another program` (or `9999`, the web UI's).
 
-- **backsight's own server, from the run that stopped**, may hold it: `backsight server status` shows it running. Stop it with `backsight server stop`, then `backsight setup --resume`; setup starts it again.
+- **backsight's own server, from the run that stopped**: setup takes it for its own and goes on, unless you changed the `project` answer. Then stop it with `backsight server stop` first, or keep the earlier project.
 - **Another program**: `ss -ltnp` shows which one. Stop it, or give backsight other ports: `backsight setup --answer api_port=<port> --answer ui_port=<port>`.
 
 ### The provider rejected the key
 
-The server step fails on its LLM check: the provider answered 401 or 403, or the message says the key is invalid or unauthorized. Set the key again, then resume:
+The server step fails on its LLM check with `the <provider> API rejected the key in llm_api_key`. The server it started keeps running. Set the key again, then resume:
 
 ```sh
 backsight secret set llm_api_key
 backsight setup --resume
 ```
 
-If the resume then stops on a taken port, that is backsight's own server: see [above](#a-port-is-taken). Other provider answers mean other fixes: a balance to top up (DeepSeek answers 402), a model name the provider does not know, or a wrong base URL. `backsight server llm check` tests the provider again, storing nothing.
+The resume takes the running server for its own and checks the key again. Other provider answers name the provider's reason, with other fixes: a balance to top up (DeepSeek answers 402), a model name the provider does not know, or a wrong base URL. `backsight server llm check` tests the provider again, storing nothing.
 
 ### Setup seems stuck
 
-On the first run, the server step downloads the server image and its models, about 2.3 GB: several minutes on a home connection, longer on a slow one. `docker images` in another terminal shows the images arriving. If it really stops, interrupt it and run `backsight setup --resume`.
+On the first run, the server step downloads the server images and its models, about 2.4 GB: several minutes on a home connection, longer on a slow one. Setup shows Docker's download progress, then the time spent while the server's first start downloads its models. If it really stops, interrupt it and run `backsight setup --resume`.
 
 ### Claude Code is missing or too old
 
@@ -150,7 +150,7 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `bank-config`: the bank holds an older backsight template | `backsight bank apply` sends this version's (`update apply` and `client install` do it too). |
 | `bank-config`: bank settings were changed on the server | Someone edited backsight's keys (the UI, the API). `backsight bank apply --force` puts backsight's values back and overwrites those edits; leave it if you made them on purpose. |
 | `bank-config`: an older template, or a change made on the server | backsight has no record of the template it sent. `backsight bank apply` sends this version's, over any edit to its keys. |
-| `backup`: no backup, or the last one is old | `backsight backup create`; check the daily job (`jobs` check). |
+| `backup`: no backup, or the last one is old | `backsight backup create`; check the daily job (`jobs` check). Archives made for another backup key (a previous install's, its identity deleted) do not count: this machine cannot decrypt them; `backsight backup identity import` adds that key if you saved it. |
 | `binary`: not self-verified, or does not match its release | Reinstall the release with `install.sh`, then `backsight client install`. |
 | `config`: unknown key or invalid value | Correct the key doctor names in `config.toml`. Unknown keys are refused, not ignored. |
 | `config`: secrets file readable by others | `chmod 600` on the file doctor names. |
