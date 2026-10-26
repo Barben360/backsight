@@ -88,6 +88,16 @@ Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) 
 
 Every command accepts `--json` and prints one envelope `{schema_version, command, ok, data | error}`. Exit codes: `0` ok, `2` invalid invocation, `10` needs the user, `20` blocked by the environment, `30` failed and rolled back, `40` partial and resumable. Commands that change configuration, user files or the server's setup take `--plan`; data operations (`secret set`, `backup create`, `store`, `forget <id>`) do not; commands that can prompt take `--non-interactive`. Details for users: [docs/commands.md](docs/commands.md#conventions).
 
+## Dependency updates
+
+A Dependabot `gomod` PR that changes `go.mod` fails `TestThirdPartyLicensesAreCurrent` until the embedded licenses file is regenerated. Fix it on the PR's branch with one line:
+
+```sh
+gh pr checkout <n> && make licenses && git commit -am "🔧 Regenerate the third-party licenses" && git push
+```
+
+This is deliberately not automated. A workflow that pushes to a Dependabot branch needs `contents: write`, which Dependabot-triggered `pull_request` runs do not get; `pull_request_target` would grant it, but then runs the PR's code with a write token. Commits pushed with `GITHUB_TOKEN` also do not start new CI runs. Read the changelog of the updated modules too: a license change is visible in the regenerated file.
+
 ## Commits and pull requests
 
 - Commit subjects start with a [gitmoji](https://gitmoji.dev/) (`✨` feature, `🐛` fix, `📝` docs, `✅` tests, `💚` CI, `🔒` security), then a sentence in the imperative.

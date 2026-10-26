@@ -94,7 +94,8 @@ fi
 
 if [ "$check" = 1 ]; then
   if ! cmp -s "$tmp/out" "$out"; then
-    echo "third-party-licenses: $out is not what go.mod gives; run make licenses and commit it." >&2
+    echo "third-party-licenses: $out is not what go.mod gives; run make licenses and commit it" >&2
+    echo "(a Dependabot PR: git fetch, check out its branch, make licenses, git commit -am \"Regenerate the third-party licenses\", git push)." >&2
     diff -u "$out" "$tmp/out" 2>&1 | head -40 >&2 || true
     exit 1
   fi
