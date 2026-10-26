@@ -78,6 +78,12 @@ type Flusher struct {
 	// Outbox takes the subagent reports a reconcile rebuilds; zero: the
 	// notes outbox of Dirs (NotesOutbox).
 	Outbox Outbox
+	// NoReports: components.write is off, so SubagentStop keeps no
+	// report and a reconcile rebuilds none.
+	NoReports bool
+	// ReportProject names a rebuilt report's project from its directory as
+	// SubagentStop does; nil: Resolver.Project.
+	ReportProject func(cwd string) string
 }
 
 // Options change the timing rules for explicit flushes.

@@ -415,8 +415,21 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg); err != nil {
 				return err
 			}
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			// A restore that wrote its epoch but did not start the server
+			// on its API key again is finished here, on the image its data
+			// is for (a server upgrade's rollback put back the version
+			// before, which this binary's pin would refuse): the marker
+			// goes once the server is healthy on that key (issue 285).
+			m, _ := state.ReadRestoreMarker(d)
+			keyStep := m != nil && m.Step == state.KeyStep
 			rt := runtimeFor(cfg)
-			if err := pinGuard(cfg, rt); err != nil {
+			if keyStep && m.Image != "" {
+				rt = rt.WithVersion(m.Image)
+			} else if err := pinGuard(cfg, rt); err != nil {
 				return err
 			}
 			files, err := renderOn(rt, sec, "backsight server start")
@@ -433,10 +446,6 @@ func newServerStartCmd(e *env) *cobra.Command {
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
 			}
-			d, _, err := machine()
-			if err != nil {
-				return err
-			}
 			// A maintenance lock whose owner is dead (its PID gone, or reused
 			// by a process started after the lock) is taken over: nothing
 			// else removes it (issue 285).
@@ -445,11 +454,6 @@ func newServerStartCmd(e *env) *cobra.Command {
 				notes = append(notes, fmt.Sprintf("removed a maintenance lock left by %q (pid %d, since %s), whose process is gone",
 					h.Owner.Command, h.Owner.PID, h.Owner.Since.Format(time.RFC3339)))
 			}
-			// A restore that wrote its epoch but did not start the server
-			// on its API key again is finished here: the marker goes once
-			// the server is healthy on that key.
-			m, _ := state.ReadRestoreMarker(d)
-			keyStep := m != nil && m.Step == state.KeyStep
 			unlock, err := serverLockFor(d, "server start", keyStep)
 			if err != nil {
 				return err

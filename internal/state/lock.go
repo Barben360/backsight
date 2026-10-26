@@ -15,6 +15,20 @@ type Owner struct {
 	PID     int       `json:"pid"`
 	Command string    `json:"command"`
 	Since   time.Time `json:"since"`
+	// StartTicks and BootID identify the owner process beyond its PID
+	// (Linux: its start time in ticks since boot, and that boot): a PID
+	// reused by another process, or after a reboot, does not match.
+	StartTicks int64  `json:"start_ticks,omitempty"`
+	BootID     string `json:"boot_id,omitempty"`
+}
+
+// self is this process as a lock owner.
+func self(command string) Owner {
+	o := Owner{PID: os.Getpid(), Command: command, Since: time.Now().UTC().Truncate(time.Second)}
+	if ticks, ok := startTicks(o.PID); ok {
+		o.StartTicks, o.BootID = ticks, bootID()
+	}
+	return o
 }
 
 // HeldError reports a lock held by someone else. Stale means its owner
@@ -49,7 +63,7 @@ func TryAcquire(path, command string) (*Lock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	owner := Owner{PID: os.Getpid(), Command: command, Since: time.Now().UTC().Truncate(time.Second)}
+	owner := self(command)
 	raw, err := json.Marshal(owner)
 	if err != nil {
 		return nil, err
@@ -128,14 +142,23 @@ func held(path string) error {
 // boot second.
 const startSlack = 5 * time.Second
 
-// ownerAlive: a process with the owner's PID runs and it is the owner, the
-// PID and the start time telling it, as heldByUpdate does: a process that
-// started after the lock was taken got a dead owner's PID reused. A lock
-// without Since, or a system that does not tell a start time, falls back
-// on the PID alone.
+// ownerAlive: a process with the owner's PID runs and it is the owner. A
+// lock with the owner's start ticks and boot id is compared with them
+// exactly: no clock step changes them. A lock without them (written by an
+// older build) compares the process's start time with Since, as
+// heldByUpdate does: a process that started after the lock was taken got a
+// dead owner's PID reused. A lock without Since, or a system that does not
+// tell a start time, falls back on the PID alone.
 func ownerAlive(o Owner) bool {
 	if !processAlive(o.PID) {
 		return false
+	}
+	if o.StartTicks != 0 {
+		if boot := bootID(); o.BootID != "" && boot != "" && boot != o.BootID {
+			return false // another boot: the PID is not the owner's
+		}
+		ticks, ok := startTicks(o.PID)
+		return !ok || ticks == o.StartTicks
 	}
 	if o.Since.IsZero() {
 		return true

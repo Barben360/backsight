@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -33,7 +31,7 @@ const (
 	// past this many characters; the server writes it within 600 tokens.
 	briefingModelChars  = 1600
 	briefingModelTokens = 600
-	briefingModelPrefix = "backsight-brief-"
+	briefingModelPrefix = retain.BriefingModelPrefix
 	// briefingModelTimeout bounds the page read, and the page creation,
 	// within the briefing's own budget.
 	briefingModelTimeout = 1500 * time.Millisecond
@@ -232,23 +230,8 @@ func (h *hookEnv) recentBriefing(ctx context.Context) (text string, items []sess
 	return strings.TrimRight(b.String(), "\n"), items, source, nil
 }
 
-// briefingModelID is the project's mental-model id: a readable slug and a
-// hash, so that two project names never share a page.
-func briefingModelID(project string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(project) {
-		if b.Len() >= 40 {
-			break
-		}
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('-')
-		}
-	}
-	sum := sha256.Sum256([]byte(project))
-	return briefingModelPrefix + b.String() + "-" + hex.EncodeToString(sum[:4])
-}
+// briefingModelID is the project's mental-model id (retain.BriefingModelID).
+func briefingModelID(project string) string { return retain.BriefingModelID(project) }
 
 // modelBriefing is the project's mental model, cut at a line boundary;
 // absent reports a project without one (the caller creates it: the server

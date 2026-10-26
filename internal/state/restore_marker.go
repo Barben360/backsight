@@ -27,6 +27,12 @@ type RestoreMarker struct {
 	// its API key is left, which `server start` does (and then removes
 	// the marker).
 	Step string `json:"step,omitempty"`
+	// Image is the Hindsight image the server's data is for at the key
+	// step (a server upgrade's rollback put back the version before), and
+	// RolledBack that a rollback put the safety archive back: server start
+	// starts that image (issue 285 review M4).
+	Image      string `json:"image,omitempty"`
+	RolledBack bool   `json:"rolled_back,omitempty"`
 }
 
 // KeyStep: the marker's restore wrote its epoch; the server is still to
