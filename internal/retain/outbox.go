@@ -44,6 +44,9 @@ type Note struct {
 	LastError   string    `json:"last_error,omitempty"`
 	Source      string    `json:"source,omitempty"` // "" (a note) | subagent
 	AgentType   string    `json:"agent_type,omitempty"`
+	// Session: the Claude Code session a note was stored from ("" from a
+	// shell), kept in the document's metadata so `memory notes` shows it.
+	Session string `json:"session,omitempty"`
 }
 
 // NewNote builds a note with its document and operation ids.
@@ -81,13 +84,17 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 		}
 		return item
 	}
-	return hindsight.RetainItem{
+	item := hindsight.RetainItem{
 		Content: n.Content, Context: "note stored by the user or the agent", DocumentID: n.DocumentID, Strategy: "document",
 		Tags:              []string{"project:" + n.Project, "source:note", "kind:" + n.Kind, "harness:claude-code"},
 		ObservationScopes: [][]string{{"project:" + n.Project}},
 		Timestamp:         &ts,
 		Metadata:          map[string]string{"source": "note", "kind": n.Kind, "machine_id": machineID},
 	}
+	if n.Session != "" {
+		item.Metadata["session"] = n.Session
+	}
+	return item
 }
 
 // Outbox is the write-ahead file of notes not yet accepted by the server.

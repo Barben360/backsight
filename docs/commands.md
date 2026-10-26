@@ -50,10 +50,11 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 |---|---|
 | `backsight search <query>...` | Searches the memory, up to 4 short keyword queries. `--all`, `--project <name>`, `--limit N`, `--min-score X`. |
 | `backsight read <id>` | Shows one memory with the facts it was built from. |
-| `backsight store --kind <kind> <text>` | Stores one durable fact. `--project <name>`. |
+| `backsight store --kind <kind> <text>` | Stores one durable fact in the current project. `--project <name>`; `--project transverse` for a user-wide rule (required in the home directory). |
 | `backsight forget <id>` | Retires a memory (reversible with `--restore`); `--purge --yes` deletes it with its source facts and documents. |
 | `backsight forget --project <name>` | Retires every raw fact of a project in the configured bank (each reversible with `backsight forget <id> --restore`); `--purge` deletes its documents and observations for good. `--source <s>` keeps to the facts of one source (`chat`, `subagent`, `note`) and the observations drawn from them. `--plan` lists the documents and counts; the write needs `--answer confirm_project=<name>`. |
 | `backsight memory scan` | Lists stored memories that look like they hold a secret, with the purge command for each. |
+| `backsight memory notes` | Lists the notes stored recently (by Claude, `store` or `/backsight:remember`), newest first, with project, session and time. `--days N` (7), `--limit N` (20), `--project <name>`. |
 | `backsight ask <question>` | The server's LLM answers over many memories (costs tokens). `--all` for the whole memory. |
 | `backsight projects` | Lists projects with their memory counts and last activity. |
 | `backsight pause` / `backsight resume` | Stops or restarts recording this session; `--project` for the whole project (`--plan` shows the config change); `--session <id>`. |

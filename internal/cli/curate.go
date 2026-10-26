@@ -418,6 +418,7 @@ type scanFinding struct {
 // newMemoryCmd groups `memory scan` (SPEC §13 threats).
 func newMemoryCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "memory", Short: "Inspect the memory itself"}
+	cmd.AddCommand(newMemoryNotesCmd(e))
 	cmd.AddCommand(&cobra.Command{
 		Use:   "scan",
 		Short: "List stored memories that look like they hold a secret, with the command that purges each",

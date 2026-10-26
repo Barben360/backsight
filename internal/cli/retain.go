@@ -70,7 +70,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: res,
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx,
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
-		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return noteProject(home, cfg, res.Project(cwd)) }}, nil
+		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) }}, nil
 }
 
 // transcripts lists the session transcripts of this machine's Claude Code.

@@ -96,7 +96,17 @@ Each argument is one short keyword query (at most 4). It searches like recall (t
 backsight store --kind decision "The billing service keeps PostgreSQL 16 for partial indexes (2026-10-24)."
 ```
 
-Kinds: `decision`, `correction`, `convention`, `pitfall`, `state`, `lesson`. One fact per call, with the why and absolute dates. `--project <name>` stores it in another project; `--project transverse` stores a user-wide rule in the transverse pool (any of its names in `projects.transverse` works too, see [configuration.md](configuration.md#projects)). Text that looks like a secret is refused.
+Kinds: `decision`, `correction`, `convention`, `pitfall`, `state`, `lesson`. One fact per call, with the why and absolute dates. Without `--project` the fact goes to the current directory's project; `--project <name>` stores it in another one. The transverse pool reaches every session, so a fact goes there only when asked by name: `--project transverse` for a user-wide rule (any of its names in `projects.transverse` works too, see [configuration.md](configuration.md#projects)). In your home directory or `~/.claude`, which belong to the transverse pool, a fact without `--project` is refused. Claude's `memory_store` follows the same rules (`project: "transverse"`). Text that looks like a secret is refused.
+
+## Reviewing what was stored
+
+Claude stores facts without asking you first. To see what it stored:
+
+```sh
+backsight memory notes
+```
+
+It lists the notes of the last 7 days, newest first: when, the project, the Claude Code session it came from, the kind and the text. `--days N`, `--limit N` and `--project <name>` (`transverse` for the transverse pool) narrow it. `backsight doctor` counts the notes of the week, the transverse pool's apart. A wrong note: find its memories with `backsight search`, then `backsight forget <id>`.
 
 ## Forgetting a memory
 

@@ -138,6 +138,59 @@ func TestStoreReachesTheServer(t *testing.T) {
 	document(t, cl, cfg.Server.Bank, env.Data.Document)
 }
 
+// memory notes asks the server for the source:note documents created in
+// the window: on the real server, a note stored now is listed with its
+// project and session, and nothing but notes is (the flush test above
+// leaves a conversation in the bank).
+func TestMemoryNotesOnTheRealServer(t *testing.T) {
+	cl, cfg, _ := setup(t)
+	t.Setenv("BACKSIGHT_SESSION", "sbx-notes")
+	text := "Sandbox notes listing " + time.Now().UTC().Format(time.RFC3339Nano)
+	code, out := run(t, "store", "--kind", "decision", "--project", "billing", text)
+	var stored struct {
+		Data struct {
+			Status   string `json:"status"`
+			Document string `json:"document"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &stored)
+	if code != 0 || stored.Data.Status != "stored" {
+		t.Fatalf("store: exit %d\n%s", code, out)
+	}
+	document(t, cl, cfg.Server.Bank, stored.Data.Document)
+	code, out = run(t, "memory", "notes", "--limit", "200")
+	var listed struct {
+		Data struct {
+			Notes []struct {
+				Document  string    `json:"document"`
+				Project   string    `json:"project"`
+				Session   string    `json:"session"`
+				Kind      string    `json:"kind"`
+				Text      string    `json:"text"`
+				CreatedAt time.Time `json:"created_at"`
+			} `json:"notes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &listed); err != nil || code != 0 {
+		t.Fatalf("memory notes: exit %d %v\n%s", code, err, out)
+	}
+	found := false
+	for _, n := range listed.Data.Notes {
+		if !strings.HasPrefix(n.Document, "note:") {
+			t.Errorf("not a note: %s", n.Document)
+		}
+		if n.Document == stored.Data.Document {
+			found = true
+			if n.Project != "billing" || n.Session != "sbx-notes" || n.Kind != "decision" || n.Text != text || time.Since(n.CreatedAt) > time.Hour || time.Since(n.CreatedAt) < -time.Minute {
+				t.Errorf("listed as %+v", n)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the note just stored is not listed\n%s", out)
+	}
+}
+
 func TestDoctorSeesTheSandbox(t *testing.T) {
 	setup(t)
 	code, out := run(t, "doctor")

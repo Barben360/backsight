@@ -47,7 +47,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 
 | Key | Default | Effect |
 |---|---|---|
-| `projects.transverse` | `[".claude", "<user>"]` | Names of the [transverse](glossary.md#transverse-pool) project: sessions in a directory with one of these names (your home, `~/.claude`) store user-wide memories, and `--project transverse` means it. The first name is the one memories are stored under. |
+| `projects.transverse` | `[".claude", "<user>"]` | Names of the [transverse](glossary.md#transverse-pool) project: sessions in a directory with one of these names (your home, `~/.claude`) store user-wide memories, and `--project transverse` means it (a stored fact goes there only when named). The first name is the one memories are stored under. |
 
 ## `[privacy]`
 
