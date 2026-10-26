@@ -33,11 +33,20 @@ type RestoreMarker struct {
 	// starts that image (issue 285 review M4).
 	Image      string `json:"image,omitempty"`
 	RolledBack bool   `json:"rolled_back,omitempty"`
+	// PurgeBanks: at the purge step, the banks whose purged documents are
+	// still to purge again once their queues are done.
+	PurgeBanks []string `json:"purge_banks,omitempty"`
 }
 
 // KeyStep: the marker's restore wrote its epoch; the server is still to
 // start on its API key.
 const KeyStep = "key"
+
+// PurgeStep: the marker's restore wrote its epochs and waits for the
+// restored queues before purging again (a queued retain would recreate a
+// purged document), the server on a temporary key; server start resumes
+// it (issue 285 review MED-1).
+const PurgeStep = "purge"
 
 // WriteRestoreMarker writes m atomically (0600).
 func WriteRestoreMarker(d paths.Dirs, m RestoreMarker) error {

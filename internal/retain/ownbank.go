@@ -2,6 +2,7 @@ package retain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,11 +21,19 @@ type Marker struct {
 // TombstonesDocument.
 var ControlMarker = Marker{Name: "backsight control", IDPrefix: "backsight:"}
 
+// AdoptedControlMarker marks a control bank backsight created for a bank
+// it could not prove its own (restore with other_banks=revert, a server
+// upgrade's rollback): backsight writes its epoch and tombstones there,
+// but it never proves the bank backsight's, so every restore asks again
+// (issue 285 review MED-2).
+var AdoptedControlMarker = Marker{Name: "backsight control (adopted)", IDPrefix: "backsight:"}
+
 // ForeignBank is a bank backsight would set up that exists without its
 // marker: someone else's, which backsight leaves as it is.
 type ForeignBank struct {
 	Bank   string
 	Reason string
+	Name   string // the bank's name, as listed
 }
 
 func (e *ForeignBank) Error() string {
@@ -41,7 +50,7 @@ func OwnedBank(ctx context.Context, cl *hindsight.Client, bank string, m Marker)
 		return nil, false, err
 	}
 	if b.Name != m.Name {
-		return nil, true, &ForeignBank{bank, fmt.Sprintf("its name is %q, not %q", b.Name, m.Name)}
+		return nil, true, &ForeignBank{bank, fmt.Sprintf("its name is %q, not %q", b.Name, m.Name), b.Name}
 	}
 	docs, err = cl.ListDocuments(ctx, bank)
 	if err != nil {
@@ -54,7 +63,34 @@ func OwnedBank(ctx context.Context, cl *hindsight.Client, bank string, m Marker)
 		}
 	}
 	if other > 0 {
-		return nil, true, &ForeignBank{bank, fmt.Sprintf("it holds %d document(s) whose id does not start with %q", other, m.IDPrefix)}
+		return nil, true, &ForeignBank{bank, fmt.Sprintf("it holds %d document(s) whose id does not start with %q", other, m.IDPrefix), b.Name}
 	}
 	return docs, true, nil
+}
+
+// OwnedControl reads bank's control bank: backsight's (adopted reports
+// AdoptedControlMarker's), missing (exists false), or someone else's
+// (*ForeignBank).
+func OwnedControl(ctx context.Context, cl *hindsight.Client, bank string) (adopted, exists bool, err error) {
+	_, exists, err = OwnedBank(ctx, cl, ControlBank(bank), ControlMarker)
+	if f := (*ForeignBank)(nil); errors.As(err, &f) && f.Name == AdoptedControlMarker.Name {
+		_, exists, err = OwnedBank(ctx, cl, ControlBank(bank), AdoptedControlMarker)
+		return err == nil, exists, err
+	}
+	return false, exists, err
+}
+
+// quietControl sets up bank's control bank (QuietBank): an existing one
+// keeps its marker, proven or adopted; a new one is adopted when adopt.
+func quietControl(ctx context.Context, cl *hindsight.Client, bank string, adopt bool) error {
+	cb := ControlBank(bank)
+	first, second := ControlMarker, AdoptedControlMarker
+	if adopt {
+		first, second = second, first
+	}
+	_, err := QuietBank(ctx, cl, cb, first, controlMission(bank))
+	if f := (*ForeignBank)(nil); errors.As(err, &f) && f.Name == second.Name {
+		_, err = QuietBank(ctx, cl, cb, second, controlMission(bank))
+	}
+	return err
 }

@@ -3,6 +3,8 @@ package retain
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -414,5 +416,49 @@ func TestReconcilePurgesAgainWhatTheServerStillHolds(t *testing.T) {
 	e.hs.mu.Unlock()
 	if rec, err := e.f.Reconcile(context.Background()); err != nil || len(rec.Purged) != 0 {
 		t.Errorf("an epoch already reconciled purges again: %+v %v", rec, err)
+	}
+}
+
+// A purge again that fails holds the sends and keeps the epoch unrecorded,
+// with what is held in state for doctor (the bank, how many documents);
+// the next run purges, records the epoch and drops the hold (issue 285
+// review LOW-4).
+func TestReconcileHoldsWhenPurgeAgainFails(t *testing.T) {
+	e := purgedEnv(t)
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "a1", "segment": "1", "project": "billing"}
+	e.hs.deleteStatus = http.StatusInternalServerError
+	e.hs.mu.Unlock()
+	if _, err := e.f.Reconcile(context.Background()); err == nil || !strings.Contains(e.f.Hold, "purg") {
+		t.Fatalf("err %v, hold %q", err, e.f.Hold)
+	}
+	st, _ := state.Load(e.f.Dirs.StateFile())
+	if st.EpochOf("claude-memory") != 0 || st.PurgeHold == nil || st.PurgeHold.Bank != "claude-memory" || st.PurgeHold.Documents != 1 {
+		t.Fatalf("epoch %d, hold %+v", st.EpochOf("claude-memory"), st.PurgeHold)
+	}
+	e.hs.mu.Lock()
+	e.hs.deleteStatus = 0
+	e.hs.mu.Unlock()
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || !slices.Equal(rec.Purged, []string{"conversation:s1"}) || e.f.Hold != "" {
+		t.Fatalf("%+v %v %q", rec, err, e.f.Hold)
+	}
+	if st, _ := state.Load(e.f.Dirs.StateFile()); st.EpochOf("claude-memory") != 1 || st.PurgeHold != nil {
+		t.Errorf("epoch %d, hold %+v", st.EpochOf("claude-memory"), st.PurgeHold)
+	}
+}
+
+// A purge's writes take an answer of "not found" for done: a document, a
+// fact or its observations already gone (issue 285 review LOW-4).
+func TestPurgeWritesTakesNotFoundForDone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"not found"}`))
+	}))
+	t.Cleanup(srv.Close)
+	cl, _ := hindsight.New(srv.URL, "k", 2*time.Second)
+	cleared, pages, err := PurgeWrites(context.Background(), cl, "claude-memory", []PurgeFact{{ID: "f1"}}, []string{"conversation:s1"}, map[string]bool{"billing": true}, "")
+	if err != nil || cleared != 0 || len(pages) != 0 {
+		t.Errorf("cleared %d pages %v: %v", cleared, pages, err)
 	}
 }

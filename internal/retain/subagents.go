@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
@@ -42,9 +43,10 @@ func SubagentReport(text string) string {
 // SubagentStop builds them: never one a purge deleted (its document or its
 // text), one the outbox already holds, nor one the hook's rules keep out
 // (a paused session or stretch, an opted-out directory, a headless parent
-// session). tombs nil reads this client's. It returns the documents
-// queued.
-func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string, tombs []state.Tombstone) ([]string, error) {
+// session). Only a report written after since (where the lost window
+// opens: what the backup holds, or was never sent, stays as it is). tombs
+// nil reads this client's. It returns the documents queued.
+func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string, tombs []state.Tombstone, since time.Time) ([]string, error) {
 	if f.NoReports {
 		return nil, nil
 	}
@@ -100,7 +102,7 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 		reply := transcript.LastReply(fh)
 		_ = fh.Close()
 		text := SubagentReport(reply.Text)
-		if text == "" || session.InSpans(spans, reply.At) {
+		if text == "" || !reply.At.After(since) || session.InSpans(spans, reply.At) {
 			continue
 		}
 		if out, _ := f.Resolver.OptedOut(reply.CWD, f.Exclude); out {

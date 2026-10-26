@@ -213,7 +213,10 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		again, err := PurgeAgain(ctx, f.Client, f.Bank, tombs)
 		rec.Purged = again.Documents
 		if err != nil {
-			return rec, fmt.Errorf("purging again what the server still holds: %w", err)
+			// Held, the epoch unrecorded, and said where doctor reads it.
+			hold := &state.PurgeHold{Bank: f.Bank, Documents: again.Left, Error: errSummary(err), At: f.Now().UTC()}
+			_ = state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error { s.PurgeHold = hold; return nil })
+			return rec, fmt.Errorf("purging again %d purged document(s) the server still holds: %w", again.Left, err)
 		}
 		reconciledAt := time.Time{}
 		if st.RestoreEpoch != nil && st.RestoreEpoch.Bank == f.Bank {
@@ -225,6 +228,9 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	}
 	return rec, state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error {
 		s.RestoreEpoch = &state.RestoreEpoch{Bank: f.Bank, Epoch: rec.To, ReconciledAt: f.Now().UTC()}
+		if s.PurgeHold != nil && s.PurgeHold.Bank == f.Bank {
+			s.PurgeHold = nil
+		}
 		return nil
 	})
 }
@@ -258,7 +264,7 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (r
 		if err != nil || !ok || cur.Bank != f.Bank || !cur.SentAt.After(since) {
 			continue // an unreadable cursor, or another bank's, resyncs anyway
 		}
-		lost, rebuilt, err := f.dropSession(ctx, sid, cur, queued)
+		lost, rebuilt, err := f.dropSession(ctx, sid, cur, queued, since)
 		if err != nil {
 			return nil, nil, fmt.Errorf("session %s: %w", sid, err)
 		}
@@ -280,7 +286,7 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (r
 // run does it again. The bare uuids stay in the index: they are the
 // fork guard, so a fork that copied these records still skips them, while
 // this session's own resync sends them (it reads its .dropped mark).
-func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queued bool) (lost bool, reports []string, err error) {
+func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queued bool, since time.Time) (lost bool, reports []string, err error) {
 	unlock, err := f.lockSession(sid)
 	if err != nil {
 		return false, nil, err
@@ -373,7 +379,7 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 		}
 	}
 	// Its subagents' reports sent after the backup are lost with it.
-	if reports, err = f.rebuildReports(ctx, sid, cur.Transcript, tombs); err != nil {
+	if reports, err = f.rebuildReports(ctx, sid, cur.Transcript, tombs, since); err != nil {
 		return false, nil, err
 	}
 	p, _ := cursorPath(f.Dirs.CursorsDir(), sid)
@@ -465,6 +471,12 @@ var controlConfig = map[string]any{"retain_extraction_mode": "chunks", "enable_o
 // first, every time: a retain into a missing bank creates it with the
 // default settings, an LLM extraction.
 func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch) error {
+	return WriteEpochAs(ctx, cl, bank, e, false)
+}
+
+// WriteEpochAs is WriteEpoch; adopt: a control bank it creates is adopted
+// (AdoptedControlMarker), for a bank backsight cannot prove its own.
+func WriteEpochAs(ctx context.Context, cl *hindsight.Client, bank string, e Epoch, adopt bool) error {
 	cur, err := ReadEpoch(ctx, cl, bank)
 	var unreadable *EpochUnreadable
 	switch {
@@ -492,7 +504,7 @@ func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch)
 		return err
 	}
 	cb := ControlBank(bank)
-	if _, err := QuietBank(ctx, cl, cb, ControlMarker, controlMission(bank)); err != nil {
+	if err := quietControl(ctx, cl, bank, adopt); err != nil {
 		return err
 	}
 	at, from := e.RestoredAt.UTC().Format(time.RFC3339), e.BackupCreatedAt.UTC().Format(time.RFC3339)

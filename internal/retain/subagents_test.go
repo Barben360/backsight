@@ -7,18 +7,25 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/state"
 )
 
 // subagent writes subagents/agent-<agent>.jsonl beside session sid's
-// transcript, ending with reply, and its .meta.json naming agentType.
+// transcript, ending with reply at 12:50 (after restoredEnv's backup), and
+// its .meta.json naming agentType.
 func (e *env) subagent(sid, agent, agentType, reply string) {
+	e.t.Helper()
+	e.subagentAt(sid, agent, agentType, reply, clockAt(12, 50))
+}
+
+func (e *env) subagentAt(sid, agent, agentType, reply string, at time.Time) {
 	e.t.Helper()
 	dir := filepath.Join(e.dir, sid, "subagents")
 	_ = os.MkdirAll(dir, 0o700)
-	lines := `{"type":"user","isSidechain":true,"uuid":"` + agent + `-1","timestamp":"2026-10-24T09:40:00Z","cwd":"` + e.cwd + `","message":{"role":"user","content":"Look at the export."}}` + "\n" +
-		`{"type":"assistant","isSidechain":true,"uuid":"` + agent + `-2","timestamp":"2026-10-24T09:45:00Z","cwd":"` + e.cwd + `","message":{"role":"assistant","content":[{"type":"text","text":` + quote(reply) + `}]}}` + "\n"
+	lines := `{"type":"user","isSidechain":true,"uuid":"` + agent + `-1","timestamp":"` + at.Add(-5*time.Minute).UTC().Format(time.RFC3339) + `","cwd":"` + e.cwd + `","message":{"role":"user","content":"Look at the export."}}` + "\n" +
+		`{"type":"assistant","isSidechain":true,"uuid":"` + agent + `-2","timestamp":"` + at.UTC().Format(time.RFC3339) + `","cwd":"` + e.cwd + `","message":{"role":"assistant","content":[{"type":"text","text":` + quote(reply) + `}]}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "agent-"+agent+".jsonl"), []byte(lines), 0o600); err != nil {
 		e.t.Fatal(err)
 	}
@@ -67,13 +74,13 @@ func TestReconcileRebuildsLostSubagentReports(t *testing.T) {
 	}
 	n := notes[0]
 	if n.DocumentID != "subagent:s2:ag1" || n.Source != "subagent" || n.AgentType != "Explore" || n.Project != "billing" ||
-		!n.CreatedAt.Equal(clockAt(9, 45)) || len([]rune(n.Content)) != ReportChars || strings.Contains(n.Content, token) ||
+		!n.CreatedAt.Equal(clockAt(12, 50)) || len([]rune(n.Content)) != ReportChars || strings.Contains(n.Content, token) ||
 		!strings.HasPrefix(n.Content, "The export pages by 200") {
 		t.Errorf("note %+v", n)
 	}
 	// Queued once: a reconcile stopped half way and done again, or the
 	// next epoch, does not queue it twice.
-	if _, err := e.f.rebuildReports(context.Background(), "s2", filepath.Join(e.dir, "s2.jsonl"), nil); err != nil {
+	if _, err := e.f.rebuildReports(context.Background(), "s2", filepath.Join(e.dir, "s2.jsonl"), nil, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if notes, _ := NotesOutbox(e.f.Dirs).read(); len(notes) != 1 {
@@ -99,7 +106,7 @@ func TestRebuiltReportsFollowTheHooksRules(t *testing.T) {
 			e.tombstone(state.Tombstone{Document: "note:elsewhere", ContentSHA256: ContentHash(SubagentReport(reply))})
 		}, false, ""},
 		"quarantined": {func(e *env) {
-			e.quarantine(NewSubagentNote("claude-memory", "s2", "ag1", "Explore", "billing", reply, clockAt(9, 45)))
+			e.quarantine(NewSubagentNote("claude-memory", "s2", "ag1", "Explore", "billing", reply, clockAt(12, 50)))
 		}, false, ""},
 		"hook's attribution": {func(e *env) { e.f.ReportProject = func(string) string { return "transverse" } }, true, "transverse"},
 	} {
@@ -130,5 +137,21 @@ func (e *env) quarantine(n Note) {
 	e.t.Helper()
 	if err := appendJSON(NotesOutbox(e.f.Dirs).QuarantinePath, n); err != nil {
 		e.t.Fatal(err)
+	}
+}
+
+// Only a report written after the lost window began is rebuilt: one from
+// before the backup (minus the clock skew) was in the backup, or was never
+// sent on purpose (issue 285 review LOW-1).
+func TestOnlyReportsAfterTheBackupAreRebuilt(t *testing.T) {
+	e := restoredEnv(t) // backup at 12:30: the window opens at 11:30
+	e.subagentAt("s2", "old", "Explore", "written before the backup", clockAt(10, 0))
+	e.subagentAt("s2", "new", "Explore", "written after the backup", clockAt(12, 45))
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rec.Reports, []string{"subagent:s2:new"}) {
+		t.Errorf("reports %v", rec.Reports)
 	}
 }
