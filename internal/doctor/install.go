@@ -130,8 +130,8 @@ func checkRemotes(d paths.Dirs, now time.Time) Check {
 		c.Summary = fmt.Sprintf("%d project names are shared by several repositories: %s", len(shared), strings.Join(shared, ", "))
 	}
 	c.Detail = strings.Join(detail, "; ") + "; their memories mix in one pool"
-	c.Fix = `if they are different projects: set project = "<another name>" in a .backsight.toml at the root of one repository, and commit it so every clone uses it. ` +
-		`If the repository was renamed or moved, or the name is shared on purpose: set project = "<that name>" in a committed .backsight.toml in each of them ` +
+	c.Fix = `if they are different projects: set project = "<another name>" in a .backsight.toml at the root of one repository, untracked (list it in .git/info/exclude: a file git tracks is not trusted for project). ` +
+		`If the repository was renamed or moved, or the name is shared on purpose: set project = "<that name>" in an untracked .backsight.toml in each of them ` +
 		`(an old remote stops counting 7 days after its last session)`
 	return c
 }

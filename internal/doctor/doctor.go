@@ -62,6 +62,7 @@ type Report struct {
 type Env struct {
 	Dirs       paths.Dirs
 	Home       string
+	Cwd        string // where doctor runs: its .backsight.toml files are checked
 	Getenv     func(string) string
 	ManagedDir string
 	Docker     func(context.Context) (string, error)
@@ -163,6 +164,7 @@ func Run(ctx context.Context, env Env) Report {
 	}
 	add(checkUpdate(env.Dirs, buildinfo.Version, now()))
 	add(installChecks(ctx, env, ref, now())...)
+	add(checkBacksightToml(env))
 	return r
 }
 

@@ -32,7 +32,7 @@ What a session, a subagent report or a stored fact is sent as: the text the serv
 
 ## Project
 
-The unit memories are grouped by: the Git repository a session ran in (a worktree counts as its main repository), or the directory outside one. A `.backsight.toml` at a repository's root can give it another name ([daily-use.md](daily-use.md#projects-and-the-transverse-memory)).
+The unit memories are grouped by: the Git repository a session ran in (a worktree counts as its main repository), or the directory outside one. A `.backsight.toml` at a repository's root, kept untracked by git, can give it another name ([daily-use.md](daily-use.md#projects-and-the-transverse-memory)).
 
 ## Transverse pool
 
@@ -40,7 +40,7 @@ The project that holds what is true everywhere: your preferences, conventions an
 
 ## Related projects
 
-Projects that a repository's `.backsight.toml` lists under `related`: recall searches them together with the current project.
+Projects that a repository's untracked `.backsight.toml` lists under `related`: recall searches them together with the current project. A file git tracks is not trusted for `related` or `project`.
 
 ## Recall
 

@@ -41,13 +41,15 @@ If Claude searched and found nothing, it says so. Memories are hints from past s
 
 Each memory belongs to a project: the Git repository you worked in (a worktree counts as its main repository), or the directory outside one. Recall searches the current project together with the [transverse project](glossary.md#transverse-pool), which holds rules valid everywhere (your preferences, your conventions), and also the whole memory and related projects, with a boost for the current project.
 
-To give a repository another project name, to search other projects with it, or to keep it out of memory, commit a `.backsight.toml` at its root:
+To give a repository another project name, to search other projects with it, or to keep it out of memory, put a `.backsight.toml` at its root:
 
 ```toml
 project = "my-project"
 related = ["shared-lib", "infra"]   # projects searched with this one
 # retain = false   # never record sessions in this repository
 ```
+
+`project` and `related` apply only from a file git does not track: keep it untracked, for example by listing `.backsight.toml` in `.git/info/exclude`. A file git tracks came with the repository, and whoever published it would otherwise choose where your sessions are stored and which projects' memories reach them; backsight ignores those two keys there, and `backsight doctor` names the file. `retain = false` applies from any file, committed or not, so a repository can keep itself out of everyone's memory. Outside git, every file is trusted.
 
 `related` lists at most 10 projects, which prompt recall, `memory_search` and `backsight search` search together with the current one, without its boost. The nearest `.backsight.toml` that sets `related` wins (a subdirectory's file over the repository's), and `related = []` clears a parent's list.
 

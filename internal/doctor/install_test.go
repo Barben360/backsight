@@ -57,7 +57,9 @@ func TestRemotesWarnsOnOneProjectNameWithTwoRemotes(t *testing.T) {
 	if !strings.Contains(c.Detail, "github.com/acme/api (2 sessions)") || !strings.Contains(c.Detail, "gitlab.com/other/api (1 session)") || strings.Contains(c.Detail, "billing") {
 		t.Errorf("detail %q", c.Detail)
 	}
-	if !strings.Contains(c.Fix, "project = ") || !strings.Contains(c.Fix, ".backsight.toml") {
+	// a tracked file is not trusted for project (decision 0072 M5): the fix
+	// asks for an untracked one, never a commit
+	if !strings.Contains(c.Fix, "project = ") || !strings.Contains(c.Fix, ".backsight.toml") || !strings.Contains(c.Fix, "untracked") || strings.Contains(c.Fix, "commit") {
 		t.Errorf("fix %q", c.Fix)
 	}
 	// The fix names both reasons a shared name is fine (0045): a renamed
