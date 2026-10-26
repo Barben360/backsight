@@ -90,7 +90,7 @@ settled_llm() {
   for _ in $(seq 1 12); do sleep 30; b=$(llm); [ "$a" = "$b" ] && { echo "$b"; return; }; a=$b; done
   fail "LLM calls still moving after 6 minutes"
 }
-idle() { for _ in $(seq 1 90); do n=$(api "$B/operations?status=pending" | jq '[.operations[]?] | length'); [ "$n" = 0 ] && return; sleep 2; done; fail "operations still pending"; }
+idle() { for _ in $(seq 1 90); do n=$(( $(api "$B/operations?status=pending&limit=1" | jq '.total // 0') + $(api "$B/operations?status=processing&limit=1" | jq '.total // 0') )); [ "$n" = 0 ] && return; sleep 2; done; fail "operations still queued"; }
 unit_tags() { api "$B/memories/list?document_id=$(enc "$1")&limit=100" | jq -c '[.items[].tags | map(select(startswith("project:")))[]] | unique'; }
 reattr() { set +e; "$bin" retain reattribute --json "$@" > "$work/out.json"; code=$?; set -e; }
 
