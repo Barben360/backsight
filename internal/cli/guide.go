@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 // guideDocs is the docs the guide shows and searches; tests replace it.
@@ -31,9 +32,11 @@ const (
 	guideLimit       = 5
 	// guideTimeout bounds one guide search or index, a refresh of the docs
 	// bank included; each server call has guideCallTimeout.
-	guideTimeout     = 3 * time.Minute
-	guideCallTimeout = 30 * time.Second
+	guideTimeout = 3 * time.Minute
 )
+
+// guideCallTimeout bounds each server call of guide; tests shorten it.
+var guideCallTimeout = 30 * time.Second
 
 func newGuideCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{
@@ -41,7 +44,7 @@ func newGuideCmd(e *env) *cobra.Command {
 		Short: "Read backsight's documentation: the topics, one topic or section, or search them",
 		Long: "backsight guide lists the documentation's topics; backsight guide <topic> shows one (through $PAGER at a terminal), " +
 			"<topic>#<section> one of its sections. backsight guide search <query> finds the sections that answer a question.",
-		Args: usageArgs(cobra.MaximumNArgs(1)),
+		Args: usageArgs(guideArgs),
 		RunE: func(_ *cobra.Command, args []string) error {
 			c, err := guideDocs()
 			if err != nil {
@@ -94,33 +97,56 @@ func topicsText(c guide.Corpus) string {
 	return b.String()
 }
 
+// guideArgs accepts at most one argument, a topic or topic#section of the
+// docs: `guide serach` is a usage error before anything runs.
+func guideArgs(cmd *cobra.Command, args []string) error {
+	if err := cobra.MaximumNArgs(1)(cmd, args); err != nil || len(args) == 0 {
+		return err
+	}
+	c, err := guideDocs()
+	if err != nil {
+		return nil // RunE reports the docs that cannot load
+	}
+	_, err = docRef(c, args[0])
+	return err
+}
+
+// docRef finds ref in c: a topic, or one section as topic#section.
+func docRef(c guide.Corpus, ref string) (map[string]any, error) {
+	data := map[string]any{"ref": ref}
+	if t, ok := c.Topic(ref); ok {
+		data["topic"], data["title"], data["text"] = t.Name, t.Title, t.Text
+		return data, nil
+	}
+	if s, ok := c.Section(ref); ok && strings.Contains(ref, "#") {
+		data["topic"], data["heading"], data["text"] = s.Topic, s.Heading, s.Text
+		return data, nil
+	}
+	var names []string
+	for _, t := range c.Topics {
+		names = append(names, t.Name)
+	}
+	return nil, &output.Error{Code: output.Usage, Message: fmt.Sprintf("no topic or section %q; topics: %s (backsight guide lists their sections with --json)", ref, strings.Join(names, ", "))}
+}
+
 // showDoc prints a topic or one section: through the pager at a terminal,
 // plain otherwise.
 func showDoc(e *env, c guide.Corpus, ref string) error {
-	data := map[string]any{"ref": ref}
-	var text string
-	if t, ok := c.Topic(ref); ok {
-		text = t.Text
-		data["topic"], data["title"] = t.Name, t.Title
-	} else if s, ok := c.Section(ref); ok && strings.Contains(ref, "#") {
-		text = s.Text
-		data["topic"], data["heading"] = s.Topic, s.Heading
-	} else {
-		var names []string
-		for _, t := range c.Topics {
-			names = append(names, t.Name)
-		}
-		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("no topic or section %q; topics: %s (backsight guide lists their sections with --json)", ref, strings.Join(names, ", "))}
+	data, err := docRef(c, ref)
+	if err != nil {
+		return err
 	}
+	text, _ := data["text"].(string)
 	if e.json {
-		data["text"] = text
 		return e.emit("guide", data, nil)
 	}
 	return page(e, text)
 }
 
 // page writes text through $PAGER (default less -FRX) when stdout is a
-// terminal, plain otherwise or when no pager runs.
+// terminal, plain otherwise or when no pager starts. A pager that started
+// is the output, whatever its exit status (the user quit it, a pipe
+// closed): a plain copy after it would print the text twice.
 func page(e *env, text string) error {
 	if stdoutIsTerminal() {
 		args := strings.Fields(os.Getenv("PAGER"))
@@ -130,7 +156,8 @@ func page(e *env, text string) error {
 		if bin, err := exec.LookPath(args[0]); err == nil {
 			cmd := exec.Command(bin, args[1:]...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = strings.NewReader(text), e.stdout, e.stderr
-			if err := cmd.Run(); err == nil {
+			if err := cmd.Start(); err == nil {
+				_ = cmd.Wait()
 				return nil
 			}
 		}
@@ -224,6 +251,10 @@ func guideSearch(ctx context.Context, c guide.Corpus, query, mode string, limit 
 		return keyword(searchFailure(cfg, res.Bank, err))
 	}
 	if len(hits) == 0 {
+		if mode == modeSemantic { // asked for: no hit is the answer
+			res.Mode, res.Reason = modeSemantic, "the semantic search found nothing in bank "+res.Bank
+			return res, nil
+		}
 		return keyword("the semantic search found nothing in bank " + res.Bank)
 	}
 	res.Mode = modeSemantic
@@ -246,7 +277,10 @@ func isNeedsUser(err error) bool {
 func searchFailure(cfg config.Config, bank string, err error) string {
 	var apiErr *hindsight.APIError
 	var se *guide.SearchError
+	var foreign *retain.ForeignBank
 	switch {
+	case errors.As(err, &foreign):
+		return "the docs bank " + bank + " is not backsight's (" + foreign.Reason + "), so backsight leaves it as it is"
 	case errors.Is(err, hindsight.ErrUnreachable):
 		return "server unreachable at " + cfg.Server.URL
 	case errors.Is(err, hindsight.ErrTimeout) || errors.Is(err, context.DeadlineExceeded):
@@ -284,10 +318,14 @@ func guideSearchText(r guideSearchResult) string {
 }
 
 func newGuideIndexCmd(e *env) *cobra.Command {
-	return &cobra.Command{
+	var plan bool
+	cmd := &cobra.Command{
 		Use:   "index",
 		Short: "Index the documentation into the server's docs bank (setup and update apply run it; 0 LLM calls)",
-		Args:  cobra.NoArgs,
+		Long: "backsight guide index brings the server's docs bank <bank>-docs to this binary's docs: new and edited sections are sent, " +
+			"unchanged ones get this docs version's tag, sections no docs version holds are deleted. A <bank>-docs that backsight did not " +
+			"make is left as it is. --plan lists the documents it would create, resend, retag, untag and delete, and changes nothing.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := guideDocs()
 			if err != nil {
@@ -303,6 +341,13 @@ func newGuideIndexCmd(e *env) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), guideTimeout)
 			defer cancel()
+			if plan {
+				p, err := guide.PlanIndex(ctx, cl, cfg.Server.Bank, c)
+				if err != nil {
+					return blocked(fmt.Errorf("planning the docs index of %s: %w", p.Bank, err))
+				}
+				return e.emit("guide index", p, func() string { return indexPlanText(p) })
+			}
 			res, err := guide.Index(ctx, cl, cfg.Server.Bank, c)
 			if err != nil {
 				return blocked(fmt.Errorf("indexing the docs into %s: %w", res.Bank, err))
@@ -310,8 +355,32 @@ func newGuideIndexCmd(e *env) *cobra.Command {
 			return e.emit("guide index", res, func() string { return indexText(res) })
 		},
 	}
+	cmd.Flags().BoolVar(&plan, "plan", false, "list the documents index would create, resend, retag, untag and delete, without changing anything")
+	return cmd
 }
 
 func indexText(r guide.IndexResult) string {
-	return fmt.Sprintf("docs indexed in bank %s: %d section(s), %d sent, %d retagged, %d unchanged, %d removed\n", r.Bank, r.Sections, r.Sent, r.Retagged, r.Unchanged, r.Deleted)
+	return fmt.Sprintf("docs indexed in bank %s: %d section(s), %d sent, %d retagged, %d unchanged, %d untagged, %d removed\n",
+		r.Bank, r.Sections, r.Sent, r.Retagged, r.Unchanged, r.Untagged, r.Deleted)
+}
+
+func indexPlanText(p guide.IndexPlan) string {
+	var b strings.Builder
+	if p.Exists {
+		fmt.Fprintf(&b, "bank %s would get its settings again, then:\n", p.Bank)
+	} else {
+		fmt.Fprintf(&b, "bank %s would be created, then:\n", p.Bank)
+	}
+	for _, l := range []struct {
+		name string
+		ids  []string
+	}{{"create", p.Create}, {"resend", p.Resend}, {"retag", p.Retag}, {"untag", p.Untag}, {"delete", p.Delete}} {
+		fmt.Fprintf(&b, "  %s (%d)", l.name, len(l.ids))
+		if len(l.ids) > 0 {
+			b.WriteString(": " + strings.Join(l.ids, ", "))
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "  unchanged: %d\nnothing was changed (--plan)\n", p.Unchanged)
+	return b.String()
 }

@@ -8,6 +8,8 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 func setup(t *testing.T) (*hindsight.Client, config.Config, string) {
@@ -146,7 +149,8 @@ func TestDoctorSeesTheSandbox(t *testing.T) {
 }
 
 // llmCalls counts the LLM requests the server logged for bank today
-// (embeddings and reranking are local models, logged apart).
+// (embeddings and reranking are local models, logged apart). Every bucket
+// must carry its total: a renamed field would read as 0 calls.
 func llmCalls(t *testing.T, cfg config.Config, bank string) int {
 	t.Helper()
 	d, _ := paths.Default()
@@ -162,18 +166,49 @@ func llmCalls(t *testing.T, cfg config.Config, bank string) int {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out struct {
-		Buckets []struct {
-			Total int `json:"total"`
-		} `json:"buckets"`
+		Buckets *[]map[string]json.RawMessage `json:"buckets"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("llm-requests/stats: HTTP %d %v", resp.StatusCode, err)
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || resp.StatusCode != http.StatusOK || out.Buckets == nil {
+		t.Fatalf("llm-requests/stats: HTTP %d %v, buckets %v", resp.StatusCode, err, out.Buckets)
 	}
 	n := 0
-	for _, b := range out.Buckets {
-		n += b.Total
+	for _, b := range *out.Buckets {
+		var total *int
+		if err := json.Unmarshal(b["total"], &total); err != nil || total == nil {
+			t.Fatalf("llm-requests/stats: a bucket without its total: %v", b)
+		}
+		n += *total
 	}
 	return n
+}
+
+// llmCountsWork is llmCalls' positive control: a retain into a bank with
+// the default settings (the mock LLM's extraction) shows up as LLM calls,
+// so a 0 elsewhere means no call, not a count that cannot see any. Run
+// after the work checked, it also waits out the stats' lag.
+func llmCountsWork(t *testing.T, cl *hindsight.Client, cfg config.Config) {
+	t.Helper()
+	bank := "sbx-llm-" + suffix(t)
+	t.Cleanup(func() { _ = cl.DeleteBank(context.Background(), bank) })
+	if err := cl.RetainNow(context.Background(), bank, []hindsight.RetainItem{{Content: "We keep PostgreSQL 16 for billing because of partial indexes.", DocumentID: "control", Tags: []string{}}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(time.Minute); llmCalls(t, cfg, bank) == 0; time.Sleep(2 * time.Second) {
+		if time.Now().After(deadline) {
+			t.Fatal("an extracting retain logged no LLM call: the count cannot prove 0 calls")
+		}
+	}
+}
+
+// suffix makes a bank name unique to this run (two runs in one second
+// shared one before).
+func suffix(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return time.Now().UTC().Format("150405") + "-" + hex.EncodeToString(b)
 }
 
 var guideFixture = fstest.MapFS{
@@ -191,7 +226,7 @@ var guideFixture = fstest.MapFS{
 func TestGuideDocsBankOnTheRealServer(t *testing.T) {
 	cl, cfg, _ := setup(t)
 	ctx := context.Background()
-	mem := "sbx-guide-" + time.Now().UTC().Format("150405")
+	mem := "sbx-guide-" + suffix(t)
 	db := guide.Bank(mem)
 	t.Cleanup(func() { _ = cl.DeleteBank(context.Background(), db) })
 	c, err := guide.Load(guideFixture)
@@ -225,6 +260,13 @@ func TestGuideDocsBankOnTheRealServer(t *testing.T) {
 	if hits, _, err := guide.Search(ctx, cl, mem, c2, "comment restaurer une sauvegarde ?", 1); err != nil || len(hits) != 1 || hits[0].Ref() != "backup#restore-a-backup" {
 		t.Errorf("a retagged section must stay searchable: %v %+v", err, hits)
 	}
+	// Both versions on one bank: the older one sends back only the section
+	// they disagree on, and retags nothing.
+	if hits, refreshed, err := guide.Search(ctx, cl, mem, c, "comment désinstaller backsight", 1); err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 0 ||
+		len(hits) != 1 || hits[0].Ref() != "install#uninstall" {
+		t.Errorf("the older version on a shared bank: %v %+v %+v", err, refreshed, hits)
+	}
+	llmCountsWork(t, cl, cfg)
 	if n := llmCalls(t, cfg, db); n != 0 {
 		t.Errorf("indexing and searching the docs made %d LLM call(s)", n)
 	}
@@ -237,7 +279,7 @@ func TestGuideDocsBankOnTheRealServer(t *testing.T) {
 // The shipped docs through the command line: guide index, then a search
 // answered by the docs bank, with no LLM call.
 func TestGuideCommandsOnTheShippedDocs(t *testing.T) {
-	_, cfg, _ := setup(t)
+	cl, cfg, _ := setup(t)
 	code, out := run(t, "guide", "index")
 	if code != 0 || !strings.Contains(out, `"bank": "`+guide.Bank(cfg.Server.Bank)+`"`) {
 		t.Fatalf("guide index: exit %d\n%s", code, out)
@@ -246,7 +288,40 @@ func TestGuideCommandsOnTheShippedDocs(t *testing.T) {
 	if code != 0 || !strings.Contains(out, `"mode": "semantic"`) || strings.Contains(out, `"hits": []`) {
 		t.Errorf("guide search: exit %d\n%s", code, out)
 	}
+	llmCountsWork(t, cl, cfg)
 	if n := llmCalls(t, cfg, guide.Bank(cfg.Server.Bank)); n != 0 {
 		t.Errorf("the docs bank logged %d LLM call(s)", n)
+	}
+}
+
+// A `<bank>-docs` someone else made on the real server: index refuses and
+// leaves its name, config and documents as they were (decision 0067, block
+// 4 review).
+func TestGuideLeavesAForeignDocsBankAlone(t *testing.T) {
+	cl, _, _ := setup(t)
+	ctx := context.Background()
+	mem := "sbx-foreign-" + suffix(t)
+	db := guide.Bank(mem)
+	t.Cleanup(func() { _ = cl.DeleteBank(context.Background(), db) })
+	if err := cl.CreateBank(ctx, db, "team docs", "our own notes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.PatchBankConfig(ctx, db, map[string]any{"retain_extraction_mode": "chunks"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.RetainNow(ctx, db, []hindsight.RetainItem{{Content: "Our release checklist lives in the wiki.", DocumentID: "note:1", Tags: []string{}}}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := guide.Load(guideFixture)
+	_, err := guide.Index(ctx, cl, mem, c)
+	var foreign *retain.ForeignBank
+	if !errors.As(err, &foreign) || !strings.Contains(err.Error(), `"team docs"`) {
+		t.Fatalf("index: %v", err)
+	}
+	b, found, err := cl.FindBank(ctx, db)
+	docs, lerr := cl.ListDocuments(ctx, db)
+	ov, cerr := cl.BankConfigOverrides(ctx, db)
+	if err != nil || !found || b.Name != "team docs" || lerr != nil || len(docs) != 1 || docs[0].ID != "note:1" || cerr != nil || ov["enable_text_search"] != nil || ov["enable_observations"] != nil {
+		t.Errorf("the bank changed: %+v %v %v %v %v %v", b, err, docs, lerr, ov, cerr)
 	}
 }

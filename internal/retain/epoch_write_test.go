@@ -23,6 +23,7 @@ type banksHS struct {
 	mu      sync.Mutex
 	docs    map[string]map[string]json.RawMessage // bank → document → metadata
 	configs map[string]map[string]any             // bank → config set
+	names   map[string]string                     // bank → name (PUT); "" for a bank made otherwise
 	calls   []string                              // "METHOD bank /sub"
 }
 
@@ -31,6 +32,16 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		if r.URL.Path == "/v1/default/banks" {
+			h.calls = append(h.calls, "LIST "+r.URL.Query().Get("q"))
+			var banks []map[string]string
+			for b := range h.docs {
+				banks = append(banks, map[string]string{"bank_id": b, "name": h.names[b]})
+			}
+			raw, _ := json.Marshal(map[string]any{"banks": banks, "total": len(banks)})
+			_, _ = w.Write(raw)
+			return
+		}
 		rest, _ := strings.CutPrefix(r.URL.EscapedPath(), "/v1/default/banks/")
 		esc, sub, _ := strings.Cut(rest, "/")
 		bank, _ := url.PathUnescape(esc)
@@ -41,6 +52,14 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 			if !exists {
 				h.docs[bank] = map[string]json.RawMessage{}
 			}
+			var body struct {
+				Name string `json:"name"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if h.names == nil {
+				h.names = map[string]string{}
+			}
+			h.names[bank] = body.Name
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && sub == "memories":
 			var body struct {
@@ -78,6 +97,13 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 				h.configs[bank][k] = v
 			}
 			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && sub == "documents":
+			var items []map[string]any
+			for id := range docs {
+				items = append(items, map[string]any{"id": id, "tags": []string{}})
+			}
+			raw, _ := json.Marshal(map[string]any{"items": items, "total": len(items)})
+			_, _ = w.Write(raw)
 		case r.Method == http.MethodGet && strings.HasPrefix(sub, "documents/"):
 			id, _ := url.PathUnescape(strings.TrimPrefix(sub, "documents/"))
 			meta, ok := docs[id]
@@ -113,7 +139,7 @@ func TestEpochLivesInTheControlBank(t *testing.T) {
 	if ControlBank("claude-memory") != "claude-memory-control" {
 		t.Errorf("control bank %q", ControlBank("claude-memory"))
 	}
-	if got := strings.Join(h.calls, ", "); got != "GET claude-memory-control /documents/backsight%3Aepoch, PUT claude-memory-control /, PATCH claude-memory-control /config, POST claude-memory-control /memories sync" {
+	if got := strings.Join(h.calls, ", "); got != "GET claude-memory-control /documents/backsight%3Aepoch, LIST claude-memory-control, PUT claude-memory-control /, PATCH claude-memory-control /config, POST claude-memory-control /memories sync" {
 		t.Errorf("calls: %s", got)
 	}
 	if cfg := h.configs["claude-memory-control"]; cfg["retain_extraction_mode"] != "chunks" || cfg["enable_observations"] != false {
@@ -189,5 +215,35 @@ func TestUnparsableEpochHistory(t *testing.T) {
 	var unreadable *EpochUnreadable
 	if !errors.As(err, &unreadable) || !strings.Contains(err.Error(), "history") {
 		t.Errorf("%v", err)
+	}
+}
+
+// A `<bank>-control` backsight did not make (another name, or a document
+// that is not one of its control records) is never reconfigured nor
+// written: WriteEpoch refuses before any write (block 4 review).
+func TestWriteEpochLeavesAForeignControlBankAlone(t *testing.T) {
+	for name, c := range map[string]struct {
+		bankName string
+		docs     map[string]json.RawMessage
+		reason   string
+	}{
+		"another name":     {"team notes", map[string]json.RawMessage{}, `its name is "team notes"`},
+		"another document": {"backsight control", map[string]json.RawMessage{EpochDocument: json.RawMessage(`{}`), "notes:1": json.RawMessage(`{}`)}, "1 document(s)"},
+	} {
+		h := &banksHS{docs: map[string]map[string]json.RawMessage{"claude-memory-control": c.docs}, configs: map[string]map[string]any{},
+			names: map[string]string{"claude-memory-control": c.bankName}}
+		err := WriteEpoch(context.Background(), h.client(t), "claude-memory", Epoch{Epoch: 1, RestoredAt: time.Now(), BackupCreatedAt: time.Now()})
+		var foreign *ForeignBank
+		if !errors.As(err, &foreign) || foreign.Bank != "claude-memory-control" || !strings.Contains(err.Error(), c.reason) {
+			t.Errorf("%s: %v", name, err)
+		}
+		for _, call := range h.calls {
+			if !strings.HasPrefix(call, "GET ") && !strings.HasPrefix(call, "LIST ") {
+				t.Errorf("%s: wrote to a bank that is not backsight's: %s", name, call)
+			}
+		}
+		if len(h.configs) != 0 || len(h.docs["claude-memory-control"]) != len(c.docs) {
+			t.Errorf("%s: configs %v docs %v", name, h.configs, h.docs)
+		}
 	}
 }

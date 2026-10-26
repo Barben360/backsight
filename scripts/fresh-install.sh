@@ -114,12 +114,27 @@ jq -e '(.data.checks | length > 0) and (.data.checks | map(select(.status == "er
 # answers a French question from it.
 jq -e '[.data.steps[] | select(.name == "docs")][0].status == "done"' "$work/setup.json" >/dev/null || fail "setup did not index the docs"
 "$bin" guide search --json "comment désinstaller backsight ?" > "$work/guide.json" || { cat "$work/guide.json" >&2; fail "guide search failed"; }
-jq -e '.ok and .data.mode == "semantic" and (.data.hits | length > 0)' "$work/guide.json" >/dev/null ||
-  { cat "$work/guide.json" >&2; fail "guide search did not answer from the docs bank"; }
-docs_bank=$(sed -n "s/^bank *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/config.toml" | head -n 1)
-docs_bank=${docs_bank:-claude-memory}-docs
-docs_llm=$(curl -fsS -H "Authorization: Bearer $(sed -n "s/^api_key *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/secrets.toml" | head -n 1)" \
-  "http://127.0.0.1:$port/v1/default/banks/$docs_bank/llm-requests/stats?period=1d&call_type=llm" | jq '[.buckets[].total] | add // 0')
+jq -e '.ok and .data.mode == "semantic" and (.data.hits[:3] | map(.ref) | any(startswith("uninstall")))' "$work/guide.json" >/dev/null ||
+  { cat "$work/guide.json" >&2; fail "guide search did not answer from the docs bank with an uninstall section in its top 3"; }
+mem_bank=$(sed -n "s/^bank *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/config.toml" | head -n 1)
+mem_bank=${mem_bank:-claude-memory}
+docs_bank=$mem_bank-docs
+# llm_calls <bank>: the LLM calls the server logged for bank today; every
+# bucket must carry its total, or a renamed field would read as 0 calls.
+llm_calls() {
+  curl -fsS -H "Authorization: Bearer $(sed -n "s/^api_key *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/secrets.toml" | head -n 1)" \
+    "http://127.0.0.1:$port/v1/default/banks/$1/llm-requests/stats?period=1d&call_type=llm" |
+    jq -e 'if (.buckets | type) == "array" and (.buckets | all(has("total"))) then [.buckets[].total] | add // 0 else error("no bucket totals") end'
+}
+# Positive control: step 4's note was extracted by the mock LLM in the
+# memory bank, so the count sees LLM calls (the stats lag a little).
+for _ in $(seq 1 30); do
+  mem_llm=$(llm_calls "$mem_bank") || fail "the LLM request stats of $mem_bank have no bucket totals"
+  [ "$mem_llm" -gt 0 ] && break
+  sleep 2
+done
+[ "$mem_llm" -gt 0 ] || fail "the memory bank $mem_bank logged no LLM call after an extracting retain: the docs bank's 0 below would prove nothing"
+docs_llm=$(llm_calls "$docs_bank") || fail "the LLM request stats of $docs_bank have no bucket totals"
 [ "$docs_llm" = 0 ] || fail "the docs bank $docs_bank logged $docs_llm LLM call(s): indexing must only embed"
 
 # 6. A session goes out through the profile's transcripts before the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/retain"
@@ -24,50 +25,96 @@ var docsRetrieval = map[string]any{"enable_graph_retrieval": false, "enable_temp
 // embeds, locally.
 const sendBatch = 16
 
+// Marker is how backsight knows the docs bank as its own: a bank of that
+// name holding only `docs:` documents. Any other `<bank>-docs` is left as
+// it is (decision 0067, block 4 review).
+var Marker = retain.Marker{Name: "backsight docs", IDPrefix: "docs:"}
+
+const mission = "backsight's documentation, one document per section, for `backsight guide search`; no memory."
+
+// versionPrefix starts every docs version tag (Corpus.Tag).
+const versionPrefix = "docs-version:"
+
 // IndexResult says what Index did to the docs bank.
 type IndexResult struct {
 	Bank      string `json:"bank"`
 	DocsHash  string `json:"docs_hash"`
 	Sections  int    `json:"sections"`
 	Sent      int    `json:"sent"`      // new or edited sections, retained
-	Retagged  int    `json:"retagged"`  // unchanged sections moved to this docs version's tag
-	Deleted   int    `json:"deleted"`   // documents of sections these docs no longer have
+	Retagged  int    `json:"retagged"`  // unchanged sections given this docs version's tag too
+	Untagged  int    `json:"untagged"`  // documents of sections these docs lack, kept for another version, this one's tag removed
+	Deleted   int    `json:"deleted"`   // documents no docs version holds any more
 	Unchanged int    `json:"unchanged"` // sections already there, tag included
+}
+
+// IndexPlan is what Index would do, by document id (guide index --plan).
+type IndexPlan struct {
+	Bank      string   `json:"bank"`
+	DocsHash  string   `json:"docs_hash"`
+	Sections  int      `json:"sections"`
+	Exists    bool     `json:"exists"`    // false: the bank would be created
+	Create    []string `json:"create"`    // new sections, sent
+	Resend    []string `json:"resend"`    // edited sections, sent again
+	Retag     []string `json:"retag"`     // unchanged sections given this version's tag
+	Untag     []string `json:"untag"`     // documents losing this version's tag, kept for another
+	Delete    []string `json:"delete"`    // documents no version holds any more
+	Unchanged int      `json:"unchanged"` // sections left as they are
+}
+
+// retag is a document's new tag list.
+type retag struct {
+	id   string
+	tags []string
 }
 
 // plan is the work to bring the docs bank to c.
 type plan struct {
-	send, retag []Section
-	remove      []string
-	unchanged   int
+	send         []Section       // new and edited sections, in the docs' order
+	isNew        map[string]bool // the sections of send the bank lacks
+	retag, untag []retag
+	remove       []string
+	unchanged    int
 }
 
 func (p plan) fresh() bool { return len(p.send)+len(p.retag) == 0 }
 
-// diff compares the bank's documents with c: a section whose hash matches
-// is not sent again, only retagged when its tag is another version's.
+// diff compares the bank's documents with c. Several docs versions can
+// share the bank (clients of one server, a restore): each document carries
+// the tags of every version holding it. A section whose hash matches is not
+// sent again, only given c's tag; a document of a section c lacks loses
+// c's tag and is deleted only when no version tag remains. Documents whose
+// id does not start with `docs:` are never touched.
 func diff(c Corpus, have []hindsight.DocumentItem) plan {
 	byID := map[string]hindsight.DocumentItem{}
 	for _, d := range have {
 		byID[d.ID] = d
 	}
-	var p plan
+	own := c.Tag()
+	p := plan{isNew: map[string]bool{}}
 	want := map[string]bool{}
 	for _, s := range c.Sections() {
 		want[s.ID()] = true
 		d, ok := byID[s.ID()]
 		switch {
-		case !ok || d.Metadata["section_hash"] != s.Hash:
+		case !ok || d.Metadata["section_hash"] != s.Hash: // this version's text, its tag alone
 			p.send = append(p.send, s)
-		case !slices.Equal(d.Tags, []string{c.Tag()}):
-			p.retag = append(p.retag, s)
+			p.isNew[s.ID()] = !ok
+		case !slices.Contains(d.Tags, own):
+			p.retag = append(p.retag, retag{s.ID(), append(slices.Clone(d.Tags), own)})
 		default:
 			p.unchanged++
 		}
 	}
 	for _, d := range have {
-		if !want[d.ID] {
+		if want[d.ID] || !strings.HasPrefix(d.ID, Marker.IDPrefix) {
+			continue
+		}
+		rest := slices.DeleteFunc(slices.Clone(d.Tags), func(t string) bool { return t == own })
+		switch {
+		case !slices.ContainsFunc(rest, func(t string) bool { return strings.HasPrefix(t, versionPrefix) }):
 			p.remove = append(p.remove, d.ID)
+		case len(rest) < len(d.Tags):
+			p.untag = append(p.untag, retag{d.ID, rest})
 		}
 	}
 	return p
@@ -76,21 +123,46 @@ func diff(c Corpus, have []hindsight.DocumentItem) plan {
 // Index brings bank's docs bank to c: the bank is set up quiet first (0
 // LLM calls: chunks only, no observations, as the control bank), new and
 // edited sections are retained, unchanged ones keep their embeddings (a
-// tag change at most), and documents of removed sections are deleted.
+// tag more at most), and documents no docs version holds are deleted. A
+// docs bank that is not backsight's is left as it is: *retain.ForeignBank.
 func Index(ctx context.Context, cl *hindsight.Client, bank string, c Corpus) (IndexResult, error) {
 	db := Bank(bank)
 	res := IndexResult{Bank: db, DocsHash: c.Hash, Sections: len(c.Sections())}
-	if err := retain.QuietBank(ctx, cl, db, "backsight docs", "backsight's documentation, one document per section, for `backsight guide search`; no memory."); err != nil {
+	have, err := retain.QuietBank(ctx, cl, db, Marker, mission)
+	if err != nil {
 		return res, err
 	}
 	if err := cl.PatchBankConfig(ctx, db, docsRetrieval); err != nil {
 		return res, err
 	}
-	have, err := cl.ListDocuments(ctx, db)
-	if err != nil {
-		return res, err
-	}
 	return apply(ctx, cl, c, diff(c, have), res)
+}
+
+// PlanIndex says what Index would do, reading only; it refuses a docs bank
+// that is not backsight's as Index does.
+func PlanIndex(ctx context.Context, cl *hindsight.Client, bank string, c Corpus) (IndexPlan, error) {
+	db := Bank(bank)
+	pl := IndexPlan{Bank: db, DocsHash: c.Hash, Sections: len(c.Sections()), Create: []string{}, Resend: []string{}, Retag: []string{}, Untag: []string{}, Delete: []string{}}
+	have, exists, err := retain.OwnedBank(ctx, cl, db, Marker)
+	if err != nil {
+		return pl, err
+	}
+	p := diff(c, have)
+	pl.Exists, pl.Unchanged, pl.Delete = exists, p.unchanged, append(pl.Delete, p.remove...)
+	for _, s := range p.send {
+		if p.isNew[s.ID()] {
+			pl.Create = append(pl.Create, s.ID())
+		} else {
+			pl.Resend = append(pl.Resend, s.ID())
+		}
+	}
+	for _, r := range p.retag {
+		pl.Retag = append(pl.Retag, r.id)
+	}
+	for _, r := range p.untag {
+		pl.Untag = append(pl.Untag, r.id)
+	}
+	return pl, nil
 }
 
 func apply(ctx context.Context, cl *hindsight.Client, c Corpus, p plan, res IndexResult) (IndexResult, error) {
@@ -111,13 +183,22 @@ func apply(ctx context.Context, cl *hindsight.Client, c Corpus, p plan, res Inde
 		}
 		res.Sent += len(items)
 	}
-	for _, s := range p.retag {
-		if err := cl.SetDocumentTags(ctx, db, s.ID(), []string{c.Tag()}); err != nil {
+	for _, r := range p.retag {
+		if err := cl.SetDocumentTags(ctx, db, r.id, r.tags); err != nil {
 			return res, err
 		}
 		res.Retagged++
 	}
+	for _, r := range p.untag {
+		if err := cl.SetDocumentTags(ctx, db, r.id, r.tags); err != nil && !notFound(err) {
+			return res, err
+		}
+		res.Untagged++
+	}
 	for _, id := range p.remove {
+		if !strings.HasPrefix(id, Marker.IDPrefix) { // diff never lists one; the one rule that must hold
+			continue
+		}
 		if err := cl.DeleteDocument(ctx, db, id); err != nil && !notFound(err) { // gone already: another client's refresh
 			return res, err
 		}
@@ -143,26 +224,18 @@ func (e *SearchError) Unwrap() error { return e.Err }
 // first; refreshed says what that did.
 func Search(ctx context.Context, cl *hindsight.Client, bank string, c Corpus, query string, limit int) (hits []Hit, refreshed *IndexResult, err error) {
 	db := Bank(bank)
-	have, err := cl.ListDocuments(ctx, db)
-	switch {
-	case notFound(err):
+	have, exists, err := retain.OwnedBank(ctx, cl, db, Marker)
+	if err != nil {
+		return nil, nil, &SearchError{"check", err}
+	}
+	if !exists || !diff(c, have).fresh() {
+		// The full Index: it sets the bank up quiet again, in case
+		// someone changed its config.
 		res, err := Index(ctx, cl, bank, c)
 		if err != nil {
 			return nil, nil, &SearchError{"refresh", err}
 		}
 		refreshed = &res
-	case err != nil:
-		return nil, nil, &SearchError{"check", err}
-	default:
-		if p := diff(c, have); !p.fresh() {
-			// The full Index: it sets the bank up quiet again, in case
-			// someone changed its config.
-			res, err := Index(ctx, cl, bank, c)
-			if err != nil {
-				return nil, nil, &SearchError{"refresh", err}
-			}
-			refreshed = &res
-		}
 	}
 	raw, err := cl.Recall(ctx, db, hindsight.RecallRequest{Query: query, Budget: "mid", MaxTokens: 4096, Tags: []string{c.Tag()}, TagsMatch: "any_strict"})
 	if err != nil {

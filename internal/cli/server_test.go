@@ -266,7 +266,8 @@ func fakeHindsight(t *testing.T) (port int) {
 	acceptedKey.Store("")
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	var mu sync.Mutex
-	banks := map[string]bool{}
+	banks := map[string]string{} // bank → name
+	bankDocs := map[string]map[string]bool{}
 	overrides := map[string]json.RawMessage{}
 	docs := map[string]json.RawMessage{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -288,13 +289,27 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{"api_version":"1.1.0"}`))
 		case r.URL.Path == "/v1/default/banks":
 			var items []string
-			for b := range banks {
-				items = append(items, `{"bank_id":"`+b+`"}`)
+			for b, name := range banks {
+				items = append(items, `{"bank_id":"`+b+`","name":"`+name+`"}`)
 			}
-			_, _ = w.Write([]byte(`{"banks":[` + strings.Join(items, ",") + `]}`))
+			_, _ = w.Write([]byte(`{"banks":[` + strings.Join(items, ",") + `],"total":` + strconv.Itoa(len(items)) + `}`))
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/default/banks/"):
-			banks[strings.TrimPrefix(r.URL.Path, "/v1/default/banks/")] = true
+			var body struct {
+				Name string `json:"name"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			banks[strings.TrimPrefix(r.URL.Path, "/v1/default/banks/")] = body.Name
 			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/documents"):
+			bank := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents")
+			var items []string
+			for id := range bankDocs[bank] {
+				items = append(items, `{"id":"`+id+`","tags":[]}`)
+			}
+			if epochDoc != "" && strings.HasSuffix(bank, "-control") && !bankDocs[bank]["backsight:epoch"] {
+				items = append(items, `{"id":"backsight:epoch","tags":[]}`)
+			}
+			_, _ = w.Write([]byte(`{"items":[` + strings.Join(items, ",") + `],"total":` + strconv.Itoa(len(items)) + `}`))
 		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/config"):
 			var body struct {
 				Updates map[string]json.RawMessage `json:"updates"`
@@ -451,7 +466,12 @@ func fakeHindsight(t *testing.T) (port int) {
 				return
 			}
 			queueAtRetain = append(queueAtRetain, queued.Load()+processing.Load())
+			bank := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/memories")
+			if bankDocs[bank] == nil {
+				bankDocs[bank] = map[string]bool{}
+			}
 			for _, it := range body.Items {
+				bankDocs[bank][it.DocumentID] = true
 				docs[it.DocumentID] = it.Metadata
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())

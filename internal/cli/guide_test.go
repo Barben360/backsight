@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/output"
@@ -44,32 +45,70 @@ type docsHindsight struct {
 	mu      sync.Mutex
 	docs    map[string]map[string][]string // bank → document id → tags
 	hashes  map[string]string              // document id → section_hash
+	names   map[string]string              // bank → name (PUT)
 	calls   []string
 	rank    []string
 	retains int
 	recall  int
+	status  map[string]int // "METHOD /sub" (or "*") → the status answered instead
+	delay   time.Duration  // recall answers after this long
 }
 
 func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 	t.Helper()
-	f := &docsHindsight{docs: map[string]map[string][]string{}, hashes: map[string]string{}}
+	f := &docsHindsight{docs: map[string]map[string][]string{}, hashes: map[string]string{}, names: map[string]string{}, status: map[string]int{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if r.URL.Path == "/v1/default/banks" {
+			f.calls = append(f.calls, "LIST "+r.URL.Query().Get("q")+" /")
+			if st := f.status["*"]; st != 0 {
+				w.WriteHeader(st)
+				return
+			}
+			banks := []map[string]string{}
+			for b := range f.docs {
+				banks = append(banks, map[string]string{"bank_id": b, "name": f.names[b]})
+			}
+			raw, _ := json.Marshal(map[string]any{"banks": banks, "total": len(banks)})
+			_, _ = w.Write(raw)
+			return
+		}
 		rest, _ := strings.CutPrefix(r.URL.EscapedPath(), "/v1/default/banks/")
 		rawBank, sub, _ := strings.Cut(rest, "/")
 		bank, _ := url.PathUnescape(rawBank)
 		f.calls = append(f.calls, r.Method+" "+bank+" /"+sub)
+		if st := max(f.status["*"], f.status[r.Method+" /"+sub]); st != 0 {
+			w.WriteHeader(st)
+			return
+		}
 		docs, ok := f.docs[bank]
 		switch {
 		case r.Method == http.MethodPut:
 			if !ok {
 				f.docs[bank] = map[string][]string{}
 			}
+			var body struct {
+				Name string `json:"name"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.names[bank] = body.Name
 			_, _ = w.Write([]byte(`{}`))
 		case !ok:
 			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPatch && sub == "config":
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPatch && strings.HasPrefix(sub, "documents/"):
+			id, _ := url.PathUnescape(strings.TrimPrefix(sub, "documents/"))
+			var body struct {
+				Tags []string `json:"tags"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			docs[id] = body.Tags
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodDelete && strings.HasPrefix(sub, "documents/"):
+			id, _ := url.PathUnescape(strings.TrimPrefix(sub, "documents/"))
+			delete(docs, id)
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodGet && sub == "documents":
 			var items []map[string]any
@@ -97,6 +136,14 @@ func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && sub == "memories/recall":
 			f.recall++
+			if f.delay > 0 {
+				f.mu.Unlock()
+				select {
+				case <-time.After(f.delay):
+				case <-r.Context().Done():
+				}
+				f.mu.Lock()
+			}
 			var results []map[string]any
 			for i, id := range f.rank {
 				results = append(results, map[string]any{"id": "u" + strconv.Itoa(i), "text": "t", "document_id": id, "scores": map[string]any{"reranker": 0.9 - float64(i)/10}})
@@ -227,7 +274,7 @@ func TestGuideSearchFallsBackWhenTheServerIsDown(t *testing.T) {
 	}
 	// Semantic only: the failure is the answer, exit 20.
 	code, env, _ = guideRun(t, "guide", "search", "--mode", "semantic", "uninstall")
-	if code != output.Blocked || env.OK || len(env.Data.Hits) != 0 {
+	if code != output.Blocked || env.OK || len(env.Data.Hits) != 0 || env.Data.Mode != "semantic" || !strings.Contains(env.Data.Reason, "unreachable") {
 		t.Errorf("exit %d %+v", code, env.Data)
 	}
 	if code, _, _ := run(t, "guide", "search", "--mode", "fuzzy", "x"); code != output.Usage {
@@ -371,7 +418,7 @@ func TestUpdateApplyGoesOnWhenTheDocsCannotBeIndexed(t *testing.T) {
 	}
 	if bins.ran("0.2.0 guide index") != 1 || !hasApplyStep(env.Data.Steps, "docs", "failed", "guide index") ||
 		!slices.ContainsFunc(env.Data.Warnings, func(w string) bool {
-			return strings.Contains(w, "docs were not indexed") && strings.Contains(w, "first use")
+			return strings.Contains(w, "docs were not indexed") && strings.Contains(w, "keyword search meanwhile")
 		}) {
 		t.Errorf("calls %q\n%s", bins.calls, out)
 	}
@@ -396,4 +443,134 @@ func applyStepIndex(steps []step, name string) int {
 		}
 	}
 	return -1
+}
+
+// Each reason the semantic search cannot answer reaches the keyword
+// fallback's reason, so the user knows what to fix.
+func TestGuideSearchSaysWhyItFellBack(t *testing.T) {
+	old := guideCallTimeout
+	guideCallTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { guideCallTimeout = old })
+	for name, c := range map[string]struct {
+		set    func(home string, f *docsHindsight)
+		reason string
+	}{
+		"config unreadable": {func(home string, _ *docsHindsight) {
+			_ = os.WriteFile(filepath.Join(home, "backsight", "config", "config.toml"), []byte("[server\nurl = "), 0o600)
+		}, "config unreadable"},
+		"key refused":   {func(_ string, f *docsHindsight) { f.status["*"] = http.StatusUnauthorized }, "the server refused the API key"},
+		"timeout":       {func(_ string, f *docsHindsight) { f.delay = 2 * time.Second }, "did not answer in time"},
+		"refresh fails": {func(_ string, f *docsHindsight) { f.status["POST /memories"] = http.StatusInternalServerError }, "could not be refreshed"},
+		"no hit":        {func(_ string, f *docsHindsight) { f.rank = nil }, "the semantic search found nothing in bank claude-memory-docs"},
+		"foreign bank": {func(_ string, f *docsHindsight) {
+			f.docs["claude-memory-docs"], f.names["claude-memory-docs"] = map[string][]string{"note:1": nil}, "team docs"
+		}, `the docs bank claude-memory-docs is not backsight's (its name is "team docs", not "backsight docs")`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := devInstall(t, true)
+			withGuideDocs(t)
+			f := newDocsHindsight(t, home)
+			f.rank = []string{"docs:install#uninstall"}
+			c.set(home, f)
+			code, env, out := guideRun(t, "guide", "search", "uninstall")
+			if code != output.OK || env.Data.Mode != "keyword" || !strings.Contains(env.Data.Reason, c.reason) {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+			if len(env.Data.Hits) == 0 || env.Data.Hits[0].Ref != "install#uninstall" {
+				t.Errorf("the keyword search did not answer: %+v", env.Data.Hits)
+			}
+		})
+	}
+}
+
+// A foreign docs bank is left as it is by every guide command: search
+// reads, index and its plan refuse with the reason (exit 20).
+func TestGuideLeavesAForeignDocsBankAlone(t *testing.T) {
+	home := devInstall(t, true)
+	withGuideDocs(t)
+	f := newDocsHindsight(t, home)
+	f.docs["claude-memory-docs"], f.names["claude-memory-docs"] = map[string][]string{"docs:x": {"mine"}}, "my notes"
+	for _, args := range [][]string{{"guide", "index"}, {"guide", "index", "--plan"}} {
+		code, out, errOut := run(t, append(args, "--json")...)
+		if code != output.Blocked || !strings.Contains(out+errOut, "is not backsight's") || !strings.Contains(out+errOut, `its name is \"my notes\"`) {
+			t.Errorf("%v: exit %d %s %s", args, code, out, errOut)
+		}
+	}
+	if code, env, _ := guideRun(t, "guide", "search", "uninstall"); code != output.OK || env.Data.Mode != "keyword" {
+		t.Errorf("search: exit %d %+v", code, env.Data)
+	}
+	for _, call := range f.calls {
+		if !strings.HasPrefix(call, "GET ") && !strings.HasPrefix(call, "LIST ") {
+			t.Errorf("wrote to a bank that is not backsight's: %s", call)
+		}
+	}
+	if f.names["claude-memory-docs"] != "my notes" || len(f.docs["claude-memory-docs"]) != 1 {
+		t.Errorf("the bank changed: %v %v", f.names, f.docs)
+	}
+}
+
+// Forced semantic with no hit is an answer, not a failure: exit 0, mode
+// semantic, no result (decision 0067, block 4 review).
+func TestGuideForcedSemanticWithNoHitIsAnAnswer(t *testing.T) {
+	home := devInstall(t, true)
+	withGuideDocs(t)
+	newDocsHindsight(t, home) // recall finds nothing
+	code, env, out := guideRun(t, "guide", "search", "--mode", "semantic", "kubernetes")
+	if code != output.OK || !env.OK || env.Data.Mode != "semantic" || len(env.Data.Hits) != 0 || !strings.Contains(env.Data.Reason, "found nothing") {
+		t.Errorf("exit %d %s", code, out)
+	}
+}
+
+// guide index --plan lists the documents it would send, retag and delete,
+// and writes nothing; index then does just that.
+func TestGuideIndexPlanWritesNothing(t *testing.T) {
+	home := devInstall(t, true)
+	withGuideDocs(t)
+	f := newDocsHindsight(t, home)
+	code, out, _ := run(t, "guide", "index", "--plan", "--json")
+	var env struct {
+		Data guide.IndexPlan `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.OK || env.Data.Exists || strings.Join(env.Data.Create, ",") != "docs:backup,docs:backup#make-a-backup,docs:backup#restore-a-backup,docs:install#uninstall" ||
+		len(env.Data.Delete) != 0 || env.Data.Bank != "claude-memory-docs" {
+		t.Errorf("exit %d %s", code, out)
+	}
+	for _, call := range f.calls {
+		if !strings.HasPrefix(call, "GET ") && !strings.HasPrefix(call, "LIST ") {
+			t.Errorf("the plan wrote: %s", call)
+		}
+	}
+	code, out, _ = run(t, "guide", "index", "--plan")
+	if code != output.OK || out != "bank claude-memory-docs would be created, then:\n"+
+		"  create (4): docs:backup, docs:backup#make-a-backup, docs:backup#restore-a-backup, docs:install#uninstall\n"+
+		"  resend (0)\n  retag (0)\n  untag (0)\n  delete (0)\n  unchanged: 0\nnothing was changed (--plan)\n" {
+		t.Errorf("text plan:\n%s", out)
+	}
+	if code, _, _ := run(t, "guide", "index"); code != output.OK || len(f.docs["claude-memory-docs"]) != 4 {
+		t.Errorf("index after the plan: exit %d %v", code, f.docs)
+	}
+}
+
+// A pager that ran is the output, whatever its exit status: no plain copy
+// after it. Only a pager that cannot start falls back to plain output.
+func TestGuidePagerFallsBackOnlyWhenItCannotStart(t *testing.T) {
+	home := isolate(t)
+	c := withGuideDocs(t)
+	old := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdoutIsTerminal = old })
+	pager := filepath.Join(home, "pager.sh")
+	if err := os.WriteFile(pager, []byte("#!/bin/sh\ncat >/dev/null\nexit 3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PAGER", pager)
+	if code, out, _ := run(t, "guide", "install"); code != output.OK || out != "" {
+		t.Errorf("a pager that exited 3 was followed by a copy: exit %d %q", code, out)
+	}
+	t.Setenv("PAGER", filepath.Join(home, "no-such-pager"))
+	topic, _ := c.Topic("install")
+	if code, out, _ := run(t, "guide", "install"); code != output.OK || out != topic.Text {
+		t.Errorf("no pager: exit %d %q", code, out)
+	}
 }

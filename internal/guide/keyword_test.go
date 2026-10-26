@@ -1,8 +1,11 @@
 package guide
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func refs(hits []Hit) []string {
@@ -52,5 +55,32 @@ func TestKeywordIsDeterministicAndDropsNonMatches(t *testing.T) {
 	}
 	if hits := c.Keyword("restore", 5); hits[0].Excerpt == "" || hits[0].Excerpt[0] == '#' {
 		t.Errorf("excerpt %q", hits[0].Excerpt)
+	}
+}
+
+// Equal scores keep the docs' order, not an alphabetical or arbitrary one:
+// 20 sections alike but for their (reverse-alphabetical) heading, more
+// than a sort that is not stable keeps in place.
+func TestKeywordTiesKeepTheDocsOrder(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# Ties\n\n")
+	var want []string
+	for i := 0; i < 20; i++ {
+		h := string(rune('z'-i)) + "section"
+		fmt.Fprintf(&b, "## %s\n\nThe quokka sleeps here.\n\n", h)
+		want = append(want, "ties#"+h)
+	}
+	c, err := Load(fstest.MapFS{"ties.md": {Data: []byte(b.String())}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits := c.Keyword("quokka", 0)
+	for _, h := range hits {
+		if h.Score != hits[0].Score {
+			t.Fatalf("not a tie: %v", hits)
+		}
+	}
+	if got := refs(hits); !reflect.DeepEqual(got, want) {
+		t.Errorf("ties reordered:\n got %v\nwant %v", got, want)
 	}
 }

@@ -151,8 +151,14 @@ func checkMention(root *cobra.Command, args []string, pending []string) error {
 			if slices.Contains(pending, next) {
 				return nil // not built yet: nothing more to check
 			}
-			if !commandWord.MatchString(w) || (cmd.HasParent() && cmd.ValidateArgs([]string{w}) == nil) {
+			if cmd.HasParent() && cmd.ValidateArgs([]string{w}) == nil {
 				break // an argument of a command that takes one
+			}
+			if cmd.HasParent() && strings.ContainsAny(cmd.Use, "<[") { // it takes an argument, and refused w (guide: a topic or topic#section)
+				return fmt.Errorf("%q has no subcommand or argument %q", "backsight "+path, w)
+			}
+			if !commandWord.MatchString(w) {
+				break
 			}
 			return fmt.Errorf("%q has no subcommand %q", strings.TrimSpace("backsight "+path), w)
 		}
@@ -243,6 +249,9 @@ func TestCheckMention(t *testing.T) {
 		"client config restore",
 		"guide search why", // positional words after a built command
 		"guide",
+		"guide install",              // a topic
+		"guide install#requirements", // a section
+		"guide index --plan",
 	}
 	for _, m := range ok {
 		if err := checkMention(root, strings.Fields(m), docsPending); err != nil {
@@ -260,6 +269,11 @@ func TestCheckMention(t *testing.T) {
 		"restore f.age --no-backup":  `"backsight restore" has no flag --no-backup`,
 		"<command> --plan":           "--plan is not a global flag (the command is a placeholder)",
 		"guidex search":              `"backsight" has no subcommand "guidex"`,
+		// guide takes a topic or topic#section, nothing else.
+		"guide serach why":     `"backsight guide" has no subcommand or argument "serach"`,
+		"guide install#nope":   `"backsight guide" has no subcommand or argument "install#nope"`,
+		"guide index --plann":  `"backsight guide index" has no flag --plann`,
+		"guide install --plan": `"backsight guide" has no flag --plan`,
 	}
 	for m, want := range bad {
 		err := checkMention(root, strings.Fields(m), docsPending)

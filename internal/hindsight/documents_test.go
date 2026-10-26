@@ -63,3 +63,32 @@ func TestRecallReadsTheDocumentID(t *testing.T) {
 		t.Fatalf("%v %+v", err, hits)
 	}
 }
+
+// The listing's search matches ids and names as substrings: only the exact
+// id counts, on whichever page it is.
+func TestFindBankPicksTheExactIDAcrossPages(t *testing.T) {
+	var queries []string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/default/banks" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		queries = append(queries, r.URL.Query().Get("q")+"@"+r.URL.Query().Get("offset"))
+		if r.URL.Query().Get("offset") == "0" {
+			_, _ = w.Write([]byte(`{"banks":[{"bank_id":"m-docs-old","name":"backsight docs"},{"bank_id":"x","name":"m-docs"}],"total":3}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"banks":[{"bank_id":"m-docs","name":"mine"}],"total":3}`))
+	})
+	b, found, err := c.FindBank(context.Background(), "m-docs")
+	if err != nil || !found || b.Name != "mine" {
+		t.Fatalf("%v %v %+v", err, found, b)
+	}
+	if len(queries) != 2 || queries[0] != "m-docs@0" || queries[1] != "m-docs@2" {
+		t.Errorf("queries %v", queries)
+	}
+	queries = nil
+	if _, found, err := c.FindBank(context.Background(), "m-do"); err != nil || found || len(queries) != 2 {
+		t.Errorf("a substring is no match: %v %v %v", err, found, queries)
+	}
+}

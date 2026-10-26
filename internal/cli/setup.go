@@ -673,11 +673,12 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		// After the bank step (server install's): the docs bank for guide
 		// search (decision 0069). Its failure never stops setup: guide
-		// search answers with its keyword search and indexes on first use.
+		// search answers with its keyword search, and indexes them on first
+		// use unless the bank is not backsight's.
 		{"docs", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
 			out := subcommand(ctx, "guide", "index")
 			if out.Err != nil {
-				return setup.Step{Name: "docs", Status: "skipped", Detail: "not indexed (" + out.Err.Message + "): backsight guide search uses its keyword search and indexes them on its first use"}, nil
+				return setup.Step{Name: "docs", Status: "skipped", Detail: "not indexed (" + out.Err.Message + "): backsight guide search answers with its keyword search meanwhile"}, nil
 			}
 			var ir guide.IndexResult
 			_ = json.Unmarshal(out.Data, &ir)

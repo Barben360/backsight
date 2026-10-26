@@ -793,7 +793,7 @@ func (a *applyRun) docs(ctx context.Context) {
 	case errors.As(err, &ce) && ce.code == output.Usage:
 		a.add("docs", "skipped", "the new binary has no guide index")
 	case err != nil:
-		a.res.Warnings = append(a.res.Warnings, "the docs were not indexed ("+err.Error()+"): backsight guide search indexes them on its first use")
+		a.res.Warnings = append(a.res.Warnings, "the docs were not indexed ("+err.Error()+"): backsight guide search answers with its keyword search meanwhile")
 		a.add("docs", "failed", err.Error())
 	default:
 		var r guide.IndexResult

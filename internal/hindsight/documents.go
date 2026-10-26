@@ -57,3 +57,33 @@ func (c *Client) ListDocuments(ctx context.Context, bank string) ([]DocumentItem
 func (c *Client) SetDocumentTags(ctx context.Context, bank, id string, tags []string) error {
 	return c.do(ctx, http.MethodPatch, bankPath(bank, "/documents/"+strings.ReplaceAll(url.PathEscape(id), ":", "%3A")), nil, map[string]any{"tags": tags}, nil)
 }
+
+// FindBank reads bank's entry in the bank listing (its name: the profile
+// read endpoint is gone in 1.1.0), searching by id page by page; found is
+// false when the server has no such bank.
+func (c *Client) FindBank(ctx context.Context, bank string) (b Bank, found bool, err error) {
+	for offset, pages := 0, 0; ; pages++ {
+		if pages == maxPages {
+			return Bank{}, false, fmt.Errorf("looking for bank %s: more than %d pages, stopping", bank, maxPages)
+		}
+		var page struct {
+			Banks []Bank `json:"banks"`
+			Total int    `json:"total"`
+		}
+		// q matches ids and names alike, as a substring: the exact id is
+		// picked out here.
+		q := url.Values{"q": {bank}, "limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}}
+		if err := c.get(ctx, "/v1/default/banks", q, &page); err != nil {
+			return Bank{}, false, err
+		}
+		for _, it := range page.Banks {
+			if it.ID == bank {
+				return it, true, nil
+			}
+		}
+		offset += len(page.Banks)
+		if len(page.Banks) == 0 || offset >= page.Total {
+			return Bank{}, false, nil
+		}
+	}
+}

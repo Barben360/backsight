@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 // fakeDoc is a document the fake server holds.
@@ -31,6 +32,7 @@ type fakeDoc struct {
 type fakeServer struct {
 	mu      sync.Mutex
 	banks   map[string]map[string]*fakeDoc
+	names   map[string]string // bank → its name, set by PUT
 	configs map[string]map[string]any
 	calls   []string // METHOD bank /rest
 	retains []string // document ids sent, in order
@@ -42,7 +44,7 @@ type fakeServer struct {
 
 func newFake(t *testing.T) (*fakeServer, *hindsight.Client) {
 	t.Helper()
-	f := &fakeServer{banks: map[string]map[string]*fakeDoc{}, configs: map[string]map[string]any{}}
+	f := &fakeServer{banks: map[string]map[string]*fakeDoc{}, names: map[string]string{}, configs: map[string]map[string]any{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	cl, err := hindsight.New(srv.URL, "k", 5*time.Second)
@@ -55,6 +57,23 @@ func newFake(t *testing.T) (*fakeServer, *hindsight.Client) {
 func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if r.URL.Path == "/v1/default/banks" { // like Hindsight: q matches ids and names as substrings
+		q := r.URL.Query().Get("q")
+		f.calls = append(f.calls, "LIST "+q+" /")
+		if f.downAt == "LIST" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		banks := []map[string]string{}
+		for b := range f.banks {
+			if strings.Contains(b, q) || strings.Contains(f.names[b], q) {
+				banks = append(banks, map[string]string{"bank_id": b, "name": f.names[b]})
+			}
+		}
+		raw, _ := json.Marshal(map[string]any{"banks": banks, "total": len(banks)})
+		_, _ = w.Write(raw)
+		return
+	}
 	rest, _ := strings.CutPrefix(r.URL.EscapedPath(), "/v1/default/banks/")
 	rawBank, sub, _ := strings.Cut(rest, "/")
 	bank, _ := url.PathUnescape(rawBank)
@@ -70,6 +89,11 @@ func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			f.banks[bank] = map[string]*fakeDoc{}
 		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.names[bank] = body.Name
 		_, _ = w.Write([]byte(`{}`))
 	case !exists:
 		w.WriteHeader(http.StatusNotFound)
@@ -190,7 +214,7 @@ func (f *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 func (f *fakeServer) writes() []string {
 	var out []string
 	for _, c := range f.calls {
-		if !strings.HasPrefix(c, "GET ") && !strings.Contains(c, "/memories/recall") {
+		if !strings.HasPrefix(c, "GET ") && !strings.HasPrefix(c, "LIST ") && !strings.Contains(c, "/memories/recall") {
 			out = append(out, c)
 		}
 	}
@@ -217,7 +241,7 @@ func TestIndexSetsUpAQuietBankAndSendsEverySection(t *testing.T) {
 	if cfg["enable_graph_retrieval"] != false || cfg["enable_temporal_retrieval"] != false || cfg["enable_text_search"] != false {
 		t.Errorf("docs bank retrieval %v", cfg)
 	}
-	if !strings.HasPrefix(strings.Join(f.calls, ", "), "PUT mem-docs /, PATCH mem-docs /config, PATCH mem-docs /config, GET mem-docs /documents") {
+	if !strings.HasPrefix(strings.Join(f.calls, ", "), "LIST mem-docs /, PUT mem-docs /, PATCH mem-docs /config, PATCH mem-docs /config, POST mem-docs /memories") {
 		t.Errorf("the bank must be set up before anything is retained: %v", f.calls)
 	}
 	for _, call := range f.calls {
@@ -232,18 +256,39 @@ func TestIndexSetsUpAQuietBankAndSendsEverySection(t *testing.T) {
 	}
 }
 
-func TestIndexSendsOnlyWhatChanged(t *testing.T) {
-	f, cl := newFake(t)
-	if _, err := Index(context.Background(), cl, "mem", load(t)); err != nil {
-		t.Fatal(err)
-	}
+// edited is the fixture with install.md changed: Requirements edited, the
+// second Uninstall removed, Update added.
+func edited(t *testing.T) Corpus {
+	t.Helper()
 	fs := fixture()
 	fs["install.md"] = &fstest.MapFile{Data: []byte("# Install\n\n## Requirements\n\nLinux, Docker, Claude Code and an LLM key.\n\n" +
 		"## Uninstall\n\nRun `backsight uninstall`; `--delete-data` also removes the server volumes.\n\n## Update\n\nRun `backsight update apply`.\n")}
-	c2, err := Load(fs)
+	c, err := Load(fs)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+func tagsOf(f *fakeServer, id string) string {
+	d := f.banks["mem-docs"][id]
+	if d == nil {
+		return "missing"
+	}
+	return strings.Join(d.tags, ",")
+}
+
+// A new docs version sends only its new and edited sections, adds its tag
+// to the unchanged ones and leaves the previous version's sections it no
+// longer has: they still carry that version's tag (decision 0067, block 4
+// review).
+func TestIndexSendsOnlyWhatChanged(t *testing.T) {
+	f, cl := newFake(t)
+	c1 := load(t)
+	if _, err := Index(context.Background(), cl, "mem", c1); err != nil {
+		t.Fatal(err)
+	}
+	c2 := edited(t)
 	f.reset()
 	res, err := Index(context.Background(), cl, "mem", c2)
 	if err != nil {
@@ -252,22 +297,151 @@ func TestIndexSendsOnlyWhatChanged(t *testing.T) {
 	if got := strings.Join(f.retains, ", "); got != "docs:install#requirements, docs:install#update" {
 		t.Errorf("sent %s: only the edited and the new section", got)
 	}
-	if res.Sent != 2 || res.Retagged != 4 || res.Deleted != 1 || res.Unchanged != 0 {
+	if res.Sent != 2 || res.Retagged != 4 || res.Deleted != 0 || res.Untagged != 0 || res.Unchanged != 0 {
 		t.Errorf("%+v", res)
 	}
-	if _, ok := f.banks["mem-docs"]["docs:install#uninstall-1"]; ok {
-		t.Error("the removed section is still in the bank")
-	}
-	for id, d := range f.banks["mem-docs"] {
-		if len(d.tags) != 1 || d.tags[0] != c2.Tag() {
-			t.Errorf("%s tagged %v, want %s", id, d.tags, c2.Tag())
+	both := c1.Tag() + "," + c2.Tag()
+	for id, want := range map[string]string{
+		"docs:backup": both, "docs:backup#make-a-backup": both, "docs:backup#restore-a-backup": both, "docs:install#uninstall": both,
+		"docs:install#requirements": c2.Tag(), "docs:install#update": c2.Tag(),
+		"docs:install#uninstall-1": c1.Tag(), // the previous version's, kept
+	} {
+		if got := tagsOf(f, id); got != want {
+			t.Errorf("%s tagged %s, want %s", id, got, want)
 		}
 	}
 	// Once more: nothing to send, retag or delete.
 	f.reset()
 	res, err = Index(context.Background(), cl, "mem", c2)
-	if err != nil || res.Sent+res.Retagged+res.Deleted != 0 || res.Unchanged != 6 || len(f.retains) != 0 {
+	if err != nil || res.Sent+res.Retagged+res.Deleted+res.Untagged != 0 || res.Unchanged != 6 || len(f.retains) != 0 {
 		t.Errorf("%v %+v %v", err, res, f.calls)
+	}
+}
+
+// Two docs versions on one server (two clients, or a restore) no longer
+// refresh each other's unchanged sections: each search of the older one
+// sends only the section the versions disagree on, retags nothing, and
+// finds its own copy of every section.
+func TestTwoDocsVersionsShareTheBank(t *testing.T) {
+	f, cl := newFake(t)
+	c1, c2 := load(t), edited(t)
+	for _, c := range []Corpus{c1, c2} {
+		if _, err := Index(context.Background(), cl, "mem", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []Corpus{c1, c2} {
+		f.reset()
+		_, refreshed, err := Search(context.Background(), cl, "mem", c, "uninstall", 10)
+		if err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 0 || refreshed.Deleted != 0 ||
+			strings.Join(f.retains, ",") != "docs:install#requirements" {
+			t.Errorf("version %s: %v %+v sent %v", c.Tag(), err, refreshed, f.retains)
+		}
+		if got := f.recall[len(f.recall)-1]["tags"].([]any); len(got) != 1 || got[0] != c.Tag() {
+			t.Errorf("recall tags %v: its own version only", got)
+		}
+	}
+	if got := tagsOf(f, "docs:install#update"); got != c2.Tag() {
+		t.Errorf("the older version touched the newer one's section: %s", got)
+	}
+	if got := tagsOf(f, "docs:install#uninstall-1"); got != c1.Tag() {
+		t.Errorf("the newer version touched the older one's section: %s", got)
+	}
+}
+
+// A document leaves the bank only when no docs version holds it: a
+// section these docs lack loses only their tag, and another version's
+// section stays as it is.
+func TestIndexRemovesOnlyItsOwnTag(t *testing.T) {
+	f, cl := newFake(t)
+	c := load(t)
+	other := "docs-version:ffffffffffffffff"
+	f.banks["mem-docs"] = map[string]*fakeDoc{
+		"docs:gone#mine":   {tags: []string{c.Tag()}},
+		"docs:gone#shared": {tags: []string{other, c.Tag()}},
+		"docs:gone#theirs": {tags: []string{other}},
+		"docs:gone#legacy": {tags: []string{}},
+	}
+	f.names["mem-docs"] = "backsight docs"
+	res, err := Index(context.Background(), cl, "mem", c)
+	if err != nil || res.Deleted != 2 || res.Untagged != 1 || res.Sent != 6 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	for id, want := range map[string]string{"docs:gone#mine": "missing", "docs:gone#legacy": "missing", "docs:gone#shared": other, "docs:gone#theirs": other} {
+		if got := tagsOf(f, id); got != want {
+			t.Errorf("%s: %s, want %s", id, got, want)
+		}
+	}
+}
+
+// Only `docs:` documents are ever deleted or retagged, whatever the bank
+// holds.
+func TestDiffTouchesOnlyDocsDocuments(t *testing.T) {
+	c := load(t)
+	p := diff(c, []hindsight.DocumentItem{{ID: "note:1", Tags: []string{c.Tag()}}, {ID: "conversation:s1"}, {ID: "docs:gone#x"}})
+	if len(p.remove) != 1 || p.remove[0] != "docs:gone#x" || len(p.untag) != 0 {
+		t.Errorf("remove %v untag %v", p.remove, p.untag)
+	}
+}
+
+// A `<bank>-docs` someone else made (another name, or documents that are
+// not backsight's sections) is never renamed, reconfigured or emptied:
+// index refuses, search reads nothing more and says why (decision 0067,
+// block 4 review).
+func TestIndexAndSearchLeaveAForeignDocsBankAlone(t *testing.T) {
+	for name, c := range map[string]struct {
+		bankName string
+		docs     map[string]*fakeDoc
+		reason   string
+	}{
+		"another name":      {"team docs", map[string]*fakeDoc{"docs:x": {content: "theirs"}}, `its name is "team docs"`},
+		"other documents":   {"backsight docs", map[string]*fakeDoc{"note:1": {content: "theirs"}, "docs:x": {}}, "1 document(s)"},
+		"an empty bank too": {"", map[string]*fakeDoc{}, `its name is ""`},
+	} {
+		f, cl := newFake(t)
+		f.banks["mem-docs"], f.names["mem-docs"] = c.docs, c.bankName
+		_, err := Index(context.Background(), cl, "mem", load(t))
+		var foreign *retain.ForeignBank
+		if !errors.As(err, &foreign) || foreign.Bank != "mem-docs" || !strings.Contains(err.Error(), c.reason) {
+			t.Errorf("%s: index %v", name, err)
+		}
+		_, _, err = Search(context.Background(), cl, "mem", load(t), "restore", 5)
+		var se *SearchError
+		if !errors.As(err, &se) || se.Stage != "check" || !errors.As(err, &foreign) {
+			t.Errorf("%s: search %v", name, err)
+		}
+		_, err = PlanIndex(context.Background(), cl, "mem", load(t))
+		if !errors.As(err, &foreign) {
+			t.Errorf("%s: plan %v", name, err)
+		}
+		if w := f.writes(); len(w) != 0 || len(f.recall) != 0 || len(f.configs) != 0 || len(f.banks["mem-docs"]) != len(c.docs) || f.names["mem-docs"] != c.bankName {
+			t.Errorf("%s: touched the bank: %v recalls %d configs %v", name, w, len(f.recall), f.configs)
+		}
+	}
+}
+
+// --plan lists what index would do, by document id, and writes nothing.
+func TestPlanIndexListsTheWorkAndWritesNothing(t *testing.T) {
+	f, cl := newFake(t)
+	c1, c2 := load(t), edited(t)
+	p, err := PlanIndex(context.Background(), cl, "mem", c1)
+	if err != nil || p.Exists || len(p.Create) != 6 || p.Create[0] != "docs:backup" || len(p.Resend)+len(p.Retag)+len(p.Delete)+len(p.Untag) != 0 || p.Bank != "mem-docs" {
+		t.Errorf("missing bank: %v %+v", err, p)
+	}
+	if w := f.writes(); len(w) != 0 || len(f.banks) != 0 {
+		t.Fatalf("the plan wrote: %v", w)
+	}
+	if _, err := Index(context.Background(), cl, "mem", c1); err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	p, err = PlanIndex(context.Background(), cl, "mem", c2)
+	if err != nil || !p.Exists || strings.Join(p.Create, ",") != "docs:install#update" || strings.Join(p.Resend, ",") != "docs:install#requirements" ||
+		len(p.Retag) != 4 || len(p.Delete)+len(p.Untag) != 0 || p.Unchanged != 0 || p.Sections != 6 || p.DocsHash != c2.Hash {
+		t.Errorf("%v %+v", err, p)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Errorf("the plan wrote: %v", w)
 	}
 }
 
@@ -275,6 +449,7 @@ func TestIndexSendsOnlyWhatChanged(t *testing.T) {
 // is no failure.
 func TestIndexToleratesADocumentAlreadyDeleted(t *testing.T) {
 	f, cl := newFake(t)
+	f.banks["mem-docs"], f.names["mem-docs"] = map[string]*fakeDoc{}, "backsight docs"
 	f.phantom = []string{"docs:old#gone"}
 	res, err := Index(context.Background(), cl, "mem", load(t))
 	if err != nil || res.Deleted != 1 || res.Sent != 6 {
