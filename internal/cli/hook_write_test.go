@@ -206,14 +206,20 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 	gitRepo(t, billing, "git@github.com:me/billing.git")
 	gitRepo(t, shop, "git@github.com:me/shop.git")
 	gitRepo(t, vendor, "https://github.com/someone/vendor-tool")
-	for _, c := range []struct{ sid, edits, want string }{{"s1", shop, "shop"}, {"s2", vendor, "billing"}} {
+	// s3's transcript lags: its final reply is not written yet, so its
+	// evidence may be partial and the report keeps its session's project.
+	for _, c := range []struct{ sid, edits, want string }{{"s1", shop, "shop"}, {"s2", vendor, "billing"}, {"s3", shop, "billing"}} {
 		parent := subagentTranscript(t, c.sid, "ag1")
 		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+billing+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
 		agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
 		line := func(uuid, file string) string {
 			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + filepath.Join(file, "x.go") + `"}}]}}` + "\n"
 		}
-		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+billing+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)), 0o600)
+		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
+		if c.sid == "s3" {
+			reply = ""
+		}
+		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+billing+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)+reply), 0o600)
 		fire(t, "subagent-stop", map[string]any{"session_id": c.sid, "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
 			"transcript_path": parent, "last_assistant_message": "Fixed in " + c.sid})
 	}
@@ -227,8 +233,12 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 		_ = json.Unmarshal([]byte(l), &n)
 		got[n.DocumentID] = n.Project
 	}
-	if got["subagent:s1:ag1"] != "shop" || got["subagent:s2:ag1"] != "billing" {
+	if got["subagent:s1:ag1"] != "shop" || got["subagent:s2:ag1"] != "billing" || got["subagent:s3:ag1"] != "billing" {
 		t.Errorf("report projects %v", got)
+	}
+	// the decision travels with the report, into its document's metadata
+	if !strings.Contains(string(raw), `"attribution":"evidence"`) || !strings.Contains(string(raw), `"attribution":"incomplete"`) {
+		t.Errorf("outbox without the decisions:\n%s", raw)
 	}
 	tel := telemetryText(t, home)
 	if !strings.Contains(tel, `"event":"attribution"`) || !strings.Contains(tel, `"path_rule":"shop"`) || !strings.Contains(tel, `"base":"billing"`) {

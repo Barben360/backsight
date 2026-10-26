@@ -44,6 +44,10 @@ type Note struct {
 	LastError   string    `json:"last_error,omitempty"`
 	Source      string    `json:"source,omitempty"` // "" (a note) | subagent
 	AgentType   string    `json:"agent_type,omitempty"`
+	// Attribution: why a subagent's report has its project (the path
+	// rule's source), kept in the document's metadata with the project so
+	// the decision survives this machine's state (decision 0072).
+	Attribution string `json:"attribution,omitempty"`
 	// Session: the Claude Code session a note was stored from ("" from a
 	// shell), kept in the document's metadata so `memory notes` shows it.
 	Session string `json:"session,omitempty"`
@@ -81,6 +85,9 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 			// On the raw facts only: the scope stays the project (decision 0071).
 			item.Tags = append(item.Tags, "agent:"+t)
 			item.Metadata["agent_type"] = t
+		}
+		if n.Attribution != "" {
+			item.Metadata["attribution"], item.Metadata["project"] = n.Attribution, n.Project
 		}
 		return item
 	}

@@ -363,7 +363,8 @@ func replyText(raw json.RawMessage) string {
 // included, whose line contains one of words: a cheap pass over a whole
 // transcript for a few commands (decision 0072 reads the worktrees and
 // clones a session made). Lines without any of words are not decoded.
-func Scan(r io.Reader, words []string, fn func(Record)) {
+// fn returning false stops the scan.
+func Scan(r io.Reader, words []string, fn func(Record) bool) {
 	br := bufio.NewReaderSize(r, 1<<16)
 	for {
 		line, _, tooLong, err := readLine(br)
@@ -371,7 +372,9 @@ func Scan(r io.Reader, words []string, fn func(Record)) {
 			var rr rawRecord
 			if json.Unmarshal(bytes.TrimSpace(line), &rr) == nil && (rr.Type == "user" || rr.Type == "assistant") && len(rr.Message) > 0 {
 				turns, tools := normalise(rr, parseTime(rr.Timestamp))
-				fn(Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Entrypoint: rr.Entrypoint, Timestamp: parseTime(rr.Timestamp), Turns: turns, Tools: tools})
+				if !fn(Record{UUID: rr.UUID, SessionID: rr.SessionID, CWD: rr.CWD, Entrypoint: rr.Entrypoint, Timestamp: parseTime(rr.Timestamp), Turns: turns, Tools: tools}) {
+					return
+				}
 			}
 		}
 		if err != nil {

@@ -23,8 +23,11 @@ import (
 
 const (
 	gateRecallBudget = 6 * time.Second // SPEC §6.2: hits only when they arrive within 6 s
-	gateHits         = 2
-	lastReplyChars   = 1000 // the end of the last reply, for the detector and outcomes
+	// subagentAttributionBudget bounds the path rule in SubagentStop (3 s
+	// for the whole hook): past it the report keeps its session's project.
+	subagentAttributionBudget = 1500 * time.Millisecond
+	gateHits                  = 2
+	lastReplyChars            = 1000 // the end of the last reply, for the detector and outcomes
 )
 
 // spawnDetached starts `backsight <args>` outside the hook's process group,
@@ -186,13 +189,19 @@ func (h *hookEnv) subagentStop() {
 	proj := canonicalProject(h.cfg, h.project)
 	// The report goes to the own repository the subagent's work is in
 	// (the path rule, decision 0072), else to its session's project.
+	source := ""
 	if p := agentTranscriptPath(h.in); p != "" {
 		a := attributor(h.dirs, h.cfg, h.resolver)
-		e := a.Subagent(h.in.SessionID, h.in.AgentID, h.in.TranscriptPath, p, proj, now())
-		proj = a.ReportProject(e)
+		a.Deadline = time.Now().Add(subagentAttributionBudget)
+		e, err := a.Subagent(h.in.SessionID, h.in.AgentID, h.in.TranscriptPath, p, proj, h.in.LastAssistantMessage, now())
+		if err != nil {
+			h.tw.Emit(telemetry.Raw{Name: "attribution_error", Fields: map[string]any{"error": err.Error()}})
+		}
+		proj, source = a.ReportProject(e), e.Source
 		h.tw.Emit(attributionEvent(e))
 	}
 	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, proj, text, now())
+	n.Attribution = source
 	if _, err := notesOutboxFor(h.dirs, h.cfg).Append(n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})
 		return

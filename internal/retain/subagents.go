@@ -116,11 +116,14 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 		if f.ReportProject != nil {
 			project = f.ReportProject(reply.CWD)
 		}
+		source := ""
 		if f.Attribution.Dir != "" {
 			// the answer SubagentStop gave, kept; else the path rule now
-			project = f.Attribution.ReportProject(f.Attribution.Subagent(sid, agent, transcriptPath, p, project, reply.At))
+			e, _ := f.Attribution.Subagent(sid, agent, transcriptPath, p, project, reply.Text, reply.At)
+			project, source = f.Attribution.ReportProject(e), e.Source
 		}
 		n := NewSubagentNote(f.Bank, sid, agent, agentTypeOf(p), project, text, reply.At)
+		n.Attribution = source
 		if _, err := ob.Append(n); err != nil {
 			return queued, err
 		}

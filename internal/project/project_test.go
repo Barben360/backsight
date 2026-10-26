@@ -300,22 +300,19 @@ func TestNamedTellsStrongNamesFromBasenames(t *testing.T) {
 	}
 }
 
-func TestRepoNameAndMainComeFromTheRepository(t *testing.T) {
+func TestMainIsTheRepositorysMainCheckout(t *testing.T) {
 	home, r := fixture(t)
 	repo := filepath.Join(home, "work", "billing")
 	git(t, repo, "remote", "add", "origin", "git@github.com:Acme/Billing-API.git")
 	wt := filepath.Join(home, "wt", "billing-fix")
 	for _, cwd := range []string{repo, filepath.Join(repo, "internal", "export"), wt} {
-		if got := r.RepoName(cwd); got != "Billing-API" {
-			t.Errorf("%s: repo name %q", cwd, got)
-		}
 		if got, _ := filepath.EvalSymlinks(r.Main(cwd)); got != mustReal(t, repo) {
 			t.Errorf("%s: main %q, want %q", cwd, r.Main(cwd), repo)
 		}
 	}
 	for _, cwd := range []string{filepath.Join(home, "notes"), filepath.Join(repo, "gone", "deleted")} {
-		if r.RepoName(cwd) != "" || r.Main(cwd) != "" {
-			t.Errorf("%s: %q %q, want nothing (outside git, or not a directory)", cwd, r.RepoName(cwd), r.Main(cwd))
+		if r.Main(cwd) != "" {
+			t.Errorf("%s: %q, want nothing (outside git, or not a directory)", cwd, r.Main(cwd))
 		}
 	}
 }

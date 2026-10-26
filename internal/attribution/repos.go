@@ -14,61 +14,101 @@ import (
 // repositories count (decision 0072): a third-party clone (a package
 // build, a framework checkout, a plugin manager's clone) is never a
 // project. A repository is own when
-//   - it is the session's launch repository (same project name), or
+//   - it is the session's launch repository (same main checkout, or a
+//     clone of the same remote), or
 //   - its remote's owner (host and every path segment but the last, such
-//     as github.com/acme) is the launch repository's, or
-//   - its remote's owner is listed in projects.own_owners.
+//     as github.com/acme) is an own owner: the launch repository's, one
+//     of projects.own_owners, or one of the owners this machine learnt
+//     from the launch repositories of its retained sessions (Owners).
 //
 // A clone whose main checkout lies in a throwaway place (the temporary
-// directory, ~/.cache) counts for the launch project when it is a clone of
-// it, for the repository its remote names when that remote is own, else
-// for nothing: a review clone named "bs" is not a project. Worktrees are
-// named by their main checkout as usual, wherever they live.
-//
-// Every input is the session's own (its launch directory, its commands)
-// or the configuration: never what other sessions did, so a later run
-// answers the same.
+// directory, ~/.cache) is one repository with its kept checkout: it counts
+// for the project of the checkout with the same remote that the session
+// launched in or the same turn names, under that checkout's name, and
+// only if that checkout is not kept out of memory; with no such checkout
+// it counts for nothing (a review clone named "bs" is not a project).
+// Worktrees are named by their main checkout as usual, wherever they live.
+// A directory kept out of memory (privacy.exclude_paths, retain = false)
+// is never evidence, nor is a clone of one.
 type Repos struct {
 	res          *project.Resolver
 	home         string
 	transverse   []string
 	exclude      []string
 	launch       string
+	launchMain   string
 	launchRemote string
+	launchOut    bool // the launch directory is kept out of memory
 	owners       map[string]bool
 	throwaway    []string
 	// gone: directories the session's own commands created (git worktree
-	// add, git clone) and that are removed since, by the project they
-	// were evidence for when the turn ran.
-	gone  map[string]string
-	cache map[string]string
+	// add, git clone) and that are removed since.
+	gone  map[string]resolved
+	cache map[string]resolved
+}
+
+// resolved is what a path names: an own repository (project, main), or a
+// throwaway clone to name through its kept checkout (clone, remote).
+type resolved struct {
+	project, main, remote string
+	clone                 bool
 }
 
 // NewRepos builds the namer of one session launched in launchDir.
-// owners are projects.own_owners, exclude privacy.exclude_paths: a
-// directory kept out of memory is never evidence, so its project's name
-// is never sent.
+// owners are the own remote owners besides the launch repository's
+// (projects.own_owners, and those Owners learnt), exclude
+// privacy.exclude_paths: a directory kept out of memory is never evidence,
+// so its project's name is never sent.
 func NewRepos(res *project.Resolver, home string, transverse []string, launchDir string, owners, exclude []string) *Repos {
 	r := &Repos{res: res, home: filepath.Clean(home), transverse: transverse, exclude: exclude, owners: map[string]bool{},
-		gone: map[string]string{}, cache: map[string]string{}}
+		gone: map[string]resolved{}, cache: map[string]resolved{}}
 	r.throwaway = []string{filepath.Join(r.home, ".cache"), "/tmp", filepath.Clean(os.TempDir())}
 	for _, o := range owners {
-		if o = Owner(project.NormaliseRemote(o) + "/x"); o != "" {
+		if o = OwnerOf(o); o != "" {
 			r.owners[o] = true
 		}
 	}
 	if strings.TrimSpace(launchDir) != "" {
 		r.launch = res.Project(launchDir)
+		r.launchMain = res.Main(launchDir)
 		r.launchRemote = res.Remote(launchDir)
-		if o := Owner(r.launchRemote); o != "" {
+		r.launchOut, _ = res.OptedOut(launchDir, exclude)
+		if o := Owner(r.launchRemote); o != "" && !r.launchOut {
 			r.owners[o] = true
 		}
 	}
 	return r
 }
 
-// Launch is the session's launch project.
-func (r *Repos) Launch() string { return r.launch }
+// OwnerOf normalises an owner as written in projects.own_owners
+// ("github.com/Acme", "https://github.com/acme/") to the Owner form.
+func OwnerOf(o string) string { return Owner(project.NormaliseRemote(o) + "/x") }
+
+// LaunchOwner is the remote owner of a retained launch directory, "" for
+// one kept out of memory, outside git, without a remote or in a throwaway
+// place: what Owners learns from each session.
+func LaunchOwner(res *project.Resolver, home, launchDir string, exclude []string) string {
+	if strings.TrimSpace(launchDir) == "" {
+		return ""
+	}
+	if out, _ := res.OptedOut(launchDir, exclude); out {
+		return ""
+	}
+	main := res.Main(launchDir)
+	if main == "" || (&Repos{home: filepath.Clean(home), throwaway: []string{filepath.Join(filepath.Clean(home), ".cache"), "/tmp", filepath.Clean(os.TempDir())}}).under(main) {
+		return ""
+	}
+	return Owner(res.Remote(launchDir))
+}
+
+// Launch is the session's launch project, "" when its directory is kept
+// out of memory (its name is then never a mention to move to).
+func (r *Repos) Launch() string {
+	if r.launchOut {
+		return ""
+	}
+	return r.launch
+}
 
 // Transverse says whether name is a transverse alias.
 func (r *Repos) Transverse(name string) bool { return slices.Contains(r.transverse, name) }
@@ -84,21 +124,64 @@ func Owner(remote string) string {
 }
 
 // Project is the own project path is evidence for, "" when none: a
-// transverse path, a plain directory, a third-party repository.
-func (r *Repos) Project(path string) string {
+// transverse path, a plain directory, a third-party repository, a
+// directory kept out of memory, a clone with no kept checkout known. kept
+// are the checkouts known by remote (Kept); nil knows only the launch one.
+func (r *Repos) Project(path string, kept map[string]Checkout) string {
+	p, _ := r.ProjectRoot(path, kept)
+	return p
+}
+
+// ProjectRoot is Project and the main checkout that names it.
+func (r *Repos) ProjectRoot(path string, kept map[string]Checkout) (string, string) {
+	v := r.resolve(path)
+	if !v.clone {
+		return v.project, v.main
+	}
+	c, ok := kept[v.remote]
+	if !ok && v.remote == r.launchRemote && r.launchMain != "" && !r.launchOut {
+		c, ok = Checkout{Project: r.launch, Main: r.launchMain}, true
+	}
+	if !ok {
+		return "", ""
+	}
+	return c.Project, c.Main
+}
+
+// Checkout is a kept (not throwaway) own repository: what a clone of the
+// same remote counts for.
+type Checkout struct {
+	Project, Main string
+}
+
+// Kept lists, by remote, the own repositories paths name directly: one
+// repository, one project name, whatever directory a clone of it is in.
+func (r *Repos) Kept(paths []string) map[string]Checkout {
+	out := map[string]Checkout{}
+	for _, p := range paths {
+		if v := r.resolve(p); !v.clone && v.project != "" && v.remote != "" {
+			if _, ok := out[v.remote]; !ok {
+				out[v.remote] = Checkout{Project: v.project, Main: v.main}
+			}
+		}
+	}
+	return out
+}
+
+func (r *Repos) resolve(path string) resolved {
 	p := filepath.Clean(path)
 	if v, ok := r.cache[p]; ok {
 		return v
 	}
-	v := r.project(p)
+	v := r.lookup(p)
 	r.cache[p] = v
 	return v
 }
 
-func (r *Repos) project(p string) string {
+func (r *Repos) lookup(p string) resolved {
 	claude := filepath.Join(r.home, ".claude")
 	if p == r.home || p == claude || strings.HasPrefix(p, claude+string(filepath.Separator)) {
-		return "" // the transverse pool: no repository evidence
+		return resolved{} // the transverse pool: no repository evidence
 	}
 	d := p
 	for d != filepath.Dir(d) {
@@ -113,24 +196,39 @@ func (r *Repos) project(p string) string {
 	}
 	if !strong {
 		if _, err := os.Lstat(p); err != nil {
-			return r.goneProject(p) // removed since the turn ran: its own commands made it
+			return r.goneDir(p) // removed since the turn ran: its own commands made it
 		}
-		return ""
+		return resolved{}
 	}
 	if r.Transverse(name) {
-		return ""
+		return resolved{}
 	}
 	if out, _ := r.res.OptedOut(d, r.exclude); out {
-		return ""
+		return resolved{}
 	}
-	main := r.res.Main(d)
+	main, remote := r.res.Main(d), r.res.Remote(d)
 	if main != "" && r.under(main) {
-		return r.cloneProject(main)
+		if remote == "" {
+			return resolved{}
+		}
+		return resolved{clone: true, remote: remote}
 	}
-	if name == r.launch || r.owners[Owner(r.res.Remote(d))] {
-		return name
+	if r.own(main, remote) {
+		return resolved{project: name, main: main, remote: remote}
 	}
-	return ""
+	return resolved{}
+}
+
+// own: the launch repository (its main checkout, or its remote), or an
+// own owner's.
+func (r *Repos) own(main, remote string) bool {
+	switch {
+	case main != "" && main == r.launchMain:
+		return true
+	case remote != "" && remote == r.launchRemote:
+		return true
+	}
+	return remote != "" && r.owners[Owner(remote)]
 }
 
 // under: dir lies in a throwaway place. Under the home directory only
@@ -149,28 +247,13 @@ func (r *Repos) under(dir string) bool {
 	return false
 }
 
-// cloneProject names a throwaway clone by its remote: the launch project
-// for a clone of it, the remote's repository for another own remote.
-func (r *Repos) cloneProject(main string) string {
-	remote := r.res.Remote(main)
-	switch {
-	case remote == "":
-		return ""
-	case remote == r.launchRemote:
-		return r.launch
-	case r.owners[Owner(remote)]:
-		return r.res.RepoName(main)
-	}
-	return ""
-}
-
-func (r *Repos) goneProject(p string) string {
+func (r *Repos) goneDir(p string) resolved {
 	for d := p; d != filepath.Dir(d); d = filepath.Dir(d) {
 		if v, ok := r.gone[d]; ok {
 			return v
 		}
 	}
-	return ""
+	return resolved{}
 }
 
 var (
@@ -216,8 +299,10 @@ func (r *Repos) Learn(cmd, cwd string) {
 		if _, err := os.Stat(repo); err != nil {
 			continue
 		}
-		if p := r.Project(repo); p != "" {
-			r.gone[filepath.Clean(dst)] = p
+		// a worktree of a repository is that repository: same answer,
+		// exclusions and clones included
+		if v := r.resolve(repo); v.project != "" || v.clone {
+			r.gone[filepath.Clean(dst)] = v
 		}
 	}
 	for _, m := range cloneRe.FindAllStringSubmatch(cmd, -1) {
@@ -229,15 +314,7 @@ func (r *Repos) Learn(cmd, cwd string) {
 		if dst == "" || remote == "" {
 			continue
 		}
-		switch {
-		case remote == r.launchRemote:
-			r.gone[dst] = r.launch
-		case r.owners[Owner(remote)]:
-			name := strings.TrimSuffix(strings.TrimRight(m[1], "/"), ".git")
-			if i := strings.LastIndexAny(name, "/:"); i >= 0 {
-				name = name[i+1:]
-			}
-			r.gone[dst] = name
-		}
+		// named, once removed, through its kept checkout like a live clone
+		r.gone[dst] = resolved{clone: true, remote: remote}
 	}
 }

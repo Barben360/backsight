@@ -45,6 +45,9 @@ type Count struct {
 type Votes struct {
 	Explicit []Count `json:"explicit,omitempty"`
 	Implicit []Count `json:"implicit,omitempty"`
+	// Roots: each voted project's main checkout, so a later exclusion of
+	// that repository can be honoured without the transcript.
+	Roots map[string]string `json:"roots,omitempty"`
 }
 
 func add(c *[]Count, p string, n int) {
@@ -100,9 +103,27 @@ func (v Votes) Projects() []string {
 
 // Tally counts a turn's calls: each own project a call's paths name gets
 // one vote from it (WriteWeight when the call writes); a shell call with
-// no path votes for the repository it ran in.
+// no path votes for the repository it ran in. A throwaway clone counts
+// for the kept checkout of the same remote that the launch directory or
+// the turn's own paths name (Repos.Kept).
 func Tally(calls []Call, r *Repos) Votes {
+	var all []string
+	for _, c := range calls {
+		all = append(all, c.Paths...)
+		if len(c.Paths) == 0 && c.Bash && c.CWD != "" {
+			all = append(all, c.CWD)
+		}
+	}
+	kept := r.Kept(all)
 	var v Votes
+	root := func(p, main string) {
+		if v.Roots == nil {
+			v.Roots = map[string]string{}
+		}
+		if _, ok := v.Roots[p]; !ok && main != "" {
+			v.Roots[p] = main
+		}
+	}
 	for _, c := range calls {
 		w := 1
 		if c.Write {
@@ -110,8 +131,9 @@ func Tally(calls []Call, r *Repos) Votes {
 		}
 		var projects []string
 		for _, p := range c.Paths {
-			if q := r.Project(p); q != "" && !slices.Contains(projects, q) {
+			if q, main := r.ProjectRoot(p, kept); q != "" && !slices.Contains(projects, q) {
 				projects = append(projects, q)
+				root(q, main)
 			}
 		}
 		slices.Sort(projects)
@@ -119,8 +141,9 @@ func Tally(calls []Call, r *Repos) Votes {
 			add(&v.Explicit, q, w)
 		}
 		if len(c.Paths) == 0 && c.Bash && c.CWD != "" {
-			if q := r.Project(c.CWD); q != "" {
+			if q, main := r.ProjectRoot(c.CWD, kept); q != "" {
 				add(&v.Implicit, q, w)
+				root(q, main)
 			}
 		}
 	}
