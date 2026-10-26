@@ -5,7 +5,9 @@
 # so that start depends on huggingface.co. BACKSIGHT_HF_CACHE names a tar
 # of that volume's content, which CI keeps with actions/cache keyed on the
 # pinned image: hfc_seed fills a new volume from it before the start, and
-# hfc_save writes it once the server is up. Unset, both do nothing. A
+# hfc_save writes it once the server is up. BACKSIGHT_HF_CACHE_DROP=1 (CI,
+# whose restored tar is never saved again) deletes the tar once read, to
+# free the disk. Unset, both do nothing. A
 # failure here is a warning, never the run's: a missing or broken cache
 # only means the server downloads its models.
 #
@@ -18,7 +20,9 @@ hfc_image() { sed -n 's/^const pinnedHindsight = "\(.*\)"$/\1/p' "$root/internal
 
 # hfc_seed <compose project>: before the stack's first start, the volume
 # Compose will use (created with Compose's labels, as Compose would),
-# filled from the tar when there is one.
+# filled from the tar when there is one. hfc_read records that this run
+# read the tar: hfc_save then leaves it alone, even once dropped.
+hfc_read=
 hfc_seed() {
   local tar=${BACKSIGHT_HF_CACHE:-} vol=$1_hf_cache image
   [ -n "$tar" ] || return 0
@@ -31,6 +35,7 @@ hfc_seed() {
     return 0
   fi
   image=$(hfc_image)
+  hfc_read=1
   if docker volume create --label "com.docker.compose.project=$1" --label com.docker.compose.volume=hf_cache "$vol" >/dev/null &&
     docker run --rm -i --network none --user 0 --entrypoint tar -v "$vol:/cache" "$image" -xpf - -C /cache < "$tar"; then
     echo "hf cache: $vol seeded from $tar" >&2
@@ -38,15 +43,17 @@ hfc_seed() {
     echo "::warning::hf cache: $vol could not be seeded from $tar; the server downloads its models" >&2
     docker volume rm -f "$vol" >/dev/null 2>&1 || true
   fi
+  [ "${BACKSIGHT_HF_CACHE_DROP:-}" != 1 ] || rm -f "$tar"
   return 0
 }
 
 # hfc_save <compose project>: once the server is up, the volume's content
-# into the tar, unless the tar is already there (restored by CI). A tar
+# into the tar, unless the tar is already there or this run read it
+# (restored by CI). A tar
 # without Hugging Face models is not kept: it would seed an empty cache.
 hfc_save() {
   local tar=${BACKSIGHT_HF_CACHE:-} vol=$1_hf_cache image
-  [ -n "$tar" ] && [ ! -s "$tar" ] || return 0
+  [ -n "$tar" ] && [ ! -s "$tar" ] && [ -z "$hfc_read" ] || return 0
   if ! docker volume inspect "$vol" >/dev/null 2>&1; then
     echo "::warning::hf cache: no volume $vol to save" >&2
     return 0

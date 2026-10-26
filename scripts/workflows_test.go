@@ -159,6 +159,40 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 	}
 }
 
+// A Docker stack job on a hosted runner first frees the disk the runner's
+// preinstalled toolchains take: images, the model cache tar and the data
+// fill the rest, and setup's doctor wants 6 GB free. A restored model
+// cache tar is dropped once seeded (it is never saved again).
+func TestStackJobsFreeTheDiskFirst(t *testing.T) {
+	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install)\.sh`)
+	jobs := 0
+	for _, w := range workflows(t) {
+		for _, j := range w.jobs {
+			if !stack.MatchString(j.raw) {
+				continue
+			}
+			jobs++
+			first := j.steps[0]
+			for _, s := range []string{"/usr/share/dotnet", "/usr/local/lib/android", "/opt/ghc", "/opt/hostedtoolcache/CodeQL"} {
+				if !strings.Contains(first, "sudo rm -rf") || !strings.Contains(first, s) {
+					t.Errorf("%s job %s: its first step does not remove %s", w.name, j.name, s)
+				}
+			}
+			if strings.Count(first, "df -h /") < 2 {
+				t.Errorf("%s job %s: its first step does not print df -h / before and after", w.name, j.name)
+			}
+			for _, step := range j.steps {
+				if stack.MatchString(step) && strings.Contains(step, "BACKSIGHT_HF_CACHE=") && !strings.Contains(step, "BACKSIGHT_HF_CACHE_DROP=1") {
+					t.Errorf("%s job %s: the model cache tar is kept on disk once seeded (BACKSIGHT_HF_CACHE_DROP=1)", w.name, j.name)
+				}
+			}
+		}
+	}
+	if jobs < 2 {
+		t.Errorf("%d stack jobs found, want sandbox and fresh-install: the check proves nothing", jobs)
+	}
+}
+
 // A release is published only once its uploaded draft verifies, and the
 // signing key is an environment secret (INDEX row "0068 flip timing and
 // runners": published as a draft, verified, then made public).

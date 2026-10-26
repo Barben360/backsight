@@ -3,6 +3,8 @@ package scripts
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +35,7 @@ esac
 // hfCache runs one hf-cache.sh function with the fake docker, as the CI
 // scripts do (set -euo pipefail); it returns the docker calls, stderr and
 // the shell's error.
-func hfCache(t *testing.T, fake, tarPath, call string) (calls []string, stderr string, err error) {
+func hfCache(t *testing.T, fake, tarPath, call string, env ...string) (calls []string, stderr string, err error) {
 	t.Helper()
 	root, _ := filepath.Abs("..")
 	cmd := exec.Command("bash", "-c", `set -euo pipefail; root=$1; . "$root/scripts/hf-cache.sh"; `+call, "hf", root)
@@ -43,6 +45,7 @@ func hfCache(t *testing.T, fake, tarPath, call string) (calls []string, stderr s
 	} else {
 		cmd.Env = append(cmd.Env, "BACKSIGHT_HF_CACHE=")
 	}
+	cmd.Env = append(cmd.Env, env...)
 	var e bytes.Buffer
 	cmd.Stderr = &e
 	err = cmd.Run()
@@ -187,5 +190,38 @@ func TestHFCacheDoesNotSaveAVolumeWithoutModels(t *testing.T) {
 				t.Errorf("left %v, stderr %q: want no file and a warning", left, stderr)
 			}
 		})
+	}
+}
+
+// CI reads a restored tar once (BACKSIGHT_HF_CACHE_DROP=1): it goes once
+// the volume is seeded, frees the runner's disk, and the run does not
+// write it again. Without the variable a seeded tar stays.
+func TestHFCacheDropsASeededTarOnRequest(t *testing.T) {
+	for _, drop := range []bool{true, false} {
+		fake := newFakeDocker(t)
+		tarPath := filepath.Join(t.TempDir(), "hf_cache.tar")
+		_ = os.WriteFile(tarPath, tarOf(t, "./huggingface/hub/models--a/blob"), 0o644)
+		_ = os.WriteFile(filepath.Join(fake, "out.tar"), tarOf(t, "./", "./huggingface/hub/models--b/blob"), 0o644)
+		var env []string
+		if drop {
+			env = []string{"BACKSIGHT_HF_CACHE_DROP=1"}
+		}
+		// The volume exists once seeded, as it would for the save.
+		calls, stderr, err := hfCache(t, fake, tarPath, `hfc_seed bs-x; touch "$(dirname "$(command -v docker)")/inspect-ok"; hfc_save bs-x`, env...)
+		if err != nil {
+			t.Fatalf("drop=%v: %v\n%s", drop, err, stderr)
+		}
+		_, statErr := os.Stat(tarPath)
+		if drop && !errors.Is(statErr, fs.ErrNotExist) {
+			t.Errorf("drop=1: the seeded tar is still there (%v)", statErr)
+		}
+		if !drop && statErr != nil {
+			t.Errorf("no drop: the seeded tar went (%v)", statErr)
+		}
+		for _, c := range calls {
+			if strings.Contains(c, "-cf -") {
+				t.Errorf("drop=%v: a seeded run saved the volume again: %s", drop, c)
+			}
+		}
 	}
 }
