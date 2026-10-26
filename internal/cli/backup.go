@@ -362,7 +362,12 @@ func readIdentities(path string, prompt func() ([]byte, error)) ([]agelib.Identi
 		}
 		return []agelib.Identity{id}, nil
 	}
-	return agelib.ParseIdentities(strings.NewReader(string(raw)))
+	ids, err := agelib.ParseIdentities(strings.NewReader(string(raw)))
+	if err != nil {
+		// The library's wording changes between releases; say it our way.
+		return nil, fmt.Errorf("%s is not an age identity file or an SSH private key (%w)", path, err)
+	}
+	return ids, nil
 }
 
 // askPassphrase reads an SSH key's passphrase from the terminal; tests

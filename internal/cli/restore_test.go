@@ -462,7 +462,7 @@ func TestRestoreRefusals(t *testing.T) {
 			_ = os.WriteFile(f, []byte(other.String()+"\n"), 0o600)
 			return []string{archive, "--identity", f}
 		}},
-		{"unreadable identity", output.Usage, "malformed secret key", func(t *testing.T, _, archive string) []string {
+		{"unreadable identity", output.Usage, "is not an age identity file or an SSH private key", func(t *testing.T, _, archive string) []string {
 			f := filepath.Join(t.TempDir(), "key.txt")
 			_ = os.WriteFile(f, []byte("not a key\n"), 0o600)
 			return []string{archive, "--identity", f}
