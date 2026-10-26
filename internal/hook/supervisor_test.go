@@ -13,6 +13,12 @@ import (
 // The test binary doubles as the child: TestMain runs childMain when the
 // helper variable is set, like the real binary's hidden hook-child command.
 func TestMain(m *testing.M) {
+	// No race runtime exit sleep (1 s while other threads live) in the
+	// children, unless the caller chose GORACE: the deadlines here are
+	// tighter than that (issue #281).
+	if _, ok := os.LookupEnv("GORACE"); !ok {
+		_ = os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
 	if os.Getenv("HOOK_TEST_CHILD") == "1" {
 		os.Exit(RunChild(context.Background(), os.Args[len(os.Args)-1], os.Stdin, os.Stdout, func(_ context.Context, event string, in []byte) ([]byte, error) {
 			switch os.Getenv("HOOK_TEST_BEHAVIOUR") {

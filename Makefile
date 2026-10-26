@@ -23,8 +23,11 @@ export CGO_ENABLED := 0
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
+# atexit_sleep_ms=0: no race runtime sleep (1 s) as each test binary and
+# hook child exits; a GORACE of the caller's wins.
 test:
-	CGO_ENABLED=1 go test -race ./...
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race ./...
+
 
 lint:
 	golangci-lint run
