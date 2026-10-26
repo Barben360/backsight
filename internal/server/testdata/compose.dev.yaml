@@ -29,6 +29,11 @@ services:
       - "127.0.0.1:19999:9999"
     env_file:
       - .env
+    # A model served on this machine (Ollama) is at host.docker.internal:
+    # Docker Desktop provides the name, Docker Engine on Linux only with
+    # this mapping to the host's gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - hf_cache:/home/hindsight/.cache
 

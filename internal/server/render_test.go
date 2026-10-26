@@ -105,6 +105,30 @@ func TestRenderOllamaNeedsNoLLMKey(t *testing.T) {
 	}
 }
 
+// The server reaches a model served on this machine (Ollama's preset,
+// http://host.docker.internal:11434) on Docker Engine for Linux too, where
+// the name exists only when the service maps it to the host's gateway
+// (Docker Desktop has it built in). Every provider gets the mapping: an
+// OpenAI-compatible server on the host needs it as much.
+func TestRenderLetsTheServerReachTheHost(t *testing.T) {
+	for _, provider := range []string{"ollama", "deepseek"} {
+		cfg := devConfig()
+		cfg.LLM.Provider = provider
+		f, err := Render(cfg, secrets, "box")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := string(f.Compose)
+		start, end := strings.Index(c, "\n  hindsight:\n"), strings.Index(c, "\nvolumes:\n")
+		if start < 0 || end < start {
+			t.Fatalf("no hindsight service in:\n%s", c)
+		}
+		if !strings.Contains(c[start:end], "\n    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\n") {
+			t.Errorf("%s: the hindsight service does not map host.docker.internal to the host:\n%s", provider, c[start:end])
+		}
+	}
+}
+
 func TestRenderRefusals(t *testing.T) {
 	cfg := devConfig()
 	cfg.Embeddings.Preset = "english"

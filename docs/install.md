@@ -101,6 +101,37 @@ With the `claude-code` provider, run `claude setup-token` first and set its toke
 
 `backsight secret list` shows which secrets are set, never their values. Setup generates the server's API key, its web UI key and the database password. The backup identity is generated with the first backup (or by `backsight backup identity show`).
 
+## Local models with Ollama
+
+With the `ollama` provider, the server, which runs in a container, calls Ollama at `http://host.docker.internal:11434`: your machine, as the container sees it. Setup's `base_url` question changes that address.
+
+- **macOS and Windows (Docker Desktop)**: nothing to change. Docker Desktop forwards that address to Ollama on your machine (these platforms are not tested yet).
+- **Linux (Docker Engine 20.10 or newer)**: backsight maps `host.docker.internal` to your machine's Docker gateway, but Ollama listens only on `127.0.0.1` by default, which the container cannot reach. Make Ollama listen on an address the container reaches, then restart it.
+
+With the systemd service Ollama's installer sets up, run `sudo systemctl edit ollama`, add these two lines, then `sudo systemctl restart ollama`:
+
+```ini
+[Service]
+Environment="OLLAMA_HOST=172.17.0.1"
+```
+
+Ollama has no authentication: anyone who reaches its port can use your models, download new ones and delete them. Choose the address with that in mind:
+
+| `OLLAMA_HOST` | Who reaches Ollama | Trade-off |
+|---|---|---|
+| `172.17.0.1`, Docker's default bridge (`ip -4 addr show docker0` shows yours) | this machine and its containers, not your network | Ollama must start after Docker, which creates that address (add `After=docker.service` under `[Unit]` in the same override); the `ollama` command on this machine then needs `OLLAMA_HOST=172.17.0.1` too |
+| `0.0.0.0`, every interface | also every device on your network | simplest; block port 11434 from outside with a firewall |
+
+A firewall on this machine (ufw, firewalld) can also block the container: allow port 11434 from Docker's networks (`172.16.0.0/12` by default), with ufw `sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp`.
+
+To check that a container reaches Ollama before you run setup:
+
+```sh
+docker run --rm --add-host=host.docker.internal:host-gateway busybox wget -qO- http://host.docker.internal:11434/api/version
+```
+
+It prints Ollama's version. Setup then tests the model itself: its LLM check runs one extraction, and `backsight server llm check` runs it again at any time.
+
 ## After setup
 
 - Save your **backup identity** somewhere else, a password manager for example: `backsight backup identity show` prints it. Without it, your backups cannot be decrypted. See [backups-and-restore.md](backups-and-restore.md).
