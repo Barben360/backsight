@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -294,8 +297,8 @@ func TestIndexSendsOnlyWhatChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(f.retains, ", "); got != "docs:install#requirements, docs:install#update" {
-		t.Errorf("sent %s: only the edited and the new section", got)
+	if got := strings.Join(f.retains, ", "); got != "docs:_versions, docs:install#requirements, docs:install#update" {
+		t.Errorf("sent %s: this version's first index time, then only the edited and the new section", got)
 	}
 	if res.Sent != 2 || res.Retagged != 4 || res.Deleted != 0 || res.Untagged != 0 || res.Unchanged != 0 {
 		t.Errorf("%+v", res)
@@ -378,7 +381,7 @@ func TestIndexRemovesOnlyItsOwnTag(t *testing.T) {
 // holds.
 func TestDiffTouchesOnlyDocsDocuments(t *testing.T) {
 	c := load(t)
-	p := diff(c, []hindsight.DocumentItem{{ID: "note:1", Tags: []string{c.Tag()}}, {ID: "conversation:s1"}, {ID: "docs:gone#x"}})
+	p := diff(c, []hindsight.DocumentItem{{ID: "note:1", Tags: []string{c.Tag()}}, {ID: "conversation:s1"}, {ID: "docs:gone#x"}}, time.Now())
 	if len(p.remove) != 1 || p.remove[0] != "docs:gone#x" || len(p.untag) != 0 {
 		t.Errorf("remove %v untag %v", p.remove, p.untag)
 	}
@@ -540,5 +543,212 @@ func TestSearchFailuresSayWhere(t *testing.T) {
 	f.downAt = "GET /documents"
 	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5); !errors.As(err, &se) || se.Stage != "check" {
 		t.Errorf("a failed listing: %v", err)
+	}
+}
+
+// release is the edited fixture with one section of its own, release n:
+// a docs version holding every edited section and that one.
+func release(t *testing.T, n int) Corpus {
+	t.Helper()
+	c, err := Load(releaseFS(n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func releaseFS(n int) fstest.MapFS {
+	fs := fixture()
+	fs["install.md"] = &fstest.MapFile{Data: []byte("# Install\n\n## Requirements\n\nLinux, Docker, Claude Code and an LLM key.\n\n" +
+		"## Uninstall\n\nRun `backsight uninstall`; `--delete-data` also removes the server volumes.\n\n" +
+		"## Release " + strconv.Itoa(n) + "\n\nWhat release " + strconv.Itoa(n) + " changed.\n")}
+	return fs
+}
+
+// releaseWithoutRestore is release n with no "Restore a backup" section.
+func releaseWithoutRestore(t *testing.T, n int) Corpus {
+	t.Helper()
+	fs := releaseFS(n)
+	fs["backup.md"] = &fstest.MapFile{Data: []byte("# Backups and restore\n\nbacksight keeps encrypted backups of the server.\n\n" +
+		"## Make a backup\n\nRun `backsight backup create`. The archive is encrypted with age.\n\n" +
+		"```sh\n## not a heading\nbacksight backup list\n```\n\n")}
+	c, err := Load(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// withClock sets the time Index records a docs version's first index at.
+func withClock(t *testing.T, at time.Time) {
+	t.Helper()
+	old := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = old })
+}
+
+// Six docs versions indexed one after the other: the sixth drops the
+// first one's tag from every document, deletes the section only the first
+// held, and keeps the five last (issue 279).
+func TestIndexKeepsTheLastFiveDocsVersions(t *testing.T) {
+	f, cl := newFake(t)
+	vs := []Corpus{load(t)}
+	for n := 2; n <= 6; n++ {
+		vs = append(vs, release(t, n))
+	}
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i, c := range vs[:5] {
+		withClock(t, start.Add(time.Duration(i)*time.Hour))
+		if _, err := Index(context.Background(), cl, "mem", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The first version's only section, and one it shares with the others.
+	if got := tagsOf(f, "docs:install#uninstall-1"); got != vs[0].Tag() {
+		t.Fatalf("before the sixth: %s", got)
+	}
+	withClock(t, start.Add(5*time.Hour))
+	f.reset()
+	res, err := Index(context.Background(), cl, "mem", vs[5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tagsOf(f, "docs:install#uninstall-1"); got != "missing" {
+		t.Errorf("the section only the dropped version held is still there: %s", got)
+	}
+	if strings.Join(res.DroppedVersions, ",") != vs[0].Tag() || res.Deleted != 1 {
+		t.Errorf("%+v: the first version dropped, its own section deleted", res)
+	}
+	for id, d := range f.banks["mem-docs"] {
+		if slices.Contains(d.tags, vs[0].Tag()) {
+			t.Errorf("%s still carries the dropped version's tag: %v", id, d.tags)
+		}
+	}
+	var kept []string
+	for _, c := range vs[1:] {
+		kept = append(kept, c.Tag())
+	}
+	if got := tagsOf(f, "docs:backup#restore-a-backup"); got != strings.Join(kept, ",") {
+		t.Errorf("a section every version holds: %s, want the five last %s", got, strings.Join(kept, ","))
+	}
+	// Each kept version still finds its own release section.
+	for i, c := range vs[1:] {
+		if got := tagsOf(f, "docs:install#release-"+strconv.Itoa(i+2)); got != c.Tag() {
+			t.Errorf("release %d: %s", i+2, got)
+		}
+	}
+	// Once more: nothing left to drop or write.
+	f.reset()
+	res, err = Index(context.Background(), cl, "mem", vs[5])
+	if err != nil || len(res.DroppedVersions) != 0 || res.Sent+res.Retagged+res.Untagged+res.Pruned+res.Deleted != 0 {
+		t.Errorf("%v %+v", err, res)
+	}
+	for _, w := range f.writes() {
+		if strings.Contains(w, "/documents") || strings.Contains(w, "/memories") {
+			t.Errorf("wrote %s: only the bank settings are set again", w)
+		}
+	}
+}
+
+// "Last" is by first-index time, not by tag: versions are ranked by the
+// time the docs bank first saw them, kept in docs:_versions; a version
+// indexed again keeps its first time, and one no record knows (indexed
+// before the record existed) is the oldest.
+func TestDiffDropsByFirstIndexTime(t *testing.T) {
+	c := load(t)
+	at := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	// Tags in reverse order of their times: z oldest … a newest.
+	tags := []string{"docs-version:zzzzzzzzzzzzzzzz", "docs-version:yyyyyyyyyyyyyyyy", "docs-version:cccccccccccccccc", "docs-version:bbbbbbbbbbbbbbbb", "docs-version:aaaaaaaaaaaaaaaa"}
+	meta := map[string]string{}
+	for i, tg := range tags {
+		meta["docs-version-at:"+strings.TrimPrefix(tg, "docs-version:")] = strconv.FormatInt(at.Add(time.Duration(i)*time.Hour).Unix(), 10)
+	}
+	have := []hindsight.DocumentItem{
+		{ID: "docs:_versions", Metadata: meta},
+		{ID: "docs:old#all", Tags: append([]string{"docs-version:unrecorded00000"}, tags...)},
+		{ID: "docs:old#z", Tags: []string{tags[0]}},
+		{ID: "docs:old#legacy", Tags: []string{"docs-version:unrecorded00000"}},
+		{ID: "note:1", Tags: []string{tags[0]}},
+	}
+	p := diff(c, have, at.Add(24*time.Hour))
+	// Seven versions (five recorded, one unrecorded, this one): the
+	// unrecorded and the oldest recorded go.
+	if got := strings.Join(p.dropped, ","); got != "docs-version:unrecorded00000,"+tags[0] {
+		t.Errorf("dropped %s", got)
+	}
+	if got := strings.Join(p.remove, ","); got != "docs:old#z,docs:old#legacy" {
+		t.Errorf("removed %s: the documents only dropped versions held", got)
+	}
+	if len(p.prune) != 1 || p.prune[0].id != "docs:old#all" || strings.Join(p.prune[0].tags, ",") != strings.Join(tags[1:], ",") {
+		t.Errorf("prune %+v", p.prune)
+	}
+	for _, r := range append(append(p.prune, p.untag...), p.retag...) {
+		if r.id == "note:1" || r.id == "docs:_versions" {
+			t.Errorf("touched %s", r.id)
+		}
+	}
+	if slices.Contains(p.remove, "note:1") || slices.Contains(p.remove, "docs:_versions") {
+		t.Errorf("removed %v", p.remove)
+	}
+	// The record keeps the kept versions' first times and adds this one's.
+	want := map[string]string{"docs-version-at:" + c.Hash[:16]: strconv.FormatInt(at.Add(24*time.Hour).Unix(), 10)}
+	for i, tg := range tags[1:] {
+		want["docs-version-at:"+strings.TrimPrefix(tg, "docs-version:")] = strconv.FormatInt(at.Add(time.Duration(i+1)*time.Hour).Unix(), 10)
+	}
+	if !maps.Equal(p.versions, want) {
+		t.Errorf("record %v\nwant %v", p.versions, want)
+	}
+	// This version recorded already: its first time stays.
+	meta["docs-version-at:"+c.Hash[:16]] = strconv.FormatInt(at.Add(-time.Hour).Unix(), 10)
+	p = diff(c, have, at.Add(48*time.Hour))
+	if p.versions["docs-version-at:"+c.Hash[:16]] != strconv.FormatInt(at.Add(-time.Hour).Unix(), 10) {
+		t.Errorf("first time moved: %v", p.versions)
+	}
+	// It is then the oldest recorded, yet kept: the running docs.
+	if !slices.Contains(p.dropped, tags[0]) || slices.Contains(p.dropped, c.Tag()) {
+		t.Errorf("dropped %v", p.dropped)
+	}
+}
+
+// --plan shows the versions the index would drop and what that changes.
+func TestPlanIndexShowsThePrune(t *testing.T) {
+	f, cl := newFake(t)
+	vs := []Corpus{load(t)}
+	for n := 2; n <= 5; n++ {
+		vs = append(vs, release(t, n))
+	}
+	vs = append(vs, releaseWithoutRestore(t, 6))
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i, c := range vs[:5] {
+		withClock(t, start.Add(time.Duration(i)*time.Hour))
+		if _, err := Index(context.Background(), cl, "mem", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.reset()
+	p, err := PlanIndex(context.Background(), cl, "mem", vs[5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.DropVersions, ",") != vs[0].Tag() || !slices.Contains(p.Delete, "docs:install#uninstall-1") || !p.RecordVersions {
+		t.Errorf("%+v", p)
+	}
+	// A section the sixth lacks but the second to fifth hold loses only
+	// the first's tag; the sections the sixth shares are retagged.
+	if strings.Join(p.Prune, ",") != "docs:backup#restore-a-backup" || !slices.Contains(p.Retag, "docs:backup#make-a-backup") {
+		t.Errorf("prune %v retag %v", p.Prune, p.Retag)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Errorf("the plan wrote: %v", w)
+	}
+}
+
+// docs:_versions is the record of the docs versions, never a section: a
+// docs file may not take its name.
+func TestLoadRefusesTheVersionsRecordName(t *testing.T) {
+	fs := fixture()
+	fs["_versions.md"] = &fstest.MapFile{Data: []byte("# Versions\n\ntext\n")}
+	if _, err := Load(fs); err == nil || !strings.Contains(err.Error(), "_versions") {
+		t.Errorf("%v", err)
 	}
 }

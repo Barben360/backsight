@@ -323,8 +323,9 @@ func newGuideIndexCmd(e *env) *cobra.Command {
 		Use:   "index",
 		Short: "Index the documentation into the server's docs bank (setup and update apply run it; 0 LLM calls)",
 		Long: "backsight guide index brings the server's docs bank <bank>-docs to this binary's docs: new and edited sections are sent, " +
-			"unchanged ones get this docs version's tag, sections no docs version holds are deleted. A <bank>-docs that backsight did not " +
-			"make is left as it is. --plan lists the documents it would create, resend, retag, untag and delete, and changes nothing.",
+			"unchanged ones get this docs version's tag, the tags of docs versions older than the last 5 (by first index) are removed, and " +
+			"sections no kept docs version holds are deleted. A <bank>-docs that backsight did not make is left as it is. --plan lists " +
+			"the documents it would create, resend, retag, untag, prune and delete, and the docs versions it would drop, and changes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := guideDocs()
@@ -355,13 +356,17 @@ func newGuideIndexCmd(e *env) *cobra.Command {
 			return e.emit("guide index", res, func() string { return indexText(res) })
 		},
 	}
-	cmd.Flags().BoolVar(&plan, "plan", false, "list the documents index would create, resend, retag, untag and delete, without changing anything")
+	cmd.Flags().BoolVar(&plan, "plan", false, "list the documents index would create, resend, retag, untag, prune and delete, and the docs versions it would drop, without changing anything")
 	return cmd
 }
 
 func indexText(r guide.IndexResult) string {
-	return fmt.Sprintf("docs indexed in bank %s: %d section(s), %d sent, %d retagged, %d unchanged, %d untagged, %d removed\n",
-		r.Bank, r.Sections, r.Sent, r.Retagged, r.Unchanged, r.Untagged, r.Deleted)
+	s := fmt.Sprintf("docs indexed in bank %s: %d section(s), %d sent, %d retagged, %d unchanged, %d untagged, %d pruned, %d removed\n",
+		r.Bank, r.Sections, r.Sent, r.Retagged, r.Unchanged, r.Untagged, r.Pruned, r.Deleted)
+	if len(r.DroppedVersions) > 0 {
+		s += "dropped docs version(s) older than the last 5: " + strings.Join(r.DroppedVersions, ", ") + "\n"
+	}
+	return s
 }
 
 func indexPlanText(p guide.IndexPlan) string {
@@ -374,13 +379,18 @@ func indexPlanText(p guide.IndexPlan) string {
 	for _, l := range []struct {
 		name string
 		ids  []string
-	}{{"create", p.Create}, {"resend", p.Resend}, {"retag", p.Retag}, {"untag", p.Untag}, {"delete", p.Delete}} {
+	}{{"create", p.Create}, {"resend", p.Resend}, {"retag", p.Retag}, {"untag", p.Untag}, {"prune", p.Prune}, {"delete", p.Delete},
+		{"drop docs versions", p.DropVersions}} {
 		fmt.Fprintf(&b, "  %s (%d)", l.name, len(l.ids))
 		if len(l.ids) > 0 {
 			b.WriteString(": " + strings.Join(l.ids, ", "))
 		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "  unchanged: %d\nnothing was changed (--plan)\n", p.Unchanged)
+	fmt.Fprintf(&b, "  unchanged: %d\n", p.Unchanged)
+	if p.RecordVersions {
+		fmt.Fprintf(&b, "  record: %s would hold this docs version's first index time\n", guide.VersionsID)
+	}
+	b.WriteString("nothing was changed (--plan)\n")
 	return b.String()
 }

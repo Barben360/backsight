@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path"
 	"sort"
@@ -75,6 +76,9 @@ func Load(fsys fs.FS) (Corpus, error) {
 			return Corpus{}, err
 		}
 		name := strings.TrimSuffix(path.Base(n), ".md")
+		if "docs:"+name == VersionsID {
+			return Corpus{}, fmt.Errorf("docs file %s: its name is the docs bank's record of versions (%s)", n, VersionsID)
+		}
 		sum.Write([]byte(name + "\x00" + string(raw) + "\x00"))
 		c.Topics = append(c.Topics, parse(name, string(raw)))
 	}

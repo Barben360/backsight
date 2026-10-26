@@ -44,7 +44,7 @@ func withGuideDocs(t *testing.T) guide.Corpus {
 type docsHindsight struct {
 	mu      sync.Mutex
 	docs    map[string]map[string][]string // bank → document id → tags
-	hashes  map[string]string              // document id → section_hash
+	meta    map[string]map[string]string   // document id → its metadata
 	names   map[string]string              // bank → name (PUT)
 	calls   []string
 	rank    []string
@@ -56,7 +56,7 @@ type docsHindsight struct {
 
 func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 	t.Helper()
-	f := &docsHindsight{docs: map[string]map[string][]string{}, hashes: map[string]string{}, names: map[string]string{}, status: map[string]int{}}
+	f := &docsHindsight{docs: map[string]map[string][]string{}, meta: map[string]map[string]string{}, names: map[string]string{}, status: map[string]int{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -114,7 +114,7 @@ func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 			var items []map[string]any
 			if r.URL.Query().Get("offset") == "0" {
 				for id, tags := range docs {
-					items = append(items, map[string]any{"id": id, "tags": tags, "document_metadata": map[string]string{"section_hash": f.hashes[id]}})
+					items = append(items, map[string]any{"id": id, "tags": tags, "document_metadata": f.meta[id]})
 				}
 			}
 			raw, _ := json.Marshal(map[string]any{"items": items, "total": len(docs)})
@@ -130,7 +130,7 @@ func newDocsHindsight(t *testing.T, home string) *docsHindsight {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			for _, it := range body.Items {
 				docs[it.DocumentID] = it.Tags
-				f.hashes[it.DocumentID] = it.Metadata["section_hash"]
+				f.meta[it.DocumentID] = it.Metadata
 				f.retains++
 			}
 			_, _ = w.Write([]byte(`{}`))
@@ -295,7 +295,7 @@ func TestGuideSearchRecallsFromTheDocsBankAndRefreshesItOnce(t *testing.T) {
 		t.Errorf("%+v", env.Data)
 	}
 	for id, tags := range f.docs["claude-memory-docs"] {
-		if len(tags) != 1 || tags[0] != c.Tag() {
+		if id != guide.VersionsID && (len(tags) != 1 || tags[0] != c.Tag()) {
 			t.Errorf("%s tagged %v", id, tags)
 		}
 	}
@@ -396,7 +396,7 @@ func TestUpdateApplyIndexesTheNewBinarysDocs(t *testing.T) {
 	signedRelease(t, src, "0.2.0", key, relOpts{})
 	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
 	env := decodeApply(t, out)
-	if code != output.OK || bins.ran("0.2.0 guide index") != 1 || !hasApplyStep(env.Data.Steps, "docs", "done", "4 section(s) in bank claude-memory-docs") || len(f.docs["claude-memory-docs"]) != 4 {
+	if code != output.OK || bins.ran("0.2.0 guide index") != 1 || !hasApplyStep(env.Data.Steps, "docs", "done", "4 section(s) in bank claude-memory-docs") || len(f.docs["claude-memory-docs"]) != 5 {
 		t.Fatalf("exit %d calls %q\n%s", code, bins.calls, out)
 	}
 	if i, j := applyStepIndex(env.Data.Steps, "server"), applyStepIndex(env.Data.Steps, "docs"); i < 0 || j < i {
@@ -544,10 +544,11 @@ func TestGuideIndexPlanWritesNothing(t *testing.T) {
 	code, out, _ = run(t, "guide", "index", "--plan")
 	if code != output.OK || out != "bank claude-memory-docs would be created, then:\n"+
 		"  create (4): docs:backup, docs:backup#make-a-backup, docs:backup#restore-a-backup, docs:install#uninstall\n"+
-		"  resend (0)\n  retag (0)\n  untag (0)\n  delete (0)\n  unchanged: 0\nnothing was changed (--plan)\n" {
+		"  resend (0)\n  retag (0)\n  untag (0)\n  prune (0)\n  delete (0)\n  drop docs versions (0)\n  unchanged: 0\n"+
+		"  record: docs:_versions would hold this docs version's first index time\nnothing was changed (--plan)\n" {
 		t.Errorf("text plan:\n%s", out)
 	}
-	if code, _, _ := run(t, "guide", "index"); code != output.OK || len(f.docs["claude-memory-docs"]) != 4 {
+	if code, _, _ := run(t, "guide", "index"); code != output.OK || len(f.docs["claude-memory-docs"]) != 5 || f.meta[guide.VersionsID] == nil {
 		t.Errorf("index after the plan: exit %d %v", code, f.docs)
 	}
 }
