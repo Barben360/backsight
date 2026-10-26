@@ -168,7 +168,7 @@ func Default(d paths.Dirs, home string) Config {
 		Recall: Recall{MinScore: 0.5, GlobalMinScore: 0.6, PromptHits: 3, QueryChars: 300, PromptChars: 800, MinGap: 3,
 			RecallMinChars: 60, ReminderMinChars: 40, QuietPrompts: 3, StickyMax: 3, StickyBypass: 0.97,
 			StickyWindowH: 24, ProjectBoost: 0.05, SessionBudgetChars: 6000, Briefing: "model"},
-		LLM:        LLM{Provider: "deepseek", Model: "deepseek-v4-flash", Currency: "USD"},
+		LLM:        LLM{Provider: "deepseek", Model: "deepseek-flash", Currency: "USD"},
 		Embeddings: Embeddings{Preset: "multilingual"},
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},

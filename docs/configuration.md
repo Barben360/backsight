@@ -90,9 +90,9 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | Key | Default | Effect |
 |---|---|---|
 | `llm.provider` | `"deepseek"` | The provider the server calls: `deepseek`, `anthropic`, `openai`, `ollama`, `claude-code`, or another Hindsight provider id. Setup's `provider` answer. Its key is the `llm_api_key` secret. |
-| `llm.model` | `"deepseek-v4-flash"` | The model name, as the provider spells it. |
+| `llm.model` | `"deepseek-flash"` | The model name, as the provider spells it. |
 | `llm.base_url` | `""` | The provider's API address. Empty: the provider's own. Set it for a compatible endpoint, or for Ollama. |
-| `llm.price_input` | `0.0` | Price per million input tokens, for `backsight stats` and the backfill estimate and cap. `0` with `price_output` also `0`: the binary's table, which knows `deepseek-v4-flash` only ($0.14 input, $0.0028 cached, $0.28 output); other models then show tokens without a cost. |
+| `llm.price_input` | `0.0` | Price per million input tokens, for `backsight stats` and the backfill estimate and cap. `0` with `price_output` also `0`: the binary's table, which knows `deepseek-flash` and its retired name `deepseek-v4-flash` only, at DeepSeek's peak prices ($0.30 input, $0.006 cached, $1.20 output per million tokens; off-peak is half, so estimates and the cap never under-count); other models then show tokens without a cost. |
 | `llm.price_cached` | `0.0` | Price per million cached input tokens. `0` with a price set: cached tokens cost the input price. |
 | `llm.price_output` | `0.0` | Price per million output tokens, thinking tokens included. |
 | `llm.currency` | `"USD"` | The currency the prices and caps are in. |

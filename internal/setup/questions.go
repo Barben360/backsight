@@ -64,7 +64,7 @@ type Preset struct {
 // Presets are the providers setup offers, recommended first. Any other
 // Hindsight provider id is accepted as free text (listed, untested).
 var Presets = []Preset{
-	{Provider: "deepseek", Model: "deepseek-v4-flash", Label: "DeepSeek API", Cost: "the cheapest provider tested: about $0.14 per million input tokens",
+	{Provider: "deepseek", Model: "deepseek-flash", Label: "DeepSeek API", Cost: "the cheapest provider tested: $0.15 per million input tokens off-peak, twice that at peak hours",
 		Caveat: "DeepSeek processes and stores data in the People's Republic of China (https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html)"},
 	{Provider: "anthropic", Model: "claude-haiku-5-5", Label: "Anthropic API key, or an Anthropic-compatible URL"},
 	{Provider: "openai", Model: "gpt-5.4-mini", Label: "OpenAI API key, or an OpenAI-compatible URL"},
