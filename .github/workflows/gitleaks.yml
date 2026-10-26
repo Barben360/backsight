@@ -8,11 +8,12 @@ permissions:
   pull-requests: read   # gitleaks-action lists the PR commits; without it, PR scans fail with 403
 jobs:
   scan:
-    runs-on: [self-hosted, backsight]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

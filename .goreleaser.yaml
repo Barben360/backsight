@@ -58,7 +58,9 @@ snapshot:
 
 release:
   prerelease: auto
-  draft: false
+  draft: true
+  # A rerun of the release workflow replaces its own unpublished draft.
+  replace_existing_draft: true
 
 changelog:
   use: git

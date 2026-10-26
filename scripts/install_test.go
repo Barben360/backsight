@@ -193,6 +193,11 @@ func TestInstallVerifiesAndInstallsWithOpenSSL(t *testing.T) {
 
 func TestInstallWithMinisign(t *testing.T) {
 	if _, err := exec.LookPath("minisign"); err != nil {
+		// On CI a skip would silently drop install.sh's minisign path, the
+		// one its users take when they have minisign.
+		if os.Getenv("CI") != "" {
+			t.Fatal("minisign missing on CI: install.sh's minisign path cannot be proved")
+		}
 		t.Skip("minisign missing")
 	}
 	k := newKey(t)
