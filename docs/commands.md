@@ -124,7 +124,7 @@ The OS scheduler (systemd user timers on Linux) runs these; you rarely need them
 | Command | Does |
 |---|---|
 | `backsight jobs tick` | Every 15 minutes: sends settled sessions and queued notes, paces the backfill. |
-| `backsight jobs maintain` | Daily: rotation of the local usage log, backup, update check (and update with `update.auto_apply`), doctor snapshot. |
+| `backsight jobs maintain` | Daily: rotation of the local usage log, backup, then the in-place moves of `retain reattribute` (never a re-send, which costs extraction: doctor shows the ones waiting), update check (and update with `update.auto_apply`), doctor snapshot (it keeps the transverse pool's noise reading, so doctor sees it grow). |
 | `backsight jobs install` | Installs the scheduler entries (setup does it). `--plan`. |
 | `backsight jobs uninstall` | Removes them. `--plan`. |
 | `backsight jobs refresh` | Rewrites entries whose template changed, without stopping a running job (updates do it). `--plan`. |

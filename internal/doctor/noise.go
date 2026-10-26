@@ -51,7 +51,12 @@ func checkNoise(ctx context.Context, env Env, cl *hindsight.Client, tg *target.T
 	var out []Check
 	usable := bank.Status == OK || bank.Status == Warn
 	if usable {
-		out = append(out, checkNoiseTransverse(ctx, cl, tg.Bank, cfg.Projects.Transverse))
+		history, _ := retain.LoadNoise(env.Dirs.State)
+		now := time.Now
+		if env.Now != nil {
+			now = env.Now
+		}
+		out = append(out, noiseTrend(checkNoiseTransverse(ctx, cl, tg.Bank, cfg.Projects.Transverse), history, now()))
 		out = append(out, checkNoiseSubagent(ctx, cl, tg.Bank))
 	} else {
 		why := "skipped: " + skipReason(srv)
@@ -147,6 +152,7 @@ func checkNoiseTransverse(ctx context.Context, cl *hindsight.Client, bank string
 		c.Status, c.Summary, c.Projects = Info, "the transverse pool project:"+alias+" holds no observation", []string{alias}
 		return c
 	}
+	c.Measure = map[string]float64{"named": float64(named), "total": float64(total)}
 	c.Projects = append([]string{alias}, sortedKeys(counts)...)
 	c.Summary = fmt.Sprintf("%d of %d transverse observations (project:%s) name another project", named, total, alias)
 	if top := topCounts(counts, 3); top != "" {
@@ -407,4 +413,67 @@ func sortedKeys(m map[string]int) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// noiseGrowth: a rise of the transverse pool's noise, in points of share
+// over a week, that doctor warns about (decision 0072: nothing diverges
+// unseen).
+const noiseGrowth = 5
+
+// noiseTrend compares c's reading (noise-transverse) with the one jobs
+// maintain kept about a week ago: it says the week's change, and warns
+// when the share of observations naming another project grew by
+// noiseGrowth points or more.
+func noiseTrend(c Check, history []retain.NoisePoint, now time.Time) Check {
+	if c.Measure == nil || c.Measure["total"] < transverseMinN {
+		return c
+	}
+	prev, ok := retain.WeekBefore(history, now)
+	if !ok || prev.Total < transverseMinN {
+		return c
+	}
+	share := 100 * c.Measure["named"] / c.Measure["total"]
+	was := 100 * prev.Share()
+	c.Summary += fmt.Sprintf(" (%.0f%%, %.0f%% a week ago)", share, was)
+	if share-was >= noiseGrowth {
+		c.Status = Warn
+		c.Summary += ": growing"
+		c.Fix = "backsight retain reattribute --plan shows what today's rules would move; backsight doctor's attribution check shows how often turns are filed elsewhere"
+	}
+	return c
+}
+
+// checkReattribution shows what the last re-attribution (retain
+// reattribute, or jobs maintain's daily free moves) left to send again:
+// sessions whose documents mix projects, with the cost of fixing them.
+func checkReattribution(env Env) Check {
+	c := Check{ID: "reattribution", Status: OK}
+	st, ok, err := retain.LoadReattributionStatus(env.Dirs.State)
+	switch {
+	case err != nil:
+		c.Status, c.Summary = Warn, "the last re-attribution's record cannot be read: "+err.Error()
+		return c
+	case !ok:
+		c.Status, c.Summary = Info, "the memory was never judged against today's project rules"
+		c.Fix = "backsight retain reattribute --plan (jobs maintain moves what is free every day after its backup)"
+		return c
+	}
+	when := st.JudgedAt.UTC().Format("2006-01-02")
+	n := len(st.Pending)
+	switch {
+	case n == 0:
+		c.Summary = "nothing left to send again (judged " + when + ")"
+	case st.Declined:
+		c.Status = Info
+		c.Summary = fmt.Sprintf("%d session(s) mix projects in their documents; sending them again was declined (judged %s)", n, when)
+	default:
+		c.Status = Warn
+		cost := fmt.Sprintf("about %d input tokens", st.Cost.InputTokens)
+		if st.Cost.Cost > 0 {
+			cost += fmt.Sprintf(", %.2f", st.Cost.Cost)
+		}
+		c.Summary = fmt.Sprintf("%d session(s) mix projects in their documents (judged %s): sending them again per project costs %s", n, when, cost)
+		c.Fix = "backsight retain reattribute --plan, then backsight retain reattribute --answer resend=yes (or resend=no to keep them)"
+	}
+	return c
 }

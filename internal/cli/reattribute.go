@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -78,8 +79,31 @@ A verified backup comes first. Running it again does nothing more.`,
 
 // runReattribute is retain reattribute: plan, then (with writes to make) a
 // verified backup, the maintenance lock, the plan again under it, the free
-// re-tags, and the re-sends once answered.
+// re-tags, and the re-sends once answered. A run that got that far records
+// what it left to send again, for doctor.
 func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOptions) (reattributeResult, error) {
+	res, err := reattribute(ctx, f, opt)
+	if res.Action == "planned" || res.Action == "" {
+		return res, err
+	}
+	st := retain.ReattributionStatus{JudgedAt: now().UTC(), Retagged: len(res.Retagged), Pending: []retain.Resend{}}
+	for _, r := range res.Plan.Resends {
+		if !slices.Contains(res.Queued, r.Session) {
+			st.Pending = append(st.Pending, r)
+			st.Cost = st.Cost.Add(r.Estimate)
+		}
+	}
+	answers, _ := parseAnswers(f.answers, "")
+	st.Declined = answers["resend"] == "no"
+	if d, _, derr := machine(); derr == nil {
+		if serr := retain.SaveReattributionStatus(d.State, st); serr != nil && err == nil {
+			err = &output.Error{Code: output.Partial, Resume: f.resume(), Message: "done, but what is left was not recorded for doctor: " + serr.Error()}
+		}
+	}
+	return res, err
+}
+
+func reattribute(ctx context.Context, f reattributeFlags, opt reattributeOptions) (reattributeResult, error) {
 	res := reattributeResult{Action: "planned", Retagged: []string{}, Queued: []string{}}
 	answers, err := parseAnswers(f.answers, "")
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/retain"
 )
@@ -351,6 +352,71 @@ func TestDocSessionOfASuccessorID(t *testing.T) {
 	for id, want := range map[string]string{"conversation:s1#2": "s1", "conversation:s1@infra#3": "s1", "conversation:s1@infra": "s1", "subagent:s1:a1": "s1", "note:x": ""} {
 		if got := docSession(id); got != want {
 			t.Errorf("docSession(%s) = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// The transverse noise is compared with the reading jobs maintain kept a
+// week ago: a rise of 5 points or more warns, even under the 20 % bar.
+func TestNoiseTransverseWarnsWhenItGrows(t *testing.T) {
+	named := []string{"trip-2031 uses Astro.", "Trip-2031's deploy is manual.", "ironwood runs on k3s.", "backsight is written in Go."}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		history []retain.NoisePoint
+		status  Status
+		summary string
+	}{
+		{"no history", nil, OK, "4 of 20 transverse observations (project:.claude) name another project: trip-2031 (2), backsight (1), ironwood (1)"},
+		{"from 3 of 20 a week ago: +5 points", []retain.NoisePoint{{At: now.Add(-7 * 24 * time.Hour), Named: 3, Total: 20}}, Warn, "(20%, 15% a week ago): growing"},
+		{"steady", []retain.NoisePoint{{At: now.Add(-7 * 24 * time.Hour), Named: 4, Total: 20}}, OK, "(20%, 20% a week ago)"},
+		{"the closest to a week is used", []retain.NoisePoint{{At: now.Add(-9 * 24 * time.Hour), Named: 0, Total: 20}, {At: now.Add(-7 * 24 * time.Hour), Named: 4, Total: 20}, {At: now.Add(-24 * time.Hour), Named: 0, Total: 20}}, OK, "(20%, 20% a week ago)"},
+		{"a reading too old is no comparison", []retain.NoisePoint{{At: now.Add(-20 * 24 * time.Hour), Named: 0, Total: 20}}, OK, "name another project: trip-2031 (2)"},
+	} {
+		f := noiseFixture(t, &noiseBank{tags: someProjects, observations: pool(20, named...)})
+		f.env.Now = func() time.Time { return now }
+		for _, p := range c.history {
+			if err := retain.RecordNoise(f.env.Dirs.State, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := check(t, f.run(), "noise-transverse")
+		if got.Status != c.status || !strings.Contains(got.Summary, c.summary) {
+			t.Errorf("%s: %s %q, want %s %q", c.name, got.Status, got.Summary, c.status, c.summary)
+		}
+		if c.status == Warn && !strings.Contains(got.Fix, "retain reattribute --plan") {
+			t.Errorf("%s: fix %q", c.name, got.Fix)
+		}
+		if got.Measure["named"] != 4 || got.Measure["total"] != 20 {
+			t.Errorf("%s: measure %v", c.name, got.Measure)
+		}
+	}
+}
+
+func TestReattributionCheckShowsWhatIsLeft(t *testing.T) {
+	at := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		st      *retain.ReattributionStatus
+		status  Status
+		summary string
+		fix     string
+	}{
+		{"never run", nil, Info, "never judged", "retain reattribute --plan"},
+		{"nothing left", &retain.ReattributionStatus{JudgedAt: at, Retagged: 3}, OK, "nothing left to send again (judged 2026-10-25)", ""},
+		{"pending", &retain.ReattributionStatus{JudgedAt: at, Pending: []retain.Resend{{Session: "s1"}, {Session: "s2"}},
+			Cost: retain.Estimate{InputTokens: 120000, Cost: 0.42}}, Warn, "2 session(s) mix projects in their documents (judged 2026-10-25): sending them again per project costs about 120000 input tokens, 0.42", "--answer resend=yes"},
+		{"declined", &retain.ReattributionStatus{JudgedAt: at, Pending: []retain.Resend{{Session: "s1"}}, Declined: true}, Info, "sending them again was declined", ""},
+	} {
+		f := newFixture(t)
+		if c.st != nil {
+			if err := retain.SaveReattributionStatus(f.env.Dirs.State, *c.st); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := checkReattribution(f.env)
+		if got.Status != c.status || !strings.Contains(got.Summary, c.summary) || !strings.Contains(got.Fix, c.fix) {
+			t.Errorf("%s: %+v", c.name, got)
 		}
 	}
 }
