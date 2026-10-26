@@ -53,18 +53,9 @@ func backupKeys(d paths.Dirs, cfg config.Config, sec config.Secrets, create bool
 		if !create {
 			return nil, nil, nil, &output.Error{Code: output.NeedsUser, Message: "no backup identity on this machine: import it with backsight backup identity import"}
 		}
-		id, err := agelib.GenerateX25519Identity()
-		if err != nil {
-			return nil, nil, nil, err
-		}
 		// Under the maintenance lock (the caller holds it): two first runs
-		// cannot both generate. A key set meanwhile is kept, never replaced.
-		if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error {
-			if s.BackupIdentity == "" {
-				return s.Set("backup_identity", id.String())
-			}
-			return nil
-		}); err != nil {
+		// cannot both generate.
+		if _, err := ensureBackupIdentity(d); err != nil {
 			return nil, nil, nil, err
 		}
 		fresh, err := config.LoadSecrets(d.SecretsFile())
@@ -88,6 +79,24 @@ func backupKeys(d paths.Dirs, cfg config.Config, sec config.Secrets, create bool
 		return nil, nil, nil, &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	return recipients, lines, ids, nil
+}
+
+// ensureBackupIdentity generates the backup identity into secrets.toml
+// when it has none (setup, the first backup); one set meanwhile is kept,
+// never replaced. made reports a new one.
+func ensureBackupIdentity(d paths.Dirs) (made bool, err error) {
+	id, err := agelib.GenerateX25519Identity()
+	if err != nil {
+		return false, err
+	}
+	err = config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error {
+		if s.BackupIdentity != "" {
+			return nil
+		}
+		made = true
+		return s.Set("backup_identity", id.String())
+	})
+	return made, err
 }
 
 type backupCreateResult struct {

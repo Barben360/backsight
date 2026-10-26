@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -289,12 +291,19 @@ func TestUninstallDeletesDataOnlyWithTheBankID(t *testing.T) {
 		t.Fatalf("acted without the id: %q %q %q", mutating(m.claude), m.dk.subcommands(), m.sys.calls)
 	}
 
-	code, _, out = uninstall(t, "--delete-data", "--answer", "confirm_bank=claude-memory")
+	code, env, out = uninstall(t, "--delete-data", "--answer", "confirm_bank=claude-memory")
 	if code != output.OK {
 		t.Fatalf("right id: exit %d\n%s", code, out)
 	}
-	if got := m.dk.subcommands(); !reflect.DeepEqual(got, []string{"down --remove-orphans"}) {
+	// The containers go with their anonymous volumes, then the project.
+	if got := m.dk.subcommands(); !reflect.DeepEqual(got, []string{"rm --stop --force -v", "down --remove-orphans"}) {
 		t.Errorf("compose: %q", got)
+	}
+	// The images stay for another install; uninstall says how to remove
+	// them, by digest (they carry no tag).
+	images := "docker image rm " + digestOnly(server.HindsightImage) + " " + digestOnly(server.PostgresImage)
+	if !slices.ContainsFunc(env.Data.NextSteps, func(s string) bool { return strings.Contains(s, images) }) {
+		t.Errorf("no %q in the next steps: %q", images, env.Data.NextSteps)
 	}
 	for _, f := range []string{"compose.yaml", ".env"} {
 		if onDisk(filepath.Join(composeDir(m.home), f)) {
@@ -329,7 +338,7 @@ func TestUninstallAsksForTheBankIDAtATerminal(t *testing.T) {
 	}
 	// The id, then Enter for the retention question (keep).
 	atTerminal(t, "claude-memory\n\n")
-	if code, out, errOut := run(t, "uninstall", "--delete-data"); code != output.OK || !reflect.DeepEqual(m.dk.subcommands(), []string{"down --remove-orphans"}) {
+	if code, out, errOut := run(t, "uninstall", "--delete-data"); code != output.OK || !reflect.DeepEqual(m.dk.subcommands(), []string{"rm --stop --force -v", "down --remove-orphans"}) || !strings.Contains(out, "next: ") || !strings.Contains(out, "docker image rm ") {
 		t.Fatalf("typed: exit %d %q\n%s%s", code, m.dk.subcommands(), out, errOut)
 	}
 	if !strings.Contains(readFile(t, m.settings), "3650") {
@@ -490,5 +499,30 @@ func TestUninstallOnAnEmptyMachine(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(env.Data.Kept, " "), "server's data") {
 		t.Errorf("claims to keep a server that is not there: %q", env.Data.Kept)
+	}
+}
+
+// digestOnly is an image reference without its tag: repo@sha256:….
+func digestOnly(ref string) string {
+	repo, digest, ok := strings.Cut(ref, "@")
+	if !ok {
+		return ref
+	}
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	return repo + "@" + digest
+}
+
+// Without --delete-data the server keeps running on its images: no
+// command to remove them.
+func TestUninstallKeepingTheServerSaysNothingOfItsImages(t *testing.T) {
+	installMachine(t)
+	code, env, out := uninstall(t, "--stop")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Contains(out, "docker image rm") {
+		t.Errorf("image removal offered for a kept server: %q", env.Data.NextSteps)
 	}
 }

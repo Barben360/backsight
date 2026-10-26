@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +103,42 @@ func TestDockerEngine(t *testing.T) {
 	}
 }
 
+// Docker CLI 26 exits 0 when it cannot reach the daemon and prints the
+// error where the version goes; 29 exits 1. Either way the engine is not
+// usable, Docker's own words reach the caller, and no word of the error is
+// taken for a version.
+func TestDockerEngineUnreachableOnDocker26And29(t *testing.T) {
+	ctx := context.Background()
+	const denied = `permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.45/info": dial unix /var/run/docker.sock: connect: permission denied` + "\n \n"
+	const down = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n \n"
+	cases := []struct {
+		name, out string
+		err       error
+		want      string
+	}{
+		{"26 permission", denied, nil, "permission denied"},
+		{"26 daemon down", down, nil, "Cannot connect to the Docker daemon"},
+		{"29 permission", denied, errors.New("exit status 1"), "permission denied"},
+		{"29 daemon down", down, errors.New("exit status 1"), "Cannot connect to the Docker daemon"},
+		{"26 empty", " \n", nil, "no version"},
+	}
+	for _, c := range cases {
+		e, err := Docker{Compose: Compose{Runner: &fakeRunner{out: []byte(c.out), err: c.err}}}.Engine(ctx)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: engine %+v, err %v; want an error containing %q", c.name, e, err, c.want)
+		}
+		if e.Version != "" {
+			t.Errorf("%s: version %q from an error", c.name, e.Version)
+		}
+	}
+	// Versions as each release prints them stay versions.
+	for _, v := range []string{"26.1.5", "29.0.1", "28.1.1-rd", "27.3.1+dfsg1"} {
+		if e, err := (Docker{Compose: Compose{Runner: &fakeRunner{out: []byte(v + " name=seccomp,profile=builtin \n")}}}).Engine(ctx); err != nil || e.Version != v {
+			t.Errorf("%s: %+v %v", v, e, err)
+		}
+	}
+}
+
 // scriptedRunner answers each docker command by its first words.
 type scriptedRunner struct {
 	calls   [][]string
@@ -149,10 +186,10 @@ func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 	}
 	failing := &fakeRunner{out: []byte("Cannot connect to the Docker daemon"), err: errors.New("exit status 1")}
 	if err := (Docker{Compose: Compose{Dir: dir, Runner: failing}}).Delete(context.Background()); err == nil || !strings.Contains(err.Error(), "Cannot connect") {
-		t.Fatalf("a failed down: %v", err)
+		t.Fatalf("a failed removal: %v", err)
 	}
 	if len(failing.calls) != 1 {
-		t.Errorf("went on after a failed down: %q", failing.calls)
+		t.Errorf("went on after a failed removal: %q", failing.calls)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".env")); err != nil {
 		t.Fatal("a failed down removed the files")
@@ -162,7 +199,9 @@ func TestDockerDeleteRemovesServerDataAndItsFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := []string{"compose", "-p", "p1", "--project-directory", dir, "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml")}
-	want := [][]string{append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
+	// The containers go first with their anonymous volumes (the database
+	// image declares one at /var/lib/postgresql), which down would leave.
+	want := [][]string{append(append([]string{}, base...), "rm", "--stop", "--force", "-v"), append(append([]string{}, base...), "down", "--remove-orphans"), {"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Errorf("docker ran\n%q\nwant\n%q", r.calls, want)
 	}
@@ -226,5 +265,93 @@ func TestDockerStopCmd(t *testing.T) {
 	// macOS's data directory has a space: the command stays one word per path.
 	if cmd := (Docker{Compose: Compose{Dir: "/Users/u/Library/Application Support/backsight/server"}}).StopCmd(); !strings.Contains(cmd, "'/Users/u/Library/Application Support/backsight/server'") {
 		t.Errorf("unquoted path: %q", cmd)
+	}
+}
+
+// streamRunner is a scriptedRunner whose pulls stream progress lines.
+type streamRunner struct {
+	scriptedRunner
+	pullErr error
+}
+
+func (r *streamRunner) Stream(_ context.Context, w io.Writer, args ...string) error {
+	r.calls = append(r.calls, args)
+	_, _ = io.WriteString(w, "a1b2: Pulling fs layer\na1b2: Downloading [=====>     ]  52MB/1GB\n")
+	if r.pullErr != nil {
+		_, _ = io.WriteString(w, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
+		return r.pullErr
+	}
+	_, _ = io.WriteString(w, "a1b2: Pull complete\n")
+	return nil
+}
+
+// Downloads names the images Docker lacks and a missing model cache;
+// Download streams Docker's progress and keeps its last words on failure.
+func TestDockerDownloads(t *testing.T) {
+	ctx := context.Background()
+	noImage := struct {
+		out string
+		err error
+	}{"Error response from daemon: No such image: x", errors.New("exit status 1")}
+	r := &streamRunner{scriptedRunner: scriptedRunner{answers: map[string]struct {
+		out string
+		err error
+	}{
+		"image inspect --format {{.Id}} " + HindsightImage: noImage,
+		"volume inspect p1_hf_cache":                       {"Error response from daemon: get p1_hf_cache: no such volume", errors.New("exit status 1")},
+	}}}
+	d := Docker{Compose: Compose{Runner: r, Project: "p1"}}
+	images, models, err := d.Downloads(ctx)
+	if err != nil || len(images) != 1 || images[0] != HindsightImage || !models {
+		t.Fatalf("downloads %v %v %v", images, models, err)
+	}
+	if mb := DownloadMB(images, models); mb != HindsightImageMB+ModelsMB {
+		t.Errorf("%d MB", mb)
+	}
+	var shown strings.Builder
+	if err := d.Download(ctx, images, &shown); err != nil || !strings.Contains(shown.String(), "Downloading [=====>") {
+		t.Errorf("progress %q %v", shown.String(), err)
+	}
+	if last := r.calls[len(r.calls)-1]; strings.Join(last, " ") != "pull "+HindsightImage {
+		t.Errorf("pull %q", last)
+	}
+	r.pullErr = errors.New("exit status 1")
+	if err := d.Download(ctx, images, io.Discard); err == nil || !strings.Contains(err.Error(), "no such host") {
+		t.Errorf("a failed pull must say why: %v", err)
+	}
+
+	// Everything there: nothing to download.
+	all := &scriptedRunner{}
+	if images, models, err := (Docker{Compose: Compose{Runner: all, Project: "p1"}}).Downloads(ctx); err != nil || len(images) != 0 || models {
+		t.Errorf("cached: %v %v %v", images, models, err)
+	}
+	// Docker unusable: an error, never "everything to download".
+	down := &scriptedRunner{answers: map[string]struct {
+		out string
+		err error
+	}{"image inspect": {"Cannot connect to the Docker daemon", errors.New("exit status 1")}}}
+	if _, _, err := (Docker{Compose: Compose{Runner: down}}).Downloads(ctx); err == nil {
+		t.Error("an unusable Docker reads as a download")
+	}
+}
+
+// Untagged images are removed by repo@digest: the tag goes, a registry's
+// port stays.
+func TestImagesRemoveCmdNamesImagesByDigest(t *testing.T) {
+	for in, want := range map[string]string{
+		"ghcr.io/vectorize-io/hindsight:1.1.0@sha256:abc": "ghcr.io/vectorize-io/hindsight@sha256:abc",
+		"localhost:5000/hindsight:dev@sha256:abc":         "localhost:5000/hindsight@sha256:abc",
+		"localhost:5000/hindsight@sha256:abc":             "localhost:5000/hindsight@sha256:abc",
+		"hindsight:dev":                                   "hindsight:dev",
+	} {
+		if got := byDigest(in); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+	dir := t.TempDir()
+	renderedProject(t, dir)
+	cmd := Docker{Compose: Compose{Dir: dir, Project: "p1"}}.ImagesRemoveCmd()
+	if !strings.HasPrefix(cmd, "docker image rm ghcr.io/vectorize-io/hindsight@sha256:") || !strings.HasSuffix(cmd, " pgvector/pgvector@sha256:"+strings.SplitN(PostgresImage, "@sha256:", 2)[1]) {
+		t.Errorf("%q", cmd)
 	}
 }

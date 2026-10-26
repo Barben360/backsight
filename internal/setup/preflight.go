@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -45,9 +46,10 @@ type Probes struct {
 	Compose func(ctx context.Context) (string, error)
 	// PortFree reports whether a loopback port can be bound.
 	PortFree func(port int) bool
-	// OwnServer: backsight's configured server already answers (adoption),
-	// so its ports being taken is expected.
-	OwnServer bool
+	// OwnPorts are the ports backsight's own server publishes now (its
+	// compose project runs): adopted, or started by an earlier setup run
+	// that stopped later (a failed LLM check). Those being taken is expected.
+	OwnPorts []int
 	// ServerInstalled: the compose project exists; the disk floor is then
 	// a warning, the image is already there.
 	ServerInstalled bool
@@ -156,7 +158,7 @@ func portCheck(p Probes, id string, port int) Check {
 	switch {
 	case p.PortFree(port):
 		c.Status, c.Summary = OK, fmt.Sprintf("port %d free", port)
-	case p.OwnServer:
+	case slices.Contains(p.OwnPorts, port):
 		c.Status, c.Summary = OK, fmt.Sprintf("port %d: backsight's server already runs", port)
 	default:
 		c.Status, c.Class, c.Summary = Fail, "blocked", fmt.Sprintf("port %d is taken by another program", port)

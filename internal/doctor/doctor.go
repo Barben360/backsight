@@ -13,8 +13,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
+
+	"filippo.io/age"
 
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/buildinfo"
@@ -212,9 +215,12 @@ func checkDocker(ctx context.Context, env Env) Check {
 	case errors.Is(err, exec.ErrNotFound):
 		c.Status, c.Summary = Warn, "Docker is not installed"
 		c.Fix = "install Docker Engine (Linux) or Docker Desktop: https://docs.docker.com/get-docker/"
+	case err != nil && strings.Contains(strings.ToLower(err.Error()), "permission denied"):
+		c.Status, c.Summary, c.Detail = Warn, "Docker is running but your user cannot use it without sudo", err.Error()
+		c.Fix = "sudo usermod -aG docker $USER, then log out and back in"
 	case err != nil:
 		c.Status, c.Summary, c.Detail = Warn, "Docker is not running or not usable", err.Error()
-		c.Fix = "start Docker (systemctl start docker) and check that your user can run docker without sudo"
+		c.Fix = "start Docker (systemctl start docker, or open Docker Desktop)"
 	default:
 		c.Status, c.Summary = OK, "Docker "+v
 	}
@@ -430,22 +436,55 @@ func checkBackup(env Env, now time.Time) Check {
 		c.Status, c.Summary, c.Detail = Warn, "cannot list the backups", err.Error()
 		return c
 	}
+	// Only an archive made for this machine's backup key or a configured
+	// recipient is this install's: one a previous install encrypted to a
+	// purged key cannot be restored here. An archive whose sidecar is gone
+	// names no recipient and counts.
+	ours := backupRecipients(env, cfg)
 	var last time.Time
+	kept, foreign := 0, 0
 	for _, e := range list {
+		if len(e.Manifest.Recipients) > 0 && !slices.ContainsFunc(e.Manifest.Recipients, func(r string) bool { return ours[strings.TrimSpace(r)] }) {
+			foreign++
+			continue
+		}
+		kept++
 		if e.Manifest.CreatedAt.After(last) {
 			last = e.Manifest.CreatedAt
 		}
 	}
+	if foreign > 0 {
+		c.Detail = fmt.Sprintf("%d archive(s) in %s were made for another backup key: this machine cannot decrypt them (backsight backup identity import adds that key)", foreign, cfg.Backup.Dir)
+	}
 	fix := "backsight backup create; if jobs maintain makes none, see its log (journalctl --user -u backsight-maintain)"
 	switch age := now.Sub(last); {
+	case last.IsZero() && foreign > 0:
+		c.Status, c.Summary, c.Fix = Warn, "no backup of this install yet", fix
 	case last.IsZero():
 		c.Status, c.Summary, c.Fix = Warn, "no backup in "+cfg.Backup.Dir, fix
 	case age > 48*time.Hour:
 		c.Status, c.Summary, c.Fix = Warn, fmt.Sprintf("last backup %.0f days ago (%s)", age.Hours()/24, last.UTC().Format("2006-01-02 15:04")), fix
 	default:
-		c.Status, c.Summary = OK, fmt.Sprintf("last backup %s UTC, %d kept", last.UTC().Format("2006-01-02 15:04"), len(list))
+		c.Status, c.Summary = OK, fmt.Sprintf("last backup %s UTC, %d kept", last.UTC().Format("2006-01-02 15:04"), kept)
 	}
 	return c
+}
+
+// backupRecipients are the recipients this install's backups are made
+// for: the configured ones and the public half of the backup identity.
+func backupRecipients(env Env, cfg config.Config) map[string]bool {
+	out := map[string]bool{}
+	for _, r := range strings.Split(cfg.Backup.Recipient, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out[r] = true
+		}
+	}
+	if sec, err := config.LoadSecrets(env.Dirs.SecretsFile()); err == nil && sec.BackupIdentity != "" {
+		if id, err := age.ParseX25519Identity(sec.BackupIdentity); err == nil {
+			out[id.Recipient().String()] = true
+		}
+	}
+	return out
 }
 
 // checkWrites reports what has not reached the server: queued notes and

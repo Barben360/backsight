@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/setup"
 )
 
 // stdin and stdinIsTerminal are replaced by tests.
@@ -113,8 +114,17 @@ func newSecretSetCmd(e *env) *cobra.Command {
 				}
 				return &output.Error{Code: code, Message: err.Error()}
 			}
-			return e.emit("secret set", map[string]string{"name": name, "file": d.SecretsFile()}, func() string {
-				return name + " saved in " + d.SecretsFile() + "\n"
+			out := map[string]string{"name": name, "file": d.SecretsFile()}
+			// A setup run that stopped goes on from where it stopped.
+			if rec, err := setup.Load(d.SetupFile()); err == nil && rec != nil && !rec.Finished {
+				out["next"] = setupResume
+			}
+			return e.emit("secret set", out, func() string {
+				text := name + " saved in " + d.SecretsFile() + "\n"
+				if out["next"] != "" {
+					text += "then run: " + out["next"] + "\n"
+				}
+				return text
 			})
 		},
 	}

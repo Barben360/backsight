@@ -424,13 +424,22 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	}
 	saveRecord(func(u *setup.Undo) { u.ClientProfiles = nil })
 
-	// 4. The server: kept, stopped, or deleted with its data.
+	// 4. The server: kept, stopped, or deleted with its data. Its images
+	// stay for a later install; how to remove them is said, read before
+	// the server's files go.
+	imagesCmd := ""
+	if res.Server == "delete-data" && cfg.Server.Mode == "local" && deployed != "" {
+		imagesCmd = runtimeFor(cfg).ImagesRemoveCmd()
+	}
 	if a, err := uninstallServer(ctx, cfg, res.Server, f.plan); err != nil {
 		return fail("server", err)
 	} else {
 		add(a)
 		if a.Status == "done" {
 			saveRecord(func(u *setup.Undo) { u.ServerStarted = false })
+		}
+		if imagesCmd != "" && (a.Status == "done" || a.Status == "planned") {
+			res.NextSteps = append(res.NextSteps, "the server's images stay on disk (about 3 GB) for another install to reuse; remove them with: "+imagesCmd)
 		}
 	}
 

@@ -780,6 +780,13 @@ func checkProvider(ctx context.Context, cfg config.Config, sec config.Secrets) (
 		return server.ProviderResult{}, blocked(err)
 	}
 	res, err := server.CheckProvider(ctx, cl, cfg.Server.Bank, cfg.LLM.Provider)
+	var pe *server.ProviderError
+	if errors.As(err, &pe) && pe.KeyRejected {
+		// The user's to fix: the key, then the same command again.
+		return res, &output.Error{Code: output.NeedsUser, Secrets: []string{"llm_api_key"},
+			Message: pe.Error() + ": set the right key with backsight secret set llm_api_key",
+			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight secret set llm_api_key", Why: "the provider refused the key the server was given"}}}
+	}
 	if err != nil {
 		return res, redacted(err, sec) // provider errors may echo a key
 	}
@@ -842,7 +849,9 @@ func serverLockFor(d paths.Dirs, command string, keyStep bool) (func(), error) {
 func redacted(err error, sec config.Secrets) error {
 	var oe *output.Error
 	if errors.As(err, &oe) {
-		return &output.Error{Code: oe.Code, Message: server.Redact(oe.Message, sec)}
+		out := *oe
+		out.Message = server.Redact(oe.Message, sec)
+		return &out
 	}
 	return &output.Error{Code: output.Blocked, Message: server.Redact(err.Error(), sec)}
 }

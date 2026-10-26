@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,20 @@ func (r DockerRunner) command(ctx context.Context, args ...string) *exec.Cmd {
 
 func (r DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	return r.command(ctx, args...).CombinedOutput()
+}
+
+// Streamer runs a command with its output going to w as it comes (an
+// image pull's progress at a terminal).
+type Streamer interface {
+	Stream(ctx context.Context, w io.Writer, args ...string) error
+}
+
+// Stream runs docker with stdout and stderr on w: a terminal gets
+// Docker's own progress bars.
+func (r DockerRunner) Stream(ctx context.Context, w io.Writer, args ...string) error {
+	cmd := r.command(ctx, args...)
+	cmd.Stdout, cmd.Stderr = w, w
+	return cmd.Run()
 }
 
 // StdoutRunner can return a command's stdout alone, stderr only in the
@@ -159,8 +174,13 @@ func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 // DataVolume is the database volume Compose creates for the project.
 func (c Compose) DataVolume() string { return c.project() + "_" + dataVolume }
 
-// dataVolume is the database volume as compose.yaml declares it.
-const dataVolume = "pg_data"
+// dataVolume is the database volume as compose.yaml declares it;
+// modelsVolume holds the embedding models the server downloads at its
+// first start.
+const (
+	dataVolume   = "pg_data"
+	modelsVolume = "hf_cache"
+)
 
 // VolumeExists reports whether the project's database volume exists: its
 // password was fixed when it was created.

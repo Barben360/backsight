@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
+
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
@@ -309,8 +311,17 @@ func TestDockerStates(t *testing.T) {
 	f.env.Docker = func(context.Context) (string, error) { return "", errors.New("Cannot connect to the Docker daemon") }
 	c := check(t, f.run(), "docker")
 	expect(t, c, Warn, "not running")
-	if !strings.Contains(c.Detail, "Cannot connect") {
-		t.Errorf("detail: %q", c.Detail)
+	if !strings.Contains(c.Detail, "Cannot connect") || !strings.Contains(c.Fix, "systemctl start docker") || strings.Contains(c.Fix, "usermod") {
+		t.Errorf("daemon down: %+v", c)
+	}
+	// Without the docker group the fix is the group, not a start.
+	f.env.Docker = func(context.Context) (string, error) {
+		return "", errors.New("docker info: permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock")
+	}
+	c = check(t, f.run(), "docker")
+	expect(t, c, Warn, "cannot use it without sudo")
+	if !strings.Contains(c.Fix, "sudo usermod -aG docker $USER") || !strings.Contains(c.Fix, "log out") {
+		t.Errorf("permission: %+v", c)
 	}
 }
 
@@ -668,6 +679,52 @@ func TestCheckBackupAge(t *testing.T) {
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\nenabled = false\n", 0o600)
 	if c := checkBackup(f.env, now); c.Status != Info || !strings.Contains(c.Summary, "backups are off") {
 		t.Errorf("off: %+v", c)
+	}
+}
+
+// archive writes a backup and its sidecar, encrypted for recipients.
+func archive(t *testing.T, dir string, at time.Time, recipients ...string) {
+	t.Helper()
+	p := filepath.Join(dir, backup.Name(at))
+	put(t, p, "x", 0o600)
+	raw, _ := json.Marshal(backup.Manifest{Format: 1, CreatedAt: at, Bank: "claude-memory", Recipients: recipients})
+	put(t, p+".json", string(raw), 0o600)
+}
+
+// After a reinstall, the archives of the previous install were made for a
+// backup key this machine no longer has: they are not this install's
+// backups, and doctor says so instead of ok.
+func TestCheckBackupCountsOnlyArchivesThisMachineCanRead(t *testing.T) {
+	f := newFixture(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	dir := filepath.Join(f.home, "bk")
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	old, _ := age.GenerateX25519Identity()
+	mine, _ := age.GenerateX25519Identity()
+	archive(t, dir, now.Add(-2*time.Hour), old.Recipient().String())
+
+	// No identity at all (purged with the previous install).
+	c := checkBackup(f.env, now)
+	if c.Status != Warn || !strings.Contains(c.Summary, "no backup of this install") || !strings.Contains(c.Detail, "1 archive(s)") || !strings.Contains(c.Fix, "backup create") {
+		t.Errorf("no identity: %+v", c)
+	}
+	// A new identity: the old archive is still not readable here.
+	put(t, f.env.Dirs.SecretsFile(), "backup_identity = \""+mine.String()+"\"\n", 0o600)
+	if c := checkBackup(f.env, now); c.Status != Warn || !strings.Contains(c.Summary, "no backup of this install") {
+		t.Errorf("another identity: %+v", c)
+	}
+	// This machine's first backup counts; the old one is named apart.
+	archive(t, dir, now.Add(-1*time.Hour), mine.Recipient().String())
+	c = checkBackup(f.env, now)
+	if c.Status != OK || !strings.Contains(c.Summary, "2026-10-25 11:00 UTC, 1 kept") || !strings.Contains(c.Detail, "1 archive(s)") {
+		t.Errorf("one of ours: %+v", c)
+	}
+	// A configured recipient (the identity kept elsewhere) is this install's.
+	other, _ := age.GenerateX25519Identity()
+	archive(t, dir, now.Add(-30*time.Minute), other.Recipient().String())
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+dir+"\"\nrecipient = \""+other.Recipient().String()+"\"\n", 0o600)
+	if c := checkBackup(f.env, now); c.Status != OK || !strings.Contains(c.Summary, "11:30 UTC, 2 kept") {
+		t.Errorf("configured recipient: %+v", c)
 	}
 }
 
