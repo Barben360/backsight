@@ -18,15 +18,18 @@ import (
 
 const (
 	tagsPath    = "/v1/default/banks/coding-agent%3A%3Amemoire/tags"
+	docsPath    = "/v1/default/banks/coding-agent%3A%3Amemoire/documents"
 	noisePage   = 7 // the fake server's page size, below the client's: every list paginates
 	transverse0 = ".claude"
 )
 
-// noiseBank fakes the memory bank's tags and the transverse pool's
-// observations, paginated, and records what was read.
+// noiseBank fakes the memory bank's tags, the transverse pool's
+// observations and the documents with their memories, paginated, and
+// records what was read.
 type noiseBank struct {
 	tags         map[string]int // tag -> count
 	observations []string       // texts tagged project:.claude
+	docs         []noiseDoc
 	mu           sync.Mutex
 	reads        []string // path?query of every tags and list request
 }
@@ -50,8 +53,18 @@ func (b *noiseBank) server(t *testing.T) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": n})
 		}
-		switch path {
-		case tagsPath:
+		switch {
+		case path == docsPath:
+			page(len(b.docs), func(i int) any { return map[string]any{"id": b.docs[i].id, "tags": []string{b.docs[i].tag}} })
+		case path == listPath && q.Has("document_id"):
+			var facts []map[string]any
+			for _, d := range b.docs {
+				if d.id == q.Get("document_id") {
+					facts = d.facts
+				}
+			}
+			page(len(facts), func(i int) any { return facts[i] })
+		case path == tagsPath:
 			var names []string
 			for tag := range b.tags {
 				if strings.HasPrefix(tag, strings.TrimSuffix(q.Get("q"), "*")) {
@@ -60,7 +73,7 @@ func (b *noiseBank) server(t *testing.T) *httptest.Server {
 			}
 			sort.Strings(names)
 			page(len(names), func(i int) any { return map[string]any{"tag": names[i], "count": b.tags[names[i]]} })
-		case listPath:
+		case path == listPath:
 			// Untagged lists every observation; the noise check only the pool.
 			if q.Has("tags") && (q.Get("type") != "observation" || q.Get("tags") != "project:"+transverse0 || q.Get("tags_match") != "any_strict") {
 				t.Errorf("transverse list query: %s", r.URL.RawQuery)
@@ -107,7 +120,7 @@ var someProjects = map[string]int{"project:.claude": 40, "project:trip-2031": 9,
 
 // Exactly 20 % is not above the threshold; one more named observation is.
 func TestNoiseTransverseThreshold(t *testing.T) {
-	named := []string{"Branch content/v1 in Barben360/trip-2031 holds two commits.", "trip-2031 uses Astro.", "Trip-2031's deploy is manual.",
+	named := []string{"Branch content/v1 in example/trip-2031 holds two commits.", "trip-2031 uses Astro.", "Trip-2031's deploy is manual.",
 		"ironwood runs on k3s."}
 	b := &noiseBank{tags: someProjects, observations: pool(20, named...)}
 	c := check(t, noiseFixture(t, b).run(), "noise-transverse")
@@ -126,7 +139,7 @@ func TestNoiseTransverseThreshold(t *testing.T) {
 	}
 	// report scrubs the names the check counted, the ones left out of the
 	// summary too, and the alias its fix names.
-	if got, want := strings.Join(c.Projects, ","), ".claude,backsight,ironwood,crawler,trip-2031"; got != want {
+	if got, want := strings.Join(c.Projects, ","), ".claude,backsight,crawler,ironwood,trip-2031"; got != want {
 		t.Errorf("projects %q, want %q", got, want)
 	}
 
@@ -158,11 +171,11 @@ func TestNoiseTransverseTooFewOrEmpty(t *testing.T) {
 func TestNoiseTransverseMatchesWholeNames(t *testing.T) {
 	tags := map[string]int{"project:.claude": 1, "project:home": 1, "project:api": 1, "project:infra": 1, "project:my-garage": 1, "project:garage": 1}
 	texts := []string{
-		"The infrastructure is in Terraform.",         // not infra
-		"The home directory holds dotfiles.",          // home is a transverse alias
-		"The api answers in JSON.",                    // api is under 4 characters
+		"The infrastructure is in Terraform.",        // not infra
+		"The home directory holds dotfiles.",         // home is a transverse alias
+		"The api answers in JSON.",                   // api is under 4 characters
 		"Deployed my-garage today.",                  // my-garage, not garage
-		"INFRA moved to OpenTofu.",                    // infra, any case
+		"INFRA moved to OpenTofu.",                   // infra, any case
 		"(infra) and \"my-garage\".",                 // punctuation is a boundary
 		"garage_backup and infra-tools run nightly.", // '_' and '-' join a word
 	}
@@ -241,6 +254,22 @@ func TestNoiseSkippedWhenServerDown(t *testing.T) {
 	}
 }
 
+// noiseDoc is a document of the bank, its project tag and its memories.
+type noiseDoc struct {
+	id, tag string
+	facts   []map[string]any
+}
+
+// doc is document id of project p with raw facts in the given states
+// ("" live) after one observation, the fact ids f-<id>-<n>.
+func doc(id, p string, states ...string) noiseDoc {
+	d := noiseDoc{id: id, tag: "project:" + p, facts: []map[string]any{{"id": "o-" + id, "fact_type": "observation"}}}
+	for n, s := range states {
+		d.facts = append(d.facts, map[string]any{"id": fmt.Sprintf("f-%s-%d", id, n), "fact_type": "world", "state": s})
+	}
+	return d
+}
+
 // sentSession writes a transcript started in cwd from entrypoint and its
 // cursor with records sent.
 func sentSession(t *testing.T, f *fixture, sid, entrypoint, cwd string, records int) {
@@ -257,10 +286,12 @@ func sentSession(t *testing.T, f *fixture, sid, entrypoint, cwd string, records 
 	}
 }
 
-// A headless session that sent records warns with its project and the
-// forget fix; an interactive one, and a headless one that sent nothing
-// (skipped since C1), are ignored. A headless session in the transverse
-// pool is named but left out of the fix.
+// A headless session warns only while the bank holds a live raw fact of
+// one of its documents (decision 0071, M5 review rules): a purged or
+// forgotten project stops warning. A project that also holds other
+// sessions, like the transverse pool, gets its headless documents named,
+// never forget --project. Interactive sessions and headless ones that sent
+// nothing (skipped since C1) are ignored.
 func TestNoiseHeadlessSessions(t *testing.T) {
 	b := &noiseBank{tags: someProjects}
 	f := noiseFixture(t, b)
@@ -271,20 +302,46 @@ func TestNoiseHeadlessSessions(t *testing.T) {
 	sentSession(t, f, "s2", "cli", filepath.Join(work, "billing"), 5)
 	sentSession(t, f, "s3", "sdk-cli", filepath.Join(work, "workspace"), 0)
 	sentSession(t, f, "s4", "sdk-cli", filepath.Join(work, "crawler"), 1)
-	c := check(t, f.run(), "noise-headless")
-	expect(t, c, Warn, "2 headless session(s) were sent before privacy.skip_entrypoints: notes-bot (1), crawler (1)")
-	if c.Fix != "backsight forget --project notes-bot --plan; backsight forget --project crawler --plan" ||
-		strings.Contains(c.Summary, "billing") || strings.Contains(c.Summary, "workspace") {
-		t.Errorf("%+v", c)
-	}
+	sentSession(t, f, "s6", "sdk-cli", filepath.Join(work, "billing"), 2)
+	sentSession(t, f, "s7", "sdk-cli", filepath.Join(work, "elsewhere"), 1)
+	// Purged: the bank holds none of their documents any more.
+	expect(t, check(t, f.run(), "noise-headless"), OK, "the 4 headless session(s) sent before privacy.skip_entrypoints hold no memory any more")
 
-	sentSession(t, f, "s5", "sdk-cli", f.home, 2)
-	c = check(t, f.run(), "noise-headless")
-	expect(t, c, Warn, "3 headless session(s)")
-	if !strings.Contains(c.Summary, ".claude (1)") || strings.Contains(c.Fix, "--project .claude") || !strings.Contains(c.Detail, "not .claude") {
+	b.docs = []noiseDoc{
+		doc("conversation:s1", "notes-bot", ""),
+		doc("subagent:s1:a1", "notes-bot", ""),
+		doc("conversation:s2", "billing", ""),
+		doc("conversation:s3", "workspace", ""),
+		doc("conversation:s4", "crawler", "invalidated", ""),
+		doc("conversation:s6", "billing", "", ""),
+		doc("conversation:s7@crawler", "crawler", ""), // the bank's label wins
+		doc("conversation:s9", "other", ""),
+	}
+	c := check(t, f.run(), "noise-headless")
+	expect(t, c, Warn, "4 headless session(s) sent before privacy.skip_entrypoints still have memories: crawler (2), billing (1), notes-bot (1)")
+	if want := "backsight forget f-conversation:s6-0 --purge (document conversation:s6); backsight forget --project crawler --plan; backsight forget --project notes-bot --plan"; c.Fix != want {
+		t.Errorf("fix %q, want %q", c.Fix, want)
+	}
+	if !strings.Contains(c.Detail, "billing also hold other sessions") || strings.Contains(c.Summary, "workspace") || strings.Contains(c.Summary, "elsewhere") {
 		t.Errorf("%+v", c)
 	}
-	if got, want := strings.Join(c.Projects, ","), ".claude,notes-bot,crawler"; got != want {
+	if got, want := strings.Join(c.Projects, ","), "billing,crawler,notes-bot"; got != want {
 		t.Errorf("projects %q, want %q (what report scrubs)", got, want)
 	}
+
+	// Forgotten without --purge: only observations and retired facts are
+	// left, nothing to clean.
+	b.docs = []noiseDoc{doc("conversation:s1", "notes-bot", "invalidated"), doc("conversation:s4", "crawler")}
+	expect(t, check(t, f.run(), "noise-headless"), OK, "hold no memory any more")
+
+	sentSession(t, f, "s5", "sdk-cli", f.home, 2)
+	b.docs = []noiseDoc{doc("conversation:s5", ".claude", "")}
+	c = check(t, f.run(), "noise-headless")
+	expect(t, c, Warn, "1 headless session(s) sent before privacy.skip_entrypoints still have memories: .claude (1)")
+	if c.Fix != "backsight forget f-conversation:s5-0 --purge (document conversation:s5)" || !strings.Contains(c.Detail, ".claude also hold other sessions") {
+		t.Errorf("the transverse pool is never forgotten whole: %+v", c)
+	}
+
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	expect(t, check(t, f.run(), "noise-headless"), Info, "5 headless session(s) were sent before privacy.skip_entrypoints; the bank was not read: server not usable")
 }

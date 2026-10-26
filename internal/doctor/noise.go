@@ -28,6 +28,9 @@ const (
 	transverseMinN      = 20
 	projectNameMinChars = 4 // shorter names match too much ordinary text
 	headlessScan        = 1 << 20
+	headlessDocsMax     = 100 // headless documents checked for a live fact
+	headlessFixesMax    = 10
+	unknownProject      = "(unknown project)"
 )
 
 // transverseReadMax bounds the observations read from the transverse pool;
@@ -36,22 +39,24 @@ var transverseReadMax = 2000
 
 var errReadMax = errors.New("read bound reached")
 
-// checkNoise runs the noise checks: the server-side ones when the bank
-// check passed, else skipped like untagged; the local one always.
+// checkNoise runs the noise checks when the bank check passed, else skips
+// them like untagged; noise-headless reads the cursors first and the bank
+// only when this machine sent a headless session.
 func checkNoise(ctx context.Context, env Env, cl *hindsight.Client, tg *target.Target, bank, srv Check) []Check {
 	cfg, err := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home)
 	if err != nil {
 		cfg = config.Default(env.Dirs, env.Home) // the reference install: backsight's defaults
 	}
 	var out []Check
-	if bank.Status == OK || bank.Status == Warn {
+	usable := bank.Status == OK || bank.Status == Warn
+	if usable {
 		out = append(out, checkNoiseTransverse(ctx, cl, tg.Bank, cfg.Projects.Transverse))
 		out = append(out, checkNoiseSubagent(ctx, cl, tg.Bank))
 	} else {
 		why := "skipped: " + skipReason(srv)
 		out = append(out, Check{ID: "noise-transverse", Status: Info, Summary: why}, Check{ID: "noise-subagent", Status: Info, Summary: why})
 	}
-	return append(out, checkNoiseHeadless(env, cfg))
+	return append(out, checkNoiseHeadless(ctx, env, cfg, cl, usable, skipReason(srv)))
 }
 
 // checkNoiseTransverse: the transverse pool is searched with every project,
@@ -181,15 +186,17 @@ func checkNoiseSubagent(ctx context.Context, cl *hindsight.Client, bank string) 
 // checkNoiseHeadless finds the sessions this machine sent before headless
 // entrypoints were skipped (decision 0071 C1): a cursor that sent records
 // for a transcript whose entrypoint privacy.skip_entrypoints now matches.
-func checkNoiseHeadless(env Env, cfg config.Config) Check {
+// It warns only while the bank still holds a live raw fact of one of their
+// documents, so a purge or a forget clears it (M5 review rules).
+func checkNoiseHeadless(ctx context.Context, env Env, cfg config.Config, cl *hindsight.Client, usable bool, why string) Check {
 	c := Check{ID: "noise-headless", Status: OK, Summary: "no headless session was sent"}
 	dir := env.Dirs.CursorsDir()
 	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	res := project.New(env.Home, cfg.Projects.Transverse)
-	perProject := map[string]int{}
-	sessions := 0
+	local := map[string]string{} // session id -> project of its first directory
 	for _, f := range files {
-		cur, ok, err := retain.LoadCursor(dir, strings.TrimSuffix(filepath.Base(f), ".json"))
+		sid := strings.TrimSuffix(filepath.Base(f), ".json")
+		cur, ok, err := retain.LoadCursor(dir, sid)
 		if err != nil || !ok || cur.Records == 0 || (cur.Bank != "" && cur.Bank != cfg.Server.Bank) {
 			continue
 		}
@@ -197,39 +204,136 @@ func checkNoiseHeadless(env Env, cfg config.Config) Check {
 		if !cfg.Privacy.SkipsEntrypoint(ep) {
 			continue
 		}
-		sessions++
-		p := "(unknown project)"
+		local[sid] = unknownProject
 		if cwd != "" {
-			p = res.Project(cwd)
+			local[sid] = res.Project(cwd)
 		}
-		perProject[p]++
 	}
-	if sessions == 0 {
+	if len(local) == 0 {
 		return c
 	}
+	if !usable {
+		c.Status, c.Summary = Info, fmt.Sprintf("%d headless session(s) were sent before privacy.skip_entrypoints; the bank was not read: %s", len(local), why)
+		return c
+	}
+	docs, err := cl.ListDocuments(ctx, cfg.Server.Bank)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "cannot list the bank's documents", err.Error()
+		return c
+	}
+	type headlessDoc struct{ id, sid, project string }
+	var mine []headlessDoc
+	others := map[string]bool{} // projects with a document of another session
+	for _, d := range docs {
+		sid := docSession(d.ID)
+		p, headless := local[sid]
+		if !headless {
+			for _, t := range d.Tags {
+				if name, ok := strings.CutPrefix(t, "project:"); ok {
+					others[name] = true
+				}
+			}
+			continue
+		}
+		for _, t := range d.Tags {
+			if name, ok := strings.CutPrefix(t, "project:"); ok {
+				p = name // the bank's label wins over the first directory's
+				break
+			}
+		}
+		mine = append(mine, headlessDoc{d.ID, sid, p})
+	}
+	more := len(mine) > headlessDocsMax
+	if more {
+		mine = mine[:headlessDocsMax]
+	}
+	live := map[string][]string{} // project -> "<fact id> <document>" of its live headless documents
+	sessions := map[string]map[string]bool{}
+	for _, d := range mine {
+		fact, err := liveRawFact(ctx, cl, cfg.Server.Bank, d.id)
+		if err != nil {
+			c.Status, c.Summary, c.Detail = Warn, "cannot list the memories of document "+d.id, err.Error()
+			return c
+		}
+		if fact == "" {
+			continue // purged or forgotten: nothing left to clean
+		}
+		live[d.project] = append(live[d.project], "backsight forget "+fact+" --purge (document "+d.id+")")
+		if sessions[d.project] == nil {
+			sessions[d.project] = map[string]bool{}
+		}
+		sessions[d.project][d.sid] = true
+	}
+	if len(live) == 0 {
+		c.Summary = fmt.Sprintf("the %d headless session(s) sent before privacy.skip_entrypoints hold no memory any more", len(local))
+		return c
+	}
+	perProject := map[string]int{}
+	n := 0
+	for p, s := range sessions {
+		perProject[p] = len(s)
+		n += len(s)
+	}
 	c.Status = Warn
-	c.Summary = fmt.Sprintf("%d headless session(s) were sent before privacy.skip_entrypoints: %s", sessions, topCounts(perProject, len(perProject)))
+	c.Summary = fmt.Sprintf("%d headless session(s) sent before privacy.skip_entrypoints still have memories: %s", n, topCounts(perProject, len(perProject)))
 	c.Detail = "check with --plan that a project holds nothing else worth keeping before forgetting it"
-	var fixes, kept []string
+	var fixes, mixed []string
 	for _, p := range sortedKeys(perProject) {
-		if p != "(unknown project)" {
+		if p != unknownProject {
 			c.Projects = append(c.Projects, p)
 		}
-		switch {
-		case slices.Contains(cfg.Projects.Transverse, p):
-			kept = append(kept, p)
-		case p != "(unknown project)":
-			fixes = append(fixes, "backsight forget --project "+p+" --plan")
+		// A project that also holds other sessions' documents, the
+		// transverse pool or an unknown project: only the headless
+		// documents go, one by one.
+		if others[p] || p == unknownProject || slices.Contains(cfg.Projects.Transverse, p) {
+			mixed = append(mixed, p)
+			fixes = append(fixes, live[p]...)
+			continue
 		}
+		fixes = append(fixes, "backsight forget --project "+p+" --plan")
 	}
-	if len(kept) > 0 {
-		c.Detail += "; not " + strings.Join(kept, ", ") + ": the transverse pool also holds interactive sessions"
+	if len(mixed) > 0 {
+		c.Detail += "; " + strings.Join(mixed, ", ") + " also hold other sessions: purge only the headless documents"
+	}
+	if len(fixes) > headlessFixesMax {
+		fixes = append(fixes[:headlessFixesMax], fmt.Sprintf("then run backsight doctor again (%d more)", len(fixes)-headlessFixesMax))
+	}
+	if more {
+		c.Detail += fmt.Sprintf("; only the first %d headless documents were read", headlessDocsMax)
 	}
 	c.Fix = strings.Join(fixes, "; ")
-	if c.Fix == "" {
-		c.Fix = "leave them, or forget their memories one by one (backsight forget <id>)"
-	}
 	return c
+}
+
+// docSession is the session id of a session's document (conversation:<sid>,
+// conversation:<sid>@<project>, subagent:<sid>:<agent>), "" for any other.
+func docSession(id string) string {
+	if rest, ok := strings.CutPrefix(id, "conversation:"); ok {
+		sid, _, _ := strings.Cut(rest, "@")
+		return sid
+	}
+	if rest, ok := strings.CutPrefix(id, "subagent:"); ok {
+		sid, _, _ := strings.Cut(rest, ":")
+		return sid
+	}
+	return ""
+}
+
+// liveRawFact is the id of one live raw fact extracted from document doc,
+// "" when none is left; forget <id> --purge deletes that document.
+func liveRawFact(ctx context.Context, cl *hindsight.Client, bank, doc string) (string, error) {
+	found := ""
+	err := cl.ListMemories(ctx, bank, hindsight.MemoryQuery{DocumentID: doc}, func(m hindsight.Memory) error {
+		if m.FactType == "observation" || m.State == "invalidated" {
+			return nil
+		}
+		found = m.ID
+		return errReadMax
+	})
+	if errors.Is(err, errReadMax) {
+		err = nil
+	}
+	return found, err
 }
 
 // headlessStart reads a transcript's entrypoint and its first record's
