@@ -86,6 +86,7 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | `recall.project_boost` | `0.05` | Added to the score of the current project's memories, so they rank first at equal relevance. |
 | `recall.session_budget_chars` | `6000` | Memory text the prompt hook may add over a whole session; recall stops once it is spent. |
 | `recall.briefing` | `"model"` | The briefing at session start. `"model"`: a page the server keeps per project from its memories (one LLM call to refresh it after new memories). `"recent"`: the project's 5 most recent memories, no LLM call. |
+| `recall.families` | `false` | Search the projects you work on together with the current one (worked out on this machine from your sessions, listed by `backsight projects`) in its project scope, like `related`, without its boost. Off until it is shown to improve recall. |
 
 ## `[llm]`: the model that extracts memories
 
