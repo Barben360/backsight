@@ -217,6 +217,10 @@ var (
 	memories           map[string]string
 	projectEntities    map[string]string
 	retainedTags       []string
+	bankConfigStatus   atomic.Int32 // non-zero: bank claude-memory's /config answers this status
+	// bankOverrides reads a bank's config overrides on the fake server,
+	// after replacing them with set when it is not nil.
+	bankOverrides func(bank string, set map[string]json.RawMessage) map[string]json.RawMessage
 )
 
 // fakeHindsight answers like a started server: health, version, banks and
@@ -257,7 +261,20 @@ func fakeHindsight(t *testing.T) (port int) {
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
 	bankDocs := map[string]map[string]bool{}
-	overrides := map[string]json.RawMessage{}
+	overrides := map[string]map[string]json.RawMessage{} // bank → its config overrides
+	bankConfigStatus.Store(0)
+	bankOverrides = func(bank string, set map[string]json.RawMessage) map[string]json.RawMessage {
+		mu.Lock()
+		defer mu.Unlock()
+		if set != nil {
+			overrides[bank] = set
+		}
+		out := map[string]json.RawMessage{}
+		for k, v := range overrides[bank] {
+			out[k] = v
+		}
+		return out
+	}
 	docs := map[string]json.RawMessage{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if k, _ := acceptedKey.Load().(string); requireKey.Load() && r.Header.Get("Authorization") != "Bearer "+k {
@@ -299,13 +316,20 @@ func fakeHindsight(t *testing.T) (port int) {
 				items = append(items, `{"id":"backsight:epoch","tags":[]}`)
 			}
 			_, _ = w.Write([]byte(`{"items":[` + strings.Join(items, ",") + `],"total":` + strconv.Itoa(len(items)) + `}`))
+		case strings.HasSuffix(r.URL.Path, "/config") && bankConfigStatus.Load() != 0 && configBank(r.URL.Path) == "claude-memory":
+			w.WriteHeader(int(bankConfigStatus.Load()))
+			_, _ = w.Write([]byte(`{"detail":"config refused"}`))
 		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/config"):
 			var body struct {
 				Updates map[string]json.RawMessage `json:"updates"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			bank := configBank(r.URL.Path)
+			if overrides[bank] == nil {
+				overrides[bank] = map[string]json.RawMessage{}
+			}
 			for k, v := range body.Updates {
-				overrides[k] = v
+				overrides[bank][k] = v
 			}
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/recall"):
@@ -525,7 +549,7 @@ func fakeHindsight(t *testing.T) (port int) {
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract"):
 			_, _ = w.Write([]byte(`{"facts":[{"text":"The billing service keeps PostgreSQL 16 for partial indexes.","fact_type":"world"}],"usage":{"input_tokens":900,"output_tokens":40}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
-			ov, _ := json.Marshal(overrides)
+			ov, _ := json.Marshal(overrides[configBank(r.URL.Path)])
 			_, _ = w.Write([]byte(`{"config":{},"overrides":` + string(ov) + `}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -535,6 +559,11 @@ func fakeHindsight(t *testing.T) (port int) {
 	u, _ := url.Parse(srv.URL)
 	port, _ = strconv.Atoi(u.Port())
 	return port
+}
+
+// configBank is the bank of a /v1/default/banks/<bank>/config path.
+func configBank(path string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(path, "/v1/default/banks/"), "/config")
 }
 
 // pointAt rewrites the dev config to use the fake server's port.

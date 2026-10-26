@@ -39,6 +39,10 @@ func (d Dirs) TelemetryDir() string    { return filepath.Join(d.State, "telemetr
 func (d Dirs) EntitiesFile() string    { return filepath.Join(d.State, "entities.json") }
 func (d Dirs) SetupFile() string       { return filepath.Join(d.State, "setup.json") }
 
+// BankTemplateFile records the bank template last applied, so doctor can
+// tell an older backsight template from a change made on the server.
+func (d Dirs) BankTemplateFile() string { return filepath.Join(d.State, "bank-template.json") }
+
 // RestoreMarker exists while a restore has not finished (decision 0044).
 func (d Dirs) RestoreMarker() string { return filepath.Join(d.State, "restore-incomplete.json") }
 

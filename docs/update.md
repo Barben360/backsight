@@ -39,8 +39,9 @@ backsight update apply
 2. takes the maintenance lock, installs the new binary next to the old one, and switches the shim, so `backsight` on your PATH runs the new version;
 3. runs the new version's client migrations, its plugin update and its scheduler refresh;
 4. if the new release pins another Hindsight version, upgrades the server (below);
-5. indexes the new version's docs for `backsight guide search` (a failure there is only a warning);
-6. records the update.
+5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`);
+6. indexes the new version's docs for `backsight guide search` (a failure there is only a warning);
+7. records the update.
 
 Then restart Claude Code (or run `/reload-plugins`) to load the new plugin.
 

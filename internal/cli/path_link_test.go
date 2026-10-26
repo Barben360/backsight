@@ -80,8 +80,49 @@ func TestClientInstallPointsAnOlderPathLinkAtTheShim(t *testing.T) {
 	}
 }
 
+// With no command on PATH (a machine set up without install.sh), client
+// install makes it as install.sh does: a link to the shim, its directory
+// created, reported as a step (M5 review rules, PATH).
+func TestClientInstallMakesTheMissingPathLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the PATH entry is a copy on Windows")
+	}
+	home := devInstall(t, true)
+	withClaude(t)
+	d := pathsOf(home)
+	link := filepath.Join(d.Bin, "backsight")
+	shim := filepath.Join(d.Data, "bin", "current")
+	if _, err := os.Stat(d.Bin); err == nil {
+		t.Fatal("the fixture already has the PATH directory")
+	}
+
+	code, out, _ := run(t, "client", "install", "--plan", "--json")
+	if code != output.OK || !strings.Contains(out, `"name": "path"`) || !strings.Contains(out, `"status": "planned"`) {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	if _, err := os.Lstat(link); err == nil {
+		t.Error("--plan made the PATH link")
+	}
+	code, out, _ = run(t, "client", "install", "--json")
+	var env struct {
+		Data clientInstallResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	stepped := false
+	for _, s := range env.Data.Steps {
+		stepped = stepped || (s.Name == "path" && s.Status == "done" && s.Detail == link+" → "+shim)
+	}
+	if code != output.OK || !stepped || readlink(t, link) != shim {
+		t.Fatalf("exit %d, link → %s\n%s", code, readlink(t, link), out)
+	}
+	// Then nothing to do.
+	if code, out, _ := run(t, "client", "install", "--json"); code != output.OK || strings.Contains(out, `"name": "path"`) {
+		t.Errorf("again: exit %d\n%s", code, out)
+	}
+}
+
 // What is not install.sh's link to one of this install's binaries stays:
-// a link elsewhere (a developer's build), a file, or none at all.
+// a link elsewhere (a developer's build), a dangling one, or a file.
 func TestClientInstallLeavesOtherPathEntriesAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the PATH entry is a copy on Windows")
@@ -91,16 +132,18 @@ func TestClientInstallLeavesOtherPathEntriesAlone(t *testing.T) {
 	d := pathsOf(home)
 	link := filepath.Join(d.Bin, "backsight")
 
-	if code, out, _ := run(t, "client", "install"); code != output.OK {
-		t.Fatal(out)
-	}
-	if _, err := os.Lstat(link); err == nil {
-		t.Error("client install created a PATH entry install.sh did not make")
-	}
 	elsewhere := filepath.Join(t.TempDir(), "backsight")
 	pathLinkAt(t, d, elsewhere)
 	if code, out, _ := run(t, "client", "install"); code != output.OK || readlink(t, link) != elsewhere {
 		t.Errorf("a link elsewhere was changed: exit %d → %s\n%s", code, readlink(t, link), out)
+	}
+	_ = os.Remove(link)
+	dangling := filepath.Join(t.TempDir(), "gone", "backsight")
+	if err := os.Symlink(dangling, link); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := run(t, "client", "install"); code != output.OK || readlink(t, link) != dangling {
+		t.Errorf("a dangling link was changed: exit %d → %s\n%s", code, readlink(t, link), out)
 	}
 	_ = os.Remove(link)
 	if err := os.WriteFile(link, []byte("mine"), 0o755); err != nil {

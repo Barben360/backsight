@@ -214,6 +214,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			{"health", "would wait for health"},
 			{"recall", "would run a recall"},
 			{"epoch", "would write " + epoch},
+			{"bank", "would compare the archive's bank settings with this backsight's template, and apply it where they differ"},
 			{"key", "would start the server again on its API key"},
 		} {
 			add(s[0], "planned", s[1])
@@ -371,6 +372,11 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	}
 	res.Epoch = &next
 	add("epoch", "done", fmt.Sprintf("restore epoch %d", next.Epoch))
+	// The bank's settings, still on the temporary key: after the epoch, so
+	// a rollback never leaves a hash recorded for settings it put back.
+	if w := restoreBank(ctx, tcl, d, cfg.Server.Bank, add); w != "" {
+		res.Warnings = append(res.Warnings, w)
+	}
 	_ = state.ClearRestoreMarker(d)
 
 	// 8. The server on its own key again.

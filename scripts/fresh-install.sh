@@ -204,6 +204,29 @@ running=$(compose ps -q --status running) || fail "cannot list the install's con
 [ -z "$running" ] || { compose ps >&2; fail "containers still running after undo"; }
 [ -f "$BACKSIGHT_HOME/config/config.toml" ] || fail "undo removed config.toml"
 
+# 10a. Setting up again over kept data (M5 review rules): uninstall
+# --stop --purge-local keeps the server's volume and its .env, and deletes
+# secrets.toml. setup with the build the update installed adopts the
+# database password and the keys from that .env, reaches step 4's memory,
+# and its client install makes the PATH command uninstall removed.
+new=$work/new/backsight
+env_password() { sed -n "s/^BACKSIGHT_DB_PASSWORD='\(.*\)'$/\1/p" "$BACKSIGHT_HOME/data/server/.env"; }
+kept_password=$(env_password)
+[ -n "$kept_password" ] || fail "no database password in the server's .env before the purge"
+"$new" uninstall --stop --purge-local --non-interactive --answer identity_saved=yes --answer drop_queued=yes --json > "$work/uninstall-keep.json" ||
+  { cat "$work/uninstall-keep.json" >&2; fail "uninstall --stop --purge-local failed"; }
+[ ! -e "$BACKSIGHT_HOME/config/secrets.toml" ] && [ ! -e "$(uc_path)" ] || fail "uninstall --purge-local kept secrets.toml or the PATH command"
+[ "$(env_password)" = "$kept_password" ] || fail "uninstall --purge-local did not keep the server's .env"
+printf 'mock-not-a-key\n' | "$new" secret set llm_api_key >/dev/null
+"$new" setup --non-interactive --json "${answers[@]}" --answer backfill=no > "$work/setup-again.json" 2>/dev/null ||
+  { cat "$work/setup-again.json" >&2; fail "setup over the kept data failed"; }
+jq -e '.ok and ([.data.steps[] | select(.name == "verify")][0].status == "done")' "$work/setup-again.json" >/dev/null || fail "verify did not pass after setting up again"
+grep -qxF "db_password = '$kept_password'" "$BACKSIGHT_HOME/config/secrets.toml" ||
+  grep -qxF "db_password = \"$kept_password\"" "$BACKSIGHT_HOME/config/secrets.toml" || fail "setup did not adopt the kept database password"
+"$new" search --all --min-score 0 --json "Which PostgreSQL version does billing keep?" > "$work/search-again.json" 2>&1 || true
+jq -e '.ok and (.data.hits | length > 0)' "$work/search-again.json" >/dev/null || { cat "$work/search-again.json" >&2; fail "the kept memory is not found after setting up again"; }
+[ -L "$(uc_path)" ] && [ "$(readlink "$(uc_path)")" = "$(uc_shim)" ] || fail "client install did not make the PATH command $(uc_path)"
+
 # 10b. Wired again by hand after undo (decision 0067 block 3), so that
 # uninstall's own client and scheduler removal is checked, not skipped:
 # the client (plugin and permission rule) and the jobs entries, through
@@ -317,4 +340,4 @@ for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/
 done
 backups_after=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 [ "$backups_after" = "$backups_before" ] || { echo "before: $backups_before" >&2; echo "after:  $backups_after" >&2; fail "uninstall changed the backups"; }
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-appended and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, client and jobs wired again, uninstall) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-appended and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, set up again over kept data, client and jobs wired again, uninstall) on project $project"

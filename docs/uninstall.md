@@ -72,3 +72,13 @@ With `--non-interactive`, uninstall exits 10 when it needs an answer, and lists 
 - **Exit 20 after the binaries step started**: the output lists the paths left to remove by hand.
 
 If `~/.local/bin/backsight` is not a link backsight made, uninstall leaves it and says so.
+
+## Setting up again over kept data
+
+`uninstall --stop --purge-local` (or `--purge-local` alone) keeps the server's database, and its `.env` in the server's directory (`~/.local/share/backsight/server/.env` by default), the only copy left of its database password. Install backsight again, then run `backsight setup` as the first time: its server step adopts the database password, the API key and the UI key from that `.env` when `secrets.toml` lacks them, so the server opens the kept database and its clients' key still works. A value already in `secrets.toml` is never replaced.
+
+Keep the same server directory and Compose project (`server.compose_dir`, `server.project`, the defaults unless you changed them). If the `.env` is gone too, setup stops and names the database volume. In that order:
+
+1. put back the `secrets.toml` the server was installed with, from your own copy;
+2. or set the password it was created with: `backsight secret set db_password`;
+3. last, and only if its memories may go: delete the volume (`docker volume rm <project>_pg_data`), then run setup again. Your backups can bring the memories back afterwards with `backsight restore`, using the backup identity you saved.

@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 )
 
@@ -76,10 +78,53 @@ func bankTemplate() map[string]any {
 
 // TemplateHash identifies the template this binary applies, bank profile
 // included.
-func TemplateHash() string {
-	raw, _ := json.Marshal(map[string]any{"config": bankTemplate(), "name": bankName, "mission": bankMission}) // sorted keys
+func TemplateHash() string { return Current().Hash() }
+
+// Template is a bank template as backsight sends it: the bank's profile
+// and the config keys it owns. Applied records the one last sent, so a
+// later binary can tell its own older template from a change made on the
+// server (M5 review rules, "Bank template follows the binary").
+type Template struct {
+	Name    string         `json:"name"`
+	Mission string         `json:"mission"`
+	Config  map[string]any `json:"config"`
+}
+
+// Current is the template this binary applies.
+func Current() Template {
+	return Template{Name: bankName, Mission: bankMission, Config: bankTemplate()}
+}
+
+// Hash identifies t; a template read back from its record hashes the same
+// as when it was sent (JSON keys sorted, numbers kept as written).
+func (t Template) Hash() string {
+	raw, _ := json.Marshal(map[string]any{"config": t.Config, "name": t.Name, "mission": t.Mission})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// SaveApplied records this binary's template at path (0600), as the one
+// the bank was given.
+func SaveApplied(path string) error {
+	raw, err := json.MarshalIndent(Current(), "", "  ")
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(path, append(raw, '\n'), 0o600)
+}
+
+// LoadApplied reads the template SaveApplied recorded; its Hash says which
+// one it is.
+func LoadApplied(path string) (Template, error) {
+	var t Template
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return t, err
+	}
+	if err := json.Unmarshal(raw, &t); err != nil {
+		return t, fmt.Errorf("%s: %w", path, err)
+	}
+	return t, nil
 }
 
 // BankResult says what ApplyBank did.
@@ -136,12 +181,18 @@ func ApplyBank(ctx context.Context, c *hindsight.Client, bank, appliedHash strin
 // them (a hand edit in the UI, a server reset). A key matches when every
 // value the template sets is there: the server may add its own defaults.
 func BankDrift(ctx context.Context, c *hindsight.Client, bank string) ([]string, error) {
+	return DriftFrom(ctx, c, bank, bankTemplate())
+}
+
+// DriftFrom is BankDrift against another template's config keys (an
+// older one, from its record).
+func DriftFrom(ctx context.Context, c *hindsight.Client, bank string, tmpl map[string]any) ([]string, error) {
 	over, err := c.BankConfigOverrides(ctx, bank)
 	if err != nil {
 		return nil, err
 	}
 	var drift []string
-	for k, want := range bankTemplate() {
+	for k, want := range tmpl {
 		raw, ok := over[k]
 		var got any
 		if !ok || json.Unmarshal(raw, &got) != nil || !holds(normal(want), got) {

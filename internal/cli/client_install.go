@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,9 +164,13 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		}
 	}
 	add("shim", did(shimChanged), shim+" → "+target)
-	// The command on PATH runs the shim (decision 0067 block review).
-	if link, older := olderPathLink(c.dirs, shim); older {
+	// The command on PATH runs the shim (decision 0067 block review), and
+	// is made when absent, as install.sh makes it (M5 review rules, PATH).
+	if link, older := olderPathLink(c.dirs, shim); older || absentPathLink(c.dirs) {
 		if !plan {
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				return res, blocked(err)
+			}
 			if err := pointShim(shim, link); err != nil {
 				return res, blocked(err)
 			}
@@ -244,6 +249,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		}
 		add("permission rule", did(len(fr[0].Changes) > 0), c.loc.Settings)
 		schedulerStep(ctx, true, add)
+		bankStep(ctx, true, add)
 		return res, nil
 	}
 	run, files, err := c.runner("client install").Apply([]claudecfg.Edit{edit})
@@ -276,6 +282,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 		return res, partialError(err)
 	}
 	schedulerStep(ctx, false, add)
+	bankStep(ctx, false, add)
 	return res, nil
 }
 
@@ -509,6 +516,17 @@ func olderPathLink(d paths.Dirs, shim string) (string, bool) {
 	}
 	dest = filepath.Clean(dest)
 	return link, dest != filepath.Clean(shim) && strings.HasPrefix(dest, filepath.Join(d.Data, "bin")+string(filepath.Separator))
+}
+
+// absentPathLink reports that nothing is at <bin>/backsight (not even a
+// dangling link): client install then makes the PATH command, a link to
+// the shim. Windows has no such link.
+func absentPathLink(d paths.Dirs) bool {
+	if runtime.GOOS == "windows" || d.Bin == "" {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(d.Bin, "backsight"))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // keepBinaries: installed versions kept besides the current and previous.

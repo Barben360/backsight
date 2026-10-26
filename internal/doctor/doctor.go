@@ -302,8 +302,13 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Chec
 }
 
 // checkBankConfig compares the bank's settings with backsight's template
-// (SPEC §15 "bank config drift"): a key changed on the server, or a
-// template this binary carries that was never applied.
+// (SPEC §15 "bank config drift"). It tells an older backsight template
+// (the bank holds the one recorded as applied: bank apply sends this
+// binary's) from a change made on the server (only --force puts
+// backsight's values back, over those edits), and a template never
+// recorded as applied (M5 review rules, "Bank template follows the
+// binary"). The comparison is against the templates' own values, never a
+// hash of what the server returns (Hindsight normalises settings).
 func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
 	c := Check{ID: "bank-config", Status: OK, Summary: "bank settings match backsight's template"}
 	drift, err := server.BankDrift(ctx, cl, bank)
@@ -311,15 +316,41 @@ func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d p
 		c.Status, c.Summary, c.Detail = Warn, "cannot read the bank's settings", err.Error()
 		return c
 	}
-	if len(drift) > 0 {
-		c.Status, c.Summary, c.Detail = Warn, "bank settings differ from backsight's template", strings.Join(drift, ", ")
-		c.Fix = "backsight bank apply --force (puts backsight's values back)"
+	recorded := ""
+	if st, err := state.Load(d.StateFile()); err == nil {
+		recorded = st.BankConfigHash
+	}
+	current := server.TemplateHash()
+	changed := func() Check {
+		c.Status, c.Summary, c.Detail = Warn, "bank settings were changed on the server", "keys that differ from backsight's template: "+strings.Join(drift, ", ")
+		c.Fix = "backsight bank apply --force (puts backsight's values back: it overwrites the edits made to these keys on the server)"
 		return c
 	}
-	if st, err := state.Load(d.StateFile()); err == nil && st.BankConfigHash != server.TemplateHash() {
-		c.Status, c.Summary = Warn, "this backsight's bank template was not applied yet"
-		c.Fix = "backsight bank apply"
+	switch {
+	case len(drift) == 0 && recorded != current:
+		c.Status, c.Summary = Warn, "the bank holds this backsight's template, not recorded as applied"
+		c.Fix = "backsight bank apply (records it)"
+		return c
+	case len(drift) == 0:
+		return c
+	case recorded == current:
+		return changed()
 	}
+	if old, err := server.LoadApplied(d.BankTemplateFile()); err == nil && recorded != "" && old.Hash() == recorded {
+		if left, err := server.DriftFrom(ctx, cl, bank, old.Config); err == nil && len(left) > 0 {
+			return changed()
+		} else if err == nil {
+			c.Status, c.Summary = Warn, "the bank holds an older backsight template"
+			c.Detail = "keys this backsight's template changes: " + strings.Join(drift, ", ")
+			c.Fix = "backsight bank apply (sends this backsight's template)"
+			return c
+		}
+	}
+	// No record of the template applied (a version before the record, a
+	// restore that could not apply it): either is possible.
+	c.Status, c.Summary = Warn, "bank settings differ from this backsight's template: an older backsight template, or a change made on the server"
+	c.Detail = "keys that differ: " + strings.Join(drift, ", ")
+	c.Fix = "backsight bank apply (sends this backsight's template: it also overwrites any edit made to these keys on the server)"
 	return c
 }
 

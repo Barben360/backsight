@@ -248,3 +248,30 @@ func TestCompareImages(t *testing.T) {
 		}
 	}
 }
+
+// The server keys come back from a .env Render wrote, without the quotes
+// it adds; other variables (the LLM key) are not secrets.toml's to adopt.
+func TestKeptSecretsReadsWhatRenderWrote(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "server")
+	got, err := KeptSecrets(dir)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("no .env: %v %v", got, err)
+	}
+	f, _ := Render(devConfig(), secrets, "box")
+	if _, err := Write(dir, f); err != nil {
+		t.Fatal(err)
+	}
+	got, err = KeptSecrets(dir)
+	if err != nil || len(got) != 3 || got["db_password"] != secrets.DBPassword || got["api_key"] != secrets.APIKey || got["ui_key"] != secrets.UIKey {
+		t.Errorf("%v %v", got, err)
+	}
+	// Unquoted, double-quoted, CRLF and empty values; comments ignored.
+	raw := "# BACKSIGHT_DB_PASSWORD='commented'\r\nBACKSIGHT_DB_PASSWORD=plainpassword1234\r\nHINDSIGHT_API_TENANT_API_KEY=\"dq\"\nHINDSIGHT_CP_ACCESS_KEY=''\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = KeptSecrets(dir)
+	if len(got) != 2 || got["db_password"] != "plainpassword1234" || got["api_key"] != "dq" {
+		t.Errorf("%v", got)
+	}
+}

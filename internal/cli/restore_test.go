@@ -225,6 +225,11 @@ func backupsIn(home string) []string {
 
 func TestRestoreReplacesTheDatabaseAndStartsANewEpoch(t *testing.T) {
 	home, archive, dk, port := restoreSetup(t)
+	// The archive's bank settings hold this backsight's template.
+	if code, out, errOut := run(t, "bank", "apply"); code != output.OK {
+		t.Fatalf("bank apply: exit %d\n%s%s", code, out, errOut)
+	}
+	bankCalls = nil
 	code, out, errOut := run(t, "restore", archive, "--json")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
@@ -540,7 +545,7 @@ func TestRestorePlanChangesNothing(t *testing.T) {
 			t.Errorf("step %+v", s)
 		}
 	}
-	if got := strings.Join(names, ","); got != "check,lock,safety backup,stop,restore,counts,start,health,recall,epoch,key" {
+	if got := strings.Join(names, ","); got != "check,lock,safety backup,stop,restore,counts,start,health,recall,epoch,bank,key" {
 		t.Errorf("steps %s", got)
 	}
 	if len(dk.calls) != 0 {

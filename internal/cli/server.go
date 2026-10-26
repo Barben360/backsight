@@ -242,13 +242,25 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 
+			kept, err := server.KeptSecrets(cfg.Server.ComposeDir)
+			if err != nil {
+				return blocked(err)
+			}
 			if f.plan {
 				prev, err := config.LoadSecrets(d.SecretsFile())
 				if err != nil && !errors.Is(err, fs.ErrNotExist) {
 					return blocked(err)
 				}
+				adopted := adoptKept(&prev, kept)
 				gen := config.GenerateMissing(&prev)
-				add("secrets", "planned", map[bool]string{true: "would generate " + strings.Join(gen, ", "), false: "all server keys present"}[len(gen) > 0])
+				var plans []string
+				if len(adopted) > 0 {
+					plans = append(plans, "would adopt "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(cfg))
+				}
+				if len(gen) > 0 {
+					plans = append(plans, "would generate "+strings.Join(gen, ", "))
+				}
+				add("secrets", "planned", map[bool]string{true: strings.Join(plans, "; "), false: "all server keys present"}[len(plans) > 0])
 				if req := config.RequiredSecrets(cfg); req["llm_api_key"] && prev.LLMAPIKey == "" {
 					return needSecrets([]string{"llm_api_key"}, "backsight server install")
 				}
@@ -267,25 +279,39 @@ func newServerInstallCmd(e *env) *cobra.Command {
 
 			// 2. Secrets: server keys generated, the LLM key is the user's. A
 			// database volume keeps the password it was created with, so a
-			// lost db_password cannot be regenerated against it.
+			// lost db_password cannot be regenerated against it. A kept
+			// .env (uninstall --purge-local keeps the server) gives back the
+			// keys secrets.toml lacks; a secrets.toml value always wins.
 			ctx := cmd.Context()
-			if prev, err := config.LoadSecrets(d.SecretsFile()); (err == nil || errors.Is(err, fs.ErrNotExist)) && prev.DBPassword == "" {
+			if prev, err := config.LoadSecrets(d.SecretsFile()); (err == nil || errors.Is(err, fs.ErrNotExist)) && prev.DBPassword == "" && !adoptable(kept, "db_password") {
 				exists, err := rt.DataExists(ctx)
 				if err != nil {
 					return blocked(err)
 				}
 				if exists {
 					return &output.Error{Code: output.Blocked, Message: rt.DataName() +
-						" exists but secrets.toml has no db_password: restore the secrets.toml it was created with, or delete it and its memories (" +
+						" exists but neither secrets.toml nor " + keptEnv(cfg) + " holds its db_password: restore the secrets.toml it was created with, " +
+						"or set the password it was created with (backsight secret set db_password); last, if its memories may go, delete it (" +
 						rt.DataRemoveCmd() + ") before installing again"}
 				}
 			}
-			var made []string
-			if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { made = config.GenerateMissing(s); return nil }); err != nil {
+			var made, adopted []string
+			if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error {
+				adopted = adoptKept(s, kept)
+				made = config.GenerateMissing(s)
+				return nil
+			}); err != nil {
 				return blocked(err)
 			}
+			var did []string
+			if len(adopted) > 0 {
+				did = append(did, "adopted "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(cfg))
+			}
 			if len(made) > 0 {
-				add("secrets", "done", "generated "+strings.Join(made, ", "))
+				did = append(did, "generated "+strings.Join(made, ", "))
+			}
+			if len(did) > 0 {
+				add("secrets", "done", strings.Join(did, "; "))
 			} else {
 				add("secrets", "skipped", "all present")
 			}
@@ -328,7 +354,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(redacted(err, sec))
 			}
 			add("health", "done", "healthy")
-			br, err := applyBank(cmd, d, cfg, sec, false)
+			br, err := applyBank(cmd.Context(), d, cfg, sec, false)
 			if err != nil {
 				return fail(err)
 			}
@@ -349,6 +375,30 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&f.base, "base-url", "", "LLM base URL for compatible endpoints")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list the steps without acting")
 	return cmd
+}
+
+// keptEnv is the server's .env, as messages name it.
+func keptEnv(cfg config.Config) string { return filepath.Join(cfg.Server.ComposeDir, ".env") }
+
+// adoptable: kept holds a value for name that secrets.toml would take.
+func adoptable(kept map[string]string, name string) bool {
+	var s config.Secrets
+	return kept[name] != "" && s.Set(name, kept[name]) == nil
+}
+
+// adoptKept sets each server key s lacks from kept (a kept .env), never
+// one s holds, and returns the names it set, sorted. A value secrets.toml
+// would refuse (a db_password outside its alphabet) is left out.
+func adoptKept(s *config.Secrets, kept map[string]string) []string {
+	var out []string
+	for _, name := range []string{"api_key", "db_password", "ui_key"} {
+		if s.Names()[name] || !adoptable(kept, name) {
+			continue
+		}
+		_ = s.Set(name, kept[name])
+		out = append(out, name)
+	}
+	return out
 }
 
 func newServerStartCmd(e *env) *cobra.Command {

@@ -680,8 +680,30 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 
 func (a *applyRun) planDocs() {
 	if _, err := os.Stat(a.d.ConfigFile()); err == nil {
+		a.add("bank", "planned", "would run the new binary's bank apply: its bank template, when it differs from the one the bank was given")
 		a.add("docs", "planned", "would run the new binary's guide index: its docs into the server's docs bank (0 LLM calls)")
 	}
+}
+
+// bank runs the new binary's bank apply (not forced): it sends the new
+// binary's template when it differs from the one recorded (M5 review
+// rules, "Bank template follows the binary"). Its client install left it
+// to this step, after the server runs the new pin. A failure is a warning,
+// never a rollback: client install and doctor name it again.
+func (a *applyRun) bank(ctx context.Context) {
+	if _, err := os.Stat(a.d.ConfigFile()); err != nil {
+		a.add("bank", "skipped", "no server configured on this machine")
+		return
+	}
+	env, err := runChild(ctx, a.target, "bank", "apply")
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the bank template was not applied ("+err.Error()+"): run backsight bank apply")
+		a.add("bank", "failed", err.Error())
+		return
+	}
+	var r server.BankResult
+	_ = json.Unmarshal(env.Data, &r)
+	a.add("bank", map[bool]string{true: "done", false: "unchanged"}[r.Sent], strings.TrimSpace(bankText(r)))
 }
 
 // steps runs the update from the shim switch on. Before the commit point
@@ -759,7 +781,9 @@ func (a *applyRun) steps(ctx context.Context) error {
 		a.rb.committed, a.marker.Committed = true, true
 		_ = state.WriteUpdateMarker(a.d, a.marker)
 
-		// 7. The new binary's docs into the docs bank (decision 0069).
+		// 7. The new binary's bank template and docs (M5 review rules,
+		// decision 0069): warnings, never a rollback.
+		a.bank(ctx)
 		a.docs(ctx)
 	}
 

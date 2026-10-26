@@ -4,7 +4,9 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -205,6 +207,44 @@ func (e *envFile) fail(k string) {
 	if e.err == nil {
 		e.err = fmt.Errorf("%s: the value contains a quote, newline or shell character that .env cannot carry", k)
 	}
+}
+
+// keptEnvKeys maps the .env variables Render writes the server keys to
+// onto their secrets.toml names.
+var keptEnvKeys = map[string]string{
+	"BACKSIGHT_DB_PASSWORD":        "db_password",
+	"HINDSIGHT_API_TENANT_API_KEY": "api_key",
+	"HINDSIGHT_CP_ACCESS_KEY":      "ui_key",
+}
+
+// KeptSecrets reads the server keys (db_password, api_key, ui_key) from a
+// .env Render wrote in dir and an uninstall --purge-local kept: setting
+// up again adopts them, so the kept database and its clients' key still
+// work (M5 review rules, "Setting up again over kept data"). The quotes
+// quoted() adds are stripped; an absent file gives none.
+func KeptSecrets(dir string) (map[string]string, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(strings.TrimSuffix(line, "\r")), "=")
+		name, known := keptEnvKeys[k]
+		if !ok || !known {
+			continue
+		}
+		if len(v) >= 2 && v[0] == v[len(v)-1] && (v[0] == '\'' || v[0] == '"') {
+			v = v[1 : len(v)-1]
+		}
+		if v != "" {
+			out[name] = v
+		}
+	}
+	return out, nil
 }
 
 var nonWord = regexp.MustCompile(`[^a-z0-9]+`)

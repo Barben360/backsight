@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -657,7 +659,7 @@ func TestCheckBankConfigDrift(t *testing.T) {
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	c := check(t, f.run(), "bank-config")
-	if c.Status != Warn || !strings.Contains(c.Detail, "enable_observations") || !strings.Contains(c.Fix, "bank apply --force") {
+	if c.Status != Warn || !strings.Contains(c.Detail, "enable_observations") || !strings.Contains(c.Fix, "backsight bank apply") {
 		t.Errorf("%+v", c)
 	}
 	g := newFixture(t)
@@ -666,6 +668,68 @@ func TestCheckBankConfigDrift(t *testing.T) {
 		if c.ID == "bank-config" {
 			t.Errorf("reference bank judged: %+v", c)
 		}
+	}
+}
+
+// overridesOf is the overrides answer of a bank holding config.
+func overridesOf(t *testing.T, config map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return `{"config":{},"overrides":` + string(raw) + `}`
+}
+
+// The bank-config check tells an older backsight template (the bank holds
+// the one recorded as applied: bank apply) from a change made on the
+// server (bank apply --force, which overwrites those edits), and says
+// when it cannot tell (M5 review rules).
+func TestCheckBankConfigTellsAnOlderTemplateFromAServerChange(t *testing.T) {
+	current := server.Current()
+	older := server.Current()
+	strategies := older.Config["retain_strategies"].(map[string]any)
+	delete(strategies, "subagent") // the template before 0071 C5
+	edited := server.Current()
+	edited.Config["enable_observations"] = false
+	olderEdited := server.Current()
+	delete(olderEdited.Config["retain_strategies"].(map[string]any), "subagent")
+	olderEdited.Config["retain_mission"] = "the user's own"
+	for _, tc := range []struct {
+		name     string
+		bank     map[string]any // what the server holds
+		recorded string         // state.json's hash
+		record   *server.Template
+		status   Status
+		summary  string
+		fix      string
+		notFix   string
+	}{
+		{"current, recorded", current.Config, current.Hash(), &current, OK, "match", "", ""},
+		{"current, not recorded", current.Config, "", nil, Warn, "not recorded as applied", "backsight bank apply (records it)", "--force"},
+		{"older template", older.Config, older.Hash(), &older, Warn, "an older backsight template", "backsight bank apply (sends", "--force"},
+		{"changed on the server", edited.Config, current.Hash(), &current, Warn, "changed on the server", "bank apply --force (puts backsight's values back: it overwrites the edits", ""},
+		{"older template changed on the server", olderEdited.Config, older.Hash(), &older, Warn, "changed on the server", "bank apply --force", ""},
+		{"no record", older.Config, older.Hash(), nil, Warn, "an older backsight template, or a change made on the server", "it also overwrites any edit", "--force"},
+		{"another template's record", older.Config, older.Hash(), &current, Warn, "or a change made on the server", "backsight bank apply", "--force"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, overridesOf(t, tc.bank)}})
+			put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+			put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+			if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion, BankConfigHash: tc.recorded}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.record != nil {
+				raw, _ := json.Marshal(tc.record)
+				put(t, f.env.Dirs.BankTemplateFile(), string(raw), 0o600)
+			}
+			c := check(t, f.run(), "bank-config")
+			if c.Status != tc.status || !strings.Contains(c.Summary, tc.summary) || !strings.Contains(c.Fix, tc.fix) || (tc.notFix != "" && strings.Contains(c.Fix, tc.notFix)) {
+				t.Errorf("%+v", c)
+			}
+		})
 	}
 }
 

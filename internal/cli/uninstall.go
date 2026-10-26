@@ -758,7 +758,7 @@ func ownEntry(d paths.Dirs, dir, name string) bool {
 		}
 		own = []string{d.StateFile(), d.LocksDir(), d.MaintenanceLock(), d.CursorsDir(), d.SessionsDir(), d.SentIndexDir(),
 			d.OutboxDir(), d.QuarantineDir(), d.JournalFile(), d.PreImagesDir(), d.TelemetryDir(), d.EntitiesFile(), d.SetupFile(),
-			d.RestoreMarker(), d.UpdateMarker(), d.UpdateSnapshot()}
+			d.RestoreMarker(), d.UpdateMarker(), d.UpdateSnapshot(), d.BankTemplateFile()}
 		for _, n := range []string{"staging", "logs", "breaker.json", "doctor-snapshot.json", "machine_id"} {
 			own = append(own, filepath.Join(d.State, n))
 		}

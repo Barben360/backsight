@@ -100,7 +100,9 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 |---|---|
 | `retention`: Claude Code keeps transcripts 30 days | `backsight client retention` keeps them 3650 days, so backfill and rebuilds can read them. |
 | `scheduler`: entries older than this binary's | `backsight jobs refresh` rewrites them without stopping a running job. |
-| `bank-config`: bank settings differ from backsight's | `backsight bank apply --force` puts backsight's values back. |
+| `bank-config`: the bank holds an older backsight template | `backsight bank apply` sends this version's (`update apply` and `client install` do it too). |
+| `bank-config`: bank settings were changed on the server | Someone edited backsight's keys (the UI, the API). `backsight bank apply --force` puts backsight's values back and overwrites those edits; leave it if you made them on purpose. |
+| `bank-config`: an older template, or a change made on the server | backsight has no record of the template it sent. `backsight bank apply` sends this version's, over any edit to its keys. |
 | `backup`: no backup, or the last one is old | `backsight backup create`; check the daily job (`jobs` check). |
 | `binary`: not self-verified, or does not match its release | Reinstall the release with `install.sh`, then `backsight client install`. |
 | `config`: unknown key or invalid value | Correct the key doctor names in `config.toml`. Unknown keys are refused, not ignored. |

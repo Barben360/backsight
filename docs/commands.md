@@ -27,7 +27,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight setup` | Sets up everything: server, bank, Claude Code wiring, jobs, verify, backfill offer. Flags: `--plan`, `--questions` (list the questions), `--answer`, `--answers-file`, `--non-interactive`, `--resume`, `--config-dir <dir>` (another Claude Code profile). |
 | `backsight setup --undo` | Reverses setup; keeps config, secrets and the memory. `--plan`; `--force` restores files edited since. |
 | `backsight verify` | Runs every hook and the memory tools as Claude Code would, then a store-and-recall round trip in a scratch bank. `--no-round-trip` skips the round trip (no LLM call); `--config-dir <dir>`. `--live` checks the real pipeline instead, read-only: this machine's latest settled session reached the server (every document of it: one per project its records belong to, `conversation:<session>` and `conversation:<session>@<project>`) and an observation was consolidated from it (exit 0 pass, 40 not yet, 20 failed with a fix). |
-| `backsight client install` | Wires Claude Code: the plugin and its permission rule. `--plan`. |
+| `backsight client install` | Wires Claude Code: the plugin and its permission rule. Also makes `~/.local/bin/backsight` (a link to the shim) when nothing is there, and sends this version's bank template when the bank was given another one. `--plan`. |
 | `backsight client retention` | Keeps Claude Code transcripts 3650 days; `--days N` sets another value, `--keep` stops managing it. `--plan`. |
 | `backsight client retire` | Unwires another Hindsight integration from Claude Code. `--plan`. |
 | `backsight client config plan` | Shows backsight's pending edits to Claude Code's files. |
@@ -79,7 +79,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight server render` | Writes the server's `compose.yaml` and `.env` from config and secrets. `--plan`. |
 | `backsight server upgrade` | Moves the server to the version this binary pins, after a verified safety backup. `--plan`, `--allow-unordered`. |
 | `backsight server llm check` | Checks the extraction LLM on a fixed sample, storing nothing. |
-| `backsight bank apply` | Creates the bank if needed and applies backsight's extraction settings. `--plan`, `--force`. |
+| `backsight bank apply` | Creates the bank if needed and applies backsight's extraction settings, unless the bank was already given this version's. `--force` sends them anyway, over any edit made to them on the server. `--plan`. |
 
 ## Backups and restore
 

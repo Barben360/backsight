@@ -68,7 +68,9 @@ Restore replaces the local server's memory with the archive's. In order, it:
 4. stops the server, replaces its database, and starts it on a temporary key only restore knows;
 5. checks health, row counts and a recall;
 6. writes back the **purge tombstones** it read before the stop (the server's and this machine's): the archive's `<bank>-control` bank lacks the purges made since;
-7. writes a new **restore epoch**, then starts the server again on its normal key.
+7. writes a new **restore epoch**;
+8. compares the bank's settings, as the archive brought them back, with this backsight's template, and applies the template where they differ (if it cannot, it says so, and the next `client install` or `update apply` sends it);
+9. starts the server again on its normal key.
 
 After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts. Facts stored with `memory_store` after the backup was made cannot be recovered that way. What `forget --purge` deleted is never sent again (see [privacy](privacy.md#removing-what-was-stored)), even when the archive predates the purge.
 

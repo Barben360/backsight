@@ -3,9 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -224,5 +229,48 @@ func TestBankDrift(t *testing.T) {
 	drift, err := BankDrift(ctx, c, "b")
 	if err != nil || strings.Join(drift, ",") != "enable_observations,entity_labels,retain_mission,retain_strategies" {
 		t.Errorf("drift %v %v", drift, err)
+	}
+}
+
+// The recorded template reads back as the one sent: same hash, and the
+// bank it was sent to holds it.
+func TestAppliedTemplateRoundTrips(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state", "bank-template.json")
+	if _, err := LoadApplied(p); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("absent: %v", err)
+	}
+	if err := SaveApplied(p); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+			t.Errorf("mode %o", fi.Mode().Perm())
+		}
+	}
+	got, err := LoadApplied(p)
+	if err != nil || got.Hash() != TemplateHash() || got.Name != bankName {
+		t.Fatalf("%v: hash %s, want %s", err, got.Hash(), TemplateHash())
+	}
+	f := &fakeBank{banks: []string{"b"}, overrides: map[string]json.RawMessage{}}
+	c := client(t, f)
+	if _, err := ApplyBank(context.Background(), c, "b", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if drift, err := DriftFrom(context.Background(), c, "b", got.Config); err != nil || len(drift) != 0 {
+		t.Errorf("the recorded template differs from the one sent: %v %v", drift, err)
+	}
+	// Another template (an older one without the subagent strategy) does
+	// not hold on a bank given this one.
+	old := Current().Config
+	old["retain_strategies"] = map[string]any{"conversation": old["retain_strategies"].(map[string]any)["conversation"]}
+	old["enable_observations"] = false
+	if drift, _ := DriftFrom(context.Background(), c, "b", old); strings.Join(drift, ",") != "enable_observations" {
+		t.Errorf("drift from the older template %v", drift)
+	}
+	if err := os.WriteFile(p, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadApplied(p); err == nil {
+		t.Error("a broken record was read")
 	}
 }

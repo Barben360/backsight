@@ -51,9 +51,9 @@ func installMachine(t *testing.T) installed {
 			t.Fatalf("%v: exit %d\n%s%s", args, code, out, errOut)
 		}
 	}
-	_ = os.MkdirAll(d.Bin, 0o755)
-	if err := os.Symlink(filepath.Join(d.Data, "bin", "current"), filepath.Join(d.Bin, "backsight")); err != nil {
-		t.Fatal(err)
+	// client install made the command on PATH, as install.sh does.
+	if got, err := os.Readlink(filepath.Join(d.Bin, "backsight")); err != nil || got != filepath.Join(d.Data, "bin", "current") {
+		t.Fatalf("no PATH link to the shim: %q %v", got, err)
 	}
 	m.dk = withCompose(t)
 	if code, out, errOut := run(t, "server", "render"); code != output.OK {
