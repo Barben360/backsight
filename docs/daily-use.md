@@ -53,7 +53,7 @@ related = ["shared-lib", "infra"]   # projects searched with this one
 
 `related` lists at most 10 projects, which prompt recall, `memory_search` and `backsight search` search together with the current one, without its boost. The nearest `.backsight.toml` that sets `related` wins (a subdirectory's file over the repository's), and `related = []` clears a parent's list.
 
-A subagent's report goes to the repository its work was in, which may not be the one the session started in: the repository its tool calls name most, where an edit or a commit counts three reads, when it clearly dominates. Only your own repositories count: those whose remote owner (for example `github.com/you`) is the owner of a repository you started a recorded session in, and the owners listed in `config.toml`:
+A subagent's report goes to the repository its work was in, which may not be the one the session started in: the repository its tool calls name most, where an edit or a commit counts three reads, when it clearly dominates. Only your own repositories count: those whose remote owner (for example `github.com/you`) is the owner of a repository you committed to and started a recorded session in (`backsight doctor` lists them; `projects.deny_owners` removes one), and the owners listed in `config.toml`:
 
 ```toml
 [projects]

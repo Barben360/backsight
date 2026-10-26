@@ -88,6 +88,23 @@ func top(c []Count) (string, int) {
 	return best, n
 }
 
+// Without is v with project p's votes and root removed.
+func (v Votes) Without(p string) Votes {
+	keep := func(c []Count) []Count {
+		return slices.DeleteFunc(slices.Clone(c), func(x Count) bool { return x.Project == p })
+	}
+	out := Votes{Explicit: keep(v.Explicit), Implicit: keep(v.Implicit)}
+	for k, r := range v.Roots {
+		if k != p {
+			if out.Roots == nil {
+				out.Roots = map[string]string{}
+			}
+			out.Roots[k] = r
+		}
+	}
+	return out
+}
+
 // Projects lists every project the turn touched, explicitly first.
 func (v Votes) Projects() []string {
 	var out []string

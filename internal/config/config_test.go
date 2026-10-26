@@ -115,6 +115,7 @@ func TestValidate(t *testing.T) {
 		{"empty canonical alias", func(c *Config) { c.Projects.Transverse = []string{""} }, "projects.transverse"},
 		{"own owner without its host", func(c *Config) { c.Projects.OwnOwners = []string{"acme"} }, "projects.own_owners"},
 		{"own owner empty", func(c *Config) { c.Projects.OwnOwners = []string{" "} }, "projects.own_owners"},
+		{"denied owner without its host", func(c *Config) { c.Projects.DenyOwners = []string{"acme"} }, "projects.deny_owners"},
 		{"loopback bind for private", func(c *Config) { c.Network.Exposure, c.Network.BindIP = "private", "127.0.0.1" }, "network.bind_ip"},
 		{"cgnat below", func(c *Config) { c.Network.Exposure, c.Network.BindIP = "private", "100.63.255.255" }, "network.bind_ip"},
 		{"cgnat above", func(c *Config) { c.Network.Exposure, c.Network.BindIP = "private", "100.128.0.1" }, "network.bind_ip"},

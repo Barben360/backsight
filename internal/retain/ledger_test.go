@@ -353,8 +353,9 @@ func TestAKeptDecisionHonoursALaterExclusion(t *testing.T) {
 		t.Fatalf("first %+v", first)
 	}
 	e.f.Attribution.Exclude = []string{shop} // backsight pause --project, later
-	if again, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(10, 5)); again.Applied != "billing" || again.Source != SourceExcluded {
-		t.Errorf("after the exclusion: %+v", again)
+	again, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(10, 5))
+	if again.Applied != "billing" || again.PathRule != "billing" || again.Source != SourceExcluded || slices.Contains(again.Votes.Projects(), "shop") || again.Votes.Roots["shop"] != "" {
+		t.Errorf("after the exclusion, the decision still names it: %+v", again)
 	}
 	if r := e.f.Attribution.Redecide(TurnEntry{Base: "billing", Votes: attribution.Votes{Explicit: []attribution.Count{{Project: "shop", N: 9}}, Roots: map[string]string{"shop": shop}}}); r.Applied != "billing" {
 		t.Errorf("redecided %+v", r)
@@ -362,29 +363,45 @@ func TestAKeptDecisionHonoursALaterExclusion(t *testing.T) {
 }
 
 // A transcript behind the report, or one that cannot be read, is never
-// judged on partial evidence; the fallback is kept like any decision, so
-// a later reader (a rebuild) files the report the same way.
-func TestALaggingOrUnreadableTranscriptKeepsTheBase(t *testing.T) {
+// judged on partial evidence: the report keeps its session's project, and
+// that decision is provisional: a later reader, once the transcript is
+// complete, decides on the evidence and keeps that.
+func TestALaggingOrUnreadableTranscriptIsDecidedLater(t *testing.T) {
 	e, billing, shop, _ := subagentEnv(t)
 	e.recordIn(billing, "s1", "u1", "user", 0, "go")
 	sess := filepath.Join(e.dir, "s1.jsonl")
 	p := e.agent("s1", "ag1", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
 	got, err := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "Fixed the cart.", clockAt(10, 5))
-	if err != nil || got.Applied != "billing" || got.Source != SourceIncomplete {
+	if err != nil || got.Applied != "billing" || got.Source != SourceIncomplete || !got.Provisional {
 		t.Fatalf("lagging: %+v %v", got, err)
 	}
+	// still behind: the provisional answer stands
+	if again, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "Fixed the cart.", clockAt(10, 5)); again.Applied != "billing" {
+		t.Errorf("still lagging: %+v", again)
+	}
 	e.subagentReply("s1", "ag1", billing, "Fixed the cart.") // the transcript catches up
-	if later, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "Fixed the cart.", clockAt(10, 5)); later.Applied != "billing" {
-		t.Errorf("a later reader decided otherwise: %+v", later)
+	later, _ := e.f.Attribution.Subagent("s1", "ag1", sess, p, "billing", "", clockAt(10, 5))
+	if later.Applied != "shop" || later.Provisional {
+		t.Errorf("decided on the evidence: %+v", later)
+	}
+	if kept, _ := e.f.Attribution.loadAgent("s1", "ag1"); kept.Applied != "shop" || kept.Provisional {
+		t.Errorf("not kept: %+v", kept)
 	}
 	missing := filepath.Join(e.dir, "s1", "subagents", "agent-ag2.jsonl")
 	got, _ = e.f.Attribution.Subagent("s1", "ag2", sess, missing, "billing", "", clockAt(10, 5))
-	if got.Source != SourceUnread {
+	if got.Source != SourceUnread || !got.Provisional || got.Applied != "billing" {
 		t.Errorf("unreadable: %+v", got)
 	}
 	e.agent("s1", "ag2", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
-	if later, _ := e.f.Attribution.Subagent("s1", "ag2", sess, missing, "billing", "", clockAt(10, 5)); later.Applied != "billing" {
-		t.Errorf("a later reader decided otherwise: %+v", later)
+	if later, _ := e.f.Attribution.Subagent("s1", "ag2", sess, missing, "billing", "", clockAt(10, 5)); later.Applied != "shop" {
+		t.Errorf("readable later: %+v", later)
+	}
+	// past the hook's budget, nothing is resolved: provisional too
+	a := e.f.Attribution
+	a.Deadline = time.Now().Add(-time.Second)
+	e.agent("s1", "ag3", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	if got, _ := a.Subagent("s1", "ag3", sess, filepath.Join(e.dir, "s1", "subagents", "agent-ag3.jsonl"), "billing", "", clockAt(10, 5)); got.Source != SourceTimeout || !got.Provisional {
+		t.Errorf("past the budget: %+v", got)
 	}
 }
 
@@ -418,37 +435,105 @@ func TestOneDecisionPerReportUnderConcurrentWriters(t *testing.T) {
 	}
 }
 
-// Own owners are the union over this machine's retained sessions (E32):
-// once a session launched in a repository of owner me was recorded, a
-// session started in ~/.claude can move a report to another of me's
-// repositories; an excluded launch teaches nothing.
-func TestOwnersAreLearntFromRetainedLaunches(t *testing.T) {
+// commitAs makes one commit in dir authored by email, with dir's own
+// user.email set to me@example.org (the identity backsight reads).
+func commitAs(t *testing.T, dir, email string) {
+	t.Helper()
+	for _, args := range [][]string{{"config", "user.email", "me@example.org"}, {"config", "user.name", "u"},
+		{"-c", "user.email=" + email, "commit", "-q", "--allow-empty", "-m", "x"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// Own owners are learnt from the launch repositories of retained sessions
+// that the user committed to: a session started in ~/.claude can then move
+// a report to another repository of that owner. A checkout of someone
+// else's code, a remote without an owner, a session kept out (excluded,
+// paused, headless) teaches nothing; projects.deny_owners wins.
+func TestOwnersAreLearntOnlyFromRepositoriesTheUserCommittedTo(t *testing.T) {
 	e, billing, shop, _ := subagentEnv(t)
 	home := filepath.Dir(filepath.Dir(billing))
 	claude := filepath.Join(home, ".claude")
 	_ = os.MkdirAll(claude, 0o700)
 	edits := [][3]string{{"Edit", "file_path", filepath.Join(shop, "a.go")}, {"Edit", "file_path", filepath.Join(shop, "b.go")}}
-	decide := func(sid string) TurnEntry {
+	n := 0
+	decide := func() TurnEntry {
+		n++
+		sid := fmt.Sprintf("c%d", n)
 		e.recordIn(claude, sid, "u1", "user", 0, "go")
 		p := e.agent(sid, "ag1", claude, "Set up.", edits...)
 		got, _ := e.f.Attribution.Subagent(sid, "ag1", filepath.Join(e.dir, sid+".jsonl"), p, ".claude", "", clockAt(10, 5))
 		return got
 	}
-	if got := decide("c1"); got.Applied != ".claude" {
-		t.Fatalf("no owner known yet: %+v", got)
+	launch := func(dir, sid string) {
+		e.recordIn(dir, sid, "u1", "user", 0, "go")
+		e.flush(sid, Options{})
 	}
-	// an excluded launch repository teaches nothing
-	e.f.Attribution.Exclude = []string{billing}
-	e.recordIn(billing, "r0", "u1", "user", 0, "go")
-	e.flush("r0", Options{})
-	if got := decide("c2"); got.Applied != ".claude" {
-		t.Fatalf("learnt from an excluded launch: %+v", got)
+	// someone else's checkout of owner me: the user never committed to it
+	commitAs(t, billing, "them@example.org")
+	launch(billing, "r0")
+	if got := decide(); got.Applied != ".claude" {
+		t.Fatalf("learnt from a checkout the user never committed to: %+v", got)
 	}
-	e.f.Attribution.Exclude = nil
-	e.recordIn(billing, "r1", "u1", "user", 0, "go")
-	e.flush("r1", Options{})
-	if got := decide("c3"); got.Applied != "shop" {
-		t.Errorf("after a retained session of owner me: %+v", got)
+	// a remote with no owner segment
+	hostOnly := e.ownRepo("solo", "https://git.example.org/solo.git")
+	commitAs(t, hostOnly, "me@example.org")
+	launch(hostOnly, "r1")
+	if got := e.f.Attribution.Learnt(); len(got) != 0 {
+		t.Fatalf("learnt %v from a remote without an owner", got)
+	}
+	// the user's commit, but the session paused: nothing
+	commitAs(t, billing, "me@example.org")
+	_ = os.MkdirAll(e.f.Dirs.SessionsDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(e.f.Dirs.SessionsDir(), "r2.json"), []byte(`{"paused":true}`), 0o600)
+	launch(billing, "r2")
+	if got := e.f.Attribution.Learnt(); len(got) != 0 {
+		t.Fatalf("learnt %v from a paused session", got)
+	}
+	// a retained session in a repository the user committed to
+	launch(billing, "r3")
+	if got := e.f.Attribution.Learnt(); !slices.Equal(got, []string{"github.com/me"}) {
+		t.Fatalf("learnt %v", got)
+	}
+	if got := decide(); got.Applied != "shop" {
+		t.Errorf("after a retained session in the user's repository: %+v", got)
+	}
+	// projects.deny_owners wins over what was learnt
+	e.f.Attribution.Deny = []string{"https://github.com/Me"}
+	if got := decide(); got.Applied != ".claude" {
+		t.Errorf("a denied owner still counts: %+v", got)
+	}
+}
+
+// Two sessions learning owners at once lose none.
+func TestOwnersLearntConcurrentlyAreAllKept(t *testing.T) {
+	e := newEnv(t)
+	e.attributed()
+	var dirs []string
+	for i := range 6 {
+		d := e.ownRepo(fmt.Sprintf("r%d", i), fmt.Sprintf("git@github.com:owner%d/r.git", i))
+		commitAs(t, d, "me@example.org")
+		dirs = append(dirs, d)
+	}
+	var wg sync.WaitGroup
+	for _, d := range dirs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a := e.f.Attribution
+			a.Resolver = project.New(filepath.Dir(filepath.Dir(d)), []string{".claude"})
+			if !a.learnOwner(d) {
+				t.Error("an owner was not recorded")
+			}
+		}()
+	}
+	wg.Wait()
+	if got := e.f.Attribution.Learnt(); len(got) != 6 {
+		t.Errorf("learnt %v", got)
 	}
 }
 

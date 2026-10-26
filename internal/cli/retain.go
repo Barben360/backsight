@@ -76,7 +76,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 
 // attributor applies the path rule with this configuration (decision 0072).
 func attributor(d paths.Dirs, cfg config.Config, res *project.Resolver) retain.Attributor {
-	return retain.Attributor{Resolver: res, Transverse: cfg.Projects.Transverse, Owners: cfg.Projects.OwnOwners,
+	return retain.Attributor{Resolver: res, Transverse: cfg.Projects.Transverse, Owners: cfg.Projects.OwnOwners, Deny: cfg.Projects.DenyOwners,
 		Exclude: cfg.Privacy.ExcludePaths, Dir: d.AttributionDir()}
 }
 

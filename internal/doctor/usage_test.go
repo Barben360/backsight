@@ -295,3 +295,19 @@ func TestUsageShowsThePathRulesDisagreement(t *testing.T) {
 		t.Errorf("a project name in the check: %q", c.Summary)
 	}
 }
+
+// doctor lists the owners learnt, without the denied ones, and says how
+// to deny one.
+func TestOwnersCheckListsWhatWasLearnt(t *testing.T) {
+	f := newFixture(t)
+	if c := checkOwners(f.env); c.Status != Info || !strings.Contains(c.Summary, "no repository owner learnt") {
+		t.Errorf("%+v", c)
+	}
+	_ = os.MkdirAll(f.env.Dirs.AttributionDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(f.env.Dirs.AttributionDir(), "owners.json"), []byte(`["github.com/me","github.com/ohmyzsh"]`), 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[projects]\ndeny_owners = [\"github.com/OhMyZsh\"]\n", 0o600)
+	c := checkOwners(f.env)
+	if c.Status != Info || !strings.HasSuffix(c.Summary, ": github.com/me") || !strings.Contains(c.Fix, "projects.deny_owners") || len(c.Projects) != 1 {
+		t.Errorf("%+v", c)
+	}
+}

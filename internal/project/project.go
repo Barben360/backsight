@@ -106,6 +106,24 @@ func gitEntry(dir string) string {
 	}
 }
 
+// Authored says whether the user's git identity (the repository's
+// effective user.email, its global one included) authored at least one
+// commit of dir's repository: what makes a repository the user's own, as
+// opposed to a checkout of someone else's code (decision 0072).
+func (r *Resolver) Authored(dir string) bool {
+	main := r.Main(dir)
+	if main == "" {
+		return false
+	}
+	out, err := exec.Command("git", "-C", main, "config", "user.email").Output()
+	email := strings.TrimSpace(string(out))
+	if err != nil || email == "" {
+		return false
+	}
+	out, err = exec.Command("git", "-C", main, "log", "--all", "-1", "--fixed-strings", "--author="+email, "--format=%H").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
 // Main is the main worktree of dir's repository (a linked worktree's main
 // checkout), "" outside git.
 func (r *Resolver) Main(dir string) string { return r.git(filepath.Clean(dir)).main }
