@@ -46,7 +46,8 @@ type ToolUse struct {
 }
 
 // Known are the record types Claude Code writes besides user and assistant
-// turns, as seen in October 2026 (none carries conversation text). Any
+// turns, as seen in October 2026 (none carries conversation text; the
+// artifact ones and frame-link hold Artifact state, links and titles). Any
 // other type is counted as unknown: a rising count is a format change to
 // look at (SPEC §14).
 var Known = map[string]bool{
@@ -54,6 +55,7 @@ var Known = map[string]bool{
 	"atis-latch": true, "mode": true, "ai-title": true, "bridge-session": true, "permission-mode": true,
 	"queue-operation": true, "pr-link": true, "custom-title": true, "agent-name": true, "system": true,
 	"file-history-snapshot": true, "file-history-delta": true, "cost-state": true, "summary": true, "progress": true,
+	"artifact-autoreact-ledger": true, "artifact-comment-monitor": true, "frame-link": true,
 }
 
 // UnknownLine is a record of a type not in Known, and the offset after it.

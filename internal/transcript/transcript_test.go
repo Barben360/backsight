@@ -264,3 +264,21 @@ func TestAgentTranscriptsAndScans(t *testing.T) {
 		t.Errorf("FirstCWD %q", got)
 	}
 }
+
+// The records Claude Code writes for Artifacts (October 2026) carry state,
+// links and titles, no conversation: they are known, never a format change.
+func TestArtifactRecordsAreKnown(t *testing.T) {
+	in := strings.Join([]string{
+		`{"type":"artifact-autoreact-ledger","v":"1","sessionId":"s","artifacts":"{}"}`,
+		`{"type":"artifact-comment-monitor","v":"1","sessionId":"s","artifacts":"{}"}`,
+		`{"type":"frame-link","sessionId":"s","frameUrl":"https://claude.ai/artifact/x","title":"Wireframes","timestamp":"2026-10-25T18:05:08Z"}`,
+		`{"type":"artifact-next-thing","sessionId":"s"}`,
+	}, "\n") + "\n"
+	recs, st, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(recs) != 0 {
+		t.Fatalf("%+v %v", recs, err)
+	}
+	if got := st.UnknownBefore(st.Consumed); len(got) != 1 || got["artifact-next-thing"] != 1 {
+		t.Errorf("unknown: %v", got)
+	}
+}
