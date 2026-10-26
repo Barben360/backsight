@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/release"
@@ -207,7 +208,7 @@ func updateBanner(uc *state.UpdateCheck, running string) string {
 	if uc == nil || !release.NewerThan(uc.Latest, running) {
 		return ""
 	}
-	return "backsight: update " + uc.Latest + " available, see `backsight changelog`"
+	return instructions.UpdateLine(uc.Latest)
 }
 
 func updateCheckText(res updateCheckResult, err error) string {

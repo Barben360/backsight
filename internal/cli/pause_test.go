@@ -195,3 +195,30 @@ func TestPauseStartsAtTheAskingPrompt(t *testing.T) {
 		t.Errorf("second stretch from %v", got)
 	}
 }
+
+// The one-line output the /backsight:pause skill relays: the state's emoji
+// first, as in the session banner (issue 7); a plan changes nothing, so it
+// carries none.
+func TestPauseTextLines(t *testing.T) {
+	for _, c := range []struct {
+		r    pauseResult
+		want string
+	}{
+		{pauseResult{Paused: true, Session: "s1", Changed: true}, "⏸️ session s1: paused\n"},
+		{pauseResult{Paused: true, Session: "s1"}, "⏸️ session s1: already paused\n"},
+		{pauseResult{Session: "s1", Changed: true}, "🧠 session s1: recording\n"},
+		{pauseResult{Session: "s1"}, "🧠 session s1: already recording\n"},
+		{pauseResult{Paused: true, Path: "/p", Changed: true}, "⏸️ project /p: paused (privacy.exclude_paths updated)\n"},
+		{pauseResult{Paused: true, Path: "/p"}, "⏸️ project /p: already paused\n"},
+		{pauseResult{Path: "/p", Changed: true}, "🧠 project /p: recording (privacy.exclude_paths updated)\n"},
+		{pauseResult{Path: "/p", Changed: true, StillExcluded: ".backsight.toml sets retain = false"},
+			"⏸️ project /p: still not recorded: .backsight.toml sets retain = false (privacy.exclude_paths updated)\n"},
+		{pauseResult{Path: "/p", StillExcluded: "privacy.exclude_paths contains /q"}, "⏸️ project /p: still not recorded: privacy.exclude_paths contains /q\n"},
+		{pauseResult{Paused: true, Path: "/p", Planned: true}, "project /p: would be paused (privacy.exclude_paths change not written: --plan)\n"},
+		{pauseResult{Path: "/p", Planned: true}, "project /p: would be recording (privacy.exclude_paths change not written: --plan)\n"},
+	} {
+		if got := pauseText(c.r); got != c.want {
+			t.Errorf("%+v\n got %q\nwant %q", c.r, got, c.want)
+		}
+	}
+}

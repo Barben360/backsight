@@ -14,7 +14,6 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/plugin"
-	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -94,34 +93,44 @@ func (h *hookEnv) sessionStart() []byte {
 		return contextOutput("SessionStart", instructions.Guide, "")
 	}
 	h.writeEnvFile()
-	project := safeProject(h.project)
+	name := safeProject(h.project)
 	var text, source string
 	var items []session.Injection
 	var err error
-	banner := "backsight · project " + project + " · memory on"
+	// An excluded project gets no briefing page, and its banner says it is
+	// not recorded.
+	optedOut, _ := h.resolver.OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths)
+	var banner string
 	unavailable := false
 	switch {
 	case h.maintenance():
-		banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("maintenance in progress"), true
+		banner, unavailable = instructions.MemoryMaintenance(name), true
 	case h.breakerOpen(): // the server failed again and again: no calls for a while
-		banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("server failing, retried in a few minutes"), true
+		banner, unavailable = instructions.MemoryUnavailable(name, "server failing, retried in a few minutes"), true
 	default:
-		text, items, source, err = h.briefing()
-		if err != nil {
-			banner, unavailable = "backsight · project "+project+" · "+instructions.MemoryUnavailable("server unreachable"), true
+		text, items, source, err = h.briefing(optedOut)
+		switch {
+		case err != nil:
+			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
+		case !h.cfg.Components.Write:
+			banner = instructions.StatusRecordingOff(name)
+		case optedOut:
+			banner = instructions.StatusNotRecorded(name)
+		default:
+			banner = instructions.StatusOn(name)
 		}
 	}
 	if st, err := state.Load(h.dirs.StateFile()); err == nil {
 		settings := claudecode.Locate(h.home, os.Getenv).Settings
 		if drift := plugin.Drift(h.dirs.Data, settings, plugin.Installed{Version: st.PluginVersion, ShimTarget: st.ShimTarget}, buildinfo.Version); len(drift) > 0 {
-			banner += "\nbacksight: Claude Code wiring drifted (" + drift[0] + "): run `backsight client install`"
+			banner += "\n" + instructions.DriftLine(drift[0])
 		}
 		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
 			banner += "\n" + line
 		}
 	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
-		banner += fmt.Sprintf("\nbacksight: %d session(s) quarantined: run `backsight doctor`", len(held))
+		banner += "\n" + instructions.QuarantineLine(len(held))
 	}
 	if h.firstSession() {
 		banner = instructions.FirstSessionNotice(h.cfg.Server.URL, h.cfg.LLM.Provider) + "\n" + banner
@@ -159,12 +168,11 @@ func (h *hookEnv) sessionStart() []byte {
 
 // briefing: the project's most recently updated observations, else its
 // latest raw facts (backfill), else the empty-memory line.
-func (h *hookEnv) briefing() (text string, items []session.Injection, source string, err error) {
+func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injection, source string, err error) {
 	ctx, cancel := context.WithTimeout(h.ctx, briefingTimeout)
 	defer cancel()
 	// An excluded project gets no page: creating one would send its name to
 	// the server and have the server's LLM summarise it.
-	optedOut, _ := project.New(h.home, h.cfg.Projects.Transverse).OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths)
 	missing := false
 	if h.cfg.Recall.Briefing == "model" && !optedOut {
 		// The page read has its own short budget: a slow server must leave
