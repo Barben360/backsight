@@ -181,3 +181,49 @@ func (c *Client) FindBank(ctx context.Context, bank string) (b Bank, found bool,
 		}
 	}
 }
+
+// DocumentsCreatedSince lists every document of bank created at or after
+// since (the server's clock), page by page, whatever its tags.
+func (c *Client) DocumentsCreatedSince(ctx context.Context, bank string, since time.Time) ([]DocumentItem, error) {
+	var all []DocumentItem
+	for offset, pages := 0, 0; ; pages++ {
+		if pages == maxPages {
+			return all, fmt.Errorf("listing the documents of %s: more than %d pages, stopping", bank, maxPages)
+		}
+		var page struct {
+			Items []listItem `json:"items"`
+			Total int        `json:"total"`
+		}
+		q := url.Values{"time_field": {"created_at"}, "start_date": {since.UTC().Format(time.RFC3339)},
+			"limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}}
+		if err := c.get(ctx, bankPath(bank, "/documents"), q, &page); err != nil {
+			return all, err
+		}
+		for _, it := range page.Items {
+			all = append(all, it.item())
+		}
+		offset += len(page.Items)
+		if len(page.Items) == 0 || offset >= page.Total {
+			return all, nil
+		}
+	}
+}
+
+// NewestDocument counts the documents of bank and reads the creation time
+// of the newest (zero when there is none), in one request.
+func (c *Client) NewestDocument(ctx context.Context, bank string) (int, time.Time, error) {
+	var page struct {
+		Items []listItem `json:"items"`
+		Total int        `json:"total"`
+	}
+	// A time field with no dates orders by it, newest first (Hindsight
+	// 1.1.0 build_time_clause).
+	if err := c.get(ctx, bankPath(bank, "/documents"), url.Values{"time_field": {"created_at"}, "limit": {"1"}}, &page); err != nil {
+		return 0, time.Time{}, err
+	}
+	var newest time.Time
+	if len(page.Items) > 0 {
+		newest = serverTime(page.Items[0].CreatedAt)
+	}
+	return page.Total, newest, nil
+}

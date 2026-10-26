@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
@@ -122,15 +123,28 @@ func (r Repurged) String() string {
 
 // PurgeAgain purges again, as forget --purge did (PurgeWrites), each
 // document of bank a tombstone names that the server holds: a restore
-// brought it back, or a queued retain recreated it (Hindsight 1.1.0
-// recreates a deleted document on append). Its facts and their projects
-// are read first; the tombstone's project is added (a page may quote a
-// document whose facts are not extracted yet).
+// brought it back, or a retain recreated it (Hindsight 1.1.0 recreates a
+// deleted document on append). The documents are looked for in batch
+// (FindRecreated): a long tombstone list costs the bank's listing, not a
+// read per tombstone.
 func PurgeAgain(ctx context.Context, cl *hindsight.Client, bank string, tombs []state.Tombstone) (Repurged, error) {
+	sc, err := FindRecreated(ctx, cl, bank, tombs, time.Time{}, nil)
+	if err != nil {
+		return Repurged{Left: sc.Checked, Unread: true}, err
+	}
+	return PurgeFound(ctx, cl, bank, sc.Found)
+}
+
+// PurgeFound purges again found, tombstoned documents the server holds:
+// each one's facts and their projects are read first; the tombstone's
+// project is added (a page may quote a document whose facts are not
+// extracted yet). The facts are those extracted from whatever recreated
+// the document, so none outlives it.
+func PurgeFound(ctx context.Context, cl *hindsight.Client, bank string, found []state.Tombstone) (Repurged, error) {
 	var res Repurged
 	seen := map[string]bool{}
 	var docs []state.Tombstone
-	for _, t := range tombs {
+	for _, t := range found {
 		if seen[t.Document] || (t.Bank != "" && t.Bank != bank) {
 			continue
 		}
@@ -141,19 +155,7 @@ func PurgeAgain(ctx context.Context, cl *hindsight.Client, bank string, tombs []
 		res.Left = len(docs) - i
 		return res, err
 	}
-	unread := func(i int, err error) (Repurged, error) {
-		res.Unread = true
-		return fail(i, err)
-	}
 	for i, t := range docs {
-		_, err := cl.GetDocument(ctx, bank, t.Document)
-		var apiErr *hindsight.APIError
-		switch {
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-			continue
-		case err != nil:
-			return unread(i, fmt.Errorf("bank %s, document %s: %w", bank, t.Document, err))
-		}
 		var facts []PurgeFact
 		projects := map[string]bool{}
 		if t.Project != "" {
@@ -168,7 +170,8 @@ func PurgeAgain(ctx context.Context, cl *hindsight.Client, bank string, tombs []
 			}
 			return nil
 		}); err != nil {
-			return unread(i, fmt.Errorf("bank %s, the facts of document %s: %w", bank, t.Document, err))
+			res.Unread = true
+			return fail(i, fmt.Errorf("bank %s, the facts of document %s: %w", bank, t.Document, err))
 		}
 		cleared, pages, err := PurgeWrites(ctx, cl, bank, facts, []string{t.Document}, projects, "it is purged again on the next restore or reconcile")
 		res.Observations += cleared

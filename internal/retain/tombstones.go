@@ -242,3 +242,7 @@ func homeOfPurged(sid string, tombs []state.Tombstone) string {
 	}
 	return ""
 }
+
+// SyncTombstones makes this client's tombstones and the control bank's
+// the same, as every reconcile does first (syncTombstones).
+func (f *Flusher) SyncTombstones(ctx context.Context) error { return f.syncTombstones(ctx) }
