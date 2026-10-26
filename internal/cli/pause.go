@@ -12,6 +12,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/session"
@@ -134,20 +135,24 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 
 func pauseText(r pauseResult) string {
 	state := map[bool]string{true: "paused", false: "recording"}[r.Paused]
+	// The state's emoji leads, as in the session banner; a plan changes
+	// nothing and carries none.
+	emoji := map[bool]string{true: instructions.EmojiNotRecorded, false: instructions.EmojiOn}[r.Paused]
+	already := "already "
 	if r.StillExcluded != "" {
-		state = "still not recorded: " + r.StillExcluded
+		state, emoji, already = "still not recorded: "+r.StillExcluded, instructions.EmojiNotRecorded, ""
 	}
 	switch {
 	case r.Planned:
 		return fmt.Sprintf("project %s: would be %s (privacy.exclude_paths change not written: --plan)\n", r.Path, map[bool]string{true: "paused", false: "recording"}[r.Paused])
 	case r.Path != "" && r.Changed:
-		return fmt.Sprintf("project %s: %s (privacy.exclude_paths updated)\n", r.Path, state)
+		return fmt.Sprintf("%s project %s: %s (privacy.exclude_paths updated)\n", emoji, r.Path, state)
 	case r.Path != "":
-		return fmt.Sprintf("project %s: already %s\n", r.Path, state)
+		return fmt.Sprintf("%s project %s: %s%s\n", emoji, r.Path, already, state)
 	case r.Changed:
-		return fmt.Sprintf("session %s: %s\n", r.Session, state)
+		return fmt.Sprintf("%s session %s: %s\n", emoji, r.Session, state)
 	}
-	return fmt.Sprintf("session %s: already %s\n", r.Session, state)
+	return fmt.Sprintf("%s session %s: already %s\n", emoji, r.Session, state)
 }
 
 // pauseStart is where a pause's stretch begins: at the prompt that asked

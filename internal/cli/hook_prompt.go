@@ -216,7 +216,7 @@ func (h *hookEnv) userPrompt() []byte {
 	case ok && h.maintenance():
 		ok, reason = false, "maintenance"
 		if !st.Unavailable {
-			banner = instructions.MemoryUnavailable("maintenance in progress")
+			banner = instructions.MemoryMaintenance("")
 		}
 	case ok && h.breakerOpen():
 		ok, reason = false, "breaker"
@@ -238,7 +238,7 @@ func (h *hookEnv) userPrompt() []byte {
 			ev.Top = res.Hits[0].Reranker
 		}
 		if failed && !st.Unavailable {
-			banner = instructions.MemoryUnavailable("server unreachable")
+			banner = instructions.MemoryUnavailable("", "server unreachable")
 		}
 		if text != "" {
 			parts = append(parts, text)

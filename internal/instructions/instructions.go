@@ -94,14 +94,9 @@ const (
 	BriefingRaw   = "(raw facts: the memory is still being consolidated)"
 )
 
-// FirstSessionNotice is shown once after setup.
+// FirstSessionNotice is shown once after setup, above the status line.
 func FirstSessionNotice(server, provider string) string {
-	return fmt.Sprintf("Memory is on: this session is stored on %s and processed by %s; `/backsight:pause` stops it for this session, `/backsight:pause project` for this project.", server, provider)
-}
-
-// MemoryUnavailable is the once-per-session visible failure (systemMessage).
-func MemoryUnavailable(why string) string {
-	return "backsight: memory unavailable (" + why + "); run `backsight doctor`."
+	return fmt.Sprintf("👋 Memory is on: this session is stored on %s and processed by %s; `/backsight:pause` stops it for this session, `/backsight:pause project` for this project.", server, provider)
 }
 
 // SubagentGuide opens the SubagentStart text (≤ 600 chars with items).

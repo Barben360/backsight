@@ -310,7 +310,7 @@ func TestSessionStartBannerShowsANewerRelease(t *testing.T) {
 	record("0.2.0")
 	// The version only: release notes are unsigned and never reach a
 	// Claude session.
-	if msg := start(); !strings.Contains(msg, "backsight: update 0.2.0 available, see `backsight changelog`") || strings.Contains(msg, "Add update check") {
+	if msg := start(); !strings.Contains(msg, "⬆️ backsight update 0.2.0 available · see `backsight changelog`") || strings.Contains(msg, "Add update check") {
 		t.Errorf("banner %q", msg)
 	}
 	setBuild(t, "0.2.0", "def5678") // updated since the check
