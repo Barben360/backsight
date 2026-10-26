@@ -1,0 +1,33 @@
+# Keeps the Go modules and the actions' SHA pins current (security review
+# M2). Weekly, one grouped pull request per ecosystem; security updates
+# (a repository setting) come as they are published. The cooldown leaves
+# a new version a few days in the wild before it is proposed, the window
+# in which a hijacked release is usually caught. Not covered here: go.mod's
+# toolchain line and the setup-go go-version that matches it, the
+# goreleaser and golangci-lint versions in the workflows, and the pinned
+# Claude Code and Node versions; govulncheck's weekly run flags a Go
+# release that fixes a reachable vulnerability.
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 5
+    groups:
+      gomod:
+        patterns: ["*"]
+    commit-message:
+      prefix: "⬆️"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "⬆️"

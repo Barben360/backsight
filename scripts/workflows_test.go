@@ -245,3 +245,123 @@ func TestReleasePublishesAVerifiedDraft(t *testing.T) {
 		t.Error("no job reads MINISIGN_SECRET_KEY: the checks prove nothing")
 	}
 }
+
+// setupGo is every actions/setup-go step of the workflows, by job.
+func setupGo(t *testing.T) (steps []struct{ where, step string }) {
+	t.Helper()
+	for _, w := range workflows(t) {
+		for _, j := range w.jobs {
+			for _, s := range j.steps {
+				if strings.Contains(s, "uses: actions/setup-go@") {
+					steps = append(steps, struct{ where, step string }{w.name + " job " + j.name, s})
+				}
+			}
+		}
+	}
+	return steps
+}
+
+// Every job builds with the patched toolchain go.mod names, never the
+// bare go line's .0 release (security review M2: v0.1.0-m5 shipped with
+// go1.26.0 and its known stdlib vulnerabilities). setup-go reads only the
+// go line of go-version-file, so each step names the version itself.
+func TestWorkflowsBuildWithThePinnedToolchain(t *testing.T) {
+	mod, err := os.ReadFile("../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^toolchain go(\d+\.\d+\.\d+)\s*$`).FindSubmatch(mod)
+	if m == nil {
+		t.Fatal("go.mod has no toolchain goX.Y.Z line: builds take the go line's release, unpatched")
+	}
+	want := regexp.MustCompile(`(?m)^          go-version: "?` + regexp.QuoteMeta(string(m[1])) + `"?(\s+#.*)?$`)
+	steps := setupGo(t)
+	for _, s := range steps {
+		if !want.MatchString(s.step) || strings.Contains(s.step, "go-version-file") {
+			t.Errorf("%s: setup-go does not install go.mod's toolchain %s exactly:\n%s", s.where, m[1], s.step)
+		}
+	}
+	if len(steps) < 6 {
+		t.Errorf("%d setup-go steps found: the check proves little", len(steps))
+	}
+}
+
+// A job that signs (goreleaser, the release key) restores no cache: the
+// Go build cache is shared with every main-branch job, some of which run
+// third-party tools, and GOCACHE objects are trusted on a hit (security
+// review M4, the "cacheract" pattern).
+func TestSigningJobsRestoreNoCache(t *testing.T) {
+	signers := 0
+	for _, w := range workflows(t) {
+		for _, j := range w.jobs {
+			if !strings.Contains(j.raw, "goreleaser/goreleaser-action@") && !strings.Contains(j.raw, "MINISIGN_SECRET_KEY") {
+				continue
+			}
+			signers++
+			for _, s := range j.steps {
+				if strings.Contains(s, "uses: actions/setup-go@") && !regexp.MustCompile(`(?m)^          cache: false\s*$`).MatchString(s) {
+					t.Errorf("%s job %s signs but setup-go restores its cache (cache: false missing)", w.name, j.name)
+				}
+				if strings.Contains(s, "uses: actions/cache") {
+					t.Errorf("%s job %s signs but restores a cache: %s", w.name, j.name, strings.TrimSpace(strings.SplitN(s, "\n", 2)[0]))
+				}
+			}
+		}
+	}
+	if signers < 2 {
+		t.Errorf("%d signing jobs found, want release and snapshot: the check proves nothing", signers)
+	}
+}
+
+// govulncheck, at a pinned version, fails CI on a vulnerability our code
+// reaches, on every change and weekly, as new advisories land on an
+// unchanged tree (security review M2).
+func TestGovulncheckGuardsTheCode(t *testing.T) {
+	run := regexp.MustCompile(`go run golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+ \./\.\.\.`)
+	found := 0
+	for _, w := range workflows(t) {
+		raw, err := os.ReadFile(filepath.Join("../.github/workflows", w.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range w.jobs {
+			if !run.MatchString(j.raw) {
+				continue
+			}
+			found++
+			for _, on := range []string{`(?m)^  pull_request:`, `(?m)^  push:\n    branches: \[main\]`, `(?m)^  schedule:\n    - cron: "[^"]+"`} {
+				if !regexp.MustCompile(on).Match(raw) {
+					t.Errorf("%s runs govulncheck but not on %s", w.name, on)
+				}
+			}
+		}
+	}
+	if found == 0 {
+		t.Error("no job runs govulncheck@<version> ./...")
+	}
+}
+
+// Dependabot keeps the modules and the actions' SHA pins current, weekly,
+// one grouped pull request per ecosystem (security review M2).
+func TestDependabotTracksModulesAndActions(t *testing.T) {
+	raw, err := os.ReadFile("../.github/dependabot.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := blocks(string(raw), regexp.MustCompile(`(?m)^  - package-ecosystem:`))
+	seen := map[string]bool{}
+	for _, u := range updates {
+		eco := strings.Trim(strings.TrimSpace(strings.SplitN(strings.SplitN(u, ":", 2)[1], "\n", 2)[0]), `"'`)
+		seen[eco] = true
+		for _, want := range []string{`(?m)^      interval: "?weekly"?\s*$`, `(?m)^    groups:\s*$`, `(?m)^    directory: "?/"?\s*$`} {
+			if !regexp.MustCompile(want).MatchString(u) {
+				t.Errorf("dependabot %s: no %s", eco, want)
+			}
+		}
+	}
+	for _, eco := range []string{"gomod", "github-actions"} {
+		if !seen[eco] {
+			t.Errorf("dependabot.yml does not track %s (found %v)", eco, seen)
+		}
+	}
+}

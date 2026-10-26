@@ -2,6 +2,8 @@ module github.com/Barben360/backsight
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	aead.dev/minisign v0.3.0
 	filippo.io/age v1.2.1
