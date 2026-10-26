@@ -5,15 +5,94 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DocumentItem is one row of a bank's document listing (no text).
 type DocumentItem struct {
-	ID       string
-	Tags     []string
-	Metadata map[string]string // string values only
+	ID        string
+	Tags      []string
+	Metadata  map[string]string // string values only
+	CreatedAt time.Time         // when the document first arrived; zero when the server gave none
+}
+
+// listItem is a document row as the server sends it.
+type listItem struct {
+	ID        string         `json:"id"`
+	Tags      []string       `json:"tags"`
+	Metadata  map[string]any `json:"document_metadata"`
+	CreatedAt string         `json:"created_at"`
+}
+
+func (it listItem) item() DocumentItem {
+	d := DocumentItem{ID: it.ID, Tags: it.Tags, Metadata: map[string]string{}, CreatedAt: serverTime(it.CreatedAt)}
+	for k, v := range it.Metadata {
+		if s, ok := v.(string); ok {
+			d.Metadata[k] = s
+		}
+	}
+	return d
+}
+
+// serverTime reads the server's ISO times, with or without a zone (UTC).
+func serverTime(s string) time.Time {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+// taggedSince is the server-side filter of the documents carrying every
+// tag and created at or after since.
+func taggedSince(since time.Time, tags []string) url.Values {
+	return url.Values{"tags": tags, "tags_match": {"all_strict"}, "time_field": {"created_at"}, "start_date": {since.UTC().Format(time.RFC3339)}}
+}
+
+// TaggedDocumentsSince lists the documents carrying every tag created at
+// or after since, newest first, page by page.
+func (c *Client) TaggedDocumentsSince(ctx context.Context, bank string, since time.Time, tags ...string) ([]DocumentItem, error) {
+	var all []DocumentItem
+	for offset, pages := 0, 0; ; pages++ {
+		if pages == maxPages {
+			return all, fmt.Errorf("listing the documents of %s: more than %d pages, stopping", bank, maxPages)
+		}
+		var page struct {
+			Items []listItem `json:"items"`
+			Total int        `json:"total"`
+		}
+		q := taggedSince(since, tags)
+		q.Set("limit", strconv.Itoa(pageSize))
+		q.Set("offset", strconv.Itoa(offset))
+		if err := c.get(ctx, bankPath(bank, "/documents"), q, &page); err != nil {
+			return all, err
+		}
+		for _, it := range page.Items {
+			all = append(all, it.item())
+		}
+		offset += len(page.Items)
+		if len(page.Items) == 0 || offset >= page.Total {
+			break
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return all, nil
+}
+
+// CountTaggedDocumentsSince counts the documents TaggedDocumentsSince
+// would list, in one request.
+func (c *Client) CountTaggedDocumentsSince(ctx context.Context, bank string, since time.Time, tags ...string) (int, error) {
+	var page struct {
+		Total int `json:"total"`
+	}
+	q := taggedSince(since, tags)
+	q.Set("limit", "1")
+	err := c.get(ctx, bankPath(bank, "/documents"), q, &page)
+	return page.Total, err
 }
 
 // ListDocuments lists every document of bank, page by page; an *APIError
@@ -25,25 +104,15 @@ func (c *Client) ListDocuments(ctx context.Context, bank string) ([]DocumentItem
 			return all, fmt.Errorf("listing the documents of %s: more than %d pages, stopping", bank, maxPages)
 		}
 		var page struct {
-			Items []struct {
-				ID       string         `json:"id"`
-				Tags     []string       `json:"tags"`
-				Metadata map[string]any `json:"document_metadata"`
-			} `json:"items"`
-			Total int `json:"total"`
+			Items []listItem `json:"items"`
+			Total int        `json:"total"`
 		}
 		q := url.Values{"limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}}
 		if err := c.get(ctx, bankPath(bank, "/documents"), q, &page); err != nil {
 			return all, err
 		}
 		for _, it := range page.Items {
-			d := DocumentItem{ID: it.ID, Tags: it.Tags, Metadata: map[string]string{}}
-			for k, v := range it.Metadata {
-				if s, ok := v.(string); ok {
-					d.Metadata[k] = s
-				}
-			}
-			all = append(all, d)
+			all = append(all, it.item())
 		}
 		offset += len(page.Items)
 		if len(page.Items) == 0 || offset >= page.Total {

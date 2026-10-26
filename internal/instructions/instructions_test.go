@@ -125,6 +125,7 @@ func TestGuideTellsClaudeNeverToAskForASecret(t *testing.T) {
 // mixes two wordings under one version.
 var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
+	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 }
 
 func wordingHash() string {

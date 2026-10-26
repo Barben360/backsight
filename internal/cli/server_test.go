@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -217,8 +218,11 @@ var (
 	memories           map[string]string
 	projectEntities    map[string]string
 	retainedTags       []string
-	retainedContents   []string     // the content of every accepted item
-	bankConfigStatus   atomic.Int32 // non-zero: bank claude-memory's /config answers this status
+	retainedContents   []string // the content of every accepted item
+	// fakeDocCreated overrides a document's created_at (default: when the
+	// fake accepted it).
+	fakeDocCreated   map[string]time.Time
+	bankConfigStatus atomic.Int32 // non-zero: bank claude-memory's /config answers this status
 	// bankOverrides reads a bank's config overrides on the fake server,
 	// after replacing them with set when it is not nil.
 	bankOverrides func(bank string, set map[string]json.RawMessage) map[string]json.RawMessage
@@ -245,6 +249,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	llmPeriod = ""
 	extractFails.Store(false)
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
+	fakeDocCreated = map[string]time.Time{}
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
 	recallQueries = nil
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
@@ -277,6 +282,12 @@ func fakeHindsight(t *testing.T) (port int) {
 		return out
 	}
 	docs := map[string]json.RawMessage{}
+	type docInfo struct {
+		tags    []string
+		text    string
+		created time.Time
+	}
+	docInfos := map[string]docInfo{} // "<bank>/<id>"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if k, _ := acceptedKey.Load().(string); requireKey.Load() && r.Header.Get("Authorization") != "Bearer "+k {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -307,6 +318,36 @@ func fakeHindsight(t *testing.T) (port int) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			banks[strings.TrimPrefix(r.URL.Path, "/v1/default/banks/")] = body.Name
 			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/documents") && r.URL.Query().Has("tags"):
+			// Like the server: the documents carrying every tag asked,
+			// created at or after start_date (time_field=created_at).
+			bank := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents")
+			q := r.URL.Query()
+			since, _ := time.Parse(time.RFC3339, q.Get("start_date"))
+			var items []map[string]any
+			for id := range bankDocs[bank] {
+				in := docInfos[bank+"/"+id]
+				created := in.created
+				if c, ok := fakeDocCreated[id]; ok {
+					created = c
+				}
+				if q.Get("time_field") == "created_at" && created.Before(since) {
+					continue
+				}
+				keep := true
+				for _, tg := range q["tags"] {
+					keep = keep && slices.Contains(in.tags, tg)
+				}
+				if keep {
+					var meta map[string]any
+					_ = json.Unmarshal(docs[bank+"/"+id], &meta)
+					items = append(items, map[string]any{"id": id, "tags": in.tags, "created_at": created.Format(time.RFC3339Nano), "document_metadata": meta})
+				}
+			}
+			off, _ := strconv.Atoi(q.Get("offset"))
+			lim, _ := strconv.Atoi(q.Get("limit"))
+			page := items[min(off, len(items)):min(off+lim, len(items))]
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": page, "total": len(items)})
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/documents"):
 			bank := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents")
 			var items []string
@@ -504,6 +545,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			for _, it := range body.Items {
 				bankDocs[bank][it.DocumentID] = true
 				docs[bank+"/"+it.DocumentID] = it.Metadata // documents are per bank, like the server's
+				docInfos[bank+"/"+it.DocumentID] = docInfo{tags: it.Tags, text: it.Content, created: time.Now().UTC()}
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())
 				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))
@@ -537,7 +579,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `}`))
+			text, _ := json.Marshal(docInfos[bank+"/"+id].text)
+			_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + string(meta) + `,"original_text":` + string(text) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/llm-requests/stats"):
 			calls := statsCalls.Add(1)
 			if statsDown.Load() || (statsFailAfter.Load() > 0 && calls > statsFailAfter.Load()) {

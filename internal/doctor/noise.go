@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/config"
@@ -56,7 +57,43 @@ func checkNoise(ctx context.Context, env Env, cl *hindsight.Client, tg *target.T
 		why := "skipped: " + skipReason(srv)
 		out = append(out, Check{ID: "noise-transverse", Status: Info, Summary: why}, Check{ID: "noise-subagent", Status: Info, Summary: why})
 	}
-	return append(out, checkNoiseHeadless(ctx, env, cfg, cl, usable, skipReason(srv)))
+	out = append(out, checkNoiseHeadless(ctx, env, cfg, cl, usable, skipReason(srv)))
+	if !usable {
+		return append(out, Check{ID: "notes", Status: Info, Summary: "skipped: " + skipReason(srv)})
+	}
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
+	return append(out, checkNotes(ctx, cl, tg.Bank, cfg.Projects.Transverse[0], now()))
+}
+
+// notesWindow: doctor counts the notes stored in the last week.
+const notesWindow = 7 * 24 * time.Hour
+
+// checkNotes counts the notes stored in the last week, the transverse
+// pool's apart: the memory tools run without a prompt, so what they wrote
+// is shown for review (decision 0072 M6). Information, never a fault.
+func checkNotes(ctx context.Context, cl *hindsight.Client, bank, alias string, now time.Time) Check {
+	c := Check{ID: "notes", Status: OK, Summary: "no note stored in the last 7 days"}
+	since := now.Add(-notesWindow)
+	n, err := cl.CountTaggedDocumentsSince(ctx, bank, since, "source:note")
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Info, "cannot count the notes stored this week", err.Error()
+		return c
+	}
+	if n == 0 {
+		return c
+	}
+	pool, err := cl.CountTaggedDocumentsSince(ctx, bank, since, "source:note", "project:"+alias)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Info, "cannot count the notes stored this week", err.Error()
+		return c
+	}
+	c.Status = Info
+	c.Summary = fmt.Sprintf("%d note%s stored in the last 7 days (%d in the transverse pool)", n, map[bool]string{true: "", false: "s"}[n == 1], pool)
+	c.Fix = "review them: backsight memory notes (the transverse pool's: backsight memory notes --project transverse)"
+	return c
 }
 
 // checkNoiseTransverse: the transverse pool is searched with every project,

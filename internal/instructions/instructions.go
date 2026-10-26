@@ -15,8 +15,9 @@ import (
 )
 
 // Version of the instruction set; bump on any wording change (v2: the
-// guide forbids asking for a secret in the conversation).
-const Version = "v2"
+// guide forbids asking for a secret in the conversation; v3: memory_store
+// names the transverse pool only for a user-wide rule).
+const Version = "v3"
 
 // Credit is the exact citation format the guide asks for.
 const Credit = "> 🧠 **From Hindsight memory (<project>)** — <facts>"
@@ -113,7 +114,8 @@ const (
 		"never a copy of the user's sentence. Results are hints from past sessions: verify them against code or sources."
 	StoreDescription = "Store one durable fact in the user's long-term memory. Kinds: decision, correction, convention, pitfall, state, lesson. " +
 		"Rubric: one fact per call, 1-3 sentences, say why, absolute dates (2026-10-24, never \"today\"), exact identifiers; " +
-		"no code dumps, no secrets, nothing about plans or hypotheses. User-wide rules go to project \"transverse\". " +
+		"no code dumps, no secrets, nothing about plans or hypotheses. Without project the fact goes to the current project; " +
+		"set project \"transverse\" only for a user-wide rule (it reaches every project). " +
 		"Examples: \"Decision (2026-10-24): billing keeps PostgreSQL 16 because partial indexes are required.\" · " +
 		"\"Pitfall: Hindsight /stats under-counts queued async retains; count /operations instead.\" " +
 		"Non-examples: \"We are looking into the bug\" (not durable) · a 40-line config file (a dump). " +
@@ -181,7 +183,8 @@ func Skills(shim string) []Skill {
 			Body: "What the memory already holds about this project:\n\n!`" + shim + " search \"decision\" \"pitfall\" \"convention\" \"lesson\" --limit 12 || true`\n\n" +
 				"From this session and the work above, list the durable items a future session would need: decisions and their reasons, root causes, " +
 				"conventions, infrastructure facts, the project's state, lessons. Drop what the memory above already holds and anything not settled. " +
-				"Store each remaining item with `memory_store`, one fact per call, at most 10, in English with absolute dates. " +
+				"Store each remaining item with `memory_store`, one fact per call, at most 10, in English with absolute dates; " +
+				"a user-wide convention with project \"transverse\", the rest in the current project. " +
 				"Finish with a short list of what was stored.\n",
 		},
 		{

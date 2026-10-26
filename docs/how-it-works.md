@@ -76,7 +76,7 @@ Claude has three tools, served by `backsight mcp` through the plugin:
 |---|---|
 | `memory_search` | Searches the memory with 1 to 4 short keyword queries, like `backsight search`. |
 | `memory_read` | Shows one memory with the facts it was built from. |
-| `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one (`transverse` for user-wide rules). It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. |
+| `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. |
 
 Setup adds a permission rule that lets Claude call these three tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
 

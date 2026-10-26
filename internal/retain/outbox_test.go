@@ -34,6 +34,14 @@ func TestNoteItem(t *testing.T) {
 	if NewNote("b", "decision", "billing", "Billing keeps PostgreSQL 16 for partial indexes.", at).OperationID != n.OperationID {
 		t.Error("operation id not deterministic")
 	}
+	if _, ok := it.Metadata["session"]; ok {
+		t.Errorf("a note without a session names one: %v", it.Metadata)
+	}
+	// the session it was stored from goes with it, for review (memory notes)
+	n.Session = "s-42"
+	if it := n.Item("m1"); it.Metadata["session"] != "s-42" {
+		t.Errorf("session metadata %v", it.Metadata)
+	}
 }
 
 func TestOutboxFlushSendsAndEmpties(t *testing.T) {

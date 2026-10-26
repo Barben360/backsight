@@ -39,7 +39,7 @@ type readArgs struct {
 type storeArgs struct {
 	Kind    string `json:"kind" jsonschema:"decision, correction, convention, pitfall, state or lesson"`
 	Text    string `json:"text" jsonschema:"1-3 sentences: the fact, why, absolute dates"`
-	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" for user-wide rules"`
+	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" only for a user-wide rule"`
 }
 
 // live is the session and project of the Claude Code session this server
@@ -159,15 +159,14 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				// while one is on, it fails closed.
 				err = errors.New("not stored: a session is paused and this server cannot tell which session it belongs to (no current hook record); resume it, or store from the shell with backsight store")
 			}
+			var proj string
+			if err == nil {
+				proj, err = noteTarget(deps.cfg, a.Project, live.Project, `project "transverse"`)
+			}
 			if err != nil {
 				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Live: found})
 				return errorResult(err.Error()), nil, nil
 			}
-			proj := a.Project
-			if proj == "" {
-				proj = live.Project
-			}
-			proj = noteProject(deps.home, deps.cfg, proj)
 			// What this fact updates or repeats, before it is stored (SPEC §7).
 			similar := deps.engine.Search(ctx, recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3})
 			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, deps.sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)

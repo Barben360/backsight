@@ -72,7 +72,7 @@ func newStoreCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "", "decision, correction, convention, pitfall, state or lesson")
-	cmd.Flags().StringVar(&proj, "project", "", "project tag (default: the current directory's project; a transverse alias for user-wide rules)")
+	cmd.Flags().StringVar(&proj, "project", "", `project tag (default: the current directory's project; "transverse" only for a user-wide rule)`)
 	return cmd
 }
 
@@ -83,8 +83,12 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		return storeResult{}, err
 	}
 	text = strings.TrimSpace(text)
-	proj = noteProject(home, cfg, proj)
+	proj, err := noteTarget(cfg, proj, project.New(home, cfg.Projects.Transverse).Project(cwd), "--project transverse")
+	if err != nil {
+		return storeResult{}, err
+	}
 	n := retain.NewNote(cfg.Server.Bank, kind, proj, text, now())
+	n.Session = sid
 	ob := notesOutboxFor(d, cfg)
 	warn, err := ob.Append(n)
 	if err != nil {
@@ -165,18 +169,35 @@ func validProject(p string) bool {
 	return true
 }
 
-// noteProject: the asked project, else the working directory's; any
-// transverse alias, or the keyword, maps to the first alias (one pool, SPEC
-// §4).
-func noteProject(home string, cfg config.Config, proj string) string {
-	if proj == "" {
-		wd, _ := os.Getwd()
-		proj = project.New(home, cfg.Projects.Transverse).Project(wd)
+// noteTarget is the project a note goes to: the one asked for, else the
+// current one. The transverse pool is shown in every project, so a note
+// goes there only when asked for by name (the keyword or an alias, mapped
+// to the first alias: one pool, SPEC §4); a note without a project in a
+// directory of the pool (home, ~/.claude) is refused, naming how to ask
+// (decision 0072 M6).
+func noteTarget(cfg config.Config, asked, current, how string) (string, error) {
+	switch {
+	case asked != "":
+		return canonicalProject(cfg, asked), nil
+	case isPool(cfg, current):
+		return "", &output.Error{Code: output.Usage, Message: "this directory belongs to the transverse pool, whose notes reach every project: " +
+			"add " + how + " for a user-wide rule, or name the project the fact belongs to; nothing stored"}
 	}
-	if len(cfg.Projects.Transverse) > 0 && (proj == TransverseKeyword || slices.Contains(cfg.Projects.Transverse, proj)) {
-		proj = cfg.Projects.Transverse[0]
+	return current, nil
+}
+
+// isPool: p names the transverse pool (the keyword or an alias).
+func isPool(cfg config.Config, p string) bool {
+	return len(cfg.Projects.Transverse) > 0 && (p == TransverseKeyword || slices.Contains(cfg.Projects.Transverse, p))
+}
+
+// canonicalProject maps the keyword and every transverse alias to the first
+// alias (one pool, SPEC §4); any other name is kept.
+func canonicalProject(cfg config.Config, p string) string {
+	if isPool(cfg, p) {
+		return cfg.Projects.Transverse[0]
 	}
-	return proj
+	return p
 }
 
 func storeText(res storeResult) string {

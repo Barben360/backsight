@@ -36,7 +36,7 @@ The unit memories are grouped by: the Git repository a session ran in (a worktre
 
 ## Transverse pool
 
-The project that holds what is true everywhere: your preferences, conventions and rules. Sessions started in your home directory or `~/.claude` go there, and `--project transverse` stores a fact there. Recall always searches it together with the current project. Its names are `projects.transverse` in [configuration.md](configuration.md#projects).
+The project that holds what is true everywhere: your preferences, conventions and rules. Sessions started in your home directory or `~/.claude` go there; a stored fact goes there only when named (`--project transverse`, or `project: "transverse"` for Claude), and `backsight memory notes --project transverse` lists the recent ones. Recall always searches it together with the current project. Its names are `projects.transverse` in [configuration.md](configuration.md#projects).
 
 ## Related projects
 
