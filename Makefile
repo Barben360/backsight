@@ -28,9 +28,10 @@ build:
 test:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race ./...
 
-
+# --allow-parallel-runners: run beside another lint (a CI job, the gate)
+# instead of failing on its lock.
 lint:
-	golangci-lint run
+	golangci-lint run --allow-parallel-runners
 
 # Compile every release target (no tests: those run on Linux only until M7).
 cross:
