@@ -275,7 +275,7 @@ func (h *hookEnv) userPrompt() []byte {
 	}
 	ev.IDs, ev.Injected, ev.Chars = ids, len(ids), len([]rune(text))
 	h.updateSession(func(s *session.State) error {
-		s.Project, s.Remote = h.project, h.remote()
+		s.Project, s.Remote, s.ProjectExplicit = h.project, h.remote(), h.resolver.Explicit(h.cwd)
 		s.Prompts = max(s.Prompts, n)
 		s.LastPromptAt = promptAt
 		s.SubagentDone = false

@@ -3,7 +3,9 @@ package doctor
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,9 +21,22 @@ func (f *fixture) session(id, project, remote string) {
 	put(f.t, filepath.Join(f.env.Dirs.SessionsDir(), id+".json"), `{"project":"`+project+`","remote":"`+remote+`"}`, 0o600)
 }
 
+// sessionAt is a session state last written at t; explicit: its project
+// name came from a .backsight.toml project key.
+func (f *fixture) sessionAt(id, project, remote string, explicit bool, t time.Time) {
+	p := filepath.Join(f.env.Dirs.SessionsDir(), id+".json")
+	put(f.t, p, `{"project":"`+project+`","remote":"`+remote+`","project_explicit":`+strconv.FormatBool(explicit)+`}`, 0o600)
+	if err := os.Chtimes(p, t, t); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// remotesNow is the clock the remotes tests judge recency against.
+var remotesNow = time.Now()
+
 func TestRemotesWarnsOnOneProjectNameWithTwoRemotes(t *testing.T) {
 	f := newFixture(t)
-	if c := checkRemotes(f.env.Dirs); c.Status != OK {
+	if c := checkRemotes(f.env.Dirs, remotesNow); c.Status != OK {
 		t.Errorf("no sessions: %+v", c)
 	}
 	f.session("s1", "api", "github.com/acme/api")
@@ -31,11 +46,11 @@ func TestRemotesWarnsOnOneProjectNameWithTwoRemotes(t *testing.T) {
 	f.session("s5", "notes", "")
 	// A live record under by-pid is not a session state.
 	put(t, filepath.Join(f.env.Dirs.SessionsDir(), "by-pid", "42.json"), `{"project":"api","remote":"github.com/other/api"}`, 0o600)
-	if c := checkRemotes(f.env.Dirs); c.Status != OK || !strings.Contains(c.Summary, "3 project") {
+	if c := checkRemotes(f.env.Dirs, remotesNow); c.Status != OK || !strings.Contains(c.Summary, "3 project") {
 		t.Errorf("one remote each: %+v", c)
 	}
 	f.session("s6", "api", "gitlab.com/other/api")
-	c := checkRemotes(f.env.Dirs)
+	c := checkRemotes(f.env.Dirs, remotesNow)
 	if c.Status != Warn || !strings.Contains(c.Summary, "two repositories share project:api") {
 		t.Fatalf("two remotes: %+v", c)
 	}
@@ -45,12 +60,17 @@ func TestRemotesWarnsOnOneProjectNameWithTwoRemotes(t *testing.T) {
 	if !strings.Contains(c.Fix, "project = ") || !strings.Contains(c.Fix, ".backsight.toml") {
 		t.Errorf("fix %q", c.Fix)
 	}
+	// The fix names both reasons a shared name is fine (0045): a renamed
+	// repository keeping its old name, and a share on purpose.
+	if !strings.Contains(c.Fix, "renamed") || !strings.Contains(c.Fix, "on purpose") {
+		t.Errorf("fix %q", c.Fix)
+	}
 	if got := strings.Join(c.Projects, ","); got != "api" {
 		t.Errorf("projects %q, want the shared name report scrubs", got)
 	}
 	// A session without a remote does not count as another repository.
 	f.session("s7", "billing", "")
-	if c := checkRemotes(f.env.Dirs); !strings.Contains(c.Summary, "project:api") || strings.Contains(c.Summary, "billing") {
+	if c := checkRemotes(f.env.Dirs, remotesNow); !strings.Contains(c.Summary, "project:api") || strings.Contains(c.Summary, "billing") {
 		t.Errorf("no remote is not a second repository: %+v", c)
 	}
 }
@@ -59,8 +79,71 @@ func TestRemotesSkipsAnUnreadableSession(t *testing.T) {
 	f := newFixture(t)
 	put(t, filepath.Join(f.env.Dirs.SessionsDir(), "bad.json"), `{not json`, 0o600)
 	f.session("s1", "api", "github.com/acme/api")
-	if c := checkRemotes(f.env.Dirs); c.Status != OK {
+	if c := checkRemotes(f.env.Dirs, remotesNow); c.Status != OK {
 		t.Errorf("%+v", c)
+	}
+	// The broken file does not stop the others from being judged.
+	f.session("s2", "api", "gitlab.com/other/api")
+	if c := checkRemotes(f.env.Dirs, remotesNow); c.Status != Warn || !strings.Contains(c.Summary, "project:api") {
+		t.Errorf("after the broken file: %+v", c)
+	}
+}
+
+// Only remotes seen in the last 7 days count: a repository renamed (or
+// moved) more than a week ago no longer warns (0067 block 4 review rules).
+func TestRemotesIgnoresRemotesNotSeenForSevenDays(t *testing.T) {
+	f := newFixture(t)
+	f.sessionAt("new", "api", "github.com/acme/api-v2", false, remotesNow.Add(-time.Hour))
+	f.sessionAt("old", "api", "github.com/acme/api", false, remotesNow.Add(-7*24*time.Hour-time.Hour))
+	c := checkRemotes(f.env.Dirs, remotesNow)
+	if c.Status != OK || !strings.Contains(c.Summary, "1 project") {
+		t.Errorf("one remote in the window: %+v", c)
+	}
+	// Six days ago is inside it.
+	f.sessionAt("old", "api", "github.com/acme/api", false, remotesNow.Add(-6*24*time.Hour))
+	if c := checkRemotes(f.env.Dirs, remotesNow); c.Status != Warn {
+		t.Errorf("6 days: %+v", c)
+	}
+}
+
+// A name every session took from an explicit .backsight.toml project key
+// was shared on purpose (or kept across a rename): no warning. One session
+// that got it from git or its directory still warns.
+func TestRemotesDoesNotWarnOnANameEverySessionSetExplicitly(t *testing.T) {
+	f := newFixture(t)
+	at := remotesNow.Add(-time.Hour)
+	f.sessionAt("a", "platform", "github.com/acme/web", true, at)
+	f.sessionAt("b", "platform", "github.com/acme/api", true, at)
+	f.sessionAt("c", "platform", "", false, at) // no remote: not a repository of the name
+	c := checkRemotes(f.env.Dirs, remotesNow)
+	if c.Status != OK || len(c.Projects) != 0 {
+		t.Errorf("explicit share: %+v", c)
+	}
+	if !strings.Contains(c.Summary, "1 shared on purpose") {
+		t.Errorf("summary %q", c.Summary)
+	}
+	f.sessionAt("d", "platform", "github.com/other/platform", false, at)
+	if c = checkRemotes(f.env.Dirs, remotesNow); c.Status != Warn || !strings.Contains(c.Summary, "project:platform") {
+		t.Errorf("one implicit session: %+v", c)
+	}
+}
+
+func TestRemotesSummaryNamesEverySharedName(t *testing.T) {
+	f := newFixture(t)
+	f.session("a1", "api", "github.com/acme/api")
+	f.session("a2", "api", "gitlab.com/other/api")
+	f.session("w1", "web", "github.com/acme/web")
+	f.session("w2", "web", "gitlab.com/other/web")
+	f.session("b1", "billing", "github.com/acme/billing")
+	c := checkRemotes(f.env.Dirs, remotesNow)
+	if c.Status != Warn || !strings.Contains(c.Summary, "2 project names are shared by several repositories: api, web") {
+		t.Fatalf("%+v", c)
+	}
+	if got := strings.Join(c.Projects, ","); got != "api,web" {
+		t.Errorf("projects %q", got)
+	}
+	if !strings.HasPrefix(c.Detail, "project:api: github.com/acme/api (1 session), gitlab.com/other/api (1 session); project:web: ") {
+		t.Errorf("detail %q", c.Detail)
 	}
 }
 
@@ -316,5 +399,53 @@ func TestRunIncludesTheInstallChecks(t *testing.T) {
 	}
 	if got := strings.Join(ids, ","); !strings.Contains(got, "remotes,pending-restore,reference-server") {
 		t.Errorf("checks %s", got)
+	}
+}
+
+// A journal that cannot be read is said, not taken as no restore pending.
+func TestPendingRestoreWarnsWhenTheJournalCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	if err := os.MkdirAll(f.env.Dirs.JournalFile(), 0o700); err != nil { // a directory in its place
+		t.Fatal(err)
+	}
+	if c := checkPendingRestore(f.env); c.Status != Warn || !strings.Contains(c.Summary, "cannot read the config editor's journal") || c.Detail == "" {
+		t.Errorf("%+v", c)
+	}
+}
+
+// The verify to run names the newest of the archives.
+func TestReferenceServerNamesTheNewestArchiveToVerify(t *testing.T) {
+	f := newFixture(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	ref, dir := f.refConfig("http://127.0.0.1:8888")
+	older := filepath.Join(dir, backup.Name(now.Add(-50*time.Hour)))
+	newer := filepath.Join(dir, backup.Name(now.Add(-2*time.Hour)))
+	put(t, newer, "x", 0o600)
+	put(t, older, "x", 0o600)
+	f.env.ReferenceServer = func(context.Context, string) (RefServer, error) { return RefServer{Running: true}, nil }
+	c := checkReferenceServer(context.Background(), f.env, ref, now)
+	if c.Status != OK || !strings.HasSuffix(c.Detail, "backsight backup verify "+newer) {
+		t.Errorf("%+v", c)
+	}
+}
+
+func TestSameServer(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"http://127.0.0.1:18888", "http://localhost:18888/", true},
+		{"http://[::1]:18888", "http://127.0.0.1:18888", true},
+		{"https://mem.example.com", "https://mem.example.com:443/", true},
+		{"http://mem.example.com", "http://mem.example.com:80", true},
+		{"http://mem.example.com", "https://mem.example.com", false}, // scheme and port differ
+		{"http://127.0.0.1:8888", "http://127.0.0.1:18888", false},
+		{"http://10.0.0.5:18888", "http://127.0.0.1:18888", false},
+		{"", "http://127.0.0.1:18888", false},
+		{"not a url", "not a url", false},
+	} {
+		if got := sameServer(c.a, c.b); got != c.same {
+			t.Errorf("sameServer(%q, %q) = %v, want %v", c.a, c.b, got, c.same)
+		}
 	}
 }

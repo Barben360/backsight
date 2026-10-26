@@ -349,12 +349,30 @@ func (r Runner) Restore(ts string, force bool) (string, []RestoreResult, error) 
 		}
 		res[i].Status = map[bool]string{true: "deleted", false: "restored"}[want == nil]
 	}
-	if started {
+	// A rerun with nothing left to write still finishes a restore of ts
+	// that an earlier pass left pending (0067 block 4 review rules).
+	if started || r.restorePending(ts) {
 		if err := r.appendJournal(map[string]any{"action": "restore", "status": "finished", "restores": ts, "run": run.done()}); err != nil {
 			return run.done(), res, err
 		}
 	}
 	return run.done(), res, nil
+}
+
+// restorePending reports whether the journal holds a started, unfinished
+// restore of run ts. An unreadable journal counts as one: a spare
+// finished line is harmless, a missing one keeps doctor warning.
+func (r Runner) restorePending(ts string) bool {
+	lines, err := ReadJournal(r.Journal)
+	if err != nil {
+		return true
+	}
+	for _, p := range PendingRestores(lines) {
+		if p.Restores == ts {
+			return true
+		}
+	}
+	return false
 }
 
 // RestorePlan says what Restore would do (status restore, delete,

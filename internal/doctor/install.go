@@ -48,18 +48,29 @@ const verifyFresh = 7 * 24 * time.Hour
 // installChecks are the M5 block 4 checks (0067): remotes, pending
 // restores and edits, and whether the reference server can be stopped.
 func installChecks(ctx context.Context, env Env, ref *reference.Install, now time.Time) []Check {
-	return []Check{checkRemotes(env.Dirs), checkPendingRestore(env), checkReferenceServer(ctx, env, ref, now)}
+	return []Check{checkRemotes(env.Dirs, now), checkPendingRestore(env), checkReferenceServer(ctx, env, ref, now)}
 }
 
+// remotesWindow: a remote not seen in a session state for this long is
+// ignored, so a renamed or moved repository stops warning (0067 block 4).
+const remotesWindow = 7 * 24 * time.Hour
+
 // checkRemotes warns when one project name was seen with two git remotes
-// (decision 0045): two repositories would share one observation pool.
-// Session states are kept 30 days, so is what it sees.
-func checkRemotes(d paths.Dirs) Check {
+// in the last 7 days (decision 0045): two repositories would share one
+// observation pool. A name every session (with a remote) took from an
+// explicit .backsight.toml project key is not warned: a rename keeping the
+// old name, or a share on purpose.
+func checkRemotes(d paths.Dirs, now time.Time) Check {
 	c := Check{ID: "remotes", Status: OK}
 	ents, _ := os.ReadDir(d.SessionsDir())
 	seen := map[string]map[string]int{} // project → remote → sessions
+	implicit := map[string]bool{}       // project → a session with a remote got the name from git or its directory
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil || now.Sub(fi.ModTime()) > remotesWindow {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(d.SessionsDir(), e.Name()))
@@ -67,8 +78,9 @@ func checkRemotes(d paths.Dirs) Check {
 			continue
 		}
 		var s struct {
-			Project string `json:"project"`
-			Remote  string `json:"remote"`
+			Project  string `json:"project"`
+			Remote   string `json:"remote"`
+			Explicit bool   `json:"project_explicit"`
 		}
 		if json.Unmarshal(raw, &s) != nil || s.Project == "" {
 			continue
@@ -78,12 +90,17 @@ func checkRemotes(d paths.Dirs) Check {
 		}
 		if s.Remote != "" {
 			seen[s.Project][s.Remote]++
+			implicit[s.Project] = implicit[s.Project] || !s.Explicit
 		}
 	}
-	var shared []string
-	var detail []string
+	var shared, detail []string
+	onPurpose := 0
 	for p, remotes := range seen {
 		if len(remotes) < 2 {
+			continue
+		}
+		if !implicit[p] {
+			onPurpose++
 			continue
 		}
 		shared = append(shared, p)
@@ -98,7 +115,10 @@ func checkRemotes(d paths.Dirs) Check {
 		detail = append(detail, "project:"+p+": "+strings.Join(rs, ", "))
 	}
 	if len(shared) == 0 {
-		c.Summary = fmt.Sprintf("no project name seen with two git remotes (%d project(s) in recent sessions)", len(seen))
+		c.Summary = fmt.Sprintf("no project name seen with two git remotes (%d project(s) in the last 7 days' sessions)", len(seen))
+		if onPurpose > 0 {
+			c.Summary = fmt.Sprintf("no project name shared by mistake (%d project(s) in the last 7 days' sessions, %d shared on purpose by .backsight.toml)", len(seen), onPurpose)
+		}
 		return c
 	}
 	sort.Strings(shared)
@@ -110,7 +130,9 @@ func checkRemotes(d paths.Dirs) Check {
 		c.Summary = fmt.Sprintf("%d project names are shared by several repositories: %s", len(shared), strings.Join(shared, ", "))
 	}
 	c.Detail = strings.Join(detail, "; ") + "; their memories mix in one pool (decision 0045)"
-	c.Fix = `set project = "<another name>" in a .backsight.toml at the root of one repository, and commit it so every clone uses it`
+	c.Fix = `if they are different projects: set project = "<another name>" in a .backsight.toml at the root of one repository, and commit it so every clone uses it. ` +
+		`If the repository was renamed or moved, or the name is shared on purpose: set project = "<that name>" in a committed .backsight.toml in each of them ` +
+		`(an old remote stops counting 7 days after its last session)`
 	return c
 }
 

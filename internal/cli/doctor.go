@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -144,34 +145,57 @@ func referenceServer(ctx context.Context, rawURL string) (doctor.RefServer, erro
 		return doctor.RefServer{}, nil
 	}
 	srv := doctor.RefServer{Running: true} // it answered, healthy or not
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Port() == "" {
-		return srv, nil
-	}
-	if ip := net.ParseIP(u.Hostname()); u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	port := localPort(rawURL)
+	if port == "" {
 		return srv, nil // another machine: its Docker is not this one's
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := composeRunner.Run(ctx, "ps", "--filter", "publish="+u.Port(), "--format", `{{.Label "com.docker.compose.project"}}`+"\t"+`{{.Names}}`)
+	out, err := composeRunner.Run(ctx, "ps", "--filter", "publish="+port, "--format", `{{.Label "com.docker.compose.project"}}`+"\t"+`{{.Names}}`)
 	if err == nil {
 		srv.Stop, srv.Start = stopCommands(string(out))
 	}
 	return srv, nil
 }
 
+// localPort is the port of a server URL on this machine (localhost or a
+// loopback address), "" for another machine or a URL without a port.
+func localPort(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Port() == "" {
+		return ""
+	}
+	if ip := net.ParseIP(u.Hostname()); u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return ""
+	}
+	return u.Port()
+}
+
 // stopCommands turns `docker ps` lines (compose project, tab, container
 // name) into the commands that stop and start that server: the whole
-// compose project when there is one, else the container.
+// compose project when there is one, else the container. A project or a
+// name that is not a plain one is never put in a command the user would
+// paste (0067 block 4 review rules).
 func stopCommands(ps string) (stop, start string) {
 	for _, line := range strings.Split(ps, "\n") {
 		project, name, _ := strings.Cut(strings.TrimRight(line, " \r"), "\t")
 		switch {
 		case project != "":
-			return "docker compose -p " + project + " stop", "docker compose -p " + project + " start"
+			if composeProject.MatchString(project) {
+				return "docker compose -p " + project + " stop", "docker compose -p " + project + " start"
+			}
 		case name != "":
-			return "docker stop " + name, "docker start " + name
+			if containerName.MatchString(name) {
+				return "docker stop " + name, "docker start " + name
+			}
 		}
 	}
 	return "", ""
 }
+
+var (
+	// composeProject is a name Compose accepts for a project.
+	composeProject = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	// containerName is a name Docker accepts for a container.
+	containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+)

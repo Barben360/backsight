@@ -133,7 +133,7 @@ func (h *hookEnv) sessionStart() []byte {
 		ids = append(ids, it.ID)
 	}
 	h.updateSession(func(st *session.State) error {
-		st.Project, st.Remote = h.project, h.remote()
+		st.Project, st.Remote, st.ProjectExplicit = h.project, h.remote(), h.resolver.Explicit(h.cwd)
 		st.Unavailable = st.Unavailable || unavailable
 		if source == "model" {
 			st.BriefingPage = text

@@ -50,7 +50,8 @@ type hookEnv struct {
 	project string
 	linked  []string // the projects cwd's .backsight.toml relates
 	// resolver named project from cwd; remote reads the repository's
-	// remote from it (decision 0045).
+	// remote from it, Explicit whether a .backsight.toml set the name
+	// (decision 0045).
 	resolver *project.Resolver
 	cwd      string
 	store    session.Store

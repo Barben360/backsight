@@ -481,3 +481,67 @@ func TestRunsWithTheSameTimestampSortInOrder(t *testing.T) {
 		t.Errorf("last run %s sorts before others: %v", last, runs)
 	}
 }
+
+// A rerun that finds every file already back (the user finished it by
+// hand) writes nothing, but closes the restore left pending (0067 block 4
+// review rules).
+func TestARerunWithNothingLeftToWriteFinishesThePendingRestore(t *testing.T) {
+	r, dir := runner(t)
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, []byte(`{}`), 0o600)
+	_ = os.WriteFile(b, []byte(`{}`), 0o600)
+	ts, _, _ := r.Apply([]Edit{{Target: a, Apply: retention(1)}, {Target: b, Apply: retention(1)}})
+	puts := 0
+	beforePut = func() {
+		if puts++; puts == 2 {
+			_ = os.WriteFile(b, []byte(`{"late": true}`), 0o600)
+		}
+	}
+	t.Cleanup(func() { beforePut = func() {} })
+	r.Command = "client config restore"
+	if _, _, err := r.Restore(ts, false); !errors.Is(err, ErrChangedSince) {
+		t.Fatalf("err %v", err)
+	}
+	beforePut = func() {}
+	_ = os.WriteFile(b, []byte(`{}`), 0o600) // put back by hand
+	run, res, err := r.Restore(ts, false)
+	if err != nil || run != "" || res[0].Status != "unchanged" || res[1].Status != "unchanged" {
+		t.Fatalf("run %q res %+v err %v", run, res, err)
+	}
+	lines, _ := ReadJournal(r.Journal)
+	if p := PendingRestores(lines); len(p) != 0 {
+		t.Errorf("still pending: %+v", p)
+	}
+	last := lines[len(lines)-1]
+	if last.Status != "finished" || last.Restores != ts || last.Run != "" {
+		t.Errorf("last line %+v", last)
+	}
+	// Once finished, a further no-op rerun adds nothing.
+	n := len(lines)
+	if _, _, err := r.Restore(ts, false); err != nil {
+		t.Fatal(err)
+	}
+	if lines, _ = ReadJournal(r.Journal); len(lines) != n {
+		t.Errorf("journal grew to %d lines: %+v", len(lines), lines[n:])
+	}
+}
+
+func TestPendingRestoresKeepsOnlyTheUnfinishedRuns(t *testing.T) {
+	line := func(status, run string) JournalLine {
+		return JournalLine{Step: "claude-config", Action: "restore", Status: status, Restores: run}
+	}
+	lines := []JournalLine{
+		line("started", "A"), line("started", "B"),
+		{Step: "claude-config", Action: "edit", Target: "/s.json", Status: "done"},
+		{Step: "server", Action: "restore", Status: "finished", Restores: "B"}, // another step's line
+		line("finished", "A"),
+	}
+	p := PendingRestores(lines)
+	if len(p) != 1 || p[0].Restores != "B" {
+		t.Errorf("pending %+v", p)
+	}
+	// A restart of B after A finished is still B's, once.
+	if p = PendingRestores(append(lines, line("started", "B"), line("finished", "B"))); len(p) != 0 {
+		t.Errorf("pending %+v", p)
+	}
+}

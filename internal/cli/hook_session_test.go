@@ -364,7 +364,20 @@ func TestSessionStartAndPromptRecordTheRepositoryRemote(t *testing.T) {
 	// A session started outside git and moved into the repository by the
 	// prompt hook gets the remote too.
 	fire(t, "user-prompt-submit", map[string]any{"session_id": "s2", "cwd": repo, "prompt": "hello there, what did we decide about billing?"})
-	if st, _ := sessions(home).Load("s2"); st.Remote != "github.com/acme/billing" {
-		t.Errorf("after the prompt hook: remote %q", st.Remote)
+	if st, _ := sessions(home).Load("s2"); st.Remote != "github.com/acme/billing" || st.ProjectExplicit {
+		t.Errorf("after the prompt hook: remote %q, explicit %v", st.Remote, st.ProjectExplicit)
+	}
+	if st, _ := sessions(home).Load("s1"); st.ProjectExplicit {
+		t.Error("a name from git recorded as explicit")
+	}
+	// A committed .backsight.toml project key: recorded as explicit, so
+	// doctor's remotes check takes the share as deliberate (0045).
+	_ = os.WriteFile(filepath.Join(repo, ".backsight.toml"), []byte("project = \"platform\"\n"), 0o600)
+	fire(t, "session-start", map[string]any{"session_id": "s3", "source": "startup", "cwd": repo})
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s4", "cwd": repo, "prompt": "hello there, what did we decide about billing?"})
+	for _, sid := range []string{"s3", "s4"} {
+		if st, _ := sessions(home).Load(sid); st.Project != "platform" || !st.ProjectExplicit {
+			t.Errorf("%s: project %q, explicit %v", sid, st.Project, st.ProjectExplicit)
+		}
 	}
 }

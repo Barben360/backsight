@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/doctor"
@@ -31,6 +33,9 @@ func isolate(t *testing.T) string {
 		e.Docker = func(context.Context) (string, error) { return "28.1.1", nil }
 		e.GPUs = func() []string { return nil }
 		e.FreeBytes = func(string) (uint64, error) { return 50e9, nil }
+		// Never the real /health probe: a reference server on this
+		// machine must not answer a test (0067 block 4 review rules).
+		e.ReferenceServer = func(context.Context, string) (doctor.RefServer, error) { return doctor.RefServer{}, nil }
 	}
 	t.Cleanup(func() { probes = old })
 	return home
@@ -116,11 +121,15 @@ func TestDoctorClientCheck(t *testing.T) {
 // psRunner answers `docker ps` with ps and records the call.
 type psRunner struct {
 	ps    string
+	err   error
 	calls []string
 }
 
 func (p *psRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 	p.calls = append(p.calls, strings.Join(args, " "))
+	if p.err != nil {
+		return nil, p.err
+	}
 	return []byte(p.ps), nil
 }
 
@@ -146,14 +155,86 @@ func TestReferenceServerProbeFindsTheComposeProjectByItsPort(t *testing.T) {
 	}
 }
 
-func TestStopCommands(t *testing.T) {
+// The test home never lets doctor reach a reference server: a real one on
+// this machine (port 8888) would answer otherwise (0067 block 4 review
+// rules). The reference config points at a server that counts its calls.
+func TestIsolatedDoctorNeverProbesTheReferenceServer(t *testing.T) {
+	home := devInstall(t, true)
+	var hits atomic.Int32
+	ref := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+	}))
+	t.Cleanup(ref.Close)
+	_ = os.MkdirAll(filepath.Join(home, ".hindsight"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, ".hindsight", "coding-agent.json"), []byte(`{"apiUrl":"`+ref.URL+`","apiToken":"fakevalue","bankId":"coding-agent::memoire"}`), 0o600)
+	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"node /h/.hindsight/coding-agents/dist/claude-stop-hook.js"}]}]}}`), 0o600)
+	_, out, _ := run(t, "doctor")
+	if !strings.Contains(out, "reference-server") || !strings.Contains(out, "not running") {
+		t.Errorf("the reference config was not read:\n%s", out)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("doctor called the reference server %d time(s)", n)
+	}
+}
+
+// A server that answers with an error still runs; a Docker that fails
+// gives no stop command; localhost is this machine.
+func TestReferenceServerProbeEdgeCases(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(srv.Close)
+	ps := &psRunner{ps: "hindsight\thindsight\n"}
+	old := composeRunner
+	composeRunner = ps
+	t.Cleanup(func() { composeRunner = old })
+	local := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	got, err := referenceServer(context.Background(), local)
+	if err != nil || !got.Running || got.Stop != "docker compose -p hindsight stop" || len(ps.calls) != 1 {
+		t.Errorf("500 on localhost: %+v %v, docker calls %q", got, err, ps.calls)
+	}
+	ps.calls, ps.err = nil, errors.New("Cannot connect to the Docker daemon")
+	got, err = referenceServer(context.Background(), srv.URL)
+	if err != nil || !got.Running || got.Stop != "" || got.Start != "" || len(ps.calls) != 1 {
+		t.Errorf("docker error: %+v %v, docker calls %q", got, err, ps.calls)
+	}
+}
+
+// Only a server on this machine is looked up in its Docker.
+func TestLocalPort(t *testing.T) {
 	for in, want := range map[string]string{
-		"hindsight\thindsight\n": "docker compose -p hindsight stop",
-		"\tmy-hindsight\n":       "docker stop my-hindsight",
-		"":                       "",
+		"http://127.0.0.1:8888":     "8888",
+		"http://localhost:8888/":    "8888",
+		"http://[::1]:9000":         "9000",
+		"http://127.0.0.2:8888":     "8888",
+		"http://10.0.0.5:8888":      "",
+		"https://mem.example.com:8": "",
+		"http://localhost":          "", // no port to filter on
+		"://bad":                    "",
 	} {
-		if got, _ := stopCommands(in); got != want {
+		if got := localPort(in); got != want {
 			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestStopCommands(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"hindsight\thindsight\n":        {"docker compose -p hindsight stop", "docker compose -p hindsight start"},
+		"\tmy-hindsight\n":              {"docker stop my-hindsight", "docker start my-hindsight"},
+		"\n\nhindsight\thindsight-db\n": {"docker compose -p hindsight stop", "docker compose -p hindsight start"}, // empty lines first
+		"ref_2\tx\r\n":                  {"docker compose -p ref_2 stop", "docker compose -p ref_2 start"},
+		"":                              {"", ""},
+		// A label or name that is not a plain Compose project or
+		// container name never reaches a command the user would paste.
+		"hindsight; rm -rf ~\thindsight\n": {"", ""},
+		"Hindsight\thindsight\n":           {"", ""},
+		"-p\thindsight\n":                  {"", ""},
+		"\t$(touch x)\n":                   {"", ""},
+		"\t-rm\n":                          {"", ""},
+	} {
+		if stop, start := stopCommands(in); stop != want[0] || start != want[1] {
+			t.Errorf("%q: (%q, %q), want %q", in, stop, start, want)
 		}
 	}
 }
