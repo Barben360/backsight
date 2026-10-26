@@ -48,6 +48,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 | Key | Default | Effect |
 |---|---|---|
 | `projects.transverse` | `[".claude", "<user>"]` | Names of the [transverse](glossary.md#transverse-pool) project: sessions in a directory with one of these names (your home, `~/.claude`) store user-wide memories, and `--project transverse` means it (a stored fact goes there only when named). The first name is the one memories are stored under. |
+| `projects.own_owners` | `[]` | Remote owners whose repositories are yours, written `host/owner` (`github.com/your-org`), besides the owner of the repository a session starts in. A subagent's report goes to the repository its work was in only when that repository is yours: a clone of someone else's code never becomes a project. |
 
 ## `[privacy]`
 
