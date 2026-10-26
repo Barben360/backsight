@@ -107,7 +107,11 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Epoch = reconcile(cmd.Context(), f)
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
-			res.Families = refreshFamilies(d, cfg, f.Resolver)
+			tags, terr := f.Client.Tags(cmd.Context(), cfg.Server.Bank, "project:")
+			if terr != nil {
+				tags = nil // not read: no project is taken for forgotten
+			}
+			res.Families = refreshFamilies(d, cfg, f.Resolver, tags)
 			if n, err := dropSettled(d); err == nil && n > 0 {
 				res.Backfill = fmt.Sprintf("%d queued session(s) had nothing left to send", n)
 			}

@@ -42,6 +42,9 @@ type Families struct {
 	Turns   int                 `json:"turns"` // turns read
 	Links   []Link              `json:"links"`
 	Of      map[string][]string `json:"of"`
+	// Roots: each member's main checkout, so recall can leave out one
+	// kept out of memory since the file was built.
+	Roots map[string]string `json:"roots,omitempty"`
 }
 
 // ComputeFamilies links the projects of turns: a pair is linked when at
@@ -50,13 +53,35 @@ type Families struct {
 // project's turns (so a project touched everywhere, a hub, does not link
 // to every small one). Links are pairwise, never transitive; each project
 // keeps its MaxFamily most co-touched ones.
-func ComputeFamilies(turns []TurnEntry) Families {
+//
+// Subagent reports count as turns, as in E32: a main turn whose subagents
+// work in both projects adds one co-touched turn per report. keep, when
+// not nil, says whether a project may still be a member (not excluded,
+// paused or forgotten since its turns were recorded).
+func ComputeFamilies(turns []TurnEntry, keep func(project, root string) bool) Families {
+	roots := map[string]string{}
+	for _, t := range turns {
+		for p, r := range t.Votes.Roots {
+			if _, ok := roots[p]; !ok {
+				roots[p] = r
+			}
+		}
+	}
+	allowed := map[string]bool{}
+	ok := func(p string) bool {
+		v, seen := allowed[p]
+		if !seen {
+			v = keep == nil || keep(p, roots[p])
+			allowed[p] = v
+		}
+		return v
+	}
 	own := map[string]int{}
 	type pair struct{ a, b string }
 	co := map[pair]int{}
 	sess := map[pair]map[string]bool{}
 	for _, t := range turns {
-		ps := t.Votes.Projects()
+		ps := slices.DeleteFunc(t.Votes.Projects(), func(p string) bool { return !ok(p) })
 		slices.Sort(ps)
 		ps = slices.Compact(ps)
 		for _, p := range ps {
@@ -73,7 +98,7 @@ func ComputeFamilies(turns []TurnEntry) Families {
 			}
 		}
 	}
-	f := Families{Turns: len(turns), Of: map[string][]string{}}
+	f := Families{Turns: len(turns), Of: map[string][]string{}, Roots: map[string]string{}}
 	for k, n := range co {
 		larger := max(own[k.a], own[k.b])
 		share := float64(n) / float64(larger)
@@ -95,6 +120,9 @@ func ComputeFamilies(turns []TurnEntry) Families {
 		for _, e := range [][2]string{{l.A, l.B}, {l.B, l.A}} {
 			if len(f.Of[e[0]]) < MaxFamily {
 				f.Of[e[0]] = append(f.Of[e[0]], e[1])
+				if r := roots[e[1]]; r != "" {
+					f.Roots[e[1]] = r
+				}
 			}
 		}
 	}
@@ -102,14 +130,27 @@ func ComputeFamilies(turns []TurnEntry) Families {
 }
 
 // RefreshFamilies computes the families of the turns recorded over the
-// last FamilyWindow and saves them in path.
-func RefreshFamilies(a Attributor, path string, now time.Time) (Families, error) {
+// last FamilyWindow and saves them in path. A project kept out of memory
+// now (its checkout excluded, retain = false, paused) is no member;
+// known, when not nil, says which projects the bank still holds (one
+// forgotten since is no member either).
+func RefreshFamilies(a Attributor, path string, now time.Time, known func(string) bool) (Families, error) {
 	since := now.Add(-FamilyWindow)
 	turns, err := a.Turns(since)
 	if err != nil {
 		return Families{}, err
 	}
-	f := ComputeFamilies(turns)
+	f := ComputeFamilies(turns, func(p, root string) bool {
+		if known != nil && !known(p) {
+			return false
+		}
+		if root != "" && a.Resolver != nil {
+			if out, _ := a.Resolver.OptedOut(root, a.Exclude); out {
+				return false
+			}
+		}
+		return true
+	})
 	f.BuiltAt, f.Since = now.UTC(), since.UTC()
 	raw, err := json.Marshal(f)
 	if err != nil {
