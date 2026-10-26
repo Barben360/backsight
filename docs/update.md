@@ -6,7 +6,7 @@ How backsight finds, checks and installs new releases.
 
 The daily job checks backsight's GitHub releases. When a newer one exists:
 
-- the next Claude Code session starts with one line, "update X available", with the version only;
+- the next Claude Code session shows one line, "⬆️ backsight update X available · see `backsight changelog`", with the version only;
 - `backsight doctor` shows it in its `update` check.
 
 `backsight update check` asks now and lists the newer releases with their notes. `backsight changelog` prints the notes of every release (`--since <version>` for the newer ones only). Release notes are not signed, so they are never shown inside a Claude session.

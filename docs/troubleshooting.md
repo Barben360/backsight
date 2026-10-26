@@ -14,7 +14,7 @@ doctor checks the whole install and changes nothing: the server, the bank, Claud
 
 ## The server is down
 
-Symptoms: no memories in your sessions, one "memory unavailable" message, doctor's `server` check in error.
+Symptoms: no memories in your sessions, one "⚠️ backsight · memory unavailable (server unreachable)" message, doctor's `server` check in error.
 
 ```sh
 backsight server status
