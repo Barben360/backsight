@@ -280,3 +280,34 @@ func TestNonInteractiveAnthropicNeedsNoBaseURL(t *testing.T) {
 		t.Errorf("groq: missing %v, want model,consent", missing)
 	}
 }
+
+// The provider choices say what a user accepts with them: the subscription
+// lane quotes Anthropic's credential clause with its link and points to an
+// API key, and DeepSeek says where it stores data.
+func TestProviderChoicesStateTheirTerms(t *testing.T) {
+	qs, _, err := Resolve(Inputs{Answers: map[string]string{"provider": "claude-code"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := map[string]Option{}
+	for _, o := range find(t, qs, "provider").Options {
+		options[o.Value] = o
+	}
+	ack := find(t, qs, "ack_subscription").Prompt
+	for _, text := range []string{options["claude-code"].Caveat, ack} {
+		for _, want := range []string{"may not collect, store, or intermediate Claude.ai credentials or session tokens",
+			"https://code.claude.com/docs/en/legal-and-compliance", "API key"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("subscription lane lacks %q: %s", want, text)
+			}
+		}
+	}
+	if c := options["deepseek"].Caveat; !strings.Contains(c, "People's Republic of China") {
+		t.Errorf("deepseek caveat does not say where data is stored: %q", c)
+	}
+	for _, p := range []string{"anthropic", "openai", "ollama"} {
+		if strings.Contains(options[p].Caveat, "China") {
+			t.Errorf("%s caveat names China: %q", p, options[p].Caveat)
+		}
+	}
+}

@@ -64,13 +64,16 @@ type Preset struct {
 // Presets are the providers setup offers, recommended first. Any other
 // Hindsight provider id is accepted as free text (listed, untested).
 var Presets = []Preset{
-	{Provider: "deepseek", Model: "deepseek-v4-flash", Label: "DeepSeek API", Cost: "the cheapest provider tested: about $0.14 per million input tokens"},
+	{Provider: "deepseek", Model: "deepseek-v4-flash", Label: "DeepSeek API", Cost: "the cheapest provider tested: about $0.14 per million input tokens",
+		Caveat: "DeepSeek processes and stores data in the People's Republic of China (https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html)"},
 	{Provider: "anthropic", Model: "claude-haiku-5-5", Label: "Anthropic API key, or an Anthropic-compatible URL"},
 	{Provider: "openai", Model: "gpt-5.4-mini", Label: "OpenAI API key, or an OpenAI-compatible URL"},
 	{Provider: "ollama", Model: "qwen3:8b", BaseURL: "http://host.docker.internal:11434", Label: "Ollama on this machine (private, lower quality)",
 		Caveat: "an 8B model writes wordier facts, some only true for a while, and takes about 2 min per part of a session on CPU; 3B and smaller models fail"},
 	{Provider: "claude-code", Model: "claude-haiku-5-5", Label: "Your Claude subscription (claude setup-token)",
-		Caveat: "Anthropic's terms restrict routing subscription credentials through third-party tools and automated use; usage counts against your plan"},
+		Caveat: "Anthropic's terms say developers \"may not collect, store, or intermediate Claude.ai credentials or session tokens\" " +
+			"(https://code.claude.com/docs/en/legal-and-compliance); this lane stores your token for the server, and Anthropic may restrict an account without notice. " +
+			"An Anthropic API key (provider anthropic) is recommended instead. Usage counts against your plan"},
 }
 
 // PresetFor returns provider's preset, false for a provider setup does not list.
