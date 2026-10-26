@@ -38,4 +38,5 @@ One row per release, newest first, added with the release's notes in `docs/relea
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
 | v0.1.1-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | security, setup and memory-quality fixes; Linux amd64 tested ([notes](releases/v0.1.1-m5.md)) |
+| v0.1.2-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | setup without a user scheduler, doctor fixes; Linux amd64 tested ([notes](releases/v0.1.2-m5.md)) |
 | v0.1.0-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | first public pre-release; Linux amd64 tested ([notes](releases/v0.1.0-m5.md)) |
