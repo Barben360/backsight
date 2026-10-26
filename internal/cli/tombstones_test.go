@@ -18,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -344,19 +345,22 @@ func TestRestoreWaitsForTheRestoredQueueBeforePurgingAgain(t *testing.T) {
 	}
 }
 
-// Interrupted while it waits (a timeout, Ctrl-C), restore leaves the
-// server on its temporary key, the marker at its purge step, and exits 40
-// naming server start, which resumes: it waits, purges again on a
-// temporary key, then starts the server on its API key and finishes
-// (issue 285 review MED-1). Doctor names it too.
+// Interrupted while it waits (Ctrl-C: its context cancelled), restore
+// leaves the server on its temporary key, the marker at its purge step,
+// and exits 40 naming server start, which resumes: it waits, purges again
+// on a temporary key, applies the bank template the restore did not reach,
+// then starts the server on its API key and finishes (issue 285 review
+// MED-1, MED-B). Doctor names it too.
 func TestRestoreInterruptedWhileWaitingResumesWithServerStart(t *testing.T) {
 	home, archive, dk, port := restoreSetup(t)
 	seedTombstones(t, home, port)
 	documentUnits["conversation:s8"] = 1
 	sec, _ := config.LoadSecrets(secretsFile(home))
-	oldWait, oldPoll := queueWait, queuePoll
-	queueWait, queuePoll = 50*time.Millisecond, time.Millisecond
-	t.Cleanup(func() { queueWait, queuePoll = oldWait, oldPoll })
+	oldPoll := queuePoll
+	queuePoll = time.Millisecond
+	t.Cleanup(func() { queuePoll = oldPoll })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var mu sync.Mutex
 	drained := false
 	var deletes []string // the key each purge-again delete came with
@@ -371,6 +375,8 @@ func TestRestoreInterruptedWhileWaitingResumesWithServerStart(t *testing.T) {
 			n := 1
 			if drained {
 				n = 0
+			} else {
+				cancel() // Ctrl-C while it waits
 			}
 			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(n) + `,"operations":[]}`))
 			return true
@@ -379,9 +385,11 @@ func TestRestoreInterruptedWhileWaitingResumesWithServerStart(t *testing.T) {
 		}
 		return false
 	}))
-	code, env, out, errOut := runRestoreJSON(t, archive)
+	var outb, errb bytes.Buffer
+	code := ExecuteContext(ctx, []string{"restore", archive, "--json"}, &outb, &errb)
+	out := outb.String()
 	if code != output.Partial || !strings.Contains(out, `"resume": "backsight server start"`) {
-		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		t.Fatalf("exit %d\n%s%s", code, out, errb.String())
 	}
 	d := pathsOf(home)
 	m, err := state.ReadRestoreMarker(d)
@@ -391,21 +399,123 @@ func TestRestoreInterruptedWhileWaitingResumesWithServerStart(t *testing.T) {
 	if k := dk.keys[len(dk.keys)-1]; k == sec.APIKey {
 		t.Error("the server runs on its API key while the purge waits")
 	}
-	if env.Data.Epoch.Epoch != 1 {
-		t.Errorf("epoch %+v", env.Data.Epoch)
-	}
 	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "backsight server start (it waits for the queues") {
 		t.Errorf("doctor:\n%s", out)
+	}
+	// The bank step was not reached: server start does it.
+	if err := state.Update(d, "test", func(s *state.State) error { s.BankConfigHash = "stale"; return nil }); err != nil {
+		t.Fatal(err)
 	}
 	mu.Lock()
 	drained = true
 	mu.Unlock()
-	queueWait = 0
-	code, out, errOut = run(t, "server", "start")
+	code, out, errOut := run(t, "server", "start")
 	if code != output.OK || !strings.Contains(out, "is finished") || !strings.Contains(out, "conversation:s8") {
 		t.Fatalf("server start: exit %d\n%s%s", code, out, errOut)
 	}
 	if !slices.Equal(deletes, []string{"false"}) || state.RestoreIncomplete(d) || dk.keys[len(dk.keys)-1] != sec.APIKey {
 		t.Errorf("deletes (on the API key?) %v, marker %v, key %v", deletes, state.RestoreIncomplete(d), dk.keys[len(dk.keys)-1] == sec.APIKey)
+	}
+	if st, _ := state.Load(d.StateFile()); st.BankConfigHash != server.TemplateHash() {
+		t.Errorf("the resumed restore did not bring the bank to the template: hash %q", st.BankConfigHash)
+	}
+}
+
+// stuckQueue answers the claude-memory queue after the restore with one
+// pending operation forever (or status instead of an answer when not 0),
+// listing it when asked.
+func stuckQueue(t *testing.T, home string, port int, dk *restoreDocker, status int) {
+	t.Helper()
+	pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+		if dk.restored() == 0 || !strings.HasSuffix(r.URL.Path, "/claude-memory/operations") {
+			return false
+		}
+		if status != 0 {
+			http.Error(w, `{"detail":"nope"}`, status)
+			return true
+		}
+		switch r.URL.Query().Get("status") {
+		case "pending":
+			_, _ = w.Write([]byte(`{"total":1,"operations":[{"id":"op-7","operation_type":"batch_retain","status":"pending","document_id":"conversation:s8"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"total":0,"operations":[]}`))
+		}
+		return true
+	}))
+}
+
+// A queue that does not move for stallAfter stops the wait: exit 40, the
+// marker at its purge step with the operations named, which doctor shows
+// with both ways out; an unreadable queue stalls the same way (issue 285
+// review MED-A).
+func TestRestoreStallsOnAQueueThatDoesNotMove(t *testing.T) {
+	for name, status := range map[string]int{"never drains": 0, "unreadable": http.StatusInternalServerError} {
+		t.Run(name, func(t *testing.T) {
+			home, archive, dk, port := restoreSetup(t)
+			seedTombstones(t, home, port)
+			oldPoll, oldStall := queuePoll, stallAfter
+			queuePoll, stallAfter = time.Millisecond, 30*time.Millisecond
+			t.Cleanup(func() { queuePoll, stallAfter = oldPoll, oldStall })
+			stuckQueue(t, home, port, dk, status)
+			code, _, out, errOut := runRestoreJSON(t, archive)
+			want := "op-7 (batch_retain, pending, document conversation:s8)"
+			if status != 0 {
+				want = "queue unreadable"
+			}
+			if code != output.Partial || !strings.Contains(out, want) || !strings.Contains(out, `"resume": "backsight server start"`) {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			m, _ := state.ReadRestoreMarker(pathsOf(home))
+			if m == nil || m.Step != state.PurgeStep || !strings.Contains(strings.Join(m.Stuck, "\n"), want) {
+				t.Fatalf("marker %+v", m)
+			}
+			_, doc, _ := run(t, "doctor")
+			if !strings.Contains(doc, want) || !strings.Contains(doc, "backsight server start") || !strings.Contains(doc, m.Safety+" --no-safety") {
+				t.Errorf("doctor:\n%s", doc)
+			}
+		})
+	}
+}
+
+// A bank the server answers not found for has no queue: restore does not
+// wait on it (issue 285 review MED-A).
+func TestRestoreQueueOfAMissingBankIsEmpty(t *testing.T) {
+	home, archive, dk, port := restoreSetup(t)
+	seedTombstones(t, home, port)
+	oldPoll, oldStall := queuePoll, stallAfter
+	queuePoll, stallAfter = time.Millisecond, 30*time.Millisecond
+	t.Cleanup(func() { queuePoll, stallAfter = oldPoll, oldStall })
+	stuckQueue(t, home, port, dk, http.StatusNotFound)
+	if code, _, out, errOut := runRestoreJSON(t, archive); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// server start on a purge-step marker whose banks' tombstones cannot be
+// read keeps the marker and names both ways out (issue 285 review LOW-B).
+func TestResumePurgeWithUnreadableTombstones(t *testing.T) {
+	home, _, dk, port := restoreSetup(t)
+	d := pathsOf(home)
+	pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+		if strings.HasSuffix(r.URL.Path, "/claude-memory-control/documents/"+retain.TombstonesDocument) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return true
+		}
+		return false
+	}))
+	if code, out, _ := run(t, "server", "render"); code != output.OK {
+		t.Fatalf("render %d %s", code, out)
+	}
+	if err := state.WriteRestoreMarker(d, state.RestoreMarker{Command: "restore", Safety: "/b/s.age", Archive: "/b/a.age",
+		Step: state.PurgeStep, PurgeBanks: []string{"claude-memory"}}); err != nil {
+		t.Fatal(err)
+	}
+	dk.calls = nil
+	code, _, errOut := run(t, "server", "start")
+	if code != output.Blocked || !strings.Contains(errOut, "backsight restore /b/s.age --no-safety") || !strings.Contains(errOut, "rerun backsight server start") {
+		t.Errorf("exit %d %s", code, errOut)
+	}
+	if m, _ := state.ReadRestoreMarker(d); m == nil || m.Step != state.PurgeStep {
+		t.Errorf("marker %+v", m)
 	}
 }

@@ -173,8 +173,11 @@ type SelfCheck struct {
 
 // PurgeHold is what a failed purge again left on the server.
 type PurgeHold struct {
-	Bank      string    `json:"bank"`
-	Documents int       `json:"documents"` // tombstoned documents left to purge again
+	Bank      string `json:"bank"`
+	Documents int    `json:"documents"` // tombstoned documents left to purge again
+	// Unchecked: a read failed, so whether the server holds them is not
+	// known yet.
+	Unchecked bool      `json:"unchecked,omitempty"`
 	Error     string    `json:"error"`
 	At        time.Time `json:"at"`
 }

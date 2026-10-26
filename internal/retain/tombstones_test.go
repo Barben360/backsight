@@ -451,14 +451,56 @@ func TestReconcileHoldsWhenPurgeAgainFails(t *testing.T) {
 // A purge's writes take an answer of "not found" for done: a document, a
 // fact or its observations already gone (issue 285 review LOW-4).
 func TestPurgeWritesTakesNotFoundForDone(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/f2/observations") {
+			_, _ = w.Write([]byte(`{}`)) // f2's observations clear; f2 is gone by the retire
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"not found"}`))
 	}))
 	t.Cleanup(srv.Close)
 	cl, _ := hindsight.New(srv.URL, "k", 2*time.Second)
-	cleared, pages, err := PurgeWrites(context.Background(), cl, "claude-memory", []PurgeFact{{ID: "f1"}}, []string{"conversation:s1"}, map[string]bool{"billing": true}, "")
-	if err != nil || cleared != 0 || len(pages) != 0 {
+	cleared, pages, err := PurgeWrites(context.Background(), cl, "claude-memory", []PurgeFact{{ID: "f1"}, {ID: "f2"}}, []string{"conversation:s1"}, map[string]bool{"billing": true}, "")
+	if err != nil || cleared != 1 || len(pages) != 0 {
 		t.Errorf("cleared %d pages %v: %v", cleared, pages, err)
+	}
+	if !slices.Contains(calls, "PATCH /v1/default/banks/claude-memory/memories/f2") || !slices.Contains(calls, "DELETE /v1/default/banks/claude-memory/documents/conversation:s1") {
+		t.Errorf("calls %q", calls)
+	}
+}
+
+// The hold of a failed purge again goes as soon as a purge again passes,
+// even when the rest of the reconcile fails after it; a hold left by a
+// read that failed says the documents are not yet checked (issue 285
+// review LOW-A).
+func TestPurgeHoldGoesOnceThePurgePasses(t *testing.T) {
+	e := purgedEnv(t)
+	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
+		s.PurgeHold = &state.PurgeHold{Bank: "claude-memory", Documents: 1, Error: "earlier"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "a1", "segment": "1", "project": "billing"}
+	e.hs.failGet = map[string]bool{"conversation:s1#2": true} // the drop of lost records fails after the purge
+	e.hs.mu.Unlock()
+	if _, err := e.f.Reconcile(context.Background()); err == nil {
+		t.Fatal("the reconcile passed")
+	}
+	if st, _ := state.Load(e.f.Dirs.StateFile()); st.PurgeHold != nil || !slices.Contains(e.hs.deleted, "conversation:s1") {
+		t.Errorf("hold %+v, deleted %v", st.PurgeHold, e.hs.deleted)
+	}
+	// A read that fails: not yet checked.
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1"}
+	e.hs.failGet = map[string]bool{"conversation:s1": true}
+	e.hs.mu.Unlock()
+	_, _ = e.f.Reconcile(context.Background())
+	if st, _ := state.Load(e.f.Dirs.StateFile()); st.PurgeHold == nil || !st.PurgeHold.Unchecked {
+		t.Errorf("hold %+v", st.PurgeHold)
 	}
 }

@@ -524,9 +524,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if pb := purgeBanks(banks); len(pb) > 0 {
 		markStep(d, state.PurgeStep, rt.Version(), false, pb)
 		if err := waitQueues(ctx, tcl, banks, func(detail string) { add("purge", "waiting", detail) }); err != nil {
-			return &output.Error{Code: output.Partial, Resume: "backsight server start",
-				Message: fmt.Sprintf("restored (epoch %d), but %v: the restore waits at its purge step, every client held; backsight server start resumes it "+
-					"(it waits for the queues, purges again, then starts the server on its API key)", next.Epoch, err)}
+			return queueHeld(d, fmt.Sprintf("restored (epoch %d)", next.Epoch), err)
 		}
 	}
 	again, detail, err := purgeAgain(ctx, tcl, banks, cfg.Server.Bank)
@@ -696,45 +694,66 @@ func readOthers(ctx context.Context, cl *hindsight.Client, db server.Database, s
 	return nil
 }
 
-// queueWait, when not zero, bounds the wait for the restored queues (tests:
-// the wait has no deadline otherwise, only a cancel stops it); queuePoll
-// is how often it looks.
-var queueWait, queuePoll time.Duration = 0, time.Second
+// queuePoll is how often the wait for the restored queues looks;
+// stallAfter is how long their queued count may stay without dropping
+// before the wait stops (issue 285 review MED-A). Tests shorten them.
+var queuePoll, stallAfter = time.Second, 10 * time.Minute
+
+// queueStall is a wait for the restored queues that stopped: what was
+// queued did not drop for stallAfter. Stuck names the operations.
+type queueStall struct{ Stuck []string }
+
+func (e *queueStall) Error() string {
+	return "the restored queue did not move for " + stallAfter.String() + ": " + strings.Join(e.Stuck, "; ")
+}
 
 // waitQueues waits until no bank of banks with tombstones has a queued
-// operation, telling progress each time what it waits for changes. A
-// queue that cannot be read is waited for too. It returns an error only
-// when ctx is done or queueWait passed.
+// operation, telling progress each time what it waits for changes. A bank
+// the server does not know has no queue; one whose queue cannot be read is
+// waited for. When the queued count has not dropped for stallAfter, it
+// stops with a *queueStall naming the operations: Hindsight 1.1.0 runs
+// again at its start only the operations its own worker left processing,
+// so one a dump brought from another worker never runs (measured for
+// issue 285). It returns an error too when ctx is done.
 func waitQueues(ctx context.Context, cl *hindsight.Client, banks []otherBank, progress func(string)) error {
-	var deadline time.Time
-	if queueWait > 0 {
-		deadline = time.Now().Add(queueWait)
-	}
-	last := ""
+	last, lastTotal, moved := "", -1, time.Now()
 	for {
-		var busy []string
+		var busy, busyBanks []string
+		total, readable := 0, true
 		for _, b := range banks {
 			if !b.epoch || b.foreign || len(b.tombs) == 0 {
 				continue
 			}
 			n, err := cl.QueuedOperations(ctx, b.bank)
+			var apiErr *hindsight.APIError
 			switch {
+			case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
 			case err != nil:
+				readable = false
 				busy = append(busy, fmt.Sprintf("bank %s (queue unreadable: %v)", b.bank, err))
+				busyBanks = append(busyBanks, b.bank)
 			case n > 0:
+				total += n
 				busy = append(busy, fmt.Sprintf("bank %s (%d queued)", b.bank, n))
+				busyBanks = append(busyBanks, b.bank)
 			}
 		}
 		if len(busy) == 0 {
 			return nil
+		}
+		if readable && (lastTotal < 0 || total < lastTotal) {
+			moved = time.Now()
+		}
+		if readable {
+			lastTotal = total
 		}
 		now := strings.Join(busy, ", ")
 		if now != last {
 			progress("waiting for the restored queue of " + now + " before purging again (a queued retain would recreate a purged document)")
 			last = now
 		}
-		if !deadline.IsZero() && !time.Now().Before(deadline) {
-			return fmt.Errorf("the restored queue of %s is not done", now)
+		if time.Since(moved) >= stallAfter {
+			return &queueStall{Stuck: stuckOperations(ctx, cl, busyBanks)}
 		}
 		select {
 		case <-ctx.Done():
@@ -742,6 +761,50 @@ func waitQueues(ctx context.Context, cl *hindsight.Client, banks []otherBank, pr
 		case <-time.After(queuePoll):
 		}
 	}
+}
+
+// stuckOperations names the queued operations of banks: id, type, status
+// and document, at most ten per status and bank.
+func stuckOperations(ctx context.Context, cl *hindsight.Client, banks []string) []string {
+	var out []string
+	for _, b := range banks {
+		for _, status := range []string{"pending", "processing"} {
+			ops, total, err := cl.Operations(ctx, b, status, 10)
+			if err != nil {
+				out = append(out, fmt.Sprintf("bank %s: %s queue unreadable (%v)", b, status, err))
+				continue
+			}
+			for _, o := range ops {
+				desc := fmt.Sprintf("bank %s: %s (%s, %s", b, o.ID, o.Type, o.Status)
+				if o.DocumentID != "" {
+					desc += ", document " + o.DocumentID
+				}
+				out = append(out, desc+")")
+			}
+			if total > len(ops) {
+				out = append(out, fmt.Sprintf("bank %s: and %d more %s", b, total-len(ops), status))
+			}
+		}
+	}
+	return out
+}
+
+// queueHeld is the exit 40 of a wait for the restored queues that stopped
+// (a stall, or a cancel): the marker stays at its purge step, with the
+// stuck operations for doctor.
+func queueHeld(d paths.Dirs, what string, err error) error {
+	msg := fmt.Sprintf("%s, but %v: the restore waits at its purge step, every client held; backsight server start resumes it "+
+		"(it waits for the queues, purges again, then starts the server on its API key)", what, err)
+	if stall := (*queueStall)(nil); errors.As(err, &stall) {
+		if m, rerr := state.ReadRestoreMarker(d); rerr == nil && m != nil {
+			m.Stuck = stall.Stuck
+			_ = state.WriteRestoreMarker(d, *m)
+			if m.Safety != "" {
+				msg += ", or else backsight restore " + m.Safety + " --no-safety puts the server back as it was"
+			}
+		}
+	}
+	return &output.Error{Code: output.Partial, Resume: "backsight server start", Message: msg}
 }
 
 // purgeAgain purges again, as forget --purge does (retain.PurgeAgain),
@@ -1161,21 +1224,32 @@ func resumePurge(ctx context.Context, e *env, cfg config.Config, sec config.Secr
 	for _, b := range m.PurgeBanks {
 		ts, err := retain.ReadTombstones(ctx, tcl, b)
 		if err != nil {
-			return "", redacted(fmt.Errorf("cannot read the purge tombstones of bank %s (%w): the %s stays at its purge step; rerun backsight server start", b, err, m.Command), sec)
+			way := ""
+			if m.Safety != "" {
+				way = ", or put the server back as it was with backsight restore " + m.Safety + " --no-safety"
+			}
+			return "", redacted(fmt.Errorf("cannot read the purge tombstones of bank %s (%w): the %s stays at its purge step; rerun backsight server start%s", b, err, m.Command, way), sec)
 		}
 		banks = append(banks, otherBank{bank: b, epoch: true, tombs: mergeTombstones(ts, st.TombstonesOf(b))})
 	}
 	if err := waitQueues(ctx, tcl, banks, progress); err != nil {
-		return "", &output.Error{Code: output.Partial, Resume: "backsight server start",
-			Message: fmt.Sprintf("%v: the %s waits at its purge step, every client held; rerun backsight server start", err, m.Command)}
+		return "", queueHeld(d, "the "+m.Command+" is not finished", err)
 	}
 	names, detail, err := purgeAgain(ctx, tcl, banks, cfg.Server.Bank)
 	if err != nil {
 		return "", redacted(fmt.Errorf("purging again (%w): the %s stays at its purge step; rerun backsight server start", err, m.Command), sec)
 	}
+	// The bank step the restore did not reach, still on the temporary key
+	// (issue 285 review MED-B).
+	bankNote := ""
+	if !m.RolledBack {
+		if w := restoreBank(ctx, tcl, d, cfg.Server.Bank, func(_, _, detail string) { bankNote = "; bank: " + detail }); w != "" {
+			bankNote = "; " + w
+		}
+	}
 	markStep(d, state.KeyStep, m.Image, m.RolledBack, nil)
 	if len(names) == 0 {
-		return "the " + m.Command + "'s queues are done: no purged document came back", nil
+		return "the " + m.Command + "'s queues are done: no purged document came back" + bankNote, nil
 	}
-	return "purged again, as forget --purge does, what the " + m.Command + " brought back: " + detail, nil
+	return "purged again, as forget --purge does, what the " + m.Command + " brought back: " + detail + bankNote, nil
 }

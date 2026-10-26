@@ -36,6 +36,9 @@ type RestoreMarker struct {
 	// PurgeBanks: at the purge step, the banks whose purged documents are
 	// still to purge again once their queues are done.
 	PurgeBanks []string `json:"purge_banks,omitempty"`
+	// Stuck: at the purge step, the queued operations that did not move
+	// for stallAfter when the wait stopped (issue 285 review MED-A).
+	Stuck []string `json:"stuck,omitempty"`
 }
 
 // KeyStep: the marker's restore wrote its epoch; the server is still to
