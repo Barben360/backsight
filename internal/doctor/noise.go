@@ -211,11 +211,39 @@ func checkNoiseTransverse(ctx context.Context, cl *hindsight.Client, bank string
 	case 100*named > transverseNamedPct*total:
 		c.Status = Warn
 		c.Detail = strings.TrimPrefix(c.Detail+"; the transverse pool is searched with every project, so another project's notes there reach every prompt", "; ")
-		c.Fix = "new sessions are attributed to their repository; clean older ones with backsight forget --project " + alias + " --source subagent --plan, or leave them"
+		c.Fix = "new sessions are attributed to their repository; what is left was learnt in conversations started from this directory: backsight retain reattribute moves them once it can tell their repository (jobs maintain runs it daily), or leave them"
+		if live, err := liveSubagentFact(ctx, cl, bank, alias); err != nil || live {
+			c.Fix = "new sessions are attributed to their repository; clean older ones with backsight forget --project " + alias + " --source subagent --plan, or leave them"
+		}
 	default:
 		c.Status = OK
 	}
 	return c
+}
+
+// liveSubagentFact says whether the transverse pool still holds a live
+// (not retired) raw fact from a subagent report: the only kind
+// `forget --source subagent` can take out. It stops at the first one, and
+// reads at most transverseReadMax facts of each type (more: assume one).
+func liveSubagentFact(ctx context.Context, cl *hindsight.Client, bank, alias string) (bool, error) {
+	for _, typ := range []string{"world", "experience"} {
+		read, found := 0, false
+		err := cl.EachTagged(ctx, bank, typ, "", "project:"+alias, func(m hindsight.Memory) error {
+			if read == transverseReadMax || slices.Contains(m.Tags, "source:subagent") {
+				found = true
+				return errReadMax
+			}
+			read++
+			return nil
+		})
+		if found {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // wordPattern matches name as a whole token, case-insensitively: a letter,

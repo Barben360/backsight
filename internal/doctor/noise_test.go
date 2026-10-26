@@ -30,6 +30,7 @@ const (
 type noiseBank struct {
 	tags         map[string]int // tag -> count
 	observations []string       // texts tagged project:.claude
+	rawSources   []string       // the source tag of each live raw fact tagged project:.claude
 	docs         []noiseDoc
 	mu           sync.Mutex
 	reads        []string // path?query of every tags and list request
@@ -76,8 +77,19 @@ func (b *noiseBank) server(t *testing.T) *httptest.Server {
 			page(len(names), func(i int) any { return map[string]any{"tag": names[i], "count": b.tags[names[i]]} })
 		case path == listPath:
 			// Untagged lists every observation; the noise check only the pool.
-			if q.Has("tags") && (q.Get("type") != "observation" || q.Get("tags") != "project:"+transverse0 || q.Get("tags_match") != "any_strict") {
+			raw := q.Get("type") == "world" || q.Get("type") == "experience"
+			if q.Has("tags") && ((q.Get("type") != "observation" && !raw) || q.Get("tags") != "project:"+transverse0 || q.Get("tags_match") != "any_strict" || q.Has("state")) {
 				t.Errorf("transverse list query: %s", r.URL.RawQuery)
+			}
+			if raw {
+				var facts []map[string]any
+				for i, src := range b.rawSources {
+					if (i%2 == 0) == (q.Get("type") == "world") {
+						facts = append(facts, map[string]any{"id": fmt.Sprintf("r%d", i), "fact_type": q.Get("type"), "text": "a raw fact", "tags": []string{"project:" + transverse0, "source:" + src}})
+					}
+				}
+				page(len(facts), func(i int) any { return facts[i] })
+				return
 			}
 			page(len(b.observations), func(i int) any {
 				return map[string]any{"id": fmt.Sprintf("o%d", i), "fact_type": "observation", "text": b.observations[i], "tags": []string{"project:" + transverse0}}
@@ -131,7 +143,7 @@ func TestNoiseTransverseThreshold(t *testing.T) {
 	}
 
 	named = append(named, "ironwood and backsight share a VPS.", "backsight is written in Go.", "crawler logs to journald.")
-	b = &noiseBank{tags: someProjects, observations: pool(20, named...)}
+	b = &noiseBank{tags: someProjects, observations: pool(20, named...), rawSources: []string{"chat", "subagent"}}
 	c = check(t, noiseFixture(t, b).run(), "noise-transverse")
 	// Top 3 only: crawler (1) is left out of the summary.
 	expect(t, c, Warn, "7 of 20 transverse observations (project:.claude) name another project: trip-2031 (3), backsight (2), ironwood (2)")
@@ -444,5 +456,35 @@ func TestAnUnreadableNoiseHistoryIsReported(t *testing.T) {
 	c := check(t, f.run(), "noise-transverse")
 	if c.Status != Warn || !strings.Contains(c.Summary, "daily readings cannot be read") || !strings.Contains(c.Fix, "noise-history.jsonl") {
 		t.Errorf("%+v", c)
+	}
+}
+
+// The fix names the subagent cleanup only while the pool still holds a
+// live subagent fact; once they are retired, what is left came from
+// conversations, which only a reattribution can move.
+func TestNoiseTransverseFixFollowsWhatIsLeft(t *testing.T) {
+	named := pool(20, sameText(10, "trip-2031 uses Astro.")...)
+	for _, tc := range []struct {
+		sources []string
+		want    string
+	}{
+		{[]string{"chat", "note", "chat", "subagent"}, "new sessions are attributed to their repository; clean older ones with backsight forget --project .claude --source subagent --plan, or leave them"},
+		{[]string{"chat", "note", "chat"}, "new sessions are attributed to their repository; what is left was learnt in conversations started from this directory: backsight retain reattribute moves them once it can tell their repository (jobs maintain runs it daily), or leave them"},
+		{nil, "new sessions are attributed to their repository; what is left was learnt in conversations started from this directory: backsight retain reattribute moves them once it can tell their repository (jobs maintain runs it daily), or leave them"},
+	} {
+		b := &noiseBank{tags: someProjects, observations: named, rawSources: tc.sources}
+		c := check(t, noiseFixture(t, b).run(), "noise-transverse")
+		expect(t, c, Warn, "10 of 20")
+		if c.Fix != tc.want {
+			t.Errorf("sources %v: fix %q, want %q", tc.sources, c.Fix, tc.want)
+		}
+	}
+	// Under the threshold, no raw fact is read.
+	b := &noiseBank{tags: someProjects, observations: pool(20), rawSources: []string{"subagent"}}
+	expect(t, check(t, noiseFixture(t, b).run(), "noise-transverse"), OK, "0 of 20")
+	for _, r := range b.reads {
+		if strings.Contains(r, "type=world") || strings.Contains(r, "type=experience") {
+			t.Errorf("raw facts read with no warning: %s", r)
+		}
 	}
 }
