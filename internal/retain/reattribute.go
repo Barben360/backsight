@@ -202,7 +202,7 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 		from := tagProject(d.Tags)
 		e, known := a.loadAgent(sid, agent)
 		switch {
-		case known:
+		case known && !e.Provisional:
 			e = a.Redecide(e)
 		case d.Metadata["attribution"] != "":
 			// decided when it was filed (the decision travels in its
@@ -440,13 +440,15 @@ func (f *Flusher) ApplyRetag(ctx context.Context, r Retag, oldTags []string) err
 	if err := f.Client.SetDocumentTags(ctx, f.Bank, r.Document, r.Tags); err != nil {
 		return errors.New(errSummary(err))
 	}
-	if err := f.checkTags(ctx, r.Document, "project:"+r.To); err != nil {
-		return err
-	}
+	// The server took the tags: the report's decision follows them, even
+	// when reading the memories back then fails.
 	if r.entry != nil {
 		if err := f.Attribution.replaceAgent(*r.entry); err != nil {
 			return err
 		}
+	}
+	if err := f.checkTags(ctx, r.Document, "project:"+r.To); err != nil {
+		return err
 	}
 	_ = f.journal("retag", "done", fields)
 	return nil
@@ -496,6 +498,15 @@ func (f *Flusher) KeepDecisions(p ReattributionPlan) {
 // the next run plans the same re-send. The caller holds the maintenance
 // lock (no flush runs meanwhile).
 func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
+	// Nothing may land on a document after its delete: Hindsight would
+	// recreate it holding that segment alone, which the resync trusts. So
+	// no re-send while anything is queued (a re-tag's consolidation, a
+	// note), and nothing changes here before it is known.
+	if n, err := f.Client.QueuedOperations(ctx, f.Bank); err != nil {
+		return errors.New(errSummary(err))
+	} else if n > 0 {
+		return fmt.Errorf("%w (%d)", ErrQueued, n)
+	}
 	unlock, err := f.lockSession(r.Session)
 	if err != nil {
 		return err
@@ -541,14 +552,6 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 		}
 	}
 	_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), r.Session))
-	// Nothing may land on a document after its delete: Hindsight would
-	// recreate it holding that segment alone, which the resync trusts.
-	if n, err := f.Client.QueuedOperations(ctx, f.Bank); err != nil || n > 0 {
-		if err == nil {
-			err = fmt.Errorf("%d operation(s) queued", n)
-		}
-		return fmt.Errorf("not deleted, retried later (%v): the server still holds the records, the next flush marks them sent again", errSummary(err))
-	}
 	if err := f.journal("resend", "intent", map[string]any{"session": r.Session, "documents": r.Documents}); err != nil {
 		return err
 	}
@@ -562,6 +565,10 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 	_ = f.journal("resend", "done", map[string]any{"session": r.Session, "documents": r.Documents, "reason": r.Reason, "records": r.Records, "projects": r.Projects})
 	return nil
 }
+
+// ErrQueued: a re-send waits for the server's queue to empty; nothing was
+// changed.
+var ErrQueued = errors.New("operations are queued on the server: the re-send waits for them")
 
 // generationPath keeps a session's last re-send generation for good: a
 // later resync rebuilds the cursor, and the .dropped mark is pruned.

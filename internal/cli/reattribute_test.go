@@ -181,3 +181,69 @@ func TestReattributeAsksBeforeUsingTheSubscription(t *testing.T) {
 		t.Errorf("allowed: exit %d, patches %v\n%s", code, docPatches, out)
 	}
 }
+
+// mixedSessionDoc adds session sid, which moved from billing to shop and
+// an older build sent as one document tagged shop: a re-send.
+func mixedSessionDoc(t *testing.T, home string, port int, sid string) {
+	t.Helper()
+	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl")
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	rec := func(uuid, cwd string) string {
+		return `{"type":"user","uuid":"` + uuid + `","sessionId":"` + sid + `","cwd":"` + cwd + `","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"work"}}` + "\n"
+	}
+	_ = os.WriteFile(p, []byte(rec(sid+"-u1", filepath.Join(home, "billing"))+rec(sid+"-u2", filepath.Join(home, "src", "shop"))), 0o600)
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "work", DocumentID: "conversation:" + sid,
+		Tags: []string{"project:shop", "source:chat"}, Metadata: map[string]string{"session_id": sid, "last_uuid": sid + "-u2", "segment": "1"}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func deletedDocs() []string {
+	var out []string
+	for _, c := range curation {
+		if strings.HasPrefix(c, "DELETE") && strings.Contains(c, "/documents/") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// In one run, re-sends come before the re-tags whose consolidation would
+// queue operations; a re-send that finds the queue busy changes nothing,
+// the run exits 20, and the next run completes it, once.
+func TestReattributeResendsBeforeRetagsAndWaitsForTheQueue(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	reportToMove(t, home, port)
+	mixedSessionDoc(t, home, port, "s2")
+	mixedSessionDoc(t, home, port, "s3")
+	queueOnWrite.Store(true) // each delete or move leaves a consolidation running
+	code, out, errOut := run(t, "retain", "reattribute", "--answer", "resend=yes", "--json")
+	if code != output.Blocked || !strings.Contains(out, `"waiting"`) || len(deletedDocs()) != 1 || len(docPatches) != 1 {
+		t.Fatalf("exit %d, deleted %v, patches %v\n%s%s", code, deletedDocs(), docPatches, out, errOut)
+	}
+	var env struct {
+		Data reattributeResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	waiting := env.Data.Waiting[0]
+	// nothing changed for the waiting session: no mark, no generation
+	cursors := pathsOf(home).CursorsDir()
+	for _, f := range []string{waiting + ".dropped", waiting + ".generation"} {
+		if _, err := os.Stat(filepath.Join(cursors, f)); err == nil {
+			t.Errorf("%s written for a re-send that waited", f)
+		}
+	}
+	processing.Store(0) // the consolidation ran
+	queueOnWrite.Store(false)
+	if code, out, errOut := run(t, "retain", "reattribute", "--answer", "resend=yes"); code != output.OK || len(deletedDocs()) != 2 {
+		t.Fatalf("the next run: exit %d, deleted %v\n%s%s", code, deletedDocs(), out, errOut)
+	}
+	if code, out, _ := run(t, "retain", "reattribute", "--answer", "resend=yes"); code != output.OK || len(deletedDocs()) != 2 {
+		t.Errorf("a third run deleted again: exit %d, %v\n%s", code, deletedDocs(), out)
+	}
+}
