@@ -322,11 +322,11 @@ func TestMCPSearchAddsTheRelatedProjects(t *testing.T) {
 	cs := mcpSession(t)
 	home := os.Getenv("HOME")
 	_ = os.MkdirAll(filepath.Join(home, "billing"), 0o700)
-	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(`related = ["ref-stack"]`+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(`related = ["atlas-spec"]`+"\n"), 0o600)
 	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4646, session.Live{SessionID: "s1", Cwd: filepath.Join(home, "billing"), Project: "billing"})
 	recallTags = nil
 	call(t, cs, "memory_search", map[string]any{"queries": []string{"spec"}})
-	if j := "|" + strings.Join(recallTags, "|"); !strings.Contains(j, "|project:billing,") || !strings.Contains(j, ",project:ref-stack") {
+	if j := "|" + strings.Join(recallTags, "|"); !strings.Contains(j, "|project:billing,") || !strings.Contains(j, ",project:atlas-spec") {
 		t.Errorf("project call %q", recallTags)
 	}
 }

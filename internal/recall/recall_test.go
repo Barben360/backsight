@@ -59,11 +59,11 @@ func (f *fakeBank) client(t *testing.T) *hindsight.Client {
 }
 
 func engine(t *testing.T, f *fakeBank) *Engine {
-	return &Engine{Client: f.client(t), Bank: "b", Transverse: []string{".claude", "user"}, Timeout: 2 * time.Second,
+	return &Engine{Client: f.client(t), Bank: "b", Transverse: []string{".claude", "annuser"}, Timeout: 2 * time.Second,
 		Now: func() time.Time { return time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC) }}
 }
 
-const own = "project:billing,project:.claude,project:user"
+const own = "project:billing,project:.claude,project:annuser"
 
 func TestSearchMergesScopesWithTheCurrentProjectBoost(t *testing.T) {
 	f := &fakeBank{scopes: map[string][]hit{
@@ -113,7 +113,7 @@ func TestRelatedScopeKeepsAskedProjectsAndCapsIndexMatches(t *testing.T) {
 	f := &fakeBank{scopes: map[string][]hit{}}
 	engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing",
 		Projects: []string{"billing", "x", "y", ".claude", "x"},
-		Related:  []string{"user", "y", "a", "b", "c", "d", "e", "f", "g"}})
+		Related:  []string{"annuser", "y", "a", "b", "c", "d", "e", "f", "g"}})
 	var related []string
 	for _, r := range f.requests {
 		if len(r.Tags) > 0 && r.Tags[0] == "project:x" {
@@ -131,13 +131,13 @@ func TestRelatedScopeKeepsAskedProjectsAndCapsIndexMatches(t *testing.T) {
 // hits are near (no foreign floor, no boost), and the related scope does not
 // repeat them.
 func TestLinkedProjectsJoinTheProjectScopeAndAreNear(t *testing.T) {
-	linked := own + ",project:ref-stack"
+	linked := own + ",project:atlas-spec"
 	f := &fakeBank{scopes: map[string][]hit{
-		linked: {{"l1", "Spec work happened in ref-stack.", "ref-stack", 0.55}},
-		"":     {{"l1", "Spec work happened in ref-stack.", "ref-stack", 0.55}, {"f1", "foreign", "infra", 0.55}, {"f2", "strong foreign", "infra", 0.65}},
+		linked: {{"l1", "Spec work happened in atlas-spec.", "atlas-spec", 0.55}},
+		"":     {{"l1", "Spec work happened in atlas-spec.", "atlas-spec", 0.55}, {"f1", "foreign", "infra", 0.55}, {"f2", "strong foreign", "infra", 0.65}},
 	}}
 	res := engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing",
-		Linked: []string{"ref-stack", "billing", ".claude"}, GlobalMinReranker: 0.6, MinReranker: 0.5})
+		Linked: []string{"atlas-spec", "billing", ".claude"}, GlobalMinReranker: 0.6, MinReranker: 0.5})
 	var ids []string
 	for _, h := range res.Hits {
 		ids = append(ids, h.ID)
@@ -147,7 +147,7 @@ func TestLinkedProjectsJoinTheProjectScopeAndAreNear(t *testing.T) {
 	}
 	f.requests = nil
 	engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing",
-		Linked: []string{"ref-stack"}, Related: []string{"ref-stack", "ops"}})
+		Linked: []string{"atlas-spec"}, Related: []string{"atlas-spec", "ops"}})
 	var tags []string
 	for _, r := range f.requests {
 		tags = append(tags, strings.Join(r.Tags, ","))

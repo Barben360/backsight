@@ -105,8 +105,8 @@ func TestBrokenBacksightTomlIsReported(t *testing.T) {
 func TestRelatedComesFromTheNearestFileThatSetsIt(t *testing.T) {
 	home, r := fixture(t)
 	repo := filepath.Join(home, "work", "billing")
-	write(t, filepath.Join(repo, ".backsight.toml"), `related = ["ref-stack", " ", "ref-stack", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]`+"\n")
-	want := "ref-stack,a,b,c,d,e,f,g,h,i"
+	write(t, filepath.Join(repo, ".backsight.toml"), `related = ["atlas-spec", " ", "atlas-spec", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]`+"\n")
+	want := "atlas-spec,a,b,c,d,e,f,g,h,i"
 	for _, cwd := range []string{repo, filepath.Join(repo, "internal", "export")} {
 		if got := strings.Join(r.Related(cwd), ","); got != want {
 			t.Errorf("%s: related %q, want %q", cwd, got, want)
@@ -134,7 +134,7 @@ func TestRelatedComesFromTheNearestFileThatSetsIt(t *testing.T) {
 // searches nothing extra.
 func TestBrokenRelatedFailsClosed(t *testing.T) {
 	home, r := fixture(t)
-	write(t, filepath.Join(home, "notes", ".backsight.toml"), "related = \"ref-stack\"\n")
+	write(t, filepath.Join(home, "notes", ".backsight.toml"), "related = \"atlas-spec\"\n")
 	if out, why := r.OptedOut(filepath.Join(home, "notes"), nil); !out || !strings.Contains(why, "cannot be read") {
 		t.Errorf("a broken related must fail closed (no retain): %v %q", out, why)
 	}

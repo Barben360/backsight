@@ -58,9 +58,9 @@ func TestScrubDropsServerAnswersAndSecrets(t *testing.T) {
 func TestScrubNamesInsideCompoundWords(t *testing.T) {
 	s := NewScrubber("")
 	s.Name("annsbox", "<host>")
-	s.Name("user", "<user>")
+	s.Name("annuser", "<user>")
 	s.Name("ab", "<x>") // too short to replace outside a path segment
-	got := s.String("annsbox annsbox,annsbox-2 backsight-annsbox annsbox_x annsbox.lan myannsbox annsboxer user-laptop ab")
+	got := s.String("annsbox annsbox,annsbox-2 backsight-annsbox annsbox_x annsbox.lan myannsbox annsboxer annuser-laptop ab")
 	if want := "<host> <host>,<host>-2 backsight-<host> <host>_x <host>.lan myannsbox annsboxer <user>-laptop ab"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

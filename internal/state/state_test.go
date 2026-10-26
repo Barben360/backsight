@@ -27,7 +27,7 @@ func TestLoadMissingIsEmptyCurrentSchema(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "state", "state.json")
 	in := State{SchemaVersion: SchemaVersion, AppliedMigrations: []string{"0001"}, BankConfigHash: "abc",
-		PluginVersion: "0.1.0", ShimTarget: "/d/bin/0.1.0/backsight", ReplacedFrom: "ref-stack",
+		PluginVersion: "0.1.0", ShimTarget: "/d/bin/0.1.0/backsight", ReplacedFrom: "reference-stack",
 		FirstSessionNoticeShown: true,
 		Backfill:                &Backfill{Done: 10, Total: 90, StartedAt: time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)},
 		UpdateCheck: &UpdateCheck{CheckedAt: time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC), Source: "github:Barben360/backsight",

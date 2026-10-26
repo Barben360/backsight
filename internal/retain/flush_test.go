@@ -511,7 +511,7 @@ func TestEachProjectGetsItsOwnDocument(t *testing.T) {
 func TestANonRepoDirectoryKeepsThePreviousProject(t *testing.T) {
 	e := newEnv(t)
 	home := filepath.Dir(filepath.Dir(e.cwd))
-	dist := filepath.Join(home, ".npm-global", "lib", "node_modules", "crawler", "dist")
+	dist := filepath.Join(home, ".npm-global", "lib", "node_modules", "lantern", "dist")
 	_ = os.MkdirAll(dist, 0o700)
 	e.recordIn(home, "s1", "u1", "user", 0, "in the home directory")
 	e.recordIn(dist, "s1", "u2", "user", 1, "reading the bundle")

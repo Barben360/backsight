@@ -134,7 +134,7 @@ func credentialLike(v string) bool {
 
 // highEntropy: upper, lower and digits mixed with frequent changes of
 // character class, as in random tokens; identifiers made of words
-// (expediteurFingerprint, Barben360-ref-stack) change class rarely.
+// (expediteurFingerprint, Barben360-atlas-spec) change class rarely.
 func highEntropy(v string) bool {
 	class := func(r rune) int {
 		switch {

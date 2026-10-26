@@ -112,7 +112,7 @@ func TestLookAlikesSurvive(t *testing.T) {
 		"github.com/Barben360/backsight/internal/hindsight",
 		"flatpak override --user --filesystem=xdg-config/gtk-4.0:ro",
 		"const expediteurPubliqueFingerprintDeclare = 1",
-		"/tmp/claude-1000/-home-user-Workspace-github-com-Barben360-ref-stack/x",
+		"/tmp/claude-1000/-home-annuser-Workspace-github-com-Barben360-atlas-spec/x",
 		`"predicted_per_token_ms":41.23456789`,
 		"The signing keys have no password: `pass` and GitHub secrets encrypt them.",
 		"Crée un token : Profil → Sécurité",

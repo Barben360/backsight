@@ -94,15 +94,15 @@ func TestGlobalHitsNeedTheHigherFloor(t *testing.T) {
 // skip that floor.
 func TestRelatedProjectsJoinTheProjectCall(t *testing.T) {
 	home := hookHome(t)
-	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(`related = ["ref-stack"]`+"\n"), 0o600)
-	recallAnswer = `[{"id":"linked","text":"spec fact","type":"observation","tags":["project:ref-stack"],"scores":{"reranker":0.55}},
+	_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte(`related = ["atlas-spec"]`+"\n"), 0o600)
+	recallAnswer = `[{"id":"linked","text":"spec fact","type":"observation","tags":["project:atlas-spec"],"scores":{"reranker":0.55}},
 		{"id":"foreign-low","text":"foreign low","type":"observation","tags":["project:other"],"scores":{"reranker":0.55}}]`
 	recallTags = nil
 	c := prompt(t, home, "s1", longPrompt).Specific.Context
 	if !strings.Contains(c, "spec fact") || strings.Contains(c, "foreign low") {
 		t.Errorf("context:\n%s", c)
 	}
-	if j := strings.Join(recallTags, "|"); !strings.Contains(j, "project:billing,") || !strings.Contains(j, ",project:ref-stack") {
+	if j := strings.Join(recallTags, "|"); !strings.Contains(j, "project:billing,") || !strings.Contains(j, ",project:atlas-spec") {
 		t.Errorf("project call %q", recallTags)
 	}
 }
