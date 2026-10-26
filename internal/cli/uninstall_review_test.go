@@ -360,6 +360,9 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	foreign := filepath.Join(d.State, "cutover-backup-20261025", "settings.json")
 	_ = os.MkdirAll(filepath.Dir(foreign), 0o700)
 	_ = os.WriteFile(foreign, []byte("mine"), 0o600)
+	ledger := filepath.Join(d.AttributionDir(), "s1", "main.jsonl")
+	_ = os.MkdirAll(filepath.Dir(ledger), 0o700)
+	_ = os.WriteFile(ledger, []byte("{}\n"), 0o600)
 	code, env, out := uninstall(t, "--purge-local")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -370,7 +373,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	if !strings.Contains(strings.Join(env.Data.Kept, "\n"), filepath.Dir(foreign)) {
 		t.Errorf("the kept entry is not named: %q", env.Data.Kept)
 	}
-	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile()} {
+	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile(), d.AttributionDir()} {
 		if onDisk(p) {
 			t.Errorf("not purged: %s", p)
 		}
