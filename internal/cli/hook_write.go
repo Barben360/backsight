@@ -184,7 +184,7 @@ func (h *hookEnv) subagentStop() {
 	}
 	text = retain.SubagentReport(text) // redacted and capped, as a reconcile rebuilds it
 	n := retain.NewSubagentNote(h.cfg.Server.Bank, h.in.SessionID, h.in.AgentID, h.in.AgentType, noteProject(h.home, h.cfg, h.project), text, now())
-	if _, err := notesOutbox(h.dirs).Append(n); err != nil {
+	if _, err := notesOutboxFor(h.dirs, h.cfg).Append(n); err != nil {
 		h.tw.Emit(telemetry.Retain{Document: n.DocumentID, Items: 1, Status: "failed"})
 		return
 	}

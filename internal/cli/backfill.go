@@ -261,7 +261,7 @@ func acquireBackfill(d paths.Dirs) (func(), error) {
 // The caller holds the backfill lock (acquireBackfill).
 func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, prices retain.Prices, inTick bool) (backfillResult, error) {
 	var res backfillResult
-	ob := notesOutbox(d)
+	ob := notesOutboxFor(d, cfg)
 	pause := func(reason string, msg string) (backfillResult, error) {
 		if err := state.Update(d, "retain backfill", func(s *state.State) error {
 			if s.Backfill != nil {

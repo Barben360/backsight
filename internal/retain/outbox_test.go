@@ -90,9 +90,7 @@ func TestOutboxQuarantinesRefusedNotes(t *testing.T) {
 
 func TestOutboxSizeLimits(t *testing.T) {
 	o := outbox(t)
-	oldWarn, oldMax := OutboxWarnBytes, OutboxMaxBytes
-	OutboxWarnBytes, OutboxMaxBytes = 300, 600
-	t.Cleanup(func() { OutboxWarnBytes, OutboxMaxBytes = oldWarn, oldMax })
+	o.WarnBytes, o.MaxBytes = 300, 600
 	warn, err := o.Append(NewNote("b", "lesson", "p", "small", at))
 	if warn || err != nil {
 		t.Fatalf("%v %v", warn, err)
@@ -261,5 +259,41 @@ func TestSubagentNoteItem(t *testing.T) {
 		len(it.ObservationScopes) != 1 || len(it.ObservationScopes[0]) != 1 || it.ObservationScopes[0][0] != "project:billing" ||
 		it.Metadata["source"] != "subagent" || it.Metadata["agent_type"] != "Explore" {
 		t.Errorf("%+v %+v", n, it)
+	}
+}
+
+func TestOutboxLimitsDefaultsAndMB(t *testing.T) {
+	if w, m := (Outbox{}).Limits(); w != 50<<20 || m != 500<<20 {
+		t.Errorf("defaults: %d %d", w, m)
+	}
+	if w, m := (Outbox{}).WithLimitsMB(3, 7).Limits(); w != 3<<20 || m != 7<<20 {
+		t.Errorf("configured: %d %d", w, m)
+	}
+	if w, m := (Outbox{}).WithLimitsMB(0, 0).Limits(); w != 50<<20 || m != 500<<20 {
+		t.Errorf("zero keeps the defaults: %d %d", w, m)
+	}
+}
+
+// A max of 1 MB refuses at 1 MB, where the default would take the note;
+// a warn of 1 MB warns where the default would not.
+func TestOutboxConfiguredLimitsAreHonoured(t *testing.T) {
+	o := outbox(t).WithLimitsMB(1, 2)
+	_ = os.MkdirAll(filepath.Dir(o.Path), 0o700)
+	big := strings.Repeat("x", 1<<20+10)
+	if err := os.WriteFile(o.Path, []byte(big+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warn, err := o.Append(NewNote("b", "lesson", "p", "past warn", at))
+	if err != nil || !warn {
+		t.Fatalf("1 MB queued, warn 1 MB: want a warning and the note kept, got %v %v", warn, err)
+	}
+	if err := os.WriteFile(o.Path, []byte(strings.Repeat("x", 2<<20)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Append(NewNote("b", "lesson", "p", "refused", at)); !errors.Is(err, ErrOutboxFull) {
+		t.Fatalf("2 MB queued, max 2 MB: want ErrOutboxFull, got %v", err)
+	}
+	if _, err := outbox(t).Append(NewNote("b", "lesson", "p", "default", at)); err != nil {
+		t.Errorf("the default still takes notes: %v", err)
 	}
 }

@@ -22,14 +22,15 @@ import (
 // Kinds a note can have (SPEC §4).
 var Kinds = map[string]bool{"decision": true, "correction": true, "convention": true, "pitfall": true, "state": true, "lesson": true}
 
-// Outbox size limits (SPEC §9.1); variables so tests can shrink them.
-var (
-	OutboxWarnBytes int64 = 50 << 20
-	OutboxMaxBytes  int64 = 500 << 20
+// Default outbox size limits (SPEC §9.1), the defaults of hooks.outbox_warn_mb
+// and hooks.outbox_max_mb.
+const (
+	DefaultOutboxWarnBytes int64 = 50 << 20
+	DefaultOutboxMaxBytes  int64 = 500 << 20
 )
 
 // ErrOutboxFull refuses a note when the outbox reached its hard limit.
-var ErrOutboxFull = errors.New("the notes outbox is full (500 MB): the server has been unreachable for long; check backsight doctor")
+var ErrOutboxFull = errors.New("the notes outbox is full: the server has been unreachable for long; check backsight doctor")
 
 // Note is one queued explicit fact.
 type Note struct {
@@ -92,6 +93,33 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 // Outbox is the write-ahead file of notes not yet accepted by the server.
 type Outbox struct {
 	Path, LockPath, QuarantinePath string
+	// WarnBytes and MaxBytes are the warning and hard size limits; zero:
+	// the defaults.
+	WarnBytes, MaxBytes int64
+}
+
+// WithLimitsMB returns o with the limits of hooks.outbox_warn_mb and
+// hooks.outbox_max_mb (a value of 0 or less keeps the default).
+func (o Outbox) WithLimitsMB(warn, max int) Outbox {
+	if warn > 0 {
+		o.WarnBytes = int64(warn) << 20
+	}
+	if max > 0 {
+		o.MaxBytes = int64(max) << 20
+	}
+	return o
+}
+
+// Limits are the warning and hard size limits in bytes.
+func (o Outbox) Limits() (warn, max int64) {
+	warn, max = o.WarnBytes, o.MaxBytes
+	if warn <= 0 {
+		warn = DefaultOutboxWarnBytes
+	}
+	if max <= 0 {
+		max = DefaultOutboxMaxBytes
+	}
+	return warn, max
 }
 
 func (o Outbox) lock(command string) (func(), error) {
@@ -121,7 +149,8 @@ func (o Outbox) Append(n Note) (warn bool, err error) {
 	if fi, err := os.Stat(o.Path); err == nil {
 		size = fi.Size()
 	}
-	if size >= OutboxMaxBytes {
+	warnAt, maxAt := o.Limits()
+	if size >= maxAt {
 		return true, ErrOutboxFull
 	}
 	raw, err := json.Marshal(n)
@@ -150,7 +179,7 @@ func (o Outbox) Append(n Note) (warn bool, err error) {
 		_ = f.Close()
 		return false, err
 	}
-	return size+int64(len(raw)) >= OutboxWarnBytes, f.Close()
+	return size+int64(len(raw)) >= warnAt, f.Close()
 }
 
 // FlushResult counts what Flush did.

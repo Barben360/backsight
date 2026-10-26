@@ -559,6 +559,26 @@ func TestWritesCheck(t *testing.T) {
 	}
 }
 
+// hooks.outbox_warn_mb and hooks.outbox_max_mb set the thresholds.
+func TestWritesCheckUsesConfiguredLimits(t *testing.T) {
+	f := newFixture(t)
+	d := f.env.Dirs
+	put(t, filepath.Join(d.OutboxDir(), "notes.jsonl"), strings.Repeat("x", 1<<20+5), 0o600)
+	expect(t, check(t, f.run(), "writes"), OK, "queued") // under the default 50 MB
+	put(t, d.ConfigFile(), "[hooks]\noutbox_warn_mb = 1\noutbox_max_mb = 5\n", 0o600)
+	c := check(t, f.run(), "writes")
+	expect(t, c, Warn, "queued")
+	if !strings.Contains(c.Fix, "server status") {
+		t.Errorf("fix: %q", c.Fix)
+	}
+	put(t, d.ConfigFile(), "[hooks]\noutbox_warn_mb = 1\noutbox_max_mb = 1\n", 0o600)
+	c = check(t, f.run(), "writes")
+	expect(t, c, Error, "queued")
+	if !strings.Contains(c.Fix, "outbox is full") {
+		t.Errorf("fix: %q", c.Fix)
+	}
+}
+
 // After the cut-over only leftovers remain: the check is OK, says the
 // timer is disabled, and counts nothing as wired.
 func TestCheckReferenceLeftovers(t *testing.T) {

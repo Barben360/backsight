@@ -119,8 +119,8 @@ Check your provider's current prices: they change, and some (DeepSeek's) differ 
 | Key | Default | Effect |
 |---|---|---|
 | `hooks.subagent_skip` | `["Explore", "statusline-setup", "claude-code-guide"]` | Subagent types that get no memory guide when they start. Their final reports are still sent. |
-| `hooks.outbox_warn_mb` | `50` | Accepted and checked (at most `hooks.outbox_max_mb`) but not used yet: doctor warns when the notes queue reaches a fixed 50 MB. |
-| `hooks.outbox_max_mb` | `500` | Accepted but not used yet: the notes queue stops taking notes at a fixed 500 MB. |
+| `hooks.outbox_warn_mb` | `50` | Size of the notes queue (notes waiting for the server) at which `backsight store` warns and `backsight doctor` warns. At least 1 and at most `hooks.outbox_max_mb`. |
+| `hooks.outbox_max_mb` | `500` | Size of the notes queue at which it stops taking notes (`backsight store` refuses and `backsight doctor` reports an error), so a server down for long cannot fill the disk. |
 
 ## `[backup]`
 
