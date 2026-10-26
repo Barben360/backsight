@@ -432,7 +432,7 @@ func TestSecretValuesReadsWhatParsersRefuse(t *testing.T) {
 	// still scrubs its values.
 	_ = os.WriteFile(sec, []byte("api_key = \"quokkaplainwordtrellis\"\n[[[ broken\nui_key = 'zebraumbrellaledger'\n"), 0o644)
 	_ = os.WriteFile(env, []byte("# HINDSIGHT_API_LLM_API_KEY='commentedoutvalue'\nMY_TOKEN=unquotedtokenvalue\nHINDSIGHT_API_LLM_PROVIDER=openai\nHINDSIGHT_API_LLM_BASE_URL='http://llm.example:8080/v1'\n"), 0o600)
-	got := strings.Join(secretValues(sec, env), " | ")
+	got := strings.Join(secretValues(sec, env, true), " | ")
 	for _, want := range []string{"quokkaplainwordtrellis", "zebraumbrellaledger", "unquotedtokenvalue", "http://llm.example:8080/v1"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("values %q lack %q", got, want)
@@ -443,8 +443,14 @@ func TestSecretValuesReadsWhatParsersRefuse(t *testing.T) {
 			t.Errorf("values %q hold %q", got, not)
 		}
 	}
-	if v := secretValues(filepath.Join(dir, "none"), filepath.Join(dir, "none")); len(v) != 0 {
+	if v := secretValues(filepath.Join(dir, "none"), filepath.Join(dir, "none"), true); len(v) != 0 {
 		t.Errorf("missing files gave %q", v)
+	}
+	// Redaction outside the report keeps a quoted value that names no
+	// secret: the LLM base URL is ordinary text.
+	got = strings.Join(secretValues(sec, env, false), " | ")
+	if !strings.Contains(got, "unquotedtokenvalue") || !strings.Contains(got, "zebraumbrellaledger") || strings.Contains(got, "llm.example") {
+		t.Errorf("values without quoted ones: %q", got)
 	}
 }
 

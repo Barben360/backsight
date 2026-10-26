@@ -3,7 +3,6 @@ package report
 import (
 	"encoding/json"
 	"net/netip"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -25,9 +24,8 @@ var httpBody = regexp.MustCompile(`(?s)(HTTP \d{3}(?: \([a-z_]+\))?:) .*`)
 // SecretPlaceholder stands for a value read from a secret store.
 const SecretPlaceholder = "[redacted:secret]"
 
-// minSecret is the shortest secret value scrubbed: a shorter one would eat
-// ordinary words, and backsight's own secrets are 32 random bytes.
-const minSecret = 8
+// minSecret is the shortest secret value scrubbed.
+const minSecret = redact.MinSecret
 
 // Scrubber removes from text what a report must never show: secrets (the
 // redaction rules and the values of the secret stores), server answers,
@@ -126,17 +124,8 @@ func (s *Scrubber) Secret(v string) {
 	sort.SliceStable(s.secrets, func(i, j int) bool { return len(s.secrets[i]) > len(s.secrets[j]) })
 }
 
-// encodings are v and its URL-escaped forms: query, path, and the path
-// form of hindsight's bankPath, which escapes ':' too.
-func encodings(v string) []string {
-	out := []string{v}
-	for _, f := range []string{url.QueryEscape(v), url.PathEscape(v), strings.ReplaceAll(url.PathEscape(v), ":", "%3A")} {
-		if !slices.Contains(out, f) {
-			out = append(out, f)
-		}
-	}
-	return out
-}
+// encodings are v and its URL-escaped forms (redact.Encodings).
+var encodings = redact.Encodings
 
 // minName is the shortest name replaced outside a path segment.
 const minName = 4

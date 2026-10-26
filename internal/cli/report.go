@@ -172,7 +172,7 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 			sc.Root(r.dir, r.with)
 		}
 	}
-	for _, v := range secretValues(d.SecretsFile(), filepath.Join(cfg.Server.ComposeDir, ".env")) {
+	for _, v := range secretValues(d.SecretsFile(), filepath.Join(cfg.Server.ComposeDir, ".env"), true) {
 		sc.Secret(v)
 	}
 	if h, err := hostname(); err == nil {
@@ -355,14 +355,29 @@ func bankProjects(ctx context.Context, doc doctor.Report) []string {
 	return out
 }
 
+// localSecretValues are the values redaction replaces wherever text
+// leaves the machine (retain, notes, queries, memory scan): every value of
+// secrets.toml and the secret-named ones of the server's .env. A quoted
+// .env value that names no secret (the LLM base URL) stays: it would eat
+// ordinary text. Never logged.
+func localSecretValues() []string {
+	d, home, err := machine()
+	if err != nil {
+		return nil
+	}
+	cfg, _ := config.Load(d.ConfigFile(), d, home) // on error: the defaults
+	return secretValues(d.SecretsFile(), filepath.Join(cfg.Server.ComposeDir, ".env"), false)
+}
+
 // envSecretKey names the .env entries that hold a secret even unquoted.
 var envSecretKey = regexp.MustCompile(`(?i)(key|pass|secret|token)`)
 
 // secretValues reads every value of secrets.toml (whatever its mode or
 // keys: reading is not showing) and the secrets of the server's .env
-// (single-quoted values and secret-named keys), so the report can scrub
-// them. A file that does not parse is read line by line.
-func secretValues(secretsFile, envFile string) []string {
+// (secret-named keys, and with quoted every single-quoted value, as the
+// report wants), so they can be scrubbed. A file that does not parse is
+// read line by line.
+func secretValues(secretsFile, envFile string, quoted bool) []string {
 	var out []string
 	if raw, err := os.ReadFile(secretsFile); err == nil {
 		var tree map[string]any
@@ -383,8 +398,8 @@ func secretValues(secretsFile, envFile string) []string {
 				continue
 			}
 			v = strings.TrimSpace(v)
-			quoted := len(v) >= 2 && (v[0] == '\'' || v[0] == '"') && v[len(v)-1] == v[0]
-			if quoted || envSecretKey.MatchString(k) {
+			isQuoted := len(v) >= 2 && (v[0] == '\'' || v[0] == '"') && v[len(v)-1] == v[0]
+			if quoted && isQuoted || envSecretKey.MatchString(k) {
 				out = append(out, strings.Trim(v, `"'`))
 			}
 		}

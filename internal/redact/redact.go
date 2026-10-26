@@ -5,10 +5,12 @@ package redact
 
 import (
 	"encoding/base64"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type rule struct {
@@ -53,8 +55,23 @@ func cliRule(re string) rule {
 	return rule{kind: "cli_password", re: regexp.MustCompile(re), group: 1, keep: keepFlag}
 }
 
+// segmentKeyRE is a key whose last word names a key, a signature or an
+// identity (AccountKey, SharedAccessKey, sig, X-Amz-Signature, TWILIO_AUTH,
+// backup_identity, client-key-data): such keys name settings as often as
+// secrets, so only a random-looking value counts (keepSegmentValue).
+// The word before a space is part of the key ("public key: age1…").
+const segmentKeyRE = `(?:[a-zA-Z0-9_.-]+ )?[a-zA-Z0-9_.-]*?(?:key|auth|sig|signature|identity)(?:[_-]data)?`
+
+// segmentValueRE is a value of such a key: base64 (standard or URL,
+// percent-escaped too, as in an SAS sig) or hex, padding included.
+const segmentValueRE = `([A-Za-z0-9+/_%-]{16,}=*)`
+
 var rules = slices.Concat([]rule{
-	{kind: "private_key", re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)`)},
+	// PEM and PGP armour: the whole block, to its end or the end of the text.
+	{kind: "private_key", re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|\z)`)},
+	// An age identity: backsight's backup key (bech32, upper-case), whole
+	// or cut short.
+	{kind: "age_identity", re: regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Z]{16,}`)},
 	{kind: "anthropic_key", re: regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}`)},
 	{kind: "openai_key", re: regexp.MustCompile(`\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}`)},
 	{kind: "stripe_key", re: regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`)},
@@ -65,6 +82,20 @@ var rules = slices.Concat([]rule{
 	{kind: "google_api_key", re: regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}`)},
 	{kind: "gitlab_token", re: regexp.MustCompile(`\bgl(?:pat|ptt|dt|rt|cbt|imt|oas)-[A-Za-z0-9_-]{20,}`)},
 	{kind: "jwt", re: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`)},
+	{kind: "digitalocean_token", re: regexp.MustCompile(`\bdo[opr]_v1_[a-f0-9]{64}\b`)},
+	{kind: "shopify_token", re: regexp.MustCompile(`\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b`)},
+	// A Twilio API key SID: the key's name, but its only identifier.
+	{kind: "twilio_key", re: regexp.MustCompile(`\bSK[0-9a-f]{32}\b`)},
+	// Webhook URLs: the path is the credential.
+	{kind: "slack_webhook", re: regexp.MustCompile(`\bhttps?://hooks\.slack(?:-gov)?\.com/(?:services|workflows|triggers)/([A-Za-z0-9_/-]{8,})`), group: 1},
+	{kind: "discord_webhook", re: regexp.MustCompile(`\bhttps?://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/([0-9]+/[A-Za-z0-9_-]+)`), group: 1},
+	// A TOTP seed (upper-case base32) in an otpauth URL or after the words
+	// naming one.
+	{kind: "totp_seed", re: regexp.MustCompile(`(?i:\botpauth://[^\s?]*\?(?:[^\s&#]*&)*secret=)([A-Z2-7]{16,}=*)`), group: 1},
+	{kind: "totp_seed", re: regexp.MustCompile(`(?i:\b(?:totp|otp|2fa|mfa|authenticator)[ _-]?(?:secret|seed|key)s?)(?:\s+is)?\s*[:=]?\s*["'\x60]?([A-Z2-7]{16,}=*)\b`), group: 1},
+	// A Docker config's "auth": base64 of user:password.
+	{kind: "docker_auth", re: regexp.MustCompile(`"auth"\s*:\s*"([A-Za-z0-9+/]{8,}=*)"`), group: 1, keep: keepBasic},
+	{kind: "docker_auth", re: regexp.MustCompile(`\\"auth\\"\s*:\s*\\"([A-Za-z0-9+/]{8,}=*)\\"`), group: 1, keep: keepBasic},
 	// Any scheme in an Authorization header (Token, ApiKey...); Bearer and
 	// Basic have their own kinds below.
 	{kind: "auth_header", re: regexp.MustCompile(`(?i)\bauthorization["']?\s*[:=]\s*["']?(?:token|apikey|api-key|key)\s+([A-Za-z0-9._~+/-]{16,}=*)`), group: 1},
@@ -85,11 +116,24 @@ var rules = slices.Concat([]rule{
 	cliRule(`\bredis-cli\b[^\n]*?\s-a\s+["']?([^\s"']+)`),
 	// Samba's user%password (smbclient, rpcclient, net).
 	cliRule(`(?:\s|^)(?:-U|--user(?:name)?)(?:=|\s+)["']?[^\s%"']+%([^\s"']+)`),
+	// docker login -p and the other registry clients' (--password is above).
+	cliRule(`\b(?:docker|podman|nerdctl|buildah|skopeo|oras|helm\s+registry)\b[^\n]*?\blogin\b[^\n]*?\s-p(?:=|\s+)"([^"\n]+)"`),
+	cliRule(`\b(?:docker|podman|nerdctl|buildah|skopeo|oras|helm\s+registry)\b[^\n]*?\blogin\b[^\n]*?\s-p(?:=|\s+)'([^'\n]+)'`),
+	cliRule(`\b(?:docker|podman|nerdctl|buildah|skopeo|oras|helm\s+registry)\b[^\n]*?\blogin\b[^\n]*?\s-p(?:=|\s+)([^\s"'-]\S*)`),
+	// netrc: a password after a machine with a login, a machine named by a
+	// host name, or the default entry; one line or several.
+	{kind: "netrc_password", re: regexp.MustCompile(`\b(?:machine\s+\S+\s+|default\s+)login\s+\S+\s+(?:account\s+\S+\s+)?password\s+(\S+)`), group: 1, keep: keepFlag},
+	{kind: "netrc_password", re: regexp.MustCompile(`\bmachine\s+[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\s+password\s+(\S+)`), group: 1, keep: keepFlag},
 },
 	// A value assigned to a secret-named key, each form for both key
 	// shapes before the next form.
 	interleave(keyRules(keyRE), keyRules(passKeyRE)),
 	[]rule{
+		// Long hex after the words naming a secret, in prose ("the token is
+		// <hex>"); bare hex is a commit, a digest or a checksum and stays.
+		{kind: "hex_secret", re: regexp.MustCompile(`(?i:\b(?:secret|token|passw(?:or)?d|passphrase|api[ _-]?key|private[ _-]key|signing[ _-]key|auth[ _-]token)s?)(?:\s+(?:is|was))?\s*[:=]?\s+["'\x60]?([0-9a-fA-F]{32,})\b`), group: 1},
+		// A random value of a key ending in key, auth, sig or identity.
+		{kind: "secret_value", re: regexp.MustCompile(`(?i)["']?\b(` + segmentKeyRE + `)["']?\s*[:=]\s*["']?` + segmentValueRE), group: 2, keep: keepSegmentValue},
 		// A long mixed-case alphanumeric token anywhere (hex, UUIDs, digests and
 		// identifiers made of words are kept).
 		{kind: "high_entropy", re: regexp.MustCompile(`\b[A-Za-z0-9_-]{32,}\b`), keep: func(h hit) bool { return !highEntropy(h.value) }},
@@ -102,6 +146,62 @@ func interleave(a, b []rule) []rule {
 		out = append(out, a[i], b[i])
 	}
 	return out
+}
+
+// notSecretKeys name a key that is an identifier, a digest or a public
+// half, not a secret (cache_key, public_key, primary_key).
+var notSecretKeys = regexp.MustCompile(`(?i)public|pub[_-]?key|cache|idempoten|primary|foreign|partition|sort|routing|object|row[_-]?key|dedup|lookup|hash|host[_-]?key|key[_-]?id`)
+
+// keepSegmentValue decides that a value of a key ending in key, auth, sig
+// or identity is a setting (auth: true, sig=v1, cache_key=<sha256>,
+// identity_file = ~/.ssh/id_ed25519), not a secret: only a random-looking
+// value is one.
+func keepSegmentValue(h hit) bool {
+	return notSecretKeys.MatchString(h.key) || placeholder(h.value) || strings.HasPrefix(h.value, "age1") || !randomValue(h.value)
+}
+
+var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// randomValue: 32 hex characters or more, or base64 (percent-escaped too)
+// of 20 characters or more holding digits and letters with frequent
+// changes of character class, as random bytes do. Identifiers made of
+// words (cleColonneEnTeteJour, claude-cli/claude-sonnet-4-6) change class
+// rarely or hold no digit; a UUID is an identifier.
+func randomValue(v string) bool {
+	v = strings.NewReplacer("%2B", "+", "%2b", "+", "%2F", "/", "%2f", "/", "%3D", "=", "%3d", "=").Replace(v)
+	core := strings.TrimRight(v, "=")
+	if uuidRE.MatchString(core) {
+		return false
+	}
+	hex := true
+	var alpha, digits, changes int
+	prev := 0
+	for _, r := range core {
+		c := 0
+		switch {
+		case r >= '0' && r <= '9':
+			digits, c = digits+1, 1
+		case r >= 'a' && r <= 'z':
+			alpha, c = alpha+1, 2
+		case r >= 'A' && r <= 'Z':
+			alpha, c = alpha+1, 3
+		}
+		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
+			hex = false
+		}
+		if c == 0 {
+			continue // separators split words, they are not randomness
+		}
+		if prev != 0 && c != prev {
+			changes++
+		}
+		prev = c
+	}
+	if hex {
+		return len(core) >= 32
+	}
+	n := alpha + digits
+	return len(core) >= 20 && digits >= 2 && alpha >= 2 && float64(changes)/float64(n) >= 0.3
 }
 
 // keepBasic decides that the word after "Basic" is not credentials: a
@@ -127,9 +227,9 @@ func keepBasic(h hit) bool {
 }
 
 // placeholder: a value standing for a secret, not one ($VAR, <your key>,
-// {{ .Token }}, an earlier redaction, a mask).
+// {{ .Token }}, an earlier redaction, a mask, an ellipsis).
 func placeholder(v string) bool {
-	return strings.HasPrefix(v, "$") || strings.HasPrefix(v, "<") || strings.HasPrefix(v, "{{") || strings.HasPrefix(v, "[redacted") ||
+	return strings.HasPrefix(v, "$") || strings.HasPrefix(v, "…") || strings.HasPrefix(v, "...") || strings.HasPrefix(v, "<") || strings.HasPrefix(v, "{{") || strings.HasPrefix(v, "[redacted") ||
 		strings.HasPrefix(v, "***") || strings.HasPrefix(v, "%")
 }
 
@@ -149,7 +249,7 @@ var secretEnd = regexp.MustCompile(`(?i)(passw(?:or)?d|passphrase|pwd|secret|(?:
 // a usage metavariable (--token TOKEN) or a prose word after a bare
 // option (--token values).
 func keepFlag(h hit) bool {
-	v := h.value
+	v := strings.Trim(h.value, "`") // markdown code spans in prose
 	if placeholder(v) {
 		return true
 	}
@@ -326,10 +426,75 @@ func highEntropy(v string) bool {
 	return float64(changes)/float64(len(v)) >= 0.3
 }
 
+// MinSecret is the shortest exact secret value replaced: a shorter one
+// would eat ordinary words, and backsight's own secrets are 32 random
+// bytes.
+const MinSecret = 8
+
+// LocalKind is the kind of an exact value given by SetLocalSecrets.
+const LocalKind = "local_secret"
+
+var local struct {
+	mu     sync.Mutex
+	load   func() []string
+	loaded bool
+	values []string // with their encodings, longest first
+}
+
+// SetLocalSecrets makes Text replace the exact values load returns (those
+// of secrets.toml and the server's .env), whatever their shape, before any
+// rule. load runs once, at the first Text after this call, so a command
+// that redacts nothing reads no secret; a later call replaces it.
+func SetLocalSecrets(load func() []string) {
+	local.mu.Lock()
+	defer local.mu.Unlock()
+	local.load, local.loaded, local.values = load, false, nil
+}
+
+func localSecrets() []string {
+	local.mu.Lock()
+	defer local.mu.Unlock()
+	if !local.loaded && local.load != nil {
+		local.loaded = true
+		var out []string
+		for _, v := range local.load() {
+			if len(v) < MinSecret {
+				continue
+			}
+			for _, f := range Encodings(v) {
+				if !slices.Contains(out, f) {
+					out = append(out, f)
+				}
+			}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+		local.values = out
+	}
+	return local.values
+}
+
+// Encodings are v and its URL-escaped forms: query, path, and the path
+// form of hindsight's bankPath, which escapes ':' too.
+func Encodings(v string) []string {
+	out := []string{v}
+	for _, f := range []string{url.QueryEscape(v), url.PathEscape(v), strings.ReplaceAll(url.PathEscape(v), ":", "%3A")} {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // Text returns s with secrets replaced by [redacted:<kind>] and the sorted
 // kinds found.
 func Text(s string) (string, []string) {
 	found := map[string]bool{}
+	for _, v := range localSecrets() {
+		if strings.Contains(s, v) {
+			s = strings.ReplaceAll(s, v, "[redacted:"+LocalKind+"]")
+			found[LocalKind] = true
+		}
+	}
 	for _, r := range rules {
 		var b strings.Builder
 		last, changed := 0, false
