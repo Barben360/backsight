@@ -8,6 +8,9 @@ before:
     # workflow signs with one (security review M3).
     - scripts/release-key-guard.sh {{ if .IsSnapshot }}--snapshot{{ end }}
     - go mod verify
+    # THIRD_PARTY_LICENSES, regenerated from go.mod: the release stops when
+    # the committed copy (embedded in the binary) differs from it.
+    - scripts/third-party-licenses.sh --check
 
 builds:
   - main: ./cmd/backsight
@@ -36,7 +39,12 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    files: [LICENSE, README.md, minisign.pub]
+    files:
+      - LICENSE
+      - README.md
+      - minisign.pub
+      - src: internal/licenses/THIRD_PARTY_LICENSES
+        strip_parent: true
   # The bare binaries too: their hashes land in the signed checksums.txt, so
   # an installed binary can check itself against it (SPEC §11.1).
   - id: binary

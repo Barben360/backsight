@@ -35,7 +35,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight client config restore [<run>]` | Puts Claude Code's files back as they were before a run (default: the last). `--plan`, `--force`. |
 | `backsight uninstall` | Removes backsight from this machine. See [uninstall.md](uninstall.md). |
 | `backsight paths` | Shows where backsight keeps its binaries, config and state. |
-| `backsight version` | Prints the version; `--json` adds the release keys and the pinned Hindsight image. |
+| `backsight version` | Prints the version; `--json` adds the release keys and the pinned Hindsight image. `--licenses` prints the license texts and notices of the third-party code in the binary (also `THIRD_PARTY_LICENSES` in every release archive). |
 
 ## Secrets
 

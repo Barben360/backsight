@@ -21,6 +21,7 @@ You need Go (the version in `go.mod`), Docker with Compose v2 for the integratio
 | `make lint` | runs golangci-lint |
 | `make cross` | compiles and vets the four release targets (linux/amd64, linux/arm64, darwin/arm64, windows/amd64) |
 | `make leaks` | scans the Git history for secrets |
+| `make licenses` | regenerates `internal/licenses/THIRD_PARTY_LICENSES` from `go.mod`: run it after adding or updating a dependency and commit the file (CI and the release refuse a stale one, and a module without a license file) |
 
 The code lives under `internal/`, one package per concern; `internal/cli` wires the commands.
 

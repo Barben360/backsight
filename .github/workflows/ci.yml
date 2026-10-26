@@ -27,6 +27,8 @@ jobs:
       # without minisign rather than skip).
       - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
       - run: make test
+      # The license texts shipped with the binary cover the current go.mod.
+      - run: scripts/third-party-licenses.sh --check
       # The testhooks build's own code (CI's update proof), never in a release.
       - run: go test -count=1 -tags testhooks ./internal/migrate/
       - run: make cross
@@ -66,7 +68,7 @@ jobs:
           BACKSIGHT_TEST_DIST_PUBKEY: ${{ runner.temp }}/test.pub
         run: |
           go test -count=1 -v -run 'TestGoreleaserDist|TestMinisignCLI|TestRealMinisignFixture' ./internal/signing/ ./internal/selfcheck/ | tee "$RUNNER_TEMP/go-test.log"
-          for t in TestGoreleaserDist TestMinisignCLI; do grep -q -- "--- PASS: $t" "$RUNNER_TEMP/go-test.log" || { echo "::error::$t did not run"; exit 1; }; done
+          for t in TestGoreleaserDist TestGoreleaserDistLicenses TestMinisignCLI; do grep -q -- "--- PASS: $t" "$RUNNER_TEMP/go-test.log" || { echo "::error::$t did not run"; exit 1; }; done
   lint:
     runs-on: ubuntu-latest
     steps:
