@@ -116,7 +116,7 @@ doctor's `writes` check counts what is waiting:
 
 - **Queued notes** wait for the server: bring it back, then `backsight jobs tick`.
 - **[Quarantined](glossary.md#quarantine) sessions or notes** were refused by the server. The reasons are in the quarantine folder doctor names. Fix the cause, then `backsight retain retry-quarantine`.
-- **The notes queue is full** (500 MB): an error. Bring the server back, then `backsight jobs tick`.
+- **The notes queue is full** (`hooks.outbox_max_mb`, 500 MB by default): an error. Bring the server back, then `backsight jobs tick`.
 
 doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl --user list-timers 'backsight-*'` shows the timers. User timers stop while you are logged out unless lingering is on (`loginctl enable-linger`); sessions are then sent at the next login.
 

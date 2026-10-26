@@ -25,6 +25,12 @@ import (
 
 func notesOutbox(d paths.Dirs) retain.Outbox { return retain.NotesOutbox(d) }
 
+// notesOutboxFor is the notes outbox with the size limits of hooks.outbox_warn_mb
+// and hooks.outbox_max_mb: use it wherever notes are appended.
+func notesOutboxFor(d paths.Dirs, cfg config.Config) retain.Outbox {
+	return retain.NotesOutbox(d).WithLimitsMB(cfg.Hooks.OutboxWarnMB, cfg.Hooks.OutboxMaxMB)
+}
+
 type storeResult struct {
 	Status   string `json:"status"` // stored | queued
 	Document string `json:"document"`
@@ -79,7 +85,7 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 	text = strings.TrimSpace(text)
 	proj = noteProject(home, cfg, proj)
 	n := retain.NewNote(cfg.Server.Bank, kind, proj, text, now())
-	ob := notesOutbox(d)
+	ob := notesOutboxFor(d, cfg)
 	warn, err := ob.Append(n)
 	if err != nil {
 		return storeResult{}, blocked(err)
@@ -87,7 +93,7 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 	res := storeResult{Status: "queued", Document: n.DocumentID, Project: proj, Kind: kind}
 	var failed error
 	if warn {
-		res.Warning = "the notes outbox is over 50 MB: the server has not accepted notes for a while"
+		res.Warning = fmt.Sprintf("the notes outbox is over %d MB: the server has not accepted notes for a while", cfg.Hooks.OutboxWarnMB)
 	}
 	machineID, _ := retain.MachineID(d.State)
 	if state.MaintenanceHeld(d.MaintenanceLock()) {

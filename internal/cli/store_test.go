@@ -85,3 +85,22 @@ func TestStoreReportsARejectedNote(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+// hooks.outbox_max_mb is read by the command: a queue past it refuses the note.
+func TestStoreHonoursTheConfiguredOutboxMax(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	appendConfig(t, home, "[hooks]\noutbox_warn_mb = 1\noutbox_max_mb = 1\n")
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.OutboxDir(), 0o700)
+	path := filepath.Join(d.OutboxDir(), "notes.jsonl")
+	_ = os.WriteFile(path, []byte(strings.Repeat("x", 1<<20)), 0o600)
+	before := retained.Load()
+	code, out, errOut := run(t, "store", "--kind", "lesson", "--project", "p", "Refused: the queue is full.")
+	if code == output.OK || retained.Load() != before || !strings.Contains(out+errOut, "outbox is full") {
+		t.Errorf("exit %d, %q %q", code, out, errOut)
+	}
+	if raw, _ := os.ReadFile(path); len(raw) != 1<<20 {
+		t.Errorf("the refused note was written: %d bytes", len(raw))
+	}
+}

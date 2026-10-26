@@ -123,7 +123,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					}
 				}
 			}
-			res.Notes, err = notesOutbox(d).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+			res.Notes, err = notesOutboxFor(d, cfg).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
 			if err != nil || res.Notes.Kept > 0 {
 				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 			}

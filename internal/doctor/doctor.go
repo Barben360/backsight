@@ -138,7 +138,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkRestore(env.Dirs))
 	add(checkUpdateIncomplete(env.Dirs))
 	add(checkLocks(env.Dirs))
-	add(checkWrites(env.Dirs))
+	add(checkWrites(env))
 	add(checkBackfill(env.Dirs))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
@@ -443,9 +443,14 @@ func checkBackup(env Env, now time.Time) Check {
 
 // checkWrites reports what has not reached the server: queued notes and
 // quarantined sessions and notes (SPEC §15).
-func checkWrites(d paths.Dirs) Check {
+func checkWrites(env Env) Check {
+	d := env.Dirs
 	c := Check{ID: "writes", Status: OK}
 	ob := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl"), QuarantinePath: filepath.Join(d.QuarantineDir(), "notes.jsonl")}
+	if cfg, err := config.Load(d.ConfigFile(), d, env.Home); err == nil { // no config: the defaults
+		ob = ob.WithLimitsMB(cfg.Hooks.OutboxWarnMB, cfg.Hooks.OutboxMaxMB)
+	}
+	warnAt, maxAt := ob.Limits()
 	pending, _ := ob.Pending()
 	qNotes, _ := ob.Quarantined()
 	qSessions, _ := retain.QuarantinedSessions(d.CursorsDir())
@@ -455,13 +460,13 @@ func checkWrites(d paths.Dirs) Check {
 	}
 	c.Summary = fmt.Sprintf("%d note(s) queued, %d session(s) and %d note(s) quarantined", pending, len(qSessions), qNotes)
 	switch {
-	case size >= retain.OutboxMaxBytes:
+	case size >= maxAt:
 		c.Status, c.Fix = Error, "the notes outbox is full: bring the server back (backsight server status), then backsight jobs tick"
 	case len(qSessions)+qNotes > 0:
 		c.Status = Warn
 		c.Detail = "the server refused them; reasons in " + d.QuarantineDir()
 		c.Fix = "fix the cause, then backsight retain retry-quarantine"
-	case size >= retain.OutboxWarnBytes:
+	case size >= warnAt:
 		c.Status, c.Fix = Warn, "the server has not accepted notes for a while: backsight server status"
 	}
 	return c
