@@ -125,6 +125,7 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 - doctor's `bank` check reports failed operations: the LLM provider refused or failed. Open the Hindsight web UI's operations page for the provider's errors.
 - `backsight server llm check` tests the extraction model on a fixed sample, storing nothing: it checks the key, the model, the output format and the language.
 - A wrong or expired key: `backsight secret set llm_api_key`, then `backsight server render` and `backsight server start`.
+- With Ollama on Linux, the server cannot connect: Ollama listens only on `127.0.0.1` by default. See [Local models with Ollama](install.md#local-models-with-ollama).
 - `backsight stats` shows the extraction tokens and cost of the last days.
 - A backfill paused on its budget: `backsight retain backfill --plan`, then `backsight retain backfill --max-cost <higher>`.
 

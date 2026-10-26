@@ -195,7 +195,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	default:
 		bq := Question{ID: "base_url", Prompt: "Base URL of the provider's API (empty: the provider's own)", Free: true, Default: preset.BaseURL}
 		if provider == "ollama" {
-			bq.Prompt = "Ollama's address as the server container sees it"
+			bq.Prompt = "Ollama's address as the server container sees it. On Linux, Ollama must listen on an address the container reaches (OLLAMA_HOST): backsight guide install#local-models-with-ollama"
 		}
 		if err := add(bq); err != nil {
 			return nil, nil, err

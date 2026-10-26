@@ -111,6 +111,11 @@ func TestProviderShapesTheFollowUpQuestions(t *testing.T) {
 	if b := find(t, qs, "base_url"); b.Default != "http://host.docker.internal:11434" {
 		t.Errorf("ollama base URL default %q", b.Default)
 	}
+	// On Linux Ollama listens on 127.0.0.1, out of the container's reach:
+	// the question says so and where the fix is.
+	if b := find(t, qs, "base_url"); !strings.Contains(b.Prompt, "OLLAMA_HOST") || !strings.Contains(b.Prompt, "backsight guide install#local-models-with-ollama") {
+		t.Errorf("ollama base URL prompt %q does not say how to make Ollama reachable", b.Prompt)
+	}
 }
 
 func TestUnlistedProviderNeedsAModel(t *testing.T) { // see also TestNonInteractiveAnthropicNeedsNoBaseURL
