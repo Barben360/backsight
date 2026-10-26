@@ -15,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/release"
@@ -86,27 +87,34 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				return finish()
 			}
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
-			backedUp := false
+			archive, noBackup := "", "backup.enabled is off, and the moves wait for a backup"
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
 				// create takes it for the dump itself.
 				if b, err := createBackup(cmd.Context(), nil); err != nil {
 					res.Status, res.Backup = "partial", "failed: "+err.Error()
+					noBackup = "today's backup failed"
 				} else {
 					res.Backup = b.Path
-					backedUp = b.Skipped == ""
+					archive = b.Path
 					if b.Skipped != "" {
-						res.Backup = "skipped: " + b.Skipped
+						res.Backup, archive = "skipped: "+b.Skipped, ""
+						noBackup = "the server is remote, so no backup is taken here: run backsight retain reattribute after backing it up on its host"
 					}
 				}
 			}
-			res.Reattribute = maintainReattribute(cmd.Context(), backedUp)
+			var moved int
+			res.Reattribute, moved = maintainReattribute(cmd.Context(), d, archive, noBackup)
 			res.Update = maintainUpdate(cmd.Context(), d)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
 			rep := runDoctor(cmd, d, home)
-			recordNoise(d, rep)
+			// Not on a day the server consolidates moved memories again: the
+			// reading would be taken mid-way, and serve as next week's base.
+			if moved == 0 && serverSettled(cmd.Context()) {
+				recordNoise(d, rep)
+			}
 			res.Doctor = fmt.Sprintf("%d error(s), %d warning(s)", rep.Errors, rep.Warnings)
 			snapshot := map[string]any{"generated_at": now().UTC(), "binary_version": buildinfo.Version, "report": rep}
 			if raw, err := json.MarshalIndent(snapshot, "", "  "); err == nil {
@@ -204,26 +212,72 @@ func maintainText(r maintainResult) string {
 		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, r.Update, r.Doctor, r.MS)
 }
 
-// maintainReattribute applies the free moves of retain reattribute right
-// after the daily backup, and never sends anything again (that costs
-// extraction: the user answers it, doctor shows it). Without today's
-// backup it does nothing.
-func maintainReattribute(ctx context.Context, backedUp bool) string {
-	if cfg, _, err := loadServerConfig(); err == nil && !cfg.Components.Write {
-		return "skipped: components.write is off"
+// maintainReattribute applies the moves in place of retain reattribute
+// after the daily backup, once that backup is verified, and never sends
+// anything again (that costs extraction: the user answers it, doctor
+// shows it). archive is today's backup, "" when there is none (noBackup
+// says why). When it does not run, the reason is recorded for doctor.
+// moved is how many documents it moved.
+func maintainReattribute(ctx context.Context, d paths.Dirs, archive, noBackup string) (string, int) {
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		return "failed: " + err.Error(), 0
 	}
-	if !backedUp {
-		return "skipped: no backup today"
+	skip := func(why string) (string, int) {
+		st, _, _ := retain.LoadReattributionStatus(d.State)
+		st.Skipped, st.SkippedAt = why, now().UTC()
+		_ = retain.SaveReattributionStatus(d.State, st)
+		return "skipped: " + why, 0
+	}
+	switch {
+	case !cfg.Components.Write:
+		return skip(writeOffReason)
+	case cfg.LLM.Provider == "claude-code":
+		return skip("the claude-code provider would run the server's work after the moves on your subscription: run backsight retain reattribute --allow-subscription")
+	case archive == "":
+		return skip(noBackup)
+	}
+	_, _, ids, err := backupKeys(d, cfg, sec, false)
+	if err == nil {
+		var v backupVerifyResult
+		if v, err = verifyArchive(ctx, d, cfg, ids, archive); err == nil && !v.OK {
+			err = fmt.Errorf("its counts differ from its manifest")
+		}
+	}
+	if err != nil {
+		return skip("today's backup did not verify (" + err.Error() + ")")
 	}
 	r, err := runReattribute(ctx, reattributeFlags{}, reattributeOptions{backedUp: true, freeOnly: true})
 	if err != nil {
-		return "failed: " + err.Error()
+		return "failed: " + err.Error(), len(r.Retagged)
 	}
 	out := fmt.Sprintf("%d moved", len(r.Retagged))
+	if r.Deferred > 0 {
+		out += fmt.Sprintf(" (%d more on the next days)", r.Deferred)
+	}
 	if n := len(r.Plan.Resends); n > 0 {
 		out += fmt.Sprintf(", %d session(s) to send again (%s): backsight retain reattribute --plan", n, estimateText(r.Plan.Cost))
 	}
-	return out
+	return out, len(r.Retagged)
+}
+
+// writeOffReason: another integration writes; nothing of backsight's to
+// keep in line.
+const writeOffReason = "components.write is off"
+
+// serverSettled: the server has no operation queued (a consolidation
+// running would move the noise reading).
+func serverSettled(ctx context.Context) bool {
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		return false
+	}
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 10*time.Second)
+	if err != nil {
+		return false
+	}
+	n, err := cl.QueuedOperations(ctx, cfg.Server.Bank)
+	return err == nil && n == 0
 }
 
 // recordNoise keeps today's reading of the transverse pool's noise from

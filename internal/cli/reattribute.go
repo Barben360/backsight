@@ -86,7 +86,7 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 	if res.Action == "planned" || res.Action == "" {
 		return res, err
 	}
-	st := retain.ReattributionStatus{JudgedAt: now().UTC(), Retagged: len(res.Retagged), Pending: []retain.Resend{}}
+	st := retain.ReattributionStatus{JudgedAt: now().UTC(), Retagged: len(res.Retagged), Pending: []retain.Resend{}} // judged: no skip reason
 	for _, r := range res.Plan.Resends {
 		if !slices.Contains(res.Queued, r.Session) {
 			st.Pending = append(st.Pending, r)
@@ -94,8 +94,20 @@ func runReattribute(ctx context.Context, f reattributeFlags, opt reattributeOpti
 		}
 	}
 	answers, _ := parseAnswers(f.answers, "")
-	st.Declined = answers["resend"] == "no"
-	if d, _, derr := machine(); derr == nil {
+	d, _, derr := machine()
+	switch answers["resend"] {
+	case "no":
+		st.Declined = true
+	case "":
+		// no answer this time (the daily job): a "no" given before stands
+		// while the same sessions are left
+		if derr == nil {
+			if prev, ok, _ := retain.LoadReattributionStatus(d.State); ok && prev.Declined && retain.SamePending(prev.Pending, st.Pending) {
+				st.Declined = true
+			}
+		}
+	}
+	if derr == nil {
 		if serr := retain.SaveReattributionStatus(d.State, st); serr != nil && err == nil {
 			err = &output.Error{Code: output.Partial, Resume: f.resume(), Message: "done, but what is left was not recorded for doctor: " + serr.Error()}
 		}

@@ -417,25 +417,31 @@ func sortedKeys(m map[string]int) []string {
 
 // noiseGrowth: a rise of the transverse pool's noise, in points of share
 // over a week, that doctor warns about (decision 0072: nothing diverges
-// unseen).
-const noiseGrowth = 5
+// unseen); it must also be noiseGrowthN more observations naming another
+// project, and both readings must hold noiseTrendMinN observations, so
+// one observation more in a small pool is no alarm.
+const (
+	noiseGrowth    = 5
+	noiseGrowthN   = 3
+	noiseTrendMinN = 50
+)
 
 // noiseTrend compares c's reading (noise-transverse) with the one jobs
 // maintain kept about a week ago: it says the week's change, and warns
 // when the share of observations naming another project grew by
 // noiseGrowth points or more.
 func noiseTrend(c Check, history []retain.NoisePoint, now time.Time) Check {
-	if c.Measure == nil || c.Measure["total"] < transverseMinN {
+	if c.Measure == nil || c.Measure["total"] < noiseTrendMinN {
 		return c
 	}
 	prev, ok := retain.WeekBefore(history, now)
-	if !ok || prev.Total < transverseMinN {
+	if !ok || prev.Total < noiseTrendMinN {
 		return c
 	}
 	share := 100 * c.Measure["named"] / c.Measure["total"]
 	was := 100 * prev.Share()
 	c.Summary += fmt.Sprintf(" (%.0f%%, %.0f%% a week ago)", share, was)
-	if share-was >= noiseGrowth {
+	if share-was >= noiseGrowth && int(c.Measure["named"])-prev.Named >= noiseGrowthN {
 		c.Status = Warn
 		c.Summary += ": growing"
 		c.Fix = "backsight retain reattribute --plan shows what today's rules would move; backsight doctor's attribution check shows how often turns are filed elsewhere"
@@ -449,18 +455,35 @@ func noiseTrend(c Check, history []retain.NoisePoint, now time.Time) Check {
 func checkReattribution(env Env) Check {
 	c := Check{ID: "reattribution", Status: OK}
 	st, ok, err := retain.LoadReattributionStatus(env.Dirs.State)
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
 	switch {
 	case err != nil:
 		c.Status, c.Summary = Warn, "the last re-attribution's record cannot be read: "+err.Error()
 		return c
-	case !ok:
+	case ok && st.Skipped == "components.write is off":
+		c.Status, c.Summary = Info, "the daily re-attribution does not run: components.write is off (another integration writes)"
+		return c
+	case ok && st.Skipped != "":
+		// the guard is off for this user: say so plainly
+		c.Status = Warn
+		c.Summary = "the daily re-attribution does not run (" + st.SkippedAt.UTC().Format("2006-01-02") + "): " + st.Skipped
+		c.Fix = "backsight retain reattribute --plan, then backsight retain reattribute to move what it lists"
+		return c
+	case !ok || st.JudgedAt.IsZero():
 		c.Status, c.Summary = Info, "the memory was never judged against today's project rules"
-		c.Fix = "backsight retain reattribute --plan (jobs maintain moves what is free every day after its backup)"
+		c.Fix = "backsight retain reattribute --plan (jobs maintain moves what it can every day after its backup)"
 		return c
 	}
 	when := st.JudgedAt.UTC().Format("2006-01-02")
 	n := len(st.Pending)
 	switch {
+	case now().Sub(st.JudgedAt) > reattributionStale:
+		c.Status = Warn
+		c.Summary = "the memory was last judged against today's project rules on " + when + ": the daily job has not done it since"
+		c.Fix = "backsight jobs status; backsight retain reattribute --plan"
 	case n == 0:
 		c.Summary = "nothing left to send again (judged " + when + ")"
 	case st.Declined:
@@ -477,3 +500,7 @@ func checkReattribution(env Env) Check {
 	}
 	return c
 }
+
+// reattributionStale: a judgement older than this means the daily job no
+// longer judges (stopped, failing).
+const reattributionStale = 3 * 24 * time.Hour

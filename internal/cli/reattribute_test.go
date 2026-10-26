@@ -247,3 +247,106 @@ func TestReattributeResendsBeforeRetagsAndWaitsForTheQueue(t *testing.T) {
 		t.Errorf("a third run deleted again: exit %d, %v\n%s", code, deletedDocs(), out)
 	}
 }
+
+// The daily job moves a document after its verified backup, never
+// re-sends one (the mixed session stays, recorded for doctor), and a
+// failing server only marks its line "failed".
+func TestMaintainMovesAfterItsVerifiedBackupAndNeverResends(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	dk := withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	reportToMove(t, home, port)
+	mixedSessionDoc(t, home, port, "s2")
+	docPatchFails.Store(true)
+	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "re-attribution failed:") || len(docPatches) != 0 {
+		t.Fatalf("a failing server: exit %d, patches %v\n%s", code, docPatches, out)
+	}
+	docPatchFails.Store(false)
+	code, out, _ := run(t, "jobs", "maintain")
+	if code != output.OK || !strings.Contains(out, "re-attribution 1 moved, 1 session(s) to send again") || !slices.Contains(docPatches, "subagent:s1:ag1") {
+		t.Fatalf("exit %d, patches %v\n%s", code, docPatches, out)
+	}
+	for _, c := range curation {
+		if strings.HasPrefix(c, "DELETE") && strings.Contains(c, "/documents/") {
+			t.Errorf("the daily job deleted a document: %s", c)
+		}
+	}
+	verified := false
+	for _, c := range dk.calls {
+		verified = verified || strings.HasPrefix(c, "exec backsight-verify-")
+	}
+	if !verified {
+		t.Error("the moves did not wait for a verified backup")
+	}
+	if st, ok, _ := retain.LoadReattributionStatus(pathsOf(home).State); !ok || len(st.Pending) != 1 || st.Pending[0].Session != "s2" {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// No move when today's backup is missing or does not verify, a restore
+// is not finished, or the provider runs on the subscription; the reason
+// is kept for doctor.
+func TestMaintainMovesNothingWhenItIsNotSafe(t *testing.T) {
+	for name, c := range map[string]struct {
+		prep func(home string, dk *backupDocker)
+		line string
+	}{
+		"backup fails":           {func(_ string, dk *backupDocker) { dk.failDump = true }, "today's backup failed"},
+		"backup does not verify": {func(_ string, dk *backupDocker) { dk.restored = "41" }, "today's backup did not verify"},
+		"restore not finished": {func(home string, _ *backupDocker) {
+			_ = state.WriteRestoreMarker(pathsOf(home), state.RestoreMarker{Command: "restore"})
+		}, "re-attribution"},
+		"subscription": {func(home string, _ *backupDocker) {
+			cfg := filepath.Join(home, "backsight", "config", "config.toml")
+			raw, _ := os.ReadFile(cfg)
+			_ = os.WriteFile(cfg, append(raw, []byte("\n[llm]\nprovider = \"claude-code\"\nmodel = \"sonnet\"\n")...), 0o600)
+		}, "on your subscription"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := devInstall(t, true)
+			port := fakeHindsight(t)
+			pointAt(t, home, port)
+			dk := withBackupDocker(t)
+			withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+			reportToMove(t, home, port)
+			c.prep(home, dk)
+			_, out, _ := run(t, "jobs", "maintain")
+			if len(docPatches) != 0 || !strings.Contains(out, c.line) {
+				t.Errorf("patches %v\n%s", docPatches, out)
+			}
+		})
+	}
+}
+
+// A "no" to the re-sends stands across the daily runs while the same
+// sessions are left; a new one makes the question come back.
+func TestADeclinedResendIsRemembered(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	mixedSessionDoc(t, home, port, "s2")
+	gitRepo(t, filepath.Join(home, "billing"), "git@github.com:me/billing.git")
+	gitRepo(t, filepath.Join(home, "src", "shop"), "git@github.com:me/shop.git")
+	if code, out, _ := run(t, "retain", "reattribute", "--answer", "resend=no"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	run(t, "jobs", "maintain")
+	if st, _, _ := retain.LoadReattributionStatus(pathsOf(home).State); !st.Declined || len(st.Pending) != 1 {
+		t.Fatalf("after the daily run: %+v", st)
+	}
+	// another mixed session appears: the answer was about the other one
+	mixed3 := filepath.Join(home, ".claude", "projects", "-home-u-billing", "s3.jsonl")
+	raw, _ := os.ReadFile(filepath.Join(home, ".claude", "projects", "-home-u-billing", "s2.jsonl"))
+	_ = os.WriteFile(mixed3, []byte(strings.ReplaceAll(string(raw), "s2", "s3")), 0o600)
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	_ = cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "work", DocumentID: "conversation:s3",
+		Tags: []string{"project:shop"}, Metadata: map[string]string{"session_id": "s3", "last_uuid": "s3-u2", "segment": "1"}}})
+	run(t, "jobs", "maintain")
+	if st, _, _ := retain.LoadReattributionStatus(pathsOf(home).State); st.Declined || len(st.Pending) != 2 {
+		t.Errorf("with a new session to send again: %+v", st)
+	}
+}
