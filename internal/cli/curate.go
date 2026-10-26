@@ -535,6 +535,9 @@ type projectInfo struct {
 	Name     string    `json:"name"`
 	Memories int       `json:"memories"`
 	Last     time.Time `json:"last"`
+	// Family: the projects worked on together with it on this machine
+	// (searched with it when recall.families is on).
+	Family []string `json:"family,omitempty"`
 }
 
 // newProjectsCmd lists the projects of the bank with counts and last
@@ -574,6 +577,13 @@ func newProjectsCmd(e *env) *cobra.Command {
 			}
 			wg.Wait()
 			sort.SliceStable(list, func(i, j int) bool { return list[i].Last.After(list[j].Last) })
+			if d, _, err := machine(); err == nil {
+				if fam, err := retain.LoadFamilies(d.FamiliesFile()); err == nil {
+					for i := range list {
+						list[i].Family = fam.Of[list[i].Name]
+					}
+				}
+			}
 			return e.emit("projects", list, func() string {
 				var b strings.Builder
 				for _, p := range list {
@@ -582,6 +592,13 @@ func newProjectsCmd(e *env) *cobra.Command {
 						last = p.Last.Format("2006-01-02")
 					}
 					fmt.Fprintf(&b, "%-30s %6d  %s\n", safeProject(p.Name), p.Memories, last)
+					if len(p.Family) > 0 {
+						fam := make([]string, len(p.Family))
+						for i, f := range p.Family {
+							fam[i] = safeProject(f)
+						}
+						fmt.Fprintf(&b, "  worked on with: %s\n", strings.Join(fam, ", "))
+					}
 				}
 				return b.String()
 			})

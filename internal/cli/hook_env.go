@@ -48,7 +48,7 @@ type hookEnv struct {
 	cfg     config.Config
 	sec     config.Secrets
 	project string
-	linked  []string // the projects cwd's .backsight.toml relates
+	linked  []string // the projects cwd's .backsight.toml relates, then the project's family
 	// resolver named project from cwd; remote reads the repository's
 	// remote from it, Explicit whether a .backsight.toml set the name
 	// (decision 0045).
@@ -84,7 +84,8 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 		cwd, _ = os.Getwd()
 	}
 	h.resolver, h.cwd = project.New(h.home, h.cfg.Projects.Transverse), cwd
-	h.project, h.linked = h.resolver.Project(cwd), h.resolver.Related(cwd)
+	h.project = h.resolver.Project(cwd)
+	h.linked = linkedProjects(h.dirs, h.cfg, h.resolver, cwd, h.project)
 	// The live record is what lets pause and the MCP server find this
 	// session: written whatever the components (0056).
 	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {

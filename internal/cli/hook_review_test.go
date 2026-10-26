@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -303,5 +304,59 @@ func TestGateIgnoresOtherToolsAndQuestionsWithoutHits(t *testing.T) {
 	recallAnswer = "[]"
 	if g := gate(t, home); g.Specific.Decision != "deny" || g.Specific.Reason != instructions.GateReason {
 		t.Errorf("no hits: %+v", g)
+	}
+}
+
+// writeFamilies saves a families file built at builtAt.
+func writeFamilies(t *testing.T, home string, builtAt time.Time, of map[string][]string) {
+	t.Helper()
+	raw, _ := json.Marshal(retain.Families{BuiltAt: builtAt, Of: of})
+	_ = os.MkdirAll(pathsOf(home).State, 0o700)
+	if err := os.WriteFile(pathsOf(home).FamiliesFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With recall.families on, the current project's family joins the project
+// call, without its boost; off (the default) or with a stale file, it
+// does not.
+func TestFamiliesJoinTheProjectCallWhenOn(t *testing.T) {
+	home := hookHome(t)
+	writeFamilies(t, home, time.Now(), map[string][]string{"billing": {"billing-spec"}})
+	recallAnswer = `[{"id":"fam","text":"spec fact","type":"observation","tags":["project:billing-spec"],"scores":{"reranker":0.55}}]`
+	recallTags = nil
+	prompt(t, home, "s1", longPrompt)
+	if j := strings.Join(recallTags, "|"); strings.Contains(j, "billing-spec") {
+		t.Errorf("families are off by default, yet the project call holds them: %q", j)
+	}
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, append(raw, []byte("[recall]\nfamilies = true\n")...), 0o600)
+	recallTags = nil
+	c := prompt(t, home, "s2", longPrompt).Specific.Context
+	if j := strings.Join(recallTags, "|"); !strings.Contains(j, "project:billing,") || !strings.Contains(j, ",project:billing-spec") {
+		t.Errorf("project call %q", recallTags)
+	}
+	if !strings.Contains(c, "spec fact") {
+		t.Errorf("a family hit under the global floor was dropped:\n%s", c)
+	}
+	_, out, _ := run(t, "recall-prompt", "--cwd", filepath.Join(home, "billing"), "--json", longPrompt)
+	var env struct {
+		Data recallPromptResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if strings.Join(env.Data.Linked, ",") != "billing-spec" || len(env.Data.Ranked) == 0 {
+		t.Fatalf("recall-prompt: %s", out)
+	}
+	for _, h := range env.Data.Ranked {
+		if h.Project == "billing-spec" && h.Score != h.Reranker {
+			t.Errorf("a family hit got the current project's boost: %+v", h)
+		}
+	}
+	writeFamilies(t, home, time.Now().Add(-8*24*time.Hour), map[string][]string{"billing": {"billing-spec"}})
+	recallTags = nil
+	prompt(t, home, "s3", longPrompt)
+	if j := strings.Join(recallTags, "|"); strings.Contains(j, "billing-spec") {
+		t.Errorf("a stale families file was used: %q", j)
 	}
 }

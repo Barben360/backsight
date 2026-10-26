@@ -39,6 +39,7 @@ type tickResult struct {
 	Index    string             `json:"index,omitempty"` // entity index: rebuilt | failed: <why>
 	Epoch    string             `json:"epoch,omitempty"` // restore epoch reconcile (decision 0044)
 	Pruned   []string           `json:"briefings_pruned,omitempty"`
+	Families string             `json:"families,omitempty"` // project families: recomputed | failed: <why>
 	// Binary: the self-check of this binary, made on its first tick
 	// (verified | unsigned | failed; SPEC §11.1).
 	Binary string `json:"binary,omitempty"`
@@ -106,6 +107,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Epoch = reconcile(cmd.Context(), f)
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
+			res.Families = refreshFamilies(d, cfg, f.Resolver)
 			if n, err := dropSettled(d); err == nil && n > 0 {
 				res.Backfill = fmt.Sprintf("%d queued session(s) had nothing left to send", n)
 			}
