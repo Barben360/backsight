@@ -366,6 +366,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	for _, n := range []string{"reattribute.jsonl", "reattribute.json", "noise-history.jsonl"} {
 		_ = os.WriteFile(filepath.Join(d.State, n), []byte("{}\n"), 0o600)
 	}
+	_ = os.WriteFile(d.FamiliesFile(), []byte("{}"), 0o600)
 	code, env, out := uninstall(t, "--purge-local")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -376,7 +377,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	if !strings.Contains(strings.Join(env.Data.Kept, "\n"), filepath.Dir(foreign)) {
 		t.Errorf("the kept entry is not named: %q", env.Data.Kept)
 	}
-	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile(), d.AttributionDir(), filepath.Join(d.State, "reattribute.jsonl"), filepath.Join(d.State, "reattribute.json"), filepath.Join(d.State, "noise-history.jsonl")} {
+	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile(), d.AttributionDir(), filepath.Join(d.State, "reattribute.jsonl"), filepath.Join(d.State, "reattribute.json"), filepath.Join(d.State, "noise-history.jsonl"), d.FamiliesFile()} {
 		if onDisk(p) {
 			t.Errorf("not purged: %s", p)
 		}
