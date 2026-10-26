@@ -15,6 +15,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,7 +26,7 @@ jobs:
           cache: true
       # install.sh's minisign path (TestInstallWithMinisign fails on CI
       # without minisign rather than skip).
-      - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
+      - run: scripts/ci-minisign.sh
       - run: make test
       # The license texts shipped with the binary cover the current go.mod.
       - run: scripts/third-party-licenses.sh --check
@@ -51,7 +52,7 @@ jobs:
         with:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
           cache: false
-      - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
+      - run: scripts/ci-minisign.sh
       - name: Throwaway signing key
         run: minisign -G -W -p "$RUNNER_TEMP/test.pub" -s "$RUNNER_TEMP/test.key"
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -71,6 +72,7 @@ jobs:
           go test -count=1 -v -run 'TestGoreleaserDist|TestMinisignCLI|TestRealMinisignFixture' ./internal/signing/ ./internal/selfcheck/ | tee "$RUNNER_TEMP/go-test.log"
           for t in TestGoreleaserDist TestGoreleaserDistLicenses TestMinisignCLI; do grep -q -- "--- PASS: $t" "$RUNNER_TEMP/go-test.log" || { echo "::error::$t did not run"; exit 1; }; done
   lint:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -172,7 +174,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/npm-home"
           HOME="$RUNNER_TEMP/npm-home" npm install -g --prefix "$RUNNER_TEMP/npm" --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.310
           echo "$RUNNER_TEMP/npm/bin" >> "$GITHUB_PATH"
-      - run: command -v minisign >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq minisign; }
+      - run: scripts/ci-minisign.sh
       # The server's model cache (scripts/hf-cache.sh), keyed on the
       # pinned image: its start does not depend on huggingface.co. A miss
       # only means the server downloads its models, and saves them.
