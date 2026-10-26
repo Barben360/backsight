@@ -90,7 +90,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight backup verify <file>` | Decrypts a backup, restores it into a throwaway database and compares counts. `--identity <file>`. |
 | `backsight backup identity show` | Prints the key that decrypts your backups (terminal only). |
 | `backsight backup identity import [file]` | Stores a backup identity from a file or stdin. `--force` replaces another one. |
-| `backsight restore <file>` | Restores a backup into the local server. `--plan`, `--identity <file>`, `--no-safety`, `--non-interactive`. |
+| `backsight restore <file>` | Restores a backup into the local server. `--plan`, `--identity <file>`, `--no-safety`, `--non-interactive`, `--answer other_banks=revert` (the server's banks without a control bank go back to the archive too). |
 
 Details: [backups-and-restore.md](backups-and-restore.md).
 

@@ -68,20 +68,35 @@ Restore replaces the local server's memory with the archive's. In order, it:
 4. stops the server, replaces its database, and starts it on a temporary key only restore knows;
 5. checks health, row counts and a recall;
 6. writes back the **purge tombstones** it read before the stop (the server's and this machine's): the archive's `<bank>-control` bank lacks the purges made since;
-7. writes a new **restore epoch**;
-8. compares the bank's settings, as the archive brought them back, with this backsight's template, and applies the template where they differ (if it cannot, it says so, and the next `client install` or `update apply` sends it);
-9. starts the server again on its normal key.
+7. writes a new **restore epoch**, in your bank and in every other memory bank of the server (see below);
+8. deletes again every purged document the archive brought back (a document a tombstone names);
+9. compares the bank's settings, as the archive brought them back, with this backsight's template, and applies the template where they differ (if it cannot, it says so, and the next `client install` or `update apply` sends it);
+10. starts the server again on its normal key, and only then clears the restore in progress.
 
-After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts. Facts stored with `memory_store` after the backup was made cannot be recovered that way. What `forget --purge` deleted is never sent again (see [privacy](privacy.md#removing-what-was-stored)), even when the archive predates the purge.
+After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts, with the final reports of their subagents (rebuilt from `<session>/subagents/agent-<id>.jsonl`, except a report a purge deleted). Facts stored with `memory_store` after the backup was made cannot be recovered that way. What `forget --purge` deleted is never sent again (see [privacy](privacy.md#removing-what-was-stored)), even when the archive predates the purge.
 
-`restore --plan` lists the purges made after the archive was taken. If the archive already held those documents, they come back with it: restore names each one in a warning, and you purge it again with `backsight forget <id> --purge`. Their turns are still not sent again from your transcripts.
+`restore --plan` lists the purges made after the archive was taken: the documents restore deletes again if the archive holds them. Their turns are not sent again from your transcripts either.
+
+### Other banks on the server
+
+The archive is a dump of the server's whole database, so it brings back **every bank** on the server as it was, not only yours (a second machine may write to another bank of the same server). Restore gives each memory bank a new restore epoch, so the clients that write to it also send again what the archive lacks: the banks that have a `<bank>-control` bank, and every other bank the server lists (the `-control` and `-docs` banks themselves excepted).
+
+A bank without a `<bank>-control` bank may not be backsight's. Before anything changes, restore names those banks and exits 10, asking `other_banks`. To go on, and accept that those banks go back to the archive too:
+
+```sh
+backsight restore <file> --answer other_banks=revert
+```
+
+`restore --plan` names them and says it will ask.
 
 Restore applies the archive's database only, never its config or secrets. It refuses an archive from another bank, with other embedding models, or made by a newer Hindsight than the one this binary pins (update backsight first). It also refuses, before anything stops, when the server's `<bank>-control` bank (where the restore epoch is written) is not backsight's: another bank name than backsight's, or documents that are not its own. An archive from an older Hindsight is migrated when the server starts.
 
 ## When a restore fails
 
+- **Exit 10**: the server holds another bank without a `<bank>-control` bank; nothing was changed. Rerun with `--answer other_banks=revert` if it may go back to the archive too.
 - **Exit 30**: something failed after the server stopped. Restore put the safety backup back, so the server is as it was. The output says what failed.
 - **Exit 20 before anything changed**: a check failed (a lock held, Docker not running, a refused archive, a `<bank>-control` bank that is not backsight's). Fix the cause and rerun.
+- **Exit 20, "the server did not start again on its API key"**: the restore (or its rollback) is done and its epoch written, but the last start failed. Every client holds its sends until `backsight server start` succeeds: it starts the server on its key and finishes the restore. `backsight doctor` says so too.
 - **Exit 20 after a failed rollback**: the server may be stopped or partly restored. `backsight doctor` shows a `restore` error naming the safety archive. Run what it says: `backsight restore <safety archive> --no-safety` puts the server back as it was, or rerun the restore you wanted.
 
 `--no-safety` skips the safety backup: use it only to restore a safety archive by hand.
