@@ -253,7 +253,7 @@ func TestScrubShortNamesOnlyAsPathSegments(t *testing.T) {
 	if got, want := s.String(`open /run/media/jd/usb and C:\Users\jd\x: jd is short`), `open /run/media/<user>/usb and C:\Users\<user>\x: jd is short`; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if got, want := s.String("/mnt/ann/x: ann-2 ann.lan ann"), "/mnt/<user>/x: ann-2 ann.lan ann"; got != want {
+	if got, want := s.String("/mnt/ann/x: ann-2 ann.example ann"), "/mnt/<user>/x: ann-2 ann.example ann"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -467,5 +467,54 @@ func TestScrubRemoteForms(t *testing.T) {
 		if got := s.String(in); got != want {
 			t.Errorf("%q → %q, want %q", in, got, want)
 		}
+	}
+}
+
+// LAN addresses and names say where the user's machines live: private,
+// CGNAT, link-local and ULA addresses go as <lan-ip>, hosts under a LAN
+// suffix as <lan-host>, a URL's user as <user> (M5 review rules, Report).
+// Loopback and public addresses are no one's and stay.
+func TestScrubLANAddressesHostsAndURLUsers(t *testing.T) {
+	s := NewScrubber("")
+	for in, want := range map[string]string{
+		"dial tcp 192.168.1.20:18888: connect: connection refused":                "dial tcp <lan-ip>:18888: connect: connection refused",
+		`Get "http://10.0.0.5:8888/health": dial tcp 10.0.0.5:8888: i/o timeout`:  `Get "http://<lan-ip>:8888/health": dial tcp <lan-ip>:8888: i/o timeout`,
+		"dial tcp 172.16.4.2:8888 and 172.31.255.1":                               "dial tcp <lan-ip>:8888 and <lan-ip>",
+		"dial tcp 100.101.102.103:8888: connect: connection refused":              "dial tcp <lan-ip>:8888: connect: connection refused",
+		"route 100.64.0.1 and 100.127.255.254":                                    "route <lan-ip> and <lan-ip>",
+		"dial tcp 169.254.10.20:80: i/o timeout":                                  "dial tcp <lan-ip>:80: i/o timeout",
+		"dial tcp [fe80::1%eth0]:8888: connect: connection refused":               "dial tcp [<lan-ip>]:8888: connect: connection refused",
+		"dial tcp [fd12:3456::1]:8888: connect: connection refused":               "dial tcp [<lan-ip>]:8888: connect: connection refused",
+		"address fd12:3456::1: refused":                                           "address <lan-ip>: refused",
+		"at 192.168.1.20.":                                                        "at <lan-ip>.",
+		"192.168.1.0/24":                                                          "<lan-ip>/24",
+		"lookup nas.lan on 127.0.0.53:53: no such host":                           "lookup <lan-host> on 127.0.0.53:53: no such host",
+		"http://myserver.local:8888/v1 and backup.home.arpa and db.corp.internal": "http://<lan-host>:8888/v1 and <lan-host> and <lan-host>",
+		"NAS.LAN is down":                       "<lan-host> is down",
+		"https://bob@example.com/x":             "https://<user>@example.com/x",
+		"cannot reach http://bob:pw@nas.lan:88": "cannot reach http://<user>:[redacted:url_password]@<lan-host>:88",
+		// Loopback, public and not addresses at all: unchanged.
+		"dial tcp 127.0.0.1:8888 and [::1]:8888 and 0.0.0.0:80":               "dial tcp 127.0.0.1:8888 and [::1]:8888 and 0.0.0.0:80",
+		"dns 8.8.8.8, 1.1.1.1, 172.32.0.1, 100.128.0.1, 2606:4700::1111":      "dns 8.8.8.8, 1.1.1.1, 172.32.0.1, 100.128.0.1, 2606:4700::1111",
+		"backsight 0.9.1 at 10:00:00, mac aa:bb:cc:dd:ee:ff, v10.0.0.1":       "backsight 0.9.1 at 10:00:00, mac aa:bb:cc:dd:ee:ff, v10.0.0.1",
+		"~/.claude/settings.local.json and .env.local":                        "~/.claude/settings.local.json and .env.local",
+		"host.docker.internal:8888 and internal/report and x.lan.example.com": "host.docker.internal:8888 and internal/report and x.lan.example.com",
+		"the local network, a lan party, foo.localhost":                       "the local network, a lan party, foo.localhost",
+		"https://example.com/@scope/pkg and postgresql://db:5432/x":           "https://example.com/@scope/pkg and postgresql://db:5432/x",
+	} {
+		if got := s.String(in); got != want {
+			t.Errorf("%q\n got %q\nwant %q", in, got, want)
+		}
+	}
+}
+
+// A name the scrubber knows keeps its own placeholder: the LAN pass comes
+// after the names.
+func TestScrubKnownNamesBeforeLANNames(t *testing.T) {
+	s := NewScrubber("")
+	s.Name("nas.lan", "<server>")
+	s.Name("ann", "<user>")
+	if got, want := s.String("lookup nas.lan and box.lan for http://ann@10.1.2.3"), "lookup <server> and <lan-host> for http://<user>@<lan-ip>"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

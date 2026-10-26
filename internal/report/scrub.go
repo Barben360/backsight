@@ -2,6 +2,7 @@ package report
 
 import (
 	"encoding/json"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -268,7 +269,83 @@ func (s *Scrubber) scrub(v string, names bool) string {
 		// Twice: adjacent occurrences share their separator.
 		v = n.re.ReplaceAllString(n.re.ReplaceAllString(v, n.with), n.with)
 	}
-	return truncate(v, MaxField)
+	return truncate(lan(v), MaxField)
+}
+
+// Placeholders of the LAN pass.
+const (
+	LANIPPlaceholder   = "<lan-ip>"
+	LANHostPlaceholder = "<lan-host>"
+	URLUserPlaceholder = "<user>"
+)
+
+var (
+	ipv4Like = regexp.MustCompile(`[0-9]{1,3}(?:\.[0-9]{1,3}){3}`)
+	// Two colons at least, an IPv4 tail and a zone allowed (fe80::1%eth0).
+	ipv6Like = regexp.MustCompile(`(?i)[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3})?(?:%[0-9a-z_.-]+)?`)
+	lanHost  = regexp.MustCompile(`(?i)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.(?:local|lan|home\.arpa|internal)`)
+	urlUser  = regexp.MustCompile(`\b([a-zA-Z][a-zA-Z0-9+.-]*://)([^\s:/@\[\]<>"']+)((?::[^\s@/]*)?@)`)
+	cgnat    = netip.MustParsePrefix("100.64.0.0/10")
+)
+
+// lan hides where the user's machines live (M5 review rules, Report):
+// private, CGNAT, link-local and ULA addresses as <lan-ip>, a host under
+// .local, .lan, .home.arpa or .internal as <lan-host> (Docker's
+// host.docker.internal is everyone's), a URL's user as <user>. Loopback
+// and public addresses stay: they name no one's network.
+func lan(v string) string {
+	v = urlUser.ReplaceAllString(v, "${1}"+URLUserPlaceholder+"${3}")
+	v = replaceTokens(v, ipv6Like, func(m string) (string, bool) {
+		m = strings.TrimRight(m, ":") // addr fd12::1: refused
+		return m, strings.Count(m, ":") >= 2 && lanAddr(m)
+	}, LANIPPlaceholder)
+	v = replaceTokens(v, ipv4Like, func(m string) (string, bool) { return m, lanAddr(m) }, LANIPPlaceholder)
+	return replaceTokens(v, lanHost, func(m string) (string, bool) {
+		return m, !strings.HasSuffix(strings.ToLower(m), "docker.internal")
+	}, LANHostPlaceholder)
+}
+
+func lanAddr(s string) bool {
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return false
+	}
+	a = a.WithZone("").Unmap()
+	return a.IsPrivate() || a.IsLinkLocalUnicast() || cgnat.Contains(a)
+}
+
+// replaceTokens replaces with placeholder each match of re that stands
+// alone (no letter, digit or '.' glued before it; no letter or digit, nor
+// a '.' then one, after it: 1.10.0.0.5, v10.0.0.1, settings.local.json
+// and .env.local stay) and that check accepts, trimmed to the part it
+// returns.
+func replaceTokens(v string, re *regexp.Regexp, check func(string) (string, bool), placeholder string) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range re.FindAllStringIndex(v, -1) {
+		i, j := m[0], m[1]
+		tok, ok := check(v[i:j])
+		if !ok || tok == "" {
+			continue
+		}
+		j = i + len(tok)
+		if i > 0 && (alnum(v[i-1]) || v[i-1] == '.' || v[i-1] == '_' || v[i-1] == '-') {
+			continue
+		}
+		if j < len(v) && (alnum(v[j]) || v[j] == '_' || v[j] == '-' || v[j] == '.' && j+1 < len(v) && alnum(v[j+1])) {
+			continue
+		}
+		b.WriteString(v[last:i] + placeholder)
+		last = j
+	}
+	if last == 0 {
+		return v
+	}
+	return b.String() + v[last:]
+}
+
+func alnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // replacePrefix shows dir as with wherever it starts a path; /home/ann is

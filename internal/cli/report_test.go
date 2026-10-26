@@ -642,3 +642,54 @@ func TestReportHidesLiveRecordProjectsWithoutTransverse(t *testing.T) {
 	assertScrubbed(t, map[string]string{"project from .backsight.toml": "mossgarden", "related from .backsight.toml": "tidewater"},
 		[]string{"flush of <project>, <project>, <project>, <project>,"})
 }
+
+// Where the user's machines live never shows: LAN addresses (private,
+// CGNAT, link-local, ULA; with ports, inside dial errors), hosts under a
+// LAN suffix and a URL's user part, in the text, the JSON and the decoded
+// links; loopback and public addresses stay (M5 review rules, Report).
+func TestReportHidesLANAddressesHostsAndURLUsers(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	old := probes
+	probes = func(e *doctor.Env) {
+		old(e)
+		e.ReferenceServer = func(context.Context, string) (doctor.RefServer, error) { return doctor.RefServer{Running: true}, nil }
+	}
+	t.Cleanup(func() { probes = old })
+	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	// A reference server on the LAN, reached with a user and a password
+	// (assembled at runtime: the secret scanner flags literals).
+	refPass := "quokka" + "Trellis7"
+	ref := filepath.Join(home, ".hindsight", "coding-agent.json")
+	_ = os.MkdirAll(filepath.Dir(ref), 0o700)
+	_ = os.WriteFile(ref, []byte(`{"apiUrl":"http://annsrefuser:`+refPass+`@192.168.7.40:8888","bankId":"coding-agent::memoire"}`), 0o600)
+
+	now := time.Now().UTC()
+	var tel strings.Builder
+	for ev, msg := range map[string]string{
+		"dial_v4_failed":      "dial tcp 192.168.1.20:18888: connect: connection refused",
+		"dial_url_failed":     `Get "http://10.20.30.40:8888/health": dial tcp 10.20.30.40:8888: i/o timeout`,
+		"dial_cgnat_failed":   "dial tcp 100.101.102.103:8888: connect: connection refused",
+		"dial_link_failed":    "dial tcp [fe80::abcd%eth0]:8888: connect: no route to host",
+		"dial_ula_failed":     "dial tcp [fd12:3456::77]:8888: connect: connection refused",
+		"lookup_lan_failed":   "dial tcp: lookup quokkanas.lan on 127.0.0.53:53: no such host",
+		"lookup_local_failed": "open http://zebrabox.local:8888 and zebraback.home.arpa and zebradb.corp.internal",
+		"url_user_failed":     "GET https://annsurluser@8.8.4.4/v1 via 127.0.0.1:8888",
+	} {
+		raw, _ := json.Marshal(map[string]any{"ts": now.Add(-time.Minute).Format(time.RFC3339Nano), "event": ev, "error": msg})
+		tel.Write(append(raw, '\n'))
+	}
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.TelemetryDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.TelemetryDir(), "events-"+now.Format("2006-01")+".jsonl"), []byte(tel.String()), 0o600)
+
+	assertScrubbed(t, map[string]string{
+		"private ip": "192.168.1.20", "url ip": "10.20.30.40", "cgnat ip": "100.101.102.103", "link-local ip": "fe80::abcd", "ula ip": "fd12:3456::77",
+		"reference ip": "192.168.7.40", "reference user": "annsrefuser", "reference password": refPass, "url user": "annsurluser",
+		"lan host": "quokkanas", "local host": "zebrabox", "home.arpa host": "zebraback", "internal host": "zebradb",
+	}, []string{
+		"dial tcp <lan-ip>:18888", `"http://<lan-ip>:8888/health"`, "dial tcp [<lan-ip>]:8888", "lookup <lan-host> on 127.0.0.53:53",
+		"http://<lan-host>:8888 and <lan-host> and <lan-host>", "https://<user>@8.8.4.4/v1 via 127.0.0.1:8888",
+	})
+}
