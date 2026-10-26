@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/attribution"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/transcript"
@@ -73,14 +76,30 @@ type Resend struct {
 	Estimate Estimate `json:"estimate"`
 }
 
+// Why a session is not judged.
+const (
+	HeldQuarantined = "quarantined"     // retain retry-quarantine lifts it first
+	HeldBackfill    = "backfill"        // the backfill queue sends it
+	HeldPending     = "pending"         // a first segment the server has not stored yet
+	HeldElsewhere   = "another machine" // a document holds records this transcript lacks
+	HeldGone        = "directory gone"  // a directory of its records no longer exists: today's names would be guesses
+)
+
+// HeldSession is a session a re-attribution leaves alone, and why.
+type HeldSession struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}
+
 // ReattributionPlan is what a re-attribution would do.
 type ReattributionPlan struct {
-	Documents int      `json:"documents"` // documents read
-	Judged    int      `json:"judged"`    // with their transcript on this machine
-	Unchanged int      `json:"unchanged"`
-	Retags    []Retag  `json:"retags"`
-	Resends   []Resend `json:"resends"`
-	Cost      Estimate `json:"cost"` // of the re-sends
+	Documents int           `json:"documents"` // documents read
+	Judged    int           `json:"judged"`    // with their transcript on this machine
+	Unchanged int           `json:"unchanged"`
+	Held      []HeldSession `json:"held"`
+	Retags    []Retag       `json:"retags"`
+	Resends   []Resend      `json:"resends"`
+	Cost      Estimate      `json:"cost"` // of the re-sends
 	// decided: reports decided from their transcript, kept when applied so
 	// a later run judges the same evidence.
 	decided []TurnEntry
@@ -132,7 +151,7 @@ func retagged(tags []string, to string) []string {
 // force. transcripts are this machine's session transcripts. It writes
 // nothing.
 func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts []string, prices Prices) ReattributionPlan {
-	plan := ReattributionPlan{Documents: len(docs), Retags: []Retag{}, Resends: []Resend{}}
+	plan := ReattributionPlan{Documents: len(docs), Held: []HeldSession{}, Retags: []Retag{}, Resends: []Resend{}}
 	paths := map[string]string{}
 	for _, p := range transcripts {
 		paths[strings.TrimSuffix(filepath.Base(p), ".jsonl")] = p
@@ -152,7 +171,15 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 		if !ok {
 			continue
 		}
-		retags, resend, unchanged, judged := f.planSession(sid, path, sessions[sid], prices)
+		if why := f.sessionHeld(sid); why != "" {
+			plan.Held = append(plan.Held, HeldSession{Session: sid, Reason: why})
+			continue
+		}
+		retags, resend, unchanged, judged, held := f.planSession(sid, path, sessions[sid], prices)
+		if held != "" {
+			plan.Held = append(plan.Held, HeldSession{Session: sid, Reason: held})
+			continue
+		}
 		plan.Judged += judged
 		plan.Unchanged += unchanged
 		plan.Retags = append(plan.Retags, retags...)
@@ -177,6 +204,12 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 		switch {
 		case known:
 			e = a.Redecide(e)
+		case d.Metadata["attribution"] != "":
+			// decided when it was filed (the decision travels in its
+			// metadata): never decided again from today's disk
+			plan.Judged++
+			plan.Unchanged++
+			continue
 		case paths[sid] == "":
 			continue // not this machine's session
 		default:
@@ -217,15 +250,28 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 
 // planSession judges the conversation documents of one session: judged is
 // how many it could read against the transcript.
-func (f *Flusher) planSession(sid, path string, docs []hindsight.DocumentItem, prices Prices) (retags []Retag, resend *Resend, unchanged, judged int) {
+func (f *Flusher) planSession(sid, path string, docs []hindsight.DocumentItem, prices Prices) (retags []Retag, resend *Resend, unchanged, judged int, held string) {
 	fh, err := os.Open(path)
 	if err != nil {
-		return nil, nil, 0, 0
+		return nil, nil, 0, 0, ""
 	}
 	recs, _, err := transcript.Read(fh, 0)
 	_ = fh.Close()
 	if err != nil || len(recs) == 0 {
-		return nil, nil, 0, 0
+		return nil, nil, 0, 0, ""
+	}
+	// Today's names come from today's disk: a directory removed since (a
+	// worktree, a clone) would name its records by a basename, worse than
+	// the label they were sent with. Such a session is not judged.
+	seen := map[string]bool{}
+	for _, r := range recs {
+		if r.CWD == "" || seen[r.CWD] {
+			continue
+		}
+		seen[r.CWD] = true
+		if fi, err := os.Stat(r.CWD); err != nil || !fi.IsDir() {
+			return nil, nil, 0, 0, HeldGone
+		}
 	}
 	attrs := f.attribute(sid, recs, attr{})
 	home := ""
@@ -244,7 +290,10 @@ func (f *Flusher) planSession(sid, path string, docs []hindsight.DocumentItem, p
 	for _, d := range docs {
 		last := indexOf(recs, d.Metadata["last_uuid"])
 		if last < 0 {
-			continue // written from a transcript this machine does not hold
+			// Written from a transcript this machine does not hold (the
+			// session went on elsewhere): never deleted from here, so no
+			// re-send of this session either.
+			return nil, nil, 0, 0, HeldElsewhere
 		}
 		judged++
 		layout, perProject := d.Metadata["project"]
@@ -278,7 +327,7 @@ func (f *Flusher) planSession(sid, path string, docs []hindsight.DocumentItem, p
 		}
 	}
 	if why == "" {
-		return retags, nil, unchanged, judged
+		return retags, nil, unchanged, judged, ""
 	}
 	// The whole session goes out again: every document of it is deleted.
 	r := &Resend{Session: sid, Transcript: path, Reason: why}
@@ -307,7 +356,45 @@ func (f *Flusher) planSession(sid, path string, docs []hindsight.DocumentItem, p
 		}
 	}
 	r.Estimate = EstimateSession(chars, prices)
-	return nil, r, unchanged, judged
+	return nil, r, unchanged, judged, ""
+}
+
+// sessionHeld says why a session's own state forbids judging it now:
+// quarantined (refused by the server or an untrusted position: the user
+// lifts it), queued for backfill, or a first segment still pending.
+func (f *Flusher) sessionHeld(sid string) string {
+	cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), sid)
+	switch {
+	case ok && cur.Quarantined:
+		return HeldQuarantined
+	case ok && cur.Backfill:
+		return HeldBackfill
+	case f.pendingMark(sid) != "":
+		return HeldPending
+	}
+	return ""
+}
+
+// ReattributionGuard refuses to judge or write while the server may hold
+// less than it will: a restore or an update not finished, a restore epoch
+// not reconciled (Hold), or retains still queued (a document read now
+// could gain a segment after a delete, which Hindsight would recreate
+// holding that segment alone).
+func (f *Flusher) ReattributionGuard(ctx context.Context) error {
+	if err := f.restoreHold(); err != nil {
+		return err
+	}
+	if f.Hold != "" {
+		return errors.New(f.Hold)
+	}
+	n, err := f.Client.QueuedOperations(ctx, f.Bank)
+	if err != nil {
+		return errors.New(errSummary(err))
+	}
+	if n > 0 {
+		return fmt.Errorf("%d operation(s) still queued on the server: retried once they ran", n)
+	}
+	return nil
 }
 
 func cmpOr(a, b string) string {
@@ -319,28 +406,75 @@ func cmpOr(a, b string) string {
 
 // reattributionJournal records each write of a re-attribution, with what
 // it replaced: a re-tag can be undone by hand from it.
-func (f *Flusher) journal(action string, fields map[string]any) {
+// An "intent" line comes before the write, a "done" one after it: a run
+// stopped in between leaves what it was about to replace.
+func (f *Flusher) journal(action, phase string, fields map[string]any) error {
 	fields["at"] = f.Now().UTC().Format(time.RFC3339)
-	fields["action"] = action
+	fields["action"], fields["phase"] = action, phase
 	raw, err := json.Marshal(fields)
-	if err == nil {
-		_ = appendFile(filepath.Join(f.Dirs.State, "reattribute.jsonl"), append(raw, '\n'))
+	if err != nil {
+		return err
 	}
+	return appendFile(filepath.Join(f.Dirs.State, "reattribute.jsonl"), append(raw, '\n'))
 }
 
 // ApplyRetag moves one document to its new project in place, then keeps
 // a report's decision so a later run judges the same evidence. The caller
 // holds the maintenance lock.
+// A conversation document is moved under its session's lock (a flush that
+// started before the maintenance lock may still append to it). The move is
+// read back: the document and every memory extracted from it must carry
+// the new project, else it is a failure (the next run tries again).
 func (f *Flusher) ApplyRetag(ctx context.Context, r Retag, oldTags []string) error {
+	if r.Kind == KindConversation {
+		unlock, err := f.lockSession(r.Session)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	fields := map[string]any{"document": r.Document, "from": r.From, "to": r.To, "old_tags": oldTags, "tags": r.Tags}
+	if err := f.journal("retag", "intent", fields); err != nil {
+		return fmt.Errorf("the journal cannot be written, nothing was moved: %w", err)
+	}
 	if err := f.Client.SetDocumentTags(ctx, f.Bank, r.Document, r.Tags); err != nil {
 		return errors.New(errSummary(err))
+	}
+	if err := f.checkTags(ctx, r.Document, "project:"+r.To); err != nil {
+		return err
 	}
 	if r.entry != nil {
 		if err := f.Attribution.replaceAgent(*r.entry); err != nil {
 			return err
 		}
 	}
-	f.journal("retag", map[string]any{"document": r.Document, "from": r.From, "to": r.To, "old_tags": oldTags, "tags": r.Tags})
+	_ = f.journal("retag", "done", fields)
+	return nil
+}
+
+// checkTags reads a moved document back: it, and each of its memories,
+// must carry tag.
+func (f *Flusher) checkTags(ctx context.Context, doc, tag string) error {
+	d, err := f.Client.GetDocument(ctx, f.Bank, doc)
+	if err != nil {
+		return errors.New("moved, but reading it back failed: " + errSummary(err))
+	}
+	if !slices.Contains(d.Tags, tag) {
+		return fmt.Errorf("the server did not apply %s to the document", tag)
+	}
+	missing := 0
+	err = f.Client.ListMemories(ctx, f.Bank, hindsight.MemoryQuery{DocumentID: doc}, func(m hindsight.Memory) error {
+		if !slices.Contains(m.Tags, tag) {
+			missing++
+		}
+		return nil
+	})
+	if err != nil {
+		return errors.New("moved, but reading its memories back failed: " + errSummary(err))
+	}
+	if missing > 0 {
+		return fmt.Errorf("the server did not apply %s to %d of the document's memories", tag, missing)
+	}
 	return nil
 }
 
@@ -376,11 +510,17 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 	if err != nil {
 		return err
 	}
-	gen := f.loadDropped(r.Session).Generation
+	// The generation salts the re-send's operation ids; it is kept for
+	// good, before anything changes, so no later re-send reuses one.
+	gen := max(f.loadDropped(r.Session).Generation, f.generation(r.Session))
 	if cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), r.Session); ok {
 		gen = max(gen, cur.Generation)
 	}
-	mark := dropped{Records: map[string]bool{}, Generation: gen + 1}
+	gen++
+	if err := f.saveGeneration(r.Session, gen); err != nil {
+		return err
+	}
+	mark := dropped{Records: map[string]bool{}, Generation: gen}
 	var keys []string
 	for _, rec := range recs {
 		if k := sessionKey(f.Bank, r.Session, rec.UUID); f.Index.Has(k) {
@@ -401,6 +541,17 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 		}
 	}
 	_ = os.Remove(pendingPath(f.Dirs.CursorsDir(), r.Session))
+	// Nothing may land on a document after its delete: Hindsight would
+	// recreate it holding that segment alone, which the resync trusts.
+	if n, err := f.Client.QueuedOperations(ctx, f.Bank); err != nil || n > 0 {
+		if err == nil {
+			err = fmt.Errorf("%d operation(s) queued", n)
+		}
+		return fmt.Errorf("not deleted, retried later (%v): the server still holds the records, the next flush marks them sent again", errSummary(err))
+	}
+	if err := f.journal("resend", "intent", map[string]any{"session": r.Session, "documents": r.Documents}); err != nil {
+		return err
+	}
 	for _, doc := range r.Documents {
 		err := f.Client.DeleteDocument(ctx, f.Bank, doc)
 		var apiErr *hindsight.APIError
@@ -408,6 +559,23 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 			return errors.New(errSummary(err))
 		}
 	}
-	f.journal("resend", map[string]any{"session": r.Session, "documents": r.Documents, "reason": r.Reason, "records": r.Records, "projects": r.Projects})
+	_ = f.journal("resend", "done", map[string]any{"session": r.Session, "documents": r.Documents, "reason": r.Reason, "records": r.Records, "projects": r.Projects})
 	return nil
+}
+
+// generationPath keeps a session's last re-send generation for good: a
+// later resync rebuilds the cursor, and the .dropped mark is pruned.
+func generationPath(cursorDir, sid string) string { return filepath.Join(cursorDir, sid+".generation") }
+
+func (f *Flusher) generation(sid string) int {
+	raw, err := os.ReadFile(generationPath(f.Dirs.CursorsDir(), sid))
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	return n
+}
+
+func (f *Flusher) saveGeneration(sid string, n int) error {
+	return fsutil.WriteAtomic(generationPath(f.Dirs.CursorsDir(), sid), []byte(strconv.Itoa(n)), 0o600)
 }

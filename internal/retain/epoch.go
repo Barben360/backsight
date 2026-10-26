@@ -434,7 +434,7 @@ func (f *Flusher) addDropped(sid string, m dropped) error {
 	}
 	d.PastSince = d.PastSince || m.PastSince
 	d.Generation = max(d.Generation, m.Generation)
-	if len(d.Records) == 0 && !d.PastSince {
+	if len(d.Records) == 0 && !d.PastSince && d.Generation == 0 {
 		return nil
 	}
 	raw, err := json.Marshal(d)

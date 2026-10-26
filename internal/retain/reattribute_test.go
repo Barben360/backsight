@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // listed is the fake server's document listing, as ListDocuments reads it.
@@ -220,5 +223,245 @@ func TestAnInterruptedResendIsPlannedAgain(t *testing.T) {
 	}
 	if again := e.plan(); len(again.Resends) != 1 {
 		t.Errorf("the re-send is not planned again: %+v", again)
+	}
+}
+
+// mixedSession: session s1 moved from alpha to beta and was sent by an
+// older build as one document tagged beta, its cursor lost since.
+func mixedSession(t *testing.T) *env {
+	t.Helper()
+	e := newEnv(t)
+	e.attributed()
+	alpha, beta := e.ownRepo("alpha", ""), e.ownRepo("beta", "")
+	e.recordIn(alpha, "s1", "u1", "user", 0, "alpha one")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta two")
+	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	e.hs.mu.Lock()
+	delete(e.hs.docs, "conversation:s1@beta")
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u2", "segment": "1"}
+	e.hs.tags["conversation:s1"] = []string{"project:beta", "source:chat"}
+	e.hs.mu.Unlock()
+	_ = os.RemoveAll(e.f.Dirs.CursorsDir())
+	return e
+}
+
+// Retains still queued on the server: nothing is judged as final nor
+// deleted (a late append to a deleted document would come back alone).
+func TestNothingIsDeletedWhileOperationsAreQueued(t *testing.T) {
+	e := mixedSession(t)
+	p := e.plan()
+	if len(p.Resends) != 1 {
+		t.Fatalf("plan %+v", p)
+	}
+	e.hs.mu.Lock()
+	e.hs.queued = 2
+	e.hs.mu.Unlock()
+	if err := e.f.ReattributionGuard(context.Background()); err == nil || !strings.Contains(err.Error(), "2 operation(s)") {
+		t.Errorf("guard: %v", err)
+	}
+	if err := e.f.ApplyResend(context.Background(), p.Resends[0]); err == nil || len(e.hs.deleted) != 0 {
+		t.Fatalf("deleted %v while operations were queued (%v)", e.hs.deleted, err)
+	}
+	// the records stay held: the next flush sends nothing again
+	e.hs.mu.Lock()
+	e.hs.queued = 0
+	e.hs.mu.Unlock()
+	sent := len(e.hs.retains)
+	e.clock = clockAt(13, 0)
+	e.flush("s1", Options{})
+	if len(e.hs.retains) != sent {
+		t.Errorf("records sent again: %d", len(e.hs.retains)-sent)
+	}
+}
+
+func TestTheGuardRefusesAnUnfinishedRestoreOrUpdate(t *testing.T) {
+	e := mixedSession(t)
+	if err := state.WriteRestoreMarker(e.f.Dirs, state.RestoreMarker{Command: "restore"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.f.ReattributionGuard(context.Background()); err == nil || !strings.Contains(err.Error(), "restore") {
+		t.Errorf("restore marker: %v", err)
+	}
+	_ = state.ClearRestoreMarker(e.f.Dirs)
+	e.f.Hold = "restore epoch not reconciled: boom"
+	if err := e.f.ReattributionGuard(context.Background()); err == nil || !strings.Contains(err.Error(), "not reconciled") {
+		t.Errorf("hold: %v", err)
+	}
+}
+
+// A document holding records this machine's transcript lacks (the session
+// went on elsewhere) is never deleted from here: its session is left
+// alone, not re-sent.
+func TestASessionContinuedElsewhereIsNeverResentFromHere(t *testing.T) {
+	e := mixedSession(t)
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1@gamma"] = map[string]string{"session_id": "s1", "last_uuid": "u9-from-machine-b", "segment": "1", "project": "gamma"}
+	e.hs.tags["conversation:s1@gamma"] = []string{"project:gamma"}
+	e.hs.mu.Unlock()
+	p := e.plan()
+	if len(p.Resends) != 0 || len(p.Held) != 1 || p.Held[0].Reason != HeldElsewhere {
+		t.Fatalf("plan %+v", p)
+	}
+}
+
+// Quarantined, backfill-queued and pending sessions are left alone, and
+// so is one whose directories are gone (today's names would be guesses).
+func TestUnsettledOrUnknowableSessionsAreLeftAlone(t *testing.T) {
+	for name, c := range map[string]struct {
+		prep func(e *env)
+		why  string
+	}{
+		"quarantined": {func(e *env) {
+			_ = SaveCursor(e.f.Dirs.CursorsDir(), "s1", Cursor{Quarantined: true, Segments: map[string]int{}})
+		}, HeldQuarantined},
+		"backfill": {func(e *env) { _ = SaveCursor(e.f.Dirs.CursorsDir(), "s1", Cursor{Backfill: true}) }, HeldBackfill},
+		"pending": {func(e *env) {
+			_ = os.MkdirAll(e.f.Dirs.CursorsDir(), 0o700)
+			_ = os.WriteFile(pendingPath(e.f.Dirs.CursorsDir(), "s1"), []byte("2026-10-24T12:00:00Z"), 0o600)
+		}, HeldPending},
+		"directory gone": {func(e *env) { _ = os.RemoveAll(filepath.Join(filepath.Dir(e.cwd), "beta")) }, HeldGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := mixedSession(t)
+			c.prep(e)
+			p := e.plan()
+			if len(p.Resends)+len(p.Retags) != 0 || len(p.Held) != 1 || p.Held[0].Reason != c.why {
+				t.Errorf("plan %+v", p)
+			}
+		})
+	}
+}
+
+// A move the server refuses, or applies to the document but not to its
+// memories, is a failure, never a silent success.
+func TestARetagIsReadBack(t *testing.T) {
+	e := newEnv(t)
+	e.attributed()
+	billing := e.ownRepo("billing", "")
+	e.recordIn(billing, "s1", "u1", "user", 0, "export")
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u1", "segment": "1"}
+	e.hs.tags = map[string][]string{"conversation:s1": {"project:dist"}}
+	e.hs.patchStatus = 503
+	e.hs.mu.Unlock()
+	p := e.plan()
+	if len(p.Retags) != 1 {
+		t.Fatalf("plan %+v", p)
+	}
+	if err := e.f.ApplyRetag(context.Background(), p.Retags[0], nil); err == nil {
+		t.Error("a 503 on the move was taken for a success")
+	}
+	e.hs.mu.Lock()
+	e.hs.patchStatus = 0
+	e.hs.staleUnits = map[string][]string{"conversation:s1": {"project:dist"}}
+	e.hs.mu.Unlock()
+	if err := e.f.ApplyRetag(context.Background(), p.Retags[0], nil); err == nil || !strings.Contains(err.Error(), "1 of the document's memories") {
+		t.Errorf("memories left behind: %v", err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(e.f.Dirs.State, "reattribute.jsonl"))
+	if strings.Count(string(raw), `"phase":"intent"`) != 2 || strings.Contains(string(raw), `"phase":"done"`) {
+		t.Errorf("journal:\n%s", raw)
+	}
+}
+
+// A conversation document moves under its session's lock: a flush still
+// running keeps it.
+func TestARetagWaitsForTheSessionsFlush(t *testing.T) {
+	e := newEnv(t)
+	e.attributed()
+	billing := e.ownRepo("billing", "")
+	e.recordIn(billing, "s1", "u1", "user", 0, "export")
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u1", "segment": "1"}
+	e.hs.tags = map[string][]string{"conversation:s1": {"project:dist"}}
+	e.hs.mu.Unlock()
+	unlock, err := e.f.lockSession("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	p := e.plan()
+	if err := e.f.ApplyRetag(context.Background(), p.Retags[0], nil); err == nil || len(e.hs.patched) != 0 {
+		t.Errorf("moved under a running flush: %v %v", err, e.hs.patched)
+	}
+}
+
+// The re-send generation is kept for good: a second re-send after a
+// resync rebuilt the cursor, and a re-send of a session with no record in
+// the index, both get operation ids Hindsight has not seen.
+func TestReSendsNeverReuseOperationIDs(t *testing.T) {
+	resendOnce := func(e *env) {
+		t.Helper()
+		p := e.plan()
+		if len(p.Resends) != 1 {
+			t.Fatalf("plan %+v", p)
+		}
+		e.apply(p)
+		sent := len(e.hs.retains)
+		e.clock = e.clock.Add(time.Hour)
+		if res := e.flush("s1", Options{}); res.Status != Sent || len(e.hs.retains)-sent != 2 {
+			t.Fatalf("the re-send stored %d item(s): %+v", len(e.hs.retains)-sent, res)
+		}
+	}
+	e := mixedSession(t)
+	resendOnce(e)
+	// mixed again (an older client), the cursor rebuilt by a resync
+	e.hs.mu.Lock()
+	delete(e.hs.docs, "conversation:s1@beta")
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "u2", "segment": "1"}
+	e.hs.mu.Unlock()
+	_ = os.RemoveAll(filepath.Join(e.f.Dirs.CursorsDir(), "s1.json"))
+	_ = os.Remove(filepath.Join(e.f.Dirs.CursorsDir(), "s1.dropped"))
+	resendOnce(e)
+
+	// sent from this machine, its index lost since
+	e = mixedSession(t)
+	e.f.Index, _ = LoadSentIndex(t.TempDir())
+	resendOnce(e)
+}
+
+// A re-send stopped after deleting part of its documents loses nothing:
+// the next flush sends what the deleted one held, the one left is planned
+// again.
+func TestAResendStoppedBetweenItsDeletesLosesNothing(t *testing.T) {
+	e := mixedSession(t)
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1@gamma"] = map[string]string{"session_id": "s1", "last_uuid": "u1", "segment": "1", "project": "gamma"}
+	e.hs.tags["conversation:s1@gamma"] = []string{"project:gamma"}
+	e.hs.mu.Unlock()
+	p := e.plan()
+	if len(p.Resends) != 1 || len(p.Resends[0].Documents) != 2 {
+		t.Fatalf("plan %+v", p)
+	}
+	r := p.Resends[0]
+	r.Documents = []string{"conversation:s1", "conversation:s1@gamma"}
+	e.hs.mu.Lock()
+	e.hs.failDelete = map[string]bool{"conversation:s1@gamma": true}
+	e.hs.mu.Unlock()
+	if err := e.f.ApplyResend(context.Background(), r); err == nil {
+		t.Fatal("a failed delete was not reported")
+	}
+	sent := len(e.hs.retains)
+	e.clock = clockAt(13, 0)
+	if res := e.flush("s1", Options{}); res.Status != Sent || len(e.hs.retains)-sent != 2 {
+		t.Fatalf("what the deleted document held was not sent again: %+v", res)
+	}
+	if again := e.plan(); len(again.Resends) != 1 || !slices.Contains(again.Resends[0].Documents, "conversation:s1@gamma") {
+		t.Errorf("the document left is not planned again: %+v", again)
+	}
+}
+
+// A report whose decision travels in its metadata is not decided again
+// from today's disk when this machine lost its record of it.
+func TestAReportsOwnDecisionIsKeptWithoutTheLedger(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	e.recordIn(billing, "s1", "u1", "user", 0, "go")
+	e.agent("s1", "ag1", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	e.hs.mu.Lock()
+	e.hs.docs["subagent:s1:ag1"] = map[string]string{"source": "subagent", "attribution": "incomplete", "project": "billing"}
+	e.hs.tags = map[string][]string{"subagent:s1:ag1": {"project:billing", "source:subagent"}}
+	e.hs.mu.Unlock()
+	if p := e.plan(); len(p.Retags) != 0 || p.Unchanged != 1 {
+		t.Errorf("plan %+v", p)
 	}
 }
