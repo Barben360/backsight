@@ -45,6 +45,9 @@ func SubagentReport(text string) string {
 // session). tombs nil reads this client's. It returns the documents
 // queued.
 func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string, tombs []state.Tombstone) ([]string, error) {
+	if f.NoReports {
+		return nil, nil
+	}
 	files, err := filepath.Glob(filepath.Join(strings.TrimSuffix(transcriptPath, ".jsonl"), "subagents", "agent-*.jsonl"))
 	if err != nil || len(files) == 0 {
 		return nil, err
@@ -59,6 +62,11 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 	if err != nil {
 		return nil, err
 	}
+	held, err := Outbox{Path: ob.QuarantinePath}.read() // refused before: retry-quarantine's
+	if err != nil {
+		return nil, err
+	}
+	pending = append(pending, held...)
 	paused, _, spans := f.pauseState(sid)
 	if wholePause(paused, spans) {
 		return nil, nil
@@ -102,7 +110,11 @@ func (f *Flusher) rebuildReports(ctx context.Context, sid, transcriptPath string
 		if slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.ContentSHA256 == h }) {
 			continue
 		}
-		n := NewSubagentNote(f.Bank, sid, agent, agentTypeOf(p), f.Resolver.Project(reply.CWD), text, reply.At)
+		project := f.Resolver.Project(reply.CWD)
+		if f.ReportProject != nil {
+			project = f.ReportProject(reply.CWD)
+		}
+		n := NewSubagentNote(f.Bank, sid, agent, agentTypeOf(p), project, text, reply.At)
 		if _, err := ob.Append(n); err != nil {
 			return queued, err
 		}

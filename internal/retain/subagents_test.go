@@ -80,3 +80,55 @@ func TestReconcileRebuildsLostSubagentReports(t *testing.T) {
 		t.Errorf("queued twice: %+v", notes)
 	}
 }
+
+// A rebuilt report follows the hook's rules (issue 285 review L3): none
+// with components.write off, under a headless parent session, from an
+// opted-out directory, nor one whose text a purge deleted under another
+// id, nor one already quarantined; its project is the hook's attribution.
+func TestRebuiltReportsFollowTheHooksRules(t *testing.T) {
+	const reply = "The export pages by 200."
+	for name, c := range map[string]struct {
+		prep    func(e *env)
+		queued  bool
+		project string
+	}{
+		"write off":       {func(e *env) { e.f.NoReports = true }, false, ""},
+		"headless parent": {func(e *env) { e.f.Headless = func(string) bool { return true } }, false, ""},
+		"opted-out cwd":   {func(e *env) { e.f.Exclude = []string{e.cwd} }, false, ""},
+		"text purged": {func(e *env) {
+			e.tombstone(state.Tombstone{Document: "note:elsewhere", ContentSHA256: ContentHash(SubagentReport(reply))})
+		}, false, ""},
+		"quarantined": {func(e *env) {
+			e.quarantine(NewSubagentNote("claude-memory", "s2", "ag1", "Explore", "billing", reply, clockAt(9, 45)))
+		}, false, ""},
+		"hook's attribution": {func(e *env) { e.f.ReportProject = func(string) string { return "transverse" } }, true, "transverse"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := restoredEnv(t)
+			e.subagent("s2", "ag1", "Explore", reply)
+			c.prep(e)
+			if _, err := e.f.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			notes, _ := NotesOutbox(e.f.Dirs).read()
+			if c.queued != (len(notes) == 1) || len(notes) > 1 || (c.queued && notes[0].Project != c.project) {
+				t.Errorf("queued %+v", notes)
+			}
+		})
+	}
+}
+
+func (e *env) tombstone(t state.Tombstone) {
+	e.t.Helper()
+	t.Bank = "claude-memory"
+	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error { s.AddTombstones(t); return nil }); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *env) quarantine(n Note) {
+	e.t.Helper()
+	if err := appendJSON(NotesOutbox(e.f.Dirs).QuarantinePath, n); err != nil {
+		e.t.Fatal(err)
+	}
+}

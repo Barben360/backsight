@@ -377,6 +377,22 @@ func fakeHindsight(t *testing.T) (port int) {
 			if items == "" || r.URL.Query().Get("offset") != "0" {
 				items = "[]"
 			}
+			if doc := r.URL.Query().Get("document_id"); doc != "" { // like the server: that document's facts only
+				var all, keep []json.RawMessage
+				_ = json.Unmarshal([]byte(items), &all)
+				for _, it := range all {
+					var m struct {
+						DocumentID string `json:"document_id"`
+					}
+					if json.Unmarshal(it, &m) == nil && m.DocumentID == doc {
+						keep = append(keep, it)
+					}
+				}
+				raw, _ := json.Marshal(keep)
+				if items = string(raw); items == "null" {
+					items = "[]"
+				}
+			}
 			_, _ = w.Write([]byte(`{"items":` + items + `,"total":` + strconv.Itoa(strings.Count(items, `"id"`)) + `}`))
 		case strings.Contains(r.URL.Path, "/mental-models"):
 			id := ""
@@ -501,11 +517,18 @@ func fakeHindsight(t *testing.T) (port int) {
 				_, _ = w.Write([]byte(`{"id":"` + id + `","document_metadata":` + epochDoc + `}`))
 				return
 			}
-			if n, ok := documentUnits[id]; ok {
+			// per bank: "<bank>/<id>", or the bare id for claude-memory and
+			// verify's scratch bank (named at random)
+			bank, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
+			n, ok := documentUnits[bank+"/"+id]
+			if !ok && (bank == "claude-memory" || strings.HasPrefix(bank, "backsight-verify-")) {
+				n, ok = documentUnits[id]
+			}
+			if ok {
 				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `}`))
 				return
 			}
-			bank, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
+			bank, _, _ = strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
 			meta, ok := docs[bank+"/"+id]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)

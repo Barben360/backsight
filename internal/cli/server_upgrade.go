@@ -151,6 +151,19 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	if err != nil {
 		return nothingChanged("cannot read this client's restore epoch (%v)", err)
 	}
+	// A rollback puts the safety dump back, every bank of the server with
+	// it: each other memory bank gets an epoch too, with no question (the
+	// dump is minutes old; issue 285 review M3).
+	others, how, err := otherBanks(ctx, cl, db, cfg.Server.Bank)
+	if err != nil {
+		return nothingChanged("%s", server.Redact("cannot list the server's banks ("+err.Error()+"), which a rollback reverts too", sec))
+	}
+	if how != "" {
+		res.Warnings = append(res.Warnings, how)
+	}
+	if err := readOthers(ctx, cl, db, st, others, func(w string) { res.Warnings = append(res.Warnings, w) }); err != nil {
+		return nothingChanged("%s", server.Redact(err.Error()+", which a rollback must go above", sec))
+	}
 
 	// 1. The new version on disk first: a bad pin fails here, unchanged.
 	if err := rt.Fetch(ctx); err != nil {
@@ -189,7 +202,7 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	}
 	rres := &restoreResult{Archive: sb.Path, Safety: sb.Path}
 	rb := &rollback{res: rres, cfg: cfg, sec: sec, rt: rt.WithVersion(res.Current), db: db, d: d, dump: dump, want: sb.Counts,
-		highest: max(before.Epoch, st.EpochOf(cfg.Server.Bank)), history: before.History, safetyAt: safetyAt, add: add, op: "server upgrade"}
+		highest: max(before.Epoch, st.EpochOf(cfg.Server.Bank)), history: before.History, safetyAt: safetyAt, add: add, op: "server upgrade", others: others}
 	failed := func(name string, err error) error {
 		add(name, "failed", server.Redact(err.Error(), sec))
 		rerr := rb.run(ctx, fmt.Errorf("%s: %w", name, err))

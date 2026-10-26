@@ -50,6 +50,7 @@ type fakeHS struct {
 	// control: the items retained into a control bank (kept out of
 	// retains, which are the sessions' sends).
 	control []hindsight.RetainItem
+	deleted []string // documents deleted, in order
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +131,14 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		raw, _ := json.Marshal(map[string]any{"id": id, "document_metadata": meta})
 		_, _ = w.Write(raw)
+	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/"):
+		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
+		h.deleted = append(h.deleted, id)
+		delete(h.docs, id)
+		delete(h.content, id)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list"):
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`)) // no fact extracted in this fake
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/operations"):
 		n := 0
 		if r.URL.Query().Get("status") == "pending" {

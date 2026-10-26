@@ -54,6 +54,7 @@ type restoreDocker struct {
 	migrateImage string
 	badVerify    bool   // the throwaway verify database counts one row less
 	failKey      string // compose up on this API key fails
+	sqlBanks     string // the bank ids the database lists (JSON), "" = the fake server's own
 }
 
 // upImage reads the hindsight image of the compose.yaml a `compose ... up`
@@ -94,6 +95,11 @@ func (f *restoreDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	}
 	last := args[len(args)-1]
 	switch {
+	case strings.Contains(line, "json_agg(bank_id"):
+		if f.sqlFails {
+			return []byte("connection refused"), os.ErrClosed
+		}
+		return []byte(f.sqlBanks + "\n"), nil
 	case strings.Contains(line, "retain_params"):
 		if f.sqlFails {
 			return []byte("connection refused"), os.ErrClosed

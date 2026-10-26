@@ -66,8 +66,11 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	if err != nil {
 		return nil, blocked(err)
 	}
-	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: project.New(home, cfg.Projects.Transverse),
-		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx}, nil
+	res := project.New(home, cfg.Projects.Transverse)
+	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: res,
+		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx,
+		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
+		NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return noteProject(home, cfg, res.Project(cwd)) }}, nil
 }
 
 // transcripts lists the session transcripts of this machine's Claude Code.
@@ -165,6 +168,9 @@ func reconcile(ctx context.Context, f *retain.Flusher) string {
 		return ""
 	}
 	line := fmt.Sprintf("restore epoch %d -> %d: %d session(s) resume from the server", rec.From, rec.To, len(rec.Resend))
+	if len(rec.Purged) > 0 {
+		line += fmt.Sprintf(", %d purged document(s) the server held again purged again", len(rec.Purged))
+	}
 	if len(rec.Reports) > 0 {
 		line += fmt.Sprintf(", %d subagent report(s) queued again", len(rec.Reports))
 	}

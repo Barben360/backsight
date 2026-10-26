@@ -491,7 +491,16 @@ func checkRestore(d paths.Dirs) Check {
 		c.Summary = fmt.Sprintf("a restore (%s, started %s) wrote its epoch but did not start the server again on its API key: sessions are held",
 			m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
 		c.Detail = "the archive restored is " + m.Archive + "; the server as it was before is in the safety archive " + m.Safety
-		c.Fix = "backsight server start (it finishes the restore)"
+		if m.RolledBack {
+			c.Detail = "the " + m.Command + " was rolled back: the server holds the safety archive " + m.Safety + " again"
+		}
+		if m.Image != "" {
+			c.Detail += "; its data is for " + m.Image
+		}
+		c.Fix = "backsight server start (it finishes the " + m.Command + " on that image)"
+		if m.Safety != "" {
+			c.Fix += ", or else backsight restore " + m.Safety + " --no-safety"
+		}
 		return c
 	}
 	c.Detail = "the server as it was before is in the safety archive " + m.Safety + "; the archive being restored is " + m.Archive

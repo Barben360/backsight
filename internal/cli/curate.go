@@ -347,49 +347,19 @@ func mirrorTombstones(ctx context.Context, cl *hindsight.Client, d paths.Dirs, b
 	return ""
 }
 
-// purgeDelete is purgeWrite's writes on the memory bank.
+// purgeDelete is purgeWrite's writes on the memory bank (retain.PurgeWrites,
+// which a restore and a reconcile share to purge a document again).
 func purgeDelete(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, error) {
+	pf := make([]retain.PurgeFact, 0, len(facts))
 	for _, f := range facts {
-		if f.State == "invalidated" {
-			continue // already archived: only its document can remove it
-		}
-		if err := cl.ClearObservations(ctx, bank, f.ID); err != nil {
-			return nil, fmt.Errorf("clearing the observations of %s: %w", f.ID, err)
-		}
-		if err := cl.Invalidate(ctx, bank, f.ID, "purged by the user (backsight forget --purge)", false); err != nil {
-			return nil, fmt.Errorf("retiring %s: %w", f.ID, err)
-		}
+		pf = append(pf, retain.PurgeFact{ID: f.ID, State: f.State})
 	}
-	for i, d := range docs {
-		if err := cl.DeleteDocument(ctx, bank, d.ID); err != nil {
-			// The observation may be gone already (its facts were cleared):
-			// say what is left and how to finish.
-			left := make([]string, 0, len(docs)-i)
-			for _, r := range docs[i:] {
-				left = append(left, r.ID)
-			}
-			if len(left) > 10 {
-				left = append(left[:10], fmt.Sprintf("and %d more", len(left)-10))
-			}
-			return nil, fmt.Errorf("deleting document %s: %w; documents left: %s (%s)", d.ID, err, strings.Join(left, ", "), rerun)
-		}
+	ids := make([]string, 0, len(docs))
+	for _, d := range docs {
+		ids = append(ids, d.ID)
 	}
-	// A briefing page (decision 0060) may quote the purged text, and so may
-	// its history: deleting the page drops both; the next session rewrites it.
-	var pages []string
-	for p := range projects {
-		id := briefingModelID(p)
-		var apiErr *hindsight.APIError
-		switch err := cl.DeleteMentalModel(ctx, bank, id); {
-		case err == nil:
-			pages = append(pages, id)
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-		default:
-			return pages, fmt.Errorf("deleting briefing page %s: %w", id, err)
-		}
-	}
-	sort.Strings(pages)
-	return pages, nil
+	_, pages, err := retain.PurgeWrites(ctx, cl, bank, pf, ids, projects, rerun)
+	return pages, err
 }
 
 func curateError(err error, id string) error {

@@ -169,7 +169,8 @@ func TestRestorePlanListsThePurgesAfterTheArchive(t *testing.T) {
 		t.Errorf("purges step: %q", purges)
 	}
 	// The documents the archive may bring back, which restore deletes again.
-	if !strings.Contains(again, "would delete again") || !strings.Contains(again, "conversation:s8 (2026-10-25T08:00:00Z)") || strings.Contains(again, "conversation:s2") {
+	// Every tombstone is checked (2); only those after the archive are named.
+	if !strings.Contains(again, "would check every tombstone (2)") || !strings.Contains(again, "conversation:s8 (2026-10-25T08:00:00Z)") || strings.Contains(again, "conversation:s2") {
 		t.Errorf("purge again step: %q", again)
 	}
 	for _, c := range bankCalls {
@@ -240,11 +241,98 @@ func TestRestoreKeepsThePurges(t *testing.T) {
 			again = st.Detail
 		}
 	}
-	if !strings.Contains(again, "1 purged document(s) the archive brought back, deleted again: conversation:s8") {
+	if !strings.Contains(again, "bank claude-memory, 1 document(s): conversation:s8") {
 		t.Errorf("purge again: %q", again)
 	}
 	// conversation:s2, which the archive does not hold, is not deleted.
 	if strings.Contains(strings.Join(curation, "\n"), "s2") {
 		t.Errorf("deleted what the archive did not bring back: %q", curation)
+	}
+}
+
+// A purged document the archive brings back is purged again the way
+// forget --purge purges: its facts' observations are cleared (they may
+// quote it), the document goes, and so does the briefing page of each
+// project its facts were tagged with; the step names all three (issue 285
+// review H1).
+func TestRestorePurgesAgainLikeAPurge(t *testing.T) {
+	home, archive, _, port := restoreSetup(t)
+	seedTombstones(t, home, port)
+	documentUnits["conversation:s8"] = 1
+	f8 := `{"id":"f8","text":"the deploy token","type":"world","tags":["project:infra"],"document_id":"conversation:s8"}`
+	listAnswer[""] = `[` + f8 + `]`
+	memories["f8"] = f8
+	page := briefingModelID("infra")
+	mentalModels[page] = `{"id":"` + page + `","content":"infra: the deploy token is …"}`
+	curation, mentalCalls = nil, nil
+	code, env, out, errOut := runRestoreJSON(t, archive)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	got := strings.Join(curation, "\n")
+	for _, want := range []string{"DELETE /v1/default/banks/claude-memory/memories/f8/observations", "DELETE /v1/default/banks/claude-memory/documents/conversation%3As8"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in\n%s", want, got)
+		}
+	}
+	if !strings.Contains(strings.Join(mentalCalls, "\n"), "DELETE "+page) {
+		t.Errorf("the briefing page that may quote it is kept: %q", mentalCalls)
+	}
+	var detail string
+	for _, st := range env.Data.Steps {
+		if st.Name == "purge again" {
+			detail = st.Detail
+		}
+	}
+	if !strings.Contains(detail, "conversation:s8") || !strings.Contains(detail, "observations of 1 fact(s) cleared") || !strings.Contains(detail, page) {
+		t.Errorf("purge again: %q", detail)
+	}
+}
+
+// A retain queued in the archive runs once the restored server starts, and
+// would recreate a purged document after it was purged again (append
+// recreates it): restore waits for the queues first, within a bound, and
+// says so when they are not done (issue 285 review M1).
+func TestRestoreWaitsForTheRestoredQueueBeforePurgingAgain(t *testing.T) {
+	for name, c := range map[string]struct {
+		queued int
+		warn   bool
+	}{"drains": {3, false}, "never drains": {1 << 30, true}} {
+		t.Run(name, func(t *testing.T) {
+			home, archive, dk, port := restoreSetup(t)
+			seedTombstones(t, home, port)
+			documentUnits["conversation:s8"] = 1
+			oldWait, oldPoll := queueWait, queuePoll
+			queueWait, queuePoll = 200*time.Millisecond, time.Millisecond
+			t.Cleanup(func() { queueWait, queuePoll = oldWait, oldPoll })
+			var mu sync.Mutex
+			left, atDelete := c.queued, -1
+			pointAt(t, home, proxyHindsight(t, port, func(w http.ResponseWriter, r *http.Request) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				if dk.restored() == 0 {
+					return false
+				}
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/claude-memory/operations") && r.URL.Query().Get("status") == "pending":
+					_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(left) + `,"operations":[]}`))
+					if left > 0 && left < 1<<30 {
+						left--
+					}
+					return true
+				case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/documents/conversation:s8"):
+					atDelete = left
+				}
+				return false
+			}))
+			code, env, out, errOut := runRestoreJSON(t, archive)
+			if code != output.OK {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			warned := strings.Contains(strings.Join(env.Data.Warnings, "\n"), "was not done within")
+			if c.warn != warned || (!c.warn && atDelete != 0) || atDelete < 0 {
+				t.Errorf("queue left at the delete %d, warned %v: %q", atDelete, warned, env.Data.Warnings)
+			}
+		})
 	}
 }

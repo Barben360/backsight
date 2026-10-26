@@ -390,3 +390,29 @@ func TestLiveDocumentID(t *testing.T) {
 		}
 	}
 }
+
+// A reconcile on a higher epoch purges again the tombstoned documents the
+// server still holds: one a queued retain recreated after the restore, or
+// one a machine purged while the restore ran, whose tombstone reached the
+// control bank late (issue 285 review M1). Not on an epoch already
+// reconciled.
+func TestReconcilePurgesAgainWhatTheServerStillHolds(t *testing.T) {
+	e := purgedEnv(t)
+	// The archive held conversation:s1 (a queued retain recreated it).
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1", "last_uuid": "a1", "segment": "1", "project": "billing"}
+	e.hs.mu.Unlock()
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rec.Purged, []string{"conversation:s1"}) || !slices.Equal(e.hs.deleted, []string{"conversation:s1"}) {
+		t.Errorf("purged %v, deleted %v", rec.Purged, e.hs.deleted)
+	}
+	e.hs.mu.Lock()
+	e.hs.docs["conversation:s1"] = map[string]string{"session_id": "s1"}
+	e.hs.mu.Unlock()
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || len(rec.Purged) != 0 {
+		t.Errorf("an epoch already reconciled purges again: %+v %v", rec, err)
+	}
+}

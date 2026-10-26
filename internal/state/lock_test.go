@@ -278,3 +278,40 @@ func TestReusedPIDIsStale(t *testing.T) {
 		t.Errorf("a lock without since: %+v", h)
 	}
 }
+
+// A lock carries its owner's start ticks and boot id: compared exactly, a
+// clock stepped forward after the lock was taken (Since far after the
+// process start, or before it) does not make a live owner stale, while a
+// lock whose ticks or boot id differ is a dead owner's, its PID reused
+// (issue 285 review M5).
+func TestLockIdentityIsStartTicksAndBootID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("start ticks and boot id are read from /proc")
+	}
+	p := filepath.Join(t.TempDir(), "maintenance.lock")
+	l, err := TryAcquire(p, "backup create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := l.Owner()
+	if o.StartTicks == 0 || o.BootID == "" {
+		t.Fatalf("the lock does not name its owner's identity: %+v", o)
+	}
+	_ = l.Release()
+	for name, c := range map[string]struct {
+		edit  func(o *Owner)
+		stale bool
+	}{
+		"clock stepped forward since": {func(o *Owner) { o.Since = o.Since.Add(-48 * time.Hour) }, false},
+		"clock stepped back since":    {func(o *Owner) { o.Since = o.Since.Add(48 * time.Hour) }, false},
+		"other start ticks":           {func(o *Owner) { o.StartTicks++ }, true},
+		"other boot":                  {func(o *Owner) { o.BootID = "00000000-0000-0000-0000-000000000000" }, true},
+	} {
+		w := o
+		c.edit(&w)
+		writeOwner(t, p, w)
+		if h := Inspect(p); h == nil || h.Stale != c.stale {
+			t.Errorf("%s: %+v, want stale %v", name, h, c.stale)
+		}
+	}
+}

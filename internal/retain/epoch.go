@@ -130,6 +130,10 @@ type Reconciled struct {
 	// Reports: the subagent reports of those sessions the server lacked,
 	// rebuilt from their transcripts into the notes outbox.
 	Reports []string `json:"reports,omitempty"`
+	// Purged: the tombstoned documents the server still held, purged again
+	// (a queued retain recreated one after the restore, or a purge's
+	// tombstone reached the control bank after the restore read it).
+	Purged []string `json:"purged_again,omitempty"`
 }
 
 // epochSkew widens "sent after the backup": the backup's time comes from
@@ -199,6 +203,17 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		}
 		if n > 0 {
 			return rec, fmt.Errorf("the bank has %d queued operation(s); retried once they are done", n)
+		}
+		// What a purge deleted and the server holds again goes first, as
+		// forget --purge removes it (issue 285 review M1).
+		tombs, err := f.tombstones()
+		if err != nil {
+			return rec, err
+		}
+		again, err := PurgeAgain(ctx, f.Client, f.Bank, tombs)
+		rec.Purged = again.Documents
+		if err != nil {
+			return rec, fmt.Errorf("purging again what the server still holds: %w", err)
 		}
 		reconciledAt := time.Time{}
 		if st.RestoreEpoch != nil && st.RestoreEpoch.Bank == f.Bank {

@@ -46,7 +46,7 @@ func TestRestoreBumpsTheEpochOfEveryMemoryBank(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	documentUnits["conversation:t1"] = 2 // the archive brings it back
+	documentUnits["team-memory/conversation:t1"] = 2 // the archive brings it back, in that bank only
 	bankCalls, curation = nil, nil
 	code, env, out, errOut := runRestoreJSON(t, archive)
 	if code != output.OK {
@@ -124,7 +124,7 @@ func TestRestoreMarkerStaysUntilTheKeyStep(t *testing.T) {
 	if e := epochOf(t, port); e.Epoch != 1 {
 		t.Errorf("epoch %+v", e)
 	}
-	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "backsight server start (it finishes the restore)") {
+	if _, out, _ := run(t, "doctor"); !strings.Contains(out, "backsight server start (it finishes the restore on that image), or else backsight restore ") {
 		t.Errorf("doctor:\n%s", out)
 	}
 	// Another command that changes the server still refuses.
