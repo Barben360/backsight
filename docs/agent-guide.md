@@ -55,7 +55,7 @@ Show the user the pre-flight checks and the planned steps. When they agree, add 
 backsight setup --non-interactive --json --answer provider=<p> … --answer consent=yes
 ```
 
-Progress lines `{"event":"progress","step","pct","eta_s"}` arrive on stderr; stdout holds the one envelope. The first run downloads the server image (a few GB): tell the user it takes several minutes.
+Progress lines `{"event":"progress","step","pct","eta_s"}` arrive on stderr; stdout holds the one envelope. During the server step a line comes every 5 seconds with a `detail` saying what runs (the image download, then the server's first start and its model download). The first run downloads about 2.4 GB: tell the user it takes several minutes.
 
 Expect exit 10 the first time: the LLM key is not set. Ask the user to run `! backsight secret set llm_api_key` (with the `claude-code` provider, first `claude setup-token`), then run `backsight setup --resume --non-interactive --json`.
 

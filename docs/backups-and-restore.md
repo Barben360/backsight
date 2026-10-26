@@ -20,7 +20,7 @@ Only archives backsight wrote (with their `.json` sidecar) are pruned. Other fil
 
 Each archive is a dump of the server's database with a manifest (backsight version, server image, embedding models, bank), backsight's config, the server's Compose override and secrets. It is always encrypted.
 
-The archives are yours to copy anywhere: another disk, a NAS, a cloud drive. `backsight doctor` warns when the last backup is more than 2 days old.
+The archives are yours to copy anywhere: another disk, a NAS, a cloud drive. `backsight doctor` warns when the last backup this machine can decrypt is more than 2 days old.
 
 To change the folder or the retention, edit `config.toml`:
 
@@ -33,7 +33,7 @@ keep_weekly = 4
 
 ## The backup identity
 
-Archives are encrypted with [age](https://age-encryption.org/). By default backsight generates an identity (a private key) on the first backup and stores it in `secrets.toml`. **Save it somewhere else** (a password manager): if this machine's disk is lost, the backups cannot be decrypted without it.
+Archives are encrypted with [age](https://age-encryption.org/). By default backsight generates an identity (a private key) during setup when backups are on (else on the first backup) and stores it in `secrets.toml`. **Save it somewhere else** (a password manager): if this machine's disk is lost, the backups cannot be decrypted without it.
 
 ```sh
 backsight backup identity show
