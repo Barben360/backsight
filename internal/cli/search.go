@@ -56,7 +56,7 @@ func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 	if idx, err := recall.LoadIndex(d.EntitiesFile()); err == nil {
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
-	linked := project.New(home, cfg.Projects.Transverse).Related(cwd)
+	linked := linkedProjects(d, cfg, project.New(home, cfg.Projects.Transverse), cwd, current)
 	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
 }
 
