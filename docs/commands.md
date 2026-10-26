@@ -68,7 +68,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight retain flush` | Sends the unsent turns of every session now, without the 30-minute wait. `--session <id>`. |
 | `backsight retain backfill` | Imports past sessions within a spending cap. `--plan`, `--since YYYY-MM-DD`, `--project <name>`, `--max-cost X`, `--max-tokens N`, `--allow-subscription`, `--projects-dir <dir>`. |
 | `backsight retain retry-quarantine` | Gives quarantined sessions and notes another try. `--session <id>`, `--notes`. |
-| `backsight retain reattribute` | Files the memory already sent under the projects today's rules give. A document whose whole content belongs to another project is moved in place, free. A session whose documents mix projects is sent again per project, at its extraction cost, only with `--answer resend=yes`. A verified backup comes first; a second run does nothing. `--plan` lists the moves and the cost. Exit 10 while re-sends wait for the answer, 40 when a write failed (run it again). |
+| `backsight retain reattribute` | Files the memory already sent under the projects today's rules give. A document whose whole content belongs to another project is moved in place, with no extraction (the server only rebuilds its observations, a few LLM calls). A session whose documents mix projects is sent again per project, at its extraction cost, only with `--answer resend=yes`. A verified backup comes first; a second run does nothing. `--plan` lists the moves and the cost. Exit 10 while re-sends wait for the answer, 40 when a write failed (run it again). |
 
 ## Server
 
