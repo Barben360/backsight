@@ -52,7 +52,7 @@ func newRetainReattributeCmd(e *env) *cobra.Command {
 		Short: "File the memory already sent under the projects today's rules give",
 		Long: `Judges every document sent from this machine against today's project rules.
 A document whose whole content belongs to another project is re-tagged in
-place, at no cost. A session whose documents mix projects is sent again per
+place, with no extraction (the server rebuilds its observations). A session whose documents mix projects is sent again per
 project, which costs extraction: it waits for --answer resend=yes.
 A verified backup comes first. Running it again does nothing more.`,
 		Args: usageArgs(cobra.NoArgs),
@@ -199,7 +199,7 @@ func finishReattribute(res reattributeResult, f reattributeFlags, opt reattribut
 				{Value: "yes", Label: "send them again per project", Cost: estimateText(c)},
 				{Value: "no", Label: "leave them as they are"}},
 				Prompt: fmt.Sprintf("%d session(s) hold documents that mix projects: send them again per project (their documents are deleted first)?", len(res.Plan.Resends))}},
-			Message: fmt.Sprintf("%d session(s) wait for --answer resend=yes (%s); the free moves are done", len(res.Plan.Resends), estimateText(c))}
+			Message: fmt.Sprintf("%d session(s) wait for --answer resend=yes (%s); the moves in place are done", len(res.Plan.Resends), estimateText(c))}
 	case pending:
 		res.Action = "resends_pending"
 	case len(res.Retagged)+len(res.Queued) == 0:
@@ -225,7 +225,7 @@ func reattributeText(r reattributeResult) string {
 	fmt.Fprintf(&b, "%d document(s) read, %d judged against this machine's transcripts, %d unchanged\n", p.Documents, p.Judged, p.Unchanged)
 	verb := map[bool]string{true: "moved", false: "would move"}[r.Action != "planned"]
 	for _, m := range p.Retags {
-		fmt.Fprintf(&b, "%s %s: %s → %s (free)\n", verb, m.Document, safeProject(m.From), safeProject(m.To))
+		fmt.Fprintf(&b, "%s %s: %s → %s (in place, no extraction)\n", verb, m.Document, safeProject(m.From), safeProject(m.To))
 	}
 	for _, s := range p.Resends {
 		names := make([]string, len(s.Projects))

@@ -7,8 +7,9 @@
 #   - a session whose document an append relabelled to a plain directory's
 #     name (S2: tagged dist, every record billing's);
 #   - a session sent as one document mixing two repositories (S1).
-# It checks: the plan; the free moves (PATCH, no LLM call, the memory units
-# follow) after a verified backup, the re-send waiting for its answer
+# It checks: the plan; the free moves (PATCH, no extraction, the memory
+# units follow; the server rebuilds their observations) after a verified
+# backup, the re-send waiting for its answer
 # (exit 10); the re-send once answered, sent again per project by the next
 # flush (the operation ids salted: Hindsight collapses a repeated one); a
 # last run that finds nothing (idempotent).
@@ -78,6 +79,9 @@ api() { curl -fsS -H "Authorization: Bearer $key" -H 'Content-Type: application/
 enc() { jq -rn --arg d "$1" '$d|@uri'; }
 tags() { api "$B/documents/$(enc "$1")" | jq -c '.tags'; }
 llm() { api "$B/llm-requests/stats?period=1d&call_type=llm" | jq '[.buckets[]?.total] | add // 0'; }
+# calls <scope>: the LLM requests the server logged for one kind of work
+# (retain_extract_facts: extraction; consolidation: observations).
+calls() { api "$B/llm-requests?scope=$1&limit=1" | jq '.total'; }
 # settled_llm: the LLM call count once it stopped moving for 30 s (the
 # server logs calls late, and consolidates after a retain returns).
 settled_llm() {
@@ -146,25 +150,28 @@ proj() { tags "$1" | jq -r 'map(select(startswith("project:")))[0]'; } # the ser
 [ "$(proj "subagent:$S3:ag1")" = project:billing ] || fail "--plan wrote"
 
 # 2. No answer: verified backup, free moves, the re-send waits (exit 10).
-calls=$(settled_llm)
+before=$(settled_llm)
+extract=$(calls retain_extract_facts) consolidate=$(calls consolidation)
 reattr
 [ "$code" = 10 ] || { cat "$work/out.json"; fail "without resend=yes: exit $code, want 10"; }
 idle
 after=$(settled_llm)
-[ "$after" = "$calls" ] || fail "the free moves made LLM calls: $calls -> $after"
+# No extraction: the server only rebuilds the moved memories' observations.
+[ "$(calls retain_extract_facts)" = "$extract" ] || fail "the free moves extracted: $extract -> $(calls retain_extract_facts)"
+moves="LLM calls $before -> $after: extraction $extract -> $(calls retain_extract_facts), consolidation $consolidate -> $(calls consolidation)"
 jq -e '.data.backup | test("backsight-.*\\.tar\\.gz\\.age$")' "$work/out.json" > /dev/null || { cat "$work/out.json"; fail "no backup named"; }
 jq -e '.backup_verify.ok == true' "$BACKSIGHT_HOME/state/state.json" > /dev/null || fail "the backup was not verified"
 [ "$(proj "subagent:$S3:ag1")" = project:shop ] || fail "the report was not moved: $(tags "subagent:$S3:ag1")"
 [ "$(unit_tags "subagent:$S3:ag1")" = '["project:shop"]' ] || fail "the report's memory units did not follow: $(unit_tags "subagent:$S3:ag1")"
 [ "$(proj "conversation:$S2")" = project:billing ] || fail "S2 was not moved"
 [ "$(proj "conversation:$S1")" = project:shop ] || fail "S1 changed without the answer"
-echo "== free moves: report $(unit_tags "subagent:$S3:ag1"), S2 $(tags "conversation:$S2"); LLM calls $calls -> $after"
+echo "== free moves: report $(unit_tags "subagent:$S3:ag1"), S2 $(tags "conversation:$S2"); $moves"
 
 # 3. The re-send, answered; the next flush sends S1 per project.
 reattr --answer resend=yes
 [ "$code" = 0 ] || { cat "$work/out.json"; fail "resend=yes: exit $code"; }
 jq -e --arg s1 "$S1" '.data.queued == [$s1]' "$work/out.json" > /dev/null || fail "S1 not queued"
-calls=$(llm)
+before=$(settled_llm) extract=$(calls retain_extract_facts)
 "$bin" retain flush --session "$S1" --json > "$work/flush.json"
 idle
 home_doc=$(api "$B/documents/$(enc "conversation:$S1")" | jq -c '{tags: (.tags | map(select(startswith("project:")))[0]), project: (.document_metadata // .metadata).project, last: (.document_metadata // .metadata).last_uuid}')
@@ -172,8 +179,8 @@ shop_doc=$(api "$B/documents/$(enc "conversation:$S1@shop")" | jq -c '{tags: (.t
 [ "$home_doc" = '{"tags":"project:billing","project":"billing","last":"s1a1"}' ] || fail "S1's home document after the re-send: $home_doc"
 [ "$shop_doc" = '{"tags":"project:shop","project":"shop","last":"s1a2"}' ] || fail "S1's shop document after the re-send: $shop_doc"
 after=$(settled_llm)
-[ "$after" -gt "$calls" ] || fail "the re-send extracted nothing"
-echo "== re-sent: $home_doc $shop_doc; LLM calls $calls -> $after"
+[ "$(calls retain_extract_facts)" -gt "$extract" ] || fail "the re-send extracted nothing"
+echo "== re-sent: $home_doc $shop_doc; LLM calls $before -> $after, extraction $extract -> $(calls retain_extract_facts)"
 
 # 4. Idempotent: nothing left.
 reattr
