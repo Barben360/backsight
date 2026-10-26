@@ -12,7 +12,7 @@ How to install backsight and set it up for Claude Code. The short path is in the
 - **Claude Code** 2.1.309 or newer, with the `claude` command on your PATH: [install Claude Code](https://code.claude.com/docs/en/setup).
 - **An LLM provider for the memory server**, which extracts memories from your sessions ([cost](../README.md#what-it-costs), [terms and data location](privacy.md#your-llm-provider)):
   - an API key from a pay-as-you-go account: [DeepSeek](https://platform.deepseek.com/api_keys) (top up a few dollars first), [Anthropic](https://platform.claude.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys), or a compatible endpoint;
-  - or [Ollama](https://ollama.com/download) on this machine, with no key;
+  - or [Ollama](https://ollama.com/download) on this machine, with no key (on Linux it must listen on an address the server container reaches: see [Local models with Ollama](#local-models-with-ollama));
   - or your Claude subscription, which Anthropic's terms are against: see [the subscription lane](privacy.md#the-claude-subscription-lane).
 - About **6 GB of free disk** for the server image and its models.
 - `curl`, `tar`, and `minisign` or OpenSSL 3 to check the release signature.
