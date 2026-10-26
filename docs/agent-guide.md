@@ -21,6 +21,8 @@ Follow these steps in order. Everything goes through `backsight` commands with `
 | 30 | failed and rolled back | show `error.message`: the machine is as before; rerun once the cause is fixed |
 | 40 | partly done, resumable | show the message, fix if asked, then run `error.resume` with `--json` (setup's is `backsight setup --resume`: add `--non-interactive` too); `verify --live` waits `data.wait_s` seconds first |
 
+Exit 10 from setup's `scheduler` pre-flight check means this machine has no systemd user session (a container, a shell opened with `su`): nothing is written yet. Tell the user that with `scheduler=off` nothing runs on a timer (`backsight jobs tick` every 15 min and `backsight jobs maintain` daily, which makes the backup, then run only by hand or from their own scheduler), and that an ssh login as that user avoids it; if they choose `scheduler=off`, run `error.resume`, the same command with `--answer scheduler=off`.
+
 ## 1. Install the binary
 
 If `backsight version` works, skip this step. Otherwise:
@@ -41,7 +43,7 @@ backsight setup --questions --json
 
 Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `default`, `recommended`, `required`, and `asked`. Questions with `"asked": false` are already settled by an existing install's config or an earlier run: tell the user, don't ask again. If the provider answer changes, list the questions again: the model and other questions follow the provider.
 
-Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a container without a user scheduler).
+Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a machine without a systemd user session, such as a container: setup's pre-flight stops with exit 10 and asks for it; it also removes the entries an earlier run wrote, and `backsight setup --resume --answer scheduler=off` goes on from the earlier run without asking for consent again).
 
 ## 3. Show the plan, then run setup
 

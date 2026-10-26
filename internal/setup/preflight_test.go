@@ -154,3 +154,35 @@ func TestNeedsUserWinsWhateverTheOrder(t *testing.T) {
 		t.Errorf("class %q, %d failed", class, len(failed))
 	}
 }
+
+// A machine without a systemd user session (a container, an su shell)
+// cannot load the timers: the check fails as the user's choice (exit 10)
+// naming scheduler=off and what stops without it; scheduler=off skips it.
+func TestNoUserSessionIsTheUsersChoice(t *testing.T) {
+	p := healthy()
+	p.UserScheduler = func(context.Context) error { return errors.New("Failed to connect to bus: No medium found") }
+	cs := Preflight(context.Background(), p)
+	c := byID(cs)["scheduler"]
+	if c.Status != Fail || c.Class != "needs_user" || !strings.Contains(c.Summary, "No medium found") {
+		t.Fatalf("%+v", c)
+	}
+	for _, s := range []string{"scheduler=off", "jobs tick", "jobs maintain", "backup create", "login session"} {
+		if !strings.Contains(c.Fix, s) {
+			t.Errorf("fix lacks %q: %s", s, c.Fix)
+		}
+	}
+	if c.Action == nil || !strings.Contains(c.Action.Cmd, "--answer scheduler=off") {
+		t.Errorf("action %+v", c.Action)
+	}
+	if class, _ := Verdict(cs); class != "needs_user" {
+		t.Errorf("verdict %q", class)
+	}
+	p.SchedulerOff = true
+	if _, ok := byID(Preflight(context.Background(), p))["scheduler"]; ok {
+		t.Error("scheduler=off still checks the user session")
+	}
+	p.SchedulerOff, p.UserScheduler = false, func(context.Context) error { return nil }
+	if c := byID(Preflight(context.Background(), p))["scheduler"]; c.Status != OK {
+		t.Errorf("reachable: %+v", c)
+	}
+}

@@ -19,10 +19,18 @@ type fakeSys struct {
 	output string            // what a failing command prints
 	xdg    string            // the user manager's XDG_CONFIG_HOME
 	out    map[string]string // what a command line prints
+	// noBus: no systemd user session, every systemctl --user call fails
+	noBus bool
 }
+
+const busError = "Failed to connect to bus: No medium found"
 
 func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	if f.noBus && strings.HasPrefix(line, "systemctl --user") {
+		f.calls = append(f.calls, line)
+		return []byte(busError + "\n"), errors.New("exit status 1")
+	}
 	if line == "systemctl --user show-environment" {
 		return []byte("HOME=/home/u\nXDG_CONFIG_HOME=" + f.xdg + "\n"), nil
 	}
@@ -37,7 +45,32 @@ func (f *fakeSys) Run(_ context.Context, name string, args ...string) ([]byte, e
 		}
 		return []byte(out), errors.New("exit status 1")
 	}
+	f.links(line)
 	return nil, nil
+}
+
+// links does what systemd does on disk: enable links each timer into
+// timers.target.wants beside the units, disable removes the links.
+func (f *fakeSys) links(line string) {
+	if f.xdg == "" {
+		return
+	}
+	wants := filepath.Join(f.xdg, "systemd", "user", "timers.target.wants")
+	for _, verb := range []string{"enable", "disable"} {
+		rest, ok := strings.CutPrefix(line, "systemctl --user "+verb+" --now ")
+		if !ok {
+			continue
+		}
+		for _, timer := range strings.Fields(rest) {
+			link := filepath.Join(wants, timer)
+			if verb == "disable" {
+				_ = os.Remove(link)
+				continue
+			}
+			_ = os.MkdirAll(wants, 0o700)
+			_ = os.Symlink(filepath.Join("..", timer), link)
+		}
+	}
 }
 
 // withSys fakes the OS scheduler for an install in home, with its shim.
@@ -288,5 +321,50 @@ func TestJobsOfASecondInstallKeepToTheirProject(t *testing.T) {
 	}
 	if readFile(t, first) != "the first install's\n" {
 		t.Error("the first install's timer was changed")
+	}
+}
+
+// Without a systemd user session the activation fails: install says
+// how to go on (exit 10: a login session, or setup's scheduler=off), and
+// uninstall then removes the entries it left, since none was enabled.
+func TestJobsWithoutAUserSession(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	sys.fail, sys.output = "systemctl --user daemon-reload", busError
+	code, errOut, _ := run(t, "jobs", "install", "--json")
+	timer := filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")
+	if code != output.NeedsUser || !strings.Contains(errOut, "scheduler=off") || !strings.Contains(errOut, "login session") {
+		t.Fatalf("install: exit %d %s", code, errOut)
+	}
+	if _, err := os.Stat(timer); err != nil {
+		t.Fatal("the failed install left no files: nothing to test")
+	}
+	sys.fail, sys.noBus = "", true
+	if code, _, errOut := run(t, "jobs", "uninstall"); code != output.OK {
+		t.Fatalf("uninstall: exit %d %s", code, errOut)
+	}
+	if _, err := os.Stat(timer); err == nil {
+		t.Error("the entries the failed install wrote stay on disk")
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.Scheduler != nil {
+		t.Errorf("the record stays: %+v", st.Scheduler)
+	}
+}
+
+// An enabled timer may run in a manager this shell cannot reach (su):
+// uninstall keeps its files and says where to run it.
+func TestJobsUninstallKeepsEnabledEntriesWithoutAUserSession(t *testing.T) {
+	home := devInstall(t, true)
+	sys := withSys(t, "linux")
+	if code, _, _ := run(t, "jobs", "install"); code != output.OK {
+		t.Fatal("install failed")
+	}
+	sys.noBus = true
+	code, _, errOut := run(t, "jobs", "uninstall")
+	if code != output.Blocked || !strings.Contains(errOut, "login session") {
+		t.Errorf("exit %d %s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, "xdg", "systemd", "user", "backsight-tick.timer")); err != nil {
+		t.Error("removed the files of enabled timers")
 	}
 }

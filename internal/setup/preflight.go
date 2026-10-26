@@ -64,6 +64,11 @@ type Probes struct {
 	Retention  string // effective cleanupPeriodDays, described
 	Transcript string // count, size and oldest, described
 	GPUs       []string
+	// UserScheduler reaches the scheduler the scheduler step installs
+	// into (systemd's user manager, over the user bus); nil where there
+	// is nothing to reach first. SchedulerOff: the answer skips that step.
+	UserScheduler func(ctx context.Context) error
+	SchedulerOff  bool
 }
 
 // Preflight runs every check in order.
@@ -93,6 +98,9 @@ func Preflight(ctx context.Context, p Probes) []Check {
 		add(diskCheck(p))
 	}
 	add(claudeCheck(ctx, p))
+	if p.UserScheduler != nil && !p.SchedulerOff {
+		add(schedulerCheck(ctx, p))
+	}
 	if p.Reference > 0 {
 		add(Check{ID: "reference", Status: Info, Summary: fmt.Sprintf("%d piece(s) of an older Hindsight install wired into Claude Code (see the reference question)", p.Reference)})
 	}
@@ -201,6 +209,30 @@ func claudeCheck(ctx context.Context, p Probes) Check {
 	default:
 		c.Status, c.Summary = OK, "Claude Code "+v
 	}
+	return c
+}
+
+// SchedulerOffFix says what scheduler=off stops and how to run it by hand.
+const SchedulerOffFix = "answer scheduler=off, or run setup again from a login session of this user (an ssh login, not su or sudo). " +
+	"With scheduler=off nothing runs on a timer: sessions are still sent when they end, but sending the settled sessions and queued notes " +
+	"(backsight jobs tick, every 15 min) and the daily upkeep with its backup (backsight jobs maintain, or backsight backup create alone) " +
+	"run only when you run them, by hand or from a scheduler of your own"
+
+// schedulerCheck: without a reachable user manager the scheduler step
+// cannot load its timers, and nothing a rerun does changes that: the
+// user chooses between a login session and scheduler=off before anything
+// is written.
+func schedulerCheck(ctx context.Context, p Probes) Check {
+	c := Check{ID: "scheduler"}
+	if err := p.UserScheduler(ctx); err != nil {
+		c.Status, c.Class = Fail, "needs_user"
+		c.Summary = "no systemd user session here (" + err.Error() + "): setup cannot install the timers that run backsight's jobs"
+		c.Fix = SchedulerOffFix
+		c.Action = &output.Action{Kind: "run_as_user", Cmd: "backsight setup --answer scheduler=off",
+			Why: "this machine has no systemd user session for the timers; scheduler=off skips them, and then jobs tick and jobs maintain run only by hand"}
+		return c
+	}
+	c.Status, c.Summary = OK, "systemd user session reachable"
 	return c
 }
 

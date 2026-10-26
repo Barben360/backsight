@@ -4,14 +4,56 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/stats"
 )
+
+// schedulerMode is whether the scheduler entries can run the jobs.
+type schedulerMode int
+
+const (
+	schedulerOn   schedulerMode = iota
+	schedulerOff                // none recorded, and setup was answered scheduler=off
+	schedulerIdle               // systemd entries recorded, no timer of theirs enabled
+)
+
+// answeredOff reports whether the last setup run was answered
+// scheduler=off.
+func answeredOff(d paths.Dirs) bool {
+	r, err := setup.Load(d.SetupFile())
+	return err == nil && r != nil && r.Answers["scheduler"] == "off"
+}
+
+func modeOf(d paths.Dirs, sc *state.Scheduler) schedulerMode {
+	switch {
+	case sc == nil && answeredOff(d):
+		return schedulerOff
+	case sc != nil && sc.Kind == "systemd" && slices.ContainsFunc(sc.Files, func(f string) bool { return strings.HasSuffix(f, ".timer") }) &&
+		!scheduler.TimersEnabled(sc.Files):
+		return schedulerIdle
+	}
+	return schedulerOn
+}
+
+// schedulerModeOf reads the mode from state.json (unreadable: on, the
+// jobs check says why).
+func schedulerModeOf(d paths.Dirs) schedulerMode {
+	st, err := state.Load(d.StateFile())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return schedulerOn
+	}
+	return modeOf(d, st.Scheduler)
+}
+
+// byHand is what runs the jobs without a scheduler.
+const byHand = "run backsight jobs tick every 15 min and backsight jobs maintain daily (it makes the backup), by hand or from a scheduler of your own"
 
 // checkJobs: each scheduled job ran within twice its cadence (SPEC §15),
 // read from the job events of the telemetry. Without scheduler entries
@@ -22,6 +64,21 @@ func checkJobs(d paths.Dirs, now time.Time, linger func() (bool, error)) Check {
 	st, err := state.Load(d.StateFile())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		c.Status, c.Summary = Warn, "state.json unreadable: "+err.Error()
+		return c
+	}
+	switch modeOf(d, st.Scheduler) {
+	case schedulerOff:
+		c.Status, c.Summary = Info, "scheduler off (setup was answered scheduler=off): nothing runs on a timer, sessions are sent when they end"
+		c.Fix = byHand
+		return c
+	case schedulerIdle:
+		c.Status, c.Summary = Warn, "systemd entries written but not enabled: no timer runs jobs tick or jobs maintain"
+		c.Detail = "systemd's user session was likely unreachable when they were installed"
+		c.Fix = "backsight jobs install from a login session of this user (an ssh login, not su or sudo); on a machine without one, backsight jobs uninstall and rerun setup with --answer scheduler=off"
+		if answeredOff(d) {
+			c.Detail += "; setup was answered scheduler=off since"
+			c.Fix = "backsight jobs uninstall"
+		}
 		return c
 	}
 	if st.Scheduler == nil {
@@ -83,10 +140,14 @@ type SchedulerEntries struct {
 // checkScheduler: entries rendered by an older template lack what this
 // binary's carry (the stop timeout an update's rollback needs, issue 222).
 // ok is false when no entries are installed (checkJobs says so).
-func checkScheduler(probe func() (SchedulerEntries, error)) (Check, bool) {
+func checkScheduler(probe func() (SchedulerEntries, error), mode schedulerMode) (Check, bool) {
 	c := Check{ID: "scheduler", Status: OK}
 	s, err := probe()
 	switch {
+	case mode == schedulerOff && err == nil && !s.Installed:
+		c.Status, c.Summary = Info, "off: setup was answered scheduler=off"
+	case mode == schedulerIdle:
+		c.Status, c.Summary = Info, "systemd entries not enabled: see the jobs check"
 	case err != nil:
 		c.Status, c.Summary, c.Detail = Info, "could not compare the scheduler entries with this binary's", err.Error()
 	case !s.Installed:
