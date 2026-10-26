@@ -69,7 +69,7 @@ Restore replaces the local server's memory with the archive's. In order, it:
 5. checks health, row counts and a recall;
 6. writes back the **purge tombstones** it read before the stop (the server's and this machine's): the archive's `<bank>-control` bank lacks the purges made since;
 7. writes a new **restore epoch**, in your bank and in every other memory bank of the server (see below);
-8. waits (up to 2 minutes) for the restored banks' queued retains, then purges again, as `forget --purge` does, every purged document the archive brought back (a document a tombstone names): its facts' observations, the document, and the briefing page of each project it touched;
+8. waits, as long as it takes and printing what it waits for, until the restored banks with purges have no queued retain left (one would recreate a purged document), the restore still in progress and the server on its temporary key; then purges again, as `forget --purge` does, every purged document the archive brought back (a document a tombstone names): its facts' observations, the document, and the briefing page of each project it touched;
 9. compares the bank's settings, as the archive brought them back, with this backsight's template, and applies the template where they differ (if it cannot, it says so, and the next `client install` or `update apply` sends it);
 10. starts the server again on its normal key, and only then clears the restore in progress.
 
@@ -83,7 +83,7 @@ After a restore, each client compares what it sent with what the server now hold
 
 The archive is a dump of the server's whole database, so it brings back **every bank** on the server as it was, not only yours (a second machine may write to another bank of the same server). Restore gives each memory bank a new restore epoch and writes its purges back, so the clients that write to it also send again what the archive lacks. A server upgrade's rollback does the same, without asking.
 
-A bank is proven backsight's when its `<bank>-control` bank is backsight's (named and filled by backsight); a docs bank (`<bank>-docs`) when it carries backsight's docs marker. Every other bank may not be backsight's: a bank with no control bank, someone else's `-control` or `-docs` bank, and, while the server's API cannot answer (the banks are then read from its database), every bank. Before anything changes, restore names those banks and exits 10, asking `other_banks`. To go on, and accept that those banks go back to the archive too:
+A bank is proven backsight's when its `<bank>-control` bank is backsight's (named and filled by backsight); a docs bank (`<bank>-docs`) when it carries backsight's docs marker. Every other bank may not be backsight's: a bank with no control bank, someone else's `-control` or `-docs` bank, and, while the server's API cannot answer (the banks are then read from its database), every bank. Before anything changes, restore names those banks and exits 10, asking `other_banks`. A control bank restore creates for such a bank is marked adopted (its name reads "backsight control (adopted)"): backsight writes the bank's epoch and purges there, but it proves nothing, so every later restore asks about that bank again. To go on, and accept that those banks go back to the archive too:
 
 ```sh
 backsight restore <file> --answer other_banks=revert
@@ -96,6 +96,7 @@ Restore applies the archive's database only, never its config or secrets. It ref
 ## When a restore fails
 
 - **Exit 10**: the server holds another bank not proven backsight's; nothing was changed. Rerun with `--answer other_banks=revert` if it may go back to the archive too.
+- **Exit 40, "the restore waits at its purge step"**: interrupted (Ctrl-C, a timeout) while it waited for the restored queues. The archive is in place and the epochs written; every client holds its sends, and the server runs on a temporary key. `backsight server start` resumes: it waits for the queues, purges again, then starts the server on its API key. `backsight doctor` says so too.
 - **Exit 30**: something failed after the server stopped. Restore put the safety backup back, so the server is as it was. The output says what failed.
 - **Exit 20 before anything changed**: a check failed (a lock held, Docker not running, a refused archive, a `<bank>-control` bank that is not backsight's). Fix the cause and rerun.
 - **Exit 20, "the server did not start again on its API key"**: the restore (or its rollback, a server upgrade's included) is done and its epoch written, but the last start failed. Every client holds its sends until `backsight server start` succeeds: it starts the server on its key, on the Hindsight version its data is for (after a server upgrade's rollback, the version before), and finishes the restore. `backsight doctor` says so too, and names the safety archive as the fallback (`backsight restore <safety archive> --no-safety`).
