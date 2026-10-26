@@ -114,12 +114,15 @@ func TestGitHubSendsTheTokenOnlyWhenSet(t *testing.T) {
 	}
 }
 
-func TestGitHubNotFoundNamesTheToken(t *testing.T) {
+func TestGitHubNotFoundNamesTheSourceOrTheToken(t *testing.T) {
 	f := &fakeGitHub{status: http.StatusNotFound}
 	srv := f.serve(t)
 	_, err := newTestGitHub(srv.URL, "").Releases(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "GH_TOKEN") || !strings.Contains(err.Error(), "404") {
-		t.Errorf("%v", err)
+	if err == nil || !strings.Contains(err.Error(), "update.source") || strings.Contains(err.Error(), "private") || !strings.Contains(err.Error(), "404") {
+		t.Errorf("without a token: %v", err)
+	}
+	if _, err := newTestGitHub(srv.URL, "tok").Releases(context.Background()); err == nil || !strings.Contains(err.Error(), "GH_TOKEN") {
+		t.Errorf("with a token: %v", err)
 	}
 	f.status = http.StatusUnauthorized
 	if _, err := newTestGitHub(srv.URL, "bad").Releases(context.Background()); err == nil || !strings.Contains(err.Error(), "401") {

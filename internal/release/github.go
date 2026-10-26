@@ -172,7 +172,7 @@ func (g *GitHub) statusError(resp *http.Response) error {
 	}
 	switch {
 	case resp.StatusCode == http.StatusNotFound && g.Token == "":
-		msg += ": a private repository needs a token in GH_TOKEN or GITHUB_TOKEN"
+		msg += ": no such repository or release; check update.source in config.toml"
 	case resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusUnauthorized:
 		msg += ": check that the token in GH_TOKEN or GITHUB_TOKEN can read the repository"
 	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusTooManyRequests:
