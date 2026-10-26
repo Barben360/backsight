@@ -16,8 +16,10 @@ import (
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -158,8 +160,7 @@ func newJobsInstallCmd(e *env) *cobra.Command {
 					if noUserBus(string(out)) {
 						// A rerun from this shell fails the same way.
 						return &output.Error{Code: output.NeedsUser, Message: fmt.Sprintf("%s: %s: %s (the files are written: backsight jobs uninstall removes them)",
-							cmdLine(c), strings.TrimSpace(string(out)), noBusHint),
-							Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight setup --resume --answer scheduler=off", Why: "without a user session the timers cannot load; this goes on without them"}}}
+							cmdLine(c), strings.TrimSpace(string(out)), noBusHint), Actions: noBusActions(d)}
 					}
 					return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s (the files are written: backsight jobs uninstall removes them)",
 						cmdLine(c), err, strings.TrimSpace(string(out)))}
@@ -217,26 +218,13 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 			for _, c := range remove {
 				res.Commands = append(res.Commands, cmdLine(c))
 			}
-			var failed []string
 			if !plan {
-				noBus := false
+				var outcomes []deactivation
 				for _, c := range remove {
 					out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...)
-					switch {
-					case err == nil:
-					case noUserBus(string(out)):
-						noBus = true
-						failed = append(failed, fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out))))
-					case !notLoaded(string(out)):
-						failed = append(failed, fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out))))
-					}
+					outcomes = append(outcomes, deactivation{cmd: c, out: string(out), err: err})
 				}
-				if noBus && p.Kind == "systemd" && !scheduler.TimersEnabled(files) {
-					// No manager to ask, and no timer was ever enabled (an
-					// install whose activation failed): nothing can be
-					// loaded, the files go.
-					failed = nil
-				}
+				failed, noBus := stillLoaded(outcomes, p.Kind, files)
 				if len(failed) > 0 {
 					if noBus {
 						return &output.Error{Code: output.Blocked, Message: "could not deactivate the entries: " + strings.Join(failed, "; ") + ": " + noBusHint}
@@ -275,6 +263,49 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be removed")
 	return cmd
+}
+
+// deactivation is one remove command's outcome.
+type deactivation struct {
+	cmd []string
+	out string
+	err error
+}
+
+// stillLoaded lists the failed deactivations that may leave an entry
+// loaded, and whether one failed for want of a user session. An entry
+// already gone is not a failure, nor, for systemd, a missing user session
+// when no timer was ever enabled (an install whose activation failed):
+// nothing can have loaded them.
+func stillLoaded(outcomes []deactivation, kind string, files []string) (failed []string, noBus bool) {
+	neverEnabled := kind == "systemd" && !scheduler.TimersEnabled(files)
+	for _, o := range outcomes {
+		line := fmt.Sprintf("%s: %v %s", cmdLine(o.cmd), o.err, strings.TrimSpace(o.out))
+		switch {
+		case o.err == nil:
+		case noUserBus(o.out):
+			if !neverEnabled {
+				noBus = true
+				failed = append(failed, line)
+			}
+		case !notLoaded(o.out):
+			failed = append(failed, line)
+		}
+	}
+	return failed, noBus
+}
+
+// noBusActions: after a setup run, its resume without the scheduler;
+// alone, the install again from a login session, or the removal of what
+// it wrote.
+func noBusActions(d paths.Dirs) []output.Action {
+	if r, err := setup.Load(d.SetupFile()); err == nil && r != nil {
+		return []output.Action{{Kind: "run_as_user", Cmd: "backsight setup --resume --answer scheduler=off", Why: "without a user session the timers cannot load; setup goes on without them"}}
+	}
+	return []output.Action{
+		{Kind: "relogin", Cmd: "backsight jobs install", Why: "run again from a login session of this user (an ssh login, not su or sudo): the timers load into its systemd user manager"},
+		{Kind: "run_as_user", Cmd: "backsight jobs uninstall", Why: "on a machine without a user session, remove the entries written; then run backsight jobs tick and jobs maintain by hand"},
+	}
 }
 
 // noBusHint says where systemd's user manager can be reached.

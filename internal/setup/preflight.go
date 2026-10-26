@@ -213,10 +213,15 @@ func claudeCheck(ctx context.Context, p Probes) Check {
 }
 
 // SchedulerOffFix says what scheduler=off stops and how to run it by hand.
-const SchedulerOffFix = "answer scheduler=off, or run setup again from a login session of this user (an ssh login, not su or sudo). " +
-	"With scheduler=off nothing runs on a timer: sessions are still sent when they end, but sending the settled sessions and queued notes " +
+const SchedulerOffFix = "answer scheduler=off, or run setup again from a login session of this user (an ssh login, not su or sudo). " + offEffect
+
+const offEffect = "With scheduler=off nothing runs on a timer: sessions are still sent when they end, but sending the settled sessions and queued notes " +
 	"(backsight jobs tick, every 15 min) and the daily upkeep with its backup (backsight jobs maintain, or backsight backup create alone) " +
 	"run only when you run them, by hand or from a scheduler of your own"
+
+// ErrSessionSlow: systemd's user manager did not answer in time; it may
+// be busy rather than missing, so scheduler=off is not the only way out.
+var ErrSessionSlow = errors.New("systemd's user session did not answer within 5 s")
 
 // schedulerCheck: without a reachable user manager the scheduler step
 // cannot load its timers, and nothing a rerun does changes that: the
@@ -224,7 +229,14 @@ const SchedulerOffFix = "answer scheduler=off, or run setup again from a login s
 // is written.
 func schedulerCheck(ctx context.Context, p Probes) Check {
 	c := Check{ID: "scheduler"}
-	if err := p.UserScheduler(ctx); err != nil {
+	err := p.UserScheduler(ctx)
+	if errors.Is(err, ErrSessionSlow) {
+		c.Status, c.Class = Fail, "blocked"
+		c.Summary = err.Error() + ": setup cannot tell whether it can install the timers that run backsight's jobs"
+		c.Fix = "retry, from a login session of this user (an ssh login, not su or sudo); if this machine has no user session at all, answer scheduler=off. " + offEffect
+		return c
+	}
+	if err != nil {
 		c.Status, c.Class = Fail, "needs_user"
 		c.Summary = "no systemd user session here (" + err.Error() + "): setup cannot install the timers that run backsight's jobs"
 		c.Fix = SchedulerOffFix

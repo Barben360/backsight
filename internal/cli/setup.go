@@ -343,12 +343,20 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	return s.execute(ctx, res, interactive)
 }
 
+// userSessionWait bounds the user session probe; tests shorten it.
+var userSessionWait = 5 * time.Second
+
 // userSession reaches systemd's user manager, as the scheduler step's
 // systemctl --user calls will.
 func userSession(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, userSessionWait)
+	defer cancel()
 	out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment")
 	if err == nil {
 		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return setup.ErrSessionSlow
 	}
 	if msg, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n"); msg != "" {
 		return errors.New(msg)
