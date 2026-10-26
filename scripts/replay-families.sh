@@ -18,7 +18,8 @@
 # Writes <data dir>/replay-base.json and replay-families.json:
 #   {qid: {ranked: [[id, score]], injected: [ids], block, ms, project,
 #          linked: [...], family: [...], projects: {id: project}, scopes: {id: scope}}}
-# merges the memory texts into <data dir>/mem.json, and prints per variant:
+# merges the memory texts into <data dir>/mem.json (the throwaway homes, with
+# their copy of the secrets, are removed at the end), and prints per variant:
 # the prompts whose project has a family, the injections, and the
 # out-of-family injections (an injected memory from outside the project
 # scope whose project is neither the prompt's nor in its family).
@@ -33,6 +34,9 @@ src_state=${BACKSIGHT_SOURCE_STATE:-$HOME/.local/state/backsight}
 [ -s "$data/prompts.json" ] || { echo "no $data/prompts.json" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq is needed" >&2; exit 2; }
 [ -s "$src_state/families.json" ] || echo "warning: no families file in $src_state: run backsight jobs tick first" >&2
+# The homes hold a copy of secrets.toml: removed on exit (KEEP_HOMES=1 keeps them).
+cleanup() { [ "${KEEP_HOMES:-}" = 1 ] || rm -rf "$data/homes"; }
+trap cleanup EXIT
 
 # home <variant> <families>: a BACKSIGHT_HOME holding copies of the source.
 home() {

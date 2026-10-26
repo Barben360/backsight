@@ -49,7 +49,7 @@ func TestReplayFamiliesComparesBothVariants(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(data, "prompts.json"), []byte(`[{"qid":"q1","cwd":"/w/billing","text":"How do invoices round?","lang":"en"},{"qid":"q2","cwd":"/w/billing","text":"And taxes?","lang":"en"}]`), 0o600)
 
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "replay-families.sh"), data, filepath.Join(bin, "backsight"))
-	cmd.Env = append(os.Environ(), "BACKSIGHT_SOURCE_CONFIG="+filepath.Join(src, "config"), "BACKSIGHT_SOURCE_STATE="+filepath.Join(src, "state"))
+	cmd.Env = append(os.Environ(), "BACKSIGHT_SOURCE_CONFIG="+filepath.Join(src, "config"), "BACKSIGHT_SOURCE_STATE="+filepath.Join(src, "state"), "KEEP_HOMES=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -82,5 +82,14 @@ func TestReplayFamiliesComparesBothVariants(t *testing.T) {
 	}
 	if c, _ := os.ReadFile(filepath.Join(src, "config", "config.toml")); string(c) != cfg {
 		t.Errorf("the source config was changed:\n%s", c)
+	}
+	// without KEEP_HOMES the homes, and their copy of the secrets, are gone
+	cmd = exec.Command("bash", filepath.Join(root, "scripts", "replay-families.sh"), data, filepath.Join(bin, "backsight"))
+	cmd.Env = append(os.Environ(), "BACKSIGHT_SOURCE_CONFIG="+filepath.Join(src, "config"), "BACKSIGHT_SOURCE_STATE="+filepath.Join(src, "state"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(data, "homes")); err == nil {
+		t.Error("the throwaway homes, with a copy of the secrets, were left behind")
 	}
 }
