@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -273,6 +274,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	// in the index) does not count for the records a restore lost of
 	// this session's own sends (its .dropped mark), unless sent again.
 	lostOwn := f.loadDropped(sid)
+	cur.Generation = max(cur.Generation, lostOwn.Generation)
 	own := func(u string) bool { return f.Index.Has(sessionKey(f.Bank, sid, u)) }
 	sent := func(u string) bool { return f.Index.Has(u) && (!lostOwn.Records[u] || own(u)) }
 	tombs, err := f.tombstones()
@@ -488,6 +490,9 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 		segNo = 1 // the segments counted were of a purged document
 	}
 	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
+	if cur.Generation > 0 {
+		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
+	}
 	if doc == cur.Document && cur.Legacy != "" {
 		// carried forward: a later resync still knows that this document
 		// holds every project's records up to there
