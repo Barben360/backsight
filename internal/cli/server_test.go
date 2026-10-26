@@ -210,6 +210,7 @@ var (
 	mentalCreateStatus atomic.Int32      // non-zero: answer page creation with this status
 	docDeleteFails     atomic.Bool       // DELETE /documents/… answers 500
 	docPatchFails      atomic.Bool       // PATCH /documents/… answers 503
+	queueOnWrite       atomic.Bool       // a document PATCH or DELETE leaves an operation processing (a consolidation)
 	docPatches         []string          // documents whose tags a PATCH replaced
 	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
 	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
@@ -262,6 +263,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	mentalCreateStatus.Store(0)
 	docDeleteFails.Store(false)
 	docPatchFails.Store(false)
+	queueOnWrite.Store(false)
 	docPatches = nil
 	epochDoc = ""
 	epochStatus.Store(0)
@@ -500,11 +502,22 @@ func fakeHindsight(t *testing.T) (port int) {
 			in.tags = body.Tags
 			docInfos[bank+"/"+id] = in
 			docPatches = append(docPatches, id)
+			if queueOnWrite.Load() {
+				processing.Store(1)
+			}
 			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && docDeleteFails.Load():
 			w.WriteHeader(http.StatusInternalServerError)
 		case r.Method == http.MethodPatch || r.Method == http.MethodDelete:
 			body, _ := io.ReadAll(r.Body)
+			if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") {
+				bank, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
+				delete(bankDocs[bank], id)
+				delete(docs, bank+"/"+id)
+				if queueOnWrite.Load() {
+					processing.Store(1)
+				}
+			}
 			// Strict like Hindsight 1.1.0: unknown memories are 404 and an
 			// observation cannot be curated (400).
 			if strings.Contains(r.URL.Path, "/memories/") {

@@ -2,6 +2,7 @@ package retain
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -259,8 +260,17 @@ func TestNothingIsDeletedWhileOperationsAreQueued(t *testing.T) {
 	if err := e.f.ReattributionGuard(context.Background()); err == nil || !strings.Contains(err.Error(), "2 operation(s)") {
 		t.Errorf("guard: %v", err)
 	}
-	if err := e.f.ApplyResend(context.Background(), p.Resends[0]); err == nil || len(e.hs.deleted) != 0 {
+	if err := e.f.ApplyResend(context.Background(), p.Resends[0]); !errors.Is(err, ErrQueued) || len(e.hs.deleted) != 0 {
 		t.Fatalf("deleted %v while operations were queued (%v)", e.hs.deleted, err)
+	}
+	// nothing changed here either: no mark, no generation, the keys kept
+	for _, f := range []string{"s1.dropped", "s1.generation"} {
+		if _, err := os.Stat(filepath.Join(e.f.Dirs.CursorsDir(), f)); err == nil {
+			t.Errorf("%s written by a re-send that waited", f)
+		}
+	}
+	if !e.f.Index.Has(sessionKey(e.f.Bank, "s1", "u1")) {
+		t.Error("the session's keys were dropped by a re-send that waited")
 	}
 	// the records stay held: the next flush sends nothing again
 	e.hs.mu.Lock()
@@ -463,5 +473,28 @@ func TestAReportsOwnDecisionIsKeptWithoutTheLedger(t *testing.T) {
 	e.hs.mu.Unlock()
 	if p := e.plan(); len(p.Retags) != 0 || p.Unchanged != 1 {
 		t.Errorf("plan %+v", p)
+	}
+}
+
+// The server took the new tags but reading the memories back fails: the
+// report's kept decision follows the tags all the same.
+func TestAFailedReadBackStillKeepsTheReportsDecision(t *testing.T) {
+	e, billing, shop, _ := subagentEnv(t)
+	e.recordIn(billing, "s1", "u1", "user", 0, "go")
+	e.agent("s1", "ag1", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	e.hs.mu.Lock()
+	e.hs.docs["subagent:s1:ag1"] = map[string]string{"source": "subagent"}
+	e.hs.tags = map[string][]string{"subagent:s1:ag1": {"project:billing", "source:subagent"}}
+	e.hs.staleUnits = map[string][]string{"subagent:s1:ag1": {"project:billing"}}
+	e.hs.mu.Unlock()
+	p := e.plan()
+	if len(p.Retags) != 1 {
+		t.Fatalf("plan %+v", p)
+	}
+	if err := e.f.ApplyRetag(context.Background(), p.Retags[0], nil); err == nil {
+		t.Fatal("memories left behind were taken for a success")
+	}
+	if kept, ok := e.f.Attribution.loadAgent("s1", "ag1"); !ok || kept.Applied != "shop" {
+		t.Errorf("the kept decision did not follow the tags: %+v", kept)
 	}
 }
