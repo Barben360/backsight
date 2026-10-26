@@ -383,6 +383,9 @@ func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.
 		// purge again: every send holds until one does (issue 285).
 		c.Status = Error
 		c.Summary = fmt.Sprintf("%d purged document(s) of bank %s are on the server again and could not be purged again: sessions are held", h.Documents, h.Bank)
+		if h.Unchecked {
+			c.Summary = fmt.Sprintf("%d purged document(s) of bank %s not yet checked (the server could not be read): sessions are held", h.Documents, h.Bank)
+		}
 		c.Detail = h.Error
 		c.Fix = "check backsight server status; the next backsight jobs tick purges them again (as forget --purge does) and reconciles"
 		return c
@@ -501,9 +504,14 @@ func checkRestore(d paths.Dirs) Check {
 			m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
 		c.Detail = "a queued retain would recreate a purged document of bank(s) " + strings.Join(m.PurgeBanks, ", ") + "; the archive restored is " + m.Archive +
 			"; the server as it was before is in the safety archive " + m.Safety
+		if len(m.Stuck) > 0 {
+			c.Summary = fmt.Sprintf("a restore (%s, started %s) stopped waiting at its purge step: queued operations did not move: sessions are held",
+				m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+			c.Detail = "stuck: " + strings.Join(m.Stuck, "; ") + " (Hindsight 1.1.0 runs again only the operations its own worker left processing); " + c.Detail
+		}
 		c.Fix = "backsight server start (it waits for the queues, purges again, then starts the server on its API key)"
 		if m.Safety != "" {
-			c.Fix += ", or else backsight restore " + m.Safety + " --no-safety"
+			c.Fix += ", or else backsight restore " + m.Safety + " --no-safety (back to the server as it was)"
 		}
 		return c
 	}

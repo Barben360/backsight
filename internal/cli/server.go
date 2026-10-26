@@ -465,6 +465,16 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
+			// The marker again, under the locks: what it says now decides
+			// (a restore may have moved on since the first read).
+			if m, _ = state.ReadRestoreMarker(d); m == nil || (m.Step != state.PurgeStep && m.Step != state.KeyStep) {
+				if keyStep && m != nil {
+					return refuseWhileBusy(d)
+				}
+				purgeStep, keyStep = false, false
+			} else {
+				purgeStep, keyStep = m.Step == state.PurgeStep, true
+			}
 			if purgeStep {
 				note, err := resumePurge(cmd.Context(), e, cfg, sec, rt, d, *m)
 				if err != nil {

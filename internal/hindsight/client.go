@@ -500,6 +500,26 @@ func (c *Client) LLMTokens(ctx context.Context, bank, period string) (LLMTokens,
 // QueuedOperations counts the bank's pending and processing operations
 // (async retains and consolidations). /stats does not count async retains
 // on Hindsight 1.1.0, the operations list does.
+// Operation is one async operation of a bank, as its listing shows it.
+type Operation struct {
+	ID         string    `json:"id"`
+	Type       string    `json:"operation_type"`
+	Status     string    `json:"status"`
+	DocumentID string    `json:"document_id"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Operations lists up to limit operations of bank with status (pending,
+// processing…), and how many there are.
+func (c *Client) Operations(ctx context.Context, bank, status string, limit int) ([]Operation, int, error) {
+	var out struct {
+		Total      int         `json:"total"`
+		Operations []Operation `json:"operations"`
+	}
+	err := c.get(ctx, bankPath(bank, "/operations"), url.Values{"status": {status}, "limit": {strconv.Itoa(limit)}}, &out)
+	return out.Operations, out.Total, err
+}
+
 func (c *Client) QueuedOperations(ctx context.Context, bank string) (int, error) {
 	n := 0
 	for _, status := range []string{"pending", "processing"} {

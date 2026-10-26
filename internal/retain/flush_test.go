@@ -50,8 +50,9 @@ type fakeHS struct {
 	// control: the items retained into a control bank (kept out of
 	// retains, which are the sessions' sends).
 	control      []hindsight.RetainItem
-	deleted      []string // documents deleted, in order
-	deleteStatus int      // non-zero: document deletes answer with it
+	deleted      []string        // documents deleted, in order
+	deleteStatus int             // non-zero: document deletes answer with it
+	failGet      map[string]bool // reads of these documents answer 500
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +118,10 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		h.gets++
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
 		h.reads = append(h.reads, id)
+		if h.failGet[id] {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		if id == EpochDocument && h.epochStatus != 0 {
 			w.WriteHeader(h.epochStatus)
 			return

@@ -214,9 +214,19 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		rec.Purged = again.Documents
 		if err != nil {
 			// Held, the epoch unrecorded, and said where doctor reads it.
-			hold := &state.PurgeHold{Bank: f.Bank, Documents: again.Left, Error: errSummary(err), At: f.Now().UTC()}
+			hold := &state.PurgeHold{Bank: f.Bank, Documents: again.Left, Unchecked: again.Unread, Error: errSummary(err), At: f.Now().UTC()}
 			_ = state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error { s.PurgeHold = hold; return nil })
 			return rec, fmt.Errorf("purging again %d purged document(s) the server still holds: %w", again.Left, err)
+		}
+		// Passed: its hold goes now, whatever the rest of the reconcile
+		// does (issue 285 review LOW-A).
+		if err := state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error {
+			if s.PurgeHold != nil && s.PurgeHold.Bank == f.Bank {
+				s.PurgeHold = nil
+			}
+			return nil
+		}); err != nil {
+			return rec, err
 		}
 		reconciledAt := time.Time{}
 		if st.RestoreEpoch != nil && st.RestoreEpoch.Bank == f.Bank {

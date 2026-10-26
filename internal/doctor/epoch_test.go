@@ -92,3 +92,19 @@ func TestCheckRestoreEpochShowsAPurgeHold(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+// A hold whose documents could not even be read says so: not yet
+// checked, not "on the server again".
+func TestCheckRestoreEpochShowsAnUncheckedPurgeHold(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{epochPath: {200, `{"id":"backsight:epoch","document_metadata":{"epoch":"2","restored_at":"2026-10-25T10:00:00Z","backup_created_at":"2026-10-25T03:00:00Z"}}`}})
+	f := configured(t, srv.URL)
+	if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+		PurgeHold: &state.PurgeHold{Bank: "coding-agent::memoire", Documents: 2, Error: "GET: 500", Unchecked: true}}); err != nil {
+		t.Fatal(err)
+	}
+	c := check(t, f.run(), "restore-epoch")
+	expect(t, c, Error, "2 purged document(s) of bank coding-agent::memoire not yet checked")
+	if strings.Contains(c.Summary, "on the server again") {
+		t.Errorf("%+v", c)
+	}
+}
