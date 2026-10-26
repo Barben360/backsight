@@ -20,7 +20,8 @@ import (
 // again with the rules that file new ones, so a rule change or an older
 // build's labels never leave the memory diverging. A document whose whole
 // content belongs to another project than its tag, under the same
-// document id, is re-tagged in place (PATCH /documents/{id}: free, its
+// document id, is re-tagged in place (PATCH /documents/{id}: no
+// extraction, though the server consolidates the moved memories again; its
 // memories follow; its metadata does not, which no reader here relies
 // on). A session whose documents mix projects, or hold records that now
 // go under another document, is sent again: its documents are deleted and
@@ -45,7 +46,8 @@ const (
 	ResendMoved = "moved" // its records now belong under another document
 )
 
-// Retag is a whole document moving to another project, free.
+// Retag is a whole document moving to another project in place: no
+// extraction (the server only rebuilds its observations).
 type Retag struct {
 	Document string   `json:"document"`
 	Session  string   `json:"session"`
