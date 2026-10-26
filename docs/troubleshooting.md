@@ -86,7 +86,7 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 
 | doctor check | Meaning | What to do |
 |---|---|---|
-| `maintenance` | An update, backup or restore holds the maintenance lock. | Wait for it. If no backsight command runs, the lock is stale: doctor names the file to remove, and `backsight server start` removes a lock whose process is gone. |
+| `maintenance` | An update, backup or restore holds the maintenance lock. | Wait for it. If no backsight command runs, the lock is stale: doctor names the file to remove, and `backsight server start` removes a lock whose process is gone (a lock names its owner's process by its start time and boot, so a reused process id or a clock change does not mislead it). |
 | `locks` | A stale lock from a command that died. | The next run of that command takes it over. |
 | `restore` | A restore did not finish. | Run the command doctor gives: rerun the restore, or put the safety archive back with `backsight restore <safety archive> --no-safety`; when only the start on the API key failed, `backsight server start` finishes it. See [backups-and-restore.md](backups-and-restore.md). |
 | `update-incomplete` | An update did not finish. | Run the command doctor gives, usually `backsight update apply`, which resumes it. See [update.md](update.md). |
