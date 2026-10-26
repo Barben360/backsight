@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -24,10 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
-func notesOutbox(d paths.Dirs) retain.Outbox {
-	return retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl"), LockPath: filepath.Join(d.LocksDir(), "outbox.lock"),
-		QuarantinePath: filepath.Join(d.QuarantineDir(), "notes.jsonl")}
-}
+func notesOutbox(d paths.Dirs) retain.Outbox { return retain.NotesOutbox(d) }
 
 type storeResult struct {
 	Status   string `json:"status"` // stored | queued

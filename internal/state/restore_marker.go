@@ -14,7 +14,8 @@ import (
 
 // RestoreMarker is <state>/restore-incomplete.json: `restore` writes it
 // before the server stops and removes it only once the new restore epoch is
-// written or a rollback finished (decision 0044, block 1 review). While it
+// written and the server runs on its API key again, or a rollback finished
+// (decision 0044, block 1 review; issue 285). While it
 // exists every session and backfill send holds, whatever the state of the
 // maintenance lock's owner, and doctor names the manual step.
 type RestoreMarker struct {
@@ -22,7 +23,15 @@ type RestoreMarker struct {
 	Safety    string    `json:"safety"`  // the safety archive of the server as it was
 	Archive   string    `json:"archive"` // the archive being restored
 	StartedAt time.Time `json:"started_at"`
+	// Step is "key" once the epoch is written: only starting the server on
+	// its API key is left, which `server start` does (and then removes
+	// the marker).
+	Step string `json:"step,omitempty"`
 }
+
+// KeyStep: the marker's restore wrote its epoch; the server is still to
+// start on its API key.
+const KeyStep = "key"
 
 // WriteRestoreMarker writes m atomically (0600).
 func WriteRestoreMarker(d paths.Dirs, m RestoreMarker) error {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -151,7 +152,9 @@ func TestMaintenanceSkipsRecallAndSaysSoOnce(t *testing.T) {
 	home := hookHome(t)
 	d := pathsOf(home)
 	_ = os.MkdirAll(d.State, 0o700)
-	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1,"command":"backup","since":"2026-10-24T09:00:00Z"}`), 0o600)
+	// a live owner: this process, since now (a PID whose process started
+	// after the lock's since is a dead owner's, reused)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"backup","since":"`+time.Now().UTC().Format(time.RFC3339)+`"}`), 0o600)
 	recallAnswer = hits(0.9)
 	h := prompt(t, home, "s1", longPrompt)
 	if len(recallQueries) != 0 || !strings.Contains(h.SystemMessage, "maintenance") {

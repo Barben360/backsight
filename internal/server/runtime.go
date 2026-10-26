@@ -97,6 +97,7 @@ type Database interface {
 	Counts(ctx context.Context, tables []string) (map[string]int64, error)
 	RemoveStaleDumps(ctx context.Context) error
 	DocumentMetadata(ctx context.Context, bank, id string) (map[string]string, error)
+	BankIDs(ctx context.Context) ([]string, error)
 }
 
 // Engine is a runtime's engine: its version, and whether it runs without

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -128,13 +129,14 @@ type serverDoc struct {
 	named string
 }
 
-// readDocuments reads the session's document of each project; a missing
-// one is not an error, any other failure is. known are documents already
-// read, by id.
-func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects []string, known map[string]serverDoc) ([]serverDoc, error) {
+// readDocuments reads the session's document of each project (its live
+// one: a purged id is never read as the session's, LiveDocumentID); a
+// missing one is not an error, any other failure is. known are documents
+// already read, by id.
+func (f *Flusher) readDocuments(ctx context.Context, sid, home string, projects []string, known map[string]serverDoc, tombs []state.Tombstone) ([]serverDoc, error) {
 	out := make([]serverDoc, 0, len(projects))
 	for _, p := range projects {
-		id := DocumentID(sid, home, p)
+		id := LiveDocumentID(sid, home, p, tombs)
 		d, ok := known[id]
 		if !ok {
 			var err error

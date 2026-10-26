@@ -135,7 +135,7 @@ func TestPurgeSurvivesARestore(t *testing.T) {
 
 // The same restore seen by a client whose cursor is gone (its resync reads
 // the server): the purged records are held, the later one goes out as a
-// new document.
+// new document, under the successor id (never the purged one).
 func TestPurgeHoldsWhenTheCursorIsGone(t *testing.T) {
 	e := purgedEnv(t)
 	if _, err := e.f.Reconcile(context.Background()); err != nil {
@@ -150,7 +150,7 @@ func TestPurgeHoldsWhenTheCursorIsGone(t *testing.T) {
 	if r.Status != Sent || r.Records != 1 || r.Segment != 1 || e.sentText(sent, "hunter2") {
 		t.Errorf("%+v, sent %+v", r, e.hs.retains[sent:])
 	}
-	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1" || it.UpdateMode != "" || !strings.Contains(it.Content, "REF-ID") {
+	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1#2" || it.UpdateMode != "" || !strings.Contains(it.Content, "REF-ID") {
 		t.Errorf("not a new document: %+v", it)
 	}
 }
@@ -183,7 +183,7 @@ func TestPurgeSurvivesRetryQuarantine(t *testing.T) {
 	}
 	// a session quarantined before the purge, released after it, too
 	e.record("s1", "u2", "user", 2, "refused turn")
-	e.hs.refuse = map[string]int{"conversation:s1": 400}
+	e.hs.refuse = map[string]int{"conversation:s1#2": 400} // the purged id is never written again
 	if r := e.flush("s1", Options{Force: true}); r.Status != Quarantined {
 		t.Fatalf("%+v", r)
 	}
@@ -326,5 +326,67 @@ func TestUnreadableTombstonesHoldTheSends(t *testing.T) {
 	writes := len(e.hs.control)
 	if _, err := e.f.Reconcile(context.Background()); err != nil || len(e.hs.control) != writes {
 		t.Errorf("a client in step wrote to the control bank: %v, %d writes", err, len(e.hs.control)-writes)
+	}
+}
+
+// A purged document's id is never written again: Hindsight 1.1.0 recreates
+// a deleted document on append (measured for issue 285), and a restore
+// deletes a tombstoned id again. The session's later turns go to
+// conversation:<sid>#2, as a new document, then append there; once that
+// one is purged too, to #3. A resync reads the live document.
+func TestAPurgedDocumentIsNeverWrittenAgain(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "the deploy token is hunter2-leaked")
+	e.record("s1", "a1", "assistant", 1, "Noted the hunter2 token.")
+	expect(t, e.flush("s1", Options{}), Sent, 2, 1)
+	e.purge("conversation:s1")
+	sent := len(e.hs.retains)
+	e.record("s1", "u2", "user", 10, "a later turn after the purge")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	it := e.hs.retains[len(e.hs.retains)-1]
+	if it.DocumentID != "conversation:s1#2" || it.UpdateMode != "" || !strings.Contains(it.Content, "REF-ID: conversation:s1#2") || e.sentText(sent, "hunter2") {
+		t.Fatalf("after the purge: %+v", it)
+	}
+	e.record("s1", "u3", "user", 20, "one more turn")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1#2" || it.UpdateMode != "append" {
+		t.Errorf("the next turn: %+v", it)
+	}
+	// A lost cursor resumes from the live document: nothing is sent twice.
+	p, _ := cursorPath(e.f.Dirs.CursorsDir(), "s1")
+	_ = os.Remove(p)
+	n := len(e.hs.retains)
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	if len(e.hs.retains) != n {
+		t.Errorf("resent after a resync: %+v", e.hs.retains[n:])
+	}
+	e.purge("conversation:s1#2")
+	e.record("s1", "u4", "user", 30, "after the second purge")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	if it := e.hs.retains[len(e.hs.retains)-1]; it.DocumentID != "conversation:s1#3" || e.sentText(n, "one more turn") {
+		t.Errorf("after the second purge: %+v", it)
+	}
+	for _, it := range e.hs.retains[sent:] {
+		if it.DocumentID == "conversation:s1" {
+			t.Errorf("the purged id was written again: %+v", it)
+		}
+	}
+}
+
+// LiveDocumentID skips every id a tombstone names; BaseDocumentID undoes
+// it, and leaves a project whose name ends in #<word> alone.
+func TestLiveDocumentID(t *testing.T) {
+	tombs := []state.Tombstone{{Document: "conversation:s1@infra"}, {Document: "conversation:s1@infra#2"}}
+	if got := LiveDocumentID("s1", "billing", "infra", tombs); got != "conversation:s1@infra#3" {
+		t.Errorf("live %s", got)
+	}
+	if got := LiveDocumentID("s1", "billing", "billing", tombs); got != "conversation:s1" {
+		t.Errorf("home %s", got)
+	}
+	for in, want := range map[string]string{"conversation:s1@infra#3": "conversation:s1@infra", "conversation:s1#2": "conversation:s1",
+		"conversation:s1@c#sharp": "conversation:s1@c#sharp", "conversation:s1#1": "conversation:s1#1", "conversation:s1": "conversation:s1"} {
+		if got := BaseDocumentID(in); got != want {
+			t.Errorf("BaseDocumentID(%s) = %s, want %s", in, got, want)
+		}
 	}
 }

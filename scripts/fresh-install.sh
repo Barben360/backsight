@@ -185,7 +185,6 @@ jq -e --arg d "conversation:$purged" '.ok and (.data.action == "purged") and ([.
   "$work/forget-purge.json" >/dev/null || { cat "$work/forget-purge.json" >&2; fail "the purge did not delete conversation:$purged and record it in the control bank"; }
 [ -z "$(rc_meta "$purged")" ] || fail "conversation:$purged survived its purge"
 jq -e --arg d "conversation:$purged" '[.tombstones[]?.document] | index($d) != null' "$BACKSIGHT_HOME/state/state.json" >/dev/null || fail "no tombstone for $purged in state.json"
-purged_cursor=$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$purged.json")
 "$bin" restore --plan --json "$archive" > "$work/restore-plan.json" || { cat "$work/restore-plan.json" >&2; fail "restore --plan failed"; }
 jq -e --arg d "conversation:$purged" '([.data.purged_after_archive[]?.document] | index($d) != null) and ([.data.steps[].name] | index("purges") != null)' \
   "$work/restore-plan.json" >/dev/null || { cat "$work/restore-plan.json" >&2; fail "restore --plan does not list the purge made after the archive"; }
@@ -196,7 +195,11 @@ curl -fsS -H "Authorization: Bearer $(rc_key)" "http://127.0.0.1:$port/v1/defaul
   jq -e --arg d "conversation:$purged" '.document_metadata.tombstones | fromjson | map(.document) | index($d) != null' >/dev/null ||
   fail "the restored control bank lacks the purge of $purged"
 [ -z "$(rc_meta "$purged")" ] || fail "the purged session $purged was sent again after the restore"
-[ "$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$purged.json")" = "$purged_cursor" ] || fail "the purged session $purged's cursor moved after the restore"
+# A purged document id is never written again (issue 285): the session's
+# later turns would go to conversation:<sid>#2, and nothing went there.
+[ -z "$(rc_doc "$purged%232")" ] || fail "the purged session $purged was sent again after the restore, to conversation:$purged#2"
+jq -e '(.segments // {}) | length == 0' "$BACKSIGHT_HOME/state/cursors/$purged.json" >/dev/null ||
+  fail "the purged session $purged's cursor still counts segments of the purged document"
 
 # 9. Update (SPEC §11.7): a failing migration and a failing server smoke
 # each roll back and leave the install working, then the update to the new

@@ -220,3 +220,22 @@ func TestRecordsCarryTheirEntrypoint(t *testing.T) {
 		t.Errorf("no entrypoint: got %q", got)
 	}
 }
+
+// LastReply reads a subagent's transcript (all sidechain): the last
+// assistant message with text, not a later one with only a tool call.
+func TestLastReplyOfASubagentTranscript(t *testing.T) {
+	in := strings.Join([]string{
+		`{"type":"user","isSidechain":true,"uuid":"1","timestamp":"2026-10-25T10:00:00Z","cwd":"/w/billing","message":{"role":"user","content":"Look at the export."}}`,
+		`{"type":"assistant","isSidechain":true,"uuid":"2","timestamp":"2026-10-25T10:01:00Z","cwd":"/w/billing","message":{"role":"assistant","content":[{"type":"text","text":"Reading."},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/w/x"}}]}}`,
+		`{"type":"assistant","isSidechain":true,"uuid":"3","timestamp":"2026-10-25T10:05:00Z","cwd":"/w/billing","message":{"role":"assistant","content":[{"type":"text","text":"The export pages by 200."},{"type":"text","text":"Fixed in exporter.go."}]}}`,
+		`{"type":"assistant","isSidechain":true,"uuid":"4","timestamp":"2026-10-25T10:06:00Z","cwd":"/w/billing","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Done","input":{}}]}}`,
+		`not json`,
+	}, "\n") + "\n"
+	got := LastReply(strings.NewReader(in))
+	if got.Text != "The export pages by 200.\nFixed in exporter.go." || got.CWD != "/w/billing" || !got.At.Equal(time.Date(2026, 10, 25, 10, 5, 0, 0, time.UTC)) {
+		t.Errorf("%+v", got)
+	}
+	if got := LastReply(strings.NewReader(`{"type":"user","message":{"role":"user","content":"hi"}}` + "\n")); got.Text != "" {
+		t.Errorf("no reply: %+v", got)
+	}
+}

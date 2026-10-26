@@ -327,7 +327,7 @@ func TestPurgeHoldsTheMaintenanceLockAndNamesABackupInProgress(t *testing.T) {
 	}
 	// a backup holding the lock makes the purge wait, before any write
 	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
-	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"backup create","since":"2026-10-25T08:59:00Z"}`), 0o600)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"backup create","since":"`+time.Now().UTC().Format(time.RFC3339)+`"}`), 0o600)
 	curation = nil
 	if code, _, errOut := run(t, "forget", "f9", "--purge", "--yes"); code != output.Blocked || !strings.Contains(errOut, "backup create") || len(curation) != 0 {
 		t.Errorf("exit %d, calls %q: %s", code, curation, errOut)

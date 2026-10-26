@@ -485,7 +485,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			for _, it := range body.Items {
 				bankDocs[bank][it.DocumentID] = true
-				docs[it.DocumentID] = it.Metadata
+				docs[bank+"/"+it.DocumentID] = it.Metadata // documents are per bank, like the server's
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())
 				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))
@@ -505,7 +505,8 @@ func fakeHindsight(t *testing.T) (port int) {
 				_, _ = w.Write([]byte(`{"id":"` + id + `","memory_unit_count":` + strconv.Itoa(n) + `}`))
 				return
 			}
-			meta, ok := docs[id]
+			bank, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/default/banks/"), "/documents/")
+			meta, ok := docs[bank+"/"+id]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				return

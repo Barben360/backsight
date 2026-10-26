@@ -487,6 +487,13 @@ func checkRestore(d paths.Dirs) Check {
 	}
 	c.Status = Error
 	c.Summary = fmt.Sprintf("a restore did not finish (%s, started %s): sessions are held", m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+	if m.Step == state.KeyStep {
+		c.Summary = fmt.Sprintf("a restore (%s, started %s) wrote its epoch but did not start the server again on its API key: sessions are held",
+			m.Command, m.StartedAt.UTC().Format("2006-01-02 15:04 UTC"))
+		c.Detail = "the archive restored is " + m.Archive + "; the server as it was before is in the safety archive " + m.Safety
+		c.Fix = "backsight server start (it finishes the restore)"
+		return c
+	}
 	c.Detail = "the server as it was before is in the safety archive " + m.Safety + "; the archive being restored is " + m.Archive
 	if m.Safety == "" {
 		c.Detail = "no safety archive was made; the archive being restored is " + m.Archive

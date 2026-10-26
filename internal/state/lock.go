@@ -119,13 +119,35 @@ func held(path string) error {
 		e.Stale = err == nil && time.Since(fi.ModTime()) > unwrittenGrace
 		return e
 	}
-	e.Stale = e.Owner.PID > 0 && !processAlive(e.Owner.PID)
+	e.Stale = e.Owner.PID > 0 && !ownerAlive(e.Owner)
 	return e
+}
+
+// startSlack: a lock's Since is its owner's clock, truncated to the
+// second, and a start time read from /proc is rounded to the tick and the
+// boot second.
+const startSlack = 5 * time.Second
+
+// ownerAlive: a process with the owner's PID runs and it is the owner, the
+// PID and the start time telling it, as heldByUpdate does: a process that
+// started after the lock was taken got a dead owner's PID reused. A lock
+// without Since, or a system that does not tell a start time, falls back
+// on the PID alone.
+func ownerAlive(o Owner) bool {
+	if !processAlive(o.PID) {
+		return false
+	}
+	if o.Since.IsZero() {
+		return true
+	}
+	start, ok := processStart(o.PID)
+	return !ok || !start.After(o.Since.Add(startSlack))
 }
 
 // BreakStale removes the lock e reported, only if it was stale and the file
 // still holds exactly what was reported. The caller reports the takeover.
-// PID reuse can make a dead owner look alive; that errs on the side of held.
+// A reused PID is told by its process's start time where the system gives
+// it (ownerAlive); elsewhere it errs on the side of held.
 func BreakStale(e *HeldError) error {
 	if !e.Stale {
 		return fmt.Errorf("%s: not stale, refusing to break it", e.Path)

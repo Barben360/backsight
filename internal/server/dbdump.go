@@ -118,6 +118,20 @@ func (d DB) DocumentMetadata(ctx context.Context, bank, id string) (map[string]s
 	return meta, nil
 }
 
+// BankIDs lists the banks of the database, read only, for when the API
+// cannot answer.
+func (d DB) BankIDs(ctx context.Context) ([]string, error) {
+	out, err := d.Query(ctx, "select coalesce(json_agg(bank_id order by bank_id), '[]'::json) from banks")
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(out), &ids); err != nil {
+		return nil, fmt.Errorf("bank list %q: %w", out, err)
+	}
+	return ids, nil
+}
+
 // Counts returns the rows of tables in the database.
 func (d DB) Counts(ctx context.Context, tables []string) (map[string]int64, error) {
 	counts := map[string]int64{}

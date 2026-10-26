@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
@@ -155,14 +156,21 @@ func TestRestorePlanListsThePurgesAfterTheArchive(t *testing.T) {
 	if len(env.Data.Purged) != 1 || env.Data.Purged[0].Document != "conversation:s8" {
 		t.Errorf("purged after the archive: %+v", env.Data.Purged)
 	}
-	var purges string
+	var purges, again string
 	for _, s := range env.Data.Steps {
-		if s.Name == "purges" {
+		switch s.Name {
+		case "purges":
 			purges = s.Detail
+		case "purge again":
+			again = s.Detail
 		}
 	}
 	if !strings.Contains(purges, "conversation:s8 (2026-10-25T08:00:00Z)") || strings.Contains(purges, "conversation:s2") {
 		t.Errorf("purges step: %q", purges)
+	}
+	// The documents the archive may bring back, which restore deletes again.
+	if !strings.Contains(again, "would delete again") || !strings.Contains(again, "conversation:s8 (2026-10-25T08:00:00Z)") || strings.Contains(again, "conversation:s2") {
+		t.Errorf("purge again step: %q", again)
 	}
 	for _, c := range bankCalls {
 		if !strings.HasPrefix(c, "GET ") {
@@ -177,10 +185,12 @@ func TestRestorePlanListsThePurgesAfterTheArchive(t *testing.T) {
 // The restored control bank is the archive's, without the purges made
 // since: restore writes every purge it knew (the server's before the stop
 // and this machine's) back into it, before the epoch that sends the clients
-// to re-read. A purged document the archive brings back is named.
+// to re-read. A purged document the archive brings back is deleted again,
+// after the epoch, still on the temporary key (issue 285).
 func TestRestoreKeepsThePurges(t *testing.T) {
 	home, archive, dk, port := restoreSetup(t)
 	seedTombstones(t, home, port)
+	sec, _ := config.LoadSecrets(secretsFile(home))
 	documentUnits["conversation:s8"] = 4 // the archive holds the document purged since
 	var mu sync.Mutex
 	var written []string // control-bank documents written after the database was replaced
@@ -199,6 +209,9 @@ func TestRestoreKeepsThePurges(t *testing.T) {
 			_ = json.Unmarshal(body, &b)
 			written = append(written, b.Items[0].DocumentID)
 		}
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && restored {
+			written = append(written, "DELETE "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]+" "+strconv.FormatBool(r.Header.Get("Authorization") != "Bearer "+sec.APIKey))
+		}
 		// the archive's control bank: no tombstones until restore writes them
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/documents/"+retain.TombstonesDocument) && restored && len(written) == 0 {
 			w.WriteHeader(http.StatusNotFound)
@@ -210,15 +223,28 @@ func TestRestoreKeepsThePurges(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	if got := strings.Join(written, ","); got != retain.TombstonesDocument+","+retain.EpochDocument {
-		t.Errorf("control documents written after the restore: %s", got)
+	// The tombstones, the epoch, then the delete on the temporary key.
+	if got := strings.Join(written, ","); got != retain.TombstonesDocument+","+retain.EpochDocument+",DELETE conversation:s8 true" {
+		t.Errorf("writes after the restore: %s", got)
 	}
 	got, err := retain.ReadTombstones(context.Background(), clientOn(port), "claude-memory")
 	if err != nil || len(got) != 2 {
 		t.Fatalf("control bank after the restore: %+v %v", got, err)
 	}
-	if !strings.Contains(stepsOf(env), "purges done") || !strings.Contains(strings.Join(env.Data.Warnings, "\n"), "conversation:s8, purged at 2026-10-25T08:00:00Z, came back") ||
-		strings.Contains(strings.Join(env.Data.Warnings, "\n"), "conversation:s2") {
-		t.Errorf("steps %s, warnings %q", stepsOf(env), env.Data.Warnings)
+	if !strings.Contains(stepsOf(env), "purges done, epoch done, purge again done, bank done, key done") {
+		t.Errorf("steps %s", stepsOf(env))
+	}
+	var again string
+	for _, st := range env.Data.Steps {
+		if st.Name == "purge again" {
+			again = st.Detail
+		}
+	}
+	if !strings.Contains(again, "1 purged document(s) the archive brought back, deleted again: conversation:s8") {
+		t.Errorf("purge again: %q", again)
+	}
+	// conversation:s2, which the archive does not hold, is not deleted.
+	if strings.Contains(strings.Join(curation, "\n"), "s2") {
+		t.Errorf("deleted what the archive did not bring back: %q", curation)
 	}
 }
