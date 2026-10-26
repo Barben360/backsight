@@ -235,7 +235,7 @@ func purgeProject(ctx context.Context, cl *hindsight.Client, bank string, f forg
 	}
 	projects := projectsOf(tagged)
 	projects[f.project] = true
-	pages, err := purgeWrite(ctx, cl, bank, sel.facts, res.Documents, projects, "run the same command again to finish")
+	pages, mirror, err := purgeWrite(ctx, cl, bank, sel.facts, res.Documents, projects, "run the same command again to finish")
 	res.Pages = pages
 	if err != nil {
 		var oe *output.Error
@@ -266,6 +266,9 @@ func purgeProject(ctx context.Context, cl *hindsight.Client, bank string, f forg
 			left = append(left, "the observations left were drawn only from facts already forgotten, which no longer clear them")
 		}
 		res.Note = strings.Join(left, "; ") + "; " + res.Note
+	}
+	if mirror != "" {
+		res.Note += "; " + mirror
 	}
 	return res, nil
 }

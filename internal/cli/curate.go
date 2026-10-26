@@ -17,8 +17,10 @@ import (
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -82,6 +84,8 @@ type purgeDoc struct {
 	ID       string `json:"id"`
 	Memories int    `json:"memories"`
 	Selected int    `json:"selected,omitempty"` // forget --project: the selected raw facts in it
+	// tomb: the document's tombstone, read from its metadata.
+	tomb state.Tombstone
 }
 
 // newForgetCmd is `forget <id> [--purge [--yes]] [--restore]` and `forget
@@ -218,13 +222,17 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 	if res.Documents, res.Undeletable, err = purgeDocuments(ctx, cl, bank, facts); err != nil || !yes {
 		return res, err
 	}
-	res.Pages, err = purgeWrite(ctx, cl, bank, facts, res.Documents, projectsOf(append([]hindsight.MemoryDetail{m}, facts...)),
+	var mirror string
+	res.Pages, mirror, err = purgeWrite(ctx, cl, bank, facts, res.Documents, projectsOf(append([]hindsight.MemoryDetail{m}, facts...)),
 		"rerun on one of the source facts: backsight forget <fact id> --purge")
 	if err != nil {
 		return res, err
 	}
 	res.Action = "purged"
 	res.Note = "backups taken before now still hold it: delete them, or keep them out of reach, if the text was a secret"
+	if mirror != "" {
+		res.Note += "; " + mirror
+	}
 	res.Backups = backupsBefore(now())
 	if len(res.Undeletable) > 0 {
 		res.Action = "partly_purged"
@@ -251,7 +259,11 @@ func purgeDocuments(ctx context.Context, cl *hindsight.Client, bank string, fact
 		if err != nil {
 			return out, undeletable, fmt.Errorf("reading document %s: %w", d, err)
 		}
-		out = append(out, purgeDoc{ID: d, Memories: doc.MemoryUnits})
+		tomb := retain.TombstoneOf(bank, d, doc.Metadata, time.Time{})
+		if strings.HasPrefix(d, "note:") && doc.OriginalText != "" {
+			tomb.ContentSHA256 = retain.ContentHash(doc.OriginalText) // a backfill replays it under another id
+		}
+		out = append(out, purgeDoc{ID: d, Memories: doc.MemoryUnits, tomb: tomb})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, undeletable, nil
@@ -271,26 +283,72 @@ func projectsOf(ms []hindsight.MemoryDetail) map[string]bool {
 }
 
 // purgeWrite performs a planned purge and returns the briefing pages it
-// deleted. Each live fact has its observations cleared while the API still
-// sees it, then is retired; last, the documents go, and with them every
-// fact, live or archived, extracted from them. rerun says how to finish
-// when a document delete fails.
-func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, error) {
+// deleted, and a note when the control bank could not take the tombstones.
+// First each document's tombstone goes into state.json, so that nothing
+// sends its records again (M5 review rules); then each live fact has its
+// observations cleared while the API still sees it, then is retired; then
+// the documents go, and with them every fact, live or archived, extracted
+// from them; last, the tombstones are mirrored into the control bank, for
+// the other clients and a reinstall. rerun says how to finish when a
+// document delete fails.
+func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, string, error) {
 	// The writes hold the maintenance lock: a backup cannot dump a half-purged
 	// database, and one that dumped before is listed below, done or not.
 	d, _, err := machine()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	l, err := state.TryAcquire(d.MaintenanceLock(), "forget --purge")
 	var held *state.HeldError
 	if errors.As(err, &held) {
-		return nil, heldRefusal(held)
+		return nil, "", heldRefusal(held)
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = l.Release() }()
+	// Before any delete: a purge stopped half way still holds what it
+	// deleted. A tombstone of a document left in place costs nothing (the
+	// server holds those records anyway).
+	at := now().UTC().Truncate(time.Second)
+	tombs := make([]state.Tombstone, 0, len(docs))
+	for _, doc := range docs {
+		t := doc.tomb
+		if t.Document == "" { // not read through purgeDocuments
+			t = retain.TombstoneOf(bank, doc.ID, nil, at)
+		}
+		t.PurgedAt = at
+		tombs = append(tombs, t)
+	}
+	if err := state.UpdateWithin(d, "forget --purge", 5*time.Second, func(s *state.State) error {
+		s.AddTombstones(tombs...)
+		return nil
+	}); err != nil {
+		return nil, "", fmt.Errorf("recording what the purge deletes (nothing was deleted): %w", err)
+	}
+	pages, err := purgeDelete(ctx, cl, bank, facts, docs, projects, rerun)
+	if err != nil {
+		return pages, "", err
+	}
+	return pages, mirrorTombstones(ctx, cl, d, bank), nil
+}
+
+// mirrorTombstones writes this client's tombstones of bank into its control
+// bank; a failure is a note, not an error: the purge is done, this client
+// holds them, and its next jobs tick writes them (retain.Reconcile).
+func mirrorTombstones(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank string) string {
+	st, err := state.Load(d.StateFile())
+	if err == nil {
+		_, err = retain.WriteTombstones(ctx, cl, bank, st.TombstonesOf(bank))
+	}
+	if err != nil {
+		return "the purge is recorded on this machine, but not yet in bank " + retain.ControlBank(bank) + " (" + err.Error() + "): the next jobs tick writes it there, for the other machines and a reinstall"
+	}
+	return ""
+}
+
+// purgeDelete is purgeWrite's writes on the memory bank.
+func purgeDelete(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, error) {
 	for _, f := range facts {
 		if f.State == "invalidated" {
 			continue // already archived: only its document can remove it

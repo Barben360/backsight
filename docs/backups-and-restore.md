@@ -67,9 +67,12 @@ Restore replaces the local server's memory with the archive's. In order, it:
 3. marks a restore in progress: every client holds its sends;
 4. stops the server, replaces its database, and starts it on a temporary key only restore knows;
 5. checks health, row counts and a recall;
-6. writes a new **restore epoch**, then starts the server again on its normal key.
+6. writes back the **purge tombstones** it read before the stop (the server's and this machine's): the archive's `<bank>-control` bank lacks the purges made since;
+7. writes a new **restore epoch**, then starts the server again on its normal key.
 
-After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts. Facts stored with `memory_store` after the backup was made cannot be recovered that way.
+After a restore, each client compares what it sent with what the server now holds, and sends again the sessions the backup did not have, from the local transcripts. Facts stored with `memory_store` after the backup was made cannot be recovered that way. What `forget --purge` deleted is never sent again (see [privacy](privacy.md#removing-what-was-stored)), even when the archive predates the purge.
+
+`restore --plan` lists the purges made after the archive was taken. If the archive already held those documents, they come back with it: restore names each one in a warning, and you purge it again with `backsight forget <id> --purge`. Their turns are still not sent again from your transcripts.
 
 Restore applies the archive's database only, never its config or secrets. It refuses an archive from another bank, with other embedding models, or made by a newer Hindsight than the one this binary pins (update backsight first). It also refuses, before anything stops, when the server's `<bank>-control` bank (where the restore epoch is written) is not backsight's: another bank name than backsight's, or documents that are not its own. An archive from an older Hindsight is migrated when the server starts.
 

@@ -134,8 +134,9 @@ type Reconciled struct {
 // by mistake costs one document read; one left out would stay lost.
 const epochSkew = time.Hour
 
-// Reconcile brings the cursors to the bank's restore epoch (decision 0044).
-// On a higher epoch, each session sent after the backup was taken, of
+// Reconcile brings the cursors to the bank's restore epoch (decision 0044),
+// after making this client's purge tombstones and the control bank's the
+// same (syncTombstones). On a higher epoch, each session sent after the backup was taken, of
 // which the server now holds less, loses its cursor and the sent-index
 // entries of what the server lacks; then the epoch is recorded in state.
 // Anything that stops it (an unreadable epoch, maintenance, a session
@@ -156,6 +157,11 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	}
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return rec, errors.New("maintenance in progress")
+	}
+	// The purge tombstones first, every run: another client's, or the
+	// only copy after a reinstall, before anything is sent or dropped.
+	if err := f.syncTombstones(ctx); err != nil {
+		return rec, err
 	}
 	st, err := state.Load(f.Dirs.StateFile())
 	if err != nil {
@@ -293,6 +299,10 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	// index alone: the resync quarantines.
 	attrs := f.attribute(sid, recs, attr{})
 	pos, bad := serverPosition(recs, docs, DocumentID(sid, cur.Home, cur.Home))
+	// A record a purge deleted is not lost: never resent (M5 review rules).
+	if pos.purged, err = f.purged(sid, recs); err != nil {
+		return false, err
+	}
 	mark := dropped{Records: map[string]bool{}}
 	earlier := f.loadDropped(sid) // a run stopped half way already dropped these
 	var keys []string
@@ -456,7 +466,7 @@ func WriteEpoch(ctx context.Context, cl *hindsight.Client, bank string, e Epoch)
 		return err
 	}
 	cb := ControlBank(bank)
-	if _, err := QuietBank(ctx, cl, cb, ControlMarker, "backsight's control records for bank "+bank+" (the restore epoch); no memory."); err != nil {
+	if _, err := QuietBank(ctx, cl, cb, ControlMarker, controlMission(bank)); err != nil {
 		return err
 	}
 	at, from := e.RestoredAt.UTC().Format(time.RFC3339), e.BackupCreatedAt.UTC().Format(time.RFC3339)
@@ -484,7 +494,12 @@ func QuietBank(ctx context.Context, cl *hindsight.Client, bank string, m Marker,
 	return docs, cl.PatchBankConfig(ctx, bank, controlConfig)
 }
 
+// controlMission is the control bank's mission, the same from every write.
+func controlMission(bank string) string {
+	return "backsight's control records for bank " + bank + " (the restore epoch, the purge tombstones); no memory."
+}
+
 // ControlBank is the bank holding bank's control records (the restore
-// epoch), apart from the memories: whatever Hindsight makes of them never
+// epoch, the purge tombstones), apart from the memories: whatever Hindsight makes of them never
 // reaches recall, doctor's counts or bank apply, which read bank alone.
 func ControlBank(bank string) string { return bank + "-control" }

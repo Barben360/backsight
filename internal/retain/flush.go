@@ -248,17 +248,25 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	lostOwn := f.loadDropped(sid)
 	own := func(u string) bool { return f.Index.Has(sessionKey(f.Bank, sid, u)) }
 	sent := func(u string) bool { return f.Index.Has(u) && (!lostOwn.Records[u] || own(u)) }
+	tombs, err := f.tombstones()
+	if err != nil {
+		return retry(err.Error())
+	}
 	known := map[string]serverDoc{}
 	if cur.Home == "" {
 		// No cursor to keep the home from: conversation:<sid> says which
 		// project it was sent for, which the directories may no longer say
-		// (a linked worktree removed since); else the records name it.
+		// (a linked worktree removed since), or its tombstone does once
+		// purged; else the records name it.
 		base, err := f.readDocument(ctx, DocumentID(sid, "", ""))
 		if err != nil {
 			res.Stop, res.NeedsFix = true, needsFix(err)
 			return retry(errSummary(err))
 		}
-		if cur.Home = base.named; cur.Home == "" {
+		if cur.Home = base.named; cur.Home == "" && !base.found {
+			cur.Home = homeOfPurged(sid, tombs)
+		}
+		if cur.Home == "" {
 			cur.Home = homeOf(recs, attrs)
 		}
 		known[base.id] = base
@@ -273,6 +281,9 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	if bad != "" {
 		return nil, f.quarantine(res, cur, bad), true
 	}
+	// What a purge deleted counts as sent: held like what the server holds,
+	// though no segment of it is left to append to.
+	pos.purged = purgedOf(sid, recs, tombs)
 	for p, seg := range pos.segments {
 		cur.Segments[p], cur.LastUUIDs[p] = seg, pos.last[p]
 	}

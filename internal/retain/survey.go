@@ -3,9 +3,11 @@ package retain
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -50,6 +52,11 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 			}
 		}
 	}
+	// What a purge deleted is never sent again: no cost, nothing to send.
+	if tombs, err := f.tombstones(); err == nil && len(tombs) > 0 {
+		gone := f.purgedRecords(sid, recs, f.attribute(sid, recs, attr{}), tombs)
+		pending = slices.DeleteFunc(slices.Clone(pending), func(r transcript.Record) bool { return gone[r.UUID] })
+	}
 	for _, r := range pending {
 		if f.headless(r.Entrypoint) {
 			continue // never sent: no cost
@@ -87,11 +94,37 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 // being the whole transcript: none from records kept out (a pause, an
 // opted-out directory, or a directory that inherits a kept-out project),
 // and a save without a project gets its record's project by the same rule
-// as the session's text (attribute), not its directory's basename.
+// as the session's text (attribute), not its directory's basename. None
+// either from records a purge deleted, nor a save whose note was purged
+// (its document, or the same text stored live under another id); with
+// tombstones that cannot be read, none at
+// all: a purge must not come back through a replay.
 func (f *Flusher) Notes(sid string, recs []transcript.Record) []Note {
+	tombs, err := f.tombstones()
+	if err != nil {
+		return nil
+	}
 	attrs := f.attribute(sid, recs, attr{})
-	return NotesFromRecords(f.Bank, sid, recs, func(r transcript.Record) (string, bool) {
+	gone := f.purgedRecords(sid, recs, attrs, tombs)
+	notes := NotesFromRecords(f.Bank, sid, recs, func(r transcript.Record) (string, bool) {
 		a := attrs[r.End]
-		return a.project, !a.out
+		return a.project, !a.out && !gone[r.UUID]
 	})
+	return slices.DeleteFunc(notes, func(n Note) bool {
+		h := ContentHash(n.Content)
+		return slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == n.DocumentID || t.ContentSHA256 == h })
+	})
+}
+
+// purgedRecords are the uuids of recs (a whole transcript) that a purge
+// deleted from the server.
+func (f *Flusher) purgedRecords(sid string, recs []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone) map[string]bool {
+	p := purgedOf(sid, recs, tombs)
+	gone := map[string]bool{}
+	for i, r := range recs {
+		if p.holds(i, attrs[r.End].project) {
+			gone[r.UUID] = true
+		}
+	}
+	return gone
 }

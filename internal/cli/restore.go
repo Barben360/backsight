@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,8 +45,11 @@ type restoreResult struct {
 	Restored   map[string]int64 `json:"restored_counts,omitempty"`
 	Epoch      *retain.Epoch    `json:"epoch,omitempty"`
 	RolledBack bool             `json:"rolled_back,omitempty"`
-	Warnings   []string         `json:"warnings,omitempty"`
-	MS         int              `json:"ms"`
+	// Purged: the purges made after the archive was taken (tombstones):
+	// their records are never sent again, but the archive may hold them.
+	Purged   []state.Tombstone `json:"purged_after_archive,omitempty"`
+	Warnings []string          `json:"warnings,omitempty"`
+	MS       int               `json:"ms"`
 }
 
 type restoreFlags struct {
@@ -191,6 +195,14 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		if fl.noSafety {
 			safety = "none (--no-safety)"
 		}
+		tombs, err := retain.ReadTombstones(ctx, cl, cfg.Server.Bank)
+		if err != nil {
+			res.Warnings = append(res.Warnings, "cannot read the purge tombstones of the server ("+err.Error()+"): only this machine's purges are listed")
+		}
+		if st, err := state.Load(d.StateFile()); err == nil {
+			tombs = mergeTombstones(tombs, st.TombstonesOf(cfg.Server.Bank))
+		}
+		res.Purged = purgedAfter(tombs, m.CreatedAt)
 		for _, s := range [][2]string{
 			{"check", fmt.Sprintf("archive of %s, Hindsight %s, bank %s, counts %v", m.CreatedAt.Format(time.RFC3339), m.HindsightImage, m.Bank, m.Counts)},
 			{"lock", "would take the maintenance lock and server.lock until the end (hooks queue, jobs skip)"},
@@ -205,6 +217,9 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			{"key", "would start the server again on its API key"},
 		} {
 			add(s[0], "planned", s[1])
+			if s[0] == "recall" && len(res.Purged) > 0 {
+				add("purges", "planned", purgesPlanned(res.Purged))
+			}
 		}
 		return nil
 	}
@@ -245,6 +260,18 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if err != nil {
 		return &output.Error{Code: output.Blocked, Message: "cannot read this client's restore epoch (" + err.Error() + "): nothing was changed"}
 	}
+	// The purges known now go on after the restore: the archive's control
+	// bank lacks those made since, and a client that reads it would send
+	// their records again (M5 review rules).
+	tombs, how, err := tombstonesBefore(ctx, cl, db, cfg.Server.Bank)
+	if err != nil {
+		return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the server's purge tombstones ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
+	}
+	if how != "" {
+		res.Warnings = append(res.Warnings, how)
+	}
+	tombs = mergeTombstones(tombs, st.TombstonesOf(cfg.Server.Bank))
+	res.Purged = purgedAfter(tombs, m.CreatedAt)
 	rb := &rollback{res: res, cfg: cfg, sec: sec, rt: rt, db: db, d: d, highest: max(before.Epoch, st.EpochOf(cfg.Server.Bank)), history: before.History,
 		safetyAt: now().UTC().Truncate(time.Second), add: add}
 
@@ -314,7 +341,21 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	add("recall", "done", "answered")
 	rb.tempKey = tmp
 
-	// 6. The new epoch, last: only a restore that passed tells the clients.
+	// 6. The purges, before the epoch tells the clients to re-read.
+	if len(tombs) > 0 {
+		if err := writeTombstonesOn(ctx, cfg, tmp, tombs); err != nil {
+			return failed("purges", err)
+		}
+		add("purges", "done", fmt.Sprintf("%d purge(s) kept, %d of them made after the archive", len(tombs), len(res.Purged)))
+		for _, t := range res.Purged {
+			if _, err := tcl.GetDocument(ctx, cfg.Server.Bank, t.Document); err == nil {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("document %s, purged at %s, came back with the archive: its records are not sent again, "+
+					"but purge it again (backsight forget <id> --purge on one of its memories)", t.Document, t.PurgedAt.Format(time.RFC3339)))
+			}
+		}
+	}
+
+	// 7. The new epoch, last: only a restore that passed tells the clients.
 	restored, err := retain.ReadEpoch(ctx, tcl, cfg.Server.Bank)
 	if err != nil {
 		return failed("epoch", err)
@@ -332,7 +373,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	add("epoch", "done", fmt.Sprintf("restore epoch %d", next.Epoch))
 	_ = state.ClearRestoreMarker(d)
 
-	// 7. The server on its own key again.
+	// 8. The server on its own key again.
 	if err := startOnKey(ctx, cfg, sec, rt, sec.APIKey); err != nil {
 		add("key", "failed", server.Redact(err.Error(), sec))
 		return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("restored (epoch %d), but the server did not start again on its API key (%v): run backsight server start", next.Epoch, err), sec)}
@@ -429,6 +470,69 @@ func startOnTemporaryKey(ctx context.Context, cfg config.Config, sec config.Secr
 	}
 	cl, err := hindsight.New(cfg.Server.URL, key, 30*time.Second)
 	return key, cl, err
+}
+
+func writeTombstonesOn(ctx context.Context, cfg config.Config, key string, ts []state.Tombstone) error {
+	cl, err := hindsight.New(cfg.Server.URL, key, epochTimeout)
+	if err != nil {
+		return err
+	}
+	_, err = retain.WriteTombstones(ctx, cl, cfg.Server.Bank, ts)
+	return err
+}
+
+// tombstonesBefore reads the server's purge tombstones through the API,
+// else read only from its database; how names the fallback.
+func tombstonesBefore(ctx context.Context, cl *hindsight.Client, db server.Database, bank string) ([]state.Tombstone, string, error) {
+	ts, apiErr := retain.ReadTombstones(ctx, cl, bank)
+	if apiErr == nil {
+		return ts, "", nil
+	}
+	meta, err := db.DocumentMetadata(ctx, retain.ControlBank(bank), retain.TombstonesDocument)
+	if err != nil {
+		return nil, "", fmt.Errorf("API: %w; database: %w", apiErr, err)
+	}
+	if meta == nil {
+		return nil, "", nil
+	}
+	if ts, err = retain.TombstonesFromMetadata(bank, meta); err != nil {
+		return nil, "", fmt.Errorf("API: %w; database: %w", apiErr, err)
+	}
+	return ts, fmt.Sprintf("the purge tombstones (%d) were read from the database (the API: %v)", len(ts), apiErr), nil
+}
+
+// mergeTombstones is a with the tombstones of b it lacks.
+func mergeTombstones(a, b []state.Tombstone) []state.Tombstone {
+	s := state.State{Tombstones: slices.Clone(a)}
+	s.AddTombstones(b...)
+	return s.Tombstones
+}
+
+// purgedAfter are the tombstones of purges made after t, oldest first.
+func purgedAfter(ts []state.Tombstone, t time.Time) []state.Tombstone {
+	var out []state.Tombstone
+	for _, x := range ts {
+		if x.PurgedAt.After(t) {
+			out = append(out, x)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b state.Tombstone) int { return a.PurgedAt.Compare(b.PurgedAt) })
+	return out
+}
+
+// purgesPlanned says what restore does with the purges made after the
+// archive: kept, so their records are not sent again; the archive itself
+// may still hold the documents.
+func purgesPlanned(ts []state.Tombstone) string {
+	ids := make([]string, 0, min(len(ts), 10))
+	for _, t := range ts[:min(len(ts), 10)] {
+		ids = append(ids, t.Document+" ("+t.PurgedAt.Format(time.RFC3339)+")")
+	}
+	if len(ts) > 10 {
+		ids = append(ids, fmt.Sprintf("and %d more", len(ts)-10))
+	}
+	return fmt.Sprintf("%d document(s) purged after the archive was taken: %s. Their records would not be sent again; "+
+		"if the archive holds them, they come back with it and need purging again", len(ts), strings.Join(ids, ", "))
 }
 
 func writeEpochOn(ctx context.Context, cfg config.Config, key string, e retain.Epoch) error {

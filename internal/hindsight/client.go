@@ -422,6 +422,9 @@ type Document struct {
 	ID          string            `json:"id"`
 	Metadata    map[string]string `json:"document_metadata"`
 	MemoryUnits int               `json:"memory_unit_count"`
+	// OriginalText: the text retained (a purge hashes a note's, M5 review
+	// rules).
+	OriginalText string `json:"original_text"`
 }
 
 // GetDocument returns a document; an *APIError of kind NotFound when absent.

@@ -293,8 +293,9 @@ func TestPurgeHoldsTheMaintenanceLockAndNamesABackupInProgress(t *testing.T) {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 	mu.Lock()
-	// observations cleared, fact retired, document and briefing page deleted
-	if writes != 4 || locked != writes {
+	// observations cleared, fact retired, document and briefing page
+	// deleted, then the control bank set up and the tombstones written
+	if writes != 7 || locked != writes {
 		t.Errorf("%d of %d writes under the maintenance lock", locked, writes)
 	}
 	mu.Unlock()

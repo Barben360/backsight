@@ -16,7 +16,8 @@ type Marker struct {
 	IDPrefix string
 }
 
-// ControlMarker marks the control bank: its only document is EpochDocument.
+// ControlMarker marks the control bank: its documents are EpochDocument and
+// TombstonesDocument.
 var ControlMarker = Marker{Name: "backsight control", IDPrefix: "backsight:"}
 
 // ForeignBank is a bank backsight would set up that exists without its

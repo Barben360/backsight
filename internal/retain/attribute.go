@@ -178,20 +178,24 @@ type position struct {
 	legacy     int
 	legacyUUID string
 	found      bool // the server holds at least one of the documents
+	// purged: what tombstones say a purge deleted (forget --purge): held
+	// as if the server still had it, never sent again.
+	purged purge
 }
 
 // holds says whether the server holds record i of project p: p's document
-// reaches it, or the legacy part of conversation:<sid> does.
+// reaches it, or the legacy part of conversation:<sid> does, or a purge
+// deleted it.
 func (p position) holds(i int, project string) bool {
 	at, ok := p.at[project]
-	return (ok && i <= at) || i <= p.legacy
+	return (ok && i <= at) || i <= p.legacy || p.purged.holds(i, project)
 }
 
 // serverPosition reads docs against recs. bad, when not empty, is why the
 // position cannot be trusted (a record recs lack, an invalid segment): the
 // session is quarantined, since sending would duplicate or replace.
 func serverPosition(recs []transcript.Record, docs []serverDoc, homeDoc string) (position, string) {
-	pos := position{at: map[string]int{}, segments: map[string]int{}, last: map[string]string{}, legacy: -1}
+	pos := position{at: map[string]int{}, segments: map[string]int{}, last: map[string]string{}, legacy: -1, purged: purge{all: -1}}
 	for _, d := range docs {
 		if !d.found {
 			continue

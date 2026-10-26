@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,6 +51,10 @@ type State struct {
 	// BackupVerify: the last `backup verify` that ran to its comparison
 	// (0067 block 4: doctor's reference-server check reads it).
 	BackupVerify *BackupVerify `json:"backup_verify,omitempty"`
+	// Tombstones: the documents `forget --purge` deleted, never pruned,
+	// mirrored into the bank's control bank (M5 review rules): what they
+	// held is never sent again, after a restore or a reinstall either.
+	Tombstones []Tombstone `json:"tombstones,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -167,6 +172,56 @@ type RestoreEpoch struct {
 	Bank         string    `json:"bank"`
 	Epoch        int       `json:"epoch"`
 	ReconciledAt time.Time `json:"reconciled_at"`
+}
+
+// Tombstone is one document a purge deleted, read just before the delete.
+// A conversation document's records up to LastUUID (and, for Legacy, every
+// project's records up to it) count as sent: no reconcile, resync,
+// retry-quarantine or backfill sends them again. Later records of the
+// session still go.
+type Tombstone struct {
+	Bank     string `json:"bank"`
+	Document string `json:"document"`
+	Session  string `json:"session,omitempty"`
+	// Project: the project the document's last segment was sent for.
+	Project  string `json:"project,omitempty"`
+	LastUUID string `json:"last_uuid,omitempty"`
+	// Legacy: the record up to which the document held every project's
+	// records (a build from before per-project documents wrote it).
+	Legacy string `json:"legacy_last_uuid,omitempty"`
+	// ContentSHA256: a note's text, hashed: a backfill replays a save
+	// under another document id than the one stored live.
+	ContentSHA256 string    `json:"content_sha256,omitempty"`
+	PurgedAt      time.Time `json:"purged_at"`
+}
+
+// same: one purge of one document, whenever it was recorded.
+func (t Tombstone) same(o Tombstone) bool {
+	return t.Bank == o.Bank && t.Document == o.Document && t.LastUUID == o.LastUUID && t.Legacy == o.Legacy
+}
+
+// AddTombstones adds the tombstones s does not hold yet and returns how
+// many it added.
+func (s *State) AddTombstones(ts ...Tombstone) int {
+	n := 0
+	for _, t := range ts {
+		if !slices.ContainsFunc(s.Tombstones, t.same) {
+			s.Tombstones = append(s.Tombstones, t)
+			n++
+		}
+	}
+	return n
+}
+
+// TombstonesOf are the tombstones of bank.
+func (s State) TombstonesOf(bank string) []Tombstone {
+	var out []Tombstone
+	for _, t := range s.Tombstones {
+		if t.Bank == bank {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // EpochOf is the restore epoch recorded for bank: 0 when none was (every

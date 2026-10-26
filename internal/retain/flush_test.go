@@ -43,15 +43,33 @@ type fakeHS struct {
 	gets     int      // document reads
 	reads    []string // the documents read, in order
 	seenOps  map[string]bool
-	// epochStatus non-zero: reads of the restore epoch answer with it.
-	epochStatus int
-	queued      int // pending operations the bank reports
+	// epochStatus non-zero: reads of the restore epoch answer with it;
+	// tombStatus the same for the purge tombstones.
+	epochStatus, tombStatus int
+	queued                  int // pending operations the bank reports
+	// control: the items retained into a control bank (kept out of
+	// retains, which are the sessions' sends).
+	control []hindsight.RetainItem
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	switch {
+	case r.URL.Path == "/v1/default/banks": // no bank listed: a control bank is created on its first write
+		_, _ = w.Write([]byte(`{"banks":[],"total":0}`))
+	case r.Method == http.MethodPut || (r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/config")):
+		_, _ = w.Write([]byte(`{}`))
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "-control/memories"):
+		var body struct {
+			Items []hindsight.RetainItem `json:"items"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, it := range body.Items {
+			h.control = append(h.control, it)
+			h.docs[it.DocumentID] = it.Metadata
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories"):
 		if h.status != 0 {
 			w.WriteHeader(h.status)
@@ -99,6 +117,10 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		h.reads = append(h.reads, id)
 		if id == EpochDocument && h.epochStatus != 0 {
 			w.WriteHeader(h.epochStatus)
+			return
+		}
+		if id == TombstonesDocument && h.tombStatus != 0 {
+			w.WriteHeader(h.tombStatus)
 			return
 		}
 		meta, ok := h.docs[id]

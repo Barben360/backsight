@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -74,6 +75,7 @@ func (b *bulkBank) answer(w http.ResponseWriter, r *http.Request) bool {
 	bank, sub, _ := strings.Cut(rest, "/")
 	b.banks[bank] = true
 	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body)) // forwarded when not answered here
 	if r.Method != http.MethodGet {
 		b.writes = append(b.writes, r.Method+" /"+sub+" "+string(body))
 		if h := state.Inspect(b.lockPath); h != nil && !h.Stale && h.Owner.Command == "forget --purge" {
@@ -359,8 +361,18 @@ func TestForgetProjectPurgeDeletesOnlyThatProject(t *testing.T) {
 	if b.lockHeld != len(b.writes) {
 		t.Errorf("%d of %d writes under the maintenance lock", b.lockHeld, len(b.writes))
 	}
-	if !reflect.DeepEqual(b.banks, map[string]bool{"claude-memory": true}) {
+	// besides the memory bank, only the control bank, for the tombstones
+	if !reflect.DeepEqual(b.banks, map[string]bool{"claude-memory": true, "claude-memory-control": true}) {
 		t.Errorf("banks touched: %v", b.banks)
+	}
+	last := b.writes[len(b.writes)-1]
+	for _, want := range []string{"POST /memories ", `"document_id":"backsight:tombstones"`, `conversation:s1`, `conversation:s2`, `conversation:s3`} {
+		if !strings.Contains(last, want) {
+			t.Errorf("the last write is not the tombstones of the three documents: %s", last)
+		}
+	}
+	if strings.Contains(last, "conversation:i1") {
+		t.Errorf("another project's document got a tombstone: %s", last)
 	}
 }
 

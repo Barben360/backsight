@@ -97,8 +97,8 @@ func TestRestoreResendsWhatTheBackupLacks(t *testing.T) {
 	if st, _ := state.Load(e.f.Dirs.StateFile()); st.EpochOf("claude-memory") != 1 {
 		t.Errorf("epoch not recorded: %+v", st.RestoreEpoch)
 	}
-	gets := e.hs.gets
-	if rec, err := e.f.Reconcile(context.Background()); err != nil || rec.From != 1 || len(rec.Resend) != 0 || e.hs.gets != gets+1 {
+	gets := e.hs.gets // the purge tombstones, then the epoch: no session's document
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || rec.From != 1 || len(rec.Resend) != 0 || e.hs.gets != gets+2 {
 		t.Errorf("a reconciled client reconciles again: %+v %v (%d reads)", rec, err, e.hs.gets-gets)
 	}
 }
@@ -162,9 +162,9 @@ func TestUnreadableEpochDropsNothing(t *testing.T) {
 func TestNoEpochDocumentIsEpochZero(t *testing.T) {
 	e := restoredEnv(t)
 	delete(e.hs.docs, EpochDocument)
-	gets := e.hs.gets
+	gets := e.hs.gets // the purge tombstones, then the epoch
 	rec, err := e.f.Reconcile(context.Background())
-	if err != nil || rec.From != 0 || rec.To != 0 || len(rec.Resend) != 0 || e.hs.gets != gets+1 {
+	if err != nil || rec.From != 0 || rec.To != 0 || len(rec.Resend) != 0 || e.hs.gets != gets+2 {
 		t.Fatalf("%+v %v (%d reads)", rec, err, e.hs.gets-gets)
 	}
 	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
