@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -456,7 +457,40 @@ func TestReportHidesProjectNamesAndRemotes(t *testing.T) {
 	_ = os.MkdirAll(sessions, 0o700)
 	_ = os.WriteFile(filepath.Join(sessions, "s1.json"), []byte(`{"project":"skunkworks","remote":"github.com/annsco/skunkworks"}`), 0o600)
 	_ = os.WriteFile(filepath.Join(sessions, "s2.json"), []byte(`{"project":"skunkworks","remote":"gitlab.com/rival/stealth-skunkworks"}`), 0o600)
-	assertScrubbed(t, map[string]string{"project": "skunkworks", "remote": "annsco", "other remote": "rival/stealth"}, []string{"<remote>"})
+	// git's own messages quote a remote as scp, without its host, by its
+	// owner, in the repository's case.
+	d := pathsOf(home)
+	ts := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	raw, _ := json.Marshal(map[string]any{"ts": ts, "event": "git_failed",
+		"error": "fetch git@github.com:Annsco/Skunkworks.git: repository Annsco/Skunkworks not found; owner annsco; mirror git@gitlab.com:/rival/stealth-skunkworks.git"})
+	_ = os.MkdirAll(d.TelemetryDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.TelemetryDir(), "events-"+time.Now().UTC().Format("2006-01")+".jsonl"), append(raw, '\n'), 0o600)
+	assertScrubbed(t, map[string]string{"project": "skunkworks", "remote": "annsco", "remote owner": "Annsco", "other remote": "rival/stealth", "other owner": "rival"},
+		[]string{"fetch git@<remote>.git: repository <remote> not found; owner <remote>; mirror git@<remote>.git"})
+}
+
+// A reference server on another machine (~/.hindsight/coding-agent.json)
+// is named by doctor's reference-server check: its host is hidden as
+// <server>. A loopback one is not a name and stays.
+func TestReportHidesANonLoopbackReferenceServer(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	old := probes
+	probes = func(e *doctor.Env) {
+		old(e)
+		e.ReferenceServer = func(context.Context, string) (doctor.RefServer, error) { return doctor.RefServer{Running: true}, nil }
+	}
+	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	ref := filepath.Join(home, ".hindsight", "coding-agent.json")
+	_ = os.MkdirAll(filepath.Dir(ref), 0o700)
+	_ = os.WriteFile(ref, []byte(`{"apiUrl":"http://annsref.example:8888","bankId":"coding-agent::memoire"}`), 0o600)
+	assertScrubbed(t, map[string]string{"reference host": "annsref"}, []string{"the reference server at http://<server>:8888 is still running"})
+
+	_ = os.WriteFile(ref, []byte(`{"apiUrl":"http://localhost:8888","bankId":"coding-agent::memoire"}`), 0o600)
+	if c := reportCheck(reportJSON(t), "reference-server"); !strings.Contains(c.Summary, "the reference server at http://localhost:8888 is still running") {
+		t.Errorf("reference-server check %+v", c)
+	}
 }
 
 // localProjects plants one project name in each local source report reads
@@ -591,4 +625,20 @@ func TestReportHidesLocalProjectsWithTheServerDown(t *testing.T) {
 		planted["local project "+n] = n
 	}
 	assertScrubbed(t, planted, []string{"flush of <project>, <project>,", "doctor/server/error"})
+}
+
+// The live records and their .backsight.toml are read whatever the
+// transverse setting: with projects.transverse empty (an invalid config)
+// their names are hidden all the same, and a record in the home directory
+// resolves to the default alias instead of failing.
+func TestReportHidesLiveRecordProjectsWithoutTransverse(t *testing.T) {
+	home := isolate(t)
+	withClaude(t)
+	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
+		"\n[projects]\ntransverse = []\n"), 0o600)
+	localProjects(t, home)
+	_ = os.WriteFile(filepath.Join(pathsOf(home).SessionsDir(), "by-pid", "4343.json"), []byte(`{"session_id":"s2","cwd":"`+home+`"}`), 0o600)
+	assertScrubbed(t, map[string]string{"project from .backsight.toml": "mossgarden", "related from .backsight.toml": "tidewater"},
+		[]string{"flush of <project>, <project>, <project>, <project>,"})
 }

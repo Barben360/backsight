@@ -144,7 +144,12 @@ func TestNoiseTransverseTooFewOrEmpty(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 	b = &noiseBank{tags: someProjects}
-	expect(t, check(t, noiseFixture(t, b).run(), "noise-transverse"), Info, "project:.claude holds no observation")
+	c = check(t, noiseFixture(t, b).run(), "noise-transverse")
+	expect(t, c, Info, "project:.claude holds no observation")
+	// The summary names the alias: report hides what Projects lists.
+	if got := strings.Join(c.Projects, ","); got != ".claude" {
+		t.Errorf("projects %q, want the alias only", got)
+	}
 }
 
 // A name matches as a whole token, in any case: infra is not

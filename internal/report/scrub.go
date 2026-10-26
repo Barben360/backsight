@@ -32,7 +32,7 @@ const minSecret = 8
 // redaction rules and the values of the secret stores), server answers,
 // the directories that name the user (home shown as ~, the other roots as
 // placeholders) and the names that identify the user (machine, bank,
-// remote server host, OS user name).
+// remote server host, git remotes, OS user name).
 type Scrubber struct {
 	home     []string
 	prefixes []prefix // home and the roots, longest first
@@ -150,7 +150,10 @@ const minName = 4
 //
 // Names apply longest first, so a project named after the machine goes
 // whole; a value already given keeps its first placeholder.
-func (s *Scrubber) Name(v, placeholder string) {
+func (s *Scrubber) Name(v, placeholder string) { s.name(v, placeholder, "") }
+
+// name is Name; flags "(?i)" matches v in any case.
+func (s *Scrubber) name(v, placeholder, flags string) {
 	if v == "" || slices.Contains(s.values, v) {
 		return
 	}
@@ -160,7 +163,40 @@ func (s *Scrubber) Name(v, placeholder string) {
 		before, after = `(^|[/\\])`, `($|[/\\])`
 	}
 	for _, f := range encodings(v) {
-		s.addName(before+regexp.QuoteMeta(f)+after, placeholder, len(v))
+		s.addName(flags+before+regexp.QuoteMeta(f)+after, placeholder, len(v))
+	}
+}
+
+// RemotePlaceholder stands for a git remote.
+const RemotePlaceholder = "<remote>"
+
+// Remote hides a recorded git remote (project.NormaliseRemote's host/path,
+// or a local path) as <remote> in every form a message quotes it, in any
+// case (the record is lower case, git's own messages are not): whole, as
+// scp (host:path), without its host, and its owner: the namespace before
+// the repository's name and its first segment (decision 0067 block 4
+// review rules). A public name as owner is kept, and the repository's
+// name alone is a project's (Project).
+func (s *Scrubber) Remote(r string) {
+	r = strings.TrimSpace(r)
+	if r == "" {
+		return
+	}
+	forms := []string{r}
+	if host, path, ok := strings.Cut(r, "/"); ok && host != "" && path != "" {
+		forms = append(forms, host+":"+path, host+":/"+path, path)
+		if i := strings.LastIndex(path, "/"); i > 0 {
+			ns := path[:i]
+			owner, _, _ := strings.Cut(ns, "/")
+			for _, o := range []string{ns, owner} {
+				if !slices.Contains(publicNames, strings.ToLower(o)) {
+					forms = append(forms, o)
+				}
+			}
+		}
+	}
+	for _, f := range forms {
+		s.name(f, RemotePlaceholder, "(?i)")
 	}
 }
 

@@ -299,8 +299,14 @@ func NormaliseRemote(raw string) string {
 	}
 	path = strings.TrimSuffix(strings.TrimRight(path, "/"), ".git")
 	path = strings.TrimRight(path, "/")
-	if host == "" {
-		return strings.ToLower(path)
+	out := strings.ToLower(path)
+	if host != "" {
+		out = strings.ToLower(host + "/" + strings.TrimLeft(path, "/"))
 	}
-	return strings.ToLower(host + "/" + strings.TrimLeft(path, "/"))
+	// An @ left over is a malformed URL's credentials (user:12/34@host,
+	// user:tok@host/o/r): nothing is recorded rather than them.
+	if strings.Contains(out, "@") {
+		return ""
+	}
+	return out
 }

@@ -21,11 +21,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
+	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/report"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
@@ -79,8 +81,9 @@ backsight errors, redacted: no memory text, prompt, transcript, secret
 (secrets.toml and the server's .env included) or server answer; your home
 shows as ~, backsight's directories outside it as <data>, <config>,
 <state>, <bin> and <backups>, your user, machine, bank and remote
-server names as <user>, <host>, <bank> and <server>, git remotes as
-<remote> and every project name this machine knows (the bank's tags,
+server hosts (backsight's and the reference's) as <user>, <host>,
+<bank> and <server>, git remotes (whole, scp form, without host, owner)
+as <remote> and every project name this machine knows (the bank's tags,
 local sessions, cursors, telemetry, .backsight.toml files, transverse
 aliases) as <project>. It prints a link
 to search existing issues for the same error class and a link that opens
@@ -114,14 +117,18 @@ func buildReport(cmd *cobra.Command, d paths.Dirs, home string) (report.Report, 
 		srv := &report.Server{Source: t.Source}
 		if u, err := url.Parse(t.URL); err == nil {
 			srv.Scheme = u.Scheme
-			host := u.Hostname()
-			srv.Loopback = host == "localhost" || net.ParseIP(host).IsLoopback()
-			if !srv.Loopback {
-				sc.Name(host, "<server>")
-			}
+			srv.Loopback = hideServerHost(sc, u)
 		}
 		sc.Name(t.Bank, "<bank>")
 		diag.Doctor.Server = srv
+	}
+	// doctor's reference-server check names the reference server's URL,
+	// from ~/.hindsight/coding-agent.json (0067 block 4 review rules).
+	if ref, err := reference.Discover(home, claudecode.Locate(home, os.Getenv)); err == nil && ref != nil && ref.URL != "" {
+		if u, err := url.Parse(ref.URL); err == nil {
+			hideServerHost(sc, u)
+		}
+		sc.Name(ref.Bank, "<bank>")
 	}
 	for _, p := range reportProjects(cmd.Context(), d, home, doc) {
 		sc.Project(p)
@@ -137,6 +144,17 @@ func buildReport(cmd *cobra.Command, d paths.Dirs, home string) (report.Report, 
 		diag.RecentErrors = []report.ErrorEvent{}
 	}
 	return report.Build(diag, sc)
+}
+
+// hideServerHost hides u's host as <server> unless it is the loopback
+// address, and reports whether it is.
+func hideServerHost(sc *report.Scrubber, u *url.URL) (loopback bool) {
+	host := u.Hostname()
+	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+		return true
+	}
+	sc.Name(host, "<server>")
+	return false
 }
 
 // reportScrubber knows what identifies this machine and its user: the
@@ -165,7 +183,7 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 	}
 	// A remote holds its project's name: longer, it goes first.
 	for _, r := range sessionRemotes(d) {
-		sc.Name(r, "<remote>")
+		sc.Remote(r)
 	}
 	if u := osUser(); u != "" {
 		sc.Name(u, "<user>")
@@ -237,18 +255,22 @@ func reportProjects(ctx context.Context, d paths.Dirs, home string, doc doctor.R
 			}
 		}
 	}
-	if len(cfg.Projects.Transverse) > 0 {
-		res := project.New(home, cfg.Projects.Transverse)
-		for _, raw := range jsonFiles(filepath.Join(d.SessionsDir(), "by-pid")) {
-			var l session.Live
-			if json.Unmarshal(raw, &l) != nil {
-				continue
-			}
-			add(l.Project)
-			if filepath.IsAbs(l.Cwd) {
-				add(res.Project(l.Cwd))
-				add(res.Related(l.Cwd)...)
-			}
+	// Read whatever the transverse setting: an invalid config that empties
+	// it resolves with the default aliases (the resolver needs one).
+	transverse := cfg.Projects.Transverse
+	if len(transverse) == 0 || transverse[0] == "" {
+		transverse = config.Default(d, home).Projects.Transverse
+	}
+	res := project.New(home, transverse)
+	for _, raw := range jsonFiles(filepath.Join(d.SessionsDir(), "by-pid")) {
+		var l session.Live
+		if json.Unmarshal(raw, &l) != nil {
+			continue
+		}
+		add(l.Project)
+		if filepath.IsAbs(l.Cwd) {
+			add(res.Project(l.Cwd))
+			add(res.Related(l.Cwd)...)
 		}
 	}
 	for _, raw := range jsonFiles(d.CursorsDir()) {

@@ -237,6 +237,19 @@ func TestRemoteWithoutOriginIsTheFirstOneAndNoneIsEmpty(t *testing.T) {
 	}
 }
 
+// Remote records what the repository's config names: an insteadOf rewrite
+// (a [url] section) is not applied, and its url-like keys are not remotes.
+func TestRemoteIgnoresInsteadOf(t *testing.T) {
+	home, r := fixture(t)
+	repo := filepath.Join(home, "work", "billing")
+	git(t, repo, "config", "url.git@gitlab.com:rival/.insteadOf", "https://github.com/acme/")
+	git(t, repo, "config", "url.https://mirror.example/.pushInsteadOf", "https://github.com/")
+	git(t, repo, "remote", "add", "origin", "https://github.com/acme/billing.git")
+	if got := r.Remote(repo); got != "github.com/acme/billing" {
+		t.Errorf("remote %q", got)
+	}
+}
+
 func TestNormaliseRemote(t *testing.T) {
 	for in, want := range map[string]string{
 		"git@github.com:Acme/api.git":             "github.com/acme/api",
@@ -247,6 +260,12 @@ func TestNormaliseRemote(t *testing.T) {
 		"/srv/git/api.git":                        "/srv/git/api",
 		"file:///srv/git/api.git/":                "/srv/git/api",
 		"  ":                                      "",
+		"https://GitHub.com:443/Acme/api.git":     "github.com/acme/api",
+		"ssh://git@github.com:2222/acme/api":      "github.com/acme/api",
+		"git@github.com:/acme/api.git":            "github.com/acme/api",
+		// Malformed: what is left of the credentials would be recorded.
+		"https://user:12/34@github.com/o/r": "",
+		"user:tok@host/o/r":                 "",
 	} {
 		if got := NormaliseRemote(in); got != want {
 			t.Errorf("%q: %q, want %q", in, got, want)

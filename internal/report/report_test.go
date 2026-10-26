@@ -441,3 +441,31 @@ func TestErrorClassesNeverHoldAProject(t *testing.T) {
 		t.Errorf("counts %v", counts)
 	}
 }
+
+// A recorded remote hides in every form a message can quote it: whole, as
+// scp (host:path), without its host, and its owner (namespace) alone, in
+// any case; a local path remote whole. The repository's last segment
+// alone is a project's business, and a public owner is kept.
+func TestScrubRemoteForms(t *testing.T) {
+	s := NewScrubber("")
+	s.Remote("github.com/annsco/skunkworks")
+	s.Remote("gitlab.com/rivalgrp/sub/stealth")
+	s.Remote("/srv/git/vaultrepo")
+	s.Remote("github.com/backsight/tools")
+	for in, want := range map[string]string{
+		"fetch git@github.com:Annsco/Skunkworks.git failed":          "fetch git@<remote>.git failed",
+		"https://github.com:443/annsco/skunkworks.git":               "https://github.com:443/<remote>.git",
+		"repository annsco/skunkworks not found":                     "repository <remote> not found",
+		"owner Annsco has no access":                                 "owner <remote> has no access",
+		"remote github.com/annsco/skunkworks":                        "remote <remote>",
+		"git@gitlab.com:rivalgrp/sub/stealth.git and rivalgrp/sub/x": "git@<remote>.git and <remote>/x",
+		"group rivalgrp":                "group <remote>",
+		"clone /srv/git/vaultrepo.git":  "clone <remote>.git",
+		"skunkworks builds":             "skunkworks builds",
+		"backsight/tools and backsight": "<remote> and backsight",
+	} {
+		if got := s.String(in); got != want {
+			t.Errorf("%q → %q, want %q", in, got, want)
+		}
+	}
+}
