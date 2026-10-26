@@ -49,6 +49,9 @@ type Check struct {
 	// Projects are the project names Summary, Detail and Fix show: report
 	// scrubs them, the short ones included (never printed).
 	Projects []string `json:"-"`
+	// Measure: the numbers behind a check, which jobs maintain keeps day
+	// by day to show a trend (noise-transverse: named, total).
+	Measure map[string]float64 `json:"measure,omitempty"`
 }
 
 type Report struct {
@@ -136,6 +139,7 @@ func Run(ctx context.Context, env Env) Report {
 	}
 	add(checkNoise(ctx, env, cl, tg, bank, srv)...)
 	add(checkOwners(env))
+	add(checkReattribution(env))
 	add(checkMaintenance(env.Dirs))
 	add(checkRestore(env.Dirs))
 	add(checkUpdateIncomplete(env.Dirs))

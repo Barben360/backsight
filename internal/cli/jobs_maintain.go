@@ -13,10 +13,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/release"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -32,7 +34,10 @@ type maintainResult struct {
 	Doctor  string   `json:"doctor,omitempty"` // snapshot: N error(s), M warning(s)
 	Backup  string   `json:"backup,omitempty"` // the archive written, or why none
 	Update  string   `json:"update,omitempty"` // up to date | <v> available | failed: why
-	MS      int      `json:"ms"`
+	// Reattribute: the free moves made after the backup, what is left to
+	// send again, or why it did not run.
+	Reattribute string `json:"reattribute,omitempty"`
+	MS          int    `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -56,7 +61,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			finish := func() error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "maintain", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "update": res.Update, "reason": res.Reason}})
+					Details: map[string]any{"rotated": len(res.Rotated), "doctor": res.Doctor, "backup": res.Backup, "reattribute": res.Reattribute, "update": res.Update, "reason": res.Reason}})
 				var failed error
 				if res.Status == "partial" {
 					failed = &output.Error{Code: output.Partial, Message: "the backup failed: " + res.Backup + "; the next run retries"}
@@ -81,6 +86,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				return finish()
 			}
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
+			backedUp := false
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
 				// create takes it for the dump itself.
@@ -88,16 +94,19 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 					res.Status, res.Backup = "partial", "failed: "+err.Error()
 				} else {
 					res.Backup = b.Path
+					backedUp = b.Skipped == ""
 					if b.Skipped != "" {
 						res.Backup = "skipped: " + b.Skipped
 					}
 				}
 			}
+			res.Reattribute = maintainReattribute(cmd.Context(), backedUp)
 			res.Update = maintainUpdate(cmd.Context(), d)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
 			tw.Emit(telemetry.Job{Name: "maintain", Status: "started"})
 			rep := runDoctor(cmd, d, home)
+			recordNoise(d, rep)
 			res.Doctor = fmt.Sprintf("%d error(s), %d warning(s)", rep.Errors, rep.Warnings)
 			snapshot := map[string]any{"generated_at": now().UTC(), "binary_version": buildinfo.Version, "report": rep}
 			if raw, err := json.MarshalIndent(snapshot, "", "  "); err == nil {
@@ -191,5 +200,38 @@ func maintainText(r maintainResult) string {
 	if r.Status == "skipped" {
 		return "skipped: " + r.Reason + "\n"
 	}
-	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated), map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Update, r.Doctor, r.MS)
+	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, re-attribution %s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated),
+		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, r.Update, r.Doctor, r.MS)
+}
+
+// maintainReattribute applies the free moves of retain reattribute right
+// after the daily backup, and never sends anything again (that costs
+// extraction: the user answers it, doctor shows it). Without today's
+// backup it does nothing.
+func maintainReattribute(ctx context.Context, backedUp bool) string {
+	if cfg, _, err := loadServerConfig(); err == nil && !cfg.Components.Write {
+		return "skipped: components.write is off"
+	}
+	if !backedUp {
+		return "skipped: no backup today"
+	}
+	r, err := runReattribute(ctx, reattributeFlags{}, reattributeOptions{backedUp: true, freeOnly: true})
+	if err != nil {
+		return "failed: " + err.Error()
+	}
+	out := fmt.Sprintf("%d moved", len(r.Retagged))
+	if n := len(r.Plan.Resends); n > 0 {
+		out += fmt.Sprintf(", %d session(s) to send again (%s): backsight retain reattribute --plan", n, estimateText(r.Plan.Cost))
+	}
+	return out
+}
+
+// recordNoise keeps today's reading of the transverse pool's noise from
+// the doctor snapshot, so doctor can tell when it grows.
+func recordNoise(d paths.Dirs, rep doctor.Report) {
+	for _, c := range rep.Checks {
+		if c.ID == "noise-transverse" && c.Measure != nil && c.Measure["total"] > 0 {
+			_ = retain.RecordNoise(d.State, retain.NoisePoint{At: now().UTC(), Named: int(c.Measure["named"]), Total: int(c.Measure["total"])})
+		}
+	}
 }

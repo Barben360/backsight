@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -189,5 +191,20 @@ func TestTickKeepsANewPage(t *testing.T) {
 	run(t, "jobs", "tick")
 	if _, ok := mentalModels[id]; !ok {
 		t.Error("a page with no refresh yet was pruned")
+	}
+}
+
+// The daily job keeps the transverse noise reading of its doctor snapshot.
+func TestMaintainRecordsTheNoiseReading(t *testing.T) {
+	home := devInstall(t, true)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.State, 0o700)
+	recordNoise(d, doctor.Report{Checks: []doctor.Check{{ID: "noise-subagent", Measure: map[string]float64{"total": 9}},
+		{ID: "noise-transverse", Measure: map[string]float64{"named": 7, "total": 40}}}})
+	recordNoise(d, doctor.Report{Checks: []doctor.Check{{ID: "noise-transverse", Summary: "skipped: no server"}}})
+	got, err := retain.LoadNoise(d.State)
+	if err != nil || len(got) != 1 || got[0].Named != 7 || got[0].Total != 40 || !got[0].At.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) {
+		t.Errorf("history %+v %v", got, err)
 	}
 }

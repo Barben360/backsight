@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 // backupDocker answers the commands a backup and a verify run: psql values,
@@ -188,8 +189,13 @@ func TestMaintainBacksUpAndPurgeNamesTheBackups(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	withBackupDocker(t)
 	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
-	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "done:") || !strings.Contains(out, "backsight-20261025T040000Z.tar.gz.age") {
+	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "done:") || !strings.Contains(out, "backsight-20261025T040000Z.tar.gz.age") ||
+		!strings.Contains(out, "re-attribution 0 moved") {
 		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// after its backup, the daily job judged the memory and recorded it
+	if st, ok, err := retain.LoadReattributionStatus(pathsOf(home).State); !ok || err != nil || !st.JudgedAt.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) {
+		t.Errorf("status %+v %v %v", st, ok, err)
 	}
 	withClock(t, time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC))
 	memories["f9"] = fact("f9", "conversation:s9")
@@ -205,8 +211,11 @@ func TestMaintainWithBackupsOff(t *testing.T) {
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, append(raw, []byte("\n[backup]\nenabled = false\n")...), 0o600)
-	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "backup off") {
+	if code, out, _ := run(t, "jobs", "maintain"); code != output.OK || !strings.Contains(out, "backup off") || !strings.Contains(out, "re-attribution skipped: no backup today") {
 		t.Errorf("exit %d\n%s", code, out)
+	}
+	if _, ok, _ := retain.LoadReattributionStatus(pathsOf(home).State); ok {
+		t.Error("the memory was re-attributed without a backup")
 	}
 }
 
