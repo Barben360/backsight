@@ -106,7 +106,7 @@ func (f *Flusher) Notes(sid string, recs []transcript.Record) []Note {
 	}
 	attrs := f.attribute(sid, recs, attr{})
 	gone := f.purgedRecords(sid, recs, attrs, tombs)
-	notes := NotesFromRecords(f.Bank, sid, recs, func(r transcript.Record) (string, bool) {
+	notes := NotesFromRecords(f.Bank, sid, recs, f.Attribution.Transverse, func(r transcript.Record) (string, bool) {
 		a := attrs[r.End]
 		return a.project, !a.out && !gone[r.UUID]
 	})

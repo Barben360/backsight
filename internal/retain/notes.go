@@ -2,6 +2,7 @@ package retain
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/redact"
@@ -17,6 +18,25 @@ var titleKinds = []struct{ prefix, kind string }{
 	{"convention", "convention"},
 	{"piège", "pitfall"}, {"piege", "pitfall"}, {"pitfall", "pitfall"},
 	{"leçon", "lesson"}, {"lecon", "lesson"}, {"lesson", "lesson"},
+}
+
+// TransverseKeyword names the transverse project in tool calls, whatever
+// the configured aliases are.
+const TransverseKeyword = "transverse"
+
+// IsPool: p names the transverse pool, the keyword or one of its aliases.
+func IsPool(aliases []string, p string) bool {
+	return len(aliases) > 0 && (p == TransverseKeyword || slices.Contains(aliases, p))
+}
+
+// CanonicalProject maps the keyword and every transverse alias to the first
+// alias (one pool, SPEC §4); any other name is kept. The live note path
+// (backsight store, memory_store) and the replay of saved notes both use it.
+func CanonicalProject(aliases []string, p string) string {
+	if IsPool(aliases, p) {
+		return aliases[0]
+	}
+	return p
 }
 
 func kindFromTitle(title string) string {
@@ -39,8 +59,11 @@ func str(in map[string]json.RawMessage, key string) string {
 // and hindsight_ingest_document calls) into notes, dated by their record
 // and identified by session and tool call so a rerun collapses (0051).
 // projectOf names the project of a record; ok false skips the record
-// (kept out).
-func NotesFromRecords(bank, sid string, recs []transcript.Record, projectOf func(r transcript.Record) (project string, ok bool)) []Note {
+// (kept out). transverse are the configured aliases: a save naming the
+// pool, or made from one of its directories, goes to the canonical alias,
+// as the live path files it (a note without a project keeps the project of
+// its record, as it was accepted then: a replay stays faithful).
+func NotesFromRecords(bank, sid string, recs []transcript.Record, transverse []string, projectOf func(r transcript.Record) (project string, ok bool)) []Note {
 	var notes []Note
 	for _, r := range recs {
 		sessionProject, ok := projectOf(r)
@@ -80,6 +103,7 @@ func NotesFromRecords(bank, sid string, recs []transcript.Record, projectOf func
 			if project == "" {
 				project = sessionProject
 			}
+			project = CanonicalProject(transverse, project)
 			content, _ = redact.Text(content)
 			n := NewNote(bank, kind, project, content, r.Timestamp)
 			n.DocumentID = "note:" + uuid5(nsBacksight, bank+"\n"+sid+"\n"+tu.ID)

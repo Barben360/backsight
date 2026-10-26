@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -39,7 +40,8 @@ func (b *notesBank) fixture(t *testing.T) *fixture {
 			t.Errorf("notes query %s", r.URL.RawQuery)
 		}
 		n := 0
-		for _, d := range b.notes {
+		items := []any{}
+		for i, d := range b.notes {
 			tags := []string{"source:note", "project:" + d.project}
 			ok := !d.at.Before(since)
 			for _, tg := range q["tags"] {
@@ -47,9 +49,13 @@ func (b *notesBank) fixture(t *testing.T) *fixture {
 			}
 			if ok {
 				n++
+				items = append(items, map[string]any{"id": fmt.Sprintf("note:n%d", i), "tags": tags})
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}, "total": n})
+		if q.Get("limit") == "1" {
+			items = []any{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": n})
 	}))
 	t.Cleanup(srv.Close)
 	f := newFixture(t)
@@ -85,4 +91,24 @@ func TestNotesCheckCountsThisWeeksNotes(t *testing.T) {
 func TestNotesCheckSkippedWithoutAServer(t *testing.T) {
 	f := newFixture(t)
 	expect(t, check(t, f.run(), "notes"), Info, "skipped")
+}
+
+// Issue 33: a document tagged project:transverse (a replay that kept the
+// keyword) is named, with the by-hand fix, since retain reattribute does
+// not move notes; a bank without one is fine.
+func TestLiteralTransverseTagIsNamed(t *testing.T) {
+	b := &notesBank{}
+	f := b.fixture(t)
+	expect(t, check(t, f.run(), "transverse-keyword"), OK, "no document is tagged project:transverse")
+	b.notes = append(b.notes, note{"billing", time.Now()}, note{"transverse", time.Now()})
+	c := check(t, f.run(), "transverse-keyword")
+	expect(t, c, Warn, "1 document tagged project:transverse")
+	for _, want := range []string{"note:n1", "PATCH", "project:.claude", "source:note", "/documents/note%3An1"} {
+		if !strings.Contains(c.Fix+c.Detail, want) {
+			t.Errorf("%q missing from %q / %q", want, c.Fix, c.Detail)
+		}
+	}
+	if strings.Contains(c.Fix, "note:n0") || strings.Contains(c.Fix, `"project:transverse"`) {
+		t.Errorf("fix names a healthy note or keeps the bad tag: %q", c.Fix)
+	}
 }
