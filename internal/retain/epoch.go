@@ -221,7 +221,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		// Passed: its hold goes now, whatever the rest of the reconcile
 		// does (issue 285 review LOW-A).
 		if err := state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error {
-			if s.PurgeHold != nil && s.PurgeHold.Bank == f.Bank {
+			if s.PurgeHold != nil && state.SameBank(s.PurgeHold.Bank, f.Bank) {
 				s.PurgeHold = nil
 			}
 			return nil
@@ -229,7 +229,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 			return rec, err
 		}
 		reconciledAt := time.Time{}
-		if st.RestoreEpoch != nil && st.RestoreEpoch.Bank == f.Bank {
+		if st.RestoreEpoch != nil && state.SameBank(st.RestoreEpoch.Bank, f.Bank) {
 			reconciledAt = st.RestoreEpoch.ReconciledAt
 		}
 		if rec.Resend, rec.Reports, err = f.dropLost(ctx, ep.since(rec.From, reconciledAt), st.Backfill != nil); err != nil {
@@ -240,10 +240,10 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		s.RestoreEpoch = &state.RestoreEpoch{Bank: f.Bank, Epoch: rec.To, ReconciledAt: f.Now().UTC()}
 		// Another server state: the look for recreated purged documents
 		// starts again from its newest document, and looks at all once.
-		if g := s.PurgeGuard; g != nil && g.Bank == f.Bank {
+		if g := s.PurgeGuard; g != nil && state.SameBank(g.Bank, f.Bank) {
 			g.Newest, g.FullAt = time.Time{}, time.Time{}
 		}
-		if s.PurgeHold != nil && s.PurgeHold.Bank == f.Bank {
+		if s.PurgeHold != nil && state.SameBank(s.PurgeHold.Bank, f.Bank) {
 			s.PurgeHold = nil
 		}
 		return nil
@@ -276,7 +276,7 @@ func (f *Flusher) dropLost(ctx context.Context, since time.Time, queued bool) (r
 	for _, p := range files {
 		sid := strings.TrimSuffix(filepath.Base(p), ".json")
 		cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), sid)
-		if err != nil || !ok || cur.Bank != f.Bank || !cur.SentAt.After(since) {
+		if err != nil || !ok || !state.SameBank(cur.Bank, f.Bank) || !cur.SentAt.After(since) {
 			continue // an unreadable cursor, or another bank's, resyncs anyway
 		}
 		lost, rebuilt, err := f.dropSession(ctx, sid, cur, queued, since)
@@ -363,7 +363,7 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 		}
 		// Only this session's own sends: a fork's copied records stay
 		// marked under the parent that sent them.
-		if k := sessionKey(f.Bank, sid, r.UUID); f.Index.Has(k) {
+		if k := ownKey(f.Index, f.Bank, sid, r.UUID); k != "" {
 			mark.Records[r.UUID] = true
 			keys = append(keys, k)
 			lostAny = true
@@ -461,7 +461,7 @@ func (f *Flusher) pruneDropped(sid string) {
 	}
 	d := f.loadDropped(sid)
 	for u := range d.Records {
-		if f.Index.Has(sessionKey(f.Bank, sid, u)) {
+		if ownKey(f.Index, f.Bank, sid, u) != "" {
 			delete(d.Records, u)
 		}
 	}

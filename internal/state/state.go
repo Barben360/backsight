@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/paths"
 )
@@ -274,11 +275,24 @@ func (s *State) AddTombstones(ts ...Tombstone) int {
 	return n
 }
 
+// SameBank reports whether two bank names a record carries are one bank:
+// equal, or the legacy name and the one bank rename moved it to. A record
+// that missed the move (a crash mid-way, a restore from before it) stays
+// the bank's, so it never causes a whole session to be sent again or a
+// purge to be forgotten.
+func SameBank(a, b string) bool {
+	if a == b {
+		return true
+	}
+	pair := func(x, y string) bool { return x == config.LegacyBank && y == config.DefaultBank }
+	return pair(a, b) || pair(b, a)
+}
+
 // TombstonesOf are the tombstones of bank.
 func (s State) TombstonesOf(bank string) []Tombstone {
 	var out []Tombstone
 	for _, t := range s.Tombstones {
-		if t.Bank == bank {
+		if SameBank(t.Bank, bank) {
 			out = append(out, t)
 		}
 	}
@@ -288,7 +302,7 @@ func (s State) TombstonesOf(bank string) []Tombstone {
 // EpochOf is the restore epoch recorded for bank: 0 when none was (every
 // install before M5, or another bank).
 func (s State) EpochOf(bank string) int {
-	if s.RestoreEpoch == nil || s.RestoreEpoch.Bank != bank {
+	if s.RestoreEpoch == nil || !SameBank(s.RestoreEpoch.Bank, bank) {
 		return 0
 	}
 	return s.RestoreEpoch.Epoch

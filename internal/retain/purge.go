@@ -144,7 +144,7 @@ func PurgeFound(ctx context.Context, cl *hindsight.Client, bank string, found []
 	seen := map[string]bool{}
 	var docs []state.Tombstone
 	for _, t := range found {
-		if seen[t.Document] || (t.Bank != "" && t.Bank != bank) {
+		if seen[t.Document] || (t.Bank != "" && !state.SameBank(t.Bank, bank)) {
 			continue
 		}
 		seen[t.Document] = true

@@ -148,6 +148,11 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 		return fail(Locked, err.Error())
 	}
 	defer unlock()
+	// Again under the session's lock: maintenance taken meanwhile (bank
+	// rename) waits for the flushes holding one, never for this one.
+	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
+		return fail(Maintenance, "maintenance in progress")
+	}
 	// Under the session's lock, whatever the flush did: the path rule's
 	// shadow answers are local and never wait for the server.
 	defer func() { res.Turns = f.recordTurns(sid, path, opt.Force) }()
@@ -169,7 +174,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	}
 	// A cursor without Segments predates per-project documents: its
 	// Segment counts every project's runs, all sent to conversation:<sid>.
-	resync := !haveCursor || cur.Bank != f.Bank || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
+	resync := !haveCursor || !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
 	if haveCursor {
 		fp, err := Fingerprint(path, cur.Offset)
 		if err != nil {
@@ -286,7 +291,7 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	// this session's own sends (its .dropped mark), unless sent again.
 	lostOwn := f.loadDropped(sid)
 	cur.Generation = max(cur.Generation, lostOwn.Generation, f.generation(sid))
-	own := func(u string) bool { return f.Index.Has(sessionKey(f.Bank, sid, u)) }
+	own := func(u string) bool { return ownKey(f.Index, f.Bank, sid, u) != "" }
 	sent := func(u string) bool { return f.Index.Has(u) && (!lostOwn.Records[u] || own(u)) }
 	tombs, err := f.tombstones()
 	if err != nil {
@@ -337,6 +342,9 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	lostIn := func(r transcript.Record, p string) bool { in, _ := lostAfter(lostTo, p, r); return in }
 	for i, r := range recs {
 		a, key := attrs[r.End], sessionKey(f.Bank, sid, r.UUID)
+		if k := ownKey(f.Index, f.Bank, sid, r.UUID); k != "" {
+			key = k // an unmark removes the key the index holds, the former name's too
+		}
 		_, found := pos.at[a.project]
 		held := false
 		switch {
@@ -449,7 +457,7 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 	key := func(r transcript.Record) runKey {
 		a := attrs[r.End]
 		switch {
-		case f.Index.Has(sessionKey(f.Bank, sid, r.UUID)):
+		case ownKey(f.Index, f.Bank, sid, r.UUID) != "":
 			return runKey{held: true}
 		case a.out:
 			return runKey{optOut: true, reason: a.why}
@@ -733,6 +741,20 @@ func (f *Flusher) waitedTooLong(sid string, now time.Time) bool {
 
 // lockSession takes the per-session lock, taking over one whose owner died
 // or that is older than lockStaleness (decision 0050).
+// SendsRunning lists the sessions a flush holds the lock of: a maintenance
+// that changes the cursors (bank rename) waits for them, since a flush
+// checks the maintenance lock before it takes its session's.
+func SendsRunning(d paths.Dirs) []string {
+	files, _ := filepath.Glob(filepath.Join(d.LocksDir(), "session-*.lock"))
+	var out []string
+	for _, f := range files {
+		if h := state.Inspect(f); h != nil && !h.Stale {
+			out = append(out, strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "session-"), ".lock"))
+		}
+	}
+	return out
+}
+
 func (f *Flusher) lockSession(sid string) (func(), error) {
 	p := filepath.Join(f.Dirs.LocksDir(), "session-"+sid+".lock")
 	l, err := state.TryAcquire(p, "retain flush")

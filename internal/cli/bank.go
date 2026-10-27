@@ -43,6 +43,10 @@ func applyBank(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.
 	var renamed, warning string
 	if cfg.Server.Mode == "local" && cfg.Server.Bank == config.LegacyBank {
 		switch r, err := runBankRename(ctx, d, cfg, sec, false, renameWaitApply); {
+		case err != nil && r.Partial:
+			// A bank moved and config.toml still names the old id: the
+			// template would create an empty bank there.
+			return server.BankResult{Bank: cfg.Server.Bank}, err
 		case err != nil:
 			warning = redacted(err, sec).Error() + " (backsight bank rename, or tonight's jobs maintain, tries again)"
 		case r.Status == "done":

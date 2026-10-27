@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,6 +77,10 @@ type bankRenameResult struct {
 	Status   string        `json:"status"` // done | unchanged | skipped | planned
 	Steps    []installStep `json:"steps"`
 	Warnings []string      `json:"warnings,omitempty"`
+	// Partial: it failed after a bank moved, so the server holds the new
+	// name while config.toml may still say the old one: nothing may write
+	// to the old id but the rerun.
+	Partial bool `json:"partial,omitempty"`
 }
 
 type bankPair struct{ from, to string }
@@ -161,7 +167,9 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 	if err != nil {
 		return res, blocked(fmt.Errorf("the server's banks: %w", err))
 	}
-	var moves []bankPair
+	// moves are renamed now; aliased get their old id as an alias, which
+	// includes the banks an earlier run moved before it stopped.
+	var moves, aliased []bankPair
 	for _, p := range bankPairs(from, to) {
 		old, now := slices.Contains(ids, p.from), slices.Contains(ids, p.to)
 		switch {
@@ -169,7 +177,9 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 			return res, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("banks %s and %s both exist: nothing was renamed. "+
 				"Keep server.bank = %q, or remove the bank you do not use, then run backsight bank rename again", p.from, p.to, from)}
 		case old:
-			moves = append(moves, p)
+			moves, aliased = append(moves, p), append(aliased, p)
+		case now:
+			aliased = append(aliased, p)
 		}
 	}
 	if plan {
@@ -207,6 +217,19 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 			case <-time.After(renamePoll):
 			}
 		}
+		// A send that began before the maintenance lock saves its cursor
+		// on the old bank: wait for it to end.
+		for running := retain.SendsRunning(d); len(running) > 0; running = retain.SendsRunning(d) {
+			if time.Now().After(deadline) {
+				return res, &output.Error{Code: output.Blocked, Message: fmt.Sprintf("a send of session %s is still running after %s: nothing was renamed. "+
+					"Run backsight bank rename again later", running[0], wait)}
+			}
+			select {
+			case <-ctx.Done():
+				return res, ctx.Err()
+			case <-time.After(renamePoll):
+			}
+		}
 		for _, p := range moves {
 			if err := ops.Rename(ctx, p.from, p.to, true); err != nil {
 				return res, blocked(fmt.Errorf("rename %s → %s refused in its dry run, nothing was renamed: %w", p.from, p.to, err))
@@ -214,9 +237,13 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 		}
 	}
 	var done []bankPair
+	// From the first rename on, a cancel (update apply's SIGTERM) must not
+	// stop half way: what follows runs to its end.
+	wctx := context.WithoutCancel(ctx)
 	undo := func(cause error) error {
 		for i := len(done) - 1; i >= 0; i-- {
-			if err := ops.Rename(context.WithoutCancel(ctx), done[i].to, done[i].from, false); err != nil {
+			if err := ops.Rename(wctx, done[i].to, done[i].from, false); err != nil {
+				res.Partial = true
 				return blocked(fmt.Errorf("%w; renaming %s back to %s failed too (%w): run backsight bank rename again", cause, done[i].to, done[i].from, err))
 			}
 		}
@@ -231,14 +258,20 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 	}
 	// The old ids keep working: a Claude Code session started before the
 	// update, or another machine's client, still calls them.
-	for _, p := range moves {
-		if err := ops.Alias(ctx, p.to, p.from); err != nil {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("bank %s: alias %s not created (%v); a client still using the old id gets a new, empty bank", p.to, p.from, err))
-			continue
+	for _, p := range aliased {
+		var ae *hindsight.APIError
+		switch err := ops.Alias(wctx, p.to, p.from); {
+		case errors.As(err, &ae) && ae.Status == http.StatusConflict:
+			add("alias", "unchanged", p.from+" reaches "+p.to+" already")
+		case err != nil:
+			res.Warnings = append(res.Warnings, fmt.Sprintf("bank %s: alias %s not created (%v): a client still using the old id gets a new, empty bank; "+
+				"backsight bank rename tries again", p.to, p.from, err))
+		default:
+			add("alias", "done", p.from+" reaches "+p.to)
 		}
-		add("alias", "done", p.from+" reaches "+p.to)
 	}
 	if err := moveRecords(d, from, to); err != nil {
+		res.Partial = true
 		return res, blocked(fmt.Errorf("the banks are renamed, this machine's records are not (%w): run backsight bank rename again", err))
 	}
 	add("records", "done", "state.json and the session cursors name bank "+to)
@@ -250,6 +283,7 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 		err = fsutil.WriteAtomic(d.ConfigFile(), raw, 0o600)
 	}
 	if err != nil {
+		res.Partial = true
 		return res, blocked(fmt.Errorf("the banks are renamed, config.toml is not (%w): set server.bank = %q in %s", err, to, d.ConfigFile()))
 	}
 	add("config", "done", "server.bank = \""+to+"\" in "+d.ConfigFile())

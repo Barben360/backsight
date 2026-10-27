@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -64,6 +65,7 @@ func legacyInstall(t *testing.T) string {
 		s.Tombstones = []state.Tombstone{{Bank: "claude-memory", Document: "conversation:s0"}, {Bank: "other", Document: "conversation:s9"}}
 		s.RestoreEpoch = &state.RestoreEpoch{Bank: "claude-memory", Epoch: 2}
 		s.PurgeGuard = &state.PurgeGuard{Bank: "claude-memory"}
+		s.PurgeHold = &state.PurgeHold{Bank: "claude-memory", Documents: 1}
 		return nil
 	})
 	_ = os.MkdirAll(d.CursorsDir(), 0o700)
@@ -96,8 +98,8 @@ func TestBankRenameMovesTheLegacyBanksAndThisMachinesRecords(t *testing.T) {
 		t.Errorf("config bank %q (%v)", cfg.Server.Bank, err)
 	}
 	st, _ := state.Load(d.StateFile())
-	if st.Tombstones[0].Bank != "backsight" || st.Tombstones[1].Bank != "other" || st.RestoreEpoch.Bank != "backsight" || st.PurgeGuard.Bank != "backsight" {
-		t.Errorf("state not moved: %+v %+v %+v", st.Tombstones, st.RestoreEpoch, st.PurgeGuard)
+	if st.Tombstones[0].Bank != "backsight" || st.Tombstones[1].Bank != "other" || st.RestoreEpoch.Bank != "backsight" || st.PurgeGuard.Bank != "backsight" || st.PurgeHold.Bank != "backsight" {
+		t.Errorf("state not moved: %+v %+v %+v %+v", st.Tombstones, st.RestoreEpoch, st.PurgeGuard, st.PurgeHold)
 	}
 	// A cursor left on the old bank would send its whole session again.
 	if cur, _, _ := retain.LoadCursor(d.CursorsDir(), "s1"); cur.Bank != "backsight" || cur.Offset != 42 {
@@ -196,5 +198,131 @@ func TestBankApplyRenamesALegacyBankFirst(t *testing.T) {
 	t.Cleanup(func() { renameWaitApply = 2 * time.Minute })
 	if code, out, errOut := run(t, "bank", "apply"); code != output.OK || !strings.Contains(out, "bank claude-memory") || !strings.Contains(out, "not renamed") {
 		t.Errorf("busy: exit %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+// A run that stopped after the renames (a crash, a cancel) is finished by
+// the next one: every old id gets its alias, the records and config move,
+// and nothing is renamed twice.
+func TestBankRenameFinishesARunThatStopped(t *testing.T) {
+	home := legacyInstall(t)
+	f := &fakeRename{banks: []string{"backsight", "backsight-docs", "backsight-control", "other"}}
+	withRename(t, f)
+	code, out, errOut := run(t, "bank", "rename")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	want := []string{"alias claude-memory→backsight", "alias claude-memory-docs→backsight-docs", "alias claude-memory-control→backsight-control"}
+	if !slices.Equal(f.calls, want) {
+		t.Errorf("calls %q, want %q", f.calls, want)
+	}
+	d := pathsOf(home)
+	if cfg, _ := config.Load(d.ConfigFile(), d, home); cfg.Server.Bank != "backsight" {
+		t.Errorf("config bank %q", cfg.Server.Bank)
+	}
+	if cur, _, _ := retain.LoadCursor(d.CursorsDir(), "s1"); cur.Bank != "backsight" {
+		t.Errorf("cursor %+v", cur)
+	}
+}
+
+// When a bank moved but this machine's records could not follow, bank
+// apply stops: sending the template to the old id would create an empty
+// bank there, next to the renamed one.
+func TestBankApplyStopsAfterAHalfDoneRename(t *testing.T) {
+	home := legacyInstall(t)
+	pointAt(t, home, fakeHindsight(t))
+	_ = os.WriteFile(filepath.Join(pathsOf(home).CursorsDir(), "s2.json"), []byte("{not json"), 0o600)
+	f := &fakeRename{banks: legacyBanks}
+	withRename(t, f)
+	code, out, errOut := run(t, "bank", "apply")
+	if code == output.OK || strings.Contains(out, "created") || !strings.Contains(errOut, "this machine's records are not") {
+		t.Errorf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	if !slices.Contains(f.calls, "rename claude-memory→backsight") {
+		t.Errorf("calls %q", f.calls)
+	}
+}
+
+// A send that began before the maintenance lock would save its cursor on
+// the old bank, and its session would be sent again: the rename waits for
+// it, and changes nothing if it does not end.
+func TestBankRenameWaitsForARunningSend(t *testing.T) {
+	home := legacyInstall(t)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.LocksDir(), 0o700)
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "session-s1.lock"), "retain flush")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRename{banks: legacyBanks}
+	withRename(t, f)
+	renameWaitHand, renamePoll = 30*time.Millisecond, 5*time.Millisecond
+	if code, _, errOut := run(t, "bank", "rename"); code != output.Blocked || !strings.Contains(errOut, "a send of session s1 is still running") {
+		t.Errorf("exit %d %q", code, errOut)
+	}
+	for _, c := range f.calls {
+		if !strings.HasPrefix(c, "pending ") {
+			t.Errorf("ran %q with a send running", c)
+		}
+	}
+	_ = l.Release()
+	if code, _, errOut := run(t, "bank", "rename"); code != output.OK {
+		t.Errorf("after the send: exit %d %s", code, errOut)
+	}
+}
+
+// The rename runs under the maintenance lock: another maintenance stops it
+// before anything moves, update apply's own lets it run, and it leaves no
+// lock of its own behind.
+func TestBankRenameTakesTheMaintenanceLock(t *testing.T) {
+	home := legacyInstall(t)
+	d := pathsOf(home)
+	f := &fakeRename{banks: legacyBanks}
+	withRename(t, f)
+	other, err := state.TryAcquire(d.MaintenanceLock(), "backup create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := run(t, "bank", "rename"); code != output.Blocked || !strings.Contains(errOut, "maintenance in progress") || len(f.calls) != 0 {
+		t.Errorf("under another maintenance: exit %d %q, calls %q", code, errOut, f.calls)
+	}
+	_ = other.Release()
+	upd, err := state.TryAcquire(d.MaintenanceLock(), "update apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := upd.Owner()
+	updateLock = &owner
+	t.Cleanup(func() { updateLock = nil; _ = upd.Release() })
+	if code, _, errOut := run(t, "bank", "rename"); code != output.OK {
+		t.Fatalf("under update apply's lock: exit %d %s", code, errOut)
+	}
+	if h := state.Inspect(d.MaintenanceLock()); h == nil || h.Owner.Command != "update apply" {
+		t.Errorf("update apply's lock was not left as it was: %+v", h)
+	}
+	_ = upd.Release()
+	raw, _ := os.ReadFile(d.ConfigFile())
+	_ = os.WriteFile(d.ConfigFile(), []byte(strings.Replace(string(raw), `bank = "backsight"`, `bank = "claude-memory"`, 1)), 0o600)
+	if code, _, errOut := run(t, "bank", "rename"); code != output.OK || state.Inspect(d.MaintenanceLock()) != nil {
+		t.Errorf("by hand: exit %d %s, lock left: %v", code, errOut, state.Inspect(d.MaintenanceLock()) != nil)
+	}
+}
+
+// The daily job finishes a rename the update left (the server was busy),
+// right after its backup.
+func TestMaintainRenamesALegacyBankAfterItsBackup(t *testing.T) {
+	home := legacyInstall(t)
+	pointAt(t, home, fakeHindsight(t))
+	withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	f := &fakeRename{banks: legacyBanks}
+	withRename(t, f)
+	code, out, errOut := run(t, "jobs", "maintain")
+	if code != output.OK || !strings.Contains(out, "bank rename claude-memory → backsight") || !slices.Contains(f.calls, "rename claude-memory→backsight") {
+		t.Fatalf("exit %d, calls %q\n%s\n%s", code, f.calls, out, errOut)
+	}
+	d := pathsOf(home)
+	if cfg, _ := config.Load(d.ConfigFile(), d, home); cfg.Server.Bank != "backsight" {
+		t.Errorf("config bank %q", cfg.Server.Bank)
 	}
 }

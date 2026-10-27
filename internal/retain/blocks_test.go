@@ -207,3 +207,23 @@ func TestSentIndexRemoveKeepsEntriesAppendedMeanwhile(t *testing.T) {
 		t.Errorf("after Remove: disk u1=%v u2=%v u3=%v, in memory u1=%v u3=%v", again.Has("u1"), again.Has("u2"), again.Has("u3"), mine.Has("u1"), mine.Has("u3"))
 	}
 }
+
+// After bank rename, the records sent under the bank's former name are
+// still this session's own: the index keeps their old keys (issue 62).
+// Without it a re-send would take them for a fork's copies and drop them.
+func TestOwnKeyFollowsTheRenamedBank(t *testing.T) {
+	idx, _ := LoadSentIndex(t.TempDir())
+	_ = idx.Add(sessionKey("claude-memory", "s1", "u1"), sessionKey("backsight", "s1", "u2"), sessionKey("team", "s1", "u3"))
+	for _, c := range []struct{ bank, uuid, want string }{
+		{"backsight", "u1", sessionKey("claude-memory", "s1", "u1")}, // sent before the rename
+		{"backsight", "u2", sessionKey("backsight", "s1", "u2")},
+		{"claude-memory", "u1", sessionKey("claude-memory", "s1", "u1")},
+		{"claude-memory", "u2", ""}, // never the other way round
+		{"other", "u3", ""},         // another bank's keys stay its own
+		{"backsight", "u9", ""},
+	} {
+		if got := ownKey(idx, c.bank, "s1", c.uuid); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.bank, c.uuid, got, c.want)
+		}
+	}
+}

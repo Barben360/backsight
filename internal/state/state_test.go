@@ -226,3 +226,21 @@ func TestPurgeGuardRoundTrips(t *testing.T) {
 		t.Errorf("%s", back)
 	}
 }
+
+func TestSameBankJoinsTheRenamedPair(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"claude-memory", "backsight", true}, {"backsight", "claude-memory", true}, {"team", "team", true},
+		{"claude-memory", "team", false}, {"backsight-docs", "claude-memory-docs", false}, {"", "backsight", false},
+	} {
+		if got := SameBank(c.a, c.b); got != c.want {
+			t.Errorf("%q %q: %v", c.a, c.b, got)
+		}
+	}
+	s := State{Tombstones: []Tombstone{{Bank: "backsight", Document: "d1"}, {Bank: "team", Document: "d2"}}, RestoreEpoch: &RestoreEpoch{Bank: "backsight", Epoch: 3}}
+	if got := s.TombstonesOf("claude-memory"); len(got) != 1 || got[0].Document != "d1" || s.EpochOf("claude-memory") != 3 {
+		t.Errorf("a restore under the legacy name loses the records: %v %d", got, s.EpochOf("claude-memory"))
+	}
+}
