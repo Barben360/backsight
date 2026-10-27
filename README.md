@@ -27,6 +27,57 @@ backsight is an independent project, not affiliated with or endorsed by Anthropi
 
 New words (bank, observation, transverse…) are in the [glossary](docs/glossary.md).
 
+## How it works
+
+A session and the memory, step by step. The green part runs on your machine and costs nothing; only the orange part, in the background, calls your LLM provider.
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant CC as Claude Code
+    participant BS as backsight
+    participant HS as Hindsight server (local)
+    participant LLM as LLM provider
+
+    rect rgba(46, 160, 67, 0.12)
+    Note over CC,HS: On your machine, free
+    You->>CC: open a session
+    CC->>BS: SessionStart hook
+    BS->>HS: read the project's briefing
+    BS-->>CC: memory guide + briefing
+    You->>CC: a prompt
+    CC->>BS: UserPromptSubmit hook
+    BS->>HS: recall (search + local reranker)
+    BS-->>CC: up to 3 relevant memories
+    CC->>BS: memory_search, memory_read
+    BS->>HS: search
+    BS-->>CC: memories, to cite
+    CC->>BS: AskUserQuestion, no search yet
+    BS-->>CC: refused once: search the memory first
+    CC->>BS: memory_store, a subagent's report
+    BS->>HS: redacted fact or report
+    You->>CC: end the session (or leave it idle 30 min)
+    CC->>BS: SessionEnd hook
+    BS->>HS: redacted session text
+    end
+
+    rect rgba(219, 109, 40, 0.12)
+    Note over HS,LLM: Paid, in the background
+    HS->>LLM: extract facts, consolidate them
+    HS->>LLM: refresh the project's briefing
+    end
+```
+
+Background jobs keep it running (systemd user timers):
+
+```mermaid
+flowchart LR
+    tick(["jobs tick<br/>every 15 min"]) --> t1["send idle sessions<br/>and queued notes"] --> t2["pace the import<br/>of past sessions"] --> t3["purge again a document<br/>an older client rewrote"]
+    maintain(["jobs maintain<br/>daily, 04:00 ± 30 min"]) --> m1["encrypted backup"] --> m2["move memories<br/>to their project"] --> m3["check purged<br/>documents"] --> m4["check for<br/>a new release"] --> m5["doctor snapshot"]
+```
+
+Every hook, threshold and time limit: [how-it-works.md](docs/how-it-works.md).
+
 ## What it costs
 
 backsight is free, and so is searching the memory: recall at each prompt, `memory_search` and `backsight search` run on your machine, with the server's local search models, and send nothing out. The server's LLM is not free: it reads each session to extract memories, and you pay its provider for the tokens.
