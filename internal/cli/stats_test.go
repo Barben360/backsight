@@ -94,12 +94,12 @@ func TestStatsReadsWhatTheProducersWrite(t *testing.T) {
 	}
 	prompt(t, home, "s1", longPrompt)
 	search("s1", "")
-	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."})
+	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": "> 🧠 **From memory (billing)** — PostgreSQL 16."})
 	prompt(t, home, "s1", longPrompt+" And the replica?")
 	search("s1", "") // turn 2
 	prompt(t, home, "s2", longPrompt)
 	search("s2", "agent-1") // a subagent's: s2 stays unsearched
-	credit := "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."
+	credit := "> 🧠 **From memory (billing)** — PostgreSQL 16."
 	fire(t, "stop", map[string]any{"session_id": "s2", "last_assistant_message": credit}) // only a subagent searched
 	prompt(t, home, "s1", "A third question, not searched, about the billing replica lag.")
 	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": credit}) // the search was turns ago

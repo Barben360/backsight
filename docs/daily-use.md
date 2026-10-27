@@ -33,7 +33,7 @@ More lines may follow: ⬆️ a newer release ([update](update.md)), ⚠️ Clau
 
 When Claude uses a memory, it cites it on its own line:
 
-> 🧠 **From Hindsight memory (my-project)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
+> 🧠 **From memory (my-project)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
 
 If Claude searched and found nothing, it says so. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
 

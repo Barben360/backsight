@@ -40,7 +40,7 @@ func TestCreditIsQuotedVerbatimWhereClaudeIsAskedToCite(t *testing.T) {
 			t.Errorf("%s lacks the exact credit format", name)
 		}
 	}
-	if Credit != "> 🧠 **From Hindsight memory (<project>)** — <facts>" {
+	if Credit != "> 🧠 **From memory (<project>)** — <facts>" {
 		t.Errorf("credit changed: %q", Credit)
 	}
 }
@@ -126,6 +126,7 @@ func TestGuideTellsClaudeNeverToAskForASecret(t *testing.T) {
 var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
+	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 
 func wordingHash() string {
