@@ -476,7 +476,7 @@ func newBackupIdentityCmd(e *env) *cobra.Command {
 			// output (SPEC §11.2 secrets rule). A person's shell has a
 			// terminal on one side at least, so `… | pass insert -m …`
 			// works (issue 61); an agent's command has none.
-			if e.json || !(stdoutIsTerminal() || stdinIsTerminal() || stderrIsTerminal()) {
+			if e.json || !stdoutIsTerminal() && !stdinIsTerminal() && !stderrIsTerminal() {
 				return &output.Error{Code: output.NeedsUser, Message: "the backup identity is a secret: run backsight backup identity show in a terminal yourself",
 					Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight backup identity show", Why: "save the key that decrypts the backups"}}}
 			}

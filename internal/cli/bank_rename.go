@@ -217,7 +217,7 @@ func runBankRename(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 	undo := func(cause error) error {
 		for i := len(done) - 1; i >= 0; i-- {
 			if err := ops.Rename(context.WithoutCancel(ctx), done[i].to, done[i].from, false); err != nil {
-				return blocked(fmt.Errorf("%w; renaming %s back to %s failed too (%v): run backsight bank rename again", cause, done[i].to, done[i].from, err))
+				return blocked(fmt.Errorf("%w; renaming %s back to %s failed too (%w): run backsight bank rename again", cause, done[i].to, done[i].from, err))
 			}
 		}
 		return blocked(fmt.Errorf("%w (the banks renamed before it were renamed back)", cause))
