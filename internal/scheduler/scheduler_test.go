@@ -266,3 +266,21 @@ func TestTimersEnabledUnreadable(t *testing.T) {
 		t.Error("an unreadable link counts as not enabled")
 	}
 }
+
+// Start runs one job now through each scheduler, without waiting for it.
+func TestStartRunsAJobNow(t *testing.T) {
+	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", UID: 1000}
+	for goos, want := range map[string]string{
+		"linux":   "systemctl --user start --no-block backsight-tick.service",
+		"darwin":  "launchctl kickstart gui/1000/tech.backsight.tick",
+		"windows": `schtasks /Run /TN backsight\tick`,
+	} {
+		p, err := For(goos, o)
+		if got := strings.Join(p.Start["tick"], " "); err != nil || got != want {
+			t.Errorf("%s: %q (%v), want %q", goos, got, err, want)
+		}
+		if len(p.Start["maintain"]) == 0 {
+			t.Errorf("%s: no start for maintain", goos)
+		}
+	}
+}

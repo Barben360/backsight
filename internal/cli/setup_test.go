@@ -229,7 +229,7 @@ func TestSetupStopsAtTheMissingKeyThenResumes(t *testing.T) {
 	if code != output.OK {
 		t.Fatalf("resume: exit %d\n%s\n%s", code, out, errOut)
 	}
-	want := []string{"server install", "guide index", "client install", "client retention", "jobs install", "verify", "retain backfill --queue --projects-dir " + filepath.Join(home, ".claude", "projects")}
+	want := []string{"server install", "guide index", "client install", "client retention", "jobs install", "verify", "retain backfill --queue --projects-dir " + filepath.Join(home, ".claude", "projects"), "jobs start tick"}
 	got := f.commands()
 	if len(got) != len(want) {
 		t.Fatalf("steps %q, want %q", got, want)
@@ -937,7 +937,8 @@ func TestSetupSubscriptionLane(t *testing.T) {
 	if code, out, _ := run(t, append(base, "--answer", "ack_subscription=yes", "--answer", "backfill=yes")...); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	last := f.commands()[len(f.commands())-1]
+	cmds := f.commands()
+	last := cmds[len(cmds)-2] // then jobs start tick
 	if !strings.HasPrefix(last, "retain backfill --queue") || !strings.HasSuffix(last, "--allow-subscription") {
 		t.Errorf("an explicit backfill=yes on the subscription lane must allow it: %q", last)
 	}
@@ -1800,5 +1801,52 @@ func TestSetupSlowUserSessionSaysRetry(t *testing.T) {
 	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "did not answer") ||
 		!strings.Contains(env.Error.Message, "retry, from a login session") || len(env.Error.Actions) != 0 || len(f.calls) > 0 {
 		t.Errorf("exit %d, steps %v\n%s", code, f.commands(), out)
+	}
+}
+
+// The import starts as setup ends: once past sessions are queued, setup
+// starts the first tick through the scheduler instead of leaving it to the
+// next 15-minute slot; without a scheduler it says what to run, and a start
+// that fails leaves the timer to it without failing setup.
+func TestSetupStartsTheImportAtOnce(t *testing.T) {
+	for _, c := range []struct {
+		name, scheduler string
+		fail            bool
+		started         bool
+		detail          string
+	}{
+		{"scheduler", "", false, true, "the import started now"},
+		{"start fails", "", true, true, "the timer starts it within 15 min"},
+		{"no scheduler", "scheduler=off", false, false, "run backsight jobs tick"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, f := setupMachine(t)
+			withLLMKey(t, home)
+			oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+			if c.fail {
+				f.fail["jobs start"] = &output.Error{Code: output.Blocked, Message: "unit not found"}
+			}
+			args := []string{"setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--answer", "backfill=yes", "--non-interactive", "--json"}
+			if c.scheduler != "" {
+				args = append(args, "--answer", c.scheduler)
+			}
+			code, out, errOut := run(t, args...)
+			if code != output.OK {
+				t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+			}
+			cmds := f.commands()
+			if last := cmds[len(cmds)-1]; (last == "jobs start tick") != c.started {
+				t.Errorf("commands %q: started %v, want %v", cmds, last == "jobs start tick", c.started)
+			}
+			var detail string
+			for _, st := range parseSetup(t, out).Data.Steps {
+				if st.Name == "backfill" {
+					detail = st.Detail
+				}
+			}
+			if !strings.Contains(detail, c.detail) {
+				t.Errorf("backfill step %q, want %q", detail, c.detail)
+			}
+		})
 	}
 }

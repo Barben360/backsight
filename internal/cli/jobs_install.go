@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -90,6 +91,36 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 }
 
 func cmdLine(c []string) string { return strings.Join(c, " ") }
+
+// newJobsStartCmd runs one job now through the OS scheduler, without
+// waiting for it: setup starts the first tick right after it queued the
+// past sessions, so the import does not wait for the next 15-minute slot.
+// The scheduler's run takes the job's own lock, so it never overlaps one
+// a timer started.
+func newJobsStartCmd(e *env) *cobra.Command {
+	return &cobra.Command{
+		Use:       "start <tick|maintain>",
+		Short:     "Start a job now through the OS scheduler, without waiting for it",
+		Args:      usageArgs(cobra.ExactArgs(1)),
+		ValidArgs: []string{"tick", "maintain"},
+		Hidden:    true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := schedulerPlan(cmd.Context())
+			if err != nil {
+				return err
+			}
+			c, ok := p.Start[args[0]]
+			if !ok {
+				return &output.Error{Code: output.Usage, Message: "no job " + strconv.Quote(args[0]) + ": tick or maintain"}
+			}
+			if out, err := sysRunner.Run(cmd.Context(), c[0], c[1:]...); err != nil {
+				return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s: %v %s", cmdLine(c), err, strings.TrimSpace(string(out)))}
+			}
+			res := map[string]string{"job": args[0], "command": cmdLine(c)}
+			return e.emit("jobs start", res, func() string { return "jobs " + args[0] + " started: " + cmdLine(c) + "\n" })
+		},
+	}
+}
 
 // newJobsInstallCmd writes the two scheduler entries (decision 0025)
 // through the config editor and activates them. setup (M4) calls it.

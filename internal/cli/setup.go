@@ -994,7 +994,22 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			var br backfillResult
 			_ = json.Unmarshal(out.Data, &br)
-			return setup.Step{Name: "backfill", Status: "done", Detail: fmt.Sprintf("%d session(s) queued: jobs tick sends them in the background", br.Total)}, nil
+			detail := fmt.Sprintf("%d session(s) queued: jobs tick sends them in the background", br.Total)
+			switch {
+			case br.Total == 0:
+			case answers["scheduler"] == "off":
+				detail += "; with no scheduler, run backsight jobs tick to send them"
+			default:
+				// The first tick now, not at the next 15-minute slot: the
+				// import starts while setup ends. Its failure leaves the
+				// timer to it.
+				if start := subcommand(ctx, "jobs", "start", "tick"); start.Err != nil {
+					detail += "; the first tick could not be started now (" + start.Err.Error() + "): the timer starts it within 15 min"
+				} else {
+					detail = fmt.Sprintf("%d session(s) queued: the import started now, jobs tick sends them in the background", br.Total)
+				}
+			}
+			return setup.Step{Name: "backfill", Status: "done", Detail: detail}, nil
 		}},
 	}
 }
@@ -1211,7 +1226,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin")
 	}
 	if answers["backfill"] == "yes" {
-		res.NextSteps = append(res.NextSteps, "your past sessions reach the memory in the background: backsight doctor shows the backfill's progress")
+		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
 	if answers["backups"] == "on" {
 		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show (at a terminal)")
