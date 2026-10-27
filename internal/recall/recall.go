@@ -52,6 +52,10 @@ type Query struct {
 	// a transverse alias nor linked/asked/related need this score (0046 poisoning
 	// defence: recall.global_min_score).
 	GlobalMinReranker float64
+	// Kinds asks the server, in the same calls, for the source facts of each
+	// observation to fill Hit.Kinds: for searches a reader sees, not for the
+	// prompt hook (larger responses).
+	Kinds bool
 }
 
 // Hit is one merged result.
@@ -65,6 +69,12 @@ type Hit struct {
 	Reranker float64   `json:"reranker"` // the server's score
 	Date     time.Time `json:"date"`
 	Age      string    `json:"age"`
+	// Kinds: the kinds (decision, pitfall...) of the facts the memory was
+	// built from, or of the fact itself for a raw hit; only on a search that
+	// asked for them (Query.Kinds). Subagent: some of those facts came from
+	// a subagent's report.
+	Kinds    []string `json:"kinds,omitempty"`
+	Subagent bool     `json:"subagent,omitempty"`
 }
 
 // ScopeMeta is how one scope's calls went (telemetry, A.4).
@@ -129,7 +139,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		defer cancel()
 	}
 	scopes := e.scopes(q)
-	answers := e.run(ctx, scopes, q.Queries, []string{"observation"})
+	answers := e.run(ctx, scopes, q.Queries, []string{"observation"}, q.Kinds)
 	res := Result{Scopes: map[string]ScopeMeta{}}
 	var empty []scope
 	for _, s := range scopes {
@@ -138,7 +148,7 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 	}
 	if len(empty) > 0 && ctx.Err() == nil {
-		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"})
+		raw := e.run(ctx, empty, q.Queries, []string{"world", "experience"}, false)
 		for _, a := range raw {
 			if len(a.hits) > 0 {
 				res.Raw = true
@@ -162,6 +172,9 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 				continue
 			}
 			h := e.hit(r, a.scope, q.Current)
+			if q.Kinds {
+				h.Kinds, h.Subagent = KindsOf(r.Tags, r.SourceTags)
+			}
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
@@ -208,7 +221,7 @@ func meta(answers []answer, name string) ScopeMeta {
 	return m
 }
 
-func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string) []answer {
+func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []string, sources bool) []answer {
 	type job struct {
 		scope scope
 		query string
@@ -228,7 +241,7 @@ func (e *Engine) run(ctx context.Context, scopes []scope, queries, types []strin
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens}
+			req := hindsight.RecallRequest{Query: j.query, Types: types, Budget: "low", MaxTokens: maxTokens, SourceFacts: sources}
 			if len(j.scope.tags) > 0 {
 				req.Tags, req.TagsMatch = j.scope.tags, "any_strict"
 			}
@@ -274,6 +287,24 @@ func (e *Engine) now() time.Time {
 		return e.Now()
 	}
 	return time.Now()
+}
+
+// KindsOf lists the kinds (the kind:<k> tags) found in the tags given, each
+// once and sorted, and whether one is tagged source:subagent. A raw fact
+// passes its own tags; an observation, its source facts'.
+func KindsOf(tagSets ...[]string) (kinds []string, subagent bool) {
+	for _, tags := range tagSets {
+		for _, t := range tags {
+			if k, ok := strings.CutPrefix(t, "kind:"); ok && k != "" && !contains(kinds, k) {
+				kinds = append(kinds, k)
+			}
+			if t == "source:subagent" {
+				subagent = true
+			}
+		}
+	}
+	sort.Strings(kinds)
+	return kinds, subagent
 }
 
 // ProjectOf is the project tag of a memory, "" when it has none.

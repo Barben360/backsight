@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -338,5 +339,77 @@ func TestEntityMatchingIsCheap(t *testing.T) {
 	}
 	if got := idx.Projects("see entity-00042 please", "billing", nil); len(got) != 1 || got[0] != "p42" {
 		t.Errorf("%v", got)
+	}
+}
+
+// kindsBank answers observations with source facts, and raw facts with their
+// own tags; it records the raw request bodies.
+func kindsEngine(t *testing.T, observations, raw string, bodies *[]string) *Engine {
+	t.Helper()
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		*bodies = append(*bodies, string(b))
+		mu.Unlock()
+		if strings.Contains(string(b), `"observation"`) {
+			_, _ = w.Write([]byte(observations))
+			return
+		}
+		_, _ = w.Write([]byte(raw))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := hindsight.New(srv.URL, "k", 5*time.Second)
+	return &Engine{Client: c, Bank: "b", Timeout: 2 * time.Second, Now: func() time.Time { return time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC) }}
+}
+
+func TestSearchKindsFromSourceFactsInTheSameCall(t *testing.T) {
+	obs := `{"results":[
+		{"id":"o1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","source_fact_ids":["f1","f2","f3"],"scores":{"reranker":0.8}},
+		{"id":"o2","text":"Other.","type":"observation","tags":["project:billing"],"source_fact_ids":["gone"],"scores":{"reranker":0.7}}],
+		"source_facts":{"f1":{"tags":["kind:state","project:billing"]},"f2":{"tags":["kind:pitfall","kind:state","source:chat"]},"f3":{"tags":["kind:pitfall","source:subagent"]}}}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Kinds: true})
+	if len(res.Hits) != 2 || strings.Join(res.Hits[0].Kinds, ",") != "pitfall,state" || !res.Hits[0].Subagent {
+		t.Fatalf("%+v", res.Hits)
+	}
+	if len(res.Hits[1].Kinds) != 0 || res.Hits[1].Subagent {
+		t.Errorf("a hit whose source facts were cut shows kinds: %+v", res.Hits[1])
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, "source_facts") {
+			t.Errorf("a call did not ask for the source facts: %s", b)
+		}
+	}
+	// One HTTP call per scope and query, not one per hit.
+	if len(bodies) != 2 {
+		t.Errorf("%d calls for 2 scopes x 1 query", len(bodies))
+	}
+}
+
+func TestSearchWithoutKindsKeepsTheRequestAndHitsAsBefore(t *testing.T) {
+	obs := `{"results":[{"id":"o1","text":"t","type":"observation","tags":["project:billing"],"source_fact_ids":["f1"],"scores":{"reranker":0.8}}],"source_facts":{"f1":{"tags":["kind:state"]}}}`
+	var bodies []string
+	res := kindsEngine(t, obs, `{"results":[]}`, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing"})
+	if len(res.Hits) != 1 || res.Hits[0].Kinds != nil || res.Hits[0].Subagent {
+		t.Fatalf("%+v", res.Hits)
+	}
+	for _, b := range bodies {
+		if strings.Contains(b, "source_facts") {
+			t.Errorf("prompt-path recall asked for source facts: %s", b)
+		}
+	}
+	js, _ := json.Marshal(res.Hits[0])
+	if strings.Contains(string(js), "kinds") || strings.Contains(string(js), "subagent") {
+		t.Errorf("JSON gained fields on a search that did not ask: %s", js)
+	}
+}
+
+func TestSearchKindsOfRawFactsComeFromTheirOwnTags(t *testing.T) {
+	raw := `{"results":[{"id":"w1","text":"A raw fact.","type":"world","tags":["project:billing","kind:decision","source:subagent"],"scores":{"reranker":0.9}}]}`
+	var bodies []string
+	res := kindsEngine(t, `{"results":[]}`, raw, &bodies).Search(context.Background(), Query{Queries: []string{"pg"}, Current: "billing", Kinds: true})
+	if !res.Raw || len(res.Hits) != 1 || strings.Join(res.Hits[0].Kinds, ",") != "decision" || !res.Hits[0].Subagent {
+		t.Fatalf("%+v", res)
 	}
 }

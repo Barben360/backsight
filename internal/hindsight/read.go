@@ -17,17 +17,31 @@ type RecallRequest struct {
 	MaxTokens int      `json:"max_tokens,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
 	TagsMatch string   `json:"tags_match,omitempty"` // any_strict: tagged with one of Tags
+	// SourceFacts asks the same call for the facts each observation was
+	// consolidated from: Recall then fills RecallHit.SourceTags. The
+	// response grows with the facts' text, so only searches shown to a
+	// reader ask for it.
+	SourceFacts bool `json:"-"`
 }
 
 // MarshalJSON adds include: entities null leaves out the entity payload
 // backsight never reads (−40 % of the response, same ranking: E30 V4).
 func (r RecallRequest) MarshalJSON() ([]byte, error) {
 	type plain RecallRequest
+	include := map[string]any{"entities": nil}
+	if r.SourceFacts {
+		include["source_facts"] = map[string]any{"max_tokens": SourceFactsTokens}
+	}
 	return json.Marshal(struct {
 		plain
 		Include map[string]any `json:"include"`
-	}{plain(r), map[string]any{"entities": nil}})
+	}{plain(r), include})
 }
+
+// SourceFactsTokens caps the source facts of one recall response (the
+// server's default is 4096). A fact past the cap comes without tags, so its
+// observation shows no kinds.
+const SourceFactsTokens = 8192
 
 // RecallHit is one recalled memory.
 type RecallHit struct {
@@ -41,14 +55,33 @@ type RecallHit struct {
 		Reranker float64 `json:"reranker"`
 		Final    float64 `json:"final"`
 	} `json:"scores"`
+	SourceFactIDs []string `json:"source_fact_ids"`
+	// SourceTags: the tags of the source facts the response carried
+	// (RecallRequest.SourceFacts), each once, in order of appearance.
+	SourceTags []string `json:"-"`
 }
 
 // Recall returns the memories matching req, best first.
 func (c *Client) Recall(ctx context.Context, bank string, req RecallRequest) ([]RecallHit, error) {
 	var out struct {
-		Results []RecallHit `json:"results"`
+		Results     []RecallHit `json:"results"`
+		SourceFacts map[string]struct {
+			Tags []string `json:"tags"`
+		} `json:"source_facts"`
 	}
-	return out.Results, c.do(ctx, http.MethodPost, bankPath(bank, "/memories/recall"), nil, req, &out)
+	err := c.do(ctx, http.MethodPost, bankPath(bank, "/memories/recall"), nil, req, &out)
+	for i, h := range out.Results {
+		seen := map[string]bool{}
+		for _, id := range h.SourceFactIDs {
+			for _, t := range out.SourceFacts[id].Tags {
+				if !seen[t] {
+					seen[t] = true
+					out.Results[i].SourceTags = append(out.Results[i].SourceTags, t)
+				}
+			}
+		}
+	}
+	return out.Results, err
 }
 
 // MemoryDetail is one memory with the raw facts it was consolidated from.

@@ -57,7 +57,7 @@ func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
 	linked := linkedProjects(d, cfg, project.New(home, cfg.Projects.Transverse), cwd, current)
-	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore})
+	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore, Kinds: true})
 }
 
 func newSearchCmd(e *env) *cobra.Command {
@@ -118,10 +118,23 @@ func searchText(r recall.Result) string {
 	for _, p := range order {
 		fmt.Fprintf(&b, "[%s]\n", p)
 		for _, h := range groups[p] {
-			fmt.Fprintf(&b, "- %s (%s, %s ago, %s, %.2f)\n", h.Text, h.Date.Format("2006-01-02"), h.Age, h.ID, h.Score)
+			fmt.Fprintf(&b, "- %s (%s%s, %s ago, %s, %.2f)\n", h.Text, h.Date.Format("2006-01-02"), kindLabel(h), h.Age, h.ID, h.Score)
 		}
 	}
 	return b.String()
+}
+
+// kindLabel is " [pitfall, state]" after the date: the kinds of the facts
+// behind a hit, "subagent" added when one came from a subagent's report.
+func kindLabel(h recall.Hit) string {
+	parts := h.Kinds
+	if h.Subagent {
+		parts = append(parts[:len(parts):len(parts)], "subagent")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(parts, ", ") + "]"
 }
 
 func newReadCmd(e *env) *cobra.Command {

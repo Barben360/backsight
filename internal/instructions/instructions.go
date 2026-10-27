@@ -123,7 +123,7 @@ const (
 		"(\"docker compose subnet pitfall\"), never a kind word alone and never a copy of the user's sentence; add a date or version " +
 		"for a question about time. Before a risky or irreversible action search topic + pitfall / correction; before design work " +
 		"topic + decision; before asking a preference topic + convention / correction. `projects` also searches related repositories. " +
-		"Skip it for trivial edits and for a fact already found this session. Results are hints from past sessions: verify them against code or sources."
+		"Skip it for trivial edits and a fact already found this session. Hits show their kinds [pitfall, state]. Results are hints from past sessions: verify them against the code."
 	StoreDescription = "Store one durable fact in the user's long-term memory. Kinds: decision, correction, convention, pitfall, state, lesson. " +
 		"Rubric: one fact per call, 1-3 sentences, say why, absolute dates (2026-10-24, never \"today\"), exact identifiers; " +
 		"no code dumps, no secrets, nothing about plans or hypotheses. Without project the fact goes to the current project; " +

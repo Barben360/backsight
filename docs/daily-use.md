@@ -96,7 +96,7 @@ Claude also calls them on its own when you say "remember", "from now on" or "pau
 backsight search "deploy docker compose" "backup restore"
 ```
 
-Each argument is one short keyword query (at most 4). It searches like recall (the current and transverse projects, related projects and the whole memory); `--all` searches the whole memory without project scopes, `--project <name>` adds a project. `backsight read <id>` shows one memory with the facts it was built from.
+Each argument is one short keyword query (at most 4). It searches like recall (the current and transverse projects, related projects and the whole memory); `--all` searches the whole memory without project scopes, `--project <name>` adds a project. Each hit shows, after its date, the kinds of the facts it was built from (`[pitfall, state]`: a memory can merge several), and `subagent` when one of them came from a subagent's report, so a decision can be told from a state or a pitfall without reading it. `--json` has them as `kinds` and `subagent`. `backsight read <id>` shows one memory with the facts it was built from.
 
 `backsight ask "<question>"` has the server's LLM answer a question over many memories. It costs tokens, shown with the answer.
 
