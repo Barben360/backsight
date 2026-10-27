@@ -4,6 +4,12 @@ on:
     tags: ["v*"]
 permissions:
   contents: write
+# A tag pushed twice starts two runs seconds apart, and the second replaced
+# the first's draft under its uploads (v0.1.5-m5): the newer run cancels
+# the older one, and the guard below refuses a tag already published.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 # GitHub-hosted runners (decision 0068); the tests need a runner slot on
 # CI (scripts/ports.sh), and a hosted job has its machine to itself.
 env:
@@ -43,6 +49,14 @@ jobs:
         run: |
           git fetch -q origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::tag $GITHUB_REF_NAME is not on main"; exit 1; }
+      # goreleaser replaces only a draft: a run reaching a published release
+      # (the tag pushed again after its release) stops here.
+      - name: Refuse tags already published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          draft=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft) || exit 0
+          [ "$draft" = true ] || { echo "::error::$GITHUB_REF_NAME is already published: release a new tag"; exit 1; }
       # The release notes are hand-written (docs/releases/<tag>.md, read by
       # goreleaser below), and the tag has its row in docs/compatibility.md.
       - name: Refuse tags without their release notes
