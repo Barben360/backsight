@@ -238,7 +238,7 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 	want := map[string]string{
 		"remember":     "",
 		"pause":        "Bash(/opt/b/current pause*)", // resume always asks
-		"memory-retro": "Bash(/opt/b/current search *), Bash(true)",
+		"memory-retro": "Bash(git log --oneline -15), Bash(git branch --show-current), Bash(/opt/b/current why*), Bash(true)",
 		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*)",
 		// then one guide entry per docs topic (instructions' test: never guide index)
 		"doctor": "Bash(/opt/b/current doctor*), Bash(/opt/b/current verify --live*), Bash(/opt/b/current verify --no-round-trip*), Bash(/opt/b/current stats*), " +
