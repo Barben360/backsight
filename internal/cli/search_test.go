@@ -103,3 +103,41 @@ func TestJobsTickRebuildsAStaleEntityIndex(t *testing.T) {
 	}
 	_ = os.Remove(path)
 }
+
+func TestSearchShowsTheKindsOfEachMemory(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recallAnswer = `[{"id":"m1","text":"PostgreSQL 16 stays for billing.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","source_fact_ids":["f1","f2"],"scores":{"reranker":0.7}},
+		{"id":"m2","text":"Plain one.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","source_fact_ids":["f3"],"scores":{"reranker":0.6}},
+		{"id":"m3","text":"No source facts.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.5}}]`
+	recallSourceFacts = `{"f1":{"tags":["kind:state","project:billing"]},"f2":{"tags":["kind:pitfall","source:subagent"]},"f3":{"tags":["kind:decision","source:chat"]}}`
+	t.Setenv("BACKSIGHT_PROJECT", "billing")
+	_, out, _ := run(t, "search", "postgres version")
+	for _, want := range []string{"(2026-10-20 [pitfall, state, subagent],", "(2026-10-20 [decision],", "No source facts. (2026-10-20, "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if recallAskedSources == 0 {
+		t.Error("search did not ask the server for source facts")
+	}
+	_, out, _ = run(t, "search", "postgres version", "--json")
+	var env struct {
+		Data recall.Result `json:"data"`
+		V    int           `json:"schema_version"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if len(env.Data.Hits) != 3 || strings.Join(env.Data.Hits[0].Kinds, ",") != "pitfall,state" || !env.Data.Hits[0].Subagent || env.V != output.SchemaVersion {
+		t.Errorf("%+v\n%s", env, out)
+	}
+}
+
+func TestSearchShowsTheKindOfARawFact(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recallAnswer = `[{"id":"w1","text":"A raw fact.","type":"world","tags":["project:billing","kind:pitfall"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.7}}]`
+	t.Setenv("BACKSIGHT_PROJECT", "billing")
+	if _, out, _ := run(t, "search", "raw"); !strings.Contains(out, "(2026-10-20 [pitfall],") {
+		t.Errorf("%s", out)
+	}
+}

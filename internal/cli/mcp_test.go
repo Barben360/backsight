@@ -101,6 +101,11 @@ func TestMCPSearchReturnsHitsAndTheCreditFormat(t *testing.T) {
 	if !strings.Contains(strings.Join(recallTags, "|"), "project:billing") {
 		t.Errorf("project scope not searched: %q", recallTags)
 	}
+	recallAnswer = `[{"id":"m1","text":"PostgreSQL 16 stays for billing.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","source_fact_ids":["f1"],"scores":{"reranker":0.7}}]`
+	recallSourceFacts = `{"f1":{"tags":["kind:decision","kind:pitfall"]}}`
+	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres version"}}); !strings.Contains(out, "(2026-10-20 [decision, pitfall],") {
+		t.Errorf("kinds missing from the tool's answer: %s", out)
+	}
 	recallAnswer = "[]"
 	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"nothing"}}); !strings.Contains(out, "nothing in memory") {
 		t.Errorf("empty: %s", out)

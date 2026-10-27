@@ -193,8 +193,13 @@ var (
 	// recallAnswer answers every recall (JSON results array); recallTags
 	// records the tags of each recall request; memories answers GET
 	// /memories/{id}; projectEntities answers /tags and /entities.
-	recallAnswer       string
-	recallTags         []string
+	recallAnswer string
+	recallTags   []string
+	// recallSourceFacts is the "source_facts" JSON object added to every
+	// recall answer when set; recallAskedSources counts the recalls that
+	// asked for source facts in their include.
+	recallSourceFacts  string
+	recallAskedSources int
 	recallQueries      []string
 	recentAnswer       map[string]string // memories/list items by type ("" = any)
 	recentByTag        map[string]string // memories/list items by tags (wins over recentAnswer)
@@ -254,7 +259,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
 	fakeDocCreated = map[string]time.Time{}
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
-	recallQueries = nil
+	recallQueries, recallSourceFacts, recallAskedSources = nil, "", 0
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
 	recentDown.Store(false)
@@ -387,17 +392,25 @@ func fakeHindsight(t *testing.T) (port int) {
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/recall"):
 			var body struct {
-				Query string   `json:"query"`
-				Tags  []string `json:"tags"`
+				Query   string         `json:"query"`
+				Tags    []string       `json:"tags"`
+				Include map[string]any `json:"include"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, ok := body.Include["source_facts"]; ok {
+				recallAskedSources++
+			}
 			recallTags = append(recallTags, strings.Join(body.Tags, ","))
 			recallQueries = append(recallQueries, body.Query)
 			if st := recallStatus.Load(); st != 0 {
 				w.WriteHeader(int(st))
 				return
 			}
-			_, _ = w.Write([]byte(`{"results":` + recallAnswer + `}`))
+			extra := ""
+			if recallSourceFacts != "" {
+				extra = `,"source_facts":` + recallSourceFacts
+			}
+			_, _ = w.Write([]byte(`{"results":` + recallAnswer + extra + `}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/memories/list") && r.URL.Query().Get("time_field") != "":
 			// Like the server: only memories with a value on the asked
 			// time field (the fake's items carry updated_at, and
