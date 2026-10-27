@@ -84,6 +84,25 @@ func TestSecretSetRefusals(t *testing.T) {
 	}
 }
 
+// Claude Code's `!` gives the command no terminal and an empty stdin: the
+// error says there was no prompt and where to run it instead (issue 59).
+func TestSecretSetWithoutATerminalSaysWhy(t *testing.T) {
+	home := isolate(t)
+	withStdin(t, "")
+	code, out, errOut := run(t, "secret", "set", "llm_api_key", "--json")
+	if code != output.NeedsUser || !strings.Contains(out+errOut, "no terminal to prompt in") || !strings.Contains(out+errOut, `"run_as_user"`) {
+		t.Errorf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	if sec, _ := config.LoadSecrets(secretsFile(home)); sec.LLMAPIKey != "" {
+		t.Error("something was saved")
+	}
+	// A pipe that carries a value still works.
+	withStdin(t, "fakevalue6\n")
+	if code, _, errOut := run(t, "secret", "set", "llm_api_key"); code != output.OK {
+		t.Errorf("pipe: exit %d %s", code, errOut)
+	}
+}
+
 func TestSecretListNeverShowsValues(t *testing.T) {
 	home := isolate(t)
 	_ = config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("api_key", "fakevalue5") })

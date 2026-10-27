@@ -158,7 +158,15 @@ func readSecret(e *env, name, fromEnv, fromFile string) (string, error) {
 		}
 		return strings.TrimSpace(string(raw)), nil
 	}
-	return firstLine(stdin)
+	r := bufio.NewReader(stdin)
+	if _, err := r.Peek(1); errors.Is(err, io.EOF) {
+		// No terminal and nothing at all on stdin: Claude Code's `!` runs a
+		// command that way, so there was no prompt to type into (issue 59).
+		return "", &output.Error{Code: output.NeedsUser, Message: "no terminal to prompt in and nothing on stdin: nothing saved. " +
+			"Run backsight secret set " + name + " in a terminal of your own (not with ! in Claude Code), or pipe the value from your password manager",
+			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight secret set " + name, Why: "type the value at a hidden prompt, in a terminal outside the agent session"}}}
+	}
+	return firstLine(r)
 }
 
 func firstLine(r io.Reader) (string, error) {

@@ -97,7 +97,7 @@ backsight secret set llm_api_key
 backsight setup --resume
 ```
 
-`secret set` reads the value at a prompt, without echo (or from a pipe, `--from-env VAR` or `--from-file FILE`). The same two commands replace a wrong key.
+`secret set` reads the value at a prompt, without echo (or from a pipe, `--from-env VAR` or `--from-file FILE`). Run it in a terminal, not with `!` in Claude Code: that gives it no terminal, and it says so and saves nothing. The same two commands replace a wrong key.
 
 With the `claude-code` provider, run `claude setup-token` first and set its token as `llm_api_key`.
 
@@ -145,7 +145,7 @@ It prints Ollama's version. Setup then tests the model itself: its LLM check run
 
 ## Install with a coding agent
 
-A coding agent (Claude Code or another) can install backsight for you: point it at [agent-guide.md](agent-guide.md). It drives the same commands with `--json` and asks you each question. You type secrets yourself, as `! backsight secret set <name>` in Claude Code.
+A coding agent (Claude Code or another) can install backsight for you: point it at [agent-guide.md](agent-guide.md). It drives the same commands with `--json` and asks you each question. You type secrets yourself: `backsight secret set <name>` in a terminal of your own, or piped from your password manager (`pass show <entry> | backsight secret set <name>`). Not with `!` in Claude Code, which gives the command no terminal to prompt in.
 
 ## Where backsight keeps its files
 
