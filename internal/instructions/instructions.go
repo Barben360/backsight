@@ -189,15 +189,24 @@ func Skills(shim string) []Skill {
 			Name: "memory-retro",
 			Description: "End-of-project retrospective into the user's long-term memory: the decisions, pitfalls, conventions and lessons of the work just " +
 				"finished. Use when the user says retro, rétrospective, post-mortem, wrap up, capitalise, or a project or milestone ends.",
-			// `|| true` keeps the skill loading when the server is down; true
-			// is a command of its own for the permission check.
-			AllowedTools: "Bash(" + shim + " search *), Bash(true)",
-			Body: "What the memory already holds about this project:\n\n!`" + shim + " search \"decision\" \"pitfall\" \"convention\" \"lesson\" --limit 12 || true`\n\n" +
-				"From this session and the work above, list the durable items a future session would need: decisions and their reasons, root causes, " +
-				"conventions, infrastructure facts, the project's state, lessons. Drop what the memory above already holds and anything not settled. " +
-				"Store each remaining item with `memory_store`, one fact per call, at most 10, in English with absolute dates; " +
-				"a user-wide convention with project \"transverse\", the rest in the current project. " +
-				"Finish with a short list of what was stored.\n",
+			// `|| true` keeps the skill loading outside a repository; true is
+			// a command of its own for the permission check. Read-only
+			// commands only: git for the recent history, why for what the
+			// hooks injected.
+			AllowedTools: "Bash(git log --oneline -15), Bash(git branch --show-current), Bash(" + shim + " why*), Bash(true)",
+			Body: "Recent history of this project:\n\n!`git log --oneline -15 || true`\n\nBranch: !`git branch --show-current || true`\n\n" +
+				"1. Find what the memory already holds. From the history above and this session, derive 2-4 topics (a feature, a component, a problem); " +
+				"for each, one `memory_search` written as topic + intent word (\"billing retries decision\"). Do not search bare kind words.\n" +
+				"2. List the durable items a future session would need: decisions and their reasons, root causes, conventions, infrastructure facts, " +
+				"the project's state, lessons, plus the alternatives rejected with their reason (kind decision) and the questions left open (kind state, dated). " +
+				"Drop what the memory already holds, and anything not settled.\n" +
+				"3. Feedback: which memory recalled during this work proved wrong or stale? `" + shim + " why` lists what the hooks injected " +
+				"(or use the /backsight:memory skill). For each, store a correction that names the old claim in its own words.\n" +
+				"4. Store each remaining item with `memory_store`, one fact per call, at most 10 in all, in English with absolute dates; " +
+				"a user-wide convention with project \"transverse\", the rest in the current project.\n" +
+				"5. Promote (report only): list the stored conventions and corrections that are user-wide or must never break, and propose moving each into " +
+				"the project's CLAUDE.md, a `.claude/rules` file or a hook. The user approves each one; never edit those files without that approval.\n" +
+				"Finish with a short list of what was stored and what you propose to promote.\n",
 		},
 		{
 			Name: "memory",

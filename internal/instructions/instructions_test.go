@@ -194,6 +194,50 @@ func TestMemorySkillRunsTheMemoryCommandsOnly(t *testing.T) {
 	}
 }
 
+func skillBody(name string) string {
+	for _, s := range Skills("/s") {
+		if s.Name == name {
+			return s.Body
+		}
+	}
+	return ""
+}
+
+// The retro skill used to preload a search for the four kind words, so the
+// "already stored" list was arbitrary. It now preloads the project's recent
+// history with read-only commands, searches by topic, and asks for the
+// rejected alternatives, the open questions, the feedback on wrong
+// memories, and a report-only promote step.
+func TestRetroSkillSearchesByTopicFromTheRecentHistory(t *testing.T) {
+	body, tools := skillBody("memory-retro"), skillTools("memory-retro")
+	if strings.Contains(body, "/s search") || strings.Contains(body, `"decision" "pitfall"`) {
+		t.Errorf("retro still preloads a bare-kind search:\n%s", body)
+	}
+	for _, cmd := range []string{"git log --oneline -15", "git branch --show-current", "true", "/s why", "/s why --last 3"} {
+		if !allows(tools, cmd) {
+			t.Errorf("%q needs a prompt: %s", cmd, tools)
+		}
+	}
+	for _, cmd := range []string{"git push", "git commit -am x", "git log -p", "git reset --hard", "/s forget 1", "/s search x", "/s doctor", "rm -rf x"} {
+		if allows(tools, cmd) {
+			t.Errorf("%q runs unprompted: %s", cmd, tools)
+		}
+	}
+	for _, want := range []string{"!`git log --oneline -15 || true`", "!`git branch --show-current || true`", "2-4 topics", "one `memory_search`",
+		"topic + intent word", "alternatives rejected", "questions left open", "proved wrong", "/s why", "CLAUDE.md", "`.claude/rules`", "a hook",
+		"never edit those files without that approval", "at most 10"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("retro skill lacks %q", want)
+		}
+	}
+	// The shim is one shell word even with a space in its path.
+	for _, s := range Skills("/Application Support/current") {
+		if s.Name == "memory-retro" && !strings.Contains(s.AllowedTools, "Bash('/Application Support/current' why*)") {
+			t.Errorf("shim not quoted: %s", s.AllowedTools)
+		}
+	}
+}
+
 // The docs promise that Claude is told never to ask for a key in the
 // conversation: the session guide, which every session gets, says so and
 // names the command that takes a secret instead.
@@ -212,7 +256,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
-	"v6": "528a24258884488a1a3095316b6159f17b76e43a5e48e22112afac2113bf80a0",
+	"v6": "4b6aaea071fcd06b639fe47b32d4391ef224208148a5d47165c50d690f859602",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 
