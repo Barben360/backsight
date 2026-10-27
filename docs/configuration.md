@@ -30,7 +30,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 | Key | Default | Effect |
 |---|---|---|
 | `server.url` | `"http://127.0.0.1:8888"` | The server's API address. With `server.mode = "local"`, its port is the API port the server publishes, and it must be explicit. |
-| `server.bank` | `"claude-memory"` | The [bank](glossary.md#bank) that holds your memory. backsight also uses `<bank>-docs` for these docs and `<bank>-control` for its own records. |
+| `server.bank` | `"claude-memory"` | The [bank](glossary.md#bank) that holds your memory. Setup writes `"backsight"` for a new install; without the key the bank is `claude-memory`, the name of installs before v0.1.4-m5, which `backsight bank rename` moves to `backsight` (the update to v0.1.4-m5 does it). backsight also uses `<bank>-docs` for these docs and `<bank>-control` for its own records. |
 | `server.mode` | `"local"` | `"local"`: backsight runs the server in Docker on this machine and manages it. `"remote"`: you run the server elsewhere; backsight only talks to `server.url`, and the commands that manage a local server (`server`, `backup`, `uninstall --stop`) refuse. |
 | `server.ui_port` | `9999` | Port of the Hindsight web UI, on the same address as the API. Must differ from the API port. |
 | `server.compose_dir` | `"<data>/server"` | Where the server's `compose.yaml`, `.env` and your own `compose.override.yaml` live. An absolute path. |

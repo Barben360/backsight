@@ -36,10 +36,10 @@ keep_weekly = 4
 Archives are encrypted with [age](https://age-encryption.org/). By default backsight generates an identity (a private key) during setup when backups are on (else on the first backup) and stores it in `secrets.toml`. **Save it somewhere else** (a password manager): if this machine's disk is lost, the backups cannot be decrypted without it.
 
 ```sh
-backsight backup identity show
+backsight backup identity show | pass insert -m backsight/backup-identity
 ```
 
-This prints the identity in a terminal only, never to a pipe or in `--json`.
+It prints the identity alone on stdout (the advice goes to stderr), so it pipes into a password manager (`pass`, `gpg -e`, a file on an encrypted disk) or shows at a terminal. It needs a person's shell, with a terminal on one side of the pipe: an agent's command, which has none, and `--json` are refused.
 
 To encrypt to a key you already keep elsewhere, set `backup.recipient` in `config.toml` to one or more age recipients (`age1…`) or SSH public keys (`ssh-ed25519 …`), separated by commas. Backups are then encrypted to them, and you decrypt with your own key (`--identity <file>`, an age identity file or an SSH private key).
 
@@ -106,6 +106,6 @@ Restore applies the archive's database only, never its config or secrets. It ref
 
 ## Restoring on a new machine
 
-1. Install backsight and run `backsight setup` with the **same bank name** as the old install (the `server.bank` value in the old `config.toml`, `claude-memory` by default).
+1. Install backsight and run `backsight setup` with the **same bank name** as the old install (the `server.bank` value in the old `config.toml`: `backsight` for an install from v0.1.4-m5 on, `claude-memory` before, or when the file has no `bank` line). An archive taken before the bank rename restores with `server.bank = "claude-memory"`; run `backsight bank rename` after it.
 2. Import the old identity: `backsight backup identity import <file>` (or pipe it on stdin). With your own recipient, pass `--identity <file>` to restore instead.
 3. Copy the archive over and run `backsight restore <file>`.

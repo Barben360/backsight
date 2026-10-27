@@ -150,21 +150,26 @@ func TestBackupRefusesDuringMaintenanceAndReportsAFailedDump(t *testing.T) {
 // a pipe an agent reads; import stores one.
 func TestBackupIdentityShowAndImport(t *testing.T) {
 	home := devInstall(t, true)
-	old := stdoutIsTerminal
-	t.Cleanup(func() { stdoutIsTerminal = old })
-	stdoutIsTerminal = func() bool { return false }
+	oldOut, oldIn, oldErr := stdoutIsTerminal, stdinIsTerminal, stderrIsTerminal
+	t.Cleanup(func() { stdoutIsTerminal, stdinIsTerminal, stderrIsTerminal = oldOut, oldIn, oldErr })
+	no := func() bool { return false }
+	stdoutIsTerminal, stdinIsTerminal, stderrIsTerminal = no, no, no
+	// No terminal at all: an agent's command, refused.
 	if code, out, _ := run(t, "backup", "identity", "show"); code != output.NeedsUser || strings.Contains(out, "AGE-SECRET-KEY") {
-		t.Errorf("piped: exit %d\n%s", code, out)
+		t.Errorf("no terminal: exit %d\n%s", code, out)
 	}
 	stdoutIsTerminal = func() bool { return true }
 	if code, out, _ := run(t, "backup", "identity", "show", "--json"); code != output.NeedsUser || strings.Contains(out, "AGE-SECRET-KEY") {
 		t.Errorf("json: exit %d\n%s", code, out)
 	}
-	code, out, _ := run(t, "backup", "identity", "show")
-	if code != output.OK || !strings.Contains(out, "AGE-SECRET-KEY-") {
-		t.Fatalf("terminal: exit %d\n%s", code, out)
+	// A person's pipe to a password manager: stdout is not a terminal,
+	// stderr is, and stdout holds the key alone (issue 61).
+	stdoutIsTerminal, stderrIsTerminal = no, func() bool { return true }
+	code, out, errOut := run(t, "backup", "identity", "show")
+	if code != output.OK || !strings.HasPrefix(out, "AGE-SECRET-KEY-") || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "\n") || !strings.Contains(errOut, "Keep it somewhere safe") {
+		t.Fatalf("pipe: exit %d\nstdout %q\nstderr %q", code, out, errOut)
 	}
-	key := strings.Fields(out)[0]
+	key := strings.TrimSpace(out)
 	other := isolate(t)
 	_ = os.MkdirAll(filepath.Join(other, "backsight", "config"), 0o700)
 	f := filepath.Join(t.TempDir(), "key.txt")

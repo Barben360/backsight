@@ -39,7 +39,7 @@ backsight update apply
 2. takes the maintenance lock, installs the new binary next to the old one, and switches the shim, so `backsight` on your PATH runs the new version;
 3. runs the new version's client migrations, its plugin update and its scheduler refresh;
 4. if the new release pins another Hindsight version, upgrades the server (below);
-5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`);
+5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`). From v0.1.4-m5 it first renames a bank still called `claude-memory` to `backsight` (`backsight bank rename`); when the server is busy, the daily job does it after its backup;
 6. indexes the new version's docs for `backsight guide search` (a failure there is only a warning);
 7. records the update.
 

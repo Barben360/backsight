@@ -98,7 +98,7 @@ type Scan struct {
 func tombstonedDocs(bank string, tombs []state.Tombstone) map[string]state.Tombstone {
 	out := map[string]state.Tombstone{}
 	for _, t := range tombs {
-		if _, ok := out[t.Document]; !ok && t.Document != "" && t.Bank == bank {
+		if _, ok := out[t.Document]; !ok && t.Document != "" && state.SameBank(t.Bank, bank) {
 			out[t.Document] = t
 		}
 	}
@@ -278,7 +278,7 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 		return g, nil
 	}
 	prev := state.PurgeGuard{Bank: f.Bank}
-	if st.PurgeGuard != nil && st.PurgeGuard.Bank == f.Bank {
+	if st.PurgeGuard != nil && state.SameBank(st.PurgeGuard.Bank, f.Bank) {
 		prev = *st.PurgeGuard
 	}
 	at := f.Now().UTC()
@@ -447,7 +447,7 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 // still waiting.
 func LookSince(st state.State, bank string, at time.Time) (since time.Time, recheck []string) {
 	prev := st.PurgeGuard
-	if prev == nil || prev.Bank != bank {
+	if prev == nil || !state.SameBank(prev.Bank, bank) {
 		return time.Time{}, nil
 	}
 	for _, w := range prev.Waiting {

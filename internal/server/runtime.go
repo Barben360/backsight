@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/config"
 )
@@ -166,24 +167,84 @@ func (d Docker) Downloads(ctx context.Context) ([]string, bool, error) {
 	return nil, false, fmt.Errorf("docker volume inspect %s: %w: %s", vol, err, strings.TrimSpace(string(out)))
 }
 
+// PullAttempts and PullBackoff: a pull that fails is tried again, since
+// Docker keeps the layers it already has and a second pull often passes
+// (a busy containerd mount, a dropped connection: issue 60).
+var (
+	PullAttempts = 3
+	PullBackoff  = 3 * time.Second
+)
+
+// PullError is an image pull that failed every attempt, with Docker's
+// last error line.
+type PullError struct {
+	Image    string
+	Last     string
+	Attempts int
+	Err      error
+}
+
+func (e *PullError) Error() string {
+	return fmt.Sprintf("docker pull %s: %v: %s", e.Image, e.Err, e.Last)
+}
+
+func (e *PullError) Unwrap() error { return e.Err }
+
+// Pull failure causes, from Docker's last line.
+const (
+	PullNetwork = "network" // DNS, TLS, timeouts, refused or reset connections, registry errors
+	PullUnpack  = "unpack"  // the layers arrived, containerd could not unpack them locally
+	PullDisk    = "disk"    // no space left
+)
+
+var (
+	unpackRE  = regexp.MustCompile(`(?i)failed to extract layer|failed to unmount|device or resource busy|failed to register layer|error creating overlay mount`)
+	diskRE    = regexp.MustCompile(`(?i)no space left on device`)
+	networkRE = regexp.MustCompile(`(?i)no such host|lookup .*: |dial tcp|i/o timeout|timeout|tls|x509|connection (refused|reset)|network is unreachable|EOF|toomanyrequests|50[0-9] |unexpected status|too many requests|bad gateway|service unavailable`)
+)
+
+// Cause classifies the failure; "" when Docker's line names none of them.
+func (e *PullError) Cause() string {
+	switch {
+	case unpackRE.MatchString(e.Last):
+		return PullUnpack
+	case diskRE.MatchString(e.Last):
+		return PullDisk
+	case networkRE.MatchString(e.Last):
+		return PullNetwork
+	}
+	return ""
+}
+
 // Download pulls each image outside the project (nothing that runs
 // changes), Docker's progress going to w: given as is, a terminal gets
-// Docker's progress bars. A failure carries Docker's last error line,
-// which w may not show.
+// Docker's progress bars. Each pull is tried PullAttempts times; a failure
+// is a *PullError carrying Docker's last error line, which w may not show.
 func (d Docker) Download(ctx context.Context, images []string, w io.Writer) error {
 	for _, im := range images {
 		var err error
 		last := &lastLine{}
-		if st, ok := d.Compose.Runner.(Streamer); ok {
-			err = st.Stream(ctx, w, io.MultiWriter(w, last), "pull", im)
-		} else {
-			var out []byte
-			out, err = d.Compose.Runner.Run(ctx, "pull", im)
-			_, _ = w.Write(out)
-			_, _ = last.Write(out)
+		for attempt := 1; attempt <= PullAttempts; attempt++ {
+			last = &lastLine{}
+			if st, ok := d.Compose.Runner.(Streamer); ok {
+				err = st.Stream(ctx, w, io.MultiWriter(w, last), "pull", im)
+			} else {
+				var out []byte
+				out, err = d.Compose.Runner.Run(ctx, "pull", im)
+				_, _ = w.Write(out)
+				_, _ = last.Write(out)
+			}
+			if err == nil || ctx.Err() != nil || attempt == PullAttempts {
+				break
+			}
+			fmt.Fprintf(w, "docker pull %s failed (%s): trying again (%d/%d)\n", im, last.String(), attempt+1, PullAttempts)
+			select {
+			case <-ctx.Done():
+			case <-time.After(PullBackoff):
+			}
 		}
 		if err != nil {
-			return fmt.Errorf("docker pull %s: %w: %s", im, err, last.String())
+			return &PullError{Image: im, Last: last.String(), Attempts: PullAttempts, Err: err}
 		}
 	}
 	return nil

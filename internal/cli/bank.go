@@ -21,7 +21,7 @@ import (
 
 func newBankCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "bank", Short: "Manage the memory bank", Args: cobra.NoArgs}
-	cmd.AddCommand(newBankApplyCmd(e))
+	cmd.AddCommand(newBankApplyCmd(e), newBankRenameCmd(e))
 	return cmd
 }
 
@@ -38,7 +38,23 @@ func applyBank(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.
 	if err != nil {
 		return server.BankResult{}, blocked(err)
 	}
+	// An install from before v0.1.4-m5 moves to the new bank names first
+	// (update apply runs bank apply after its commit point, under its lock).
+	var renamed, warning string
+	if cfg.Server.Mode == "local" && cfg.Server.Bank == config.LegacyBank {
+		switch r, err := runBankRename(ctx, d, cfg, sec, false, renameWaitApply); {
+		case err != nil && r.Partial:
+			// A bank moved and config.toml still names the old id: the
+			// template would create an empty bank there.
+			return server.BankResult{Bank: cfg.Server.Bank}, err
+		case err != nil:
+			warning = redacted(err, sec).Error() + " (backsight bank rename, or tonight's jobs maintain, tries again)"
+		case r.Status == "done":
+			cfg.Server.Bank, renamed = r.To, r.From+" → "+r.To
+		}
+	}
 	res, err := server.ApplyBank(ctx, cl, cfg.Server.Bank, st.BankConfigHash, force)
+	res.Renamed, res.RenameWarning = renamed, warning
 	if err != nil {
 		return res, blocked(err)
 	}
@@ -122,6 +138,10 @@ func bankStep(ctx context.Context, plan bool, add func(name, status, detail stri
 
 func bankText(r server.BankResult) string {
 	switch {
+	case r.Renamed != "":
+		return "bank " + r.Renamed + " renamed, then " + strings.TrimSpace(bankText(server.BankResult{Bank: r.Bank, Created: r.Created, Sent: r.Sent})) + "\n"
+	case r.RenameWarning != "":
+		return strings.TrimSpace(bankText(server.BankResult{Bank: r.Bank, Created: r.Created, Sent: r.Sent})) + "; not renamed: " + r.RenameWarning + "\n"
 	case r.Created:
 		return fmt.Sprintf("bank %s created and configured\n", r.Bank)
 	case r.Sent:

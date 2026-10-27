@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/stats"
 )
 
@@ -516,5 +517,14 @@ func TestScrubKnownNamesBeforeLANNames(t *testing.T) {
 	s.Name("ann", "<user>")
 	if got, want := s.String("lookup nas.lan and box.lan for http://ann@10.1.2.3"), "lookup <server> and <lan-host> for http://<user>@<lan-ip>"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The doctor skill files issues where report's links point.
+func TestDoctorSkillFilesIssuesInTheReportRepo(t *testing.T) {
+	for _, s := range instructions.Skills("/s") {
+		if s.Name == "doctor" && !strings.Contains(s.Body, "gh issue create -R "+Repo+"`") {
+			t.Errorf("the doctor skill files elsewhere than %s:\n%s", Repo, s.Body)
+		}
 	}
 }

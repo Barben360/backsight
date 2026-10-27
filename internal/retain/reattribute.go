@@ -549,7 +549,7 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 	mark := dropped{Records: map[string]bool{}, Generation: gen}
 	var keys []string
 	for _, rec := range recs {
-		if k := sessionKey(f.Bank, r.Session, rec.UUID); f.Index.Has(k) {
+		if k := ownKey(f.Index, f.Bank, r.Session, rec.UUID); k != "" {
 			mark.Records[rec.UUID] = true
 			keys = append(keys, k)
 		}

@@ -8,7 +8,7 @@ Follow these steps in order. Everything goes through `backsight` commands with `
 
 ## Rules
 
-- **Secrets never pass through you.** Never put a key in a command line, an answer or a file. When a key is needed, ask the user to type, in Claude Code: `! backsight secret set <name>` (the value is read without echo).
+- **Secrets never pass through you.** Never put a key in a command line, an answer or a file. When a key is needed, ask the user to run `backsight secret set <name>` in a terminal of their own, outside this session (the value is read without echo), or to pipe it from their password manager (`pass show <entry> | backsight secret set <name>`). Not with `!` in Claude Code: it runs the command without a terminal, so there is no prompt and nothing is saved. Never suggest `--from-env` or `echo` inside the session: the key would land in the transcript, which backsight sends to the memory server.
 - **The user decides.** Show each question with its options, costs and caveats, say which is recommended, and wait for the answer. Never answer `consent` yourself.
 - **Read the exit code and the JSON envelope** `{schema_version, command, ok, data | error}`:
 
@@ -59,7 +59,7 @@ backsight setup --non-interactive --json --answer provider=<p> … --answer cons
 
 Progress lines `{"event":"progress","step","pct","eta_s"}` arrive on stderr; stdout holds the one envelope. During the server step a line comes every 5 seconds with a `detail` saying what runs (the image download, then the server's first start and its model download). The first run downloads about 2.4 GB: tell the user it takes several minutes.
 
-Expect exit 10 the first time: the LLM key is not set. Ask the user to run `! backsight secret set llm_api_key` (with the `claude-code` provider, first `claude setup-token`), then run `backsight setup --resume --non-interactive --json`.
+Expect exit 10 the first time: the LLM key is not set. Ask the user to run `backsight secret set llm_api_key` in a terminal of their own (with the `claude-code` provider, first `claude setup-token`), then run `backsight setup --resume --non-interactive --json`.
 
 ## 4. Finish
 

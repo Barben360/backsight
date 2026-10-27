@@ -170,11 +170,22 @@ type Update struct {
 	Prereleases bool `toml:"prereleases" json:"prereleases"`
 }
 
+// DefaultBank is the memory bank setup and server install write into a new
+// config.toml (with DefaultBank-docs and DefaultBank-control). LegacyBank
+// is what installs before v0.1.4-m5 use, and what a config.toml without
+// server.bank still means, so that no binary ever points an older install
+// at a new, empty bank: bank rename (update apply runs it) moves the bank
+// and writes the new name.
+const (
+	DefaultBank = "backsight"
+	LegacyBank  = "claude-memory"
+)
+
 // Default is the Appendix A.1 configuration for these directories and home.
 func Default(d paths.Dirs, home string) Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
-		Server: Server{URL: "http://127.0.0.1:8888", Bank: "claude-memory", Mode: "local",
+		Server: Server{URL: "http://127.0.0.1:8888", Bank: LegacyBank, Mode: "local",
 			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server"), Project: "backsight"},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: []string{"sdk-*"}},

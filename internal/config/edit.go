@@ -28,6 +28,11 @@ func SetExcludePaths(raw []byte, paths []string) ([]byte, error) {
 	return setKey(raw, "privacy", "exclude_paths", "["+strings.Join(quoted, ", ")+"]")
 }
 
+// SetServerBank returns raw with [server] bank set to bank.
+func SetServerBank(raw []byte, bank string) ([]byte, error) {
+	return setKey(raw, "server", "bank", strconv.Quote(bank))
+}
+
 // valueEnd is where a one-line TOML value ends in s (strings and arrays
 // read with their quotes, so a "#" or "]" inside a string counts for
 // nothing); ok false when an array does not close on this line.

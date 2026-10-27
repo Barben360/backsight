@@ -557,3 +557,10 @@ func (c *Client) QueuedOperationsOf(ctx context.Context, bank, status string, pa
 	}
 	return ops, false, nil
 }
+
+// CreateBankAlias makes alias a second id of bank: a client still calling
+// the alias reaches the bank (Hindsight resolves it before anything reads
+// it). 409 when alias already names a bank or another alias.
+func (c *Client) CreateBankAlias(ctx context.Context, bank, alias string) error {
+	return c.do(ctx, http.MethodPost, bankPath(bank, "/aliases"), nil, map[string]any{"alias": alias}, nil)
+}

@@ -8,7 +8,7 @@ The open-source memory server backsight installs and runs for you, in Docker: [v
 
 ## Bank
 
-One memory store on the Hindsight server, named by an id. Your memory is the bank `claude-memory` (`server.bank` in [configuration.md](configuration.md)). backsight keeps two more beside it: `claude-memory-docs` holds these docs for `backsight guide search`, and `claude-memory-control` holds backsight's own records (tombstones, restore epochs). Neither mixes with your memories.
+One memory store on the Hindsight server, named by an id. Your memory is the bank `backsight` (`server.bank` in [configuration.md](configuration.md); `claude-memory` on installs before v0.1.4-m5 until `backsight bank rename` moves it). backsight keeps two more beside it: `backsight-docs` holds these docs for `backsight guide search`, and `backsight-control` holds backsight's own records (tombstones, restore epochs). Neither mixes with your memories.
 
 ## Memory
 

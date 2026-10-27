@@ -62,7 +62,7 @@ Setup checks the machine, asks a few questions, shows its plan, and asks for you
 8. installs the background jobs (a timer every 15 minutes and a daily one) and, with backups on, generates your backup identity, the key backups are encrypted to;
 9. runs `backsight verify`: every hook and the memory tools as Claude Code runs them, then a store-and-recall round trip;
 10. unwires an older Hindsight integration from Claude Code, if you chose to (see below);
-11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted.
+11. queues your past sessions for import ([backfill](glossary.md#backfill)), if you accepted, and starts the first `jobs tick` at once so the import begins before setup ends.
 
 The first run downloads about 2.4 GB: the server images (about 1.2 GB, with Docker's progress shown), then the embedding models at the server's first start (about 1.2 GB; setup prints the time spent while it waits). Expect several minutes on a home connection. Every step is journaled: if setup stops, `backsight setup --resume` continues where it stopped, the server it started included.
 
@@ -97,7 +97,7 @@ backsight secret set llm_api_key
 backsight setup --resume
 ```
 
-`secret set` reads the value at a prompt, without echo (or from a pipe, `--from-env VAR` or `--from-file FILE`). The same two commands replace a wrong key.
+`secret set` reads the value at a prompt, without echo (or from a pipe, `--from-env VAR` or `--from-file FILE`). Run it in a terminal, not with `!` in Claude Code: that gives it no terminal, and it says so and saves nothing. The same two commands replace a wrong key.
 
 With the `claude-code` provider, run `claude setup-token` first and set its token as `llm_api_key`.
 
@@ -138,14 +138,14 @@ It prints Ollama's version. Setup then tests the model itself: its LLM check run
 
 ## After setup
 
-- Save your **backup identity** somewhere else, a password manager for example: `backsight backup identity show` prints it. Without it, your backups cannot be decrypted. See [backups-and-restore.md](backups-and-restore.md).
-- If you accepted the backfill, past sessions are sent in the background; `backsight doctor` shows its progress.
+- Save your **backup identity** somewhere else, a password manager for example: `backsight backup identity show | pass insert -m backsight/backup-identity` (or without the pipe, to see it). Without it, your backups cannot be decrypted. See [backups-and-restore.md](backups-and-restore.md).
+- If you accepted the backfill, the import has already started and goes on in the background; `backsight doctor` shows its progress.
 - `backsight doctor` checks the whole install at any time.
 - Daily use: [daily-use.md](daily-use.md).
 
 ## Install with a coding agent
 
-A coding agent (Claude Code or another) can install backsight for you: point it at [agent-guide.md](agent-guide.md). It drives the same commands with `--json` and asks you each question. You type secrets yourself, as `! backsight secret set <name>` in Claude Code.
+A coding agent (Claude Code or another) can install backsight for you: point it at [agent-guide.md](agent-guide.md). It drives the same commands with `--json` and asks you each question. You type secrets yourself: `backsight secret set <name>` in a terminal of your own, or piped from your password manager (`pass show <entry> | backsight secret set <name>`). Not with `!` in Claude Code, which gives the command no terminal to prompt in.
 
 ## Where backsight keeps its files
 

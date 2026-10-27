@@ -994,7 +994,22 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			var br backfillResult
 			_ = json.Unmarshal(out.Data, &br)
-			return setup.Step{Name: "backfill", Status: "done", Detail: fmt.Sprintf("%d session(s) queued: jobs tick sends them in the background", br.Total)}, nil
+			detail := fmt.Sprintf("%d session(s) queued: jobs tick sends them in the background", br.Total)
+			switch {
+			case br.Total == 0:
+			case answers["scheduler"] == "off":
+				detail += "; with no scheduler, run backsight jobs tick to send them"
+			default:
+				// The first tick now, not at the next 15-minute slot: the
+				// import starts while setup ends. Its failure leaves the
+				// timer to it.
+				if start := subcommand(ctx, "jobs", "start", "tick"); start.Err != nil {
+					detail += "; the first tick could not be started now (" + start.Err.Error() + "): the timer starts it within 15 min"
+				} else {
+					detail = fmt.Sprintf("%d session(s) queued: the import started now, jobs tick sends them in the background", br.Total)
+				}
+			}
+			return setup.Step{Name: "backfill", Status: "done", Detail: detail}, nil
 		}},
 	}
 }
@@ -1052,9 +1067,32 @@ func (s *setupEnv) download(ctx context.Context, rt server.Runtime) (models bool
 	err = dl.Download(ctx, images, w)
 	stop()
 	if err != nil {
-		return models, &output.Error{Code: output.Blocked, Message: "the download stopped: " + err.Error() + " (check the network)"}
+		return models, downloadError(err)
 	}
 	return models, nil
+}
+
+// downloadError says what stopped an image download, from Docker's last
+// line: only a network-shaped error is blamed on the network (issue 60).
+func downloadError(err error) error {
+	msg := "the download stopped: " + err.Error()
+	var pe *server.PullError
+	if !errors.As(err, &pe) {
+		return &output.Error{Code: output.Blocked, Message: msg}
+	}
+	msg = fmt.Sprintf("the download stopped after %d attempts: %s", pe.Attempts, err.Error())
+	switch pe.Cause() {
+	case server.PullNetwork:
+		msg += " (check the network, then backsight setup --resume)"
+	case server.PullDisk:
+		msg += " (free disk space, then backsight setup --resume)"
+	case server.PullUnpack:
+		msg += " (Docker got the image but could not unpack it on this machine: an on-access antivirus or another tool holding containerd's mounts " +
+			"can cause it. Run docker pull " + pe.Image + " yourself, then backsight setup --resume; troubleshooting.md, \"An image does not unpack\")"
+	default:
+		msg += " (Docker's message says why; then backsight setup --resume)"
+	}
+	return &output.Error{Code: output.Blocked, Message: msg}
 }
 
 // missingSecrets lists the keys the configuration these answers give
@@ -1211,10 +1249,10 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins) so it loads the backsight plugin")
 	}
 	if answers["backfill"] == "yes" {
-		res.NextSteps = append(res.NextSteps, "your past sessions reach the memory in the background: backsight doctor shows the backfill's progress")
+		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
 	if answers["backups"] == "on" {
-		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show (at a terminal)")
+		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)")
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""

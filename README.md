@@ -207,7 +207,7 @@ You mostly use Claude Code as before. Commands you may need:
 
 | Command | Use |
 |---|---|
-| `backsight doctor` | Check everything, with a fix for each problem. |
+| `backsight doctor` | Check everything, with a fix for each problem (in Claude Code: `/backsight:doctor`, which can also file a bug). |
 | `backsight search "<keywords>"` | Search the memory yourself (local, free). |
 | `backsight store --kind decision "<fact>"` | Store a fact (in Claude Code: `/backsight:remember`). |
 | `backsight forget <id>` | Retire a wrong memory. |
@@ -235,7 +235,7 @@ You mostly use Claude Code as before. Commands you may need:
 
 backsight is a **preview**: it runs daily on its author's machine, but expect rough edges and changes between releases. Linux is the only tested platform. Each release pins one Hindsight version, listed in [docs/compatibility.md](docs/compatibility.md).
 
-Found a problem? `backsight report` prints a redacted diagnostic and a link to file a GitHub issue; it sends nothing itself. For a security problem, see [SECURITY.md](SECURITY.md).
+Found a problem? Ask Claude `/backsight:doctor`: it diagnoses, fixes with your OK, and drafts the issue it files only once you confirm. Or run `backsight report` yourself: it prints a redacted diagnostic and a link to file a GitHub issue, and sends nothing itself. For a security problem, see [SECURITY.md](SECURITY.md).
 
 Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -31,7 +31,10 @@ import (
 )
 
 // stdoutIsTerminal is replaced by tests.
-var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+var (
+	stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+	stderrIsTerminal = func() bool { return term.IsTerminal(int(os.Stderr.Fd())) }
+)
 
 func newBackupCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "backup", Short: "Encrypted backups of the memory server", Args: cobra.NoArgs}
@@ -466,12 +469,14 @@ func newBackupIdentityCmd(e *env) *cobra.Command {
 	importCmd := newBackupIdentityImportCmd(e)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "show",
-		Short: "Print the backup identity, to keep somewhere else (terminal only)",
+		Short: "Print the backup identity, to keep somewhere else: alone on stdout, so it pipes to a password manager",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
-			// A secret: printed to a person at a terminal, never to an agent
-			// reading the output (SPEC §11.2 secrets rule).
-			if e.json || !stdoutIsTerminal() {
+			// A secret: printed for a person, never to an agent reading the
+			// output (SPEC §11.2 secrets rule). A person's shell has a
+			// terminal on one side at least, so `… | pass insert -m …`
+			// works (issue 61); an agent's command has none.
+			if e.json || !stdoutIsTerminal() && !stdinIsTerminal() && !stderrIsTerminal() {
 				return &output.Error{Code: output.NeedsUser, Message: "the backup identity is a secret: run backsight backup identity show in a terminal yourself",
 					Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight backup identity show", Why: "save the key that decrypts the backups"}}}
 			}
@@ -496,7 +501,10 @@ func newBackupIdentityCmd(e *env) *cobra.Command {
 				return err
 			}
 			sec, _ = config.LoadSecrets(d.SecretsFile())
-			fmt.Fprintf(e.stdout, "%s\nKeep it somewhere safe and apart from this machine: without it the backups cannot be read.\n", sec.BackupIdentity)
+			// The key alone on stdout, the advice on stderr: a pipe gets the
+			// key and nothing else.
+			fmt.Fprintln(e.stdout, sec.BackupIdentity)
+			fmt.Fprintln(e.stderr, "Keep it somewhere safe and apart from this machine: without it the backups cannot be read.")
 			return nil
 		},
 	}, importCmd)

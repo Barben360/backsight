@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/redact"
@@ -359,6 +360,22 @@ func (s *SentIndex) Has(uuid string) bool { return s.set[uuidKey(uuid)] }
 // tells a fork's copied records (sent under the parent) from this session's
 // own, and a bank switch from a pending first segment.
 func sessionKey(bank, sid, uuid string) string { return bank + "\x00" + sid + "\x00" + uuid }
+
+// ownKey is the key the index holds for uuid as sent in session sid of
+// bank: bank's own, else the one written under the name bank had before
+// bank rename moved it (its keys stay in the index, which is hashed and
+// never rewritten). "" when the index holds neither.
+func ownKey(idx *SentIndex, bank, sid, uuid string) string {
+	if k := sessionKey(bank, sid, uuid); idx.Has(k) {
+		return k
+	}
+	if bank == config.DefaultBank {
+		if k := sessionKey(config.LegacyBank, sid, uuid); idx.Has(k) {
+			return k
+		}
+	}
+	return ""
+}
 
 // Add appends uuids (one write, fsynced).
 func (s *SentIndex) Add(uuids ...string) error {

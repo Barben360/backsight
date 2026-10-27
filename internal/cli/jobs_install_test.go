@@ -443,3 +443,21 @@ func TestJobsUninstallKeepsEnabledEntriesWithoutAUserSession(t *testing.T) {
 		t.Error("removed the files of enabled timers")
 	}
 }
+
+func TestJobsStartRunsTheJobThroughTheScheduler(t *testing.T) {
+	devInstall(t, true)
+	sys := withSys(t, "linux")
+	if code, out, errOut := run(t, "jobs", "start", "tick"); code != output.OK || !strings.Contains(out, "jobs tick started") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	if last := sys.calls[len(sys.calls)-1]; last != "systemctl --user start --no-block backsight-tick.service" {
+		t.Errorf("calls %q", sys.calls)
+	}
+	if code, _, _ := run(t, "jobs", "start", "nightly"); code != output.Usage {
+		t.Errorf("an unknown job: exit %d", code)
+	}
+	sys.fail = "systemctl --user start"
+	if code, _, errOut := run(t, "jobs", "start", "tick"); code != output.Blocked || !strings.Contains(errOut, "start --no-block") {
+		t.Errorf("a failing start: exit %d %q", code, errOut)
+	}
+}

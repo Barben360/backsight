@@ -82,7 +82,8 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight server render` | Writes the server's `compose.yaml` and `.env` from config and secrets. `--plan`. |
 | `backsight server upgrade` | Moves the server to the version this binary pins, after a verified safety backup. `--plan`, `--allow-unordered`. |
 | `backsight server llm check` | Checks the extraction LLM on a fixed sample, storing nothing. |
-| `backsight bank apply` | Creates the bank if needed and applies backsight's extraction settings, unless the bank was already given this version's. `--force` sends them anyway, over any edit made to them on the server. `--plan`. |
+| `backsight bank apply` | Creates the bank if needed and applies backsight's extraction settings, unless the bank was already given this version's. `--force` sends them anyway, over any edit made to them on the server. On a local server whose bank is still `claude-memory`, it runs `bank rename` first. `--plan`. |
+| `backsight bank rename` | Moves the banks of an install from before v0.1.4-m5 (`claude-memory`, `-docs`, `-control`) to `backsight`, `backsight-docs`, `backsight-control`, keeping every memory: it waits for the server's running operations (up to 10 minutes), dry-runs then runs Hindsight's own rename (`hindsight-admin rename-bank`, no LLM call) under the maintenance lock, keeps each old id as an alias of its bank so a client still using it keeps working, moves this machine's records (state.json, session cursors) and sets `server.bank`. If one bank cannot move, the ones before it are renamed back and nothing changes. The update to v0.1.4-m5 runs it (through `bank apply`), and `jobs maintain` tries again after its backup when the server was busy. A remote server is renamed on its host. `--plan`. |
 
 ## Backups and restore
 
@@ -91,7 +92,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight backup create` | Makes an encrypted backup now. |
 | `backsight backup list` | Lists backups, newest first. |
 | `backsight backup verify <file>` | Decrypts a backup, restores it into a throwaway database and compares counts. `--identity <file>`. |
-| `backsight backup identity show` | Prints the key that decrypts your backups (terminal only). |
+| `backsight backup identity show` | Prints the key that decrypts your backups, alone on stdout, so it pipes into a password manager (`backsight backup identity show \| pass insert -m backsight/backup-identity`). Refused without any terminal (an agent) and with `--json`. |
 | `backsight backup identity import [file]` | Stores a backup identity from a file or stdin. `--force` replaces another one. |
 | `backsight restore <file>` | Restores a backup into the local server. `--plan`, `--identity <file>`, `--no-safety`, `--non-interactive`, `--answer other_banks=revert` (the server's banks without a control bank go back to the archive too). |
 
@@ -114,7 +115,7 @@ Details: [update.md](update.md).
 | `backsight doctor` | Checks the whole install, read-only; each problem comes with its fix. |
 | `backsight report` | Prints a redacted diagnostic and links to search and file a GitHub issue. Sends nothing. |
 | `backsight guide` | Lists these documents; `backsight guide <topic>` shows one (`<topic>#<section>` one section), `backsight guide search <question>` searches them: semantically on the server, with a keyword search when the server cannot answer (`--mode keyword` asks for it). |
-| `backsight guide index [--plan]` | Indexes these documents into the server's docs bank (`<bank>-docs`, no LLM call). Setup and `update apply` run it, and `guide search` when the bank holds other docs. Several backsight versions can share the bank: each tags the sections it holds, and a section is deleted only when no version holds it. The bank keeps the last 5 versions, by the time each was first indexed (recorded in its `docs:_versions` document): an older version's tags are removed, and its sections no kept version holds are deleted. A `<bank>-docs` that backsight did not make (another name, or documents that are not its sections) is left as it is: `guide index` refuses and `guide search` uses its keyword search, saying why. `--plan` lists the documents it would create, resend, retag, untag, prune (losing only a dropped version's tag) and delete, and the versions it would drop. The `/backsight:memory` skill may run `guide` and `guide search` without asking, never `guide index`. |
+| `backsight guide index [--plan]` | Indexes these documents into the server's docs bank (`<bank>-docs`, no LLM call). Setup and `update apply` run it, and `guide search` when the bank holds other docs. Several backsight versions can share the bank: each tags the sections it holds, and a section is deleted only when no version holds it. The bank keeps the last 5 versions, by the time each was first indexed (recorded in its `docs:_versions` document): an older version's tags are removed, and its sections no kept version holds are deleted. A `<bank>-docs` that backsight did not make (another name, or documents that are not its sections) is left as it is: `guide index` refuses and `guide search` uses its keyword search, saying why. `--plan` lists the documents it would create, resend, retag, untag, prune (losing only a dropped version's tag) and delete, and the versions it would drop. The `/backsight:doctor` skill may run `guide` and `guide search` without asking, never `guide index`. |
 
 Details: [troubleshooting.md](troubleshooting.md).
 
@@ -125,6 +126,7 @@ The OS scheduler (systemd user timers on Linux) runs these; you rarely need them
 | Command | Does |
 |---|---|
 | `backsight jobs tick` | Every 15 minutes: sends settled sessions and queued notes, paces the backfill, then looks among the documents created since its last look for a purged document an older client wrote again, and purges it again (`retain purge-again`). |
+| `backsight jobs start tick` (or `maintain`) | Starts the job now through the OS scheduler, with its environment and log, without waiting for it. Setup runs it right after it queued your past sessions. |
 | `backsight jobs maintain` | Daily: rotation of the local usage log, backup, then the in-place moves of `retain reattribute` (never a re-send, which costs extraction: doctor shows the ones waiting), the look at every purge tombstone for a document an older client wrote again (`retain purge-again`), update check (and update with `update.auto_apply`), doctor snapshot (it keeps the transverse pool's noise reading, so doctor sees it grow). |
 | `backsight jobs install` | Installs the scheduler entries (setup does it). `--plan`. |
 | `backsight jobs uninstall` | Removes them. `--plan`. |
