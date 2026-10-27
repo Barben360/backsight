@@ -105,8 +105,11 @@ func FirstSessionNotice(server, provider string) string {
 	return fmt.Sprintf("👋 Memory is on: this session is stored on %s and processed by %s; `/backsight:pause` stops it for this session, `/backsight:pause project` for this project.", server, provider)
 }
 
-// SubagentGuide opens the SubagentStart text (≤ 600 chars with items).
-const SubagentGuide = "The user's long-term memory is searchable with `memory_search` (short keyword queries)."
+// SubagentGuide opens the SubagentStart text (≤ 600 chars with the hints
+// line and the briefing items, which the hook clips to what is left).
+const SubagentGuide = "Memory: `memory_search` (topic + intent word queries). Your final message is kept in it: " +
+	"findings with their cause, decisions with their reason, what was delivered where; no progress chatter; " +
+	"quote a recalled fact, never say you retrieved a memory. The main session stores durable decisions."
 
 // Tool descriptions (SPEC §7).
 const (
