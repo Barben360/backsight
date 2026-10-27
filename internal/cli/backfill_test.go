@@ -394,7 +394,7 @@ func TestBackfillInterruptPauses(t *testing.T) {
 	f, _ := newFlusher(d, home, cfg, sec, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := runBackfill(ctx, f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false)
+	_, err := runBackfill(ctx, f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false, nil)
 	st, _ := state.Load(d.StateFile())
 	if err == nil || st.Backfill.Paused != "interrupted" || retained.Load() != 0 {
 		t.Errorf("%v %+v", err, st.Backfill)
@@ -528,5 +528,159 @@ func TestBackfillTakesOverAStaleLock(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(d.LocksDir(), "job-backfill.lock"), []byte(`{"pid":999999,"command":"retain backfill","since":"2026-10-25T03:00:00Z"}`), 0o600)
 	if code, out, errOut := run(t, "retain", "backfill", "--max-cost", "1"); code != output.OK || !strings.Contains(out, "finished") {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// progressEvents is the JSON progress lines a --json run wrote on stderr.
+func progressEvents(t *testing.T, errOut string) (evs []backfillEvent) {
+	t.Helper()
+	for _, l := range strings.Split(strings.TrimSpace(errOut), "\n") {
+		var ev backfillEvent
+		if l == "" || json.Unmarshal([]byte(l), &ev) != nil || ev.Event != "progress" {
+			continue
+		}
+		evs = append(evs, ev)
+	}
+	return evs
+}
+
+// A long backfill says how far it is after each session, on stderr: stdout
+// keeps its one envelope.
+func TestBackfillReportsEachSession(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "newer", time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), false)
+	oldSession(t, home, "older", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	code, out, errOut := run(t, "retain", "backfill", "--json")
+	var env struct {
+		Data backfillResult `json:"data"`
+	}
+	if code != output.OK || json.Unmarshal([]byte(out), &env) != nil || !env.Data.Finished {
+		t.Fatalf("stdout must stay one envelope: exit %d\n%s", code, out)
+	}
+	var sessions []backfillEvent
+	for _, ev := range progressEvents(t, errOut) {
+		if ev.Step == "session" {
+			sessions = append(sessions, ev)
+		}
+	}
+	if len(sessions) != 2 || sessions[0].Session != "older" || sessions[0].Done != 1 || sessions[1].Session != "newer" || sessions[1].Done != 2 ||
+		sessions[1].Total != 2 || sessions[1].Status != retain.Sent || sessions[0].Command != "retain backfill" || sessions[1].Currency != "USD" {
+		t.Errorf("want one event per session, oldest first, counting up to 2/2: %+v\n%s", sessions, errOut)
+	}
+
+	oldSession(t, home, "third", time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC), false)
+	code, out, errOut = run(t, "retain", "backfill")
+	if code != output.OK || !strings.Contains(errOut, "1/1  sent  third") || strings.Contains(out, "1/1  sent") {
+		t.Errorf("text progress belongs on stderr: exit %d\nstdout %s\nstderr %s", code, out, errOut)
+	}
+}
+
+// A wait on the server's queue is said once, not left silent.
+func TestBackfillSaysItWaitsForTheQueue(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "q1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	queued.Store(int64(backfillQueueLimit) + 5)
+	_, _, errOut := run(t, "retain", "backfill", "--json")
+	waits := 0
+	for _, ev := range progressEvents(t, errOut) {
+		if ev.Step == "queue" && ev.Status == "waiting" && strings.Contains(ev.Detail, "operations queued") {
+			waits++
+		}
+	}
+	if waits != 1 {
+		t.Errorf("want one queue wait event, got %d\n%s", waits, errOut)
+	}
+}
+
+// The tick runs unattended: its backfill writes no progress.
+func TestJobsTickBackfillIsSilent(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	oldSession(t, home, "a", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), false)
+	if code, _, _ := run(t, "retain", "backfill", "--queue"); code != output.OK {
+		t.Fatalf("queue: exit %d", code)
+	}
+	code, out, errOut := run(t, "jobs", "tick")
+	if code != output.OK || !strings.Contains(out, "backfill 1/1") || errOut != "" {
+		t.Errorf("exit %d\nstdout %s\nstderr %q", code, out, errOut)
+	}
+}
+
+func backfillStatusOf(t *testing.T) (int, backfillStatus) {
+	t.Helper()
+	code, out, errOut := run(t, "retain", "backfill", "--status", "--json")
+	var env struct {
+		Data backfillStatus `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("exit %d: %v\n%s%s", code, err, out, errOut)
+	}
+	return code, env.Data
+}
+
+// --status reads the progress from the machine alone, while a backfill
+// runs and with the server down, and says what to do after a pause.
+func TestBackfillStatus(t *testing.T) {
+	home := devInstall(t, true) // pointed at a closed port: no server
+	d := pathsOf(home)
+	if code, s := backfillStatusOf(t); code != output.OK || s.Active || s.Finished || s.Total != 0 {
+		t.Errorf("no backfill: exit %d %+v", code, s)
+	}
+	if _, out, _ := run(t, "retain", "backfill", "--status"); !strings.Contains(out, "no backfill") {
+		t.Errorf("%s", out)
+	}
+
+	_ = state.Update(d, "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Total: 5, Done: 2, MaxCost: 1.5, Currency: "USD", SpentCost: 0.25, SpentTokens: 1000,
+			Sessions: []string{"/x/c.jsonl", "/x/d.jsonl", "/x/e.jsonl"}}
+		return nil
+	})
+	if code, s := backfillStatusOf(t); code != output.OK || !s.Active || s.Running || s.Done != 2 || s.Total != 5 || s.Left != 3 ||
+		s.Spent != 0.25 || s.MaxCost != 1.5 || s.Currency != "USD" || s.Finished {
+		t.Errorf("queued: exit %d %+v", code, s)
+	}
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "job-backfill.lock"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, s := backfillStatusOf(t)
+	_, out, _ := run(t, "retain", "backfill", "--status")
+	_ = l.Release()
+	if !s.Running || !strings.Contains(out, "2/5") || !strings.Contains(out, "sending now") {
+		t.Errorf("a held lock is a running backfill: %+v\n%s", s, out)
+	}
+	if _, s := backfillStatusOf(t); s.Running {
+		t.Errorf("released lock still running: %+v", s)
+	}
+
+	_ = state.Update(d, "test", func(s *state.State) error { s.Backfill.Paused = "budget"; return nil })
+	if _, out, _ := run(t, "retain", "backfill", "--status"); !strings.Contains(out, "paused: budget") || !strings.Contains(out, "--max-cost") {
+		t.Errorf("a budget pause must say how to resume: %s", out)
+	}
+	_ = state.Update(d, "test", func(s *state.State) error { s.Backfill.Paused = "interrupted"; return nil })
+	if _, out, _ := run(t, "retain", "backfill", "--status"); !strings.Contains(out, "paused: interrupted") || !strings.Contains(out, "rerun backsight retain backfill") {
+		t.Errorf("an interrupted backfill must say how to resume: %s", out)
+	}
+
+	_ = state.Update(d, "test", func(s *state.State) error {
+		s.Backfill.Sessions, s.Backfill.Done, s.Backfill.Paused = nil, 5, ""
+		return nil
+	})
+	if _, s := backfillStatusOf(t); s.Active || !s.Finished || s.Done != 5 || s.Left != 0 {
+		t.Errorf("finished: %+v", s)
+	}
+}
+
+func TestBackfillStatusRefusesOtherFlags(t *testing.T) {
+	devInstall(t, true)
+	for _, extra := range [][]string{{"--plan"}, {"--max-cost", "2"}, {"--since", "2026-01-01"}, {"--allow-subscription"}} {
+		if code, _, _ := run(t, append([]string{"retain", "backfill", "--status"}, extra...)...); code != output.Usage {
+			t.Errorf("--status %v: exit %d, want %d", extra, code, output.Usage)
+		}
 	}
 }

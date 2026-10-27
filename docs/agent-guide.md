@@ -69,6 +69,12 @@ On exit 0, `data` holds:
 - `next_steps`: relay each one (the backup key to save, the background backfill);
 - `try_first`: suggest it.
 
+### Following the import of past sessions
+
+When the user accepted the import, setup queued it and started the first `jobs tick`, which sends at most three sessions per run, every 15 minutes. `backsight retain backfill --status --json` reads its progress from this machine alone, without the server: `data.done`, `data.total`, `data.left`, `data.spent_cost` against `data.max_cost`, `data.running` (a backfill is sending now), `data.paused` and `data.finished`. Poll it every few minutes rather than in a tight loop.
+
+To finish the import now, with the user's go-ahead, run `backsight retain backfill --json` in the background. It blocks until the queue is empty, which can take hours (setup's `backfill` step and `backsight retain backfill --plan` give the estimate). Pass the same `--projects-dir` as setup's `backfill` step, and `--allow-subscription` on the `claude-code` provider: other filters start a new queue. After each session, a line `{"event":"progress","command":"retain backfill","step":"session","status","session","done","total","spent_cost","spent_tokens","currency"}` arrives on stderr; `"step":"queue"` or `"final"` with `"status":"waiting"` and a `detail` says it waits for the server. Exit 0 with `data.finished` means done; exit 40 means paused (`data.paused`: `budget` needs a higher `--max-cost`, which is the user's call; `interrupted` or `server` resume with a rerun).
+
 `backsight doctor --json` checks the whole install at any time. About an hour after the user's first real session, `backsight verify --live --json` checks the real pipeline, read-only: exit 0 means this machine's latest settled session reached the server and an observation was consolidated from it; exit 40 means not yet, rerun after `data.wait_s` seconds; exit 20 means it failed, with `data.fix`. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
 
 ## When something goes wrong

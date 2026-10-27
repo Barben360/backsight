@@ -124,7 +124,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if release, err := acquireBackfill(d); err != nil {
 					res.Backfill = "skipped: another backfill is running"
 				} else {
-					br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, true)
+					br, berr := runBackfill(cmd.Context(), f, d, cfg, prices, true, nil)
 					release()
 					res.Backfill = fmt.Sprintf("%d/%d", br.Done, br.Total)
 					if berr != nil {
