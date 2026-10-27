@@ -67,7 +67,7 @@ var Presets = []Preset{
 	{Provider: "deepseek", Model: "deepseek-flash", Label: "DeepSeek API", Cost: "the cheapest provider tested: $0.15 per million input tokens off-peak, twice that at peak hours",
 		Caveat: "DeepSeek processes and stores data in the People's Republic of China (https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html)"},
 	{Provider: "anthropic", Model: "claude-haiku-5-5", Label: "Anthropic API key, or an Anthropic-compatible URL"},
-	{Provider: "openai", Model: "gpt-5.4-mini", Label: "OpenAI API key, or an OpenAI-compatible URL"},
+	{Provider: "openai", Model: "gpt-6-luna", Label: "OpenAI API key, or an OpenAI-compatible URL"},
 	{Provider: "ollama", Model: "qwen3:8b", BaseURL: "http://host.docker.internal:11434", Label: "Ollama on this machine (private, lower quality)",
 		Caveat: "an 8B model writes wordier facts, some only true for a while, and takes about 2 min per part of a session on CPU; 3B and smaller models fail"},
 	{Provider: "claude-code", Model: "claude-haiku-5-5", Label: "Your Claude subscription (claude setup-token)",

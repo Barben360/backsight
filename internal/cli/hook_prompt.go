@@ -37,9 +37,11 @@ var (
 	approvalRE = regexp.MustCompile(`(?i)^\s*(?:ok(?:ay)?|parfait|valid[ée]|go|looks good|lgtm|yes|oui|d'accord|ça marche|perfect|top)(?:[^\pL\pN]|$)`)
 )
 
-// Credit detection on the previous reply (outcome telemetry, C12).
+// Credit detection on the previous reply (outcome telemetry, C12). The
+// credit's 🧠 sets it apart from a plain "from memory"; the v3 wording,
+// "From Hindsight memory", still counts.
 var (
-	creditRE = regexp.MustCompile(`(?i)from hindsight memory`)
+	creditRE = regexp.MustCompile(`(?i)🧠\s*\**\s*from memory\b|from hindsight memory`)
 	emptyRE  = regexp.MustCompile(`(?i)nothing (?:relevant )?in (?:the |your )?memory|rien[^.\n]{0,25}en m[ée]moire`)
 	usedRE   = regexp.MustCompile(`(?i)(?:according to|from) (?:the |your )?(?:long-term )?memory\b|memory (?:says|shows|notes|confirms)\b|(?:d['’]après|selon) (?:la|ta|ma) m[ée]moire\b`)
 )

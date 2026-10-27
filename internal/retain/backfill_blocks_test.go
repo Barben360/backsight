@@ -79,6 +79,9 @@ func TestPricesAndCost(t *testing.T) {
 	if got := p.Cost(100, 500, 0, 0); got != 500*p.Cached/1e6 {
 		t.Errorf("cached above input must not go negative: %v", got)
 	}
+	if l := PricesFor("gpt-6-luna", 0, 0, 0, "USD"); l.Input != 0.10 || l.Cached != 0.01 || l.Output != 0.50 {
+		t.Errorf("setup's openai default needs its price: %+v", l)
+	}
 	if PricesFor("some-local-model", 0, 0, 0, "USD").Known() {
 		t.Error("an unknown model has no price")
 	}

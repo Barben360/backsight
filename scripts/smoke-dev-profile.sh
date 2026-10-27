@@ -49,7 +49,7 @@ for line in open(sys.argv[1]):
     if m.get("type") == "assistant":
         ok["tool"] |= any(b.get("type") == "tool_use" and b.get("name", "").startswith("mcp__plugin_backsight_memory__") for b in m["message"]["content"])
     if m.get("type") == "result":
-        ok["cite"] = "From Hindsight memory" in (m.get("result") or "") or "nothing in memory" in (m.get("result") or "")
+        ok["cite"] = "From memory" in (m.get("result") or "") or "nothing in memory" in (m.get("result") or "")
 print(ok)
 sys.exit(0 if all(ok.values()) else 1)
 PY

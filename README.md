@@ -12,7 +12,7 @@ Long-term memory for Claude Code, on a [Hindsight](https://github.com/vectorize-
 
 - **What**: one Go binary that installs a memory server in Docker on your machine, wires it into Claude Code, and keeps it running.
 - **Why**: Claude Code forgets everything between sessions. With backsight, Claude remembers what you decided, fixed and learned, across all your projects, and recalls it when it matters.
-- **Cost**: a few cents per session for the LLM that turns your sessions into memories, paid to the provider you choose ([below](#what-it-costs)).
+- **Cost**: searching the memory is local and free. Only turning sessions into memories uses an LLM: a few cents per session, paid to the provider you choose ([below](#what-it-costs)).
 
 > A *backsight* is the surveying reading taken back on a known point before moving forward.
 
@@ -21,28 +21,81 @@ backsight is an independent project, not affiliated with or endorsed by Anthropi
 ## What it does for you
 
 - **Remembers your sessions.** When a session ends, its text is redacted and sent to your server, which extracts durable facts: decisions, fixes, conventions, pitfalls.
-- **Recalls at the right moment.** Each session starts with a briefing on the current project. Each prompt brings the few most relevant memories into Claude's context, and Claude searches the memory before answering factual questions.
+- **Recalls at the right moment.** Each session starts with a briefing on the current project. Each prompt brings the few most relevant memories into Claude's context, and Claude searches the memory before answering factual questions. Every search runs on your machine, with no LLM call.
 - **Stays yours.** The server runs on your machine, on `127.0.0.1`. You choose which LLM extracts the memories, and can pause or exclude anything.
 - **Looks after itself.** Daily encrypted backups, signed updates that roll back on failure, and `backsight doctor` to say what is wrong and how to fix it.
 
 New words (bank, observation, transverse…) are in the [glossary](docs/glossary.md).
 
+## How it works
+
+A session and the memory, step by step. The green part runs on your machine and costs nothing; only the orange part, in the background, calls your LLM provider.
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant CC as Claude Code
+    participant BS as backsight
+    participant HS as Hindsight server (local)
+    participant LLM as LLM provider
+
+    rect rgba(46, 160, 67, 0.12)
+    Note over CC,HS: On your machine, free
+    You->>CC: open a session
+    CC->>BS: SessionStart hook
+    BS->>HS: read the project's briefing
+    BS-->>CC: memory guide + briefing
+    You->>CC: a prompt
+    CC->>BS: UserPromptSubmit hook
+    BS->>HS: recall (search + local reranker)
+    BS-->>CC: up to 3 relevant memories
+    CC->>BS: memory_search, memory_read
+    BS->>HS: search
+    BS-->>CC: memories, to cite
+    CC->>BS: AskUserQuestion, no search yet
+    BS-->>CC: refused once: search the memory first
+    CC->>BS: memory_store, a subagent's report
+    BS->>HS: redacted fact or report
+    You->>CC: end the session (or leave it idle 30 min)
+    CC->>BS: SessionEnd hook
+    BS->>HS: redacted session text
+    end
+
+    rect rgba(219, 109, 40, 0.12)
+    Note over HS,LLM: Paid, in the background
+    HS->>LLM: extract facts, consolidate them
+    HS->>LLM: refresh the project's briefing
+    end
+```
+
+Background jobs keep it running (systemd user timers):
+
+```mermaid
+flowchart LR
+    tick(["jobs tick<br/>every 15 min"]) --> t1["send idle sessions<br/>and queued notes"] --> t2["pace the import<br/>of past sessions"] --> t3["purge again a document<br/>an older client rewrote"]
+    maintain(["jobs maintain<br/>daily, 04:00 ± 30 min"]) --> m1["encrypted backup"] --> m2["move memories<br/>to their project"] --> m3["check purged<br/>documents"] --> m4["check for<br/>a new release"] --> m5["doctor snapshot"]
+```
+
+Every hook, threshold and time limit: [how-it-works.md](docs/how-it-works.md).
+
 ## What it costs
 
-backsight is free. The server's LLM is not: it reads each session to extract memories, and you pay its provider for the tokens.
+backsight is free, and so is searching the memory: recall at each prompt, `memory_search` and `backsight search` run on your machine, with the server's local search models, and send nothing out. The server's LLM is not free: it reads each session to extract memories, and you pay its provider for the tokens.
 
-| Provider | Per session | 5 sessions a day, 22 days a month |
+| Provider | Per session | Per month (5 sessions a day, 22 days) |
 |---|---|---|
-| DeepSeek V4.1 Flash (`deepseek`, the default; model `deepseek-flash`, not the Pro model) | about $0.05; $0.10 at DeepSeek's peak hours | about $5, up to $11 |
-| Anthropic API with Claude Haiku 5.5 (`anthropic`) | about $0.04 | about $4 |
-| Ollama on your machine (`ollama`) | nothing, but slow on a CPU and lower quality | nothing |
-| Your Claude subscription (`claude-code`) | counts against your plan; [not recommended](docs/privacy.md#the-claude-subscription-lane) | |
+| DeepSeek V4.1 Flash (default) | $0.05, $0.10 at peak hours | $5, up to $11 |
+| Claude Haiku 5.5 | $0.04 | $4 |
+| GPT-6 Luna | $0.04 | $4 |
+| Ollama on your machine | free, but slow on a CPU and lower quality | free |
+| Your Claude subscription | counts against your plan; [not recommended](docs/privacy.md#the-claude-subscription-lane) | |
 
 How these figures are made, so you can redo them for your use:
 
 - **A session** is 30,000 characters of sent text (your prompts, Claude's replies and one line per tool call): the average of 42 real sessions of the author.
 - **Tokens per session**, from backsight's own estimate (the one `backsight retain backfill --plan` shows): about 92,000 input and 14,000 output tokens for extraction and consolidation. Output is counted 2.5 times over for the model's thinking tokens, the ratio measured on the author's server. Add one refresh of the project's briefing, about 96,000 input tokens.
-- **Prices**, checked on 2026-10-26, per million tokens: DeepSeek $0.15 input and $0.60 output off-peak, twice that at peak hours (01:00–04:00 and 06:00–10:00 UTC on weekdays, [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/)); Claude Haiku 5.5 $0.10 input and $0.50 output ([Claude pricing](https://claude.com/pricing)). Cached input, which is cheaper, is counted at the full price.
+- **Prices**, per million tokens: DeepSeek V4.1 Flash $0.15 input and $0.60 output off-peak, twice that at peak hours (01:00–04:00 and 06:00–10:00 UTC on weekdays, [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/)); Claude Haiku 5.5 $0.10 input and $0.50 output ([Claude pricing](https://claude.com/pricing)); GPT-6 Luna $0.10 input and $0.50 output ([OpenAI pricing](https://developers.openai.com/api/docs/pricing)). Checked on 2026-10-26, GPT-6 Luna on 2026-10-27. Cached input, which is cheaper, is counted at the full price.
+- **In setup**, the providers are `deepseek` (model `deepseek-flash`, not the Pro model), `anthropic`, `openai`, `ollama` and `claude-code`. GPT-6 Luna (`gpt-6-luna`) is the default model for `openai`.
 
 Long sessions cost more, short ones less. Importing your past sessions (backfill) is a one-off at about the same price per session: setup shows its estimate and a spending cap before you accept. `backsight stats` shows the tokens actually spent, and their cost once the model's price is known ([configuration.md](docs/configuration.md#llm-the-model-that-extracts-memories)).
 
@@ -104,7 +157,7 @@ Every detail: [docs/install.md](docs/install.md).
 
 When Claude uses a memory, it cites it:
 
-> 🧠 **From Hindsight memory (my-project)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
+> 🧠 **From memory (my-project)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
 
 ## Pause, turn off, uninstall
 
@@ -132,13 +185,13 @@ The session ends; backsight sends it to your server, which extracts the decision
 
 backsight adds the memory to your prompt, and Claude answers with it:
 
-> 🧠 **From Hindsight memory (billing)** — the invoices client timeout was raised to 60 s with 2 retries on 2026-10-12, because the new gateway is slow to answer.
+> 🧠 **From memory (billing)** — the invoices client timeout was raised to 60 s with 2 retries on 2026-10-12, because the new gateway is slow to answer.
 >
 > A failing call can take up to 3 minutes: 60 s for each of the 3 attempts.
 
 ## Privacy
 
-- The server runs locally, on loopback, with its API and web UI behind keys.
+- The server runs locally, on loopback, with its API and web UI behind keys. Recall and searches never leave the machine.
 - Session text goes to the LLM provider you chose, under that provider's terms. With Ollama, it stays on the machine.
 - The server downloads its two search models from Hugging Face on its first start, and Docker pulls its images; no memory text goes with them.
 - Secrets are redacted before anything is stored, facts that look like secrets are refused, and Claude is told never to ask you for a key in the conversation.
@@ -155,7 +208,7 @@ You mostly use Claude Code as before. Commands you may need:
 | Command | Use |
 |---|---|
 | `backsight doctor` | Check everything, with a fix for each problem. |
-| `backsight search "<keywords>"` | Search the memory yourself. |
+| `backsight search "<keywords>"` | Search the memory yourself (local, free). |
 | `backsight store --kind decision "<fact>"` | Store a fact (in Claude Code: `/backsight:remember`). |
 | `backsight forget <id>` | Retire a wrong memory. |
 | `backsight pause` / `backsight resume` | Stop or restart recording (in Claude Code: `/backsight:pause`). |

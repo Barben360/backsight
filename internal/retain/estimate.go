@@ -25,9 +25,12 @@ func (p Prices) Known() bool { return p.Input > 0 || p.Output > 0 }
 // estimates may over-state an off-peak spend by up to 2x, never the reverse.
 // The retired name deepseek-v4-flash is still accepted by DeepSeek, served
 // and billed as deepseek-flash, so existing installs keep a price.
+// gpt-6-luna, setup's openai default, at OpenAI's standard tier (checked
+// 2026-10-27, developers.openai.com/api/docs/pricing).
 var priceTable = map[string]Prices{
 	"deepseek-flash":    {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
 	"deepseek-v4-flash": {Input: 0.30, Cached: 0.006, Output: 1.20, Currency: "USD"},
+	"gpt-6-luna":        {Input: 0.10, Cached: 0.01, Output: 0.50, Currency: "USD"},
 }
 
 // PricesFor returns the configured prices, else the table's for model.

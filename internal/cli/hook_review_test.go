@@ -270,7 +270,7 @@ func TestApprovalDetectorCases(t *testing.T) {
 
 func TestStopCreditsTheWholeReplyAndHonoursPause(t *testing.T) {
 	home := hookHome(t)
-	fire(t, "stop", map[string]any{"session_id": "s1", "cwd": home, "last_assistant_message": "> 🧠 **From Hindsight memory (billing)** — 16.\n" + strings.Repeat("more text ", 500)})
+	fire(t, "stop", map[string]any{"session_id": "s1", "cwd": home, "last_assistant_message": "> 🧠 **From memory (billing)** — 16.\n" + strings.Repeat("more text ", 500)})
 	if st, _ := sessions(home).Load("s1"); st.LastCredit != "exact" {
 		t.Errorf("credit %q", st.LastCredit)
 	}

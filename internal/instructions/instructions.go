@@ -16,11 +16,12 @@ import (
 
 // Version of the instruction set; bump on any wording change (v2: the
 // guide forbids asking for a secret in the conversation; v3: memory_store
-// names the transverse pool only for a user-wide rule).
-const Version = "v3"
+// names the transverse pool only for a user-wide rule; v4: the credit reads
+// "From memory").
+const Version = "v4"
 
 // Credit is the exact citation format the guide asks for.
-const Credit = "> 🧠 **From Hindsight memory (<project>)** — <facts>"
+const Credit = "> 🧠 **From memory (<project>)** — <facts>"
 
 // Guide is the SessionStart guide (≤ 1 200 chars, kept near 700, E6).
 const Guide = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject). " +

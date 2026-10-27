@@ -232,7 +232,7 @@ func TestOutcomeOfThePreviousInjection(t *testing.T) {
 	recallAnswer = hits(0.9)
 	prompt(t, home, "s1", longPrompt)
 	_ = sessions(home).Update("s1", func(st *session.State) error {
-		st.LastAssistant = "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."
+		st.LastAssistant = "> 🧠 **From memory (billing)** — PostgreSQL 16."
 		return nil
 	})
 	prompt(t, home, "s1", "no, actually we never use PostgreSQL 15 anywhere")
@@ -273,7 +273,7 @@ func TestReplyAndToolUseEventsCarryTheTurn(t *testing.T) {
 	prompt(t, home, "s1", longPrompt)
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
 		"tool_response": "[billing] fact (2d ago, 0b4c2a52-0000-4000-8000-000000000001)"})
-	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": "> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16."})
+	fire(t, "stop", map[string]any{"session_id": "s1", "last_assistant_message": "> 🧠 **From memory (billing)** — PostgreSQL 16."})
 	tel := telemetryText(t, home)
 	if !strings.Contains(tel, `"event":"tool_use"`) || !strings.Contains(tel, `"memory_ids":["0b4c2a52-0000-4000-8000-000000000001"]`) || !strings.Contains(tel, `"n":1`) {
 		t.Errorf("tool_use:\n%s", tel)
@@ -307,4 +307,30 @@ func TestPromptLang(t *testing.T) {
 			t.Errorf("%q: %s, want %s", text, got, want)
 		}
 	}
+}
+
+// The credit is told apart by its 🧠: a plain "from memory" is a free use,
+// and the v3 wording still counts as exact.
+func TestReplyKindTellsTheCreditApart(t *testing.T) {
+	for text, want := range map[string]string{
+		"> 🧠 **From memory (billing)** — PostgreSQL 16.":           "exact",
+		"🧠 From memory (billing) — PostgreSQL 16.":                 "exact",
+		"> 🧠 **From Hindsight memory (billing)** — PostgreSQL 16.": "exact",
+		"From memory, billing runs PostgreSQL 16.":                 "free",
+		"Nothing in memory about it.":                              "empty",
+	} {
+		if got := replyKind(text); got == nil || *got != want {
+			t.Errorf("%q: got %s, want %s", text, kindOf(got), want)
+		}
+	}
+	if got := replyKind("PostgreSQL 16, as the docs say."); got != nil {
+		t.Errorf("no memory use: got %q", *got)
+	}
+}
+
+func kindOf(k *string) string {
+	if k == nil {
+		return "none"
+	}
+	return *k
 }

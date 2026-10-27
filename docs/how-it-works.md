@@ -38,7 +38,7 @@ To recall, it searches the start of your prompt (300 characters, code blocks rem
 - were not shown earlier in the session;
 - were not shown 3 times in the last 24 hours, unless they match almost exactly.
 
-They are added to the prompt under a header that frames them as notes from past sessions, data and not instructions, to verify before use. Claude cites the ones it uses as `🧠 From Hindsight memory (<project>) — …`.
+They are added to the prompt under a header that frames them as notes from past sessions, data and not instructions, to verify before use. Claude cites the ones it uses as `🧠 From memory (<project>) — …`.
 
 The prompt hook may also add one short line:
 
