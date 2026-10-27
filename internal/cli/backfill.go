@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -34,6 +36,7 @@ var (
 type backfillFlags struct {
 	plan, allowSubscription bool
 	queue                   bool // queue for jobs tick, send nothing now (setup)
+	status                  bool // read the progress, send nothing
 	since, project, dir     string
 	maxCost                 float64
 	maxTokens               int64
@@ -72,6 +75,9 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 		Short: "Send past sessions (oldest first) and replay their explicit saves, within a spending cap",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if fl.status {
+				return backfillStatusCmd(e, cmd)
+			}
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
 				return err
@@ -174,7 +180,7 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 			if !e.json { // the plan before a long run (decision 0051)
 				_, _ = io.WriteString(e.stdout, backfillText(backfillResult{Plan: plan}))
 			}
-			res, failed := runBackfill(cmd.Context(), f, d, cfg, prices, false)
+			res, failed := runBackfill(cmd.Context(), f, d, cfg, prices, false, e.backfillProgress)
 			res.Plan = plan
 			return e.report("retain backfill", res, func() string { return backfillRunText(res) }, failed)
 		},
@@ -186,6 +192,7 @@ func newRetainBackfillCmd(e *env) *cobra.Command {
 	cmd.Flags().Int64Var(&fl.maxTokens, "max-tokens", 0, "token cap, for models without a price")
 	cmd.Flags().BoolVar(&fl.allowSubscription, "allow-subscription", false, "accept backfill on the Claude subscription lane")
 	cmd.Flags().StringVar(&fl.dir, "projects-dir", "", "read transcripts from another Claude Code profile's projects directory")
+	cmd.Flags().BoolVar(&fl.status, "status", false, "show the progress of the queued backfill, sending nothing (no server needed)")
 	cmd.Flags().BoolVar(&fl.queue, "queue", false, "queue the backfill for jobs tick and return")
 	_ = cmd.Flags().MarkHidden("queue")
 	return cmd
@@ -255,12 +262,52 @@ func acquireBackfill(d paths.Dirs) (func(), error) {
 	return func() { _ = l.Release() }, nil
 }
 
+// backfillEvent is a progress line of a running backfill, on stderr: one
+// after each session, and one when it starts waiting on the server.
+type backfillEvent struct {
+	Event    string  `json:"event"` // progress
+	Command  string  `json:"command"`
+	Step     string  `json:"step"`   // session | queue | final
+	Status   string  `json:"status"` // a session's retain status, or waiting
+	Session  string  `json:"session,omitempty"`
+	Detail   string  `json:"detail,omitempty"`
+	Done     int     `json:"done"`
+	Total    int     `json:"total"`
+	Spent    float64 `json:"spent_cost"`
+	Tokens   int64   `json:"spent_tokens"`
+	Currency string  `json:"currency,omitempty"`
+}
+
+// backfillProgress writes ev on stderr: a JSON line with --json (stdout
+// keeps its one envelope), else a text line.
+func (e *env) backfillProgress(ev backfillEvent) {
+	ev.Event, ev.Command = "progress", "retain backfill"
+	if e.json {
+		b, _ := json.Marshal(ev)
+		fmt.Fprintln(e.stderr, string(b))
+		return
+	}
+	if ev.Step == "session" {
+		fmt.Fprintf(e.stderr, "%d/%d  %s  %s  spent %.4f %s (%d tokens)\n", ev.Done, ev.Total, ev.Status, ev.Session, ev.Spent, ev.Currency, ev.Tokens)
+		return
+	}
+	fmt.Fprintf(e.stderr, "%d/%d  waiting  %s\n", ev.Done, ev.Total, ev.Detail)
+}
+
 // runBackfill sends the queued sessions, one at a time, measuring the
 // spend before each (decision 0051). inTick: at most tickBackfillLimit
-// sessions and a bounded wait on the server's queue.
+// sessions and a bounded wait on the server's queue. say, when not nil,
+// gets the progress (a tick runs unattended: nil).
 // The caller holds the backfill lock (acquireBackfill).
-func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, prices retain.Prices, inTick bool) (backfillResult, error) {
+func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg config.Config, prices retain.Prices, inTick bool, say func(backfillEvent)) (backfillResult, error) {
 	var res backfillResult
+	if say == nil {
+		say = func(backfillEvent) {}
+	}
+	progress := func(step, status, session, detail string) {
+		say(backfillEvent{Step: step, Status: status, Session: session, Detail: detail,
+			Done: res.Done, Total: res.Total, Spent: res.Spent, Tokens: res.Tokens, Currency: prices.Currency})
+	}
 	ob := notesOutboxFor(d, cfg)
 	pause := func(reason string, msg string) (backfillResult, error) {
 		if err := state.Update(d, "retain backfill", func(s *state.State) error {
@@ -292,7 +339,9 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		res.Done, res.Total, res.Spent, res.Tokens = b.Done, b.Total, b.SpentCost, b.SpentTokens
 		if len(b.Sessions) == 0 {
 			if !inTick { // the last sessions' extraction is spend too
-				_ = waitQueue(ctx, f.Client, cfg.Server.Bank, 0, finalQueueWait)
+				_ = waitQueue(ctx, f.Client, cfg.Server.Bank, 0, finalQueueWait, func(n int) {
+					progress("final", "waiting", "", fmt.Sprintf("%d operations queued: waiting at most %s for the last extractions, to measure their spend", n, finalQueueWait))
+				})
 				if err := measure(ctx, f.Client, cfg.Server.Bank, &b, prices); err == nil {
 					_ = state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill = &b; return nil })
 					res.Spent, res.Tokens = b.SpentCost, b.SpentTokens
@@ -311,7 +360,9 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		if inTick {
 			wait = tickQueueWait
 		}
-		if err := waitQueue(ctx, f.Client, cfg.Server.Bank, backfillQueueLimit, wait); err != nil {
+		if err := waitQueue(ctx, f.Client, cfg.Server.Bank, backfillQueueLimit, wait, func(n int) {
+			progress("queue", "waiting", "", fmt.Sprintf("%d operations queued on the server: waiting until at most %d remain", n, backfillQueueLimit))
+		}); err != nil {
 			if ctx.Err() != nil {
 				return pause("interrupted", "interrupted; rerun backsight retain backfill to continue")
 			}
@@ -362,10 +413,14 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 				s.Backfill.Sessions = s.Backfill.Sessions[1:]
 				s.Backfill.Done++
 			}
+			if s.Backfill != nil {
+				res.Done, res.Total = s.Backfill.Done, s.Backfill.Total
+			}
 			return nil
 		}); err != nil {
 			return res, blocked(err)
 		}
+		progress("session", r.Status, r.Session, r.Detail)
 		sent++
 	}
 }
@@ -446,8 +501,9 @@ func measure(ctx context.Context, c *hindsight.Client, bank string, b *state.Bac
 }
 
 // waitQueue waits until the bank has at most limit queued or running
-// operations; maxWait > 0 bounds the wait (errQueueBusy).
-func waitQueue(ctx context.Context, c *hindsight.Client, bank string, limit int, maxWait time.Duration) error {
+// operations; maxWait > 0 bounds the wait (errQueueBusy). waiting, when
+// not nil, is called once, when the wait starts.
+func waitQueue(ctx context.Context, c *hindsight.Client, bank string, limit int, maxWait time.Duration, waiting func(n int)) error {
 	deadline := time.Now().Add(maxWait)
 	for {
 		n, err := c.QueuedOperations(ctx, bank)
@@ -456,6 +512,10 @@ func waitQueue(ctx context.Context, c *hindsight.Client, bank string, limit int,
 		}
 		if n <= limit {
 			return nil
+		}
+		if waiting != nil {
+			waiting(n)
+			waiting = nil
 		}
 		if maxWait > 0 && time.Now().After(deadline) {
 			return errQueueBusy
@@ -497,4 +557,77 @@ func backfillRunText(r backfillResult) string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// backfillStatus is the queued backfill's progress, read from state.json
+// alone: an agent polls it while a backfill or the ticks send.
+type backfillStatus struct {
+	Active    bool       `json:"active"`  // sessions are left to send
+	Running   bool       `json:"running"` // a backfill (retain backfill or a tick) is sending now
+	Done      int        `json:"done"`
+	Total     int        `json:"total"`
+	Left      int        `json:"left"`
+	Spent     float64    `json:"spent_cost"`
+	Tokens    int64      `json:"spent_tokens"`
+	Currency  string     `json:"currency,omitempty"`
+	MaxCost   float64    `json:"max_cost,omitempty"`
+	MaxTokens int64      `json:"max_tokens,omitempty"`
+	Paused    string     `json:"paused,omitempty"`
+	Finished  bool       `json:"finished"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
+func backfillStatusCmd(e *env, cmd *cobra.Command) error {
+	var other []string
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if f.Name != "status" && f.Name != "json" {
+			other = append(other, "--"+f.Name)
+		}
+	})
+	if len(other) > 0 {
+		return &output.Error{Code: output.Usage, Message: "--status only reads the progress: drop " + strings.Join(other, ", ")}
+	}
+	d, _, err := machine()
+	if err != nil {
+		return err
+	}
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		return blocked(err)
+	}
+	var s backfillStatus
+	if b := st.Backfill; b != nil {
+		s = backfillStatus{Active: len(b.Sessions) > 0, Done: b.Done, Total: b.Total, Left: len(b.Sessions), Spent: b.SpentCost, Tokens: b.SpentTokens,
+			Currency: b.Currency, MaxCost: b.MaxCost, MaxTokens: b.MaxTokens, Paused: b.Paused, Finished: len(b.Sessions) == 0}
+		if !b.StartedAt.IsZero() {
+			s.StartedAt = &b.StartedAt
+		}
+	}
+	h := state.Inspect(filepath.Join(d.LocksDir(), "job-backfill.lock"))
+	s.Running = h != nil && !h.Stale
+	return e.emit("retain backfill", s, func() string { return backfillStatusText(s) })
+}
+
+func backfillStatusText(s backfillStatus) string {
+	if s.Total == 0 && !s.Active {
+		return "no backfill\n"
+	}
+	capText := fmt.Sprintf("%.2f %s", s.MaxCost, s.Currency)
+	if s.MaxCost == 0 {
+		capText = fmt.Sprintf("%d tokens", s.MaxTokens)
+	}
+	msg := fmt.Sprintf("backfill %d/%d (%d left), spent %.4f %s (%d tokens) of a %s cap", s.Done, s.Total, s.Left, s.Spent, s.Currency, s.Tokens, capText)
+	switch {
+	case s.Finished:
+		msg += ", finished"
+	case s.Paused == "budget":
+		msg += ", paused: budget; backsight retain backfill --plan, then backsight retain backfill --max-cost <higher>"
+	case s.Paused != "":
+		msg += ", paused: " + s.Paused + "; rerun backsight retain backfill to continue"
+	case s.Running:
+		msg += ", sending now"
+	default:
+		msg += ", jobs tick sends it in the background"
+	}
+	return msg + "\n"
 }

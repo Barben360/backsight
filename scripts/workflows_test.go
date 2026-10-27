@@ -206,6 +206,7 @@ func TestReleasePublishesAVerifiedDraft(t *testing.T) {
 		t.Error(".goreleaser.yaml does not publish a draft (release.draft: true)")
 	}
 	steps := []struct{ what, re string }{
+		{"owner guard", `for a in "\$GITHUB_ACTOR" "\$GITHUB_TRIGGERING_ACTOR"; do\n +\[ "\$a" = "\$GITHUB_REPOSITORY_OWNER" \] \|\| \{`},
 		{"tag guard", `merge-base --is-ancestor "\$GITHUB_SHA" origin/main`},
 		{"goreleaser", `uses: goreleaser/goreleaser-action@`},
 		{"verify-dist", `make verify-dist`},

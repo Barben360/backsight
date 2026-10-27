@@ -159,7 +159,17 @@ backsight retain backfill --plan
 backsight retain backfill --since 2026-01-01 --max-cost 2
 ```
 
-`--plan` shows the sessions, their size, the expected cost and duration. Backfill sends the oldest first, in the background, and stops at the spending cap (`--max-cost`, default 1.5 times the estimate). On the Claude subscription it is refused unless you add `--allow-subscription`. `backsight doctor` shows its progress.
+`--plan` shows the sessions, their size, the expected cost and duration. Backfill sends the oldest first, in the background, and stops at the spending cap (`--max-cost`, default 1.5 times the estimate). On the Claude subscription it is refused unless you add `--allow-subscription`.
+
+`backsight retain backfill` runs until the import is done and prints a line on stderr after each session (`3/42  sent  <session>  spent …`) and when it waits for the server. To see how far an import is, whether you started it or setup left it to `jobs tick`:
+
+```sh
+backsight retain backfill --status
+```
+
+It reads this machine's state only, so it answers at once, even with the server down: sessions done and left, the spend against the cap, whether a backfill is sending right now, and, when it paused, how to resume. `backsight doctor` shows the same progress in its `backfill` check.
+
+To import a queue setup left to `jobs tick` in one go rather than three sessions every 15 minutes, run `backsight retain backfill` with the same `--projects-dir` setup used (and `--allow-subscription` on the Claude subscription): other filters start a new queue.
 
 ## Seeing what memory does
 
