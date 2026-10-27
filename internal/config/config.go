@@ -120,6 +120,11 @@ type Recall struct {
 	// project scope, without its boost (decision 0072). Off until a recall
 	// replay validates it.
 	Families bool `toml:"families" json:"families"`
+	// FailurePitfalls: when a tool call fails, recall the memories about that
+	// failure and hand them to Claude (once per error signature). Off until a
+	// replay shows it helps. Nothing writes this key: an older binary refuses
+	// a config.toml with a key it does not know, so only the user sets it.
+	FailurePitfalls bool `toml:"failure_pitfalls" json:"failure_pitfalls"`
 }
 
 type LLM struct {

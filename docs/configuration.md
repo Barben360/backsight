@@ -87,6 +87,7 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | `recall.session_budget_chars` | `6000` | Memory text the prompt hook may add over a whole session; recall stops once it is spent. |
 | `recall.briefing` | `"model"` | The briefing at session start. `"model"`: a page the server keeps per project from its memories (one LLM call to refresh it after new memories). `"recent"`: the project's 5 most recent memories, no LLM call. |
 | `recall.families` | `false` | Search the projects you work on together with the current one (worked out on this machine from your sessions, listed by `backsight projects`) in its project scope, like `related`, without its boost. Off until it is shown to improve recall. |
+| `recall.failure_pitfalls` | `false` | When a tool call fails (`Bash`, `Edit`, `Write`, `MultiEdit`, `WebFetch` or an MCP server's tool), search the memory for that failure and hand Claude up to 2 memories scoring at least 0.8, once per kind of error and session, within `recall.session_budget_chars`. Off until it is shown to help. **Needs v0.1.6-m5 or newer:** an older backsight refuses a `config.toml` with a key it does not know, so remove the line before installing an older version. A failed `backsight update apply` is not affected: its rollback puts back the `config.toml` you had before the update. backsight never writes this key. |
 
 ## `[llm]`: the model that extracts memories
 

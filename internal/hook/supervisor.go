@@ -60,6 +60,8 @@ func ChildDeadline(event string, input []byte) time.Duration {
 		return 9 * time.Second
 	case "post-tool-use":
 		return 1500 * time.Millisecond
+	case "post-tool-use-failure":
+		return 8 * time.Second // one recall (6 s) and a session write
 	case "session-end":
 		return 800 * time.Millisecond
 	}

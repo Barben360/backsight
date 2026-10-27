@@ -150,6 +150,7 @@ func TestDeadlines(t *testing.T) {
 		{"user-prompt-submit", `{}`, 20 * time.Second},
 		{"pre-tool-use", `{}`, 9 * time.Second},
 		{"post-tool-use", `{}`, 1500 * time.Millisecond},
+		{"post-tool-use-failure", `{}`, 8 * time.Second},
 		{"subagent-start", `{}`, 3 * time.Second},
 		{"subagent-stop", `{}`, 3 * time.Second},
 		{"stop", `{}`, 3 * time.Second},

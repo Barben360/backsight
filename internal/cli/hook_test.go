@@ -40,7 +40,7 @@ func runHookCmd(t *testing.T, input string, args ...string) (int, string) {
 // valid hook JSON; failures land in telemetry (SPEC §6.1, chaos per event).
 func TestHookAlwaysExitsZero(t *testing.T) {
 	home := isolate(t)
-	events := []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "subagent-start", "subagent-stop", "stop", "session-end"}
+	events := []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure", "subagent-start", "subagent-stop", "stop", "session-end"}
 	for _, chaos := range []string{"panic", "fatal", "kill", "exit2"} {
 		childFromTestBinary(t, chaos)
 		for _, ev := range events {

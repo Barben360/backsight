@@ -37,6 +37,8 @@ type hookInput struct {
 	AgentTranscriptPath  string          `json:"agent_transcript_path"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
 	Reason               string          `json:"reason"`
+	Error                string          `json:"error"`        // PostToolUseFailure
+	IsInterrupt          bool            `json:"is_interrupt"` // PostToolUseFailure
 }
 
 // hookEnv is what every handler needs, resolved once per event.

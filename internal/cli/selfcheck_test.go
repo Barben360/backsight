@@ -170,7 +170,7 @@ func TestHooksNeverRunTheSelfCheck(t *testing.T) {
 	childFromTestBinary(t, "")
 	d := pathsOf(home)
 	in := `{"session_id":"s1","source":"startup","cwd":"` + filepath.Join(home, "billing") + `","prompt":"how do we deploy billing?"}`
-	for _, ev := range []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "subagent-start", "subagent-stop", "stop", "session-end"} {
+	for _, ev := range []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure", "subagent-start", "subagent-stop", "stop", "session-end"} {
 		code, out := runHookCmd(t, in, ev)
 		if code != 0 || (ev == "session-start" && !strings.Contains(out, "additionalContext")) {
 			t.Fatalf("%s: exit %d %q", ev, code, out)
