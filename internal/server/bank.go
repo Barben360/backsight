@@ -133,6 +133,10 @@ type BankResult struct {
 	Created bool   `json:"created"`
 	Sent    bool   `json:"sent"`
 	Hash    string `json:"template_hash"`
+	// Renamed: the legacy bank renamed first (bank rename), as "old → new";
+	// RenameWarning: why it was not, the template then going to the old.
+	Renamed       string `json:"renamed,omitempty"`
+	RenameWarning string `json:"rename_warning,omitempty"`
 }
 
 // ApplyBank creates bank if missing and sets backsight's keys on it, unless

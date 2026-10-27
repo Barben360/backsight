@@ -456,6 +456,11 @@ func TestRestoreRefusals(t *testing.T) {
 		{"another bank", output.Blocked, `bank "other"`, func(t *testing.T, home, _ string) []string {
 			return []string{writeArchive(t, home, backup.Manifest{HindsightImage: server.HindsightImage, Bank: "other"})}
 		}},
+		{"archive from before the bank rename", output.Blocked, `set server.bank = "claude-memory"`, func(t *testing.T, home, _ string) []string {
+			raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+			_ = os.WriteFile(pathsOf(home).ConfigFile(), []byte(strings.Replace(string(raw), "[server]\n", "[server]\nbank = \"backsight\"\n", 1)), 0o600)
+			return []string{writeArchive(t, home, backup.Manifest{HindsightImage: server.HindsightImage, Bank: "claude-memory"})}
+		}},
 		{"identity that does not decrypt it", output.Usage, "--identity", func(t *testing.T, _, archive string) []string {
 			other, _ := agelib.GenerateX25519Identity()
 			f := filepath.Join(t.TempDir(), "key.txt")

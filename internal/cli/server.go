@@ -151,6 +151,8 @@ func initialConfig(f installFlags) []byte {
 	var b strings.Builder
 	b.WriteString("# Written by backsight server install.\nschema_version = 1\n\n[server]\n")
 	fmt.Fprintf(&b, "url = \"http://127.0.0.1:%d\"\nui_port = %d\n", f.apiPort, f.uiPort)
+	// Written out: a config.toml without it means the legacy bank.
+	fmt.Fprintf(&b, "bank = %s\n", strconv.Quote(config.DefaultBank))
 	if f.project != "" && f.project != "backsight" {
 		fmt.Fprintf(&b, "project = %s\n", strconv.Quote(f.project))
 	}

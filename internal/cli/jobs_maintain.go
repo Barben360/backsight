@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -41,6 +42,9 @@ type maintainResult struct {
 	// Purges: the daily look at every purge tombstone for a document an
 	// older client wrote again, "" when none was found.
 	Purges string `json:"purges,omitempty"`
+	// Rename: the legacy bank's move to the new names, after the backup,
+	// when an update could not finish it (pending operations).
+	Rename string `json:"rename,omitempty"`
 	MS     int    `json:"ms"`
 }
 
@@ -109,6 +113,9 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 			var moved int
 			res.Reattribute, moved = maintainReattribute(cmd.Context(), d, archive, noBackup)
 			res.Purges = guardMaintain(cmd.Context(), d, home)
+			if archive != "" {
+				res.Rename = maintainRename(cmd.Context(), d)
+			}
 			res.Update = maintainUpdate(cmd.Context(), d)
 			// This run counts as maintain running: the snapshot must not
 			// find maintain late after a weekend off.
@@ -216,6 +223,9 @@ func maintainText(r maintainResult) string {
 	if r.Purges != "" {
 		purges = ", " + r.Purges
 	}
+	if r.Rename != "" {
+		purges += ", bank rename " + r.Rename
+	}
 	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, re-attribution %s%s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated),
 		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, r.MS)
 }
@@ -309,4 +319,19 @@ func recordNoise(d paths.Dirs, rep doctor.Report) {
 			_ = retain.RecordNoise(d.State, retain.NoisePoint{At: now().UTC(), Named: int(c.Measure["named"]), Total: int(c.Measure["total"])})
 		}
 	}
+}
+
+// maintainRename moves a legacy bank to the new names, right after a
+// backup: update apply leaves it here when the server was busy. "" when
+// there is nothing to rename.
+func maintainRename(ctx context.Context, d paths.Dirs) string {
+	cfg, sec, err := loadServerConfig()
+	if err != nil || cfg.Server.Mode != "local" || cfg.Server.Bank != config.LegacyBank {
+		return ""
+	}
+	r, err := runBankRename(ctx, d, cfg, sec, false, renameWaitDaily)
+	if err != nil {
+		return "failed: " + redacted(err, sec).Error()
+	}
+	return r.From + " → " + r.To
 }

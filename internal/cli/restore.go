@@ -1041,6 +1041,9 @@ func restorable(m backup.Manifest, cfg config.Config, rt server.Runtime) error {
 			"restore it with its own image (server.digest = %q in config.toml, then backsight server start)", m.HindsightImage, pinned, digest)}
 	case cmp > 0:
 		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive was taken with Hindsight %s, newer than this install's %s: update backsight first", m.HindsightImage, pinned)}
+	case m.Bank == config.LegacyBank && cfg.Server.Bank == config.DefaultBank:
+		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive was taken before the bank rename (bank %q, this install uses %q): "+
+			"set server.bank = %q in config.toml, restore it, then run backsight bank rename", m.Bank, cfg.Server.Bank, m.Bank)}
 	case m.Bank != cfg.Server.Bank:
 		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive holds bank %q, this install uses %q (server.bank)", m.Bank, cfg.Server.Bank)}
 	case m.Embeddings != embeddings:

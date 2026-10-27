@@ -308,6 +308,13 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Chec
 	}
 	c.Status = OK
 	c.Summary = fmt.Sprintf("bank %s: %d memories, %d documents, %d awaiting consolidation", t.Bank, st.TotalNodes, st.TotalDocuments, st.PendingConsolidation)
+	if t.Source == "config" && t.Bank == config.LegacyBank {
+		// Not a fault: the old name works. update apply and the daily job
+		// move it once the server has no operation running.
+		c.Status = Info
+		c.Detail = "bank " + t.Bank + " has the name of installs before v0.1.4-m5"
+		c.Fix = "backsight bank rename (tonight's jobs maintain does it too): it becomes " + config.DefaultBank + ", keeping every memory"
+	}
 	if st.FailedOperations > 0 || st.FailedConsolidation > 0 {
 		c.Status = Warn
 		c.Detail = fmt.Sprintf("%d failed operations, %d failed consolidations", st.FailedOperations, st.FailedConsolidation)
