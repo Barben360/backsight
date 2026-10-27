@@ -79,6 +79,22 @@ func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
 	}
 }
 
+// Close the loop: shipped work and contradicted memories become one dated
+// fact naming the old claim; a contradicted similar memory is updated.
+func TestStoreDescriptionClosesTheLoop(t *testing.T) {
+	for _, want := range []string{"Close the loop", "PR merged, issue closed or abandoned, root cause found", "contradicted by the code or the user",
+		"ONE dated fact", "names the old claim in its own words", "replaces open item", "kind correction", "updates it rather than adding a parallel fact"} {
+		if !strings.Contains(StoreDescription, want) {
+			t.Errorf("store description lacks %q", want)
+		}
+	}
+	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
+		if !strings.Contains(s, "naming the old claim") {
+			t.Errorf("%s lacks the close-the-loop line", name)
+		}
+	}
+}
+
 func TestNudgeNamesTermsOnlyWhenKnown(t *testing.T) {
 	if strings.Contains(Nudge(nil), "knows about") || !strings.Contains(Nudge([]string{"Grafana"}), "knows about: Grafana") {
 		t.Errorf("%q / %q", Nudge(nil), Nudge([]string{"Grafana"}))
@@ -178,7 +194,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
-	"v6": "aa995e354d80e965b5bfa5656a9b202bceb9f34ff225dcb8aa76e4a8b64ff7c6",
+	"v6": "c21018d701c3ef5972a31dc06613f220a671995795feff76cc7f6ffd772442a9",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 

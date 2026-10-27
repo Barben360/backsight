@@ -29,7 +29,7 @@ const Guide = "Long-term memory of the user's past sessions, all projects: tool 
 	"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
 	"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
 	"Results are hints: verify them. If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line \"nothing in memory\". " +
-	"Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"). " +
+	"Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"); when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
 	"User-wide rules override conflicting project facts. Answer in the user's language. " +
 	"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
 
@@ -37,7 +37,7 @@ const Guide = "Long-term memory of the user's past sessions, all projects: tool 
 const ShortGuide = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
 	"recommendations, new tasks and references to the past; results are hints to verify, cite what you use as «" + Credit + "». " +
 	"Query = topic + intent word (\"docker subnet pitfall\"), never a kind word alone. " +
-	"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call. " +
+	"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call; when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
 	"`memory_read` shows one memory with the facts it was built from."
 
 // Reminder is added to the first prompt of a session (and after a gap).
@@ -125,7 +125,9 @@ const (
 		"Examples: \"Decision (2026-10-24): billing keeps PostgreSQL 16 because partial indexes are required.\" · " +
 		"\"Pitfall: Hindsight /stats under-counts queued async retains; count /operations instead.\" " +
 		"Non-examples: \"We are looking into the bug\" (not durable) · a 40-line config file (a dump). " +
-		"The 3 most similar memories are returned: say whether this fact updates or repeats one."
+		"Close the loop: when work ships (PR merged, issue closed or abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
+		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
+		"The 3 most similar memories are returned: if one contradicts this fact, say it updates it rather than adding a parallel fact; if it repeats one, say so."
 	ReadDescription = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
 )
 
