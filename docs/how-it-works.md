@@ -74,7 +74,7 @@ Claude has three tools, served by `backsight mcp` through the plugin:
 
 | Tool | Does |
 |---|---|
-| `memory_search` | Searches the memory with 1 to 4 short queries, like `backsight search`. Claude is told to write each as a topic plus an intent word (`docker compose subnet pitfall`), never a kind word alone, and to search before a risky action, design work or asking you a preference. |
+| `memory_search` | Searches the memory with 1 to 4 short queries, like `backsight search`, with each hit's kinds (`[decision, state]`) after its date. Claude is told to write each as a topic plus an intent word (`docker compose subnet pitfall`), never a kind word alone, and to search before a risky action, design work or asking you a preference. |
 | `memory_read` | Shows one memory with the facts it was built from. |
 | `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. Claude is told to store a dated fact that names the old claim when work ships or a recalled memory proves wrong. |
 
