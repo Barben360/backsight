@@ -17,8 +17,9 @@ import (
 // Version of the instruction set; bump on any wording change (v2: the
 // guide forbids asking for a secret in the conversation; v3: memory_store
 // names the transverse pool only for a user-wide rule; v4: the credit reads
-// "From memory").
-const Version = "v4"
+// "From memory"; v5: the doctor skill, the memory skill narrowed to the
+// memory).
+const Version = "v5"
 
 // Credit is the exact citation format the guide asks for.
 const Credit = "> 🧠 **From memory (<project>)** — <facts>"
@@ -190,24 +191,45 @@ func Skills(shim string) []Skill {
 		},
 		{
 			Name: "memory",
-			Description: "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, why, stats, doctor; " +
-				"and to the documentation of backsight itself (guide search) for questions about installing, configuring or using backsight.",
+			Description: "Command-line access to the user's long-term memory when the memory tools are missing or failing: search, read, " +
+				"and why (what the hooks injected this session). For backsight itself (broken, doctor, install, update, a bug), use /backsight:doctor.",
 			ArgumentHint: "<what to look for>",
-			// The read-only commands it names: never forget or purge, nor
-			// guide index (guideTools).
-			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), Bash(" + shim + " stats*), Bash(" + shim + " doctor*), " + guideTools(shim),
+			// The read-only commands it names: never forget or purge.
+			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*)",
 			Body: "Use the backsight command line:\n\n" +
 				"- `" + shim + " search \"<query 1>\" \"<query 2>\"`: 1-4 short keyword queries;\n" +
 				"- `" + shim + " read <id>`: one memory with its source facts;\n" +
-				"- `" + shim + " why`: what the hooks injected this session and why;\n" +
-				"- `" + shim + " stats`: how the memory is used;\n" +
-				"- `" + shim + " doctor`: what is wrong and how to fix it;\n" +
-				"- `" + shim + " guide search \"<question>\"`: the documentation sections answering a question about backsight itself " +
-				"(install, commands, settings, backups, troubleshooting); `" + shim + " guide <topic>#<section>` shows one.\n\n" +
+				"- `" + shim + " why`: what the hooks injected this session and why.\n\n" +
 				"Request: $ARGUMENTS\n\nResults are hints from past sessions: verify them, and cite what you use as «" + Credit + "».\n",
+		},
+		{
+			Name: "doctor",
+			Description: "backsight itself rather than what the memory holds: it seems broken or silent, a doctor warning, whether memory works, " +
+				"how to install, configure, update or uninstall it, and reporting a backsight bug as a GitHub issue. Use when the user says " +
+				"backsight, doctor, memory is not working, update backsight, report a bug or file an issue.",
+			ArgumentHint: "<the problem or question>",
+			// Read-only diagnostics only (SPEC §17): every command that
+			// changes the install, and gh, asks the user. verify without
+			// --live or --no-round-trip is left out: its round trip calls
+			// the LLM.
+			AllowedTools: "Bash(" + shim + " doctor*), Bash(" + shim + " verify --live*), Bash(" + shim + " verify --no-round-trip*), Bash(" + shim + " stats*), " +
+				"Bash(" + shim + " why*), Bash(" + shim + " version), Bash(" + shim + " update check*), Bash(" + shim + " report*), " + guideTools(shim),
+			Body: "Request: $ARGUMENTS\n\n" +
+				"1. Diagnose: `" + shim + " doctor` (what is wrong, with a fix for each problem); `" + shim + " verify --live` when sessions seem not to reach the memory; " +
+				"`" + shim + " why` for what the hooks added this session; `" + shim + " stats` for how the memory is used; `" + shim + " version` and `" + shim + " update check` for the release.\n" +
+				"2. Find the fix: doctor's own fix line first, then the docs: `" + shim + " guide search \"<question>\"` and `" + shim + " guide <topic>#<section>`.\n" +
+				"3. Fix: say what you will run and why, then run it. Commands that change the install (setup --resume, client install, update apply, server start, " +
+				"backup, restore, forget…) are not pre-approved: the user approves each one.\n" +
+				"4. Report a bug, when the docs have no fix or backsight misbehaves: run `" + shim + " report` and show the user its redacted diagnostic; " +
+				"look for an existing issue with `gh issue list -R " + issueRepo + " --search \"<keywords>\"`. Draft the issue: a title, what happened against " +
+				"what was expected, the steps to reproduce, the diagnostic. File it with `gh issue create -R " + issueRepo + "` only once the user confirmed " +
+				"that text; without gh, give the link `report` printed. Never put memory content, prompts or secrets in an issue.\n",
 		},
 	}
 }
+
+// issueRepo is where the doctor skill files backsight's issues.
+const issueRepo = "Barben360/backsight"
 
 // guideTools are the guide commands the memory skill runs unprompted: the
 // topic list, a topic or one of its sections (one entry per docs topic), and

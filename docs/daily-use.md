@@ -78,14 +78,15 @@ There is no language setting. `backsight server llm check` checks that the extra
 
 ## Skills
 
-The plugin adds four skills you can call in Claude Code:
+The plugin adds five skills you can call in Claude Code:
 
 | Skill | Use |
 |---|---|
 | `/backsight:remember <fact>` | Store a fact now, for example a rule from now on. Claude picks the kind and the project. |
 | `/backsight:pause` | Stop recording this session; `/backsight:pause project` stops recording this project. |
 | `/backsight:memory-retro` | At the end of a project: Claude writes its decisions, pitfalls and lessons into memory. |
-| `/backsight:memory` | Command-line access to the memory when the memory tools are missing or failing. |
+| `/backsight:memory` | Command-line access to the memory (search, read, why) when the memory tools are missing or failing. |
+| `/backsight:doctor` | backsight itself: Claude runs `doctor` and the docs to find what is wrong, fixes it with your OK, and for a bug drafts a GitHub issue from `backsight report` that it files only once you confirm. |
 
 Claude also calls them on its own when you say "remember", "from now on" or "pause memory".
 

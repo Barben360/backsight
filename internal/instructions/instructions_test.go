@@ -89,20 +89,55 @@ func allows(tools, cmd string) bool {
 // The memory skill reads the docs unprompted (the topics, a topic, a
 // section, a search) but never runs guide index, which writes the docs
 // bank (decision 0067, block 4 review).
-func TestMemorySkillRunsTheReadingGuideCommandsOnly(t *testing.T) {
-	var tools string
+func skillTools(name string) string {
 	for _, s := range Skills("/s") {
-		if s.Name == "memory" {
-			tools = s.AllowedTools
+		if s.Name == name {
+			return s.AllowedTools
 		}
 	}
-	for _, cmd := range []string{"/s guide", `/s guide search "comment restaurer ?"`, "/s guide install", "/s guide install#requirements",
+	return ""
+}
+
+// The doctor skill diagnoses and reads the docs unprompted; anything that
+// changes the install, a verify that calls the LLM, and gh ask the user.
+func TestDoctorSkillRunsTheDiagnosticsOnly(t *testing.T) {
+	tools := skillTools("doctor")
+	for _, cmd := range []string{"/s doctor", "/s doctor --json", "/s verify --live", "/s verify --no-round-trip", "/s stats 30", "/s why",
+		"/s version", "/s update check", "/s report", "/s guide", `/s guide search "comment restaurer ?"`, "/s guide install#requirements",
 		"/s guide troubleshooting#slow-recall-and-gpu-acceleration", "/s guide commands --json"} {
 		if !allows(tools, cmd) {
 			t.Errorf("%q needs a prompt: %s", cmd, tools)
 		}
 	}
-	for _, cmd := range []string{"/s guide index", "/s guide index --plan", "/s guide index --json", "/s forget 1", "/s guide; rm x"} {
+	for _, cmd := range []string{"/s guide index", "/s guide index --plan", "/s verify", "/s update apply", "/s setup --resume", "/s client install",
+		"/s forget 1", "/s search x", "gh issue create -R Barben360/backsight", "/s version --licenses"} {
+		if allows(tools, cmd) {
+			t.Errorf("%q runs unprompted: %s", cmd, tools)
+		}
+	}
+	var body string
+	for _, s := range Skills("/s") {
+		if s.Name == "doctor" {
+			body = s.Body
+		}
+	}
+	for _, want := range []string{"/s report", "gh issue list -R Barben360/backsight", "gh issue create -R Barben360/backsight", "only once the user confirmed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("doctor skill lacks %q", want)
+		}
+	}
+}
+
+// The memory skill is about the memory only: backsight's own commands
+// moved to the doctor skill.
+func TestMemorySkillRunsTheMemoryCommandsOnly(t *testing.T) {
+	tools := skillTools("memory")
+	for _, cmd := range []string{`/s search "deploy" "backup"`, "/s read 0b4c2a52", "/s why --last 3"} {
+		if !allows(tools, cmd) {
+			t.Errorf("%q needs a prompt: %s", cmd, tools)
+		}
+	}
+	for _, cmd := range []string{"/s doctor", "/s guide", "/s stats", "/s forget 1"} {
 		if allows(tools, cmd) {
 			t.Errorf("%q runs unprompted: %s", cmd, tools)
 		}
@@ -126,6 +161,7 @@ func TestGuideTellsClaudeNeverToAskForASecret(t *testing.T) {
 var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
+	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 

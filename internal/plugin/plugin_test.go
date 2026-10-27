@@ -239,8 +239,10 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		"remember":     "",
 		"pause":        "Bash(/opt/b/current pause*)", // resume always asks
 		"memory-retro": "Bash(/opt/b/current search *), Bash(true)",
+		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*)",
 		// then one guide entry per docs topic (instructions' test: never guide index)
-		"memory": "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), Bash(/opt/b/current stats*), Bash(/opt/b/current doctor*), " +
+		"doctor": "Bash(/opt/b/current doctor*), Bash(/opt/b/current verify --live*), Bash(/opt/b/current verify --no-round-trip*), Bash(/opt/b/current stats*), " +
+			"Bash(/opt/b/current why*), Bash(/opt/b/current version), Bash(/opt/b/current update check*), Bash(/opt/b/current report*), " +
 			"Bash(/opt/b/current guide), Bash(/opt/b/current guide search *), Bash(/opt/b/current guide agent-guide*), ",
 	}
 	for name, tools := range want {
@@ -250,7 +252,7 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		}
 		fm := frontmatter(t, name, string(raw))
 		ok := fm["allowed-tools"] == tools
-		if name == "memory" {
+		if name == "doctor" {
 			var rest string
 			rest, ok = strings.CutPrefix(fm["allowed-tools"], tools)
 			for _, e := range strings.Split(rest, ", ") {
@@ -262,9 +264,9 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		}
 	}
 	// Questions about backsight itself go to its docs (decision 0069).
-	if raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "memory", "SKILL.md")); !strings.Contains(string(raw), "`/opt/b/current guide search \"<question>\"`") ||
-		!strings.Contains(frontmatter(t, "memory", string(raw))["description"], "backsight itself") {
-		t.Errorf("memory skill lacks guide search:\n%s", raw)
+	if raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "doctor", "SKILL.md")); !strings.Contains(string(raw), "`/opt/b/current guide search \"<question>\"`") ||
+		!strings.Contains(frontmatter(t, "doctor", string(raw))["description"], "backsight itself") {
+		t.Errorf("doctor skill lacks guide search:\n%s", raw)
 	}
 	// values YAML would misread unquoted come back intact
 	raw, _ := os.ReadFile(filepath.Join(dir, "plugins", "backsight", "skills", "pause", "SKILL.md"))
