@@ -51,7 +51,10 @@ type State struct {
 	Unavailable   bool   `json:"unavailable_notified"` // the visible failure was shown
 	LastAssistant string `json:"last_assistant"`       // the last reply, recorded at Stop
 	SubagentDone  bool   `json:"subagent_done"`        // a subagent finished since the last prompt
-	LastCredit    string `json:"last_credit"`          // how the last reply cited memory: exact | empty | free | ""
+	// FailureSigs: error signatures the failure hook already looked up
+	// this session (a repeated failure is not injected twice).
+	FailureSigs []string `json:"failure_sigs,omitempty"`
+	LastCredit  string   `json:"last_credit"` // how the last reply cited memory: exact | empty | free | ""
 }
 
 // Span is one paused stretch; a zero To is still open.

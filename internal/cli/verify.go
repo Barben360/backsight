@@ -156,6 +156,8 @@ func syntheticInput(h plugin.Hook, sid, dir string) []byte {
 		in["tool_name"], in["tool_input"] = "AskUserQuestion", map[string]any{"questions": []any{}}
 	case "PostToolUse":
 		in["tool_name"], in["tool_input"], in["tool_response"] = plugin.ToolNames[0], map[string]any{"query": "verify"}, map[string]any{}
+	case "PostToolUseFailure":
+		in["tool_name"], in["tool_input"], in["error"] = "Bash", map[string]any{"command": "backsight verify"}, "Exit code 1\nverify"
 	case "SubagentStart", "SubagentStop":
 		in["agent_id"], in["agent_type"] = "verify", "general-purpose"
 	case "SessionEnd":

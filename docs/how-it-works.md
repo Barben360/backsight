@@ -111,6 +111,7 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | `UserPromptSubmit` | Each prompt | Recall, reminder, nudge, save prompt. | 25 s |
 | `PreToolUse` (`AskUserQuestion`) | Claude asks you a question | The question gate. | 10 s |
 | `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge. | 2 s |
+| `PostToolUseFailure` (`Bash`, file and web tools, MCP tools) | A tool call fails | With `recall.failure_pitfalls = true` only: searches the memory for the failure (tool, command and error text, secrets redacted) and adds up to 2 memories scoring at least 0.8, once per kind of error in a session. Does nothing when the session is paused, the project excluded or the session budget spent. | 10 s |
 | `SubagentStart` | A subagent starts | Its short memory guide. | 5 s |
 | `SubagentStop` | A subagent finishes | Queues its report. | 5 s |
 | `Stop` | Claude's reply ends | Notes the end of the reply, for the save detector. No network. | 5 s |

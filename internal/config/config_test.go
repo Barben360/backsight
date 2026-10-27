@@ -45,6 +45,32 @@ func TestDefaultMatchesSpecAppendixA(t *testing.T) {
 	}
 }
 
+// recall.failure_pitfalls is opt-in and migratable: an older binary refuses
+// a config with a key it does not know, so the default must hold when the
+// key is absent and no code may ever write it.
+func TestFailurePitfallsDefaultsOffAndIsNeverWritten(t *testing.T) {
+	cfg, err := Load(write(t, "[recall]\nmin_score = 0.6\n"), dirs, "/home/u")
+	if err != nil || cfg.Recall.FailurePitfalls {
+		t.Fatalf("absent key: %v, on = %v", err, cfg.Recall.FailurePitfalls)
+	}
+	cfg, err = Load(write(t, "[recall]\nfailure_pitfalls = true\n"), dirs, "/home/u")
+	if err != nil || !cfg.Recall.FailurePitfalls {
+		t.Fatalf("set key: %v, on = %v", err, cfg.Recall.FailurePitfalls)
+	}
+	err = filepath.WalkDir("..", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, "config.go") {
+			return err
+		}
+		if raw, _ := os.ReadFile(p); strings.Contains(string(raw), "failure_pitfalls") {
+			t.Errorf("%s mentions failure_pitfalls: only the user may set it", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nope.toml"), dirs, "/home/u")
 	if !errors.Is(err, fs.ErrNotExist) {

@@ -84,14 +84,15 @@ func TestHooksCoverEveryEventInExecForm(t *testing.T) {
 	var hf hooksFile
 	read(t, filepath.Join(dir, "plugins", "backsight", "hooks", "hooks.json"), &hf)
 	want := map[string][]string{ // Claude Code event -> matchers
-		"SessionStart":     {"startup", "resume|clear|compact|fork"},
-		"UserPromptSubmit": {""},
-		"PreToolUse":       {"AskUserQuestion"},
-		"PostToolUse":      {"mcp__plugin_backsight_memory__.*"},
-		"SubagentStart":    {""},
-		"SubagentStop":     {""},
-		"Stop":             {""},
-		"SessionEnd":       {""},
+		"SessionStart":       {"startup", "resume|clear|compact|fork"},
+		"UserPromptSubmit":   {""},
+		"PreToolUse":         {"AskUserQuestion"},
+		"PostToolUse":        {"mcp__plugin_backsight_memory__.*"},
+		"PostToolUseFailure": {"Bash|Edit|Write|MultiEdit|WebFetch|mcp__.*"},
+		"SubagentStart":      {""},
+		"SubagentStop":       {""},
+		"Stop":               {""},
+		"SessionEnd":         {""},
 	}
 	if len(hf.Hooks) != len(want) {
 		t.Errorf("%d events, want %d", len(hf.Hooks), len(want))
@@ -166,7 +167,7 @@ func TestExactToolNamesEventsAndTimeouts(t *testing.T) {
 	exact := map[string]string{ // event/matcher -> backsight event, timeout
 		"SessionStart/startup": "session-start 10", "SessionStart/resume|clear|compact|fork": "session-start 5",
 		"UserPromptSubmit/": "user-prompt-submit 25", "PreToolUse/AskUserQuestion": "pre-tool-use 10",
-		"PostToolUse/mcp__plugin_backsight_memory__.*": "post-tool-use 2", "SubagentStart/": "subagent-start 5",
+		"PostToolUse/mcp__plugin_backsight_memory__.*": "post-tool-use 2", "PostToolUseFailure/Bash|Edit|Write|MultiEdit|WebFetch|mcp__.*": "post-tool-use-failure 10", "SubagentStart/": "subagent-start 5",
 		"SubagentStop/": "subagent-stop 5", "Stop/": "stop 5", "SessionEnd/": "session-end 1",
 	}
 	n := 0

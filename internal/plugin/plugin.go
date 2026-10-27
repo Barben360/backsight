@@ -27,7 +27,7 @@ const (
 	Server      = "memory"
 	// layout changes whenever the generated files change shape, so dev
 	// builds get a new plugin version.
-	layout = "3"
+	layout = "4"
 )
 
 // ToolNames are the three memory tools as Claude Code names them.
@@ -50,6 +50,8 @@ var events = []event{
 	{"UserPromptSubmit", "", "user-prompt-submit", 25},
 	{"PreToolUse", "AskUserQuestion", "pre-tool-use", 10},
 	{"PostToolUse", "mcp__plugin_" + Name + "_" + Server + "__.*", "post-tool-use", 2},
+	// A failed tool call: the pitfalls memory knows about it (off by default, see docs/configuration.md).
+	{"PostToolUseFailure", "Bash|Edit|Write|MultiEdit|WebFetch|mcp__.*", "post-tool-use-failure", 10},
 	{"SubagentStart", "", "subagent-start", 5},
 	{"SubagentStop", "", "subagent-stop", 5},
 	{"Stop", "", "stop", 5},
