@@ -138,7 +138,7 @@ It prints Ollama's version. Setup then tests the model itself: its LLM check run
 
 ## After setup
 
-- Save your **backup identity** somewhere else, a password manager for example: `backsight backup identity show` prints it. Without it, your backups cannot be decrypted. See [backups-and-restore.md](backups-and-restore.md).
+- Save your **backup identity** somewhere else, a password manager for example: `backsight backup identity show | pass insert -m backsight/backup-identity` (or without the pipe, to see it). Without it, your backups cannot be decrypted. See [backups-and-restore.md](backups-and-restore.md).
 - If you accepted the backfill, the import has already started and goes on in the background; `backsight doctor` shows its progress.
 - `backsight doctor` checks the whole install at any time.
 - Daily use: [daily-use.md](daily-use.md).

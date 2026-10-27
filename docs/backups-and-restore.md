@@ -36,10 +36,10 @@ keep_weekly = 4
 Archives are encrypted with [age](https://age-encryption.org/). By default backsight generates an identity (a private key) during setup when backups are on (else on the first backup) and stores it in `secrets.toml`. **Save it somewhere else** (a password manager): if this machine's disk is lost, the backups cannot be decrypted without it.
 
 ```sh
-backsight backup identity show
+backsight backup identity show | pass insert -m backsight/backup-identity
 ```
 
-This prints the identity in a terminal only, never to a pipe or in `--json`.
+It prints the identity alone on stdout (the advice goes to stderr), so it pipes into a password manager (`pass`, `gpg -e`, a file on an encrypted disk) or shows at a terminal. It needs a person's shell, with a terminal on one side of the pipe: an agent's command, which has none, and `--json` are refused.
 
 To encrypt to a key you already keep elsewhere, set `backup.recipient` in `config.toml` to one or more age recipients (`age1…`) or SSH public keys (`ssh-ed25519 …`), separated by commas. Backups are then encrypted to them, and you decrypt with your own key (`--identity <file>`, an age identity file or an SSH private key).
 

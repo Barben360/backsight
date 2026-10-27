@@ -92,7 +92,7 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight backup create` | Makes an encrypted backup now. |
 | `backsight backup list` | Lists backups, newest first. |
 | `backsight backup verify <file>` | Decrypts a backup, restores it into a throwaway database and compares counts. `--identity <file>`. |
-| `backsight backup identity show` | Prints the key that decrypts your backups (terminal only). |
+| `backsight backup identity show` | Prints the key that decrypts your backups, alone on stdout, so it pipes into a password manager (`backsight backup identity show \| pass insert -m backsight/backup-identity`). Refused without any terminal (an agent) and with `--json`. |
 | `backsight backup identity import [file]` | Stores a backup identity from a file or stdin. `--force` replaces another one. |
 | `backsight restore <file>` | Restores a backup into the local server. `--plan`, `--identity <file>`, `--no-safety`, `--non-interactive`, `--answer other_banks=revert` (the server's banks without a control bank go back to the archive too). |
 

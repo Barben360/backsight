@@ -1252,7 +1252,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
 	if answers["backups"] == "on" {
-		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show (at a terminal)")
+		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)")
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""
