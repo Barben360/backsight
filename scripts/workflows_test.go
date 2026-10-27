@@ -208,6 +208,7 @@ func TestReleasePublishesAVerifiedDraft(t *testing.T) {
 	steps := []struct{ what, re string }{
 		{"owner guard", `for a in "\$GITHUB_ACTOR" "\$GITHUB_TRIGGERING_ACTOR"; do\n +\[ "\$a" = "\$GITHUB_REPOSITORY_OWNER" \] \|\| \{`},
 		{"tag guard", `merge-base --is-ancestor "\$GITHUB_SHA" origin/main`},
+		{"published guard", `name: Refuse tags already published`},
 		{"goreleaser", `uses: goreleaser/goreleaser-action@`},
 		{"verify-dist", `make verify-dist`},
 		{"draft check", `gh release download "\$GITHUB_REF_NAME"`},
@@ -448,6 +449,57 @@ func TestReleasePublishesHandWrittenNotes(t *testing.T) {
 			cmd := exec.Command("bash", "-eo", "pipefail", "-c", script)
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "GITHUB_REF_NAME=v9.8.7")
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != c.ok || !strings.Contains(string(out), c.says) {
+				t.Errorf("ok %v, want %v; output %q, want it to say %q", err == nil, c.ok, out, c.says)
+			}
+		})
+	}
+}
+
+// A tag pushed twice must not race two releases (v0.1.5-m5: the second
+// run replaced the first's draft under its uploads), nor touch a release
+// already published.
+func TestReleaseRunsOnceATag(t *testing.T) {
+	raw, err := os.ReadFile("../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^concurrency:\n  group: release-\$\{\{ github\.ref \}\}\n  cancel-in-progress: true\n`).Match(raw) {
+		t.Error("release.yml: no workflow-level concurrency group on the tag cancelling the older run")
+	}
+	var guard string
+	for _, w := range workflows(t) {
+		for _, j := range w.jobs {
+			for _, s := range j.steps {
+				if w.name == "release.yml" && strings.Contains(s, "name: Refuse tags already published") {
+					guard = s
+				}
+			}
+		}
+	}
+	_, body, ok := strings.Cut(guard, "run: |\n")
+	if !ok {
+		t.Fatalf("release.yml: no published-tag guard with a run block:\n%s", guard)
+	}
+	script := regexp.MustCompile(`(?m)^ {10}`).ReplaceAllString(body, "")
+	cases := []struct {
+		name, gh string // the fake gh's body
+		ok       bool
+		says     string
+	}{
+		{"no release yet", "echo 'release not found' >&2; exit 1", true, ""},
+		{"draft of an earlier run", "echo true", true, ""},
+		{"published", "echo false", false, "v9.8.7 is already published"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\n"+c.gh+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-eo", "pipefail", "-c", script)
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "GITHUB_REF_NAME=v9.8.7", "GITHUB_REPOSITORY=o/r")
 			out, err := cmd.CombinedOutput()
 			if (err == nil) != c.ok || !strings.Contains(string(out), c.says) {
 				t.Errorf("ok %v, want %v; output %q, want it to say %q", err == nil, c.ok, out, c.says)
