@@ -19,13 +19,13 @@ import (
 // names the transverse pool only for a user-wide rule; v4: the credit reads
 // "From memory"; v5: the doctor skill, the memory skill narrowed to the
 // memory).
-const Version = "v5"
+const Version = "v6"
 
 // Credit is the exact citation format the guide asks for.
 const Credit = "> 🧠 **From memory (<project>)** — <facts>"
 
 // Guide is the SessionStart guide (≤ 1 200 chars, kept near 700, E6).
-const Guide = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject). " +
+const Guide = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject, topic + intent word: \"docker subnet pitfall\"). " +
 	"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
 	"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
 	"Results are hints: verify them. If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line \"nothing in memory\". " +
@@ -36,6 +36,7 @@ const Guide = "Long-term memory of the user's past sessions, all projects: tool 
 // ShortGuide is the MCP server's instructions (≤ 1 000 chars).
 const ShortGuide = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
 	"recommendations, new tasks and references to the past; results are hints to verify, cite what you use as «" + Credit + "». " +
+	"Query = topic + intent word (\"docker subnet pitfall\"), never a kind word alone. " +
 	"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call. " +
 	"`memory_read` shows one memory with the facts it was built from."
 
@@ -111,9 +112,12 @@ const SubagentGuide = "The user's long-term memory is searchable with `memory_se
 const (
 	SearchDescription = "Search the user's long-term memory: what was discussed, decided and learned in past sessions across all projects " +
 		"(decisions and their reasons, conventions, infrastructure facts, project history, mistakes already made). " +
-		"Use it BEFORE asking the user a factual question, recommending an architecture, tool or convention, starting a task, " +
-		"or when the user refers to the past. Write 1-4 short keyword queries (key entities and terms, one per subject), " +
-		"never a copy of the user's sentence. Results are hints from past sessions: verify them against code or sources."
+		"Use it BEFORE asking the user a factual question or a preference, recommending an architecture, tool or convention, starting a task, " +
+		"or when the user refers to the past. Queries: 1-4 short ones, one per angle, written as topic + intent word " +
+		"(\"docker compose subnet pitfall\"), never a kind word alone and never a copy of the user's sentence; add a date or version " +
+		"for a question about time. Before a risky or irreversible action search topic + pitfall / correction; before design work " +
+		"topic + decision; before asking a preference topic + convention / correction. `projects` also searches related repositories. " +
+		"Skip it for trivial edits and for a fact already found this session. Results are hints from past sessions: verify them against code or sources."
 	StoreDescription = "Store one durable fact in the user's long-term memory. Kinds: decision, correction, convention, pitfall, state, lesson. " +
 		"Rubric: one fact per call, 1-3 sentences, say why, absolute dates (2026-10-24, never \"today\"), exact identifiers; " +
 		"no code dumps, no secrets, nothing about plans or hypotheses. Without project the fact goes to the current project; " +

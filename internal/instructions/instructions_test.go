@@ -18,7 +18,7 @@ func TestSizes(t *testing.T) {
 		text string
 		max  int
 	}{
-		{"guide (E6: near 700)", Guide, 900},
+		{"guide (E6: near 700)", Guide, 1000},
 		{"short guide", ShortGuide, 1000},
 		{"reminder", Reminder, 300},
 		{"nudge with terms", Nudge([]string{"PostgreSQL", "Grafana", "backfill", "observation scopes"}), 300},
@@ -50,6 +50,22 @@ func TestGuideCoversTheSpecPoints(t *testing.T) {
 		"transverse", "override", "user's language", "test"} {
 		if !strings.Contains(Guide, want) {
 			t.Errorf("guide lacks %q", want)
+		}
+	}
+}
+
+// The search recipes: topic first, intent word second; the triggers; when
+// not to search; the real parameter name for related repositories.
+func TestSearchDescriptionCarriesTheRecipes(t *testing.T) {
+	for _, want := range []string{"topic + intent word", "never a kind word alone", "one per angle", "date or version", "pitfall / correction",
+		"topic + decision", "convention / correction", "`projects`", "Skip it for trivial edits", "already found this session"} {
+		if !strings.Contains(SearchDescription, want) {
+			t.Errorf("search description lacks %q", want)
+		}
+	}
+	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
+		if !strings.Contains(s, "topic + intent word") {
+			t.Errorf("%s lacks the query recipe", name)
 		}
 	}
 }
@@ -162,6 +178,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
+	"v6": "aa995e354d80e965b5bfa5656a9b202bceb9f34ff225dcb8aa76e4a8b64ff7c6",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 
