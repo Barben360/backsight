@@ -54,6 +54,14 @@ The resume takes the running server for its own and checks the key again. Other 
 
 On the first run, the server step downloads the server images and its models, about 2.4 GB: several minutes on a home connection, longer on a slow one. Setup shows Docker's download progress, then the time spent while the server's first start downloads its models. If it really stops, interrupt it and run `backsight setup --resume`.
 
+### An image does not unpack
+
+Setup pulls each image up to 3 times before it stops, and says what Docker's last line points at: the network, the disk, or an image Docker got but could not unpack. That last one reads `failed to extract layer … failed to unmount /var/lib/containerd/tmpmounts/… device or resource busy`. It happens on this machine, not on the network: something holds containerd's temporary mounts while it unpacks the layers, most often an on-access antivirus scanner.
+
+1. Pull the image named in the message yourself, for example `docker pull pgvector/pgvector:pg18@sha256:…`: Docker keeps the layers it has, and a second pull usually passes.
+2. Run `backsight setup --resume`.
+3. If it keeps failing, look for mounts the failed pulls left: `findmnt | grep containerd/tmpmounts`, and remove each with `sudo umount <path>`. Excluding `/var/lib/containerd` from the scanner, or pausing it during setup, prevents it.
+
 ### Claude Code is missing or too old
 
 Setup needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup).

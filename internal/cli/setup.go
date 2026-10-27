@@ -1067,9 +1067,32 @@ func (s *setupEnv) download(ctx context.Context, rt server.Runtime) (models bool
 	err = dl.Download(ctx, images, w)
 	stop()
 	if err != nil {
-		return models, &output.Error{Code: output.Blocked, Message: "the download stopped: " + err.Error() + " (check the network)"}
+		return models, downloadError(err)
 	}
 	return models, nil
+}
+
+// downloadError says what stopped an image download, from Docker's last
+// line: only a network-shaped error is blamed on the network (issue 60).
+func downloadError(err error) error {
+	msg := "the download stopped: " + err.Error()
+	var pe *server.PullError
+	if !errors.As(err, &pe) {
+		return &output.Error{Code: output.Blocked, Message: msg}
+	}
+	msg = fmt.Sprintf("the download stopped after %d attempts: %s", pe.Attempts, err.Error())
+	switch pe.Cause() {
+	case server.PullNetwork:
+		msg += " (check the network, then backsight setup --resume)"
+	case server.PullDisk:
+		msg += " (free disk space, then backsight setup --resume)"
+	case server.PullUnpack:
+		msg += " (Docker got the image but could not unpack it on this machine: an on-access antivirus or another tool holding containerd's mounts " +
+			"can cause it. Run docker pull " + pe.Image + " yourself, then backsight setup --resume; troubleshooting.md, \"An image does not unpack\")"
+	default:
+		msg += " (Docker's message says why; then backsight setup --resume)"
+	}
+	return &output.Error{Code: output.Blocked, Message: msg}
 }
 
 // missingSecrets lists the keys the configuration these answers give

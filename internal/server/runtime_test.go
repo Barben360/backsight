@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/config"
 )
@@ -273,6 +274,9 @@ type streamRunner struct {
 	scriptedRunner
 	pullErr error
 	stdout  io.Writer
+	// failures: the first pulls fail with failLine, then they pass.
+	failures int
+	failLine string
 }
 
 func (r *streamRunner) Stream(_ context.Context, w, errw io.Writer, args ...string) error {
@@ -283,6 +287,11 @@ func (r *streamRunner) Stream(_ context.Context, w, errw io.Writer, args ...stri
 		_, _ = io.WriteString(errw, "Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host\n")
 		return r.pullErr
 	}
+	if r.failures > 0 {
+		r.failures--
+		_, _ = io.WriteString(errw, r.failLine+"\n")
+		return errors.New("exit status 1")
+	}
 	_, _ = io.WriteString(w, "a1b2: Pull complete\n")
 	return nil
 }
@@ -291,6 +300,9 @@ func (r *streamRunner) Stream(_ context.Context, w, errw io.Writer, args ...stri
 // Download streams Docker's progress and keeps its last words on failure.
 func TestDockerDownloads(t *testing.T) {
 	ctx := context.Background()
+	oldBackoff := PullBackoff
+	PullBackoff = time.Millisecond
+	t.Cleanup(func() { PullBackoff = oldBackoff })
 	noImage := struct {
 		out string
 		err error
@@ -361,4 +373,44 @@ func TestImagesRemoveCmdNamesImagesByDigest(t *testing.T) {
 	if !strings.HasPrefix(cmd, "docker image rm ghcr.io/vectorize-io/hindsight@sha256:") || !strings.HasSuffix(cmd, " pgvector/pgvector@sha256:"+strings.SplitN(PostgresImage, "@sha256:", 2)[1]) {
 		t.Errorf("%q", cmd)
 	}
+}
+
+const unpackLine = `failed to extract layer (application/vnd.oci.image.layer.v1.tar+gzip sha256:5031) to overlayfs as "extract-1": ` +
+	`failed to unmount /var/lib/containerd/tmpmounts/containerd-mount123: device or resource busy`
+
+// A pull that fails is tried again: Docker keeps the layers it has, and
+// the second pull passes (issue 60). Every attempt failing names the cause
+// from Docker's last line.
+func TestDownloadRetriesAndNamesTheCause(t *testing.T) {
+	ctx := context.Background()
+	oldBackoff := PullBackoff
+	PullBackoff = time.Millisecond
+	t.Cleanup(func() { PullBackoff = oldBackoff })
+	r := &streamRunner{failures: 1, failLine: unpackLine}
+	d := Docker{Compose: Compose{Runner: r, Project: "p1"}}
+	var shown strings.Builder
+	if err := d.Download(ctx, []string{HindsightImage}, &shown); err != nil || len(r.calls) != 2 || !strings.Contains(shown.String(), "trying again (2/3)") {
+		t.Fatalf("err %v, %d pulls\n%s", err, len(r.calls), shown.String())
+	}
+	for line, want := range map[string]string{
+		unpackLine: PullUnpack,
+		"Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host": PullNetwork,
+		"Error response from daemon: received unexpected HTTP status: 503 Service Unavailable":            PullNetwork,
+		"write /var/lib/docker/tmp/x: no space left on device":                                            PullDisk,
+		"Error response from daemon: manifest unknown":                                                    "",
+	} {
+		r := &streamRunner{failures: PullAttempts, failLine: line}
+		err := Docker{Compose: Compose{Runner: r, Project: "p1"}}.Download(ctx, []string{PostgresImage}, io.Discard)
+		var pe *PullError
+		if !errors.As(err, &pe) || pe.Cause() != want || len(r.calls) != PullAttempts || pe.Image != PostgresImage {
+			t.Errorf("%q: %v (cause %q, want %q), %d pulls", line, err, causeOf(pe), want, len(r.calls))
+		}
+	}
+}
+
+func causeOf(e *PullError) string {
+	if e == nil {
+		return "no PullError"
+	}
+	return e.Cause()
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -1848,5 +1849,19 @@ func TestSetupStartsTheImportAtOnce(t *testing.T) {
 				t.Errorf("backfill step %q, want %q", detail, c.detail)
 			}
 		})
+	}
+}
+
+// Only a network-shaped pull failure is blamed on the network (issue 60).
+func TestDownloadErrorNamesTheCause(t *testing.T) {
+	unpack := &server.PullError{Image: "pgvector/pgvector:pg18", Attempts: 3, Err: errors.New("exit status 1"),
+		Last: "failed to extract layer (x) to overlayfs: failed to unmount /var/lib/containerd/tmpmounts/m: device or resource busy"}
+	msg := downloadError(unpack).Error()
+	if strings.Contains(msg, "network") || !strings.Contains(msg, "could not unpack it") || !strings.Contains(msg, "docker pull pgvector/pgvector:pg18") {
+		t.Errorf("unpack: %s", msg)
+	}
+	dns := &server.PullError{Image: "i", Attempts: 3, Err: errors.New("exit status 1"), Last: "dial tcp: lookup ghcr.io: no such host"}
+	if msg := downloadError(dns).Error(); !strings.Contains(msg, "check the network") {
+		t.Errorf("network: %s", msg)
 	}
 }
