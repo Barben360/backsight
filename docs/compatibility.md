@@ -37,6 +37,7 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.6-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | memory kinds on search results, search and close-the-loop guidance, retro rewrite, tool-failure pitfalls (off by default); Linux amd64 tested ([notes](releases/v0.1.6-m5.md)) |
 | v0.1.5-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | backfill progress on stderr and `retain backfill --status`; Linux amd64 tested ([notes](releases/v0.1.5-m5.md)) |
 | v0.1.4-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | banks renamed to backsight, `/backsight:doctor`, setup and backup fixes; Linux amd64 tested ([notes](releases/v0.1.4-m5.md)) |
 | v0.1.3-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | shorter memory citation, `gpt-6-luna` as the OpenAI default; Linux amd64 tested ([notes](releases/v0.1.3-m5.md)) |
