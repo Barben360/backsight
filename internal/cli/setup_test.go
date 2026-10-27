@@ -447,7 +447,7 @@ func TestSetupAsksAtATerminal(t *testing.T) {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
 	}
 	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
-	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-5.4-mini"`) || !strings.Contains(string(raw), "enabled = false") {
+	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-6-luna"`) || !strings.Contains(string(raw), "enabled = false") {
 		t.Errorf("answers not applied:\n%s", raw)
 	}
 	if !strings.Contains(out, "[recommended]") || !strings.Contains(out, "setup will:") || !strings.Contains(out, "backsight is set up") {
@@ -863,7 +863,7 @@ func TestSetupKeepsItsOwnConfigOpenToNewAnswers(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
-	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-5.4-mini"`) {
+	if !strings.Contains(string(raw), `provider = "openai"`) || !strings.Contains(string(raw), `model = "gpt-6-luna"`) {
 		t.Fatalf("config not rewritten:\n%s", raw)
 	}
 	// Once edited by hand it is the user's: adopted, contradictions refused.

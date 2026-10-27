@@ -246,7 +246,7 @@ func TestSavedModelFollowsOnlyItsProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	Defaults(qs)
-	if m := find(t, qs, "model"); m.Value != "gpt-5.4-mini" {
+	if m := find(t, qs, "model"); m.Value != "gpt-6-luna" {
 		t.Errorf("model %q (%s): the old provider's model leaked", m.Value, m.Source)
 	}
 	if b := find(t, qs, "backups"); b.Value != "off" || b.Source != "saved" {
