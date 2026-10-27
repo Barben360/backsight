@@ -58,7 +58,7 @@ func TestGuideCoversTheSpecPoints(t *testing.T) {
 // not to search; the real parameter name for related repositories.
 func TestSearchDescriptionCarriesTheRecipes(t *testing.T) {
 	for _, want := range []string{"topic + intent word", "never a kind word alone", "one per angle", "date or version", "pitfall / correction",
-		"topic + decision", "convention / correction", "`projects`", "Skip it for trivial edits", "already found this session"} {
+		"topic + decision", "convention / correction", "`projects`", "Skip it for trivial edits", "already found this session", "Hits show their kinds"} {
 		if !strings.Contains(SearchDescription, want) {
 			t.Errorf("search description lacks %q", want)
 		}
@@ -256,7 +256,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
-	"v6": "4b6aaea071fcd06b639fe47b32d4391ef224208148a5d47165c50d690f859602",
+	"v6": "4acc218d97e8f4d2e12ae5766f4e0848a452d64a518552cbd63e4584eed3da6f",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 
