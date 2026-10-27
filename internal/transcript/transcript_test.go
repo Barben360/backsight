@@ -282,3 +282,19 @@ func TestArtifactRecordsAreKnown(t *testing.T) {
 		t.Errorf("unknown: %v", got)
 	}
 }
+
+// tools-used (October 2026) lists the tool names a session used, no
+// conversation: known, never a format change.
+func TestToolsUsedRecordsAreKnown(t *testing.T) {
+	in := strings.Join([]string{
+		`{"type":"tools-used","tools":["mcp__plugin_backsight_memory__memory_search"],"sessionId":"s"}`,
+		`{"type":"tools-next-thing","sessionId":"s"}`,
+	}, "\n") + "\n"
+	recs, st, err := Read(strings.NewReader(in), 0)
+	if err != nil || len(recs) != 0 {
+		t.Fatalf("%+v %v", recs, err)
+	}
+	if got := st.UnknownBefore(st.Consumed); len(got) != 1 || got["tools-next-thing"] != 1 {
+		t.Errorf("unknown: %v", got)
+	}
+}
