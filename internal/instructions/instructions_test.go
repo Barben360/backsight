@@ -18,14 +18,14 @@ func TestSizes(t *testing.T) {
 		text string
 		max  int
 	}{
-		{"guide (E6: near 700)", Guide, 900},
+		{"guide (E6: near 700)", Guide, 1000},
 		{"short guide", ShortGuide, 1000},
 		{"reminder", Reminder, 300},
 		{"nudge with terms", Nudge([]string{"PostgreSQL", "Grafana", "backfill", "observation scopes"}), 300},
 		{"gate reason", GateReason, 400},
-		{"subagent guide", SubagentGuide, 200},
+		{"subagent guide", SubagentGuide, 300},
 		{"search description", SearchDescription, 1000},
-		{"store description", StoreDescription, 1200},
+		{"store description", StoreDescription, 1400},
 		{"read description", ReadDescription, 300},
 	} {
 		if n := utf8.RuneCountInString(c.text); n > c.max || n == 0 {
@@ -54,11 +54,61 @@ func TestGuideCoversTheSpecPoints(t *testing.T) {
 	}
 }
 
+// The search recipes: topic first, intent word second; the triggers; when
+// not to search; the real parameter name for related repositories.
+func TestSearchDescriptionCarriesTheRecipes(t *testing.T) {
+	for _, want := range []string{"topic + intent word", "never a kind word alone", "one per angle", "date or version", "pitfall / correction",
+		"topic + decision", "convention / correction", "`projects`", "Skip it for trivial edits", "already found this session"} {
+		if !strings.Contains(SearchDescription, want) {
+			t.Errorf("search description lacks %q", want)
+		}
+	}
+	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
+		if !strings.Contains(s, "topic + intent word") {
+			t.Errorf("%s lacks the query recipe", name)
+		}
+	}
+}
+
 func TestStoreDescriptionCarriesTheRubric(t *testing.T) {
 	for _, want := range []string{"decision, correction, convention, pitfall, state, lesson", "one fact per call", "why", "absolute dates",
 		"no secrets", "transverse", "Examples:", "Non-examples:", "3 most similar"} {
 		if !strings.Contains(StoreDescription, want) {
 			t.Errorf("store description lacks %q", want)
+		}
+	}
+}
+
+// Close the loop: shipped work and contradicted memories become one dated
+// fact naming the old claim; a contradicted similar memory is updated.
+func TestStoreDescriptionClosesTheLoop(t *testing.T) {
+	for _, want := range []string{"Close the loop", "PR merged, issue closed or abandoned, root cause found", "contradicted by the code or the user",
+		"ONE dated fact", "names the old claim in its own words", "replaces open item", "kind correction", "updates it rather than adding a parallel fact"} {
+		if !strings.Contains(StoreDescription, want) {
+			t.Errorf("store description lacks %q", want)
+		}
+	}
+	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
+		if !strings.Contains(s, "naming the old claim") {
+			t.Errorf("%s lacks the close-the-loop line", name)
+		}
+	}
+}
+
+func TestStoreDescriptionForbidsMemoryAboutMemory(t *testing.T) {
+	for _, want := range []string{"State the fact itself", "never \"a memory about X was stored\"", "split a fact that covers two topics"} {
+		if !strings.Contains(StoreDescription, want) {
+			t.Errorf("store description lacks %q", want)
+		}
+	}
+}
+
+// What a subagent's final report should look like: it is kept in memory.
+func TestSubagentGuideShapesTheReport(t *testing.T) {
+	for _, want := range []string{"memory_search", "Your final message is kept", "findings with their cause", "decisions with their reason",
+		"what was delivered where", "no progress chatter", "never say you retrieved a memory", "The main session stores durable decisions"} {
+		if !strings.Contains(SubagentGuide, want) {
+			t.Errorf("subagent guide lacks %q", want)
 		}
 	}
 }
@@ -144,6 +194,50 @@ func TestMemorySkillRunsTheMemoryCommandsOnly(t *testing.T) {
 	}
 }
 
+func skillBody(name string) string {
+	for _, s := range Skills("/s") {
+		if s.Name == name {
+			return s.Body
+		}
+	}
+	return ""
+}
+
+// The retro skill used to preload a search for the four kind words, so the
+// "already stored" list was arbitrary. It now preloads the project's recent
+// history with read-only commands, searches by topic, and asks for the
+// rejected alternatives, the open questions, the feedback on wrong
+// memories, and a report-only promote step.
+func TestRetroSkillSearchesByTopicFromTheRecentHistory(t *testing.T) {
+	body, tools := skillBody("memory-retro"), skillTools("memory-retro")
+	if strings.Contains(body, "/s search") || strings.Contains(body, `"decision" "pitfall"`) {
+		t.Errorf("retro still preloads a bare-kind search:\n%s", body)
+	}
+	for _, cmd := range []string{"git log --oneline -15", "git branch --show-current", "true", "/s why", "/s why --last 3"} {
+		if !allows(tools, cmd) {
+			t.Errorf("%q needs a prompt: %s", cmd, tools)
+		}
+	}
+	for _, cmd := range []string{"git push", "git commit -am x", "git log -p", "git reset --hard", "/s forget 1", "/s search x", "/s doctor", "rm -rf x"} {
+		if allows(tools, cmd) {
+			t.Errorf("%q runs unprompted: %s", cmd, tools)
+		}
+	}
+	for _, want := range []string{"!`git log --oneline -15 || true`", "!`git branch --show-current || true`", "2-4 topics", "one `memory_search`",
+		"topic + intent word", "alternatives rejected", "questions left open", "proved wrong", "/s why", "CLAUDE.md", "`.claude/rules`", "a hook",
+		"never edit those files without that approval", "at most 10"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("retro skill lacks %q", want)
+		}
+	}
+	// The shim is one shell word even with a space in its path.
+	for _, s := range Skills("/Application Support/current") {
+		if s.Name == "memory-retro" && !strings.Contains(s.AllowedTools, "Bash('/Application Support/current' why*)") {
+			t.Errorf("shim not quoted: %s", s.AllowedTools)
+		}
+	}
+}
+
 // The docs promise that Claude is told never to ask for a key in the
 // conversation: the session guide, which every session gets, says so and
 // names the command that takes a secret instead.
@@ -162,6 +256,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
+	"v6": "4b6aaea071fcd06b639fe47b32d4391ef224208148a5d47165c50d690f859602",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 

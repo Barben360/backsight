@@ -84,7 +84,7 @@ The plugin adds five skills you can call in Claude Code:
 |---|---|
 | `/backsight:remember <fact>` | Store a fact now, for example a rule from now on. Claude picks the kind and the project. |
 | `/backsight:pause` | Stop recording this session; `/backsight:pause project` stops recording this project. |
-| `/backsight:memory-retro` | At the end of a project: Claude writes its decisions, pitfalls and lessons into memory. |
+| `/backsight:memory-retro` | At the end of a project: Claude reads the recent git history, searches the memory topic by topic for what is already stored, then writes the decisions (rejected alternatives included), pitfalls, open questions and lessons into memory. It also asks which recalled memory proved wrong and proposes, without applying, moving lasting rules into your CLAUDE.md, a `.claude/rules` file or a hook. |
 | `/backsight:memory` | Command-line access to the memory (search, read, why) when the memory tools are missing or failing. |
 | `/backsight:doctor` | backsight itself: Claude runs `doctor` and the docs to find what is wrong, fixes it with your OK, and for a bug drafts a GitHub issue from `backsight report` that it files only once you confirm. |
 

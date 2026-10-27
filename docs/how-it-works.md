@@ -65,7 +65,7 @@ The point: many questions Claude would ask you ("which server?", "what did we de
 
 ## Subagents
 
-- **When a subagent starts**, it gets a one-line memory guide and the top of the briefing (at most 600 characters), except the types in `hooks.subagent_skip` (by default `Explore`, `statusline-setup` and `claude-code-guide`).
+- **When a subagent starts**, it gets a short memory guide (including how its final report should read: findings with their cause, decisions with their reason, what was delivered where) and the top of the briefing (at most 600 characters), except the types in `hooks.subagent_skip` (by default `Explore`, `statusline-setup` and `claude-code-guide`).
 - **When it finishes**, its final report is redacted, cut at 4,000 characters and sent like a note, unless the session is paused or the project excluded.
 
 ## The memory tools
@@ -74,9 +74,9 @@ Claude has three tools, served by `backsight mcp` through the plugin:
 
 | Tool | Does |
 |---|---|
-| `memory_search` | Searches the memory with 1 to 4 short keyword queries, like `backsight search`. |
+| `memory_search` | Searches the memory with 1 to 4 short queries, like `backsight search`. Claude is told to write each as a topic plus an intent word (`docker compose subnet pitfall`), never a kind word alone, and to search before a risky action, design work or asking you a preference. |
 | `memory_read` | Shows one memory with the facts it was built from. |
-| `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. |
+| `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. Claude is told to store a dated fact that names the old claim when work ships or a recalled memory proves wrong. |
 
 Setup adds a permission rule that lets Claude call these three tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
 

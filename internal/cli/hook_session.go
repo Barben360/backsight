@@ -41,7 +41,7 @@ const (
 	compactStores     = 10
 	subagentItems     = 2
 	subagentChars     = 600
-	subagentItemChars = 180
+	subagentItemChars = 100
 )
 
 func init() {
