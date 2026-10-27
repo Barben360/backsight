@@ -18,7 +18,10 @@ import (
 // guide forbids asking for a secret in the conversation; v3: memory_store
 // names the transverse pool only for a user-wide rule; v4: the credit reads
 // "From memory"; v5: the doctor skill, the memory skill narrowed to the
-// memory).
+// memory; v6: search recipes (topic + intent word), close the loop on
+// shipped work and contradicted memories, no memory about memory, the
+// shape of a subagent's report, memory-retro rewritten around the
+// project's recent history).
 const Version = "v6"
 
 // Credit is the exact citation format the guide asks for.
