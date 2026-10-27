@@ -256,7 +256,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
-	"v6": "4acc218d97e8f4d2e12ae5766f4e0848a452d64a518552cbd63e4584eed3da6f",
+	"v6": "08ae29b8359ba847e94edb12c320d9ff4a3bfab837c6597c2a32a9422cde7228",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 
@@ -264,7 +264,7 @@ func wordingHash() string {
 	h := sha256.New()
 	texts := []string{Credit, Guide, ShortGuide, Reminder, Nudge(nil), Nudge([]string{"a", "b"}), DetectorRule, DetectorApproval, GateReason,
 		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
-		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription}
+		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader}
 	for _, s := range Skills("/s") {
 		// AllowedTools lists one entry per docs topic: a new docs page is
 		// not a change of wording.

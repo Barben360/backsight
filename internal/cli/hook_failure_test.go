@@ -138,7 +138,7 @@ func TestFailureRecallRedactsTheQueryAndKeepsToTheBudget(t *testing.T) {
 			t.Errorf("query leaks a key or is too long: %q", q)
 		}
 	}
-	if n := len([]rune(h.Specific.Context)); n > 100+len([]rune(failureHeader))+1 {
+	if n := len([]rune(h.Specific.Context)); n > 100+len([]rune(instructions.FailureHeader))+1 {
 		t.Errorf("injected %d chars with 100 left in the session budget:\n%s", n, h.Specific.Context)
 	}
 }

@@ -34,9 +34,6 @@ const (
 	failureCmdChars = 100
 )
 
-// failureHeader frames the memories injected after a failed tool call.
-var failureHeader = "Memories about this failure " + instructions.HintsLine + "; cite what you use:"
-
 var (
 	exitCodeRE = regexp.MustCompile(`^\s*Exit code \d+\s*`)
 	sigPathRE  = regexp.MustCompile(`(?:[A-Za-z]:)?[\\/][^\s:"'()\[\]]+|\b[\w.-]+/[\w./-]+`)
@@ -154,7 +151,7 @@ func (h *hookEnv) toolFailure() []byte {
 	})
 	text := ""
 	if len(chosen) > 0 {
-		text = failureHeader + strings.TrimPrefix(block, instructions.RecallHeader)
+		text = instructions.FailureHeader + strings.TrimPrefix(block, instructions.RecallHeader)
 	}
 	at := now()
 	h.store.Retry = time.Second // parallel tool calls fail together
