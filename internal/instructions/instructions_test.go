@@ -25,7 +25,7 @@ func TestSizes(t *testing.T) {
 		{"gate reason", GateReason, 400},
 		{"subagent guide", SubagentGuide, 200},
 		{"search description", SearchDescription, 1000},
-		{"store description", StoreDescription, 1200},
+		{"store description", StoreDescription, 1400},
 		{"read description", ReadDescription, 300},
 	} {
 		if n := utf8.RuneCountInString(c.text); n > c.max || n == 0 {
@@ -91,6 +91,14 @@ func TestStoreDescriptionClosesTheLoop(t *testing.T) {
 	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide} {
 		if !strings.Contains(s, "naming the old claim") {
 			t.Errorf("%s lacks the close-the-loop line", name)
+		}
+	}
+}
+
+func TestStoreDescriptionForbidsMemoryAboutMemory(t *testing.T) {
+	for _, want := range []string{"State the fact itself", "never \"a memory about X was stored\"", "split a fact that covers two topics"} {
+		if !strings.Contains(StoreDescription, want) {
+			t.Errorf("store description lacks %q", want)
 		}
 	}
 }
@@ -194,7 +202,7 @@ var wordings = map[string]string{
 	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
 	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
-	"v6": "c21018d701c3ef5972a31dc06613f220a671995795feff76cc7f6ffd772442a9",
+	"v6": "510b7b340dea9c34f4fd6dbe641aed20083de90985b16c2fcad3853ad6ca263e",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 }
 

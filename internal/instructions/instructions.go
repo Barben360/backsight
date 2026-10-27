@@ -127,6 +127,7 @@ const (
 		"Non-examples: \"We are looking into the bug\" (not durable) · a 40-line config file (a dump). " +
 		"Close the loop: when work ships (PR merged, issue closed or abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
 		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
+		"State the fact itself, never \"a memory about X was stored\"; split a fact that covers two topics. " +
 		"The 3 most similar memories are returned: if one contradicts this fact, say it updates it rather than adding a parallel fact; if it repeats one, say so."
 	ReadDescription = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
 )
