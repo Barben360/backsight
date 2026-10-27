@@ -146,3 +146,30 @@ func TestCurationCalls(t *testing.T) {
 		t.Errorf("err %v\ngot:\n%s\nwant:\n%s", err, strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestRecallAsksForSourceFactsAndReadsTheirTags(t *testing.T) {
+	var got string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = string(body)
+		_, _ = w.Write([]byte(`{"results":[
+			{"id":"o1","text":"obs","type":"observation","source_fact_ids":["f1","f2","f9"]},
+			{"id":"o2","text":"no sources","type":"observation","source_fact_ids":null},
+			{"id":"w1","text":"raw","type":"world","tags":["kind:state"]}],
+			"source_facts":{"f1":{"id":"f1","tags":["project:p","kind:decision"]},"f2":{"id":"f2","tags":["kind:decision","kind:pitfall","source:subagent"]}},
+			"source_facts_truncated":true}`))
+	})
+	hits, err := c.Recall(context.Background(), "b", RecallRequest{Query: "x", SourceFacts: true})
+	if err != nil || !strings.Contains(got, `"include":{"entities":null,"source_facts":{"max_tokens":8192}}`) {
+		t.Fatalf("err %v body %s", err, got)
+	}
+	if want := "project:p kind:decision kind:pitfall source:subagent"; strings.Join(hits[0].SourceTags, " ") != want {
+		t.Errorf("source tags %q, want %q (each once; f9 was cut by the server's budget)", hits[0].SourceTags, want)
+	}
+	if len(hits[1].SourceTags) != 0 || len(hits[2].SourceTags) != 0 {
+		t.Errorf("a hit without source facts got tags: %+v", hits[1:])
+	}
+	if _, err := c.Recall(context.Background(), "b", RecallRequest{Query: "x"}); err != nil || strings.Contains(got, "source_facts") {
+		t.Errorf("a plain recall must not ask for source facts (err %v): %s", err, got)
+	}
+}
