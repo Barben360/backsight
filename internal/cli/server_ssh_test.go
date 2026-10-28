@@ -1375,3 +1375,38 @@ func TestSSHInstallNamesAnOlderHostFirst(t *testing.T) {
 		t.Errorf("calls %q, want the probe and version only", h.steps())
 	}
 }
+
+// A value the host's login shell could read otherwise than sh is refused
+// before any ssh call: never once the host started changing.
+func TestSSHInstallRefusesAShellUnsafeValueFirst(t *testing.T) {
+	_, src, h := sshMachine(t, "100.101.1.2")
+	for _, args := range [][]string{
+		{"--answer", "model=a!b"},
+		{"--model", "a!b"},
+		{"--answer", `model=a\b`},
+		{"--base-url", "http://h/\x01"},
+		{"--answer", "retention=a!b"},
+		{"--private", "100.64.0.9!"},
+	} {
+		h.calls = nil
+		code, out, errOut := run(t, sshInstallArgs(src, append(args, "--json")...)...)
+		if code != output.Usage || len(h.calls) != 0 || !strings.Contains(out, "login shell") {
+			t.Errorf("%q: exit %d, calls %q, want exit 2 before any ssh\n%s%s", args, code, h.steps(), out, errOut)
+		}
+	}
+}
+
+// A host question quoting a key JSON escapes (& ") comes back masked.
+func TestSSHInstallMasksAnEscapedKeyInAHostQuestion(t *testing.T) {
+	const key = `sk-q&r"s0123456789`
+	esc, _ := json.Marshal(key)
+	_, src, h := sshMachine(t, "100.101.1.2")
+	t.Setenv(llmKeyEnv, key)
+	h.setupErr = &output.Error{Code: output.NeedsUser, Message: "setup asks",
+		Questions: []setup.Question{{ID: "x", Prompt: "is " + key + " right?"}}}
+	code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+	if code != output.NeedsUser || !strings.Contains(out, "is [redacted] right?") ||
+		strings.Contains(out+errOut, key) || strings.Contains(out+errOut, strings.Trim(string(esc), `"`)) {
+		t.Errorf("exit %d, want the question masked\n%s%s", code, out, errOut)
+	}
+}

@@ -421,6 +421,20 @@ func sshInstallAnswers(f sshInstallFlags) (map[string]string, error) {
 	case f.plan && keyFlag:
 		return nil, &output.Error{Code: output.Usage, Message: "--plan reads no key: drop --llm-key-from-env and --llm-key-from-file"}
 	}
+	// Every word the host gets, refused here before any ssh, never once
+	// the host started changing: --private, the answers, the install
+	// flags (as id=value answers); connect's answers too, being answers.
+	words := append([]string{f.private}, f.answers...)
+	for _, p := range installFlagAnswers {
+		if v, ok := f.flagValue(p[0]); ok {
+			words = append(words, p[1]+"="+v)
+		}
+	}
+	for _, w := range words {
+		if err := checkRemoteWord(w); err != nil {
+			return nil, err
+		}
+	}
 	return checkAnswers(f)
 }
 
