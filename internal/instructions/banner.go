@@ -1,6 +1,9 @@
 package instructions
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // The lines a user sees in a session (hook systemMessage, and the pause
 // command the /backsight:pause skill relays). Claude never reads them, so
@@ -17,17 +20,39 @@ const (
 )
 
 // statusLine is "<emoji> backsight · 🗂️ <project> · <text>"; a prompt-time
-// line has no project.
+// line has no project, and an empty text ends the line at the project.
 func statusLine(emoji, project, text string) string {
-	s := emoji + " backsight · "
+	parts := []string{emoji + " backsight"}
 	if project != "" {
-		s += EmojiProject + " " + project + " · "
+		parts = append(parts, EmojiProject+" "+project)
 	}
-	return s + text
+	if text != "" {
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, " · ")
 }
 
-// StatusOn: recall and recording are on.
-func StatusOn(project string) string { return statusLine(EmojiOn, project, "memory on") }
+// StatusOn: recall and recording are on. 🧠 says so, so the line has no
+// words of its own: "🧠 backsight · 🗂️ <project>".
+func StatusOn(project string) string { return statusLine(EmojiOn, project, "") }
+
+// Rosewood (#C9507A, bold) reads on dark and light terminals alike;
+// Claude Code renders it in a hook's systemMessage.
+const brandOn, brandOff = "\x1b[1;38;2;201;80;122m", "\x1b[0m"
+
+// Colored paints the brand word of each "<emoji> backsight" line rosewood.
+// Other lines, and a project that is itself called backsight, are left
+// as they are.
+func Colored(banner string) string {
+	lines := strings.Split(banner, "\n")
+	for i, l := range lines {
+		emoji, rest, ok := strings.Cut(l, " ")
+		if ok && (rest == "backsight" || strings.HasPrefix(rest, "backsight ")) {
+			lines[i] = emoji + " " + brandOn + "backsight" + brandOff + strings.TrimPrefix(rest, "backsight")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // StatusNotRecorded: the project is excluded (privacy.exclude_paths, a
 // .backsight.toml with retain = false, or a broken one); recall still runs.

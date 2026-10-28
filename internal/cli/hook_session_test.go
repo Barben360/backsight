@@ -45,6 +45,7 @@ func hookHome(t *testing.T) string {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	_ = os.MkdirAll(filepath.Join(home, "billing"), 0o700)
+	t.Setenv("NO_COLOR", "1") // banners compare as plain text
 	return home
 }
 
