@@ -331,3 +331,16 @@ func TestKeptSecretsReadsWhatRenderWrote(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+func TestPinnedVersionIsTheImageTag(t *testing.T) {
+	old := HindsightImage
+	defer func() { HindsightImage = old }()
+	HindsightImage = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:abc"
+	if got := PinnedVersion(); got != "1.1.0" {
+		t.Errorf("with digest: %q", got)
+	}
+	HindsightImage = "localhost:5000/hindsight:2.3.4"
+	if got := PinnedVersion(); got != "2.3.4" {
+		t.Errorf("registry port: %q", got)
+	}
+}

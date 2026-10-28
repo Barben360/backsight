@@ -55,6 +55,9 @@ type Check struct {
 	// Measure: the numbers behind a check, which jobs maintain keeps day
 	// by day to show a trend (noise-transverse: named, total).
 	Measure map[string]float64 `json:"measure,omitempty"`
+	// version is the Hindsight version the server check read, for the
+	// checks that compare it.
+	version string
 }
 
 type Report struct {
@@ -105,7 +108,7 @@ const (
 // has none: each reads "not a client" there.
 var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "latency", "learning", "noise-headless", "noise-subagent",
 	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "transcripts",
-	"transverse-keyword", "usage", "writes"}
+	"transverse-keyword", "usage", "version-skew", "writes"}
 
 // Run performs every check in a fixed order.
 func Run(ctx context.Context, env Env) Report {
@@ -147,6 +150,9 @@ func Run(ctx context.Context, env Env) Report {
 	if cfgErr == nil && cfg.Server.Mode == "remote" {
 		if c, ok := checkServerID(ctx, cl, tg, env.Dirs, srv); ok {
 			add(c)
+		}
+		if srv.version != "" {
+			add(checkSkew(srv.version))
 		}
 	}
 	bank := checkBank(ctx, cl, tg)
@@ -306,6 +312,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 		return c, nil
 	}
 	c.Status, c.Summary = OK, fmt.Sprintf("Hindsight %s at %s%s", v.APIVersion, t.Display(), from)
+	c.version = v.APIVersion
 	if t.Cleartext() {
 		c.Status = Warn
 		c.Detail = "the API key travels unencrypted to a non-loopback host"

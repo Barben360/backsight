@@ -38,6 +38,16 @@ func init() {
 	}
 }
 
+// PinnedVersion is the tag of HindsightImage ("1.1.0"): the Hindsight
+// version this backsight is built for.
+func PinnedVersion() string {
+	ref, _, _ := strings.Cut(HindsightImage, "@")
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
 const pinnedHindsight = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06"
 
 // Files are the rendered compose project.

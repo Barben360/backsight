@@ -1020,3 +1020,19 @@ func TestServerReachIsNotAClientCheckOnAServerOnlyHost(t *testing.T) {
 		t.Errorf("%d server-reach check(s), %+v", n, c)
 	}
 }
+
+// A client compares its server's Hindsight version with its pin and warns
+// on a skew, naming the fix; a PC running its own server has no skew.
+func TestVersionSkewOnlyOnAClient(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{"/version": {200, `{"api_version":"1.2.0"}`}})
+	c := check(t, boundClient(t, srv, "remote", "").run(), "version-skew")
+	if c.Status != Warn || c.Summary != "server runs Hindsight 1.2.0, this backsight pins "+server.PinnedVersion() ||
+		!strings.Contains(c.Fix, "update apply") {
+		t.Errorf("remote: %+v", c)
+	}
+	for _, ch := range boundClient(t, srv, "local", "").run().Checks {
+		if ch.ID == "version-skew" {
+			t.Errorf("local: %+v", ch)
+		}
+	}
+}
