@@ -46,7 +46,7 @@ func TestShowsOfOneSession(t *testing.T) {
 	at := time.Date(2026, 10, 28, 9, 0, 0, 123, time.UTC)
 	events := []Event{
 		{Kind: "turn", Session: "s1", Turn: "p-1", TS: at},
-		{Kind: "shows", Session: "s1", Turn: "p-1", Agent: "a7", Project: "billing", Path: "search", TS: at, Items: []Item{{ID: idA, Rank: 1}, {ID: idB, Rank: 2}}},
+		{Kind: "shows", Session: "s1", Turn: "p-1", Agent: "a7", Project: "billing", Path: "search", TS: at, Items: []Item{{ID: idA, Rank: 1, Project: "infra"}, {ID: idB, Rank: 2}}},
 		{Kind: "shows", Session: "s2", Turn: "q-1", Path: "prompt", TS: at, Items: []Item{{ID: "other", Rank: 1}}},
 		{Kind: "credit", Session: "s1", Turn: "p-1", IDs: []string{idA}, TS: at},
 	}
@@ -58,6 +58,10 @@ func TestShowsOfOneSession(t *testing.T) {
 		Key: "s1|p-1|" + "1793178000000000123" + "|" + idB}
 	if got[1] != want {
 		t.Errorf("show\n got %+v\nwant %+v", got[1], want)
+	}
+	// an item's own project wins; a line without one (older) keeps the session's
+	if got[0].Project != "infra" {
+		t.Errorf("item project: %+v", got[0])
 	}
 	if len(Shows(events, "s3")) != 0 {
 		t.Error("another session's shows")

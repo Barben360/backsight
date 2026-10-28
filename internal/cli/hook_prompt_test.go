@@ -359,6 +359,14 @@ func eventsOf(evs []feedback.Event, kind string) []feedback.Event {
 	return out
 }
 
+func itemProjects(items []feedback.Item) string {
+	var parts []string
+	for _, it := range items {
+		parts = append(parts, it.Project)
+	}
+	return strings.Join(parts, ",")
+}
+
 func itemsText(items []feedback.Item) string {
 	var parts []string
 	for _, it := range items {
@@ -382,7 +390,7 @@ func TestPromptRecallJournalsShowsWithRanks(t *testing.T) {
 		t.Errorf("turn %+v", turn)
 	}
 	shows := evs[1]
-	if shows.Path != "prompt" || shows.Turn != "p-1" || shows.Session != "s1" || shows.Agent != "" || itemsText(shows.Items) != "m1:1:0.9,m3:2:0.7" {
+	if shows.Path != "prompt" || shows.Turn != "p-1" || shows.Session != "s1" || shows.Agent != "" || itemsText(shows.Items) != "m1:1:0.9,m3:2:0.7" || itemProjects(shows.Items) != "billing,billing" {
 		t.Errorf("shows %+v items %s", shows, itemsText(shows.Items))
 	}
 	if cur, ok := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1"); !ok || cur.ID != "p-1" || cur.N != 1 || cur.Machine {
@@ -456,6 +464,10 @@ func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
 	if s := shows[1]; s.Path != "read" || s.Turn != "p-1" || s.Agent != "" || itemsText(s.Items) != "1c4c2a52-0000-4000-8000-000000000002:0:0" {
 		t.Errorf("read %+v items %s", s, itemsText(s.Items))
 	}
+	// each search item carries the project of the group its line sits in
+	if p := itemProjects(shows[0].Items); p != "billing,.claude,billing" {
+		t.Errorf("search item projects %q", p)
+	}
 	// A search that found nothing shows nothing.
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search", "tool_response": "nothing in memory\n"})
 	if n := len(eventsOf(journalEvents(t, home), "shows")); n != 2 {
@@ -478,6 +490,7 @@ func TestPostToolUseJournalsTheCredit(t *testing.T) {
 	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · 0b4c2a52)** — <the facts you used, in your words>")
 	credit("p-2", map[string]any{"verdict": "none"}, "Noted: no memory used.")
 	// a refused call is no credit, whatever it was asked
+	credit("p-2", map[string]any{"ids": []string{"cccccccc"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · cccccccc)** — x") // used, but no id resolves: no empty credit
 	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "0b4c2a52: not shown in this session, or its search result has not arrived yet: call again after the result")
 	credits := eventsOf(journalEvents(t, home), "credit")
 	if len(credits) != 2 {

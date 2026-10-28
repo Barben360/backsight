@@ -488,15 +488,23 @@ func creditSession(t *testing.T) (*mcp.ClientSession, string) {
 	return cs, home
 }
 
-// showIn journals what a hook shows: ids shown in session sess, of project.
-func showIn(t *testing.T, home, sess, project string, ids ...string) {
+// showIn journals what a hook shows: ids of project proj shown in session
+// sess, in project proj.
+func showIn(t *testing.T, home, sess string, ids ...string) {
 	t.Helper()
 	items := make([]feedback.Item, 0, len(ids))
 	for i, id := range ids {
-		items = append(items, feedback.Item{ID: id, Rank: i + 1})
+		items = append(items, feedback.Item{ID: id, Rank: i + 1, Project: "proj"})
 	}
-	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: sess, Project: project})
-	if err := j.Append(feedback.Event{Kind: "shows", Turn: "p-1", Path: "search", Items: items}); err != nil {
+	showItems(t, home, sess, "search", "proj", items...)
+}
+
+// showItems journals a shows event of path in session sess, whose
+// session project is sessProject.
+func showItems(t *testing.T, home, sess, path, sessProject string, items ...feedback.Item) {
+	t.Helper()
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: sess, Project: sessProject})
+	if err := j.Append(feedback.Event{Kind: "shows", Turn: "p-1", Path: path, Items: items}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -518,7 +526,7 @@ func creditEvent(t *testing.T, home string, fields ...string) bool {
 
 func TestCreditUsedReturnsTheLineToPrint(t *testing.T) {
 	cs, home := creditSession(t)
-	showIn(t, home, "S", "proj", creditA)
+	showIn(t, home, "S", creditA)
 	before := len(journalEvents(t, home))
 	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}})
 	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, "> 🧠 **From memory (proj · aaaaaaaa)** — ") || !strings.Contains(out, "final message") {
@@ -530,10 +538,24 @@ func TestCreditUsedReturnsTheLineToPrint(t *testing.T) {
 	if !creditEvent(t, home, `"verdict":"used"`, `"ids_n":1`, `"ok":true`) {
 		t.Errorf("telemetry:\n%s", telemetryText(t, home))
 	}
-	// ids of two projects: one group each, full ids and prefixes alike
-	showIn(t, home, "S", "infra", creditB)
+}
+
+// The line names each memory's own project, not the session's: a session
+// in billing shown an infra memory credits it to infra.
+func TestCreditNamesEachMemorysOwnProject(t *testing.T) {
+	cs, home := creditSession(t)
+	showItems(t, home, "S", "search", "billing", feedback.Item{ID: creditB, Rank: 1, Project: "infra"}, feedback.Item{ID: creditA, Rank: 2, Project: "billing"})
+	showItems(t, home, "S", "read", "billing", feedback.Item{ID: creditB}) // a read names no project: the search's stays
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"bbbbbbbb"}})
+	if isErr || !strings.Contains(out, "From memory (infra · bbbbbbbb)**") {
+		t.Errorf("%v\n%s", isErr, out)
+	}
+	// ids of two projects: one line each, full ids and prefixes alike
 	out, isErr = call(t, cs, "memory_credit", map[string]any{"ids": []string{creditB, "aaaaaaaa"}, "verdict": "used"})
-	if isErr || !strings.Contains(out, "From memory (infra · bbbbbbbb)**") || !strings.Contains(out, "From memory (proj · aaaaaaaa)**") {
+	want := "Credited. Print these lines in your final message:\n" +
+		"> 🧠 **From memory (infra · bbbbbbbb)** — <the facts you used, in your words>\n" +
+		"> 🧠 **From memory (billing · aaaaaaaa)** — <the facts you used, in your words>"
+	if isErr || out != want {
 		t.Errorf("%v\n%s", isErr, out)
 	}
 }
@@ -541,7 +563,7 @@ func TestCreditUsedReturnsTheLineToPrint(t *testing.T) {
 // Another session's shows cannot be credited here.
 func TestCreditSeesOnlyItsSessionsShows(t *testing.T) {
 	cs, home := creditSession(t)
-	showIn(t, home, "S2", "proj", creditA)
+	showIn(t, home, "S2", creditA)
 	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); !isErr || !strings.Contains(out, "aaaaaaaa: not shown in this session") {
 		t.Errorf("%v %s", isErr, out)
 	}
@@ -549,7 +571,7 @@ func TestCreditSeesOnlyItsSessionsShows(t *testing.T) {
 
 func TestCreditIsAllOrNothing(t *testing.T) {
 	cs, home := creditSession(t)
-	showIn(t, home, "S", "proj", creditA, "aaaaaaaa-9999-4000-8000-000000000009")
+	showIn(t, home, "S", creditA, "aaaaaaaa-9999-4000-8000-000000000009")
 	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{creditA, "cccccccc"}})
 	if !isErr || !strings.Contains(out, "cccccccc: not shown in this session") || strings.Contains(out, "aaaaaaaa: ") || strings.Contains(out, "From memory") {
 		t.Errorf("%v %s", isErr, out)
@@ -570,7 +592,7 @@ func TestCreditBeforeTheSearchResultIsRefused(t *testing.T) {
 	if !isErr || !strings.Contains(out, "aaaaaaaa: not shown in this session") || !strings.Contains(out, "call again after the result") {
 		t.Errorf("%v %s", isErr, out)
 	}
-	showIn(t, home, "S", "proj", creditA)
+	showIn(t, home, "S", creditA)
 	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, "Credited.") {
 		t.Errorf("after the show: %v %s", isErr, out)
 	}
@@ -578,7 +600,7 @@ func TestCreditBeforeTheSearchResultIsRefused(t *testing.T) {
 
 func TestCreditNoneNeedsNoIDs(t *testing.T) {
 	cs, home := creditSession(t)
-	showIn(t, home, "S", "proj", creditA)
+	showIn(t, home, "S", creditA)
 	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "none"}); !isErr || !strings.Contains(out, "none") {
 		t.Errorf("none with ids: %v %s", isErr, out)
 	}
@@ -610,7 +632,7 @@ func TestCreditWithoutSessionAsksToRetry(t *testing.T) {
 	mcpParentPID = 4949
 	t.Cleanup(func() { mcpParentPID = 0 })
 	cs := mcpSession(t)
-	showIn(t, os.Getenv("HOME"), "S", "proj", creditA)
+	showIn(t, os.Getenv("HOME"), "S", creditA)
 	for _, args := range []map[string]any{{"ids": []string{"aaaaaaaa"}}, {"verdict": "none"}} {
 		if out, isErr := call(t, cs, "memory_credit", args); !isErr || out != "memory session not ready: call memory_credit again" {
 			t.Errorf("%v: %v %q", args, isErr, out)
@@ -625,7 +647,7 @@ func TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable(t *testing.T
 		t.Skip("root reads a file without permissions")
 	}
 	cs, home := creditSession(t)
-	showIn(t, home, "S", "proj", creditB)
+	showIn(t, home, "S", creditB)
 	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "journal-*.jsonl"))
 	if len(files) != 1 || os.Chmod(files[0], 0) != nil {
 		t.Fatalf("journal %v", files)

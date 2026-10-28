@@ -20,11 +20,14 @@ import (
 // Schema is the journal line format this binary writes and reads.
 const Schema = 1
 
-// Item is one memory of a show, with its place in the list shown.
+// Item is one memory of a show, with its place in the list shown and the
+// project it belongs to (empty when the path does not tell, and on lines
+// written before the field).
 type Item struct {
 	ID       string  `json:"id"`
 	Rank     int     `json:"rank,omitempty"`
 	Reranker float64 `json:"reranker,omitempty"`
+	Project  string  `json:"project,omitempty"`
 }
 
 // Settled is the outcome a settle gave one show: credit, confident_miss,

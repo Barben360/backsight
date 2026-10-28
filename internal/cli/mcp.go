@@ -343,11 +343,20 @@ func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
 	if len(problems) > 0 {
 		return "", errors.New(strings.Join(problems, "\n"))
 	}
-	// One line per project, in the order the ids were given; a memory's
-	// project is the session's when it was last shown.
+	// One line per project, in the order the ids were given. A memory's
+	// project is the one its latest show names; a read names none (its
+	// show carries the session's), so it only fills in for an id that no
+	// other show named.
 	project := map[string]string{}
 	for _, s := range shown {
-		project[s.ID] = s.Project
+		if s.Path != "read" {
+			project[s.ID] = s.Project
+		}
+	}
+	for _, s := range shown {
+		if _, ok := project[s.ID]; !ok {
+			project[s.ID] = s.Project
+		}
 	}
 	var order []string
 	groups := map[string][]string{}

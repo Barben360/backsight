@@ -120,7 +120,7 @@ func (h *hookEnv) journalShows(path string, items []feedback.Item) {
 func itemsFromHits(hits []recall.Hit) []feedback.Item {
 	items := make([]feedback.Item, 0, len(hits))
 	for i, hit := range hits {
-		items = append(items, feedback.Item{ID: hit.ID, Rank: i + 1, Reranker: hit.Reranker})
+		items = append(items, feedback.Item{ID: hit.ID, Rank: i + 1, Reranker: hit.Reranker, Project: hit.Project})
 	}
 	return items
 }
@@ -129,7 +129,7 @@ func itemsFromHits(hits []recall.Hit) []feedback.Item {
 func itemsFromInjections(ins []session.Injection) []feedback.Item {
 	items := make([]feedback.Item, 0, len(ins))
 	for i, in := range ins {
-		items = append(items, feedback.Item{ID: in.ID, Rank: i + 1})
+		items = append(items, feedback.Item{ID: in.ID, Rank: i + 1, Project: in.Project})
 	}
 	return items
 }
@@ -140,26 +140,38 @@ var (
 	searchHitRE = regexp.MustCompile(`(?m)^- #([0-9]+) .*, ([^\s,()]+), -?[0-9]+\.[0-9]+\)\r?$`)
 	// searchRankRE: any line that starts like a hit.
 	searchRankRE = regexp.MustCompile(`(?m)^- #[0-9]+ `)
+	// searchGroupRE: a project's group header, "[<project>]".
+	searchGroupRE = regexp.MustCompile(`^\[(.+)\]\r?$`)
 	// showIDRE: what memory_read journals must look like an id, never text.
 	showIDRE = regexp.MustCompile(`^[A-Za-z0-9:_-]{1,128}$`)
 )
 
 // searchShows reads the ranked hits back from memory_search's text, in
-// rank order. Only whole hit lines count, and only when every line that
-// starts like a hit is one and their ranks run 1..N: anything else (a
-// memory's text posing as a hit) journals nothing rather than a wrong show.
+// rank order, each with the project of the group header above it. Only
+// whole hit lines count, and only when every line that starts like a hit
+// is one and their ranks run 1..N: anything else (a memory's text posing
+// as a hit) journals nothing rather than a wrong show. A memory's text is
+// on one line, so it cannot pose as a header.
 func searchShows(text string) []feedback.Item {
-	lines := searchHitRE.FindAllStringSubmatch(text, -1)
-	if len(lines) != len(searchRankRE.FindAllStringIndex(text, -1)) {
+	if len(searchHitRE.FindAllStringIndex(text, -1)) != len(searchRankRE.FindAllStringIndex(text, -1)) {
 		return nil
 	}
-	items := make([]feedback.Item, 0, len(lines))
-	for _, l := range lines {
+	var items []feedback.Item
+	project := ""
+	for _, line := range strings.Split(text, "\n") {
+		if g := searchGroupRE.FindStringSubmatch(line); g != nil {
+			project = g[1]
+			continue
+		}
+		l := searchHitRE.FindStringSubmatch(line)
+		if l == nil {
+			continue
+		}
 		rank, err := strconv.Atoi(l[1])
 		if err != nil {
 			return nil
 		}
-		items = append(items, feedback.Item{ID: l[2], Rank: rank})
+		items = append(items, feedback.Item{ID: l[2], Rank: rank, Project: project})
 	}
 	slices.SortFunc(items, func(a, b feedback.Item) int { return a.Rank - b.Rank }) // grouped by project in the text
 	for i, it := range items {
@@ -219,12 +231,15 @@ func (h *hookEnv) journalCredit(text string) {
 	}
 	_ = json.Unmarshal(h.in.ToolInput, &in)
 	var ids []string
-	if verdict == "used" && len(in.IDs) > 0 {
+	if verdict == "used" {
 		shown := shownInSession(h.dirs, h.in.SessionID)
 		for _, ref := range in.IDs {
 			if id, err := feedback.Resolve(strings.TrimSpace(ref), shown); err == nil && !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
+		}
+		if len(ids) == 0 {
+			return // a used credit naming nothing shown credits nothing
 		}
 	}
 	h.feedbackError(h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, IDs: ids, Verdict: verdict}))

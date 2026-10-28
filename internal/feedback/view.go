@@ -11,7 +11,8 @@ import (
 // Show is one memory put in front of the agent, read back from a shows
 // event. Key names it (session|turn|<event ts in Unix ns>|id): the hooks
 // get no tool call id, and seq is counted per process. Project is the
-// session's project when it was shown.
+// memory's, from its item; the session's when the item names none (a read,
+// an older line).
 type Show struct {
 	ID, Turn, Agent, Path, Key, Project string
 	Rank                                int
@@ -27,7 +28,11 @@ func Shows(events []Event, session string) []Show {
 		}
 		at := strconv.FormatInt(e.TS.UnixNano(), 10)
 		for _, it := range e.Items {
-			out = append(out, Show{ID: it.ID, Turn: e.Turn, Agent: e.Agent, Path: e.Path, Project: e.Project, Rank: it.Rank, At: e.TS,
+			project := it.Project
+			if project == "" {
+				project = e.Project
+			}
+			out = append(out, Show{ID: it.ID, Turn: e.Turn, Agent: e.Agent, Path: e.Path, Project: project, Rank: it.Rank, At: e.TS,
 				Key: session + "|" + e.Turn + "|" + at + "|" + it.ID})
 		}
 	}
