@@ -1,8 +1,6 @@
 <h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img alt="backsight" src="docs/assets/logo-light.svg" height="64">
-  </picture>
+  <img alt="backsight" src="docs/assets/logo-light.svg#gh-light-mode-only" height="64">
+  <img alt="backsight" src="docs/assets/logo-dark.svg#gh-dark-mode-only" height="64">
 </h1>
 
 [![CI](https://github.com/Barben360/backsight/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Barben360/backsight/actions/workflows/ci.yml?query=branch%3Amain)
