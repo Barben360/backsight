@@ -183,3 +183,26 @@ func TestPrintCommandsPlaceEachAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A LAN address: the commands say the host's expose will ask for
+// cleartext_lan=yes, right before that command, unless it is answered.
+func TestPrintCommandsWarnOfACleartextLAN(t *testing.T) {
+	setBuild(t, "9.9.9", "abc1234")
+	args := []string{"server", "install", "--print-commands", "--private", "192.168.1.5"}
+	code, out, errOut := run(t, args...)
+	before, _, ok := strings.Cut(out, "backsight server expose --private 192.168.1.5\n")
+	lines := strings.Split(strings.TrimSuffix(before, "\n"), "\n")
+	if code != output.OK || !ok || !strings.HasPrefix(lines[len(lines)-1], "# ") || !strings.Contains(lines[len(lines)-1], "cleartext_lan=yes") {
+		t.Errorf("exit %d, want a comment naming cleartext_lan=yes right before expose\n%s%s", code, out, errOut)
+	}
+	_, out, _ = run(t, append(args, "--json")...)
+	var env printedEnvelope
+	_ = json.Unmarshal([]byte(out), &env)
+	if len(env.Data.Commands) < 4 || !strings.HasPrefix(env.Data.Commands[3].Cmd, "backsight server expose") || !strings.Contains(env.Data.Commands[3].Why, "cleartext_lan=yes") {
+		t.Errorf("JSON: %+v", env.Data.Commands)
+	}
+	_, out, _ = run(t, append(args, "--answer", "cleartext_lan=yes")...)
+	if strings.Contains(out, "not a tailnet address") {
+		t.Errorf("answered, yet the comment stays:\n%s", out)
+	}
+}

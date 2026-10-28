@@ -1288,3 +1288,90 @@ func TestSSHInstallPartialKeepsSSHAction(t *testing.T) {
 		t.Errorf("exit %d, want 40 with ssh u@h to run\n%s%s", code, out, errOut)
 	}
 }
+
+// With --json, each change this PC makes streams a progress line as it
+// starts and as it ends, the release's upload to the host included.
+func TestSSHInstallStreamsItsSteps(t *testing.T) {
+	_, src, _ := sshMachine(t, "100.101.1.2")
+	code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	var got []string
+	for _, l := range strings.Split(errOut, "\n") {
+		var ev map[string]any
+		if json.Unmarshal([]byte(l), &ev) != nil || ev["event"] != "progress" || ev["command"] != "server install" {
+			continue
+		}
+		got = append(got, fmt.Sprint(ev["step"], ":", ev["status"]))
+	}
+	want := []string{"release:running", "upload:running", "release:done", "llm-key:running", "llm-key:done", "setup:running", "setup:done",
+		"expose:running", "expose:done", "token:running", "token:done", "connect:running", "connect:done"}
+	if !slices.Equal(got, want) {
+		t.Errorf("progress %q\nwant     %q", got, want)
+	}
+	if !strings.Contains(errOut, `"step":"host:server"`) {
+		t.Errorf("the host's own progress is no longer relayed:\n%s", errOut)
+	}
+}
+
+// A host extracting with a Claude subscription: its terms are accepted
+// before anything changes there, in the plan, at a terminal, or as an
+// answer the resume carries.
+func TestSSHInstallAsksTheSubscriptionAckFirst(t *testing.T) {
+	_, src, h := sshMachine(t, "100.101.1.2")
+	args := sshInstallArgs(src, "--provider", "claude-code", "--json")
+	code, out, errOut := run(t, args...)
+	env := parseSSHInstall(t, out)
+	if code != output.NeedsUser || env.Error == nil || !strings.HasSuffix(env.Error.Resume, " --answer consent=yes --non-interactive --answer ack_subscription=yes") ||
+		!strings.Contains(fmt.Sprint(env.Error.Questions), "ack_subscription") || !slices.Equal(h.steps(), []string{"probe"}) {
+		t.Fatalf("no ack: exit %d, calls %q\n%s%s", code, h.steps(), out, errOut)
+	}
+
+	h.calls = nil
+	_, out, _ = run(t, "server", "install", "--ssh", "u@h", "--source", src, "--provider", "claude-code", "--plan", "--json")
+	if env := parseSSHInstall(t, out); !hasConnectStep(env.Data.Steps, "ack_subscription", "planned", "Claude subscription") {
+		t.Errorf("plan: %+v", env.Data.Steps)
+	}
+
+	h.calls = nil
+	if code, out, errOut := run(t, append(args, "--answer", "ack_subscription=yes")...); code != output.OK ||
+		!strings.Contains(strings.Join(h.call("setup").words, " "), "--answer ack_subscription=yes") {
+		t.Errorf("acked: exit %d, calls %q\n%s%s", code, h.steps(), out, errOut)
+	}
+
+	terminal := func(t *testing.T, in string) {
+		withStdin(t, in)
+		oldIn, oldOut := stdinIsTerminal, stdoutIsTerminal
+		stdinIsTerminal, stdoutIsTerminal = func() bool { return true }, func() bool { return true }
+		t.Cleanup(func() { stdinIsTerminal, stdoutIsTerminal = oldIn, oldOut })
+	}
+	text := []string{"server", "install", "--ssh", "u@h", "--source", src, "--llm-key-from-env", llmKeyEnv, "--provider", "claude-code"}
+	h.calls = nil
+	terminal(t, "n\n")
+	if code, out, errOut := run(t, text...); code != output.OK || !strings.Contains(out, "Claude subscription") || !strings.Contains(out, "nothing changed") ||
+		slices.ContainsFunc(h.steps(), func(s string) bool { return !slices.Contains([]string{"probe", "version", "paths", "secret list"}, s) }) {
+		t.Errorf("declined at a terminal: exit %d, calls %q, want reads only\n%s%s", code, h.steps(), out, errOut)
+	}
+	h.calls = nil
+	terminal(t, "y\ny\n"+strings.Repeat("\n", 10))
+	if code, out, errOut := run(t, text...); code != output.OK || !strings.Contains(strings.Join(h.call("setup").words, " "), "--answer ack_subscription=yes") {
+		t.Errorf("accepted at a terminal: exit %d, calls %q\n%s%s", code, h.steps(), out, errOut)
+	}
+}
+
+// An older backsight on the host is named before anything else is read
+// there: its paths --json may not even answer.
+func TestSSHInstallNamesAnOlderHostFirst(t *testing.T) {
+	_, src, h := sshMachine(t, "100.101.1.2")
+	h.version = "9.9.8"
+	h.exit, h.stderr = map[string]int{"paths": 2}, map[string]string{"paths": "unknown flag: --json\n"}
+	code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+	env := parseSSHInstall(t, out)
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "runs backsight 9.9.8 and this PC 9.9.9") {
+		t.Fatalf("exit %d, want 20 naming both versions\n%s%s", code, out, errOut)
+	}
+	if !slices.Equal(h.steps(), []string{"probe", "version"}) {
+		t.Errorf("calls %q, want the probe and version only", h.steps())
+	}
+}

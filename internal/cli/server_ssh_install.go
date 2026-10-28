@@ -212,7 +212,8 @@ func hostEnvelope(out []byte) (hostEnv, bool) {
 
 // inspectHost reads the host's backsight, when it has one: its version,
 // whether it is set up and how, its state directory and whether its LLM
-// key is set. Read-only.
+// key is set. Read-only. Another version than this PC's stops the reading
+// there: server install refuses it, whatever the rest would say.
 func inspectHost(ctx context.Context, target string, facts hostFacts) (hostInstall, error) {
 	var h hostInstall
 	if !facts.HasShim {
@@ -229,6 +230,9 @@ func inspectHost(ctx context.Context, target string, facts hostFacts) (hostInsta
 		return h, unreadableHost(target, "version")
 	}
 	h.Version = v.Version
+	if h.Version != buildinfo.Version { // refused as it is: another release may read nothing more
+		return h, nil
+	}
 	if h, err = hostPaths(ctx, target, facts.Shim, h); err != nil {
 		return h, err
 	}
@@ -625,6 +629,13 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	case hasLocal:
 		connectDetail = "back up, verify and stop this PC's own server, then send its sessions to the host (connect --undo goes back)"
 	}
+	// A host extracting with a Claude subscription: its terms are accepted
+	// before any change there, as setup and connect ask them.
+	ack := setup.SubscriptionQuestion(true)
+	askAck := provider == "claude-code" && answers["ack_subscription"] != "yes"
+	if askAck {
+		res.Steps = append(res.Steps, step{"ack_subscription", "planned", "ask: " + ack.Prompt})
+	}
 	res.Steps = append(res.Steps,
 		step{"setup", "planned", setupDetail},
 		step{"expose", "planned", "backsight server expose --private " + addr + " there: the server answers other PCs on " + addr},
@@ -634,18 +645,30 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		return res, nil
 	}
 
-	// 7. Consent, then the key: all before any change on the host.
+	// 7. Consent, the subscription's terms, then the key: all before any
+	// change on the host.
 	interactive := !e.json && !f.nonInteractive && stdinIsTerminal() && stdoutIsTerminal()
+	acked := func() bool {
+		fmt.Fprintf(e.stdout, "\n%s\n", ack.Prompt)
+		if !confirm(e, "Accept? [y/N] ") {
+			res.Declined = true
+			return false
+		}
+		hostAns = append(hostAns, "ack_subscription=yes")
+		f.answers = append(f.answers, "ack_subscription=yes") // connect's too
+		askAck = false
+		return true
+	}
 	switch consent := answers["consent"]; {
 	case consent == "" && interactive:
 		fmt.Fprint(e.stdout, sshInstallText(res))
 		res.shown, res.warned = len(res.Steps), len(res.Warnings)
+		if askAck && !acked() {
+			return res, nil
+		}
 		if !confirm(e, "Install the memory server on "+t+" and join it from this PC? [y/N] ") {
 			res.Declined = true
 			return res, nil
-		}
-		// The steps done so far were in the plan; the others show as done.
-		for res.shown = 0; res.shown < len(res.Steps) && res.Steps[res.shown].Status != "planned"; res.shown++ {
 		}
 	case consent == "":
 		return res, hide(&output.Error{Code: output.NeedsUser, Resume: resume + " --answer consent=yes",
@@ -653,6 +676,21 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	case consent != "yes":
 		res.Declined = true
 		return res, nil
+	}
+	if askAck && interactive && !acked() { // the consent was given as an answer
+		return res, nil
+	}
+	if askAck {
+		return res, hide(&output.Error{Code: output.NeedsUser, Questions: []setup.Question{ack}, Resume: resume + " --answer ack_subscription=yes",
+			Message: t + " would extract with a Claude subscription: accept its terms before anything changes there (nothing was changed); rerun with --answer ack_subscription=yes"})
+	}
+	if res.shown > 0 {
+		// The steps done so far were in the plan; the others show as done.
+		for res.shown = 0; res.shown < len(res.Steps) && res.Steps[res.shown].Status != "planned"; res.shown++ {
+		}
+	}
+	if i := slices.IndexFunc(res.Steps, func(s step) bool { return s.Name == "ack_subscription" }); i >= 0 {
+		res.Steps[i] = step{"ack_subscription", "done", "the terms of extracting with a Claude subscription, accepted"}
 	}
 	if needKey {
 		noKey := &output.Error{Code: output.NeedsUser, Resume: resume + " --llm-key-from-file F",
@@ -674,7 +712,8 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		}
 	}
 
-	// 8-13. The changes, each shown as it is done.
+	// 8-13. The changes, each shown as it is done; with --json, a progress
+	// line as each starts and ends (decision 0064).
 	show := func() {
 		if e.json {
 			return
@@ -683,10 +722,24 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 			fmt.Fprint(e.stdout, stepLine(res.Steps[res.shown]))
 		}
 	}
+	progress := func(name, status, detail string) {
+		if e.json {
+			b, _ := json.Marshal(map[string]any{"event": "progress", "command": "server install", "step": name, "status": status, "detail": detail})
+			fmt.Fprintln(e.stderr, string(b))
+		}
+	}
+	start := func(name string) {
+		for _, s := range res.Steps {
+			if s.Name == name {
+				progress(name, "running", s.Detail)
+			}
+		}
+	}
 	mark := func(name, status string) {
 		for i := range res.Steps {
 			if res.Steps[i].Name == name {
 				res.Steps[i].Status = status
+				progress(name, status, res.Steps[i].Detail)
 			}
 		}
 		show()
@@ -706,7 +759,9 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	}
 	show()
 	if src != nil {
-		if err := installRelease(ctx, t, src, facts.GOARCH); err != nil {
+		start("release")
+		uploading := func() { progress("upload", "running", "the verified release goes to "+t+" over ssh") }
+		if err := installRelease(ctx, t, src, facts.GOARCH, uploading); err != nil {
 			return fail("release", err)
 		}
 		mark("release", "done")
@@ -717,6 +772,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		}
 	}
 	if needKey {
+		start("llm-key")
 		if _, err := runOnHost(ctx, he, t, facts.Shim, strings.NewReader(key+"\n"), "secret", "set", "llm_api_key", "--json"); err != nil {
 			return fail("llm-key", err)
 		}
@@ -726,6 +782,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	for _, a := range hostAns {
 		args = append(args, "--answer", a)
 	}
+	start("setup")
 	if _, err := runOnHost(ctx, he, t, facts.Shim, nil, args...); err != nil {
 		return fail("setup", err)
 	}
@@ -734,10 +791,12 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	if answers["cleartext_lan"] == "yes" {
 		args = append(args, "--answer", "cleartext_lan=yes")
 	}
+	start("expose")
 	if _, err := runOnHost(ctx, he, t, facts.Shim, nil, args...); err != nil {
 		return fail("expose", err)
 	}
 	mark("expose", "done")
+	start("token")
 	if tok, err = tokenFromHost(ctx, t, facts.Shim, h); err != nil {
 		return fail("token", err)
 	}
@@ -751,6 +810,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 			cargs = append(cargs, a)
 		}
 	}
+	start("connect")
 	cres, err := runConnect(ctx, e, connectFlags{preread: &tok, resume: resume, answers: cargs, nonInteractive: f.nonInteractive, configDir: f.configDir})
 	if cres.URL != "" {
 		res.Connect = &cres
@@ -770,8 +830,9 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 }
 
 // installRelease stages this version's release for the host in a private
-// temporary directory, verified here, and installs it there.
-func installRelease(ctx context.Context, target string, src release.Source, goarch string) error {
+// temporary directory, verified here, and installs it there; uploading
+// is called once it is verified, as it goes to the host.
+func installRelease(ctx context.Context, target string, src release.Source, goarch string, uploading func()) error {
 	work, err := os.MkdirTemp("", "backsight-ssh-")
 	if err != nil {
 		return blocked(err)
@@ -781,6 +842,7 @@ func installRelease(ctx context.Context, target string, src release.Source, goar
 	if err != nil {
 		return err
 	}
+	uploading()
 	_, err = installOnHost(ctx, target, work, archive)
 	return err
 }

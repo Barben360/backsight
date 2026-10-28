@@ -16,6 +16,7 @@ type printedCommand struct {
 	Where string `json:"where"` // "host" | "this-pc"
 	Cmd   string `json:"cmd"`
 	Why   string `json:"why"`
+	note  string // a comment line printed before Cmd, also ending Why
 }
 
 // printedCommands is server install --print-commands: the steps of
@@ -99,30 +100,38 @@ func printCommands(f sshInstallFlags, version string) (printedCommands, error) {
 		ip = shellWord(f.private)
 	}
 	expose := "backsight server expose --private " + ip
+	exposeNote := ""
 	if v, ok := answers["cleartext_lan"]; ok {
 		expose += " --answer cleartext_lan=" + shellWord(v)
+	} else if a := net.ParseIP(f.private); a != nil && !config.IsTailnet(a) {
+		exposeNote = f.private + " is not a tailnet address: the API key would travel unencrypted on this network, so server expose asks you to answer cleartext_lan=yes"
 	}
 	join := func(parts ...string) string {
 		return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), " ")
 	}
 
-	res.Commands = append(res.Commands, printedCommand{"host",
-		fmt.Sprintf("curl -fsSL %s%s/scripts/install.sh | BACKSIGHT_RELEASE_URL=%s%s sh", printRepo, version, printRelease, version),
-		"installs backsight v" + version + ", the release matching this PC: install.sh checks its signature and hash on the host"})
+	res.Commands = append(res.Commands, printedCommand{Where: "host",
+		Cmd: fmt.Sprintf("curl -fsSL %s%s/scripts/install.sh | BACKSIGHT_RELEASE_URL=%s%s sh", printRepo, version, printRelease, version),
+		Why: "installs backsight v" + version + ", the release matching this PC: install.sh checks its signature and hash on the host"})
 	if !config.KeylessProviders[provider] {
-		res.Commands = append(res.Commands, printedCommand{"host", "backsight secret set llm_api_key",
-			"asks for the LLM API key at a hidden prompt: it never goes on a command line"})
+		res.Commands = append(res.Commands, printedCommand{Where: "host", Cmd: "backsight secret set llm_api_key",
+			Why: "asks for the LLM API key at a hidden prompt: it never goes on a command line"})
 	}
 	res.Commands = append(res.Commands,
-		printedCommand{"host", join("backsight setup --role server", join(hostAns...)),
-			"sets the server up; it shows its plan and asks you to approve it at the host's terminal"},
-		printedCommand{"host", expose,
-			"opens the server to your other PCs on this LAN or tailnet address of the host"},
-		printedCommand{"host", "backsight server token --out " + printToken,
-			"writes the connection token, which holds the API key, to a file only you can read (mode 0600), never to the screen. Carry " + printToken +
+		printedCommand{Where: "host", Cmd: join("backsight setup --role server", join(hostAns...)),
+			Why: "sets the server up; it shows its plan and asks you to approve it at the host's terminal"},
+		printedCommand{Where: "host", Cmd: expose,
+			Why: "opens the server to your other PCs on this LAN or tailnet address of the host", note: exposeNote},
+		printedCommand{Where: "host", Cmd: "backsight server token --out " + printToken,
+			Why: "writes the connection token, which holds the API key, to a file only you can read (mode 0600), never to the screen. Carry " + printToken +
 				" to this PC yourself (USB stick, scp), never through a chat or a shared folder"},
-		printedCommand{"this-pc", join("backsight connect --token-file "+printToken, join(clientAns...)),
-			"joins this PC to the host's memory; it shows its plan and asks. Then delete " + printToken + " on both machines: it holds the API key. To undo on the host: backsight setup --undo"})
+		printedCommand{Where: "this-pc", Cmd: join("backsight connect --token-file "+printToken, join(clientAns...)),
+			Why: "joins this PC to the host's memory; it shows its plan and asks. Then delete " + printToken + " on both machines: it holds the API key. To undo on the host: backsight setup --undo"})
+	for i, c := range res.Commands {
+		if c.note != "" {
+			res.Commands[i].Why += ". " + strings.ToUpper(c.note[:1]) + c.note[1:]
+		}
+	}
 	return res, nil
 }
 
@@ -134,6 +143,9 @@ func printedCommandsText(r printedCommands) string {
 	b.WriteString("# On the host (Linux with Docker), as the user who will run the server:\n")
 	for _, c := range r.Commands {
 		if c.Where == "host" {
+			if c.note != "" {
+				b.WriteString("# " + c.note + "\n")
+			}
 			b.WriteString(c.Cmd + "\n")
 		}
 	}
