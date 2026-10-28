@@ -1517,6 +1517,37 @@ func TestSetupGeneratesTheBackupIdentity(t *testing.T) {
 	}
 }
 
+// On a client of a shared server the server, its docs bank and its
+// backups are the host's: setup skips the server and docs steps, plan and
+// run, never runs guide index, and generates no backup identity.
+func TestSetupOnAClientSkipsDocsAndBackupIdentity(t *testing.T) {
+	home, f := setupMachine(t)
+	_ = os.MkdirAll(filepath.Dir(pathsOf(home).ConfigFile()), 0o700)
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("api_key", "fakeapikey") }); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--plan", "--json")
+	steps := parseSetup(t, out).Data.Steps
+	if code != output.OK || !hasStep(steps, "server", "skipped", "100.101.1.2") || !hasStep(steps, "docs", "skipped", "the server's host indexes its docs") ||
+		hasStep(steps, "scheduler", "planned", "backup identity") {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	steps = parseSetup(t, out).Data.Steps
+	if code != output.OK || !hasStep(steps, "server", "skipped", "100.101.1.2") || !hasStep(steps, "docs", "skipped", "the server's host indexes its docs") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if cmds := strings.Join(f.commands(), ","); strings.Contains(cmds, "guide index") || strings.Contains(cmds, "server install") || !strings.Contains(cmds, "client install") {
+		t.Errorf("steps run: %s", cmds)
+	}
+	if sec, err := config.LoadSecrets(secretsFile(home)); err != nil || sec.BackupIdentity != "" || hasStep(steps, "scheduler", "done", "backup_identity") {
+		t.Errorf("a client generated a backup identity: %v\n%s", err, out)
+	}
+}
+
 func atATerminal(t *testing.T, input string) {
 	t.Helper()
 	withStdin(t, input)

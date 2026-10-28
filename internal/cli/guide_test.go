@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,9 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 )
 
@@ -574,4 +577,114 @@ func TestGuidePagerFallsBackOnlyWhenItCannotStart(t *testing.T) {
 	if code, out, _ := run(t, "guide", "install"); code != output.OK || out != topic.Text {
 		t.Errorf("no pager: exit %d %q", code, out)
 	}
+}
+
+// toClient turns the install newDocsHindsight pointed at the fake into a
+// client of it (server.mode remote).
+func toClient(t *testing.T, home string) {
+	t.Helper()
+	p := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(p)
+	if err := os.WriteFile(p, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// docsWrites lists the calls that changed the fake's banks.
+func docsWrites(f *docsHindsight) []string {
+	var w []string
+	for _, call := range f.calls {
+		if !strings.HasPrefix(call, "GET ") && !strings.HasPrefix(call, "LIST ") && !strings.Contains(call, "/memories/recall") {
+			w = append(w, call)
+		}
+	}
+	return w
+}
+
+// The docs bank is its host's: guide index on a client refuses, names
+// the host, and writes nothing.
+func TestGuideIndexRefusedOnAClient(t *testing.T) {
+	home := devInstall(t, true)
+	withGuideDocs(t)
+	f := newDocsHindsight(t, home)
+	toClient(t, home)
+	for _, args := range [][]string{{"guide", "index"}, {"guide", "index", "--plan"}} {
+		code, _, errOut := run(t, args...)
+		if code != output.Usage || !strings.Contains(errOut, "run backsight guide index on that server's host") || !strings.Contains(errOut, "127.0.0.1") {
+			t.Errorf("%v: exit %d %s", args, code, errOut)
+		}
+	}
+	if len(f.calls) != 0 || f.retains != 0 {
+		t.Errorf("a client called the docs bank: %v", f.calls)
+	}
+}
+
+// guide search on a client reads the docs bank as the host left it: on
+// these docs it answers, else it falls back to the keyword search; it
+// never creates, refreshes or retags the bank.
+func TestGuideSearchOnAClientFallsBackToKeyword(t *testing.T) {
+	home := devInstall(t, true)
+	c := withGuideDocs(t)
+	f := newDocsHindsight(t, home)
+	f.rank = []string{"docs:install#uninstall"}
+	toClient(t, home)
+	const reason = "the server's docs bank holds the host's docs version"
+
+	// No docs bank yet.
+	code, env, out := guideRun(t, "guide", "search", "uninstall")
+	if code != output.OK || env.Data.Mode != "keyword" || env.Data.Reason != reason || len(env.Data.Hits) == 0 || env.Data.Hits[0].Ref != "install#uninstall" {
+		t.Errorf("missing bank: exit %d %s", code, out)
+	}
+	code, env, out = guideRun(t, "guide", "search", "--mode", "semantic", "uninstall")
+	if code != output.Blocked || env.Data.Mode != "semantic" || env.Data.Reason != reason {
+		t.Errorf("missing bank, semantic only: exit %d %s", code, out)
+	}
+	if w := docsWrites(f); len(w) != 0 || len(f.docs) != 0 {
+		t.Fatalf("a client wrote the docs bank: %v", w)
+	}
+
+	// The host indexed other docs.
+	other, err := guide.Load(fstest.MapFS{"install.md": {Data: []byte("# Install\n\n## Uninstall\n\nRun `backsight uninstall --stop`.\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guide.Index(context.Background(), docsClient(t, home), "claude-memory", other); err != nil {
+		t.Fatal(err)
+	}
+	f.calls, f.retains = nil, 0
+	code, env, out = guideRun(t, "guide", "search", "uninstall")
+	if code != output.OK || env.Data.Mode != "keyword" || env.Data.Reason != reason || env.Data.Refreshed != nil {
+		t.Errorf("another docs version: exit %d %s", code, out)
+	}
+	if w := docsWrites(f); len(w) != 0 || f.retains != 0 {
+		t.Errorf("a client refreshed the docs bank: %v", w)
+	}
+
+	// The host indexed these docs: the client's search answers from them.
+	if _, err := guide.Index(context.Background(), docsClient(t, home), "claude-memory", c); err != nil {
+		t.Fatal(err)
+	}
+	f.calls, f.retains = nil, 0
+	code, env, out = guideRun(t, "guide", "search", "uninstall")
+	if code != output.OK || env.Data.Mode != "semantic" || env.Data.Refreshed != nil || len(env.Data.Hits) != 1 {
+		t.Errorf("these docs: exit %d %s", code, out)
+	}
+	if w := docsWrites(f); len(w) != 0 {
+		t.Errorf("a client wrote the docs bank: %v", w)
+	}
+}
+
+// docsClient is a Hindsight client of the server home's config names, as
+// the server's host would hold it.
+func docsClient(t *testing.T, home string) *hindsight.Client {
+	t.Helper()
+	cfg, err := config.Load(pathsOf(home).ConfigFile(), pathsOf(home), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := hindsight.New(cfg.Server.URL, "k", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cl
 }

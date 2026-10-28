@@ -368,17 +368,27 @@ type SearchError struct {
 func (e *SearchError) Error() string { return e.Stage + ": " + e.Err.Error() }
 func (e *SearchError) Unwrap() error { return e.Err }
 
+// ErrNotIndexed: the docs bank is missing or holds none of c's sections,
+// and Search was not to refresh it.
+var ErrNotIndexed = errors.New("docs bank not indexed for this docs version")
+
 // Search recalls the sections of c matching query from bank's docs bank,
-// one hit per section, best first. A bank missing, or on another docs
-// version (a restore, another client of a shared server), is brought to c
-// first; refreshed says what that did.
-func Search(ctx context.Context, cl *hindsight.Client, bank string, c Corpus, query string, limit int) (hits []Hit, refreshed *IndexResult, err error) {
+// one hit per section, best first. With refresh, a bank missing, or on
+// another docs version (a restore), is brought to c first; refreshed says
+// what that did. Without (a client of a shared server: the bank is its
+// host's), Search only reads, and a bank missing or without c's tag is
+// ErrNotIndexed.
+func Search(ctx context.Context, cl *hindsight.Client, bank string, c Corpus, query string, limit int, refresh bool) (hits []Hit, refreshed *IndexResult, err error) {
 	db := Bank(bank)
 	have, exists, err := retain.OwnedBank(ctx, cl, db, Marker)
 	if err != nil {
 		return nil, nil, &SearchError{"check", err}
 	}
-	if !exists || !diff(c, have, now()).fresh() {
+	if !refresh {
+		if !exists || !tagged(have, c.Tag()) {
+			return nil, nil, ErrNotIndexed
+		}
+	} else if !exists || !diff(c, have, now()).fresh() {
 		// The full Index: it sets the bank up quiet again, in case
 		// someone changed its config.
 		res, err := Index(ctx, cl, bank, c)
@@ -408,6 +418,13 @@ func Search(ctx context.Context, cl *hindsight.Client, bank string, c Corpus, qu
 		}
 	}
 	return hits, refreshed, nil
+}
+
+// tagged: one of have's sections carries tag.
+func tagged(have []hindsight.DocumentItem, tag string) bool {
+	return slices.ContainsFunc(have, func(d hindsight.DocumentItem) bool {
+		return strings.HasPrefix(d.ID, Marker.IDPrefix) && slices.Contains(d.Tags, tag)
+	})
 }
 
 func notFound(err error) bool {

@@ -679,10 +679,22 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 }
 
 func (a *applyRun) planDocs() {
-	if _, err := os.Stat(a.d.ConfigFile()); err == nil {
+	switch {
+	case !a.configured():
+	case a.cfg.Server.Mode != "local":
+		a.add("bank", "skipped", hostAppliesBank)
+		a.add("docs", "skipped", hostIndexesDocs)
+	default:
 		a.add("bank", "planned", "would run the new binary's bank apply: its bank template, when it differs from the one the bank was given")
 		a.add("docs", "planned", "would run the new binary's guide index: its docs into the server's docs bank (0 LLM calls)")
 	}
+}
+
+// configured: this machine has a config.toml (a server, its own or one it
+// is a client of).
+func (a *applyRun) configured() bool {
+	_, err := os.Stat(a.d.ConfigFile())
+	return err == nil
 }
 
 // bank runs the new binary's bank apply (not forced): it sends the new
@@ -690,9 +702,14 @@ func (a *applyRun) planDocs() {
 // rules, "Bank template follows the binary"). Its client install left it
 // to this step, after the server runs the new pin. A failure is a warning,
 // never a rollback: client install and doctor name it again.
+// On a client of a shared server the bank is its host's.
 func (a *applyRun) bank(ctx context.Context) {
-	if _, err := os.Stat(a.d.ConfigFile()); err != nil {
+	if !a.configured() {
 		a.add("bank", "skipped", "no server configured on this machine")
+		return
+	}
+	if a.cfg.Server.Mode != "local" {
+		a.add("bank", "skipped", hostAppliesBank)
 		return
 	}
 	env, err := runChild(ctx, a.target, "bank", "apply")
@@ -806,9 +823,14 @@ func (a *applyRun) steps(ctx context.Context) error {
 // docs runs the new binary's guide index: its docs into the server's docs
 // bank. A failure is a warning, never a rollback: guide search answers
 // with its keyword search meanwhile and refreshes the bank on first use.
+// On a client of a shared server the docs bank is its host's.
 func (a *applyRun) docs(ctx context.Context) {
-	if _, err := os.Stat(a.d.ConfigFile()); err != nil {
+	if !a.configured() {
 		a.add("docs", "skipped", "no server configured on this machine")
+		return
+	}
+	if a.cfg.Server.Mode != "local" {
+		a.add("docs", "skipped", hostIndexesDocs)
 		return
 	}
 	env, err := runChild(ctx, a.target, "guide", "index")

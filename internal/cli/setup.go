@@ -855,8 +855,12 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		// After the bank step (server install's): the docs bank for guide
 		// search (decision 0069). Its failure never stops setup: guide
 		// search answers with its keyword search, and indexes them on first
-		// use unless the bank is not backsight's.
+		// use unless the bank is not backsight's. On a client of a shared
+		// server the docs bank is its host's.
 		{"docs", 5, func(ctx context.Context, _ *setup.Record) (setup.Step, error) {
+			if cfg, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home); err == nil && cfg.Server.Mode != "local" {
+				return setup.Step{Name: "docs", Status: "skipped", Detail: hostIndexesDocs}, nil
+			}
 			out := subcommand(ctx, "guide", "index")
 			if out.Err != nil {
 				return setup.Step{Name: "docs", Status: "skipped", Detail: "not indexed (" + out.Err.Message + "): backsight guide search answers with its keyword search meanwhile"}, nil
@@ -1043,13 +1047,14 @@ func serverOnlyStep(name string) setup.Step {
 }
 
 // backupIdentity generates the backup identity when backups are on and
-// no recipient is configured, and says so ("" when none was made).
+// no recipient is configured, and says so ("" when none was made). A
+// client of a shared server makes none: backups are its host's.
 func (s *setupEnv) backupIdentity(answers map[string]string) (string, error) {
 	cfg, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home)
 	if err != nil {
 		return "", &output.Error{Code: output.Usage, Message: err.Error()}
 	}
-	if answers["backups"] != "on" || !cfg.Backup.Enabled || cfg.Backup.Recipient != "" {
+	if answers["backups"] != "on" || !cfg.Backup.Enabled || cfg.Backup.Recipient != "" || cfg.Server.Mode != "local" {
 		return "", nil
 	}
 	made, err := ensureBackupIdentity(s.dirs)
@@ -1448,8 +1453,9 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	if a["retention"] == "keep" {
 		retention = "leave Claude Code's setting as it is"
 	}
+	remote := s.cfg != nil && s.cfg.Server.Mode != "local"
 	scheduler := "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"
-	if a["backups"] == "on" {
+	if a["backups"] == "on" && !remote {
 		scheduler += "; generate the backup identity if there is none"
 	}
 	if a["scheduler"] == "off" {
@@ -1469,11 +1475,16 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	if a["backfill"] == "yes" {
 		backfill = "queue past sessions for jobs tick"
 	}
+	serverStep := setup.Step{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])}
+	docsStep := setup.Step{Name: "docs", Status: "planned", Detail: "backsight guide index: the documentation into the server's docs bank, for backsight guide search (0 LLM calls)"}
+	if remote { // the server and its docs bank are its host's
+		serverStep = setup.Step{Name: "server", Status: "skipped", Detail: "remote server " + s.cfg.Server.URL + ": install it on its host"}
+		docsStep = setup.Step{Name: "docs", Status: "skipped", Detail: hostIndexesDocs}
+	}
 	steps := []setup.Step{
 		{Name: "config", Status: "planned", Detail: cfgDetail},
 		{Name: "secrets", Status: "planned", Detail: "check llm_api_key (exit 10 with the command to run when missing)"},
-		{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])},
-		{Name: "docs", Status: "planned", Detail: "backsight guide index: the documentation into the server's docs bank, for backsight guide search (0 LLM calls)"},
+		serverStep, docsStep,
 		{Name: "client", Status: "planned", Detail: "backsight client install: plugin and permission rule in " + s.loc.Dir},
 		{Name: "retention", Status: "planned", Detail: retention},
 		{Name: "scheduler", Status: "planned", Detail: scheduler},

@@ -105,7 +105,7 @@ To stop depending on the address, `backsight server expose --loopback` takes the
 
 ## A command says to run it on the server's host
 
-`this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine and the commands that manage it (`server start`, `server stop`, `server upgrade`, `server token`, `server expose`, `server llm check`, `backup create`, `restore`, `uninstall --stop`, `uninstall --delete-data`) only work there. Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.
+`this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine and the commands that manage it (`server start`, `server stop`, `server upgrade`, `server token`, `server expose`, `server llm check`, `backup create`, `restore`, `uninstall --stop`, `uninstall --delete-data`), and those that write its banks (`bank apply`, `guide index`), only work there. Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.
 
 ## Another PC cannot reach the server
 
@@ -198,6 +198,7 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `bank-config`: the bank holds an older backsight template | `backsight bank apply` sends this version's (`update apply` and `client install` do it too). |
 | `bank-config`: bank settings were changed on the server | Someone edited backsight's keys (the UI, the API). `backsight bank apply --force` puts backsight's values back and overwrites those edits; leave it if you made them on purpose. |
 | `bank-config`: an older template, or a change made on the server | backsight has no record of the template it sent. `backsight bank apply` sends this version's, over any edit to its keys. |
+| `bank-config` (info): the server's host applies the bank's settings | This PC is a client of a shared server: the bank's settings are the host's backsight's, and this PC never sends its own. Keys that differ only mean the host runs another backsight version. To give the bank a newer template, update backsight on the host, or run `backsight bank apply` there. |
 | `backup`: no backup, or the last one is old | `backsight backup create`; check the daily job (`jobs` check). Archives made for another backup key (a previous install's, its identity deleted) do not count: this machine cannot decrypt them; `backsight backup identity import` adds that key if you saved it. |
 | `binary`: not self-verified, or does not match its release | Reinstall the release with `install.sh`, then `backsight client install`. |
 | `config`: unknown key or invalid value | Correct the key doctor names in `config.toml`. Unknown keys are refused, not ignored. |

@@ -810,6 +810,34 @@ func TestCheckBankConfigTellsAnOlderTemplateFromAServerChange(t *testing.T) {
 	}
 }
 
+// On a client of a shared server the bank's settings are its host's: the
+// check is info, says how they compare with this backsight's template,
+// and its fix runs on the host. Nothing local (the recorded hash) counts.
+func TestBankConfigOnAClientIsInfo(t *testing.T) {
+	current, edited := server.Current(), server.Current()
+	edited.Config["enable_observations"] = false
+	for _, tc := range []struct {
+		name   string
+		bank   map[string]any
+		detail string
+		fix    string
+	}{
+		{"same template", current.Config, "bank settings match backsight's template", ""},
+		{"another template", edited.Config, "enable_observations", "on the server's host: backsight bank apply"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, overridesOf(t, tc.bank)}})
+			put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+			put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+			c := check(t, f.run(), "bank-config")
+			if c.Status != Info || !strings.Contains(c.Summary, "the server's host") || !strings.Contains(c.Detail, tc.detail) || c.Fix != tc.fix {
+				t.Errorf("%+v", c)
+			}
+		})
+	}
+}
+
 // A client behind the bank's restore epoch warns with the fix (its cursors
 // may hold as sent what the restore lost); on the same epoch it is ok, and
 // an unreachable server skips the check.

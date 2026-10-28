@@ -149,7 +149,7 @@ func Run(ctx context.Context, env Env) Report {
 	if bank.Status == OK || bank.Status == Warn {
 		add(checkUntagged(ctx, cl, tg.Bank))
 		if tg.Source == "config" {
-			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs))
+			add(checkBankConfig(ctx, cl, tg.Bank, env.Dirs, cfgErr == nil && cfg.Server.Mode != "local"))
 			add(checkEpoch(ctx, cl, tg.Bank, env.Dirs))
 			add(checkPurged(ctx, cl, tg.Bank, env))
 		}
@@ -362,10 +362,15 @@ func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Chec
 // backsight's values back, over those edits), and a template never
 // recorded as applied (M5 review rules, "Bank template follows the
 // binary"). The comparison is against the templates' own values, never a
-// hash of what the server returns (Hindsight normalises settings).
-func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
+// hash of what the server returns (Hindsight normalises settings). On a
+// client of a shared server (remote) the bank is its host's: see
+// hostBankConfig.
+func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs, remote bool) Check {
 	c := Check{ID: "bank-config", Status: OK, Summary: "bank settings match backsight's template"}
 	drift, err := server.BankDrift(ctx, cl, bank)
+	if remote {
+		return hostBankConfig(drift, err)
+	}
 	if err != nil {
 		c.Status, c.Summary, c.Detail = Warn, "cannot read the bank's settings", err.Error()
 		return c
@@ -405,6 +410,25 @@ func checkBankConfig(ctx context.Context, cl *hindsight.Client, bank string, d p
 	c.Status, c.Summary = Warn, "bank settings differ from this backsight's template: an older backsight template, or a change made on the server"
 	c.Detail = "keys that differ: " + strings.Join(drift, ", ")
 	c.Fix = "backsight bank apply (sends this backsight's template: it also overwrites any edit made to these keys on the server)"
+	return c
+}
+
+// hostBankConfig is the bank-config check on a client of a shared server:
+// the server's host applies its backsight's template, so the check only
+// informs, comparing the bank with this backsight's template. This
+// machine's record of a template applied is not the host's: it is left
+// out.
+func hostBankConfig(drift []string, err error) Check {
+	c := Check{ID: "bank-config", Status: Info, Summary: "the server's host applies the bank's settings"}
+	switch {
+	case err != nil:
+		c.Detail = "cannot read the bank's settings: " + err.Error()
+	case len(drift) == 0:
+		c.Detail = "bank settings match backsight's template"
+	default:
+		c.Detail = "keys that differ from this backsight's template: " + strings.Join(drift, ", ")
+		c.Fix = "on the server's host: backsight bank apply"
+	}
 	return c
 }
 
