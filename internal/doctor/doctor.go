@@ -175,7 +175,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkUpdateIncomplete(env.Dirs))
 	add(checkLocks(env.Dirs))
 	add(checkWrites(env))
-	add(checkReach(env, tg))
+	add(checkReach(env, tg, srv))
 	add(checkBackfill(env.Dirs))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
@@ -653,8 +653,9 @@ const unreachableWarn = time.Hour
 // checkReach says whether this machine reaches its server and since when,
 // from what the hooks and jobs tick recorded (state.Reach), with what waits
 // on this machine meanwhile. Never an error: the server check carries a
-// live failure.
-func checkReach(env Env, tg *target.Target) Check {
+// live failure. A server that answers doctor now is reported as such: the
+// record catches up at the next recall or tick.
+func checkReach(env Env, tg *target.Target, srv Check) Check {
 	d := env.Dirs
 	c := Check{ID: "server-reach", Status: Info}
 	if tg == nil || tg.Source != "config" { // the hooks that record it are backsight's
@@ -676,8 +677,12 @@ func checkReach(env Env, tg *target.Target) Check {
 		breaker = "open until " + at(b.OpenUntil)
 	}
 	pending, _ := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl")}.Pending()
+	answers := srv.Status == OK || srv.Status == Warn // Warn: it answered, in cleartext
+	if answers && !r.FailingSince.IsZero() {
+		last = "now; it was silent from " + at(r.FailingSince)
+	}
 	c.Summary = fmt.Sprintf("last answer %s; breaker %s; %d note(s) queued; %d session(s) waiting", last, breaker, pending, r.SessionsWaiting)
-	if !r.FailingSince.IsZero() && now().Sub(r.FailingSince) > unreachableWarn {
+	if !answers && !r.FailingSince.IsZero() && now().Sub(r.FailingSince) > unreachableWarn {
 		c.Status = Warn
 		c.Fix = "the server at " + tg.Display() + " has not answered since " + at(r.FailingSince) +
 			": check it on its host (backsight server status there) or the network; nothing is lost"

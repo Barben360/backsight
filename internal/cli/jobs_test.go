@@ -305,29 +305,64 @@ func TestTickWithWriteOffPrunesNothingOnAnotherServer(t *testing.T) {
 	}
 }
 
-// A tick asks the server once whether it answers and records it, with the
-// sessions it kept for the next tick: doctor and the session banner read
-// them without a call of their own.
+// A tick asks the server once whether it answers and records it, with
+// every session still to send (not only the one a stopped flush tried):
+// doctor and the session banner read them without a call of their own.
 func TestTickRecordsReachAndWaiting(t *testing.T) {
 	home := devInstall(t, true) // closed port: the server is down
 	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
 	run(t, "jobs", "tick") // first tick: retain_since = 08:00
-	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	for _, sid := range []string{"s1", "s2", "s3"} {
+		writeTranscript(t, home, sid, time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	}
 	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
 	if code, out, _ := run(t, "jobs", "tick"); code != output.Partial || !strings.Contains(out, "retry:1") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	r := state.LoadReach(pathsOf(home))
-	if !r.FailingSince.Equal(time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)) || !r.LastOK.IsZero() || r.SessionsWaiting != 1 {
+	if !r.FailingSince.Equal(time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)) || !r.LastOK.IsZero() || r.SessionsWaiting != 3 {
 		t.Fatalf("server down: %+v", r)
 	}
 	pointAt(t, home, fakeHindsight(t))
 	withClock(t, time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC))
-	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:1") {
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:3") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	r = state.LoadReach(pathsOf(home))
 	if !r.FailingSince.IsZero() || !r.LastOK.Equal(time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC)) || r.SessionsWaiting != 0 {
 		t.Errorf("server back: %+v", r)
+	}
+}
+
+// With recording off nothing is sent, and the count of sessions waiting
+// is still refreshed, never left from an older tick.
+func TestTickWithWriteOffRefreshesWaiting(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	state.RecordWaiting(pathsOf(home), 7)
+	appendConfig(t, home, "[components]\nwrite = false")
+	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	writeTranscript(t, home, "s2", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	if r := state.LoadReach(pathsOf(home)); r.SessionsWaiting != 2 || !r.LastOK.Equal(time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("write off: %+v", r)
+	}
+}
+
+// Another server answering at the joined address is not this PC's server
+// answering: the tick leaves the last answer as it was.
+func TestTickRecordsNoAnswerFromAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recordMismatch(t, home)
+	last := time.Date(2026, 10, 24, 6, 0, 0, 0, time.UTC)
+	state.RecordReach(pathsOf(home), true, last)
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
+		t.Errorf("another server: %+v", r)
 	}
 }

@@ -989,6 +989,21 @@ func TestServerReachWarnsAfterAnHour(t *testing.T) {
 	}
 }
 
+// A server that answers doctor now is not reported silent, whatever the
+// record says until the next recall or tick catches up.
+func TestServerReachAnswersNowAfterASilence(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+fakeServer(t).URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	r := f.run()
+	expect(t, check(t, r, "server"), OK, "Hindsight")
+	c := check(t, r, "server-reach")
+	if c.Status != Info || c.Fix != "" ||
+		c.Summary != "last answer now; it was silent from 2026-10-28 10:00 UTC; breaker closed; 1 note(s) queued; 2 session(s) waiting" {
+		t.Errorf("answers now: %+v", c)
+	}
+}
+
 // A server-only host runs no hooks: its reach is not a client's.
 func TestServerReachIsNotAClientCheckOnAServerOnlyHost(t *testing.T) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
