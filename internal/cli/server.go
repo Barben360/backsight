@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/target"
@@ -266,7 +267,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				if req := config.RequiredSecrets(cfg); req["llm_api_key"] && prev.LLMAPIKey == "" {
 					return needSecrets([]string{"llm_api_key"}, "backsight server install")
 				}
-				for _, s := range []string{"render", "pull", "start", "health", "bank", "provider"} {
+				for _, s := range []string{"render", "pull", "start", "health", "bank", "server-id", "provider"} {
 					add(s, "planned", "")
 				}
 				return e.emit("server install", res, func() string { return installSummary(res) })
@@ -361,6 +362,13 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(err)
 			}
 			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
+			// After the bank step (it may rename a legacy bank). A failure is a warning: `server token` retries it.
+			if status, detail := ensureServerID(cmd.Context(), cfg, sec); status == "warning" {
+				res.Warnings = append(res.Warnings, "server id: "+detail+" (backsight server token tries again)")
+				add("server-id", "warning", detail)
+			} else {
+				add("server-id", status, detail)
+			}
 			pr, err := checkProvider(cmd.Context(), cfg, sec)
 			if err != nil {
 				return fail(err)
@@ -377,6 +385,25 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&f.base, "base-url", "", "LLM base URL for compatible endpoints")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list the steps without acting")
 	return cmd
+}
+
+// ensureServerID gives the server its id (retain.EnsureServerID) and
+// reports it as an install step: done (written now), unchanged (already
+// there) or warning (the detail says why; the install goes on).
+func ensureServerID(ctx context.Context, cfg config.Config, sec config.Secrets) (status, detail string) {
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second)
+	if err == nil {
+		var had, id string
+		if had, err = retain.ReadServerID(ctx, cl, cfg.Server.Bank); err == nil {
+			if id, err = retain.EnsureServerID(ctx, cl, cfg.Server.Bank); err == nil {
+				if had != "" {
+					return "unchanged", id
+				}
+				return "done", id
+			}
+		}
+	}
+	return "warning", redacted(err, sec).Error()
 }
 
 // keptEnv is the server's .env, as messages name it.
