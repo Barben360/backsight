@@ -47,16 +47,14 @@ func init() {
 		if !ok {
 			return nil, nil
 		}
-		h.stop()
-		return nil, nil
+		return h.stop(), nil
 	}
 	handlers["subagent-stop"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {
 		h, ok := newHookEnv(ctx, input, "")
 		if !ok {
 			return nil, nil
 		}
-		h.subagentStop()
-		return nil, nil
+		return h.subagentStop(), nil
 	}
 	handlers["session-end"] = sessionEnd
 }
@@ -114,8 +112,10 @@ func (h *hookEnv) gate() []byte {
 		if len(res.Hits) > 0 {
 			reason += "\nPossibly relevant memories " + instructions.HintsLine + ":"
 			for _, hit := range res.Hits {
-				reason += fmt.Sprintf("\n- [%s] %s", safeProject(hit.Project), clip(hit.Text, briefingItemChars))
+				reason += fmt.Sprintf("\n- %s %s%s", memoryTag(hit.Project, hit.ID), clip(hit.Text, briefingItemChars), age(hit.Age))
 			}
+			h.journalShows("gate", itemsFromHits(res.Hits))
+			h.updateSession(func(s *session.State) error { s.KeepShownTexts(hitTexts(res.Hits)); return nil })
 		}
 	}
 	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
@@ -138,10 +138,11 @@ func questionText(raw json.RawMessage) string {
 }
 
 // stop records the end of the last reply (the transcript can lag, C06):
-// the detector's approval context and the next outcome's credit. No network.
-func (h *hookEnv) stop() {
+// the detector's approval context and the next outcome's credit; then the
+// end-of-turn check, whose block is its answer. No network.
+func (h *hookEnv) stop() []byte {
 	if paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID); paused {
-		return
+		return nil
 	}
 	full := strings.TrimSpace(h.in.LastAssistantMessage)
 	credit := ""
@@ -163,15 +164,27 @@ func (h *hookEnv) stop() {
 	if ev.N > 0 {
 		h.tw.Emit(ev)
 	}
+	return h.creditCheck("")
 }
 
-// subagentStop queues the subagent's final report as a document (SPEC §6.2),
-// redacted and capped, honouring the session pause and opt-outs.
-func (h *hookEnv) subagentStop() {
+// subagentStop queues the subagent's final report, then runs the
+// end-of-turn check for the subagent, whose block is its answer.
+func (h *hookEnv) subagentStop() []byte {
 	if !subagentRan(h.in) {
-		return // an internal helper agent (a tool-call summary): no transcript, no result, no report
+		return nil // an internal helper agent (a tool-call summary): no transcript, no result, no report
 	}
 	h.updateSession(func(s *session.State) error { s.SubagentDone = true; return nil }) // the approval detector (read side)
+	h.queueSubagentReport()
+	if paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID); paused || h.in.AgentID == "" {
+		return nil
+	}
+	return h.creditCheck(h.in.AgentID) // a subagent runs inside its parent's turn
+}
+
+// queueSubagentReport queues the subagent's final report as a document
+// (SPEC §6.2), redacted and capped, honouring the session pause and
+// opt-outs.
+func (h *hookEnv) queueSubagentReport() {
 	text := strings.TrimSpace(h.in.LastAssistantMessage)
 	if !h.cfg.Components.Write || text == "" || h.in.AgentID == "" {
 		return

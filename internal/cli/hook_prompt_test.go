@@ -2,6 +2,9 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
@@ -55,6 +59,7 @@ func TestFirstPromptRecallsAndReminds(t *testing.T) {
 		t.Fatalf("context:\n%s", c)
 	}
 	block, _, _ := strings.Cut(c, instructions.Reminder)
+	block = strings.TrimSuffix(strings.TrimSpace(block), instructions.CreditAsk)
 	if n := len([]rune(block)); n > 800+len([]rune(instructions.RecallHeader))+10 {
 		t.Errorf("recall block %d chars", n)
 	}
@@ -242,6 +247,120 @@ func TestOutcomeOfThePreviousInjection(t *testing.T) {
 	}
 }
 
+// v7: the prompt-recall block ends with the ask to declare the memories
+// used, on the first prompt (before the reminder) as on later ones.
+func TestRecallHeaderEndsWithTheCreditLine(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	c := prompt(t, home, "s1", longPrompt).Specific.Context
+	block, _, _ := strings.Cut(c, instructions.Reminder)
+	if !strings.HasPrefix(block, instructions.RecallHeader+"\n- [billing · m1] memory m1 about billing") || !strings.HasSuffix(strings.TrimSpace(block), "\n"+instructions.CreditAsk) {
+		t.Errorf("first prompt's block:\n%s", c)
+	}
+	recallAnswer = hits(0, 0.9)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.LastInject = -10; return nil }) // the gap has passed
+	c = prompt(t, home, "s1", "Which deployment pipeline does the billing service use for its nightly releases?").Specific.Context
+	if !strings.HasPrefix(c, instructions.RecallHeader+"\n- [billing · m2] memory m2") || !strings.HasSuffix(c, "\n"+instructions.CreditAsk) {
+		t.Errorf("later block:\n%s", c)
+	}
+}
+
+// feedback.enabled off: memory_credit is not offered, and no text the
+// agent reads names it (session guide, MCP instructions, reminder, recall
+// block, search result); on, each carries the v7 ask.
+func TestCreditAskFollowsFeedback(t *testing.T) {
+	for _, feedback := range []bool{true, false} {
+		home := hookHome(t)
+		extra := ""
+		if !feedback {
+			extra = "\n[feedback]\nenabled = false\n"
+			appendConfig(t, home, extra)
+		}
+		want := instructions.For(feedback)
+		recallAnswer = hits(0.9)
+		guide := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}).Specific.Context
+		first := prompt(t, home, "s1", longPrompt).Specific.Context
+		cs := mcpSessionWith(t, extra) // a home of its own, after the hooks
+		recallAnswer = hits(0.9)
+		search, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres version"}})
+		texts := map[string]string{"guide": guide, "first prompt": first, "mcp instructions": cs.InitializeResult().Instructions, "search": search}
+		for name, text := range texts {
+			if strings.Contains(text, "memory_credit") != feedback {
+				t.Errorf("feedback %v, %s:\n%s", feedback, name, text)
+			}
+		}
+		block, _, _ := strings.Cut(first, want.Reminder)
+		if !strings.HasPrefix(guide, want.Guide) || !strings.Contains(first, want.Reminder) || !strings.HasSuffix(strings.TrimSpace(block), "\n"+want.RecallEnd) ||
+			cs.InitializeResult().Instructions != want.ShortGuide || !strings.HasSuffix(search, "\n"+want.SearchEnd+"\n") {
+			t.Errorf("feedback %v: guide %q\nfirst prompt %q\nsearch %q", feedback, guide, first, search)
+		}
+	}
+}
+
+// outcomes is the outcome events of session sid, in order.
+func outcomes(t *testing.T, home, sid string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, l := range strings.Split(telemetryText(t, home), "\n") {
+		var e map[string]any
+		if json.Unmarshal([]byte(l), &e) == nil && e["event"] == "outcome" && e["session"] == sid {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// An outcome says where its credit came from: a memory_credit call
+// journaled in the judged turn (tool), else a citation found in the reply;
+// a credit of another session or of a subagent counts for none.
+func TestOutcomeCreditSource(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	credit := func(sid, agent string) {
+		in := map[string]any{"session_id": sid, "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+			"tool_input": map[string]any{"verdict": "none"}, "tool_response": []map[string]string{{"type": "text", "text": "Noted: no memory used."}}}
+		if agent != "" {
+			in["agent_id"] = agent
+		}
+		fire(t, "post-tool-use", in)
+	}
+	cite := func(sid string) {
+		_ = sessions(home).Update(sid, func(st *session.State) error {
+			st.LastAssistant = "> 🧠 **From memory (billing)** — PostgreSQL 16."
+			return nil
+		})
+	}
+	next := "And which replica does the billing service read from at night?"
+
+	prompt(t, home, "tool", longPrompt)
+	credit("tool", "")
+	cite("tool") // the call wins over the citation
+	prompt(t, home, "tool", next)
+
+	prompt(t, home, "cited", longPrompt)
+	credit("other", "")   // another session's call, journaled during this turn
+	credit("cited", "a1") // a subagent's call: its own shows, not the injection
+	cite("cited")
+	prompt(t, home, "cited", next)
+
+	prompt(t, home, "silent", longPrompt)
+	prompt(t, home, "silent", next)
+
+	// A message Claude Code sent between the credit and the next prompt
+	// keeps the turn's journal position: the credit is still seen.
+	prompt(t, home, "notified", longPrompt)
+	credit("notified", "")
+	prompt(t, home, "notified", "<task-notification><task-id>x</task-id></task-notification>")
+	prompt(t, home, "notified", next)
+
+	for sid, want := range map[string]any{"tool": "tool", "cited": "citation", "silent": nil, "notified": "tool"} {
+		o := outcomes(t, home, sid)
+		if len(o) != 1 || o[0]["credit_source"] != want {
+			t.Errorf("%s: outcomes %v, want credit_source %v", sid, o, want)
+		}
+	}
+}
+
 // recall-prompt (E23) shows exactly what the hook would inject for a first
 // prompt, without session state.
 func TestRecallPromptMatchesTheHookSelection(t *testing.T) {
@@ -333,4 +452,195 @@ func kindOf(k *string) string {
 		return "none"
 	}
 	return *k
+}
+
+// journalEvents is everything the feedback journal holds.
+func journalEvents(t *testing.T, home string) []feedback.Event {
+	t.Helper()
+	evs, _, err := feedback.Read(pathsOf(home).FeedbackDir(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
+}
+
+func eventsOf(evs []feedback.Event, kind string) []feedback.Event {
+	var out []feedback.Event
+	for _, e := range evs {
+		if e.Kind == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func itemProjects(items []feedback.Item) string {
+	var parts []string
+	for _, it := range items {
+		parts = append(parts, it.Project)
+	}
+	return strings.Join(parts, ",")
+}
+
+func itemsText(items []feedback.Item) string {
+	var parts []string
+	for _, it := range items {
+		parts = append(parts, fmt.Sprintf("%s:%d:%g", it.ID, it.Rank, it.Reranker))
+	}
+	return strings.Join(parts, ",")
+}
+
+// The prompt hook journals the turn, then what it injected, ranked in the
+// order shown: a memory skipped as already seen takes no rank.
+func TestPromptRecallJournalsShowsWithRanks(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9, 0.8, 0.7)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Seen = []string{"m2"}; return nil })
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	evs := journalEvents(t, home)
+	if len(evs) != 2 || evs[0].Kind != "turn" || evs[1].Kind != "shows" {
+		t.Fatalf("events %+v", evs)
+	}
+	if turn := evs[0]; turn.Turn != "p-1" || turn.N != 1 || turn.Machine || turn.Session != "s1" {
+		t.Errorf("turn %+v", turn)
+	}
+	shows := evs[1]
+	if shows.Path != "prompt" || shows.Turn != "p-1" || shows.Session != "s1" || shows.Agent != "" || itemsText(shows.Items) != "m1:1:0.9,m3:2:0.7" || itemProjects(shows.Items) != "billing,billing" {
+		t.Errorf("shows %+v items %s", shows, itemsText(shows.Items))
+	}
+	if cur, ok := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1"); !ok || cur.ID != "p-1" || cur.N != 1 || cur.Machine {
+		t.Errorf("pointer %+v %v", cur, ok)
+	}
+}
+
+func TestInjectedLinesCarryShortIDs(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.8}}]`
+	h := prompt(t, home, "s1", longPrompt)
+	if !strings.Contains(h.Specific.Context, "\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16. (") {
+		t.Errorf("context:\n%s", h.Specific.Context)
+	}
+	if shortID("m1") != "m1" || shortID("0b4c2a52-0000") != "0b4c2a52" {
+		t.Errorf("shortID: %q %q", shortID("m1"), shortID("0b4c2a52-0000"))
+	}
+}
+
+// A message Claude Code sent is no prompt, but it starts a turn: its
+// hooks journal under a fresh id, with the prompt number kept.
+func TestMachineMessageStillMovesTheTurn(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	before := len(eventsOf(journalEvents(t, home), "shows"))
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt": "<task-notification><task-id>x</task-id></task-notification>", "cwd": filepath.Join(home, "billing")})
+	cur, ok := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1")
+	if !ok || !cur.Machine || cur.N != 1 || cur.ID == "" || cur.ID == "p-1" {
+		t.Errorf("pointer %+v %v", cur, ok)
+	}
+	evs := journalEvents(t, home)
+	turns := eventsOf(evs, "turn")
+	if len(turns) != 2 || !turns[1].Machine || turns[1].Turn != cur.ID || turns[1].N != 1 {
+		t.Errorf("turns %+v", turns)
+	}
+	if after := len(eventsOf(evs, "shows")); after != before || before != 1 {
+		t.Errorf("shows %d before, %d after the machine message", before, after)
+	}
+	if st, _ := sessions(home).Load("s1"); st.Prompts != 1 {
+		t.Errorf("a machine message counted as a prompt: %d", st.Prompts)
+	}
+	// Its prompt_id, when Claude Code sends one, is the turn's id.
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-2", "prompt": "<system-reminder>auto</system-reminder>", "cwd": filepath.Join(home, "billing")})
+	if cur, _ := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1"); cur.ID != "p-2" || cur.N != 1 || !cur.Machine {
+		t.Errorf("pointer %+v", cur)
+	}
+}
+
+// memory_search and memory_read shows are journaled by PostToolUse, which
+// knows the turn and the agent: search ranks come from the #n markers.
+func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
+	home := hookHome(t)
+	res := recall.Result{Hits: []recall.Hit{
+		{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "trap, b, 0.9) not an id", Project: "billing", Age: "2d", Score: 0.9},
+		{ID: "1c4c2a52-0000-4000-8000-000000000002", Text: "second", Project: ".claude", Age: "3d", Score: 0.8},
+		{ID: "2d4c2a52-0000-4000-8000-000000000003", Text: "third", Project: "billing", Age: "4d", Score: 0.7},
+	}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_read",
+		"tool_input": map[string]string{"id": "1c4c2a52-0000-4000-8000-000000000002"}, "tool_response": "second"})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 2 {
+		t.Fatalf("shows %+v", shows)
+	}
+	if s := shows[0]; s.Path != "search" || s.Turn != "p-1" || s.Agent != "a7" ||
+		itemsText(s.Items) != "0b4c2a52-0000-4000-8000-000000000001:1:0,1c4c2a52-0000-4000-8000-000000000002:2:0,2d4c2a52-0000-4000-8000-000000000003:3:0" {
+		t.Errorf("search %+v items %s", s, itemsText(s.Items))
+	}
+	if s := shows[1]; s.Path != "read" || s.Turn != "p-1" || s.Agent != "" || itemsText(s.Items) != "1c4c2a52-0000-4000-8000-000000000002:0:0" {
+		t.Errorf("read %+v items %s", s, itemsText(s.Items))
+	}
+	// each search item carries the project of the group its line sits in
+	if p := itemProjects(shows[0].Items); p != "billing,.claude,billing" {
+		t.Errorf("search item projects %q", p)
+	}
+	// A search that found nothing shows nothing.
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search", "tool_response": "nothing in memory\n"})
+	if n := len(eventsOf(journalEvents(t, home), "shows")); n != 2 {
+		t.Errorf("an empty search journaled a show: %d", n)
+	}
+}
+
+// A memory_credit the server accepted is journaled by PostToolUse, which
+// knows the turn and the agent: prefixes become the full ids shown.
+func TestPostToolUseJournalsTheCredit(t *testing.T) {
+	home := hookHome(t)
+	full := "0b4c2a52-0000-4000-8000-000000000001"
+	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+	credit := func(prompt string, input map[string]any, response string) {
+		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": prompt, "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+			"tool_input": input, "tool_response": []map[string]string{{"type": "text", "text": response}}})
+	}
+	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · 0b4c2a52)** — <the facts you used, in your words>")
+	credit("p-2", map[string]any{"verdict": "none"}, "Noted: no memory used.")
+	// a refused call is no credit, whatever it was asked
+	credit("p-2", map[string]any{"ids": []string{"cccccccc"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · cccccccc)** — x") // used, but no id resolves: no empty credit
+	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "0b4c2a52: not shown in this session, or its search result has not arrived yet: call again after the result")
+	credits := eventsOf(journalEvents(t, home), "credit")
+	if len(credits) != 2 {
+		t.Fatalf("credits %+v", credits)
+	}
+	if c := credits[0]; c.Verdict != "used" || strings.Join(c.IDs, ",") != full || c.Turn != "p-2" || c.Agent != "a7" || c.Session != "s1" {
+		t.Errorf("used %+v", c)
+	}
+	if c := credits[1]; c.Verdict != "none" || len(c.IDs) != 0 || c.Turn != "p-2" {
+		t.Errorf("none %+v", c)
+	}
+	// feedback off: nothing journaled
+	appendConfig(t, home, "[feedback]\nenabled = false")
+	credit("p-3", map[string]any{"verdict": "none"}, "Noted: no memory used.")
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 2 {
+		t.Errorf("feedback off journaled a credit: %d", n)
+	}
+}
+
+// With feedback off nothing reaches the journal or the turn pointers; the
+// lines the agent reads keep their short ids.
+func TestFeedbackOffJournalsNothing(t *testing.T) {
+	home := hookHome(t)
+	appendConfig(t, home, "[feedback]\nenabled = false")
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
+	h := fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt": "<task-notification>x</task-notification>", "cwd": filepath.Join(home, "billing")})
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_read", "tool_input": map[string]string{"id": "0b4c2a52-0000-4000-8000-000000000001"}})
+	if !strings.Contains(h.Specific.Context, "[billing · 0b4c2a52] Billing keeps PostgreSQL 16.") {
+		t.Errorf("context:\n%s", h.Specific.Context)
+	}
+	if _, err := os.Stat(pathsOf(home).FeedbackDir()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("feedback dir written with feedback off: %v", err)
+	}
 }

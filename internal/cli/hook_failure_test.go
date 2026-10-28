@@ -156,3 +156,18 @@ func TestFailureSignatureIgnoresNumbersPathsHexAndCase(t *testing.T) {
 		t.Error("two different errors share a signature")
 	}
 }
+
+// What the failure recall injects is journaled as shown, path failure.
+func TestFailureRecallJournalsItsShows(t *testing.T) {
+	home := hookHome(t)
+	failureOn(t, home)
+	recallAnswer = hits(0.95, 0.85, 0.82)
+	h := failure(t, home, "s1", "Bash", npmError, map[string]any{"prompt_id": "p-1"})
+	if !strings.Contains(h.Specific.Context, "[billing · m1] memory m1") {
+		t.Fatalf("context:\n%s", h.Specific.Context)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "failure" || shows[0].Turn != "p-1" || itemsText(shows[0].Items) != "m1:1:0.95,m2:2:0.85" {
+		t.Errorf("shows %+v", shows)
+	}
+}

@@ -496,3 +496,35 @@ func TestOwnOwnersAreRead(t *testing.T) {
 		t.Errorf("%+v", cfg.Projects)
 	}
 }
+
+// [feedback] lives in Default only: setup never writes it, since an older
+// binary refuses a config.toml with keys it does not know.
+func TestFeedbackDefaultsAndValidation(t *testing.T) {
+	got := Default(dirs, "/home/u").Feedback
+	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always"}); got != want {
+		t.Fatalf("defaults %+v, want %+v", got, want)
+	}
+	cfg, err := Load(write(t, "[feedback]\nenabled = false\nconfident_rank = 1\nmiss_half_life_days = 0\ncredit_half_life_days = 30\nstop_check = \"cited\"\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited"}); cfg.Feedback != want {
+		t.Errorf("read %+v, want %+v", cfg.Feedback, want)
+	}
+	for body, key := range map[string]string{
+		"confident_rank = 0":         "feedback.confident_rank",
+		`stop_check = "sometimes"`:   "feedback.stop_check",
+		"miss_half_life_days = -1":   "feedback.miss_half_life_days",
+		"credit_half_life_days = -1": "feedback.credit_half_life_days",
+	} {
+		_, err := Load(write(t, "[feedback]\n"+body+"\n"), dirs, "/home/u")
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: got %v, want an error naming %s", body, err, key)
+		}
+	}
+	for _, s := range []string{"always", "cited", "off"} {
+		if _, err := Load(write(t, "[feedback]\nstop_check = \""+s+"\"\n"), dirs, "/home/u"); err != nil {
+			t.Errorf("stop_check %q refused: %v", s, err)
+		}
+	}
+}

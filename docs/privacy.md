@@ -23,6 +23,7 @@ The server turns this text into memories: short facts tagged with their project,
 Setup shows the provider data flow and asks for your consent before anything is stored. Nothing else leaves the machine:
 
 - backsight's own logs and usage events stay in local files (`backsight paths` shows the state directory); they are never sent. So does the record of which project each turn was filed under and which repositories its tool calls named (project names and counts, no text), which files subagent reports and shows how often the main conversation would have been filed elsewhere;
+- the feedback journal and ledger (`feedback/` in the state directory that `backsight paths` shows) record which memories were shown and credited: memory ids, ranks, outcomes and counts only, never memory or conversation text. They stay local, and `backsight uninstall --purge-local` removes them;
 - `backsight report` builds a diagnostic for a bug report but sends nothing: you read it and decide;
 - backsight turns on none of Hindsight's optional tracing or metrics exporters.
 
@@ -65,7 +66,7 @@ Redaction can miss a secret in an unusual format. `backsight memory scan` re-che
 
 | Scope | How |
 |---|---|
-| This session, from now on | `/backsight:pause` in Claude Code (or `backsight pause`); `/backsight:pause` again with "resume", or `backsight resume`, to record again. Turns typed while paused are never sent. |
+| This session, from now on | `/backsight:pause` in Claude Code (or `backsight pause`); `/backsight:pause` again with "resume", or `backsight resume`, to record again. Turns typed while paused are never sent, and leave nothing in the feedback journal. |
 | A project, on this machine | `backsight pause --project` in its directory: adds it to `privacy.exclude_paths` in `config.toml`. `backsight resume --project` removes it. |
 | A repository, for everyone who clones it | commit a `.backsight.toml` with `retain = false` at its root. |
 | Headless runs, on this machine | `privacy.skip_entrypoints` in `config.toml`: turns Claude Code recorded under one of these entrypoints (glob patterns) are never sent. The default, `["sdk-*"]`, skips Agent SDK runs (`sdk-cli`, `sdk-ts`, `sdk-py`); `[]` sends them too. |

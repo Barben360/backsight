@@ -8,7 +8,7 @@ You use Claude Code as usual. backsight works through hooks and memory tools:
 
 - **At session start**, Claude gets a short guide on using the memory, and a briefing for the current project: a page the server keeps from the project's memories (open items, recent work, rules in force).
 - **On each prompt**, backsight searches the memory with your prompt and adds the few most relevant memories to Claude's context, framed as notes to verify.
-- **Claude searches and stores** with three memory tools: `memory_search`, `memory_read` and `memory_store`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls.
+- **Claude searches and stores** with four memory tools: `memory_search`, `memory_read`, `memory_store` and `memory_credit`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls; `memory_credit` names the memories shown to it that informed an answer, and returns the citation line it prints. A turn that showed memories and ends without that report is held once: Claude is asked to make it, then finishes.
 - **Before Claude asks you a question** with its question tool, it must have searched the memory during this prompt: the first attempt is sent back once, with the memories that match the question ([details](how-it-works.md#before-claude-asks-you-a-question)).
 - **When you state a rule or approve something** ("from now on…", "we decided…", "ok"), a line asks Claude to store it if it is durable ([the save detector](how-it-works.md#the-save-detector)).
 - **When the session ends**, or once its last turn is 30 minutes old, its text is redacted and sent to your server, which extracts memories from it in the background.
@@ -31,11 +31,11 @@ More lines may follow: ⬆️ a newer release ([update](update.md)), ⚠️ Clau
 
 ## Recognizing a memory
 
-When Claude uses a memory, it cites it on its own line:
+Each memory shown to Claude carries its project and a short id, the first 8 characters of its id. When Claude uses a memory, it reports it with the `memory_credit` tool, which hands back the line it prints:
 
-> 🧠 **From memory (my-project)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
+> 🧠 **From memory (my-project · 0b4c2a52)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
 
-If Claude searched and found nothing, it says so. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
+The part in parentheses names the project and the short ids of the memories used; what follows the dash is Claude's own summary of what it used. When memories were shown but none helped, Claude reports that instead and prints no line. If Claude searched and found nothing, it says so. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
 
 ## Projects and the transverse memory
 
@@ -174,7 +174,8 @@ To import a queue setup left to `jobs tick` in one go rather than three sessions
 ## Seeing what memory does
 
 - `backsight why` shows the last memories the hooks injected, with their scores and the rule that let them through.
-- `backsight stats` shows the last 7 days: recalls, searches, citations, extraction cost (`backsight stats 30` for 30 days).
+- `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, extraction cost (`backsight stats 30` for 30 days).
+- `backsight feedback log --id <id>` shows the timeline of one memory: each time it was shown to Claude, where and at which rank, each time Claude reported using it, and how each showing was settled (credited, a confident miss when it was near the top and unused, or unknown when the turn ended without a report), then its counts. `--session <id>` shows a whole session instead (its first 8 characters are enough).
 - `backsight doctor` checks the whole install.
 
 ## Browsing these docs

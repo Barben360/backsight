@@ -12,6 +12,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
@@ -37,8 +38,9 @@ type hookInput struct {
 	AgentTranscriptPath  string          `json:"agent_transcript_path"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
 	Reason               string          `json:"reason"`
-	Error                string          `json:"error"`        // PostToolUseFailure
-	IsInterrupt          bool            `json:"is_interrupt"` // PostToolUseFailure
+	Error                string          `json:"error"`            // PostToolUseFailure
+	IsInterrupt          bool            `json:"is_interrupt"`     // PostToolUseFailure
+	StopHookActive       bool            `json:"stop_hook_active"` // Stop, SubagentStop: the turn goes on from a Stop hook's block
 }
 
 // hookEnv is what every handler needs, resolved once per event.
@@ -59,6 +61,11 @@ type hookEnv struct {
 	store    session.Store
 	tw       *telemetry.Writer
 	client   *hindsight.Client
+	// journal records the memories shown to the agent (feedback); turn is
+	// the turn this process started, when turnSet.
+	journal *feedback.Journal
+	turn    string
+	turnSet bool
 }
 
 // Which component an event belongs to (A.1 components).
@@ -101,6 +108,7 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// instead of losing their updates (0054 amendment).
 	h.store = session.Store{Dir: h.dirs.SessionsDir(), Locks: h.dirs.LocksDir(), Retry: 100 * time.Millisecond}
 	h.tw = telemetry.New(h.dirs.State, telemetry.Common{V: instructions.Version, Session: h.in.SessionID, Project: h.project, BinaryVersion: buildinfo.Version})
+	h.journal = feedback.NewJournal(h.dirs.FeedbackDir(), feedback.Common{Session: h.in.SessionID, Project: h.project, Binary: buildinfo.Version, V: instructions.Version})
 	// One deadline for every call of a hook: the supervisor's own is the
 	// hard stop, this one lets the handler finish with what it has.
 	h.client, err = hindsight.New(h.cfg.Server.URL, h.sec.APIKey, 30*time.Second)

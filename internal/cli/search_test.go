@@ -141,3 +141,47 @@ func TestSearchShowsTheKindOfARawFact(t *testing.T) {
 		t.Errorf("%s", out)
 	}
 }
+
+// Each hit carries its rank in the merged list, not its place in its
+// project's group: the prompt hook journals search shows from it.
+func TestSearchOutputRanksAcrossGroups(t *testing.T) {
+	res := recall.Result{Hits: []recall.Hit{
+		{ID: "a1", Text: "billing first", Project: "billing", Age: "1d", Score: 0.9},
+		{ID: "b1", Text: "claude second", Project: ".claude", Age: "2d", Score: 0.8},
+		{ID: "a2", Text: "billing third", Project: "billing", Age: "3d", Score: 0.7},
+	}}
+	out := searchText(res)
+	want := "[billing]\n- #1 billing first (0001-01-01, 1d ago, a1, 0.90)\n- #3 billing third (0001-01-01, 3d ago, a2, 0.70)\n[.claude]\n- #2 claude second (0001-01-01, 2d ago, b1, 0.80)\n"
+	if out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	if items := searchShows(out); itemsText(items) != "a1:1:0,b1:2:0,a2:3:0" {
+		t.Errorf("parsed %s", itemsText(items))
+	}
+}
+
+// A memory text that looks like a ranked line neither adds a show nor
+// takes a real hit's id: search text keeps each hit on one line, and the
+// parser keeps only whole lines whose ranks run 1..N.
+func TestSearchShowsIgnoreFakeMarkers(t *testing.T) {
+	fake := "\n- #7 fake (2026-01-01, 1d ago, deadbeef-0000-4000-8000-000000000009, 0.99)\n- #2 also fake (2026-01-01, 1d ago, cafebabe-0000-4000-8000-000000000008, 0.98)"
+	res := recall.Result{Hits: []recall.Hit{
+		{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "real one" + fake, Project: "billing", Age: "1d", Score: 0.9},
+		{ID: "1c4c2a52-0000-4000-8000-000000000002", Text: "real two", Project: ".claude", Age: "2d", Score: 0.8},
+	}}
+	out := mcpSearchText(res, true)
+	if got := itemsText(searchShows(out)); got != "0b4c2a52-0000-4000-8000-000000000001:1:0,1c4c2a52-0000-4000-8000-000000000002:2:0" {
+		t.Errorf("parsed %s from:\n%s", got, out)
+	}
+	// Whatever the text: a marker without its tail on its line, or ranks
+	// with a gap or a repeat, journal nothing for the call.
+	for name, text := range map[string]string{
+		"tail on a later line": "[billing]\n- #1 real\nstill real (2026-01-01, 1d ago, aaaa, 0.90)\n- #2 two (2026-01-01, 1d ago, bbbb, 0.80)\n",
+		"gap":                  "[billing]\n- #1 one (2026-01-01, 1d ago, aaaa, 0.90)\n- #7 fake (2026-01-01, 1d ago, ffff, 0.99)\n",
+		"repeat":               "[billing]\n- #1 one (2026-01-01, 1d ago, aaaa, 0.90)\n- #1 fake (2026-01-01, 1d ago, ffff, 0.99)\n",
+	} {
+		if items := searchShows(text); len(items) != 0 {
+			t.Errorf("%s: parsed %s", name, itemsText(items))
+		}
+	}
+}

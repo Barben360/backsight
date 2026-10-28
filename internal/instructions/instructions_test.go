@@ -18,9 +18,9 @@ func TestSizes(t *testing.T) {
 		text string
 		max  int
 	}{
-		{"guide (E6: near 700)", Guide, 1000},
+		{"guide (≤ 1 200, E6: near 700)", Guide, 1200},
 		{"short guide", ShortGuide, 1000},
-		{"reminder", Reminder, 300},
+		{"reminder", Reminder, 400},
 		{"nudge with terms", Nudge([]string{"PostgreSQL", "Grafana", "backfill", "observation scopes"}), 300},
 		{"gate reason", GateReason, 400},
 		{"subagent guide", SubagentGuide, 300},
@@ -34,14 +34,72 @@ func TestSizes(t *testing.T) {
 	}
 }
 
-func TestCreditIsQuotedVerbatimWhereClaudeIsAskedToCite(t *testing.T) {
+// v7: the agent declares the memories it used with memory_credit, whose
+// answer carries the line to print; no text asks for a citation format.
+func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
+	want := "When memories were shown to you this turn, call `memory_credit` once you know what you used, before your final message: " +
+		"the ids that informed it (it returns the line to print), or `verdict: none`."
+	if CreditAsk != want {
+		t.Errorf("credit ask changed: %q", CreditAsk)
+	}
 	for name, s := range map[string]string{"guide": Guide, "short guide": ShortGuide, "reminder": Reminder} {
-		if !strings.Contains(s, Credit) {
-			t.Errorf("%s lacks the exact credit format", name)
+		if !strings.Contains(s, CreditAsk) || strings.Contains(s, Credit) {
+			t.Errorf("%s: want the credit ask and no citation format: %s", name, s)
 		}
 	}
 	if Credit != "> 🧠 **From memory (<project>)** — <facts>" {
 		t.Errorf("credit changed: %q", Credit)
+	}
+}
+
+func TestGuideV7(t *testing.T) {
+	if Version != "v7" {
+		t.Errorf("version %s", Version)
+	}
+	for _, c := range []struct {
+		name string
+		text string
+		max  int
+	}{{"guide", Guide, 1200}, {"short guide", ShortGuide, 1000}} {
+		if n := utf8.RuneCountInString(c.text); n > c.max {
+			t.Errorf("%s: %d chars (max %d)", c.name, n, c.max)
+		}
+		for _, want := range []string{"memory_credit", "verdict: none"} {
+			if !strings.Contains(c.text, want) {
+				t.Errorf("%s lacks %q", c.name, want)
+			}
+		}
+		if strings.Contains(c.text, "cite it exactly") || strings.Contains(c.text, "cite what you use") {
+			t.Errorf("%s still asks for a citation: %s", c.name, c.text)
+		}
+	}
+}
+
+// feedback.enabled off: memory_credit is not offered, so no text names it;
+// the agent cites in the earlier format instead. On: the credit ask.
+func TestTextsFollowFeedback(t *testing.T) {
+	on, off := For(true), For(false)
+	for name, pair := range map[string][2]string{
+		"guide": {on.Guide, off.Guide}, "short guide": {on.ShortGuide, off.ShortGuide}, "reminder": {on.Reminder, off.Reminder},
+		"recall end": {on.RecallEnd, off.RecallEnd}, "search end": {on.SearchEnd, off.SearchEnd},
+	} {
+		if !strings.Contains(pair[0], "memory_credit") || strings.Contains(pair[0], Credit) {
+			t.Errorf("%s, feedback on: %s", name, pair[0])
+		}
+		if strings.Contains(pair[1], "memory_credit") || !strings.Contains(pair[1], Credit) {
+			t.Errorf("%s, feedback off: %s", name, pair[1])
+		}
+	}
+	if on.Guide != Guide || on.ShortGuide != ShortGuide || on.Reminder != Reminder || on.RecallEnd != CreditAsk {
+		t.Errorf("feedback on is not the v7 set: %+v", on)
+	}
+	for name, c := range map[string]struct {
+		text string
+		max  int
+	}{"guide": {off.Guide, 1200}, "short guide": {off.ShortGuide, 1000}, "reminder": {off.Reminder, 400}} {
+		if n := utf8.RuneCountInString(c.text); n > c.max {
+			t.Errorf("%s, feedback off: %d chars (max %d)", name, n, c.max)
+		}
 	}
 }
 
@@ -258,13 +316,19 @@ var wordings = map[string]string{
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
 	"v6": "08ae29b8359ba847e94edb12c320d9ff4a3bfab837c6597c2a32a9422cde7228",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
+	"v7": "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
 }
 
 func wordingHash() string {
 	h := sha256.New()
 	texts := []string{Credit, Guide, ShortGuide, Reminder, Nudge(nil), Nudge([]string{"a", "b"}), DetectorRule, DetectorApproval, GateReason,
 		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
-		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader}
+		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader,
+		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk}
+	for _, feedback := range []bool{true, false} {
+		x := For(feedback)
+		texts = append(texts, x.Guide, x.ShortGuide, x.Reminder, x.RecallEnd, x.SearchEnd)
+	}
 	for _, s := range Skills("/s") {
 		// AllowedTools lists one entry per docs topic: a new docs page is
 		// not a change of wording.

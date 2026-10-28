@@ -230,6 +230,28 @@ func TestDocsNameOnlyExistingCommandsAndFlags(t *testing.T) {
 	}
 }
 
+// Every command a user can run is in the command reference: a new
+// command that forgets docs/commands.md fails here.
+func TestDocsCommandsNameEveryCommand(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/commands.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var walk func(*cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			if !sub.IsAvailableCommand() || sub.Name() == "help" || sub.Name() == "completion" {
+				continue
+			}
+			if !sub.HasSubCommands() && !strings.Contains(string(raw), "`"+sub.CommandPath()) {
+				t.Errorf("docs/commands.md does not name `%s`", sub.CommandPath())
+			}
+			walk(sub)
+		}
+	}
+	walk(docsRoot())
+}
+
 func TestCheckMention(t *testing.T) {
 	root := docsRoot()
 	ok := []string{

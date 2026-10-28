@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
@@ -34,13 +36,18 @@ type searchArgs struct {
 }
 
 type readArgs struct {
-	ID string `json:"id" jsonschema:"the memory id shown by memory_search"`
+	ID string `json:"id" jsonschema:"the memory id shown by memory_search, or the short id (first 8 characters) of a memory shown in this session"`
 }
 
 type storeArgs struct {
 	Kind    string `json:"kind" jsonschema:"decision, correction, convention, pitfall, state or lesson"`
 	Text    string `json:"text" jsonschema:"1-3 sentences: the fact, why, absolute dates"`
 	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" only for a user-wide rule"`
+}
+
+type creditArgs struct {
+	IDs     []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
+	Verdict string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; none: no memory shown informed it"`
 }
 
 // live is the session and project of the Claude Code session this server
@@ -157,7 +164,7 @@ func errorResult(s string) *mcp.CallToolResult {
 
 // newMCPServer builds the memory server (SPEC §7).
 func newMCPServer(deps mcpDeps) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.ShortGuide})
+	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.For(deps.cfg.Feedback.Enabled).ShortGuide})
 	key := &mcpKey{file: deps.dirs.SecretsFile(), cfg: deps.cfg, sec: deps.sec, engine: deps.engine}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
@@ -189,7 +196,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if len(res.Hits) == 0 && !scopesOK(res) {
 				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil
 			}
-			return textResult(mcpSearchText(res)), nil, nil
+			return textResult(mcpSearchText(res, deps.cfg.Feedback.Enabled)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
@@ -200,6 +207,10 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			id := strings.TrimSpace(a.ID)
 			if !memoryIDRE.MatchString(id) || strings.Contains(id, "..") {
 				return errorResult("id: the memory id shown by memory_search"), nil, nil
+			}
+			id, err := deps.readID(id)
+			if err != nil {
+				return errorResult(err.Error()), nil, nil
 			}
 			sec, eng := key.get()
 			m, err := eng.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
@@ -265,8 +276,137 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			}
 			return textResult(b.String()), nil, nil
 		})
+	if deps.cfg.Feedback.Enabled {
+		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
+			func(_ context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
+				verdict := a.Verdict
+				if verdict == "" {
+					verdict = "used"
+				}
+				text, err := deps.credit(verdict, a.IDs)
+				if !slices.Contains([]string{"used", "none", "wrong", "outdated"}, verdict) {
+					verdict = "invalid" // telemetry holds enums, never what the agent typed
+				}
+				deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+				if err != nil {
+					return errorResult(err.Error()), nil, nil
+				}
+				return textResult(text), nil, nil
+			})
+	}
 	return s
 }
+
+// memory_credit's accepted answers start with these: the PostToolUse hook
+// journals a credit only behind one of them.
+const (
+	creditUsedPrefix = "Credited."
+	creditNonePrefix = "Noted:"
+	maxCreditIDs     = 10
+)
+
+// credit is memory_credit's answer: for used, the line to print, once
+// every id resolves to one shown in this session (all or nothing); for
+// none, a note. It journals nothing: the PostToolUse hook does, with the
+// turn and the agent only hooks receive.
+func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
+	switch verdict {
+	case "used":
+		if len(refs) == 0 || len(refs) > maxCreditIDs {
+			return "", errors.New("ids: give 1 to 10 ids of memories shown in this session, or verdict none")
+		}
+	case "none":
+		if len(refs) > 0 {
+			return "", errors.New(`verdict none takes no ids: drop them, or credit them with verdict "used"`)
+		}
+	case "wrong", "outdated":
+		return "", fmt.Errorf("verdict %s comes in a later version: store the correction with memory_store", verdict)
+	default:
+		return "", errors.New(`verdict: "used" or "none"`)
+	}
+	live, found := d.live()
+	if found != "record" {
+		return "", errors.New("memory session not ready: call memory_credit again")
+	}
+	if verdict == "none" {
+		return creditNonePrefix + " no memory used.", nil
+	}
+	shown := shownInSession(d.dirs, live.SessionID)
+	var ids, problems []string
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		id, err := feedback.Resolve(ref, shown)
+		switch {
+		case errors.Is(err, feedback.ErrUnknown):
+			problems = append(problems, ref+": not shown in this session, or its search result has not arrived yet: call again after the result")
+		case err != nil:
+			problems = append(problems, ref+": "+err.Error()+": give more of its id")
+		case !slices.Contains(ids, id):
+			ids = append(ids, id)
+		}
+	}
+	if len(problems) > 0 {
+		return "", errors.New(strings.Join(problems, "\n"))
+	}
+	// One line per project, in the order the ids were given. A memory's
+	// project is the one its latest show names; a read names none (its
+	// show carries the session's), so it only fills in for an id that no
+	// other show named.
+	project := map[string]string{}
+	for _, s := range shown {
+		if s.Path != "read" {
+			project[s.ID] = s.Project
+		}
+	}
+	for _, s := range shown {
+		if _, ok := project[s.ID]; !ok {
+			project[s.ID] = s.Project
+		}
+	}
+	var order []string
+	groups := map[string][]string{}
+	for _, id := range ids {
+		p := project[id]
+		if p == "" {
+			p = live.Project
+		}
+		p = safeProject(p)
+		if groups[p] == nil {
+			order = append(order, p)
+		}
+		groups[p] = append(groups[p], shortID(id))
+	}
+	lines := make([]string, 0, len(order))
+	for _, p := range order {
+		lines = append(lines, instructions.CreditLine(p, groups[p]))
+	}
+	what := "this line"
+	if len(lines) > 1 {
+		what = "these lines"
+	}
+	return creditUsedPrefix + " Print " + what + " in your final message:\n" + strings.Join(lines, "\n"), nil
+}
+
+// readID is the memory id memory_read's ref names: the id of a memory
+// shown in this session that the ref starts with (8 characters or more),
+// else the ref itself (a full id needs no show).
+func (d mcpDeps) readID(ref string) (string, error) {
+	live, found := d.live()
+	if found != "record" || fullUUIDRE.MatchString(ref) {
+		return ref, nil
+	}
+	id, err := feedback.Resolve(ref, shownInSession(d.dirs, live.SessionID))
+	switch {
+	case errors.Is(err, feedback.ErrAmbiguous):
+		return "", errors.New(ref + ": " + err.Error() + ": give more of its id")
+	case err != nil:
+		return ref, nil
+	}
+	return id, nil
+}
+
+// fullUUIDRE: a whole id, which needs no lookup among the shows.
+var fullUUIDRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // memoryIDRE: what Hindsight ids look like (UUIDs); nothing that could
 // turn into another path.
@@ -291,12 +431,13 @@ func scopeErrors(r recall.Result) string {
 	return strings.Join(errs, "; ")
 }
 
-// mcpSearchText is searchText with the credit format the agent must use.
-func mcpSearchText(r recall.Result) string {
+// mcpSearchText is searchText with the ask to declare what the agent uses
+// (to cite it, when memory_credit is not offered).
+func mcpSearchText(r recall.Result, feedback bool) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
 	}
-	return searchText(r) + "\nCite what you use as: " + instructions.Credit + "\n"
+	return searchText(r) + "\n" + instructions.For(feedback).SearchEnd + "\n"
 }
 
 func newMCPCmd() *cobra.Command {

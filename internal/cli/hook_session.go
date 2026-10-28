@@ -77,6 +77,7 @@ func init() {
 // env file, the banner and the one-time notice; after a compaction the
 // replay of recent injections and stores.
 func (h *hookEnv) sessionStart() []byte {
+	h.startSessionTurn()
 	switch h.in.Source {
 	case "startup", "":
 	case "compact":
@@ -91,10 +92,10 @@ func (h *hookEnv) sessionStart() []byte {
 			st.Seen = keep
 			return nil
 		})
-		return contextOutput("SessionStart", instructions.Guide+replay, "")
+		return contextOutput("SessionStart", h.texts().Guide+replay, "")
 	default: // resume, clear, fork: clear and fork start a new session id
 		h.writeEnvFile()
-		return contextOutput("SessionStart", instructions.Guide, "")
+		return contextOutput("SessionStart", h.texts().Guide, "")
 	}
 	h.writeEnvFile()
 	name := safeProject(h.project)
@@ -114,6 +115,7 @@ func (h *hookEnv) sessionStart() []byte {
 	default:
 		text, items, source, err = h.briefing(optedOut)
 		answered = err == nil
+		h.journalShows("briefing", itemsFromInjections(items)) // shown, whether the session state is written or not
 		switch {
 		case err != nil:
 			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
@@ -165,6 +167,7 @@ func (h *hookEnv) sessionStart() []byte {
 			}
 			st.Injected = append(st.Injected, it)
 		}
+		st.KeepShownTexts(injectionTexts(items))
 		return nil
 	})
 	if err == nil {
@@ -173,7 +176,7 @@ func (h *hookEnv) sessionStart() []byte {
 		// cross-session sticky muted them in sessions that never got the
 		// briefing (resume, clear, fork).
 	}
-	context := instructions.Guide
+	context := h.texts().Guide
 	if text != "" {
 		context += "\n\n" + text
 	}
@@ -243,7 +246,8 @@ func (h *hookEnv) recentBriefing(ctx context.Context) (text string, items []sess
 		if w := m.When(); !w.IsZero() {
 			ago = recall.Age(at.Sub(w))
 		}
-		line := "- " + clip(m.Text, briefingItemChars) + age(ago) + "\n"
+		tag := memoryTag(h.project, m.ID) + " " // within the item's characters
+		line := "- " + tag + clip(m.Text, briefingItemChars-len([]rune(tag))) + age(ago) + "\n"
 		if len([]rune(b.String()))+len([]rune(line)) > briefingChars {
 			break
 		}
@@ -365,18 +369,20 @@ func (h *hookEnv) subagentStart() []byte {
 				text += "\n" + clip(page[1], subagentChars-len([]rune(text)))
 			}
 		}
-		n := 0
+		var shown []session.Injection
 		for _, in := range st.Injected {
-			if in.Rule != "briefing" || n == subagentItems {
+			if in.Rule != "briefing" || len(shown) == subagentItems {
 				continue
 			}
-			line := "\n- " + clip(in.Text, subagentItemChars)
+			tag := memoryTag(in.Project, in.ID) + " " // within the item's characters
+			line := "\n- " + tag + clip(in.Text, subagentItemChars-len([]rune(tag)))
 			if len([]rune(text))+len([]rune(line)) > subagentChars {
 				break
 			}
 			text += line
-			n++
+			shown = append(shown, in)
 		}
+		h.journalShows("briefing", itemsFromInjections(shown))
 	}
 	return contextOutput("SubagentStart", text, "")
 }

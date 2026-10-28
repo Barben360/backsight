@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -382,5 +383,56 @@ func TestForgetPurgeRefusesAnotherServer(t *testing.T) {
 	defer mu.Unlock()
 	if st, _ := state.Load(pathsOf(home).StateFile()); len(writes) != 0 || len(st.Tombstones) != 0 {
 		t.Errorf("writes %v, tombstones %+v", writes, st.Tombstones)
+	}
+}
+
+// forgottenIDs is the ids of the journal's forget events, one string per
+// event.
+func forgottenIDs(t *testing.T, home string) []string {
+	t.Helper()
+	events, _, err := feedback.Read(pathsOf(home).FeedbackDir(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range events {
+		if e.Kind == "forget" {
+			out = append(out, strings.Join(e.IDs, ","))
+		}
+	}
+	return out
+}
+
+// A forget journals the memories it retired, so the ledger drops them; a
+// failed forget or a restore journals nothing.
+func TestForgetJournalsTheRetiredMemories(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	memories["f1"] = fact("f1", "conversation:s1")
+	memories["o1"] = `{"id":"o1","text":"obs","type":"observation","tags":["project:billing"],"source_memories":[{"id":"f2","type":"world"},{"id":"f3","type":"world"}]}`
+	memories["f2"], memories["f3"] = fact("f2", ""), fact("f3", "")
+	memories["f9"] = fact("f9", "conversation:s9")
+	documentUnits["conversation:s9"] = 1
+	run(t, "forget", "f1")
+	run(t, "forget", "--restore", "f1")
+	run(t, "forget", "o1")
+	run(t, "forget", "nope")
+	run(t, "forget", "f9", "--purge")
+	run(t, "forget", "f9", "--purge", "--yes")
+	if got := forgottenIDs(t, home); strings.Join(got, " ") != "f1 o1,f2,f3 f9" {
+		t.Errorf("forget events %q, want f1, o1 with its sources, the purged f9", got)
+	}
+
+	// With [feedback] enabled = false, nothing is journaled.
+	home = devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	cfg, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), append(cfg, "[feedback]\nenabled = false\n"...), 0o600)
+	memories["f1"] = fact("f1", "conversation:s1")
+	if code, _, _ := run(t, "forget", "f1"); code != output.OK {
+		t.Fatalf("exit %d", code)
+	}
+	if got := forgottenIDs(t, home); len(got) != 0 {
+		t.Errorf("disabled feedback journaled %q", got)
 	}
 }

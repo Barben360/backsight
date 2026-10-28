@@ -63,3 +63,9 @@ keep_weekly = 4
 auto_apply = false
 source = ""
 prereleases = false
+[feedback]
+enabled = true
+confident_rank = 2
+miss_half_life_days = 90
+credit_half_life_days = 365
+stop_check = "always"

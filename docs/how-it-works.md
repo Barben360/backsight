@@ -20,7 +20,7 @@ Hooks never block Claude Code. When the server is down or slow, recall is skippe
 
 ## At session start
 
-- **The memory guide**: a short text (about 900 characters) telling Claude when to search and store, how to cite a memory, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
+- **The memory guide**: a short text (about 1,100 characters) telling Claude when to search and store, to report the memories it used with `memory_credit`, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
 - **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force. After a compaction, the briefing and the last memories shown are given again.
 - **The status line** you see, such as `🧠 backsight · 🗂️ my-project` ([daily-use.md](daily-use.md#the-line-at-session-start)).
 
@@ -38,11 +38,11 @@ To recall, it searches the start of your prompt (300 characters, code blocks rem
 - were not shown earlier in the session;
 - were not shown 3 times in the last 24 hours, unless they match almost exactly.
 
-They are added to the prompt under a header that frames them as notes from past sessions, data and not instructions, to verify before use. Claude cites the ones it uses as `🧠 From memory (<project>) — …`.
+They are added to the prompt under a header that frames them as notes from past sessions, data and not instructions, to verify before use, each with its project and short id (`[billing · 0b4c2a52]`). A last line asks Claude to report, before its final message, which of them informed its answer ([below](#which-memories-helped)).
 
 The prompt hook may also add one short line:
 
-- on the first prompt, a reminder to search memory before answering;
+- on the first prompt, a reminder to search memory before answering and to report the memories it used;
 - after 3 prompts without a memory search, when your prompt names things the memory knows about, a nudge that names them;
 - a **save prompt** (below).
 
@@ -57,6 +57,17 @@ backsight looks at your prompt for the signs of something worth keeping, and the
 
 Claude decides whether the thing is durable and what to write; nothing is stored without a `memory_store` call, which you see in the session. `/backsight:remember <fact>` stores a fact directly.
 
+## Which memories helped
+
+backsight keeps a local record of which memories Claude was shown and which it used, ids and counts only (`feedback.*` in [configuration.md](configuration.md#feedback-which-memories-claude-used)):
+
+1. **A memory is shown**: in the briefing, under a prompt, after a failed tool call, with a refused question, or in a `memory_search` or `memory_read` result. backsight notes its id, how it was shown and its rank.
+2. **Claude reports**: once it knows what it used, before its final message, it calls `memory_credit` with the ids of the memories that informed its answer, or with `verdict: none`. The tool accepts only memories shown in the session and returns the line Claude prints: `🧠 From memory (<project> · <id8>) — …`.
+3. **The end of the turn checks**: a turn that showed memories and ends without that report is held once, with the memories listed; Claude reports, then finishes (`feedback.stop_check`).
+4. **The turn settles**: every 15 minutes, the background job settles the memories shown at least 30 minutes ago in turns that are over. Each becomes a **credit** (Claude reported using it), a **confident miss** (shown in the top 2, `feedback.confident_rank`, of a prompt, a search or a refused question, in a turn Claude reported on, and not used), **unknown** (Claude never reported on that turn), or simply shown. A credit made after its memory settled counts nowhere and is counted as late.
+
+`backsight stats` shows these counts on its `Credits` line (how turns ended and what Claude reported) and its `Ledger` line (what settled). They do not change recall yet.
+
 ## Before Claude asks you a question
 
 When Claude is about to ask you a question with its `AskUserQuestion` tool and has not searched the memory during this prompt, the first attempt is refused with a reason: search the memory first, then ask again saying "nothing in memory" if it has no answer. Up to 2 memories that match the question, found within 6 seconds, come with the reason. This happens at most once per prompt, and never while the memory is unavailable, so a question is delayed, never blocked.
@@ -70,15 +81,16 @@ The point: many questions Claude would ask you ("which server?", "what did we de
 
 ## The memory tools
 
-Claude has three tools, served by `backsight mcp` through the plugin:
+Claude has four tools, served by `backsight mcp` through the plugin:
 
 | Tool | Does |
 |---|---|
 | `memory_search` | Searches the memory with 1 to 4 short queries, like `backsight search`, with each hit's kinds (`[decision, state]`) after its date. Claude is told to write each as a topic plus an intent word (`docker compose subnet pitfall`), never a kind word alone, and to search before a risky action, design work or asking you a preference. |
-| `memory_read` | Shows one memory with the facts it was built from. |
+| `memory_read` | Shows one memory with the facts it was built from: by its full id, or by the short id of a memory shown in this session. |
 | `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. Claude is told to store a dated fact that names the old claim when work ships or a recalled memory proves wrong. |
+| `memory_credit` | Claude names the memories shown to it in this session that informed its answer (their full ids or the 8-character short ids shown next to them), and gets back the line to print in its reply: `> 🧠 **From memory (<project> · <id8>)** — <the facts used>`. When none did, it says so with `verdict: none`. Every id must have been shown in this session, or the call is refused and nothing is recorded; a memory found by a search sent in the same message counts once that search has returned. Offered only while `feedback.enabled` is on (see [configuration](configuration.md#feedback-which-memories-claude-used)). |
 
-Setup adds a permission rule that lets Claude call these three tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
+Setup adds a permission rule that lets Claude call these four tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
 
 ## When a session is sent
 
@@ -94,11 +106,12 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 
 | What | Size |
 |---|---|
-| The memory guide, each session start | about 900 characters |
+| The memory guide, each session start | about 1,100 characters |
 | The briefing, each session start | up to about 1,600 characters |
-| The memory tools' descriptions and instructions | about 2,000 characters |
+| The memory tools' descriptions and instructions | about 4,000 characters |
 | Memories on prompts, whole session | up to 6,000 characters (`recall.session_budget_chars`) |
-| Reminder, nudge, save prompt | 100 to 300 characters each, when they fire |
+| The line asking Claude to report what it used, under each recall | about 200 characters |
+| Reminder, nudge, save prompt | 100 to 350 characters each, when they fire |
 
 At about 4 characters per token, a full session costs at most 3,000 to 4,000 tokens of context. `backsight stats` shows what the prompt hook actually added per session.
 
@@ -110,11 +123,11 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | `SessionStart` (resume, clear, compact, fork) | The session goes on | The guide; after a compaction, the briefing and last memories again. | 5 s |
 | `UserPromptSubmit` | Each prompt | Recall, reminder, nudge, save prompt. | 25 s |
 | `PreToolUse` (`AskUserQuestion`) | Claude asks you a question | The question gate. | 10 s |
-| `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge. | 2 s |
+| `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge; records the memories a search or a read showed, and the ones Claude credited with `memory_credit`. | 2 s |
 | `PostToolUseFailure` (`Bash`, file and web tools, MCP tools) | A tool call fails | With `recall.failure_pitfalls = true` only: searches the memory for the failure (tool, command and error text, secrets redacted) and adds up to 2 memories scoring at least 0.8, once per kind of error in a session. Does nothing when the session is paused, the project excluded or the session budget spent. | 10 s |
 | `SubagentStart` | A subagent starts | Its short memory guide. | 5 s |
-| `SubagentStop` | A subagent finishes | Queues its report. | 5 s |
-| `Stop` | Claude's reply ends | Notes the end of the reply, for the save detector. No network. | 5 s |
+| `SubagentStop` | A subagent finishes | Queues its report; when the subagent was shown memories, the same check as `Stop`, for the subagent. | 5 s |
+| `Stop` | Claude's reply ends | Notes the end of the reply, for the save detector. When the turn showed memories and Claude has not reported which ones it used with `memory_credit`, asks it once, listing them by short id: Claude goes on, reports, and adds the citation line if it used any (`feedback.stop_check`, see [configuration](configuration.md#feedback-which-memories-claude-used)). Never in a paused or headless session, after a message Claude Code sent itself, or when the record cannot be read. No network. | 5 s |
 | `SessionEnd` | The session ends | Starts sending it, in the background. | 1 s |
 
 `backsight verify` runs every hook as Claude Code does. `backsight why` shows what the hooks added in the latest session, and why.

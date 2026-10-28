@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
@@ -398,5 +399,101 @@ func TestSessionStartAndPromptRecordTheRepositoryRemote(t *testing.T) {
 		if st, _ := sessions(home).Load(sid); st.Project != "platform" || !st.ProjectExplicit {
 			t.Errorf("%s: project %q, explicit %v", sid, st.Project, st.ProjectExplicit)
 		}
+	}
+}
+
+// The recent-observation briefing is journaled as a show before any turn,
+// the first turn's journal reads start before it, and a subagent's
+// briefing items are journaled with its agent id.
+func TestRecentBriefingAndSubagentShows(t *testing.T) {
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "," + obs("o2", "Billing moved in October.", "2026-10-23T09:00:00Z") + "]"
+	dir := pathsOf(home).FeedbackDir()
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	start, ok := feedback.CurrentTurn(dir, "s1")
+	if !ok || start.ID != "" || start.N != 0 || start.File == "" {
+		t.Fatalf("pointer %+v %v", start, ok)
+	}
+	fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 2 {
+		t.Fatalf("shows %+v", shows)
+	}
+	if s := shows[0]; s.Path != "briefing" || s.Turn != "" || s.Agent != "" || s.Session != "s1" || itemsText(s.Items) != "o1:1:0,o2:2:0" {
+		t.Errorf("briefing %+v items %s", s, itemsText(s.Items))
+	}
+	if s := shows[1]; s.Path != "briefing" || s.Turn != "" || s.Agent != "a1" || itemsText(s.Items) != "o1:1:0,o2:2:0" {
+		t.Errorf("subagent %+v items %s", s, itemsText(s.Items))
+	}
+	// The first prompt's turn starts where the session did: its reads
+	// include the briefing.
+	recallAnswer = "[]"
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	first, _ := feedback.CurrentTurn(dir, "s1")
+	if first.ID != "p-1" || first.N != 1 || first.File != start.File || first.Offset != start.Offset {
+		t.Errorf("first turn %+v, session start %+v", first, start)
+	}
+	evs, _, _ := feedback.ReadFrom(first.File, first.Offset)
+	if len(eventsOf(evs, "shows")) != 2 {
+		t.Errorf("the first turn does not read the briefing: %+v", evs)
+	}
+	// The second starts where the journal ends.
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-2", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	second, _ := feedback.CurrentTurn(dir, "s1")
+	if fi, err := os.Stat(second.File); err != nil || second.Offset <= start.Offset || second.Offset >= fi.Size() {
+		t.Errorf("second turn %+v", second)
+	}
+	// A resumed session starts a new turn pointer, without a briefing.
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "resume", "cwd": filepath.Join(home, "billing")})
+	if cur, _ := feedback.CurrentTurn(dir, "s1"); cur.ID != "" || cur.N != 0 || cur.Offset <= second.Offset {
+		t.Errorf("after resume %+v", cur)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "shows")); n != 2 {
+		t.Errorf("resume journaled a briefing: %d shows", n)
+	}
+}
+
+// Briefing items carry their short id, at session start and in a
+// subagent's briefing: a memory the agent cannot name cannot be credited.
+func TestBriefingLinesCarryShortIDs(t *testing.T) {
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("0b4c2a52-0000-4000-8000-000000000001", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "," +
+		obs("1c4c2a52-0000-4000-8000-000000000002", "Billing moved in October.", "2026-10-23T09:00:00Z") + "]"
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	for _, want := range []string{"\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16. (", "\n- [billing · 1c4c2a52] Billing moved in October. ("} {
+		if !strings.Contains(h.Specific.Context, want) {
+			t.Errorf("briefing lacks %q:\n%s", want, h.Specific.Context)
+		}
+	}
+	s := fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
+	for _, want := range []string{"\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16.", "\n- [billing · 1c4c2a52] Billing moved in October."} {
+		if !strings.Contains(s.Specific.Context, want) {
+			t.Errorf("subagent briefing lacks %q:\n%s", want, s.Specific.Context)
+		}
+	}
+}
+
+// The briefing was shown whether or not the session state could be
+// written: its show is journaled with the state busy.
+func TestBriefingShowsSurviveABusySessionState(t *testing.T) {
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.LocksDir(), 0o700)
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "state-s1.lock"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") {
+		t.Fatalf("no briefing:\n%s", h.Specific.Context)
+	}
+	if st, _ := sessions(home).Load("s1"); len(st.Injected) != 0 {
+		t.Fatalf("the state was written despite the lock: %+v", st)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "briefing" || itemsText(shows[0].Items) != "o1:1:0" {
+		t.Errorf("shows %+v", shows)
 	}
 }

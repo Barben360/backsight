@@ -156,7 +156,7 @@ func TestDevBuildsGetAContentVersion(t *testing.T) {
 // Exact names and values: tests built from the code's own constants would
 // agree with a typo (decision 0054 tool names, SPEC §6.2 timeouts).
 func TestExactToolNamesEventsAndTimeouts(t *testing.T) {
-	want := []string{"mcp__plugin_backsight_memory__memory_search", "mcp__plugin_backsight_memory__memory_read", "mcp__plugin_backsight_memory__memory_store"}
+	want := []string{"mcp__plugin_backsight_memory__memory_search", "mcp__plugin_backsight_memory__memory_read", "mcp__plugin_backsight_memory__memory_store", "mcp__plugin_backsight_memory__memory_credit"}
 	if strings.Join(ToolNames, ",") != strings.Join(want, ",") {
 		t.Errorf("tool names %v", ToolNames)
 	}
@@ -189,6 +189,18 @@ func TestExactToolNamesEventsAndTimeouts(t *testing.T) {
 	read(t, filepath.Join(dir, "plugins", "backsight", ".claude-plugin", "plugin.json"), &pj)
 	if mkt["owner"] == nil || mkt["description"] == nil || pj["description"] == nil {
 		t.Errorf("fields Claude Code's schema wants: %v %v", mkt, pj)
+	}
+}
+
+// memory_credit joins the allowed tools, and the plugin is regenerated for
+// it: its version hash follows layout 5.
+func TestPluginAllowsTheCreditTool(t *testing.T) {
+	if len(ToolNames) != 4 || ToolNames[3] != "mcp__plugin_backsight_memory__memory_credit" {
+		t.Errorf("tool names %v", ToolNames)
+	}
+	// sha256("5\n/s")[:6]; layout 4 gave another hash
+	if got := Version("1.2.3", "/s"); got != "1.2.3+a8128dd31978" {
+		t.Errorf("version %s", got)
 	}
 }
 

@@ -37,6 +37,7 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.8-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | one memory for all your PCs (`server expose`, `server token`, `connect`, `setup --role server`), `memory_credit` and the record of which memories Claude used (`feedback log`, `feedback rebuild`); Linux amd64 tested ([notes](releases/v0.1.8-m6.md)) |
 | v0.1.7-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | doctor knows the `tools-used` transcript records; Linux amd64 tested ([notes](releases/v0.1.7-m5.md)) |
 | v0.1.6-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | memory kinds on search results, search and close-the-loop guidance, retro rewrite, tool-failure pitfalls (off by default); Linux amd64 tested ([notes](releases/v0.1.6-m5.md)) |
 | v0.1.5-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | backfill progress on stderr and `retain backfill --status`; Linux amd64 tested ([notes](releases/v0.1.5-m5.md)) |
