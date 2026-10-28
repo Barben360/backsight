@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,6 +39,13 @@ func refuseSpawn(args ...string) error {
 }
 
 func refuseSpawnLogged(_ *os.File, args ...string) error { return refuseSpawn(args...) }
+
+// refuseSSH: no test reaches a real ssh server without installing a fake.
+type refuseSSH struct{}
+
+func (refuseSSH) Run(_ context.Context, args []string, _ io.Reader, _, _ io.Writer) (int, error) {
+	return -1, fmt.Errorf("test reached ssh %v without a fake runner", args)
+}
 
 // testHookFault makes the test binary, run as `hook-child`, fail before
 // the handler as a crashing child would: panic | fatal | hang | kill |
@@ -86,6 +94,7 @@ func TestMain(m *testing.M) {
 	}
 	composeRunner = refuseDocker{}
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
+	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
 	os.Exit(m.Run())
 }
