@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,6 +32,69 @@ func SetExcludePaths(raw []byte, paths []string) ([]byte, error) {
 // SetServerBank returns raw with [server] bank set to bank.
 func SetServerBank(raw []byte, bank string) ([]byte, error) {
 	return setKey(raw, "server", "bank", strconv.Quote(bank))
+}
+
+// SetRemote returns raw as a client of the server at url, bank bank
+// ([server] url, bank and mode = "remote"), as connect writes it.
+func SetRemote(raw []byte, url, bank string) ([]byte, error) {
+	out := raw
+	var err error
+	// Each new key goes right under the table header: url, bank, then
+	// mode reads mode, bank, url.
+	for _, kv := range [][2]string{{"url", url}, {"bank", bank}, {"mode", "remote"}} {
+		if out, err = setKey(out, "server", kv[0], strconv.Quote(kv[1])); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// SetLLMEstimate returns raw with the [llm] keys a client prices its
+// backfill estimate with: the host's provider and model, its prices per
+// million tokens and their currency. An empty value or a zero price
+// removes its key (the default applies); a negative or non-finite price
+// is refused.
+func SetLLMEstimate(raw []byte, provider, model, currency string, input, cached, output float64) ([]byte, error) {
+	price := func(v float64) (string, error) {
+		switch {
+		case math.IsNaN(v) || math.IsInf(v, 0) || v < 0:
+			return "", errors.New("an LLM price must be a number ≥ 0")
+		case v == 0:
+			return "", nil
+		}
+		s := strconv.FormatFloat(v, 'f', -1, 64)
+		if !strings.Contains(s, ".") {
+			s += ".0" // a TOML float, not an integer
+		}
+		return s, nil
+	}
+	quoted := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return strconv.Quote(s)
+	}
+	keys := [][2]string{{"provider", quoted(provider)}, {"model", quoted(model)}}
+	for _, p := range []struct {
+		key string
+		v   float64
+	}{{"price_input", input}, {"price_cached", cached}, {"price_output", output}} {
+		s, err := price(p.v)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, [2]string{p.key, s})
+	}
+	keys = append(keys, [2]string{"currency", quoted(currency)})
+	out := raw
+	var err error
+	// Backwards: each new key goes right under the table header.
+	for i := len(keys) - 1; i >= 0; i-- {
+		if out, err = setKey(out, "llm", keys[i][0], keys[i][1]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // SetNetwork returns raw with [network] exposure set, and bind_ip set to

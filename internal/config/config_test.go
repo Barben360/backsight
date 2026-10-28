@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -391,6 +392,54 @@ func TestSetNetwork(t *testing.T) {
 	}
 	if _, err := SetNetwork([]byte("network.exposure = \"private\"\n"), "loopback", ""); err == nil {
 		t.Error("a dotted key was edited")
+	}
+}
+
+// connect points a config at another PC's server: the user's comments and
+// unrelated keys stay, and the result loads as a client of that server.
+func TestSetRemoteKeepsTheFileAndLoadsRemote(t *testing.T) {
+	in := "# mine\nschema_version = 1\n\n[server]\nurl = \"http://127.0.0.1:8888\" # was local\nui_port = 19999\n\n[recall]\nmin_score = 0.6\n"
+	got, err := SetRemote([]byte(in), "http://100.101.1.2:8888", "backsight")
+	want := "# mine\nschema_version = 1\n\n[server]\nmode = \"remote\"\nbank = \"backsight\"\nurl = \"http://100.101.1.2:8888\" # was local\nui_port = 19999\n\n[recall]\nmin_score = 0.6\n"
+	if err != nil || string(got) != want {
+		t.Fatalf("got  %q (%v)\nwant %q", got, err, want)
+	}
+	cfg, err := Parse(got, "config.toml", dirs, "/home/u")
+	if err != nil || cfg.Server.Mode != "remote" || cfg.Server.URL != "http://100.101.1.2:8888" || cfg.Server.Bank != "backsight" || cfg.Recall.MinScore != 0.6 {
+		t.Errorf("%+v %v", cfg.Server, err)
+	}
+	fresh, err := SetRemote([]byte("# Written by backsight connect.\nschema_version = 1\n"), "http://h.tailnet.ts.net:8888", "b")
+	if cfg, perr := Parse(fresh, "config.toml", dirs, "/home/u"); err != nil || perr != nil || cfg.Server.Mode != "remote" || cfg.Server.URL != "http://h.tailnet.ts.net:8888" ||
+		!strings.HasPrefix(string(fresh), "# Written by backsight connect.\n") {
+		t.Errorf("new file: %q %v %v", fresh, err, perr)
+	}
+	if _, err := SetRemote([]byte("server.url = \"x\"\n"), "http://100.101.1.2:8888", "b"); err == nil {
+		t.Error("a dotted key was edited")
+	}
+}
+
+// The host's LLM on a client prices the backfill estimate: each value is
+// set in place, and a zero price or an empty value removes its key.
+func TestSetLLMEstimate(t *testing.T) {
+	in := "# mine\n[llm]\nprovider = \"deepseek\" # host's\nprice_cached = 0.1\nbase_url = \"http://x\"\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n"
+	got, err := SetLLMEstimate([]byte(in), "anthropic", "claude-haiku-4-5", "EUR", 1, 0, 5.5)
+	want := "# mine\n[llm]\nmodel = \"claude-haiku-4-5\"\nprice_input = 1.0\nprice_output = 5.5\ncurrency = \"EUR\"\nprovider = \"anthropic\" # host's\nbase_url = \"http://x\"\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n"
+	if err != nil || string(got) != want {
+		t.Fatalf("got  %q (%v)\nwant %q", got, err, want)
+	}
+	cfg, err := Parse(got, "config.toml", dirs, "/home/u")
+	if err != nil || cfg.LLM.Provider != "anthropic" || cfg.LLM.Model != "claude-haiku-4-5" || cfg.LLM.PriceInput != 1 || cfg.LLM.PriceCached != 0 ||
+		cfg.LLM.PriceOutput != 5.5 || cfg.LLM.Currency != "EUR" || cfg.LLM.BaseURL != "http://x" {
+		t.Errorf("%+v %v", cfg.LLM, err)
+	}
+	fresh, err := SetLLMEstimate([]byte("schema_version = 1\n"), "deepseek", "deepseek-flash", "", 0, 0, 0)
+	if err != nil || string(fresh) != "schema_version = 1\n\n[llm]\nprovider = \"deepseek\"\nmodel = \"deepseek-flash\"\n" {
+		t.Errorf("%q %v", fresh, err)
+	}
+	for _, bad := range []float64{-1, math.NaN(), math.Inf(1)} {
+		if _, err := SetLLMEstimate([]byte(""), "deepseek", "m", "USD", bad, 0, 0); err == nil {
+			t.Errorf("price %v accepted", bad)
+		}
 	}
 }
 

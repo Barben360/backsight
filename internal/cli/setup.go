@@ -583,12 +583,21 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	if st, err := state.Load(s.dirs.StateFile()); err == nil && st.RetainSince != nil {
 		since = *st.RetainSince
 	}
-	fl := estimateFlusher(s.dirs, s.home, cfg, since, idx)
-	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
-	if model != cfg.LLM.Model {
-		prices = retain.PricesFor(model, 0, 0, 0, cfg.LLM.Currency)
+	if model != cfg.LLM.Model { // the configured prices are another model's
+		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
 	}
-	files, _ := filepath.Glob(filepath.Join(s.loc.Projects, "*", "*.jsonl"))
+	return backfillSurvey(s.dirs, s.home, s.loc.Projects, cfg, since, idx)
+}
+
+// backfillSurvey counts the sessions of projectsDir a backfill would send
+// with cfg (live retain from since, idx what was sent) and prices them for
+// cfg's model; it reads the transcripts only, never the server. 0 sessions
+// when the survey fails.
+func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, since time.Time, idx *retain.SentIndex) (sessions int, cost string) {
+	fl := estimateFlusher(d, home, cfg, since, idx)
+	model := cfg.LLM.Model
+	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
+	files, _ := filepath.Glob(filepath.Join(projectsDir, "*", "*.jsonl"))
 	_, plan, err := surveyAll(fl, files, backfillFlags{}, prices)
 	if err != nil {
 		return 0, ""
@@ -1291,7 +1300,7 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 		res.NextSteps = append(res.NextSteps, "open the server to your other PCs: backsight server expose --private <this host's LAN or tailnet address> --out <file> "+
 			"writes the connection token they join with (it holds the API key: carry it by hand, never through an agent; backsight server token writes it again)")
 	}
-	if answers["backups"] == "on" {
+	if answers["backups"] == "on" && (s.cfg == nil || s.cfg.Server.Mode == "local") { // a client's backups are its host's
 		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)")
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
@@ -1481,9 +1490,13 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		serverStep = setup.Step{Name: "server", Status: "skipped", Detail: "remote server " + s.cfg.Server.URL + ": install it on its host"}
 		docsStep = setup.Step{Name: "docs", Status: "skipped", Detail: hostIndexesDocs}
 	}
+	key := "llm_api_key"
+	if remote { // the server's LLM key is its host's
+		key = "api_key"
+	}
 	steps := []setup.Step{
 		{Name: "config", Status: "planned", Detail: cfgDetail},
-		{Name: "secrets", Status: "planned", Detail: "check llm_api_key (exit 10 with the command to run when missing)"},
+		{Name: "secrets", Status: "planned", Detail: "check " + key + " (exit 10 with the command to run when missing)"},
 		serverStep, docsStep,
 		{Name: "client", Status: "planned", Detail: "backsight client install: plugin and permission rule in " + s.loc.Dir},
 		{Name: "retention", Status: "planned", Detail: retention},

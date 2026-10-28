@@ -79,7 +79,7 @@ While the server is down, nothing is lost: sessions stay in Claude Code's transc
 
 If the server rejects the API key, the key in `secrets.toml` and the server's `.env` differ: `backsight server render` writes the `.env` from your secrets again, then `backsight server start`.
 
-On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host.
+On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host: carry the file to each PC and run `backsight connect --token-file <file>` there, then delete the file.
 
 ### After a reboot the server was down for a while (private exposure)
 
@@ -112,6 +112,16 @@ To stop depending on the address, `backsight server expose --loopback` takes the
 doctor's `server-id` check in error, and the session banner "⚠️ a different memory server answers at the joined address": this PC joined a server, and the one answering at its address now has another id (or none). Its host was reinstalled without a restore, or the address now leads to another machine. Each server has its own id, kept in its data, so a host replaced by a fresh install and a restore of its backup keeps its id and its clients.
 
 While it lasts, this PC sends nothing: sessions stay in Claude Code's transcripts and notes in this PC's queue, so nothing is lost. To go on with the server now at that address, make a token on its host (`backsight server token --out <file>`) and join it again with `backsight connect --token-file <file>`. If the old server comes back at the address, sending resumes on its own at the next `backsight jobs tick`.
+
+## connect refuses the token
+
+`backsight connect` checks the token and the server before it changes anything: after each of these refusals, nothing changed on this PC.
+
+- **"the token holds the API key: pass it on stdin (--token -) or in a file (--token-file F)"**: the token was given on the command line, where your shell history, and an agent's transcript if an agent ran it, keep it. connect never shows it. Since the key is exposed, run `backsight server token --rotate --out <file>` on the server's host, then `backsight connect --token-file <file>` here (or `backsight connect --token -` and paste it at the hidden prompt).
+- **"connect: the server rejected this token's key (rotated?)"**: the host gave its server a new API key (`backsight server token --rotate`) after this token was made. Make a new token on the host (`backsight server token --out <file>`) and run `backsight connect --token-file <file>` with it.
+- **"the server at <url> is not the one this token was made for: get a fresh token there"**: another server answers at the token's address. Its host was reinstalled without a restore (a new server has a new id), or the address now leads to another machine. Make a token on the machine that runs the server now (`backsight server token --out <file>`).
+- **"is a public address"**: the token names a public IP address, where the API key would cross the internet. On the server's host, open it on a LAN or tailnet address instead (`backsight server expose --private <ip>`), which hands out a new token.
+- **"does not answer"**: see the next section.
 
 ## Another PC cannot reach the server
 

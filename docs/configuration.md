@@ -31,7 +31,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 |---|---|---|
 | `server.url` | `"http://127.0.0.1:8888"` | The server's API address. With `server.mode = "local"`, its port is the API port the server publishes, and it must be explicit. |
 | `server.bank` | `"claude-memory"` | The [bank](glossary.md#bank) that holds your memory. Setup writes `"backsight"` for a new install; without the key the bank is `claude-memory`, the name of installs before v0.1.4-m5, which `backsight bank rename` moves to `backsight` (the update to v0.1.4-m5 does it). backsight also uses `<bank>-docs` for these docs and `<bank>-control` for its own records. |
-| `server.mode` | `"local"` | `"local"`: backsight runs the server in Docker on this machine and manages it. `"remote"`: you run the server elsewhere; backsight only talks to `server.url`, and the commands that manage a local server (`server`, `backup`, `uninstall --stop`) refuse. |
+| `server.mode` | `"local"` | `"local"`: backsight runs the server in Docker on this machine and manages it. `"remote"`: you run the server elsewhere; backsight only talks to `server.url`, and the commands that manage a local server (`server`, `backup`, `uninstall --stop`) refuse. `backsight connect` sets it, with `server.url` and `server.bank`, from the token of the server's host. |
 | `server.role` | `"both"` | `"both"`: this PC runs Claude Code, and its server too when `server.mode = "local"`. `"server"`: a host that only serves the memory, without Claude Code; `backsight setup --role server` sets it (see [install](install.md#a-server-only-host)); it needs `server.mode = "local"`. |
 | `server.ui_port` | `9999` | Port of the Hindsight web UI, on the same address as the API. Must differ from the API port. |
 | `server.compose_dir` | `"<data>/server"` | Where the server's `compose.yaml`, `.env` and your own `compose.override.yaml` live. An absolute path. |
@@ -103,6 +103,8 @@ How these fit together: [how-it-works.md](how-it-works.md#on-each-prompt).
 | `llm.currency` | `"USD"` | The currency the prices and caps are in. |
 
 Check your provider's current prices: they change, and some (DeepSeek's) differ by time of day.
+
+On a client of another PC's server (`server.mode = "remote"`), the server's host extracts the memories: `[llm]` there describes the host's provider, model and prices, for cost estimates only (`backsight stats`, setup's backfill offer). `backsight connect` writes them from the connection token, never a key: a client needs no `llm_api_key`.
 
 ## `[embeddings]`
 

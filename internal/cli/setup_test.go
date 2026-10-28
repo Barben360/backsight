@@ -1548,6 +1548,34 @@ func TestSetupOnAClientSkipsDocsAndBackupIdentity(t *testing.T) {
 	}
 }
 
+// A client extracts nothing: its [llm] only prices estimates (connect
+// writes the host's). Setup there asks nothing about the provider, not
+// even the subscription caveat of a claude-code host, and checks only the
+// API key.
+func TestSetupOnAClientAsksNothingAboutTheProvider(t *testing.T) {
+	home, _ := setupMachine(t)
+	_ = os.MkdirAll(filepath.Dir(pathsOf(home).ConfigFile()), 0o700)
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n[llm]\nprovider = \"claude-code\"\nmodel = \"sonnet\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("api_key", "fakeapikey") }); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := run(t, "setup", "--questions", "--json")
+	for _, q := range parseSetup(t, out).Data.Questions {
+		if q.ID == "ack_subscription" || q.ID == "base_url" || ((q.ID == "provider" || q.ID == "model") && q.Asked()) {
+			t.Errorf("a client is asked %s:\n%s", q.ID, out)
+		}
+	}
+	code, out, _ := run(t, "setup", "--plan", "--json")
+	if steps := parseSetup(t, out).Data.Steps; code != output.OK || !hasStep(steps, "secrets", "planned", "check api_key") || strings.Contains(out, "llm_api_key") {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	if code, out, errOut := run(t, "setup", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
 func atATerminal(t *testing.T, input string) {
 	t.Helper()
 	withStdin(t, input)

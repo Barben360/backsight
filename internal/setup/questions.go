@@ -159,6 +159,9 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	}
 	// A server-only host runs no Claude Code: nothing of it to ask about.
 	serverOnly := extra["role"] == config.RoleServer
+	// A client extracts nothing: its [llm] only prices estimates, its
+	// provider and model come from config.toml (connect writes the host's).
+	remote := in.Config != nil && in.Config.Server.Mode == "remote"
 	pick := func(q *Question) error {
 		ans, given := in.Answers[q.ID]
 		if given && ans == "" && q.ID != "base_url" { // empty is no answer (only a base URL may be empty)
@@ -226,8 +229,8 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	}
 	model := orDefault(qs[len(qs)-1].Value, mq.Default)
 
-	switch provider {
-	case "deepseek", "claude-code":
+	switch {
+	case remote, provider == "deepseek", provider == "claude-code":
 	default:
 		bq := Question{ID: "base_url", Prompt: "Base URL of the provider's API (empty: the provider's own)", Free: true, Default: preset.BaseURL}
 		if provider == "ollama" {
@@ -237,7 +240,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			return nil, nil, err
 		}
 	}
-	if provider == "claude-code" {
+	if provider == "claude-code" && !remote {
 		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
 			Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}); err != nil {
 			return nil, nil, err
