@@ -55,6 +55,15 @@ type Event struct {
 	Details      map[string]any
 	Hook         string // hook_failure
 	Error        string // the *_error and *_failed events
+	// feedback: credit_check, credit, feedback_settle
+	Outcome string
+	Flags   []string
+	Verdict string
+	Shows   int
+	Credits int
+	Misses  int
+	Unknown int
+	Late    int
 	// attribution
 	Base     string
 	Applied  string
@@ -209,6 +218,23 @@ type Report struct {
 		Subagents int `json:"subagents"`
 		Moved     int `json:"moved"`
 	} `json:"attribution"`
+	// Feedback: the end-of-turn checks by outcome (declared, blocked,
+	// undeclared, check_skipped), the memory_credit calls accepted by
+	// verdict and those refused, what the settles decided, the used
+	// credits that came too late to attach, and the honesty flags.
+	Feedback struct {
+		Checks   map[string]int `json:"checks"`
+		Verdicts map[string]int `json:"verdicts"`
+		Refused  int            `json:"refused"`
+		Late     int            `json:"late"`
+		Settled  struct {
+			Shows   int `json:"shows"`
+			Credits int `json:"credits"`
+			Misses  int `json:"misses"`
+			Unknown int `json:"unknown"`
+		} `json:"settled"`
+		Flags map[string]int `json:"flags"`
+	} `json:"feedback"`
 }
 
 type turn struct {
@@ -229,6 +255,7 @@ func Compute(events []Event, from, to time.Time) Report {
 	r.From, r.To = from, to
 	r.Prompts.Skips, r.Turns.Credit, r.Prompts.ByLang = map[string]int{}, map[string]int{}, map[string][2]int{}
 	r.Gate, r.Tools, r.Live, r.Retains, r.HookFailures, r.Unknown = map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
+	r.Feedback.Checks, r.Feedback.Verdicts, r.Feedback.Flags = map[string]int{}, map[string]int{}, map[string]int{}
 	searched, stored, bySearch := map[turn]bool{}, map[turn]bool{}, map[turn]bool{}
 	returned := map[string]map[string]time.Time{} // session → memory id → first time a tool returned it
 	for _, e := range events {
@@ -371,6 +398,21 @@ func Compute(events []Event, from, to time.Time) Report {
 			if e.PathRule != e.Applied {
 				a.Disagree++
 			}
+		case "credit_check":
+			r.Feedback.Checks[e.Outcome]++
+			for _, f := range e.Flags {
+				r.Feedback.Flags[f]++
+			}
+		case "credit":
+			if e.OK {
+				r.Feedback.Verdicts[e.Verdict]++
+			} else {
+				r.Feedback.Refused++
+			}
+		case "feedback_settle":
+			s := &r.Feedback.Settled
+			s.Shows, s.Credits, s.Misses, s.Unknown = s.Shows+e.Shows, s.Credits+e.Credits, s.Misses+e.Misses, s.Unknown+e.Unknown
+			r.Feedback.Late += e.Late
 		case "transcript_unknown":
 			for t, n := range e.Types {
 				r.Unknown[t] += n

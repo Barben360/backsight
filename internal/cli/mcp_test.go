@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -91,6 +92,20 @@ func TestMCPServesFourTools(t *testing.T) {
 	}
 }
 
+const searchTrailer = "If a memory informs your answer, call memory_credit with its id before your final message.\n"
+
+// v7: the search result asks for a declaration, not a citation format;
+// an empty search asks for nothing.
+func TestSearchTrailerAsksForACredit(t *testing.T) {
+	out := mcpSearchText(recall.Result{Hits: []recall.Hit{{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "fact", Project: "billing", Age: "2d", Score: 0.9}}})
+	if !strings.HasSuffix(out, "\n"+searchTrailer) || strings.Contains(out, instructions.Credit) || strings.Contains(out, "Cite what you use") {
+		t.Errorf("trailer:\n%s", out)
+	}
+	if out := mcpSearchText(recall.Result{}); out != "nothing in memory\n" {
+		t.Errorf("empty search: %q", out)
+	}
+}
+
 func toolNames(t *testing.T, cs *mcp.ClientSession) map[string]string {
 	t.Helper()
 	tools, err := cs.ListTools(context.Background(), nil)
@@ -108,7 +123,7 @@ func TestMCPSearchReturnsHitsAndTheCreditFormat(t *testing.T) {
 	cs := mcpSession(t)
 	recallAnswer = `[{"id":"m1","text":"PostgreSQL 16 stays for billing.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.7}}]`
 	out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres version"}})
-	if isErr || !strings.Contains(out, "PostgreSQL 16 stays") || !strings.Contains(out, "[billing]") || !strings.Contains(out, instructions.Credit) {
+	if isErr || !strings.Contains(out, "PostgreSQL 16 stays") || !strings.Contains(out, "[billing]") || !strings.HasSuffix(out, searchTrailer) {
 		t.Errorf("%v\n%s", isErr, out)
 	}
 	if !strings.Contains(strings.Join(recallTags, "|"), "project:billing") {

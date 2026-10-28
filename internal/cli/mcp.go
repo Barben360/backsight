@@ -405,12 +405,12 @@ func scopeErrors(r recall.Result) string {
 	return strings.Join(errs, "; ")
 }
 
-// mcpSearchText is searchText with the credit format the agent must use.
+// mcpSearchText is searchText with the ask to declare what the agent uses.
 func mcpSearchText(r recall.Result) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
 	}
-	return searchText(r) + "\nCite what you use as: " + instructions.Credit + "\n"
+	return searchText(r) + "\nIf a memory informs your answer, call memory_credit with its id before your final message.\n"
 }
 
 func newMCPCmd() *cobra.Command {

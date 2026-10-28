@@ -33,6 +33,9 @@ type Outcome struct {
 	Searched     bool     `json:"searched"`
 	Credited     *string  `json:"credited"` // exact | free | empty | null
 	Contradicted bool     `json:"contradicted"`
+	// CreditSource: tool (a memory_credit call of the main agent in the
+	// turn), else citation (a credit found in the reply), else empty.
+	CreditSource string `json:"credit_source,omitempty"`
 }
 
 // Reply is how a finished reply used memory (Stop): the per-turn search

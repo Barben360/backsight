@@ -190,6 +190,8 @@ func (h *hookEnv) userPrompt() []byte {
 	st, _ := h.store.Load(h.in.SessionID)
 	n := st.Prompts + 1
 	ev.N = n
+	judge := st.LastInject == n-1 && n > 1
+	toolCredit := judge && h.creditedSinceTurn() // read before beginTurn moves the pointer
 	h.beginTurn(n, false)
 	rc := h.cfg.Recall
 	detector := detect(st, prompt)
@@ -198,7 +200,7 @@ func (h *hookEnv) userPrompt() []byte {
 	}
 
 	// What followed the previous prompt's injection.
-	if st.LastInject == n-1 && n > 1 {
+	if judge {
 		var ids []string
 		for _, in := range st.Injected {
 			if in.Prompt == n-1 {
@@ -209,7 +211,14 @@ func (h *hookEnv) userPrompt() []byte {
 		if st.LastCredit != "" {
 			credited = &st.LastCredit // computed at Stop over the whole reply
 		}
-		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, Contradicted: detector == "rule"})
+		source := ""
+		switch {
+		case toolCredit:
+			source = "tool"
+		case credited != nil && (*credited == "exact" || *credited == "free"):
+			source = "citation"
+		}
+		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, CreditSource: source, Contradicted: detector == "rule"})
 	}
 
 	var parts []string
@@ -245,7 +254,7 @@ func (h *hookEnv) userPrompt() []byte {
 			banner = instructions.MemoryUnavailable("", "server unreachable")
 		}
 		if text != "" {
-			parts = append(parts, text)
+			parts = append(parts, text+"\n"+instructions.CreditAsk)
 			injected = items
 			memoryChars = len([]rune(text))
 			h.journalShows("prompt", itemsFromHits(chosen))

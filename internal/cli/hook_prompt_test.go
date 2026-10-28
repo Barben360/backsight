@@ -59,6 +59,7 @@ func TestFirstPromptRecallsAndReminds(t *testing.T) {
 		t.Fatalf("context:\n%s", c)
 	}
 	block, _, _ := strings.Cut(c, instructions.Reminder)
+	block = strings.TrimSuffix(strings.TrimSpace(block), instructions.CreditAsk)
 	if n := len([]rune(block)); n > 800+len([]rune(instructions.RecallHeader))+10 {
 		t.Errorf("recall block %d chars", n)
 	}
@@ -243,6 +244,81 @@ func TestOutcomeOfThePreviousInjection(t *testing.T) {
 	tel := telemetryText(t, home)
 	if !strings.Contains(tel, `"event":"outcome"`) || !strings.Contains(tel, `"credited":"exact"`) || !strings.Contains(tel, `"contradicted":true`) {
 		t.Errorf("telemetry:\n%s", tel)
+	}
+}
+
+// v7: the prompt-recall block ends with the ask to declare the memories
+// used, on the first prompt (before the reminder) as on later ones.
+func TestRecallHeaderEndsWithTheCreditLine(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	c := prompt(t, home, "s1", longPrompt).Specific.Context
+	block, _, _ := strings.Cut(c, instructions.Reminder)
+	if !strings.HasPrefix(block, instructions.RecallHeader+"\n- [billing · m1] memory m1 about billing") || !strings.HasSuffix(strings.TrimSpace(block), "\n"+instructions.CreditAsk) {
+		t.Errorf("first prompt's block:\n%s", c)
+	}
+	recallAnswer = hits(0, 0.9)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.LastInject = -10; return nil }) // the gap has passed
+	c = prompt(t, home, "s1", "Which deployment pipeline does the billing service use for its nightly releases?").Specific.Context
+	if !strings.HasPrefix(c, instructions.RecallHeader+"\n- [billing · m2] memory m2") || !strings.HasSuffix(c, "\n"+instructions.CreditAsk) {
+		t.Errorf("later block:\n%s", c)
+	}
+}
+
+// outcomes is the outcome events of session sid, in order.
+func outcomes(t *testing.T, home, sid string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, l := range strings.Split(telemetryText(t, home), "\n") {
+		var e map[string]any
+		if json.Unmarshal([]byte(l), &e) == nil && e["event"] == "outcome" && e["session"] == sid {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// An outcome says where its credit came from: a memory_credit call
+// journaled in the judged turn (tool), else a citation found in the reply;
+// a credit of another session or of a subagent counts for none.
+func TestOutcomeCreditSource(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	credit := func(sid, agent string) {
+		in := map[string]any{"session_id": sid, "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+			"tool_input": map[string]any{"verdict": "none"}, "tool_response": []map[string]string{{"type": "text", "text": "Noted: no memory used."}}}
+		if agent != "" {
+			in["agent_id"] = agent
+		}
+		fire(t, "post-tool-use", in)
+	}
+	cite := func(sid string) {
+		_ = sessions(home).Update(sid, func(st *session.State) error {
+			st.LastAssistant = "> 🧠 **From memory (billing)** — PostgreSQL 16."
+			return nil
+		})
+	}
+	next := "And which replica does the billing service read from at night?"
+
+	prompt(t, home, "tool", longPrompt)
+	credit("tool", "")
+	cite("tool") // the call wins over the citation
+	prompt(t, home, "tool", next)
+
+	prompt(t, home, "cited", longPrompt)
+	credit("other", "")   // another session's call, journaled during this turn
+	credit("cited", "a1") // a subagent's call: its own shows, not the injection
+	cite("cited")
+	prompt(t, home, "cited", next)
+
+	prompt(t, home, "silent", longPrompt)
+	prompt(t, home, "silent", next)
+
+	for sid, want := range map[string]any{"tool": "tool", "cited": "citation", "silent": nil} {
+		o := outcomes(t, home, sid)
+		if len(o) != 1 || o[0]["credit_source"] != want {
+			t.Errorf("%s: outcomes %v, want credit_source %v", sid, o, want)
+		}
 	}
 }
 

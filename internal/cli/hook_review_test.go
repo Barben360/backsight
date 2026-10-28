@@ -75,6 +75,7 @@ func TestPromptRecallCapsAndFloors(t *testing.T) {
 	c = prompt(t, home, "s2", longPrompt).Specific.Context
 	block, _, _ := strings.Cut(c, instructions.Reminder)
 	block = strings.TrimPrefix(strings.TrimSpace(block), instructions.RecallHeader)
+	block = strings.TrimSuffix(strings.TrimSpace(block), instructions.CreditAsk)
 	if n := len([]rune(strings.TrimSpace(block))); n > 800 || n < 400 {
 		t.Errorf("recall block %d chars, want ≤ 800 and filled", n)
 	}

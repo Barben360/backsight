@@ -76,6 +76,40 @@ func TestStatsWindowPeriodAndCost(t *testing.T) {
 	}
 }
 
+// The two feedback lines: the end-of-turn checks and credit calls, then
+// the settled shows, with the confident misses as a share of the shows
+// left uncredited.
+func TestStatsCountsFeedback(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	tw := telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"})
+	for _, c := range []telemetry.CreditCheck{{Outcome: "declared", Flags: []string{"credit_without_overlap"}}, {Outcome: "declared"},
+		{Outcome: "declared", Flags: []string{"none_with_overlap"}}, {Outcome: "blocked"}, {Outcome: "blocked"}, {Outcome: "undeclared"}, {Outcome: "check_skipped"}} {
+		tw.Emit(c)
+	}
+	for _, c := range []telemetry.Credit{{Verdict: "used", IDs: 2, OK: true}, {Verdict: "used", IDs: 1, OK: true}, {Verdict: "none", OK: true},
+		{Verdict: "used", IDs: 1}, {Verdict: "invalid"}} {
+		tw.Emit(c)
+	}
+	tw.Emit(telemetry.FeedbackSettle{Shows: 6, Credits: 1, Misses: 2, Unknown: 1, Late: 1})
+	tw.Emit(telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1})
+	_, out, _ := run(t, "stats", "1")
+	for _, want := range []string{
+		"\nCredits      turns with memories shown: declared 3, after a block 2, undeclared 1, skipped 1; used 2, none 1, refused 2\n",
+		"\nLedger       settled 10 shows: 2 credits, 3 confident misses (38% of uncredited), 1 unknown, 1 late; honesty flags: credit_without_overlap 1, none_with_overlap 1\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	// No feedback events: zeros, no share, no flags.
+	empty := devInstall(t, true)
+	pointAt(t, empty, fakeHindsight(t))
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none\n") {
+		t.Errorf("empty window:\n%s", out)
+	}
+}
+
 // Producers to reader: what the hooks, the flush and the tick write is what
 // stats counts (a renamed field on either side fails here).
 func TestStatsReadsWhatTheProducersWrite(t *testing.T) {

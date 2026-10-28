@@ -214,3 +214,53 @@ func TestPercentileOnTwentyValuesLeavesTheInput(t *testing.T) {
 		t.Error("the input was sorted in place")
 	}
 }
+
+// feedbackEvents writes one window of the feedback telemetry: end-of-turn
+// checks, memory_credit calls and two settles.
+func feedbackEvents(tw *telemetry.Writer) {
+	for _, c := range []telemetry.CreditCheck{
+		{Outcome: "declared", Shown: 2, Flags: []string{"credit_without_overlap"}},
+		{Outcome: "declared", Shown: 1},
+		{Outcome: "declared", Shown: 3, Flags: []string{"none_with_overlap"}},
+		{Outcome: "blocked", Shown: 1},
+		{Outcome: "blocked", Shown: 2},
+		{Outcome: "undeclared", Shown: 2},
+		{Outcome: "check_skipped", Shown: 1},
+	} {
+		tw.Emit(c)
+	}
+	for _, c := range []telemetry.Credit{
+		{Verdict: "used", IDs: 2, OK: true}, {Verdict: "used", IDs: 1, OK: true}, {Verdict: "none", OK: true},
+		{Verdict: "used", IDs: 1, OK: false}, {Verdict: "invalid", OK: false},
+	} {
+		tw.Emit(c)
+	}
+	tw.Emit(telemetry.FeedbackSettle{Shows: 6, Credits: 1, Misses: 2, Unknown: 1, Late: 1})
+	tw.Emit(telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1})
+}
+
+// The feedback counts, from events the real writer wrote: checks by
+// outcome, accepted credits by verdict and the refused ones, the settled
+// shows summed, the late credits and the honesty flags.
+func TestComputeCountsFeedback(t *testing.T) {
+	state := t.TempDir()
+	feedbackEvents(telemetry.New(state, telemetry.Common{Session: "s1"}))
+	now := time.Now()
+	ev, err := Load(filepath.Join(state, "telemetry"), now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := Compute(ev, now.Add(-time.Hour), now.Add(time.Hour)).Feedback
+	if f.Checks["declared"] != 3 || f.Checks["blocked"] != 2 || f.Checks["undeclared"] != 1 || f.Checks["check_skipped"] != 1 || len(f.Checks) != 4 {
+		t.Errorf("checks %v", f.Checks)
+	}
+	if f.Verdicts["used"] != 2 || f.Verdicts["none"] != 1 || len(f.Verdicts) != 2 || f.Refused != 2 {
+		t.Errorf("verdicts %v, refused %d", f.Verdicts, f.Refused)
+	}
+	if s := f.Settled; s.Shows != 10 || s.Credits != 2 || s.Misses != 3 || s.Unknown != 1 || f.Late != 1 {
+		t.Errorf("settled %+v, late %d", s, f.Late)
+	}
+	if f.Flags["credit_without_overlap"] != 1 || f.Flags["none_with_overlap"] != 1 || len(f.Flags) != 2 {
+		t.Errorf("flags %v", f.Flags)
+	}
+}

@@ -31,11 +31,11 @@ More lines may follow: ⬆️ a newer release ([update](update.md)), ⚠️ Clau
 
 ## Recognizing a memory
 
-When Claude uses a memory, it cites it on its own line:
+Each memory shown to Claude carries its project and a short id, the first 8 characters of its id. When Claude uses a memory, it reports it with the `memory_credit` tool, which hands back the line it prints:
 
-> 🧠 **From memory (my-project)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
+> 🧠 **From memory (my-project · 0b4c2a52)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
 
-If Claude searched and found nothing, it says so. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
+The part in parentheses names the project and the short ids of the memories used; what follows the dash is Claude's own summary of what it used. When memories were shown but none helped, Claude reports that instead and prints no line. If Claude searched and found nothing, it says so. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
 
 ## Projects and the transverse memory
 
@@ -174,7 +174,7 @@ To import a queue setup left to `jobs tick` in one go rather than three sessions
 ## Seeing what memory does
 
 - `backsight why` shows the last memories the hooks injected, with their scores and the rule that let them through.
-- `backsight stats` shows the last 7 days: recalls, searches, citations, extraction cost (`backsight stats 30` for 30 days).
+- `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, extraction cost (`backsight stats 30` for 30 days).
 - `backsight doctor` checks the whole install.
 
 ## Browsing these docs

@@ -107,6 +107,26 @@ func (h *hookEnv) beginTurn(n int, machine bool) {
 	h.feedbackError(h.journal.Append(feedback.Event{Kind: "turn", Turn: id, N: n, Machine: machine}))
 }
 
+// creditedSinceTurn: the main agent of this session made a memory_credit
+// call since its current turn began, read before the next turn moves the
+// pointer. False when the journal is off or cannot be read.
+func (h *hookEnv) creditedSinceTurn() bool {
+	if !h.feedbackOn() {
+		return false
+	}
+	t, ok := feedback.CurrentTurn(h.dirs.FeedbackDir(), h.in.SessionID)
+	if !ok {
+		return false
+	}
+	events, _, err := feedback.ReadSince(t.File, t.Offset)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(events, func(e feedback.Event) bool {
+		return e.Kind == "credit" && e.Session == h.in.SessionID && e.Agent == ""
+	})
+}
+
 // journalShows records items shown to the agent on path (prompt, gate,
 // briefing, search, read).
 func (h *hookEnv) journalShows(path string, items []feedback.Item) {
