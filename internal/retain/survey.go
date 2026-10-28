@@ -43,7 +43,7 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	c.Project = f.Resolver.Project(recs[0].CWD)
 	pending := recs
 	replayed := false
-	if cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), sid); ok && !cur.Backfill {
+	if cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), sid); ok && !cur.Backfill && !f.NoCursors {
 		replayed = cur.NotesReplayed
 		pending = nil
 		for _, r := range recs {

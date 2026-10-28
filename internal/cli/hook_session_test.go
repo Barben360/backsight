@@ -322,6 +322,24 @@ func TestPagesAreCreatedOnlyForProjectsWithMemories(t *testing.T) {
 	}
 }
 
+// While another server answers at the joined address, SessionStart reads
+// its briefing there but creates no page on it (a write, and its LLM's
+// work); once the joined one answers again, the page is created.
+func TestNoBriefingPageIsCreatedOnAnotherServer(t *testing.T) {
+	home := hookHome(t)
+	recordMismatch(t, home)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if len(mentalCalls) != 0 || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") {
+		t.Errorf("another server: %q %q", mentalCalls, h.Specific.Context)
+	}
+	setMismatch(t, home, "")
+	fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if len(mentalCalls) != 1 {
+		t.Errorf("the joined server: %q", mentalCalls)
+	}
+}
+
 // A page written as one long line is clipped, not reduced to "…".
 func TestAOneLinePageIsClipped(t *testing.T) {
 	home := hookHome(t)

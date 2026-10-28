@@ -29,7 +29,7 @@ func (e *env) emit(command string, data any, text func() string) error {
 	if e.json {
 		return output.WriteJSON(e.stdout, command, data, nil)
 	}
-	_, err := io.WriteString(e.stdout, text())
+	_, err := io.WriteString(e.stdout, maskTokenText(text()))
 	return err
 }
 
@@ -49,14 +49,17 @@ func machine() (paths.Dirs, string, error) {
 
 // report prints a result that may carry a failure: the data is always shown
 // (inside the error envelope with --json), and the exit code still follows
-// cmdErr without a second message.
+// cmdErr without a second message. A connection token in the text or the
+// error is masked: an error can quote a file given by mistake (the token
+// file as --answers-file), and the token holds the API key.
 func (e *env) report(command string, data any, text func() string, cmdErr error) error {
+	cmdErr = maskReported(cmdErr)
 	if e.json {
 		if err := output.WriteJSON(e.stdout, command, data, cmdErr); err != nil {
 			return err
 		}
 	} else {
-		if _, err := io.WriteString(e.stdout, text()); err != nil {
+		if _, err := io.WriteString(e.stdout, maskTokenText(text())); err != nil {
 			return err
 		}
 		var shown shownError
@@ -195,12 +198,34 @@ func maskTokens(err error) error {
 	if !strings.Contains(err.Error(), token.Prefix) {
 		return err
 	}
-	mask := func(s string) string { return tokenInText.ReplaceAllString(s, token.Prefix+"[redacted]") }
 	var oe *output.Error
 	if errors.As(err, &oe) {
 		out := *oe
-		out.Message = mask(oe.Message)
+		out.Message = maskTokenText(oe.Message)
 		return &out
 	}
-	return &output.Error{Code: output.CodeOf(err), Message: mask(err.Error())}
+	return &output.Error{Code: output.CodeOf(err), Message: maskTokenText(err.Error())}
+}
+
+// maskTokenText hides any connection token in s.
+func maskTokenText(s string) string {
+	if !strings.Contains(s, token.Prefix) {
+		return s
+	}
+	return tokenInText.ReplaceAllString(s, token.Prefix+"[redacted]")
+}
+
+// maskReported is maskTokens for report's error (nil passes), keeping a
+// failure the text already explains as one.
+func maskReported(err error) error {
+	if err == nil || !strings.Contains(err.Error(), token.Prefix) {
+		return err
+	}
+	var shown shownError
+	if errors.As(err, &shown) {
+		out := *shown.err
+		out.Message = maskTokenText(out.Message)
+		return shownError{&out}
+	}
+	return maskTokens(err)
 }

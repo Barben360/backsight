@@ -241,8 +241,14 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			return nil, nil, err
 		}
 	}
-	if provider == "claude-code" && !remote {
-		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
+	if provider == "claude-code" {
+		// A client's sends and backfill are extracted on its host's
+		// subscription: the same terms.
+		prompt := "Extracting with your Claude subscription: "
+		if remote {
+			prompt = "The server's host extracts with its Claude subscription, this PC's sessions included: "
+		}
+		if err := add(Question{ID: "ack_subscription", Prompt: prompt + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
 			Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}); err != nil {
 			return nil, nil, err
 		}

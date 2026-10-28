@@ -212,6 +212,9 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return rec, errors.New("maintenance in progress")
 	}
+	if err := f.startedOver(); err != nil {
+		return rec, err
+	}
 	// The purge tombstones first, every run: another client's, or the
 	// only copy after a reinstall, before anything is sent or dropped.
 	if err := f.syncTombstones(ctx); err != nil {

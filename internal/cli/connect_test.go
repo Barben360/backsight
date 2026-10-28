@@ -414,6 +414,211 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 	}
 }
 
+// connect's plan counts what the new server will be sent as the flusher
+// will once the cursors moved aside: a session the old server holds whole
+// (its cursor at the end of the transcript, its saves replayed) is sent
+// again, with its cost, whether the old server was another one or this
+// PC's own.
+func TestConnectPlanCountsWhatTheOldServerHolds(t *testing.T) {
+	fullySent := func(t *testing.T, home string) {
+		t.Helper()
+		d := pathsOf(home)
+		fi, err := os.Stat(filepath.Join(home, ".claude", "projects", "-home-u-billing", "s1.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = os.MkdirAll(d.CursorsDir(), 0o700)
+		cur := `{"offset":` + strconv.FormatInt(fi.Size(), 10) + `,"bank":"backsight","notes_replayed":true,"segments":{},"last_uuids":{"billing":"s1-a1"}}`
+		if err := os.WriteFile(filepath.Join(d.CursorsDir(), "s1.json"), []byte(cur), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("other-server", func(t *testing.T) {
+		home, _ := setupMachine(t)
+		d := pathsOf(home)
+		oldURL := "http://127.0.0.1:" + strconv.Itoa(fakeHindsight(t))
+		cl, _ := hindsight.New(oldURL, "", 5*time.Second)
+		oldID, err := retain.EnsureServerID(context.Background(), cl, config.DefaultBank)
+		if err != nil {
+			t.Fatal(err)
+		}
+		asClientOf(t, home, oldURL)
+		_ = state.Update(d, "test", func(s *state.State) error {
+			s.RemoteServer = &state.RemoteServer{ID: oldID, URL: oldURL}
+			return nil
+		})
+		oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), true)
+		fullySent(t, home)
+		tok := joinableHost(t)
+		code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--plan", "--json")
+		if env := parseConnect(t, out); code != output.OK || env.Data.Situation != joinOther || !hasConnectStep(env.Data.Steps, "setup", "planned", "the offer to send at most 1 past session(s) (≈ ") {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+	})
+	t.Run("own-server", func(t *testing.T) {
+		home, _ := setupMachine(t)
+		ownServerPC(t, home)
+		oldSession(t, home, "s1", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), true)
+		fullySent(t, home)
+		tok := joinableHost(t)
+		noKeyRequired()
+		withBackupDocker(t)
+		code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--plan", "--json")
+		env := parseConnect(t, out)
+		if code != output.OK || env.Data.Situation != joinOwn || env.Data.OwnServer == nil || env.Data.OwnServer.Sessions != 1 ||
+			!hasConnectStep(env.Data.Steps, "setup", "planned", "the offer to send at most 1 past session(s) (≈ ") {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+	})
+}
+
+// An update that did not finish would, on its way back, write state.json
+// and config.toml back as they were before it, undoing half a switch:
+// connect and connect --undo refuse, changing nothing.
+func TestConnectRefusesWhileAnUpdateDidNotFinish(t *testing.T) {
+	mark := func(t *testing.T, home string) {
+		t.Helper()
+		d := pathsOf(home)
+		if err := os.WriteFile(d.UpdateMarker(), []byte(`{"step":"swap"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("connect", func(t *testing.T) {
+		home, f := setupMachine(t)
+		tok := joinableHost(t)
+		switchingClient(t, home)
+		mark(t, home)
+		before := treeOf(t, home)
+		code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+		if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "an update did not finish") {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+		sameTree(t, before, treeOf(t, home))
+		if len(f.calls) != 0 {
+			t.Errorf("ran %v", f.calls)
+		}
+	})
+	t.Run("undo", func(t *testing.T) {
+		home, f := setupMachine(t)
+		connectedFromOwnServer(t, home)
+		mark(t, home)
+		f.calls = nil
+		before := treeOf(t, home)
+		if code, out, errOut := run(t, "connect", "--undo", "--json"); code != output.Blocked || !strings.Contains(out+errOut, "an update did not finish") {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+		sameTree(t, before, treeOf(t, home))
+		if len(f.calls) != 0 {
+			t.Errorf("ran %v", f.calls)
+		}
+	})
+}
+
+// A send that took its session's lock before connect (or connect --undo)
+// took the maintenance lock would save the old server's cursor among the
+// new server's: the switch waits for it, and changes nothing when it does
+// not end.
+func TestConnectWaitsForARunningSend(t *testing.T) {
+	oldWait, oldPoll := connectSendsWait, connectSendsPoll
+	connectSendsWait, connectSendsPoll = 30*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { connectSendsWait, connectSendsPoll = oldWait, oldPoll })
+	hold := func(t *testing.T, home string) func() {
+		t.Helper()
+		d := pathsOf(home)
+		_ = os.MkdirAll(d.LocksDir(), 0o700)
+		l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "session-s1.lock"), "retain flush")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func() { _ = l.Release() }
+	}
+	t.Run("connect", func(t *testing.T) {
+		home, _ := setupMachine(t)
+		tok := joinableHost(t)
+		switchingClient(t, home)
+		release := hold(t, home)
+		before := treeOf(t, home)
+		args := []string{"connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"}
+		code, out, errOut := run(t, args...)
+		if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "a send of session s1 is still running") ||
+			!strings.Contains(env.Error.Message, "nothing was changed") {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+		sameTree(t, before, treeOf(t, home))
+		release()
+		if code, out, errOut := run(t, args...); code != output.OK {
+			t.Errorf("after the send: exit %d\n%s%s", code, out, errOut)
+		}
+	})
+	t.Run("undo", func(t *testing.T) {
+		home, _ := setupMachine(t)
+		connectedFromOwnServer(t, home)
+		release := hold(t, home)
+		before := treeOf(t, home)
+		code, out, errOut := run(t, "connect", "--undo", "--json")
+		if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "a send of session s1 is still running") {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+		sameTree(t, before, treeOf(t, home))
+		release()
+		if code, out, errOut := run(t, "connect", "--undo", "--json"); code != output.OK {
+			t.Errorf("after the send: exit %d\n%s%s", code, out, errOut)
+		}
+	})
+}
+
+// A flusher built before connect (a tick, a backfill, the Stop hook's
+// flush) that goes on after it holds the old server's client and sent
+// index: it sends nothing and saves no cursor among the new server's, and
+// the next run sends the session to the new server.
+func TestConnectStopsAFlusherBuiltBefore(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	oldURL := "http://127.0.0.1:" + strconv.Itoa(fakeHindsight(t))
+	cl, _ := hindsight.New(oldURL, "", 5*time.Second)
+	oldID, err := retain.EnsureServerID(context.Background(), cl, config.DefaultBank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asClientOf(t, home, oldURL)
+	since := time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)
+	_ = state.Update(d, "test", func(s *state.State) error {
+		s.RetainSince, s.RemoteServer = &since, &state.RemoteServer{ID: oldID, URL: oldURL}
+		return nil
+	})
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := config.LoadSecrets(d.SecretsFile())
+	stale, err := newFlusher(d, home, cfg, sec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tok := joinableHost(t)
+	if code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("connect: exit %d\n%s%s", code, out, errOut)
+	}
+	noKeyRequired() // the fakes share one key switch: the old server takes its old key still
+	before := retained.Load()
+	path := filepath.Join(home, ".claude", "projects", "-home-u-billing", "s1.jsonl")
+	if r := stale.FlushFile(context.Background(), path, retain.Options{IgnoreSince: true}); r.Status != retain.Retry || !r.Stop || !strings.Contains(r.Detail, "started over") {
+		t.Errorf("the stale flusher: %+v", r)
+	}
+	if _, err := stale.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "started over") {
+		t.Errorf("the stale flusher's reconcile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.CursorsDir(), "s1.json")); err == nil || retained.Load() != before {
+		t.Errorf("the stale flusher wrote a cursor (%v) or sent %d", err, retained.Load()-before)
+	}
+	if code, out, errOut := run(t, "retain", "flush", "--session", "s1"); code != output.OK || !strings.Contains(out, "1 sent") || retained.Load() == before {
+		t.Errorf("to the new server: exit %d, %d retained\n%s%s", code, retained.Load()-before, out, errOut)
+	}
+}
+
 // A client that found another server at its address joins it with its
 // token: the binding moves to the new id and the mismatch is cleared.
 func TestConnectAgainClearsMismatch(t *testing.T) {
@@ -558,12 +763,17 @@ func TestATokenInAFlagValueIsMasked(t *testing.T) {
 	isolate(t)
 	tok := joinableHost(t)
 	enc := token.Encode(tok)
+	file := tokenFile(t, tok) // given as the answers file too: its bad line is quoted
 	for _, args := range [][]string{
 		{"connect", "--plan=" + enc},
 		{"connect", "--plan=" + enc, "--json"},
 		{"connect", "--non-interactive=" + enc, "--json"},
 		{"setup", "--plan=" + enc},
 		{"setup", enc, "--json"},
+		{"connect", "--token-file", file, "--answers-file", file, "--plan"},
+		{"connect", "--token-file", file, "--answers-file", file, "--plan", "--json"},
+		{"setup", "--answers-file", file, "--plan"},
+		{"setup", "--answers-file", file, "--plan", "--json"},
 	} {
 		code, out, errOut := run(t, args...)
 		if code != output.Usage || leaked(out+errOut, tok) || !strings.Contains(out+errOut, token.Prefix+"[redacted]") {

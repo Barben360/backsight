@@ -447,9 +447,6 @@ func hostBankConfig(drift []string, err error) Check {
 	return c
 }
 
-// checkEpoch reports a client still on an old restore epoch (decision
-// 0044): its cursors may hold as sent what the restore lost, until a flush
-// reconciles them.
 // checkServerID: a client bound to a server (connect) checks that the one
 // answering at its address is it (decision 0073); ok false: not bound.
 func checkServerID(ctx context.Context, cl *hindsight.Client, t *target.Target, d paths.Dirs, srv Check) (Check, bool) {
@@ -479,6 +476,9 @@ func checkServerID(ctx context.Context, cl *hindsight.Client, t *target.Target, 
 	return c, true
 }
 
+// checkEpoch reports a client still on an old restore epoch (decision
+// 0044): its cursors may hold as sent what the restore lost, until a flush
+// reconciles them.
 func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
 	c := Check{ID: "restore-epoch"}
 	ep, err := retain.ReadEpoch(ctx, cl, bank)
@@ -535,6 +535,11 @@ func checkBackup(env Env, now time.Time) Check {
 	switch {
 	case err != nil:
 		c.Status, c.Summary = Info, "skipped: no backsight config"
+		return c
+	case cfg.Server.Mode == "remote":
+		// A client's memory lives on the server: its host backs it up
+		// (decision 0073), and backup create refuses here.
+		c.Status, c.Summary = Info, "backups are made on the server's host (backsight backup create there)"
 		return c
 	case !cfg.Backup.Enabled:
 		c.Status, c.Summary = Info, "backups are off (backup.enabled = false)"

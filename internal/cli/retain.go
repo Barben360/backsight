@@ -51,19 +51,20 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	}
 	since := now().UTC().Truncate(time.Second)
 	var joined *state.RemoteServer
+	generation := 0
 	if setSince {
 		err = state.Update(d, "jobs tick", func(s *state.State) error {
 			if s.RetainSince == nil {
 				s.RetainSince = &since
 			}
-			since, joined = *s.RetainSince, s.RemoteServer
+			since, joined, generation = *s.RetainSince, s.RemoteServer, s.SendsGeneration
 			return nil
 		})
 	} else if st, lerr := state.Load(d.StateFile()); lerr == nil {
 		if st.RetainSince != nil {
 			since = *st.RetainSince
 		}
-		joined = st.RemoteServer
+		joined, generation = st.RemoteServer, st.SendsGeneration
 	} else {
 		err = lerr
 	}
@@ -78,7 +79,7 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	res := project.New(home, cfg.Projects.Transverse)
 	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: res,
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx,
-		ServerID: serverID,
+		ServerID: serverID, SendsGeneration: generation,
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
 		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
 		Attribution: attributor(d, cfg, res)}, nil

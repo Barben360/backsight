@@ -291,6 +291,8 @@ type connectMeta struct {
 	Backfill     *state.Backfill     `json:"backfill,omitempty"`
 	RestoreEpoch *state.RestoreEpoch `json:"restore_epoch,omitempty"`
 	RemoteServer *state.RemoteServer `json:"remote_server,omitempty"`
+	// SendsGeneration: state.json's before the reset bumped it.
+	SendsGeneration int `json:"sends_generation,omitempty"`
 }
 
 // resetRetain starts this PC's sends over for another server: the session
@@ -312,7 +314,7 @@ func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Ti
 	if err != nil {
 		return err
 	}
-	meta := connectMeta{MovedAt: at.UTC(), RetainSince: st.RetainSince, Backfill: st.Backfill, RestoreEpoch: st.RestoreEpoch, RemoteServer: st.RemoteServer}
+	meta := connectMeta{MovedAt: at.UTC(), RetainSince: st.RetainSince, Backfill: st.Backfill, RestoreEpoch: st.RestoreEpoch, RemoteServer: st.RemoteServer, SendsGeneration: st.SendsGeneration}
 	if home, herr := os.UserHomeDir(); herr == nil {
 		if cfg, cerr := config.Load(d.ConfigFile(), d, home); cerr == nil {
 			meta.URL, meta.Mode = cfg.Server.URL, cfg.Server.Mode
@@ -330,9 +332,11 @@ func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Ti
 			return err
 		}
 	}
+	// A new generation: a flusher built before sends nothing after.
 	since := at.UTC().Truncate(time.Second)
 	return state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
 		s.RetainSince, s.Backfill, s.RestoreEpoch = &since, nil, &epoch
+		s.SendsGeneration++
 		return nil
 	})
 }
@@ -346,8 +350,10 @@ func retainFiles(d paths.Dirs) []string {
 // undoRetainReset puts back what resetRetain moved into keep and the state
 // fields meta.json recorded, then removes keep unless told to keep it
 // (it holds a file still to put back). No meta.json: nothing was moved
-// yet.
-func undoRetainReset(d paths.Dirs, keep string, remove bool) error {
+// yet. rollback: the reset is undone within its own run, so the sends
+// generation goes back too (a flusher built before it targets the old
+// server, which this PC uses again); otherwise it only grows.
+func undoRetainReset(d paths.Dirs, keep string, remove, rollback bool) error {
 	if err := connectFault("undo"); err != nil {
 		return err
 	}
@@ -374,6 +380,9 @@ func undoRetainReset(d paths.Dirs, keep string, remove bool) error {
 	}
 	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
 		s.RetainSince, s.Backfill, s.RestoreEpoch = meta.RetainSince, meta.Backfill, meta.RestoreEpoch
+		if rollback {
+			s.SendsGeneration = meta.SendsGeneration
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -435,6 +444,9 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 	if err != nil {
 		return res, err
 	}
+	if err := updateIncomplete(d, "connect --undo"); err != nil {
+		return res, err
+	}
 	pre, meta, err := ownPreImage(d)
 	if err != nil {
 		return res, err
@@ -466,7 +478,7 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 	if plan {
 		return res, nil
 	}
-	if err := applyUndo(d, pre, now().UTC()); err != nil {
+	if err := applyUndo(ctx, d, pre, now().UTC()); err != nil {
 		return res, err
 	}
 	for i := range res.Steps[:3] {
@@ -488,12 +500,15 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 // applyUndo is connect --undo's switch, under the maintenance lock. A
 // failure before config.toml and secrets.toml are both back puts the
 // shared server's back (exit 30).
-func applyUndo(d paths.Dirs, pre string, at time.Time) error {
+func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) error {
 	unlock, _, err := serverMaintenanceLock(d, "connect --undo")
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if err := waitSends(ctx, d, "connect --undo"); err != nil {
+		return err
+	}
 	var keptCfg, keptSec, curCfg, curSec []byte
 	for p, dst := range map[string]*[]byte{filepath.Join(pre, "config.toml"): &keptCfg, filepath.Join(pre, "secrets.toml"): &keptSec, d.ConfigFile(): &curCfg, d.SecretsFile(): &curSec} {
 		if *dst, err = os.ReadFile(p); err != nil {
@@ -509,7 +524,7 @@ func applyUndo(d paths.Dirs, pre string, at time.Time) error {
 		if err := fsutil.WriteAtomic(d.SecretsFile(), curSec, 0o600); err != nil {
 			left = append(left, d.SecretsFile()+" ("+err.Error()+")")
 		}
-		if err := undoRetainReset(d, shared, true); err != nil {
+		if err := undoRetainReset(d, shared, true, true); err != nil {
 			left = append(left, "the sends kept in "+shared+" ("+err.Error()+")")
 		}
 		if len(left) > 0 {
@@ -530,7 +545,7 @@ func applyUndo(d paths.Dirs, pre string, at time.Time) error {
 	if err := fsutil.WriteAtomic(d.SecretsFile(), keptSec, 0o600); err != nil {
 		return rollback(err)
 	}
-	if err := undoRetainReset(d, pre, true); err != nil {
+	if err := undoRetainReset(d, pre, true, false); err != nil {
 		return &output.Error{Code: output.Blocked, Message: "config.toml and secrets.toml are back as they were before connect, but this PC's sends to its own server are not (" + err.Error() +
 			"): they are in " + pre + ", whose meta.json records the state they went with"}
 	}
@@ -551,6 +566,41 @@ func keepDir(d paths.Dirs, at time.Time, suffix string) string {
 		}
 		keep = fmt.Sprintf("%s-%d", base, i)
 	}
+}
+
+// connectSendsWait: how long connect, under the maintenance lock, waits
+// for the sends that began before it; connectSendsPoll: how often it
+// looks.
+var connectSendsWait, connectSendsPoll = 2 * time.Minute, time.Second
+
+// waitSends waits for the sends that took their session's lock before
+// command took the maintenance lock: each would save its cursor once this
+// PC's sends started over, and the new server would skip that session.
+// Nothing is changed yet when it refuses (exit 20).
+func waitSends(ctx context.Context, d paths.Dirs, command string) error {
+	deadline := time.Now().Add(connectSendsWait)
+	for running := retain.SendsRunning(d); len(running) > 0; running = retain.SendsRunning(d) {
+		if time.Now().After(deadline) {
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("a send of session %s is still running after %s: nothing was changed. "+
+				"Run backsight %s again later", running[0], connectSendsWait, command)}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(connectSendsPoll):
+		}
+	}
+	return nil
+}
+
+// updateIncomplete refuses connect while an update did not finish: its
+// way back writes state.json and config.toml back as they were before it,
+// which would undo the switch but for the key and the moved sends.
+func updateIncomplete(d paths.Dirs, command string) error {
+	if state.UpdateIncomplete(d) {
+		return &output.Error{Code: output.Blocked, Message: "an update did not finish (" + d.UpdateMarker() + "): run backsight doctor for the way back, then backsight " + command + " again; nothing was changed"}
+	}
+	return nil
 }
 
 // connectFault fails a step of applyConnect in tests; nil in the binary.
@@ -585,6 +635,9 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	}
 	d, home, err := machine()
 	if err != nil {
+		return res, err
+	}
+	if err := updateIncomplete(d, "connect"); err != nil {
 		return res, err
 	}
 	situation, cfg, err := situationOf(d, home, tok)
@@ -771,7 +824,9 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 	detail := "then backsight setup: client install, retention, scheduler, verify"
 	sessions := 0
 	if idx != nil {
-		n, cost := backfillSurvey(d, home, projectsDir(home, f.configDir), cfg, since, idx)
+		// A new start counts as the flusher will once the cursors moved:
+		// what the old server holds is sent again.
+		n, cost := backfillSurvey(d, home, projectsDir(home, f.configDir), cfg, since, idx, restart)
 		if n > 0 {
 			bound := ""
 			if restart {
@@ -892,6 +947,11 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		return err
 	}
 	defer unlock()
+	if situation == joinOther || situation == joinOwn { // the sends start over
+		if err := waitSends(ctx, d, "connect"); err != nil {
+			return err
+		}
+	}
 	// Read again under the lock: the plan was made from what was there.
 	want, raw := fsutil.Absent, []byte(nil)
 	if situation != joinNew {
@@ -937,7 +997,7 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 			}
 		}
 		if keep != "" {
-			if err := undoRetainReset(d, keep, !keepCopy); err != nil {
+			if err := undoRetainReset(d, keep, !keepCopy, true); err != nil {
 				left = append(left, "this PC's session cursors, sent-index and split sessions may still be in "+keep+
 					", and state.json's retain_since, backfill and restore_epoch changed; "+filepath.Join(keep, "meta.json")+" records them as they were ("+err.Error()+")")
 			}

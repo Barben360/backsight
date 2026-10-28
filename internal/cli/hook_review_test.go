@@ -169,6 +169,28 @@ func TestRecallRecordsReach(t *testing.T) {
 	}
 }
 
+// Another server answering at the joined address is not this PC's server
+// answering: a recall it answers leaves the last answer as it was, as the
+// tick does; once the joined one answers again, it is recorded.
+func TestRecallRecordsNoAnswerFromAnotherServer(t *testing.T) {
+	home := hookHome(t)
+	recordMismatch(t, home)
+	last := time.Now().Add(-4 * time.Hour).UTC()
+	state.RecordReach(pathsOf(home), true, last)
+	recallAnswer = hits(0.9)
+	if c := prompt(t, home, "s1", longPrompt).Specific.Context; !strings.Contains(c, "memory m1") {
+		t.Fatalf("no recall, the check below proves nothing:\n%s", c)
+	}
+	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
+		t.Errorf("another server: %+v", r)
+	}
+	setMismatch(t, home, "")
+	prompt(t, home, "s2", longPrompt)
+	if r := state.LoadReach(pathsOf(home)); !r.LastOK.After(last) {
+		t.Errorf("the joined server: %+v", r)
+	}
+}
+
 func TestMaintenanceSkipsRecallAndSaysSoOnce(t *testing.T) {
 	home := hookHome(t)
 	d := pathsOf(home)

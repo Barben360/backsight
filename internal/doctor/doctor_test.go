@@ -704,6 +704,24 @@ func TestCheckBackupAge(t *testing.T) {
 	}
 }
 
+// A client's memory is on the server's host, which backs it up: no
+// archive here, or old ones from before connect, is information, never a
+// warning whose fix (backup create) a client refuses.
+func TestCheckBackupOnAClient(t *testing.T) {
+	f := newFixture(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	dir := filepath.Join(f.home, "bk")
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \"http://192.168.1.20:8888\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	want := "backups are made on the server's host (backsight backup create there)"
+	if c := checkBackup(f.env, now); c.Status != Info || c.Summary != want || c.Fix != "" {
+		t.Errorf("none: %+v", c)
+	}
+	put(t, filepath.Join(dir, backup.Name(now.Add(-30*24*time.Hour))), "x", 0o600)
+	if c := checkBackup(f.env, now); c.Status != Info || c.Summary != want || c.Fix != "" {
+		t.Errorf("an old archive of its own server: %+v", c)
+	}
+}
+
 // archive writes a backup and its sidecar, encrypted for recipients.
 func archive(t *testing.T, dir string, at time.Time, recipients ...string) {
 	t.Helper()

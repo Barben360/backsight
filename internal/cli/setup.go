@@ -586,15 +586,17 @@ func (s *setupEnv) backfillEstimate(model string) (int, string) {
 	if model != cfg.LLM.Model { // the configured prices are another model's
 		cfg.LLM.Model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput = model, 0, 0, 0
 	}
-	return backfillSurvey(s.dirs, s.home, s.loc.Projects, cfg, since, idx)
+	return backfillSurvey(s.dirs, s.home, s.loc.Projects, cfg, since, idx, false)
 }
 
 // backfillSurvey counts the sessions of projectsDir a backfill would send
 // with cfg (live retain from since, idx what was sent) and prices them for
 // cfg's model; it reads the transcripts only, never the server. 0 sessions
-// when the survey fails.
-func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, since time.Time, idx *retain.SentIndex) (sessions int, cost string) {
+// when the survey fails. fresh: no cursor counts, for a server this PC
+// has sent nothing to yet.
+func backfillSurvey(d paths.Dirs, home, projectsDir string, cfg config.Config, since time.Time, idx *retain.SentIndex, fresh bool) (sessions int, cost string) {
 	fl := estimateFlusher(d, home, cfg, since, idx)
+	fl.NoCursors = fresh
 	model := cfg.LLM.Model
 	prices := retain.PricesFor(model, cfg.LLM.PriceInput, cfg.LLM.PriceCached, cfg.LLM.PriceOutput, cfg.LLM.Currency)
 	files, _ := filepath.Glob(filepath.Join(projectsDir, "*", "*.jsonl"))

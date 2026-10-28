@@ -172,6 +172,36 @@ func TestVerifyFailsWhenRecallFindsNothing(t *testing.T) {
 	}
 }
 
+// While another server answers at the joined address, the round trip
+// writes nothing to it, not even a scratch bank, and fails saying why;
+// once the joined one answers again, it runs.
+func TestVerifyWritesNothingToAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	asShim(t)
+	fastVerify(t)
+	documentUnits[verifyDoc] = 2
+	recallAnswer = `[{"id":"m1","text":"The user chose a verification codeword.","type":"world","scores":{"reranker":0.9}}]`
+	recordMismatch(t, home)
+	code, out, _ := run(t, "verify", "--json")
+	if c := parseVerify(t, out)["round_trip"]; code != output.Blocked || c.Status != "fail" || !strings.Contains(c.Summary, "a different server answers at this address (server b, joined a)") {
+		t.Errorf("exit %d %+v", code, c)
+	}
+	for _, c := range bankCalls {
+		if f := strings.Fields(c); f[0] != "GET" {
+			t.Errorf("written to another server: %s", c)
+		}
+	}
+	if retained.Load() != 0 {
+		t.Errorf("%d retained on another server", retained.Load())
+	}
+	setMismatch(t, home, "")
+	code, out, _ = run(t, "verify", "--json")
+	if c := parseVerify(t, out)["round_trip"]; code != output.OK || c.Status != "ok" || retained.Load() != 1 {
+		t.Errorf("the joined server: exit %d %+v, %d retained", code, c, retained.Load())
+	}
+}
+
 func TestVerifyWithoutRoundTripCallsNoLLM(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))

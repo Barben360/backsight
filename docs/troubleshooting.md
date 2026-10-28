@@ -111,7 +111,7 @@ To stop depending on the address, `backsight server expose --loopback` takes the
 
 doctor's `server-id` check in error, and the session banner "⚠️ a different memory server answers at the joined address": this PC joined a server, and the one answering at its address now has another id (or none). Its host was reinstalled without a restore, or the address now leads to another machine. Each server has its own id, kept in its data, so a host replaced by a fresh install and a restore of its backup keeps its id and its clients.
 
-While it lasts, this PC sends nothing: sessions stay in Claude Code's transcripts and notes in this PC's queue, so nothing is lost. To go on with the server now at that address, make a token on its host (`backsight server token --out <file>`) and join it again with `backsight connect --token-file <file>`. If the old server comes back at the address, sending resumes on its own at the next `backsight jobs tick`.
+While it lasts, this PC sends nothing: sessions stay in Claude Code's transcripts and notes in this PC's queue, so nothing is lost. Nor does it write anything else there: `forget` (with `--restore`, `--purge` or `--project`) refuses, `verify`'s round trip fails saying why, and no briefing page is created at session start; recall and the briefing still read what that server holds. To go on with the server now at that address, make a token on its host (`backsight server token --out <file>`) and join it again with `backsight connect --token-file <file>`. If the old server comes back at the address, sending resumes on its own at the next `backsight jobs tick`.
 
 ## connect refuses the token
 
@@ -122,6 +122,8 @@ While it lasts, this PC sends nothing: sessions stay in Claude Code's transcript
 - **"the server at <url> is not the one this token was made for: get a fresh token there"**: another server answers at the token's address. Its host was reinstalled without a restore (a new server has a new id), or the address now leads to another machine. Make a token on the machine that runs the server now (`backsight server token --out <file>`).
 - **"is a public address"**: the token names a public IP address, where the API key would cross the internet. On the server's host, open it on a LAN or tailnet address instead (`backsight server expose --private <ip>`), which hands out a new token.
 - **"does not answer"**: see the next section.
+- **"an update did not finish"**: an update stopped half way, and its way back would write `state.json` and `config.toml` back as they were before it, undoing part of the switch. Run `backsight doctor`, which says how to finish or roll back the update, then run `backsight connect` again (the same for `connect --undo`).
+- **"a send of session <id> is still running"**: connect, and `connect --undo`, start this PC's sends over for the other server, and wait up to 2 minutes for the sends already running to end first (one would otherwise record its session as sent to the new server). Run the same command again a little later.
 
 ## connect stopped because the backup did not verify
 
@@ -232,6 +234,7 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `bank-config`: an older template, or a change made on the server | backsight has no record of the template it sent. `backsight bank apply` sends this version's, over any edit to its keys. |
 | `bank-config` (info): the server's host applies the bank's settings | This PC is a client of a shared server: the bank's settings are the host's backsight's, and this PC never sends its own. Keys that differ only mean the host runs another backsight version. To give the bank a newer template, update backsight on the host, or run `backsight bank apply` there. |
 | `backup`: no backup, or the last one is old | `backsight backup create`; check the daily job (`jobs` check). Archives made for another backup key (a previous install's, its identity deleted) do not count: this machine cannot decrypt them; `backsight backup identity import` adds that key if you saved it. |
+| `backup` (info): backups are made on the server's host | This PC is a client of a shared server: its memory lives on the server, and the server's host backs it up (`backsight backup create` there; this PC refuses it). Archives this PC made before it joined, of its own server, stay where they are. |
 | `binary`: not self-verified, or does not match its release | Reinstall the release with `install.sh`, then `backsight client install`. |
 | `config`: unknown key or invalid value | Correct the key doctor names in `config.toml`. Unknown keys are refused, not ignored. |
 | `config`: secrets file readable by others | `chmod 600` on the file doctor names. |

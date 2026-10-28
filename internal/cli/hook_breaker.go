@@ -21,7 +21,11 @@ func (h *hookEnv) breakerOpen() bool { return now().Before(state.LoadBreaker(h.d
 // also records whether the server answered (state.Reach), at most once a
 // minute while it does.
 func (h *hookEnv) breakerRecord(failed bool) {
-	state.RecordReach(h.dirs, !failed, now())
+	// Another server answering at the joined address is not this PC's
+	// server answering: only a failure is recorded then, as jobs tick does.
+	if failed || otherServer(h.dirs, h.cfg) == nil {
+		state.RecordReach(h.dirs, !failed, now())
+	}
 	b := state.LoadBreaker(h.dirs)
 	switch {
 	case !failed && b.Failures == 0 && b.OpenUntil.IsZero():

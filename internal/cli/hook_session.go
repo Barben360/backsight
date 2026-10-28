@@ -201,8 +201,9 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 	}
 	text, items, source, err = h.recentBriefing(ctx)
 	// A page is created only for a project with memories: an empty or new
-	// one would be summarised from nothing, then pruned, in a loop.
-	if missing && err == nil && source != "empty" {
+	// one would be summarised from nothing, then pruned, in a loop. Nor on
+	// another server than the joined one: nothing is written to it.
+	if missing && err == nil && source != "empty" && otherServer(h.dirs, h.cfg) == nil {
 		pctx, pcancel := context.WithTimeout(ctx, briefingModelTimeout)
 		if cerr := h.client.CreateMentalModel(pctx, h.cfg.Server.Bank, briefingModelID(h.project), "backsight briefing: "+h.project, instructions.BriefingQuery,
 			[]string{"project:" + h.project}, briefingModelTokens); cerr != nil {
