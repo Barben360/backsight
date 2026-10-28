@@ -62,9 +62,10 @@ var sshOptions = []string{"-T",
 	"-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
 	"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no"}
 
-// sshTarget is [user@]host: letters, digits and . _ - in both, and : % [ ]
-// in the host for an IPv6 address.
-var sshTarget = regexp.MustCompile(`^[A-Za-z0-9._-]+(@[A-Za-z0-9._:%\[\]-]+)?$`)
+// sshTarget is [user@]host: letters, digits and . _ - in both, and : % in
+// the host for an IPv6 address, unbracketed (ssh strips brackets only in
+// ssh:// URIs).
+var sshTarget = regexp.MustCompile(`^([A-Za-z0-9._-]+@)?[A-Za-z0-9._:%-]+$`)
 
 // checkTarget refuses a target ssh could read as an option or a shell
 // could expand: one [user@]host or host alias only.
@@ -81,7 +82,7 @@ func checkTarget(target string) error {
 	case strings.Count(target, "@") > 1:
 		why = "it holds more than one '@'"
 	case !sshTarget.MatchString(target):
-		why = "it holds a character other than letters, digits, '.', '_', '-' (and ':', '%', '[', ']' in an IPv6 host)"
+		why = "it holds a character other than letters, digits, '.', '_', '-' (and ':', '%' in an IPv6 host)"
 	default:
 		return nil
 	}
@@ -250,8 +251,9 @@ func sshFailure(target, stderr string) error {
 			Actions: []output.Action{
 				{Kind: "run_as_user", Cmd: "ssh-add", Why: "load your key into the ssh agent"},
 				{Kind: "run_as_user", Cmd: "ssh-copy-id " + shellWord(target), Why: "install your public key on the host"}}}
-	case !strings.Contains(stderr, "kex_exchange_identification") && (strings.Contains(stderr, "closed by remote host") ||
-		strings.Contains(stderr, "Connection reset") || strings.Contains(stderr, "Broken pipe")):
+	case !strings.Contains(stderr, "kex_exchange_identification") && !strings.Contains(stderr, "ssh_exchange_identification") &&
+		(strings.Contains(stderr, "closed by remote host") || strings.Contains(stderr, "Connection reset") ||
+			strings.Contains(stderr, "Broken pipe") || strings.Contains(stderr, "Timeout, server ")):
 		// The session was up: the step on the host may have run in part.
 		return &output.Error{Code: output.Blocked,
 			Message: "the ssh connection to " + target + " dropped (" + last + "): the step on the host may have run in part; every step can run again, so rerun this"}

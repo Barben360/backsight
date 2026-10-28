@@ -99,12 +99,12 @@ func TestSSHArgsPinTheSafeOptions(t *testing.T) {
 
 func TestCheckTargetRefusesOptionInjection(t *testing.T) {
 	for _, bad := range []string{"-oProxyCommand=x", "", "a b", "u@h\n", "u@@h", "u@h@i", "u\th", "u@h\x00", "-h",
-		"u@-oProxyCommand=x", "u$(x)@h", "h`x`", "h;id", "h|id", "u@'h'", `u@"h"`, "h&", "~u@h", "h/x", "u@h*"} {
+		"u@-oProxyCommand=x", "u$(x)@h", "h`x`", "h;id", "h|id", "u@'h'", `u@"h"`, "h&", "~u@h", "h/x", "u@h*", "u@[2001:db8::1]", "[2001:db8::1]", "u:x@h"} {
 		if err := checkTarget(bad); output.CodeOf(err) != output.Usage {
 			t.Errorf("checkTarget(%q) = %v (code %d), want exit 2", bad, err, output.CodeOf(err))
 		}
 	}
-	for _, ok := range []string{"u@h", "h", "my-alias", "u@100.64.0.1", "u.name@host.example.com", "u@[fd7a:115c:a1e0::1]", "u@fe80::1%eth0"} {
+	for _, ok := range []string{"u@h", "h", "my-alias", "u@100.64.0.1", "u.name@host.example.com", "fd7a:115c:a1e0::1", "u@fd7a:115c:a1e0::1", "u@fe80::1%eth0"} {
 		if err := checkTarget(ok); err != nil {
 			t.Errorf("checkTarget(%q) = %v, want nil", ok, err)
 		}
@@ -211,6 +211,10 @@ func TestSSHFailureClassifies(t *testing.T) {
 			[]string{"the ssh connection to u@h dropped (client_loop: send disconnect: Connection reset by 100.64.0.2 port 22): the step on the host may have run in part; every step can run again, so rerun this"}, nil},
 		{"dropped-pipe", "client_loop: send disconnect: Broken pipe\r\n", output.Blocked,
 			[]string{"the ssh connection to u@h dropped (client_loop: send disconnect: Broken pipe): the step on the host may have run in part; every step can run again, so rerun this"}, nil},
+		{"keepalive", "Timeout, server h not responding.\r\n", output.Blocked,
+			[]string{"the ssh connection to u@h dropped (Timeout, server h not responding.): the step on the host may have run in part; every step can run again, so rerun this"}, nil},
+		{"refused-at-old-kex", "ssh_exchange_identification: Connection closed by remote host\r\n", output.Blocked,
+			[]string{"ssh could not reach u@h: ssh_exchange_identification: Connection closed by remote host"}, nil},
 		{"refused-at-kex", "kex_exchange_identification: Connection closed by remote host\r\nConnection closed by 100.64.0.2 port 22\r\n", output.Blocked,
 			[]string{"ssh could not reach u@h: Connection closed by 100.64.0.2 port 22"}, nil},
 		{"unreachable", "ssh: connect to host h port 22: Connection refused\r\n\r\n", output.Blocked,
