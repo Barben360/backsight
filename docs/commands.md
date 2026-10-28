@@ -87,6 +87,8 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight bank apply` | Creates the bank if needed and applies backsight's extraction settings, unless the bank was already given this version's. `--force` sends them anyway, over any edit made to them on the server. On a local server whose bank is still `claude-memory`, it runs `bank rename` first. `--plan`. |
 | `backsight bank rename` | Moves the banks of an install from before v0.1.4-m5 (`claude-memory`, `-docs`, `-control`) to `backsight`, `backsight-docs`, `backsight-control`, keeping every memory: it waits for the server's running operations (up to 10 minutes), dry-runs then runs Hindsight's own rename (`hindsight-admin rename-bank`, no LLM call) under the maintenance lock, keeps each old id as an alias of its bank so a client still using it keeps working, moves this machine's records (state.json, session cursors) and sets `server.bank`. If one bank cannot move, the ones before it are renamed back and nothing changes. The update to v0.1.4-m5 runs it (through `bank apply`), and `jobs maintain` tries again after its backup when the server was busy. A remote server is renamed on its host. `--plan`. |
 
+On a client (`server.mode = "remote"`), every command that manages the server (`server install`, `render`, `start`, `stop`, `status`, `upgrade`, `token`, `expose`, `llm check`, `backup create`, `restore`, `uninstall --stop`, `uninstall --delete-data`) refuses and names the server's host and the command to run there. `backsight jobs maintain` skips the backup on a client.
+
 ## Backups and restore
 
 | Command | Does |

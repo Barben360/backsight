@@ -1022,7 +1022,7 @@ func TestServerCommandsRefuseRemoteMode(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
 	_ = os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
 	for _, args := range [][]string{{"server", "render"}, {"server", "start"}, {"server", "stop"}, {"server", "status"}, {"server", "install"}} {
-		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "local server") {
+		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "https://mem.example") && strings.Contains(errOut, "backsight "+strings.Join(args, " ")) {
 			t.Errorf("%v: exit %d: %s", args, code, errOut)
 		}
 	}

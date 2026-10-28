@@ -151,7 +151,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if err != nil {
 		return err
 	}
-	if err := requireLocal(cfg); err != nil {
+	if err := requireLocal(cfg, "restore"); err != nil {
 		return err
 	}
 	d, _, err := machine()

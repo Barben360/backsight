@@ -285,7 +285,7 @@ func TestBackupOffTouchesNoDocker(t *testing.T) {
 	}
 }
 
-func TestBackupOfARemoteServerIsSkipped(t *testing.T) {
+func TestBackupCreateOfARemoteServerIsRefusedButTheJobSkips(t *testing.T) {
 	home := devInstall(t, true)
 	dk := withBackupDocker(t)
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
@@ -294,8 +294,12 @@ func TestBackupOfARemoteServerIsSkipped(t *testing.T) {
 	if !strings.Contains(string(raw), "[server]") {
 		_ = os.WriteFile(cfg, append(raw, []byte("\n[server]\nmode = \"remote\"\n")...), 0o600)
 	}
-	if code, out, _ := run(t, "backup", "create"); code != output.OK || !strings.Contains(out, "remote") || len(dk.calls) != 0 {
-		t.Errorf("exit %d, calls %q\n%s", code, dk.calls, out)
+	if code, _, errOut := run(t, "backup", "create"); code != output.Usage || !strings.Contains(errOut, "backsight backup create") || len(dk.calls) != 0 {
+		t.Errorf("exit %d, calls %q\n%s", code, dk.calls, errOut)
+	}
+	// the daily job does not fail on a client: it skips the backup
+	if code, out, errOut := run(t, "jobs", "maintain"); code != output.OK || len(dk.calls) != 0 {
+		t.Errorf("jobs maintain: exit %d, calls %q\n%s%s", code, dk.calls, out, errOut)
 	}
 }
 

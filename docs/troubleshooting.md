@@ -103,6 +103,10 @@ Wants=tailscaled.service
 
 To stop depending on the address, `backsight server expose --loopback` takes the server back to this machine only.
 
+## A command says to run it on the server's host
+
+`this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine and the commands that manage it (`server start`, `server stop`, `server upgrade`, `server token`, `server expose`, `server llm check`, `backup create`, `restore`, `uninstall --stop`, `uninstall --delete-data`) only work there. Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.
+
 ## Another PC cannot reach the server
 
 `backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:

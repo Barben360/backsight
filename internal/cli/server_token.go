@@ -92,7 +92,7 @@ func newServerTokenCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireLocal(cfg); err != nil {
+			if err := requireLocal(cfg, "server token"); err != nil {
 				return err
 			}
 			url, err := clientURL(cfg)

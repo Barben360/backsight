@@ -265,7 +265,7 @@ func TestTokenRemoteModeRefused(t *testing.T) {
 	_ = os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
 	f := filepath.Join(t.TempDir(), "join.token")
 	for _, args := range [][]string{{"server", "token", "--out", f}, {"server", "token", "--rotate", "--out", f}} {
-		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "local server") {
+		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "backsight server token") {
 			t.Errorf("%v: exit %d: %s", args, code, errOut)
 		}
 	}

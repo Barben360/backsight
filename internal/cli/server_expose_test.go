@@ -368,7 +368,7 @@ func TestExposeFlags(t *testing.T) {
 		}
 	}
 	_ = os.WriteFile(fx.cfgPath, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
-	if code, _, errOut := run(t, "server", "expose", "--loopback"); code != output.Usage || !strings.Contains(errOut, "local server") {
+	if code, _, errOut := run(t, "server", "expose", "--loopback"); code != output.Usage || !strings.Contains(errOut, "backsight server expose") {
 		t.Errorf("remote mode: exit %d: %s", code, errOut)
 	}
 	if len(fx.dk.ups) != 0 {

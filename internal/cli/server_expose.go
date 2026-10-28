@@ -131,7 +131,7 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 	if err != nil {
 		return err
 	}
-	if err := requireLocal(cfg); err != nil {
+	if err := requireLocal(cfg, "server expose"); err != nil {
 		return err
 	}
 	d, home, err := machine()

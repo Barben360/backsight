@@ -595,7 +595,7 @@ func TestRestoreOfARemoteServerIsRefused(t *testing.T) {
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
 	_ = os.WriteFile(cfg, []byte(strings.Replace(string(raw), "[server]", "[server]\nmode = \"remote\"", 1)), 0o600)
-	if code, _, errOut := run(t, "restore", filepath.Join(home, "x.tar.gz.age")); code != output.Usage || !strings.Contains(errOut, "remote") {
+	if code, _, errOut := run(t, "restore", filepath.Join(home, "x.tar.gz.age")); code != output.Usage || !strings.Contains(errOut, "on that server's host") {
 		t.Errorf("exit %d %q", code, errOut)
 	}
 }

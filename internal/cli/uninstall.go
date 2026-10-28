@@ -155,7 +155,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		return res, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	if cfg.Server.Mode != "local" && (f.stop || f.deleteData) {
-		return res, &output.Error{Code: output.Blocked, Message: "server.mode is " + cfg.Server.Mode + ": the server runs on another machine; run backsight uninstall " + res.flag() + " there"}
+		return res, &output.Error{Code: output.Blocked, Message: "this PC is a client of the server at " + cfg.Server.URL + ": run backsight uninstall " + res.flag() + " on that server's host"}
 	}
 	st, err := state.Load(d.StateFile())
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

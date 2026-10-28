@@ -527,7 +527,7 @@ func TestUninstallRemoteServerRefusesStop(t *testing.T) {
 	_ = os.WriteFile(pathsOf(m.home).ConfigFile(), []byte(strings.Replace(raw, "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
 	before := treeOf(t, m.home)
 	for _, args := range [][]string{{"--stop"}, {"--delete-data"}} {
-		if code, _, out := uninstall(t, args...); code != output.Blocked || !strings.Contains(out, "remote") {
+		if code, _, out := uninstall(t, args...); code != output.Blocked || !strings.Contains(out, "on that server's host") {
 			t.Errorf("%s on a remote server: exit %d\n%s", args[0], code, out)
 		}
 	}
