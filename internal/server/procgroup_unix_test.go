@@ -3,6 +3,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -52,6 +53,39 @@ func TestTerminateGroup(t *testing.T) {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+// A docker whose context ends returns within dockerWaitDelay, even when a
+// child it started (the Compose plugin of an older CLI, which outlives a
+// killed docker) still holds its output: a hook's bounded look at a hung
+// daemon must not run on to the hook's own deadline.
+func TestDockerRunnerReturnsSoonAfterItsContextEnds(t *testing.T) {
+	bin := t.TempDir()
+	// The child keeps the output pipe open for 10 s after docker is killed.
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nsleep 10 &\nsleep 10\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	const budget = 200 * time.Millisecond
+	for name, call := range map[string]func(context.Context) error{
+		"Run": func(ctx context.Context) error { _, err := (DockerRunner{}).Run(ctx, "compose", "ps"); return err },
+		"RunStdout": func(ctx context.Context) error {
+			_, err := (DockerRunner{}).RunStdout(ctx, "compose", "ps")
+			return err
+		},
+		"Stream": func(ctx context.Context) error {
+			var out bytes.Buffer
+			return (DockerRunner{}).Stream(ctx, &out, &out, "compose", "pull")
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		start := time.Now()
+		err := call(ctx)
+		cancel()
+		if took := time.Since(start); err == nil || took > budget+dockerWaitDelay+time.Second {
+			t.Errorf("%s returned after %s (budget %s, wait delay %s): %v", name, took, budget, dockerWaitDelay, err)
 		}
 	}
 }

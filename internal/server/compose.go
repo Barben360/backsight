@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Runner executes docker with args and returns combined output.
@@ -26,8 +27,15 @@ type Runner interface {
 // the docker compose a rollback is running.
 type DockerRunner struct{ OwnGroup bool }
 
+// dockerWaitDelay bounds the wait for docker's output once its context
+// ended and docker was killed: an older CLI does not end the Compose plugin
+// it started, which keeps the output open (with a hung daemon, until the
+// daemon answers). A bounded look, as a hook's, then still ends in time.
+const dockerWaitDelay = 500 * time.Millisecond
+
 func (r DockerRunner) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.WaitDelay = dockerWaitDelay
 	if r.OwnGroup {
 		ownGroup(cmd)
 	}
