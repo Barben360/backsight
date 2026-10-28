@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/release"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/token"
@@ -334,6 +336,13 @@ func (f sshInstallFlags) flagValue(flag string) (string, bool) {
 	return "", false
 }
 
+// planCommand is this run's plan: command without the key flags, which
+// --plan refuses (it reads no key).
+func (f sshInstallFlags) planCommand() string {
+	f.keyEnv, f.keyFile = "", ""
+	return f.command() + " --plan"
+}
+
 // command is this run as a command line, for every resume: flag names and
 // paths, never a key.
 func (f sshInstallFlags) command() string {
@@ -619,6 +628,7 @@ type sshInstallResult struct {
 	RestartRequired bool           `json:"restart_required"`
 	NextSteps       []string       `json:"next_steps,omitempty"`
 	shown           int            // steps already printed, in text mode
+	warned          int            // warnings already printed, in text mode
 }
 
 // sshInstallText is what text mode prints at the end: the steps not yet
@@ -635,8 +645,10 @@ func sshInstallText(r sshInstallResult) string {
 	} else if r.Declined {
 		b.WriteString("nothing changed\n")
 	}
-	for _, w := range r.Warnings {
-		fmt.Fprintf(&b, "warning  %s\n", w)
+	if r.warned < len(r.Warnings) {
+		for _, w := range r.Warnings[r.warned:] {
+			fmt.Fprintf(&b, "warning  %s\n", w)
+		}
 	}
 	if r.Connect == nil {
 		for _, n := range r.NextSteps {
@@ -731,6 +743,10 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		return res, blocked(err)
 	}
 	refuse := func(err error) (sshInstallResult, error) { return res, hide(withResume(err, resume)) }
+	// The host's progress reaches this PC's stderr masked too.
+	he := &env{stdout: e.stdout, json: e.json, stderr: redactingWriter{e.stderr, func() []config.Secrets {
+		return []config.Secrets{localSec, {LLMAPIKey: key, APIKey: tok.APIKey}}
+	}}}
 
 	// 2. The host's facts.
 	facts, err := probeHost(ctx, t)
@@ -857,6 +873,8 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	}
 	connectDetail := "join it: this PC's sessions go to the host's memory"
 	switch {
+	case hasLocal && local.Server.Mode == "remote" && sameHost(local.Server.URL, t, addr):
+		connectDetail = "already joined (the server at " + local.Server.URL + "): connect checks it is the same server and updates its address and key"
 	case hasLocal && local.Server.Mode == "remote":
 		connectDetail = "leave the server at " + local.Server.URL + " for it"
 	case hasLocal:
@@ -876,7 +894,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	switch consent := answers["consent"]; {
 	case consent == "" && interactive:
 		fmt.Fprint(e.stdout, sshInstallText(res))
-		res.shown = len(res.Steps)
+		res.shown, res.warned = len(res.Steps), len(res.Warnings)
 		if !confirm(e, "Install the memory server on "+t+" and join it from this PC? [y/N] ") {
 			res.Declined = true
 			return res, nil
@@ -886,7 +904,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		}
 	case consent == "":
 		return res, hide(&output.Error{Code: output.NeedsUser, Resume: resume + " --answer consent=yes",
-			Message: "server install --ssh changes " + t + " and this PC: read the plan (" + resume + " --plan), then rerun with --answer consent=yes: nothing was changed"})
+			Message: "server install --ssh changes " + t + " and this PC: read the plan (" + f.planCommand() + "), then rerun with --answer consent=yes: nothing was changed"})
 	case consent != "yes":
 		res.Declined = true
 		return res, nil
@@ -932,7 +950,12 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		mark(name, "failed")
 		var tr *sshTransport
 		if errors.As(err, &tr) {
-			err = &output.Error{Code: output.Partial, Message: "the install on " + t + " stopped part way: " + tr.Error()}
+			pe := &output.Error{Code: output.Partial, Message: "the install on " + t + " stopped part way: " + tr.Error()}
+			var oe *output.Error
+			if errors.As(tr.err, &oe) { // ssh's own class: what the user runs before the rerun
+				pe.Actions = oe.Actions
+			}
+			err = pe
 		}
 		return res, hide(withResume(err, resume))
 	}
@@ -949,7 +972,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 		}
 	}
 	if needKey {
-		if _, err := runOnHost(ctx, e, t, facts.Shim, strings.NewReader(key+"\n"), "secret", "set", "llm_api_key", "--json"); err != nil {
+		if _, err := runOnHost(ctx, he, t, facts.Shim, strings.NewReader(key+"\n"), "secret", "set", "llm_api_key", "--json"); err != nil {
 			return fail("llm-key", err)
 		}
 		mark("llm-key", "done")
@@ -958,7 +981,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	for _, a := range hostAns {
 		args = append(args, "--answer", a)
 	}
-	if _, err := runOnHost(ctx, e, t, facts.Shim, nil, args...); err != nil {
+	if _, err := runOnHost(ctx, he, t, facts.Shim, nil, args...); err != nil {
 		return fail("setup", err)
 	}
 	mark("setup", "done")
@@ -966,7 +989,7 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	if answers["cleartext_lan"] == "yes" {
 		args = append(args, "--answer", "cleartext_lan=yes")
 	}
-	if _, err := runOnHost(ctx, e, t, facts.Shim, nil, args...); err != nil {
+	if _, err := runOnHost(ctx, he, t, facts.Shim, nil, args...); err != nil {
 		return fail("expose", err)
 	}
 	mark("expose", "done")
@@ -978,7 +1001,8 @@ func runSSHInstall(ctx context.Context, e *env, f sshInstallFlags) (sshInstallRe
 	// 13. This PC joins it: at a terminal, connect shows its own plan and asks.
 	var cargs []string
 	for _, a := range f.answers {
-		if k, _, _ := strings.Cut(a, "="); k == "consent" || k == "ack_subscription" || slices.Contains(clientAnswers, strings.TrimSpace(k)) {
+		k, _, _ := strings.Cut(a, "=")
+		if k = strings.TrimSpace(k); k == "consent" || k == "ack_subscription" || slices.Contains(clientAnswers, k) {
 			cargs = append(cargs, a)
 		}
 	}
@@ -1025,4 +1049,40 @@ func withResume(err error, resume string) error {
 		return &out
 	}
 	return &output.Error{Code: output.Blocked, Message: err.Error(), Resume: resume}
+}
+
+// sameHost says whether url's host is the ssh target's host or the
+// address the server opens on: this PC already joined that server.
+func sameHost(url, target, addr string) bool {
+	u, err := neturl.Parse(url)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	_, host, ok := strings.Cut(target, "@")
+	if !ok {
+		host = target
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.Equal(net.ParseIP(addr)) || ip.Equal(net.ParseIP(host))
+	}
+	return strings.EqualFold(h, host)
+}
+
+// redactingWriter masks the secrets of sec in each write: the host's
+// progress lines, one write each.
+type redactingWriter struct {
+	w   io.Writer
+	sec func() []config.Secrets
+}
+
+func (r redactingWriter) Write(p []byte) (int, error) {
+	text := string(p)
+	for _, s := range r.sec() {
+		text = server.Redact(text, s)
+	}
+	if _, err := io.WriteString(r.w, text); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }

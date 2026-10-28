@@ -398,8 +398,11 @@ type fakeHost struct {
 	mode     string
 	keySet   bool
 	tok      token.Token
-	setupErr *output.Error // what setup answers, once
-	drop     string        // the step whose connection drops (ssh exits 255)
+	setupErr *output.Error     // what setup answers, once
+	drop     string            // the step whose connection drops (ssh exits 255)
+	dropErr  string            // ssh's stderr then; default: a closed connection
+	probe    map[string]string // the probe's answers instead of a supported Linux host's (os, machine, verifier, missing)
+	progress string            // the detail of setup's progress line
 	calls    []hostCall
 }
 
@@ -430,7 +433,12 @@ func (h *fakeHost) Run(_ context.Context, args []string, stdin io.Reader, stdout
 	case strings.Contains(remote, "backsight-probe"):
 		c.step = "probe"
 		has := map[bool]string{true: "yes", false: "no"}[h.version != ""]
-		fmt.Fprintf(stdout, "os=Linux\nmachine=x86_64\nconn=100.101.1.9 50022 %s 22\nshim=%s\nhas_shim=%s\nverifier=minisign\nmissing=\nlinger=%s\n", h.addr, fakeShim, has, h.linger)
+		facts := map[string]string{"os": "Linux", "machine": "x86_64", "verifier": "minisign", "missing": ""}
+		for k, v := range h.probe {
+			facts[k] = v
+		}
+		fmt.Fprintf(stdout, "os=%s\nmachine=%s\nconn=100.101.1.9 50022 %s 22\nshim=%s\nhas_shim=%s\nverifier=%s\nmissing=%s\nlinger=%s\n",
+			facts["os"], facts["machine"], h.addr, fakeShim, has, facts["verifier"], facts["missing"], h.linger)
 	case strings.Contains(remote, "backsight-install"):
 		c.step = "install"
 		h.version = "9.9.9"
@@ -463,7 +471,8 @@ func (h *fakeHost) Run(_ context.Context, args []string, stdin io.Reader, stdout
 			code = reply(map[string]string{"name": "llm_api_key"}, nil)
 		case "setup":
 			h.config, h.role, h.mode = true, "server", "local"
-			_, _ = io.WriteString(stderr, `{"event":"progress","step":"server","pct":40,"eta_s":30}`+"\n")
+			line, _ := json.Marshal(map[string]any{"event": "progress", "step": "server", "pct": 40, "eta_s": 30, "detail": h.progress})
+			_, _ = fmt.Fprintln(stderr, string(line))
 			err := h.setupErr
 			h.setupErr = nil
 			code = reply(map[string]any{"steps": []any{}}, err)
@@ -484,7 +493,11 @@ func (h *fakeHost) Run(_ context.Context, args []string, stdin io.Reader, stdout
 	}
 	h.calls = append(h.calls, c)
 	if c.step == h.drop {
-		_, _ = io.WriteString(stderr, "Connection to h closed by remote host.\n")
+		msg := h.dropErr
+		if msg == "" {
+			msg = "Connection to h closed by remote host.\n"
+		}
+		_, _ = io.WriteString(stderr, msg)
 		return 255, nil
 	}
 	return code, nil
@@ -620,7 +633,8 @@ func TestSSHInstallNeverPutsASecretOnACommandLineOrOutput(t *testing.T) {
 		}
 	}
 	for _, mode := range [][]string{{"--json"}, nil} {
-		t.Run(strings.Join(append([]string{"text"}, mode...), ""), func(t *testing.T) {
+		name := map[bool]string{true: "json", false: "text"}[len(mode) > 0]
+		t.Run(name, func(t *testing.T) {
 			_, src, h := sshMachine(t, "100.101.1.2")
 			code, out, errOut := run(t, sshInstallArgs(src, mode...)...)
 			if code != output.OK {
@@ -813,8 +827,20 @@ func TestSSHInstallPlanChangesNothing(t *testing.T) {
 func TestSSHInstallNeedsConsentAndKeyBeforeTouchingTheHost(t *testing.T) {
 	_, src, h := sshMachine(t, "100.101.1.2")
 	code, out, _ := run(t, "server", "install", "--ssh", "u@h", "--source", src, "--llm-key-from-env", llmKeyEnv, "--non-interactive", "--json")
-	if env := parseSSHInstall(t, out); code != output.NeedsUser || env.Error == nil || !strings.HasSuffix(env.Error.Resume, " --answer consent=yes") || !slices.Equal(h.steps(), []string{"probe"}) {
-		t.Errorf("no consent: exit %d, calls %q\n%s", code, h.steps(), out)
+	env := parseSSHInstall(t, out)
+	if code != output.NeedsUser || env.Error == nil || !strings.HasSuffix(env.Error.Resume, " --answer consent=yes") || !slices.Equal(h.steps(), []string{"probe"}) {
+		t.Fatalf("no consent: exit %d, calls %q\n%s", code, h.steps(), out)
+	}
+	// The plan it names runs as a plan.
+	_, after, _ := strings.Cut(env.Error.Message, "read the plan (")
+	planCmd, _, _ := strings.Cut(after, ")")
+	words := strings.Fields(planCmd)
+	if len(words) < 2 || words[0] != "backsight" || words[len(words)-1] != "--plan" {
+		t.Fatalf("plan command %q", planCmd)
+	}
+	h.calls = nil
+	if code, out, errOut := run(t, append(words[1:], "--json")...); code != output.OK || !parseSSHInstall(t, out).Data.Plan || !slices.Equal(h.steps(), []string{"probe"}) {
+		t.Errorf("%s: exit %d, calls %q\n%s%s", planCmd, code, h.steps(), out, errOut)
 	}
 
 	h.calls = nil
@@ -959,6 +985,7 @@ func TestSSHInstallAsksAtATerminal(t *testing.T) {
 		t.Cleanup(func() { stdinIsTerminal, stdoutIsTerminal = oldIn, oldOut })
 	}
 	_, src, h := sshMachine(t, "100.101.1.2")
+	h.linger = "no"
 	terminal(t, "n\n")
 	args := []string{"server", "install", "--ssh", "u@h", "--source", src, "--llm-key-from-env", llmKeyEnv}
 	code, out, errOut := run(t, args...)
@@ -971,7 +998,7 @@ func TestSSHInstallAsksAtATerminal(t *testing.T) {
 	terminal(t, "y\ny\n"+strings.Repeat("\n", 10)) // setup takes its defaults
 	code, out, errOut = run(t, args...)
 	if code != output.OK || strings.Count(out, "done     setup: backsight setup --role server") != 1 || !strings.Contains(out, "Join this server? [y/N]") ||
-		!strings.Contains(out, "done     connect:") || h.call("handback") == nil {
+		!strings.Contains(out, "done     connect:") || h.call("handback") == nil || strings.Count(out, "enable-linger") != 1 {
 		t.Errorf("accepted: exit %d, calls %q\n%s%s", code, h.steps(), out, errOut)
 	}
 }
@@ -995,5 +1022,113 @@ func TestSSHInstallDroppedConnectionIsPartial(t *testing.T) {
 			}
 			sameTree(t, before, treeOf(t, home))
 		})
+	}
+}
+
+// Brief step 2: a host the release cannot go to is refused right after
+// the probe, with nothing else run there.
+func TestSSHInstallRefusesAHostItCannotInstall(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		probe  map[string]string
+		code   int
+		want   []string
+		action string
+	}{
+		{"not Linux", map[string]string{"os": "Darwin"}, output.Blocked, []string{"runs Darwin", "Linux host only", "backsight server install --print-commands"}, ""},
+		{"no release for it", map[string]string{"machine": "riscv64"}, output.Blocked, []string{"riscv64", "no release", "backsight server install --print-commands"}, ""},
+		{"no verifier", map[string]string{"verifier": ""}, output.NeedsUser, []string{"neither minisign nor OpenSSL 3"}, "on u@h: install minisign (or OpenSSL 3), which checks the release signature"},
+		{"missing tools", map[string]string{"missing": " tar mktemp"}, output.Blocked, []string{"lacks tar, mktemp"}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, src, h := sshMachine(t, "100.101.1.2")
+			h.probe = c.probe
+			before := treeOf(t, home)
+			code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+			env := parseSSHInstall(t, out)
+			if code != c.code || env.Error == nil {
+				t.Fatalf("exit %d, want %d\n%s%s", code, c.code, out, errOut)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(env.Error.Message, w) {
+					t.Errorf("message %q lacks %q", env.Error.Message, w)
+				}
+			}
+			if c.action != "" && (len(env.Error.Actions) != 1 || env.Error.Actions[0].Kind != "install" || env.Error.Actions[0].Why != c.action) {
+				t.Errorf("actions %+v, want the install of a verifier", env.Error.Actions)
+			}
+			if !slices.Equal(h.steps(), []string{"probe"}) {
+				t.Errorf("calls %q, want the probe only", h.steps())
+			}
+			sameTree(t, before, treeOf(t, home))
+		})
+	}
+}
+
+// A rerun once all went through: the plan says this PC already joined,
+// and connect finds the same server.
+func TestSSHInstallRerunAfterASuccess(t *testing.T) {
+	_, src, h := sshMachine(t, "100.101.1.2")
+	if code, out, errOut := run(t, sshInstallArgs(src, "--json")...); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	h.calls = nil
+	code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+	env := parseSSHInstall(t, out)
+	if code != output.OK || env.Data.Connect == nil || env.Data.Connect.Situation != joinSame {
+		t.Fatalf("rerun: exit %d\n%s%s", code, out, errOut)
+	}
+	if want := []string{"probe", "version", "paths", "secret list", "secret set", "setup", "expose", "token", "handback"}; !slices.Equal(h.steps(), want) {
+		t.Errorf("rerun calls %q, want %q", h.steps(), want)
+	}
+}
+
+// The plan names a client of the host's own address as already joined.
+func TestSSHInstallPlanSaysAlreadyJoined(t *testing.T) {
+	home, src, _ := sshMachine(t, "100.101.1.2")
+	asClientOf(t, home, "http://100.101.1.2:8888")
+	_, out, _ := run(t, "server", "install", "--ssh", "u@h", "--source", src, "--plan", "--json")
+	if env := parseSSHInstall(t, out); !hasConnectStep(env.Data.Steps, "connect", "planned", "already joined") {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+	asClientOf(t, home, "http://100.101.1.7:8888")
+	_, out, _ = run(t, "server", "install", "--ssh", "u@h", "--source", src, "--plan", "--json")
+	if env := parseSSHInstall(t, out); !hasConnectStep(env.Data.Steps, "connect", "planned", "leave the server at http://100.101.1.7:8888") {
+		t.Errorf("another server: steps %+v", env.Data.Steps)
+	}
+}
+
+// The host's progress lines are masked with the key this run sent.
+func TestSSHInstallRelaysNoSecret(t *testing.T) {
+	for _, mode := range [][]string{{"--json"}, nil} {
+		_, src, h := sshMachine(t, "100.101.1.2")
+		h.progress = "using " + llmKey
+		code, out, errOut := run(t, sshInstallArgs(src, mode...)...)
+		if code != output.OK || strings.Contains(out+errOut, llmKey) {
+			t.Errorf("%v: exit %d\n%s%s", mode, code, out, errOut)
+		}
+		if len(mode) > 0 && !strings.Contains(errOut, `"step":"host:server"`) {
+			t.Errorf("no progress relayed:\n%s", errOut)
+		}
+	}
+}
+
+// An answer id with spaces around it still reaches its side.
+func TestSSHInstallTrimsAnswerIDs(t *testing.T) {
+	_, src, _ := sshMachine(t, "100.101.1.2")
+	code, out, errOut := run(t, "server", "install", "--ssh", "u@h", "--source", src, "--llm-key-from-env", llmKeyEnv, "--answer", " consent =yes", "--non-interactive", "--json")
+	if code != output.OK {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// ssh's own class mid-run keeps its action on the partial install.
+func TestSSHInstallPartialKeepsSSHAction(t *testing.T) {
+	_, src, h := sshMachine(t, "100.101.1.2")
+	h.drop, h.dropErr = "expose", "Host key verification failed.\n"
+	code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+	env := parseSSHInstall(t, out)
+	if code != output.Partial || env.Error == nil || len(env.Error.Actions) == 0 || env.Error.Actions[0].Cmd != "ssh u@h" || !strings.HasPrefix(env.Error.Resume, "backsight server install --ssh u@h ") {
+		t.Errorf("exit %d, want 40 with ssh u@h to run\n%s%s", code, out, errOut)
 	}
 }
