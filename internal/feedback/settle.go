@@ -14,6 +14,10 @@ const (
 	OutcomeMiss    = "confident_miss" // shown near the top, its agent declared the turn, and did not use it
 	OutcomeShown   = "shown"
 	OutcomeUnknown = "unknown" // its agent never declared the turn: undeclared, interrupted or compacted
+	// OutcomeForgotten: its memory was forgotten at or after the show,
+	// before it settled. Settled so that it is never decided again, and
+	// counted nowhere.
+	OutcomeForgotten = "forgotten"
 )
 
 const (
@@ -35,13 +39,19 @@ type Params struct {
 	TurnTimeout                  time.Duration
 }
 
+// Keys of the half-lives in a settle event's params.
+const (
+	missHalfLifeKey   = "miss_half_life_days"
+	creditHalfLifeKey = "credit_half_life_days"
+)
+
 // record is p as a settle event carries it.
 func (p Params) record() map[string]float64 {
 	return map[string]float64{
-		"confident_rank":        float64(p.ConfidentRank),
-		"miss_half_life_days":   p.MissHalfLife.Hours() / 24,
-		"credit_half_life_days": p.CreditHalfLife.Hours() / 24,
-		"turn_timeout_minutes":  p.TurnTimeout.Minutes(),
+		"confident_rank":       float64(p.ConfidentRank),
+		missHalfLifeKey:        p.MissHalfLife.Hours() / 24,
+		creditHalfLifeKey:      p.CreditHalfLife.Hours() / 24,
+		"turn_timeout_minutes": p.TurnTimeout.Minutes(),
 	}
 }
 
@@ -73,7 +83,8 @@ type pendingShow struct {
 // main agent) or the show openTurnLimit old. Events after now are not
 // seen. Each used credit, in time order, attaches to its id's latest
 // earlier show of its session neither credited nor settled; late counts
-// the used credits since the last settle event that found none.
+// the used credits since the last settle event that found none. A show
+// whose memory was forgotten at or after it settles as forgotten.
 func Decide(events []Event, p Params, now time.Time) (settled []Settled, late int) {
 	var seen []Event
 	var lastSettle time.Time
@@ -93,6 +104,7 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 	declared := map[string]bool{}       // session|turn|agent with a credit
 	stopped := map[string]bool{}        // session|turn|agent with a stop
 	turns := map[string][]Event{}       // session's turn events, in time order
+	forgotten := map[string]time.Time{} // id: its latest forget
 	for _, e := range sortedByTime(seen) {
 		switch e.Kind {
 		case "turn":
@@ -125,6 +137,10 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 			}
 		case "stop":
 			stopped[e.Session+"|"+e.Turn+"|"+e.Agent] = true
+		case "forget":
+			for _, id := range e.IDs {
+				forgotten[id] = laterOf(forgotten[id], e.TS)
+			}
 		}
 	}
 	for _, s := range shows {
@@ -136,8 +152,11 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 		if age < openTurnLimit && !turnOver(s, turn, turns[s.session], stopped) {
 			continue
 		}
+		forgot, wasForgotten := forgotten[s.ID]
 		outcome := OutcomeShown
 		switch {
+		case wasForgotten && !forgot.Before(s.At):
+			outcome = OutcomeForgotten
 		case s.credited:
 			outcome = OutcomeCredit
 		case !declared[s.session+"|"+turn+"|"+s.Agent]:
@@ -238,6 +257,9 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	}
 	res.Late = late
 	for _, s := range settled {
+		if s.Outcome == OutcomeForgotten {
+			continue
+		}
 		res.Shows++
 		switch s.Outcome {
 		case OutcomeCredit:

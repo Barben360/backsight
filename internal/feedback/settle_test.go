@@ -356,3 +356,49 @@ func TestLoadLedgerRefusesAnUnknownSchema(t *testing.T) {
 		t.Error("a settle was journaled")
 	}
 }
+
+// A memory forgotten after it was shown and before its show settled: the
+// show is settled as forgotten, counted nowhere, never decided again, and
+// a rebuild agrees. A show after the forget counts.
+func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir,
+		evTurn("s1", "p1", 0),
+		evShows("s1", "p1", "", "prompt", 1, Item{ID: "m1", Rank: 1}, Item{ID: "m2", Rank: 2}),
+		evCredit("s1", "p1", "", "used", 2, "m1"),
+		Event{Kind: "forget", TS: at(5), IDs: []string{"m1"}},
+		evStop("s1", "p1", "", "declared", 6),
+	)
+	res, err := Settle(dir, testParams, at(120))
+	if err != nil || res.Shows != 1 || res.Credits != 0 || res.Misses != 1 {
+		t.Fatalf("settle: %+v %v", res, err)
+	}
+	live, _ := LoadLedger(dir)
+	if _, ok := live.Memories["m1"]; ok || live.Memories["m2"].Shown != 1 {
+		t.Errorf("live after a forget before settle: %+v", live.Memories)
+	}
+	if again, err := Settle(dir, testParams, at(240)); err != nil || again != (SettleResult{}) {
+		t.Errorf("second settle: %+v %v", again, err)
+	}
+	if k := settleKeys(t, dir); k[key("s1", "p1", 1, "m1")] != 1 {
+		t.Errorf("the forgotten show is not marked settled once: %v", k)
+	}
+	rebuilt, _ := Rebuild(dir, testParams, false)
+	assertSameEntries(t, live, rebuilt, 0)
+
+	// Shown again after the forget: that show counts.
+	writeJournal(t, dir,
+		evTurn("s1", "p2", 300),
+		evShows("s1", "p2", "", "search", 301, Item{ID: "m1", Rank: 3}),
+		evStop("s1", "p2", "", "undeclared", 302),
+	)
+	if res, err := Settle(dir, testParams, at(420)); err != nil || res.Shows != 1 {
+		t.Fatalf("settle after the new show: %+v %v", res, err)
+	}
+	live, _ = LoadLedger(dir)
+	if live.Memories["m1"].Shown != 1 {
+		t.Errorf("m1 shown after its forget: %+v", live.Memories["m1"])
+	}
+	rebuilt, _ = Rebuild(dir, testParams, false)
+	assertSameEntries(t, live, rebuilt, 0)
+}

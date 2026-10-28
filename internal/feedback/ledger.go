@@ -42,15 +42,21 @@ type Ledger struct {
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
 
 // Apply adds a settle event's shows to the ledger, or drops a forget
-// event's memories. Sums decay order-independently, so applying settle
-// events as they come and folding them all later agree.
+// event's memories. A settle decays under the half-lives it recorded, p's
+// when it recorded none; a forgotten show counts nowhere. Sums decay
+// order-independently, so applying settle events as they come and folding
+// them all later agree.
 func (l *Ledger) Apply(e Event, p Params) {
 	if l.Memories == nil {
 		l.Memories = map[string]Entry{}
 	}
 	switch e.Kind {
 	case "settle":
+		p = p.recorded(e.Params)
 		for _, s := range e.Settled {
+			if s.Outcome == OutcomeForgotten {
+				continue
+			}
 			m := l.Memories[s.ID]
 			m.Shown++
 			m.LastShown = laterOf(m.LastShown, s.At)
@@ -70,15 +76,38 @@ func (l *Ledger) Apply(e Event, p Params) {
 	}
 }
 
+// recorded is p with the half-lives a settle event's params carry.
+func (p Params) recorded(params map[string]float64) Params {
+	if d, ok := params[missHalfLifeKey]; ok {
+		p.MissHalfLife = days(d)
+	}
+	if d, ok := params[creditHalfLifeKey]; ok {
+		p.CreditHalfLife = days(d)
+	}
+	return p
+}
+
+func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Hour)) }
+
 // Fold is the ledger of events' settle and forget events, applied in
-// (ts, seq) order; its watermark is the last settle's time.
+// (ts, seq) order, each settle key once; its watermark is the last
+// settle's time.
 func Fold(events []Event, p Params) Ledger {
 	l := newLedger()
+	applied := map[string]bool{}
 	for _, e := range sortedByTime(events) {
-		l.Apply(e, p)
 		if e.Kind == "settle" {
+			var fresh []Settled
+			for _, s := range e.Settled {
+				if !applied[s.Key] {
+					applied[s.Key] = true
+					fresh = append(fresh, s)
+				}
+			}
+			e.Settled = fresh
 			l.Watermark = laterOf(l.Watermark, e.TS)
 		}
+		l.Apply(e, p)
 	}
 	return l
 }
@@ -170,7 +199,10 @@ func saveLedger(dir string, l Ledger) error {
 }
 
 // Rebuild folds every journal file of dir, under the ledger lock, and
-// writes the result only when write.
+// writes the result only when write. Each settle event folds with the
+// half-lives it recorded, so a rebuild after a config change gives the
+// live ledger back; p's half-lives serve only settle events that recorded
+// none. Recomputing under other parameters is not a rebuild.
 func Rebuild(dir string, p Params, write bool) (Ledger, error) {
 	release, err := lockLedger(dir)
 	if err != nil {

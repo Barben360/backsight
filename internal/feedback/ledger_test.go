@@ -224,3 +224,61 @@ func TestEntryDecayedTo(t *testing.T) {
 		t.Errorf("no credit: %+v", empty)
 	}
 }
+
+// Two settle events carrying the same key (a journal copied twice, a
+// settle replayed by hand): the fold counts the show once.
+func TestFoldCountsASettleKeyOnce(t *testing.T) {
+	s := Settled{Key: "k1", ID: "m1", At: at(1), Outcome: OutcomeCredit}
+	l := Fold([]Event{
+		{Kind: "settle", TS: at(100), Seq: 1, Settled: []Settled{s}},
+		{Kind: "settle", TS: at(200), Seq: 2, Settled: []Settled{s, {Key: "k2", ID: "m1", At: at(150), Outcome: OutcomeShown}}},
+	}, testParams)
+	if e := l.Memories["m1"]; e.Shown != 2 || e.Credits != 1 {
+		t.Errorf("m1: %+v, want shown 2 and one credit", e)
+	}
+}
+
+// A rebuild after the half-lives changed reproduces the live ledger: each
+// settle event is folded with the half-lives it recorded.
+func TestRebuildUsesTheRecordedHalfLives(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	day := 60 * 24
+	writeJournal(t, dir,
+		evTurn("s1", "p1", 0),
+		evShows("s1", "p1", "", "prompt", 1, Item{ID: "m1", Rank: 1}, Item{ID: "m2", Rank: 1}),
+		evCredit("s1", "p1", "", "used", 2, "m2"),
+		evStop("s1", "p1", "", "declared", 3),
+	)
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	writeJournal(t, dir,
+		evTurn("s1", "p2", 40*day),
+		evShows("s1", "p2", "", "prompt", 40*day+1, Item{ID: "m1", Rank: 1}, Item{ID: "m2", Rank: 1}),
+		evCredit("s1", "p2", "", "used", 40*day+2, "m2"),
+		evStop("s1", "p2", "", "declared", 40*day+3),
+	)
+	if _, err := Settle(dir, testParams, at(40*day+120)); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := LoadLedger(dir)
+	if e := live.Memories["m1"]; e.Misses <= 1 || e.Misses >= 2 {
+		t.Fatalf("a weak sample: m1 %+v", e)
+	}
+	shorter := testParams
+	shorter.MissHalfLife, shorter.CreditHalfLife = 30*24*time.Hour, 30*24*time.Hour
+	rebuilt, err := Rebuild(dir, shorter, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 1e-12)
+	// Settle events without params (none are written so) fold with the
+	// caller's.
+	bare := Fold([]Event{
+		{Kind: "settle", TS: at(100), Seq: 1, Settled: []Settled{{Key: "k1", ID: "m1", At: at(0), Outcome: OutcomeMiss}}},
+		{Kind: "settle", TS: at(200), Seq: 2, Settled: []Settled{{Key: "k2", ID: "m1", At: at(30 * day), Outcome: OutcomeMiss}}},
+	}, shorter)
+	if got := bare.Memories["m1"].Misses; math.Abs(got-1.5) > 1e-12 {
+		t.Errorf("misses without params %v, want 1.5 under the caller's 30 days", got)
+	}
+}
