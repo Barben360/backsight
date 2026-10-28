@@ -1,4 +1,9 @@
-# backsight
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img alt="backsight" src="docs/assets/logo-light.svg" height="64">
+  </picture>
+</h1>
 
 [![CI](https://github.com/Barben360/backsight/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Barben360/backsight/actions/workflows/ci.yml?query=branch%3Amain)
 [![Secret scan](https://github.com/Barben360/backsight/actions/workflows/gitleaks.yml/badge.svg?branch=main)](https://github.com/Barben360/backsight/actions/workflows/gitleaks.yml?query=branch%3Amain)
@@ -17,6 +22,20 @@ Long-term memory for Claude Code, on a [Hindsight](https://github.com/vectorize-
 > A *backsight* is the surveying reading taken back on a known point before moving forward.
 
 backsight is an independent project, not affiliated with or endorsed by Anthropic or Vectorize.
+
+## Why backsight
+
+I have used Claude Code for a long time, and what always wore on me was having to repeat myself: giving the same information again, correcting answers that left out part of the context. My only workaround was to spot what kept coming back and pin it down somewhere: the project's CLAUDE.md, my global CLAUDE.md, skills or plugins built for one project or for me. What I really needed was a memory: something that keeps what has already been said, doesn't fall into the same traps twice, and works the way I work.
+
+I discovered agent memory with OpenClaw, but without the power of Claude Code. I found it again with LifeOS (formerly PAI), this time built into Claude Code. Not having to repeat things is a real comfort. But LifeOS installed a host of very invasive skills and principles, which changed completely from one update to the next, not always for the better, and rather opaquely. My setup no longer belonged to me.
+
+I wanted a memory I would never have to act on again, and one that uses one of the real strengths of LLMs: semantic search. LifeOS and claude-mem both read a memory laid out in files, with slightly improved greps. With that, if I search for "authentication", the memory about an "expired token" doesn't come up, even though it was exactly the one I needed.
+
+Looking for a system built on embeddings, with proven capabilities, auditable and easy to explore, I came across Hindsight. I liked its philosophy right away. I plugged it into Claude Code following its recommendations, imported months of memories into it, and was soon disappointed. The memories it injected, at session start as well as along the way, were not always relevant. Above all, each project had its own isolated bank: I felt like I was talking to a different person in each one.
+
+So I experimented. Week after week, I measured the relevance of what was recalled, then adjusted accordingly: Hindsight's configuration, hooks to decide when Claude fetches information, skills to tell it how to search for it and bring it back into context. I kept what improved the measurements and threw out the rest. backsight grew out of these successive trials. Today I use it every day, both for my personal projects and at work, as two independent setups. For that use it beats everything I have tried, and I keep improving it on demanding ground: a large multi-project stack. Whether I start Claude in a project or in my home directory, I talk to the same person, who remembers what we are talking about, the decisions we made and the pitfalls already avoided. And I keep a clean Claude Code, with only the skills I need.
+
+This memory layer is what I'm sharing here. First so you can benefit from it, but also so you can evaluate it, criticize it, suggest improvements, love it or hate it. And so that together we can make it what I hoped it would be.
 
 ## What it does for you
 
@@ -176,7 +195,7 @@ Every detail: [docs/install.md](docs/install.md).
 ## Check it works
 
 1. `backsight verify` runs every hook and the memory tools as Claude Code does, then stores and recalls a test memory. No line should say `fail`.
-2. Start a Claude Code session in one of your projects. Its first line is `🧠 backsight · 🗂️ <project> · memory on`; the very first session also shows `👋 Memory is on`, with where sessions go.
+2. Start a Claude Code session in one of your projects. Its first line is `🧠 backsight · 🗂️ <project>`; the very first session also shows `👋 Memory is on`, with where sessions go.
 3. `backsight doctor` checks the whole install. Right after setup, a warning that there is no backup yet is expected: the first one runs tonight, or now with `backsight backup create`.
 4. Work as usual. Once your first session has ended (or sat idle for 30 minutes) and a few minutes more have passed, `backsight verify --live` confirms it reached the server and became memories, and `backsight search "<a topic of that session>"` finds them.
 
