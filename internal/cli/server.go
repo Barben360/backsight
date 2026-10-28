@@ -880,8 +880,8 @@ func serverLockFor(d paths.Dirs, command string, keyStep bool) (func(), error) {
 // key or address: hooks queue and jobs skip until it is done or rolled
 // back. note names a stale maintenance lock it broke.
 func serverMaintenanceLock(d paths.Dirs, command string) (unlock func(), note string, err error) {
-	if state.RestoreIncomplete(d) {
-		return nil, "", refuseWhileBusy(d)
+	if restoreIncomplete(d) {
+		return nil, "", restoreIncompleteError(d)
 	}
 	ml, note, err := acquireMaintenance(d, command)
 	if err != nil {

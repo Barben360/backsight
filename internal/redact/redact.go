@@ -67,6 +67,10 @@ const segmentKeyRE = `(?:[a-zA-Z0-9_.-]+ )?[a-zA-Z0-9_.-]*?(?:key|auth|sig|signa
 const segmentValueRE = `([A-Za-z0-9+/_%-]{16,}=*)`
 
 var rules = slices.Concat([]rule{
+	// A backsight connection token: it carries the API key. First, and with
+	// no \b: glued to a word or after an escaped newline (\n) it must still
+	// be masked whole, before a broader rule takes a part of it.
+	{kind: "backsight_token", re: regexp.MustCompile(`bst1\.[A-Za-z0-9_-]{40,}`)},
 	// PEM and PGP armour: the whole block, to its end or the end of the text.
 	{kind: "private_key", re: regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|\z)`)},
 	// An age identity: backsight's backup key (bech32, upper-case), whole
@@ -74,8 +78,6 @@ var rules = slices.Concat([]rule{
 	{kind: "age_identity", re: regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Z]{16,}`)},
 	{kind: "anthropic_key", re: regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}`)},
 	{kind: "openai_key", re: regexp.MustCompile(`\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}`)},
-	// A backsight connection token: it carries the API key.
-	{kind: "backsight_token", re: regexp.MustCompile(`\bbst1\.[A-Za-z0-9_-]{40,}`)},
 	{kind: "stripe_key", re: regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`)},
 	{kind: "github_token", re: regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,})`)},
 	{kind: "npm_token", re: regexp.MustCompile(`\bnpm_[A-Za-z0-9]{36}`)},

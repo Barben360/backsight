@@ -1128,3 +1128,24 @@ func TestServerCommandsUseTheConfiguredProject(t *testing.T) {
 		t.Errorf("exit %d: %s %s", code, out, errOut)
 	}
 }
+
+// The marker can vanish between the check and the refusal's own look: the
+// lock must still refuse, never return (nil, "", nil), and leave no lock.
+func TestMaintenanceLockRefusesWhenTheMarkerVanishes(t *testing.T) {
+	home := legacyInstall(t)
+	d := pathsOf(home)
+	old := restoreIncomplete
+	t.Cleanup(func() { restoreIncomplete = old })
+	restoreIncomplete = func(paths.Dirs) bool { return true }
+	unlock, _, err := serverMaintenanceLock(d, "server expose")
+	var oe *output.Error
+	if !errors.As(err, &oe) || oe.Code != output.Blocked || !strings.Contains(oe.Message, "restore-incomplete.json") {
+		t.Fatalf("err = %v", err)
+	}
+	if unlock != nil {
+		t.Error("an unlock came back with the refusal")
+	}
+	if h := state.Inspect(d.MaintenanceLock()); h != nil {
+		t.Errorf("maintenance lock left: %+v", h)
+	}
+}

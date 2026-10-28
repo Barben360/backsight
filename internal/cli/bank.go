@@ -13,7 +13,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
-	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -71,8 +70,8 @@ func applyBank(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.
 // point, while it still holds the lock.
 func bankBusy(d paths.Dirs) error {
 	if h := state.Inspect(d.MaintenanceLock()); h != nil && !h.Stale && heldByUpdate(h) {
-		if state.RestoreIncomplete(d) {
-			return &output.Error{Code: output.Blocked, Message: "a restore did not finish (" + d.RestoreMarker() + "): run backsight doctor for the way back"}
+		if restoreIncomplete(d) {
+			return restoreIncompleteError(d)
 		}
 		return nil
 	}
