@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -403,5 +404,57 @@ func TestMCPStoreFollowsAProjectPauseTakenDuringTheSession(t *testing.T) {
 	before := retained.Load()
 	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."}); !isErr || !strings.Contains(out, "excluded") || retained.Load() != before {
 		t.Errorf("%v %s", isErr, out)
+	}
+}
+
+// rotateTo gives secrets.toml a new API key, the only one the fake server
+// accepts from now on (a server token --rotate on this host).
+func rotateTo(t *testing.T, home string) {
+	t.Helper()
+	var fresh config.Secrets
+	config.GenerateMissing(&fresh)
+	if err := config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { s.APIKey = fresh.APIKey; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	requireKey.Store(true)
+	acceptedKey.Store(fresh.APIKey)
+}
+
+// A server started on the old key follows secrets.toml once the server
+// refuses that key: each tool works on its first call after the rotation.
+func TestMCPFollowsARotatedKey(t *testing.T) {
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	memories["m1"] = `{"id":"m1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"]}`
+	recallAnswer = `[{"id":"m1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.7}}]`
+	rotateTo(t, home)
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "m1"}); isErr || !strings.Contains(out, "PostgreSQL 16 stays.") {
+		t.Errorf("read: %v %s", isErr, out)
+	}
+	rotateTo(t, home)
+	if out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}}); isErr || !strings.Contains(out, "PostgreSQL 16 stays.") {
+		t.Errorf("search: %v %s", isErr, out)
+	}
+	rotateTo(t, home)
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16 on 2026-10-20."}); isErr || !strings.Contains(out, "stored (decision") || retained.Load() != before+1 {
+		t.Errorf("store: %v %d %s", isErr, retained.Load()-before, out)
+	}
+}
+
+// A refused key that secrets.toml still holds is not tried again, and a
+// new key the server refuses too is tried once: never a loop.
+func TestMCPRefusedKeyIsTriedOnce(t *testing.T) {
+	cs := mcpSession(t)
+	requireKey.Store(true)
+	acceptedKey.Store("a-key-nobody-has")
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "m1"}); !isErr || !strings.Contains(out, "unauthorized") || refusedCalls.Load() != 1 {
+		t.Errorf("unchanged key: %d calls, %v %s", refusedCalls.Load(), isErr, out)
+	}
+	rotateTo(t, os.Getenv("HOME"))
+	acceptedKey.Store("a-key-nobody-has")
+	refusedCalls.Store(0)
+	if _, isErr := call(t, cs, "memory_read", map[string]any{"id": "m1"}); !isErr || refusedCalls.Load() != 2 {
+		t.Errorf("new key refused too: %d calls, %v", refusedCalls.Load(), isErr)
 	}
 }

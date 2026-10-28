@@ -837,3 +837,36 @@ func TestCheckRestoreEpoch(t *testing.T) {
 	put(t, g.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	expect(t, check(t, g.run(), "restore-epoch"), Info, "skipped")
 }
+
+// A server-only host runs no Claude Code: the client checks say so, the
+// server's own checks run as on any host.
+func TestServerOnlyHostSkipsTheClientChecks(t *testing.T) {
+	f := newFixture(t)
+	srv := fakeServer(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	f.env.ClaudePlugins = func(string) ([]byte, error) {
+		t.Error("doctor asked Claude Code on a server-only host")
+		return nil, errors.New("no claude")
+	}
+	f.env.Scheduler = func() (SchedulerEntries, error) { return SchedulerEntries{Installed: true, Kind: "systemd"}, nil }
+	r := f.run()
+	seen := map[string]int{}
+	for _, c := range r.Checks {
+		seen[c.ID]++
+	}
+	for _, id := range append([]string{"client", "retention", "reference", "usage"}, ClientChecks...) {
+		c := check(t, r, id)
+		expect(t, c, Info, "not a client: server-only host")
+		if seen[id] != 1 {
+			t.Errorf("%s reported %d times", id, seen[id])
+		}
+	}
+	expect(t, check(t, r, "server"), OK, "config")
+	expect(t, check(t, r, "scheduler"), OK, "systemd entries match")
+	for _, id := range []string{"backup", "pending-restore", "bank"} {
+		if c := check(t, r, id); strings.Contains(c.Summary, "not a client") {
+			t.Errorf("%s is a server check, reported %+v", id, c)
+		}
+	}
+}

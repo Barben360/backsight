@@ -19,6 +19,7 @@ var (
 	aws       = "AK" + "IA" + "Q3EGRA7HZ6FK4M2X"
 	google    = "AI" + "za" + rep("Sy9xK2m4P7", 3) + "abcde"
 	jwt       = "ey" + "JhbGciOiJIUzI1NiJ9" + ".ey" + "JzdWIiOiIxMjM0NTY3ODkwIn0" + "." + rep("dBjftJeZ4C", 3)
+	bstToken  = "bst" + "1." + rep("eyJ1cmwiOiJo", 5)
 	privKey   = "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nQyNTUxOQAAACD\n-----END " + "OPENSSH PRIVATE KEY-----"
 
 	// Security review H1 and M1 shapes.
@@ -38,6 +39,7 @@ func TestTruePositives(t *testing.T) {
 		name, in, kind, gone string
 	}{
 		{"anthropic", "export ANTHROPIC=" + anthropic + " now", "anthropic_key", anthropic},
+		{"backsight token", "here: " + bstToken, "backsight_token", bstToken[5:]},
 		{"openai", "the key is " + openai, "openai_key", openai},
 		{"github", "token " + github + " expired", "github_token", github},
 		{"github pat", githubPAT, "github_token", githubPAT},
@@ -309,8 +311,8 @@ func TestLookAlikesSurvive(t *testing.T) {
 }
 
 func TestKindsAreUniqueAndSorted(t *testing.T) {
-	_, kinds := Text(github + " and " + github + " and " + aws)
-	if strings.Join(kinds, ",") != "aws_access_key,github_token" {
+	_, kinds := Text(github + " and " + github + " and " + aws + " " + bstToken)
+	if strings.Join(kinds, ",") != "aws_access_key,backsight_token,github_token" {
 		t.Errorf("%v", kinds)
 	}
 }

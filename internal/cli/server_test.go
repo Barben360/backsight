@@ -219,8 +219,10 @@ var (
 	docPatches         []string          // documents whose tags a PATCH replaced
 	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
 	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
+	serverIDStatus     atomic.Int32      // non-zero: reading the server id answers this status
 	requireKey         atomic.Bool       // the fake checks the bearer key against acceptedKey
 	acceptedKey        atomic.Value      // the API key the fake server runs on (a string), set by compose up
+	refusedCalls       atomic.Int64      // requests the fake refused for their key
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
@@ -272,8 +274,10 @@ func fakeHindsight(t *testing.T) (port int) {
 	docPatches = nil
 	epochDoc = ""
 	epochStatus.Store(0)
+	serverIDStatus.Store(0)
 	requireKey.Store(false)
 	acceptedKey.Store("")
+	refusedCalls.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
@@ -301,6 +305,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	docInfos := map[string]docInfo{} // "<bank>/<id>"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if k, _ := acceptedKey.Load().(string); requireKey.Load() && r.Header.Get("Authorization") != "Bearer "+k {
+			refusedCalls.Add(1)
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"detail":"invalid API key"}`))
 			return
@@ -610,6 +615,10 @@ func fakeHindsight(t *testing.T) (port int) {
 			id := r.URL.Path[strings.Index(r.URL.Path, "/documents/")+len("/documents/"):]
 			if id == "backsight:epoch" && epochStatus.Load() != 0 {
 				w.WriteHeader(int(epochStatus.Load()))
+				return
+			}
+			if id == "backsight:server" && serverIDStatus.Load() != 0 {
+				w.WriteHeader(int(serverIDStatus.Load()))
 				return
 			}
 			if id == "backsight:epoch" && epochDoc != "" {
@@ -1025,11 +1034,24 @@ func TestServerInstallStreamsStepsInTextMode(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	_, out, _ := run(t, "server", "install")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 9 || !strings.HasPrefix(lines[0], "skipped  config") || !strings.HasPrefix(lines[7], "done     provider") || !strings.Contains(out, "UI http://127.0.0.1:19999") {
+	if len(lines) < 10 || !strings.HasPrefix(lines[0], "skipped  config") || !strings.HasPrefix(lines[7], "done     server-id: ") || !strings.HasPrefix(lines[8], "done     provider") || !strings.Contains(out, "UI http://127.0.0.1:19999") {
 		t.Errorf("%s", out)
 	}
 	if strings.Count(out, "skipped  config:") != 1 || strings.Count(out, "done     provider:") != 1 {
 		t.Errorf("each step must be printed once:\n%s", out)
+	}
+}
+
+// The server id is a step, not a gate: when it cannot be read the install
+// finishes with a warning.
+func TestServerInstallServerIDFailureIsAWarning(t *testing.T) {
+	home := devInstall(t, true)
+	withCompose(t)
+	pointAt(t, home, fakeHindsight(t))
+	serverIDStatus.Store(http.StatusInternalServerError)
+	code, out, _ := run(t, "server", "install")
+	if code != output.OK || !strings.Contains(out, "warning  server-id: ") || !strings.Contains(out, "done     provider") {
+		t.Errorf("exit %d\n%s", code, out)
 	}
 }
 

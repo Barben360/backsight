@@ -20,7 +20,7 @@ func (refuseDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 }
 
 // refuseSys, refuseClaude and refuseSpawn do the same for systemctl and
-// launchctl, claude and the detached flush.
+// launchctl, claude and the detached flush or server start.
 type refuseSys struct{}
 
 func (refuseSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -36,6 +36,8 @@ func (refuseClaude) Run(_ context.Context, _ []string, args ...string) ([]byte, 
 func refuseSpawn(args ...string) error {
 	return fmt.Errorf("test reached a detached backsight %v without a fake spawn", args)
 }
+
+func refuseSpawnLogged(_ *os.File, args ...string) error { return refuseSpawn(args...) }
 
 // testHookFault makes the test binary, run as `hook-child`, fail before
 // the handler as a crashing child would: panic | fatal | hang | kill |
@@ -83,7 +85,7 @@ func TestMain(m *testing.M) {
 		os.Exit(Execute(args, os.Stdout, os.Stderr))
 	}
 	composeRunner = refuseDocker{}
-	sysRunner, claudeRunner, spawnDetached = refuseSys{}, refuseClaude{}, refuseSpawn
+	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
 	os.Exit(m.Run())
 }

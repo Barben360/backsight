@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/target"
@@ -266,7 +267,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				if req := config.RequiredSecrets(cfg); req["llm_api_key"] && prev.LLMAPIKey == "" {
 					return needSecrets([]string{"llm_api_key"}, "backsight server install")
 				}
-				for _, s := range []string{"render", "pull", "start", "health", "bank", "provider"} {
+				for _, s := range []string{"render", "pull", "start", "health", "bank", "server-id", "provider"} {
 					add(s, "planned", "")
 				}
 				return e.emit("server install", res, func() string { return installSummary(res) })
@@ -361,6 +362,15 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(err)
 			}
 			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
+			// After the bank step (it may rename a legacy bank). A failure is a
+			// warning: the first connection token made writes the id.
+			if status, detail := ensureServerID(cmd.Context(), cfg, sec); status == "warning" {
+				res.Warnings = append(res.Warnings, "server id: "+detail+" (backsight server install again writes it; "+
+					"so does the first connection token, from backsight server expose --private or backsight server token once the server is exposed)")
+				add("server-id", "warning", detail)
+			} else {
+				add("server-id", status, detail)
+			}
 			pr, err := checkProvider(cmd.Context(), cfg, sec)
 			if err != nil {
 				return fail(err)
@@ -377,6 +387,25 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&f.base, "base-url", "", "LLM base URL for compatible endpoints")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list the steps without acting")
 	return cmd
+}
+
+// ensureServerID gives the server its id (retain.EnsureServerID) and
+// reports it as an install step: done (written now), unchanged (already
+// there) or warning (the detail says why; the install goes on).
+func ensureServerID(ctx context.Context, cfg config.Config, sec config.Secrets) (status, detail string) {
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second)
+	if err == nil {
+		var had, id string
+		if had, err = retain.ReadServerID(ctx, cl, cfg.Server.Bank); err == nil {
+			if id, err = retain.EnsureServerID(ctx, cl, cfg.Server.Bank); err == nil {
+				if had != "" {
+					return "unchanged", id
+				}
+				return "done", id
+			}
+		}
+	}
+	return "warning", redacted(err, sec).Error()
 }
 
 // keptEnv is the server's .env, as messages name it.
@@ -616,7 +645,7 @@ func statusText(r statusResult) string {
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e))
 	return cmd
 }
 
@@ -844,6 +873,26 @@ func serverLockFor(d paths.Dirs, command string, keyStep bool) (func(), error) {
 		return nil, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	return func() { _ = l.Release() }, nil
+}
+
+// serverMaintenanceLock takes the maintenance lock and server.lock, as
+// server upgrade does, for a command that restarts the server on another
+// key or address: hooks queue and jobs skip until it is done or rolled
+// back. note names a stale maintenance lock it broke.
+func serverMaintenanceLock(d paths.Dirs, command string) (unlock func(), note string, err error) {
+	if state.RestoreIncomplete(d) {
+		return nil, "", refuseWhileBusy(d)
+	}
+	ml, note, err := acquireMaintenance(d, command)
+	if err != nil {
+		return nil, "", err
+	}
+	sl, _, err := state.Acquire(filepath.Join(d.LocksDir(), "server.lock"), command)
+	if err != nil {
+		_ = ml.Release()
+		return nil, "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	return func() { _ = sl.Release(); _ = ml.Release() }, note, nil
 }
 
 // redacted is blocked() with every known secret value masked: Docker and

@@ -50,6 +50,7 @@ func init() {
 		if !ok {
 			return nil, nil
 		}
+		h.startLateServer()
 		if !h.cfg.Components.Read {
 			// Write side only: no guide or briefing, but the env file, so
 			// that pause can name this session.

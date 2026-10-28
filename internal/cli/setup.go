@@ -47,6 +47,7 @@ type setupFlags struct {
 	questions, undo, force       bool
 	reconfigure                  bool
 	configDir                    string
+	role                         string // --role: the answer role
 }
 
 // subResult is a backsight command's envelope.
@@ -102,7 +103,7 @@ func newSetupCmd(e *env) *cobra.Command {
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if f.undo {
-				if len(f.answers) > 0 || f.answersFile != "" || f.resume || f.questions {
+				if len(f.answers) > 0 || f.answersFile != "" || f.resume || f.questions || f.role != "" {
 					return &output.Error{Code: output.Usage, Message: "--undo takes only --plan and --force"}
 				}
 				res, err := runSetupUndo(cmd.Context(), f, f.force)
@@ -125,6 +126,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.undo, "undo", false, "reverse what setup changed (config, secrets and data are kept)")
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without Claude Code that only holds the memory for your other PCs (default both)")
 	return cmd
 }
 
@@ -229,6 +231,12 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	if s.answer, err = parseAnswers(f.answers, f.answersFile); err != nil {
 		return res, err
 	}
+	if f.role != "" { // --role is the answer role
+		if a, ok := s.answer["role"]; ok && a != f.role {
+			return res, &output.Error{Code: output.Usage, Message: fmt.Sprintf("--role %s and the answer role=%s differ: give one", f.role, a)}
+		}
+		s.answer["role"] = f.role
+	}
 	getenv := os.Getenv
 	if f.configDir != "" {
 		getenv = func(k string) string {
@@ -281,6 +289,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 
 	probes := preflightProbes(ctx, s, extra)
 	probes.SchedulerOff = extra["scheduler"] == "off"
+	probes.ServerOnly = extra["role"] == config.RoleServer
 	if schedulerGOOS == "linux" && !s.schedulerSettled(extra) {
 		probes.UserScheduler = userSession
 	}
@@ -387,6 +396,9 @@ func (s *setupEnv) rerunWith(answer string) string {
 	}
 	if s.f.configDir != "" {
 		parts = append(parts, "--config-dir", shellWord(s.f.configDir))
+	}
+	if s.f.role != "" {
+		parts = append(parts, "--role", shellWord(s.f.role))
 	}
 	if s.f.nonInteractive {
 		parts = append(parts, "--non-interactive")
@@ -747,7 +759,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 	if s.cfg == nil {
 		serverETA = 300 // the first pull downloads the image
 	}
-	return []setupStep{
+	steps := []setupStep{
 		// Secrets first: nothing is written while a key is missing, so the
 		// answers stay free to change.
 		{"secrets", 1, func(context.Context, *setup.Record) (setup.Step, error) {
@@ -1012,6 +1024,22 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			return setup.Step{Name: "backfill", Status: "done", Detail: detail}, nil
 		}},
 	}
+	if answers["role"] == config.RoleServer {
+		for i, st := range steps {
+			if slices.Contains(clientSteps, st.name) {
+				steps[i].eta, steps[i].run = 0, func(context.Context, *setup.Record) (setup.Step, error) { return serverOnlyStep(st.name), nil }
+			}
+		}
+	}
+	return steps
+}
+
+// clientSteps wire Claude Code: a server-only host has none, they are
+// skipped there.
+var clientSteps = []string{"client", "retention", "verify", "reference", "backfill"}
+
+func serverOnlyStep(name string) setup.Step {
+	return setup.Step{Name: name, Status: "skipped", Detail: "server-only host"}
 }
 
 // backupIdentity generates the backup identity when backups are on and
@@ -1170,6 +1198,9 @@ func setupConfig(a map[string]string) []byte {
 	ui, _ := strconv.Atoi(a["ui_port"])
 	raw := string(initialConfig(installFlags{apiPort: api, uiPort: ui, provider: a["provider"], model: a["model"], base: a["base_url"], project: a["project"]}))
 	raw = strings.Replace(raw, "# Written by backsight server install.", "# Written by backsight setup.", 1)
+	if a["role"] == config.RoleServer {
+		raw = strings.Replace(raw, "[server]\n", "[server]\nrole = \"server\"\n", 1)
+	}
 	if a["backups"] == "off" {
 		raw += "\n[backup]\nenabled = false\n"
 	}
@@ -1251,11 +1282,18 @@ func (s *setupEnv) execute(ctx context.Context, res setupResult, interactive boo
 	if answers["backfill"] == "yes" {
 		res.NextSteps = append(res.NextSteps, "your past sessions are being imported in the background: backsight doctor shows the backfill's progress")
 	}
+	if answers["role"] == config.RoleServer {
+		res.NextSteps = append(res.NextSteps, "open the server to your other PCs: backsight server expose --private <this host's LAN or tailnet address> --out <file> "+
+			"writes the connection token they join with (it holds the API key: carry it by hand, never through an agent; backsight server token writes it again)")
+	}
 	if answers["backups"] == "on" {
 		res.NextSteps = append(res.NextSteps, "save the backup key somewhere safe: backsight backup identity show | pass insert -m backsight/backup-identity (or any password manager; at a terminal, without the pipe, to see it)")
 	}
 	res.NextSteps = append(res.NextSteps, "to reverse it: backsight setup --undo (config, secrets and memories are kept)")
 	res.TryFirst = "In a new Claude Code session, ask: \"What do you remember about this project?\""
+	if answers["role"] == config.RoleServer {
+		res.TryFirst = "backsight doctor: the server's own checks (the client ones read \"not a client: server-only host\")"
+	}
 	return res, nil
 }
 
@@ -1431,7 +1469,7 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 	if a["backfill"] == "yes" {
 		backfill = "queue past sessions for jobs tick"
 	}
-	return []setup.Step{
+	steps := []setup.Step{
 		{Name: "config", Status: "planned", Detail: cfgDetail},
 		{Name: "secrets", Status: "planned", Detail: "check llm_api_key (exit 10 with the command to run when missing)"},
 		{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])},
@@ -1443,6 +1481,14 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		{Name: "reference", Status: "planned", Detail: reference},
 		{Name: "backfill", Status: "planned", Detail: backfill},
 	}
+	if a["role"] == config.RoleServer {
+		for i, st := range steps {
+			if slices.Contains(clientSteps, st.Name) {
+				steps[i] = serverOnlyStep(st.Name)
+			}
+		}
+	}
+	return steps
 }
 
 // reuseHint says how to change answers a rerun took from the last run.

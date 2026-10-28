@@ -14,7 +14,9 @@ const (
 	createBreakawayFromJob = 0x01000000
 )
 
-func startDetached(args ...string) error {
+// startDetachedTo starts `backsight <args>` out of the caller's process
+// group, its output going to out (nil: discarded), and does not wait for it.
+func startDetachedTo(out *os.File, args ...string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -23,6 +25,9 @@ func startDetached(args ...string) error {
 	// the job does not kill the flush; else as detached as allowed.
 	for _, flags := range []uint32{createNewProcessGroup | detachedProcess | createBreakawayFromJob, createNewProcessGroup | detachedProcess} {
 		cmd := exec.Command(exe, args...)
+		if out != nil {
+			cmd.Stdout, cmd.Stderr = out, out
+		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: flags}
 		if err = cmd.Start(); err == nil {
 			return cmd.Process.Release()

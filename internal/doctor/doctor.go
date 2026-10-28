@@ -87,6 +87,10 @@ type Env struct {
 	// Scheduler compares the installed scheduler entries with this
 	// binary's templates (nil: not compared).
 	Scheduler func() (SchedulerEntries, error)
+	// ExposureDetail says why a server of this machine exposed on a
+	// private address does not answer, and its fix when not the usual one
+	// ("": nothing to add; nil: not asked).
+	ExposureDetail func() (detail, fix string)
 	InstallProbes
 }
 
@@ -96,17 +100,31 @@ const (
 	diskError      = 256 << 20
 )
 
+// ClientChecks look at Claude Code's side of this machine: its wiring,
+// sessions, notes and recall. A server-only host (server.role = "server")
+// has none: each reads "not a client" there.
+var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "latency", "learning", "noise-headless", "noise-subagent",
+	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "transcripts",
+	"transverse-keyword", "usage", "writes"}
+
 // Run performs every check in a fixed order.
 func Run(ctx context.Context, env Env) Report {
 	var r Report
+	record := func(c Check) {
+		r.Checks = append(r.Checks, c)
+		switch c.Status {
+		case Error:
+			r.Errors++
+		case Warn:
+			r.Warnings++
+		}
+	}
+	cfg, cfgErr := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home)
+	serverOnly := cfgErr == nil && cfg.ServerOnly()
 	add := func(cs ...Check) {
 		for _, c := range cs {
-			r.Checks = append(r.Checks, c)
-			switch c.Status {
-			case Error:
-				r.Errors++
-			case Warn:
-				r.Warnings++
+			if !serverOnly || !slices.Contains(ClientChecks, c.ID) {
+				record(c)
 			}
 		}
 	}
@@ -142,7 +160,9 @@ func Run(ctx context.Context, env Env) Report {
 			add(Check{ID: "purged-documents", Status: Info, Summary: "skipped: " + skipReason(srv)})
 		}
 	}
-	add(checkNoise(ctx, env, cl, tg, bank, srv)...)
+	if !serverOnly { // they ask the bank, for nothing there
+		add(checkNoise(ctx, env, cl, tg, bank, srv)...)
+	}
 	add(checkOwners(env))
 	add(checkReattribution(env))
 	add(checkMaintenance(env.Dirs))
@@ -154,16 +174,15 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
-	add(checkClient(env, loc))
+	if !serverOnly { // it asks Claude Code
+		add(checkClient(env, loc))
+	}
 	add(checkGPU(env.GPUs()))
 	now := time.Now
 	if env.Now != nil {
 		now = env.Now
 	}
-	writeOff := false
-	if cfg, err := config.Load(env.Dirs.ConfigFile(), env.Dirs, env.Home); err == nil {
-		writeOff = !cfg.Components.Write
-	}
+	writeOff := cfgErr == nil && !cfg.Components.Write
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	add(checkBackup(env, now()))
 	add(checkJobs(env.Dirs, now(), env.Linger))
@@ -175,6 +194,11 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkUpdate(env.Dirs, buildinfo.Version, now()))
 	add(installChecks(ctx, env, ref, now())...)
 	add(checkBacksightToml(env))
+	if serverOnly {
+		for _, id := range ClientChecks {
+			record(Check{ID: id, Status: Info, Summary: "not a client: server-only host"})
+		}
+	}
 	return r
 }
 
@@ -257,6 +281,14 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 			c.Fix = "start the older Hindsight server (docker compose up -d in its directory)"
 		} else {
 			c.Fix = "check it with backsight server status, start it with backsight server start (on the server's machine if it is remote)"
+		}
+		if t.Source == "config" && env.ExposureDetail != nil {
+			if detail, fix := env.ExposureDetail(); detail != "" {
+				c.Detail = detail
+				if fix != "" {
+					c.Fix = fix
+				}
+			}
 		}
 		return c, nil
 	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.Unauthorized:

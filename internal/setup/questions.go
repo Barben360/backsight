@@ -104,10 +104,11 @@ type Inputs struct {
 }
 
 // Hidden answers have defaults and are never asked.
-var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on"}
+// role: "server" for a host that only serves the memory (setup --role).
+var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler", "role"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -123,6 +124,41 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 	fromConfig := configAnswers(in.Config)
+	extra := map[string]string{}
+	for k, def := range hidden {
+		v := def
+		if c, ok := fromConfig[k]; ok {
+			if a, given := in.Answers[k]; given && a != c {
+				return nil, nil, &UsageError{fmt.Sprintf("config.toml already sets %s to %q (answer %q): edit %s in config.toml, or drop the answer", k, c, a, configKey[k])}
+			}
+			v = c
+		} else if a, ok := in.Answers[k]; ok {
+			v = a
+		} else if s := in.Saved[k]; s != "" {
+			v = s
+		}
+		if k == "scheduler" {
+			if v != "on" && v != "off" {
+				return nil, nil, &UsageError{fmt.Sprintf("scheduler=%s: on or off", v)}
+			}
+		} else if k == "role" {
+			if v != config.RoleBoth && v != config.RoleServer {
+				return nil, nil, &UsageError{fmt.Sprintf("role=%s: %s or %s", v, config.RoleBoth, config.RoleServer)}
+			}
+		} else if k == "project" {
+			if !projectRE.MatchString(v) {
+				return nil, nil, &UsageError{fmt.Sprintf("project=%s: lowercase letters, digits, - and _", v)}
+			}
+		} else if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {
+			return nil, nil, &UsageError{fmt.Sprintf("%s=%s is not a port", k, v)}
+		}
+		extra[k] = v
+	}
+	if extra["api_port"] == extra["ui_port"] {
+		return nil, nil, &UsageError{"api_port and ui_port must differ"}
+	}
+	// A server-only host runs no Claude Code: nothing of it to ask about.
+	serverOnly := extra["role"] == config.RoleServer
 	pick := func(q *Question) error {
 		ans, given := in.Answers[q.ID]
 		if given && ans == "" && q.ID != "base_url" { // empty is no answer (only a base URL may be empty)
@@ -208,15 +244,17 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 
-	rq := Question{ID: "retention", Prompt: "How long should Claude Code keep its transcripts? Backfill and memory rebuilds read them.",
-		Free: true, Default: RecommendedRetention, Recommended: RecommendedRetention,
-		Options: []Option{{Value: RecommendedRetention, Label: "ten years"}, {Value: "keep", Label: "leave Claude Code's setting as it is", Caveat: "Claude Code deletes transcripts after 30 days by default"}}}
-	if err := add(rq); err != nil {
-		return nil, nil, err
-	}
-	if v := qs[len(qs)-1].Value; v != "" && v != "keep" {
-		if n, err := strconv.Atoi(v); err != nil || n < 1 {
-			return nil, nil, &UsageError{fmt.Sprintf("retention=%s: a number of days ≥ 1, or keep", v)}
+	if !serverOnly {
+		rq := Question{ID: "retention", Prompt: "How long should Claude Code keep its transcripts? Backfill and memory rebuilds read them.",
+			Free: true, Default: RecommendedRetention, Recommended: RecommendedRetention,
+			Options: []Option{{Value: RecommendedRetention, Label: "ten years"}, {Value: "keep", Label: "leave Claude Code's setting as it is", Caveat: "Claude Code deletes transcripts after 30 days by default"}}}
+		if err := add(rq); err != nil {
+			return nil, nil, err
+		}
+		if v := qs[len(qs)-1].Value; v != "" && v != "keep" {
+			if n, err := strconv.Atoi(v); err != nil || n < 1 {
+				return nil, nil, &UsageError{fmt.Sprintf("retention=%s: a number of days ≥ 1, or keep", v)}
+			}
 		}
 	}
 
@@ -224,14 +262,14 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		Options: []Option{{Value: "on", Label: "daily encrypted backups"}, {Value: "off", Label: "no backups", Caveat: "a lost disk loses the memory"}}}); err != nil {
 		return nil, nil, err
 	}
-	if in.ReferencePieces > 0 {
+	if in.ReferencePieces > 0 && !serverOnly {
 		if err := add(Question{ID: "reference", Prompt: fmt.Sprintf("%d pieces of an older Hindsight install are wired into Claude Code. Retire them once backsight is installed (undoable; the old server is left untouched)?", in.ReferencePieces),
 			Default: "retire", Recommended: "retire",
 			Options: []Option{{Value: "retire", Label: "retire them (backup copies kept, setup --undo restores them)"}, {Value: "keep", Label: "leave them", Caveat: "both memories then inject into every prompt"}}}); err != nil {
 			return nil, nil, err
 		}
 	}
-	if in.Backfill != nil {
+	if in.Backfill != nil && !serverOnly {
 		if n, cost := in.Backfill(model); n > 0 {
 			sessions := "sessions"
 			if n == 1 {
@@ -253,35 +291,6 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		return nil, nil, err
 	}
 
-	extra := map[string]string{}
-	for k, def := range hidden {
-		v := def
-		if c, ok := fromConfig[k]; ok {
-			if a, given := in.Answers[k]; given && a != c {
-				return nil, nil, &UsageError{fmt.Sprintf("config.toml already sets %s to %q (answer %q): edit %s in config.toml, or drop the answer", k, c, a, configKey[k])}
-			}
-			v = c
-		} else if a, ok := in.Answers[k]; ok {
-			v = a
-		} else if s := in.Saved[k]; s != "" {
-			v = s
-		}
-		if k == "scheduler" {
-			if v != "on" && v != "off" {
-				return nil, nil, &UsageError{fmt.Sprintf("scheduler=%s: on or off", v)}
-			}
-		} else if k == "project" {
-			if !projectRE.MatchString(v) {
-				return nil, nil, &UsageError{fmt.Sprintf("project=%s: lowercase letters, digits, - and _", v)}
-			}
-		} else if n, err := strconv.Atoi(v); err != nil || n < 1 || n > 65535 {
-			return nil, nil, &UsageError{fmt.Sprintf("%s=%s is not a port", k, v)}
-		}
-		extra[k] = v
-	}
-	if extra["api_port"] == extra["ui_port"] {
-		return nil, nil, &UsageError{"api_port and ui_port must differ"}
-	}
 	return qs, extra, nil
 }
 
@@ -336,7 +345,7 @@ func orDefault(v, def string) string {
 
 // configKey names the config.toml key behind an answer.
 var configKey = map[string]string{"provider": "llm.provider", "model": "llm.model", "base_url": "llm.base_url",
-	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project"}
+	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role"}
 
 // configAnswers are the answers an existing config already gives.
 func configAnswers(c *config.Config) map[string]string {
@@ -357,6 +366,7 @@ func configAnswers(c *config.Config) map[string]string {
 	}
 	out["ui_port"] = strconv.Itoa(c.Server.UIPort)
 	out["project"] = c.Server.Project
+	out["role"] = c.Server.Role
 	for k, v := range out {
 		if v == "" && k != "base_url" {
 			delete(out, k)

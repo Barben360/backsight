@@ -860,9 +860,8 @@ func purgeBanks(banks []otherBank) []string {
 // process group: a Ctrl-C must not kill a rollback's docker.
 func ownGroupRuntime(cfg config.Config) server.Runtime {
 	c := composeFor(cfg)
-	if r, ok := c.Runner.(server.DockerRunner); ok {
-		r.OwnGroup = true
-		c.Runner = r
+	if r, ok := c.Runner.(interface{ InOwnGroup() server.Runner }); ok {
+		c.Runner = r.InOwnGroup()
 	}
 	return server.Docker{Compose: c, Cfg: cfg}
 }

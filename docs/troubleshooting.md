@@ -79,6 +79,41 @@ While the server is down, nothing is lost: sessions stay in Claude Code's transc
 
 If the server rejects the API key, the key in `secrets.toml` and the server's `.env` differ: `backsight server render` writes the `.env` from your secrets again, then `backsight server start`.
 
+On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host.
+
+### After a reboot the server was down for a while (private exposure)
+
+A server opened to other PCs (`backsight server expose --private <ip>`) listens on that address and on `127.0.0.1` from one container. When Docker starts at boot before the address exists (Tailscale or DHCP still coming up, or a new DHCP lease), the container cannot listen on it and does not start, and Docker does not try again: this machine's own memory is down too.
+
+backsight starts it again on its own once the address is there: `backsight jobs tick` (every 15 minutes) and the next Claude Code session (at most every 5 minutes) run `backsight server start` in the background, its output in `logs/server-start.log` in the state directory (`backsight paths` shows it). A server you stopped with `backsight server stop` stays stopped. doctor's `server` check says whether the address is still missing.
+
+To start Docker after Tailscale on Linux, so the address is there first:
+
+```sh
+sudo systemctl edit docker.service
+```
+
+and add:
+
+```ini
+[Unit]
+After=tailscaled.service
+Wants=tailscaled.service
+```
+
+To stop depending on the address, `backsight server expose --loopback` takes the server back to this machine only.
+
+## Another PC cannot reach the server
+
+`backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:
+
+- **"is not an address of this machine"**: the address belongs to no network interface of the host, so the server could not listen on it. Pick one of the private addresses the message lists; for a tailnet, check that Tailscale is up (`tailscale ip -4`).
+- **"the API key travels unencrypted on this network"**: the address is on a LAN, not a tailnet, and every request carries the API key in clear to anyone on that network. Prefer the host's tailnet address (Tailscale: `100.x`). On a network you trust, rerun the same command with `--answer cleartext_lan=yes`.
+
+If the command exits 30, the server did not answer on the new address: `config.toml` was put back and the server started as before. If it exits 20 after the change, `config.toml` was put back but the server did not start again on it: the message says what to run.
+
+`backsight server install` (and setup's server step) gives the server an id, which every connection token carries. If the server does not answer that step, install warns `server id: …` and goes on: memory works on this machine without it. `backsight server install` again writes it, and so does the first connection token made: `backsight server expose --private <ip>`, or `backsight server token` once the server is exposed.
+
 ## Memories are not recalled
 
 1. Restart Claude Code, or run `/reload-plugins`: a session started before setup or an update has no plugin, or the old one.

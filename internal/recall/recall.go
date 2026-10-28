@@ -8,6 +8,7 @@ package recall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -83,6 +84,8 @@ type ScopeMeta struct {
 	MS  int    `json:"ms"`
 	Raw int    `json:"raw"` // results before the score floor
 	Err string `json:"err,omitempty"`
+	// Unauthorized: the server refused the API key.
+	Unauthorized bool `json:"-"`
 }
 
 // Result of a search. Raw: some hits are raw facts, standing in for a scope
@@ -164,7 +167,9 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 		}
 		m.MS = max(m.MS, a.ms)
 		if a.err != nil {
+			var apiErr *hindsight.APIError
 			m.OK, m.Err = false, a.err.Error()
+			m.Unauthorized = errors.As(a.err, &apiErr) && apiErr.Kind == hindsight.Unauthorized
 		}
 		for _, r := range a.hits {
 			m.Raw++

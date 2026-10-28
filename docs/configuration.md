@@ -32,6 +32,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 | `server.url` | `"http://127.0.0.1:8888"` | The server's API address. With `server.mode = "local"`, its port is the API port the server publishes, and it must be explicit. |
 | `server.bank` | `"claude-memory"` | The [bank](glossary.md#bank) that holds your memory. Setup writes `"backsight"` for a new install; without the key the bank is `claude-memory`, the name of installs before v0.1.4-m5, which `backsight bank rename` moves to `backsight` (the update to v0.1.4-m5 does it). backsight also uses `<bank>-docs` for these docs and `<bank>-control` for its own records. |
 | `server.mode` | `"local"` | `"local"`: backsight runs the server in Docker on this machine and manages it. `"remote"`: you run the server elsewhere; backsight only talks to `server.url`, and the commands that manage a local server (`server`, `backup`, `uninstall --stop`) refuse. |
+| `server.role` | `"both"` | `"both"`: this PC runs Claude Code, and its server too when `server.mode = "local"`. `"server"`: a host that only serves the memory, without Claude Code; `backsight setup --role server` sets it (see [install](install.md#a-server-only-host)); it needs `server.mode = "local"`. |
 | `server.ui_port` | `9999` | Port of the Hindsight web UI, on the same address as the API. Must differ from the API port. |
 | `server.compose_dir` | `"<data>/server"` | Where the server's `compose.yaml`, `.env` and your own `compose.override.yaml` live. An absolute path. |
 | `server.project` | `"backsight"` | The Docker Compose project name, and the prefix of the server's volumes. Another name runs a second install beside the first (lowercase letters, digits, `-` and `_`). |
@@ -113,7 +114,7 @@ Check your provider's current prices: they change, and some (DeepSeek's) differ 
 
 | Key | Default | Effect |
 |---|---|---|
-| `network.exposure` | `"loopback"` | `"loopback"`: the server listens on `127.0.0.1` only. `"private"`: it listens on `network.bind_ip`, so other machines of your network can reach it, over plain HTTP; its API and UI still need their keys. |
+| `network.exposure` | `"loopback"` | `"loopback"`: the server listens on `127.0.0.1` only. `"private"`: it listens on `network.bind_ip` as well, so other machines of your network can reach it, over plain HTTP; its API and UI still need their keys. `backsight server expose` sets both keys and restarts the server. |
 | `network.bind_ip` | `""` | With `"private"` exposure, the address to listen on: a private LAN or tailnet address (10/8, 172.16/12, 192.168/16, 100.64/10, IPv6 ULA), never a public one. |
 | `network.breaker_failures` | `3` | After this many prompts in a row where the server could not be reached, recall pauses… |
 | `network.breaker_pause_min` | `5` | …for this many minutes, so an unreachable server does not slow every prompt. |

@@ -74,6 +74,8 @@ var rules = slices.Concat([]rule{
 	{kind: "age_identity", re: regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Z]{16,}`)},
 	{kind: "anthropic_key", re: regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}`)},
 	{kind: "openai_key", re: regexp.MustCompile(`\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}`)},
+	// A backsight connection token: it carries the API key.
+	{kind: "backsight_token", re: regexp.MustCompile(`\bbst1\.[A-Za-z0-9_-]{40,}`)},
 	{kind: "stripe_key", re: regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`)},
 	{kind: "github_token", re: regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,})`)},
 	{kind: "npm_token", re: regexp.MustCompile(`\bnpm_[A-Za-z0-9]{36}`)},

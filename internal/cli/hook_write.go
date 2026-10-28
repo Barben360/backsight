@@ -32,7 +32,7 @@ const (
 
 // spawnDetached starts `backsight <args>` outside the hook's process group,
 // so it outlives SessionEnd's 1.5 s budget; tests replace it.
-var spawnDetached = startDetached
+var spawnDetached = func(args ...string) error { return startDetachedTo(nil, args...) }
 
 func init() {
 	handlers["pre-tool-use"] = func(ctx context.Context, _ string, input []byte) ([]byte, error) {

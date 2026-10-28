@@ -46,6 +46,9 @@ type tickResult struct {
 	// Binary: the self-check of this binary, made on its first tick
 	// (verified | unsigned | failed; SPEC §11.1).
 	Binary string `json:"binary,omitempty"`
+	// Server: the start of a server whose private address came after
+	// Docker started it (startLateServer), "" when none was needed.
+	Server string `json:"server,omitempty"`
 	MS     int    `json:"ms"`
 }
 
@@ -69,7 +72,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -93,6 +96,10 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// After the maintenance check: it writes state.json, whose lock
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
+			// First: a server left down at boot makes every send below fail.
+			sctx, scancel := context.WithTimeout(cmd.Context(), serverCheckTimeout)
+			res.Server = startLateServer(sctx, d, cfg)
+			scancel()
 
 			f, err := newFlusher(d, home, cfg, sec, true)
 			if err != nil {
@@ -174,6 +181,9 @@ func tickText(r tickResult) string {
 	}
 	if r.Purges != "" {
 		msg += ", " + r.Purges
+	}
+	if r.Server != "" {
+		msg += ", " + r.Server
 	}
 	return msg + "\n"
 }

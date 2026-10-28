@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -73,7 +74,64 @@ func (d mcpDeps) freshPrivacy() config.Config {
 	return cfg
 }
 
-// mcpDeps is what the tools need, resolved once per server.
+// mcpKey holds what carries the API key for the server's whole life. A
+// `server token --rotate` on this host gives secrets.toml a new key (hooks
+// and jobs read it on each run): a tool call the server refuses reads it
+// again and, when it changed, is tried once more with it.
+type mcpKey struct {
+	mu     sync.Mutex
+	file   string // secrets.toml
+	cfg    config.Config
+	sec    config.Secrets
+	engine *recall.Engine
+}
+
+func (k *mcpKey) get() (config.Secrets, *recall.Engine) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.sec, k.engine
+}
+
+// refresh follows secrets.toml after the server refused used, the key of
+// the refused call, and says whether to try the call again: the key
+// changed, now or in a concurrent call. An unchanged key: no retry.
+func (k *mcpKey) refresh(used string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.sec.APIKey != used {
+		return true
+	}
+	sec, err := config.LoadSecrets(k.file)
+	if err != nil || sec.APIKey == "" || sec.APIKey == used {
+		return false
+	}
+	eng, err := newEngine(k.cfg, sec)
+	if err != nil {
+		return false
+	}
+	k.sec, k.engine = sec, eng
+	return true
+}
+
+func unauthorized(err error) bool {
+	var apiErr *hindsight.APIError
+	return errors.As(err, &apiErr) && apiErr.Kind == hindsight.Unauthorized
+}
+
+// refused: every scope of r that failed was refused the key, and one did.
+func refused(r recall.Result) bool {
+	seen := false
+	for _, m := range r.Scopes {
+		if !m.OK && !m.Unauthorized {
+			return false
+		}
+		seen = seen || m.Unauthorized
+	}
+	return seen
+}
+
+// mcpDeps is what the tools need, resolved once per server; sec and
+// engine are the start's, which mcpKey follows.
 type mcpDeps struct {
 	dirs        paths.Dirs
 	home        string
@@ -99,6 +157,7 @@ func errorResult(s string) *mcp.CallToolResult {
 // newMCPServer builds the memory server (SPEC §7).
 func newMCPServer(deps mcpDeps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.ShortGuide})
+	key := &mcpKey{file: deps.dirs.SecretsFile(), cfg: deps.cfg, sec: deps.sec, engine: deps.engine}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
@@ -119,7 +178,12 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				minScore = *a.MinScore
 			}
 			live, found := deps.live()
-			res := searchMemory(ctx, deps.dirs, deps.home, deps.cfg, deps.engine, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			sec, eng := key.get()
+			res := searchMemory(ctx, deps.dirs, deps.home, deps.cfg, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			if refused(res) && key.refresh(sec.APIKey) {
+				_, eng = key.get()
+				res = searchMemory(ctx, deps.dirs, deps.home, deps.cfg, eng, live.Project, live.Cwd, a.Queries, a.Projects, a.Scope == "all", limit, minScore)
+			}
 			deps.tw.Emit(telemetry.Tool{Name: "memory_search", MS: int(time.Since(start).Milliseconds()), Hits: len(res.Hits), OK: scopesOK(res), Live: found})
 			if len(res.Hits) == 0 && !scopesOK(res) {
 				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil
@@ -136,7 +200,12 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if !memoryIDRE.MatchString(id) || strings.Contains(id, "..") {
 				return errorResult("id: the memory id shown by memory_search"), nil, nil
 			}
-			m, err := deps.engine.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
+			sec, eng := key.get()
+			m, err := eng.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
+			if unauthorized(err) && key.refresh(sec.APIKey) {
+				_, eng = key.get()
+				m, err = eng.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
+			}
 			deps.tw.Emit(telemetry.Tool{Name: "memory_read", MS: int(time.Since(start).Milliseconds()), Hits: map[bool]int{true: 1}[err == nil], OK: err == nil})
 			var apiErr *hindsight.APIError
 			if errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
@@ -168,8 +237,16 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				return errorResult(err.Error()), nil, nil
 			}
 			// What this fact updates or repeats, before it is stored (SPEC §7).
-			similar := deps.engine.Search(ctx, recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3})
-			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, deps.sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
+			// A refused key is followed here, before the note is queued: the
+			// store itself is never sent twice.
+			sec, eng := key.get()
+			q := recall.Query{Queries: []string{a.Text}, Current: proj, MinScore: searchMinScore, Limit: 3}
+			similar := eng.Search(ctx, q)
+			if refused(similar) && key.refresh(sec.APIKey) {
+				sec, eng = key.get()
+				similar = eng.Search(ctx, q)
+			}
+			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found})
 			if res.Document == "" {
 				return errorResult(err.Error()), nil, nil

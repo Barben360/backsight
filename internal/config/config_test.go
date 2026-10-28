@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -90,6 +91,29 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	}
 }
 
+func TestServerRole(t *testing.T) {
+	cfg, err := Load(write(t, "[server]\nbank = \"work\"\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Role != RoleBoth || cfg.ServerOnly() {
+		t.Errorf("without role: got %q, ServerOnly %v; want %q, false", cfg.Server.Role, cfg.ServerOnly(), RoleBoth)
+	}
+	cfg, err = Load(write(t, "[server]\nrole = \"server\"\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Role != RoleServer || !cfg.ServerOnly() {
+		t.Errorf("role = server: got %q, ServerOnly %v", cfg.Server.Role, cfg.ServerOnly())
+	}
+	if _, err := Load(write(t, "[server]\nrole = \"client\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "server.role") {
+		t.Errorf("role = client: want an error naming server.role, got %v", err)
+	}
+	if _, err := Load(write(t, "[server]\nrole = \"server\"\nmode = \"remote\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "server.role") {
+		t.Errorf("role = server with mode = remote: want an error naming server.role, got %v", err)
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	cases := []struct{ name, content, wantInErr string }{
 		{"unknown key", "[recall]\nmin_scor = 0.5\n", "recall.min_scor"},
@@ -148,6 +172,8 @@ func TestValidate(t *testing.T) {
 		{"breaker failures", func(c *Config) { c.Network.BreakerFailures = 0 }, "network.breaker_failures"},
 		{"breaker pause", func(c *Config) { c.Network.BreakerPauseMin = 0 }, "network.breaker_pause_min"},
 		{"outbox warn zero", func(c *Config) { c.Hooks.OutboxWarnMB = 0 }, "hooks.outbox_warn_mb"},
+		{"role unknown", func(c *Config) { c.Server.Role = "client" }, "server.role"},
+		{"server-only host with a remote server", func(c *Config) { c.Server.Role, c.Server.Mode = RoleServer, "remote" }, "server.role"},
 		{"bank empty", func(c *Config) { c.Server.Bank = "" }, "server.bank"},
 		{"exposure", func(c *Config) { c.Network.Exposure = "public" }, "network.exposure"},
 		{"private needs ip", func(c *Config) { c.Network.Exposure = "private" }, "network.bind_ip"},
@@ -341,6 +367,39 @@ func TestSetExcludePathsWithHashesAndQuotesInValues(t *testing.T) {
 	got, err := SetExcludePaths([]byte(in), []string{"/a#b", "/c]d", "/e"})
 	if err != nil || string(got) != "[privacy]\nexclude_paths = [\"/a#b\", \"/c]d\", \"/e\"] # kept \"note\"\n" {
 		t.Errorf("%q %v", got, err)
+	}
+}
+
+// server expose sets the exposure and its address, keeping the rest of the
+// file; loopback removes the address.
+func TestSetNetwork(t *testing.T) {
+	cases := []struct {
+		name, in, exposure, ip, want string
+	}{
+		{"private, no section", "# mine\n[server]\nbank = \"b\"\n", "private", "100.101.1.2",
+			"# mine\n[server]\nbank = \"b\"\n\n[network]\nexposure = \"private\"\nbind_ip = \"100.101.1.2\"\n"},
+		{"private, replaced", "[network]\nexposure = \"private\" # LAN\nbind_ip = \"192.168.1.10\"\nbreaker_failures = 4\n", "private", "100.101.1.2",
+			"[network]\nexposure = \"private\" # LAN\nbind_ip = \"100.101.1.2\"\nbreaker_failures = 4\n"},
+		{"loopback removes bind_ip", "# mine\n[network]\nexposure = \"private\"\nbind_ip = \"192.168.1.10\"\nbreaker_failures = 4\n[llm]\nmodel = \"m\"\n", "loopback", "",
+			"# mine\n[network]\nexposure = \"loopback\"\nbreaker_failures = 4\n[llm]\nmodel = \"m\"\n"},
+	}
+	for _, c := range cases {
+		got, err := SetNetwork([]byte(c.in), c.exposure, c.ip)
+		if err != nil || string(got) != c.want {
+			t.Errorf("%s:\ngot  %q (%v)\nwant %q", c.name, got, err, c.want)
+		}
+	}
+	if _, err := SetNetwork([]byte("network.exposure = \"private\"\n"), "loopback", ""); err == nil {
+		t.Error("a dotted key was edited")
+	}
+}
+
+func TestIsTailnet(t *testing.T) {
+	for ip, want := range map[string]bool{"100.101.1.2": true, "100.64.0.1": true, "fd7a:115c:a1e0::5": true,
+		"192.168.1.10": false, "10.0.0.2": false, "100.128.0.1": false, "fd00::1": false} {
+		if got := IsTailnet(net.ParseIP(ip)); got != want {
+			t.Errorf("IsTailnet(%s) = %v, want %v", ip, got, want)
+		}
 	}
 }
 

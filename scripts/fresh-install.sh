@@ -206,6 +206,65 @@ jq -e '(.segments // {}) | length == 0' "$BACKSIGHT_HOME/state/cursors/$purged.j
 # signed build, server upgrade included, passes.
 uc_proof
 
+# 9a. Exposure and the connection token (M6 block 1, decision 0073): the
+# updated build opens the server on this machine's private address, hands
+# out its token, keeps the server id across hands-out, and a rotation
+# kills the old key. The token files hold the key: they are only checked
+# for existence and never printed. With no private IPv4 (the source of
+# the default route), the leg fails on CI and is skipped on a dev machine.
+sv=$(uc_shim)
+priv_ip=
+if command -v ip >/dev/null; then
+  cand=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
+  case $cand in
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) priv_ip=$cand ;;
+  esac
+fi
+if [ -z "$priv_ip" ]; then
+  # On CI a skip would turn the proof into a pass with no coverage.
+  [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] || fail "no private IPv4 on the default route (is ip installed?): the exposure leg cannot run on CI"
+  echo "fresh-install: skipping the exposure leg: no private IPv4 on the default route" >&2
+else
+  health() { curl -fsS --max-time 10 "http://$1:$port/health" >/dev/null; } # health <ip>
+  banks_status() { # banks_status <key>: the HTTP status of the banks list with that key
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" "http://127.0.0.1:$port/v1/default/banks"
+  }
+  # The commands' JSON never carries the key; a failure shows it anyway
+  # with any api_key value masked.
+  show() { sed 's/"api_key": *"[^"]*"/"api_key":"..."/g' "$1" >&2; }
+  "$sv" server expose --private "$priv_ip" --answer cleartext_lan=yes --json --out "$work/token" > "$work/expose.json" ||
+    { show "$work/expose.json"; fail "server expose --private $priv_ip failed"; }
+  jq -e --arg ip "$priv_ip" '.ok and .data.exposure == "private" and .data.bind_ip == $ip' "$work/expose.json" >/dev/null ||
+    { show "$work/expose.json"; fail "expose.json: want ok, exposure private, bind_ip $priv_ip"; }
+  [ -s "$work/token" ] || fail "server expose wrote no token file"
+  health "$priv_ip" || fail "/health does not answer on $priv_ip after expose --private"
+  health 127.0.0.1 || fail "/health does not answer on 127.0.0.1 after expose --private"
+  "$sv" server token --json --out "$work/token2" > "$work/token2.json" || { show "$work/token2.json"; fail "server token failed"; }
+  "$sv" server token --json --out "$work/token2b" > "$work/token2b.json" || { show "$work/token2b.json"; fail "server token (second time) failed"; }
+  sid=$(jq -r '.data.server_id // empty' "$work/token2.json")
+  [ -n "$sid" ] && [ "$sid" = "$(jq -r '.data.server_id // empty' "$work/token2b.json")" ] || fail "server token handed out two different server ids"
+  jq -e --arg ip "$priv_ip" '.ok and (.data.url | contains($ip)) and (.data.bank | length > 0) and (.data.written | length > 0) and (.data | has("api_key") | not)' "$work/token2.json" >/dev/null ||
+    { show "$work/token2.json"; fail "token2.json: want ok, the private url, a bank, the file written and no key"; }
+  [ -s "$work/token2" ] && [ -s "$work/token2b" ] || fail "server token wrote no token file"
+  # The key stays in these variables: never echoed, never traced.
+  { set +x; } 2>/dev/null
+  old_key=$(rc_key)
+  [ -n "$old_key" ] || fail "no api_key in the isolated secrets.toml"
+  [ "$(banks_status "$old_key")" = 200 ] || fail "the banks list refuses the current key before the rotation"
+  "$sv" server token --rotate --json --out "$work/token3" > "$work/token3.json" || { show "$work/token3.json"; fail "server token --rotate failed"; }
+  [ -s "$work/token3" ] || fail "server token --rotate wrote no token file"
+  new_key=$(rc_key)
+  [ -n "$new_key" ] && [ "$new_key" != "$old_key" ] || fail "the rotation left the same api_key in secrets.toml"
+  [ "$(banks_status "$old_key")" = 401 ] || fail "the old key still works after the rotation (want 401)"
+  [ "$(banks_status "$new_key")" = 200 ] || fail "the new key is refused after the rotation (want 200)"
+  [ "$(jq -r '.data.server_id' "$work/token3.json")" = "$sid" ] || fail "the rotation changed the server id"
+  unset old_key new_key
+  "$sv" server expose --loopback --json > "$work/expose-loopback.json" || { show "$work/expose-loopback.json"; fail "server expose --loopback failed"; }
+  health 127.0.0.1 || fail "/health does not answer on 127.0.0.1 after expose --loopback"
+  if health "$priv_ip"; then fail "/health still answers on $priv_ip after expose --loopback"; fi
+  "$sv" server status --json > "$work/status-loopback.json" || { cat "$work/status-loopback.json" >&2; fail "the server is not healthy after closing the exposure"; }
+fi
+
 # 10. Undo unwires Claude Code, stops the server, and keeps config and data.
 "$bin" setup --undo --json > "$work/undo.json" || fail "setup --undo failed"
 if claude plugin list --json | jq -e 'map(.id) | index("backsight@backsight") != null' >/dev/null; then fail "the plugin survived undo"; fi
@@ -354,4 +413,4 @@ for p in "$BACKSIGHT_HOME/config" "$BACKSIGHT_HOME/state" "$BACKSIGHT_HOME/data/
 done
 backups_after=$(cd "$backups_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum)
 [ "$backups_after" = "$backups_before" ] || { echo "before: $backups_before" >&2; echo "after:  $backups_after" >&2; fail "uninstall changed the backups"; }
-echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-appended and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, undo, set up again over kept data, client and jobs wired again, uninstall) on project $project"
+echo "fresh-install: ok (setup with verify, store, search, doctor, backup, restore epoch $rc_epoch_before -> $rc_epoch_after with the lost session re-sent once, the live segment re-appended and a purge kept, update $uc_old -> $uc_new with its server upgrade after two rolled back ones, ${priv_ip:+exposure on $priv_ip with token and rotation, }undo, set up again over kept data, client and jobs wired again, uninstall) on project $project"

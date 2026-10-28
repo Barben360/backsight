@@ -84,8 +84,10 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "{{.Bind}}:{{.APIPort}}:8888"
-      - "{{.Bind}}:{{.UIPort}}:9999"
+{{- range .Binds}}
+      - "{{.}}:{{$.APIPort}}:8888"
+      - "{{.}}:{{$.UIPort}}:9999"
+{{- end}}
     env_file:
       - .env
     # A model served on this machine (Ollama) is at host.docker.internal:
@@ -128,12 +130,15 @@ func RenderImage(cfg config.Config, sec config.Secrets, host, image string) (Fil
 	if err != nil {
 		return Files{}, err
 	}
-	bind := "127.0.0.1"
+	// Loopback is always published: the host's own client keeps server.url
+	// on 127.0.0.1 when the server is opened to other PCs.
+	binds := []string{"127.0.0.1"}
 	if cfg.Network.Exposure == "private" {
-		bind = cfg.Network.BindIP
-	}
-	if strings.Contains(bind, ":") { // IPv6: Compose wants [addr]:port
-		bind = "[" + bind + "]"
+		bind := cfg.Network.BindIP
+		if strings.Contains(bind, ":") { // IPv6: Compose wants [addr]:port
+			bind = "[" + bind + "]"
+		}
+		binds = append(binds, bind)
 	}
 	var compose bytes.Buffer
 	project := cfg.Server.Project
@@ -141,7 +146,7 @@ func RenderImage(cfg config.Config, sec config.Secrets, host, image string) (Fil
 		project = Project
 	}
 	if err := composeTmpl.Execute(&compose, map[string]any{"Project": project, "Postgres": PostgresImage, "Hindsight": image,
-		"Bind": bind, "APIPort": apiPort, "UIPort": cfg.Server.UIPort}); err != nil {
+		"Binds": binds, "APIPort": apiPort, "UIPort": cfg.Server.UIPort}); err != nil {
 		return Files{}, err
 	}
 
