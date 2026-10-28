@@ -47,12 +47,14 @@ var probeScript = strings.Join([]string{
 // $1 too when given (a test key).
 var installScript = strings.Join([]string{
 	`set -eu`,
-	`d=$(mktemp -d)`,
-	`cleanup() { rm -rf -- "$d"; }`,
+	// The traps come first: once the directory exists, a signal removes it.
+	`d=`,
+	`cleanup() { if [ -n "$d" ]; then rm -rf -- "$d"; fi; }`,
 	`trap cleanup EXIT`,
 	`trap "exit 129" HUP`, // dash and zsh run no EXIT trap on a signal's death
 	`trap "exit 130" INT`,
 	`trap "exit 143" TERM`,
+	`d=$(mktemp -d)`,
 	`tar -xf - -C "$d"`,
 	`if [ -n "${1:-}" ]; then BACKSIGHT_INSTALL_PUBKEY=$1; export BACKSIGHT_INSTALL_PUBKEY; fi`,
 	`BACKSIGHT_RELEASE_DIR=$d/release sh "$d/install.sh"`,
