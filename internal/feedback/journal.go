@@ -204,3 +204,31 @@ func ReadFrom(file string, offset int64) (events []Event, skipped int, err error
 		}
 	}
 }
+
+// ReadSince returns the events of file from byte offset on, then those of
+// the later month files beside it: a turn that began before a month's end
+// goes on in the next file.
+func ReadSince(file string, offset int64) (events []Event, skipped int, err error) {
+	if file == "" {
+		return nil, 0, errors.New("no journal position")
+	}
+	if events, skipped, err = ReadFrom(file, offset); err != nil {
+		return events, skipped, err
+	}
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(file), "journal-*.jsonl"))
+	if err != nil {
+		return events, skipped, err
+	}
+	slices.Sort(files)
+	for _, f := range files {
+		if filepath.Base(f) <= filepath.Base(file) {
+			continue
+		}
+		ev, sk, err := ReadFrom(f, 0)
+		events, skipped = append(events, ev...), skipped+sk
+		if err != nil {
+			return events, skipped, err
+		}
+	}
+	return events, skipped, nil
+}

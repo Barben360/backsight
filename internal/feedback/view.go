@@ -3,9 +3,11 @@ package feedback
 import (
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Show is one memory put in front of the agent, read back from a shows
@@ -73,4 +75,101 @@ func Resolve(ref string, shown []Show) (string, error) {
 		return "", ErrUnknown
 	}
 	return match, nil
+}
+
+// Check is what the end of a turn needs to know about one agent: the
+// memories shown to it, whether it declared (a memory_credit call of the
+// turn), whether it was already asked to, and what it declared.
+type Check struct {
+	Shown             []Show
+	Declared, Blocked bool
+	None              bool     // a credit of the turn said none
+	Credited          []string // the ids its used credits named
+}
+
+// CheckTurn is turn's check for agent ("" is the main agent) of session;
+// withBriefing adds the main agent's briefing shows (turn ""), shown
+// before the first prompt.
+func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) Check {
+	var c Check
+	for _, s := range Shows(events, session) {
+		if s.Agent == agent && (s.Turn == turn || withBriefing && agent == "" && s.Turn == "") {
+			c.Shown = append(c.Shown, s)
+		}
+	}
+	for _, e := range events {
+		if e.Session != session || e.Turn != turn || e.Agent != agent {
+			continue
+		}
+		switch {
+		case e.Kind == "credit":
+			c.Declared = true
+			c.None = c.None || e.Verdict == "none"
+			for _, id := range e.IDs {
+				if !slices.Contains(c.Credited, id) {
+					c.Credited = append(c.Credited, id)
+				}
+			}
+		case e.Kind == "stop" && e.Outcome == "blocked":
+			c.Blocked = true
+		}
+	}
+	return c
+}
+
+// Honesty flags (audit only, never fed to the ranking): a declaration the
+// final reply seems to contradict.
+const (
+	FlagNoneWithOverlap      = "none_with_overlap"      // declared none, but the reply repeats a shown memory
+	FlagCreditWithoutOverlap = "credit_without_overlap" // a credited memory the reply does not echo
+	noneOverlapMin           = 0.5
+	creditOverlapMin         = 0.2
+)
+
+// Flags compares reply with texts (memory id to text) of the memories c
+// shows and credits; a memory without a text, or without a word to
+// compare, flags nothing.
+func (c Check) Flags(reply string, texts map[string]string) []string {
+	var flags []string
+	if c.None && slices.ContainsFunc(c.Shown, func(s Show) bool {
+		text := texts[s.ID]
+		return len(words(text)) > 0 && Overlap(reply, text) >= noneOverlapMin
+	}) {
+		flags = append(flags, FlagNoneWithOverlap)
+	}
+	if slices.ContainsFunc(c.Credited, func(id string) bool {
+		text := texts[id]
+		return len(words(text)) > 0 && Overlap(reply, text) < creditOverlapMin
+	}) {
+		flags = append(flags, FlagCreditWithoutOverlap)
+	}
+	return flags
+}
+
+// Overlap is the share of memory's distinct words (lowercase, 4 letters or
+// digits or more) that reply contains; 0 when memory has none.
+func Overlap(reply, memory string) float64 {
+	mem := words(memory)
+	if len(mem) == 0 {
+		return 0
+	}
+	in := words(reply)
+	n := 0
+	for w := range mem {
+		if in[w] {
+			n++
+		}
+	}
+	return float64(n) / float64(len(mem))
+}
+
+// words is the set of s's lowercase words of at least 4 letters or digits.
+func words(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		if len([]rune(w)) >= 4 {
+			set[w] = true
+		}
+	}
+	return set
 }

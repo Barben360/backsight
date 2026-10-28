@@ -73,7 +73,7 @@ func TestMonthlyFilesUseUTC(t *testing.T) {
 // Every A.4 event names itself as the spec does.
 func TestEventNames(t *testing.T) {
 	cases := map[string]Event{"prompt": Prompt{}, "outcome": Outcome{}, "briefing": Briefing{}, "briefing_outcome": BriefingOutcome{},
-		"tool": Tool{}, "gate": Gate{}, "retain": Retain{}, "hook_failure": HookFailure{}, "job": Job{}}
+		"tool": Tool{}, "gate": Gate{}, "retain": Retain{}, "hook_failure": HookFailure{}, "job": Job{}, "credit_check": CreditCheck{}}
 	for want, e := range cases {
 		if e.EventName() != want {
 			t.Errorf("%T: %q, want %q", e, e.EventName(), want)

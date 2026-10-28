@@ -69,6 +69,15 @@ type Credit struct {
 	OK      bool   `json:"ok"`
 }
 
+// CreditCheck is the end-of-turn check of one agent's turn that showed
+// memories: declared, blocked, undeclared or check_skipped, with the
+// honesty flags of its declaration.
+type CreditCheck struct {
+	Outcome string   `json:"outcome"`
+	Shown   int      `json:"shown"`
+	Flags   []string `json:"flags,omitempty"`
+}
+
 type Gate struct {
 	N        int    `json:"n"`
 	Decision string `json:"decision"` // deny | allow
@@ -121,6 +130,7 @@ func (Briefing) EventName() string        { return "briefing" }
 func (BriefingOutcome) EventName() string { return "briefing_outcome" }
 func (Tool) EventName() string            { return "tool" }
 func (Gate) EventName() string            { return "gate" }
+func (CreditCheck) EventName() string     { return "credit_check" }
 func (Credit) EventName() string          { return "credit" }
 func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }

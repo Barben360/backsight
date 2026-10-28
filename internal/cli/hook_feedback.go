@@ -125,6 +125,25 @@ func itemsFromHits(hits []recall.Hit) []feedback.Item {
 	return items
 }
 
+// hitTexts is the hits' texts by id, for the session's ShownTexts.
+func hitTexts(hits []recall.Hit) map[string]string {
+	texts := make(map[string]string, len(hits))
+	for _, hit := range hits {
+		texts[hit.ID] = hit.Text
+	}
+	return texts
+}
+
+// injectionTexts is the injected memories' texts by id, for the session's
+// ShownTexts.
+func injectionTexts(ins []session.Injection) map[string]string {
+	texts := make(map[string]string, len(ins))
+	for _, in := range ins {
+		texts[in.ID] = in.Text
+	}
+	return texts
+}
+
 // itemsFromInjections ranks briefing items from 1 in the order shown.
 func itemsFromInjections(ins []session.Injection) []feedback.Item {
 	items := make([]feedback.Item, 0, len(ins))
@@ -140,6 +159,8 @@ var (
 	searchHitRE = regexp.MustCompile(`(?m)^- #([0-9]+) .*, ([^\s,()]+), -?[0-9]+\.[0-9]+\)\r?$`)
 	// searchRankRE: any line that starts like a hit.
 	searchRankRE = regexp.MustCompile(`(?m)^- #[0-9]+ `)
+	// searchTextRE: a hit line's text, before its last parenthesis.
+	searchTextRE = regexp.MustCompile(`^- #[0-9]+ (.*) \([^()]*, ([^\s,()]+), -?[0-9]+\.[0-9]+\)\r?$`)
 	// searchGroupRE: a project's group header, "[<project>]".
 	searchGroupRE = regexp.MustCompile(`^\[(.+)\]\r?$`)
 	// showIDRE: what memory_read journals must look like an id, never text.
@@ -180,6 +201,21 @@ func searchShows(text string) []feedback.Item {
 		}
 	}
 	return items
+}
+
+// searchTexts is the texts of memory_search's hit lines by id, for the
+// session's ShownTexts; nothing when searchShows finds no whole list.
+func searchTexts(text string) map[string]string {
+	if searchShows(text) == nil {
+		return nil
+	}
+	texts := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		if l := searchTextRE.FindStringSubmatch(line); l != nil {
+			texts[l[2]] = l[1]
+		}
+	}
+	return texts
 }
 
 // readShow is memory_read's id as one unranked item; nil when the call

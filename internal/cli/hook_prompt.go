@@ -302,6 +302,7 @@ func (h *hookEnv) userPrompt() []byte {
 			}
 		}
 		s.Injected = append(s.Injected, injected...)
+		s.KeepShownTexts(injectionTexts(injected))
 		s.CharsInjected += memoryChars // memory text only, not reminders or nudges
 		return nil
 	})
@@ -462,8 +463,13 @@ func (h *hookEnv) postToolUse() {
 	// an fsync'd write under the session lock: this hook (deadline 1.5 s)
 	// waits up to 1 s rather than the prompt path's 100 ms.
 	h.store.Retry = time.Second
+	var shownTexts map[string]string
+	if strings.HasSuffix(h.in.ToolName, "memory_search") {
+		shownTexts = searchTexts(text)
+	}
 	h.updateSession(func(s *session.State) error {
 		n = s.Prompts
+		s.KeepShownTexts(shownTexts) // a subagent's too: the end of its turn asks about them
 		if !subagent {
 			s.SearchedPromptID = s.Prompts
 			for _, id := range ids {

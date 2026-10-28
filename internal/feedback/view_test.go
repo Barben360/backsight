@@ -2,6 +2,8 @@ package feedback
 
 import (
 	"errors"
+	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,5 +67,98 @@ func TestShowsOfOneSession(t *testing.T) {
 	}
 	if len(Shows(events, "s3")) != 0 {
 		t.Error("another session's shows")
+	}
+}
+
+// CheckTurn keeps one session's, one turn's and one agent's shows (the
+// main agent's first turn adds the briefing), and tells whether that turn
+// and agent declared, and was already asked.
+func TestCheckTurn(t *testing.T) {
+	events := []Event{
+		{Kind: "shows", Session: "s1", Turn: "", Path: "briefing", Items: []Item{{ID: "brief", Rank: 1}}},
+		{Kind: "shows", Session: "s1", Turn: "t1", Path: "prompt", Items: []Item{{ID: idA, Rank: 1}}},
+		{Kind: "shows", Session: "s1", Turn: "t1", Agent: "a1", Path: "search", Items: []Item{{ID: idB, Rank: 1}}},
+		{Kind: "shows", Session: "s1", Turn: "t0", Path: "prompt", Items: []Item{{ID: "old", Rank: 1}}},
+		{Kind: "shows", Session: "s2", Turn: "t1", Path: "prompt", Items: []Item{{ID: "other", Rank: 1}}},
+		{Kind: "credit", Session: "s1", Turn: "t1", Verdict: "none"},
+		{Kind: "credit", Session: "s1", Turn: "t1", Agent: "a1", Verdict: "used", IDs: []string{idB}},
+		{Kind: "stop", Session: "s1", Turn: "t1", Agent: "a1", Outcome: "blocked"},
+		{Kind: "stop", Session: "s1", Turn: "t1", Outcome: "undeclared"},
+		{Kind: "credit", Session: "s2", Turn: "t2", Verdict: "none"},
+		{Kind: "stop", Session: "s2", Turn: "t2", Outcome: "blocked"},
+	}
+	ids := func(c Check) string {
+		var out []string
+		for _, s := range c.Shown {
+			out = append(out, s.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	main := CheckTurn(events, "s1", "t1", "", false)
+	if ids(main) != idA || !main.Declared || main.Blocked || !main.None || len(main.Credited) != 0 {
+		t.Errorf("main %s %+v", ids(main), main)
+	}
+	if got := CheckTurn(events, "s1", "t1", "", true); ids(got) != "brief,"+idA {
+		t.Errorf("first turn: %s", ids(got))
+	}
+	sub := CheckTurn(events, "s1", "t1", "a1", true) // a subagent never takes the main agent's briefing
+	if ids(sub) != idB || !sub.Declared || !sub.Blocked || sub.None || strings.Join(sub.Credited, ",") != idB {
+		t.Errorf("subagent %s %+v", ids(sub), sub)
+	}
+	other := CheckTurn(events, "s2", "t1", "", false) // s2's credit and block are of another turn
+	if ids(other) != "other" || other.Declared || other.Blocked {
+		t.Errorf("s2 %s %+v", ids(other), other)
+	}
+}
+
+func TestOverlap(t *testing.T) {
+	memory := "Billing keeps PostgreSQL 16 for partial indexes."
+	for _, c := range []struct {
+		reply string
+		want  float64
+	}{
+		{"We keep PostgreSQL 16 on billing because partial indexes need it.", 0.8}, // billing postgresql partial indexes of 5 (keeps ≠ keep)
+		{"BILLING, POSTGRESQL!", 0.4},
+		{"Nothing to do with it.", 0},
+		{"", 0},
+	} {
+		if got := Overlap(c.reply, memory); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("Overlap(%q) = %v, want %v", c.reply, got, c.want)
+		}
+	}
+	if got := Overlap("anything at all", "a b 16"); got != 0 {
+		t.Errorf("a memory without a word of 4 letters: %v", got)
+	}
+	// distinct words: a repeated word counts once
+	if got := Overlap("billing", "billing billing invoices"); math.Abs(got-0.5) > 1e-9 {
+		t.Errorf("repeated word: %v", got)
+	}
+}
+
+// The flags compare the reply with the texts of the memories shown and
+// credited: a none that repeats a shown memory, a credit whose memory the
+// reply does not echo. A memory without a kept text flags nothing.
+func TestHonestyFlags(t *testing.T) {
+	texts := map[string]string{idA: "Billing keeps PostgreSQL 16 for partial indexes.", idB: "Deploys go through the staging cluster first."}
+	shown := []Show{{ID: idA}, {ID: idB}, {ID: "untold"}}
+	reply := "Billing keeps PostgreSQL 16 because of partial indexes."
+	for _, c := range []struct {
+		name  string
+		check Check
+		want  string
+	}{
+		{"none repeating a shown memory", Check{Shown: shown, Declared: true, None: true}, FlagNoneWithOverlap},
+		{"credit the reply does not echo", Check{Shown: shown, Declared: true, Credited: []string{idB}}, FlagCreditWithoutOverlap},
+		{"credit the reply echoes", Check{Shown: shown, Declared: true, Credited: []string{idA}}, ""},
+		{"credit without a kept text", Check{Shown: shown, Declared: true, Credited: []string{"untold"}}, ""},
+		{"none and an unechoed credit", Check{Shown: shown, Declared: true, None: true, Credited: []string{idB}}, FlagNoneWithOverlap + "," + FlagCreditWithoutOverlap},
+		{"undeclared", Check{Shown: shown}, ""},
+	} {
+		if got := strings.Join(c.check.Flags(reply, texts), ","); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := (Check{Shown: shown, Declared: true, None: true}).Flags("Unrelated answer about the weather.", texts); len(got) != 0 {
+		t.Errorf("none without overlap flagged %v", got)
 	}
 }

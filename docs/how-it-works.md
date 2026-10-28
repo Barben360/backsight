@@ -114,8 +114,8 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge; records the memories a search or a read showed, and the ones Claude credited with `memory_credit`. | 2 s |
 | `PostToolUseFailure` (`Bash`, file and web tools, MCP tools) | A tool call fails | With `recall.failure_pitfalls = true` only: searches the memory for the failure (tool, command and error text, secrets redacted) and adds up to 2 memories scoring at least 0.8, once per kind of error in a session. Does nothing when the session is paused, the project excluded or the session budget spent. | 10 s |
 | `SubagentStart` | A subagent starts | Its short memory guide. | 5 s |
-| `SubagentStop` | A subagent finishes | Queues its report. | 5 s |
-| `Stop` | Claude's reply ends | Notes the end of the reply, for the save detector. No network. | 5 s |
+| `SubagentStop` | A subagent finishes | Queues its report; when the subagent was shown memories, the same check as `Stop`, for the subagent. | 5 s |
+| `Stop` | Claude's reply ends | Notes the end of the reply, for the save detector. When the turn showed memories and Claude has not reported which ones it used with `memory_credit`, asks it once, listing them by short id: Claude goes on, reports, and adds the citation line if it used any (`feedback.stop_check`, see [configuration](configuration.md#feedback-which-memories-claude-used)). Never in a paused or headless session, after a message Claude Code sent itself, or when the record cannot be read. No network. | 5 s |
 | `SessionEnd` | The session ends | Starts sending it, in the background. | 1 s |
 
 `backsight verify` runs every hook as Claude Code does. `backsight why` shows what the hooks added in the latest session, and why.

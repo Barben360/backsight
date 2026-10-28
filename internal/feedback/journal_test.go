@@ -219,3 +219,40 @@ func appendRaw(t *testing.T, file, s string) {
 		t.Fatal(err)
 	}
 }
+
+// A turn that began in one month and ends in the next reads both files:
+// the first from its offset, the later one whole.
+func TestReadSinceCrossesAMonth(t *testing.T) {
+	dir := t.TempDir()
+	j := NewJournal(dir, common)
+	thisMonth := time.Now().UTC()
+	thisMonth = time.Date(thisMonth.Year(), thisMonth.Month(), 1, 0, 0, 1, 0, time.UTC)
+	lastMonth := thisMonth.Add(-2 * time.Second)
+	j.now = func() time.Time { return lastMonth }
+	if err := j.Append(Event{Kind: "turn", Turn: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	file, off := j.Position()
+	for _, at := range []time.Time{lastMonth, thisMonth} {
+		j.now = func() time.Time { return at }
+		if err := j.Append(Event{Kind: "shows", Turn: "t2", Path: at.Format("2006-01")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, skipped, err := ReadSince(file, off)
+	if err != nil || skipped != 0 || len(events) != 2 || events[0].Path != lastMonth.Format("2006-01") || events[1].Path != thisMonth.Format("2006-01") {
+		t.Fatalf("%+v, %d skipped, %v", events, skipped, err)
+	}
+	if _, _, err := ReadSince("", 0); err == nil {
+		t.Error("no position: want an error, not the working directory's journals")
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(file, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadSince(file, off); err == nil {
+		t.Error("a journal that is a directory read without an error")
+	}
+}

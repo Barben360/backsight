@@ -169,6 +169,7 @@ func (h *hookEnv) toolFailure() []byte {
 			}
 			s.Injected = append(s.Injected, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: s.Prompts, Rule: "failure", At: at})
 		}
+		s.KeepShownTexts(hitTexts(chosen))
 		s.CharsInjected += len([]rune(text))
 		return nil
 	})

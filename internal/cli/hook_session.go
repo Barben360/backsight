@@ -167,6 +167,7 @@ func (h *hookEnv) sessionStart() []byte {
 			}
 			st.Injected = append(st.Injected, it)
 		}
+		st.KeepShownTexts(injectionTexts(items))
 		return nil
 	})
 	if err == nil {

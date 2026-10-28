@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -167,5 +168,40 @@ func TestPauseSpans(t *testing.T) {
 	}
 	if st.Paused || len(st.PausedSpans) != 2 {
 		t.Errorf("%+v", st)
+	}
+}
+
+// The texts of shown memories are kept for the end-of-turn check, at most
+// 50: the ones just shown stay, older ones make room.
+func TestKeepShownTextsIsCapped(t *testing.T) {
+	var st State
+	st.KeepShownTexts(map[string]string{"m1": "first", "m2": "second"})
+	st.KeepShownTexts(map[string]string{"m1": "first, updated"})
+	if len(st.ShownTexts) != 2 || st.ShownTexts["m1"] != "first, updated" || st.ShownTexts["m2"] != "second" {
+		t.Fatalf("%v", st.ShownTexts)
+	}
+	for i := range 60 {
+		st.KeepShownTexts(map[string]string{fmt.Sprintf("old-%d", i): "x"})
+	}
+	batch := map[string]string{}
+	for i := range 10 {
+		batch[fmt.Sprintf("new-%d", i)] = "y"
+	}
+	st.KeepShownTexts(batch)
+	if len(st.ShownTexts) != maxShownTexts || maxShownTexts != 50 {
+		t.Fatalf("%d texts kept", len(st.ShownTexts))
+	}
+	for id := range batch {
+		if st.ShownTexts[id] != "y" {
+			t.Errorf("%s, just shown, was dropped", id)
+		}
+	}
+	big := map[string]string{}
+	for i := range 70 {
+		big[fmt.Sprintf("big-%d", i)] = "z"
+	}
+	st.KeepShownTexts(big)
+	if len(st.ShownTexts) != maxShownTexts {
+		t.Errorf("a batch over the cap: %d texts kept", len(st.ShownTexts))
 	}
 }
