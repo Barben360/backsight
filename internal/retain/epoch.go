@@ -388,7 +388,9 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	// A record is lost when this session sent it (its session key) and its
 	// project's document no longer holds it: positions are per document, as
 	// the resync reads them. A position that cannot be trusted leaves the
-	// index alone: the resync quarantines.
+	// index alone: the resync quarantines. A split document (decision
+	// 0073) has no position in recs: this session's own records there are
+	// taken as lost and go again, stored twice rather than lost.
 	attrs := f.attribute(sid, recs, attr{})
 	pos, bad := serverPosition(recs, docs, LiveDocumentID(sid, cur.Home, cur.Home, tombs))
 	// A record a purge deleted is not lost: never resent (M5 review rules).

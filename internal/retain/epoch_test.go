@@ -354,3 +354,27 @@ func TestFlushHoldsOnServerIDMismatch(t *testing.T) {
 		t.Errorf("unreadable id, no mismatch recorded: %v, hold %q", err, e.f.Hold)
 	}
 }
+
+// A restore to a backup taken before this PC's part of a split session
+// went out: the reconcile cannot tell this PC's records from the server's
+// last_uuid (the other PC's), and resends them rather than lose them
+// (decision 0073, "never lose").
+func TestRestoreResendsThisPCsPartOfASplitSession(t *testing.T) {
+	e := splitSession(t)
+	snap := e.hs.backup()
+	expect(t, e.flush("s1", Options{}), Sent, 5, 5)
+	e.hs.restore(snap, 1, clockAt(11, 0), clockAt(12, 30))
+	e.clock = clockAt(12, 30)
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || !reflect.DeepEqual(rec.Resend, []string{"s1"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || len(e.hs.retains) != 2 {
+		t.Fatalf("%+v, %d items", r, len(e.hs.retains))
+	}
+	for _, u := range []string{"u3", "b1", "b2"} {
+		if !strings.Contains(e.hs.content["conversation:s1"], "turn "+u) {
+			t.Errorf("%s lost: %q", u, e.hs.content["conversation:s1"])
+		}
+	}
+}

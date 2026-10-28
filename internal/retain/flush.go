@@ -330,6 +330,13 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	if bad != "" {
 		return nil, f.quarantine(res, cur, bad), true
 	}
+	for _, d := range docs {
+		if pos.split[d.project] {
+			if err := RecordSplit(f.Dirs.State, sid, d.id, now); err != nil {
+				return retry(err.Error())
+			}
+		}
+	}
 	// What a purge deleted counts as sent: held like what the server holds,
 	// though no segment of it is left to append to.
 	pos.purged = purgedOf(sid, recs, tombs)
@@ -379,6 +386,10 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 			// Sent, but missing from the server's metadata (async retain
 			// still running, or a crash before the cursor was saved):
 			// never send it twice.
+			held = true
+		case own(r.UUID) && pos.split[a.project]:
+			// Sent from this PC, before or after the other PC continued
+			// the session (decision 0073): the server has it.
 			held = true
 		case own(r.UUID) && resend:
 			unmark, resent = append(unmark, key), append(resent, r.UUID)

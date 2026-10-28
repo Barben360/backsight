@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -632,6 +633,27 @@ func TestCheckBackfill(t *testing.T) {
 	set(&state.Backfill{Done: 2, Total: 2})
 	if c := checkBackfill(d); c.Status != OK || !strings.Contains(c.Summary, "finished (2/2)") {
 		t.Errorf("finished: %+v", c)
+	}
+}
+
+// A session continued on two PCs is information, never a warning: nothing
+// was lost, its shared part may be stored twice (decision 0073). Doctor
+// names the sessions.
+func TestSplitSessionIsInfo(t *testing.T) {
+	f := newFixture(t)
+	if c := check(t, f.run(), "split-session"); c.Status != OK || c.Summary != "no session continued on two PCs" {
+		t.Errorf("none: %+v", c)
+	}
+	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	for _, s := range [][2]string{{"s1", "conversation:s1"}, {"s1", "conversation:s1@beta"}, {"s2", "conversation:s2"}} {
+		if err := retain.RecordSplit(f.env.Dirs.State, s[0], s[1], at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := check(t, f.run(), "split-session")
+	if c.Status != Info || c.Summary != "2 session(s) continued on two PCs: their shared part may be stored twice" ||
+		c.Detail != "s1, s2" || c.Fix != "" {
+		t.Errorf("two: %+v", c)
 	}
 }
 

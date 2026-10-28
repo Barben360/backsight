@@ -340,7 +340,11 @@ func TestLostCursorResumesFromServer(t *testing.T) {
 	}
 }
 
-func TestUnknownServerPositionQuarantines(t *testing.T) {
+// A document written before per-project documents (no project in its
+// metadata) holds every project's records up to its last_uuid: one this
+// transcript lacks leaves the legacy position unknown, which still
+// quarantines (decision 0073 sends only a per-project document's split).
+func TestLegacyPositionUnknownStillQuarantines(t *testing.T) {
 	e := newEnv(t)
 	e.record("s1", "u1", "user", 0, "first")
 	e.hs.docs["conversation:s1"] = map[string]string{"last_uuid": "not-in-this-file", "segment": "4"}
@@ -353,6 +357,76 @@ func TestUnknownServerPositionQuarantines(t *testing.T) {
 	}
 	if r := e.flush("s1", Options{}); r.Status != Held {
 		t.Errorf("a quarantined session must stay skipped (held): %+v", r)
+	}
+}
+
+// splitSession is s1 copied to this PC after u1 u2 and resumed on both:
+// this copy holds u1 u2 u3 b1 b2, while the server's home document ends at
+// a9 (segment 4), the other PC's continuation, which this copy lacks.
+func splitSession(t *testing.T) *env {
+	e := newEnv(t)
+	for i, u := range []string{"u1", "u2", "u3", "b1", "b2"} {
+		e.record("s1", u, "user", i, "turn "+u)
+	}
+	e.hs.docs["conversation:s1"] = map[string]string{"last_uuid": "a9", "segment": "4", "project": "billing"}
+	return e
+}
+
+// expectSplitSend checks the one item sent: the home document's next
+// segment (5, appended), holding the records of sent and none of held.
+func (e *env) expectSplitSend(sent, held []string) {
+	e.t.Helper()
+	if len(e.hs.retains) != 1 {
+		e.t.Fatalf("%d items: %+v", len(e.hs.retains), e.hs.retains)
+	}
+	it := e.hs.retains[0]
+	if it.DocumentID != "conversation:s1" || it.UpdateMode != "append" || it.Metadata["segment"] != "5" {
+		e.t.Errorf("%s %q segment %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"])
+	}
+	for _, u := range sent {
+		if !strings.Contains(it.Content, "turn "+u) {
+			e.t.Errorf("%s not sent: %s", u, it.Content)
+		}
+	}
+	for _, u := range held {
+		if strings.Contains(it.Content, "turn "+u) {
+			e.t.Errorf("%s sent twice: %s", u, it.Content)
+		}
+	}
+}
+
+// A session continued on two PCs (decision 0073, "never lose"): the server
+// holds it up to a record this copy lacks. Instead of a quarantine, what
+// this PC's sent index lacks goes out as the next segment, and the split is
+// recorded for doctor. Once sent, the session is neither waiting nor sent
+// again.
+func TestSplitSessionSendsWhatTheIndexLacks(t *testing.T) {
+	e := splitSession(t)
+	if err := e.f.Index.Add("u1", sessionKey(e.f.Bank, "s1", "u1"), "u2", sessionKey(e.f.Bank, "s1", "u2")); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, e.flush("s1", Options{}), Sent, 3, 5)
+	e.expectSplitSend([]string{"u3", "b1", "b2"}, []string{"u1", "u2"})
+	splits, err := SplitSessions(e.f.Dirs.State)
+	if s, ok := splits["s1"]; err != nil || !ok || !reflect.DeepEqual(s.Documents, []string{"conversation:s1"}) || !s.FirstAt.Equal(e.clock) {
+		t.Errorf("split record: %v %+v", err, splits)
+	}
+	if n := e.f.Unsent([]string{filepath.Join(e.dir, "s1.jsonl")}); n != 0 {
+		t.Errorf("%d session(s) still waiting", n)
+	}
+	if r := e.flush("s1", Options{}); r.Status != Nothing || len(e.hs.retains) != 1 {
+		t.Errorf("flushed again: %+v", r)
+	}
+}
+
+// A transcript copied to this PC carries no sent index: the shared part
+// goes out again with this PC's continuation (stored twice, never lost).
+func TestSplitSessionWithACopiedTranscriptSendsTheSharedPartToo(t *testing.T) {
+	e := splitSession(t)
+	expect(t, e.flush("s1", Options{}), Sent, 5, 5)
+	e.expectSplitSend([]string{"u1", "u2", "u3", "b1", "b2"}, nil)
+	if splits, _ := SplitSessions(e.f.Dirs.State); len(splits) != 1 {
+		t.Errorf("split record: %+v", splits)
 	}
 }
 
@@ -683,17 +757,31 @@ func TestResyncResumesEachDocumentAfterItsOwnPosition(t *testing.T) {
 	}
 }
 
-// A last_uuid this transcript lacks in any of the session's documents makes
-// the position unknown: quarantine.
-func TestUnknownPositionInASideDocumentQuarantines(t *testing.T) {
+// A side document can be continued on two PCs too: its split sends what
+// this PC's index lacks to that document alone, as its next segment; the
+// home document, whose position is known, gets nothing.
+func TestSplitSideDocument(t *testing.T) {
 	e := newEnv(t)
 	beta := e.repo("beta")
-	e.record("s1", "u1", "user", 0, "billing")
-	e.recordIn(beta, "s1", "u2", "user", 1, "beta")
-	e.hs.docs["conversation:s1"] = map[string]string{"last_uuid": "u1", "segment": "1"}
-	e.hs.docs["conversation:s1@beta"] = map[string]string{"last_uuid": "elsewhere", "segment": "1"}
-	if r := e.flush("s1", Options{}); r.Status != Quarantined || len(e.hs.retains) != 0 || !strings.Contains(r.Detail, "elsewhere") {
-		t.Errorf("%+v", r)
+	e.record("s1", "u1", "user", 0, "home turn")
+	e.recordIn(beta, "s1", "u2", "user", 1, "beta turn")
+	home := map[string]string{"last_uuid": "u1", "segment": "1", "project": "billing"}
+	e.hs.docs["conversation:s1"] = home
+	e.hs.docs["conversation:s1@beta"] = map[string]string{"last_uuid": "elsewhere", "segment": "2", "project": "beta"}
+	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
+	if len(e.hs.retains) != 1 {
+		t.Fatalf("%d items: %+v", len(e.hs.retains), e.hs.retains)
+	}
+	if it := e.hs.retains[0]; it.DocumentID != "conversation:s1@beta" || it.UpdateMode != "append" || it.Metadata["segment"] != "3" ||
+		!strings.Contains(it.Content, "beta turn") || strings.Contains(it.Content, "home turn") {
+		t.Errorf("%s %q segment %s: %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"], it.Content)
+	}
+	if !reflect.DeepEqual(e.hs.docs["conversation:s1"], home) {
+		t.Errorf("home document touched: %v", e.hs.docs["conversation:s1"])
+	}
+	splits, err := SplitSessions(e.f.Dirs.State)
+	if err != nil || !reflect.DeepEqual(splits["s1"].Documents, []string{"conversation:s1@beta"}) {
+		t.Errorf("split record: %v %+v", err, splits)
 	}
 }
 

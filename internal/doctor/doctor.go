@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,7 +108,7 @@ const (
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
 var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "latency", "learning", "noise-headless", "noise-subagent",
-	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "transcripts",
+	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
 	"transverse-keyword", "usage", "version-skew", "writes"}
 
 // Run performs every check in a fixed order.
@@ -183,6 +184,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkWrites(env))
 	add(checkReach(env, tg, srv))
 	add(checkBackfill(env.Dirs))
+	add(checkSplit(env.Dirs))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
@@ -813,6 +815,23 @@ func checkBackfill(d paths.Dirs) Check {
 		c.Fix = "backsight retain backfill"
 	default:
 		c.Status, c.Summary = Info, fmt.Sprintf("backfill in progress: %d/%d, sent by jobs tick", b.Done, b.Total)
+	}
+	return c
+}
+
+// checkSplit reports the sessions continued on two PCs (decision 0073):
+// sent rather than quarantined, nothing lost, their shared part possibly
+// stored twice. Information only: there is nothing to fix.
+func checkSplit(d paths.Dirs) Check {
+	c := Check{ID: "split-session", Status: OK, Summary: "no session continued on two PCs"}
+	splits, err := retain.SplitSessions(d.State)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "cannot read the sessions continued on two PCs", err.Error()
+		return c
+	}
+	if len(splits) > 0 {
+		c.Status, c.Summary = Info, fmt.Sprintf("%d session(s) continued on two PCs: their shared part may be stored twice", len(splits))
+		c.Detail = strings.Join(slices.Sorted(maps.Keys(splits)), ", ")
 	}
 	return c
 }
