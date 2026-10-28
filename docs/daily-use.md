@@ -17,11 +17,11 @@ Hooks never block Claude Code: if the server is down, recall is skipped and writ
 
 ## The line at session start
 
-Each session starts with one line from backsight (Claude Code shows it after `SessionStart:startup says:`). Its first emoji tells the memory's state, and 🗂️ names the project:
+Each session starts with one line from backsight (Claude Code shows it after `SessionStart:startup says:`). Its first emoji tells the memory's state, and 🗂️ names the project. The word backsight is shown in rosewood; set `NO_COLOR=1` in the environment Claude Code starts from to turn the color off:
 
 | Line | Means |
 |---|---|
-| 🧠 backsight · 🗂️ my-project · memory on | Recall and recording are on. |
+| 🧠 backsight · 🗂️ my-project | Recall and recording are on. |
 | ⏸️ backsight · 🗂️ my-project · recall on, this project is not recorded | The project is excluded: `backsight pause --project`, `privacy.exclude_paths`, or a `.backsight.toml` with `retain = false`. Memories are still recalled. |
 | 🔕 backsight · 🗂️ my-project · recall on, recording off | `components.write = false` in `config.toml`: no session is recorded. |
 | ⚠️ backsight · 🗂️ my-project · memory unavailable (server unreachable) · run `backsight doctor` | No recall in this session for now; sessions are sent later. See [the server is down](troubleshooting.md#the-server-is-down). |

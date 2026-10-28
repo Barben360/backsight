@@ -22,7 +22,7 @@ Hooks never block Claude Code. When the server is down or slow, recall is skippe
 
 - **The memory guide**: a short text (about 900 characters) telling Claude when to search and store, how to cite a memory, to answer in your language, and never to ask you for a key, token or password in the conversation. It comes again after `/clear`, a resume or a compaction.
 - **The briefing**: the project's page (at most about 1,600 characters), written by the server from the project's memories: open items, recent work, rules in force. After a compaction, the briefing and the last memories shown are given again.
-- **The status line** you see, such as `🧠 backsight · 🗂️ my-project · memory on` ([daily-use.md](daily-use.md#the-line-at-session-start)).
+- **The status line** you see, such as `🧠 backsight · 🗂️ my-project` ([daily-use.md](daily-use.md#the-line-at-session-start)).
 
 ## On each prompt
 

@@ -140,13 +140,17 @@ func safeProject(p string) string {
 	return clip(p, 60)
 }
 
-// contextOutput is a hook answer: text for Claude, a banner for the user.
+// contextOutput is a hook answer: text for Claude, a banner for the user,
+// its brand word in color unless NO_COLOR is set (no-color.org).
 func contextOutput(event, text, banner string) []byte {
 	out := map[string]any{}
 	if text != "" {
 		out["hookSpecificOutput"] = map[string]string{"hookEventName": event, "additionalContext": text}
 	}
 	if banner != "" {
+		if os.Getenv("NO_COLOR") == "" {
+			banner = instructions.Colored(banner)
+		}
 		out["systemMessage"] = banner
 	}
 	if len(out) == 0 {

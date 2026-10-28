@@ -12,7 +12,9 @@ import (
 )
 
 // The lines a user sees in a session (systemMessage), rendered exactly:
-// one leading emoji per state, the project after 🗂️ (issue 7).
+// one leading emoji per state, the project after 🗂️ (issue 7). hookHome
+// sets NO_COLOR, so these compare plain text; TestBannerBrandColor checks
+// the color.
 
 // noticeShown skips the one-time first-session notice, so a banner is
 // only the lines under test.
@@ -53,7 +55,7 @@ func TestSessionStartBannerStates(t *testing.T) {
 		setup func(t *testing.T, home string)
 		want  string
 	}{
-		{"on", func(*testing.T, string) {}, "🧠 backsight · 🗂️ billing · memory on"},
+		{"on", func(*testing.T, string) {}, "🧠 backsight · 🗂️ billing"},
 		{"project excluded", func(t *testing.T, home string) {
 			appendConfig(t, home, "[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]")
 		}, "⏸️ backsight · 🗂️ billing · recall on, this project is not recorded"},
@@ -105,7 +107,7 @@ func TestSessionStartBannerExtraLines(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("want 4 lines, got %q", lines)
 	}
-	if lines[0] != "🧠 backsight · 🗂️ billing · memory on" {
+	if lines[0] != "🧠 backsight · 🗂️ billing" {
 		t.Errorf("status line %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], "⚠️ Claude Code wiring drifted (plugin 0.0.0-old is not this binary's (") ||
@@ -129,7 +131,7 @@ func TestFirstSessionNoticeLeadsTheBanner(t *testing.T) {
 	lines := strings.Split(startBanner(t, home, "s1"), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "👋 Memory is on: this session is stored on http://127.0.0.1:") ||
 		!strings.HasSuffix(lines[0], "; `/backsight:pause` stops it for this session, `/backsight:pause project` for this project.") ||
-		lines[1] != "🧠 backsight · 🗂️ billing · memory on" {
+		lines[1] != "🧠 backsight · 🗂️ billing" {
 		t.Errorf("banner %q", lines)
 	}
 }
@@ -144,5 +146,23 @@ func TestPromptUnavailableLines(t *testing.T) {
 	holdMaintenance(t, home)
 	if got := prompt(t, home, "s2", longPrompt).SystemMessage; got != "🛠️ backsight · memory unavailable (maintenance in progress), back when it ends" {
 		t.Errorf("maintenance %q", got)
+	}
+}
+
+func TestBannerBrandColor(t *testing.T) {
+	home := hookHome(t)
+	noticeShown(t, home)
+	t.Setenv("NO_COLOR", "")
+	if got, want := startBanner(t, home, "s1"), "🧠 \x1b[1;38;2;201;80;122mbacksight\x1b[0m · 🗂️ billing"; got != want {
+		t.Errorf("colored banner\n got %q\nwant %q", got, want)
+	}
+	recallStatus.Store(500)
+	if got, want := prompt(t, home, "s2", longPrompt).SystemMessage, "⚠️ \x1b[1;38;2;201;80;122mbacksight\x1b[0m · memory unavailable (server unreachable) · run `backsight doctor`"; got != want {
+		t.Errorf("colored prompt line\n got %q\nwant %q", got, want)
+	}
+	recallStatus.Store(0)
+	t.Setenv("NO_COLOR", "1")
+	if got := startBanner(t, home, "s3"); got != "🧠 backsight · 🗂️ billing" {
+		t.Errorf("NO_COLOR banner %q", got)
 	}
 }
