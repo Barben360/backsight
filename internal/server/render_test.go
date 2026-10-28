@@ -76,9 +76,42 @@ func TestRenderPrivateExposureAndOverrides(t *testing.T) {
 			t.Errorf(".env lacks %q", want)
 		}
 	}
-	if strings.Contains(c, "127.0.0.1") {
-		t.Error("private exposure must not also publish on loopback")
+}
+
+// portLines returns the published-port entries of a rendered compose.
+func portLines(compose string) []string {
+	var got []string
+	for _, l := range strings.Split(compose, "\n") {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, `- "`) && (strings.HasSuffix(l, `:8888"`) || strings.HasSuffix(l, `:9999"`)) {
+			got = append(got, l)
+		}
 	}
+	return got
+}
+
+func wantPorts(t *testing.T, cfg config.Config, want ...string) {
+	t.Helper()
+	f, err := Render(cfg, secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := portLines(string(f.Compose)); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("ports %q, want %q", got, want)
+	}
+}
+
+// The host's own client keeps server.url on loopback: opening the server to
+// other PCs must not take that address away.
+func TestPrivateExposurePublishesLoopbackToo(t *testing.T) {
+	cfg := devConfig()
+	cfg.Network.Exposure, cfg.Network.BindIP = "private", "192.168.1.10"
+	wantPorts(t, cfg,
+		`- "127.0.0.1:18888:8888"`, `- "127.0.0.1:19999:9999"`,
+		`- "192.168.1.10:18888:8888"`, `- "192.168.1.10:19999:9999"`)
+}
+
+func TestLoopbackExposurePublishesLoopbackOnly(t *testing.T) {
+	wantPorts(t, devConfig(), `- "127.0.0.1:18888:8888"`, `- "127.0.0.1:19999:9999"`)
 }
 
 func TestRenderListsMissingSecrets(t *testing.T) {
@@ -194,10 +227,9 @@ func TestDSNEncodesThePassword(t *testing.T) {
 func TestIPv6BindIsBracketed(t *testing.T) {
 	cfg := devConfig()
 	cfg.Network.Exposure, cfg.Network.BindIP = "private", "fd7a:115c:a1e0::1"
-	f, err := Render(cfg, secrets, "box")
-	if err != nil || !strings.Contains(string(f.Compose), `"[fd7a:115c:a1e0::1]:18888:8888"`) {
-		t.Errorf("%v\n%s", err, f.Compose)
-	}
+	wantPorts(t, cfg,
+		`- "127.0.0.1:18888:8888"`, `- "127.0.0.1:19999:9999"`,
+		`- "[fd7a:115c:a1e0::1]:18888:8888"`, `- "[fd7a:115c:a1e0::1]:19999:9999"`)
 }
 
 func TestRedact(t *testing.T) {
