@@ -166,6 +166,20 @@ If Claude Code is already wired to a Hindsight server through another integratio
 
 The old server and its data are left running and untouched: stop it yourself once you no longer need it as a fallback. Once `backsight backup verify` passed on backsight's newest backup within the last 7 days, doctor's `reference-server` line says the old server can be stopped and gives the command; stopping keeps its data. Your past sessions reach the new memory through backfill. `backsight setup --undo` puts the old wiring back.
 
+## A server-only host
+
+A machine that only holds the shared memory for your other PCs, a home server or a NAS for example, needs Docker and an LLM provider, not Claude Code:
+
+```sh
+backsight setup --role server
+```
+
+Setup writes `role = "server"` under `[server]` in `config.toml`, installs the server, the documentation bank and the scheduler entries, and skips what wires Claude Code: its pre-flight does not look for the `claude` command, it asks neither the retention, the reference nor the backfill question, and its `client`, `retention`, `verify`, `reference` and `backfill` steps read `skipped: server-only host`. Both scheduled jobs are installed: `jobs maintain` makes the daily backup, and `jobs tick` starts the server again once its private address is back after a reboot. `backsight doctor` reports the checks that look at Claude Code as `not a client: server-only host`. `backsight setup --undo` reverses what setup did there.
+
+Then open the server to your other PCs with `backsight server expose --private <address>` (a tailnet address keeps the API key encrypted), which hands out the connection token they join with; `backsight server token` writes it again. The token holds the API key: carry it to the other PC yourself.
+
+On a machine already set up for Claude Code (`role = "both"`, the default), `--role server` stops with a usage error naming `server.role`: setup does not unwire Claude Code.
+
 ## Undo setup
 
 ```sh

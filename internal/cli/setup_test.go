@@ -1865,3 +1865,110 @@ func TestDownloadErrorNamesTheCause(t *testing.T) {
 		t.Errorf("network: %s", msg)
 	}
 }
+
+// serverOnlyMachine is setupMachine for a host without Claude Code: the
+// claude probe and the claude command fail the test when reached.
+func serverOnlyMachine(t *testing.T) (string, *fakeSteps, *fakeClaude) {
+	t.Helper()
+	home, f := setupMachine(t)
+	withLLMKey(t, home)
+	claude := claudeRunner.(*fakeClaude)
+	probes := preflightProbes
+	preflightProbes = func(ctx context.Context, s setupEnv, x map[string]string) setup.Probes {
+		p := probes(ctx, s, x)
+		p.Claude = func(context.Context) (string, error) {
+			t.Error("pre-flight asked for Claude Code on a server-only host")
+			return "", errors.New("no claude")
+		}
+		return p
+	}
+	return home, f, claude
+}
+
+func TestSetupServerOnly(t *testing.T) {
+	home, f, claude := serverOnlyMachine(t)
+	code, out, errOut := run(t, "setup", "--role", "server", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	env := parseSetup(t, out)
+	want := map[string]string{"secrets": "skipped", "config": "done", "server": "done", "docs": "done", "scheduler": "done",
+		"client": "skipped", "retention": "skipped", "verify": "skipped", "reference": "skipped", "backfill": "skipped"}
+	got := map[string]string{}
+	for _, st := range env.Data.Steps {
+		got[st.Name] = st.Status
+		if want[st.Name] == "skipped" && st.Name != "secrets" && st.Detail != "server-only host" {
+			t.Errorf("%s: detail %q, want server-only host", st.Name, st.Detail)
+		}
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("steps %v\nwant  %v", got, want)
+	}
+	if cmds := strings.Join(f.commands(), ", "); cmds != "server install, guide index, jobs install" {
+		t.Errorf("commands %s", cmds)
+	}
+	if len(claude.calls) > 0 {
+		t.Errorf("claude ran on a server-only host: %v", claude.calls)
+	}
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	cfg, err := config.Parse(raw, "config.toml", pathsOf(home), home)
+	if err != nil || !cfg.ServerOnly() {
+		t.Fatalf("config %+v %v\n%s", cfg.Server, err, raw)
+	}
+	for _, line := range append(env.Data.NextSteps, env.Data.TryFirst) {
+		if strings.Contains(line, "Claude Code") {
+			t.Errorf("a server-only host is told about Claude Code: %q", line)
+		}
+	}
+	if !slices.ContainsFunc(env.Data.NextSteps, func(s string) bool { return strings.Contains(s, "backsight server expose") }) {
+		t.Errorf("next steps do not say how to open the server to the other PCs: %v", env.Data.NextSteps)
+	}
+
+	// A rerun keeps the role; undo reverses what ran, without Claude Code.
+	if code, out, _ := run(t, "setup", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK || !hasStep(parseSetup(t, out).Data.Steps, "client", "skipped", "server-only host") {
+		t.Errorf("rerun without --role: exit %d\n%s", code, out)
+	}
+	f.calls = nil
+	if code, out, _ := run(t, "setup", "--undo", "--json"); code != output.OK {
+		t.Fatalf("undo: exit %d\n%s", code, out)
+	}
+	if cmds := strings.Join(f.commands(), ", "); cmds != "jobs uninstall, server stop" {
+		t.Errorf("undo commands %s", cmds)
+	}
+	if len(claude.calls) > 0 {
+		t.Errorf("undo ran claude: %v", claude.calls)
+	}
+}
+
+func TestSetupServerOnlyRoleAgainstAnExistingConfig(t *testing.T) {
+	home, _, _ := serverOnlyMachine(t)
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nurl = \"http://127.0.0.1:18888\"\nui_port = 19999\n"), 0o600)
+	code, _, errOut := run(t, "setup", "--role", "server", "--answer", "consent=yes", "--non-interactive")
+	if code != output.Usage || !strings.Contains(errOut, "server.role") {
+		t.Errorf("--role server over a both config: exit %d %s", code, errOut)
+	}
+	if code, _, errOut := run(t, "setup", "--role", "client", "--non-interactive"); code != output.Usage {
+		t.Errorf("--role client: exit %d %s", code, errOut)
+	}
+}
+
+// The plan shows the Claude Code steps skipped, and a resume after the
+// missing key keeps the role.
+func TestSetupServerOnlyPlanAndResume(t *testing.T) {
+	home, f := setupMachine(t)
+	code, out, _ := run(t, "setup", "--role", "server", "--answer", "provider=deepseek", "--plan", "--json")
+	if code != output.OK || !hasStep(parseSetup(t, out).Data.Steps, "verify", "skipped", "server-only host") {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	if code, _, _ := run(t, "setup", "--role", "server", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.NeedsUser {
+		t.Fatalf("without the key: exit %d", code)
+	}
+	withLLMKey(t, home)
+	if code, out, _ := run(t, "setup", "--resume", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("resume: exit %d\n%s", code, out)
+	}
+	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	if !strings.Contains(string(raw), `role = "server"`) || strings.Contains(strings.Join(f.commands(), ","), "client install") {
+		t.Errorf("resume lost the role: %v\n%s", f.commands(), raw)
+	}
+}

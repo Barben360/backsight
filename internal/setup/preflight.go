@@ -69,6 +69,9 @@ type Probes struct {
 	// is nothing to reach first. SchedulerOff: the answer skips that step.
 	UserScheduler func(ctx context.Context) error
 	SchedulerOff  bool
+	// ServerOnly: a host without Claude Code (setup --role server); the
+	// Claude Code checks and lines are skipped.
+	ServerOnly bool
 }
 
 // Preflight runs every check in order.
@@ -97,18 +100,22 @@ func Preflight(ctx context.Context, p Probes) []Check {
 		}
 		add(diskCheck(p))
 	}
-	add(claudeCheck(ctx, p))
+	if !p.ServerOnly {
+		add(claudeCheck(ctx, p))
+	}
 	if p.UserScheduler != nil && !p.SchedulerOff {
 		add(schedulerCheck(ctx, p))
 	}
-	if p.Reference > 0 {
-		add(Check{ID: "reference", Status: Info, Summary: fmt.Sprintf("%d piece(s) of an older Hindsight install wired into Claude Code (see the reference question)", p.Reference)})
-	}
-	if p.Retention != "" {
-		add(Check{ID: "retention", Status: Info, Summary: p.Retention})
-	}
-	if p.Transcript != "" {
-		add(Check{ID: "transcripts", Status: Info, Summary: p.Transcript})
+	if !p.ServerOnly {
+		if p.Reference > 0 {
+			add(Check{ID: "reference", Status: Info, Summary: fmt.Sprintf("%d piece(s) of an older Hindsight install wired into Claude Code (see the reference question)", p.Reference)})
+		}
+		if p.Retention != "" {
+			add(Check{ID: "retention", Status: Info, Summary: p.Retention})
+		}
+		if p.Transcript != "" {
+			add(Check{ID: "transcripts", Status: Info, Summary: p.Transcript})
+		}
 	}
 	gpu := Check{ID: "gpu", Status: Info, Summary: "no GPU found: CPU inference"}
 	if len(p.GPUs) > 0 {

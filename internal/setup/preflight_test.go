@@ -197,3 +197,27 @@ func TestSlowUserSessionIsRetried(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+// A server-only host has no Claude Code: its checks and lines are not
+// setup's business there, even when claude is missing.
+func TestPreflightServerOnlySkipsClaudeCode(t *testing.T) {
+	p := healthy()
+	p.ServerOnly = true
+	p.Claude = func(context.Context) (string, error) { return "", fmt.Errorf("claude: %w", exec.ErrNotFound) }
+	p.Retention, p.Transcript, p.Reference = "Claude Code keeps transcripts 30 days", "3 transcripts", 2
+	cs := Preflight(context.Background(), p)
+	if class, failed := Verdict(cs); class != "" {
+		t.Fatalf("class %q, failed %+v", class, failed)
+	}
+	got := byID(cs)
+	for _, id := range []string{"claude", "retention", "transcripts", "reference"} {
+		if _, ok := got[id]; ok {
+			t.Errorf("server-only host has a %s check: %+v", id, got[id])
+		}
+	}
+	for _, id := range []string{"platform", "docker", "compose", "api_port", "ui_port", "disk", "gpu"} {
+		if _, ok := got[id]; !ok {
+			t.Errorf("no %s check", id)
+		}
+	}
+}

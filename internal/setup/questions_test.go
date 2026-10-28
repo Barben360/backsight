@@ -316,3 +316,32 @@ func TestProviderChoicesStateTheirTerms(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveServerOnlyAsksNoClientQuestion(t *testing.T) {
+	asked := false
+	qs, extra, err := Resolve(Inputs{Answers: map[string]string{"role": "server"}, ReferencePieces: 3,
+		Backfill: func(string) (int, string) { asked = true; return 12, "≈ $0.40" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ids(qs), ","); got != "provider,model,backups,consent" {
+		t.Errorf("questions %s, want provider,model,backups,consent", got)
+	}
+	if asked {
+		t.Error("a server-only host estimated a backfill of transcripts it does not have")
+	}
+	if extra["role"] != "server" {
+		t.Errorf("role %q, want server", extra["role"])
+	}
+	if _, extra, _ := Resolve(Inputs{}); extra["role"] != "both" {
+		t.Errorf("default role %q, want both", extra["role"])
+	}
+	// An existing config's role wins: a contradicting answer names its key.
+	cfg := adopted(t)
+	if _, _, err := Resolve(Inputs{Config: cfg, Answers: map[string]string{"role": "server"}}); err == nil || !strings.Contains(err.Error(), "server.role") {
+		t.Errorf("role against an adopted config: %v", err)
+	}
+	if _, _, err := Resolve(Inputs{Answers: map[string]string{"role": "client"}}); err == nil {
+		t.Error("role=client accepted")
+	}
+}
