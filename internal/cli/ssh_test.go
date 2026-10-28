@@ -71,7 +71,8 @@ func fakeSSHOnPath(t *testing.T, body string) string {
 func TestSSHArgsPinTheSafeOptions(t *testing.T) {
 	got := sshArgs("u@h", "x")
 	joined := strings.Join(got, " ")
-	for _, o := range []string{"BatchMode=yes", "StrictHostKeyChecking=yes", "UpdateHostKeys=no", "ConnectTimeout=20",
+	for _, o := range []string{"BatchMode=yes", "StrictHostKeyChecking=yes", "UpdateHostKeys=no", "VerifyHostKeyDNS=no",
+		"ControlMaster=no", "ControlPath=none", "ConnectTimeout=20",
 		"ServerAliveInterval=15", "ServerAliveCountMax=4", "ForwardAgent=no", "ForwardX11=no",
 		"ClearAllForwardings=yes", "PermitLocalCommand=no"} {
 		i := slices.Index(got, o)
@@ -88,7 +89,8 @@ func TestSSHArgsPinTheSafeOptions(t *testing.T) {
 	if slices.Index(got, "--") != len(got)-3 {
 		t.Errorf("an argument follows -- besides the target and command: %q", got)
 	}
-	for _, bad := range []string{"accept-new", "StrictHostKeyChecking=no", "UpdateHostKeys=yes", "UpdateHostKeys=ask"} {
+	for _, bad := range []string{"accept-new", "StrictHostKeyChecking=no", "UpdateHostKeys=yes", "UpdateHostKeys=ask",
+		"VerifyHostKeyDNS=yes", "ControlMaster=auto", "ControlPersist"} {
 		if strings.Contains(joined, bad) {
 			t.Errorf("args hold %s: %q", bad, got)
 		}
@@ -96,12 +98,13 @@ func TestSSHArgsPinTheSafeOptions(t *testing.T) {
 }
 
 func TestCheckTargetRefusesOptionInjection(t *testing.T) {
-	for _, bad := range []string{"-oProxyCommand=x", "", "a b", "u@h\n", "u@@h", "u@h@i", "u\th", "u@h\x00", "-h"} {
+	for _, bad := range []string{"-oProxyCommand=x", "", "a b", "u@h\n", "u@@h", "u@h@i", "u\th", "u@h\x00", "-h",
+		"u@-oProxyCommand=x", "u$(x)@h", "h`x`", "h;id", "h|id", "u@'h'", `u@"h"`, "h&", "~u@h", "h/x", "u@h*"} {
 		if err := checkTarget(bad); output.CodeOf(err) != output.Usage {
 			t.Errorf("checkTarget(%q) = %v (code %d), want exit 2", bad, err, output.CodeOf(err))
 		}
 	}
-	for _, ok := range []string{"u@h", "h", "my-alias", "u@100.64.0.1"} {
+	for _, ok := range []string{"u@h", "h", "my-alias", "u@100.64.0.1", "u.name@host.example.com", "u@[fd7a:115c:a1e0::1]", "u@fe80::1%eth0"} {
 		if err := checkTarget(ok); err != nil {
 			t.Errorf("checkTarget(%q) = %v, want nil", ok, err)
 		}
@@ -195,6 +198,21 @@ func TestSSHFailureClassifies(t *testing.T) {
 		{"denied", "u@h: Permission denied (publickey,password).\r\n", output.NeedsUser,
 			[]string{"ssh could not log in to u@h without a prompt: load your key into the agent or install it on the host, then run this again"},
 			[]string{"ssh-add", "ssh-copy-id u@h"}},
+		{"revoked", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n" +
+			"@       WARNING: REVOKED HOST KEY DETECTED!               @\r\n" +
+			"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n" +
+			"The ED25519 host key for h is marked as revoked.\r\n" +
+			"This could mean that a stolen key is being used to\r\nimpersonate this host.\r\n" +
+			"Host key verification failed.\r\n", output.Blocked,
+			[]string{"the host key of u@h is marked revoked in your ssh configuration: an attack or a retired key. Check with whoever runs it; backsight never accepts or removes a host key. Nothing was changed"}, nil},
+		{"denied-not-auth", "bash: /x: Permission denied\nConnection to h closed by remote host.\r\n", output.Blocked,
+			[]string{"the ssh connection to u@h dropped (Connection to h closed by remote host.): the step on the host may have run in part; every step can run again, so rerun this"}, nil},
+		{"dropped-reset", "client_loop: send disconnect: Connection reset by 100.64.0.2 port 22\r\n", output.Blocked,
+			[]string{"the ssh connection to u@h dropped (client_loop: send disconnect: Connection reset by 100.64.0.2 port 22): the step on the host may have run in part; every step can run again, so rerun this"}, nil},
+		{"dropped-pipe", "client_loop: send disconnect: Broken pipe\r\n", output.Blocked,
+			[]string{"the ssh connection to u@h dropped (client_loop: send disconnect: Broken pipe): the step on the host may have run in part; every step can run again, so rerun this"}, nil},
+		{"refused-at-kex", "kex_exchange_identification: Connection closed by remote host\r\nConnection closed by 100.64.0.2 port 22\r\n", output.Blocked,
+			[]string{"ssh could not reach u@h: Connection closed by 100.64.0.2 port 22"}, nil},
 		{"unreachable", "ssh: connect to host h port 22: Connection refused\r\n\r\n", output.Blocked,
 			[]string{"ssh could not reach u@h: ssh: connect to host h port 22: Connection refused"}, nil},
 		{"dns", "ssh: Could not resolve hostname h: Name or service not known\n", output.Blocked,
@@ -224,7 +242,7 @@ func TestSSHFailureClassifies(t *testing.T) {
 			if !slices.Equal(cmds, tc.actions) {
 				t.Errorf("actions %q, want %q", cmds, tc.actions)
 			}
-			if b := fmt.Sprintf("%+v", oe); strings.Contains(b, "ssh-keygen -R") || strings.Contains(b, "-R 'h'") ||
+			if b := fmt.Sprintf("%+v", oe); strings.Contains(b, "ssh-keygen -R") || strings.Contains(b, "-R 'h'") || strings.Contains(b, "known_hosts:3") ||
 				strings.Contains(b, "accept-new") {
 				t.Errorf("the failure offers to drop or accept a host key: %s", b)
 			}
@@ -238,16 +256,44 @@ func TestRemoteScriptQuoting(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs sh")
 	}
-	cmd := remoteScript("t", `printf "%s\n" "$0" "$@"`, "/home/a b/x", "it's", "$HOME")
+	cmd, err := remoteScript("t", `printf "%s\n" "$0" "$@"`, "/home/a b/x", "it's", "$HOME", "a=b", "*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, err := exec.Command("sh", "-c", cmd).Output()
 	if err != nil {
 		t.Fatalf("%s: %v", cmd, err)
 	}
-	if want := "backsight-t\n/home/a b/x\nit's\n$HOME\n"; string(out) != want {
+	if want := "backsight-t\n/home/a b/x\nit's\n$HOME\na=b\n*\n"; string(out) != want {
 		t.Errorf("sh -c %s\nprinted %q\nwant    %q", cmd, out, want)
 	}
-	if got := remoteShim("/opt/b s/backsight", "secret", "set", "llm_api_key"); got != "'/opt/b s/backsight' secret set llm_api_key" {
-		t.Errorf("remoteShim = %q", got)
+	if got, err := remoteShim("/opt/b s/backsight", "secret", "set", "llm_api_key"); err != nil || got != "'/opt/b s/backsight' secret set llm_api_key" {
+		t.Errorf("remoteShim = %q, %v", got, err)
+	}
+}
+
+// A word fish, csh or zsh would read otherwise than sh never reaches the
+// host: refused with exit 2 before any ssh call, saying why.
+func TestRemoteWordsRefuseShellSurprises(t *testing.T) {
+	for _, bad := range []string{`C:\x`, "a\nb", "a\rb", "a\x00b", "\x1b[31m", "=ls"} {
+		if _, err := remoteScript("t", "true", "ok", bad); output.CodeOf(err) != output.Usage ||
+			!strings.Contains(err.Error(), "backslash") || !strings.Contains(err.Error(), "login shell") {
+			t.Errorf("remoteScript arg %q: %v", bad, err)
+		}
+		if _, err := remoteShim("/x/backsight", "secret", bad); output.CodeOf(err) != output.Usage {
+			t.Errorf("remoteShim arg %q: %v", bad, err)
+		}
+		if _, err := remoteShim(bad, "version"); output.CodeOf(err) != output.Usage {
+			t.Errorf("remoteShim shim %q: %v", bad, err)
+		}
+	}
+	for _, step := range []string{"a b", "x;y", "=x", ""} {
+		if _, err := remoteScript(step, "true"); err == nil {
+			t.Errorf("remoteScript step %q accepted", step)
+		}
+	}
+	if _, err := remoteScript("t", "true", "a=b", "/p/x y", "it's"); err != nil {
+		t.Errorf("plain words refused: %v", err)
 	}
 }
 
@@ -294,5 +340,37 @@ func TestSSHRunMapsExitsAndKeepsTheTail(t *testing.T) {
 	f.err = errors.New("could not start")
 	if _, err := sshRun(context.Background(), "u@h", "true", nil, io.Discard, nil); err == nil || !strings.Contains(err.Error(), "could not start") {
 		t.Errorf("start failure: %v", err)
+	}
+}
+
+// A stderr that never ends a line is handed over in bounded pieces: the
+// memory held stays capped and nothing is lost.
+func TestSSHRunCapsALongStderrLine(t *testing.T) {
+	long := strings.Repeat("x", 3*stderrLineMax+100)
+	se := &stderrLines{}
+	for i := 0; i < len(long); i += 1000 {
+		_, _ = se.Write([]byte(long[i:min(i+1000, len(long))]))
+		if len(se.buf) >= stderrLineMax || cap(se.buf) > 2*stderrLineMax {
+			t.Fatalf("buffer grew to %d (cap %d)", len(se.buf), cap(se.buf))
+		}
+	}
+
+	f := &fakeSSH{stderr: long + "\nend", code: 0}
+	withSSH(t, f)
+	var got []string
+	tail, err := sshRun(context.Background(), "u@h", "true", nil, io.Discard, func(l []byte) { got = append(got, string(l)) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 || got[4] != "end" || strings.Join(got[:4], "") != long {
+		t.Fatalf("handed %d lines", len(got))
+	}
+	for _, l := range got {
+		if len(l) > stderrLineMax {
+			t.Errorf("a line of %d bytes", len(l))
+		}
+	}
+	if !strings.HasSuffix(tail, "\nend") {
+		t.Errorf("tail ends %q", tail[max(0, len(tail)-20):])
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -51,25 +52,36 @@ var sshRunner sshCLI = execSSH{}
 
 // sshOptions precede every target; command-line options win over the
 // user's ~/.ssh/config, which still applies to everything else (User,
-// Port, IdentityFile, ProxyJump).
+// Port, IdentityFile, ProxyJump). No multiplexing: a master connection
+// already open would skip the host key check, and one backsight opened
+// would outlive it. No SSHFP: a key absent from known_hosts is refused
+// even when DNS vouches for it.
 var sshOptions = []string{"-T",
 	"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",
+	"-o", "VerifyHostKeyDNS=no", "-o", "ControlMaster=no", "-o", "ControlPath=none",
 	"-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
 	"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no"}
 
-// checkTarget refuses a target ssh could read as an option or that is not
-// one user@host or host alias.
+// sshTarget is [user@]host: letters, digits and . _ - in both, and : % [ ]
+// in the host for an IPv6 address.
+var sshTarget = regexp.MustCompile(`^[A-Za-z0-9._-]+(@[A-Za-z0-9._:%\[\]-]+)?$`)
+
+// checkTarget refuses a target ssh could read as an option or a shell
+// could expand: one [user@]host or host alias only.
 func checkTarget(target string) error {
 	why := ""
+	_, host, hasUser := strings.Cut(target, "@")
 	switch {
 	case target == "":
 		why = "it is empty"
-	case strings.HasPrefix(target, "-"):
+	case strings.HasPrefix(target, "-") || hasUser && strings.HasPrefix(host, "-"):
 		why = "it starts with '-', as an ssh option does"
 	case strings.IndexFunc(target, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0:
 		why = "it holds a space or a control character"
 	case strings.Count(target, "@") > 1:
 		why = "it holds more than one '@'"
+	case !sshTarget.MatchString(target):
+		why = "it holds a character other than letters, digits, '.', '_', '-' (and ':', '%', '[', ']' in an IPv6 host)"
 	default:
 		return nil
 	}
@@ -81,23 +93,42 @@ func sshArgs(target, remote string) []string {
 	return append(append([]string{}, sshOptions...), "--", target, remote)
 }
 
+// checkRemoteWord refuses a word the host's login shell could read
+// otherwise than sh does: a backslash or a control character (fish, csh)
+// or a leading '=' (zsh's =cmd expansion).
+func checkRemoteWord(w string) error {
+	if !strings.ContainsRune(w, '\\') && strings.IndexFunc(w, unicode.IsControl) < 0 && !strings.HasPrefix(w, "=") {
+		return nil
+	}
+	return &output.Error{Code: output.Usage, Message: fmt.Sprintf("%q cannot be passed to the host: it holds a backslash or a control character (a newline too) or starts with '=', which the host's login shell (fish, csh, zsh) could read otherwise than sh", w)}
+}
+
 // remoteScript runs script under sh on the host, whatever the user's login
 // shell, with $0 naming the step and args as $1….
-func remoteScript(step, script string, args ...string) string {
+func remoteScript(step, script string, args ...string) (string, error) {
+	if shellWord(step) != step || checkRemoteWord(step) != nil {
+		return "", fmt.Errorf("remote step %q is not one plain word", step)
+	}
 	cmd := "sh -c " + shellQuote(script) + " backsight-" + step
 	for _, a := range args {
+		if err := checkRemoteWord(a); err != nil {
+			return "", err
+		}
 		cmd += " " + shellWord(a)
 	}
-	return cmd
+	return cmd, nil
 }
 
 // remoteShim is the command line running the host's shim with args.
-func remoteShim(shim string, args ...string) string {
-	words := []string{shellWord(shim)}
-	for _, a := range args {
+func remoteShim(shim string, args ...string) (string, error) {
+	words := make([]string, 0, 1+len(args))
+	for _, a := range append([]string{shim}, args...) {
+		if err := checkRemoteWord(a); err != nil {
+			return "", err
+		}
 		words = append(words, shellWord(a))
 	}
-	return strings.Join(words, " ")
+	return strings.Join(words, " "), nil
 }
 
 // remoteExit is the remote command's own non-zero exit.
@@ -116,6 +147,10 @@ func (e *remoteExit) Error() string {
 // sshTailLines bounds the stderr kept for an error.
 const sshTailLines = 40
 
+// stderrLineMax bounds a line kept in memory: a longer one is handed over
+// in pieces.
+const stderrLineMax = 64 << 10
+
 // stderrLines splits ssh's stderr into lines, hands each to on and keeps
 // the last sshTailLines.
 type stderrLines struct {
@@ -130,13 +165,17 @@ func (s *stderrLines) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	s.buf = append(s.buf, p...)
 	for {
-		i := bytes.IndexByte(s.buf, '\n')
-		if i < 0 {
+		if i := bytes.IndexByte(s.buf, '\n'); i >= 0 && i <= stderrLineMax {
+			s.line(s.buf[:i])
+			s.buf = s.buf[i+1:]
+		} else if len(s.buf) >= stderrLineMax {
+			s.line(s.buf[:stderrLineMax])
+			s.buf = s.buf[stderrLineMax:]
+		} else {
 			break
 		}
-		s.line(s.buf[:i])
-		s.buf = s.buf[i+1:]
 	}
+	s.buf = append([]byte(nil), s.buf...) // drop what was handed over
 	return len(p), nil
 }
 
@@ -188,26 +227,34 @@ func sshRun(ctx context.Context, target, remote string, stdin io.Reader, stdout 
 // sshFailure maps ssh's own failure, from its stderr, to what the user must
 // do (NeedsUser) or what the environment refuses (Blocked).
 func sshFailure(target, stderr string) error {
-	switch {
-	case strings.Contains(stderr, "REMOTE HOST IDENTIFICATION HAS CHANGED"):
-		return &output.Error{Code: output.Blocked,
-			Message: "the host key of " + target + " changed since you last connected: an attack or a reinstalled host. Check with whoever runs it; backsight never accepts or removes a host key. Nothing was changed"}
-	case strings.Contains(stderr, "Host key verification failed"):
-		return &output.Error{Code: output.NeedsUser,
-			Message: target + "'s host key is not in your known_hosts and backsight never accepts an unknown one: connect once yourself, compare the fingerprint with the host's (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub there), then run this again",
-			Actions: []output.Action{{Kind: "run_as_user", Cmd: "ssh " + shellWord(target), Why: "accept the host key yourself once its fingerprint matches the host's"}}}
-	case strings.Contains(stderr, "Permission denied"):
-		return &output.Error{Code: output.NeedsUser,
-			Message: "ssh could not log in to " + target + " without a prompt: load your key into the agent or install it on the host, then run this again",
-			Actions: []output.Action{
-				{Kind: "run_as_user", Cmd: "ssh-add", Why: "load your key into the ssh agent"},
-				{Kind: "run_as_user", Cmd: "ssh-copy-id " + shellWord(target), Why: "install your public key on the host"}}}
-	}
 	last := ""
 	for _, l := range strings.Split(stderr, "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			last = l
 		}
+	}
+	switch {
+	case strings.Contains(stderr, "REMOTE HOST IDENTIFICATION HAS CHANGED"):
+		return &output.Error{Code: output.Blocked,
+			Message: "the host key of " + target + " changed since you last connected: an attack or a reinstalled host. Check with whoever runs it; backsight never accepts or removes a host key. Nothing was changed"}
+	case strings.Contains(stderr, "REVOKED HOST KEY DETECTED"):
+		return &output.Error{Code: output.Blocked,
+			Message: "the host key of " + target + " is marked revoked in your ssh configuration: an attack or a retired key. Check with whoever runs it; backsight never accepts or removes a host key. Nothing was changed"}
+	case strings.Contains(stderr, "Host key verification failed"):
+		return &output.Error{Code: output.NeedsUser,
+			Message: target + "'s host key is not in your known_hosts and backsight never accepts an unknown one: connect once yourself, compare the fingerprint with the host's (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub there), then run this again",
+			Actions: []output.Action{{Kind: "run_as_user", Cmd: "ssh " + shellWord(target), Why: "accept the host key yourself once its fingerprint matches the host's"}}}
+	case strings.Contains(stderr, "Permission denied ("):
+		return &output.Error{Code: output.NeedsUser,
+			Message: "ssh could not log in to " + target + " without a prompt: load your key into the agent or install it on the host, then run this again",
+			Actions: []output.Action{
+				{Kind: "run_as_user", Cmd: "ssh-add", Why: "load your key into the ssh agent"},
+				{Kind: "run_as_user", Cmd: "ssh-copy-id " + shellWord(target), Why: "install your public key on the host"}}}
+	case !strings.Contains(stderr, "kex_exchange_identification") && (strings.Contains(stderr, "closed by remote host") ||
+		strings.Contains(stderr, "Connection reset") || strings.Contains(stderr, "Broken pipe")):
+		// The session was up: the step on the host may have run in part.
+		return &output.Error{Code: output.Blocked,
+			Message: "the ssh connection to " + target + " dropped (" + last + "): the step on the host may have run in part; every step can run again, so rerun this"}
 	}
 	msg := "ssh could not reach " + target
 	if last != "" {
