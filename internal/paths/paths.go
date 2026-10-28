@@ -45,6 +45,9 @@ func (d Dirs) SetupFile() string       { return filepath.Join(d.State, "setup.js
 // this PC joined another server (cursors, sent-index, the state it had).
 func (d Dirs) ConnectDir() string { return filepath.Join(d.State, "connect") }
 
+// FeedbackDir holds the feedback journal and the turn pointers.
+func (d Dirs) FeedbackDir() string { return filepath.Join(d.State, "feedback") }
+
 // BankTemplateFile records the bank template last applied, so doctor can
 // tell an older backsight template from a change made on the server.
 func (d Dirs) BankTemplateFile() string { return filepath.Join(d.State, "bank-template.json") }

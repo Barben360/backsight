@@ -38,6 +38,7 @@ type Config struct {
 	Hooks         Hooks      `toml:"hooks" json:"hooks"`
 	Backup        Backup     `toml:"backup" json:"backup"`
 	Update        Update     `toml:"update" json:"update"`
+	Feedback      Feedback   `toml:"feedback" json:"feedback"`
 }
 
 type Server struct {
@@ -187,6 +188,22 @@ type Update struct {
 	Prereleases bool `toml:"prereleases" json:"prereleases"`
 }
 
+// Feedback: what Claude reports using from the memories shown to it, and
+// how long that counts. Nothing writes this table: an older binary refuses
+// a config.toml with a key it does not know, so only the user sets it.
+type Feedback struct {
+	Enabled bool `toml:"enabled" json:"enabled"`
+	// ConfidentRank: an unused memory shown at this rank or better counts
+	// as a miss.
+	ConfidentRank int `toml:"confident_rank" json:"confident_rank"`
+	// Half-lives of misses and credits in days; 0: they never fade.
+	MissHalfLifeDays   int `toml:"miss_half_life_days" json:"miss_half_life_days"`
+	CreditHalfLifeDays int `toml:"credit_half_life_days" json:"credit_half_life_days"`
+	// StopCheck: when the end of a turn asks Claude to report what it used
+	// ("always", "cited" or "off").
+	StopCheck string `toml:"stop_check" json:"stop_check"`
+}
+
 // DefaultBank is the memory bank setup and server install write into a new
 // config.toml (with DefaultBank-docs and DefaultBank-control). LegacyBank
 // is what installs before v0.1.4-m5 use, and what a config.toml without
@@ -215,6 +232,7 @@ func Default(d paths.Dirs, home string) Config {
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
+		Feedback:   Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always"},
 	}
 }
 
@@ -384,6 +402,10 @@ func (c Config) Validate() error {
 			bad(key, "%q must be an absolute directory path", v)
 		}
 	}
+	atLeast("feedback.confident_rank", c.Feedback.ConfidentRank, 1)
+	atLeast("feedback.miss_half_life_days", c.Feedback.MissHalfLifeDays, 0)
+	atLeast("feedback.credit_half_life_days", c.Feedback.CreditHalfLifeDays, 0)
+	oneOf("feedback.stop_check", c.Feedback.StopCheck, "always", "cited", "off")
 	if c.Update.Source != "" && !filepath.IsAbs(c.Update.Source) {
 		bad("update.source", "%q must be empty (GitHub releases) or an absolute directory path", c.Update.Source)
 	}
