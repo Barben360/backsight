@@ -98,6 +98,10 @@ func newSearchCmd(e *env) *cobra.Command {
 	return cmd
 }
 
+// oneLine keeps a hit on its line: a memory's text never starts a line of
+// its own, which the rank parser would read as a hit.
+var oneLine = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
 // searchText groups hits by project, best first, each with its rank.
 func searchText(r recall.Result) string {
 	if len(r.Hits) == 0 {
@@ -121,7 +125,7 @@ func searchText(r recall.Result) string {
 		fmt.Fprintf(&b, "[%s]\n", p)
 		for _, i := range groups[p] {
 			h := r.Hits[i]
-			fmt.Fprintf(&b, "- #%d %s (%s%s, %s ago, %s, %.2f)\n", i+1, h.Text, h.Date.Format("2006-01-02"), kindLabel(h), h.Age, h.ID, h.Score)
+			fmt.Fprintf(&b, "- #%d %s (%s%s, %s ago, %s, %.2f)\n", i+1, oneLine.Replace(h.Text), h.Date.Format("2006-01-02"), kindLabel(h), h.Age, h.ID, h.Score)
 		}
 	}
 	return b.String()

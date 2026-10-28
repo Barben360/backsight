@@ -182,5 +182,6 @@ func (h *hookEnv) toolFailure() []byte {
 	if failed {
 		return nil
 	}
+	h.journalShows("failure", itemsFromHits(chosen))
 	return contextOutput("PostToolUseFailure", text, "")
 }

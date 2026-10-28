@@ -134,33 +134,38 @@ func itemsFromInjections(ins []session.Injection) []feedback.Item {
 }
 
 var (
-	// searchRankRE: a memory_search hit line starts with its merged rank.
-	searchRankRE = regexp.MustCompile(`(?m)^- #([0-9]+) `)
-	// searchIDRE: the hit's id, before the score that ends its line.
-	searchIDRE = regexp.MustCompile(`, ([^\s,()]+), -?[0-9]+\.[0-9]+\)`)
+	// searchHitRE: a memory_search hit line, whole: its merged rank first,
+	// its id and score last.
+	searchHitRE = regexp.MustCompile(`(?m)^- #([0-9]+) .*, ([^\s,()]+), -?[0-9]+\.[0-9]+\)\r?$`)
+	// searchRankRE: any line that starts like a hit.
+	searchRankRE = regexp.MustCompile(`(?m)^- #[0-9]+ `)
 	// showIDRE: what memory_read journals must look like an id, never text.
 	showIDRE = regexp.MustCompile(`^[A-Za-z0-9:_-]{1,128}$`)
 )
 
 // searchShows reads the ranked hits back from memory_search's text, in
-// rank order: each "#n" marker with the last id before the next one (a
-// memory's text may run over several lines or look like the end of one).
+// rank order. Only whole hit lines count, and only when every line that
+// starts like a hit is one and their ranks run 1..N: anything else (a
+// memory's text posing as a hit) journals nothing rather than a wrong show.
 func searchShows(text string) []feedback.Item {
-	marks := searchRankRE.FindAllStringSubmatchIndex(text, -1)
-	var items []feedback.Item
-	for i, m := range marks {
-		end := len(text)
-		if i+1 < len(marks) {
-			end = marks[i+1][0]
+	lines := searchHitRE.FindAllStringSubmatch(text, -1)
+	if len(lines) != len(searchRankRE.FindAllStringIndex(text, -1)) {
+		return nil
+	}
+	items := make([]feedback.Item, 0, len(lines))
+	for _, l := range lines {
+		rank, err := strconv.Atoi(l[1])
+		if err != nil {
+			return nil
 		}
-		ids := searchIDRE.FindAllStringSubmatch(text[m[1]:end], -1)
-		rank, err := strconv.Atoi(text[m[2]:m[3]])
-		if len(ids) == 0 || err != nil {
-			continue
-		}
-		items = append(items, feedback.Item{ID: ids[len(ids)-1][1], Rank: rank})
+		items = append(items, feedback.Item{ID: l[2], Rank: rank})
 	}
 	slices.SortFunc(items, func(a, b feedback.Item) int { return a.Rank - b.Rank }) // grouped by project in the text
+	for i, it := range items {
+		if it.Rank != i+1 {
+			return nil
+		}
+	}
 	return items
 }
 

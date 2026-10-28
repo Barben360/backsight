@@ -115,6 +115,7 @@ func (h *hookEnv) sessionStart() []byte {
 	default:
 		text, items, source, err = h.briefing(optedOut)
 		answered = err == nil
+		h.journalShows("briefing", itemsFromInjections(items)) // shown, whether the session state is written or not
 		switch {
 		case err != nil:
 			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
@@ -170,7 +171,6 @@ func (h *hookEnv) sessionStart() []byte {
 	})
 	if err == nil {
 		h.tw.Emit(telemetry.Briefing{IDs: ids, Chars: len([]rune(text)), Source: source})
-		h.journalShows("briefing", itemsFromInjections(items))
 		// Briefed ids join this session's seen set only: counting them in the
 		// cross-session sticky muted them in sessions that never got the
 		// briefing (resume, clear, fork).
@@ -245,7 +245,8 @@ func (h *hookEnv) recentBriefing(ctx context.Context) (text string, items []sess
 		if w := m.When(); !w.IsZero() {
 			ago = recall.Age(at.Sub(w))
 		}
-		line := "- " + clip(m.Text, briefingItemChars) + age(ago) + "\n"
+		tag := memoryTag(h.project, m.ID) + " " // within the item's characters
+		line := "- " + tag + clip(m.Text, briefingItemChars-len([]rune(tag))) + age(ago) + "\n"
 		if len([]rune(b.String()))+len([]rune(line)) > briefingChars {
 			break
 		}
@@ -372,7 +373,8 @@ func (h *hookEnv) subagentStart() []byte {
 			if in.Rule != "briefing" || len(shown) == subagentItems {
 				continue
 			}
-			line := "\n- " + clip(in.Text, subagentItemChars)
+			tag := memoryTag(in.Project, in.ID) + " " // within the item's characters
+			line := "\n- " + tag + clip(in.Text, subagentItemChars-len([]rune(tag)))
 			if len([]rune(text))+len([]rune(line)) > subagentChars {
 				break
 			}
