@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/Barben360/backsight/internal/output"
@@ -43,13 +42,17 @@ var probeScript = strings.Join([]string{
 }, "; ")
 
 // installScript unpacks the tar on stdin (install.sh and release/) into a
-// temp directory removed on exit, and runs that install.sh on it, trusting
+// temp directory removed on exit, also on a hangup (a killed ssh) or a
+// signal, and runs that install.sh on it, trusting
 // $1 too when given (a test key).
 var installScript = strings.Join([]string{
 	`set -eu`,
 	`d=$(mktemp -d)`,
 	`cleanup() { rm -rf -- "$d"; }`,
 	`trap cleanup EXIT`,
+	`trap "exit 129" HUP`, // dash and zsh run no EXIT trap on a signal's death
+	`trap "exit 130" INT`,
+	`trap "exit 143" TERM`,
 	`tar -xf - -C "$d"`,
 	`if [ -n "${1:-}" ]; then BACKSIGHT_INSTALL_PUBKEY=$1; export BACKSIGHT_INSTALL_PUBKEY; fi`,
 	`BACKSIGHT_RELEASE_DIR=$d/release sh "$d/install.sh"`,
@@ -132,18 +135,13 @@ func probeHost(ctx context.Context, target string) (hostFacts, error) {
 	return f, nil
 }
 
-// describeSuffix is git describe's "-<n>-g<hash>[-dirty]", whatever the
-// hash's length: a version carrying it is a development build, never a
-// release, even when release.Parse reads it as a pre-release.
-var describeSuffix = regexp.MustCompile(`-[0-9]+-g[0-9a-f]+(-dirty)?$`)
-
 // stageRelease downloads the release of this backsight's version for a
 // Linux goarch host into work and verifies it here: the host needs no
 // route to the release source, and checks it again itself.
 func stageRelease(ctx context.Context, src release.Source, version, goarch, work string) (archive, keyID string, err error) {
-	if v, err := release.Parse(version); err != nil || v.Dev() || describeSuffix.MatchString(version) {
+	if v, err := release.Parse(version); err != nil || v.Dev() {
 		return "", "", &output.Error{Code: output.Blocked,
-			Message: fmt.Sprintf("this backsight is a development build (%s): no release matches it; run a released backsight, or pass --source DIR holding a release of %s", version, version)}
+			Message: fmt.Sprintf("this backsight is a development build (%s): no release matches it; run a released backsight, or backsight server install --print-commands", version)}
 	}
 	rels, err := src.Releases(ctx)
 	if err != nil {
@@ -167,7 +165,8 @@ func stageRelease(ctx context.Context, src release.Source, version, goarch, work
 // installOnHost sends this version's install.sh and the release staged in
 // work to the host on ssh's stdin, and runs install.sh there: it checks
 // the signature with the key it carries and the archive's hash, and
-// switches the shim last. tail is the last lines of its stderr.
+// switches the shim, then the command on PATH, last (a failure between
+// the two leaves the shim switched). tail is the last lines of its stderr.
 func installOnHost(ctx context.Context, target, work, archive string) (tail string, err error) {
 	var args []string
 	if signing.TestKey != "" { // a testkey build: install.sh trusts it too, and says so
@@ -189,7 +188,7 @@ func installOnHost(ctx context.Context, target, work, archive string) (tail stri
 	tail, err = sshRun(ctx, target, remote, f, nil, nil)
 	if re := (*remoteExit)(nil); errors.As(err, &re) {
 		return tail, &output.Error{Code: output.Blocked,
-			Message: fmt.Sprintf("the release did not install on %s (%s): nothing was switched there", target, lastLine(tail))}
+			Message: fmt.Sprintf("the release did not install on %s (%s): the host may still run its previous backsight; rerunning this is safe", target, lastLine(tail))}
 	}
 	return tail, err
 }

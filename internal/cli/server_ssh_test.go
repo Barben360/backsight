@@ -67,10 +67,10 @@ func TestStageReleaseVerifiesTheHostsArchive(t *testing.T) {
 	if _, _, err := stageRelease(ctx, release.Dir{Path: src}, "9.9.9", "riscv64", t.TempDir()); output.CodeOf(err) != output.Blocked || !strings.Contains(err.Error(), "riscv64") {
 		t.Errorf("no archive for the host: %v (exit %d), want exit 20 naming riscv64", err, output.CodeOf(err))
 	}
-	for _, v := range []string{"dev", "0.1.7-3-gabc"} {
+	for _, v := range []string{"dev", "0.1.7-3-gabc1234", "0.1.7-dirty"} {
 		if _, _, err := stageRelease(ctx, release.Dir{Path: src}, v, "arm64", t.TempDir()); output.CodeOf(err) != output.Blocked ||
-			!strings.Contains(err.Error(), "--source") || !strings.Contains(err.Error(), v) {
-			t.Errorf("development build %s: %v (exit %d), want exit 20 naming --source", v, err, output.CodeOf(err))
+			!strings.Contains(err.Error(), "server install --print-commands") || !strings.Contains(err.Error(), v) || strings.Contains(err.Error(), "--source") {
+			t.Errorf("development build %s: %v (exit %d), want exit 20 naming --print-commands, not --source", v, err, output.CodeOf(err))
 		}
 	}
 }
@@ -80,6 +80,14 @@ func TestStageReleaseVerifiesTheHostsArchive(t *testing.T) {
 // through a login shell (sh here), with the host's HOME and TMPDIR and env
 // (NAME=value words). It needs a verifier install.sh accepts.
 func loopbackHost(t *testing.T, env ...string) (hostHome, hostTmp string) {
+	t.Helper()
+	hostHome, hostTmp, _ = loopback(t, 0, env...)
+	return hostHome, hostTmp
+}
+
+// loopback is loopbackHost passing the host only the first cut bytes of
+// stdin when cut > 0; sshDir/reached exists once ssh ran.
+func loopback(t *testing.T, cut int, env ...string) (hostHome, hostTmp, sshDir string) {
 	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("the loopback host is a Linux one")
@@ -93,11 +101,16 @@ func loopbackHost(t *testing.T, env ...string) (hostHome, hostTmp string) {
 		k, v, _ := strings.Cut(e, "=")
 		words = append(words, k+"="+shellQuote(v))
 	}
-	fakeSSHOnPath(t, `while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+	filter := ""
+	if cut > 0 {
+		filter = fmt.Sprintf("head -c %d | ", cut)
+	}
+	sshDir = fakeSSHOnPath(t, `: > "$(dirname "$0")/reached"
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift 2
-exec env -u BACKSIGHT_HOME -u XDG_DATA_HOME -u BACKSIGHT_INSTALL_PUBKEY -u BACKSIGHT_RELEASE_DIR -u SSH_CONNECTION `+strings.Join(words, " ")+` sh -c "$1"`)
+`+filter+`env -u BACKSIGHT_HOME -u XDG_DATA_HOME -u BACKSIGHT_INSTALL_PUBKEY -u BACKSIGHT_RELEASE_DIR -u SSH_CONNECTION `+strings.Join(words, " ")+` sh -c "$1"`)
 	withSSH(t, execSSH{})
-	return hostHome, hostTmp
+	return hostHome, hostTmp, sshDir
 }
 
 func hasVerifier() bool {
@@ -235,6 +248,8 @@ func TestInstallOnHostRunsInstallShThere(t *testing.T) {
 // trusts one.
 func TestInstallOnHostSendsThisVersionsInstallSh(t *testing.T) {
 	work, archive := stageHere(t)
+	old := signing.TestKey
+	t.Cleanup(func() { signing.TestKey = old })
 	for _, key := range []string{signing.TestKey, ""} {
 		signing.TestKey = key
 		f := &fakeSSH{}
@@ -280,35 +295,59 @@ func TestHostRefusesATamperedRelease(t *testing.T) {
 	if _, err := exec.LookPath("minisign"); err != nil {
 		refusal = "signed by another key"
 	}
+	archive := "backsight_9.9.9_linux_" + runtime.GOARCH + ".tar.gz"
 	for name, c := range map[string]struct {
-		o    relOpts
-		want string
+		o        relOpts
+		drop     string // left out of work
+		truncate bool   // the host gets the tar cut inside the archive
+		want     string
+		local    bool // refused here, before ssh
 	}{
-		"tampered archive": {relOpts{tamperArchive: true}, "checksum mismatch"},
-		"another key":      {relOpts{key: &other}, refusal},
+		"tampered archive":  {o: relOpts{tamperArchive: true}, want: "checksum mismatch"},
+		"another key":       {o: relOpts{key: &other}, want: refusal},
+		"missing signature": {drop: "checksums.txt.minisig", want: "checksums.txt.minisig", local: true},
+		"truncated stream":  {truncate: true, want: "(tar: "},
 	} {
 		t.Run(name, func(t *testing.T) {
-			hostHome, _ := loopbackHost(t)
 			src := t.TempDir()
 			c.o.platform = "linux_" + runtime.GOARCH
 			signedRelease(t, src, "9.9.9", trustTestKey(t), c.o)
 			work := t.TempDir()
-			archive := "backsight_9.9.9_linux_" + runtime.GOARCH + ".tar.gz"
 			for _, n := range []string{archive, "checksums.txt", "checksums.txt.minisig"} {
 				b, err := os.ReadFile(filepath.Join(src, "v9.9.9", n))
 				if err != nil {
 					t.Fatal(err)
 				}
+				if n == c.drop {
+					continue
+				}
 				if err := os.WriteFile(filepath.Join(work, n), b, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
+			cut := 0
+			if c.truncate { // into the archive's last block, before tar's end blocks
+				probe := filepath.Join(t.TempDir(), "u.tar")
+				if err := writeUpload(probe, work, archive); err != nil {
+					t.Fatal(err)
+				}
+				fi, _ := os.Stat(probe)
+				cut = int(fi.Size()) - 1024 - 256
+			}
+			hostHome, hostTmp, sshDir := loopback(t, cut)
 			_, err := installOnHost(context.Background(), "u@h", work, archive)
-			if output.CodeOf(err) != output.Blocked || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "nothing was switched") {
+			if output.CodeOf(err) != output.Blocked || !strings.Contains(err.Error(), c.want) ||
+				!c.local && !strings.Contains(err.Error(), "rerunning this is safe") {
 				t.Errorf("err = %v (exit %d), want exit 20 quoting %q", err, output.CodeOf(err), c.want)
+			}
+			if _, err := os.Stat(filepath.Join(sshDir, "reached")); c.local == (err == nil) {
+				t.Errorf("ssh ran: %v, want %v", err == nil, !c.local)
 			}
 			if _, err := os.Lstat(filepath.Join(hostHome, ".local/share/backsight/bin/current")); err == nil {
 				t.Error("a shim was switched on the host")
+			}
+			if ents, _ := os.ReadDir(hostTmp); len(ents) != 0 {
+				t.Errorf("the host's TMPDIR keeps %d entries", len(ents))
 			}
 		})
 	}
