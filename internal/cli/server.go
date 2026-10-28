@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -941,15 +942,71 @@ func serverMaintenanceLock(d paths.Dirs, command string) (unlock func(), note st
 }
 
 // redacted is blocked() with every known secret value masked: Docker and
-// provider output can quote configuration.
+// provider output can quote configuration, and another backsight's error
+// (over ssh) its actions and questions too.
 func redacted(err error, sec config.Secrets) error {
 	var oe *output.Error
 	if errors.As(err, &oe) {
 		out := *oe
 		out.Message = server.Redact(oe.Message, sec)
+		if oe.Actions != nil {
+			out.Actions = make([]output.Action, len(oe.Actions))
+			for i, a := range oe.Actions {
+				a.Cmd, a.Why = server.Redact(a.Cmd, sec), server.Redact(a.Why, sec)
+				out.Actions[i] = a
+			}
+		}
+		out.Questions = redactedTree(oe.Questions, sec)
 		return &out
 	}
 	return &output.Error{Code: output.Blocked, Message: server.Redact(err.Error(), sec)}
+}
+
+// redactedTree is v with sec's values masked in every string it holds, as
+// its JSON form; v itself when it holds none.
+func redactedTree(v any, sec config.Secrets) any {
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil // never shown unmasked
+	}
+	if s := string(raw); server.Redact(server.Redact(s, sec), jsonEscaped(sec)) == s {
+		return v
+	}
+	var tree any
+	if json.Unmarshal(raw, &tree) != nil {
+		return nil
+	}
+	var walk func(any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case string:
+			return server.Redact(t, sec)
+		case []any:
+			for i := range t {
+				t[i] = walk(t[i])
+			}
+		case map[string]any:
+			for k := range t {
+				t[k] = walk(t[k])
+			}
+		}
+		return x
+	}
+	return walk(tree)
+}
+
+// jsonEscaped is sec with each value as JSON writes it inside a string:
+// a value holding " \ < > & or a control character is escaped there, and
+// masking its raw form would miss it.
+func jsonEscaped(sec config.Secrets) config.Secrets {
+	esc := func(v string) string {
+		b, _ := json.Marshal(v)
+		return strings.TrimSuffix(strings.TrimPrefix(string(b), `"`), `"`)
+	}
+	return config.Secrets{APIKey: esc(sec.APIKey), UIKey: esc(sec.UIKey), DBPassword: esc(sec.DBPassword), LLMAPIKey: esc(sec.LLMAPIKey), BackupIdentity: esc(sec.BackupIdentity)}
 }
 
 func installWarnings(cfg config.Config) []string {

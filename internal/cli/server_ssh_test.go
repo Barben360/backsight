@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/release"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/token"
@@ -403,6 +404,9 @@ type fakeHost struct {
 	dropErr  string            // ssh's stderr then; default: a closed connection
 	probe    map[string]string // the probe's answers instead of a supported Linux host's (os, machine, verifier, missing)
 	progress string            // the detail of setup's progress line
+	progStep string            // the step of setup's progress line; default: server
+	exit     map[string]int    // a step that exits with this code instead, after its answer
+	stderr   map[string]string // what a step in exit writes on stderr
 	calls    []hostCall
 }
 
@@ -471,7 +475,11 @@ func (h *fakeHost) Run(_ context.Context, args []string, stdin io.Reader, stdout
 			code = reply(map[string]string{"name": "llm_api_key"}, nil)
 		case "setup":
 			h.config, h.role, h.mode = true, "server", "local"
-			line, _ := json.Marshal(map[string]any{"event": "progress", "step": "server", "pct": 40, "eta_s": 30, "detail": h.progress})
+			st := h.progStep
+			if st == "" {
+				st = "server"
+			}
+			line, _ := json.Marshal(map[string]any{"event": "progress", "step": st, "pct": 40, "eta_s": 30, "detail": h.progress})
 			_, _ = fmt.Fprintln(stderr, string(line))
 			err := h.setupErr
 			h.setupErr = nil
@@ -490,6 +498,10 @@ func (h *fakeHost) Run(_ context.Context, args []string, stdin io.Reader, stdout
 	default:
 		h.t.Errorf("unexpected remote command %q", remote)
 		code = 1
+	}
+	if x, ok := h.exit[c.step]; ok {
+		_, _ = io.WriteString(stderr, h.stderr[c.step])
+		code = x
 	}
 	h.calls = append(h.calls, c)
 	if c.step == h.drop {
@@ -909,6 +921,9 @@ func TestSSHInstallRefusesBadInvocations(t *testing.T) {
 		{"--answer", "llm_api_key=x"},
 		{"--answer", "colour=blue"},
 		{"--answer", "x=" + token.Prefix + "abc"},
+		{"--provider", token.Prefix + "abc"},
+		{"--model", token.Prefix + "abc"},
+		{"--base-url", token.Prefix + "abc"},
 		{"--provider", "anthropic", "--answer", "provider=deepseek"},
 		{"--llm-key-from-file", "/k"},
 		{"--answer", "cleartext_lan=maybe"},
@@ -1098,18 +1113,125 @@ func TestSSHInstallPlanSaysAlreadyJoined(t *testing.T) {
 	}
 }
 
-// The host's progress lines are masked with the key this run sent.
+// The host's progress lines are masked with the key this run sent, also
+// where JSON escapes it (a key holding & or "), and in text mode, which
+// prints the host's step names.
 func TestSSHInstallRelaysNoSecret(t *testing.T) {
+	const key = `sk-a&b"c<d>0123456789`
+	esc, _ := json.Marshal(key)
 	for _, mode := range [][]string{{"--json"}, nil} {
 		_, src, h := sshMachine(t, "100.101.1.2")
-		h.progress = "using " + llmKey
+		t.Setenv(llmKeyEnv, key)
+		h.progress, h.progStep = "using "+key, "pull "+key
 		code, out, errOut := run(t, sshInstallArgs(src, mode...)...)
-		if code != output.OK || strings.Contains(out+errOut, llmKey) {
+		if code != output.OK || strings.Contains(out+errOut, key) || strings.Contains(out+errOut, strings.Trim(string(esc), `"`)) {
 			t.Errorf("%v: exit %d\n%s%s", mode, code, out, errOut)
 		}
-		if len(mode) > 0 && !strings.Contains(errOut, `"step":"host:server"`) {
-			t.Errorf("no progress relayed:\n%s", errOut)
+		if h.call("secret set").stdin != key+"\n" {
+			t.Errorf("%v: the key sent is %q", mode, h.call("secret set").stdin)
 		}
+		relayed := `"step":"host:pull [redacted]"`
+		if len(mode) == 0 {
+			relayed = "u@h: pull [redacted]\n"
+		}
+		if !strings.Contains(errOut, relayed) {
+			t.Errorf("%v: no masked progress relayed (want %s):\n%s", mode, relayed, errOut)
+		}
+	}
+}
+
+// Every secret this run holds is masked in what comes back from the host:
+// its error's message, actions and questions, and a failing step's last
+// stderr line; so is the host token's key when connect fails.
+func TestSSHInstallMasksTheHostsAnswers(t *testing.T) {
+	const localKey = "this-pcs-api-key-0123456789"
+	for name, c := range map[string]struct {
+		fail func(h *fakeHost)
+		want string // in the output: the failure was relayed
+	}{
+		"setup refuses": {func(h *fakeHost) {
+			h.setupErr = &output.Error{Code: output.NeedsUser, Message: "Docker refused " + llmKey + " and " + localKey,
+				Actions:   []output.Action{{Kind: "run_as_user", Cmd: "docker login -p " + llmKey, Why: "the registry wants " + localKey}},
+				Questions: []setup.Question{{ID: "x", Prompt: "is " + llmKey + " right?", Options: []setup.Option{{Value: "yes", Label: "keep " + localKey}}}}}
+		}, "Docker refused [redacted] and [redacted]"},
+		"install refuses": {func(h *fakeHost) {
+			h.exit, h.stderr = map[string]int{"install": 1}, map[string]string{"install": "install.sh: bad key " + llmKey + "\n"}
+		}, "bad key [redacted]"},
+	} {
+		for _, mode := range [][]string{{"--json"}, nil} {
+			t.Run(name+fmt.Sprint(mode), func(t *testing.T) {
+				home, src, h := sshMachine(t, "100.101.1.2")
+				d := pathsOf(home)
+				if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", localKey) }); err != nil {
+					t.Fatal(err)
+				}
+				c.fail(h)
+				code, out, errOut := run(t, sshInstallArgs(src, mode...)...)
+				if code == output.OK || !strings.Contains(out+errOut, c.want) {
+					t.Fatalf("exit %d, want a failure saying %q\n%s%s", code, c.want, out, errOut)
+				}
+				for _, s := range []string{llmKey, localKey} {
+					if strings.Contains(out+errOut, s) {
+						t.Errorf("%s in the output:\n%s%s", s, out, errOut)
+					}
+				}
+				if len(mode) > 0 && name == "setup refuses" {
+					env := parseSSHInstall(t, out)
+					if b, _ := json.Marshal(env.Error); env.Error == nil || len(env.Error.Actions) != 1 || !strings.Contains(string(b), "keep [redacted]") {
+						t.Errorf("the host's actions and questions are not relayed masked: %s", b)
+					}
+				}
+			})
+		}
+	}
+	t.Run("connect fails", func(t *testing.T) {
+		_, src, h := sshMachine(t, "100.101.1.2")
+		old := connectFault
+		connectFault = func(step string) error {
+			if step == "secrets" {
+				return &output.Error{Code: output.Blocked, Message: "injected " + hostKey,
+					Actions: []output.Action{{Kind: "run_as_user", Cmd: "echo " + hostKey, Why: hostKey}}}
+			}
+			return nil
+		}
+		t.Cleanup(func() { connectFault = old })
+		code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
+		if code == output.OK || !strings.Contains(out, "injected [redacted]") || leaked(out+errOut, h.tok) {
+			t.Errorf("exit %d, want connect's failure masked\n%s%s", code, out, errOut)
+		}
+	})
+}
+
+// The token never lands in a file on this PC, nor in its temp directory:
+// only the API key it holds, in secrets.toml.
+func TestSSHInstallLeavesNoTokenOnThisPC(t *testing.T) {
+	home, src, h := sshMachine(t, "100.101.1.2")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	if code, out, errOut := run(t, sshInstallArgs(src, "--json")...); code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	enc := token.Encode(h.tok)
+	secrets := pathsOf(home).SecretsFile()
+	for _, root := range []string{home, tmp} {
+		for p, v := range treeOf(t, root) {
+			if v == "dir" || strings.HasPrefix(v, "-> ") {
+				continue
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(b, []byte(enc)) || bytes.Contains(b, []byte(strings.TrimPrefix(enc, token.Prefix))) {
+				t.Errorf("%s holds the token", p)
+			}
+			if bytes.Contains(b, []byte(h.tok.APIKey)) && p != secrets {
+				t.Errorf("%s holds the token's API key", p)
+			}
+		}
+	}
+	if b, _ := os.ReadFile(secrets); !bytes.Contains(b, []byte(h.tok.APIKey)) {
+		t.Error("secrets.toml lacks the API key: the scan looked at nothing")
 	}
 }
 

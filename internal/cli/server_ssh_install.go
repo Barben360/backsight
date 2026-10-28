@@ -383,10 +383,15 @@ func sshInstallText(r sshInstallResult) string {
 }
 
 // refuseTokenArgs refuses a connection token given as --private, an
-// --answer (whole or its value) or one of the other values: a token holds
-// the API key and never goes on a command line.
+// install flag's value, an --answer (whole or its value) or one of the
+// other values: a token holds the API key and never goes on a command line.
 func refuseTokenArgs(f sshInstallFlags, others ...string) error {
 	values := append([]string{f.private}, others...)
+	for _, p := range installFlagAnswers {
+		if v, ok := f.flagValue(p[0]); ok {
+			values = append(values, v)
+		}
+	}
 	for _, a := range f.answers {
 		_, v, _ := strings.Cut(a, "=")
 		values = append(values, a, v)
@@ -810,7 +815,8 @@ func sameHost(url, target, addr string) bool {
 }
 
 // redactingWriter masks the secrets of sec in each write: the host's
-// progress lines, one write each.
+// progress lines, one write each, re-encoded as JSON lines with --json, so
+// each value is masked as written and as JSON escapes it.
 type redactingWriter struct {
 	w   io.Writer
 	sec func() []config.Secrets
@@ -819,7 +825,7 @@ type redactingWriter struct {
 func (r redactingWriter) Write(p []byte) (int, error) {
 	text := string(p)
 	for _, s := range r.sec() {
-		text = server.Redact(text, s)
+		text = server.Redact(server.Redact(text, s), jsonEscaped(s))
 	}
 	if _, err := io.WriteString(r.w, text); err != nil {
 		return 0, err

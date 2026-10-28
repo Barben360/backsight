@@ -114,10 +114,13 @@ func TestPrintCommandsRefusals(t *testing.T) {
 		"token in an answer's value": {[]string{"--answer", "provider=bst1.xxx"}, "token"},
 		"token as an answer":         {[]string{"--answer", "bst1.xxx"}, "token"},
 		"token in --private":         {[]string{"--private", "bst1.xxx"}, "token"},
+		"token in --provider":        {[]string{"--provider", "bst1.xxx"}, "token"},
+		"token in --model":           {[]string{"--model", "bst1.xxx"}, "token"},
+		"token in --base-url":        {[]string{"--base-url", "bst1.xxx"}, "token"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, out, errOut := run(t, append([]string{"server", "install", "--print-commands", "--json"}, c.args...)...)
-			if code != output.Usage || !strings.Contains(out+errOut, c.want) || strings.Contains(out+errOut, "bst1.xxx\\n") || strings.Contains(out, "backsight setup") {
+			if code != output.Usage || !strings.Contains(out+errOut, c.want) || strings.Contains(out+errOut, "bst1.xxx") || strings.Contains(out, "backsight setup") {
 				t.Errorf("exit %d, want 2 naming %q\n%s%s", code, c.want, out, errOut)
 			}
 		})
