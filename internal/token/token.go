@@ -44,9 +44,16 @@ func (t Token) String() string {
 // Format makes every fmt verb print String.
 func (t Token) Format(f fmt.State, _ rune) { _, _ = fmt.Fprint(f, t.String()) }
 
+// MarshalJSON writes the summary, never the key: a Token in any JSON output
+// stays safe. Encode and Decode use wire, which keeps the key.
+func (t Token) MarshalJSON() ([]byte, error) { return json.Marshal(t.String()) }
+
+// wire is Token's encoded form, without Token's methods.
+type wire Token
+
 // Encode renders t as Prefix and base64url JSON.
 func Encode(t Token) string {
-	raw, _ := json.Marshal(t) // plain strings and numbers: cannot fail
+	raw, _ := json.Marshal(wire(t)) // plain strings and numbers: cannot fail
 	return Prefix + base64.RawURLEncoding.EncodeToString(raw)
 }
 
@@ -62,10 +69,11 @@ func Decode(s string) (Token, error) {
 	if err != nil {
 		return Token{}, errors.New("connection token is damaged (invalid base64)")
 	}
-	var t Token
-	if err := json.Unmarshal(raw, &t); err != nil {
+	var w wire
+	if err := json.Unmarshal(raw, &w); err != nil {
 		return Token{}, errors.New("connection token is damaged (invalid content)")
 	}
+	t := Token(w)
 	for _, f := range []struct{ name, value string }{{"url", t.URL}, {"bank", t.Bank}, {"api_key", t.APIKey}, {"server_id", t.ServerID}} {
 		if f.value == "" {
 			return Token{}, fmt.Errorf("connection token has no %s", f.name)

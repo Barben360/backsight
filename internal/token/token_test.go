@@ -2,6 +2,7 @@ package token
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -81,5 +82,19 @@ func TestNeverPrintsTheKey(t *testing.T) {
 	}
 	if out := fmt.Sprint(tok); out != tok.String() {
 		t.Errorf("Sprint = %q", out)
+	}
+}
+
+func TestJSONNeverCarriesTheKey(t *testing.T) {
+	tok := full()
+	holder := struct{ Conn Token }{tok}
+	for name, v := range map[string]any{"token": tok, "pointer": &tok, "holder": holder} {
+		raw, err := json.Marshal(v)
+		if err != nil || strings.Contains(string(raw), key) {
+			t.Errorf("%s: %s, %v", name, raw, err)
+		}
+	}
+	if got, err := Decode(Encode(tok)); err != nil || got != tok {
+		t.Fatalf("round trip lost the key: %+v, %v", got, err)
 	}
 }
