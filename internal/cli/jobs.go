@@ -52,6 +52,9 @@ type tickResult struct {
 	MS     int    `json:"ms"`
 }
 
+// reachCheckTimeout bounds the tick's one health call.
+const reachCheckTimeout = 5 * time.Second
+
 func newJobsTickCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tick",
@@ -105,6 +108,12 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// One look whether the server answers, for doctor's server-reach
+			// check and the session banner (the hooks record only recalls).
+			hctx, hcancel := context.WithTimeout(cmd.Context(), reachCheckTimeout)
+			_, herr := f.Client.Health(hctx)
+			hcancel()
+			state.RecordReach(d, herr == nil, now())
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
 				res.Status, res.Reason = "skipped", "components.write is off"
 				if cfg.Components.Read {
@@ -119,6 +128,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Epoch = reconcile(cmd.Context(), f)
 			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
 			res.Sessions = rep.Counts
+			state.RecordWaiting(d, rep.Counts[retain.Retry])
 			tags, terr := f.Client.Tags(cmd.Context(), cfg.Server.Bank, "project:")
 			if terr != nil {
 				tags = nil // not read: no project is taken for forgotten

@@ -149,6 +149,26 @@ func TestBreakerPausesRecallAfterRepeatedFailures(t *testing.T) {
 	}
 }
 
+// A recall that fails everywhere records the server's silence from its
+// first failure; one that answers clears it (state.Reach, read by doctor
+// and the session banner).
+func TestRecallRecordsReach(t *testing.T) {
+	home := hookHome(t)
+	recallStatus.Store(500)
+	first := time.Now()
+	prompt(t, home, "s1", longPrompt)
+	prompt(t, home, "s2", longPrompt)
+	r := state.LoadReach(pathsOf(home))
+	if r.FailingSince.Before(first.Add(-time.Second)) || r.FailingSince.After(first.Add(time.Second)) {
+		t.Fatalf("failures: %+v", r)
+	}
+	recallStatus.Store(0)
+	prompt(t, home, "s3", longPrompt)
+	if r := state.LoadReach(pathsOf(home)); !r.FailingSince.IsZero() || r.LastOK.IsZero() {
+		t.Errorf("answer: %+v", r)
+	}
+}
+
 func TestMaintenanceSkipsRecallAndSaysSoOnce(t *testing.T) {
 	home := hookHome(t)
 	d := pathsOf(home)

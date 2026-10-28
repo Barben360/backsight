@@ -42,6 +42,9 @@ const (
 	subagentItems     = 2
 	subagentChars     = 600
 	subagentItemChars = 100
+	// unreachableAfter: a server silent this long gets its banner line
+	// (doctor's server-reach check warns from the same age).
+	unreachableAfter = time.Hour
 )
 
 func init() {
@@ -102,7 +105,7 @@ func (h *hookEnv) sessionStart() []byte {
 	// not recorded.
 	optedOut, _ := h.resolver.OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths)
 	var banner string
-	unavailable := false
+	unavailable, answered, mismatch := false, false, false
 	switch {
 	case h.maintenance():
 		banner, unavailable = instructions.MemoryMaintenance(name), true
@@ -110,6 +113,7 @@ func (h *hookEnv) sessionStart() []byte {
 		banner, unavailable = instructions.MemoryUnavailable(name, "server failing, retried in a few minutes"), true
 	default:
 		text, items, source, err = h.briefing(optedOut)
+		answered = err == nil
 		switch {
 		case err != nil:
 			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
@@ -131,7 +135,13 @@ func (h *hookEnv) sessionStart() []byte {
 		}
 		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" && h.cfg.Server.Mode == "remote" {
 			banner += "\n" + instructions.OtherServerLine()
+			mismatch = true
 		}
+	}
+	// The more specific mismatch line stands alone; a briefing read just
+	// now means the server answers again, whatever the record says.
+	if r := state.LoadReach(h.dirs); !mismatch && !answered && !r.FailingSince.IsZero() && now().Sub(r.FailingSince) > unreachableAfter {
+		banner += "\n" + instructions.UnreachableLine(r.FailingSince)
 	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
 		banner += "\n" + instructions.QuarantineLine(len(held))

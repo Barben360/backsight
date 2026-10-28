@@ -104,7 +104,7 @@ const (
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
 var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "latency", "learning", "noise-headless", "noise-subagent",
-	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "transcripts",
+	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "transcripts",
 	"transverse-keyword", "usage", "writes"}
 
 // Run performs every check in a fixed order.
@@ -175,6 +175,7 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkUpdateIncomplete(env.Dirs))
 	add(checkLocks(env.Dirs))
 	add(checkWrites(env))
+	add(checkReach(env, tg))
 	add(checkBackfill(env.Dirs))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
@@ -641,6 +642,45 @@ func checkWrites(env Env) Check {
 		c.Fix = "fix the cause, then backsight retain retry-quarantine"
 	case size >= warnAt:
 		c.Status, c.Fix = Warn, "the server has not accepted notes for a while: backsight server status"
+	}
+	return c
+}
+
+// unreachableWarn: a server silent this long warns (the session banner
+// says so from the same age).
+const unreachableWarn = time.Hour
+
+// checkReach says whether this machine reaches its server and since when,
+// from what the hooks and jobs tick recorded (state.Reach), with what waits
+// on this machine meanwhile. Never an error: the server check carries a
+// live failure.
+func checkReach(env Env, tg *target.Target) Check {
+	d := env.Dirs
+	c := Check{ID: "server-reach", Status: Info}
+	if tg == nil || tg.Source != "config" { // the hooks that record it are backsight's
+		c.Summary = "skipped: no backsight config"
+		return c
+	}
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
+	at := func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+	r := state.LoadReach(d)
+	last := "none recorded yet"
+	if !r.LastOK.IsZero() {
+		last = at(r.LastOK)
+	}
+	breaker := "closed"
+	if b := state.LoadBreaker(d); now().Before(b.OpenUntil) {
+		breaker = "open until " + at(b.OpenUntil)
+	}
+	pending, _ := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl")}.Pending()
+	c.Summary = fmt.Sprintf("last answer %s; breaker %s; %d note(s) queued; %d session(s) waiting", last, breaker, pending, r.SessionsWaiting)
+	if !r.FailingSince.IsZero() && now().Sub(r.FailingSince) > unreachableWarn {
+		c.Status = Warn
+		c.Fix = "the server at " + tg.Display() + " has not answered since " + at(r.FailingSince) +
+			": check it on its host (backsight server status there) or the network; nothing is lost"
 	}
 	return c
 }

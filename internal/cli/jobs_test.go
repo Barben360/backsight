@@ -304,3 +304,30 @@ func TestTickWithWriteOffPrunesNothingOnAnotherServer(t *testing.T) {
 		t.Error("page kept once the joined server answers")
 	}
 }
+
+// A tick asks the server once whether it answers and records it, with the
+// sessions it kept for the next tick: doctor and the session banner read
+// them without a call of their own.
+func TestTickRecordsReachAndWaiting(t *testing.T) {
+	home := devInstall(t, true) // closed port: the server is down
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	if code, out, _ := run(t, "jobs", "tick"); code != output.Partial || !strings.Contains(out, "retry:1") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	r := state.LoadReach(pathsOf(home))
+	if !r.FailingSince.Equal(time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)) || !r.LastOK.IsZero() || r.SessionsWaiting != 1 {
+		t.Fatalf("server down: %+v", r)
+	}
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC))
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:1") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	r = state.LoadReach(pathsOf(home))
+	if !r.FailingSince.IsZero() || !r.LastOK.Equal(time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC)) || r.SessionsWaiting != 0 {
+		t.Errorf("server back: %+v", r)
+	}
+}

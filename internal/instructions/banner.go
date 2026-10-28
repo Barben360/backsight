@@ -3,6 +3,7 @@ package instructions
 import (
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The lines a user sees in a session (hook systemMessage, and the pause
@@ -99,4 +100,10 @@ func QuarantineLine(n int) string {
 // joined; nothing is sent until connect runs again.
 func OtherServerLine() string {
 	return EmojiWarning + " a different memory server answers at the joined address: notes and sessions wait on this PC · run `backsight doctor`"
+}
+
+// UnreachableLine: the server has not answered this PC for over an hour
+// (state.Reach); what it would send waits here.
+func UnreachableLine(since time.Time) string {
+	return EmojiWarning + " memory server silent since " + since.UTC().Format("2006-01-02 15:04") + " UTC: notes and sessions wait on this PC · run `backsight doctor`"
 }

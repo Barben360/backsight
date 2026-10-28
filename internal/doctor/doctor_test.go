@@ -944,3 +944,64 @@ func TestServerIDCheckOnlyOnABoundClient(t *testing.T) {
 		}
 	}
 }
+
+// reachURL: a server that does not answer.
+const reachURL = "http://127.0.0.1:1"
+
+// reachingClient is a client of reachURL whose server last answered at
+// lastOK and has failed since failing (zero: it answers), with one queued
+// note and two sessions kept for the next tick.
+func reachingClient(t *testing.T, now, lastOK, failing time.Time) *fixture {
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \""+reachURL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	put(t, filepath.Join(f.env.Dirs.OutboxDir(), "notes.jsonl"), `{"operation_id":"a","content":"x"}`+"\n", 0o600)
+	state.RecordReach(f.env.Dirs, true, lastOK)
+	if !failing.IsZero() {
+		state.RecordReach(f.env.Dirs, false, failing)
+	}
+	state.RecordWaiting(f.env.Dirs, 2)
+	return f
+}
+
+// server-reach says when the server last answered and what waits on this
+// PC; a silence over an hour warns, with where to look. Never an error:
+// the server check carries a live failure.
+func TestServerReachWarnsAfterAnHour(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	c := check(t, reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-59*time.Minute)).run(), "server-reach")
+	want := "last answer 2026-10-28 09:00 UTC; breaker closed; 1 note(s) queued; 2 session(s) waiting"
+	if c.Status != Info || c.Summary != want || c.Fix != "" {
+		t.Errorf("59 min: %+v", c)
+	}
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-61*time.Minute))
+	put(t, filepath.Join(f.env.Dirs.State, "breaker.json"), `{"open_until":"2026-10-28T12:05:00Z"}`, 0o600)
+	c = check(t, f.run(), "server-reach")
+	want = "last answer 2026-10-28 09:00 UTC; breaker open until 2026-10-28 12:05 UTC; 1 note(s) queued; 2 session(s) waiting"
+	if c.Status != Warn || c.Summary != want ||
+		c.Fix != "the server at "+reachURL+" has not answered since 2026-10-28 10:59 UTC: check it on its host (backsight server status there) or the network; nothing is lost" {
+		t.Errorf("61 min: %+v", c)
+	}
+	c = check(t, reachingClient(t, now, now.Add(-5*time.Minute), time.Time{}).run(), "server-reach")
+	if c.Status != Info || !strings.HasPrefix(c.Summary, "last answer 2026-10-28 11:55 UTC; breaker closed;") {
+		t.Errorf("answering: %+v", c)
+	}
+}
+
+// A server-only host runs no hooks: its reach is not a client's.
+func TestServerReachIsNotAClientCheckOnAServerOnlyHost(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
+	r := f.run()
+	n := 0
+	for _, c := range r.Checks {
+		if c.ID == "server-reach" {
+			n++
+		}
+	}
+	if c := check(t, r, "server-reach"); n != 1 || c.Status != Info || c.Summary != "not a client: server-only host" {
+		t.Errorf("%d server-reach check(s), %+v", n, c)
+	}
+}
