@@ -55,7 +55,8 @@ func (f *exposeDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 
 // exposeHost is a dev install on loopback with a fake server that checks
 // the API key and a fake Docker; the machine's addresses are 127.0.0.1,
-// 192.168.1.10 (a LAN), 100.101.1.2 and fd7a:115c:a1e0::5 (a tailnet).
+// 192.168.1.10 (a LAN), 100.101.1.2 and fd7a:115c:a1e0::5 (a tailnet),
+// and 203.0.113.7 (public).
 // dialed lists the private addresses the command checked; a dial fails
 // while dialFails is set. stdout is not a terminal.
 type exposeFixture struct {
@@ -79,7 +80,7 @@ func exposeHost(t *testing.T) *exposeFixture {
 	stdoutIsTerminal = func() bool { return false }
 	interfaceAddrs = func() ([]net.Addr, error) {
 		var out []net.Addr
-		for _, c := range []string{"127.0.0.1/8", "192.168.1.10/24", "100.101.1.2/32", "fd7a:115c:a1e0::5/128"} {
+		for _, c := range []string{"127.0.0.1/8", "192.168.1.10/24", "100.101.1.2/32", "fd7a:115c:a1e0::5/128", "203.0.113.7/24"} {
 			ip, n, _ := net.ParseCIDR(c)
 			out = append(out, &net.IPNet{IP: ip, Mask: n.Mask})
 		}
@@ -144,6 +145,23 @@ func TestExposeRefusesForeignAddress(t *testing.T) {
 	}
 }
 
+// A public address of this machine (a VPS, a bridged NAS) is refused by the
+// config's own rule, before anything changes.
+func TestExposeRefusesPublicAddress(t *testing.T) {
+	fx := exposeHost(t)
+	before := fx.config(t)
+	code, out, errOut := run(t, "server", "expose", "--private", "203.0.113.7", "--answer", "cleartext_lan=yes")
+	if code != output.Usage || !strings.Contains(errOut, "network.bind_ip") || !strings.Contains(errOut, "nothing was changed") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if string(fx.config(t)) != string(before) || len(fx.dk.ups) != 0 || len(fx.dialed) != 0 {
+		t.Errorf("something changed: %d starts, %d dials\n%s", len(fx.dk.ups), len(fx.dialed), fx.config(t))
+	}
+	if _, err := os.Stat(filepath.Join(composeDir(fx.home), "compose.yaml")); err == nil {
+		t.Error("the server's files were rendered")
+	}
+}
+
 func TestExposeAsksCleartext(t *testing.T) {
 	fx := exposeHost(t)
 	before := fx.config(t)
@@ -166,7 +184,7 @@ func TestExposeAsksCleartext(t *testing.T) {
 	}
 	if len(env.Error.Questions) != 1 || env.Error.Questions[0].ID != "cleartext_lan" ||
 		!strings.Contains(env.Error.Message, "the API key travels unencrypted on this network; prefer a tailnet address (Tailscale: 100.x)") ||
-		env.Error.Resume != "backsight server expose --private 192.168.1.10 --out "+f+" --answer cleartext_lan=yes" {
+		env.Error.Resume != "backsight server expose --private 192.168.1.10 --out "+f+" --json --answer cleartext_lan=yes" {
 		t.Errorf("needs_user error: %+v", env.Error)
 	}
 	if string(fx.config(t)) != string(before) || len(fx.dk.ups) != 0 {
@@ -256,13 +274,16 @@ func TestExposeRollsBack(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fx := exposeHost(t)
+			w := watchUps(fx.home)
 			c.fail(fx)
 			before := fx.config(t)
 			f := filepath.Join(t.TempDir(), "join.token")
 			code, out, errOut := run(t, "server", "expose", "--private", "100.101.1.2", "--out", f)
-			if code != output.Blocked || !strings.Contains(errOut, "config.toml is back as it was") {
+			if code != output.RolledBack || !strings.Contains(errOut, "config.toml is back as it was") {
 				t.Fatalf("exit %d\n%s%s", code, out, errOut)
 			}
+			// Hooks queue and jobs skip meanwhile; a Ctrl-C cannot kill the rollback.
+			w.guarded(t, 2)
 			if after := fx.config(t); string(after) != string(before) {
 				t.Errorf("config.toml changed:\n%s", after)
 			}

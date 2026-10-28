@@ -12,6 +12,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -115,8 +116,16 @@ func spawnServerStart(d paths.Dirs) error {
 }
 
 // startLateServer spawns `server start` when exposureNeedsStart says so,
-// and says what it did ("": nothing to do).
+// and says what it did ("": nothing to do). Never while a restore did not
+// finish (server start would resume it with nobody there) or while a
+// command holds server.lock (it is restarting the server itself).
 func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) string {
+	if state.RestoreIncomplete(d) {
+		return ""
+	}
+	if h := state.Inspect(filepath.Join(d.LocksDir(), "server.lock")); h != nil && !h.Stale {
+		return ""
+	}
 	start, why := exposureNeedsStart(ctx, cfg, runtimeFor(cfg))
 	if !start {
 		return ""

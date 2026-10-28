@@ -102,10 +102,11 @@ func newServerTokenCmd(e *env) *cobra.Command {
 			if err := tokenOut(e, out); err != nil {
 				return err
 			}
-			var d paths.Dirs
 			var rt server.Runtime
 			if rotate {
-				rt = runtimeFor(cfg)
+				// Docker in its own process group: a second Ctrl-C must not
+				// kill the rollback's docker compose up.
+				rt = ownGroupRuntime(cfg)
 				if err := pinGuard(cfg, rt); err != nil {
 					return err
 				}
@@ -113,18 +114,28 @@ func newServerTokenCmd(e *env) *cobra.Command {
 					p := rotatePlan(cfg, url, out)
 					return e.emit("server token", p, p.text)
 				}
-				if d, _, err = machine(); err != nil {
-					return err
-				}
-				unlock, err := serverLock(d, "server token --rotate")
-				if err != nil {
-					return err
-				}
-				defer unlock()
-				// Again under the lock: another command may have changed them.
-				if _, sec, err = loadServerConfig(); err != nil {
-					return err
-				}
+			}
+			d, _, err := machine()
+			if err != nil {
+				return err
+			}
+			// server.lock either way: no token on a key a running rotation
+			// rolls back, no two first server ids. A rotation also holds the
+			// maintenance lock: hooks queue and jobs skip while the server
+			// restarts on the new key.
+			var unlock func()
+			if rotate {
+				unlock, _, err = serverMaintenanceLock(d, "server token --rotate")
+			} else {
+				unlock, err = serverLock(d, "server token")
+			}
+			if err != nil {
+				return err
+			}
+			defer unlock()
+			// Again under the lock: another command may have changed them.
+			if _, sec, err = loadServerConfig(); err != nil {
+				return err
 			}
 			if sec.APIKey == "" {
 				return needSecrets([]string{"api_key"}, "backsight server token")
@@ -290,5 +301,6 @@ func rotateKey(ctx context.Context, d paths.Dirs, cfg config.Config, old config.
 		return old, hindsight.Version{}, mask(fmt.Errorf("the server did not run on the new API key (%s); the old key is back in secrets.toml, but the server did not start healthy on it (%s): "+
 			"the old token works again once it does: run backsight server start, then backsight server status", cause, rerr.Error()))
 	}
-	return old, hindsight.Version{}, mask(fmt.Errorf("the server did not run on the new API key (%s): the old key is back and the server runs on it, so the old token still works", cause))
+	return old, hindsight.Version{}, mask(&output.Error{Code: output.RolledBack,
+		Message: fmt.Sprintf("the server did not run on the new API key (%s): the old key is back and the server runs on it, so the old token still works", cause)})
 }

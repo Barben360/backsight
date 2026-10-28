@@ -362,9 +362,11 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(err)
 			}
 			add("bank", map[bool]string{true: "done", false: "skipped"}[br.Sent], strings.TrimSpace(bankText(br)))
-			// After the bank step (it may rename a legacy bank). A failure is a warning: `server token` retries it.
+			// After the bank step (it may rename a legacy bank). A failure is a
+			// warning: the first connection token made writes the id.
 			if status, detail := ensureServerID(cmd.Context(), cfg, sec); status == "warning" {
-				res.Warnings = append(res.Warnings, "server id: "+detail+" (backsight server token tries again)")
+				res.Warnings = append(res.Warnings, "server id: "+detail+" (backsight server install again writes it; "+
+					"so does the first connection token, from backsight server expose --private or backsight server token once the server is exposed)")
 				add("server-id", "warning", detail)
 			} else {
 				add("server-id", status, detail)
@@ -871,6 +873,26 @@ func serverLockFor(d paths.Dirs, command string, keyStep bool) (func(), error) {
 		return nil, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	return func() { _ = l.Release() }, nil
+}
+
+// serverMaintenanceLock takes the maintenance lock and server.lock, as
+// server upgrade does, for a command that restarts the server on another
+// key or address: hooks queue and jobs skip until it is done or rolled
+// back. note names a stale maintenance lock it broke.
+func serverMaintenanceLock(d paths.Dirs, command string) (unlock func(), note string, err error) {
+	if state.RestoreIncomplete(d) {
+		return nil, "", refuseWhileBusy(d)
+	}
+	ml, note, err := acquireMaintenance(d, command)
+	if err != nil {
+		return nil, "", err
+	}
+	sl, _, err := state.Acquire(filepath.Join(d.LocksDir(), "server.lock"), command)
+	if err != nil {
+		_ = ml.Release()
+		return nil, "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
+	return func() { _ = sl.Release(); _ = ml.Release() }, note, nil
 }
 
 // redacted is blocked() with every known secret value masked: Docker and

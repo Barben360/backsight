@@ -42,6 +42,12 @@ func (r DockerRunner) command(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// InOwnGroup is r with OwnGroup set.
+func (r DockerRunner) InOwnGroup() Runner {
+	r.OwnGroup = true
+	return r
+}
+
 func (r DockerRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	return r.command(ctx, args...).CombinedOutput()
 }

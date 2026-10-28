@@ -210,8 +210,8 @@ uc_proof
 # updated build opens the server on this machine's private address, hands
 # out its token, keeps the server id across hands-out, and a rotation
 # kills the old key. The token files hold the key: they are only checked
-# for existence and never printed. The leg is skipped, not failed, on a
-# machine with no private IPv4 (the source of the default route).
+# for existence and never printed. With no private IPv4 (the source of
+# the default route), the leg fails on CI and is skipped on a dev machine.
 sv=$(uc_shim)
 priv_ip=
 if command -v ip >/dev/null; then

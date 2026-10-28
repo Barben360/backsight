@@ -22,6 +22,9 @@ func TestDockerRunnerOwnGroup(t *testing.T) {
 	if c := (DockerRunner{}).command(context.Background(), "version"); c.SysProcAttr != nil && c.SysProcAttr.Setpgid {
 		t.Error("the default runner left the process group")
 	}
+	if r, ok := (DockerRunner{}).InOwnGroup().(DockerRunner); !ok || !r.OwnGroup {
+		t.Errorf("InOwnGroup: %#v", r)
+	}
 }
 
 // TerminateGroup sends SIGTERM to the child's whole process group (the

@@ -16,9 +16,71 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/token"
 )
+
+// upWatch wraps a fake Docker: for each compose up it notes whether the
+// command ran it in its own process group (the runner ownGroupRuntime
+// makes, which a terminal's Ctrl-C does not reach) and whether the
+// maintenance lock and server.lock were held.
+type upWatch struct {
+	server.Runner
+	d   paths.Dirs
+	ups []upSeen
+}
+
+type upSeen struct{ ownGroup, maintenance, serverLock bool }
+
+// watchUps makes the fake Docker in use an upWatch of home's install.
+func watchUps(home string) *upWatch {
+	w := &upWatch{Runner: composeRunner, d: pathsOf(home)}
+	composeRunner = w // the fixture's cleanup puts the original back
+	return w
+}
+
+func (w *upWatch) Run(ctx context.Context, args ...string) ([]byte, error) {
+	w.note(false, args)
+	return w.Runner.Run(ctx, args...)
+}
+
+func (w *upWatch) InOwnGroup() server.Runner { return ownGroupRun{w} }
+
+type ownGroupRun struct{ w *upWatch }
+
+func (g ownGroupRun) Run(ctx context.Context, args ...string) ([]byte, error) {
+	g.w.note(true, args)
+	return g.w.Runner.Run(ctx, args...)
+}
+
+func (w *upWatch) note(ownGroup bool, args []string) {
+	if strings.HasSuffix(strings.Join(args, " "), "up -d --wait") {
+		live := func(p string) bool { h := state.Inspect(p); return h != nil && !h.Stale }
+		w.ups = append(w.ups, upSeen{ownGroup: ownGroup, maintenance: live(w.d.MaintenanceLock()), serverLock: live(filepath.Join(w.d.LocksDir(), "server.lock"))})
+	}
+}
+
+// guarded fails t unless every compose up ran in its own process group,
+// under the maintenance lock and server.lock, and both locks are released.
+func (w *upWatch) guarded(t *testing.T, ups int) {
+	t.Helper()
+	if len(w.ups) != ups {
+		t.Errorf("%d compose up(s), want %d", len(w.ups), ups)
+	}
+	for i, u := range w.ups {
+		if !u.ownGroup || !u.maintenance || !u.serverLock {
+			t.Errorf("compose up %d: own process group %v, maintenance lock %v, server.lock %v", i, u.ownGroup, u.maintenance, u.serverLock)
+		}
+	}
+	for _, p := range []string{w.d.MaintenanceLock(), filepath.Join(w.d.LocksDir(), "server.lock")} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s left behind", p)
+		}
+	}
+}
 
 // keyDocker plays the server's compose project for a key rotation: each
 // `up` notes the API key the .env gives the server, which the fake server
@@ -241,13 +303,16 @@ func TestRotateNewKeyWorks(t *testing.T) {
 
 func TestRotateRollsBack(t *testing.T) {
 	home, _, dk := tokenHost(t)
+	w := watchUps(home)
 	old, _ := config.LoadSecrets(secretsFile(home))
 	dk.only = old.APIKey // the server never runs healthy on a new key
 	f := filepath.Join(t.TempDir(), "join.token")
 	code, out, errOut := run(t, "server", "token", "--rotate", "--out", f)
-	if code != output.Blocked || !strings.Contains(errOut, "the old token still works") {
+	if code != output.RolledBack || !strings.Contains(errOut, "the old token still works") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
+	// Hooks queue and jobs skip meanwhile; a Ctrl-C cannot kill the rollback.
+	w.guarded(t, 2)
 	now, _ := config.LoadSecrets(secretsFile(home))
 	if now != old {
 		t.Error("secrets.toml does not hold the old secrets again")
@@ -322,5 +387,27 @@ func TestRotatePlanChangesNothing(t *testing.T) {
 	}
 	if code, _, errOut := run(t, "server", "token", "--plan", "--out", f); code != output.Usage || !strings.Contains(errOut, "--rotate") {
 		t.Errorf("--plan without --rotate: exit %d: %s", code, errOut)
+	}
+}
+
+// A token is not handed out while another command holds server.lock (a
+// rotation may roll its key back), nor a first server id written twice.
+func TestTokenWaitsForServerLock(t *testing.T) {
+	home, _, _ := tokenHost(t)
+	l, _, err := state.Acquire(filepath.Join(pathsOf(home).LocksDir(), "server.lock"), "server token --rotate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "join.token")
+	code, out, errOut := run(t, "server", "token", "--out", f)
+	if code != output.Blocked || !strings.Contains(errOut, "server token --rotate") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if _, err := os.Stat(f); err == nil {
+		t.Error("a token was written")
+	}
+	_ = l.Release()
+	if code, out, errOut := run(t, "server", "token", "--out", f); code != output.OK {
+		t.Errorf("lock released: exit %d\n%s%s", code, out, errOut)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // recoverRT is a runtime whose deployed version and containers a test sets.
@@ -218,5 +219,46 @@ func TestDoctorNamesTheLateAddress(t *testing.T) {
 	// server start would fail on the missing address: not the fix.
 	if st, d, fix := detail(); st != doctor.Error || d != want || strings.Contains(fix, "server start") || !strings.Contains(fix, "backsight server expose --loopback") {
 		t.Errorf("address absent: %s %q, fix %q", st, d, fix)
+	}
+}
+
+// No server start while a restore did not finish (whatever its step: the
+// start would resume it with nobody there) or while a command holds
+// server.lock (it restarts the server itself), from jobs tick or a session.
+func TestLateServerWaitsForRestoreAndServerLock(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	_ = os.MkdirAll(filepath.Dir(d.RestoreMarker()), 0o700)
+	session := func() {
+		t.Helper()
+		_ = os.Remove(filepath.Join(d.State, serverCheckStamp))
+		raw, _ := json.Marshal(map[string]any{"session_id": "s1", "cwd": fx.home, "source": "startup"})
+		if _, err := handleHook(context.Background(), "session-start", raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []string{"", "key", "purge"} {
+		if err := os.WriteFile(d.RestoreMarker(), []byte(`{"command":"restore","step":"`+step+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, out, _ := run(t, "jobs", "tick")
+		session()
+		if len(fx.spawns) != 0 {
+			t.Fatalf("restore marker at step %q: spawns %q\n%s", step, fx.spawns, out)
+		}
+	}
+	_ = os.Remove(d.RestoreMarker())
+	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "server.lock"), "server expose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := run(t, "jobs", "tick")
+	session()
+	if len(fx.spawns) != 0 {
+		t.Fatalf("server.lock held: spawns %q\n%s", fx.spawns, out)
+	}
+	_ = l.Release()
+	if _, out, _ := run(t, "jobs", "tick"); len(fx.spawns) != 1 {
+		t.Errorf("nothing held: spawns %q\n%s", fx.spawns, out)
 	}
 }

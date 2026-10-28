@@ -56,9 +56,9 @@ type exposeResult struct {
 }
 
 type exposeFlags struct {
-	private, out   string
-	loopback, plan bool
-	answers        []string
+	private, out         string
+	loopback, plan, json bool
+	answers              []string
 }
 
 // command is this run as a command line, for a needs_user resume.
@@ -75,6 +75,9 @@ func (f exposeFlags) command() string {
 	}
 	for _, a := range f.answers {
 		cmd += " --answer " + shellWord(a)
+	}
+	if f.json {
+		cmd += " --json"
 	}
 	return cmd
 }
@@ -102,6 +105,7 @@ func newServerExposeCmd(e *env) *cobra.Command {
 }
 
 func runExpose(ctx context.Context, e *env, f exposeFlags) error {
+	f.json = e.json
 	if (f.private == "") == !f.loopback {
 		return &output.Error{Code: output.Usage, Message: "say where the server listens: --private <ip> (this machine's LAN or tailnet address) or --loopback (127.0.0.1 only)"}
 	}
@@ -184,7 +188,9 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 			res.Notes = append(res.Notes, "the connection token holds the API key, so it goes to a file or a terminal only: "+tokenElsewhere)
 		}
 	}
-	rtNext := runtimeFor(next)
+	// Docker in its own process group: a second Ctrl-C must not kill the
+	// rollback's docker compose up.
+	rtNext := ownGroupRuntime(next)
 	if err := pinGuard(next, rtNext); err != nil {
 		return err
 	}
@@ -202,12 +208,16 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 		return e.emit("server expose", res, func() string { return exposePlanText(res, f.out, giveToken) })
 	}
 
-	// 4. The change, rolled back on any failure.
-	unlock, err := serverLock(d, "server expose")
+	// 4. The change, rolled back on any failure, under the maintenance lock
+	// (hooks queue, jobs skip) and server.lock.
+	unlock, note, err := serverMaintenanceLock(d, "server expose")
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if note != "" {
+		res.Notes = append(res.Notes, note)
+	}
 	// Again under the lock: another command may have changed them.
 	if _, sec, err = loadServerConfig(); err != nil {
 		return err
@@ -217,7 +227,7 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 	if err != nil {
 		return err
 	}
-	rtOld := runtimeFor(old)
+	rtOld := ownGroupRuntime(old)
 	oldFiles, err := renderOn(rtOld, sec, "backsight server start")
 	if err != nil {
 		return err
@@ -245,7 +255,7 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 			return redacted(fmt.Errorf("the server did not run %s (%s); config.toml is back as it was, but the server did not start healthy on it (%s): "+
 				"run backsight server start, then backsight server status", target, cause, rerr.Error()), sec)
 		}
-		return redacted(fmt.Errorf("the server did not run %s (%s): config.toml is back as it was and the server runs as before", target, cause), sec)
+		return redacted(&output.Error{Code: output.RolledBack, Message: fmt.Sprintf("the server did not run %s (%s): config.toml is back as it was and the server runs as before", target, cause)}, sec)
 	}
 	res.Changes = ch
 
