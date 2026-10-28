@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -55,6 +56,39 @@ type State struct {
 	// this session (a repeated failure is not injected twice).
 	FailureSigs []string `json:"failure_sigs,omitempty"`
 	LastCredit  string   `json:"last_credit"` // how the last reply cited memory: exact | empty | free | ""
+	// ShownTexts: the texts of memories shown lately, by id, for the end
+	// of turn's check (at most maxShownTexts).
+	ShownTexts map[string]string `json:"shown_texts,omitempty"`
+}
+
+// maxShownTexts bounds ShownTexts: a turn shows a dozen memories at most.
+const maxShownTexts = 50
+
+// KeepShownTexts records the texts of memories just shown; past the cap,
+// older texts make room (in no set order: a map has none), then, for a
+// batch over the cap, some of its own.
+func (s *State) KeepShownTexts(texts map[string]string) {
+	if len(texts) == 0 {
+		return
+	}
+	if s.ShownTexts == nil {
+		s.ShownTexts = map[string]string{}
+	}
+	maps.Copy(s.ShownTexts, texts)
+	for id := range s.ShownTexts {
+		if len(s.ShownTexts) <= maxShownTexts {
+			return
+		}
+		if _, now := texts[id]; !now {
+			delete(s.ShownTexts, id)
+		}
+	}
+	for id := range s.ShownTexts {
+		if len(s.ShownTexts) <= maxShownTexts {
+			return
+		}
+		delete(s.ShownTexts, id)
+	}
 }
 
 // Span is one paused stretch; a zero To is still open.

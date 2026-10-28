@@ -14,7 +14,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 
 | Keys | Applies |
 |---|---|
-| `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*` | At the next hook or command: the hooks read the file each time. |
+| `recall.*`, `privacy.*`, `components.*`, `projects.*`, `hooks.*`, `feedback.*` | At the next hook or command: the hooks read the file each time. |
 | `llm.*`, `network.*`, `server.ui_port`, the port of `server.url` | After `backsight server render` and `backsight server start`, which write the server's files again and recreate it. Then `backsight server llm check` tests an LLM change. |
 | `backup.*`, `update.*` | At the next daily job, or the next `backup` or `update` command. |
 | `client.retention_days` | At the next `backsight client install` or `backsight client retention`. |
@@ -147,6 +147,20 @@ On a client of another PC's server (`server.mode = "remote"`), the server's host
 | `update.source` | `""` | Empty: the GitHub releases of `Barben360/backsight`. Else an absolute path to a directory of downloaded release files. |
 | `update.prereleases` | `false` | Offer pre-releases even when the installed version is a stable one. A pre-release install is offered pre-releases anyway. |
 
+## `[feedback]`: which memories Claude used
+
+When memories were shown to Claude during a turn, it reports which ones informed its answer with the `memory_credit` tool. backsight keeps a local record of what was shown and what was used, ids and counts only, never the text of a memory, a prompt or a reply. backsight never writes this section: an older backsight refuses a `config.toml` with keys it does not know, so remove the section before installing an older version.
+
+| Key | Default | Effect |
+|---|---|---|
+| `feedback.enabled` | `true` | Record which memories are shown and which Claude reports using, and offer Claude the `memory_credit` tool. `false`: nothing is recorded, the tool is not offered, and Claude is asked instead to cite the memories it uses as `🧠 From memory (<project>) — …`. |
+| `feedback.confident_rank` | `2` | A memory shown this high or higher in a recall or a search (1 is the top) and not used counts as a miss, when Claude reported what it used that turn. At least 1. |
+| `feedback.miss_half_life_days` | `90` | A miss counts half as much after this many days, a quarter after twice as many. `0`: misses never fade. |
+| `feedback.credit_half_life_days` | `365` | The same for the times Claude used a memory. `0`: they never fade. |
+| `feedback.stop_check` | `"always"` | When the end of a turn asks Claude to report what it used, if it has not: `"always"` whenever the turn showed memories; `"cited"` only when its reply cites a memory or it searched or read the memory itself; `"off"` never. |
+
+Every 15 minutes, `backsight jobs tick` turns that record into counts per memory, in `feedback/ledger.json` under the state directory. Each memory shown is counted once its turn is over and it was shown at least 30 minutes ago (or 2 hours ago when the turn never ended), so a use Claude reports a few turns later still counts: as used, as a miss (see `confident_rank`), as shown, or as unknown when Claude never reported what it used that turn (an interrupted turn, for instance), which never counts as a miss. A memory shown in a briefing, opened with `memory_read` or recalled after a failed tool call is never a miss. A use reported after that counts nowhere. `backsight forget <id>` drops a memory's counts.
+
 ## Examples
 
 Quieter recall: fewer, closer memories.
@@ -166,6 +180,13 @@ briefing = "recent"
 [backup]
 dir = "/mnt/backup/backsight"
 keep_daily = 14
+```
+
+Ask Claude what it used only when it cited a memory or looked one up itself:
+
+```toml
+[feedback]
+stop_check = "cited"
 ```
 
 A price for another provider's model, so `backsight stats` shows a cost:

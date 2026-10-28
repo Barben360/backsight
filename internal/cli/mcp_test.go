@@ -11,7 +11,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -74,11 +76,38 @@ func call(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any)
 	return b.String(), res.IsError
 }
 
-func TestMCPServesThreeToolsWithTheGuide(t *testing.T) {
+func TestMCPServesFourTools(t *testing.T) {
 	cs := mcpSession(t)
 	if got := cs.InitializeResult().Instructions; got != instructions.ShortGuide {
 		t.Errorf("instructions %q", got)
 	}
+	names := toolNames(t, cs)
+	if len(names) != 4 || names["memory_search"] != instructions.SearchDescription || names["memory_store"] != instructions.StoreDescription ||
+		names["memory_read"] == "" || names["memory_credit"] != instructions.CreditDescription {
+		t.Errorf("tools %v", names)
+	}
+	// feedback off: the tool is not offered
+	if names := toolNames(t, mcpSessionWith(t, "\n[feedback]\nenabled = false\n")); len(names) != 3 || names["memory_credit"] != "" {
+		t.Errorf("feedback off: tools %v", names)
+	}
+}
+
+const searchTrailer = "If a memory informs your answer, call memory_credit with its id before your final message.\n"
+
+// v7: the search result asks for a declaration, not a citation format;
+// an empty search asks for nothing.
+func TestSearchTrailerAsksForACredit(t *testing.T) {
+	out := mcpSearchText(recall.Result{Hits: []recall.Hit{{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "fact", Project: "billing", Age: "2d", Score: 0.9}}}, true)
+	if !strings.HasSuffix(out, "\n"+searchTrailer) || strings.Contains(out, instructions.Credit) || strings.Contains(out, "Cite what you use") {
+		t.Errorf("trailer:\n%s", out)
+	}
+	if out := mcpSearchText(recall.Result{}, true); out != "nothing in memory\n" {
+		t.Errorf("empty search: %q", out)
+	}
+}
+
+func toolNames(t *testing.T, cs *mcp.ClientSession) map[string]string {
+	t.Helper()
 	tools, err := cs.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -87,16 +116,14 @@ func TestMCPServesThreeToolsWithTheGuide(t *testing.T) {
 	for _, tl := range tools.Tools {
 		names[tl.Name] = tl.Description
 	}
-	if len(names) != 3 || names["memory_search"] != instructions.SearchDescription || names["memory_store"] != instructions.StoreDescription || names["memory_read"] == "" {
-		t.Errorf("tools %v", names)
-	}
+	return names
 }
 
 func TestMCPSearchReturnsHitsAndTheCreditFormat(t *testing.T) {
 	cs := mcpSession(t)
 	recallAnswer = `[{"id":"m1","text":"PostgreSQL 16 stays for billing.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.7}}]`
 	out, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres version"}})
-	if isErr || !strings.Contains(out, "PostgreSQL 16 stays") || !strings.Contains(out, "[billing]") || !strings.Contains(out, instructions.Credit) {
+	if isErr || !strings.Contains(out, "PostgreSQL 16 stays") || !strings.Contains(out, "[billing]") || !strings.HasSuffix(out, searchTrailer) {
 		t.Errorf("%v\n%s", isErr, out)
 	}
 	if !strings.Contains(strings.Join(recallTags, "|"), "project:billing") {
@@ -456,5 +483,217 @@ func TestMCPRefusedKeyIsTriedOnce(t *testing.T) {
 	refusedCalls.Store(0)
 	if _, isErr := call(t, cs, "memory_read", map[string]any{"id": "m1"}); !isErr || refusedCalls.Load() != 2 {
 		t.Errorf("new key refused too: %d calls, %v", refusedCalls.Load(), isErr)
+	}
+}
+
+const (
+	creditA = "aaaaaaaa-0000-4000-8000-000000000001"
+	creditB = "bbbbbbbb-0000-4000-8000-000000000002"
+)
+
+// creditSession is a memory server whose Claude Code process has a
+// current record for session S, project proj.
+func creditSession(t *testing.T) (*mcp.ClientSession, string) {
+	t.Helper()
+	mcpParentPID = 4848
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "proj", At: time.Now()})
+	return cs, home
+}
+
+// showIn journals what a hook shows: ids of project proj shown in session
+// sess, in project proj.
+func showIn(t *testing.T, home, sess string, ids ...string) {
+	t.Helper()
+	items := make([]feedback.Item, 0, len(ids))
+	for i, id := range ids {
+		items = append(items, feedback.Item{ID: id, Rank: i + 1, Project: "proj"})
+	}
+	showItems(t, home, sess, "search", "proj", items...)
+}
+
+// showItems journals a shows event of path in session sess, whose
+// session project is sessProject.
+func showItems(t *testing.T, home, sess, path, sessProject string, items ...feedback.Item) {
+	t.Helper()
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: sess, Project: sessProject})
+	if err := j.Append(feedback.Event{Kind: "shows", Turn: "p-1", Path: path, Items: items}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// creditEvent: one telemetry credit event holds every field given.
+func creditEvent(t *testing.T, home string, fields ...string) bool {
+	t.Helper()
+	for _, line := range strings.Split(telemetryText(t, home), "\n") {
+		ok := strings.Contains(line, `"event":"credit"`)
+		for _, f := range fields {
+			ok = ok && strings.Contains(line, f)
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCreditUsedReturnsTheLineToPrint(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	before := len(journalEvents(t, home))
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}})
+	if isErr || !strings.HasPrefix(out, "Credited.") || !strings.Contains(out, "> 🧠 **From memory (proj · aaaaaaaa)** — ") || !strings.Contains(out, "final message") {
+		t.Errorf("%v\n%s", isErr, out)
+	}
+	if n := len(journalEvents(t, home)); n != before {
+		t.Errorf("the server journaled %d events: only the hook does", n-before)
+	}
+	if !creditEvent(t, home, `"verdict":"used"`, `"ids_n":1`, `"ok":true`) {
+		t.Errorf("telemetry:\n%s", telemetryText(t, home))
+	}
+}
+
+// The line names each memory's own project, not the session's: a session
+// in billing shown an infra memory credits it to infra.
+func TestCreditNamesEachMemorysOwnProject(t *testing.T) {
+	cs, home := creditSession(t)
+	showItems(t, home, "S", "search", "billing", feedback.Item{ID: creditB, Rank: 1, Project: "infra"}, feedback.Item{ID: creditA, Rank: 2, Project: "billing"})
+	showItems(t, home, "S", "read", "billing", feedback.Item{ID: creditB}) // a read names no project: the search's stays
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"bbbbbbbb"}})
+	if isErr || !strings.Contains(out, "From memory (infra · bbbbbbbb)**") {
+		t.Errorf("%v\n%s", isErr, out)
+	}
+	// ids of two projects: one line each, full ids and prefixes alike
+	out, isErr = call(t, cs, "memory_credit", map[string]any{"ids": []string{creditB, "aaaaaaaa"}, "verdict": "used"})
+	want := "Credited. Print these lines in your final message:\n" +
+		"> 🧠 **From memory (infra · bbbbbbbb)** — <the facts you used, in your words>\n" +
+		"> 🧠 **From memory (billing · aaaaaaaa)** — <the facts you used, in your words>"
+	if isErr || out != want {
+		t.Errorf("%v\n%s", isErr, out)
+	}
+}
+
+// Another session's shows cannot be credited here.
+func TestCreditSeesOnlyItsSessionsShows(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S2", creditA)
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); !isErr || !strings.Contains(out, "aaaaaaaa: not shown in this session") {
+		t.Errorf("%v %s", isErr, out)
+	}
+}
+
+func TestCreditIsAllOrNothing(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA, "aaaaaaaa-9999-4000-8000-000000000009")
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{creditA, "cccccccc"}})
+	if !isErr || !strings.Contains(out, "cccccccc: not shown in this session") || strings.Contains(out, "aaaaaaaa: ") || strings.Contains(out, "From memory") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if !creditEvent(t, home, `"verdict":"used"`, `"ids_n":2`, `"ok":false`) {
+		t.Errorf("telemetry:\n%s", telemetryText(t, home))
+	}
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); !isErr || !strings.Contains(out, "aaaaaaaa: matches several memories") {
+		t.Errorf("ambiguous: %v %s", isErr, out)
+	}
+}
+
+// A credit sent with the search that shows the id (parallel calls) comes
+// before the hook journaled the show: refused, then accepted once it is.
+func TestCreditBeforeTheSearchResultIsRefused(t *testing.T) {
+	cs, home := creditSession(t)
+	out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}})
+	if !isErr || !strings.Contains(out, "aaaaaaaa: not shown in this session") || !strings.Contains(out, "call again after the result") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.HasPrefix(out, "Credited.") {
+		t.Errorf("after the show: %v %s", isErr, out)
+	}
+}
+
+func TestCreditNoneNeedsNoIDs(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "none"}); !isErr || !strings.Contains(out, "none") {
+		t.Errorf("none with ids: %v %s", isErr, out)
+	}
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "none"}); isErr || out != "Noted: no memory used." {
+		t.Errorf("none: %v %q", isErr, out)
+	}
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{}); !isErr || !strings.Contains(out, "ids") {
+		t.Errorf("used without ids: %v %s", isErr, out)
+	}
+	eleven := make([]string, 11)
+	for i := range eleven {
+		eleven[i] = creditA
+	}
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": eleven}); !isErr || !strings.Contains(out, "1 to 10") {
+		t.Errorf("eleven ids: %v %s", isErr, out)
+	}
+	for _, v := range []string{"wrong", "outdated"} {
+		if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": v}); !isErr || !strings.Contains(out, "later version") {
+			t.Errorf("%s: %v %s", v, isErr, out)
+		}
+	}
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used" or "none"`) {
+		t.Errorf("unknown verdict: %v %s", isErr, out)
+	}
+}
+
+// Without its session the server cannot tell which shows count.
+func TestCreditWithoutSessionAsksToRetry(t *testing.T) {
+	mcpParentPID = 4949
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSession(t)
+	showIn(t, os.Getenv("HOME"), "S", creditA)
+	for _, args := range []map[string]any{{"ids": []string{"aaaaaaaa"}}, {"verdict": "none"}} {
+		if out, isErr := call(t, cs, "memory_credit", args); !isErr || out != "memory session not ready: call memory_credit again" {
+			t.Errorf("%v: %v %q", args, isErr, out)
+		}
+	}
+}
+
+// An unreadable journal does not fail the call: the session state's seen
+// ids stand in for the shows.
+func TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file without permissions")
+	}
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditB)
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "journal-*.jsonl"))
+	if len(files) != 1 || os.Chmod(files[0], 0) != nil {
+		t.Fatalf("journal %v", files)
+	}
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	_ = sessions(home).Update("S", func(st *session.State) error { st.Seen = []string{creditA}; return nil })
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.Contains(out, "From memory (proj · aaaaaaaa)") {
+		t.Errorf("%v %s", isErr, out)
+	}
+}
+
+// memory_read takes the short id of a memory shown in this session, as
+// memory_credit does; a full id needs no show.
+func TestMCPReadTakesAShortIDShownInTheSession(t *testing.T) {
+	cs, home := creditSession(t)
+	memories[creditA] = `{"id":"` + creditA + `","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"]}`
+	memories[creditB] = `{"id":"` + creditB + `","text":"Deploys go through staging.","type":"observation","tags":["project:billing"]}`
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "aaaaaaaa"}); isErr || !strings.Contains(out, "PostgreSQL 16 stays.") {
+		t.Errorf("short id: %v %s", isErr, out)
+	}
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": creditB}); isErr || !strings.Contains(out, "Deploys go through staging.") {
+		t.Errorf("full id without a show: %v %s", isErr, out)
+	}
+	// shown in another session only: not this session's short id
+	showIn(t, home, "S2", creditB)
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "bbbbbbbb"}); !isErr || !strings.Contains(out, "no memory bbbbbbbb") {
+		t.Errorf("another session's short id: %v %s", isErr, out)
+	}
+	showIn(t, home, "S", "aaaaaaaa-9999-4000-8000-000000000009")
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "aaaaaaaa"}); !isErr || !strings.Contains(out, "aaaaaaaa: matches several memories") {
+		t.Errorf("ambiguous short id: %v %s", isErr, out)
 	}
 }

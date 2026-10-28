@@ -165,6 +165,9 @@ func newForgetCmd(e *env) *cobra.Command {
 				if len(targets) != 1 || targets[0] != id {
 					res.Sources = targets
 				}
+				if !restore {
+					journalForget(append([]string{id}, res.Sources...))
+				}
 			default:
 				res, err = purgeMemory(ctx, cl, bank, id, yes)
 				if err != nil {
@@ -175,6 +178,7 @@ func newForgetCmd(e *env) *cobra.Command {
 						Message: "purging deletes the documents listed (every fact extracted from them): confirm with backsight forget " + id + " --purge --yes",
 						Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight forget " + id + " --purge --yes", Why: "delete for good what is listed"}}})
 				}
+				journalForget(append([]string{id}, res.Sources...))
 			}
 			return e.emit("forget", res, func() string { return forgetText(res) })
 		},

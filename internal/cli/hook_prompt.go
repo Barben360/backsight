@@ -182,6 +182,7 @@ func (h *hookEnv) userPrompt() []byte {
 	promptAt := now()
 	ev := telemetry.Prompt{Plen: len([]rune(prompt)), IDs: []string{}, Lang: promptLang(prompt)}
 	if machineRE.MatchString(prompt) {
+		h.beginTurn(0, true) // not a prompt, but its hooks journal under a turn of their own
 		ev.Decision, ev.Reason = "skip", "machine"
 		h.tw.Emit(ev)
 		return nil
@@ -189,6 +190,9 @@ func (h *hookEnv) userPrompt() []byte {
 	st, _ := h.store.Load(h.in.SessionID)
 	n := st.Prompts + 1
 	ev.N = n
+	judge := st.LastInject == n-1 && n > 1
+	toolCredit := judge && h.creditedSinceTurn() // read before beginTurn moves the pointer
+	h.beginTurn(n, false)
 	rc := h.cfg.Recall
 	detector := detect(st, prompt)
 	if detector != "" {
@@ -196,7 +200,7 @@ func (h *hookEnv) userPrompt() []byte {
 	}
 
 	// What followed the previous prompt's injection.
-	if st.LastInject == n-1 && n > 1 {
+	if judge {
 		var ids []string
 		for _, in := range st.Injected {
 			if in.Prompt == n-1 {
@@ -207,7 +211,14 @@ func (h *hookEnv) userPrompt() []byte {
 		if st.LastCredit != "" {
 			credited = &st.LastCredit // computed at Stop over the whole reply
 		}
-		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, Contradicted: detector == "rule"})
+		source := ""
+		switch {
+		case toolCredit:
+			source = "tool"
+		case credited != nil && (*credited == "exact" || *credited == "free"):
+			source = "citation"
+		}
+		h.tw.Emit(telemetry.Outcome{N: n - 1, IDs: ids, Searched: st.SearchedPromptID == n-1, Credited: credited, CreditSource: source, Contradicted: detector == "rule"})
 	}
 
 	var parts []string
@@ -227,7 +238,7 @@ func (h *hookEnv) userPrompt() []byte {
 	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
-		text, items, res := h.promptRecall(st, prompt, reason)
+		text, chosen, items, res := h.promptRecall(st, prompt, reason)
 		ev.Scopes = map[string]telemetry.ScopeResult{}
 		failed := len(res.Scopes) > 0
 		for name, m := range res.Scopes {
@@ -243,13 +254,14 @@ func (h *hookEnv) userPrompt() []byte {
 			banner = instructions.MemoryUnavailable("", "server unreachable")
 		}
 		if text != "" {
-			parts = append(parts, text)
+			parts = append(parts, text+"\n"+h.texts().RecallEnd)
 			injected = items
 			memoryChars = len([]rune(text))
+			h.journalShows("prompt", itemsFromHits(chosen))
 		}
 	}
 	if n == 1 && len([]rune(prompt)) >= rc.ReminderMinChars {
-		parts = append(parts, instructions.Reminder)
+		parts = append(parts, h.texts().Reminder)
 		ev.Hinted = true
 	}
 	nudged := false
@@ -299,6 +311,7 @@ func (h *hookEnv) userPrompt() []byte {
 			}
 		}
 		s.Injected = append(s.Injected, injected...)
+		s.KeepShownTexts(injectionTexts(injected))
 		s.CharsInjected += memoryChars // memory text only, not reminders or nudges
 		return nil
 	})
@@ -332,7 +345,7 @@ func (h *hookEnv) sticky() session.Sticky {
 
 // promptRecall searches the prompt and keeps up to PromptHits unseen,
 // unmuted memories above the reranker floor, within PromptChars.
-func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, []session.Injection, recall.Result) {
+func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, []recall.Hit, []session.Injection, recall.Result) {
 	_, res := h.searchPrompt(prompt)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
@@ -340,14 +353,14 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, [
 		return slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass)
 	})
 	if len(chosen) == 0 {
-		return "", nil, res
+		return "", nil, nil, res
 	}
 	at := now()
 	items := make([]session.Injection, 0, len(chosen))
 	for _, hit := range chosen {
 		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
 	}
-	return block, items, res
+	return block, chosen, items, res
 }
 
 // searchPrompt is the prompt path's query and recall (SPEC §10.2), shared
@@ -415,7 +428,7 @@ func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool)
 			continue
 		}
 		room := rc.PromptChars - len([]rune(b.String()))
-		prefix, suffix := "- ["+safeProject(hit.Project)+"] ", age(hit.Age)+"\n"
+		prefix, suffix := "- "+memoryTag(hit.Project, hit.ID)+" ", age(hit.Age)+"\n"
 		textRoom := room - len([]rune(prefix)) - len([]rune(suffix))
 		if textRoom < 60 {
 			break
@@ -430,18 +443,23 @@ func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool)
 }
 
 var (
-	memoryToolRE = regexp.MustCompile(`__memory_(?:search|read|store)$`)
+	memoryToolRE = regexp.MustCompile(`__memory_(?:search|read|store|credit)$`)
 	uuidRE       = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	noteRE       = regexp.MustCompile(`\bnote:[0-9a-f-]{36}\b`)
 )
 
 // postToolUse marks that a memory tool ran during this prompt (the gate's
-// flag), adds returned ids to the seen set and stores to the session.
+// flag), adds returned ids to the seen set and stores to the session, and
+// journals shows and credits.
 func (h *hookEnv) postToolUse() {
 	if !memoryToolRE.MatchString(h.in.ToolName) {
 		return
 	}
 	text := responseText(h.in.ToolResponse)
+	if strings.HasSuffix(h.in.ToolName, "memory_credit") {
+		h.journalCredit(text) // naming memories already shown is no search: the gate's flag and the seen set stay
+		return
+	}
 	var ids, notes []string
 	if strings.HasSuffix(h.in.ToolName, "memory_store") {
 		notes = noteRE.FindAllString(text, -1)
@@ -454,8 +472,13 @@ func (h *hookEnv) postToolUse() {
 	// an fsync'd write under the session lock: this hook (deadline 1.5 s)
 	// waits up to 1 s rather than the prompt path's 100 ms.
 	h.store.Retry = time.Second
+	var shownTexts map[string]string
+	if strings.HasSuffix(h.in.ToolName, "memory_search") {
+		shownTexts = searchTexts(text)
+	}
 	h.updateSession(func(s *session.State) error {
 		n = s.Prompts
+		s.KeepShownTexts(shownTexts) // a subagent's too: the end of its turn asks about them
 		if !subagent {
 			s.SearchedPromptID = s.Prompts
 			for _, id := range ids {
@@ -476,6 +499,12 @@ func (h *hookEnv) postToolUse() {
 	// n ties it to the prompt (detector follow-up), memory_ids to the
 	// briefing (briefing use).
 	h.tw.Emit(telemetry.Raw{Name: "tool_use", Fields: map[string]any{"name": h.in.ToolName, "ids": len(ids), "memory_ids": ids, "n": n, "subagent": subagent}})
+	switch {
+	case strings.HasSuffix(h.in.ToolName, "memory_search"):
+		h.journalShows("search", searchShows(text))
+	case strings.HasSuffix(h.in.ToolName, "memory_read"):
+		h.journalShows("read", h.readShow(h.in.ToolInput))
+	}
 }
 
 // responseText flattens a tool response: a string, or MCP content blocks.

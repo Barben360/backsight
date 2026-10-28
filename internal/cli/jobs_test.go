@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
@@ -364,5 +366,56 @@ func TestTickRecordsNoAnswerFromAnotherServer(t *testing.T) {
 	run(t, "jobs", "tick")
 	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
 		t.Errorf("another server: %+v", r)
+	}
+}
+
+// Settling is local: a tick settles the journal into the ledger while the
+// server does not answer.
+func TestTickSettlesWhileTheServerIsDown(t *testing.T) {
+	home := devInstall(t, true) // closed port
+	d := pathsOf(home)
+	j := feedback.NewJournal(d.FeedbackDir(), feedback.Common{Session: "s1"})
+	start := time.Now().Add(-3 * time.Hour)
+	for _, e := range []feedback.Event{
+		{Kind: "turn", Turn: "p1", TS: start},
+		{Kind: "shows", Turn: "p1", Path: "prompt", TS: start.Add(time.Minute), Items: []feedback.Item{{ID: "m1", Rank: 1}, {ID: "m2", Rank: 2}}},
+		{Kind: "credit", Turn: "p1", Verdict: "used", IDs: []string{"m1"}, TS: start.Add(2 * time.Minute)},
+		{Kind: "stop", Turn: "p1", Outcome: "declared", TS: start.Add(3 * time.Minute)},
+	} {
+		if err := j.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, out, errOut := run(t, "jobs", "tick", "--json")
+	var env struct {
+		Data tickResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("not an envelope: %s %s", out, errOut)
+	}
+	if f := env.Data.Feedback; f.Shows != 2 || f.Credits != 1 || f.Misses != 1 || f.Unknown != 0 {
+		t.Errorf("feedback %+v\n%s", f, out)
+	}
+	raw, _ := os.ReadFile(filepath.Join(d.TelemetryDir(), "events-"+time.Now().UTC().Format("2006-01")+".jsonl"))
+	if !strings.Contains(string(raw), `"event":"feedback_settle"`) || !strings.Contains(string(raw), `"shows":2`) {
+		t.Errorf("telemetry: %s", raw)
+	}
+	l, err := feedback.LoadLedger(d.FeedbackDir())
+	if err != nil || l.Memories["m1"].Credits != 1 || l.Memories["m2"].Misses != 1 {
+		t.Errorf("ledger %+v %v", l, err)
+	}
+	// [feedback] enabled = false: the tick leaves the journal alone.
+	home = devInstall(t, true)
+	d = pathsOf(home)
+	cfg, _ := os.ReadFile(d.ConfigFile())
+	_ = os.WriteFile(d.ConfigFile(), append(cfg, "[feedback]\nenabled = false\n"...), 0o600)
+	j = feedback.NewJournal(d.FeedbackDir(), feedback.Common{Session: "s1"})
+	_ = j.Append(feedback.Event{Kind: "shows", Turn: "p1", Path: "prompt", TS: start, Items: []feedback.Item{{ID: "m1", Rank: 1}}})
+	_, out, _ = run(t, "jobs", "tick", "--json")
+	if strings.Contains(out, `"shows": 1`) {
+		t.Errorf("disabled feedback settled: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(d.FeedbackDir(), "ledger.json")); err == nil {
+		t.Error("disabled feedback wrote a ledger")
 	}
 }

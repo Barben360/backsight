@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/server"
@@ -2043,5 +2044,23 @@ func TestSetupServerOnlyPlanAndResume(t *testing.T) {
 	raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
 	if !strings.Contains(string(raw), `role = "server"`) || strings.Contains(strings.Join(f.commands(), ","), "client install") {
 		t.Errorf("resume lost the role: %v\n%s", f.commands(), raw)
+	}
+}
+
+// An older binary refuses a config.toml with keys it does not know, so the
+// files setup and server install write for a fresh install leave [feedback]
+// to its defaults.
+func TestFreshConfigHasNoFeedbackSection(t *testing.T) {
+	for _, raw := range [][]byte{
+		setupConfig(map[string]string{"api_port": "8888", "ui_port": "9999", "provider": "openai", "model": "m", "base_url": "http://x", "project": "bs2", "role": config.RoleServer, "backups": "off"}),
+		initialConfig(installFlags{apiPort: 8888, uiPort: 9999, provider: "openai", project: "bs2"}),
+	} {
+		if strings.Contains(string(raw), "feedback") {
+			t.Errorf("a fresh config.toml mentions feedback:\n%s", raw)
+		}
+		cfg, err := config.Parse(raw, "config.toml", paths.Dirs{Data: "/d", Config: "/c", State: "/s"}, "/home/u")
+		if err != nil || cfg.Feedback != config.Default(paths.Dirs{}, "/home/u").Feedback {
+			t.Errorf("fresh config: %v, feedback %+v", err, cfg.Feedback)
+		}
 	}
 }

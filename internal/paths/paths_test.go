@@ -80,6 +80,7 @@ func TestStateLayout(t *testing.T) {
 		d.JournalFile():     "journal.jsonl",
 		d.PreImagesDir():    "pre-images",
 		d.TelemetryDir():    "telemetry",
+		d.FeedbackDir():     "feedback",
 	} {
 		if want := filepath.Join("/s", rel); got != want {
 			t.Errorf("got %s, want %s", got, want)

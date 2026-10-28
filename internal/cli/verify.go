@@ -132,7 +132,7 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 	for _, h := range plugin.Hooks() {
 		add(verifyHook(ctx, sd, shim, env, h, sid, work))
 	}
-	add(verifyMCP(ctx, shim, env, work))
+	add(verifyMCP(ctx, shim, env, work, cfg.Feedback.Enabled))
 	if noRoundTrip {
 		add(verifyCheck{ID: "round_trip", Status: "skipped", Summary: "--no-round-trip"})
 		return res, nil
@@ -214,7 +214,8 @@ func hookFailed(d paths.Dirs, sid, arg string) bool {
 	return false
 }
 
-func verifyMCP(ctx context.Context, shim string, env []string, dir string) verifyCheck {
+// verifyMCP expects every memory tool; memory_credit only with feedback on.
+func verifyMCP(ctx context.Context, shim string, env []string, dir string, feedbackOn bool) verifyCheck {
 	c := verifyCheck{ID: "mcp"}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -240,7 +241,7 @@ func verifyMCP(ctx context.Context, shim string, env []string, dir string) verif
 	}
 	for _, want := range plugin.ToolNames {
 		short := want[strings.LastIndex(want, "__")+2:]
-		if !slices.Contains(got, short) {
+		if !slices.Contains(got, short) && (feedbackOn || short != "memory_credit") {
 			c.Status, c.Summary = "fail", fmt.Sprintf("tool %s missing (server lists %v)", short, got)
 			return c
 		}

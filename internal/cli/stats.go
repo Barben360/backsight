@@ -222,6 +222,12 @@ func statsText(r statsResult) string {
 		fmt.Fprintf(&b, "Attribution  main turns %d, the path rule would file %d elsewhere (%s, not applied); subagent reports %d, %d filed in another repository than their session's\n",
 			a.Main, a.Disagree, pct(a.Disagree, a.Main), a.Subagents, a.Moved)
 	}
+	f := r.Feedback
+	fmt.Fprintf(&b, "Credits      turns with memories shown: declared %d, after a block %d, undeclared %d, skipped %d; used %d, none %d, refused %d\n",
+		f.Checks["declared"]-f.DeclaredAfterBlock, f.DeclaredAfterBlock, f.Checks["undeclared"], f.Checks["check_skipped"], f.Verdicts["used"], f.Verdicts["none"], f.Refused)
+	st := f.Settled
+	fmt.Fprintf(&b, "Ledger       settled %d shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; honesty flags: %s\n",
+		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, counts(f.Flags))
 	fmt.Fprintf(&b, "Hook failures %s; unknown transcript records: %s\n", counts(r.HookFailures), counts(r.Unknown))
 	x := r.Extraction
 	switch {

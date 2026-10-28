@@ -33,6 +33,9 @@ type Outcome struct {
 	Searched     bool     `json:"searched"`
 	Credited     *string  `json:"credited"` // exact | free | empty | null
 	Contradicted bool     `json:"contradicted"`
+	// CreditSource: tool (a memory_credit call of the main agent in the
+	// turn), else citation (a credit found in the reply), else empty.
+	CreditSource string `json:"credit_source,omitempty"`
 }
 
 // Reply is how a finished reply used memory (Stop): the per-turn search
@@ -59,6 +62,35 @@ type Tool struct {
 	Hits int    `json:"hits"`
 	OK   bool   `json:"ok"`
 	Live string `json:"live,omitempty"` // MCP: record | stale | none (how the server found its session)
+}
+
+// Credit is one memory_credit call: its verdict, how many ids it named
+// and whether it was accepted.
+type Credit struct {
+	Verdict string `json:"verdict"` // used | none | wrong | outdated | invalid
+	IDs     int    `json:"ids_n"`
+	OK      bool   `json:"ok"`
+}
+
+// CreditCheck is the end-of-turn check of one agent's turn that showed
+// memories: declared, blocked, undeclared or check_skipped, with the
+// honesty flags of its declaration. AfterBlock: a declared or undeclared
+// turn that an earlier check of the turn blocked.
+type CreditCheck struct {
+	Outcome    string   `json:"outcome"`
+	Shown      int      `json:"shown"`
+	Flags      []string `json:"flags,omitempty"`
+	AfterBlock bool     `json:"after_block,omitempty"`
+}
+
+// FeedbackSettle is one settle of the feedback journal: the shows it
+// decided by outcome, and the used credits that came too late to attach.
+type FeedbackSettle struct {
+	Shows   int `json:"shows"`
+	Credits int `json:"credits"`
+	Misses  int `json:"misses"`
+	Unknown int `json:"unknown"`
+	Late    int `json:"late"`
 }
 
 type Gate struct {
@@ -113,6 +145,9 @@ func (Briefing) EventName() string        { return "briefing" }
 func (BriefingOutcome) EventName() string { return "briefing_outcome" }
 func (Tool) EventName() string            { return "tool" }
 func (Gate) EventName() string            { return "gate" }
+func (CreditCheck) EventName() string     { return "credit_check" }
+func (Credit) EventName() string          { return "credit" }
+func (FeedbackSettle) EventName() string  { return "feedback_settle" }
 func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }
 func (Attribution) EventName() string     { return "attribution" }

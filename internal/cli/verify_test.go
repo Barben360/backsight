@@ -93,7 +93,7 @@ func TestVerifyRunsEveryHookTheMCPServerAndARoundTrip(t *testing.T) {
 			t.Errorf("hook %s: %+v", h.Arg, c)
 		}
 	}
-	if checks["mcp"].Status != "ok" || !strings.Contains(checks["mcp"].Summary, "and 3 tools") {
+	if checks["mcp"].Status != "ok" || !strings.Contains(checks["mcp"].Summary, "and 4 tools") {
 		t.Errorf("mcp: %+v", checks["mcp"])
 	}
 	if checks["round_trip"].Status != "ok" {
@@ -209,6 +209,18 @@ func TestVerifyWithoutRoundTripCallsNoLLM(t *testing.T) {
 	code, out, _ := run(t, "verify", "--no-round-trip", "--json")
 	if c := parseVerify(t, out)["round_trip"]; code != output.OK || c.Status != "skipped" || retained.Load() != 0 {
 		t.Errorf("exit %d %+v, %d retained\n%s", code, c, retained.Load(), out)
+	}
+}
+
+// With feedback off the server does not offer memory_credit: not a failure.
+func TestVerifyExpectsNoCreditToolWithFeedbackOff(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	asShim(t)
+	appendConfig(t, home, "[feedback]\nenabled = false")
+	code, out, _ := run(t, "verify", "--no-round-trip", "--json")
+	if c := parseVerify(t, out)["mcp"]; code != output.OK || c.Status != "ok" || !strings.Contains(c.Summary, "and 3 tools") {
+		t.Errorf("exit %d %+v\n%s", code, c, out)
 	}
 }
 

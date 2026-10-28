@@ -84,7 +84,7 @@ The small program `~/.local/bin/backsight` points to. It always starts the curre
 
 ## Hooks, plugin, memory tools, skills
 
-How backsight plugs into Claude Code. The **plugin** `backsight` holds the **hooks** (commands Claude Code runs at session start, on each prompt, and so on), the three **memory tools** Claude calls (`memory_search`, `memory_read`, `memory_store`, served over MCP) and the **skills** (`/backsight:remember`, `/backsight:pause`, `/backsight:memory-retro`, `/backsight:memory`). See [how-it-works.md](how-it-works.md#hooks).
+How backsight plugs into Claude Code. The **plugin** `backsight` holds the **hooks** (commands Claude Code runs at session start, on each prompt, and so on), the four **memory tools** Claude calls (`memory_search`, `memory_read`, `memory_store`, `memory_credit`, served over MCP) and the **skills** (`/backsight:remember`, `/backsight:pause`, `/backsight:memory-retro`, `/backsight:memory`). See [how-it-works.md](how-it-works.md#hooks).
 
 ## Embedding model and reranker
 
