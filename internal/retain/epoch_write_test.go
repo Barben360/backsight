@@ -100,7 +100,7 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 		case r.Method == http.MethodGet && sub == "documents":
 			var items []map[string]any
 			for id := range docs {
-				items = append(items, map[string]any{"id": id, "tags": []string{}})
+				items = append(items, map[string]any{"id": id, "tags": []string{}, "document_metadata": docs[id]})
 			}
 			raw, _ := json.Marshal(map[string]any{"items": items, "total": len(items)})
 			_, _ = w.Write(raw)

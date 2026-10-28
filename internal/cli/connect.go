@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	agelib "filippo.io/age"
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/claudecode"
@@ -36,6 +37,7 @@ const (
 	joinSame  = "same-server"  // a client of that server already
 	joinOther = "other-server" // a client of another server
 	joinOwn   = "own-server"   // a PC with a server of its own
+	joinUndo  = "undo"         // connect --undo: back to this PC's own server
 )
 
 // tokenArgument is the refusal of a token given on the command line: it
@@ -45,11 +47,20 @@ const tokenArgument = "the token holds the API key: pass it on stdin (--token -)
 
 type connectFlags struct {
 	token, tokenFile string
-	plan             bool
+	plan, undo       bool
 	answers          []string
 	answersFile      string
 	nonInteractive   bool
 	configDir        string
+}
+
+// ownServer is what joining another server does to this PC's own.
+type ownServer struct {
+	Deployed    bool   `json:"deployed"`
+	Sessions    int    `json:"sessions"`               // past sessions a backfill sends to the new server
+	SavedNotes  *int   `json:"saved_notes,omitempty"`  // the note documents of its bank; nil: not counted
+	OrphanNotes *int   `json:"orphan_notes,omitempty"` // of those, the ones no transcript here sends again
+	Backup      string `json:"backup,omitempty"`       // the archive verified before the stop
 }
 
 // connectResult is what connect did or would do. It never holds the key
@@ -65,6 +76,7 @@ type connectResult struct {
 	Declined         bool          `json:"declined,omitempty"`
 	Warnings         []string      `json:"warnings,omitempty"`
 	Steps            []step        `json:"steps"`
+	OwnServer        *ownServer    `json:"own_server,omitempty"`
 	Setup            *setupResult  `json:"setup,omitempty"`
 	RestartRequired  bool          `json:"restart_required"`
 	NextSteps        []string      `json:"next_steps,omitempty"`
@@ -88,6 +100,16 @@ func newConnectCmd(e *env) *cobra.Command {
 			return &output.Error{Code: output.Usage, Message: "connect takes no argument: pass the token on stdin (--token -) or in a file (--token-file F)"}
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.undo {
+				if f.token != "" || f.tokenFile != "" || len(f.answers) > 0 || f.answersFile != "" {
+					return &output.Error{Code: output.Usage, Message: "connect --undo takes no token nor answers: it puts back what connect kept on this PC"}
+				}
+				res, err := undoConnect(cmd.Context(), e, f.plan)
+				if res.URL == "" {
+					return err
+				}
+				return e.report("connect", res, func() string { return connectText(res) }, err)
+			}
 			res, err := runConnect(cmd.Context(), e, f)
 			if res.URL == "" { // refused before the token was read: nothing to show
 				return err
@@ -98,6 +120,7 @@ func newConnectCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&f.token, "token", "", "- reads the connection token from stdin (a hidden prompt at a terminal); never the token itself")
 	cmd.Flags().StringVar(&f.tokenFile, "token-file", "", "read the connection token from this file (backsight server token --out writes it on the host)")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "check the server and show what connect would change, changing nothing")
+	cmd.Flags().BoolVar(&f.undo, "undo", false, "point this PC back at its own server, as it was before connect, and start it")
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "consent=yes to go ahead without a terminal; setup's answers (id=value, repeatable)")
 	cmd.Flags().StringVar(&f.answersFile, "answers-file", "", "answers as a JSON object or id=value lines (no secrets)")
 	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: exit 10 when the consent or another answer is missing")
@@ -359,10 +382,165 @@ func undoRetainReset(d paths.Dirs, keep string) error {
 	return nil
 }
 
+// keepOwnConfig copies config.toml (raw, as it was read under the lock)
+// and secrets.toml into keep (0600): connect --undo puts them back.
+func keepOwnConfig(d paths.Dirs, keep string, raw []byte) error {
+	if err := fsutil.WriteAtomic(filepath.Join(keep, "config.toml"), raw, 0o600); err != nil {
+		return err
+	}
+	sec, err := os.ReadFile(d.SecretsFile())
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(filepath.Join(keep, "secrets.toml"), sec, 0o600)
+}
+
+// ownPreImage is the newest directory connect left when it took this PC
+// off its own server (meta.json mode local), "" when there is none.
+func ownPreImage(d paths.Dirs) (string, connectMeta, error) {
+	ents, err := os.ReadDir(d.ConnectDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", connectMeta{}, nil
+	}
+	if err != nil {
+		return "", connectMeta{}, blocked(err)
+	}
+	var newest string
+	var meta connectMeta
+	for _, ent := range ents { // by name: a later run of the same second sorts after
+		raw, err := os.ReadFile(filepath.Join(d.ConnectDir(), ent.Name(), "meta.json"))
+		if err != nil {
+			continue
+		}
+		var m connectMeta
+		if json.Unmarshal(raw, &m) != nil || m.Mode != "local" || m.MovedAt.Before(meta.MovedAt) {
+			continue
+		}
+		newest, meta = filepath.Join(d.ConnectDir(), ent.Name()), m
+	}
+	return newest, meta, nil
+}
+
+// undoConnect points this PC back at its own server, as the newest
+// connect from it left it: under the maintenance lock, the sends to the
+// shared server move to <ts>-shared, then config.toml, secrets.toml, the
+// sends and the state fields kept go back and the binding goes; then the
+// server starts. A failed start leaves the switch done (exit 40).
+func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) {
+	res := connectResult{Plan: plan, Situation: joinUndo, Steps: []step{}}
+	d, home, err := machine()
+	if err != nil {
+		return res, err
+	}
+	pre, meta, err := ownPreImage(d)
+	if err != nil {
+		return res, err
+	}
+	if pre == "" {
+		return res, &output.Error{Code: output.Usage, Message: "this PC had no server of its own before connect: backsight uninstall removes the client"}
+	}
+	if cur, err := config.Load(d.ConfigFile(), d, home); err == nil && cur.Server.Mode == "local" {
+		return res, &output.Error{Code: output.Usage, Message: "this PC already uses its own server (" + d.ConfigFile() + "): connect --undo has nothing to put back"}
+	}
+	raw, err := os.ReadFile(filepath.Join(pre, "config.toml"))
+	if err == nil {
+		_, err = os.Stat(filepath.Join(pre, "secrets.toml"))
+	}
+	if err != nil {
+		return res, &output.Error{Code: output.Blocked, Message: pre + " does not hold this PC's config.toml and secrets.toml as they were (" + err.Error() + "): nothing was changed"}
+	}
+	res.URL, res.Bank = meta.URL, config.DefaultBank
+	if cfg, err := config.Parse(raw, d.ConfigFile(), d, home); err == nil {
+		res.URL, res.Bank = cfg.Server.URL, cfg.Server.Bank
+	}
+	res.Steps = []step{
+		{Name: "history", Status: "planned", Detail: "this PC's sends to the shared server move to " + d.ConnectDir() + " (<time>-shared); those to its own server come back from " + pre},
+		{Name: "config", Status: "planned", Detail: "put back " + d.ConfigFile() + " and " + d.SecretsFile() + " as they were before connect: [server] url " + res.URL + ", mode local"},
+		{Name: "binding", Status: "planned", Detail: "forget the shared server's id in " + d.StateFile()},
+		{Name: "server", Status: "planned", Detail: "backsight server start"},
+	}
+	res.RestartRequired = true
+	if plan {
+		return res, nil
+	}
+	if err := applyUndo(d, pre, now().UTC()); err != nil {
+		return res, err
+	}
+	for i := range res.Steps[:3] {
+		res.Steps[i].Status = "done"
+		if !e.json { // before the server's start, which takes a while
+			fmt.Fprint(e.stdout, stepLine(res.Steps[i]))
+		}
+	}
+	res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins): an open session keeps the server it started with")
+	if sr := subcommand(ctx, "server", "start"); sr.Err != nil {
+		res.Steps[3].Status = "failed"
+		return res, &output.Error{Code: output.Partial, Resume: "backsight server start",
+			Message: "this PC is back on its own server's config, but starting the server failed (" + sr.Err.Message + "): run backsight server start"}
+	}
+	res.Steps[3].Status = "done"
+	return res, nil
+}
+
+// applyUndo is connect --undo's switch, under the maintenance lock. A
+// failure before config.toml and secrets.toml are both back puts the
+// shared server's back (exit 30).
+func applyUndo(d paths.Dirs, pre string, at time.Time) error {
+	unlock, _, err := serverMaintenanceLock(d, "connect --undo")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	var keptCfg, keptSec, curCfg, curSec []byte
+	for p, dst := range map[string]*[]byte{filepath.Join(pre, "config.toml"): &keptCfg, filepath.Join(pre, "secrets.toml"): &keptSec, d.ConfigFile(): &curCfg, d.SecretsFile(): &curSec} {
+		if *dst, err = os.ReadFile(p); err != nil {
+			return blocked(err)
+		}
+	}
+	shared := keepDir(d, at, "-shared")
+	rollback := func(cause error) error {
+		var left []string
+		if err := fsutil.WriteAtomic(d.ConfigFile(), curCfg, 0o600); err != nil {
+			left = append(left, d.ConfigFile()+" ("+err.Error()+")")
+		}
+		if err := fsutil.WriteAtomic(d.SecretsFile(), curSec, 0o600); err != nil {
+			left = append(left, d.SecretsFile()+" ("+err.Error()+")")
+		}
+		if err := undoRetainReset(d, shared); err != nil {
+			left = append(left, "the sends kept in "+shared+" ("+err.Error()+")")
+		}
+		if len(left) > 0 {
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("connect --undo stopped (%s), and putting the shared server's setup back failed: %s", cause.Error(), strings.Join(left, "; "))}
+		}
+		return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("connect --undo stopped (%s): what it had changed is put back, this PC is as it was", cause.Error())}
+	}
+	// The restore epoch given here is replaced by the one kept in pre.
+	if err := resetRetain(d, shared, state.RestoreEpoch{}, at); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return blocked(err)
+		}
+		return rollback(fmt.Errorf("moving the shared server's sends aside: %w", err))
+	}
+	if err := fsutil.WriteAtomic(d.ConfigFile(), keptCfg, 0o600); err != nil {
+		return rollback(err)
+	}
+	if err := fsutil.WriteAtomic(d.SecretsFile(), keptSec, 0o600); err != nil {
+		return rollback(err)
+	}
+	if err := undoRetainReset(d, pre); err != nil {
+		return &output.Error{Code: output.Blocked, Message: "config.toml and secrets.toml are back as they were before connect, but this PC's sends to its own server are not (" + err.Error() +
+			"): they are in " + pre + ", whose meta.json records the state they went with"}
+	}
+	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error { s.RemoteServer = nil; return nil }); err != nil {
+		return &output.Error{Code: output.Blocked, Message: "this PC is back on its own server, but forgetting the shared server's id in " + d.StateFile() + " failed (" + err.Error() + "): the sends stop until it is removed"}
+	}
+	return nil
+}
+
 // keepDir is a directory of ConnectDir no earlier run used, named by at
-// (a second run within the same second gets a suffix).
-func keepDir(d paths.Dirs, at time.Time) string {
-	base := filepath.Join(d.ConnectDir(), at.Format("20060102T150405Z"))
+// and suffix (a second run within the same second gets a number).
+func keepDir(d paths.Dirs, at time.Time, suffix string) string {
+	base := filepath.Join(d.ConnectDir(), at.Format("20060102T150405Z")+suffix)
 	keep := base
 	for i := 2; ; i++ {
 		if _, err := os.Lstat(keep); err != nil { // absent (any other error: Mkdir says it)
@@ -411,8 +589,18 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		return res, err
 	}
 	res.Situation = situation
+	var localSec config.Secrets // this PC's own server's
 	if situation == joinOwn {
-		return res, &output.Error{Code: output.Usage, Message: "this PC runs its own server: connect lands in the next release step"}
+		if localSec, err = config.LoadSecrets(d.SecretsFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return res, blocked(err)
+		}
+		// A server that does not answer cannot tell; the probe of the
+		// token's server then fails when it is this one.
+		if cl, err := hindsight.New(cfg.Server.URL, localSec.APIKey, 10*time.Second); err == nil {
+			if id, err := retain.ReadServerID(ctx, cl, tok.Bank); err == nil && id == tok.ServerID {
+				return res, &output.Error{Code: output.Usage, Message: "this token is for this machine's own server: it is already connected"}
+			}
+		}
 	}
 	p, err := probeToken(ctx, tok)
 	if err != nil {
@@ -437,7 +625,16 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	if err != nil {
 		return res, err
 	}
-	res.Steps = connectPlan(d, home, f, tok, situation, newCfg)
+	var sessions int
+	res.Steps, sessions = connectPlan(d, home, f, tok, situation, newCfg)
+	if situation == joinOwn {
+		own, warning := ownServerPlan(ctx, *cfg, localSec, sessions, transcriptFiles(home, f.configDir))
+		res.OwnServer = own
+		if warning != "" {
+			res.Warnings = append(res.Warnings, warning)
+		}
+		res.Steps = append([]step{ownServerStep(own.Deployed)}, res.Steps...)
+	}
 	res.RestartRequired = cfg == nil || cfg.Server.URL != tok.URL
 	if f.plan {
 		return res, nil
@@ -465,9 +662,18 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
 		}
 	}
+	var restart func() error // starts this PC's server again when connect puts it back
+	if res.OwnServer != nil && res.OwnServer.Deployed {
+		archive, err := stopOwnServer(ctx, d, *cfg, localSec)
+		if err != nil {
+			return res, redacted(err, config.Secrets{APIKey: tok.APIKey})
+		}
+		res.OwnServer.Backup = archive
+		restart = func() error { return runtimeFor(*cfg).Start(ctx) }
+	}
 	at := now().UTC()
-	if err := applyConnect(d, home, tok, p, situation, at, resume); err != nil {
-		return res, redacted(err, config.Secrets{APIKey: tok.APIKey})
+	if err := applyConnect(d, home, tok, p, situation, at, resume, restart); err != nil {
+		return res, redacted(redacted(err, localSec), config.Secrets{APIKey: tok.APIKey})
 	}
 	for i := range res.Steps {
 		if res.Steps[i].Status == "planned" && res.Steps[i].Name != "setup" {
@@ -515,8 +721,9 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	return res, err
 }
 
-// connectPlan lists what connect will do, in order.
-func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, situation string, cfg config.Config) []step {
+// connectPlan lists what connect will do, in order, and counts the past
+// sessions setup offers to send.
+func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, situation string, cfg config.Config) ([]step, int) {
 	verb := "edit "
 	if situation == joinNew {
 		verb = "write "
@@ -528,9 +735,14 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 	steps := []step{{Name: "config", Status: "planned", Detail: verb + d.ConfigFile() + ": [server] url " + tok.URL + ", bank " + tok.Bank + ", mode remote; [llm] " + llm + ", never a key"}}
 	steps = append(steps, step{Name: "secrets", Status: "planned", Detail: "api_key in " + d.SecretsFile() + " (mode 0600)"})
 	since, idx := now().UTC(), (*retain.SentIndex)(nil)
-	if situation == joinOther {
+	restart := situation == joinOther || situation == joinOwn
+	switch situation {
+	case joinOther:
 		steps = append(steps, step{Name: "history", Status: "planned", Detail: "this PC's sends start over on that server: what it already holds is not sent again " +
 			"(the session cursors, sent-index and split sessions move to " + d.ConnectDir() + ")"})
+	case joinOwn:
+		steps = append(steps, step{Name: "history", Status: "planned", Detail: "this PC's sends start over on that server: what it already holds is not sent again " +
+			"(the session cursors, sent-index and split sessions move to " + d.ConnectDir() + ", with config.toml and secrets.toml as they are: connect --undo puts them back)"})
 	}
 	if situation == joinSame {
 		if st, err := state.Load(d.StateFile()); err == nil && st.RetainSince != nil {
@@ -542,35 +754,128 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 		idx, _ = retain.LoadSentIndex(filepath.Join(d.ConnectDir(), "none"))
 	}
 	steps = append(steps, step{Name: "binding", Status: "planned", Detail: "record server " + tok.ServerID + " in " + d.StateFile() + ": another server answering at that address stops the sends"})
-	getenv := os.Getenv
-	if f.configDir != "" {
-		getenv = func(k string) string {
-			if k == "CLAUDE_CONFIG_DIR" {
-				return f.configDir
-			}
-			return os.Getenv(k)
-		}
-	}
 	detail := "then backsight setup: client install, retention, scheduler, verify"
+	sessions := 0
 	if idx != nil {
-		if n, cost := backfillSurvey(d, home, claudecode.Locate(home, getenv).Projects, cfg, since, idx); n > 0 {
+		n, cost := backfillSurvey(d, home, projectsDir(home, f.configDir), cfg, since, idx)
+		if n > 0 {
 			bound := ""
-			if situation == joinOther {
+			if restart {
 				bound = "at most "
 			}
 			detail += fmt.Sprintf(", and the offer to send %s%d past session(s) (%s)", bound, n, cost)
 		}
+		sessions = n
 	}
-	return append(steps, step{Name: "setup", Status: "planned", Detail: detail})
+	return append(steps, step{Name: "setup", Status: "planned", Detail: detail}), sessions
+}
+
+// projectsDir is Claude Code's transcripts directory, configDir (the
+// --config-dir flag) first.
+func projectsDir(home, configDir string) string {
+	getenv := os.Getenv
+	if configDir != "" {
+		getenv = func(k string) string {
+			if k == "CLAUDE_CONFIG_DIR" {
+				return configDir
+			}
+			return os.Getenv(k)
+		}
+	}
+	return claudecode.Locate(home, getenv).Projects
+}
+
+// transcriptFiles are the session transcripts a backfill reads.
+func transcriptFiles(home, configDir string) []string {
+	files, _ := filepath.Glob(filepath.Join(projectsDir(home, configDir), "*", "*.jsonl"))
+	return files
+}
+
+// ownServerPlan is what joining another server does to this PC's own
+// (cfg, sec): sessions are sent again, and the saved notes of its bank no
+// transcript left here holds stay there. warning says how many, or why
+// they could not be counted.
+func ownServerPlan(ctx context.Context, cfg config.Config, sec config.Secrets, sessions int, transcripts []string) (*ownServer, string) {
+	own := &ownServer{Sessions: sessions}
+	deployed, err := runtimeFor(cfg).Deployed()
+	own.Deployed = err != nil || deployed != "" // unreadable: the backup says
+	if !own.Deployed {
+		return own, ""
+	}
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second)
+	if err != nil {
+		return own, server.Redact("the saved notes of this PC's server could not be counted: "+err.Error(), sec)
+	}
+	orphans, total, err := retain.CountOrphanNotes(ctx, cl, cfg.Server.Bank, transcripts)
+	if err != nil {
+		return own, server.Redact("the saved notes of this PC's server could not be counted ("+err.Error()+"): start it (backsight server start) and run the plan again to see them", sec)
+	}
+	own.SavedNotes, own.OrphanNotes = &total, &orphans
+	if orphans == 0 {
+		return own, ""
+	}
+	return own, fmt.Sprintf("%d of %d saved notes have no transcript left on this PC: they stay in this PC's old bank only", orphans, total)
+}
+
+// ownServerStep is the plan's step for this PC's own server.
+func ownServerStep(deployed bool) step {
+	if !deployed {
+		return step{Name: "server", Status: "skipped", Detail: "this PC's server is not deployed: nothing to back up or stop"}
+	}
+	return step{Name: "server", Status: "planned", Detail: "back up and verify this PC's server, then stop it (data and backups kept; connect --undo starts it again)"}
+}
+
+// stopOwnServer backs up this PC's server and verifies the archive with
+// the install's identities; only then it stops the server, under the
+// maintenance lock. Its data volumes and its backups are kept. A failed
+// backup or verify changes nothing (an archive made is kept).
+func stopOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets) (archive string, err error) {
+	unchanged := func(what string, err error) error {
+		return redacted(&output.Error{Code: output.Blocked, Message: "connect stopped: " + what + " (" + err.Error() + "): nothing was changed"}, sec)
+	}
+	b, err := createBackup(ctx, nil) // takes the maintenance lock
+	if err == nil && b.Skipped != "" {
+		err = errors.New(b.Skipped)
+	}
+	if err != nil {
+		return "", unchanged("backing up this PC's server failed", err)
+	}
+	// The first backup may have made the identity: read the secrets again.
+	fresh, err := config.LoadSecrets(d.SecretsFile())
+	var v backupVerifyResult
+	if err == nil {
+		var ids []agelib.Identity
+		if _, _, ids, err = backupKeys(d, cfg, fresh, false); err == nil {
+			v, err = verifyArchive(ctx, d, cfg, ids, b.Path)
+		}
+	}
+	if !v.OK { // a result that could not be recorded still verified
+		if err == nil {
+			err = errors.New("its counts differ from its manifest")
+		}
+		return b.Path, unchanged("the backup "+b.Path+" did not verify", err)
+	}
+	unlock, _, err := serverMaintenanceLock(d, "connect")
+	if err != nil {
+		return b.Path, err
+	}
+	defer unlock()
+	if err := runtimeFor(cfg).Stop(ctx); err != nil {
+		return b.Path, redacted(&output.Error{Code: output.Blocked, Message: "connect stopped: stopping this PC's server failed (" + err.Error() +
+			"): nothing else was changed; backsight server start starts it again"}, sec)
+	}
+	return b.Path, nil
 }
 
 // applyConnect writes what the plan said, under the maintenance lock
 // (hooks queue, jobs skip): the retain reset first (it records the server
 // config.toml still names), then config.toml, the key, and the binding
-// last. A failure up to the key puts back what was done (exit 30; 20 when
+// last; leaving this PC's own server, its config.toml and secrets.toml
+// are kept with the moved retain state. A failure up to the key puts back
+// what was done, restart starting a stopped server again (exit 30; 20 when
 // that fails too, saying what is left); a failure of the binding leaves
 // the rest done, for resume to finish (exit 40).
-func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time, resume string) error {
+func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time, resume string, restart func() error) error {
 	unlock, _, err := serverMaintenanceLock(d, "connect")
 	if err != nil {
 		return err
@@ -604,6 +909,11 @@ func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation
 				left = append(left, d.ConfigFile()+" still names "+tok.URL+" ("+err.Error()+")")
 			}
 		}
+		if restart != nil {
+			if err := restart(); err != nil {
+				left = append(left, "this PC's server is stopped ("+err.Error()+"): backsight server start starts it")
+			}
+		}
 		if keep != "" {
 			if err := undoRetainReset(d, keep); err != nil {
 				left = append(left, "this PC's session cursors, sent-index and split sessions may still be in "+keep+
@@ -615,13 +925,18 @@ func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation
 		}
 		return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("connect stopped (%s): what it had changed is put back, this PC is as it was", cause.Error())}
 	}
-	if situation == joinOther {
-		keep = keepDir(d, at)
+	if situation == joinOther || situation == joinOwn {
+		keep = keepDir(d, at, "")
 		if err := resetRetain(d, keep, state.RestoreEpoch{Bank: tok.Bank, Epoch: p.Epoch, ReconciledAt: at}, at); err != nil {
 			if errors.Is(err, fs.ErrExist) { // another run's directory: not this one's to undo
 				keep = ""
 			}
 			return rollback(fmt.Errorf("moving this PC's sends aside: %w", err))
+		}
+	}
+	if situation == joinOwn {
+		if err := keepOwnConfig(d, keep, raw); err != nil {
+			return rollback(fmt.Errorf("keeping this PC's config.toml and secrets.toml in %s: %w", keep, err))
 		}
 	}
 	if err := connectFault("config"); err != nil {
@@ -658,11 +973,17 @@ func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation
 
 func connectPlanText(r connectResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "server %s at %s (bank %s, Hindsight %s)\n", r.ServerID, r.URL, r.Bank, r.HindsightVersion)
+	will := "\nconnect will:\n"
+	if r.Situation == joinUndo {
+		fmt.Fprintf(&b, "this PC's own server at %s (bank %s)\n", r.URL, r.Bank)
+		will = "\nconnect --undo will:\n"
+	} else {
+		fmt.Fprintf(&b, "server %s at %s (bank %s, Hindsight %s)\n", r.ServerID, r.URL, r.Bank, r.HindsightVersion)
+	}
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
-	b.WriteString("\nconnect will:\n")
+	b.WriteString(will)
 	for _, s := range r.Steps {
 		fmt.Fprintf(&b, "  %-8s %s\n", s.Name, s.Detail)
 	}
@@ -677,6 +998,17 @@ func connectText(r connectResult) string {
 		return "nothing changed\n"
 	case r.Plan:
 		return connectPlanText(r)
+	case r.Situation == joinUndo: // the switch's steps are printed as they are done
+		var b strings.Builder
+		for _, s := range r.Steps {
+			if s.Name == "server" && s.Status != "planned" {
+				b.WriteString(stepLine(s))
+			}
+		}
+		for _, n := range r.NextSteps {
+			b.WriteString("- " + n + "\n")
+		}
+		return b.String()
 	}
 	if r.Setup == nil { // stopped before setup: what it would have done
 		return connectPlanText(r)

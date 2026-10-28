@@ -123,6 +123,15 @@ While it lasts, this PC sends nothing: sessions stay in Claude Code's transcript
 - **"is a public address"**: the token names a public IP address, where the API key would cross the internet. On the server's host, open it on a LAN or tailnet address instead (`backsight server expose --private <ip>`), which hands out a new token.
 - **"does not answer"**: see the next section.
 
+## connect stopped because the backup did not verify
+
+On a PC with its own server, `backsight connect` backs it up and verifies the archive (decrypts it and restores it into a throwaway database) before it stops that server. If the backup fails (**"backing up this PC's server failed"**) or the archive does not verify (**"the backup <file> did not verify"**), connect exits 20 and nothing changed: the server still runs, `config.toml`, the key and the sends are as they were; an archive made is kept.
+
+- The backup failed: the server must run for its database to be dumped. Check `backsight server status`, start it with `backsight server start`, and run `backsight backup create` to see the error alone.
+- The archive did not verify: run `backsight backup verify <file>` on the archive the message names; [backups-and-restore.md](backups-and-restore.md) says what its errors mean. Once `backsight backup create` then `backsight backup verify <file>` pass, run `backsight connect` again.
+
+If connect exits 20 saying the stop failed, the backup verified but the server did not stop: nothing else changed, and `backsight server start` starts it again.
+
 ## Another PC cannot reach the server
 
 `backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:
