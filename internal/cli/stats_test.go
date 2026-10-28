@@ -84,7 +84,8 @@ func TestStatsCountsFeedback(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	tw := telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"})
 	for _, c := range []telemetry.CreditCheck{{Outcome: "declared", Flags: []string{"credit_without_overlap"}}, {Outcome: "declared"},
-		{Outcome: "declared", Flags: []string{"none_with_overlap"}}, {Outcome: "blocked"}, {Outcome: "blocked"}, {Outcome: "undeclared"}, {Outcome: "check_skipped"}} {
+		{Outcome: "declared", Flags: []string{"none_with_overlap"}, AfterBlock: true}, {Outcome: "blocked"}, {Outcome: "blocked"}, {Outcome: "undeclared", AfterBlock: true},
+		{Outcome: "check_skipped"}} {
 		tw.Emit(c)
 	}
 	for _, c := range []telemetry.Credit{{Verdict: "used", IDs: 2, OK: true}, {Verdict: "used", IDs: 1, OK: true}, {Verdict: "none", OK: true},
@@ -95,7 +96,7 @@ func TestStatsCountsFeedback(t *testing.T) {
 	tw.Emit(telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1})
 	_, out, _ := run(t, "stats", "1")
 	for _, want := range []string{
-		"\nCredits      turns with memories shown: declared 3, after a block 2, undeclared 1, skipped 1; used 2, none 1, refused 2\n",
+		"\nCredits      turns with memories shown: declared 2, after a block 1, undeclared 1, skipped 1; used 2, none 1, refused 2\n",
 		"\nLedger       settled 10 shows: 2 credits, 3 confident misses (38% of uncredited), 1 unknown, 1 late; honesty flags: credit_without_overlap 1, none_with_overlap 1\n",
 	} {
 		if !strings.Contains(out, want) {

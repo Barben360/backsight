@@ -92,10 +92,10 @@ func (h *hookEnv) sessionStart() []byte {
 			st.Seen = keep
 			return nil
 		})
-		return contextOutput("SessionStart", instructions.Guide+replay, "")
+		return contextOutput("SessionStart", h.texts().Guide+replay, "")
 	default: // resume, clear, fork: clear and fork start a new session id
 		h.writeEnvFile()
-		return contextOutput("SessionStart", instructions.Guide, "")
+		return contextOutput("SessionStart", h.texts().Guide, "")
 	}
 	h.writeEnvFile()
 	name := safeProject(h.project)
@@ -176,7 +176,7 @@ func (h *hookEnv) sessionStart() []byte {
 		// cross-session sticky muted them in sessions that never got the
 		// briefing (resume, clear, fork).
 	}
-	context := instructions.Guide
+	context := h.texts().Guide
 	if text != "" {
 		context += "\n\n" + text
 	}

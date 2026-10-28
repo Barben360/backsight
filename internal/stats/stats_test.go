@@ -221,10 +221,10 @@ func feedbackEvents(tw *telemetry.Writer) {
 	for _, c := range []telemetry.CreditCheck{
 		{Outcome: "declared", Shown: 2, Flags: []string{"credit_without_overlap"}},
 		{Outcome: "declared", Shown: 1},
-		{Outcome: "declared", Shown: 3, Flags: []string{"none_with_overlap"}},
+		{Outcome: "declared", Shown: 3, Flags: []string{"none_with_overlap"}, AfterBlock: true},
 		{Outcome: "blocked", Shown: 1},
 		{Outcome: "blocked", Shown: 2},
-		{Outcome: "undeclared", Shown: 2},
+		{Outcome: "undeclared", Shown: 2, AfterBlock: true},
 		{Outcome: "check_skipped", Shown: 1},
 	} {
 		tw.Emit(c)
@@ -251,8 +251,8 @@ func TestComputeCountsFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := Compute(ev, now.Add(-time.Hour), now.Add(time.Hour)).Feedback
-	if f.Checks["declared"] != 3 || f.Checks["blocked"] != 2 || f.Checks["undeclared"] != 1 || f.Checks["check_skipped"] != 1 || len(f.Checks) != 4 {
-		t.Errorf("checks %v", f.Checks)
+	if f.Checks["declared"] != 3 || f.Checks["blocked"] != 2 || f.Checks["undeclared"] != 1 || f.Checks["check_skipped"] != 1 || len(f.Checks) != 4 || f.DeclaredAfterBlock != 1 {
+		t.Errorf("checks %v, declared after a block %d", f.Checks, f.DeclaredAfterBlock)
 	}
 	if f.Verdicts["used"] != 2 || f.Verdicts["none"] != 1 || len(f.Verdicts) != 2 || f.Refused != 2 {
 		t.Errorf("verdicts %v, refused %d", f.Verdicts, f.Refused)

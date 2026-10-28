@@ -31,7 +31,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	events, _, err := feedback.ReadSince(t.File, t.Offset)
 	if err != nil {
 		h.feedbackError(err)
-		h.journalStop(t.ID, agent, "check_skipped", mode, 0, nil)
+		h.journalStop(t.ID, agent, "check_skipped", mode, 0, nil, false)
 		return nil
 	}
 	// The briefing is shown before the first prompt: the first turn's.
@@ -57,7 +57,8 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	default:
 		outcome = "blocked"
 	}
-	h.journalStop(t.ID, agent, outcome, mode, len(ids), c.Flags(reply, texts))
+	afterBlock := c.Blocked && (outcome == "declared" || outcome == "undeclared")
+	h.journalStop(t.ID, agent, outcome, mode, len(ids), c.Flags(reply, texts), afterBlock)
 	if outcome != "blocked" {
 		return nil
 	}
@@ -74,9 +75,9 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 }
 
 // journalStop records the check's outcome, best effort, and its telemetry.
-func (h *hookEnv) journalStop(turn, agent, outcome, mode string, shown int, flags []string) {
+func (h *hookEnv) journalStop(turn, agent, outcome, mode string, shown int, flags []string, afterBlock bool) {
 	h.feedbackError(h.journal.Append(feedback.Event{Kind: "stop", Turn: turn, Agent: agent, Outcome: outcome, StopCheck: mode, Flags: flags}))
-	h.tw.Emit(telemetry.CreditCheck{Outcome: outcome, Shown: shown, Flags: flags})
+	h.tw.Emit(telemetry.CreditCheck{Outcome: outcome, Shown: shown, Flags: flags, AfterBlock: afterBlock})
 }
 
 // shownIDs is each memory shown once, in the order first shown.

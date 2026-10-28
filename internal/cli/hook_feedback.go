@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
@@ -32,6 +33,12 @@ func shortID(id string) string {
 // memoryTag is a shown memory's "[<project> · <id8>]".
 func memoryTag(project, id string) string {
 	return "[" + safeProject(project) + " · " + safeProject(shortID(id)) + "]"
+}
+
+// texts are the instruction texts for feedback.enabled: memory_credit is
+// named only where it is offered.
+func (h *hookEnv) texts() instructions.Texts {
+	return instructions.For(h.cfg.Feedback.Enabled)
 }
 
 // feedbackOn: the journal is written for this event.
@@ -84,9 +91,11 @@ func (h *hookEnv) startSessionTurn() {
 }
 
 // beginTurn is UserPromptSubmit's pointer and turn event, before any
-// recall. A machine message keeps the prompt number of the turn it
-// follows; the first turn after a session start keeps its journal
-// position, so that its reads include the briefing.
+// recall. A machine message keeps the prompt number and the journal
+// position of the turn it follows, so that the next prompt still reads
+// that turn's credits (a machine turn is never checked at Stop); the first
+// turn after a session start keeps its journal position, so that its reads
+// include the briefing.
 func (h *hookEnv) beginTurn(n int, machine bool) {
 	if !h.feedbackOn() {
 		return
@@ -100,7 +109,7 @@ func (h *hookEnv) beginTurn(n int, machine bool) {
 		n = prev.N
 	}
 	file, offset := h.journal.Position()
-	if had && prev.N == 0 && prev.File != "" {
+	if had && (prev.N == 0 || machine) && prev.File != "" {
 		file, offset = prev.File, prev.Offset
 	}
 	h.setTurn(feedback.Turn{ID: id, N: n, At: now(), Machine: machine, File: file, Offset: offset})

@@ -153,7 +153,7 @@ When memories were shown to Claude during a turn, it reports which ones informed
 
 | Key | Default | Effect |
 |---|---|---|
-| `feedback.enabled` | `true` | Record which memories are shown and which Claude reports using, and offer Claude the `memory_credit` tool. `false`: nothing is recorded and the tool is not offered. |
+| `feedback.enabled` | `true` | Record which memories are shown and which Claude reports using, and offer Claude the `memory_credit` tool. `false`: nothing is recorded, the tool is not offered, and Claude is asked instead to cite the memories it uses as `🧠 From memory (<project>) — …`. |
 | `feedback.confident_rank` | `2` | A memory shown this high or higher in a recall or a search (1 is the top) and not used counts as a miss, when Claude reported what it used that turn. At least 1. |
 | `feedback.miss_half_life_days` | `90` | A miss counts half as much after this many days, a quarter after twice as many. `0`: misses never fade. |
 | `feedback.credit_half_life_days` | `365` | The same for the times Claude used a memory. `0`: they never fade. |

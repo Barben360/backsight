@@ -27,9 +27,10 @@ import (
 // them in a fixed format).
 const Version = "v7"
 
-// Credit is the citation format of instruction sets v4 to v6. Only the
-// memory skill still asks for it (the command line has no memory_credit);
-// the reply's credit detection keeps counting it.
+// Credit is the citation format of instruction sets v4 to v6, still asked
+// for where memory_credit is not offered: with feedback.enabled off, and in
+// the memory skill (the command line). The reply's credit detection keeps
+// counting it.
 const Credit = "> 🧠 **From memory (<project>)** — <facts>"
 
 // CreditAsk asks the agent to declare the memories it used (v7): in the
@@ -38,25 +39,60 @@ const Credit = "> 🧠 **From memory (<project>)** — <facts>"
 const CreditAsk = "When memories were shown to you this turn, call `memory_credit` once you know what you used, before your final message: " +
 	"the ids that informed it (it returns the line to print), or `verdict: none`."
 
+const (
+	guideHead = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject, topic + intent word: \"docker subnet pitfall\"). " +
+		"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
+		"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
+		"Results are hints: verify them. "
+	guideTail = "Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"); when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
+		"User-wide rules override conflicting project facts. Answer in the user's language. " +
+		"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
+	shortGuideHead = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
+		"recommendations, new tasks and references to the past; results are hints to verify"
+	shortGuideTail = "Query = topic + intent word (\"docker subnet pitfall\"), never a kind word alone. " +
+		"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call; when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
+		"`memory_read` shows one memory with the facts it was built from."
+	reminderHead = "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, " +
+		"call `memory_search` first"
+)
+
 // Guide is the SessionStart guide (≤ 1 200 chars, E6).
-const Guide = "Long-term memory of the user's past sessions, all projects: tool `memory_search` (1-4 short keyword queries, one per subject, topic + intent word: \"docker subnet pitfall\"). " +
-	"Search BEFORE asking a factual question, recommending a tool, convention or architecture, starting a task or topic, " +
-	"when the user refers to the past, and before writing a test or changing something shared; skip trivial edits. " +
-	"Results are hints: verify them. " + CreditAsk + " An empty search: one line \"nothing in memory\". " +
-	"Store durable decisions, corrections, conventions, pitfalls and delivered states with `memory_store` (user-wide rules: project \"transverse\"); when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
-	"User-wide rules override conflicting project facts. Answer in the user's language. " +
-	"Never ask the user for a key, token or password in the conversation: they run `backsight secret set` in a terminal."
+const Guide = guideHead + CreditAsk + " An empty search: one line \"nothing in memory\". " + guideTail
 
 // ShortGuide is the MCP server's instructions (≤ 1 000 chars).
-const ShortGuide = "The user's long-term memory of past sessions across all projects. Call `memory_search` before factual questions, " +
-	"recommendations, new tasks and references to the past; results are hints to verify. " + CreditAsk + " " +
-	"Query = topic + intent word (\"docker subnet pitfall\"), never a kind word alone. " +
-	"Call `memory_store` for durable decisions, corrections, conventions, pitfalls and delivered states, one fact per call; when work ships or a memory proves wrong, store a dated fact naming the old claim. " +
-	"`memory_read` shows one memory with the facts it was built from."
+const ShortGuide = shortGuideHead + ". " + CreditAsk + " " + shortGuideTail
 
 // Reminder is added to the first prompt of a session (and after a gap).
-const Reminder = "Memory reminder: if this prompt opens a topic, asks a factual question or calls for a recommendation, " +
-	"call `memory_search` first. " + CreditAsk
+const Reminder = reminderHead + ". " + CreditAsk
+
+// The texts where memory_credit is not offered (feedback.enabled off): the
+// v6 citation instead of the credit ask.
+const (
+	GuideCite      = guideHead + "If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line \"nothing in memory\". " + guideTail
+	ShortGuideCite = shortGuideHead + ", cite what you use as «" + Credit + "». " + shortGuideTail
+	ReminderCite   = reminderHead + "; credit what you use exactly: «" + Credit + "»."
+	RecallCite     = "Cite what you use as «" + Credit + "»."
+	SearchCite     = "Cite what you use as: " + Credit
+)
+
+// SearchCreditAsk ends a memory_search result while memory_credit is offered.
+const SearchCreditAsk = "If a memory informs your answer, call memory_credit with its id before your final message."
+
+// Texts are the instruction texts that depend on feedback.enabled.
+type Texts struct {
+	Guide, ShortGuide, Reminder string
+	RecallEnd                   string // the prompt-recall block's last line
+	SearchEnd                   string // memory_search's last line
+}
+
+// For is the texts for feedback on (the agent declares with memory_credit)
+// or off (the tool is not offered: the agent cites).
+func For(feedback bool) Texts {
+	if feedback {
+		return Texts{Guide: Guide, ShortGuide: ShortGuide, Reminder: Reminder, RecallEnd: CreditAsk, SearchEnd: SearchCreditAsk}
+	}
+	return Texts{Guide: GuideCite, ShortGuide: ShortGuideCite, Reminder: ReminderCite, RecallEnd: RecallCite, SearchEnd: SearchCite}
+}
 
 // Nudge is the quiet-prompt nudge: several prompts without any search.
 func Nudge(terms []string) string {

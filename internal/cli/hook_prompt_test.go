@@ -265,6 +265,38 @@ func TestRecallHeaderEndsWithTheCreditLine(t *testing.T) {
 	}
 }
 
+// feedback.enabled off: memory_credit is not offered, and no text the
+// agent reads names it (session guide, MCP instructions, reminder, recall
+// block, search result); on, each carries the v7 ask.
+func TestCreditAskFollowsFeedback(t *testing.T) {
+	for _, feedback := range []bool{true, false} {
+		home := hookHome(t)
+		extra := ""
+		if !feedback {
+			extra = "\n[feedback]\nenabled = false\n"
+			appendConfig(t, home, extra)
+		}
+		want := instructions.For(feedback)
+		recallAnswer = hits(0.9)
+		guide := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}).Specific.Context
+		first := prompt(t, home, "s1", longPrompt).Specific.Context
+		cs := mcpSessionWith(t, extra) // a home of its own, after the hooks
+		recallAnswer = hits(0.9)
+		search, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres version"}})
+		texts := map[string]string{"guide": guide, "first prompt": first, "mcp instructions": cs.InitializeResult().Instructions, "search": search}
+		for name, text := range texts {
+			if strings.Contains(text, "memory_credit") != feedback {
+				t.Errorf("feedback %v, %s:\n%s", feedback, name, text)
+			}
+		}
+		block, _, _ := strings.Cut(first, want.Reminder)
+		if !strings.HasPrefix(guide, want.Guide) || !strings.Contains(first, want.Reminder) || !strings.HasSuffix(strings.TrimSpace(block), "\n"+want.RecallEnd) ||
+			cs.InitializeResult().Instructions != want.ShortGuide || !strings.HasSuffix(search, "\n"+want.SearchEnd+"\n") {
+			t.Errorf("feedback %v: guide %q\nfirst prompt %q\nsearch %q", feedback, guide, first, search)
+		}
+	}
+}
+
 // outcomes is the outcome events of session sid, in order.
 func outcomes(t *testing.T, home, sid string) []map[string]any {
 	t.Helper()
@@ -314,7 +346,14 @@ func TestOutcomeCreditSource(t *testing.T) {
 	prompt(t, home, "silent", longPrompt)
 	prompt(t, home, "silent", next)
 
-	for sid, want := range map[string]any{"tool": "tool", "cited": "citation", "silent": nil} {
+	// A message Claude Code sent between the credit and the next prompt
+	// keeps the turn's journal position: the credit is still seen.
+	prompt(t, home, "notified", longPrompt)
+	credit("notified", "")
+	prompt(t, home, "notified", "<task-notification><task-id>x</task-id></task-notification>")
+	prompt(t, home, "notified", next)
+
+	for sid, want := range map[string]any{"tool": "tool", "cited": "citation", "silent": nil, "notified": "tool"} {
 		o := outcomes(t, home, sid)
 		if len(o) != 1 || o[0]["credit_source"] != want {
 			t.Errorf("%s: outcomes %v, want credit_source %v", sid, o, want)
@@ -526,7 +565,7 @@ func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
 		{ID: "2d4c2a52-0000-4000-8000-000000000003", Text: "third", Project: "billing", Age: "4d", Score: 0.7},
 	}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_read",
 		"tool_input": map[string]string{"id": "1c4c2a52-0000-4000-8000-000000000002"}, "tool_response": "second"})
 	shows := eventsOf(journalEvents(t, home), "shows")
@@ -558,7 +597,7 @@ func TestPostToolUseJournalsTheCredit(t *testing.T) {
 	full := "0b4c2a52-0000-4000-8000-000000000001"
 	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
 	credit := func(prompt string, input map[string]any, response string) {
 		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": prompt, "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
 			"tool_input": input, "tool_response": []map[string]string{{"type": "text", "text": response}}})

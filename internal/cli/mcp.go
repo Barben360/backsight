@@ -163,7 +163,7 @@ func errorResult(s string) *mcp.CallToolResult {
 
 // newMCPServer builds the memory server (SPEC §7).
 func newMCPServer(deps mcpDeps) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.ShortGuide})
+	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.For(deps.cfg.Feedback.Enabled).ShortGuide})
 	key := &mcpKey{file: deps.dirs.SecretsFile(), cfg: deps.cfg, sec: deps.sec, engine: deps.engine}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
@@ -195,7 +195,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if len(res.Hits) == 0 && !scopesOK(res) {
 				return errorResult("memory unavailable: " + scopeErrors(res)), nil, nil
 			}
-			return textResult(mcpSearchText(res)), nil, nil
+			return textResult(mcpSearchText(res, deps.cfg.Feedback.Enabled)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_read", Description: instructions.ReadDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a readArgs) (*mcp.CallToolResult, any, error) {
@@ -405,12 +405,13 @@ func scopeErrors(r recall.Result) string {
 	return strings.Join(errs, "; ")
 }
 
-// mcpSearchText is searchText with the ask to declare what the agent uses.
-func mcpSearchText(r recall.Result) string {
+// mcpSearchText is searchText with the ask to declare what the agent uses
+// (to cite it, when memory_credit is not offered).
+func mcpSearchText(r recall.Result, feedback bool) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
 	}
-	return searchText(r) + "\nIf a memory informs your answer, call memory_credit with its id before your final message.\n"
+	return searchText(r) + "\n" + instructions.For(feedback).SearchEnd + "\n"
 }
 
 func newMCPCmd() *cobra.Command {

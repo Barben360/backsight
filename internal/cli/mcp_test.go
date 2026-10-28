@@ -97,11 +97,11 @@ const searchTrailer = "If a memory informs your answer, call memory_credit with 
 // v7: the search result asks for a declaration, not a citation format;
 // an empty search asks for nothing.
 func TestSearchTrailerAsksForACredit(t *testing.T) {
-	out := mcpSearchText(recall.Result{Hits: []recall.Hit{{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "fact", Project: "billing", Age: "2d", Score: 0.9}}})
+	out := mcpSearchText(recall.Result{Hits: []recall.Hit{{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "fact", Project: "billing", Age: "2d", Score: 0.9}}}, true)
 	if !strings.HasSuffix(out, "\n"+searchTrailer) || strings.Contains(out, instructions.Credit) || strings.Contains(out, "Cite what you use") {
 		t.Errorf("trailer:\n%s", out)
 	}
-	if out := mcpSearchText(recall.Result{}); out != "nothing in memory\n" {
+	if out := mcpSearchText(recall.Result{}, true); out != "nothing in memory\n" {
 		t.Errorf("empty search: %q", out)
 	}
 }

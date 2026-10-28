@@ -254,14 +254,14 @@ func (h *hookEnv) userPrompt() []byte {
 			banner = instructions.MemoryUnavailable("", "server unreachable")
 		}
 		if text != "" {
-			parts = append(parts, text+"\n"+instructions.CreditAsk)
+			parts = append(parts, text+"\n"+h.texts().RecallEnd)
 			injected = items
 			memoryChars = len([]rune(text))
 			h.journalShows("prompt", itemsFromHits(chosen))
 		}
 	}
 	if n == 1 && len([]rune(prompt)) >= rc.ReminderMinChars {
-		parts = append(parts, instructions.Reminder)
+		parts = append(parts, h.texts().Reminder)
 		ev.Hinted = true
 	}
 	nudged := false

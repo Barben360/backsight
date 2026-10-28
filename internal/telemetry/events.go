@@ -74,11 +74,13 @@ type Credit struct {
 
 // CreditCheck is the end-of-turn check of one agent's turn that showed
 // memories: declared, blocked, undeclared or check_skipped, with the
-// honesty flags of its declaration.
+// honesty flags of its declaration. AfterBlock: a declared or undeclared
+// turn that an earlier check of the turn blocked.
 type CreditCheck struct {
-	Outcome string   `json:"outcome"`
-	Shown   int      `json:"shown"`
-	Flags   []string `json:"flags,omitempty"`
+	Outcome    string   `json:"outcome"`
+	Shown      int      `json:"shown"`
+	Flags      []string `json:"flags,omitempty"`
+	AfterBlock bool     `json:"after_block,omitempty"`
 }
 
 // FeedbackSettle is one settle of the feedback journal: the shows it

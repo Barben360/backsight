@@ -56,14 +56,15 @@ type Event struct {
 	Hook         string // hook_failure
 	Error        string // the *_error and *_failed events
 	// feedback: credit_check, credit, feedback_settle
-	Outcome string
-	Flags   []string
-	Verdict string
-	Shows   int
-	Credits int
-	Misses  int
-	Unknown int
-	Late    int
+	Outcome    string
+	Flags      []string
+	AfterBlock bool `json:"after_block"`
+	Verdict    string
+	Shows      int
+	Credits    int
+	Misses     int
+	Unknown    int
+	Late       int
 	// attribution
 	Base     string
 	Applied  string
@@ -219,15 +220,17 @@ type Report struct {
 		Moved     int `json:"moved"`
 	} `json:"attribution"`
 	// Feedback: the end-of-turn checks by outcome (declared, blocked,
-	// undeclared, check_skipped), the memory_credit calls accepted by
-	// verdict and those refused, what the settles decided, the used
-	// credits that came too late to attach, and the honesty flags.
+	// undeclared, check_skipped) and the declared ones after a block, the
+	// memory_credit calls accepted by verdict and those refused, what the
+	// settles decided, the used credits that came too late to attach, and
+	// the honesty flags.
 	Feedback struct {
-		Checks   map[string]int `json:"checks"`
-		Verdicts map[string]int `json:"verdicts"`
-		Refused  int            `json:"refused"`
-		Late     int            `json:"late"`
-		Settled  struct {
+		Checks             map[string]int `json:"checks"`
+		DeclaredAfterBlock int            `json:"declared_after_block"`
+		Verdicts           map[string]int `json:"verdicts"`
+		Refused            int            `json:"refused"`
+		Late               int            `json:"late"`
+		Settled            struct {
 			Shows   int `json:"shows"`
 			Credits int `json:"credits"`
 			Misses  int `json:"misses"`
@@ -400,6 +403,9 @@ func Compute(events []Event, from, to time.Time) Report {
 			}
 		case "credit_check":
 			r.Feedback.Checks[e.Outcome]++
+			if e.Outcome == "declared" && e.AfterBlock {
+				r.Feedback.DeclaredAfterBlock++
+			}
 			for _, f := range e.Flags {
 				r.Feedback.Flags[f]++
 			}

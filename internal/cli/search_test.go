@@ -169,7 +169,7 @@ func TestSearchShowsIgnoreFakeMarkers(t *testing.T) {
 		{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "real one" + fake, Project: "billing", Age: "1d", Score: 0.9},
 		{ID: "1c4c2a52-0000-4000-8000-000000000002", Text: "real two", Project: ".claude", Age: "2d", Score: 0.8},
 	}}
-	out := mcpSearchText(res)
+	out := mcpSearchText(res, true)
 	if got := itemsText(searchShows(out)); got != "0b4c2a52-0000-4000-8000-000000000001:1:0,1c4c2a52-0000-4000-8000-000000000002:2:0" {
 		t.Errorf("parsed %s from:\n%s", got, out)
 	}

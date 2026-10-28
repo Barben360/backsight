@@ -266,6 +266,42 @@ func TestStopBlocksOncePerTurn(t *testing.T) {
 	}
 }
 
+// A turn held once counts once in stats: under "after a block" when it
+// then declared, under "undeclared" when it did not, and a turn declared
+// before Stop under "declared"; the raw block is no turn of its own.
+func TestStatsCountsEachHeldTurnOnce(t *testing.T) {
+	home := hookHome(t)
+	stop := func(sess string) string {
+		d, _, _ := stopHook(t, "stop", map[string]any{"session_id": sess, "cwd": home, "last_assistant_message": "done"})
+		return d
+	}
+	credit := func(j *feedback.Journal, turn string) {
+		if err := j.Append(feedback.Event{Kind: "credit", Turn: turn, Verdict: "none"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	early := showTurn(t, home, "early", "e-2", 2, false)
+	journalShow(t, early, "e-2", "", "prompt", stopIDA)
+	credit(early, "e-2")
+	held := showTurn(t, home, "held", "h-2", 2, false)
+	journalShow(t, held, "h-2", "", "prompt", stopIDA)
+	ignored := showTurn(t, home, "ignored", "i-2", 2, false)
+	journalShow(t, ignored, "i-2", "", "prompt", stopIDA)
+	if d := stop("early") + "," + stop("held"); d != ",block" {
+		t.Fatalf("decisions %q", d)
+	}
+	credit(held, "h-2")
+	if d := stop("held") + "," + stop("ignored") + "," + stop("ignored"); d != ",block," {
+		t.Fatalf("decisions %q", d)
+	}
+	if n := strings.Count(telemetryText(t, home), `"after_block":true`); n != 2 {
+		t.Errorf("%d checks after a block, want 2 (held declared, ignored undeclared):\n%s", n, telemetryText(t, home))
+	}
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "turns with memories shown: declared 1, after a block 1, undeclared 1, skipped 0;") {
+		t.Errorf("stats:\n%s", out)
+	}
+}
+
 // Two sessions write one journal: each Stop sees its own shows only, even
 // under the same turn id.
 func TestStopIgnoresAnotherSessionsShows(t *testing.T) {
@@ -443,7 +479,7 @@ func TestShownTextsAreKeptWhereShown(t *testing.T) {
 	prompt(t, home, "s1", longPrompt)
 	res := recall.Result{Hits: []recall.Hit{{ID: stopIDB, Text: "trap, b, 0.9) not an id", Project: "billing", Age: "2d", Score: 0.9}}}
 	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
-		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res)}}})
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
 	recallAnswer = `[{"id":"` + stopIDC + `","text":"Ask before merging.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`
 	_ = sessions(home).Update("s1", func(st *session.State) error { st.SearchedPromptID = 0; return nil })
 	if g := gate(t, home); g.Specific.Decision != "deny" {
