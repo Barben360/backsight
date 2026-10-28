@@ -81,6 +81,15 @@ If the server rejects the API key, the key in `secrets.toml` and the server's `.
 
 On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host.
 
+## Another PC cannot reach the server
+
+`backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:
+
+- **"is not an address of this machine"**: the address belongs to no network interface of the host, so the server could not listen on it. Pick one of the private addresses the message lists; for a tailnet, check that Tailscale is up (`tailscale ip -4`).
+- **"the API key travels unencrypted on this network"**: the address is on a LAN, not a tailnet, and every request carries the API key in clear to anyone on that network. Prefer the host's tailnet address (Tailscale: `100.x`). On a network you trust, rerun the same command with `--answer cleartext_lan=yes`.
+
+If the command exits 20 after the change, the server did not answer on the new address: `config.toml` was put back and the server started as before (the message says so, or what to run when it could not be).
+
 ## Memories are not recalled
 
 1. Restart Claude Code, or run `/reload-plugins`: a session started before setup or an update has no plugin, or the old one.

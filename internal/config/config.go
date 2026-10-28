@@ -413,7 +413,15 @@ func (c Config) APIPort() (int, error) {
 	return strconv.Atoi(p)
 }
 
-// cgnat is 100.64.0.0/10, the range tailnets such as Tailscale use.
-var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+// Tailnet ranges: Tailscale gives its machines addresses in 100.64.0.0/10
+// (CGNAT) and fd7a:115c:a1e0::/48.
+var (
+	cgnat    = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+	tailnet6 = &net.IPNet{IP: net.ParseIP("fd7a:115c:a1e0::"), Mask: net.CIDRMask(48, 128)}
+)
+
+// IsTailnet reports whether ip is a tailnet address, where traffic is
+// encrypted between machines (a LAN address carries it in clear).
+func IsTailnet(ip net.IP) bool { return cgnat.Contains(ip) || tailnet6.Contains(ip) }
 
 func isPrivate(ip net.IP) bool { return ip.IsPrivate() || cgnat.Contains(ip) }

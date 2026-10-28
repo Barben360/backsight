@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -366,6 +367,39 @@ func TestSetExcludePathsWithHashesAndQuotesInValues(t *testing.T) {
 	got, err := SetExcludePaths([]byte(in), []string{"/a#b", "/c]d", "/e"})
 	if err != nil || string(got) != "[privacy]\nexclude_paths = [\"/a#b\", \"/c]d\", \"/e\"] # kept \"note\"\n" {
 		t.Errorf("%q %v", got, err)
+	}
+}
+
+// server expose sets the exposure and its address, keeping the rest of the
+// file; loopback removes the address.
+func TestSetNetwork(t *testing.T) {
+	cases := []struct {
+		name, in, exposure, ip, want string
+	}{
+		{"private, no section", "# mine\n[server]\nbank = \"b\"\n", "private", "100.101.1.2",
+			"# mine\n[server]\nbank = \"b\"\n\n[network]\nexposure = \"private\"\nbind_ip = \"100.101.1.2\"\n"},
+		{"private, replaced", "[network]\nexposure = \"private\" # LAN\nbind_ip = \"192.168.1.10\"\nbreaker_failures = 4\n", "private", "100.101.1.2",
+			"[network]\nexposure = \"private\" # LAN\nbind_ip = \"100.101.1.2\"\nbreaker_failures = 4\n"},
+		{"loopback removes bind_ip", "# mine\n[network]\nexposure = \"private\"\nbind_ip = \"192.168.1.10\"\nbreaker_failures = 4\n[llm]\nmodel = \"m\"\n", "loopback", "",
+			"# mine\n[network]\nexposure = \"loopback\"\nbreaker_failures = 4\n[llm]\nmodel = \"m\"\n"},
+	}
+	for _, c := range cases {
+		got, err := SetNetwork([]byte(c.in), c.exposure, c.ip)
+		if err != nil || string(got) != c.want {
+			t.Errorf("%s:\ngot  %q (%v)\nwant %q", c.name, got, err, c.want)
+		}
+	}
+	if _, err := SetNetwork([]byte("network.exposure = \"private\"\n"), "loopback", ""); err == nil {
+		t.Error("a dotted key was edited")
+	}
+}
+
+func TestIsTailnet(t *testing.T) {
+	for ip, want := range map[string]bool{"100.101.1.2": true, "100.64.0.1": true, "fd7a:115c:a1e0::5": true,
+		"192.168.1.10": false, "10.0.0.2": false, "100.128.0.1": false, "fd00::1": false} {
+		if got := IsTailnet(net.ParseIP(ip)); got != want {
+			t.Errorf("IsTailnet(%s) = %v, want %v", ip, got, want)
+		}
 	}
 }
 

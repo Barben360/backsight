@@ -142,10 +142,7 @@ func newServerTokenCmd(e *env) *cobra.Command {
 					return err
 				}
 			}
-			tok := token.Token{URL: url, Bank: cfg.Server.Bank, APIKey: sec.APIKey, UIURL: uiURL(cfg), HindsightVersion: v.APIVersion, ServerID: id,
-				LLM: token.LLM{Provider: cfg.LLM.Provider, Model: cfg.LLM.Model, Currency: cfg.LLM.Currency,
-					PriceInput: cfg.LLM.PriceInput, PriceCached: cfg.LLM.PriceCached, PriceOutput: cfg.LLM.PriceOutput}}
-			where, err := writeToken(e, tok, out)
+			where, err := writeToken(e, connectionToken(cfg, url, sec, id, v), out)
 			if err != nil {
 				if rotate {
 					return redacted(fmt.Errorf("the API key was rotated, but the token could not be written (%s): run backsight server token --out FILE to write it", err.Error()), sec)
@@ -204,6 +201,15 @@ func (p tokenPlan) text() string {
 		fmt.Fprintf(&b, "  - %s\n", s)
 	}
 	return b.String() + p.Note + "\n"
+}
+
+// connectionToken is the token other PCs join with: the server's address
+// url, its bank, sec's API key, its UI, id and version, and its LLM's
+// prices.
+func connectionToken(cfg config.Config, url string, sec config.Secrets, id string, v hindsight.Version) token.Token {
+	return token.Token{URL: url, Bank: cfg.Server.Bank, APIKey: sec.APIKey, UIURL: uiURL(cfg), HindsightVersion: v.APIVersion, ServerID: id,
+		LLM: token.LLM{Provider: cfg.LLM.Provider, Model: cfg.LLM.Model, Currency: cfg.LLM.Currency,
+			PriceInput: cfg.LLM.PriceInput, PriceCached: cfg.LLM.PriceCached, PriceOutput: cfg.LLM.PriceOutput}}
 }
 
 // serverIdentity is the server's id (written now if it has none) and its

@@ -33,6 +33,21 @@ func SetServerBank(raw []byte, bank string) ([]byte, error) {
 	return setKey(raw, "server", "bank", strconv.Quote(bank))
 }
 
+// SetNetwork returns raw with [network] exposure set, and bind_ip set to
+// bindIP ("" removes it: a loopback server has none), as server expose
+// changes them.
+func SetNetwork(raw []byte, exposure, bindIP string) ([]byte, error) {
+	value := ""
+	if bindIP != "" {
+		value = strconv.Quote(bindIP)
+	}
+	out, err := setKey(raw, "network", "bind_ip", value)
+	if err != nil {
+		return nil, err
+	}
+	return setKey(out, "network", "exposure", strconv.Quote(exposure))
+}
+
 // valueEnd is where a one-line TOML value ends in s (strings and arrays
 // read with their quotes, so a "#" or "]" inside a string counts for
 // nothing); ok false when an array does not close on this line.
