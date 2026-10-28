@@ -382,15 +382,25 @@ func sshInstallText(r sshInstallResult) string {
 	return b.String()
 }
 
-// sshInstallAnswers checks the run's flags and answers, here only.
-func sshInstallAnswers(f sshInstallFlags) (map[string]string, error) {
-	values := []string{f.target, f.private, f.source, f.keyFile, f.configDir}
+// refuseTokenArgs refuses a connection token given as --private, an
+// --answer (whole or its value) or one of the other values: a token holds
+// the API key and never goes on a command line.
+func refuseTokenArgs(f sshInstallFlags, others ...string) error {
+	values := append([]string{f.private}, others...)
 	for _, a := range f.answers {
 		_, v, _ := strings.Cut(a, "=")
 		values = append(values, a, v)
 	}
 	if slices.ContainsFunc(values, looksLikeToken) {
-		return nil, &output.Error{Code: output.Usage, Message: tokenArgument}
+		return &output.Error{Code: output.Usage, Message: tokenArgument}
+	}
+	return nil
+}
+
+// sshInstallAnswers checks the run's flags and answers, here only.
+func sshInstallAnswers(f sshInstallFlags) (map[string]string, error) {
+	if err := refuseTokenArgs(f, f.target, f.source, f.keyFile, f.configDir); err != nil {
+		return nil, err
 	}
 	if err := checkTarget(f.target); err != nil {
 		return nil, err
@@ -418,7 +428,7 @@ func checkAnswers(f sshInstallFlags) (map[string]string, error) {
 			return nil, &output.Error{Code: output.Usage, Message: "answer cleartext_lan=" + v + ": want yes"}
 		case k == "consent", k == "ack_subscription", k == "cleartext_lan", slices.Contains(hostAnswers, k), slices.Contains(clientAnswers, k):
 		default:
-			return nil, &output.Error{Code: output.Usage, Message: "unknown answer " + k + ": server install --ssh takes the host's setup answers (" + strings.Join(hostAnswers, ", ") +
+			return nil, &output.Error{Code: output.Usage, Message: "unknown answer " + k + ": server install --ssh and --print-commands take the host's setup answers (" + strings.Join(hostAnswers, ", ") +
 				"), this PC's (" + strings.Join(clientAnswers, ", ") + "), consent, ack_subscription and cleartext_lan"}
 		}
 	}

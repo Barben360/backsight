@@ -70,8 +70,8 @@ func TestPrintCommandsCarryNoSecretAndRunNothing(t *testing.T) {
 	t.Setenv(llmKeyEnv, llmKey)
 	before := treeOf(t, home)
 	code, out, errOut := run(t, append(printArgs, "--llm-key-from-env", llmKeyEnv)...)
-	if code != output.Usage {
-		t.Errorf("a key flag: exit %d, want 2\n%s%s", code, out, errOut)
+	if code != output.Usage || !strings.Contains(errOut, "go with --ssh") || strings.Contains(out+errOut, llmKey) {
+		t.Errorf("a key flag: exit %d, want 2 saying the key flags go with --ssh\n%s%s", code, out, errOut)
 	}
 	code, out, errOut = run(t, printArgs...)
 	if code != output.OK {
@@ -103,16 +103,21 @@ func TestPrintCommandsRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		"ssh":    {[]string{"--ssh", "u@h"}, "exclude each other"},
-		"plan":   {[]string{"--plan"}, "exclude each other"},
-		"source": {[]string{"--source", "/tmp/x"}, "go with --ssh"},
-		"key":    {[]string{"--llm-key-from-file", "/tmp/k"}, "go with --ssh"},
-		"answer": {[]string{"--answer", "nope=1"}, "unknown answer"},
-		"ip":     {[]string{"--private", "host.example"}, "not an IP address"},
+		"ssh":                        {[]string{"--ssh", "u@h"}, "exclude each other"},
+		"plan":                       {[]string{"--plan"}, "exclude each other"},
+		"source":                     {[]string{"--source", "/tmp/x"}, "go with --ssh"},
+		"key":                        {[]string{"--llm-key-from-file", "/tmp/k"}, "go with --ssh"},
+		"answer":                     {[]string{"--answer", "nope=1"}, "unknown answer"},
+		"ip":                         {[]string{"--private", "host.example"}, "not an IP address"},
+		"public":                     {[]string{"--private", "8.8.8.8"}, "not a LAN or tailnet address"},
+		"consent":                    {[]string{"--answer", "consent=yes"}, "at their own terminal"},
+		"token in an answer's value": {[]string{"--answer", "provider=bst1.xxx"}, "token"},
+		"token as an answer":         {[]string{"--answer", "bst1.xxx"}, "token"},
+		"token in --private":         {[]string{"--private", "bst1.xxx"}, "token"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, out, errOut := run(t, append([]string{"server", "install", "--print-commands", "--json"}, c.args...)...)
-			if code != output.Usage || !strings.Contains(out+errOut, c.want) {
+			if code != output.Usage || !strings.Contains(out+errOut, c.want) || strings.Contains(out+errOut, "bst1.xxx\\n") || strings.Contains(out, "backsight setup") {
 				t.Errorf("exit %d, want 2 naming %q\n%s%s", code, c.want, out, errOut)
 			}
 		})
@@ -154,5 +159,24 @@ func TestPrintedCommandsExist(t *testing.T) {
 	}
 	if n != 5 {
 		t.Errorf("%d backsight commands checked, want 5", n)
+	}
+}
+
+// Each answer lands on the command that takes it.
+func TestPrintCommandsPlaceEachAnswer(t *testing.T) {
+	setBuild(t, "9.9.9", "abc1234")
+	code, out, errOut := run(t, "server", "install", "--print-commands", "--provider", "claude-code", "--private", "192.168.1.5",
+		"--answer", "cleartext_lan=yes", "--answer", "retention=keep", "--answer", "backfill=no", "--answer", "ack_subscription=yes")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"backsight setup --role server --answer provider=claude-code --answer ack_subscription=yes\n",
+		"backsight server expose --private 192.168.1.5 --answer cleartext_lan=yes\n",
+		"backsight connect --token-file backsight-token --answer retention=keep --answer backfill=no\n",
+	} {
+		if !strings.Contains(out, "\n"+want) {
+			t.Errorf("output lacks the line %q\n%s", want, out)
+		}
 	}
 }

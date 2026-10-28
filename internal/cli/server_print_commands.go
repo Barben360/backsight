@@ -47,18 +47,27 @@ func printCommands(f sshInstallFlags, version string) (printedCommands, error) {
 	case f.source != "", f.keyEnv != "", f.keyFile != "", f.nonInteractive, f.configDir != "":
 		return res, &output.Error{Code: output.Usage, Message: "--source, --llm-key-from-env, --llm-key-from-file, --non-interactive and --config-dir go with --ssh: --print-commands lists the steps and reads no key; the host's own prompt asks for it"}
 	}
-	if slices.ContainsFunc(append([]string{f.private}, f.answers...), looksLikeToken) {
-		return res, &output.Error{Code: output.Usage, Message: tokenArgument}
+	if err := refuseTokenArgs(f); err != nil {
+		return res, err
 	}
 	if v, err := release.Parse(version); err != nil || v.Dev() {
 		return res, &output.Error{Code: output.Usage, Message: "no release matches this development build (" + version + "): run a released backsight"}
 	}
-	if f.private != "" && net.ParseIP(f.private) == nil {
-		return res, &output.Error{Code: output.Usage, Message: "--private " + f.private + " is not an IP address: give a LAN or tailnet address of the host"}
+	if f.private != "" {
+		ip := net.ParseIP(f.private)
+		switch {
+		case ip == nil:
+			return res, &output.Error{Code: output.Usage, Message: "--private " + f.private + " is not an IP address: give a LAN or tailnet address of the host"}
+		case !config.IsTailnet(ip) && !ip.IsPrivate():
+			return res, &output.Error{Code: output.Usage, Message: "--private " + f.private + " is not a LAN or tailnet address: give one of the host's (tailscale ip -4 or ip addr there)"}
+		}
 	}
 	answers, err := checkAnswers(f)
 	if err != nil {
 		return res, err
+	}
+	if _, ok := answers["consent"]; ok {
+		return res, &output.Error{Code: output.Usage, Message: "--answer consent goes with --ssh: with --print-commands, setup and connect ask for consent at their own terminal, so there is none to give"}
 	}
 
 	provider := answers["provider"]
