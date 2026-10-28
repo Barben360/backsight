@@ -271,6 +271,9 @@ else
   }
   c2() { HOME=$work/home2 BACKSIGHT_HOME=$work/backsight2 "$@"; }
   mkdir -p "$work/home2"
+  # The host's own files: the second client must leave them alone.
+  host_files() { sha256sum "$BACKSIGHT_HOME/config/secrets.toml" "$BACKSIGHT_HOME/config/config.toml"; }
+  host_before=$(host_files)
   docs_before=$(bank_docs) || fail "cannot read the host bank's document count"
   c2 "$sv" connect --token-file "$work/token3" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
     --non-interactive --json > "$work/connect.json" 2> "$work/connect.err" || { show "$work/connect.json"; show "$work/connect.err"; fail "connect with the rotated token failed"; }
@@ -288,6 +291,7 @@ else
   done
   [ "$docs_after" -eq $((docs_before + 1)) ] || fail "the host bank holds $docs_after documents, want $((docs_before + 1)) (before the client's note: $docs_before)"
   # The pre-rotation token's key is dead: connect refuses it and changes nothing.
+  [ -s "$work/token2" ] || fail "harness: the pre-rotation token file is missing or empty"
   cp "$work/backsight2/config/secrets.toml" "$work/secrets2.before"
   set +e
   c2 "$sv" connect --token-file "$work/token2" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
@@ -295,7 +299,10 @@ else
   code=$?
   set -e
   [ $code -eq 20 ] || { show "$work/connect-old.json"; fail "connect with the pre-rotation token: exit $code, want 20"; }
+  jq -e '.ok == false and (.error.message | contains("the server rejected this token'"'"'s key"))' "$work/connect-old.json" >/dev/null ||
+    { show "$work/connect-old.json"; fail "connect with the pre-rotation token: want ok false and the rejected-key message"; }
   cmp -s "$work/secrets2.before" "$work/backsight2/config/secrets.toml" || fail "the refused connect changed the client's secrets.toml"
+  [ "$(host_files)" = "$host_before" ] || fail "the second client changed the first client's secrets.toml or config.toml"
   "$sv" server expose --loopback --json > "$work/expose-loopback.json" || { show "$work/expose-loopback.json"; fail "server expose --loopback failed"; }
   health 127.0.0.1 || fail "/health does not answer on 127.0.0.1 after expose --loopback"
   if health "$priv_ip"; then fail "/health still answers on $priv_ip after expose --loopback"; fi
