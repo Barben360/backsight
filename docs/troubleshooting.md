@@ -79,6 +79,8 @@ While the server is down, nothing is lost: sessions stay in Claude Code's transc
 
 If the server rejects the API key, the key in `secrets.toml` and the server's `.env` differ: `backsight server render` writes the `.env` from your secrets again, then `backsight server start`.
 
+On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host.
+
 ## Memories are not recalled
 
 1. Restart Claude Code, or run `/reload-plugins`: a session started before setup or an update has no plugin, or the old one.
