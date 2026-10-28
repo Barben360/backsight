@@ -296,3 +296,31 @@ func TestRotateMasksBothKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestRotatePlanChangesNothing(t *testing.T) {
+	home, _, dk := tokenHost(t)
+	before, err := os.ReadFile(secretsFile(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "join.token")
+	code, out, errOut := run(t, "server", "token", "--rotate", "--plan", "--out", f)
+	if code != output.OK || !strings.Contains(out, "would rotate") || !strings.Contains(out, "new API key") || !strings.Contains(out, f) || !strings.Contains(out, "stop working") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if after, _ := os.ReadFile(secretsFile(home)); string(after) != string(before) {
+		t.Error("secrets.toml changed")
+	}
+	if len(dk.keys) != 0 || refusedCalls.Load() != 0 || len(bankCalls) != 0 {
+		t.Errorf("the plan reached Docker or the server: %d starts, %v", len(dk.keys), bankCalls)
+	}
+	if _, err := os.Stat(f); err == nil {
+		t.Error("a token was written")
+	}
+	if _, err := os.Stat(filepath.Join(composeDir(home), "compose.yaml")); err == nil {
+		t.Error("the server's files were rendered")
+	}
+	if code, _, errOut := run(t, "server", "token", "--plan", "--out", f); code != output.Usage || !strings.Contains(errOut, "--rotate") {
+		t.Errorf("--plan without --rotate: exit %d: %s", code, errOut)
+	}
+}

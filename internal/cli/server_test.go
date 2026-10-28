@@ -222,6 +222,7 @@ var (
 	serverIDStatus     atomic.Int32      // non-zero: reading the server id answers this status
 	requireKey         atomic.Bool       // the fake checks the bearer key against acceptedKey
 	acceptedKey        atomic.Value      // the API key the fake server runs on (a string), set by compose up
+	refusedCalls       atomic.Int64      // requests the fake refused for their key
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
@@ -276,6 +277,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	serverIDStatus.Store(0)
 	requireKey.Store(false)
 	acceptedKey.Store("")
+	refusedCalls.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
@@ -303,6 +305,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	docInfos := map[string]docInfo{} // "<bank>/<id>"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if k, _ := acceptedKey.Load().(string); requireKey.Load() && r.Header.Get("Authorization") != "Bearer "+k {
+			refusedCalls.Add(1)
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"detail":"invalid API key"}`))
 			return

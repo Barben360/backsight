@@ -6,6 +6,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -78,12 +79,15 @@ func writeToken(e *env, tok token.Token, out string) (where string, err error) {
 
 func newServerTokenCmd(e *env) *cobra.Command {
 	var out string
-	var rotate bool
+	var rotate, plan bool
 	cmd := &cobra.Command{
 		Use:   "token",
 		Short: "Write the connection token other PCs join this server with (it holds the API key)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if plan && !rotate {
+				return &output.Error{Code: output.Usage, Message: "--plan previews --rotate: server token alone changes nothing on the server"}
+			}
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
 				return err
@@ -104,6 +108,10 @@ func newServerTokenCmd(e *env) *cobra.Command {
 				rt = runtimeFor(cfg)
 				if err := pinGuard(cfg, rt); err != nil {
 					return err
+				}
+				if plan {
+					p := rotatePlan(cfg, url, out)
+					return e.emit("server token", p, p.text)
 				}
 				if d, _, err = machine(); err != nil {
 					return err
@@ -150,13 +158,14 @@ func newServerTokenCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&out, "out", "", "write the token to this file (mode 0600) instead of the terminal")
 	cmd.Flags().BoolVar(&rotate, "rotate", false, "give the server a new API key first: every token handed out before stops working")
+	cmd.Flags().BoolVar(&plan, "plan", false, "with --rotate: say what the rotation would do, changing nothing")
 	return cmd
 }
 
 func tokenText(r tokenResult, rotated bool) string {
 	text := ""
 	if rotated {
-		text = "API key rotated: the server and this PC use the new one; every other PC joins again with the new token.\n"
+		text = "API key rotated: the server uses the new one, and so does this PC (hooks and jobs read it on each run, open sessions at their next memory call); every other PC joins again with the new token.\n"
 	}
 	where := "written to " + r.Written
 	if r.Written == onTerminal {
@@ -164,6 +173,37 @@ func tokenText(r tokenResult, rotated bool) string {
 	}
 	return text + fmt.Sprintf("connection token for %s (bank %s, server %s) %s.\n"+
 		"It holds the API key: carry it to the other PC yourself, never through a chat or a shared folder.\n", r.URL, r.Bank, r.ServerID, where)
+}
+
+// tokenPlan is what --rotate --plan says it would do, in order.
+type tokenPlan struct {
+	Plan  bool     `json:"plan"`
+	URL   string   `json:"url"`
+	Bank  string   `json:"bank"`
+	Steps []string `json:"steps"`
+	Note  string   `json:"note"`
+}
+
+func rotatePlan(cfg config.Config, url, out string) tokenPlan {
+	dest := "print the new token to this terminal"
+	if out != "" {
+		dest = "write the new token to " + out + " (mode 0600)"
+	}
+	return tokenPlan{Plan: true, URL: url, Bank: cfg.Server.Bank, Note: "every token handed out before would stop working", Steps: []string{
+		"give the server a new API key in secrets.toml",
+		"render the server's files in " + cfg.Server.ComposeDir + " again and restart it",
+		"check its health on the new key (on failure: the old key back, the server restarted on it)",
+		dest,
+	}}
+}
+
+func (p tokenPlan) text() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "would rotate the API key of %s (bank %s):\n", p.URL, p.Bank)
+	for _, s := range p.Steps {
+		fmt.Fprintf(&b, "  - %s\n", s)
+	}
+	return b.String() + p.Note + "\n"
 }
 
 // serverIdentity is the server's id (written now if it has none) and its
