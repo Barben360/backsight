@@ -129,6 +129,9 @@ func (h *hookEnv) sessionStart() []byte {
 		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
 			banner += "\n" + line
 		}
+		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" {
+			banner += "\n" + instructions.OtherServerLine()
+		}
 	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
 		banner += "\n" + instructions.QuarantineLine(len(held))

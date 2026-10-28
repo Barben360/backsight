@@ -107,6 +107,12 @@ To stop depending on the address, `backsight server expose --loopback` takes the
 
 `this PC is a client of the server at <url>: run backsight <command> on that server's host`: this PC's `server.mode` is `remote`, so the server runs on another machine and the commands that manage it (`server start`, `server stop`, `server upgrade`, `server token`, `server expose`, `server llm check`, `backup create`, `restore`, `uninstall --stop`, `uninstall --delete-data`), and those that write its banks (`bank apply`, `guide index`), only work there. Log in to the machine at the address the message names and run the command it gives. Nothing changed on this PC.
 
+## doctor: a different server answers at this address
+
+doctor's `server-id` check in error, and the session banner "⚠️ a different memory server answers at the joined address": this PC joined a server, and the one answering at its address now has another id (or none). Its host was reinstalled without a restore, or the address now leads to another machine. Each server has its own id, kept in its data, so a host replaced by a fresh install and a restore of its backup keeps its id and its clients.
+
+While it lasts, this PC sends nothing: sessions stay in Claude Code's transcripts and notes in this PC's queue, so nothing is lost. To go on with the server now at that address, make a token on its host (`backsight server token --out <file>`) and join it again with `backsight connect --token-file <file>`. If the old server comes back at the address, sending resumes on its own at the next `backsight jobs tick`.
+
 ## Another PC cannot reach the server
 
 `backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:

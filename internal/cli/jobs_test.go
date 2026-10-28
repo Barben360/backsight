@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -211,5 +214,48 @@ func TestMaintainRecordsTheNoiseReading(t *testing.T) {
 	got, err := retain.LoadNoise(d.State)
 	if err != nil || len(got) != 1 || got[0].Named != 7 || got[0].Total != 40 || !got[0].At.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) {
 		t.Errorf("history %+v %v", got, err)
+	}
+}
+
+// On a client whose server another one replaced at the same address, a
+// tick sends neither sessions nor notes and records the other server's
+// id; once the joined server answers again, both go out.
+func TestJobsTickSendsNothingWhileAnotherServerAnswers(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	other, err := retain.EnsureServerID(context.Background(), cl, "claude-memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "joined", URL: "http://127.0.0.1:" + strconv.Itoa(port)}
+		return nil
+	})
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	_, _ = notesOutbox(pathsOf(home)).Append(newTestNote())
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	before := retained.Load()
+	if code, out, _ := run(t, "jobs", "tick"); code != output.Partial || !strings.Contains(out, "a different server answers at this address") || retained.Load() != before {
+		t.Fatalf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 1 {
+		t.Errorf("want the note kept, got %d queued", n)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.RemoteServer == nil || st.RemoteServer.Mismatch != other {
+		t.Errorf("mismatch not recorded: %+v", st.RemoteServer)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.RemoteServer.ID = other; return nil })
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:1") || !strings.Contains(out, "notes sent 1") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.RemoteServer.Mismatch != "" {
+		t.Errorf("mismatch not cleared: %+v", st.RemoteServer)
 	}
 }

@@ -73,9 +73,13 @@ type Flusher struct {
 	Now         func() time.Time
 	RetainSince time.Time // zero: no boundary
 	Index       *SentIndex
-	// Hold: the bank's restore epoch could not be reconciled (Reconcile):
-	// nothing is sent until a later run reconciles (decision 0044).
+	// Hold: the bank's restore epoch could not be reconciled, or another
+	// server answers at the joined address (Reconcile): nothing is sent
+	// until a later run reconciles (decisions 0044, 0073).
 	Hold string
+	// ServerID: the id of the server this client joined (connect); ""
+	// when it joined none, which checks no id.
+	ServerID string
 	// Outbox takes the subagent reports a reconcile rebuilds; zero: the
 	// notes outbox of Dirs (NotesOutbox).
 	Outbox Outbox

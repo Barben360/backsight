@@ -10,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func TestStoreSendsAtOnce(t *testing.T) {
@@ -102,5 +103,29 @@ func TestStoreHonoursTheConfiguredOutboxMax(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(path); len(raw) != 1<<20 {
 		t.Errorf("the refused note was written: %d bytes", len(raw))
+	}
+}
+
+// While a different server answers at the joined address (a jobs tick
+// recorded it), a note stays queued, sent to no server: no extra request
+// on the hot path, the warning names doctor.
+func TestStoreKeepsTheNoteWhileAnotherServerAnswers(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", Mismatch: "b", MismatchAt: time.Now()}
+		return nil
+	})
+	before := retained.Load()
+	code, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Kept while another server answers.", "--json")
+	var env struct {
+		Data storeResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.OK || env.Data.Status != "queued" || !strings.Contains(env.Data.Warning, "backsight doctor") || retained.Load() != before {
+		t.Errorf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 1 {
+		t.Errorf("want the note queued, got %d", n)
 	}
 }

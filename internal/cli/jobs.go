@@ -139,14 +139,21 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					}
 				}
 			}
-			res.Notes, err = notesOutboxFor(d, cfg).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
-			if err != nil || res.Notes.Kept > 0 {
-				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
+			if otherServerAnswers(d) {
+				// Not the server this client joined: nothing is written to
+				// it, notes stay queued (decision 0073).
+				res.Notes.Kept, _ = notesOutboxFor(d, cfg).Pending()
+				failed = &output.Error{Code: output.Partial, Message: "nothing sent: a different server answers at the joined address; run backsight doctor"}
+			} else {
+				res.Notes, err = notesOutboxFor(d, cfg).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+				if err != nil || res.Notes.Kept > 0 {
+					failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
+				}
+				// After the sends: a slow server delays this look, never them.
+				res.Purges = guardTick(cmd.Context(), f, cfg)
+				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			}
-			// After the sends: a slow server delays this look, never them.
-			res.Purges = guardTick(cmd.Context(), f, cfg)
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
-			res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"

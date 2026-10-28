@@ -166,3 +166,21 @@ func TestBannerBrandColor(t *testing.T) {
 		t.Errorf("NO_COLOR banner %q", got)
 	}
 }
+
+// A different server answering at the joined address is a line of its own:
+// recall may still answer (from the other server), sending holds.
+func TestSessionStartBannerNamesAnotherServer(t *testing.T) {
+	home := hookHome(t)
+	noticeShown(t, home)
+	if got := startBanner(t, home, "s1"); strings.Contains(got, "different memory server") {
+		t.Fatalf("no mismatch recorded: %q", got)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", Mismatch: "b", MismatchAt: time.Now()}
+		return nil
+	})
+	want := "🧠 backsight · 🗂️ billing\n⚠️ a different memory server answers at the joined address: notes and sessions wait on this PC · run `backsight doctor`"
+	if got := startBanner(t, home, "s2"); got != want {
+		t.Errorf("banner\n got %q\nwant %q", got, want)
+	}
+}

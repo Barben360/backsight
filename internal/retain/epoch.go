@@ -148,13 +148,60 @@ const epochSkew = time.Hour
 // entries of what the server lacks; then the epoch is recorded in state.
 // Anything that stops it (an unreadable epoch, maintenance, a session
 // being flushed) drops nothing more and sets Hold: the next run retries.
+// First of all, the server must be the one this client joined
+// (checkServer): another one holds every send, with nothing reconciled.
 func (f *Flusher) Reconcile(ctx context.Context) (Reconciled, error) {
+	if err := f.checkServer(ctx); err != nil {
+		f.Hold = err.Error()
+		return Reconciled{}, err
+	}
 	rec, err := f.reconcile(ctx)
 	f.Hold = ""
 	if err != nil {
 		f.Hold = "restore epoch not reconciled: " + err.Error()
 	}
 	return rec, err
+}
+
+// checkServer compares the server's id with the one this client joined
+// (decision 0073) and records the outcome where doctor, the session banner
+// and store read it: another id is recorded as the mismatch, the joined
+// id clears it. An id that cannot be read records nothing: a mismatch
+// recorded earlier still holds (the last server that answered was
+// another), and without one the run goes on (its sends fail or not on
+// their own).
+func (f *Flusher) checkServer(ctx context.Context) error {
+	err := CheckServer(ctx, f.Client, f.Bank, f.ServerID)
+	var mm *ServerMismatch
+	switch {
+	case errors.As(err, &mm):
+		at := f.Now().UTC()
+		_ = state.Update(f.Dirs, "server id check", func(s *state.State) error {
+			if rs := s.RemoteServer; rs != nil && rs.ID == f.ServerID && rs.Mismatch != mm.GotName() {
+				rs.Mismatch, rs.MismatchAt = mm.GotName(), at
+			}
+			return nil
+		})
+		return err
+	case err != nil:
+		st, lerr := state.Load(f.Dirs.StateFile())
+		if rs := st.RemoteServer; lerr == nil && rs != nil && rs.ID == f.ServerID && rs.Mismatch != "" {
+			return &ServerMismatch{Want: f.ServerID, Got: rs.Mismatch}
+		}
+		return nil
+	case f.ServerID == "":
+		return nil
+	}
+	st, err := state.Load(f.Dirs.StateFile())
+	if rs := st.RemoteServer; err != nil || rs == nil || rs.Mismatch == "" {
+		return nil // nothing to clear: no write on every run
+	}
+	return state.Update(f.Dirs, "server id check", func(s *state.State) error {
+		if rs := s.RemoteServer; rs != nil && rs.ID == f.ServerID {
+			rs.Mismatch, rs.MismatchAt = "", time.Time{}
+		}
+		return nil
+	})
 }
 
 func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {

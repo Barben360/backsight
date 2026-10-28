@@ -144,6 +144,11 @@ func Run(ctx context.Context, env Env) Report {
 	r.Server = tg
 	srv, cl := checkServer(ctx, env, tg)
 	add(srv)
+	if cfgErr == nil && cfg.Server.Mode == "remote" {
+		if c, ok := checkServerID(ctx, cl, tg, env.Dirs, srv); ok {
+			add(c)
+		}
+	}
 	bank := checkBank(ctx, cl, tg)
 	add(bank)
 	if bank.Status == OK || bank.Status == Warn {
@@ -435,6 +440,35 @@ func hostBankConfig(drift []string, err error) Check {
 // checkEpoch reports a client still on an old restore epoch (decision
 // 0044): its cursors may hold as sent what the restore lost, until a flush
 // reconciles them.
+// checkServerID: a client bound to a server (connect) checks that the one
+// answering at its address is it (decision 0073); ok false: not bound.
+func checkServerID(ctx context.Context, cl *hindsight.Client, t *target.Target, d paths.Dirs, srv Check) (Check, bool) {
+	c := Check{ID: "server-id"}
+	st, err := state.Load(d.StateFile())
+	if err != nil || st.RemoteServer == nil || st.RemoteServer.ID == "" {
+		return c, false
+	}
+	want := st.RemoteServer.ID
+	if cl == nil {
+		c.Status, c.Summary = Info, "skipped: "+skipReason(srv)
+		return c, true
+	}
+	err = retain.CheckServer(ctx, cl, t.Bank, want)
+	var mm *retain.ServerMismatch
+	switch {
+	case errors.As(err, &mm):
+		c.Status = Error
+		c.Summary = fmt.Sprintf("a different server answers at %s (server %s, this PC joined %s): nothing is sent", t.Display(), mm.GotName(), want)
+		c.Detail = "sessions stay in Claude Code's transcripts and notes in this PC's queue until connect runs again"
+		c.Fix = "backsight connect --token-file FILE with a token from the server now at " + t.Display() + " (backsight server token there)"
+	case err != nil:
+		c.Status, c.Summary, c.Detail = Info, "cannot read the server's id", err.Error()
+	default:
+		c.Status, c.Summary = OK, "server "+want
+	}
+	return c, true
+}
+
 func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.Dirs) Check {
 	c := Check{ID: "restore-epoch"}
 	ep, err := retain.ReadEpoch(ctx, cl, bank)

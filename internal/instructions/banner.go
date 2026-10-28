@@ -94,3 +94,9 @@ func QuarantineLine(n int) string {
 	}
 	return EmojiWarning + " " + strconv.Itoa(n) + " " + noun + " quarantined (not sent to memory) · run `backsight doctor`"
 }
+
+// OtherServerLine: another server answers at the address this client
+// joined; nothing is sent until connect runs again.
+func OtherServerLine() string {
+	return EmojiWarning + " a different memory server answers at the joined address: notes and sessions wait on this PC · run `backsight doctor`"
+}

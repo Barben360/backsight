@@ -50,25 +50,35 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 		return nil, blocked(err)
 	}
 	since := now().UTC().Truncate(time.Second)
+	var joined *state.RemoteServer
 	if setSince {
 		err = state.Update(d, "jobs tick", func(s *state.State) error {
 			if s.RetainSince == nil {
 				s.RetainSince = &since
 			}
-			since = *s.RetainSince
+			since, joined = *s.RetainSince, s.RemoteServer
 			return nil
 		})
-	} else if st, lerr := state.Load(d.StateFile()); lerr == nil && st.RetainSince != nil {
-		since = *st.RetainSince
+	} else if st, lerr := state.Load(d.StateFile()); lerr == nil {
+		if st.RetainSince != nil {
+			since = *st.RetainSince
+		}
+		joined = st.RemoteServer
 	} else {
 		err = lerr
 	}
 	if err != nil {
 		return nil, blocked(err)
 	}
+	// A client checks it still reaches the server it joined (decision 0073).
+	serverID := ""
+	if joined != nil && cfg.Server.Mode == "remote" {
+		serverID = joined.ID
+	}
 	res := project.New(home, cfg.Projects.Transverse)
 	return &retain.Flusher{Client: cl, Bank: cfg.Server.Bank, Dirs: d, Resolver: res,
 		Exclude: cfg.Privacy.ExcludePaths, Headless: cfg.Privacy.SkipsEntrypoint, MachineID: machine, Version: buildinfo.Version, Now: now, RetainSince: since, Index: idx,
+		ServerID: serverID,
 		// A rebuilt subagent report follows SubagentStop's rules (issue 285).
 		Outbox: notesOutboxFor(d, cfg), NoReports: !cfg.Components.Write, ReportProject: func(cwd string) string { return canonicalProject(cfg, res.Project(cwd)) },
 		Attribution: attributor(d, cfg, res)}, nil

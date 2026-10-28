@@ -898,3 +898,49 @@ func TestServerOnlyHostSkipsTheClientChecks(t *testing.T) {
 		}
 	}
 }
+
+const serverIDPath = "/v1/default/banks/coding-agent%3A%3Amemoire-control/documents/backsight%3Aserver"
+
+// boundClient is a client of srv that joined server id.
+func boundClient(t *testing.T, srv *httptest.Server, mode, id string) *fixture {
+	f := newFixture(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \""+mode+"\"\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	if id != "" {
+		if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+			RemoteServer: &state.RemoteServer{ID: id, URL: srv.URL}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+// A client whose address answers with another server's id, or a server
+// with none, is in error: it sends nothing until connect runs again.
+func TestServerIDMismatchIsAnError(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{serverIDPath: {200, `{"id":"backsight:server","document_metadata":{"server_id":"b"}}`}})
+	c := check(t, boundClient(t, srv, "remote", "a").run(), "server-id")
+	if c.Status != Error || !strings.Contains(c.Summary, "server b") || !strings.Contains(c.Summary, "joined a") ||
+		c.Fix != "backsight connect --token-file FILE with a token from the server now at "+srv.URL+" (backsight server token there)" {
+		t.Errorf("another id: %+v", c)
+	}
+	expect(t, check(t, boundClient(t, srv, "remote", "b").run(), "server-id"), OK, "server b")
+	expect(t, check(t, boundClient(t, fakeServer(t), "remote", "a").run(), "server-id"), Error, "server none")
+}
+
+// Only a client bound to a server checks its id: an install before
+// connect has no binding, and a machine running its own server is not
+// bound to one.
+func TestServerIDCheckOnlyOnABoundClient(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{serverIDPath: {200, `{"id":"backsight:server","document_metadata":{"server_id":"b"}}`}})
+	for name, f := range map[string]*fixture{
+		"remote, no binding": boundClient(t, srv, "remote", ""),
+		"local, bound":       boundClient(t, srv, "local", "a"),
+	} {
+		for _, c := range f.run().Checks {
+			if c.ID == "server-id" {
+				t.Errorf("%s: %+v", name, c)
+			}
+		}
+	}
+}
