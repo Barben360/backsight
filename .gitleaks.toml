@@ -5,4 +5,4 @@ useDefault = true
 
 [allowlist]
 description = "redaction tests (fake credentials by design)"
-paths = ['''internal/redact/redact_test\.go''', '''internal/claudecfg/claudecfg_test\.go''']
+paths = ['''internal/redact/redact_test\.go''', '''internal/claudecfg/claudecfg_test\.go''', '''internal/cli/server_ssh_test\.go''']

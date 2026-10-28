@@ -27,9 +27,14 @@ func TestInstallScriptCleansUpWhenKilled(t *testing.T) {
 	}
 	shells := [][]string{{"sh"}}
 	for _, s := range [][]string{{"dash"}, {"busybox", "sh"}, {"zsh", "--emulate", "sh"}} {
-		if _, err := exec.LookPath(s[0]); err == nil {
-			shells = append(shells, s)
+		if _, err := exec.LookPath(s[0]); err != nil {
+			continue
 		}
+		if !runsPathTar(s, bin) {
+			t.Logf("%s runs its own tar, not PATH's: its run is left out", s[0])
+			continue
+		}
+		shells = append(shells, s)
 	}
 	for _, sh := range shells {
 		for name, sig := range map[string]syscall.Signal{"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "TERM": syscall.SIGTERM} {
@@ -80,4 +85,19 @@ func TestInstallScriptCleansUpWhenKilled(t *testing.T) {
 			})
 		}
 	}
+}
+
+// runsPathTar reports whether sh runs the tar found on PATH: a busybox
+// built to prefer its own applets runs its tar whatever PATH says, so the
+// stand-in above could never mark that the copy started.
+func runsPathTar(sh []string, bin string) bool {
+	mark := filepath.Join(bin, "probe-started")
+	defer func() { _ = os.Remove(mark) }()
+	cmd := exec.Command(sh[0], append(sh[1:], "-c", "tar --version >/dev/null 2>&1; :")...)
+	cmd.Env = append(os.Environ(), "TAR_STARTED="+mark, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if cmd.Run() != nil {
+		return false
+	}
+	_, err := os.Stat(mark)
+	return err == nil
 }
