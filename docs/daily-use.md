@@ -8,7 +8,7 @@ You use Claude Code as usual. backsight works through hooks and memory tools:
 
 - **At session start**, Claude gets a short guide on using the memory, and a briefing for the current project: a page the server keeps from the project's memories (open items, recent work, rules in force).
 - **On each prompt**, backsight searches the memory with your prompt and adds the few most relevant memories to Claude's context, framed as notes to verify.
-- **Claude searches and stores** with three memory tools: `memory_search`, `memory_read` and `memory_store`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls.
+- **Claude searches and stores** with four memory tools: `memory_search`, `memory_read`, `memory_store` and `memory_credit`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls; `memory_credit` names the memories shown to it that informed an answer, and returns the citation line it prints.
 - **Before Claude asks you a question** with its question tool, it must have searched the memory during this prompt: the first attempt is sent back once, with the memories that match the question ([details](how-it-works.md#before-claude-asks-you-a-question)).
 - **When you state a rule or approve something** ("from now on…", "we decided…", "ok"), a line asks Claude to store it if it is durable ([the save detector](how-it-works.md#the-save-detector)).
 - **When the session ends**, or once its last turn is 30 minutes old, its text is redacted and sent to your server, which extracts memories from it in the background.

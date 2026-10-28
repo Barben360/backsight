@@ -70,15 +70,16 @@ The point: many questions Claude would ask you ("which server?", "what did we de
 
 ## The memory tools
 
-Claude has three tools, served by `backsight mcp` through the plugin:
+Claude has four tools, served by `backsight mcp` through the plugin:
 
 | Tool | Does |
 |---|---|
 | `memory_search` | Searches the memory with 1 to 4 short queries, like `backsight search`, with each hit's kinds (`[decision, state]`) after its date. Claude is told to write each as a topic plus an intent word (`docker compose subnet pitfall`), never a kind word alone, and to search before a risky action, design work or asking you a preference. |
 | `memory_read` | Shows one memory with the facts it was built from. |
 | `memory_store` | Stores one durable fact, after redaction; text that still looks like a secret is refused. Facts go to the current project unless Claude names another one; the transverse pool only when named (`transverse`, for user-wide rules), and in your home directory or `~/.claude` a fact without a project is refused. It returns the 3 most similar memories, so Claude can say whether the fact updates or repeats one. Claude is told to store a dated fact that names the old claim when work ships or a recalled memory proves wrong. |
+| `memory_credit` | Claude names the memories shown to it in this session that informed its answer (their full ids or the 8-character short ids shown next to them), and gets back the line to print in its reply: `> 🧠 **From memory (<project> · <id8>)** — <the facts used>`. When none did, it says so with `verdict: none`. Every id must have been shown in this session, or the call is refused and nothing is recorded; a memory found by a search sent in the same message counts once that search has returned. Offered only while `feedback.enabled` is on (see [configuration](configuration.md#feedback-which-memories-claude-used)). |
 
-Setup adds a permission rule that lets Claude call these three tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
+Setup adds a permission rule that lets Claude call these four tools without asking you each time. Without that rule Claude Code would ask you before each call; if you remove it, `backsight doctor` reports the wiring as drifted and `backsight client install` puts it back.
 
 ## When a session is sent
 
@@ -96,7 +97,7 @@ After a purge (`forget --purge`), the session's later turns go to a new document
 |---|---|
 | The memory guide, each session start | about 900 characters |
 | The briefing, each session start | up to about 1,600 characters |
-| The memory tools' descriptions and instructions | about 2,000 characters |
+| The memory tools' descriptions and instructions | about 4,000 characters |
 | Memories on prompts, whole session | up to 6,000 characters (`recall.session_budget_chars`) |
 | Reminder, nudge, save prompt | 100 to 300 characters each, when they fire |
 
@@ -110,7 +111,7 @@ At about 4 characters per token, a full session costs at most 3,000 to 4,000 tok
 | `SessionStart` (resume, clear, compact, fork) | The session goes on | The guide; after a compaction, the briefing and last memories again. | 5 s |
 | `UserPromptSubmit` | Each prompt | Recall, reminder, nudge, save prompt. | 25 s |
 | `PreToolUse` (`AskUserQuestion`) | Claude asks you a question | The question gate. | 10 s |
-| `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge. | 2 s |
+| `PostToolUse` (the memory tools) | After a memory tool call | Notes that memory was searched, for the gate and the nudge; records the memories a search or a read showed, and the ones Claude credited with `memory_credit`. | 2 s |
 | `PostToolUseFailure` (`Bash`, file and web tools, MCP tools) | A tool call fails | With `recall.failure_pitfalls = true` only: searches the memory for the failure (tool, command and error text, secrets redacted) and adds up to 2 memories scoring at least 0.8, once per kind of error in a session. Does nothing when the session is paused, the project excluded or the session budget spent. | 10 s |
 | `SubagentStart` | A subagent starts | Its short memory guide. | 5 s |
 | `SubagentStop` | A subagent finishes | Queues its report. | 5 s |

@@ -433,18 +433,23 @@ func selectHits(hits []recall.Hit, rc config.Recall, skip func(recall.Hit) bool)
 }
 
 var (
-	memoryToolRE = regexp.MustCompile(`__memory_(?:search|read|store)$`)
+	memoryToolRE = regexp.MustCompile(`__memory_(?:search|read|store|credit)$`)
 	uuidRE       = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	noteRE       = regexp.MustCompile(`\bnote:[0-9a-f-]{36}\b`)
 )
 
 // postToolUse marks that a memory tool ran during this prompt (the gate's
-// flag), adds returned ids to the seen set and stores to the session.
+// flag), adds returned ids to the seen set and stores to the session, and
+// journals shows and credits.
 func (h *hookEnv) postToolUse() {
 	if !memoryToolRE.MatchString(h.in.ToolName) {
 		return
 	}
 	text := responseText(h.in.ToolResponse)
+	if strings.HasSuffix(h.in.ToolName, "memory_credit") {
+		h.journalCredit(text) // naming memories already shown is no search: the gate's flag and the seen set stay
+		return
+	}
 	var ids, notes []string
 	if strings.HasSuffix(h.in.ToolName, "memory_store") {
 		notes = noteRE.FindAllString(text, -1)

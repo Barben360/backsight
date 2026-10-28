@@ -61,6 +61,14 @@ type Tool struct {
 	Live string `json:"live,omitempty"` // MCP: record | stale | none (how the server found its session)
 }
 
+// Credit is one memory_credit call: its verdict, how many ids it named
+// and whether it was accepted.
+type Credit struct {
+	Verdict string `json:"verdict"` // used | none | wrong | outdated | invalid
+	IDs     int    `json:"ids_n"`
+	OK      bool   `json:"ok"`
+}
+
 type Gate struct {
 	N        int    `json:"n"`
 	Decision string `json:"decision"` // deny | allow
@@ -113,6 +121,7 @@ func (Briefing) EventName() string        { return "briefing" }
 func (BriefingOutcome) EventName() string { return "briefing_outcome" }
 func (Tool) EventName() string            { return "tool" }
 func (Gate) EventName() string            { return "gate" }
+func (Credit) EventName() string          { return "credit" }
 func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }
 func (Attribution) EventName() string     { return "attribution" }

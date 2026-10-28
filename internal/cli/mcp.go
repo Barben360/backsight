@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
@@ -41,6 +43,11 @@ type storeArgs struct {
 	Kind    string `json:"kind" jsonschema:"decision, correction, convention, pitfall, state or lesson"`
 	Text    string `json:"text" jsonschema:"1-3 sentences: the fact, why, absolute dates"`
 	Project string `json:"project,omitempty" jsonschema:"default: the current project; \"transverse\" only for a user-wide rule"`
+}
+
+type creditArgs struct {
+	IDs     []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
+	Verdict string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; none: no memory shown informed it"`
 }
 
 // live is the session and project of the Claude Code session this server
@@ -264,7 +271,106 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			}
 			return textResult(b.String()), nil, nil
 		})
+	if deps.cfg.Feedback.Enabled {
+		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
+			func(_ context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
+				verdict := a.Verdict
+				if verdict == "" {
+					verdict = "used"
+				}
+				text, err := deps.credit(verdict, a.IDs)
+				if !slices.Contains([]string{"used", "none", "wrong", "outdated"}, verdict) {
+					verdict = "invalid" // telemetry holds enums, never what the agent typed
+				}
+				deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+				if err != nil {
+					return errorResult(err.Error()), nil, nil
+				}
+				return textResult(text), nil, nil
+			})
+	}
 	return s
+}
+
+// memory_credit's accepted answers start with these: the PostToolUse hook
+// journals a credit only behind one of them.
+const (
+	creditUsedPrefix = "Credited."
+	creditNonePrefix = "Noted:"
+	maxCreditIDs     = 10
+)
+
+// credit is memory_credit's answer: for used, the line to print, once
+// every id resolves to one shown in this session (all or nothing); for
+// none, a note. It journals nothing: the PostToolUse hook does, with the
+// turn and the agent only hooks receive.
+func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
+	switch verdict {
+	case "used":
+		if len(refs) == 0 || len(refs) > maxCreditIDs {
+			return "", errors.New("ids: give 1 to 10 ids of memories shown in this session, or verdict none")
+		}
+	case "none":
+		if len(refs) > 0 {
+			return "", errors.New(`verdict none takes no ids: drop them, or credit them with verdict "used"`)
+		}
+	case "wrong", "outdated":
+		return "", fmt.Errorf("verdict %s comes in a later version: store the correction with memory_store", verdict)
+	default:
+		return "", errors.New(`verdict: "used" or "none"`)
+	}
+	live, found := d.live()
+	if found != "record" {
+		return "", errors.New("memory session not ready: call memory_credit again")
+	}
+	if verdict == "none" {
+		return creditNonePrefix + " no memory used.", nil
+	}
+	shown := shownInSession(d.dirs, live.SessionID)
+	var ids, problems []string
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		id, err := feedback.Resolve(ref, shown)
+		switch {
+		case errors.Is(err, feedback.ErrUnknown):
+			problems = append(problems, ref+": not shown in this session, or its search result has not arrived yet: call again after the result")
+		case err != nil:
+			problems = append(problems, ref+": "+err.Error()+": give more of its id")
+		case !slices.Contains(ids, id):
+			ids = append(ids, id)
+		}
+	}
+	if len(problems) > 0 {
+		return "", errors.New(strings.Join(problems, "\n"))
+	}
+	// One line per project, in the order the ids were given; a memory's
+	// project is the session's when it was last shown.
+	project := map[string]string{}
+	for _, s := range shown {
+		project[s.ID] = s.Project
+	}
+	var order []string
+	groups := map[string][]string{}
+	for _, id := range ids {
+		p := project[id]
+		if p == "" {
+			p = live.Project
+		}
+		p = safeProject(p)
+		if groups[p] == nil {
+			order = append(order, p)
+		}
+		groups[p] = append(groups[p], shortID(id))
+	}
+	lines := make([]string, 0, len(order))
+	for _, p := range order {
+		lines = append(lines, instructions.CreditLine(p, groups[p]))
+	}
+	what := "this line"
+	if len(lines) > 1 {
+		what = "these lines"
+	}
+	return creditUsedPrefix + " Print " + what + " in your final message:\n" + strings.Join(lines, "\n"), nil
 }
 
 // memoryIDRE: what Hindsight ids look like (UUIDs); nothing that could

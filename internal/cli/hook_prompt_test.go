@@ -463,6 +463,40 @@ func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
 	}
 }
 
+// A memory_credit the server accepted is journaled by PostToolUse, which
+// knows the turn and the agent: prefixes become the full ids shown.
+func TestPostToolUseJournalsTheCredit(t *testing.T) {
+	home := hookHome(t)
+	full := "0b4c2a52-0000-4000-8000-000000000001"
+	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res)}}})
+	credit := func(prompt string, input map[string]any, response string) {
+		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": prompt, "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+			"tool_input": input, "tool_response": []map[string]string{{"type": "text", "text": response}}})
+	}
+	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "Credited. Print this line in your final message:\n> 🧠 **From memory (billing · 0b4c2a52)** — <the facts you used, in your words>")
+	credit("p-2", map[string]any{"verdict": "none"}, "Noted: no memory used.")
+	// a refused call is no credit, whatever it was asked
+	credit("p-2", map[string]any{"ids": []string{"0b4c2a52"}}, "0b4c2a52: not shown in this session, or its search result has not arrived yet: call again after the result")
+	credits := eventsOf(journalEvents(t, home), "credit")
+	if len(credits) != 2 {
+		t.Fatalf("credits %+v", credits)
+	}
+	if c := credits[0]; c.Verdict != "used" || strings.Join(c.IDs, ",") != full || c.Turn != "p-2" || c.Agent != "a7" || c.Session != "s1" {
+		t.Errorf("used %+v", c)
+	}
+	if c := credits[1]; c.Verdict != "none" || len(c.IDs) != 0 || c.Turn != "p-2" {
+		t.Errorf("none %+v", c)
+	}
+	// feedback off: nothing journaled
+	appendConfig(t, home, "[feedback]\nenabled = false")
+	credit("p-3", map[string]any{"verdict": "none"}, "Noted: no memory used.")
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 2 {
+		t.Errorf("feedback off journaled a credit: %d", n)
+	}
+}
+
 // With feedback off nothing reaches the journal or the turn pointers; the
 // lines the agent reads keep their short ids.
 func TestFeedbackOffJournalsNothing(t *testing.T) {

@@ -139,8 +139,18 @@ const (
 		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
 		"State the fact itself, never \"a memory about X was stored\"; split a fact that covers two topics. " +
 		"The 3 most similar memories are returned: if one contradicts this fact, say it updates it rather than adding a parallel fact; if it repeats one, say so."
-	ReadDescription = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
+	ReadDescription   = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
+	CreditDescription = "Name the memories shown to you in this session that informed your answer: call it once you know what you used, before your final message. " +
+		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
+		"Memories were shown but none informed the answer: `verdict: none`, without ids. Only memories shown in this session count: a search sent in the same message " +
+		"must return its result first. Examples: {\"ids\": [\"0b4c2a52\"]} after using that memory · {\"verdict\": \"none\"} when the memories shown were off-topic."
 )
+
+// CreditLine is the line memory_credit hands back for the agent to print:
+// the memories of one project it used, by short id.
+func CreditLine(project string, ids8 []string) string {
+	return "> 🧠 **From memory (" + project + " · " + strings.Join(ids8, ", ") + ")** — <the facts you used, in your words>"
+}
 
 // Skill is one plugin skill (SPEC §9.2, §17): its SKILL.md frontmatter and
 // body; shim is the absolute path of the backsight shim.

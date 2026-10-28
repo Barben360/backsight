@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -180,4 +181,51 @@ func readShow(raw json.RawMessage) []feedback.Item {
 		return []feedback.Item{{ID: id}}
 	}
 	return nil
+}
+
+// shownInSession is what session sess was shown: the journal's shows of
+// the last 62 days and, when the journal cannot be read, the session
+// state's seen ids too.
+func shownInSession(d paths.Dirs, sess string) []feedback.Show {
+	events, _, err := feedback.Read(d.FeedbackDir(), now().AddDate(0, 0, -62))
+	shown := feedback.Shows(events, sess)
+	if err != nil {
+		st, _ := session.Store{Dir: d.SessionsDir()}.Load(sess)
+		for _, id := range st.Seen {
+			shown = append(shown, feedback.Show{ID: id})
+		}
+	}
+	return shown
+}
+
+// journalCredit records a memory_credit call the server accepted (its
+// answer starts with one of the credit prefixes; a refusal records
+// nothing), prefixes resolved to the full ids shown.
+func (h *hookEnv) journalCredit(text string) {
+	if !h.feedbackOn() {
+		return
+	}
+	var verdict string
+	switch {
+	case strings.HasPrefix(text, creditUsedPrefix):
+		verdict = "used"
+	case strings.HasPrefix(text, creditNonePrefix):
+		verdict = "none"
+	default:
+		return
+	}
+	var in struct {
+		IDs []string `json:"ids"`
+	}
+	_ = json.Unmarshal(h.in.ToolInput, &in)
+	var ids []string
+	if verdict == "used" && len(in.IDs) > 0 {
+		shown := shownInSession(h.dirs, h.in.SessionID)
+		for _, ref := range in.IDs {
+			if id, err := feedback.Resolve(strings.TrimSpace(ref), shown); err == nil && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	h.feedbackError(h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, IDs: ids, Verdict: verdict}))
 }

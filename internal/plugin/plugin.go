@@ -27,14 +27,15 @@ const (
 	Server      = "memory"
 	// layout changes whenever the generated files change shape, so dev
 	// builds get a new plugin version.
-	layout = "4"
+	layout = "5"
 )
 
-// ToolNames are the three memory tools as Claude Code names them.
+// ToolNames are the four memory tools as Claude Code names them.
 var ToolNames = []string{
 	"mcp__plugin_" + Name + "_" + Server + "__memory_search",
 	"mcp__plugin_" + Name + "_" + Server + "__memory_read",
 	"mcp__plugin_" + Name + "_" + Server + "__memory_store",
+	"mcp__plugin_" + Name + "_" + Server + "__memory_credit",
 }
 
 // event is one hooks.json entry: Claude Code event, matcher, backsight
