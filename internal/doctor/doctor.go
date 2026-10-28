@@ -87,6 +87,10 @@ type Env struct {
 	// Scheduler compares the installed scheduler entries with this
 	// binary's templates (nil: not compared).
 	Scheduler func() (SchedulerEntries, error)
+	// ExposureDetail says why a server of this machine exposed on a
+	// private address does not answer, and its fix when not the usual one
+	// ("": nothing to add; nil: not asked).
+	ExposureDetail func() (detail, fix string)
 	InstallProbes
 }
 
@@ -257,6 +261,14 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 			c.Fix = "start the older Hindsight server (docker compose up -d in its directory)"
 		} else {
 			c.Fix = "check it with backsight server status, start it with backsight server start (on the server's machine if it is remote)"
+		}
+		if t.Source == "config" && env.ExposureDetail != nil {
+			if detail, fix := env.ExposureDetail(); detail != "" {
+				c.Detail = detail
+				if fix != "" {
+					c.Fix = fix
+				}
+			}
 		}
 		return c, nil
 	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.Unauthorized:

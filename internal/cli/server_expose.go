@@ -302,13 +302,7 @@ func onThisMachine(ip net.IP) error {
 	}
 	var found []string
 	for _, a := range addrs {
-		var x net.IP
-		switch v := a.(type) {
-		case *net.IPNet:
-			x = v.IP
-		case *net.IPAddr:
-			x = v.IP
-		}
+		x := addrIP(a)
 		switch {
 		case x == nil:
 		case x.Equal(ip):
@@ -324,6 +318,17 @@ func onThisMachine(ip net.IP) error {
 		return &output.Error{Code: output.Usage, Message: msg + ", which has no private (LAN or tailnet) address: connect it to the network, or start Tailscale, first"}
 	}
 	return &output.Error{Code: output.Usage, Message: msg + ": its private addresses are " + strings.Join(found, ", ")}
+}
+
+// addrIP is the IP of an interface address (nil for another kind).
+func addrIP(a net.Addr) net.IP {
+	switch v := a.(type) {
+	case *net.IPNet:
+		return v.IP
+	case *net.IPAddr:
+		return v.IP
+	}
+	return nil
 }
 
 func exposePlanText(r exposeResult, out string, giveToken bool) string {

@@ -81,6 +81,28 @@ If the server rejects the API key, the key in `secrets.toml` and the server's `.
 
 On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host.
 
+### After a reboot the server was down for a while (private exposure)
+
+A server opened to other PCs (`backsight server expose --private <ip>`) listens on that address and on `127.0.0.1` from one container. When Docker starts at boot before the address exists (Tailscale or DHCP still coming up, or a new DHCP lease), the container cannot listen on it and does not start, and Docker does not try again: this machine's own memory is down too.
+
+backsight starts it again on its own once the address is there: `backsight jobs tick` (every 15 minutes) and the next Claude Code session (at most every 5 minutes) run `backsight server start` in the background, its output in `logs/server-start.log` in the state directory (`backsight paths` shows it). A server you stopped with `backsight server stop` stays stopped. doctor's `server` check says whether the address is still missing.
+
+To start Docker after Tailscale on Linux, so the address is there first:
+
+```sh
+sudo systemctl edit docker.service
+```
+
+and add:
+
+```ini
+[Unit]
+After=tailscaled.service
+Wants=tailscaled.service
+```
+
+To stop depending on the address, `backsight server expose --loopback` takes the server back to this machine only.
+
 ## Another PC cannot reach the server
 
 `backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:

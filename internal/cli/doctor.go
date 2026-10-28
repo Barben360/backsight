@@ -62,6 +62,7 @@ func realProbes(e *doctor.Env) {
 		return selfcheck.Current(e.Dirs, exe)
 	}
 	e.ReferenceServer = referenceServer
+	e.ExposureDetail = func() (string, string) { return exposureDetail(e.Dirs, e.Home) }
 	e.ConfigEdits = func(profile string) ([]claudecfg.FileResult, error) {
 		c, err := newClientEnv(e.Dirs, e.Home, profile, e.ManagedDir)
 		if err != nil {
