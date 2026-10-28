@@ -175,6 +175,7 @@ To import a queue setup left to `jobs tick` in one go rather than three sessions
 
 - `backsight why` shows the last memories the hooks injected, with their scores and the rule that let them through.
 - `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, extraction cost (`backsight stats 30` for 30 days).
+- `backsight feedback log --id <id>` shows the timeline of one memory: each time it was shown to Claude, where and at which rank, each time Claude reported using it, and how each showing was settled (credited, a confident miss when it was near the top and unused, or unknown when the turn ended without a report), then its counts. `--session <id>` shows a whole session instead.
 - `backsight doctor` checks the whole install.
 
 ## Browsing these docs

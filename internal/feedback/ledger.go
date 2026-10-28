@@ -100,13 +100,32 @@ func sortedByTime(events []Event) []Event {
 // ref: whatever the order of the additions, the sum ends referenced at the
 // latest t with the same value.
 func add(v float64, ref, t time.Time, h time.Duration) (float64, time.Time) {
-	if h <= 0 {
-		return v + 1, laterOf(ref, t)
-	}
 	if !t.After(ref) {
-		return v + math.Exp2(-float64(ref.Sub(t))/float64(h)), ref
+		return v + decay(1, t, ref, h), ref
 	}
-	return v*math.Exp2(-float64(t.Sub(ref))/float64(h)) + 1, t
+	return decay(v, ref, t, h) + 1, t
+}
+
+// decay is v referenced at ref, read at t: halved every h. A t before ref,
+// or a half-life of 0, leaves v as it is.
+func decay(v float64, ref, t time.Time, h time.Duration) float64 {
+	if h <= 0 || !t.After(ref) {
+		return v
+	}
+	return v * math.Exp2(-float64(t.Sub(ref))/float64(h))
+}
+
+// DecayedTo is e with its credits and misses read at t under p's
+// half-lives, each referenced at t from then on (a t before a reference
+// leaves that sum as it is).
+func (e Entry) DecayedTo(t time.Time, p Params) Entry {
+	if e.Credits != 0 && t.After(e.CreditsAt) {
+		e.Credits, e.CreditsAt = decay(e.Credits, e.CreditsAt, t, p.CreditHalfLife), t
+	}
+	if e.Misses != 0 && t.After(e.MissesAt) {
+		e.Misses, e.MissesAt = decay(e.Misses, e.MissesAt, t, p.MissHalfLife), t
+	}
+	return e
 }
 
 func laterOf(a, b time.Time) time.Time {

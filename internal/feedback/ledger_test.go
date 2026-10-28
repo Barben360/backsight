@@ -197,3 +197,30 @@ func TestForgetDropsTheEntry(t *testing.T) {
 	rebuilt, _ := Rebuild(dir, testParams, false)
 	assertSameEntries(t, live, rebuilt, 0)
 }
+
+// An entry read at a later time: credits and misses each fade from their
+// own reference time by their own half-life; a time before the reference,
+// or a half-life of 0, leaves the sum as it is.
+func TestEntryDecayedTo(t *testing.T) {
+	p := Params{MissHalfLife: 90 * 24 * time.Hour, CreditHalfLife: 365 * 24 * time.Hour}
+	e := Entry{Shown: 3, Credits: 2, CreditsAt: at(0), Misses: 1, MissesAt: at(60 * 24 * 90), LastShown: at(5)}
+	got := e.DecayedTo(at(60*24*365), p)
+	if math.Abs(got.Credits-1) > 1e-12 || !got.CreditsAt.Equal(at(60*24*365)) {
+		t.Errorf("credits %v at %v, want 1 a credit half-life later", got.Credits, got.CreditsAt)
+	}
+	if want := math.Exp2(-275.0 / 90); math.Abs(got.Misses-want) > 1e-12 || !got.MissesAt.Equal(at(60*24*365)) {
+		t.Errorf("misses %v at %v, want %v", got.Misses, got.MissesAt, want)
+	}
+	if got.Shown != 3 || !got.LastShown.Equal(at(5)) {
+		t.Errorf("counts and times changed: %+v", got)
+	}
+	if back := e.DecayedTo(at(-60), p); back.Credits != 2 || back.Misses != 1 {
+		t.Errorf("before the reference: %+v", back)
+	}
+	if flat := e.DecayedTo(at(60*24*365), Params{}); flat.Credits != 2 || flat.Misses != 1 {
+		t.Errorf("no decay: %+v", flat)
+	}
+	if empty := (Entry{Shown: 1}).DecayedTo(at(10), p); empty.Credits != 0 || !empty.CreditsAt.IsZero() {
+		t.Errorf("no credit: %+v", empty)
+	}
+}

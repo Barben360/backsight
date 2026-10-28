@@ -62,6 +62,8 @@ Every backsight command, grouped by use. `backsight <command> --help` shows the 
 | `backsight pause` / `backsight resume` | Stops or restarts recording this session; `--project` for the whole project (`--plan` shows the config change); `--session <id>`. |
 | `backsight why` | Shows the last memories the hooks injected and why. `--last N`, `--session <id>`. |
 | `backsight stats [days]` | Usage over the last days (default 7); `--since`/`--until` for a fixed window. |
+| `backsight feedback log` | The timeline of one memory (`--id <id>`, its first 8 characters are enough) or one session (`--session <id>`, by default `$BACKSIGHT_SESSION`), oldest first: each time it was shown (where, at which rank), credited and settled, with the turn number; with `--id`, its counts at the end, credits and misses faded to now. `--since <date>`. Reads only. |
+| `backsight feedback rebuild` | Recomputes every memory's counts of times shown, credited and missed from the journal (losing `ledger.json` costs nothing). `--plan` shows the totals and how many memories would be added, dropped or changed, writing nothing. Exit 20 while a `jobs tick` is settling: run it again. |
 
 ## Sending sessions
 
