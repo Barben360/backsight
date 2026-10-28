@@ -124,6 +124,7 @@ While it lasts, this PC sends nothing: sessions stay in Claude Code's transcript
 - **"does not answer"**: see the next section.
 - **"an update did not finish"**: an update stopped half way, and its way back would write `state.json` and `config.toml` back as they were before it, undoing part of the switch. Run `backsight doctor`, which says how to finish or roll back the update, then run `backsight connect` again (the same for `connect --undo`).
 - **"a send of session <id> is still running"**: connect, and `connect --undo`, start this PC's sends over for the other server, and wait up to 2 minutes for the sends already running to end first (one would otherwise record its session as sent to the new server). Run the same command again a little later.
+- **"a restore-epoch reconcile is running"**: after a restore of the server, `backsight jobs tick` catches this PC up with it, which may mark sessions to send again. connect waits up to 2 minutes for that to end before it starts the sends over (it would otherwise mark sessions among the new server's). Run `backsight connect` again a little later.
 
 ## connect stopped because the backup did not verify
 
@@ -195,6 +196,7 @@ doctor's `writes` check counts what is waiting:
 - **Queued notes** wait for the server: bring it back, then `backsight jobs tick`.
 - **[Quarantined](glossary.md#quarantine) sessions or notes** were refused by the server. The reasons are in the quarantine folder doctor names. Fix the cause, then `backsight retain retry-quarantine`.
 - **The notes queue is full** (`hooks.outbox_max_mb`, 500 MB by default): an error. Bring the server back, then `backsight jobs tick`.
+- **"nothing sent: this PC's sends started over for another server (connect) since this tick began"** (a `jobs tick`), or **"backfill stopped: this PC's sends started over for another server (connect) since it began"** (a `retain backfill`): `backsight connect` ran while they did. They send nothing more to the old server and record nothing for it; the queued notes stay queued. The next `backsight jobs tick` sends to the new server; a backfill is offered again by connect's setup steps.
 
 doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl --user list-timers 'backsight-*'` shows the timers. User timers stop while you are logged out unless lingering is on (`loginctl enable-linger`); sessions are then sent at the next login.
 

@@ -309,13 +309,23 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			Done: res.Done, Total: res.Total, Spent: res.Spent, Tokens: res.Tokens, Currency: prices.Currency})
 	}
 	ob := notesOutboxFor(d, cfg)
+	ob.Gate = f.StartedOver // the replayed notes go to the server this run began with only
+	// Connect started this PC's sends over: what this run would record is
+	// the old server's (a tick goes on with its other work).
+	startedOver := func() (backfillResult, error) {
+		if inTick {
+			return res, nil
+		}
+		return res, &output.Error{Code: output.Partial, Message: "backfill stopped: this PC's sends started over for another server (connect) since it began; nothing more was recorded"}
+	}
 	pause := func(reason string, msg string) (backfillResult, error) {
-		if err := state.Update(d, "retain backfill", func(s *state.State) error {
+		if err := backfillUpdate(d, f, func(s *state.State) {
 			if s.Backfill != nil {
 				s.Backfill.Paused = reason
 			}
-			return nil
-		}); err != nil {
+		}); errors.Is(err, errStartedOver) {
+			return startedOver()
+		} else if err != nil {
 			return res, blocked(err)
 		}
 		res.Paused = reason
@@ -343,7 +353,9 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 					progress("final", "waiting", "", fmt.Sprintf("%d operations queued: waiting at most %s for the last extractions, to measure their spend", n, finalQueueWait))
 				})
 				if err := measure(ctx, f.Client, cfg.Server.Bank, &b, prices); err == nil {
-					_ = state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill = &b; return nil })
+					if err := backfillUpdate(d, f, func(s *state.State) { s.Backfill = &b }); errors.Is(err, errStartedOver) {
+						return startedOver()
+					}
 					res.Spent, res.Tokens = b.SpentCost, b.SpentTokens
 				}
 			}
@@ -377,7 +389,9 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 		path := b.Sessions[0]
 		only, _ := notesOnly(d, path)
 		over := !only && ((b.MaxCost > 0 && b.SpentCost >= b.MaxCost) || (b.MaxTokens > 0 && b.SpentTokens >= b.MaxTokens))
-		if err := state.Update(d, "retain backfill", func(s *state.State) error { s.Backfill = &b; return nil }); err != nil {
+		if err := backfillUpdate(d, f, func(s *state.State) { s.Backfill = &b }); errors.Is(err, errStartedOver) {
+			return startedOver()
+		} else if err != nil {
 			return res, blocked(err)
 		}
 		res.Spent, res.Tokens = b.SpentCost, b.SpentTokens
@@ -408,7 +422,7 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			_, _ = ob.Flush(ctx, f.Client, cfg.Server.Bank, f.MachineID) // kept notes go out with the next tick
 			_ = retain.MarkNotesReplayed(d.CursorsDir(), sid)            // they are in the outbox: never queued again
 		}
-		if err := state.Update(d, "retain backfill", func(s *state.State) error {
+		if err := backfillUpdate(d, f, func(s *state.State) {
 			if s.Backfill != nil && len(s.Backfill.Sessions) > 0 && s.Backfill.Sessions[0] == path {
 				s.Backfill.Sessions = s.Backfill.Sessions[1:]
 				s.Backfill.Done++
@@ -416,13 +430,32 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			if s.Backfill != nil {
 				res.Done, res.Total = s.Backfill.Done, s.Backfill.Total
 			}
-			return nil
-		}); err != nil {
+		}); errors.Is(err, errStartedOver) {
+			return startedOver()
+		} else if err != nil {
 			return res, blocked(err)
 		}
 		progress("session", r.Status, r.Session, r.Detail)
 		sent++
 	}
+}
+
+// errStartedOver: this PC's sends started over for another server
+// (connect) since the backfill's flusher was built.
+var errStartedOver = errors.New("this PC's sends started over for another server (connect)")
+
+// backfillUpdate writes fn's change to state.json, unless this PC's sends
+// started over since f was built: then it writes nothing (the backfill
+// record is the new server's, or gone) and returns errStartedOver. The
+// check is under the state lock, which connect's start-over takes too.
+func backfillUpdate(d paths.Dirs, f *retain.Flusher, fn func(*state.State)) error {
+	return state.Update(d, "retain backfill", func(s *state.State) error {
+		if s.SendsGeneration != f.SendsGeneration {
+			return errStartedOver
+		}
+		fn(s)
+		return nil
+	})
 }
 
 // notesOnly: live retain took the session over (a live cursor), so all a

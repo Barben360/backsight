@@ -378,3 +378,33 @@ func TestRestoreResendsThisPCsPartOfASplitSession(t *testing.T) {
 		}
 	}
 }
+
+// A connect between the reconcile's first look and its epoch.lock (here
+// while the epoch document is read) started this PC's sends over: the
+// reconcile drops no cursor, records no epoch and deletes nothing.
+func TestReconcileSpanningConnectDropsNothing(t *testing.T) {
+	e := restoredEnv(t)
+	cursor := filepath.Join(e.f.Dirs.CursorsDir(), "s1.json")
+	before, err := os.ReadFile(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stBefore, _ := state.Load(e.f.Dirs.StateFile())
+	e.hs.onDocument = func(id string) {
+		if id == EpochDocument {
+			_ = state.Update(e.f.Dirs, "connect", func(s *state.State) error { s.SendsGeneration++; return nil })
+		}
+	}
+	if _, err := e.f.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "started over") {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if after, _ := os.ReadFile(cursor); string(after) != string(before) {
+		t.Errorf("s1's cursor changed:\n%s\nwas\n%s", after, before)
+	}
+	if st, _ := state.Load(e.f.Dirs.StateFile()); !reflect.DeepEqual(st.RestoreEpoch, stBefore.RestoreEpoch) {
+		t.Errorf("restore epoch recorded: %+v, was %+v", st.RestoreEpoch, stBefore.RestoreEpoch)
+	}
+	if len(e.hs.deleted) != 0 {
+		t.Errorf("deleted %v", e.hs.deleted)
+	}
+}

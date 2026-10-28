@@ -162,8 +162,14 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				res.Notes.Kept, _ = notesOutboxFor(d, cfg).Pending()
 				failed = &output.Error{Code: output.Partial, Message: "nothing sent: a different server answers at the joined address; run backsight doctor"}
 			} else {
-				res.Notes, err = notesOutboxFor(d, cfg).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
-				if err != nil || res.Notes.Kept > 0 {
+				ob := notesOutboxFor(d, cfg)
+				ob.Gate = f.StartedOver // queued notes go to the server this tick began with only
+				res.Notes, err = ob.Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+				switch {
+				case errors.Is(err, retain.ErrStartedOver):
+					res.Notes.Kept, _ = ob.Pending()
+					failed = &output.Error{Code: output.Partial, Message: "nothing sent: this PC's sends started over for another server (connect) since this tick began; the next tick sends"}
+				case err != nil || res.Notes.Kept > 0:
 					failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
 				}
 				// After the sends: a slow server delays this look, never them.

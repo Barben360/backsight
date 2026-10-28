@@ -110,6 +110,10 @@ type Outbox struct {
 	// WarnBytes and MaxBytes are the warning and hard size limits; zero:
 	// the defaults.
 	WarnBytes, MaxBytes int64
+	// Gate, when not nil, is asked before each note's send: an error
+	// stops the flush, that note and every later one kept as they were
+	// (no attempt counted), and Flush returns it.
+	Gate func() error
 }
 
 // WithLimitsMB returns o with the limits of hooks.outbox_warn_mb and
@@ -228,7 +232,13 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 	}
 	done := map[string]bool{}   // sent or quarantined: remove
 	failed := map[string]Note{} // kept with its new attempt count
+	var gateErr error
 	for _, n := range notes {
+		if o.Gate != nil {
+			if gateErr = o.Gate(); gateErr != nil {
+				break // this note and the rest stay as they are
+			}
+		}
 		err := c.Retain(ctx, bank, []hindsight.RetainItem{n.Item(machineID)}, n.OperationID)
 		if err == nil {
 			res.Sent++
@@ -273,7 +283,10 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 		keep = append(keep, n)
 	}
 	res.Kept = len(keep)
-	return res, o.rewrite(keep)
+	if err := o.rewrite(keep); err != nil {
+		return res, err
+	}
+	return res, gateErr
 }
 
 func (o Outbox) read() ([]Note, error) {

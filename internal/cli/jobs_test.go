@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -364,5 +366,35 @@ func TestTickRecordsNoAnswerFromAnotherServer(t *testing.T) {
 	run(t, "jobs", "tick")
 	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
 		t.Errorf("another server: %+v", r)
+	}
+}
+
+// A tick whose flusher was built before connect started this PC's sends
+// over (here while the tick asks /health) sends no queued note to the old
+// server: the note stays for the next tick.
+func TestTickKeepsNotesAfterConnectStartedOver(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	ob := notesOutbox(pathsOf(home))
+	_, _ = ob.Append(newTestNote())
+	fakeHook = func(r *http.Request) {
+		if r.URL.Path == "/health" {
+			_ = state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil })
+		}
+	}
+	before := retained.Load()
+	code, out, errOut := run(t, "jobs", "tick", "--json")
+	var env tickEnvelope
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.Partial || env.Data.Status != "partial" || retained.Load() != before {
+		t.Fatalf("exit %d, %d retained\n%s\n%s", code, retained.Load()-before, out, errOut)
+	}
+	if !strings.Contains(out, "started over for another server") || env.Data.Notes.Kept != 1 {
+		t.Errorf("notes %+v\n%s", env.Data.Notes, out)
+	}
+	if n, _ := ob.Pending(); n != 1 {
+		t.Errorf("want the note kept, got %d queued", n)
 	}
 }

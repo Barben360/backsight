@@ -168,7 +168,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	}
 	// Under the session's lock too: connect waits for the flushes holding
 	// one, and a later one sees its new generation.
-	if err := f.startedOver(); err != nil {
+	if err := f.StartedOver(); err != nil {
 		res.Stop = true // every session of this run is in the same case
 		return fail(Retry, err.Error())
 	}
@@ -769,15 +769,24 @@ func (f *Flusher) waitedTooLong(sid string, now time.Time) bool {
 	return false
 }
 
-// startedOver says this PC's sends started over for another server
+// ErrStartedOver: this PC's sends started over for another server
 // (connect) since the flusher was built.
-func (f *Flusher) startedOver() error {
+var ErrStartedOver = errors.New("this PC's sends started over for another server (connect) since this run began: the next run sends")
+
+// StartedOver says this PC's sends started over for another server
+// (connect) since the flusher was built (ErrStartedOver).
+func (f *Flusher) StartedOver() error {
 	st, err := state.Load(f.Dirs.StateFile())
 	if err != nil {
 		return err
 	}
+	return f.startedOverIn(st)
+}
+
+// startedOverIn is StartedOver on a state already loaded.
+func (f *Flusher) startedOverIn(st state.State) error {
 	if st.SendsGeneration != f.SendsGeneration {
-		return errors.New("this PC's sends started over for another server (connect) since this run began: the next run sends")
+		return ErrStartedOver
 	}
 	return nil
 }

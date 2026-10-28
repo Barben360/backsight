@@ -234,6 +234,9 @@ var (
 	// fake accepted it).
 	fakeDocCreated   map[string]time.Time
 	bankConfigStatus atomic.Int32 // non-zero: bank claude-memory's /config answers this status
+	// fakeHook, when not nil, sees every request before the fake answers
+	// it (outside the fake's lock).
+	fakeHook func(r *http.Request)
 	// bankOverrides reads a bank's config overrides on the fake server,
 	// after replacing them with set when it is not nil.
 	bankOverrides func(bank string, set map[string]json.RawMessage) map[string]json.RawMessage
@@ -281,6 +284,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	acceptedKey.Store("")
 	refusedCalls.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
+	fakeHook = nil
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
 	bankDocs := map[string]map[string]bool{}
@@ -311,6 +315,9 @@ func fakeHindsight(t *testing.T) (port int) {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"detail":"invalid API key"}`))
 			return
+		}
+		if fakeHook != nil {
+			fakeHook(r)
 		}
 		mu.Lock()
 		defer mu.Unlock()

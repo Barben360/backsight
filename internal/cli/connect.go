@@ -593,6 +593,34 @@ func waitSends(ctx context.Context, d paths.Dirs, command string) error {
 	return nil
 }
 
+// holdEpochLock takes epoch.lock for command, waiting up to
+// connectSendsWait for a restore-epoch reconcile that holds it: one
+// running while the sends start over would drop cursors among the new
+// server's. A reconcile that takes it after sees the new generation
+// under it and stops. Nothing is changed yet when it refuses (exit 20).
+func holdEpochLock(ctx context.Context, d paths.Dirs, command string) (release func(), err error) {
+	path := filepath.Join(d.LocksDir(), "epoch.lock")
+	deadline := time.Now().Add(connectSendsWait)
+	for {
+		l, _, err := state.Acquire(path, command) // a dead reconcile's lock is taken over
+		if err == nil {
+			return func() { _ = l.Release() }, nil
+		}
+		var held *state.HeldError
+		if !errors.As(err, &held) {
+			return nil, blocked(err)
+		}
+		if time.Now().After(deadline) {
+			return nil, &output.Error{Code: output.Blocked, Message: "a restore-epoch reconcile is running: nothing was changed. Run backsight " + command + " again later"}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(connectSendsPoll):
+		}
+	}
+}
+
 // updateIncomplete refuses connect while an update did not finish: its
 // way back writes state.json and config.toml back as they were before it,
 // which would undo the switch but for the key and the moved sends.
@@ -951,6 +979,11 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		if err := waitSends(ctx, d, "connect"); err != nil {
 			return err
 		}
+		release, err := holdEpochLock(ctx, d, "connect")
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
 	// Read again under the lock: the plan was made from what was there.
 	want, raw := fsutil.Absent, []byte(nil)

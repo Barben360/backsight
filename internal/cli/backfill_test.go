@@ -3,10 +3,14 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -682,5 +686,83 @@ func TestBackfillStatusRefusesOtherFlags(t *testing.T) {
 		if code, _, _ := run(t, append([]string{"retain", "backfill", "--status"}, extra...)...); code != output.Usage {
 			t.Errorf("--status %v: exit %d, want %d", extra, code, output.Usage)
 		}
+	}
+}
+
+// spanningConnect queues s1 and s2 for backfill and builds the flusher;
+// the fake's first queue read then does what connect does (the backfill
+// record dropped, the sends generation bumped) and what queue, when not
+// nil, sets as the new backfill (setup queuing one after connect).
+func spanningConnect(t *testing.T, queue *state.Backfill) (state.State, error) {
+	t.Helper()
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	fastBackfill(t)
+	d := pathsOf(home)
+	var sessions []string
+	for _, sid := range []string{"s1", "s2"} {
+		oldSession(t, home, sid, time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), true)
+		sessions = append(sessions, filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl"))
+	}
+	_ = state.Update(d, "test", func(s *state.State) error {
+		s.Backfill = &state.Backfill{Total: 2, MaxCost: 10, Currency: "USD", StartDay: "2026-10-24", Sessions: sessions}
+		return nil
+	})
+	cfg, sec, _ := loadServerConfig()
+	f, err := newFlusher(d, home, cfg, sec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	var after state.State
+	fakeHook = func(r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/operations") {
+			once.Do(func() {
+				_ = state.Update(d, "connect", func(s *state.State) error {
+					s.Backfill = queue
+					s.SendsGeneration++
+					return nil
+				})
+				after, _ = state.Load(d.StateFile())
+			})
+		}
+	}
+	_, err = runBackfill(context.Background(), f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false, nil)
+	if after.SendsGeneration == 0 {
+		t.Fatal("the queue was never read: connect did not happen")
+	}
+	st, _ := state.Load(d.StateFile())
+	if !reflect.DeepEqual(st.Backfill, after.Backfill) {
+		t.Errorf("backfill record %+v, connect left %+v", st.Backfill, after.Backfill)
+	}
+	return st, err
+}
+
+func wantStartedOver(t *testing.T, err error) {
+	t.Helper()
+	var oe *output.Error
+	if !errors.As(err, &oe) || oe.Code != output.Partial || !strings.HasPrefix(oe.Message, "backfill stopped: this PC's sends started over") {
+		t.Errorf("runBackfill: %v", err)
+	}
+}
+
+// A backfill running across connect writes nothing for the old server:
+// the backfill record connect dropped stays dropped, and nothing is sent.
+func TestBackfillSpanningConnectRecordsNothing(t *testing.T) {
+	st, err := spanningConnect(t, nil)
+	wantStartedOver(t, err)
+	if st.Backfill != nil || retained.Load() != 0 {
+		t.Errorf("backfill %+v, %d retained", st.Backfill, retained.Load())
+	}
+}
+
+// The same, with a new backfill queued after connect: the old run neither
+// pauses it nor counts its sessions done.
+func TestBackfillSpanningConnectLeavesTheNewQueue(t *testing.T) {
+	b2 := &state.Backfill{Total: 1, MaxCost: 5, Currency: "USD", StartDay: "2026-10-28", Sessions: []string{"/elsewhere/s3.jsonl"}}
+	st, err := spanningConnect(t, b2)
+	wantStartedOver(t, err)
+	if st.Backfill == nil || st.Backfill.Paused != "" || st.Backfill.Done != 0 || len(st.Backfill.Sessions) != 1 {
+		t.Errorf("the new backfill: %+v", st.Backfill)
 	}
 }

@@ -305,3 +305,22 @@ func TestOutboxConfiguredLimitsAreHonoured(t *testing.T) {
 		t.Errorf("the default still takes notes: %v", err)
 	}
 }
+
+// A gate that refuses (connect started this PC's sends over) sends no
+// note: every note stays as it was, and Flush says why.
+func TestOutboxGateKeepsEveryNote(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+	_, _ = o.Append(NewNote("b", "lesson", "p", "two", at))
+	gate := errors.New("started over")
+	o.Gate = func() error { return gate }
+	_, err := o.Flush(context.Background(), e.f.Client, "b", "m1")
+	if !errors.Is(err, gate) || len(e.hs.retains) != 0 {
+		t.Fatalf("flush: %v, %d retained", err, len(e.hs.retains))
+	}
+	notes, _ := o.read()
+	if len(notes) != 2 || notes[0].Content != "one" || notes[1].Content != "two" || notes[0].Attempts != 0 || notes[1].Attempts != 0 || notes[0].LastError != "" {
+		t.Errorf("kept: %+v", notes)
+	}
+}
