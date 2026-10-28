@@ -130,7 +130,11 @@ On a PC with its own server, `backsight connect` backs it up and verifies the ar
 - The backup failed: the server must run for its database to be dumped. Check `backsight server status`, start it with `backsight server start`, and run `backsight backup create` to see the error alone.
 - The archive did not verify: run `backsight backup verify <file>` on the archive the message names; [backups-and-restore.md](backups-and-restore.md) says what its errors mean. Once `backsight backup create` then `backsight backup verify <file>` pass, run `backsight connect` again.
 
-If connect exits 20 saying the stop failed, the backup verified but the server did not stop: nothing else changed, and `backsight server start` starts it again.
+If this PC had no backup identity yet, the first backup made one: the message says it was added to `secrets.toml` (`backsight backup identity show` shows it, to keep elsewhere), and nothing else changed.
+
+If its server does not answer at all (**"this PC's server at <url> does not answer"**), connect refuses before the backup: start it with `backsight server start`, then run `backsight connect` again.
+
+Once the backup verified, connect stops the server under the maintenance lock, then writes. If the stop or a write fails, it starts the server again and puts the rest back (exit 30). If it exits 20 instead, the message says what is left; when `config.toml` could not be put back, it names the copy kept in `connect/<time>/` to copy over it.
 
 ## Another PC cannot reach the server
 

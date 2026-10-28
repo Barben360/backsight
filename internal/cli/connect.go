@@ -344,9 +344,10 @@ func retainFiles(d paths.Dirs) []string {
 }
 
 // undoRetainReset puts back what resetRetain moved into keep and the state
-// fields meta.json recorded, then removes keep. No meta.json: nothing was
-// moved yet.
-func undoRetainReset(d paths.Dirs, keep string) error {
+// fields meta.json recorded, then removes keep unless told to keep it
+// (it holds a file still to put back). No meta.json: nothing was moved
+// yet.
+func undoRetainReset(d paths.Dirs, keep string, remove bool) error {
 	if err := connectFault("undo"); err != nil {
 		return err
 	}
@@ -377,8 +378,10 @@ func undoRetainReset(d paths.Dirs, keep string) error {
 	}); err != nil {
 		return err
 	}
-	_ = os.RemoveAll(keep)
-	_ = os.Remove(d.ConnectDir()) // when empty
+	if remove {
+		_ = os.RemoveAll(keep)
+		_ = os.Remove(d.ConnectDir()) // when empty
+	}
 	return nil
 }
 
@@ -506,7 +509,7 @@ func applyUndo(d paths.Dirs, pre string, at time.Time) error {
 		if err := fsutil.WriteAtomic(d.SecretsFile(), curSec, 0o600); err != nil {
 			left = append(left, d.SecretsFile()+" ("+err.Error()+")")
 		}
-		if err := undoRetainReset(d, shared); err != nil {
+		if err := undoRetainReset(d, shared, true); err != nil {
 			left = append(left, "the sends kept in "+shared+" ("+err.Error()+")")
 		}
 		if len(left) > 0 {
@@ -527,7 +530,7 @@ func applyUndo(d paths.Dirs, pre string, at time.Time) error {
 	if err := fsutil.WriteAtomic(d.SecretsFile(), keptSec, 0o600); err != nil {
 		return rollback(err)
 	}
-	if err := undoRetainReset(d, pre); err != nil {
+	if err := undoRetainReset(d, pre, true); err != nil {
 		return &output.Error{Code: output.Blocked, Message: "config.toml and secrets.toml are back as they were before connect, but this PC's sends to its own server are not (" + err.Error() +
 			"): they are in " + pre + ", whose meta.json records the state they went with"}
 	}
@@ -594,12 +597,20 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		if localSec, err = config.LoadSecrets(d.SecretsFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return res, blocked(err)
 		}
-		// A server that does not answer cannot tell; the probe of the
-		// token's server then fails when it is this one.
-		if cl, err := hindsight.New(cfg.Server.URL, localSec.APIKey, 10*time.Second); err == nil {
-			if id, err := retain.ReadServerID(ctx, cl, tok.Bank); err == nil && id == tok.ServerID {
-				return res, &output.Error{Code: output.Usage, Message: "this token is for this machine's own server: it is already connected"}
-			}
+		// A deployed server must answer: connect backs it up before it
+		// stops it. One not deployed holds nothing to compare.
+		deployed, derr := runtimeFor(*cfg).Deployed()
+		var id string
+		cl, err := hindsight.New(cfg.Server.URL, localSec.APIKey, 10*time.Second)
+		if err == nil {
+			id, err = retain.ReadServerID(ctx, cl, tok.Bank)
+		}
+		switch {
+		case err != nil && (derr != nil || deployed != ""):
+			return res, redacted(&output.Error{Code: output.Blocked, Message: "this PC's server at " + cfg.Server.URL + " does not answer (" + err.Error() +
+				"): connect checks it is not the token's server and backs it up before stopping it; start it (backsight server start) and run connect again: nothing was changed"}, localSec)
+		case err == nil && id == tok.ServerID:
+			return res, &output.Error{Code: output.Usage, Message: "this token is for this machine's own server: it is already connected"}
 		}
 	}
 	p, err := probeToken(ctx, tok)
@@ -662,17 +673,20 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
 		}
 	}
-	var restart func() error // starts this PC's server again when connect puts it back
+	var own server.Runtime // this PC's server, stopped once its backup verified
 	if res.OwnServer != nil && res.OwnServer.Deployed {
-		archive, err := stopOwnServer(ctx, d, *cfg, localSec)
+		archive, err := backupOwnServer(ctx, d, *cfg, localSec)
 		if err != nil {
 			return res, redacted(err, config.Secrets{APIKey: tok.APIKey})
 		}
 		res.OwnServer.Backup = archive
-		restart = func() error { return runtimeFor(*cfg).Start(ctx) }
+		if err := connectFault("backed-up"); err != nil {
+			return res, err
+		}
+		own = runtimeFor(*cfg)
 	}
 	at := now().UTC()
-	if err := applyConnect(d, home, tok, p, situation, at, resume, restart); err != nil {
+	if err := applyConnect(ctx, d, home, tok, p, situation, at, resume, own); err != nil {
 		return res, redacted(redacted(err, localSec), config.Secrets{APIKey: tok.APIKey})
 	}
 	for i := range res.Steps {
@@ -825,13 +839,18 @@ func ownServerStep(deployed bool) step {
 	return step{Name: "server", Status: "planned", Detail: "back up and verify this PC's server, then stop it (data and backups kept; connect --undo starts it again)"}
 }
 
-// stopOwnServer backs up this PC's server and verifies the archive with
-// the install's identities; only then it stops the server, under the
-// maintenance lock. Its data volumes and its backups are kept. A failed
-// backup or verify changes nothing (an archive made is kept).
-func stopOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets) (archive string, err error) {
+// backupOwnServer backs up this PC's server and verifies the archive
+// with the install's identities, before applyConnect stops it. A failed
+// backup or verify changes nothing but the backup identity, generated
+// into secrets.toml by a first backup (an archive made is kept). sec is
+// secrets.toml as it was before.
+func backupOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets) (archive string, err error) {
 	unchanged := func(what string, err error) error {
-		return redacted(&output.Error{Code: output.Blocked, Message: "connect stopped: " + what + " (" + err.Error() + "): nothing was changed"}, sec)
+		changed := "nothing was changed"
+		if fresh, ferr := config.LoadSecrets(d.SecretsFile()); ferr == nil && sec.BackupIdentity == "" && fresh.BackupIdentity != "" {
+			changed = "nothing else was changed than the backup identity added to secrets.toml (backsight backup identity show)"
+		}
+		return redacted(&output.Error{Code: output.Blocked, Message: "connect stopped: " + what + " (" + err.Error() + "): " + changed}, sec)
 	}
 	b, err := createBackup(ctx, nil) // takes the maintenance lock
 	if err == nil && b.Skipped != "" {
@@ -855,27 +874,19 @@ func stopOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec con
 		}
 		return b.Path, unchanged("the backup "+b.Path+" did not verify", err)
 	}
-	unlock, _, err := serverMaintenanceLock(d, "connect")
-	if err != nil {
-		return b.Path, err
-	}
-	defer unlock()
-	if err := runtimeFor(cfg).Stop(ctx); err != nil {
-		return b.Path, redacted(&output.Error{Code: output.Blocked, Message: "connect stopped: stopping this PC's server failed (" + err.Error() +
-			"): nothing else was changed; backsight server start starts it again"}, sec)
-	}
 	return b.Path, nil
 }
 
 // applyConnect writes what the plan said, under the maintenance lock
 // (hooks queue, jobs skip): the retain reset first (it records the server
 // config.toml still names), then config.toml, the key, and the binding
-// last; leaving this PC's own server, its config.toml and secrets.toml
-// are kept with the moved retain state. A failure up to the key puts back
-// what was done, restart starting a stopped server again (exit 30; 20 when
-// that fails too, saying what is left); a failure of the binding leaves
+// last; leaving this PC's own server (own, nil otherwise), it stops that
+// server first, once the plan is read again, and keeps its config.toml
+// and secrets.toml with the moved retain state. A failure up to the key
+// puts back what was done, starting a stopped server again (exit 30; 20
+// when that fails too, saying what is left); a failure of the binding leaves
 // the rest done, for resume to finish (exit 40).
-func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time, resume string, restart func() error) error {
+func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time, resume string, own server.Runtime) error {
 	unlock, _, err := serverMaintenanceLock(d, "connect")
 	if err != nil {
 		return err
@@ -895,27 +906,38 @@ func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation
 	if err != nil {
 		return err
 	}
-	keep, wrote := "", false
+	keep, wrote, stopped := "", false, false
 	rollback := func(cause error) error {
 		var left []string
+		keepCopy := false // keep holds the config.toml to put back by hand
 		if wrote {
-			var err error
-			if raw == nil {
+			err := connectFault("putback")
+			switch {
+			case err != nil:
+			case raw == nil:
 				err = os.Remove(d.ConfigFile())
-			} else {
+			default:
 				err = fsutil.WriteAtomic(d.ConfigFile(), raw, 0o600)
 			}
 			if err != nil {
-				left = append(left, d.ConfigFile()+" still names "+tok.URL+" ("+err.Error()+")")
+				msg := d.ConfigFile() + " still names " + tok.URL + " (" + err.Error() + ")"
+				if keep != "" && raw != nil {
+					copied := filepath.Join(keep, "config.toml")
+					if _, serr := os.Stat(copied); serr == nil || fsutil.WriteAtomic(copied, raw, 0o600) == nil {
+						keepCopy = true
+						msg += ": copy " + copied + ", the file as it was, over it"
+					}
+				}
+				left = append(left, msg)
 			}
 		}
-		if restart != nil {
-			if err := restart(); err != nil {
+		if stopped {
+			if err := own.Start(ctx); err != nil {
 				left = append(left, "this PC's server is stopped ("+err.Error()+"): backsight server start starts it")
 			}
 		}
 		if keep != "" {
-			if err := undoRetainReset(d, keep); err != nil {
+			if err := undoRetainReset(d, keep, !keepCopy); err != nil {
 				left = append(left, "this PC's session cursors, sent-index and split sessions may still be in "+keep+
 					", and state.json's retain_since, backfill and restore_epoch changed; "+filepath.Join(keep, "meta.json")+" records them as they were ("+err.Error()+")")
 			}
@@ -924,6 +946,12 @@ func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation
 			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("connect stopped (%s), and putting this PC back failed: %s", cause.Error(), strings.Join(left, "; "))}
 		}
 		return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("connect stopped (%s): what it had changed is put back, this PC is as it was", cause.Error())}
+	}
+	if own != nil {
+		stopped = true // a failed stop may have stopped part of it
+		if err := own.Stop(ctx); err != nil {
+			return rollback(fmt.Errorf("stopping this PC's server: %w", err))
+		}
 	}
 	if situation == joinOther || situation == joinOwn {
 		keep = keepDir(d, at, "")

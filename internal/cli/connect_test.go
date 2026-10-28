@@ -608,6 +608,12 @@ func TestConnectWarnsOnAVersionSkew(t *testing.T) {
 // fakes' key switch: call noKeyRequired then.
 func ownServerPC(t *testing.T, home string) *hindsight.Client {
 	t.Helper()
+	return ownServerSetup(t, home, true)
+}
+
+// ownServerSetup is ownServerPC, with or without a backup identity yet.
+func ownServerSetup(t *testing.T, home string, identity bool) *hindsight.Client {
+	t.Helper()
 	d := pathsOf(home)
 	_ = os.MkdirAll(d.Config, 0o700)
 	port := fakeHindsight(t)
@@ -618,8 +624,10 @@ func ownServerPC(t *testing.T, home string) *hindsight.Client {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ensureBackupIdentity(d); err != nil {
-		t.Fatal(err)
+	if identity {
+		if _, err := ensureBackupIdentity(d); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_ = os.MkdirAll(composeDir(home), 0o700)
 	if err := os.WriteFile(filepath.Join(composeDir(home), "compose.yaml"), []byte("services:\n  hindsight:\n    image: ghcr.io/vectorize-io/hindsight:1.1.0\n"), 0o600); err != nil {
@@ -967,5 +975,123 @@ func TestConnectUndoPlanChangesNothing(t *testing.T) {
 	sameTree(t, before, treeOf(t, home))
 	if len(f.calls) != 0 {
 		t.Errorf("ran %v", f.commands())
+	}
+}
+
+// A first backup that fails still generated the backup identity into
+// secrets.toml: connect says so instead of "nothing was changed".
+func TestConnectOwnServerBackupFailureSaysTheIdentityWasAdded(t *testing.T) {
+	home, _ := setupMachine(t)
+	ownServerSetup(t, home, false)
+	tok := joinableHost(t)
+	noKeyRequired()
+	dk := withBackupDocker(t)
+	dk.failDump = true
+	d := pathsOf(home)
+	files := ownFiles(home)
+	before := contentsOf(t, []string{files[0], files[2], files[3]}) // all but secrets.toml
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseConnect(t, out)
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "backup identity added to secrets.toml") || strings.Contains(env.Error.Message, "nothing was changed") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if sec, _ := config.LoadSecrets(d.SecretsFile()); sec.BackupIdentity == "" {
+		t.Error("no identity: the message would lie")
+	}
+	sameContents(t, before)
+	if composeStopped(dk.calls) >= 0 {
+		t.Errorf("the server was stopped: %q", dk.calls)
+	}
+}
+
+// A deployed server of this PC's own that does not answer cannot be told
+// apart from the token's nor backed up: connect refuses before anything.
+// One not deployed has nothing to tell: connect goes on.
+func TestConnectRefusesWhenItsOwnServerDoesNotAnswer(t *testing.T) {
+	home, _ := setupMachine(t)
+	ownServerPC(t, home)
+	tok := joinableHost(t)
+	noKeyRequired()
+	dk := withBackupDocker(t)
+	pointAt(t, home, closedPort(t))
+	file := tokenFile(t, tok)
+	before := treeOf(t, home)
+	code, out, errOut := run(t, "connect", "--token-file", file, "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "does not answer") || !strings.Contains(env.Error.Message, "backsight server start") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if len(dk.calls) != 0 {
+		t.Errorf("Docker was called: %q", dk.calls)
+	}
+	sameTree(t, before, treeOf(t, home))
+	_ = os.Remove(filepath.Join(composeDir(home), "compose.yaml"))
+	if code, out, errOut := run(t, "connect", "--token-file", file, "--plan", "--json"); code != output.OK || !hasConnectStep(parseConnect(t, out).Data.Steps, "server", "skipped", "not deployed") {
+		t.Errorf("not deployed: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// The maintenance lock taken by a job between the backup and the switch:
+// connect stops with the server never stopped, nothing changed.
+func TestConnectOwnServerLockTakenAfterTheBackup(t *testing.T) {
+	home, _ := setupMachine(t)
+	ownServerPC(t, home)
+	tok := joinableHost(t)
+	noKeyRequired()
+	dk := withBackupDocker(t)
+	d := pathsOf(home)
+	before := contentsOf(t, ownFiles(home))
+	old := connectFault
+	connectFault = func(step string) error {
+		if step == "backed-up" {
+			return os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1,"command":"jobs maintain"}`), 0o600)
+		}
+		return nil
+	}
+	t.Cleanup(func() { connectFault = old })
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "maintenance in progress") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if i := composeStopped(dk.calls); i >= 0 {
+		t.Errorf("the server was stopped: %q", dk.calls)
+	}
+	sameContents(t, before)
+	if _, err := os.Stat(d.ConnectDir()); err == nil {
+		t.Error("retain state moved aside")
+	}
+}
+
+// When config.toml cannot be put back, the copy kept with the moved state
+// stays, named in the message, holding the file as it was; the rest is
+// put back and the server started again.
+func TestConnectKeepsTheConfigCopyWhenPuttingItBackFails(t *testing.T) {
+	home, _ := setupMachine(t)
+	ownServerPC(t, home)
+	tok := joinableHost(t)
+	noKeyRequired()
+	dk := withBackupDocker(t)
+	d := pathsOf(home)
+	before := contentsOf(t, ownFiles(home))
+	withConnectFault(t, "secrets", "putback")
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseConnect(t, out)
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "putting this PC back failed") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	copies, _ := filepath.Glob(filepath.Join(d.ConnectDir(), "*", "config.toml"))
+	if len(copies) != 1 || !strings.Contains(env.Error.Message, "copy "+copies[0]) {
+		t.Fatalf("copy %v not named:\n%s", copies, env.Error.Message)
+	}
+	if raw, _ := os.ReadFile(copies[0]); string(raw) != before[d.ConfigFile()] {
+		t.Errorf("the copy is not config.toml as it was:\n%s", raw)
+	}
+	for _, p := range ownFiles(home)[2:] { // the sends are back
+		if raw, err := os.ReadFile(p); err != nil || string(raw) != before[p] {
+			t.Errorf("%s not put back: %v", p, err)
+		}
+	}
+	started := slices.IndexFunc(dk.calls, func(c string) bool { return strings.HasPrefix(c, "compose") && strings.Contains(c, " up -d") })
+	if stop := composeStopped(dk.calls); stop < 0 || started < stop {
+		t.Errorf("stopped at %d, started at %d", stop, started)
 	}
 }
