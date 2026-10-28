@@ -360,6 +360,40 @@ func TestHostRefusesATamperedRelease(t *testing.T) {
 	}
 }
 
+// The host's own environment never picks the key its install.sh trusts:
+// a release signed by the key its BACKSIGHT_INSTALL_PUBKEY names installs
+// nothing there.
+func TestHostEnvironmentCannotChooseTheKey(t *testing.T) {
+	pub, attacker, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := signing.TestKey
+	signing.TestKey = "" // a release build: no key argument
+	t.Cleanup(func() { signing.TestKey = old })
+	src := t.TempDir()
+	signedRelease(t, src, "9.9.9", attacker, relOpts{platform: "linux_" + runtime.GOARCH})
+	archive := "backsight_9.9.9_linux_" + runtime.GOARCH + ".tar.gz"
+	work := t.TempDir()
+	for _, n := range []string{archive, "checksums.txt", "checksums.txt.minisig"} {
+		b, err := os.ReadFile(filepath.Join(src, "v9.9.9", n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(work, n), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hostHome, _, _ := loopback(t, 0, "BACKSIGHT_INSTALL_PUBKEY="+pub.String(), "BACKSIGHT_RELEASE_URL=https://example.invalid/r")
+	tail, err := installOnHost(context.Background(), "u@h", work, archive)
+	if output.CodeOf(err) != output.Blocked || strings.Contains(tail, "BACKSIGHT_INSTALL_PUBKEY is set") {
+		t.Errorf("err = %v (exit %d), want exit 20 from the release key\n%s", err, output.CodeOf(err), tail)
+	}
+	if _, err := os.Lstat(filepath.Join(hostHome, ".local/share/backsight/bin/current")); err == nil {
+		t.Error("a release signed by the key the host's environment named was installed")
+	}
+}
+
 // A remote script reaches sh through the user's login shell, quoted: no
 // quote or backslash (fish, csh read them otherwise), no newline (csh
 // refuses one inside quotes), no '!' (csh's history), and valid sh.

@@ -74,7 +74,7 @@ func TestSSHArgsPinTheSafeOptions(t *testing.T) {
 	for _, o := range []string{"BatchMode=yes", "StrictHostKeyChecking=yes", "UpdateHostKeys=no", "VerifyHostKeyDNS=no",
 		"ControlMaster=no", "ControlPath=none", "ConnectTimeout=20",
 		"ServerAliveInterval=15", "ServerAliveCountMax=4", "ForwardAgent=no", "ForwardX11=no",
-		"ClearAllForwardings=yes", "PermitLocalCommand=no"} {
+		"ClearAllForwardings=yes", "PermitLocalCommand=no", "Tunnel=no"} {
 		i := slices.Index(got, o)
 		if i < 1 || got[i-1] != "-o" {
 			t.Errorf("option %s not passed with -o: %q", o, got)
@@ -279,7 +279,7 @@ func TestRemoteScriptQuoting(t *testing.T) {
 // A word fish, csh or zsh would read otherwise than sh never reaches the
 // host: refused with exit 2 before any ssh call, saying why.
 func TestRemoteWordsRefuseShellSurprises(t *testing.T) {
-	for _, bad := range []string{`C:\x`, "a\nb", "a\rb", "a\x00b", "\x1b[31m", "=ls"} {
+	for _, bad := range []string{`C:\x`, "a\nb", "a\rb", "a\x00b", "\x1b[31m", "=ls", "%1", "%job", "a!b", "!!", "x!"} {
 		if _, err := remoteScript("t", "true", "ok", bad); output.CodeOf(err) != output.Usage ||
 			!strings.Contains(err.Error(), "backslash") || !strings.Contains(err.Error(), "login shell") {
 			t.Errorf("remoteScript arg %q: %v", bad, err)
@@ -296,7 +296,7 @@ func TestRemoteWordsRefuseShellSurprises(t *testing.T) {
 			t.Errorf("remoteScript step %q accepted", step)
 		}
 	}
-	if _, err := remoteScript("t", "true", "a=b", "/p/x y", "it's"); err != nil {
+	if _, err := remoteScript("t", "true", "a=b", "/p/x y", "it's", "50%", "a%b", "a==b"); err != nil {
 		t.Errorf("plain words refused: %v", err)
 	}
 }

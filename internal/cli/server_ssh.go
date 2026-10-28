@@ -43,9 +43,11 @@ var probeScript = strings.Join([]string{
 
 // installScript unpacks the tar on stdin (install.sh and release/) into a
 // temp directory removed on exit, also on a hangup (a killed ssh) or a
-// signal, and runs that install.sh on it, trusting
-// $1 too when given (a test key).
+// signal, and runs that install.sh on it. install.sh checks the release
+// against the key it carries, or against $1 instead when given (a test
+// key); the host's own environment never chooses it (unset first).
 var installScript = strings.Join([]string{
+	`unset BACKSIGHT_INSTALL_PUBKEY BACKSIGHT_RELEASE_URL`,
 	`set -eu`,
 	// The traps come first: once the directory exists, a signal removes it.
 	`d=`,

@@ -60,7 +60,7 @@ var sshOptions = []string{"-T",
 	"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",
 	"-o", "VerifyHostKeyDNS=no", "-o", "ControlMaster=no", "-o", "ControlPath=none",
 	"-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
-	"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no"}
+	"-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "Tunnel=no"}
 
 // sshTarget is [user@]host: letters, digits and . _ - in both, and : % in
 // the host for an IPv6 address, unbracketed (ssh strips brackets only in
@@ -95,13 +95,14 @@ func sshArgs(target, remote string) []string {
 }
 
 // checkRemoteWord refuses a word the host's login shell could read
-// otherwise than sh does: a backslash or a control character (fish, csh)
-// or a leading '=' (zsh's =cmd expansion).
+// otherwise than sh does: a backslash or a control character (fish, csh),
+// a '!' (csh's history, even quoted), a leading '=' (zsh's =cmd
+// expansion) or a leading '%' (fish's job expansion).
 func checkRemoteWord(w string) error {
-	if !strings.ContainsRune(w, '\\') && strings.IndexFunc(w, unicode.IsControl) < 0 && !strings.HasPrefix(w, "=") {
+	if !strings.ContainsAny(w, "\\!") && strings.IndexFunc(w, unicode.IsControl) < 0 && !strings.HasPrefix(w, "=") && !strings.HasPrefix(w, "%") {
 		return nil
 	}
-	return &output.Error{Code: output.Usage, Message: fmt.Sprintf("%q cannot be passed to the host: it holds a backslash or a control character (a newline too) or starts with '=', which the host's login shell (fish, csh, zsh) could read otherwise than sh", w)}
+	return &output.Error{Code: output.Usage, Message: fmt.Sprintf("%q cannot be passed to the host: it holds a backslash, a '!' or a control character (a newline too), or starts with '=' or '%%', which the host's login shell (fish, csh, zsh) could read otherwise than sh", w)}
 }
 
 // remoteScript runs script under sh on the host, whatever the user's login
