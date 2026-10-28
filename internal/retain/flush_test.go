@@ -430,6 +430,44 @@ func TestSplitSessionWithACopiedTranscriptSendsTheSharedPartToo(t *testing.T) {
 	}
 }
 
+// A split document with no valid segment number still quarantines: its
+// next segment would be 1, which replaces the other PC's document.
+func TestSplitWithInvalidSegmentStillQuarantines(t *testing.T) {
+	for _, seg := range []string{"", "0", "x"} {
+		e := splitSession(t)
+		doc := map[string]string{"last_uuid": "a9", "segment": seg, "project": "billing"}
+		e.hs.docs["conversation:s1"] = doc
+		r := e.flush("s1", Options{})
+		if r.Status != Quarantined || len(e.hs.retains) != 0 || !strings.Contains(r.Detail, "no valid segment number") {
+			t.Errorf("segment %q: %+v, %d items", seg, r, len(e.hs.retains))
+		}
+		if !reflect.DeepEqual(e.hs.docs["conversation:s1"], doc) {
+			t.Errorf("segment %q: server document touched: %v", seg, e.hs.docs["conversation:s1"])
+		}
+		if splits, _ := SplitSessions(e.f.Dirs.State); len(splits) != 0 {
+			t.Errorf("segment %q: recorded as split: %+v", seg, splits)
+		}
+	}
+}
+
+// A per-project home document whose legacy_last_uuid this transcript lacks
+// still quarantines, though its own last_uuid is known: the legacy part
+// holds every project's records up to a point this copy cannot place.
+func TestPerProjectLegacyPositionUnknownStillQuarantines(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "first")
+	e.record("s1", "u2", "user", 1, "second")
+	doc := map[string]string{"last_uuid": "u1", "segment": "2", "project": "billing", "legacy_last_uuid": "gone"}
+	e.hs.docs["conversation:s1"] = doc
+	r := e.flush("s1", Options{})
+	if r.Status != Quarantined || len(e.hs.retains) != 0 || !strings.Contains(r.Detail, "gone") {
+		t.Errorf("%+v, %d items", r, len(e.hs.retains))
+	}
+	if !reflect.DeepEqual(e.hs.docs["conversation:s1"], doc) {
+		t.Errorf("server document touched: %v", e.hs.docs["conversation:s1"])
+	}
+}
+
 // claude --fork-session copies the parent's records with their uuids.
 func TestForkSendsOnlyItsOwnTurns(t *testing.T) {
 	e := newEnv(t)
