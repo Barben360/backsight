@@ -25,18 +25,24 @@ type Show struct {
 func Shows(events []Event, session string) []Show {
 	var out []Show
 	for _, e := range events {
-		if e.Kind != "shows" || e.Session != session {
-			continue
+		if e.Kind == "shows" && e.Session == session {
+			out = append(out, showsOf(e)...)
 		}
-		at := strconv.FormatInt(e.TS.UnixNano(), 10)
-		for _, it := range e.Items {
-			project := it.Project
-			if project == "" {
-				project = e.Project
-			}
-			out = append(out, Show{ID: it.ID, Turn: e.Turn, Agent: e.Agent, Path: e.Path, Project: project, Rank: it.Rank, At: e.TS,
-				Key: session + "|" + e.Turn + "|" + at + "|" + it.ID})
+	}
+	return out
+}
+
+// showsOf is the shows of one shows event.
+func showsOf(e Event) []Show {
+	at := strconv.FormatInt(e.TS.UnixNano(), 10)
+	out := make([]Show, 0, len(e.Items))
+	for _, it := range e.Items {
+		project := it.Project
+		if project == "" {
+			project = e.Project
 		}
+		out = append(out, Show{ID: it.ID, Turn: e.Turn, Agent: e.Agent, Path: e.Path, Project: project, Rank: it.Rank, At: e.TS,
+			Key: e.Session + "|" + e.Turn + "|" + at + "|" + it.ID})
 	}
 	return out
 }

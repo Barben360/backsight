@@ -78,6 +78,16 @@ type CreditCheck struct {
 	Flags   []string `json:"flags,omitempty"`
 }
 
+// FeedbackSettle is one settle of the feedback journal: the shows it
+// decided by outcome, and the used credits that came too late to attach.
+type FeedbackSettle struct {
+	Shows   int `json:"shows"`
+	Credits int `json:"credits"`
+	Misses  int `json:"misses"`
+	Unknown int `json:"unknown"`
+	Late    int `json:"late"`
+}
+
 type Gate struct {
 	N        int    `json:"n"`
 	Decision string `json:"decision"` // deny | allow
@@ -132,6 +142,7 @@ func (Tool) EventName() string            { return "tool" }
 func (Gate) EventName() string            { return "gate" }
 func (CreditCheck) EventName() string     { return "credit_check" }
 func (Credit) EventName() string          { return "credit" }
+func (FeedbackSettle) EventName() string  { return "feedback_settle" }
 func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }
 func (Attribution) EventName() string     { return "attribution" }

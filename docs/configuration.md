@@ -159,6 +159,8 @@ When memories were shown to Claude during a turn, it reports which ones informed
 | `feedback.credit_half_life_days` | `365` | The same for the times Claude used a memory. `0`: they never fade. |
 | `feedback.stop_check` | `"always"` | When the end of a turn asks Claude to report what it used, if it has not: `"always"` whenever the turn showed memories; `"cited"` only when its reply cites a memory or it searched or read the memory itself; `"off"` never. |
 
+Every 15 minutes, `backsight jobs tick` turns that record into counts per memory, in `feedback/ledger.json` under the state directory. Each memory shown is counted once its turn is over and it was shown at least 30 minutes ago (or 2 hours ago when the turn never ended), so a use Claude reports a few turns later still counts: as used, as a miss (see `confident_rank`), as shown, or as unknown when Claude never reported what it used that turn (an interrupted turn, for instance), which never counts as a miss. A memory shown in a briefing, opened with `memory_read` or recalled after a failed tool call is never a miss. A use reported after that counts nowhere. `backsight forget <id>` drops a memory's counts.
+
 ## Examples
 
 Quieter recall: fewer, closer memories.

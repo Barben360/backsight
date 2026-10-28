@@ -13,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -49,7 +50,9 @@ type tickResult struct {
 	// Server: the start of a server whose private address came after
 	// Docker started it (startLateServer), "" when none was needed.
 	Server string `json:"server,omitempty"`
-	MS     int    `json:"ms"`
+	// Feedback: what the settle of the feedback journal decided.
+	Feedback feedback.SettleResult `json:"feedback"`
+	MS       int                   `json:"ms"`
 }
 
 // reachCheckTimeout bounds the tick's one health call.
@@ -99,6 +102,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// After the maintenance check: it writes state.json, whose lock
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
+			res.Feedback = settleFeedback(d, cfg, tw) // local only: before the server start, which can wait
 			// First: a server left down at boot makes every send below fail.
 			sctx, scancel := context.WithTimeout(cmd.Context(), serverCheckTimeout)
 			res.Server = startLateServer(sctx, d, cfg)
