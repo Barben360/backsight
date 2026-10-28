@@ -224,7 +224,7 @@ func TestExposeTailnetNeedsNoAnswer(t *testing.T) {
 		t.Errorf("dialed %v, want %s", fx.dialed, api)
 	}
 	key := fx.apiKey(t)
-	if tok := readToken(t, f); tok.URL != "http://"+api || tok.APIKey != key || tok.ServerID == "" || tok.UIURL != "http://100.101.1.2:19999" {
+	if tok := tokenFrom(t, f); tok.URL != "http://"+api || tok.APIKey != key || tok.ServerID == "" || tok.UIURL != "http://100.101.1.2:19999" {
 		t.Errorf("token url %s ui %s server %q (key equal: %v)", tok.URL, tok.UIURL, tok.ServerID, tok.APIKey == key)
 	}
 	if strings.Contains(out+errOut, key) || strings.Contains(out+errOut, token.Prefix) || !strings.Contains(out, f) {
@@ -240,8 +240,8 @@ func TestExposeTailnetIPv6(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	api := "[fd7a:115c:a1e0::5]:" + strconv.Itoa(fx.port)
-	if len(fx.dialed) != 1 || fx.dialed[0] != api || readToken(t, f).URL != "http://"+api {
-		t.Errorf("dialed %v, token %s", fx.dialed, readToken(t, f).URL)
+	if len(fx.dialed) != 1 || fx.dialed[0] != api || tokenFrom(t, f).URL != "http://"+api {
+		t.Errorf("dialed %v, token %s", fx.dialed, tokenFrom(t, f).URL)
 	}
 }
 
@@ -368,7 +368,7 @@ func TestExposeFlags(t *testing.T) {
 		}
 	}
 	_ = os.WriteFile(fx.cfgPath, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
-	if code, _, errOut := run(t, "server", "expose", "--loopback"); code != output.Usage || !strings.Contains(errOut, "local server") {
+	if code, _, errOut := run(t, "server", "expose", "--loopback"); code != output.Usage || !strings.Contains(errOut, "backsight server expose") {
 		t.Errorf("remote mode: exit %d: %s", code, errOut)
 	}
 	if len(fx.dk.ups) != 0 {

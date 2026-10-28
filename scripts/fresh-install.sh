@@ -259,6 +259,50 @@ else
   [ "$(banks_status "$new_key")" = 200 ] || fail "the new key is refused after the rotation (want 200)"
   [ "$(jq -r '.data.server_id' "$work/token3.json")" = "$sid" ] || fail "the rotation changed the server id"
   unset old_key new_key
+  # 9a'. The client side (M6 block 2): a second PC, with its own HOME,
+  # BACKSIGHT_HOME and Claude Code profile, joins this server with the
+  # rotated token. scheduler=off: no entry named like the user's own install.
+  # Its key stays in its secrets.toml, never printed.
+  bank_docs() { # the host bank's document count; the key stays inside
+    local k
+    { set +x; } 2>/dev/null
+    k=$(rc_key)
+    curl -fsS --max-time 10 -H "Authorization: Bearer $k" "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/stats" | jq -er '.total_documents'
+  }
+  c2() { HOME=$work/home2 BACKSIGHT_HOME=$work/backsight2 "$@"; }
+  mkdir -p "$work/home2"
+  # The host's own files: the second client must leave them alone.
+  host_files() { sha256sum "$BACKSIGHT_HOME/config/secrets.toml" "$BACKSIGHT_HOME/config/config.toml"; }
+  host_before=$(host_files)
+  docs_before=$(bank_docs) || fail "cannot read the host bank's document count"
+  c2 "$sv" connect --token-file "$work/token3" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
+    --non-interactive --json > "$work/connect.json" 2> "$work/connect.err" || { show "$work/connect.json"; show "$work/connect.err"; fail "connect with the rotated token failed"; }
+  jq -e '.ok' "$work/connect.json" >/dev/null || { show "$work/connect.json"; fail "connect.json: want ok"; }
+  c2 "$sv" doctor --json > "$work/doctor2.json" || true
+  jq -e '(.data.checks | map(select(.id == "server-id"))[0].status == "ok") and (.data.checks | map(select(.status == "error")) | length == 0)' "$work/doctor2.json" >/dev/null ||
+    { jq -c '.data.checks[]? | select(.status == "error" or .id == "server-id")' "$work/doctor2.json" >&2; fail "the client's doctor: want server-id ok and no error"; }
+  c2 "$sv" store --json --kind decision "The client proof stores this decision: the second PC reads the host's memory." > "$work/store2.json" ||
+    { show "$work/store2.json"; fail "the client's store failed"; }
+  jq -e '.ok and .data.status == "stored"' "$work/store2.json" >/dev/null || { show "$work/store2.json"; fail "the client's note was not stored"; }
+  for _ in $(seq 1 30); do
+    docs_after=$(bank_docs) || fail "cannot read the host bank's document count"
+    [ "$docs_after" -gt "$docs_before" ] && break
+    sleep 2
+  done
+  [ "$docs_after" -eq $((docs_before + 1)) ] || fail "the host bank holds $docs_after documents, want $((docs_before + 1)) (before the client's note: $docs_before)"
+  # The pre-rotation token's key is dead: connect refuses it and changes nothing.
+  [ -s "$work/token2" ] || fail "harness: the pre-rotation token file is missing or empty"
+  cp "$work/backsight2/config/secrets.toml" "$work/secrets2.before"
+  set +e
+  c2 "$sv" connect --token-file "$work/token2" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
+    --non-interactive --json > "$work/connect-old.json" 2> "$work/connect-old.err"
+  code=$?
+  set -e
+  [ $code -eq 20 ] || { show "$work/connect-old.json"; fail "connect with the pre-rotation token: exit $code, want 20"; }
+  jq -e '.ok == false and (.error.message | contains("the server rejected this token'"'"'s key"))' "$work/connect-old.json" >/dev/null ||
+    { show "$work/connect-old.json"; fail "connect with the pre-rotation token: want ok false and the rejected-key message"; }
+  cmp -s "$work/secrets2.before" "$work/backsight2/config/secrets.toml" || fail "the refused connect changed the client's secrets.toml"
+  [ "$(host_files)" = "$host_before" ] || fail "the second client changed the first client's secrets.toml or config.toml"
   "$sv" server expose --loopback --json > "$work/expose-loopback.json" || { show "$work/expose-loopback.json"; fail "server expose --loopback failed"; }
   health 127.0.0.1 || fail "/health does not answer on 127.0.0.1 after expose --loopback"
   if health "$priv_ip"; then fail "/health still answers on $priv_ip after expose --loopback"; fi

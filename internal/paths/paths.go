@@ -41,6 +41,10 @@ func (d Dirs) FamiliesFile() string    { return filepath.Join(d.State, "families
 func (d Dirs) EntitiesFile() string    { return filepath.Join(d.State, "entities.json") }
 func (d Dirs) SetupFile() string       { return filepath.Join(d.State, "setup.json") }
 
+// ConnectDir keeps, one directory per run, what connect moved aside when
+// this PC joined another server (cursors, sent-index, the state it had).
+func (d Dirs) ConnectDir() string { return filepath.Join(d.State, "connect") }
+
 // BankTemplateFile records the bank template last applied, so doctor can
 // tell an older backsight template from a change made on the server.
 func (d Dirs) BankTemplateFile() string { return filepath.Join(d.State, "bank-template.json") }

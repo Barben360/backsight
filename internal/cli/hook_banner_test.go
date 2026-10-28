@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -164,5 +165,69 @@ func TestBannerBrandColor(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	if got := startBanner(t, home, "s3"); got != "🧠 backsight · 🗂️ billing" {
 		t.Errorf("NO_COLOR banner %q", got)
+	}
+}
+
+// A different server answering at the joined address is a line of its own:
+// recall may still answer (from the other server), sending holds.
+func TestSessionStartBannerNamesAnotherServer(t *testing.T) {
+	home := hookHome(t)
+	noticeShown(t, home)
+	if got := startBanner(t, home, "s1"); strings.Contains(got, "different memory server") {
+		t.Fatalf("no mismatch recorded: %q", got)
+	}
+	setMismatch(t, home, "b") // local mode: a record left behind holds nothing
+	if got := startBanner(t, home, "s2"); strings.Contains(got, "different memory server") {
+		t.Fatalf("local mode: %q", got)
+	}
+	recordMismatch(t, home)
+	want := "🧠 backsight · 🗂️ billing\n⚠️ a different memory server answers at the joined address: notes and sessions wait on this PC · run `backsight doctor`"
+	if got := startBanner(t, home, "s3"); got != want {
+		t.Errorf("banner\n got %q\nwant %q", got, want)
+	}
+}
+
+// failingSince records that the server has not answered since at.
+func failingSince(t *testing.T, home string, at time.Time) {
+	t.Helper()
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.State, 0o700)
+	raw := `{"last_ok":"` + at.Add(-time.Hour).UTC().Format(time.RFC3339) + `","failing_since":"` + at.UTC().Format(time.RFC3339) + `","sessions_waiting":2}`
+	if err := os.WriteFile(filepath.Join(d.State, "reach.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A server silent for over an hour gets a line of its own, read from the
+// reach record (no call of its own); a server answering this briefing, or
+// another server at the joined address, does not.
+func TestSessionStartBannerAfterAnHourUnreachable(t *testing.T) {
+	home := hookHome(t)
+	noticeShown(t, home)
+	recentDown.Store(true)
+	unavailable := "⚠️ backsight · 🗂️ billing · memory unavailable (server unreachable) · run `backsight doctor`"
+	failingSince(t, home, time.Now().Add(-59*time.Minute))
+	if got := startBanner(t, home, "s1"); got != unavailable {
+		t.Errorf("59 min\n got %q\nwant %q", got, unavailable)
+	}
+	since := time.Now().Add(-61 * time.Minute)
+	failingSince(t, home, since)
+	start := time.Now()
+	got := startBanner(t, home, "s2")
+	if took := time.Since(start); took > hook.ChildDeadline("session-start", []byte(`{"source":"startup"}`)) {
+		t.Errorf("the hook took %s", took)
+	}
+	want := unavailable + "\n⚠️ memory server silent since " + since.UTC().Format("2006-01-02 15:04") + " UTC: notes and sessions wait on this PC · run `backsight doctor`"
+	if got != want {
+		t.Errorf("61 min\n got %q\nwant %q", got, want)
+	}
+	recentDown.Store(false) // it answers again before the next tick or recall records it
+	if got := startBanner(t, home, "s3"); got != "🧠 backsight · 🗂️ billing" {
+		t.Errorf("server back: %q", got)
+	}
+	recentDown.Store(true)
+	recordMismatch(t, home)
+	if got := startBanner(t, home, "s4"); strings.Contains(got, "silent") || !strings.Contains(got, "different memory server") {
+		t.Errorf("mismatch: %q", got)
 	}
 }

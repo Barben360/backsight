@@ -238,6 +238,13 @@ func newBackupCreateCmd(e *env) *cobra.Command {
 		Short: "Dump the memory server into an encrypted archive (keeps 7 daily and 4 weekly)",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
+			if err := requireLocal(cfg, "backup create"); err != nil {
+				return err
+			}
 			res, err := createBackup(cmd.Context(), nil)
 			if err != nil {
 				return err

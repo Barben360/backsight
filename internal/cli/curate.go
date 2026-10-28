@@ -67,6 +67,20 @@ func curateClient() (*hindsight.Client, string, error) {
 	return cl, cfg.Server.Bank, nil
 }
 
+// heldWrites refuses a write to the server while another server answers
+// at the joined address (decision 0073), before any write.
+func heldWrites() error {
+	d, _, err := machine()
+	if err != nil {
+		return err
+	}
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		return err
+	}
+	return otherServerRefusal(d, cfg)
+}
+
 type forgetResult struct {
 	ID          string     `json:"id"`
 	Action      string     `json:"action"` // forgotten | restored | purge_planned | purged | partly_purged
@@ -132,6 +146,9 @@ func newForgetCmd(e *env) *cobra.Command {
 			res := forgetResult{ID: id}
 			switch {
 			case restore, !purge:
+				if err := heldWrites(); err != nil {
+					return err
+				}
 				// Only raw facts can be curated: an observation is retired
 				// through its source facts and regenerates without them.
 				targets, err := curatable(ctx, cl, bank, id)
@@ -296,6 +313,14 @@ func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []
 	// database, and one that dumped before is listed below, done or not.
 	d, _, err := machine()
 	if err != nil {
+		return nil, "", err
+	}
+	// Neither its deletes nor its tombstones go to another server.
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	if err := otherServerRefusal(d, cfg); err != nil {
 		return nil, "", err
 	}
 	l, err := state.TryAcquire(d.MaintenanceLock(), "forget --purge")

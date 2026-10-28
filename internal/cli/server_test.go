@@ -220,6 +220,7 @@ var (
 	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
 	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
 	serverIDStatus     atomic.Int32      // non-zero: reading the server id answers this status
+	fakeAPIVersion     string            // what /version answers; "": it fails
 	requireKey         atomic.Bool       // the fake checks the bearer key against acceptedKey
 	acceptedKey        atomic.Value      // the API key the fake server runs on (a string), set by compose up
 	refusedCalls       atomic.Int64      // requests the fake refused for their key
@@ -275,6 +276,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	epochDoc = ""
 	epochStatus.Store(0)
 	serverIDStatus.Store(0)
+	fakeAPIVersion = "1.1.0"
 	requireKey.Store(false)
 	acceptedKey.Store("")
 	refusedCalls.Store(0)
@@ -319,8 +321,10 @@ func fakeHindsight(t *testing.T) (port int) {
 		switch {
 		case r.URL.Path == "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","database":"connected"}`))
+		case r.URL.Path == "/version" && fakeAPIVersion == "":
+			w.WriteHeader(http.StatusInternalServerError)
 		case r.URL.Path == "/version":
-			_, _ = w.Write([]byte(`{"api_version":"1.1.0"}`))
+			_, _ = w.Write([]byte(`{"api_version":"` + fakeAPIVersion + `"}`))
 		case r.URL.Path == "/v1/default/banks":
 			var items []string
 			for b, name := range banks {
@@ -1022,7 +1026,7 @@ func TestServerCommandsRefuseRemoteMode(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(cfg), 0o700)
 	_ = os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
 	for _, args := range [][]string{{"server", "render"}, {"server", "start"}, {"server", "stop"}, {"server", "status"}, {"server", "install"}} {
-		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "local server") {
+		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "https://mem.example") || !strings.Contains(errOut, "backsight "+strings.Join(args, " ")) {
 			t.Errorf("%v: exit %d: %s", args, code, errOut)
 		}
 	}
@@ -1126,5 +1130,26 @@ func TestServerCommandsUseTheConfiguredProject(t *testing.T) {
 	code, out, errOut := run(t, "server", "install")
 	if code != output.Blocked || !strings.Contains(out+errOut, "bs-fresh_pg_data") || strings.Contains(out+errOut, "backsight_pg_data") {
 		t.Errorf("exit %d: %s %s", code, out, errOut)
+	}
+}
+
+// The marker can vanish between the check and the refusal's own look: the
+// lock must still refuse, never return (nil, "", nil), and leave no lock.
+func TestMaintenanceLockRefusesWhenTheMarkerVanishes(t *testing.T) {
+	home := legacyInstall(t)
+	d := pathsOf(home)
+	old := restoreIncomplete
+	t.Cleanup(func() { restoreIncomplete = old })
+	restoreIncomplete = func(paths.Dirs) bool { return true }
+	unlock, _, err := serverMaintenanceLock(d, "server expose")
+	var oe *output.Error
+	if !errors.As(err, &oe) || oe.Code != output.Blocked || !strings.Contains(oe.Message, "restore-incomplete.json") {
+		t.Fatalf("err = %v", err)
+	}
+	if unlock != nil {
+		t.Error("an unlock came back with the refusal")
+	}
+	if h := state.Inspect(d.MaintenanceLock()); h != nil {
+		t.Errorf("maintenance lock left: %+v", h)
 	}
 }

@@ -363,7 +363,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	ledger := filepath.Join(d.AttributionDir(), "s1", "main.jsonl")
 	_ = os.MkdirAll(filepath.Dir(ledger), 0o700)
 	_ = os.WriteFile(ledger, []byte("{}\n"), 0o600)
-	for _, n := range []string{"reattribute.jsonl", "reattribute.json", "noise-history.jsonl"} {
+	for _, n := range []string{"reattribute.jsonl", "reattribute.json", "noise-history.jsonl", "reach.json", "split-sessions.json"} {
 		_ = os.WriteFile(filepath.Join(d.State, n), []byte("{}\n"), 0o600)
 	}
 	_ = os.WriteFile(d.FamiliesFile(), []byte("{}"), 0o600)
@@ -377,7 +377,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	if !strings.Contains(strings.Join(env.Data.Kept, "\n"), filepath.Dir(foreign)) {
 		t.Errorf("the kept entry is not named: %q", env.Data.Kept)
 	}
-	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile(), d.AttributionDir(), filepath.Join(d.State, "reattribute.jsonl"), filepath.Join(d.State, "reattribute.json"), filepath.Join(d.State, "noise-history.jsonl"), d.FamiliesFile()} {
+	for _, p := range []string{d.StateFile(), d.LocksDir(), d.PreImagesDir(), filepath.Join(d.State, "telemetry"), d.ConfigFile(), d.AttributionDir(), filepath.Join(d.State, "reattribute.jsonl"), filepath.Join(d.State, "reattribute.json"), filepath.Join(d.State, "noise-history.jsonl"), filepath.Join(d.State, "reach.json"), filepath.Join(d.State, "split-sessions.json"), d.FamiliesFile()} {
 		if onDisk(p) {
 			t.Errorf("not purged: %s", p)
 		}
@@ -527,7 +527,7 @@ func TestUninstallRemoteServerRefusesStop(t *testing.T) {
 	_ = os.WriteFile(pathsOf(m.home).ConfigFile(), []byte(strings.Replace(raw, "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
 	before := treeOf(t, m.home)
 	for _, args := range [][]string{{"--stop"}, {"--delete-data"}} {
-		if code, _, out := uninstall(t, args...); code != output.Blocked || !strings.Contains(out, "remote") {
+		if code, _, out := uninstall(t, args...); code != output.Blocked || !strings.Contains(out, "on that server's host") {
 			t.Errorf("%s on a remote server: exit %d\n%s", args[0], code, out)
 		}
 	}

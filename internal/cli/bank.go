@@ -13,7 +13,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
-	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -71,8 +70,8 @@ func applyBank(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.
 // point, while it still holds the lock.
 func bankBusy(d paths.Dirs) error {
 	if h := state.Inspect(d.MaintenanceLock()); h != nil && !h.Stale && heldByUpdate(h) {
-		if state.RestoreIncomplete(d) {
-			return &output.Error{Code: output.Blocked, Message: "a restore did not finish (" + d.RestoreMarker() + "): run backsight doctor for the way back"}
+		if restoreIncomplete(d) {
+			return restoreIncompleteError(d)
 		}
 		return nil
 	}
@@ -97,6 +96,8 @@ func recordBank(d paths.Dirs, command, hash string) error {
 // binary"): a non-force bank apply. Its failure is reported, never
 // fatal: the next client install, update apply or doctor names it again.
 // Without a config (Claude Code wired to nothing yet) there is no step.
+// On a client of a shared server the bank is its host's: clients on other
+// backsight versions would overwrite each other's template.
 func bankStep(ctx context.Context, plan bool, add func(name, status, detail string)) {
 	d, home, err := machine()
 	if err != nil {
@@ -104,6 +105,10 @@ func bankStep(ctx context.Context, plan bool, add func(name, status, detail stri
 	}
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if err != nil {
+		return
+	}
+	if cfg.Server.Mode != "local" {
+		add("bank", "skipped", hostAppliesBank)
 		return
 	}
 	st, err := state.Load(d.StateFile())
@@ -136,6 +141,10 @@ func bankStep(ctx context.Context, plan bool, add func(name, status, detail stri
 	add("bank", map[bool]string{true: "done", false: "unchanged"}[res.Sent], strings.TrimSpace(bankText(res)))
 }
 
+// hostAppliesBank is the bank step on a client (client install, update
+// apply): the template is the server host's backsight's.
+const hostAppliesBank = "the server's host applies its bank template (backsight bank apply there)"
+
 func bankText(r server.BankResult) string {
 	switch {
 	case r.Renamed != "":
@@ -159,6 +168,9 @@ func newBankApplyCmd(e *env) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireLocal(cfg, "bank apply"); err != nil {
 				return err
 			}
 			d, _, err := machine()

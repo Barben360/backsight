@@ -1517,6 +1517,79 @@ func TestSetupGeneratesTheBackupIdentity(t *testing.T) {
 	}
 }
 
+// On a client of a shared server the server, its docs bank and its
+// backups are the host's: setup skips the server and docs steps, plan and
+// run, never runs guide index, and generates no backup identity.
+func TestSetupOnAClientSkipsDocsAndBackupIdentity(t *testing.T) {
+	home, f := setupMachine(t)
+	_ = os.MkdirAll(filepath.Dir(pathsOf(home).ConfigFile()), 0o700)
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("api_key", "fakeapikey") }); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "setup", "--answer", "provider=deepseek", "--plan", "--json")
+	steps := parseSetup(t, out).Data.Steps
+	if code != output.OK || !hasStep(steps, "server", "skipped", "100.101.1.2") || !hasStep(steps, "docs", "skipped", "the server's host indexes its docs") ||
+		hasStep(steps, "scheduler", "planned", "backup identity") {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+	steps = parseSetup(t, out).Data.Steps
+	if code != output.OK || !hasStep(steps, "server", "skipped", "100.101.1.2") || !hasStep(steps, "docs", "skipped", "the server's host indexes its docs") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if cmds := strings.Join(f.commands(), ","); strings.Contains(cmds, "guide index") || strings.Contains(cmds, "server install") || !strings.Contains(cmds, "client install") {
+		t.Errorf("steps run: %s", cmds)
+	}
+	if sec, err := config.LoadSecrets(secretsFile(home)); err != nil || sec.BackupIdentity != "" || hasStep(steps, "scheduler", "done", "backup_identity") {
+		t.Errorf("a client generated a backup identity: %v\n%s", err, out)
+	}
+}
+
+// A client extracts nothing and backs nothing up: its [llm] only prices
+// estimates (connect writes the host's), its backups are the host's.
+// Setup there asks nothing about the provider nor about backups, and
+// checks only the API key. A claude-code host extracts this PC's sessions
+// and backfill on its subscription: the client is shown that caveat and
+// must accept it.
+func TestSetupOnAClientAsksNothingAboutTheProvider(t *testing.T) {
+	home, _ := setupMachine(t)
+	_ = os.MkdirAll(filepath.Dir(pathsOf(home).ConfigFile()), 0o700)
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n[llm]\nprovider = \"claude-code\"\nmodel = \"sonnet\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UpdateSecrets(secretsFile(home), func(s *config.Secrets) error { return s.Set("api_key", "fakeapikey") }); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := run(t, "setup", "--questions", "--json")
+	ack := false
+	for _, q := range parseSetup(t, out).Data.Questions {
+		if q.ID == "base_url" || q.ID == "backups" || ((q.ID == "provider" || q.ID == "model") && q.Asked()) {
+			t.Errorf("a client is asked %s:\n%s", q.ID, out)
+		}
+		if q.ID == "ack_subscription" {
+			ack = q.Required && strings.Contains(q.Prompt, "The server's host extracts with its Claude subscription, this PC's sessions included") &&
+				strings.Contains(q.Prompt, "may not collect, store, or intermediate Claude.ai credentials")
+		}
+	}
+	if !ack {
+		t.Errorf("a client of a claude-code host is not shown its subscription caveat:\n%s", out)
+	}
+	code, out, _ := run(t, "setup", "--plan", "--json")
+	if steps := parseSetup(t, out).Data.Steps; code != output.OK || !hasStep(steps, "secrets", "planned", "check api_key") || strings.Contains(out, "llm_api_key") ||
+		hasStep(steps, "scheduler", "planned", "backups") {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	if code, out, errOut := run(t, "setup", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.NeedsUser || !strings.Contains(out, "ack_subscription") {
+		t.Errorf("without the caveat accepted: exit %d\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := run(t, "setup", "--answer", "ack_subscription=yes", "--answer", "consent=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
 func atATerminal(t *testing.T, input string) {
 	t.Helper()
 	withStdin(t, input)

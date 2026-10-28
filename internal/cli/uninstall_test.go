@@ -460,7 +460,7 @@ func TestUninstallFlagsAreChecked(t *testing.T) {
 	raw := readFile(t, pathsOf(m.home).ConfigFile())
 	_ = os.WriteFile(pathsOf(m.home).ConfigFile(), []byte(strings.Replace(raw, "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
 	before = treeOf(t, m.home)
-	if code, _, out := uninstall(t, "--stop"); code != output.Blocked || !strings.Contains(out, "remote") {
+	if code, _, out := uninstall(t, "--stop"); code != output.Blocked || !strings.Contains(out, "on that server's host") {
 		t.Errorf("--stop on a remote server: exit %d\n%s", code, out)
 	}
 	sameTree(t, before, treeOf(t, m.home))

@@ -98,3 +98,15 @@ func TestJSONNeverCarriesTheKey(t *testing.T) {
 		t.Fatalf("round trip lost the key: %+v, %v", got, err)
 	}
 }
+
+func TestDecodeRefusesUserinfo(t *testing.T) {
+	tk := full()
+	tk.URL = "http://u:pw@10.0.0.2:8888"
+	_, err := Decode(Encode(tk))
+	if err == nil {
+		t.Fatal("a url with credentials was accepted")
+	}
+	if !strings.Contains(err.Error(), "must not carry credentials") || strings.Contains(err.Error(), "pw") || strings.Contains(err.Error(), "u:") {
+		t.Errorf("err = %q", err)
+	}
+}

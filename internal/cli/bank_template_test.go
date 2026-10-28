@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -234,5 +235,52 @@ func TestRestoreClearsTheHashWhenTheTemplateCannotBeApplied(t *testing.T) {
 	}
 	if env.Data.Epoch == nil || env.Data.RolledBack {
 		t.Errorf("the restore did not pass: %+v", env.Data)
+	}
+}
+
+// asClient makes the install a client of the fake server at port
+// (server.mode remote): the server and its banks are another machine's.
+func asClient(t *testing.T, home string, port int) {
+	t.Helper()
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("[server]\nmode = \"remote\"\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The bank's settings are its host's: bank apply on a client refuses,
+// names the host, and sends nothing (two clients on two versions would
+// overwrite each other's template).
+func TestBankApplyRefusedOnAClient(t *testing.T) {
+	home := devInstall(t, true)
+	asClient(t, home, fakeHindsight(t))
+	olderTemplate(t, home)
+	for _, args := range [][]string{{"bank", "apply"}, {"bank", "apply", "--force"}, {"bank", "apply", "--plan"}} {
+		code, _, errOut := run(t, args...)
+		if code != output.Usage || !strings.Contains(errOut, "run backsight bank apply on that server's host") || !strings.Contains(errOut, "127.0.0.1") {
+			t.Errorf("%v: exit %d %s", args, code, errOut)
+		}
+	}
+	if len(bankCalls) != 0 || hasSubagentStrategy(t) {
+		t.Errorf("a client touched the bank: %v", bankCalls)
+	}
+}
+
+// client install on a client leaves the bank to the server's host: its
+// bank step is skipped, plan and run, and never calls the bank.
+func TestClientInstallSkipsTheBankOnAClient(t *testing.T) {
+	home := devInstall(t, true)
+	asClient(t, home, fakeHindsight(t))
+	withClaude(t)
+	olderTemplate(t, home)
+	before := recordedHash(t, home)
+	for _, args := range [][]string{{"client", "install", "--plan", "--json"}, {"client", "install", "--json"}} {
+		code, out, errOut := run(t, args...)
+		s := installStepNamed(installSteps(t, out), "bank")
+		if code != output.OK || s == nil || s.Status != "skipped" || s.Detail != "the server's host applies its bank template (backsight bank apply there)" {
+			t.Errorf("%v: exit %d %+v\n%s%s", args, code, s, out, errOut)
+		}
+	}
+	if len(bankCalls) != 0 || hasSubagentStrategy(t) || recordedHash(t, home) != before {
+		t.Errorf("a client touched the bank: %v, hash %s", bankCalls, recordedHash(t, home))
 	}
 }

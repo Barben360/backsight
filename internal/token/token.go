@@ -82,5 +82,8 @@ func Decode(s string) (Token, error) {
 	if u, err := url.Parse(t.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return Token{}, errors.New("connection token url is not an http(s) address")
 	}
+	if u, _ := url.Parse(t.URL); u.User != nil {
+		return Token{}, errors.New("connection token url must not carry credentials")
+	}
 	return t, nil
 }

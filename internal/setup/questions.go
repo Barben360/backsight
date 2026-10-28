@@ -159,6 +159,10 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	}
 	// A server-only host runs no Claude Code: nothing of it to ask about.
 	serverOnly := extra["role"] == config.RoleServer
+	// A client extracts nothing and backs nothing up: its [llm] only
+	// prices estimates, its provider and model come from config.toml
+	// (connect writes the host's), and backups are the host's.
+	remote := in.Config != nil && in.Config.Server.Mode == "remote"
 	pick := func(q *Question) error {
 		ans, given := in.Answers[q.ID]
 		if given && ans == "" && q.ID != "base_url" { // empty is no answer (only a base URL may be empty)
@@ -226,8 +230,8 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	}
 	model := orDefault(qs[len(qs)-1].Value, mq.Default)
 
-	switch provider {
-	case "deepseek", "claude-code":
+	switch {
+	case remote, provider == "deepseek", provider == "claude-code":
 	default:
 		bq := Question{ID: "base_url", Prompt: "Base URL of the provider's API (empty: the provider's own)", Free: true, Default: preset.BaseURL}
 		if provider == "ollama" {
@@ -238,7 +242,13 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 	if provider == "claude-code" {
-		if err := add(Question{ID: "ack_subscription", Prompt: "Extracting with your Claude subscription: " + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
+		// A client's sends and backfill are extracted on its host's
+		// subscription: the same terms.
+		prompt := "Extracting with your Claude subscription: "
+		if remote {
+			prompt = "The server's host extracts with its Claude subscription, this PC's sessions included: "
+		}
+		if err := add(Question{ID: "ack_subscription", Prompt: prompt + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
 			Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}); err != nil {
 			return nil, nil, err
 		}
@@ -258,9 +268,11 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 
-	if err := add(Question{ID: "backups", Prompt: "Back up the memory every day (encrypted, 7 daily + 4 weekly kept)?", Default: "on", Recommended: "on",
-		Options: []Option{{Value: "on", Label: "daily encrypted backups"}, {Value: "off", Label: "no backups", Caveat: "a lost disk loses the memory"}}}); err != nil {
-		return nil, nil, err
+	if !remote { // a client's backups are its host's
+		if err := add(Question{ID: "backups", Prompt: "Back up the memory every day (encrypted, 7 daily + 4 weekly kept)?", Default: "on", Recommended: "on",
+			Options: []Option{{Value: "on", Label: "daily encrypted backups"}, {Value: "off", Label: "no backups", Caveat: "a lost disk loses the memory"}}}); err != nil {
+			return nil, nil, err
+		}
 	}
 	if in.ReferencePieces > 0 && !serverOnly {
 		if err := add(Question{ID: "reference", Prompt: fmt.Sprintf("%d pieces of an older Hindsight install are wired into Claude Code. Retire them once backsight is installed (undoable; the old server is left untouched)?", in.ReferencePieces),

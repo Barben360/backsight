@@ -59,6 +59,29 @@ func TestForgetARawFactIsReversible(t *testing.T) {
 	}
 }
 
+// While another server answers at the joined address, forget and forget
+// --restore write nothing to it (decision 0073); once the joined one
+// answers again, they do.
+func TestForgetWritesNothingToAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	memories["f1"] = fact("f1", "conversation:s1")
+	recordMismatch(t, home)
+	for _, args := range [][]string{{"forget", "f1"}, {"forget", "--restore", "f1"}} {
+		code, out, errOut := run(t, args...)
+		if code != output.Blocked || !strings.Contains(out+errOut, "a different server answers at this address (server b, joined a)") {
+			t.Errorf("%v: exit %d\n%s%s", args, code, out, errOut)
+		}
+	}
+	if len(curation) != 0 {
+		t.Errorf("written to another server: %q", curation)
+	}
+	setMismatch(t, home, "")
+	if code, out, errOut := run(t, "forget", "f1"); code != output.OK || len(curation) == 0 {
+		t.Errorf("the joined server: exit %d, %q\n%s%s", code, curation, out, errOut)
+	}
+}
+
 // Hindsight curates raw facts only: forgetting an observation retires its
 // source facts (and the observation regenerates without them).
 func TestForgetAnObservationRetiresItsSources(t *testing.T) {
@@ -331,5 +354,33 @@ func TestPurgeHoldsTheMaintenanceLockAndNamesABackupInProgress(t *testing.T) {
 	curation = nil
 	if code, _, errOut := run(t, "forget", "f9", "--purge", "--yes"); code != output.Blocked || !strings.Contains(errOut, "backup create") || len(curation) != 0 {
 		t.Errorf("exit %d, calls %q: %s", code, curation, errOut)
+	}
+}
+
+// forget --purge deletes nothing and writes no tombstone, here or on the
+// server, while another server answers at the joined address.
+func TestForgetPurgeRefusesAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	var mu sync.Mutex
+	var writes []string
+	pointAt(t, home, proxyHindsight(t, fakeHindsight(t), func(_ http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodGet {
+			mu.Lock()
+			writes = append(writes, r.Method+" "+r.URL.Path)
+			mu.Unlock()
+		}
+		return false
+	}))
+	memories["f9"] = fact("f9", "conversation:s9")
+	documentUnits["conversation:s9"] = 1
+	recordMismatch(t, home)
+	code, out, errOut := run(t, "forget", "f9", "--purge", "--yes")
+	if code != output.Blocked || !strings.Contains(out+errOut, "a different server answers at this address") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if st, _ := state.Load(pathsOf(home).StateFile()); len(writes) != 0 || len(st.Tombstones) != 0 {
+		t.Errorf("writes %v, tombstones %+v", writes, st.Tombstones)
 	}
 }

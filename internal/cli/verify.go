@@ -137,6 +137,10 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 		add(verifyCheck{ID: "round_trip", Status: "skipped", Summary: "--no-round-trip"})
 		return res, nil
 	}
+	if mm := otherServer(d, cfg); mm != nil { // its scratch bank is a write too
+		add(verifyCheck{ID: "round_trip", Status: "fail", Summary: mm.Error() + "; the round trip writes nothing to it (backsight doctor)"})
+		return res, nil
+	}
 	add(roundTrip(ctx, cfg, sec))
 	return res, nil
 }

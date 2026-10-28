@@ -1459,7 +1459,9 @@ func TestUpdateApplyPassesOnAChildsNeedsUser(t *testing.T) {
 	}
 }
 
-// A remote server is upgraded on its host: the server step is skipped.
+// A remote server is upgraded on its host: the server step is skipped,
+// and so are the bank template and the docs, plan and run (the host's
+// backsight applies its own).
 func TestUpdateApplySkipsARemoteServer(t *testing.T) {
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
@@ -1467,13 +1469,24 @@ func TestUpdateApplySkipsARemoteServer(t *testing.T) {
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
 	raw, _ := os.ReadFile(d.ConfigFile())
 	_ = os.WriteFile(d.ConfigFile(), []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
-	code, out, _ := run(t, "update", "apply", "--source", src, "--json")
+	hostOnly := func(env applyEnvelope) bool {
+		return hasApplyStep(env.Data.Steps, "bank", "skipped", "the server's host applies its bank template (backsight bank apply there)") &&
+			hasApplyStep(env.Data.Steps, "docs", "skipped", "the server's host indexes its docs")
+	}
+	code, out, _ := run(t, "update", "apply", "--plan", "--source", src, "--json")
+	if env := decodeApply(t, out); code != output.OK || !hostOnly(env) {
+		t.Errorf("plan: exit %d\n%s", code, out)
+	}
+	code, out, _ = run(t, "update", "apply", "--source", src, "--json")
 	env := decodeApply(t, out)
-	if code != output.OK || bins.ran("0.2.0 server") != 0 ||
+	if code != output.OK || bins.ran("0.2.0 server") != 0 || !hostOnly(env) ||
 		!slices.ContainsFunc(env.Data.Steps, func(s step) bool {
 			return s.Name == "server" && s.Status == "skipped" && strings.Contains(s.Detail, "remote")
 		}) {
 		t.Errorf("exit %d, calls %q\n%s", code, bins.calls, out)
+	}
+	if bins.ran("0.2.0 bank apply") != 0 || bins.ran("0.2.0 guide index") != 0 {
+		t.Errorf("a client ran the host's steps: %q", bins.calls)
 	}
 }
 

@@ -42,6 +42,9 @@ const (
 	subagentItems     = 2
 	subagentChars     = 600
 	subagentItemChars = 100
+	// unreachableAfter: a server silent this long gets its banner line
+	// (doctor's server-reach check warns from the same age).
+	unreachableAfter = time.Hour
 )
 
 func init() {
@@ -102,7 +105,7 @@ func (h *hookEnv) sessionStart() []byte {
 	// not recorded.
 	optedOut, _ := h.resolver.OptedOut(h.in.Cwd, h.cfg.Privacy.ExcludePaths)
 	var banner string
-	unavailable := false
+	unavailable, answered, mismatch := false, false, false
 	switch {
 	case h.maintenance():
 		banner, unavailable = instructions.MemoryMaintenance(name), true
@@ -110,6 +113,7 @@ func (h *hookEnv) sessionStart() []byte {
 		banner, unavailable = instructions.MemoryUnavailable(name, "server failing, retried in a few minutes"), true
 	default:
 		text, items, source, err = h.briefing(optedOut)
+		answered = err == nil
 		switch {
 		case err != nil:
 			banner, unavailable = instructions.MemoryUnavailable(name, "server unreachable"), true
@@ -129,6 +133,15 @@ func (h *hookEnv) sessionStart() []byte {
 		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
 			banner += "\n" + line
 		}
+		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" && h.cfg.Server.Mode == "remote" {
+			banner += "\n" + instructions.OtherServerLine()
+			mismatch = true
+		}
+	}
+	// The more specific mismatch line stands alone; a briefing read just
+	// now means the server answers again, whatever the record says.
+	if r := state.LoadReach(h.dirs); !mismatch && !answered && !r.FailingSince.IsZero() && now().Sub(r.FailingSince) > unreachableAfter {
+		banner += "\n" + instructions.UnreachableLine(r.FailingSince)
 	}
 	if held, _ := retain.QuarantinedSessions(h.dirs.CursorsDir()); len(held) > 0 {
 		banner += "\n" + instructions.QuarantineLine(len(held))
@@ -188,8 +201,9 @@ func (h *hookEnv) briefing(optedOut bool) (text string, items []session.Injectio
 	}
 	text, items, source, err = h.recentBriefing(ctx)
 	// A page is created only for a project with memories: an empty or new
-	// one would be summarised from nothing, then pruned, in a loop.
-	if missing && err == nil && source != "empty" {
+	// one would be summarised from nothing, then pruned, in a loop. Nor on
+	// another server than the joined one: nothing is written to it.
+	if missing && err == nil && source != "empty" && otherServer(h.dirs, h.cfg) == nil {
 		pctx, pcancel := context.WithTimeout(ctx, briefingModelTimeout)
 		if cerr := h.client.CreateMentalModel(pctx, h.cfg.Server.Bank, briefingModelID(h.project), "backsight briefing: "+h.project, instructions.BriefingQuery,
 			[]string{"project:" + h.project}, briefingModelTokens); cerr != nil {

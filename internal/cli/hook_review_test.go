@@ -149,6 +149,48 @@ func TestBreakerPausesRecallAfterRepeatedFailures(t *testing.T) {
 	}
 }
 
+// A recall that fails everywhere records the server's silence from its
+// first failure; one that answers clears it (state.Reach, read by doctor
+// and the session banner).
+func TestRecallRecordsReach(t *testing.T) {
+	home := hookHome(t)
+	recallStatus.Store(500)
+	first := time.Now()
+	prompt(t, home, "s1", longPrompt)
+	prompt(t, home, "s2", longPrompt)
+	r := state.LoadReach(pathsOf(home))
+	if r.FailingSince.Before(first.Add(-time.Second)) || r.FailingSince.After(first.Add(time.Second)) {
+		t.Fatalf("failures: %+v", r)
+	}
+	recallStatus.Store(0)
+	prompt(t, home, "s3", longPrompt)
+	if r := state.LoadReach(pathsOf(home)); !r.FailingSince.IsZero() || r.LastOK.IsZero() {
+		t.Errorf("answer: %+v", r)
+	}
+}
+
+// Another server answering at the joined address is not this PC's server
+// answering: a recall it answers leaves the last answer as it was, as the
+// tick does; once the joined one answers again, it is recorded.
+func TestRecallRecordsNoAnswerFromAnotherServer(t *testing.T) {
+	home := hookHome(t)
+	recordMismatch(t, home)
+	last := time.Now().Add(-4 * time.Hour).UTC()
+	state.RecordReach(pathsOf(home), true, last)
+	recallAnswer = hits(0.9)
+	if c := prompt(t, home, "s1", longPrompt).Specific.Context; !strings.Contains(c, "memory m1") {
+		t.Fatalf("no recall, the check below proves nothing:\n%s", c)
+	}
+	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
+		t.Errorf("another server: %+v", r)
+	}
+	setMismatch(t, home, "")
+	prompt(t, home, "s2", longPrompt)
+	if r := state.LoadReach(pathsOf(home)); !r.LastOK.After(last) {
+		t.Errorf("the joined server: %+v", r)
+	}
+}
+
 func TestMaintenanceSkipsRecallAndSaysSoOnce(t *testing.T) {
 	home := hookHome(t)
 	d := pathsOf(home)

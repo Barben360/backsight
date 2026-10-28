@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
@@ -211,5 +214,155 @@ func TestMaintainRecordsTheNoiseReading(t *testing.T) {
 	got, err := retain.LoadNoise(d.State)
 	if err != nil || len(got) != 1 || got[0].Named != 7 || got[0].Total != 40 || !got[0].At.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) {
 		t.Errorf("history %+v %v", got, err)
+	}
+}
+
+// On a client whose server another one replaced at the same address, a
+// tick sends neither sessions nor notes and records the other server's
+// id; once the joined server answers again, both go out.
+func TestJobsTickSendsNothingWhileAnotherServerAnswers(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	other, err := retain.EnsureServerID(context.Background(), cl, "claude-memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "joined", URL: "http://127.0.0.1:" + strconv.Itoa(port)}
+		return nil
+	})
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	_, _ = notesOutbox(pathsOf(home)).Append(newTestNote())
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	before := retained.Load()
+	if code, out, _ := run(t, "jobs", "tick"); code != output.Partial || !strings.Contains(out, "a different server answers at this address") || retained.Load() != before {
+		t.Fatalf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 1 {
+		t.Errorf("want the note kept, got %d queued", n)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.RemoteServer == nil || st.RemoteServer.Mismatch != other {
+		t.Errorf("mismatch not recorded: %+v", st.RemoteServer)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error { s.RemoteServer.ID = other; return nil })
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:1") || !strings.Contains(out, "notes sent 1") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if st, _ := state.Load(pathsOf(home).StateFile()); st.RemoteServer.Mismatch != "" {
+		t.Errorf("mismatch not cleared: %+v", st.RemoteServer)
+	}
+}
+
+// recordMismatch makes home a client (server.mode remote) that joined
+// server a, whose last check found server b at its address.
+func recordMismatch(t *testing.T, home string) {
+	t.Helper()
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	if err := os.WriteFile(cfgPath, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setMismatch(t, home, "b")
+}
+
+func setMismatch(t *testing.T, home, got string) {
+	t.Helper()
+	if err := state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", Mismatch: got}
+		if got != "" {
+			s.RemoteServer.MismatchAt = time.Now()
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With recording off, a tick still prunes the briefing pages, but not on
+// another server than the joined one.
+func TestTickWithWriteOffPrunesNothingOnAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	id := briefingModelID("billing")
+	mentalModels[id] = `{"id":"` + id + `","content":"x","tags":["project:billing"],"last_refreshed_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
+	recordMismatch(t, home)
+	appendConfig(t, home, "[components]\nread = false\nwrite = false")
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; !ok {
+		t.Fatal("a page deleted on another server")
+	}
+	setMismatch(t, home, "")
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; ok {
+		t.Error("page kept once the joined server answers")
+	}
+}
+
+// A tick asks the server once whether it answers and records it, with
+// every session still to send (not only the one a stopped flush tried):
+// doctor and the session banner read them without a call of their own.
+func TestTickRecordsReachAndWaiting(t *testing.T) {
+	home := devInstall(t, true) // closed port: the server is down
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	for _, sid := range []string{"s1", "s2", "s3"} {
+		writeTranscript(t, home, sid, time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	}
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	if code, out, _ := run(t, "jobs", "tick"); code != output.Partial || !strings.Contains(out, "retry:1") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	r := state.LoadReach(pathsOf(home))
+	if !r.FailingSince.Equal(time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)) || !r.LastOK.IsZero() || r.SessionsWaiting != 3 {
+		t.Fatalf("server down: %+v", r)
+	}
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC))
+	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "sent:3") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	r = state.LoadReach(pathsOf(home))
+	if !r.FailingSince.IsZero() || !r.LastOK.Equal(time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC)) || r.SessionsWaiting != 0 {
+		t.Errorf("server back: %+v", r)
+	}
+}
+
+// With recording off nothing is sent, and the count of sessions waiting
+// is still refreshed, never left from an older tick.
+func TestTickWithWriteOffRefreshesWaiting(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	state.RecordWaiting(pathsOf(home), 7)
+	appendConfig(t, home, "[components]\nwrite = false")
+	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	writeTranscript(t, home, "s2", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	if r := state.LoadReach(pathsOf(home)); r.SessionsWaiting != 2 || !r.LastOK.Equal(time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("write off: %+v", r)
+	}
+}
+
+// Another server answering at the joined address is not this PC's server
+// answering: the tick leaves the last answer as it was.
+func TestTickRecordsNoAnswerFromAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recordMismatch(t, home)
+	last := time.Date(2026, 10, 24, 6, 0, 0, 0, time.UTC)
+	state.RecordReach(pathsOf(home), true, last)
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
+		t.Errorf("another server: %+v", r)
 	}
 }

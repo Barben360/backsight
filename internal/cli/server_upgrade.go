@@ -69,7 +69,7 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	if err != nil {
 		return err
 	}
-	if err := requireLocal(cfg); err != nil {
+	if err := requireLocal(cfg, "server upgrade"); err != nil {
 		return err
 	}
 	d, _, err := machine()

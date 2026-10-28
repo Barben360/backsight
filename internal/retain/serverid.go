@@ -35,6 +35,41 @@ func ReadServerID(ctx context.Context, cl *hindsight.Client, bank string) (strin
 	return id, nil
 }
 
+// ServerMismatch: the server answering at the joined address is not the
+// one this client joined (Want); Got is its id, "" for a server with none.
+type ServerMismatch struct{ Want, Got string }
+
+func (e *ServerMismatch) Error() string {
+	return "a different server answers at this address (server " + e.GotName() + ", joined " + e.Want + "): run backsight connect with its token"
+}
+
+// GotName is Got, or "none" for a server without an id: what state.json
+// records as the mismatch, where "" means none.
+func (e *ServerMismatch) GotName() string {
+	if e.Got == "" {
+		return "none"
+	}
+	return e.Got
+}
+
+// CheckServer says whether the server behind cl is the one this client
+// joined (want, its id). want "" (no server joined, every install before
+// connect) asks nothing. A server with another id, or with none, is a
+// *ServerMismatch; a failed read is another error, which proves nothing.
+func CheckServer(ctx context.Context, cl *hindsight.Client, bank, want string) error {
+	if want == "" {
+		return nil
+	}
+	got, err := ReadServerID(ctx, cl, bank)
+	switch {
+	case err != nil:
+		return err
+	case got != want:
+		return &ServerMismatch{Want: want, Got: got}
+	}
+	return nil
+}
+
 // EnsureServerID returns bank's server id, writing a new random one
 // (UUIDv4, synchronously, no LLM call) when the server has none yet.
 func EnsureServerID(ctx context.Context, cl *hindsight.Client, bank string) (string, error) {

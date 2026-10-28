@@ -104,3 +104,36 @@ func TestStoreHonoursTheConfiguredOutboxMax(t *testing.T) {
 		t.Errorf("the refused note was written: %d bytes", len(raw))
 	}
 }
+
+// While a different server answers at the joined address (a jobs tick
+// recorded it), a note stays queued, sent to no server: no extra request
+// on the hot path, the warning names doctor.
+func TestStoreKeepsTheNoteWhileAnotherServerAnswers(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recordMismatch(t, home)
+	before := retained.Load()
+	code, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Kept while another server answers.", "--json")
+	var env struct {
+		Data storeResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if code != output.OK || env.Data.Status != "queued" || !strings.Contains(env.Data.Warning, "backsight doctor") || retained.Load() != before {
+		t.Errorf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 1 {
+		t.Errorf("want the note queued, got %d", n)
+	}
+}
+
+// A mismatch record left after a switch back to local mode holds nothing:
+// only a client checks the server it joined.
+func TestStoreSendsInLocalModeWhateverTheRecord(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	setMismatch(t, home, "b")
+	before := retained.Load()
+	if code, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Sent from a local install.", "--json"); code != output.OK || !strings.Contains(out, `"status": "stored"`) || retained.Load() != before+1 {
+		t.Errorf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
+	}
+}

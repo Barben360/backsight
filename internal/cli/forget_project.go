@@ -157,6 +157,9 @@ func runForgetProject(ctx context.Context, f forgetProjectFlags) (forgetProjectR
 			Message: "forget --project needs answers to confirm_project (--answer confirm_project=<project name>): nothing was changed"}
 	}
 	if !f.purge {
+		if err := heldWrites(); err != nil { // a purge refuses in purgeWrite
+			return res, err
+		}
 		return forgetProjectFacts(ctx, cl, bank, f, sel, res)
 	}
 	return purgeProject(ctx, cl, bank, f, sel, res)

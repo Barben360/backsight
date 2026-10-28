@@ -180,6 +180,10 @@ type position struct {
 	legacy     int
 	legacyUUID string
 	found      bool // the server holds at least one of the documents
+	// split: projects whose document's last_uuid this transcript lacks, a
+	// session continued on two PCs (decision 0073): no at entry, so what
+	// this PC's sent index lacks goes out as the next segment.
+	split map[string]bool
 	// purged: what tombstones say a purge deleted (forget --purge): held
 	// as if the server still had it, never sent again.
 	purged purge
@@ -194,23 +198,29 @@ func (p position) holds(i int, project string) bool {
 }
 
 // serverPosition reads docs against recs. bad, when not empty, is why the
-// position cannot be trusted (a record recs lack, an invalid segment): the
-// session is quarantined, since sending would duplicate or replace.
+// position cannot be trusted: the session is quarantined, since sending
+// would duplicate or replace. That is an invalid segment number, or a
+// legacy position (the record up to which conversation:<sid> holds every
+// project's, the whole last_uuid of a document from before per-project
+// documents) this transcript lacks. A per-project document whose last_uuid
+// it lacks is split instead (decision 0073, "never lose"): continued on
+// another PC after this copy, its segments go on from the server's.
 func serverPosition(recs []transcript.Record, docs []serverDoc, homeDoc string) (position, string) {
-	pos := position{at: map[string]int{}, segments: map[string]int{}, last: map[string]string{}, legacy: -1, purged: purge{all: -1}}
+	pos := position{at: map[string]int{}, segments: map[string]int{}, last: map[string]string{}, split: map[string]bool{}, legacy: -1, purged: purge{all: -1}}
 	for _, d := range docs {
 		if !d.found {
 			continue
-		}
-		i := indexOf(recs, d.lastUUID)
-		if i < 0 {
-			return pos, "the server holds this session up to record " + d.lastUUID + ", which this transcript does not contain"
 		}
 		seg, err := strconv.Atoi(d.segment)
 		if err != nil || seg < 1 {
 			return pos, "the server's document " + d.id + " has no valid segment number; sending would replace it"
 		}
-		pos.at[d.project], pos.segments[d.project], pos.last[d.project], pos.found = i, seg, d.lastUUID, true
+		pos.segments[d.project], pos.last[d.project], pos.found = seg, d.lastUUID, true
+		if i := indexOf(recs, d.lastUUID); i >= 0 {
+			pos.at[d.project] = i
+		} else {
+			pos.split[d.project] = true
+		}
 		if d.id == homeDoc && d.legacy != "" {
 			if pos.legacy = indexOf(recs, d.legacy); pos.legacy < 0 {
 				return pos, "the server holds this session up to record " + d.legacy + ", which this transcript does not contain"

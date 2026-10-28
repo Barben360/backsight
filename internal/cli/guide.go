@@ -211,10 +211,15 @@ func newGuideSearchCmd(e *env) *cobra.Command {
 	return cmd
 }
 
+// hostIndexesDocs is the docs step on a client (setup, update apply): the
+// docs bank is the server host's, indexed by its backsight.
+const hostIndexesDocs = "the server's host indexes its docs"
+
 // guideSearch answers query semantically from the docs bank, refreshing it
 // when it holds another docs version, else (or with mode keyword) by the
 // local keyword search, saying why. With mode semantic a failure is an
-// error instead of a fallback.
+// error instead of a fallback. A client of a shared server never writes
+// the docs bank, its host's: on other docs it searches by keyword.
 func guideSearch(ctx context.Context, c guide.Corpus, query, mode string, limit int) (guideSearchResult, error) {
 	res := guideSearchResult{Query: query, Hits: []guideHit{}}
 	keyword := func(reason string) (guideSearchResult, error) {
@@ -245,8 +250,11 @@ func guideSearch(ctx context.Context, c guide.Corpus, query, mode string, limit 
 	ctx, cancel := context.WithTimeout(ctx, guideTimeout)
 	defer cancel()
 	res.Bank = guide.Bank(cfg.Server.Bank)
-	hits, refreshed, err := guide.Search(ctx, cl, cfg.Server.Bank, c, query, limit)
+	hits, refreshed, err := guide.Search(ctx, cl, cfg.Server.Bank, c, query, limit, cfg.Server.Mode == "local")
 	res.Refreshed = refreshed
+	if errors.Is(err, guide.ErrNotIndexed) {
+		return keyword("the server's docs bank holds the host's docs version")
+	}
 	if err != nil {
 		return keyword(searchFailure(cfg, res.Bank, err))
 	}
@@ -334,6 +342,9 @@ func newGuideIndexCmd(e *env) *cobra.Command {
 			}
 			cfg, sec, err := loadServerConfig()
 			if err != nil {
+				return err
+			}
+			if err := requireLocal(cfg, "guide index"); err != nil {
 				return err
 			}
 			cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, guideCallTimeout)

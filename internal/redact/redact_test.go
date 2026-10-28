@@ -3,8 +3,12 @@ package redact
 import (
 	"encoding/base64"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/token"
 )
 
 // Secrets are assembled at runtime: the file itself holds no scannable token.
@@ -356,5 +360,22 @@ func TestLocalSecrets(t *testing.T) {
 	SetLocalSecrets(nil)
 	if out, _ := Text("the llm key is " + plain); !strings.Contains(out, plain) {
 		t.Errorf("a cleared source still redacts: %q", out)
+	}
+}
+
+// A connection token carries the API key: it is masked wherever it sits,
+// glued to a word or after an escaped newline in a JSON string included.
+func TestRedactMasksAnEncodedToken(t *testing.T) {
+	sec := config.Secrets{}
+	config.GenerateMissing(&sec)
+	tok := token.Encode(token.Token{URL: "http://100.101.1.2:8888", Bank: "backsight", APIKey: sec.APIKey, ServerID: "0b6f1c1e-5b0e-4f4e-9d0c-2b8f3c5a7e11"})
+	for _, in := range []string{"here: " + tok, "x" + tok, `\n` + tok, `{"t":"` + tok + `"}`} {
+		out, kinds := Text(in)
+		if strings.Contains(out, tok[len(token.Prefix):]) || strings.Contains(out, sec.APIKey) {
+			t.Errorf("%q left the token: %q", in, out)
+		}
+		if !slices.Contains(kinds, "backsight_token") {
+			t.Errorf("%q: kinds %v", in, kinds)
+		}
 	}
 }

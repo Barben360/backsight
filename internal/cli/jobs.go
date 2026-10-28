@@ -52,6 +52,9 @@ type tickResult struct {
 	MS     int    `json:"ms"`
 }
 
+// reachCheckTimeout bounds the tick's one health call.
+const reachCheckTimeout = 5 * time.Second
+
 func newJobsTickCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tick",
@@ -105,18 +108,32 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// One look whether the server answers, for doctor's server-reach
+			// check and the session banner (the hooks record only recalls).
+			hctx, hcancel := context.WithTimeout(cmd.Context(), reachCheckTimeout)
+			_, herr := f.Client.Health(hctx)
+			hcancel()
+			files := transcripts(home)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
+				recordReach(d, cfg, herr)
+				state.RecordWaiting(d, f.Unsent(files))
 				res.Status, res.Reason = "skipped", "components.write is off"
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 				}
-				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
+				if otherServer(d, cfg) == nil { // nothing is written to another server
+					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
+				}
 				pruneSessions(d)
 				return finish(nil)
 			}
 			res.Epoch = reconcile(cmd.Context(), f)
-			rep, failed := reportFlush(flushAll(cmd, f, transcripts(home), retain.Options{}, d))
+			recordReach(d, cfg, herr) // after the reconcile: it records another server at the address
+			rep, failed := reportFlush(flushAll(cmd, f, files, retain.Options{}, d))
 			res.Sessions = rep.Counts
+			// Every unsent session, from the transcripts: a flush that stops
+			// at the first failure (server down, a hold) counts one.
+			state.RecordWaiting(d, f.Unsent(files))
 			tags, terr := f.Client.Tags(cmd.Context(), cfg.Server.Bank, "project:")
 			if terr != nil {
 				tags = nil // not read: no project is taken for forgotten
@@ -139,14 +156,21 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					}
 				}
 			}
-			res.Notes, err = notesOutboxFor(d, cfg).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
-			if err != nil || res.Notes.Kept > 0 {
-				failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
+			if otherServer(d, cfg) != nil {
+				// Not the server this client joined: nothing is written to
+				// it, notes stay queued (decision 0073).
+				res.Notes.Kept, _ = notesOutboxFor(d, cfg).Pending()
+				failed = &output.Error{Code: output.Partial, Message: "nothing sent: a different server answers at the joined address; run backsight doctor"}
+			} else {
+				res.Notes, err = notesOutboxFor(d, cfg).Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+				if err != nil || res.Notes.Kept > 0 {
+					failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
+				}
+				// After the sends: a slow server delays this look, never them.
+				res.Purges = guardTick(cmd.Context(), f, cfg)
+				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			}
-			// After the sends: a slow server delays this look, never them.
-			res.Purges = guardTick(cmd.Context(), f, cfg)
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
-			res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -154,6 +178,16 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			return finish(failed)
 		},
 	}
+}
+
+// recordReach records the tick's health call (state.Reach). An answer
+// while another server holds the joined address is not this PC's server
+// answering: only a failure is recorded then.
+func recordReach(d paths.Dirs, cfg config.Config, herr error) {
+	if herr == nil && otherServer(d, cfg) != nil {
+		return
+	}
+	state.RecordReach(d, herr == nil, now())
 }
 
 // ensureSelfCheck: the first tick of a binary hashes it against its signed

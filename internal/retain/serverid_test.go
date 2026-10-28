@@ -3,6 +3,7 @@ package retain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -58,5 +59,35 @@ func TestReadServerIDBrokenMetadata(t *testing.T) {
 	}
 	if id, err := EnsureServerID(context.Background(), cl, "claude-memory"); err == nil || id != "" {
 		t.Errorf("ensure replaced a broken document: %q %v", id, err)
+	}
+}
+
+// A client bound to server a holds when another server answers at its
+// address: one with another id, or one with none (a fresh install there).
+// No binding (every install before connect) asks nothing.
+func TestCheckServerMismatch(t *testing.T) {
+	ctx := context.Background()
+	h := &banksHS{docs: map[string]map[string]json.RawMessage{"claude-memory-control": {ServerDocument: json.RawMessage(`{"server_id":"b"}`)}}, configs: map[string]map[string]any{}}
+	cl := h.client(t)
+	var mm *ServerMismatch
+	err := CheckServer(ctx, cl, "claude-memory", "a")
+	if !errors.As(err, &mm) || mm.Want != "a" || mm.Got != "b" ||
+		err.Error() != "a different server answers at this address (server b, joined a): run backsight connect with its token" {
+		t.Errorf("another id: %v", err)
+	}
+	if err := CheckServer(ctx, cl, "claude-memory", "b"); err != nil {
+		t.Errorf("the joined server: %v", err)
+	}
+	delete(h.docs, "claude-memory-control")
+	if err := CheckServer(ctx, cl, "claude-memory", "a"); !errors.As(err, &mm) || mm.Got != "" || !strings.Contains(err.Error(), "(server none, joined a)") {
+		t.Errorf("no id: %v", err)
+	}
+	calls := len(h.calls)
+	if err := CheckServer(ctx, cl, "claude-memory", ""); err != nil || len(h.calls) != calls {
+		t.Errorf("unbound: %v, %d request(s)", err, len(h.calls)-calls)
+	}
+	h.docs["claude-memory-control"] = map[string]json.RawMessage{ServerDocument: json.RawMessage(`{}`)}
+	if err := CheckServer(ctx, cl, "claude-memory", "a"); err == nil || errors.As(err, &mm) {
+		t.Errorf("unreadable id: %v, want an error that is not a mismatch", err)
 	}
 }

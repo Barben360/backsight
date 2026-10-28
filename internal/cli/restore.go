@@ -118,10 +118,20 @@ func refuseWhileBusy(d paths.Dirs) error {
 	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale {
 		return &output.Error{Code: output.Blocked, Message: "maintenance in progress: " + held.Error()}
 	}
-	if state.RestoreIncomplete(d) {
-		return &output.Error{Code: output.Blocked, Message: "a restore did not finish (" + d.RestoreMarker() + "): run backsight doctor for the way back"}
+	if restoreIncomplete(d) {
+		return restoreIncompleteError(d)
 	}
 	return nil
+}
+
+// restoreIncomplete is replaced by tests.
+var restoreIncomplete = state.RestoreIncomplete
+
+// restoreIncompleteError is the refusal while a restore did not finish. It
+// does not look at the marker again: a caller that saw it is refused even
+// if the marker has gone since.
+func restoreIncompleteError(d paths.Dirs) error {
+	return &output.Error{Code: output.Blocked, Message: "a restore did not finish (" + d.RestoreMarker() + "): run backsight doctor for the way back"}
 }
 
 func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags, add func(name, status, detail string)) error {
@@ -141,7 +151,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if err != nil {
 		return err
 	}
-	if err := requireLocal(cfg); err != nil {
+	if err := requireLocal(cfg, "restore"); err != nil {
 		return err
 	}
 	d, _, err := machine()

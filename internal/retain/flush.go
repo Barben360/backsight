@@ -73,9 +73,22 @@ type Flusher struct {
 	Now         func() time.Time
 	RetainSince time.Time // zero: no boundary
 	Index       *SentIndex
-	// Hold: the bank's restore epoch could not be reconciled (Reconcile):
-	// nothing is sent until a later run reconciles (decision 0044).
+	// Hold: the bank's restore epoch could not be reconciled, or another
+	// server answers at the joined address (Reconcile): nothing is sent
+	// until a later run reconciles (decisions 0044, 0073).
 	Hold string
+	// ServerID: the id of the server this client joined (connect); ""
+	// when it joined none, which checks no id.
+	ServerID string
+	// SendsGeneration: state.json's when the flusher was built. Once
+	// connect started the sends over for another server, this flusher's
+	// client, bank and sent index are the old server's: it sends nothing
+	// and saves no cursor, a next run does.
+	SendsGeneration int
+	// NoCursors: Survey reads no session cursor, counting for a server
+	// this PC has sent nothing to yet (connect's plan, before its cursors
+	// move aside).
+	NoCursors bool
 	// Outbox takes the subagent reports a reconcile rebuilds; zero: the
 	// notes outbox of Dirs (NotesOutbox).
 	Outbox Outbox
@@ -152,6 +165,12 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	// rename) waits for the flushes holding one, never for this one.
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return fail(Maintenance, "maintenance in progress")
+	}
+	// Under the session's lock too: connect waits for the flushes holding
+	// one, and a later one sees its new generation.
+	if err := f.startedOver(); err != nil {
+		res.Stop = true // every session of this run is in the same case
+		return fail(Retry, err.Error())
 	}
 	// Under the session's lock, whatever the flush did: the path rule's
 	// shadow answers are local and never wait for the server.
@@ -326,6 +345,13 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	if bad != "" {
 		return nil, f.quarantine(res, cur, bad), true
 	}
+	for _, d := range docs {
+		if pos.split[d.project] {
+			if err := RecordSplit(f.Dirs.State, sid, d.id, now); err != nil {
+				return retry(err.Error())
+			}
+		}
+	}
 	// What a purge deleted counts as sent: held like what the server holds,
 	// though no segment of it is left to append to.
 	pos.purged = purgedOf(sid, recs, tombs)
@@ -375,6 +401,10 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 			// Sent, but missing from the server's metadata (async retain
 			// still running, or a crash before the cursor was saved):
 			// never send it twice.
+			held = true
+		case own(r.UUID) && pos.split[a.project]:
+			// Sent from this PC, before or after the other PC continued
+			// the session (decision 0073): the server has it.
 			held = true
 		case own(r.UUID) && resend:
 			unmark, resent = append(unmark, key), append(resent, r.UUID)
@@ -737,6 +767,19 @@ func (f *Flusher) waitedTooLong(sid string, now time.Time) bool {
 	}
 	_ = fsutil.WriteAtomic(pendingPath(f.Dirs.CursorsDir(), sid), []byte(now.UTC().Format(time.RFC3339)), 0o600)
 	return false
+}
+
+// startedOver says this PC's sends started over for another server
+// (connect) since the flusher was built.
+func (f *Flusher) startedOver() error {
+	st, err := state.Load(f.Dirs.StateFile())
+	if err != nil {
+		return err
+	}
+	if st.SendsGeneration != f.SendsGeneration {
+		return errors.New("this PC's sends started over for another server (connect) since this run began: the next run sends")
+	}
+	return nil
 }
 
 // lockSession takes the per-session lock, taking over one whose owner died

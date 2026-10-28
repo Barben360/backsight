@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -635,6 +636,27 @@ func TestCheckBackfill(t *testing.T) {
 	}
 }
 
+// A session continued on two PCs is information, never a warning: nothing
+// was lost, its shared part may be stored twice (decision 0073). Doctor
+// names the sessions.
+func TestSplitSessionIsInfo(t *testing.T) {
+	f := newFixture(t)
+	if c := check(t, f.run(), "split-session"); c.Status != OK || c.Summary != "no session continued on two PCs" {
+		t.Errorf("none: %+v", c)
+	}
+	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	for _, s := range [][2]string{{"s1", "conversation:s1"}, {"s1", "conversation:s1@beta"}, {"s2", "conversation:s2"}} {
+		if err := retain.RecordSplit(f.env.Dirs.State, s[0], s[1], at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := check(t, f.run(), "split-session")
+	if c.Status != Info || c.Summary != "2 session(s) continued on two PCs: their shared part may be stored twice" ||
+		c.Detail != "s1, s2" || c.Fix != "" {
+		t.Errorf("two: %+v", c)
+	}
+}
+
 // Only a dead owner's lock is reported; a held one is not.
 func TestCheckLocks(t *testing.T) {
 	d := paths.Dirs{State: t.TempDir()}
@@ -679,6 +701,24 @@ func TestCheckBackupAge(t *testing.T) {
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\nenabled = false\n", 0o600)
 	if c := checkBackup(f.env, now); c.Status != Info || !strings.Contains(c.Summary, "backups are off") {
 		t.Errorf("off: %+v", c)
+	}
+}
+
+// A client's memory is on the server's host, which backs it up: no
+// archive here, or old ones from before connect, is information, never a
+// warning whose fix (backup create) a client refuses.
+func TestCheckBackupOnAClient(t *testing.T) {
+	f := newFixture(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	dir := filepath.Join(f.home, "bk")
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \"http://192.168.1.20:8888\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	want := "backups are made on the server's host (backsight backup create there)"
+	if c := checkBackup(f.env, now); c.Status != Info || c.Summary != want || c.Fix != "" {
+		t.Errorf("none: %+v", c)
+	}
+	put(t, filepath.Join(dir, backup.Name(now.Add(-30*24*time.Hour))), "x", 0o600)
+	if c := checkBackup(f.env, now); c.Status != Info || c.Summary != want || c.Fix != "" {
+		t.Errorf("an old archive of its own server: %+v", c)
 	}
 }
 
@@ -810,6 +850,34 @@ func TestCheckBankConfigTellsAnOlderTemplateFromAServerChange(t *testing.T) {
 	}
 }
 
+// On a client of a shared server the bank's settings are its host's: the
+// check is info, says how they compare with this backsight's template,
+// and its fix runs on the host. Nothing local (the recorded hash) counts.
+func TestBankConfigOnAClientIsInfo(t *testing.T) {
+	current, edited := server.Current(), server.Current()
+	edited.Config["enable_observations"] = false
+	for _, tc := range []struct {
+		name   string
+		bank   map[string]any
+		detail string
+		fix    string
+	}{
+		{"same template", current.Config, "bank settings match backsight's template", ""},
+		{"another template", edited.Config, "enable_observations", "on the server's host: backsight bank apply"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, overridesOf(t, tc.bank)}})
+			put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+			put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+			c := check(t, f.run(), "bank-config")
+			if c.Status != Info || !strings.Contains(c.Summary, "the server's host") || !strings.Contains(c.Detail, tc.detail) || c.Fix != tc.fix {
+				t.Errorf("%+v", c)
+			}
+		})
+	}
+}
+
 // A client behind the bank's restore epoch warns with the fix (its cursors
 // may hold as sent what the restore lost); on the same epoch it is ok, and
 // an unreachable server skips the check.
@@ -867,6 +935,144 @@ func TestServerOnlyHostSkipsTheClientChecks(t *testing.T) {
 	for _, id := range []string{"backup", "pending-restore", "bank"} {
 		if c := check(t, r, id); strings.Contains(c.Summary, "not a client") {
 			t.Errorf("%s is a server check, reported %+v", id, c)
+		}
+	}
+}
+
+const serverIDPath = "/v1/default/banks/coding-agent%3A%3Amemoire-control/documents/backsight%3Aserver"
+
+// boundClient is a client of srv that joined server id.
+func boundClient(t *testing.T, srv *httptest.Server, mode, id string) *fixture {
+	f := newFixture(t)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \""+mode+"\"\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	if id != "" {
+		if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+			RemoteServer: &state.RemoteServer{ID: id, URL: srv.URL}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+// A client whose address answers with another server's id, or a server
+// with none, is in error: it sends nothing until connect runs again.
+func TestServerIDMismatchIsAnError(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{serverIDPath: {200, `{"id":"backsight:server","document_metadata":{"server_id":"b"}}`}})
+	c := check(t, boundClient(t, srv, "remote", "a").run(), "server-id")
+	if c.Status != Error || !strings.Contains(c.Summary, "server b") || !strings.Contains(c.Summary, "joined a") ||
+		c.Fix != "backsight connect --token-file FILE with a token from the server now at "+srv.URL+" (backsight server token there)" {
+		t.Errorf("another id: %+v", c)
+	}
+	expect(t, check(t, boundClient(t, srv, "remote", "b").run(), "server-id"), OK, "server b")
+	expect(t, check(t, boundClient(t, fakeServer(t), "remote", "a").run(), "server-id"), Error, "server none")
+}
+
+// Only a client bound to a server checks its id: an install before
+// connect has no binding, and a machine running its own server is not
+// bound to one.
+func TestServerIDCheckOnlyOnABoundClient(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{serverIDPath: {200, `{"id":"backsight:server","document_metadata":{"server_id":"b"}}`}})
+	for name, f := range map[string]*fixture{
+		"remote, no binding": boundClient(t, srv, "remote", ""),
+		"local, bound":       boundClient(t, srv, "local", "a"),
+	} {
+		for _, c := range f.run().Checks {
+			if c.ID == "server-id" {
+				t.Errorf("%s: %+v", name, c)
+			}
+		}
+	}
+}
+
+// reachURL: a server that does not answer.
+const reachURL = "http://127.0.0.1:1"
+
+// reachingClient is a client of reachURL whose server last answered at
+// lastOK and has failed since failing (zero: it answers), with one queued
+// note and two sessions kept for the next tick.
+func reachingClient(t *testing.T, now, lastOK, failing time.Time) *fixture {
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \""+reachURL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	put(t, filepath.Join(f.env.Dirs.OutboxDir(), "notes.jsonl"), `{"operation_id":"a","content":"x"}`+"\n", 0o600)
+	state.RecordReach(f.env.Dirs, true, lastOK)
+	if !failing.IsZero() {
+		state.RecordReach(f.env.Dirs, false, failing)
+	}
+	state.RecordWaiting(f.env.Dirs, 2)
+	return f
+}
+
+// server-reach says when the server last answered and what waits on this
+// PC; a silence over an hour warns, with where to look. Never an error:
+// the server check carries a live failure.
+func TestServerReachWarnsAfterAnHour(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	c := check(t, reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-59*time.Minute)).run(), "server-reach")
+	want := "last answer 2026-10-28 09:00 UTC; breaker closed; 1 note(s) queued; 2 session(s) waiting"
+	if c.Status != Info || c.Summary != want || c.Fix != "" {
+		t.Errorf("59 min: %+v", c)
+	}
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-61*time.Minute))
+	put(t, filepath.Join(f.env.Dirs.State, "breaker.json"), `{"open_until":"2026-10-28T12:05:00Z"}`, 0o600)
+	c = check(t, f.run(), "server-reach")
+	want = "last answer 2026-10-28 09:00 UTC; breaker open until 2026-10-28 12:05 UTC; 1 note(s) queued; 2 session(s) waiting"
+	if c.Status != Warn || c.Summary != want ||
+		c.Fix != "the server at "+reachURL+" has not answered since 2026-10-28 10:59 UTC: check it on its host (backsight server status there) or the network; nothing is lost" {
+		t.Errorf("61 min: %+v", c)
+	}
+	c = check(t, reachingClient(t, now, now.Add(-5*time.Minute), time.Time{}).run(), "server-reach")
+	if c.Status != Info || !strings.HasPrefix(c.Summary, "last answer 2026-10-28 11:55 UTC; breaker closed;") {
+		t.Errorf("answering: %+v", c)
+	}
+}
+
+// A server that answers doctor now is not reported silent, whatever the
+// record says until the next recall or tick catches up.
+func TestServerReachAnswersNowAfterASilence(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+fakeServer(t).URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	r := f.run()
+	expect(t, check(t, r, "server"), OK, "Hindsight")
+	c := check(t, r, "server-reach")
+	if c.Status != Info || c.Fix != "" ||
+		c.Summary != "last answer now; it was silent from 2026-10-28 10:00 UTC; breaker closed; 1 note(s) queued; 2 session(s) waiting" {
+		t.Errorf("answers now: %+v", c)
+	}
+}
+
+// A server-only host runs no hooks: its reach is not a client's.
+func TestServerReachIsNotAClientCheckOnAServerOnlyHost(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
+	r := f.run()
+	n := 0
+	for _, c := range r.Checks {
+		if c.ID == "server-reach" {
+			n++
+		}
+	}
+	if c := check(t, r, "server-reach"); n != 1 || c.Status != Info || c.Summary != "not a client: server-only host" {
+		t.Errorf("%d server-reach check(s), %+v", n, c)
+	}
+}
+
+// A client compares its server's Hindsight version with its pin and warns
+// on a skew, naming the fix; a PC running its own server has no skew.
+func TestVersionSkewOnlyOnAClient(t *testing.T) {
+	srv := fakeServerWith(t, map[string]reply{"/version": {200, `{"api_version":"1.2.0"}`}})
+	c := check(t, boundClient(t, srv, "remote", "").run(), "version-skew")
+	if c.Status != Warn || c.Summary != "server runs Hindsight 1.2.0, this backsight pins "+server.PinnedVersion() ||
+		!strings.Contains(c.Fix, "update apply") {
+		t.Errorf("remote: %+v", c)
+	}
+	for _, ch := range boundClient(t, srv, "local", "").run().Checks {
+		if ch.ID == "version-skew" {
+			t.Errorf("local: %+v", ch)
 		}
 	}
 }

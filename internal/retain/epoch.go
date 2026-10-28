@@ -148,13 +148,60 @@ const epochSkew = time.Hour
 // entries of what the server lacks; then the epoch is recorded in state.
 // Anything that stops it (an unreadable epoch, maintenance, a session
 // being flushed) drops nothing more and sets Hold: the next run retries.
+// First of all, the server must be the one this client joined
+// (checkServer): another one holds every send, with nothing reconciled.
 func (f *Flusher) Reconcile(ctx context.Context) (Reconciled, error) {
+	if err := f.checkServer(ctx); err != nil {
+		f.Hold = err.Error()
+		return Reconciled{}, err
+	}
 	rec, err := f.reconcile(ctx)
 	f.Hold = ""
 	if err != nil {
 		f.Hold = "restore epoch not reconciled: " + err.Error()
 	}
 	return rec, err
+}
+
+// checkServer compares the server's id with the one this client joined
+// (decision 0073) and records the outcome where doctor, the session banner
+// and store read it: another id is recorded as the mismatch, the joined
+// id clears it. An id that cannot be read records nothing: a mismatch
+// recorded earlier still holds (the last server that answered was
+// another), and without one the run goes on (its sends fail or not on
+// their own).
+func (f *Flusher) checkServer(ctx context.Context) error {
+	err := CheckServer(ctx, f.Client, f.Bank, f.ServerID)
+	var mm *ServerMismatch
+	switch {
+	case errors.As(err, &mm):
+		at := f.Now().UTC()
+		_ = state.Update(f.Dirs, "server id check", func(s *state.State) error {
+			if rs := s.RemoteServer; rs != nil && rs.ID == f.ServerID && rs.Mismatch != mm.GotName() {
+				rs.Mismatch, rs.MismatchAt = mm.GotName(), at
+			}
+			return nil
+		})
+		return err
+	case err != nil:
+		st, lerr := state.Load(f.Dirs.StateFile())
+		if rs := st.RemoteServer; lerr == nil && rs != nil && rs.ID == f.ServerID && rs.Mismatch != "" {
+			return &ServerMismatch{Want: f.ServerID, Got: rs.Mismatch}
+		}
+		return nil
+	case f.ServerID == "":
+		return nil
+	}
+	st, err := state.Load(f.Dirs.StateFile())
+	if rs := st.RemoteServer; err != nil || rs == nil || rs.Mismatch == "" {
+		return nil // nothing to clear: no write on every run
+	}
+	return state.Update(f.Dirs, "server id check", func(s *state.State) error {
+		if rs := s.RemoteServer; rs != nil && rs.ID == f.ServerID {
+			rs.Mismatch, rs.MismatchAt = "", time.Time{}
+		}
+		return nil
+	})
 }
 
 func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
@@ -164,6 +211,9 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	}
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return rec, errors.New("maintenance in progress")
+	}
+	if err := f.startedOver(); err != nil {
+		return rec, err
 	}
 	// The purge tombstones first, every run: another client's, or the
 	// only copy after a reinstall, before anything is sent or dropped.
@@ -341,7 +391,9 @@ func (f *Flusher) dropSession(ctx context.Context, sid string, cur Cursor, queue
 	// A record is lost when this session sent it (its session key) and its
 	// project's document no longer holds it: positions are per document, as
 	// the resync reads them. A position that cannot be trusted leaves the
-	// index alone: the resync quarantines.
+	// index alone: the resync quarantines. A split document (decision
+	// 0073) has no position in recs: this session's own records there are
+	// taken as lost and go again, stored twice rather than lost.
 	attrs := f.attribute(sid, recs, attr{})
 	pos, bad := serverPosition(recs, docs, LiveDocumentID(sid, cur.Home, cur.Home, tombs))
 	// A record a purge deleted is not lost: never resent (M5 review rules).

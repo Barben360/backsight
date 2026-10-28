@@ -270,6 +270,27 @@ func TestForgetProjectNeedsTheProjectName(t *testing.T) {
 	}
 }
 
+// While another server answers at the joined address, forget --project
+// retires nothing there (its purge refuses in purgeWrite); once the joined
+// one answers again, it does.
+func TestForgetProjectWritesNothingToAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	b := newBulkBank(t, home)
+	b.add(false, "f1", "world", "conversation:s1", billing)
+	recordMismatch(t, home)
+	code, env, out := forgetProject(t, "--project", "billing", "--answer", "confirm_project=billing")
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "a different server answers at this address (server b, joined a)") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if len(b.writes) != 0 {
+		t.Errorf("written to another server: %q", b.writes)
+	}
+	setMismatch(t, home, "")
+	if code, env, out := forgetProject(t, "--project", "billing", "--answer", "confirm_project=billing"); code != output.OK || env.Data.Retired != 1 || len(b.writes) != 1 {
+		t.Errorf("the joined server: exit %d, writes %q\n%s", code, b.writes, out)
+	}
+}
+
 // A plain forget retires every live raw fact of the project, as forget
 // <id> does, and nothing of another project; the archive is left alone.
 func TestForgetProjectRetiresItsRawFacts(t *testing.T) {

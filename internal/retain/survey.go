@@ -43,7 +43,7 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 	c.Project = f.Resolver.Project(recs[0].CWD)
 	pending := recs
 	replayed := false
-	if cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), sid); ok && !cur.Backfill {
+	if cur, ok, _ := LoadCursor(f.Dirs.CursorsDir(), sid); ok && !cur.Backfill && !f.NoCursors {
 		replayed = cur.NotesReplayed
 		pending = nil
 		for _, r := range recs {
@@ -88,6 +88,35 @@ func (f *Flusher) Survey(path string) (Candidate, []transcript.Record) {
 		c.Status = "send"
 	}
 	return c, recs
+}
+
+// Unsent counts the sessions of files that live retain still has records
+// of to send, settled or not, from the transcripts and cursors alone (no
+// server call). Backfill's sessions (started before retain_since) and
+// quarantined ones are not counted; a transcript its cursor reached costs
+// a stat and the cursor.
+func (f *Flusher) Unsent(files []string) int {
+	n := 0
+	for _, file := range files {
+		fi, err := os.Stat(file)
+		if err != nil {
+			continue
+		}
+		cur, ok, err := LoadCursor(f.Dirs.CursorsDir(), strings.TrimSuffix(filepath.Base(file), ".jsonl"))
+		switch {
+		case err != nil:
+			continue
+		case ok && (cur.Quarantined || cur.Backfill || cur.Offset >= fi.Size()):
+			continue
+		case !ok && !f.RetainSince.IsZero() && fi.ModTime().Before(f.RetainSince):
+			continue // last written before retain_since: backfill's
+		}
+		c, recs := f.Survey(file)
+		if c.Status == "send" && (ok || f.RetainSince.IsZero() || !recs[0].Timestamp.Before(f.RetainSince)) {
+			n++
+		}
+	}
+	return n
 }
 
 // Notes are the explicit saves of a session that may be replayed, recs

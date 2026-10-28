@@ -2,6 +2,7 @@ package retain
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -298,5 +299,82 @@ func TestReconcileKeepsASessionWhoseLatestSendIsInASideDocument(t *testing.T) {
 	}
 	if cur, ok, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1"); !ok || !reflect.DeepEqual(cur, before) {
 		t.Errorf("cursor dropped or changed: %+v", cur)
+	}
+}
+
+// A client bound to server a sends nothing while server b answers at its
+// address, and records b for doctor, the banner and store; once a answers
+// again it sends and the record goes. A failed read of the id changes
+// nothing: a recorded mismatch still holds, none lets the run go on.
+func TestFlushHoldsOnServerIDMismatch(t *testing.T) {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "Why does the export fail?")
+	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", ConnectedAt: clockAt(8, 0)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.f.ServerID = "a"
+	e.hs.docs[ServerDocument] = map[string]string{"server_id": "b"}
+	const text = "a different server answers at this address (server b, joined a): run backsight connect with its token"
+	var mm *ServerMismatch
+	if _, err := e.f.Reconcile(context.Background()); !errors.As(err, &mm) || e.f.Hold != text {
+		t.Fatalf("reconcile: %v, hold %q", err, e.f.Hold)
+	}
+	if r := e.flush("s1", Options{}); r.Status != Retry || r.Detail != text || len(e.hs.retains) != 0 {
+		t.Errorf("held flush: %+v, %d retain(s)", r, len(e.hs.retains))
+	}
+	raw, _ := os.ReadFile(e.f.Dirs.StateFile())
+	st, _ := state.Load(e.f.Dirs.StateFile())
+	if !strings.Contains(string(raw), `"mismatch": "b"`) || st.RemoteServer == nil || st.RemoteServer.ID != "a" || !st.RemoteServer.MismatchAt.Equal(clockAt(12, 0)) {
+		t.Errorf("state.json:\n%s", raw)
+	}
+
+	e.hs.failGet = map[string]bool{ServerDocument: true}
+	if _, err := e.f.Reconcile(context.Background()); !errors.As(err, &mm) || e.f.Hold != text {
+		t.Errorf("unreadable id with a mismatch recorded: %v, hold %q", err, e.f.Hold)
+	}
+	if st, _ := state.Load(e.f.Dirs.StateFile()); st.RemoteServer.Mismatch != "b" {
+		t.Errorf("an unreadable id changed the record: %+v", st.RemoteServer)
+	}
+
+	e.hs.failGet = nil
+	e.hs.docs[ServerDocument] = map[string]string{"server_id": "a"}
+	if _, err := e.f.Reconcile(context.Background()); err != nil || e.f.Hold != "" {
+		t.Fatalf("the joined server answers again: %v, hold %q", err, e.f.Hold)
+	}
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	if st, _ := state.Load(e.f.Dirs.StateFile()); st.RemoteServer.Mismatch != "" || !st.RemoteServer.MismatchAt.IsZero() || st.RemoteServer.ID != "a" {
+		t.Errorf("mismatch not cleared: %+v", st.RemoteServer)
+	}
+
+	e.hs.failGet = map[string]bool{ServerDocument: true}
+	if _, err := e.f.Reconcile(context.Background()); err != nil || e.f.Hold != "" {
+		t.Errorf("unreadable id, no mismatch recorded: %v, hold %q", err, e.f.Hold)
+	}
+}
+
+// A restore to a backup taken before this PC's part of a split session
+// went out: the reconcile cannot tell this PC's records from the server's
+// last_uuid (the other PC's), and resends them rather than lose them
+// (decision 0073, "never lose").
+func TestRestoreResendsThisPCsPartOfASplitSession(t *testing.T) {
+	e := splitSession(t)
+	snap := e.hs.backup()
+	expect(t, e.flush("s1", Options{}), Sent, 5, 5)
+	e.hs.restore(snap, 1, clockAt(11, 0), clockAt(12, 30))
+	e.clock = clockAt(12, 30)
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || !reflect.DeepEqual(rec.Resend, []string{"s1"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	r := e.flush("s1", Options{})
+	if r.Status != Sent || len(e.hs.retains) != 2 {
+		t.Fatalf("%+v, %d items", r, len(e.hs.retains))
+	}
+	for _, u := range []string{"u3", "b1", "b2"} {
+		if !strings.Contains(e.hs.content["conversation:s1"], "turn "+u) {
+			t.Errorf("%s lost: %q", u, e.hs.content["conversation:s1"])
+		}
 	}
 }

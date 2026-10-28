@@ -330,3 +330,60 @@ func TestRetainPurgeAgainRefusesUnderMaintenance(t *testing.T) {
 		t.Error("deleted under the maintenance lock")
 	}
 }
+
+// controlWrites are the requests that wrote to the control bank.
+func (rs *recreatedServer) controlWrites() []string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	var out []string
+	for _, w := range rs.writes {
+		if strings.Contains(w, "-control") {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// While another server answers at the joined address, jobs maintain's
+// look neither mirrors this PC's tombstones into its control bank nor
+// deletes there; once the joined server answers, it does.
+func TestJobsMaintainWritesNothingToAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	rs := withRecreated(t, home)
+	configWith(t, home, "\n[backup]\nenabled = false\n")
+	recordMismatch(t, home)
+	rs.set(func() { rs.writes = nil })
+	_, out, _ := run(t, "jobs", "maintain")
+	if w := rs.controlWrites(); len(w) != 0 || !strings.Contains(out, "not looked at: a different server answers at the joined address") {
+		t.Fatalf("control bank writes %v\n%s", w, out)
+	}
+	if exists, _ := rs.state(); !exists {
+		t.Error("deleted on another server")
+	}
+	setMismatch(t, home, "")
+	run(t, "jobs", "maintain")
+	if w := rs.controlWrites(); len(w) == 0 {
+		t.Error("the joined server got no tombstones: the check above proves nothing")
+	}
+}
+
+// retain purge-again, --plan included, refuses while another server
+// answers at the joined address, before any write.
+func TestRetainPurgeAgainRefusesAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	rs := withRecreated(t, home)
+	recordMismatch(t, home)
+	rs.set(func() { rs.writes = nil })
+	for _, args := range [][]string{{"--plan"}, {"--allow-subscription"}} {
+		code, out, errOut := run(t, append([]string{"retain", "purge-again"}, args...)...)
+		if code != output.Blocked || !strings.Contains(out+errOut, "a different server answers at this address (server b, joined a)") {
+			t.Errorf("%v: exit %d\n%s\n%s", args, code, out, errOut)
+		}
+	}
+	rs.mu.Lock()
+	writes := rs.writes
+	rs.mu.Unlock()
+	if exists, _ := rs.state(); !exists || len(writes) != 0 {
+		t.Errorf("wrote to another server: %v", writes)
+	}
+}

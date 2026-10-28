@@ -63,6 +63,13 @@ type State struct {
 	// PurgeGuard: the periodic look for tombstoned documents a client
 	// unaware of tombstones wrote again (backsight issue 5).
 	PurgeGuard *PurgeGuard `json:"purge_guard,omitempty"`
+	// RemoteServer: the server this client joined (connect); nil on a
+	// machine that joined none, which checks no server id.
+	RemoteServer *RemoteServer `json:"remote_server,omitempty"`
+	// SendsGeneration counts the times connect (or connect --undo) started
+	// this PC's sends over for another server: a flusher built before
+	// sends nothing after (retain.Flusher.SendsGeneration).
+	SendsGeneration int `json:"sends_generation,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -318,6 +325,20 @@ type Client struct {
 	// a rollback.
 	Profile      string `json:"profile,omitempty"`
 	ShimPrevious string `json:"shim_previous,omitempty"`
+}
+
+// RemoteServer is the server this client joined, by the id its data holds
+// (retain.ServerDocument): another server answering at URL holds every send
+// until connect runs again (decision 0073).
+type RemoteServer struct {
+	ID          string    `json:"id"`
+	URL         string    `json:"url"`
+	ConnectedAt time.Time `json:"connected_at"`
+	// Mismatch: the id another server answered with at the last check
+	// ("none" for a server without one); "" while the joined one answers.
+	// Doctor, the session banner and store read it.
+	Mismatch   string    `json:"mismatch,omitempty"`
+	MismatchAt time.Time `json:"mismatch_at,omitempty"`
 }
 
 // Backfill tracks the replay of past transcripts (decision 0037).

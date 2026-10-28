@@ -335,7 +335,7 @@ func TestTwoDocsVersionsShareTheBank(t *testing.T) {
 	}
 	for _, c := range []Corpus{c1, c2} {
 		f.reset()
-		_, refreshed, err := Search(context.Background(), cl, "mem", c, "uninstall", 10)
+		_, refreshed, err := Search(context.Background(), cl, "mem", c, "uninstall", 10, true)
 		if err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 0 || refreshed.Deleted != 0 ||
 			strings.Join(f.retains, ",") != "docs:install#requirements" {
 			t.Errorf("version %s: %v %+v sent %v", c.Tag(), err, refreshed, f.retains)
@@ -408,7 +408,7 @@ func TestIndexAndSearchLeaveAForeignDocsBankAlone(t *testing.T) {
 		if !errors.As(err, &foreign) || foreign.Bank != "mem-docs" || !strings.Contains(err.Error(), c.reason) {
 			t.Errorf("%s: index %v", name, err)
 		}
-		_, _, err = Search(context.Background(), cl, "mem", load(t), "restore", 5)
+		_, _, err = Search(context.Background(), cl, "mem", load(t), "restore", 5, true)
 		var se *SearchError
 		if !errors.As(err, &se) || se.Stage != "check" || !errors.As(err, &foreign) {
 			t.Errorf("%s: search %v", name, err)
@@ -472,7 +472,7 @@ func TestSearchOnAFreshBankOnlyReads(t *testing.T) {
 	}
 	f.reset()
 	f.rank = []string{"docs:install#uninstall", "docs:backup#restore-a-backup"}
-	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "comment désinstaller ?", 3)
+	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "comment désinstaller ?", 3, true)
 	if err != nil || refreshed != nil {
 		t.Fatalf("%v %+v", err, refreshed)
 	}
@@ -502,7 +502,7 @@ func TestSearchRefreshesABankOnAnotherVersion(t *testing.T) {
 	c, _ := Load(fs)
 	f.reset()
 	f.rank = []string{"docs:backup#verify-a-backup"}
-	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "check an archive", 5)
+	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "check an archive", 5, true)
 	if err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 6 {
 		t.Fatalf("%v %+v", err, refreshed)
 	}
@@ -514,7 +514,7 @@ func TestSearchRefreshesABankOnAnotherVersion(t *testing.T) {
 func TestSearchIndexesAMissingBank(t *testing.T) {
 	f, cl := newFake(t)
 	c := load(t)
-	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "restore", 5)
+	hits, refreshed, err := Search(context.Background(), cl, "mem", c, "restore", 5, true)
 	if err != nil || refreshed == nil || refreshed.Sent != 6 || len(hits) == 0 {
 		t.Fatalf("%v %+v %v", err, refreshed, refs(hits))
 	}
@@ -527,7 +527,7 @@ func TestSearchFailuresSayWhere(t *testing.T) {
 	f, cl := newFake(t)
 	c := load(t)
 	f.downAt = "POST /memories"
-	_, _, err := Search(context.Background(), cl, "mem", c, "restore", 5)
+	_, _, err := Search(context.Background(), cl, "mem", c, "restore", 5, true)
 	var se *SearchError
 	if !errors.As(err, &se) || se.Stage != "refresh" {
 		t.Errorf("a failed refresh: %v", err)
@@ -537,12 +537,52 @@ func TestSearchFailuresSayWhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.downAt = "POST /memories/recall"
-	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5); !errors.As(err, &se) || se.Stage != "recall" {
+	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5, true); !errors.As(err, &se) || se.Stage != "recall" {
 		t.Errorf("a failed recall: %v", err)
 	}
 	f.downAt = "GET /documents"
-	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5); !errors.As(err, &se) || se.Stage != "check" {
+	if _, _, err := Search(context.Background(), cl, "mem", c, "restore", 5, true); !errors.As(err, &se) || se.Stage != "check" {
 		t.Errorf("a failed listing: %v", err)
+	}
+}
+
+// Without refresh (a client of a shared server: the docs bank is its
+// host's) search only reads: a bank missing, or holding none of these
+// docs' sections, is ErrNotIndexed, and a bank holding them answers as
+// it is, even when another version's index left it short of a section.
+func TestSearchWithoutRefreshNeverWrites(t *testing.T) {
+	f, cl := newFake(t)
+	old, c := load(t), edited(t)
+	if _, _, err := Search(context.Background(), cl, "mem", c, "uninstall", 5, false); !errors.Is(err, ErrNotIndexed) {
+		t.Errorf("missing bank: %v", err)
+	}
+	if w := f.writes(); len(w) != 0 {
+		t.Errorf("a search without refresh created the bank: %v", w)
+	}
+	if _, err := Index(context.Background(), cl, "mem", old); err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	if _, _, err := Search(context.Background(), cl, "mem", c, "uninstall", 5, false); !errors.Is(err, ErrNotIndexed) {
+		t.Errorf("another docs version: %v", err)
+	}
+	if w := f.writes(); len(w) != 0 || len(f.recall) != 0 {
+		t.Errorf("a search without refresh wrote %v, recalled %v", w, f.recall)
+	}
+	if _, err := Index(context.Background(), cl, "mem", c); err != nil {
+		t.Fatal(err)
+	}
+	f.reset()
+	f.rank = []string{"docs:install#uninstall"}
+	hits, refreshed, err := Search(context.Background(), cl, "mem", old, "uninstall", 5, false)
+	if err != nil || refreshed != nil || len(hits) == 0 || hits[0].Ref() != "install#uninstall" {
+		t.Errorf("a bank holding these docs: %v %+v %v", err, refreshed, refs(hits))
+	}
+	if w := f.writes(); len(w) != 0 || len(f.retains) != 0 {
+		t.Errorf("a search without refresh wrote: %v %v", w, f.retains)
+	}
+	if got := f.recall[0]["tags"].([]any); len(got) != 1 || got[0] != old.Tag() {
+		t.Errorf("recall tags %v: its own version only", got)
 	}
 }
 

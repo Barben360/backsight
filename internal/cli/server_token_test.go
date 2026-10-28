@@ -137,7 +137,7 @@ func tokenHost(t *testing.T) (home string, port int, dk *keyDocker) {
 	return home, port, dk
 }
 
-func readToken(t *testing.T, path string) token.Token {
+func tokenFrom(t *testing.T, path string) token.Token {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -204,7 +204,7 @@ func TestTokenWritesFile0600(t *testing.T) {
 	if fi, err := os.Stat(f); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("token file: %v %v", fi.Mode(), err)
 	}
-	tok := readToken(t, f)
+	tok := tokenFrom(t, f)
 	want := token.Token{URL: "http://192.168.1.10:" + strconv.Itoa(port), Bank: config.DefaultBank, APIKey: sec.APIKey,
 		UIURL: "http://192.168.1.10:19999", HindsightVersion: "1.1.0", ServerID: serverIDOf(t, port, sec.APIKey),
 		LLM: token.LLM{Provider: "deepseek", Model: "test-model", Currency: "EUR", PriceInput: 0.25}}
@@ -265,7 +265,7 @@ func TestTokenRemoteModeRefused(t *testing.T) {
 	_ = os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"https://mem.example\"\n"), 0o600)
 	f := filepath.Join(t.TempDir(), "join.token")
 	for _, args := range [][]string{{"server", "token", "--out", f}, {"server", "token", "--rotate", "--out", f}} {
-		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "local server") {
+		if code, _, errOut := run(t, args...); code != output.Usage || !strings.Contains(errOut, "backsight server token") {
 			t.Errorf("%v: exit %d: %s", args, code, errOut)
 		}
 	}
@@ -283,7 +283,7 @@ func TestRotateNewKeyWorks(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	now, _ := config.LoadSecrets(secretsFile(home))
-	tok := readToken(t, f)
+	tok := tokenFrom(t, f)
 	if now.APIKey == old.APIKey || tok.APIKey != now.APIKey {
 		t.Errorf("secrets.toml kept the old key or the token does not carry the new one")
 	}

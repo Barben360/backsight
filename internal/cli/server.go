@@ -237,7 +237,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				}
 				add("config", map[bool]string{true: "planned", false: "skipped"}[f.plan], "keep "+d.ConfigFile())
 			}
-			if err := requireLocal(cfg); err != nil {
+			if err := requireLocal(cfg, "server install"); err != nil {
 				return err
 			}
 			rt := runtimeFor(cfg)
@@ -443,7 +443,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireLocal(cfg); err != nil {
+			if err := requireLocal(cfg, "server start"); err != nil {
 				return err
 			}
 			d, _, err := machine()
@@ -556,7 +556,7 @@ func newServerStopCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireLocal(cfg); err != nil {
+			if err := requireLocal(cfg, "server stop"); err != nil {
 				return err
 			}
 			if plan {
@@ -602,7 +602,7 @@ func newServerStatusCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireLocal(cfg); err != nil {
+			if err := requireLocal(cfg, "server status"); err != nil {
 				return err
 			}
 			var res statusResult
@@ -735,10 +735,11 @@ func needSecrets(names []string, resume string) error {
 	return e
 }
 
-// requireLocal refuses server commands on a client of a remote server.
-func requireLocal(cfg config.Config) error {
+// requireLocal refuses a server command on a client of a remote server,
+// naming the server and the command to run on its host.
+func requireLocal(cfg config.Config, command string) error {
 	if cfg.Server.Mode != "local" {
-		return &output.Error{Code: output.Usage, Message: "server.mode is " + cfg.Server.Mode + ": this command manages a local server (run it on the server machine)"}
+		return &output.Error{Code: output.Usage, Message: "this PC is a client of the server at " + cfg.Server.URL + ": run backsight " + command + " on that server's host"}
 	}
 	return nil
 }
@@ -760,7 +761,7 @@ func newServerRenderCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireLocal(cfg); err != nil {
+			if err := requireLocal(cfg, "server render"); err != nil {
 				return err
 			}
 			rt := runtimeFor(cfg)
@@ -835,6 +836,9 @@ func newServerLLMCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := requireLocal(cfg, "server llm check"); err != nil {
+				return err
+			}
 			res, err := checkProvider(cmd.Context(), cfg, sec)
 			if err != nil {
 				return err
@@ -880,8 +884,8 @@ func serverLockFor(d paths.Dirs, command string, keyStep bool) (func(), error) {
 // key or address: hooks queue and jobs skip until it is done or rolled
 // back. note names a stale maintenance lock it broke.
 func serverMaintenanceLock(d paths.Dirs, command string) (unlock func(), note string, err error) {
-	if state.RestoreIncomplete(d) {
-		return nil, "", refuseWhileBusy(d)
+	if restoreIncomplete(d) {
+		return nil, "", restoreIncompleteError(d)
 	}
 	ml, note, err := acquireMaintenance(d, command)
 	if err != nil {
