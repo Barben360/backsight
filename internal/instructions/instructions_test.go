@@ -316,7 +316,7 @@ var wordings = map[string]string{
 	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
 	"v6": "08ae29b8359ba847e94edb12c320d9ff4a3bfab837c6597c2a32a9422cde7228",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
-	"v7": "175252a67a8270efdb0118b9cc50637b81ce6f7f7c42befc64d6d900d8dccb6a",
+	"v7": "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
 }
 
 func wordingHash() string {

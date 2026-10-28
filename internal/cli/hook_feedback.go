@@ -41,9 +41,20 @@ func (h *hookEnv) texts() instructions.Texts {
 	return instructions.For(h.cfg.Feedback.Enabled)
 }
 
-// feedbackOn: the journal is written for this event.
-func (h *hookEnv) feedbackOn() bool {
+// feedbackEnabled: feedback is on for this event, whether or not its
+// session is paused; the turn pointer follows it.
+func (h *hookEnv) feedbackEnabled() bool {
 	return h.cfg.Feedback.Enabled && h.journal != nil
+}
+
+// feedbackOn: the journal is written for this event. A paused session
+// journals nothing (an unreadable session state counts as paused).
+func (h *hookEnv) feedbackOn() bool {
+	if !h.feedbackEnabled() {
+		return false
+	}
+	paused, _ := session.Paused(h.dirs.SessionsDir(), h.in.SessionID)
+	return !paused
 }
 
 // feedbackError logs a journal or turn pointer write that failed.
@@ -53,20 +64,23 @@ func (h *hookEnv) feedbackError(err error) {
 	}
 }
 
-// turnID is the turn this event journals under: the hook's prompt_id, else
-// the one this process started, else the session's turn pointer; "" before
+// turnPointer is the session's turn pointer, which the prompt hook moves.
+func (h *hookEnv) turnPointer() (feedback.Turn, bool) {
+	return feedback.CurrentTurn(h.dirs.FeedbackDir(), h.in.SessionID)
+}
+
+// turnID is the turn this event journals under: the one this process
+// started, else the session's turn pointer (the end-of-turn check reads
+// that turn), else the hook's prompt_id when no pointer exists; "" before
 // any prompt (the briefing's turn).
 func (h *hookEnv) turnID() string {
-	if h.in.PromptID != "" {
-		return h.in.PromptID
-	}
 	if h.turnSet {
 		return h.turn
 	}
-	if t, ok := feedback.CurrentTurn(h.dirs.FeedbackDir(), h.in.SessionID); ok {
+	if t, ok := h.turnPointer(); ok {
 		return t.ID
 	}
-	return ""
+	return h.in.PromptID
 }
 
 // setTurn records t as the session's current turn.
@@ -83,7 +97,7 @@ func (h *hookEnv) startSessionTurn() {
 	default:
 		return
 	}
-	if !h.feedbackOn() {
+	if !h.feedbackEnabled() {
 		return
 	}
 	file, offset := h.journal.Position()
@@ -91,16 +105,16 @@ func (h *hookEnv) startSessionTurn() {
 }
 
 // beginTurn is UserPromptSubmit's pointer and turn event, before any
-// recall. A machine message keeps the prompt number and the journal
+// recall; a paused session moves the pointer only. A machine message keeps the prompt number and the journal
 // position of the turn it follows, so that the next prompt still reads
 // that turn's credits (a machine turn is never checked at Stop); the first
 // turn after a session start keeps its journal position, so that its reads
 // include the briefing.
 func (h *hookEnv) beginTurn(n int, machine bool) {
-	if !h.feedbackOn() {
+	if !h.feedbackEnabled() {
 		return
 	}
-	prev, had := feedback.CurrentTurn(h.dirs.FeedbackDir(), h.in.SessionID)
+	prev, had := h.turnPointer()
 	id := h.in.PromptID
 	if id == "" {
 		id = randomHex(16)
@@ -113,7 +127,9 @@ func (h *hookEnv) beginTurn(n int, machine bool) {
 		file, offset = prev.File, prev.Offset
 	}
 	h.setTurn(feedback.Turn{ID: id, N: n, At: now(), Machine: machine, File: file, Offset: offset})
-	h.feedbackError(h.journal.Append(feedback.Event{Kind: "turn", Turn: id, N: n, Machine: machine}))
+	if h.feedbackOn() {
+		h.feedbackError(h.journal.Append(feedback.Event{Kind: "turn", Turn: id, N: n, Machine: machine}))
+	}
 }
 
 // creditedSinceTurn: the main agent of this session made a memory_credit
@@ -123,7 +139,7 @@ func (h *hookEnv) creditedSinceTurn() bool {
 	if !h.feedbackOn() {
 		return false
 	}
-	t, ok := feedback.CurrentTurn(h.dirs.FeedbackDir(), h.in.SessionID)
+	t, ok := h.turnPointer()
 	if !ok {
 		return false
 	}

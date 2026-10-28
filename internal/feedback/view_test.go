@@ -161,4 +161,11 @@ func TestHonestyFlags(t *testing.T) {
 	if got := (Check{Shown: shown, Declared: true, None: true}).Flags("Unrelated answer about the weather.", texts); len(got) != 0 {
 		t.Errorf("none without overlap flagged %v", got)
 	}
+	// A blank reply (cut, or the agent ended on a tool call) says nothing
+	// about what it used.
+	for _, blank := range []string{"", " \n\t"} {
+		if got := (Check{Shown: shown, Declared: true, Credited: []string{idB}}).Flags(blank, texts); len(got) != 0 {
+			t.Errorf("blank reply %q flagged %v", blank, got)
+		}
+	}
 }

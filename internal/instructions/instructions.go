@@ -118,7 +118,7 @@ const GateReason = "Before asking the user, look for the answer in their memory:
 // it ends without a memory_credit call: the header, one line per memory,
 // then the ask.
 const (
-	StopCheckHeader = "Memories were shown to you this turn:"
+	StopCheckHeader = "Memories were shown to you this turn " + HintsLine + ":"
 	StopCheckAsk    = "Call memory_credit with the ids that informed your answer, or verdict none. If you credit any, add the line it returns to your answer."
 )
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
@@ -23,7 +24,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	if !h.feedbackOn() {
 		return nil
 	}
-	t, ok := feedback.CurrentTurn(h.dirs.FeedbackDir(), h.in.SessionID)
+	t, ok := h.turnPointer() // the turn every writer of the turn filed under (turnID)
 	if !ok {
 		return nil // no turn began under the journal: nothing it showed is known
 	}
@@ -66,7 +67,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	for _, id := range ids {
 		text := "(text not kept)"
 		if s := texts[id]; s != "" {
-			text = clip(s, stopReasonChars)
+			text = strconv.Quote(clip(s, stopReasonChars))
 		}
 		reason += "\n- " + safeProject(shortID(id)) + " " + text
 	}

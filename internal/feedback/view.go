@@ -133,9 +133,12 @@ const (
 )
 
 // Flags compares reply with texts (memory id to text) of the memories c
-// shows and credits; a memory without a text, or without a word to
-// compare, flags nothing.
+// shows and credits; a blank reply, a memory without a text, or without a
+// word to compare, flags nothing.
 func (c Check) Flags(reply string, texts map[string]string) []string {
+	if strings.TrimSpace(reply) == "" {
+		return nil
+	}
 	var flags []string
 	if c.None && slices.ContainsFunc(c.Shown, func(s Show) bool {
 		text := texts[s.ID]
