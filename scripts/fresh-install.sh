@@ -221,6 +221,8 @@ if command -v ip >/dev/null; then
   esac
 fi
 if [ -z "$priv_ip" ]; then
+  # On CI a skip would turn the proof into a pass with no coverage.
+  [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] || fail "no private IPv4 on the default route (is ip installed?): the exposure leg cannot run on CI"
   echo "fresh-install: skipping the exposure leg: no private IPv4 on the default route" >&2
 else
   health() { curl -fsS --max-time 10 "http://$1:$port/health" >/dev/null; } # health <ip>
