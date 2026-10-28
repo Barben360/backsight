@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -198,15 +199,24 @@ var sshFlags = []string{"private", "source", "llm-key-from-env", "llm-key-from-f
 func newServerInstallCmd(e *env) *cobra.Command {
 	var f installFlags
 	var sf sshInstallFlags
+	var printOnly bool
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install and start the local Hindsight server (idempotent), or with --ssh one on another machine",
 		Long: "--ssh user@host installs the memory server on that machine over the system ssh, with your keys and known_hosts, " +
 			"and joins it from this PC; it works from a client too. The LLM key goes from --llm-key-from-env, --llm-key-from-file " +
 			"or a hidden prompt to the host on the stdin of secret set; the connection token comes back over ssh and is never shown. " +
-			"Every step can run again: a rerun goes on from where a run stopped.",
+			"Every step can run again: a rerun goes on from where a run stopped. --print-commands prints those steps for a host you have no ssh access to, and runs nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if printOnly {
+				sf.install, sf.plan, sf.changed = f, f.plan, cmd.Flags().Changed
+				res, err := printCommands(sf, buildinfo.Version)
+				if err != nil {
+					return err
+				}
+				return e.emit("server install", res, func() string { return printedCommandsText(res) })
+			}
 			if cmd.Flags().Changed("ssh") {
 				sf.install, sf.plan, sf.changed = f, f.plan, cmd.Flags().Changed
 				res, err := runSSHInstall(cmd.Context(), e, sf)
@@ -217,7 +227,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 			for _, fl := range sshFlags {
 				if cmd.Flags().Changed(fl) {
-					return &output.Error{Code: output.Usage, Message: "--" + fl + " goes with --ssh user@host: it installs the server on another machine"}
+					return &output.Error{Code: output.Usage, Message: "--" + fl + " goes with --ssh user@host (it installs the server on another machine) or --print-commands"}
 				}
 			}
 			d, home, err := machine()
@@ -409,11 +419,12 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&f.base, "base-url", "", "LLM base URL for compatible endpoints")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list the steps without acting")
 	cmd.Flags().StringVar(&sf.target, "ssh", "", "install the server on this machine instead ([user@]host, as ssh takes it) and join it from this PC")
-	cmd.Flags().StringVar(&sf.private, "private", "", "with --ssh: open the server on this LAN or tailnet address of the host (default: the address ssh reached)")
+	cmd.Flags().BoolVar(&printOnly, "print-commands", false, "print the commands that install the server on another machine by hand (a host you have no ssh access to), and run nothing")
+	cmd.Flags().StringVar(&sf.private, "private", "", "with --ssh or --print-commands: open the server on this LAN or tailnet address of the host (--ssh default: the address ssh reached)")
 	cmd.Flags().StringVar(&sf.source, "source", "", "with --ssh: read the release from this local release directory")
 	cmd.Flags().StringVar(&sf.keyEnv, "llm-key-from-env", "", "with --ssh: read the host's LLM API key from this environment variable")
 	cmd.Flags().StringVar(&sf.keyFile, "llm-key-from-file", "", "with --ssh: read the host's LLM API key from the first line of this file")
-	cmd.Flags().StringArrayVar(&sf.answers, "answer", nil, "with --ssh: consent=yes to go ahead without a terminal; setup's answers for the host or this PC (id=value, repeatable)")
+	cmd.Flags().StringArrayVar(&sf.answers, "answer", nil, "with --ssh: consent=yes to go ahead without a terminal; with --ssh or --print-commands: setup's answers for the host or this PC (id=value, repeatable)")
 	cmd.Flags().BoolVar(&sf.nonInteractive, "non-interactive", false, "with --ssh: never prompt: exit 10 when the consent, the key or another answer is missing")
 	cmd.Flags().StringVar(&sf.configDir, "config-dir", "", "with --ssh: this PC's Claude Code directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	return cmd

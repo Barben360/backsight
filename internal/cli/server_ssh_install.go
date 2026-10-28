@@ -402,6 +402,12 @@ func sshInstallAnswers(f sshInstallFlags) (map[string]string, error) {
 	case f.plan && keyFlag:
 		return nil, &output.Error{Code: output.Usage, Message: "--plan reads no key: drop --llm-key-from-env and --llm-key-from-file"}
 	}
+	return checkAnswers(f)
+}
+
+// checkAnswers parses and checks --answer and the answers the install flags
+// stand for; --ssh and --print-commands take the same ones.
+func checkAnswers(f sshInstallFlags) (map[string]string, error) {
 	answers, err := parseAnswers(f.answers, "")
 	if err != nil {
 		return nil, err
