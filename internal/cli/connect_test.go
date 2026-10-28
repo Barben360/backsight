@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/token"
 	"github.com/Barben360/backsight/internal/transcript"
@@ -1354,5 +1355,99 @@ func TestConnectKeepsTheConfigCopyWhenPuttingItBackFails(t *testing.T) {
 	started := slices.IndexFunc(dk.calls, func(c string) bool { return strings.HasPrefix(c, "compose") && strings.Contains(c, " up -d") })
 	if stop := composeStopped(dk.calls); stop < 0 || started < stop {
 		t.Errorf("stopped at %d, started at %d", stop, started)
+	}
+}
+
+// subscriptionHost is joinableHost extracting with a Claude subscription.
+func subscriptionHost(t *testing.T) token.Token {
+	tok := joinableHost(t)
+	tok.LLM = token.LLM{Provider: "claude-code", Model: "claude-haiku-5-5", Currency: "EUR"}
+	return tok
+}
+
+// A host on a Claude subscription: the acknowledgement is asked in
+// connect's plan, before any switch, not by setup after it.
+func TestConnectAsksTheSubscriptionAckBeforeTheSwitch(t *testing.T) {
+	home, _ := setupMachine(t)
+	tok := subscriptionHost(t)
+	before := treeOf(t, home)
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseConnect(t, out)
+	if code != output.NeedsUser || env.Error == nil {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	qs, _ := json.Marshal(env.Error.Questions)
+	var got []setup.Question
+	if err := json.Unmarshal(qs, &got); err != nil || len(got) != 1 || got[0].ID != "ack_subscription" || !strings.Contains(got[0].Prompt, "server's host") {
+		t.Errorf("questions: %s (%v)", qs, err)
+	}
+	if !strings.HasSuffix(env.Error.Resume, " --answer consent=yes --answer ack_subscription=yes") {
+		t.Errorf("resume: %q", env.Error.Resume)
+	}
+	d := pathsOf(home)
+	for _, f := range []string{d.ConfigFile(), d.SecretsFile()} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("%s written before the acknowledgement", f)
+		}
+	}
+	if st, _ := state.Load(d.StateFile()); st.RemoteServer != nil {
+		t.Errorf("binding recorded: %+v", st.RemoteServer)
+	}
+	sameTree(t, before, treeOf(t, home))
+}
+
+// With the acknowledgement given, connect switches and setup, which holds
+// it already, asks nothing.
+func TestConnectWithTheSubscriptionAck(t *testing.T) {
+	home, _ := setupMachine(t)
+	tok := subscriptionHost(t)
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "ack_subscription=yes", "--non-interactive", "--json")
+	env := parseConnect(t, out)
+	if code != output.OK || env.Data.Setup == nil {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	for _, q := range env.Data.Setup.Questions {
+		if q.ID == "ack_subscription" && (q.Asked() || q.Value != "yes") {
+			t.Errorf("setup asks the acknowledgement again: %+v", q)
+		}
+	}
+	rec, err := setup.Load(pathsOf(home).SetupFile())
+	if err != nil || rec == nil || rec.Answers["ack_subscription"] != "yes" {
+		t.Errorf("setup record: %+v %v", rec, err)
+	}
+}
+
+// --plan lists the question and the step and changes nothing.
+func TestConnectPlanListsTheSubscriptionAck(t *testing.T) {
+	home := isolate(t)
+	tok := subscriptionHost(t)
+	before := treeOf(t, home)
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--plan", "--json")
+	env := parseConnect(t, out)
+	if code != output.OK || len(env.Data.Questions) != 1 || env.Data.Questions[0].ID != "ack_subscription" || !hasConnectStep(env.Data.Steps, "ack_subscription", "planned", "") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	sameTree(t, before, treeOf(t, home))
+	// A host on another provider asks nothing.
+	if code, out, _ := run(t, "connect", "--token-file", tokenFile(t, joinableHost(t)), "--plan", "--json"); code != output.OK || len(parseConnect(t, out).Data.Questions) != 0 {
+		t.Errorf("anthropic host: exit %d\n%s", code, out)
+	}
+}
+
+// A PC already on a subscription host that joins the same kind of host
+// again is not asked twice.
+func TestConnectSameServerDoesNotAskTheAckAgain(t *testing.T) {
+	home, _ := setupMachine(t)
+	tok := subscriptionHost(t)
+	d := pathsOf(home)
+	if code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "ack_subscription=yes", "--non-interactive", "--json"); code != output.OK {
+		t.Fatalf("first connect: exit %d\n%s%s", code, out, errOut)
+	}
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.OK || env.Error != nil || len(env.Data.Questions) != 0 {
+		t.Errorf("second connect: exit %d\n%s%s", code, out, errOut)
+	}
+	if rec, _ := setup.Load(d.SetupFile()); rec == nil || rec.Answers["ack_subscription"] != "yes" {
+		t.Errorf("record: %+v", rec)
 	}
 }

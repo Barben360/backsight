@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -343,5 +344,27 @@ func TestResolveServerOnlyAsksNoClientQuestion(t *testing.T) {
 	}
 	if _, _, err := Resolve(Inputs{Answers: map[string]string{"role": "client"}}); err == nil {
 		t.Error("role=client accepted")
+	}
+}
+
+// The acknowledgement a client's setup asks is the one connect asks in its
+// plan: one builder, so their words cannot drift.
+func TestSubscriptionQuestionIsTheBuildersOne(t *testing.T) {
+	cfg := config.Default(paths.Dirs{Data: "/d"}, "/home/u")
+	cfg.Server.Mode = "remote"
+	cfg.LLM.Provider = "claude-code"
+	qs, _, err := Resolve(Inputs{Config: &cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, want := find(t, qs, "ack_subscription"), SubscriptionQuestion(true)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("builder's question %+v differs from SubscriptionQuestion(true) %+v", got, want)
+	}
+	if !strings.Contains(want.Prompt, "server's host") || !want.Required || len(want.Options) != 1 || want.Options[0].Value != "yes" {
+		t.Errorf("question: %+v", want)
+	}
+	if local := SubscriptionQuestion(false); strings.Contains(local.Prompt, "server's host") {
+		t.Errorf("local wording names a host: %s", local.Prompt)
 	}
 }

@@ -86,6 +86,20 @@ func PresetFor(provider string) (Preset, bool) {
 	return Preset{}, false
 }
 
+// SubscriptionQuestion is the acknowledgement of extracting with a Claude
+// subscription. A client's sends and backfill are extracted on its host's
+// subscription: the same terms, worded for the host when remote. Setup asks
+// it, and so does connect in its plan, before anything changes.
+func SubscriptionQuestion(remote bool) Question {
+	prompt := "Extracting with your Claude subscription: "
+	if remote {
+		prompt = "The server's host extracts with its Claude subscription, this PC's sessions included: "
+	}
+	preset, _ := PresetFor("claude-code")
+	return Question{ID: "ack_subscription", Prompt: prompt + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
+		Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}
+}
+
 // RecommendedRetention keeps transcripts ten years (decision 0041).
 const RecommendedRetention = "3650"
 
@@ -242,14 +256,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 	if provider == "claude-code" {
-		// A client's sends and backfill are extracted on its host's
-		// subscription: the same terms.
-		prompt := "Extracting with your Claude subscription: "
-		if remote {
-			prompt = "The server's host extracts with its Claude subscription, this PC's sessions included: "
-		}
-		if err := add(Question{ID: "ack_subscription", Prompt: prompt + preset.Caveat + ". Backfill of past sessions stays off unless you also answer backfill=yes. Accept?",
-			Options: []Option{{Value: "yes", Label: "I accept"}}, Required: true}); err != nil {
+		if err := add(SubscriptionQuestion(remote)); err != nil {
 			return nil, nil, err
 		}
 	}
