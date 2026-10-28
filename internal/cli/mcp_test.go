@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -137,6 +138,24 @@ func TestMCPStoreShowsSimilarMemoriesAndStores(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(retainedTags, "|"), "kind:correction") {
 		t.Errorf("tags %v", retainedTags)
+	}
+}
+
+// A memory server started before connect holds the old server's config:
+// its store queues the note and sends nothing, the next tick sends it.
+func TestMCPStoreAfterConnectStartedOverKeepsTheNote(t *testing.T) {
+	cs := mcpSession(t)
+	d := pathsOf(os.Getenv("HOME"))
+	if err := state.Update(d, "connect", func(s *state.State) error { s.SendsGeneration++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	before := retained.Load()
+	out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16 for partial indexes."})
+	if isErr || !strings.Contains(out, "queued (decision, project billing)") || retained.Load() != before {
+		t.Errorf("%v, %d retained\n%s", isErr, retained.Load()-before, out)
+	}
+	if n, _ := notesOutbox(d).Pending(); n != 1 {
+		t.Errorf("want the note queued, got %d", n)
 	}
 }
 

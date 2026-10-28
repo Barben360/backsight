@@ -10,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 func TestStoreSendsAtOnce(t *testing.T) {
@@ -26,6 +27,21 @@ func TestStoreSendsAtOnce(t *testing.T) {
 	}
 	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 0 {
 		t.Errorf("%d notes left in the outbox", n)
+	}
+}
+
+// store reads the sends generation as it starts: after a connect it sends
+// to the server it joined.
+func TestStoreSendsAfterAConnect(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	if err := state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration = 3; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	before := retained.Load()
+	code, out, _ := run(t, "store", "--kind", "decision", "--project", "billing", "Billing keeps PostgreSQL 16.")
+	if code != output.OK || !strings.HasPrefix(out, "stored") || retained.Load() != before+1 {
+		t.Errorf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
 	}
 }
 

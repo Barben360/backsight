@@ -110,9 +110,12 @@ type Outbox struct {
 	// WarnBytes and MaxBytes are the warning and hard size limits; zero:
 	// the defaults.
 	WarnBytes, MaxBytes int64
-	// Gate, when not nil, is asked before each note's send: an error
-	// stops the flush, that note and every later one kept as they were
-	// (no attempt counted), and Flush returns it.
+	// Gate, when not nil, is asked before each note's send and again
+	// after it: an error stops the flush, that note and every later one
+	// kept as they were (no attempt counted), and Flush returns it. A
+	// note the gate refuses after its send went to the server the flush
+	// began with: it stays queued for the next one (operation ids are
+	// per server).
 	Gate func() error
 }
 
@@ -240,6 +243,11 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 			}
 		}
 		err := c.Retain(ctx, bank, []hindsight.RetainItem{n.Item(machineID)}, n.OperationID)
+		if err == nil && o.Gate != nil {
+			if gateErr = o.Gate(); gateErr != nil {
+				break // connect started over during the send: kept for the new server
+			}
+		}
 		if err == nil {
 			res.Sent++
 			res.SentDocs = append(res.SentDocs, n.DocumentID)

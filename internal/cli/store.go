@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -55,16 +56,17 @@ func newStoreCmd(e *env) *cobra.Command {
 		Short: "Store one durable fact (a decision, correction, convention, pitfall, state or lesson)",
 		Args:  usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, sec, err := loadServerConfig()
-			if err != nil {
-				return err
-			}
 			d, home, err := machine()
 			if err != nil {
 				return err
 			}
+			generation := sendsGeneration(d) // before the config it goes with
+			cfg, sec, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
 			cwd, _ := os.Getwd()
-			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, os.Getenv("BACKSIGHT_SESSION"), cwd, kind, proj, strings.Join(args, " "))
+			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, os.Getenv("BACKSIGHT_SESSION"), cwd, kind, proj, strings.Join(args, " "))
 			if res.Document == "" {
 				return failed // refused before anything was queued
 			}
@@ -76,9 +78,39 @@ func newStoreCmd(e *env) *cobra.Command {
 	return cmd
 }
 
+// sendsGeneration is this PC's sends generation now, read before the
+// config a process sends with: once connect started the sends over, a
+// process holding the old config sends nothing (sendsGate). -1 when
+// state.json cannot be read: no send from this process.
+func sendsGeneration(d paths.Dirs) int {
+	st, err := state.Load(d.StateFile())
+	if err != nil {
+		return -1
+	}
+	return st.SendsGeneration
+}
+
+// sendsGate refuses once this PC's sends generation is no longer
+// generation: connect started the sends over for another server since
+// the process loaded its config (retain.ErrStartedOver).
+func sendsGate(d paths.Dirs, generation int) func() error {
+	return func() error {
+		st, err := state.Load(d.StateFile())
+		if err != nil {
+			return err
+		}
+		if st.SendsGeneration != generation {
+			return retain.ErrStartedOver
+		}
+		return nil
+	}
+}
+
 // storeNote validates and queues one note, then tries to send it now (the
-// outbox keeps it otherwise). Shared by the CLI and memory_store.
-func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, sid, cwd, kind, proj, text string) (storeResult, error) {
+// outbox keeps it otherwise), unless connect started this PC's sends over
+// since generation was read with cfg: then the next jobs tick sends it.
+// Shared by the CLI and memory_store.
+func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, generation int, sid, cwd, kind, proj, text string) (storeResult, error) {
 	if err := checkNote(d, home, cfg, sid, cwd, kind, proj, text); err != nil {
 		return storeResult{}, err
 	}
@@ -106,8 +138,12 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		res.Warning = "a different server answers at the joined address: the note waits on this PC; run backsight doctor"
 	} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
 		fctx, cancel := context.WithTimeout(ctx, storeFlushBudget)
+		ob.Gate = sendsGate(d, generation)
 		fr, err := ob.Flush(fctx, cl, cfg.Server.Bank, machineID)
 		cancel()
+		if errors.Is(err, retain.ErrStartedOver) {
+			res.Warning = "this PC joined another server since this process started: the note goes out with the next jobs tick"
+		}
 		switch {
 		case err != nil && !slices.Contains(fr.SentDocs, n.DocumentID):
 		case slices.Contains(fr.QuarantinedDocs, n.DocumentID):

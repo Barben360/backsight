@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -816,6 +818,31 @@ func TestBackfillSpanningConnectAfterASend(t *testing.T) {
 	r := spanningConnect(t, spanRun{sids: []string{"s1", "s2"}, on: onSessionSend})
 	if r.st.Backfill != nil || retained.Load() != 1 {
 		t.Errorf("backfill %+v, %d retained (want s1's send only)", r.st.Backfill, retained.Load())
+	}
+	d := pathsOf(r.home)
+	if cur, ok, _ := retain.LoadCursor(d.CursorsDir(), "s1"); !ok || cur.NotesReplayed {
+		t.Errorf("s1's cursor: %+v (found %v)", cur, ok)
+	}
+	if n, _ := notesOutbox(d).Pending(); n != 1 {
+		t.Errorf("want s1's save queued, got %d", n)
+	}
+}
+
+// Connect while a session's save goes to the old server: the save stays
+// queued for the new one, and the session's cursor is not marked as
+// having replayed its saves.
+func TestBackfillSpanningConnectDuringASave(t *testing.T) {
+	onSave := func(r *http.Request) bool {
+		if !onSessionSend(r) {
+			return false
+		}
+		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(b))
+		return bytes.Contains(b, []byte(`"document_id":"note:`))
+	}
+	r := spanningConnect(t, spanRun{sids: []string{"s1"}, on: onSave})
+	if retained.Load() != 2 {
+		t.Errorf("%d retained, want s1 and its save", retained.Load())
 	}
 	d := pathsOf(r.home)
 	if cur, ok, _ := retain.LoadCursor(d.CursorsDir(), "s1"); !ok || cur.NotesReplayed {
