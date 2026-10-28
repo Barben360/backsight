@@ -114,8 +114,9 @@ func (h *hookEnv) gate() []byte {
 		if len(res.Hits) > 0 {
 			reason += "\nPossibly relevant memories " + instructions.HintsLine + ":"
 			for _, hit := range res.Hits {
-				reason += fmt.Sprintf("\n- [%s] %s", safeProject(hit.Project), clip(hit.Text, briefingItemChars))
+				reason += fmt.Sprintf("\n- %s %s%s", memoryTag(hit.Project, hit.ID), clip(hit.Text, briefingItemChars), age(hit.Age))
 			}
+			h.journalShows("gate", itemsFromHits(res.Hits))
 		}
 	}
 	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{

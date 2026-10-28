@@ -98,7 +98,7 @@ func newSearchCmd(e *env) *cobra.Command {
 	return cmd
 }
 
-// searchText groups hits by project, best first.
+// searchText groups hits by project, best first, each with its rank.
 func searchText(r recall.Result) string {
 	if len(r.Hits) == 0 {
 		return "nothing in memory\n"
@@ -107,18 +107,21 @@ func searchText(r recall.Result) string {
 	if r.Raw {
 		b.WriteString("(raw facts: the memory is not consolidated yet)\n")
 	}
+	// Each hit keeps its merged rank (#n) in its project's group: the
+	// PostToolUse hook journals search shows from it.
 	var order []string
-	groups := map[string][]recall.Hit{}
-	for _, h := range r.Hits {
+	groups := map[string][]int{}
+	for i, h := range r.Hits {
 		if groups[h.Project] == nil {
 			order = append(order, h.Project)
 		}
-		groups[h.Project] = append(groups[h.Project], h)
+		groups[h.Project] = append(groups[h.Project], i)
 	}
 	for _, p := range order {
 		fmt.Fprintf(&b, "[%s]\n", p)
-		for _, h := range groups[p] {
-			fmt.Fprintf(&b, "- %s (%s%s, %s ago, %s, %.2f)\n", h.Text, h.Date.Format("2006-01-02"), kindLabel(h), h.Age, h.ID, h.Score)
+		for _, i := range groups[p] {
+			h := r.Hits[i]
+			fmt.Fprintf(&b, "- #%d %s (%s%s, %s ago, %s, %.2f)\n", i+1, h.Text, h.Date.Format("2006-01-02"), kindLabel(h), h.Age, h.ID, h.Score)
 		}
 	}
 	return b.String()

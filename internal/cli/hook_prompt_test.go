@@ -2,6 +2,9 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
@@ -333,4 +337,148 @@ func kindOf(k *string) string {
 		return "none"
 	}
 	return *k
+}
+
+// journalEvents is everything the feedback journal holds.
+func journalEvents(t *testing.T, home string) []feedback.Event {
+	t.Helper()
+	evs, _, err := feedback.Read(pathsOf(home).FeedbackDir(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
+}
+
+func eventsOf(evs []feedback.Event, kind string) []feedback.Event {
+	var out []feedback.Event
+	for _, e := range evs {
+		if e.Kind == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func itemsText(items []feedback.Item) string {
+	var parts []string
+	for _, it := range items {
+		parts = append(parts, fmt.Sprintf("%s:%d:%g", it.ID, it.Rank, it.Reranker))
+	}
+	return strings.Join(parts, ",")
+}
+
+// The prompt hook journals the turn, then what it injected, ranked in the
+// order shown: a memory skipped as already seen takes no rank.
+func TestPromptRecallJournalsShowsWithRanks(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9, 0.8, 0.7)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Seen = []string{"m2"}; return nil })
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	evs := journalEvents(t, home)
+	if len(evs) != 2 || evs[0].Kind != "turn" || evs[1].Kind != "shows" {
+		t.Fatalf("events %+v", evs)
+	}
+	if turn := evs[0]; turn.Turn != "p-1" || turn.N != 1 || turn.Machine || turn.Session != "s1" {
+		t.Errorf("turn %+v", turn)
+	}
+	shows := evs[1]
+	if shows.Path != "prompt" || shows.Turn != "p-1" || shows.Session != "s1" || shows.Agent != "" || itemsText(shows.Items) != "m1:1:0.9,m3:2:0.7" {
+		t.Errorf("shows %+v items %s", shows, itemsText(shows.Items))
+	}
+	if cur, ok := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1"); !ok || cur.ID != "p-1" || cur.N != 1 || cur.Machine {
+		t.Errorf("pointer %+v %v", cur, ok)
+	}
+}
+
+func TestInjectedLinesCarryShortIDs(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.8}}]`
+	h := prompt(t, home, "s1", longPrompt)
+	if !strings.Contains(h.Specific.Context, "\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16. (") {
+		t.Errorf("context:\n%s", h.Specific.Context)
+	}
+	if shortID("m1") != "m1" || shortID("0b4c2a52-0000") != "0b4c2a52" {
+		t.Errorf("shortID: %q %q", shortID("m1"), shortID("0b4c2a52-0000"))
+	}
+}
+
+// A message Claude Code sent is no prompt, but it starts a turn: its
+// hooks journal under a fresh id, with the prompt number kept.
+func TestMachineMessageStillMovesTheTurn(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.9)
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	before := len(eventsOf(journalEvents(t, home), "shows"))
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt": "<task-notification><task-id>x</task-id></task-notification>", "cwd": filepath.Join(home, "billing")})
+	cur, ok := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1")
+	if !ok || !cur.Machine || cur.N != 1 || cur.ID == "" || cur.ID == "p-1" {
+		t.Errorf("pointer %+v %v", cur, ok)
+	}
+	evs := journalEvents(t, home)
+	turns := eventsOf(evs, "turn")
+	if len(turns) != 2 || !turns[1].Machine || turns[1].Turn != cur.ID || turns[1].N != 1 {
+		t.Errorf("turns %+v", turns)
+	}
+	if after := len(eventsOf(evs, "shows")); after != before || before != 1 {
+		t.Errorf("shows %d before, %d after the machine message", before, after)
+	}
+	if st, _ := sessions(home).Load("s1"); st.Prompts != 1 {
+		t.Errorf("a machine message counted as a prompt: %d", st.Prompts)
+	}
+	// Its prompt_id, when Claude Code sends one, is the turn's id.
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-2", "prompt": "<system-reminder>auto</system-reminder>", "cwd": filepath.Join(home, "billing")})
+	if cur, _ := feedback.CurrentTurn(pathsOf(home).FeedbackDir(), "s1"); cur.ID != "p-2" || cur.N != 1 || !cur.Machine {
+		t.Errorf("pointer %+v", cur)
+	}
+}
+
+// memory_search and memory_read shows are journaled by PostToolUse, which
+// knows the turn and the agent: search ranks come from the #n markers.
+func TestPostToolUseJournalsSearchAndReadShows(t *testing.T) {
+	home := hookHome(t)
+	res := recall.Result{Hits: []recall.Hit{
+		{ID: "0b4c2a52-0000-4000-8000-000000000001", Text: "trap, b, 0.9) not an id", Project: "billing", Age: "2d", Score: 0.9},
+		{ID: "1c4c2a52-0000-4000-8000-000000000002", Text: "second", Project: ".claude", Age: "3d", Score: 0.8},
+		{ID: "2d4c2a52-0000-4000-8000-000000000003", Text: "third", Project: "billing", Age: "4d", Score: 0.7},
+	}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "agent_id": "a7", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res)}}})
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_read",
+		"tool_input": map[string]string{"id": "1c4c2a52-0000-4000-8000-000000000002"}, "tool_response": "second"})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 2 {
+		t.Fatalf("shows %+v", shows)
+	}
+	if s := shows[0]; s.Path != "search" || s.Turn != "p-1" || s.Agent != "a7" ||
+		itemsText(s.Items) != "0b4c2a52-0000-4000-8000-000000000001:1:0,1c4c2a52-0000-4000-8000-000000000002:2:0,2d4c2a52-0000-4000-8000-000000000003:3:0" {
+		t.Errorf("search %+v items %s", s, itemsText(s.Items))
+	}
+	if s := shows[1]; s.Path != "read" || s.Turn != "p-1" || s.Agent != "" || itemsText(s.Items) != "1c4c2a52-0000-4000-8000-000000000002:0:0" {
+		t.Errorf("read %+v items %s", s, itemsText(s.Items))
+	}
+	// A search that found nothing shows nothing.
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_search", "tool_response": "nothing in memory\n"})
+	if n := len(eventsOf(journalEvents(t, home), "shows")); n != 2 {
+		t.Errorf("an empty search journaled a show: %d", n)
+	}
+}
+
+// With feedback off nothing reaches the journal or the turn pointers; the
+// lines the agent reads keep their short ids.
+func TestFeedbackOffJournalsNothing(t *testing.T) {
+	home := hookHome(t)
+	appendConfig(t, home, "[feedback]\nenabled = false")
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}}]`
+	fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	fire(t, "subagent-start", map[string]any{"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose", "cwd": filepath.Join(home, "billing")})
+	h := fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt_id": "p-1", "prompt": longPrompt, "cwd": filepath.Join(home, "billing")})
+	fire(t, "user-prompt-submit", map[string]any{"session_id": "s1", "prompt": "<task-notification>x</task-notification>", "cwd": filepath.Join(home, "billing")})
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_read", "tool_input": map[string]string{"id": "0b4c2a52-0000-4000-8000-000000000001"}})
+	if !strings.Contains(h.Specific.Context, "[billing · 0b4c2a52] Billing keeps PostgreSQL 16.") {
+		t.Errorf("context:\n%s", h.Specific.Context)
+	}
+	if _, err := os.Stat(pathsOf(home).FeedbackDir()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("feedback dir written with feedback off: %v", err)
+	}
 }

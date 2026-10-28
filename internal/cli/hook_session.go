@@ -77,6 +77,7 @@ func init() {
 // env file, the banner and the one-time notice; after a compaction the
 // replay of recent injections and stores.
 func (h *hookEnv) sessionStart() []byte {
+	h.startSessionTurn()
 	switch h.in.Source {
 	case "startup", "":
 	case "compact":
@@ -169,6 +170,7 @@ func (h *hookEnv) sessionStart() []byte {
 	})
 	if err == nil {
 		h.tw.Emit(telemetry.Briefing{IDs: ids, Chars: len([]rune(text)), Source: source})
+		h.journalShows("briefing", itemsFromInjections(items))
 		// Briefed ids join this session's seen set only: counting them in the
 		// cross-session sticky muted them in sessions that never got the
 		// briefing (resume, clear, fork).
@@ -365,9 +367,9 @@ func (h *hookEnv) subagentStart() []byte {
 				text += "\n" + clip(page[1], subagentChars-len([]rune(text)))
 			}
 		}
-		n := 0
+		var shown []session.Injection
 		for _, in := range st.Injected {
-			if in.Rule != "briefing" || n == subagentItems {
+			if in.Rule != "briefing" || len(shown) == subagentItems {
 				continue
 			}
 			line := "\n- " + clip(in.Text, subagentItemChars)
@@ -375,8 +377,9 @@ func (h *hookEnv) subagentStart() []byte {
 				break
 			}
 			text += line
-			n++
+			shown = append(shown, in)
 		}
+		h.journalShows("briefing", itemsFromInjections(shown))
 	}
 	return contextOutput("SubagentStart", text, "")
 }

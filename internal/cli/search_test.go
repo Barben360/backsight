@@ -141,3 +141,21 @@ func TestSearchShowsTheKindOfARawFact(t *testing.T) {
 		t.Errorf("%s", out)
 	}
 }
+
+// Each hit carries its rank in the merged list, not its place in its
+// project's group: the prompt hook journals search shows from it.
+func TestSearchOutputRanksAcrossGroups(t *testing.T) {
+	res := recall.Result{Hits: []recall.Hit{
+		{ID: "a1", Text: "billing first", Project: "billing", Age: "1d", Score: 0.9},
+		{ID: "b1", Text: "claude second", Project: ".claude", Age: "2d", Score: 0.8},
+		{ID: "a2", Text: "billing third", Project: "billing", Age: "3d", Score: 0.7},
+	}}
+	out := searchText(res)
+	want := "[billing]\n- #1 billing first (0001-01-01, 1d ago, a1, 0.90)\n- #3 billing third (0001-01-01, 3d ago, a2, 0.70)\n[.claude]\n- #2 claude second (0001-01-01, 2d ago, b1, 0.80)\n"
+	if out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	if items := searchShows(out); itemsText(items) != "a1:1:0,b1:2:0,a2:3:0" {
+		t.Errorf("parsed %s", itemsText(items))
+	}
+}

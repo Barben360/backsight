@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/session"
 )
 
 // childFromTestBinary makes the supervisor's child this test binary, which
@@ -88,5 +91,27 @@ func TestHookPrintsTheChildAnswerAndCutsAHang(t *testing.T) {
 	}
 	if !strings.Contains(telemetryText(t, home), `"kind":"timeout"`) || !strings.Contains(telemetryText(t, home), `"session":"s1"`) {
 		t.Error("timeout not logged with its session")
+	}
+}
+
+// The gate's hits are shown to the agent with their short ids, and
+// journaled under the turn the prompt hook recorded.
+func TestGateJournalsItsHits(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = `[{"id":"0b4c2a52-0000-4000-8000-000000000001","text":"Billing keeps PostgreSQL 16.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.8}},
+		{"id":"1c4c2a52-0000-4000-8000-000000000002","text":"Billing moved in October.","type":"observation","tags":["project:billing"],"scores":{"reranker":0.7}}]`
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Prompts = 2; return nil })
+	if err := feedback.SetTurn(pathsOf(home).FeedbackDir(), "s1", feedback.Turn{ID: "t-2", N: 2}); err != nil {
+		t.Fatal(err)
+	}
+	g := gate(t, home)
+	if g.Specific.Decision != "deny" || !strings.Contains(g.Specific.Reason, "\n- [billing · 0b4c2a52] Billing keeps PostgreSQL 16.") ||
+		!strings.Contains(g.Specific.Reason, "\n- [billing · 1c4c2a52] Billing moved in October.") {
+		t.Fatalf("%+v", g)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || shows[0].Path != "gate" || shows[0].Turn != "t-2" ||
+		itemsText(shows[0].Items) != "0b4c2a52-0000-4000-8000-000000000001:1:0.8,1c4c2a52-0000-4000-8000-000000000002:2:0.7" {
+		t.Errorf("shows %+v", shows)
 	}
 }
