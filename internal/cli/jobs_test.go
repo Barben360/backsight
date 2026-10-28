@@ -398,3 +398,35 @@ func TestTickKeepsNotesAfterConnectStartedOver(t *testing.T) {
 		t.Errorf("want the note kept, got %d queued", n)
 	}
 }
+
+// A tick whose flusher predates connect deletes nothing on the old server
+// either: no purged document purged again, no briefing page pruned,
+// whether or not a note was queued.
+func TestStaleTickDeletesNothingOnTheServer(t *testing.T) {
+	for name, note := range map[string]bool{"a queued note": true, "no note": false} {
+		t.Run(name, func(t *testing.T) {
+			home := devInstall(t, true)
+			rs := withRecreated(t, home)
+			recentHasEventTime.Store(true)
+			idle := briefingModelID("old")
+			old := time.Now().Add(-20 * 24 * time.Hour).UTC()
+			mentalModels[idle] = `{"id":"` + idle + `","content":"x","tags":["project:old"],"last_refreshed_at":"` + old.Format(time.RFC3339Nano) + `"}`
+			recentByTag["project:old"] = `[{"id":"b","text":"t","mentioned_at":"` + old.Format(time.RFC3339) + `"}]`
+			if note {
+				_, _ = notesOutbox(pathsOf(home)).Append(newTestNote())
+			}
+			fakeHook = func(r *http.Request) {
+				if r.URL.Path == "/health" {
+					_ = state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil })
+				}
+			}
+			code, out, errOut := run(t, "jobs", "tick", "--json")
+			if exists, deleted := rs.state(); code != output.Partial || !strings.Contains(out, "started over for another server") || !exists || deleted != 0 {
+				t.Fatalf("exit %d, s9 exists %v, %d deletes\n%s\n%s", code, exists, deleted, out, errOut)
+			}
+			if _, ok := mentalModels[idle]; !ok {
+				t.Error("the idle project's page was pruned")
+			}
+		})
+	}
+}

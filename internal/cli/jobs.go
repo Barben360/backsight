@@ -165,16 +165,20 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				ob := notesOutboxFor(d, cfg)
 				ob.Gate = f.StartedOver // queued notes go to the server this tick began with only
 				res.Notes, err = ob.Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
-				switch {
-				case errors.Is(err, retain.ErrStartedOver):
+				// No note queued asks no gate: the deletes below look again.
+				if errors.Is(err, retain.ErrStartedOver) || errors.Is(f.StartedOver(), retain.ErrStartedOver) {
+					// The client is the old server's: nothing is written or
+					// deleted there any more, as during a mismatch.
 					res.Notes.Kept, _ = ob.Pending()
 					failed = &output.Error{Code: output.Partial, Message: "nothing sent: this PC's sends started over for another server (connect) since this tick began; the next tick sends"}
-				case err != nil || res.Notes.Kept > 0:
-					failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
+				} else {
+					if err != nil || res.Notes.Kept > 0 {
+						failed = &output.Error{Code: output.Partial, Message: "some notes stay queued; the next tick retries them"}
+					}
+					// After the sends: a slow server delays this look, never them.
+					res.Purges = guardTick(cmd.Context(), f, cfg)
+					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				}
-				// After the sends: a slow server delays this look, never them.
-				res.Purges = guardTick(cmd.Context(), f, cfg)
-				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			pruneSessions(d)

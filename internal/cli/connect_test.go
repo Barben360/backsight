@@ -568,36 +568,53 @@ func TestConnectWaitsForARunningSend(t *testing.T) {
 }
 
 // A restore-epoch reconcile holding epoch.lock re-checks the sends
-// generation under it, then drops cursors: connect waits for it, changes
-// nothing when it does not end, and goes once it ended.
+// generation under it, then drops cursors: connect, and connect --undo,
+// wait for it, change nothing when it does not end, and go once it ended.
 func TestConnectWaitsForTheEpochLock(t *testing.T) {
 	oldWait, oldPoll := connectSendsWait, connectSendsPoll
 	connectSendsWait, connectSendsPoll = 50*time.Millisecond, 5*time.Millisecond
 	t.Cleanup(func() { connectSendsWait, connectSendsPoll = oldWait, oldPoll })
-	home, _ := setupMachine(t)
-	tok := joinableHost(t)
-	switchingClient(t, home)
-	d := pathsOf(home)
-	lock := filepath.Join(d.LocksDir(), "epoch.lock")
-	_ = os.MkdirAll(d.LocksDir(), 0o700)
-	raw, _ := json.Marshal(state.Owner{PID: liveProcess(t), Command: "restore epoch reconcile", Since: time.Now().UTC().Truncate(time.Second)})
-	if err := os.WriteFile(lock, raw, 0o600); err != nil {
-		t.Fatal(err)
+	hold := func(t *testing.T, home string) (lock string) {
+		t.Helper()
+		d := pathsOf(home)
+		lock = filepath.Join(d.LocksDir(), "epoch.lock")
+		_ = os.MkdirAll(d.LocksDir(), 0o700)
+		raw, _ := json.Marshal(state.Owner{PID: liveProcess(t), Command: "restore epoch reconcile", Since: time.Now().UTC().Truncate(time.Second)})
+		if err := os.WriteFile(lock, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return lock
 	}
-	before := treeOf(t, home)
-	args := []string{"connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"}
-	code, out, errOut := run(t, args...)
-	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "a restore-epoch reconcile is running") ||
-		!strings.Contains(env.Error.Message, "nothing was changed") {
-		t.Fatalf("exit %d\n%s%s", code, out, errOut)
-	}
-	sameTree(t, before, treeOf(t, home))
-	_ = os.Remove(lock)
-	if code, out, errOut := run(t, args...); code != output.OK {
-		t.Errorf("after the reconcile: exit %d\n%s%s", code, out, errOut)
-	}
-	if _, err := os.Stat(lock); err == nil {
-		t.Error("connect left epoch.lock held")
+	for name, setup := range map[string]func(t *testing.T, home string) []string{
+		"connect": func(t *testing.T, home string) []string {
+			tok := joinableHost(t)
+			switchingClient(t, home)
+			return []string{"connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"}
+		},
+		"undo": func(t *testing.T, home string) []string {
+			connectedFromOwnServer(t, home)
+			return []string{"connect", "--undo", "--json"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, _ := setupMachine(t)
+			args := setup(t, home)
+			lock := hold(t, home)
+			before := treeOf(t, home)
+			code, out, errOut := run(t, args...)
+			if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "a restore-epoch reconcile is running") ||
+				!strings.Contains(env.Error.Message, "nothing was changed") {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			sameTree(t, before, treeOf(t, home))
+			_ = os.Remove(lock)
+			if code, out, errOut := run(t, args...); code != output.OK {
+				t.Errorf("after the reconcile: exit %d\n%s%s", code, out, errOut)
+			}
+			if _, err := os.Stat(lock); err == nil {
+				t.Error("left epoch.lock held")
+			}
+		})
 	}
 }
 

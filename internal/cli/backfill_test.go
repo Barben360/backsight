@@ -689,23 +689,48 @@ func TestBackfillStatusRefusesOtherFlags(t *testing.T) {
 	}
 }
 
-// spanningConnect queues s1 and s2 for backfill and builds the flusher;
-// the fake's first queue read then does what connect does (the backfill
-// record dropped, the sends generation bumped) and what queue, when not
-// nil, sets as the new backfill (setup queuing one after connect).
-func spanningConnect(t *testing.T, queue *state.Backfill) (state.State, error) {
+// spanRun is a backfill run that connect starts the sends over during:
+// sids are queued (each with a save), and during the first request on
+// matches the fake does what connect does: the backfill record becomes
+// queue's (nil: dropped; else what setup queued after connect) and the
+// sends generation goes up; cancel also interrupts the run (Ctrl-C).
+type spanRun struct {
+	sids   []string
+	on     func(r *http.Request) bool
+	queue  func(home string) *state.Backfill
+	cancel bool
+}
+
+type spanned struct {
+	home string
+	st   state.State // state.json after the run
+	err  error       // the run's
+}
+
+func onQueueRead(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/operations") }
+
+func onSessionSend(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/v1/default/banks/claude-memory/memories"
+}
+
+func transcriptOf(home, sid string) string {
+	return filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl")
+}
+
+// spanningConnect runs sr; the backfill record must be what connect left.
+func spanningConnect(t *testing.T, sr spanRun) spanned {
 	t.Helper()
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	fastBackfill(t)
 	d := pathsOf(home)
 	var sessions []string
-	for _, sid := range []string{"s1", "s2"} {
+	for _, sid := range sr.sids {
 		oldSession(t, home, sid, time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), true)
-		sessions = append(sessions, filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl"))
+		sessions = append(sessions, transcriptOf(home, sid))
 	}
 	_ = state.Update(d, "test", func(s *state.State) error {
-		s.Backfill = &state.Backfill{Total: 2, MaxCost: 10, Currency: "USD", StartDay: "2026-10-24", Sessions: sessions}
+		s.Backfill = &state.Backfill{Total: len(sessions), MaxCost: 10, Currency: "USD", StartDay: "2026-10-24", Sessions: sessions}
 		return nil
 	})
 	cfg, sec, _ := loadServerConfig()
@@ -713,56 +738,114 @@ func spanningConnect(t *testing.T, queue *state.Backfill) (state.State, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var once sync.Once
 	var after state.State
 	fakeHook = func(r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/operations") {
+		if sr.on(r) {
 			once.Do(func() {
+				var queue *state.Backfill
+				if sr.queue != nil {
+					queue = sr.queue(home)
+				}
 				_ = state.Update(d, "connect", func(s *state.State) error {
 					s.Backfill = queue
 					s.SendsGeneration++
 					return nil
 				})
 				after, _ = state.Load(d.StateFile())
+				if sr.cancel {
+					cancel()
+				}
 			})
 		}
 	}
-	_, err = runBackfill(context.Background(), f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false, nil)
+	_, err = runBackfill(ctx, f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false, nil)
+	fakeHook = nil
 	if after.SendsGeneration == 0 {
-		t.Fatal("the queue was never read: connect did not happen")
+		t.Fatal("connect did not happen during the run")
 	}
 	st, _ := state.Load(d.StateFile())
 	if !reflect.DeepEqual(st.Backfill, after.Backfill) {
 		t.Errorf("backfill record %+v, connect left %+v", st.Backfill, after.Backfill)
 	}
-	return st, err
-}
-
-func wantStartedOver(t *testing.T, err error) {
-	t.Helper()
 	var oe *output.Error
 	if !errors.As(err, &oe) || oe.Code != output.Partial || !strings.HasPrefix(oe.Message, "backfill stopped: this PC's sends started over") {
 		t.Errorf("runBackfill: %v", err)
 	}
+	return spanned{home: home, st: st, err: err}
 }
 
 // A backfill running across connect writes nothing for the old server:
 // the backfill record connect dropped stays dropped, and nothing is sent.
 func TestBackfillSpanningConnectRecordsNothing(t *testing.T) {
-	st, err := spanningConnect(t, nil)
-	wantStartedOver(t, err)
-	if st.Backfill != nil || retained.Load() != 0 {
-		t.Errorf("backfill %+v, %d retained", st.Backfill, retained.Load())
+	r := spanningConnect(t, spanRun{sids: []string{"s1", "s2"}, on: onQueueRead})
+	if r.st.Backfill != nil || retained.Load() != 0 {
+		t.Errorf("backfill %+v, %d retained", r.st.Backfill, retained.Load())
+	}
+}
+
+// newQueue is a backfill setup queued after connect.
+func newQueue(home string) *state.Backfill {
+	return &state.Backfill{Total: 1, MaxCost: 5, Currency: "USD", StartDay: "2026-10-28", Sessions: []string{transcriptOf(home, "s3")}}
+}
+
+// Interrupted after connect: the run does not pause the new backfill.
+func TestBackfillSpanningConnectRecordsNoPause(t *testing.T) {
+	r := spanningConnect(t, spanRun{sids: []string{"s1"}, on: onQueueRead, queue: newQueue, cancel: true})
+	if b := r.st.Backfill; b == nil || b.Paused != "" || retained.Load() != 0 {
+		t.Errorf("backfill %+v, %d retained", b, retained.Load())
+	}
+}
+
+// Connect while the last extractions are measured: the measure is not
+// recorded.
+func TestBackfillSpanningConnectRecordsNoFinalMeasure(t *testing.T) {
+	r := spanningConnect(t, spanRun{on: onQueueRead})
+	if r.st.Backfill != nil {
+		t.Errorf("backfill %+v", r.st.Backfill)
+	}
+}
+
+// Connect right after a session went out: the session is not counted
+// done, its saves stay queued for the new server, and its cursor (the new
+// server's, were connect to have moved the old one) is not marked as
+// having replayed them.
+func TestBackfillSpanningConnectAfterASend(t *testing.T) {
+	r := spanningConnect(t, spanRun{sids: []string{"s1", "s2"}, on: onSessionSend})
+	if r.st.Backfill != nil || retained.Load() != 1 {
+		t.Errorf("backfill %+v, %d retained (want s1's send only)", r.st.Backfill, retained.Load())
+	}
+	d := pathsOf(r.home)
+	if cur, ok, _ := retain.LoadCursor(d.CursorsDir(), "s1"); !ok || cur.NotesReplayed {
+		t.Errorf("s1's cursor: %+v (found %v)", cur, ok)
+	}
+	if n, _ := notesOutbox(d).Pending(); n != 1 {
+		t.Errorf("want s1's save queued, got %d", n)
 	}
 }
 
 // The same, with a new backfill queued after connect: the old run neither
-// pauses it nor counts its sessions done.
+// pauses it nor counts its sessions done, and a run begun after connect
+// sends it.
 func TestBackfillSpanningConnectLeavesTheNewQueue(t *testing.T) {
-	b2 := &state.Backfill{Total: 1, MaxCost: 5, Currency: "USD", StartDay: "2026-10-28", Sessions: []string{"/elsewhere/s3.jsonl"}}
-	st, err := spanningConnect(t, b2)
-	wantStartedOver(t, err)
-	if st.Backfill == nil || st.Backfill.Paused != "" || st.Backfill.Done != 0 || len(st.Backfill.Sessions) != 1 {
-		t.Errorf("the new backfill: %+v", st.Backfill)
+	r := spanningConnect(t, spanRun{sids: []string{"s1", "s2"}, on: onQueueRead, queue: func(home string) *state.Backfill {
+		oldSession(t, home, "s3", time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC), false)
+		return newQueue(home)
+	}})
+	if b := r.st.Backfill; b == nil || b.Paused != "" || b.Done != 0 || len(b.Sessions) != 1 || retained.Load() != 0 {
+		t.Fatalf("the new backfill: %+v, %d retained", b, retained.Load())
+	}
+	d := pathsOf(r.home)
+	cfg, sec, _ := loadServerConfig()
+	f, err := newFlusher(d, r.home, cfg, sec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := runBackfill(context.Background(), f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false, nil)
+	st, _ := state.Load(d.StateFile())
+	if err != nil || !res.Finished || st.Backfill == nil || st.Backfill.Done != 1 || len(st.Backfill.Sessions) != 0 || retained.Load() != 1 {
+		t.Errorf("a run after connect: %+v %v, state %+v, %d retained", res, err, st.Backfill, retained.Load())
 	}
 }

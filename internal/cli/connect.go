@@ -509,6 +509,11 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 	if err := waitSends(ctx, d, "connect --undo"); err != nil {
 		return err
 	}
+	release, err := holdEpochLock(ctx, d, "connect --undo")
+	if err != nil {
+		return err
+	}
+	defer release()
 	var keptCfg, keptSec, curCfg, curSec []byte
 	for p, dst := range map[string]*[]byte{filepath.Join(pre, "config.toml"): &keptCfg, filepath.Join(pre, "secrets.toml"): &keptSec, d.ConfigFile(): &curCfg, d.SecretsFile(): &curSec} {
 		if *dst, err = os.ReadFile(p); err != nil {
