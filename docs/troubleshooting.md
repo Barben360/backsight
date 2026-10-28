@@ -150,6 +150,31 @@ If the command exits 30, the server did not answer on the new address: `config.t
 
 `backsight server install` (and setup's server step) gives the server an id, which every connection token carries. If the server does not answer that step, install warns `server id: …` and goes on: memory works on this machine without it. `backsight server install` again writes it, and so does the first connection token made: `backsight server expose --private <ip>`, or `backsight server token` once the server is exposed.
 
+## server install --ssh stopped
+
+`backsight server install --ssh user@host` reads the host, plans and asks before it changes anything there. Each refusal below, up to the consent and the key, leaves both machines as they were.
+
+- **"the host key of … is not in your known_hosts"** (exit 10): backsight never accepts a host key it does not know. Connect once yourself (`ssh user@host`), check that the fingerprint ssh shows matches the host's (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there), accept it, then run the command again.
+- **"the host key of … changed since you last connected"**, or **"is marked revoked"** (exit 20): an attack, or a host reinstalled since. Check with whoever runs it; backsight never removes a host key from `known_hosts`.
+- **"ssh could not log in to … without a prompt"** (exit 10): backsight runs ssh without a password prompt. Load your key into the agent (`ssh-add`) or install it on the host (`ssh-copy-id user@host`). **"ssh could not reach …"** quotes ssh's own reason (name, network, firewall).
+- **"did not answer the probe as sh does"** or **"cannot read what … runs"**: the host's login shell printed something else than the answer, or the probe failed there (its last line is quoted). Check that `ssh user@host uname -s` prints only `Linux`.
+- **"installs on a Linux host only for now"**, **"for which backsight has no release"**: the host is not x86_64 or aarch64 Linux. Install backsight by hand there, as on any machine ([install.md](install.md)).
+- **"neither minisign nor OpenSSL 3"** (exit 10): the host needs one of them to check the release signature: install `minisign` (or OpenSSL 3) there. **"lacks tar"** or **"mktemp"**: install them there.
+- **"… runs backsight x and this PC y"**: an install over ssh never replaces the backsight of an existing install (its updates migrate data). Run `backsight update apply` on the older one so both run the same release, then run the command again.
+- **"is set up as a PC with Claude Code"**: the host already uses the memory itself. Open its server there instead (`backsight server expose --private <ip>`, then `backsight server token --out <file>`), carry the file here and run `backsight connect --token-file <file>`. **"is a client of another memory server"**: install the server on that server's host instead.
+- **"the ssh connection reached … at …, which other PCs cannot use"** (exit 10): your ssh went through a loopback, a public address or a tunnel, so that address is no good for your other PCs. Rerun with `--private <ip>`, a LAN or tailnet address of the host (`tailscale ip -4` or `ip addr` there). **"is not a tailnet address"**: as for `backsight server expose`, a LAN address carries the API key in clear; rerun with `--answer cleartext_lan=yes` on a network you trust, or give a tailnet address.
+- **"this backsight is a development build"**: no release matches it, so there is nothing to copy. Run the command from a released backsight. **"the release source has no version"**: the release of this PC's version cannot be found; with `--source <dir>`, point it at a directory holding that release.
+- **"no terminal and nothing on stdin"** (exit 10): the LLM key has nowhere to come from. Pass it with `--llm-key-from-file <file>` (first line) or `--llm-key-from-env <var>`, never as an answer.
+
+Once the host started changing, a failure keeps what was done there (the host is never rolled back) and prints the same command as `resume`: every step can run again, so running it goes on from where it stopped (the release and the key already there are not sent again, setup resumes from its journal).
+
+- **"the release did not install on …"** (exit 20): the host's `install.sh` refused the release this PC sent (its reason is quoted: a signature or checksum mismatch, a cut transfer), and the host may still run its previous backsight. The host's `install.sh` trusts this version's signing key only: during a signing key rotation, a release signed by the next key may pass this PC's check and fail there. Run the command again; if it keeps failing, report it.
+- **"on user@host: …"**: backsight on the host refused a step (setup, server expose, server token) with its own exit code and reason, for example Docker not running there. Fix it on the host as the message says, then run the same command here.
+- **"the install on … stopped part way"** (exit 40), or **"the ssh connection to … dropped"**: the connection ended during a step, which may have run in part. Run the same command again.
+- **"lingering is off"** (a warning): on the host, your user's services stop when you log out, so its backups and update checks only run while you are logged in there. Turn lingering on there: `sudo loginctl enable-linger <user>`.
+
+To undo the install on the host, run `backsight setup --undo` there; on this PC, `backsight connect --undo` goes back to its own server when it had one.
+
 ## Memories are not recalled
 
 1. Restart Claude Code, or run `/reload-plugins`: a session started before setup or an update has no plugin, or the old one.

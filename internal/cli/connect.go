@@ -53,6 +53,10 @@ type connectFlags struct {
 	answersFile      string
 	nonInteractive   bool
 	configDir        string
+	// Not flags: server install --ssh brought the token back over ssh
+	// (preread: not read again) and resumes with its own command line.
+	preread *token.Token
+	resume  string
 }
 
 // ownServer is what joining another server does to this PC's own.
@@ -656,8 +660,11 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	if slices.ContainsFunc(values, looksLikeToken) {
 		return res, &output.Error{Code: output.Usage, Message: tokenArgument}
 	}
-	tok, err := readToken(e, f.token, f.tokenFile)
-	if err != nil {
+	var tok token.Token
+	var err error
+	if f.preread != nil {
+		tok = *f.preread
+	} else if tok, err = readToken(e, f.token, f.tokenFile); err != nil {
 		return res, err
 	}
 	if err := publicAddress(tok); err != nil {
@@ -754,8 +761,11 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		return res, nil
 	}
 
-	resume := "backsight connect --token-file F --answer consent=yes"
-	if f.tokenFile != "" {
+	resume, consentResume, planCmd := "backsight connect --token-file F --answer consent=yes", "backsight connect --token-file F --answer consent=yes", "backsight connect --token-file F --plan"
+	switch {
+	case f.resume != "":
+		resume, consentResume, planCmd = f.resume, f.resume+" --answer consent=yes", f.resume+" --plan"
+	case f.tokenFile != "":
 		if abs, err := filepath.Abs(f.tokenFile); err == nil {
 			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
 		}
@@ -777,8 +787,8 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 			return res, nil
 		}
 	case consent == "":
-		return res, &output.Error{Code: output.NeedsUser, Message: "connect changes this PC's config and key: read the plan (backsight connect --token-file F --plan), then rerun with --answer consent=yes",
-			Resume: "backsight connect --token-file F --answer consent=yes"}
+		return res, &output.Error{Code: output.NeedsUser, Message: "connect changes this PC's config and key: read the plan (" + planCmd + "), then rerun with --answer consent=yes",
+			Resume: consentResume}
 	case consent != "yes":
 		res.Declined = true
 		return res, nil

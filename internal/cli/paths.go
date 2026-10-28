@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -16,6 +17,10 @@ type pathsInfo struct {
 	ConfigExists  bool   `json:"config_exists"`
 	SecretsFile   string `json:"secrets_file"`
 	SecretsExists bool   `json:"secrets_exists"`
+	// What the install is, from config.toml: empty when it is absent or
+	// does not load.
+	Role string `json:"server_role,omitempty"`
+	Mode string `json:"server_mode,omitempty"`
 }
 
 func newPathsCmd(e *env) *cobra.Command {
@@ -24,13 +29,16 @@ func newPathsCmd(e *env) *cobra.Command {
 		Short: "Show where backsight keeps its binaries, config and state",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			d, _, err := machine()
+			d, home, err := machine()
 			if err != nil {
 				return err
 			}
 			info := pathsInfo{Dirs: d, ConfigFile: d.ConfigFile(), SecretsFile: d.SecretsFile()}
 			info.ConfigExists = exists(info.ConfigFile)
 			info.SecretsExists = exists(info.SecretsFile)
+			if cfg, err := config.Load(info.ConfigFile, d, home); err == nil {
+				info.Role, info.Mode = cfg.Server.Role, cfg.Server.Mode
+			}
 			return e.emit("paths", info, func() string {
 				var b strings.Builder
 				for _, row := range [][2]string{{"data", d.Data}, {"config", d.Config}, {"state", d.State}, {"bin", d.Bin},
