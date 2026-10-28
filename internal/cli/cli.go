@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/redact"
+	"github.com/Barben360/backsight/internal/token"
 )
 
 // env is what every command needs: where to write and whether to emit JSON.
@@ -174,10 +176,31 @@ func ExecuteContext(ctx context.Context, args []string, stdout, stderr io.Writer
 		code = output.Usage
 		err = &output.Error{Code: code, Message: err.Error()}
 	}
+	err = maskTokens(err)
 	if e.json {
 		_ = output.WriteJSON(stdout, strings.TrimPrefix(cmd.CommandPath(), "backsight "), nil, err)
 	} else {
 		_, _ = fmt.Fprintf(stderr, "backsight: %v\n", err)
 	}
 	return code
+}
+
+// tokenInText is a connection token, or its start, inside a message.
+var tokenInText = regexp.MustCompile(regexp.QuoteMeta(token.Prefix) + `[A-Za-z0-9_=-]*`)
+
+// maskTokens hides any connection token in err's message: a token typed
+// as a flag's value by mistake (--plan=bst1.…) is quoted back by the flag
+// parser, and it holds the API key.
+func maskTokens(err error) error {
+	if !strings.Contains(err.Error(), token.Prefix) {
+		return err
+	}
+	mask := func(s string) string { return tokenInText.ReplaceAllString(s, token.Prefix+"[redacted]") }
+	var oe *output.Error
+	if errors.As(err, &oe) {
+		out := *oe
+		out.Message = mask(oe.Message)
+		return &out
+	}
+	return &output.Error{Code: output.CodeOf(err), Message: mask(err.Error())}
 }

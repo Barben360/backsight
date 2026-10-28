@@ -159,8 +159,9 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	}
 	// A server-only host runs no Claude Code: nothing of it to ask about.
 	serverOnly := extra["role"] == config.RoleServer
-	// A client extracts nothing: its [llm] only prices estimates, its
-	// provider and model come from config.toml (connect writes the host's).
+	// A client extracts nothing and backs nothing up: its [llm] only
+	// prices estimates, its provider and model come from config.toml
+	// (connect writes the host's), and backups are the host's.
 	remote := in.Config != nil && in.Config.Server.Mode == "remote"
 	pick := func(q *Question) error {
 		ans, given := in.Answers[q.ID]
@@ -261,9 +262,11 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		}
 	}
 
-	if err := add(Question{ID: "backups", Prompt: "Back up the memory every day (encrypted, 7 daily + 4 weekly kept)?", Default: "on", Recommended: "on",
-		Options: []Option{{Value: "on", Label: "daily encrypted backups"}, {Value: "off", Label: "no backups", Caveat: "a lost disk loses the memory"}}}); err != nil {
-		return nil, nil, err
+	if !remote { // a client's backups are its host's
+		if err := add(Question{ID: "backups", Prompt: "Back up the memory every day (encrypted, 7 daily + 4 weekly kept)?", Default: "on", Recommended: "on",
+			Options: []Option{{Value: "on", Label: "daily encrypted backups"}, {Value: "off", Label: "no backups", Caveat: "a lost disk loses the memory"}}}); err != nil {
+			return nil, nil, err
+		}
 	}
 	if in.ReferencePieces > 0 && !serverOnly {
 		if err := add(Question{ID: "reference", Prompt: fmt.Sprintf("%d pieces of an older Hindsight install are wired into Claude Code. Retire them once backsight is installed (undoable; the old server is left untouched)?", in.ReferencePieces),

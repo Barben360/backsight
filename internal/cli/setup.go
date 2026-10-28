@@ -1463,9 +1463,12 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		retention = "leave Claude Code's setting as it is"
 	}
 	remote := s.cfg != nil && s.cfg.Server.Mode != "local"
-	scheduler := "backsight jobs install: jobs tick every 15 min, jobs maintain daily (backups " + a["backups"] + ")"
-	if a["backups"] == "on" && !remote {
-		scheduler += "; generate the backup identity if there is none"
+	scheduler := "backsight jobs install: jobs tick every 15 min, jobs maintain daily"
+	if !remote { // a client's backups are its host's
+		scheduler += " (backups " + a["backups"] + ")"
+		if a["backups"] == "on" {
+			scheduler += "; generate the backup identity if there is none"
+		}
 	}
 	if a["scheduler"] == "off" {
 		scheduler = "none (scheduler=off): run jobs tick and jobs maintain some other way"

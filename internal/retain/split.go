@@ -27,6 +27,10 @@ const splitWait = 2 * time.Second
 
 func splitPath(stateDir string) string { return filepath.Join(stateDir, "split-sessions.json") }
 
+// SplitSessionsFile is where the split sessions of the server this PC
+// sends to are recorded: connect moves it aside with the cursors.
+func SplitSessionsFile(stateDir string) string { return splitPath(stateDir) }
+
 // SplitSessions reads <state>/split-sessions.json, by session id; absent:
 // none.
 func SplitSessions(stateDir string) (map[string]SplitSession, error) {

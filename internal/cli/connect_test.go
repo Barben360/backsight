@@ -3,18 +3,22 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/token"
 )
@@ -58,16 +62,19 @@ func leaked(text string, tok token.Token) bool {
 	return strings.Contains(text, tok.APIKey) || strings.Contains(text, strings.TrimPrefix(token.Encode(tok), token.Prefix))
 }
 
+// oldKey is the API key a client had before connect.
+const oldKey = "the-old-key-0123456789abcdef"
+
 // asClientOf makes home a client of the server at url, bank backsight, on
-// API key key.
-func asClientOf(t *testing.T, home, url, key string) {
+// API key oldKey.
+func asClientOf(t *testing.T, home, url string) {
 	t.Helper()
 	d := pathsOf(home)
 	_ = os.MkdirAll(d.Config, 0o700)
 	if err := os.WriteFile(d.ConfigFile(), []byte("# my client\nschema_version = 1\n\n[server]\nmode = \"remote\"\nurl = \""+url+"\"\nbank = \"backsight\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", key) }); err != nil {
+	if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", oldKey) }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -318,7 +325,7 @@ func TestConnectSameServerOnlyUpdatesURLAndKey(t *testing.T) {
 	home, _ := setupMachine(t)
 	tok := joinableHost(t)
 	d := pathsOf(home)
-	asClientOf(t, home, "http://100.101.1.2:8888", "the-old-key-0123456789abcdef")
+	asClientOf(t, home, "http://100.101.1.2:8888")
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	_ = state.Update(d, "test", func(s *state.State) error {
 		s.RetainSince, s.RemoteServer = &since, &state.RemoteServer{ID: tok.ServerID, URL: "http://100.101.1.2:8888"}
@@ -358,7 +365,7 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	asClientOf(t, home, oldURL, "the-old-key-0123456789abcdef")
+	asClientOf(t, home, oldURL)
 	since := time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC)
 	_ = state.Update(d, "test", func(s *state.State) error {
 		s.RetainSince, s.RemoteServer = &since, &state.RemoteServer{ID: oldID, URL: oldURL}
@@ -370,6 +377,8 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 		t.Fatalf("to the old server: exit %d\n%s%s", code, out, errOut)
 	}
 
+	split := retain.SplitSessionsFile(d.State) // the old server's split sessions
+	_ = os.WriteFile(split, []byte(`{"s9":{"document":"conversation:s9"}}`), 0o600)
 	tok := joinableHost(t) // the new server: holds nothing of s1
 	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json")
 	if env := parseConnect(t, out); code != output.OK || env.Data.Situation != joinOther || !hasConnectStep(env.Data.Steps, "history", "done", "start over") {
@@ -379,7 +388,10 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 	if len(runs) != 1 {
 		t.Fatalf("connect runs kept: %v", runs)
 	}
-	for _, p := range []string{"cursors", "sent-index"} {
+	if _, err := os.Stat(split); err == nil {
+		t.Error("split-sessions.json left in place")
+	}
+	for _, p := range []string{"cursors", "sent-index", "split-sessions.json"} {
 		if _, err := os.Stat(filepath.Join(runs[0], p)); err != nil {
 			t.Errorf("%s not kept: %v", p, err)
 		}
@@ -406,7 +418,7 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 func TestConnectAgainClearsMismatch(t *testing.T) {
 	home, _ := setupMachine(t)
 	tok := joinableHost(t)
-	asClientOf(t, home, tok.URL, "the-old-key-0123456789abcdef")
+	asClientOf(t, home, tok.URL)
 	setMismatch(t, home, "b")
 	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
 	if code != output.OK {
@@ -435,5 +447,160 @@ func TestConnectRefusesAServerOnlyHostAndAnOwnServer(t *testing.T) {
 			t.Errorf("%s: exit %d\n%s%s", want, code, out, errOut)
 		}
 		sameTree(t, before, treeOf(t, home))
+	}
+}
+
+// withConnectFault makes the named steps of applyConnect fail.
+func withConnectFault(t *testing.T, steps ...string) {
+	t.Helper()
+	old := connectFault
+	connectFault = func(step string) error {
+		if slices.Contains(steps, step) {
+			return errors.New("injected " + step + " failure")
+		}
+		return nil
+	}
+	t.Cleanup(func() { connectFault = old })
+}
+
+// switchingClient is a client of another server than the fake's, with
+// cursors, a sent-index, split sessions and the state fields a switch
+// resets.
+func switchingClient(t *testing.T, home string) {
+	t.Helper()
+	d := pathsOf(home)
+	asClientOf(t, home, "http://100.101.1.2:8888")
+	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	if err := state.Update(d, "test", func(s *state.State) error {
+		s.RetainSince, s.RemoteServer = &since, &state.RemoteServer{ID: "a", URL: "http://100.101.1.2:8888"}
+		s.Backfill = &state.Backfill{Done: 1, Total: 2, StartedAt: since}
+		s.RestoreEpoch = &state.RestoreEpoch{Bank: config.DefaultBank, Epoch: 3, ReconciledAt: since}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.MkdirAll(d.CursorsDir(), 0o700)
+	_ = os.MkdirAll(d.SentIndexDir(), 0o700)
+	_ = os.WriteFile(filepath.Join(d.CursorsDir(), "s1.json"), []byte(`{"offset":42}`), 0o600)
+	_ = os.WriteFile(filepath.Join(d.SentIndexDir(), "index.bin"), []byte("12345678"), 0o600)
+	_ = os.WriteFile(retain.SplitSessionsFile(d.State), []byte(`{}`), 0o600)
+}
+
+// A write that fails before the key is saved puts back what connect had
+// changed (moved retain state, state fields, config.toml) and exits 30,
+// naming the cause.
+func TestConnectRollsBackAFailedWrite(t *testing.T) {
+	for _, step := range []string{"config", "secrets"} {
+		t.Run(step, func(t *testing.T) {
+			home, f := setupMachine(t)
+			tok := joinableHost(t)
+			switchingClient(t, home)
+			before := treeOf(t, home)
+			withConnectFault(t, step)
+			code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+			if env := parseConnect(t, out); code != output.RolledBack || env.Error == nil || !strings.Contains(env.Error.Message, "injected "+step+" failure") ||
+				!strings.Contains(env.Error.Message, "this PC is as it was") || leaked(out+errOut, tok) {
+				t.Errorf("exit %d\n%s%s", code, out, errOut)
+			}
+			sameTree(t, before, treeOf(t, home))
+			if len(f.calls) != 0 {
+				t.Errorf("setup ran: %v", f.commands())
+			}
+		})
+	}
+}
+
+// When putting back fails too, connect exits 20 and says what is left and
+// where meta.json records the state as it was.
+func TestConnectSaysWhatIsLeftWhenTheRollbackFails(t *testing.T) {
+	home, _ := setupMachine(t)
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	withConnectFault(t, "secrets", "undo")
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseConnect(t, out)
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "putting this PC back failed") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	runs, _ := filepath.Glob(filepath.Join(pathsOf(home).ConnectDir(), "*", "meta.json"))
+	if len(runs) != 1 || !strings.Contains(env.Error.Message, runs[0]) {
+		t.Errorf("meta.json %v not named:\n%s", runs, env.Error.Message)
+	}
+}
+
+// A failure recording the server's id, once config.toml and the key are
+// written, exits 40 with the command that finishes it, which does.
+func TestConnectResumesAFailedBinding(t *testing.T) {
+	home, _ := setupMachine(t)
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	file := tokenFile(t, tok)
+	withConnectFault(t, "binding")
+	code, out, errOut := run(t, "connect", "--token-file", file, "--answer", "consent=yes", "--non-interactive", "--json")
+	env := parseConnect(t, out)
+	if code != output.Partial || env.Error == nil || env.Error.Resume != "backsight connect --token-file "+shellWord(file)+" --answer consent=yes" {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	d := pathsOf(home)
+	cfg, _ := config.Load(d.ConfigFile(), d, home)
+	sec, _ := config.LoadSecrets(d.SecretsFile())
+	if st, _ := state.Load(d.StateFile()); cfg.Server.URL != tok.URL || sec.APIKey != hostKey || st.RemoteServer.ID != "a" {
+		t.Errorf("config %s, key written %v, binding %+v", cfg.Server.URL, sec.APIKey == hostKey, st.RemoteServer)
+	}
+	withConnectFault(t)
+	if code, out, errOut := run(t, "connect", "--token-file", file, "--answer", "consent=yes", "--non-interactive"); code != output.OK {
+		t.Fatalf("resume: exit %d\n%s%s", code, out, errOut)
+	}
+	if st, _ := state.Load(d.StateFile()); st.RemoteServer.ID != tok.ServerID {
+		t.Errorf("binding: %+v", st.RemoteServer)
+	}
+}
+
+// A token typed as a flag's value by mistake is quoted back by the flag
+// parser: every command's error masks it, text and JSON.
+func TestATokenInAFlagValueIsMasked(t *testing.T) {
+	isolate(t)
+	tok := joinableHost(t)
+	enc := token.Encode(tok)
+	for _, args := range [][]string{
+		{"connect", "--plan=" + enc},
+		{"connect", "--plan=" + enc, "--json"},
+		{"connect", "--non-interactive=" + enc, "--json"},
+		{"setup", "--plan=" + enc},
+		{"setup", enc, "--json"},
+	} {
+		code, out, errOut := run(t, args...)
+		if code != output.Usage || leaked(out+errOut, tok) || !strings.Contains(out+errOut, token.Prefix+"[redacted]") {
+			t.Errorf("%s: exit %d\n%s%s", args[0], code, out, errOut)
+		}
+	}
+}
+
+// A server on another Hindsight than this backsight's pin is joined with
+// a warning (minor: update, patch: nothing to do); an unreadable version
+// is the token's.
+func TestConnectWarnsOnAVersionSkew(t *testing.T) {
+	setupMachine(t)
+	tok := joinableHost(t)
+	f := tokenFile(t, tok)
+	pin := strings.Split(server.PinnedVersion(), ".")
+	minor, _ := strconv.Atoi(pin[1])
+	patch, _ := strconv.Atoi(pin[2])
+	fakeAPIVersion = pin[0] + "." + pin[1] + "." + strconv.Itoa(patch+1)
+	code, out, errOut := run(t, "connect", "--token-file", f, "--plan", "--json")
+	if env := parseConnect(t, out); code != output.OK || env.Data.Skew != doctor.Info || !strings.Contains(strings.Join(env.Data.Warnings, "\n"), "only the patch differs") {
+		t.Errorf("patch: exit %d\n%s%s", code, out, errOut)
+	}
+	fakeAPIVersion = ""
+	code, out, errOut = run(t, "connect", "--token-file", f, "--plan", "--json")
+	if env := parseConnect(t, out); code != output.OK || env.Data.HindsightVersion != tok.HindsightVersion {
+		t.Errorf("unreadable: exit %d\n%s%s", code, out, errOut)
+	}
+	other := pin[0] + "." + strconv.Itoa(minor+1) + ".0"
+	fakeAPIVersion = other
+	code, out, errOut = run(t, "connect", "--token-file", f, "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.OK || env.Data.Skew != doctor.Warn || env.Data.HindsightVersion != other ||
+		!strings.Contains(strings.Join(env.Data.Warnings, "\n"), "backsight update apply") {
+		t.Errorf("minor: exit %d\n%s%s", code, out, errOut)
 	}
 }

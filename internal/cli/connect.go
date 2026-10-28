@@ -195,15 +195,21 @@ func probeToken(ctx context.Context, tok token.Token) (probe, error) {
 	if id != tok.ServerID {
 		return probe{}, redacted(fmt.Errorf("the server at %s is not the one this token was made for: get a fresh token there", tok.URL), sec)
 	}
-	v, err := cl.Version(ctx)
-	if err != nil {
-		return probe{}, fail("reading the server version", err)
-	}
 	ep, err := retain.ReadEpoch(ctx, cl, tok.Bank)
 	if err != nil {
 		return probe{}, fail("reading the bank's restore epoch", err)
 	}
-	return probe{Version: v.APIVersion, Skew: doctor.VersionSkew(v.APIVersion, server.PinnedVersion()), Epoch: ep.Epoch}, nil
+	// A version skew never refuses: an unreadable version is the one the
+	// token was made with.
+	version := tok.HindsightVersion
+	if v, err := cl.Version(ctx); err == nil && v.APIVersion != "" {
+		version = v.APIVersion
+	}
+	p := probe{Version: version, Epoch: ep.Epoch}
+	if version != "" {
+		p.Skew = doctor.VersionSkew(version, server.PinnedVersion())
+	}
+	return p, nil
 }
 
 // situationOf says what this PC is to tok's server, with its config (nil
@@ -265,7 +271,8 @@ type connectMeta struct {
 }
 
 // resetRetain starts this PC's sends over for another server: the session
-// cursors and the sent-index move into keep (a new directory), with
+// cursors, the sent-index and the split sessions move into keep (a new
+// directory), with
 // meta.json recording the state they went with and the server they were
 // for (config.toml as it is now). Live retain then starts at at, the
 // backfill record is dropped and the restore epoch is epoch, the new
@@ -295,8 +302,8 @@ func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Ti
 	if err := fsutil.WriteAtomic(filepath.Join(keep, "meta.json"), append(raw, '\n'), 0o600); err != nil {
 		return err
 	}
-	for _, dir := range []string{d.CursorsDir(), d.SentIndexDir()} {
-		if err := os.Rename(dir, filepath.Join(keep, filepath.Base(dir))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	for _, p := range retainFiles(d) {
+		if err := os.Rename(p, filepath.Join(keep, filepath.Base(p))); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -306,6 +313,67 @@ func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Ti
 		return nil
 	})
 }
+
+// retainFiles are what this PC's sends to one server left: resetRetain
+// moves them aside.
+func retainFiles(d paths.Dirs) []string {
+	return []string{d.CursorsDir(), d.SentIndexDir(), retain.SplitSessionsFile(d.State)}
+}
+
+// undoRetainReset puts back what resetRetain moved into keep and the state
+// fields meta.json recorded, then removes keep. No meta.json: nothing was
+// moved yet.
+func undoRetainReset(d paths.Dirs, keep string) error {
+	if err := connectFault("undo"); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(filepath.Join(keep, "meta.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		_ = os.Remove(keep)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var meta connectMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return err
+	}
+	for _, p := range retainFiles(d) {
+		moved := filepath.Join(keep, filepath.Base(p))
+		if _, err := os.Lstat(moved); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err := os.Rename(moved, p); err != nil {
+			return err
+		}
+	}
+	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
+		s.RetainSince, s.Backfill, s.RestoreEpoch = meta.RetainSince, meta.Backfill, meta.RestoreEpoch
+		return nil
+	}); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(keep)
+	_ = os.Remove(d.ConnectDir()) // when empty
+	return nil
+}
+
+// keepDir is a directory of ConnectDir no earlier run used, named by at
+// (a second run within the same second gets a suffix).
+func keepDir(d paths.Dirs, at time.Time) string {
+	base := filepath.Join(d.ConnectDir(), at.Format("20060102T150405Z"))
+	keep := base
+	for i := 2; ; i++ {
+		if _, err := os.Lstat(keep); err != nil { // absent (any other error: Mkdir says it)
+			return keep
+		}
+		keep = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+// connectFault fails a step of applyConnect in tests; nil in the binary.
+var connectFault = func(string) error { return nil }
 
 // runConnect joins tok's server: read and check the token, probe the
 // server, show the plan, ask, write, then run setup's client steps.
@@ -351,8 +419,13 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		return res, err
 	}
 	res.HindsightVersion, res.Skew = p.Version, p.Skew
-	if p.Skew == doctor.Warn {
+	switch p.Skew {
+	case doctor.Warn:
 		res.Warnings = append(res.Warnings, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: on the server's host, backsight update apply; or update this PC to the host's backsight", p.Version, server.PinnedVersion()))
+	case doctor.Info:
+		res.Warnings = append(res.Warnings, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: only the patch differs, nothing to do", p.Version, server.PinnedVersion()))
+	case "":
+		res.Warnings = append(res.Warnings, "the server's Hindsight version could not be read: backsight doctor compares it with this backsight's pin once connected")
 	}
 	var raw []byte // nil: no config.toml yet
 	if cfg != nil {
@@ -386,8 +459,14 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		return res, nil
 	}
 
+	resume := "backsight connect --token-file F --answer consent=yes"
+	if f.tokenFile != "" {
+		if abs, err := filepath.Abs(f.tokenFile); err == nil {
+			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
+		}
+	}
 	at := now().UTC()
-	if err := applyConnect(d, home, tok, p, situation, at); err != nil {
+	if err := applyConnect(d, home, tok, p, situation, at, resume); err != nil {
 		return res, redacted(err, config.Secrets{APIKey: tok.APIKey})
 	}
 	for i := range res.Steps {
@@ -451,7 +530,7 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 	since, idx := now().UTC(), (*retain.SentIndex)(nil)
 	if situation == joinOther {
 		steps = append(steps, step{Name: "history", Status: "planned", Detail: "this PC's sends start over on that server: what it already holds is not sent again " +
-			"(the session cursors and sent-index move to " + d.ConnectDir() + ")"})
+			"(the session cursors, sent-index and split sessions move to " + d.ConnectDir() + ")"})
 	}
 	if situation == joinSame {
 		if st, err := state.Load(d.StateFile()); err == nil && st.RetainSince != nil {
@@ -488,8 +567,10 @@ func connectPlan(d paths.Dirs, home string, f connectFlags, tok token.Token, sit
 // applyConnect writes what the plan said, under the maintenance lock
 // (hooks queue, jobs skip): the retain reset first (it records the server
 // config.toml still names), then config.toml, the key, and the binding
-// last, so a failure part way leaves a rerun of connect to finish it.
-func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time) error {
+// last. A failure up to the key puts back what was done (exit 30; 20 when
+// that fails too, saying what is left); a failure of the binding leaves
+// the rest done, for resume to finish (exit 40).
+func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time, resume string) error {
 	unlock, _, err := serverMaintenanceLock(d, "connect")
 	if err != nil {
 		return err
@@ -509,27 +590,70 @@ func applyConnect(d paths.Dirs, home string, tok token.Token, p probe, situation
 	if err != nil {
 		return err
 	}
+	keep, wrote := "", false
+	rollback := func(cause error) error {
+		var left []string
+		if wrote {
+			var err error
+			if raw == nil {
+				err = os.Remove(d.ConfigFile())
+			} else {
+				err = fsutil.WriteAtomic(d.ConfigFile(), raw, 0o600)
+			}
+			if err != nil {
+				left = append(left, d.ConfigFile()+" still names "+tok.URL+" ("+err.Error()+")")
+			}
+		}
+		if keep != "" {
+			if err := undoRetainReset(d, keep); err != nil {
+				left = append(left, "this PC's session cursors, sent-index and split sessions may still be in "+keep+
+					", and state.json's retain_since, backfill and restore_epoch changed; "+filepath.Join(keep, "meta.json")+" records them as they were ("+err.Error()+")")
+			}
+		}
+		if len(left) > 0 {
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("connect stopped (%s), and putting this PC back failed: %s", cause.Error(), strings.Join(left, "; "))}
+		}
+		return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("connect stopped (%s): what it had changed is put back, this PC is as it was", cause.Error())}
+	}
 	if situation == joinOther {
-		keep := filepath.Join(d.ConnectDir(), at.Format("20060102T150405Z"))
+		keep = keepDir(d, at)
 		if err := resetRetain(d, keep, state.RestoreEpoch{Bank: tok.Bank, Epoch: p.Epoch, ReconciledAt: at}, at); err != nil {
-			return blocked(fmt.Errorf("moving this PC's sends aside: %w", err))
+			if errors.Is(err, fs.ErrExist) { // another run's directory: not this one's to undo
+				keep = ""
+			}
+			return rollback(fmt.Errorf("moving this PC's sends aside: %w", err))
 		}
 	}
+	if err := connectFault("config"); err != nil {
+		return rollback(err)
+	}
 	if err := os.MkdirAll(d.Config, 0o700); err != nil {
-		return blocked(err)
+		return rollback(err)
 	}
 	if !bytes.Equal(out, raw) {
 		if err := fsutil.ReplaceIfUnchanged(d.ConfigFile(), out, 0o600, want); err != nil {
-			return blocked(fmt.Errorf("%s changed while connect wrote it: %w", d.ConfigFile(), err))
+			return rollback(fmt.Errorf("%s changed while connect wrote it: %w", d.ConfigFile(), err))
 		}
+		wrote = true
+	}
+	if err := connectFault("secrets"); err != nil {
+		return rollback(err)
 	}
 	if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", tok.APIKey) }); err != nil {
-		return blocked(fmt.Errorf("writing the API key to %s: %w", d.SecretsFile(), err))
+		return rollback(fmt.Errorf("writing the API key to %s: %w", d.SecretsFile(), err))
 	}
-	return state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
-		s.RemoteServer = &state.RemoteServer{ID: tok.ServerID, URL: tok.URL, ConnectedAt: at}
-		return nil
-	})
+	err = connectFault("binding")
+	if err == nil {
+		err = state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
+			s.RemoteServer = &state.RemoteServer{ID: tok.ServerID, URL: tok.URL, ConnectedAt: at}
+			return nil
+		})
+	}
+	if err != nil {
+		return &output.Error{Code: output.Partial, Resume: resume,
+			Message: fmt.Sprintf("config.toml and the API key now name %s, but recording its server id in %s failed (%s): run %s to finish", tok.URL, d.StateFile(), err.Error(), resume)}
+	}
+	return nil
 }
 
 func connectPlanText(r connectResult) string {

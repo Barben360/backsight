@@ -220,6 +220,7 @@ var (
 	epochDoc           string            // GET /documents/backsight:epoch answers this metadata ("" = 404)
 	epochStatus        atomic.Int32      // non-zero: reading the restore epoch answers this status
 	serverIDStatus     atomic.Int32      // non-zero: reading the server id answers this status
+	fakeAPIVersion     string            // what /version answers; "": it fails
 	requireKey         atomic.Bool       // the fake checks the bearer key against acceptedKey
 	acceptedKey        atomic.Value      // the API key the fake server runs on (a string), set by compose up
 	refusedCalls       atomic.Int64      // requests the fake refused for their key
@@ -275,6 +276,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	epochDoc = ""
 	epochStatus.Store(0)
 	serverIDStatus.Store(0)
+	fakeAPIVersion = "1.1.0"
 	requireKey.Store(false)
 	acceptedKey.Store("")
 	refusedCalls.Store(0)
@@ -319,8 +321,10 @@ func fakeHindsight(t *testing.T) (port int) {
 		switch {
 		case r.URL.Path == "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","database":"connected"}`))
+		case r.URL.Path == "/version" && fakeAPIVersion == "":
+			w.WriteHeader(http.StatusInternalServerError)
 		case r.URL.Path == "/version":
-			_, _ = w.Write([]byte(`{"api_version":"1.1.0"}`))
+			_, _ = w.Write([]byte(`{"api_version":"` + fakeAPIVersion + `"}`))
 		case r.URL.Path == "/v1/default/banks":
 			var items []string
 			for b, name := range banks {
