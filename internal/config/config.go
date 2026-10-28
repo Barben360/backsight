@@ -41,9 +41,12 @@ type Config struct {
 }
 
 type Server struct {
-	URL        string `toml:"url" json:"url"`
-	Bank       string `toml:"bank" json:"bank"`
-	Mode       string `toml:"mode" json:"mode"`
+	URL  string `toml:"url" json:"url"`
+	Bank string `toml:"bank" json:"bank"`
+	Mode string `toml:"mode" json:"mode"`
+	// Role: "both" (this PC runs Claude Code and, in local mode, the server)
+	// or "server" (a host that only serves the memory; no Claude Code).
+	Role       string `toml:"role" json:"role"`
 	UIPort     int    `toml:"ui_port" json:"ui_port"`
 	ComposeDir string `toml:"compose_dir" json:"compose_dir"`
 	// Project is the Compose project name, and the prefix of its volume:
@@ -51,6 +54,15 @@ type Server struct {
 	Project string `toml:"project" json:"project"`
 	Digest  string `toml:"digest" json:"digest"` // empty: the binary's pin
 }
+
+// Values of server.role.
+const (
+	RoleBoth   = "both"
+	RoleServer = "server"
+)
+
+// ServerOnly reports a host that only serves the memory (no Claude Code).
+func (c Config) ServerOnly() bool { return c.Server.Role == RoleServer }
 
 // Client is what backsight keeps in Claude Code's own settings (0052).
 type Client struct {
@@ -190,7 +202,7 @@ const (
 func Default(d paths.Dirs, home string) Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
-		Server: Server{URL: "http://127.0.0.1:8888", Bank: LegacyBank, Mode: "local",
+		Server: Server{URL: "http://127.0.0.1:8888", Bank: LegacyBank, Mode: "local", Role: RoleBoth,
 			UIPort: 9999, ComposeDir: filepath.Join(d.Data, "server"), Project: "backsight"},
 		Projects:   Projects{Transverse: []string{".claude", filepath.Base(home)}},
 		Privacy:    Privacy{ExcludePaths: []string{}, SkipEntrypoints: []string{"sdk-*"}},
@@ -277,6 +289,10 @@ func (c Config) Validate() error {
 	}
 
 	oneOf("server.mode", c.Server.Mode, "local", "remote")
+	oneOf("server.role", c.Server.Role, RoleBoth, RoleServer)
+	if c.Server.Role == RoleServer && c.Server.Mode == "remote" {
+		bad("server.role", "a server-only host runs its server locally (server.mode = \"local\")")
+	}
 	switch u, err := url.Parse(c.Server.URL); {
 	case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
 		bad("server.url", "is not an http(s) URL with a host")

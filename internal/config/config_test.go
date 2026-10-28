@@ -90,6 +90,29 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	}
 }
 
+func TestServerRole(t *testing.T) {
+	cfg, err := Load(write(t, "[server]\nbank = \"work\"\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Role != RoleBoth || cfg.ServerOnly() {
+		t.Errorf("without role: got %q, ServerOnly %v; want %q, false", cfg.Server.Role, cfg.ServerOnly(), RoleBoth)
+	}
+	cfg, err = Load(write(t, "[server]\nrole = \"server\"\n"), dirs, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Role != RoleServer || !cfg.ServerOnly() {
+		t.Errorf("role = server: got %q, ServerOnly %v", cfg.Server.Role, cfg.ServerOnly())
+	}
+	if _, err := Load(write(t, "[server]\nrole = \"client\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "server.role") {
+		t.Errorf("role = client: want an error naming server.role, got %v", err)
+	}
+	if _, err := Load(write(t, "[server]\nrole = \"server\"\nmode = \"remote\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "server.role") {
+		t.Errorf("role = server with mode = remote: want an error naming server.role, got %v", err)
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	cases := []struct{ name, content, wantInErr string }{
 		{"unknown key", "[recall]\nmin_scor = 0.5\n", "recall.min_scor"},
@@ -148,6 +171,8 @@ func TestValidate(t *testing.T) {
 		{"breaker failures", func(c *Config) { c.Network.BreakerFailures = 0 }, "network.breaker_failures"},
 		{"breaker pause", func(c *Config) { c.Network.BreakerPauseMin = 0 }, "network.breaker_pause_min"},
 		{"outbox warn zero", func(c *Config) { c.Hooks.OutboxWarnMB = 0 }, "hooks.outbox_warn_mb"},
+		{"role unknown", func(c *Config) { c.Server.Role = "client" }, "server.role"},
+		{"server-only host with a remote server", func(c *Config) { c.Server.Role, c.Server.Mode = RoleServer, "remote" }, "server.role"},
 		{"bank empty", func(c *Config) { c.Server.Bank = "" }, "server.bank"},
 		{"exposure", func(c *Config) { c.Network.Exposure = "public" }, "network.exposure"},
 		{"private needs ip", func(c *Config) { c.Network.Exposure = "private" }, "network.bind_ip"},
