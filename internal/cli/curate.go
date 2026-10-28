@@ -298,6 +298,14 @@ func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []
 	if err != nil {
 		return nil, "", err
 	}
+	// Neither its deletes nor its tombstones go to another server.
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	if err := otherServerRefusal(d, cfg); err != nil {
+		return nil, "", err
+	}
 	l, err := state.TryAcquire(d.MaintenanceLock(), "forget --purge")
 	var held *state.HeldError
 	if errors.As(err, &held) {

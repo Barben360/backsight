@@ -110,7 +110,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 				}
-				res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
+				if otherServer(d, cfg) == nil { // nothing is written to another server
+					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
+				}
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -139,7 +141,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					}
 				}
 			}
-			if otherServerAnswers(d) {
+			if otherServer(d, cfg) != nil {
 				// Not the server this client joined: nothing is written to
 				// it, notes stay queued (decision 0073).
 				res.Notes.Kept, _ = notesOutboxFor(d, cfg).Pending()

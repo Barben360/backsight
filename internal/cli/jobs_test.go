@@ -259,3 +259,48 @@ func TestJobsTickSendsNothingWhileAnotherServerAnswers(t *testing.T) {
 		t.Errorf("mismatch not cleared: %+v", st.RemoteServer)
 	}
 }
+
+// recordMismatch makes home a client (server.mode remote) that joined
+// server a, whose last check found server b at its address.
+func recordMismatch(t *testing.T, home string) {
+	t.Helper()
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	if err := os.WriteFile(cfgPath, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setMismatch(t, home, "b")
+}
+
+func setMismatch(t *testing.T, home, got string) {
+	t.Helper()
+	if err := state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", Mismatch: got}
+		if got != "" {
+			s.RemoteServer.MismatchAt = time.Now()
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With recording off, a tick still prunes the briefing pages, but not on
+// another server than the joined one.
+func TestTickWithWriteOffPrunesNothingOnAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	id := briefingModelID("billing")
+	mentalModels[id] = `{"id":"` + id + `","content":"x","tags":["project:billing"],"last_refreshed_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
+	recordMismatch(t, home)
+	appendConfig(t, home, "[components]\nread = false\nwrite = false")
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; !ok {
+		t.Fatal("a page deleted on another server")
+	}
+	setMismatch(t, home, "")
+	run(t, "jobs", "tick")
+	if _, ok := mentalModels[id]; ok {
+		t.Error("page kept once the joined server answers")
+	}
+}

@@ -129,7 +129,7 @@ func (h *hookEnv) sessionStart() []byte {
 		if line := updateBanner(st.UpdateCheck, buildinfo.Version); line != "" {
 			banner += "\n" + line
 		}
-		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" {
+		if st.RemoteServer != nil && st.RemoteServer.Mismatch != "" && h.cfg.Server.Mode == "remote" {
 			banner += "\n" + instructions.OtherServerLine()
 		}
 	}

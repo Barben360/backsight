@@ -67,6 +67,9 @@ func guardMaintain(ctx context.Context, d paths.Dirs, home string) string {
 	if !cfg.Components.Write {
 		return ""
 	}
+	if otherServer(d, cfg) != nil { // neither tombstones nor deletes go to it
+		return "not looked at: a different server answers at the joined address"
+	}
 	f, err := newFlusher(d, home, cfg, sec, false)
 	if err != nil {
 		return "not looked at: " + err.Error()
@@ -136,6 +139,9 @@ func runPurgeAgain(ctx context.Context, plan, allowSubscription bool) (purgeAgai
 	res.Bank = cfg.Server.Bank
 	d, home, err := machine()
 	if err != nil {
+		return res, err
+	}
+	if err := otherServerRefusal(d, cfg); err != nil {
 		return res, err
 	}
 	f, err := newFlusher(d, home, cfg, sec, false)

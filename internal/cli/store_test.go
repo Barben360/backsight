@@ -10,7 +10,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
-	"github.com/Barben360/backsight/internal/state"
 )
 
 func TestStoreSendsAtOnce(t *testing.T) {
@@ -112,10 +111,7 @@ func TestStoreHonoursTheConfiguredOutboxMax(t *testing.T) {
 func TestStoreKeepsTheNoteWhileAnotherServerAnswers(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
-	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
-		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", Mismatch: "b", MismatchAt: time.Now()}
-		return nil
-	})
+	recordMismatch(t, home)
 	before := retained.Load()
 	code, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Kept while another server answers.", "--json")
 	var env struct {
@@ -127,5 +123,17 @@ func TestStoreKeepsTheNoteWhileAnotherServerAnswers(t *testing.T) {
 	}
 	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 1 {
 		t.Errorf("want the note queued, got %d", n)
+	}
+}
+
+// A mismatch record left after a switch back to local mode holds nothing:
+// only a client checks the server it joined.
+func TestStoreSendsInLocalModeWhateverTheRecord(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	setMismatch(t, home, "b")
+	before := retained.Load()
+	if code, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Sent from a local install.", "--json"); code != output.OK || !strings.Contains(out, `"status": "stored"`) || retained.Load() != before+1 {
+		t.Errorf("exit %d, %d retained\n%s", code, retained.Load()-before, out)
 	}
 }

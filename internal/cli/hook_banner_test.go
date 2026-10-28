@@ -175,12 +175,13 @@ func TestSessionStartBannerNamesAnotherServer(t *testing.T) {
 	if got := startBanner(t, home, "s1"); strings.Contains(got, "different memory server") {
 		t.Fatalf("no mismatch recorded: %q", got)
 	}
-	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
-		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://100.64.0.1:8888", Mismatch: "b", MismatchAt: time.Now()}
-		return nil
-	})
+	setMismatch(t, home, "b") // local mode: a record left behind holds nothing
+	if got := startBanner(t, home, "s2"); strings.Contains(got, "different memory server") {
+		t.Fatalf("local mode: %q", got)
+	}
+	recordMismatch(t, home)
 	want := "🧠 backsight · 🗂️ billing\n⚠️ a different memory server answers at the joined address: notes and sessions wait on this PC · run `backsight doctor`"
-	if got := startBanner(t, home, "s2"); got != want {
+	if got := startBanner(t, home, "s3"); got != want {
 		t.Errorf("banner\n got %q\nwant %q", got, want)
 	}
 }

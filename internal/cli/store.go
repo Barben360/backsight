@@ -102,7 +102,7 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 	machineID, _ := retain.MachineID(d.State)
 	if state.MaintenanceHeld(d.MaintenanceLock()) {
 		res.Warning = "maintenance in progress: the note goes out after it"
-	} else if otherServerAnswers(d) {
+	} else if otherServer(d, cfg) != nil {
 		res.Warning = "a different server answers at the joined address: the note waits on this PC; run backsight doctor"
 	} else if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 15*time.Second); err == nil {
 		fctx, cancel := context.WithTimeout(ctx, storeFlushBudget)
@@ -120,12 +120,29 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 	return res, failed
 }
 
-// otherServerAnswers: the last check found another server at the joined
-// address (Flusher.Reconcile records it, decision 0073); nothing is sent
-// to it. Read from state.json: no request on the hot path.
-func otherServerAnswers(d paths.Dirs) bool {
+// otherServer is the mismatch the last check recorded: another server
+// answers at the joined address (Flusher.Reconcile records it, decision
+// 0073), and nothing is sent or written to it; nil otherwise. Read from
+// state.json: no request on the hot path. Only a client (server.mode
+// remote) holds: a record left after a switch to local holds nothing.
+func otherServer(d paths.Dirs, cfg config.Config) *retain.ServerMismatch {
+	if cfg.Server.Mode != "remote" {
+		return nil
+	}
 	st, err := state.Load(d.StateFile())
-	return err == nil && st.RemoteServer != nil && st.RemoteServer.Mismatch != ""
+	if err != nil || st.RemoteServer == nil || st.RemoteServer.Mismatch == "" {
+		return nil
+	}
+	return &retain.ServerMismatch{Want: st.RemoteServer.ID, Got: st.RemoteServer.Mismatch}
+}
+
+// otherServerRefusal refuses a command that writes to the server while
+// another server answers at the joined address, before any write.
+func otherServerRefusal(d paths.Dirs, cfg config.Config) error {
+	if mm := otherServer(d, cfg); mm != nil {
+		return &output.Error{Code: output.Blocked, Message: mm.Error() + "; nothing was changed (backsight doctor)"}
+	}
+	return nil
 }
 
 // storeFlushBudget bounds the immediate send: a backlog left by an outage
