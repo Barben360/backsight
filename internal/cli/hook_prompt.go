@@ -503,7 +503,7 @@ func (h *hookEnv) postToolUse() {
 	case strings.HasSuffix(h.in.ToolName, "memory_search"):
 		h.journalShows("search", searchShows(text))
 	case strings.HasSuffix(h.in.ToolName, "memory_read"):
-		h.journalShows("read", readShow(h.in.ToolInput))
+		h.journalShows("read", h.readShow(h.in.ToolInput))
 	}
 }
 

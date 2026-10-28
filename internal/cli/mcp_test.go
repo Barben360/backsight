@@ -673,3 +673,27 @@ func TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable(t *testing.T
 		t.Errorf("%v %s", isErr, out)
 	}
 }
+
+// memory_read takes the short id of a memory shown in this session, as
+// memory_credit does; a full id needs no show.
+func TestMCPReadTakesAShortIDShownInTheSession(t *testing.T) {
+	cs, home := creditSession(t)
+	memories[creditA] = `{"id":"` + creditA + `","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"]}`
+	memories[creditB] = `{"id":"` + creditB + `","text":"Deploys go through staging.","type":"observation","tags":["project:billing"]}`
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "aaaaaaaa"}); isErr || !strings.Contains(out, "PostgreSQL 16 stays.") {
+		t.Errorf("short id: %v %s", isErr, out)
+	}
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": creditB}); isErr || !strings.Contains(out, "Deploys go through staging.") {
+		t.Errorf("full id without a show: %v %s", isErr, out)
+	}
+	// shown in another session only: not this session's short id
+	showIn(t, home, "S2", creditB)
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "bbbbbbbb"}); !isErr || !strings.Contains(out, "no memory bbbbbbbb") {
+		t.Errorf("another session's short id: %v %s", isErr, out)
+	}
+	showIn(t, home, "S", "aaaaaaaa-9999-4000-8000-000000000009")
+	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "aaaaaaaa"}); !isErr || !strings.Contains(out, "aaaaaaaa: matches several memories") {
+		t.Errorf("ambiguous short id: %v %s", isErr, out)
+	}
+}

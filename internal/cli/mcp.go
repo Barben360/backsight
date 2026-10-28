@@ -36,7 +36,7 @@ type searchArgs struct {
 }
 
 type readArgs struct {
-	ID string `json:"id" jsonschema:"the memory id shown by memory_search"`
+	ID string `json:"id" jsonschema:"the memory id shown by memory_search, or the short id (first 8 characters) of a memory shown in this session"`
 }
 
 type storeArgs struct {
@@ -206,6 +206,10 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			id := strings.TrimSpace(a.ID)
 			if !memoryIDRE.MatchString(id) || strings.Contains(id, "..") {
 				return errorResult("id: the memory id shown by memory_search"), nil, nil
+			}
+			id, err := deps.readID(id)
+			if err != nil {
+				return errorResult(err.Error()), nil, nil
 			}
 			sec, eng := key.get()
 			m, err := eng.Client.GetMemory(ctx, deps.cfg.Server.Bank, id)
@@ -381,6 +385,27 @@ func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
 	}
 	return creditUsedPrefix + " Print " + what + " in your final message:\n" + strings.Join(lines, "\n"), nil
 }
+
+// readID is the memory id memory_read's ref names: the id of a memory
+// shown in this session that the ref starts with (8 characters or more),
+// else the ref itself (a full id needs no show).
+func (d mcpDeps) readID(ref string) (string, error) {
+	live, found := d.live()
+	if found != "record" || fullUUIDRE.MatchString(ref) {
+		return ref, nil
+	}
+	id, err := feedback.Resolve(ref, shownInSession(d.dirs, live.SessionID))
+	switch {
+	case errors.Is(err, feedback.ErrAmbiguous):
+		return "", errors.New(ref + ": " + err.Error() + ": give more of its id")
+	case err != nil:
+		return ref, nil
+	}
+	return id, nil
+}
+
+// fullUUIDRE: a whole id, which needs no lookup among the shows.
+var fullUUIDRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // memoryIDRE: what Hindsight ids look like (UUIDs); nothing that could
 // turn into another path.

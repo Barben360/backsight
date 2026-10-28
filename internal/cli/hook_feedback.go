@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
 	"slices"
 	"strconv"
@@ -263,17 +264,31 @@ func searchTexts(text string) map[string]string {
 	return texts
 }
 
-// readShow is memory_read's id as one unranked item; nil when the call
-// named nothing that looks like an id.
-func readShow(raw json.RawMessage) []feedback.Item {
+// readShow is memory_read's id as one unranked item, a short id resolved
+// to the id shown in the session it names, as the server does; nil when
+// the call named nothing that looks like an id, or a short id of several.
+func (h *hookEnv) readShow(raw json.RawMessage) []feedback.Item {
+	if !h.feedbackOn() {
+		return nil
+	}
 	var in struct {
 		ID string `json:"id"`
 	}
 	_ = json.Unmarshal(raw, &in)
-	if id := strings.TrimSpace(in.ID); showIDRE.MatchString(id) {
-		return []feedback.Item{{ID: id}}
+	id := strings.TrimSpace(in.ID)
+	if !showIDRE.MatchString(id) {
+		return nil
 	}
-	return nil
+	if !fullUUIDRE.MatchString(id) {
+		full, err := feedback.Resolve(id, shownInSession(h.dirs, h.in.SessionID))
+		switch {
+		case err == nil:
+			id = full
+		case errors.Is(err, feedback.ErrAmbiguous):
+			return nil
+		}
+	}
+	return []feedback.Item{{ID: id}}
 }
 
 // shownInSession is what session sess was shown: the journal's shows of

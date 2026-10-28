@@ -115,6 +115,11 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 					return &output.Error{Code: output.Usage, Message: err.Error()}
 				}
 			}
+			if sess != "" {
+				if sess, err = resolveSession(sess, events); err != nil {
+					return &output.Error{Code: output.Usage, Message: err.Error()}
+				}
+			}
 			res := logResult{ID: id, Session: sess, Since: from, Events: timeline(events, id, sess, from), Skipped: skipped}
 			if id != "" {
 				l, err := feedback.LoadLedger(dir)
@@ -130,7 +135,7 @@ func newFeedbackLogCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&id, "id", "", "memory id, or its first 8 characters or more")
-	cmd.Flags().StringVar(&sess, "session", "", "session id (default without --id: $BACKSIGHT_SESSION)")
+	cmd.Flags().StringVar(&sess, "session", "", "session id, or its first 8 characters or more (default without --id: $BACKSIGHT_SESSION)")
 	cmd.Flags().StringVar(&since, "since", "", "only events from then on (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD, UTC)")
 	return cmd
 }
@@ -156,6 +161,28 @@ func resolveLogged(ref string, events []feedback.Event) (string, error) {
 		return ref, nil
 	}
 	return id, nil
+}
+
+// resolveSession is the session ref names among the journal's sessions:
+// the session itself, or a prefix of 8 characters or more that one
+// session starts with. A session the journal does not hold is kept.
+func resolveSession(ref string, events []feedback.Event) (string, error) {
+	if len(ref) < shortIDChars || slices.ContainsFunc(events, func(e feedback.Event) bool { return e.Session == ref }) {
+		return ref, nil
+	}
+	match := ""
+	for _, e := range events {
+		if strings.HasPrefix(e.Session, ref) && e.Session != match {
+			if match != "" {
+				return "", fmt.Errorf("%s starts several sessions: give more characters", ref)
+			}
+			match = e.Session
+		}
+	}
+	if match == "" {
+		return ref, nil
+	}
+	return match, nil
 }
 
 // timeline is the events of memory id and of session sess ("" for any)

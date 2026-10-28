@@ -244,3 +244,29 @@ func TestFeedbackRebuildWritesTheFold(t *testing.T) {
 		t.Error("a blocked rebuild wrote the ledger")
 	}
 }
+
+// --session takes the first 8 characters of a session id or more, when
+// exactly one session of the journal starts with them.
+func TestFeedbackLogTakesASessionPrefix(t *testing.T) {
+	home := isolate(t)
+	t.Setenv("BACKSIGHT_SESSION", "")
+	dir := feedbackJournal(t, home)
+	_, out, _ := run(t, "feedback", "log", "--session", "s1-abcde")
+	if lineIndex(strings.Split(out, "\n"), "turn 1", "stop", "declared") < 0 {
+		t.Errorf("session prefix:\n%s", out)
+	}
+	j := feedback.NewJournal(dir, feedback.Common{Session: "s1-abcdef99"})
+	if err := j.Append(feedback.Event{Kind: "turn", Turn: "q1", N: 1, TS: logStart}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := run(t, "feedback", "log", "--session", "s1-abcde"); code != output.Usage || !strings.Contains(out+errOut, "s1-abcde starts several sessions") {
+		t.Errorf("ambiguous prefix: exit %d\n%s%s", code, out, errOut)
+	}
+	if _, out, _ := run(t, "feedback", "log", "--session", "s1-abcdef1"); lineIndex(strings.Split(out, "\n"), "turn 1", "stop", "declared") < 0 {
+		t.Errorf("a longer prefix:\n%s", out)
+	}
+	// under 8 characters: no prefix, a session of its own
+	if _, out, _ := run(t, "feedback", "log", "--session", "s1-abcd"); strings.Contains(out, "declared") {
+		t.Errorf("a 7-character prefix matched:\n%s", out)
+	}
+}

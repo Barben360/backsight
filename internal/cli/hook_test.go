@@ -605,3 +605,16 @@ func TestPausedSessionJournalsNothing(t *testing.T) {
 		t.Errorf("pointer %+v %v", cur, ok)
 	}
 }
+
+// A memory_read by short id is journaled under the full id it names.
+func TestReadByShortIDJournalsTheFullID(t *testing.T) {
+	home := hookHome(t)
+	j := showTurn(t, home, "s1", "t-2", 2, false)
+	journalShow(t, j, "t-2", "", "search", stopIDA)
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "tool_name": "mcp__plugin_backsight_memory__memory_read",
+		"tool_input": map[string]string{"id": "0b4c2a52"}, "tool_response": "Billing keeps PostgreSQL 16."})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 2 || shows[1].Path != "read" || itemsText(shows[1].Items) != stopIDA+":0:0" {
+		t.Errorf("shows %+v", shows)
+	}
+}
