@@ -296,7 +296,7 @@ func TestGuideDocsBankOnTheRealServer(t *testing.T) {
 		"comment désinstaller backsight":            "install#uninstall",
 		"arrêter l'enregistrement de cette session": "install#pause-recording",
 	} {
-		hits, refreshed, err := guide.Search(ctx, cl, mem, c, q, 3)
+		hits, refreshed, err := guide.Search(ctx, cl, mem, c, q, 3, true)
 		if err != nil || refreshed != nil || len(hits) == 0 || hits[0].Ref() != want {
 			var got []string
 			for _, h := range hits {
@@ -311,12 +311,12 @@ func TestGuideDocsBankOnTheRealServer(t *testing.T) {
 	if err != nil || res.Sent != 1 || res.Retagged != 5 {
 		t.Errorf("second index: %v %+v", err, res)
 	}
-	if hits, _, err := guide.Search(ctx, cl, mem, c2, "comment restaurer une sauvegarde ?", 1); err != nil || len(hits) != 1 || hits[0].Ref() != "backup#restore-a-backup" {
+	if hits, _, err := guide.Search(ctx, cl, mem, c2, "comment restaurer une sauvegarde ?", 1, true); err != nil || len(hits) != 1 || hits[0].Ref() != "backup#restore-a-backup" {
 		t.Errorf("a retagged section must stay searchable: %v %+v", err, hits)
 	}
 	// Both versions on one bank: the older one sends back only the section
 	// they disagree on, and retags nothing.
-	if hits, refreshed, err := guide.Search(ctx, cl, mem, c, "comment désinstaller backsight", 1); err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 0 ||
+	if hits, refreshed, err := guide.Search(ctx, cl, mem, c, "comment désinstaller backsight", 1, true); err != nil || refreshed == nil || refreshed.Sent != 1 || refreshed.Retagged != 0 ||
 		len(hits) != 1 || hits[0].Ref() != "install#uninstall" {
 		t.Errorf("the older version on a shared bank: %v %+v %+v", err, refreshed, hits)
 	}
