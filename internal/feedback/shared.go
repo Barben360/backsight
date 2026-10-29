@@ -266,15 +266,22 @@ func (l Ledger) WithRemote(r Remote, p Params, now time.Time) Ledger {
 	out.Memories = make(map[string]Entry, len(l.Memories)+len(r))
 	maps.Copy(out.Memories, l.Memories)
 	for id, s := range r {
-		m := l.Memories[id]
-		sum := SharedEntry{Credits: m.Credits, CreditsAt: m.CreditsAt, Misses: m.Misses, MissesAt: m.MissesAt}.plus(s, now, p)
-		m.Credits, m.CreditsAt, m.Misses, m.MissesAt = sum.Credits, sum.CreditsAt, sum.Misses, sum.MissesAt
-		if m.Hidden == nil && s.HiddenSince.After(m.UnhiddenAt) {
-			m.Hidden = &Hidden{Since: s.HiddenSince}
-		}
-		out.Memories[id] = m
+		out.Memories[id] = l.Memories[id].WithRemote(s, p, now)
 	}
 	return out
+}
+
+// WithRemote is e (a zero Entry for a memory never shown here) with s's
+// credits and misses added, both read at now, and s's hiding when e is
+// not hidden and s's is newer than e's last unhide: one memory of
+// Ledger.WithRemote.
+func (e Entry) WithRemote(s SharedEntry, p Params, now time.Time) Entry {
+	sum := SharedEntry{Credits: e.Credits, CreditsAt: e.CreditsAt, Misses: e.Misses, MissesAt: e.MissesAt}.plus(s, now, p)
+	e.Credits, e.CreditsAt, e.Misses, e.MissesAt = sum.Credits, sum.CreditsAt, sum.Misses, sum.MissesAt
+	if e.Hidden == nil && s.HiddenSince.After(e.UnhiddenAt) {
+		e.Hidden = &Hidden{Since: s.HiddenSince}
+	}
+	return e
 }
 
 // plus is s with e's credits and misses added, both read at now, and the

@@ -50,7 +50,7 @@ func shareLedger(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg co
 		return false, 0, 0, nil
 	}
 	uploaded, uerr := uploadShared(ctx, cl, d, cfg, machine, now)
-	machines, skipped, rerr := refreshShared(ctx, cl, d, cfg.Server.Bank, machine, now)
+	machines, skipped, rerr := refreshShared(ctx, cl, d, cfg.Server.Bank, machine, now, feedbackParams(cfg))
 	return uploaded, machines, skipped, errors.Join(uerr, rerr)
 }
 
@@ -97,9 +97,11 @@ func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg c
 // refreshShared fetches the other machines' documents into shared.json,
 // when the cache is shareRefreshEvery old (or dated ahead of now),
 // missing or unreadable: those ParseSharedDoc reads, as the server holds
-// them, this machine's left out whatever their id. machines is counted
+// them, this machine's left out whatever their id. Then it combines them
+// under p into shared-combined.json, which recall reads (combineShared),
+// also when only that file is missing or unreadable. machines is counted
 // from the cache as it stands after.
-func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank, machine string, now time.Time) (machines, skipped int, err error) {
+func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank, machine string, now time.Time, p feedback.Params) (machines, skipped int, err error) {
 	dir := d.FeedbackDir()
 	cache, cerr := feedback.LoadSharedCache(dir)
 	count := func(c feedback.SharedCache) int {
@@ -107,6 +109,9 @@ func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank
 		return feedback.SharedMachines(docs, machine, now)
 	}
 	if age := now.Sub(cache.FetchedAt); cerr == nil && age >= 0 && age < shareRefreshEvery {
+		if _, lerr := feedback.LoadSharedCombined(dir, now); lerr != nil {
+			return count(cache), 0, combineShared(dir, cache, machine, now, p)
+		}
 		return count(cache), 0, nil
 	}
 	items, err := retain.ControlDocuments(ctx, cl, bank, sharedDocPrefix)
@@ -131,7 +136,15 @@ func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank
 	if err := feedback.SaveSharedCache(dir, fresh); err != nil {
 		return count(cache), skipped, err
 	}
-	return count(fresh), skipped, nil
+	return count(fresh), skipped, combineShared(dir, fresh, machine, now, p)
+}
+
+// combineShared writes c's documents combined at now (to the second)
+// under p, this machine's left out: what recall adds to its own counts.
+func combineShared(dir string, c feedback.SharedCache, machine string, now time.Time, p feedback.Params) error {
+	docs, _ := c.Parsed()
+	at := now.Truncate(time.Second)
+	return feedback.SaveSharedCombined(dir, at, feedback.CombineRemote(docs, machine, at, p))
 }
 
 func sha256Hex(s string) string {

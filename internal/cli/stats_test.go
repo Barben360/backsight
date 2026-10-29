@@ -294,6 +294,18 @@ func TestStatsNamesSharedMachines(t *testing.T) {
 	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 1 other machine\n") {
 		t.Errorf("one other machine:\n%s", out)
 	}
+	// No machine id yet: every document counts, and stats creates none.
+	idFile := filepath.Join(pathsOf(home).State, "machine_id")
+	if err := os.Remove(idFile); err != nil {
+		t.Fatal(err)
+	}
+	writeSharedCache(t, home, otherMachine("pc-b", nil), otherMachine(self, nil))
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 2 other machines\n") {
+		t.Errorf("no machine id:\n%s", out)
+	}
+	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
+		t.Errorf("stats created the machine id: %v", err)
+	}
 	appendConfig(t, home, "[feedback]\nshare_ledger = false")
 	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"\n") {
 		t.Errorf("sharing off:\n%s", out)

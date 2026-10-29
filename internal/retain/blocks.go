@@ -447,12 +447,21 @@ func (s *SentIndex) Remove(uuids ...string) error {
 	return nil
 }
 
+// ReadMachineID is the id MachineID created in dir, never creating one:
+// "" when there is none yet.
+func ReadMachineID(dir string) string {
+	if raw, err := os.ReadFile(filepath.Join(dir, "machine_id")); err == nil && len(bytes.TrimSpace(raw)) == 36 {
+		return string(bytes.TrimSpace(raw))
+	}
+	return ""
+}
+
 // MachineID is a random id created once in dir/machine_id.
 func MachineID(dir string) (string, error) {
-	p := filepath.Join(dir, "machine_id")
-	if raw, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(raw)) == 36 {
-		return string(bytes.TrimSpace(raw)), nil
+	if id := ReadMachineID(dir); id != "" {
+		return id, nil
 	}
+	p := filepath.Join(dir, "machine_id")
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	b[6] = (b[6] & 0x0f) | 0x40

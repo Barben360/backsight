@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -422,4 +423,68 @@ func serverURL(t *testing.T, home string) string {
 		t.Fatal(err)
 	}
 	return cfg.Server.URL
+}
+
+// combined is this machine's shared-combined.json read at now.
+func (m *shareMachine) combined(now time.Time) (feedback.Remote, time.Time, error) {
+	c, err := feedback.LoadSharedCombined(m.d.FeedbackDir(), now)
+	return c.Remote(), c.At(), err
+}
+
+// Every refresh combines the documents it cached, this machine's left
+// out, into the view recall reads; a missing or unreadable view is
+// combined again from the cache without a fetch.
+func TestShareCombinesAtEveryRefresh(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(nil)
+	p := feedbackParams(m.cfg)
+	b := map[string]feedback.SharedEntry{shareM1: {Credits: 1.5, CreditsAt: shareT0.Add(-2 * time.Hour)}}
+	m.put("pc-b", sharedMeta(t, "pc-b", shareT0.Add(-time.Hour), b))
+	m.put("pc-a-old", sharedMeta(t, "pc-a", shareT0.Add(-time.Hour), map[string]feedback.SharedEntry{shareM2: {Credits: 9, CreditsAt: shareT0}}))
+	m.put("pc-y", `{"v":2,"machine":"pc-y","at":1790000000,"entries":{"`+shareM2+`":[5,1790000000,0,0,0]}}`)
+	at := shareT0.Add(500 * time.Millisecond) // combined to the second
+	if _, _, _, err := m.share(at); err != nil {
+		t.Fatal(err)
+	}
+	r, when, err := m.combined(at)
+	if err != nil || !when.Equal(shareT0) {
+		t.Fatalf("combined at %s: %v", when, err)
+	}
+	_, docs := m.cache()
+	want := feedback.CombineRemote(docs, "pc-a", shareT0, p)
+	if len(r) != 1 || math.Abs(r[shareM1].Credits-want[shareM1].Credits) > 1e-12 || !r[shareM1].CreditsAt.Equal(shareT0) {
+		t.Errorf("combined %+v, want %+v (own and unknown-version documents left out)", r, want)
+	}
+
+	// Gone or unreadable before the next refresh: combined again from the
+	// cache, which stays as it was.
+	raw, _ := os.ReadFile(feedback.SharedCacheFile(m.d.FeedbackDir()))
+	for name, spoil := range map[string]func(string) error{
+		"missing":    os.Remove,
+		"unreadable": func(f string) error { return os.WriteFile(f, []byte("{"), 0o600) },
+	} {
+		if err := spoil(feedback.SharedCombinedFile(m.d.FeedbackDir())); err != nil {
+			t.Fatal(err)
+		}
+		later := shareT0.Add(time.Hour)
+		if _, _, _, err := m.share(later); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if r, when, err := m.combined(later); err != nil || !when.Equal(later) || r[shareM1].Credits == 0 {
+			t.Errorf("%s: combined %+v at %s, %v", name, r, when, err)
+		}
+		if again, _ := os.ReadFile(feedback.SharedCacheFile(m.d.FeedbackDir())); string(again) != string(raw) {
+			t.Errorf("%s: the cache was fetched again", name)
+		}
+	}
+
+	// The next refresh combines anew, with what it fetched.
+	m.put("pc-c", sharedMeta(t, "pc-c", shareT0, map[string]feedback.SharedEntry{shareM2: {Misses: 1, MissesAt: shareT0}}))
+	refresh := shareT0.Add(6*time.Hour + time.Second)
+	if _, _, _, err := m.share(refresh); err != nil {
+		t.Fatal(err)
+	}
+	if r, when, err := m.combined(refresh); err != nil || !when.Equal(refresh) || r[shareM2].Misses < 0.99 || r[shareM2].Credits != 0 {
+		t.Errorf("after the refresh: %+v at %s, %v", r, when, err)
+	}
 }

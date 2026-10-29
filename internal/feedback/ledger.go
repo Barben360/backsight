@@ -294,12 +294,20 @@ func (l Ledger) Counted() int {
 // nothing settled, and for priors that do not add up to a positive sum.
 func (l Ledger) Boost(id string, p Params, now time.Time) float64 {
 	m, ok := l.Memories[id]
-	a, b := p.PriorCredits, p.PriorMisses
-	if !ok || a+b <= 0 {
+	if !ok {
 		return 0
 	}
-	m = m.DecayedTo(now, p)
-	return p.Weight * ((m.Credits+a)/(m.Credits+m.Misses+a+b) - a/(a+b))
+	return m.Boost(p, now)
+}
+
+// Boost is Ledger.Boost of the memory whose entry is e.
+func (e Entry) Boost(p Params, now time.Time) float64 {
+	a, b := p.PriorCredits, p.PriorMisses
+	if a+b <= 0 {
+		return 0
+	}
+	e = e.DecayedTo(now, p)
+	return p.Weight * ((e.Credits+a)/(e.Credits+e.Misses+a+b) - a/(a+b))
 }
 
 func laterOf(a, b time.Time) time.Time {

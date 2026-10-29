@@ -120,8 +120,9 @@ func sharedMachines(d paths.Dirs) int {
 		return 0
 	}
 	docs, _ := c.Parsed()
-	self, _ := retain.MachineID(d.State)
-	return feedback.SharedMachines(docs, self, now())
+	// Read only: stats never creates the machine id. Without one, every
+	// document counts (the tick leaves this machine's out anyway).
+	return feedback.SharedMachines(docs, retain.ReadMachineID(d.State), now())
 }
 
 // parseWhen reads a window bound; a date alone is midnight UTC.

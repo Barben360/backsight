@@ -812,6 +812,11 @@ func TestRestoreOfAMemoryHiddenOnAnotherMachine(t *testing.T) {
 	if hiddenHereNow() {
 		t.Error("still hidden here after the restore")
 	}
+	// Restored for good: a second restore finds it hidden nowhere, and
+	// the server does not hold it.
+	if code, out, errOut := run(t, "forget", "--restore", uA); code != output.Usage {
+		t.Errorf("second restore: exit %d\n%s%s", code, out, errOut)
+	}
 	// Hidden nowhere, and not on the server: nothing to restore.
 	if code, _, _ := run(t, "forget", "--restore", uB); code != output.Usage {
 		t.Errorf("%s: exit %d", uB, code)

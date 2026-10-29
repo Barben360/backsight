@@ -767,7 +767,8 @@ func uuidHits() string {
 }
 
 // writeSharedCache writes docs as the tick's shared.json, each through
-// MarshalMeta as the other machines upload it.
+// MarshalMeta as the other machines upload it, and combines them now as
+// the tick does into shared-combined.json, which recall reads.
 func writeSharedCache(t *testing.T, home string, docs ...feedback.SharedDoc) {
 	t.Helper()
 	c := feedback.SharedCache{FetchedAt: time.Now().UTC()}
@@ -783,6 +784,13 @@ func writeSharedCache(t *testing.T, home string, docs ...feedback.SharedDoc) {
 		t.Fatal(err)
 	}
 	if err := feedback.SaveSharedCache(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := combineShared(dir, c, "", time.Now(), feedbackParams(cfg)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -848,9 +856,12 @@ func TestRemoteHidingHidesHere(t *testing.T) {
 	}
 }
 
-// A shared cache recall cannot use (garbage, a document of an unknown
-// version, no file) leaves recall on this machine's ledger: the same
-// context, byte for byte, and the same shows as with no cache at all.
+// Shared counts recall cannot use leave it on this machine's ledger: the
+// same context, byte for byte, and the same shows as with none at all.
+// So do a combined view that is garbage, of an unknown version or 30
+// days old, documents of an unknown version (the tick combines nothing
+// of them), and documents never combined: recall reads the combined view
+// alone, never a document.
 func TestRecallIgnoresABrokenSharedCache(t *testing.T) {
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	local := `{"schema":1,"watermark":"` + at + `","memories":{"` + uA + `":{"shown":10,"credits":10,"credits_at":"` + at + `"}}}`
@@ -867,23 +878,46 @@ func TestRecallIgnoresABrokenSharedCache(t *testing.T) {
 		}
 		return h.Specific.Context, shows[0].Items
 	}
-	raw := func(content string) func(string) {
+	file := func(name func(string) string, content string) func(string) {
 		return func(home string) {
 			dir := pathsOf(home).FeedbackDir()
-			if err := os.WriteFile(feedback.SharedCacheFile(dir), []byte(content), 0o600); err != nil {
+			if err := os.WriteFile(name(dir), []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
+	// What a usable view would do: credit B far above A, and hide A.
+	now := time.Now().Unix()
+	view := func(header string) string {
+		return fmt.Sprintf("%s\n%s\t0\t0\t0\t0\t%d\n%s\t50\t%d\t0\t0\t0\n", header, uA, now, uB, now)
+	}
+	entries := fmt.Sprintf(`{"%s":[50,%d,0,0,0],"%s":[0,0,0,0,%d]}`, uB, now, uA, now)
 	wantCtx, wantItems := run(func(string) {})
 	if !injectedFirst(wantCtx, "memory A", "memory B") || wantItems[0].Boost <= 0 {
 		t.Fatalf("baseline without the local boost:\n%s\n%+v", wantCtx, wantItems)
 	}
-	now := time.Now().Unix()
+	if ctx, _ := run(file(feedback.SharedCombinedFile, view(fmt.Sprintf("v1 %d", now)))); strings.Contains(ctx, "memory A") || !strings.Contains(ctx, "memory B") {
+		t.Fatalf("the usable view is not used, the cases below prove nothing:\n%s", ctx)
+	}
 	for name, cache := range map[string]func(string){
-		"garbage":         raw("{not json"),
-		"unknown version": raw(fmt.Sprintf(`{"fetched_at":"%s","docs":[{"v":2,"machine":"pc-b","at":%d,"entries":{"%s":[50,%d,0,0,0],"%s":[0,0,0,0,%d]}}]}`, at, now, uB, now, uA, now)),
-		"not a list":      raw(`{"fetched_at":"` + at + `","docs":7}`),
+		"garbage":         file(feedback.SharedCombinedFile, "{not json"),
+		"unknown version": file(feedback.SharedCombinedFile, view(fmt.Sprintf("v2 %d", now))),
+		"31 days old":     file(feedback.SharedCombinedFile, view(fmt.Sprintf("v1 %d", now-31*24*3600))),
+		"documents of an unknown version": func(home string) {
+			c := feedback.SharedCache{FetchedAt: time.Now(), Docs: []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"v":2,"machine":"pc-b","at":%d,"entries":%s}`, now, entries))}}
+			if err := feedback.SaveSharedCache(pathsOf(home).FeedbackDir(), c); err != nil {
+				t.Fatal(err)
+			}
+			if err := combineShared(pathsOf(home).FeedbackDir(), c, "", time.Now(), feedback.Params{}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"documents never combined": func(home string) {
+			writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uB: {Credits: 50, CreditsAt: time.Now().Truncate(time.Second)}}))
+			if err := os.Remove(feedback.SharedCombinedFile(pathsOf(home).FeedbackDir())); err != nil {
+				t.Fatal(err)
+			}
+		},
 	} {
 		ctx, items := run(cache)
 		if ctx != wantCtx {
@@ -894,5 +928,25 @@ func TestRecallIgnoresABrokenSharedCache(t *testing.T) {
 		}) {
 			t.Errorf("%s: shows %+v, want %+v", name, items, wantItems)
 		}
+	}
+}
+
+// Recall reads the combined view, never the documents nor the machine
+// id: with shared.json unreadable it still weighs the other machines'
+// counts, and it creates no machine id.
+func TestRecallReadsOnlyTheCombinedCounts(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = uuidHits()
+	writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uB: {Credits: 10, CreditsAt: time.Now().Truncate(time.Second)}}))
+	dir := pathsOf(home).FeedbackDir()
+	if err := os.WriteFile(feedback.SharedCacheFile(dir), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(pathsOf(home).State, "machine_id"))
+	if h := prompt(t, home, "s1", longPrompt); !injectedFirst(h.Specific.Context, "memory B", "memory A") {
+		t.Errorf("the combined counts not used:\n%s", h.Specific.Context)
+	}
+	if _, err := os.Stat(filepath.Join(pathsOf(home).State, "machine_id")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("recall created the machine id: %v", err)
 	}
 }
