@@ -318,7 +318,7 @@ func replayJournal(t *testing.T, home string, recalls ...feedback.Event) string 
 		}
 		for _, e := range []feedback.Event{
 			{Kind: "turn", Turn: turn, N: i + 1, TS: m},
-			{Kind: "shows", Turn: turn, Path: "prompt", TS: m.Add(time.Minute), Items: []feedback.Item{{ID: tu.id, Rank: tu.rank, ScoreWithoutBoost: 0.7}}},
+			{Kind: "shows", Turn: turn, Path: "prompt", TS: m.Add(time.Minute), Items: []feedback.Item{{ID: tu.id, Rank: tu.rank, ScoreWithoutBoost: ptr(0.7)}}},
 			credit,
 			{Kind: "stop", Turn: turn, Outcome: "declared", StopCheck: "always", TS: m.Add(3 * time.Minute)},
 		} {
@@ -427,14 +427,15 @@ func TestReplayCountsSignChangesAndMovers(t *testing.T) {
 // replayed ledgers: a larger weight (k) lifts m2 over b, which flips a
 // recall's and a gate's order and brings m2 into a prompt's top 3
 // (recall.prompt_hits). A recall without scores (an earlier version) is
-// not comparable; a failure show is not counted.
+// not comparable, one with a score of 0 is; a failure show is not
+// counted.
 func TestReplayCountsChangedRecalls(t *testing.T) {
 	home := isolate(t)
 	at := logStart.Add(6 * time.Hour)
 	scored := func(pairs ...any) []feedback.Item {
 		var items []feedback.Item
 		for i := 0; i < len(pairs); i += 2 {
-			items = append(items, feedback.Item{ID: pairs[i].(string), Rank: i/2 + 1, ScoreWithoutBoost: pairs[i+1].(float64)})
+			items = append(items, feedback.Item{ID: pairs[i].(string), Rank: i/2 + 1, ScoreWithoutBoost: ptr(pairs[i+1].(float64))})
 		}
 		return items
 	}
@@ -445,19 +446,20 @@ func TestReplayCountsChangedRecalls(t *testing.T) {
 		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: []feedback.Item{{ID: repB, Rank: 1, Reranker: 0.8}, {ID: repM2, Rank: 2, Reranker: 0.785}}},
 		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: scored(repM2, 0.90, repB, 0.70)},
 		feedback.Event{Kind: "shows", Path: "failure", TS: at, Items: scored(repB, 0.80, repM2, 0.785)},
+		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: at, Items: scored(repM2, 0.01, repC, 0.0)}, // a score of 0 is a score
 	)
-	if r := replayJSON(t).Data.Recalls; r.Compared != 19 || r.SetChanged != 0 || r.OrderChanged != 0 || r.NotComparable != 1 {
+	if r := replayJSON(t).Data.Recalls; r.Compared != 20 || r.SetChanged != 0 || r.OrderChanged != 0 || r.NotComparable != 1 {
 		t.Errorf("current parameters: %+v", r)
 	}
-	if r := replayJSON(t, "--set", "boost_weight=0.5").Data.Recalls; r.Compared != 19 || r.SetChanged != 1 || r.OrderChanged != 2 || r.NotComparable != 1 {
-		t.Errorf("k 0.5: %+v, want 19 compared, 1 set changed (the prompt), 2 orders (the recall and the gate), 1 not comparable", r)
+	if r := replayJSON(t, "--set", "boost_weight=0.5").Data.Recalls; r.Compared != 20 || r.SetChanged != 1 || r.OrderChanged != 2 || r.NotComparable != 1 {
+		t.Errorf("k 0.5: %+v, want 20 compared, 1 set changed (the prompt), 2 orders (the recall and the gate), 1 not comparable", r)
 	}
 	// A weight between: m2 (+0.0086) passes neither b nor d.
 	if r := replayJSON(t, "--set", "boost_weight=0.15").Data.Recalls; r.SetChanged != 0 || r.OrderChanged != 0 {
 		t.Errorf("k 0.15: %+v", r)
 	}
 	_, out, _ := run(t, "feedback", "replay", "--set", "boost_weight=0.5")
-	if lineIndex(strings.Split(out, "\n"), "19 compared", "1 would change", "2 their order", "1 journaled by an earlier version") < 0 {
+	if lineIndex(strings.Split(out, "\n"), "20 compared", "1 would change", "2 their order", "1 journaled by an earlier version") < 0 {
 		t.Errorf("recall line:\n%s", out)
 	}
 }
@@ -489,7 +491,19 @@ func TestReplayRefusesUnknownKeys(t *testing.T) {
 			t.Errorf("--set %s: exit %d\n%s%s", set, code, out, errOut)
 		}
 	}
+	// A config.toml refused on a key --set does not name is the config's
+	// error, as for any command: not a --set one.
+	_ = os.MkdirAll(filepath.Dir(pathsOf(home).ConfigFile()), 0o700)
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("[feedback]\nstale_shows = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "feedback", "replay", "--set", "boost_weight=0.2")
+	if code != output.Blocked || !strings.Contains(out+errOut, "feedback.stale_shows") || strings.Contains(out+errOut, "--set") {
+		t.Errorf("a broken config.toml: exit %d, want %d without --set\n%s%s", code, output.Blocked, out, errOut)
+	}
 }
+
+func ptr(v float64) *float64 { return &v }
 
 // Replay reads only: no file changes, and it runs while a tick holds the
 // ledger lock.

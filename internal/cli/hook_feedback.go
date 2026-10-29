@@ -176,8 +176,9 @@ func itemsFromHits(hits []recall.Hit) []feedback.Item {
 
 // scoreWithoutBoost is hit's score before the ledger's boost, to 4
 // decimals as recall rounds it.
-func scoreWithoutBoost(hit recall.Hit) float64 {
-	return math.Round((hit.Score-hit.Boost)*10000) / 10000
+func scoreWithoutBoost(hit recall.Hit) *float64 {
+	score := math.Round((hit.Score-hit.Boost)*10000) / 10000
+	return &score
 }
 
 // rankWithoutBoost is hit's place among the hits shown had recall not

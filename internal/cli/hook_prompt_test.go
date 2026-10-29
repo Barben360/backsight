@@ -731,10 +731,10 @@ func TestPromptShowsJournalTheBoost(t *testing.T) {
 		t.Fatalf("shows %+v", shows)
 	}
 	m2, m1 := shows[0].Items[0], shows[0].Items[1]
-	if m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost < 0.034 || m2.Boost > 0.035 || m2.Reranker != 0.8 || m2.ScoreWithoutBoost != 0.85 {
+	if m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost < 0.034 || m2.Boost > 0.035 || m2.Reranker != 0.8 || m2.ScoreWithoutBoost == nil || *m2.ScoreWithoutBoost != 0.85 {
 		t.Errorf("m2 %+v", m2)
 	}
-	if m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 || m1.ScoreWithoutBoost != 0.87 {
+	if m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 || m1.ScoreWithoutBoost == nil || *m1.ScoreWithoutBoost != 0.87 {
 		t.Errorf("m1 %+v", m1)
 	}
 }

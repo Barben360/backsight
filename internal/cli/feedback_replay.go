@@ -165,7 +165,7 @@ func compareReplays(events []feedback.Event, before, after feedback.Ledger, p, q
 		if !recalled || e.TS.After(t) || len(e.Items) == 0 {
 			continue
 		}
-		if slices.ContainsFunc(e.Items, func(it feedback.Item) bool { return it.ScoreWithoutBoost == 0 }) {
+		if slices.ContainsFunc(e.Items, func(it feedback.Item) bool { return it.ScoreWithoutBoost == nil }) {
 			res.Recalls.NotComparable++
 			continue
 		}
@@ -194,7 +194,7 @@ func boostedOrder(items []feedback.Item, l feedback.Ledger, p feedback.Params, t
 	}
 	all := make([]scored, 0, len(items))
 	for _, it := range items {
-		all = append(all, scored{it.ID, round4(it.ScoreWithoutBoost + round4(l.Boost(it.ID, p, t)))})
+		all = append(all, scored{it.ID, round4(*it.ScoreWithoutBoost + round4(l.Boost(it.ID, p, t)))})
 	}
 	slices.SortFunc(all, func(a, b scored) int {
 		if c := cmp.Compare(b.score, a.score); c != 0 {
