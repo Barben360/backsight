@@ -52,7 +52,10 @@ type tickResult struct {
 	Server string `json:"server,omitempty"`
 	// Feedback: what the settle of the feedback journal decided.
 	Feedback feedback.SettleResult `json:"feedback"`
-	MS       int                   `json:"ms"`
+	// Unhidden: the hidden observations the server rewrote or dropped
+	// since, visible again (checkHidden).
+	Unhidden int `json:"unhidden,omitempty"`
+	MS       int `json:"ms"`
 }
 
 // reachCheckTimeout bounds the tick's one health call.
@@ -78,7 +81,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -117,6 +120,14 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			hctx, hcancel := context.WithTimeout(cmd.Context(), reachCheckTimeout)
 			_, herr := f.Client.Health(hctx)
 			hcancel()
+			// Lifts the hidings the server made moot: only on a server that
+			// answers and is the one this PC joined (another one holds none
+			// of its memories, which would read as gone).
+			liftHidden := func() {
+				if cfg.Feedback.Enabled && herr == nil && otherServer(d, cfg) == nil {
+					res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, d.FeedbackDir(), now())
+				}
+			}
 			files := transcripts(home)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
 				recordReach(d, cfg, herr)
@@ -125,6 +136,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 				}
+				liftHidden()
 				if otherServer(d, cfg) == nil { // nothing is written to another server
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				}
@@ -185,6 +197,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
+			liftHidden() // after the sends: a slow server delays this look, never them
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -232,6 +245,9 @@ func tickText(r tickResult) string {
 	}
 	if r.Server != "" {
 		msg += ", " + r.Server
+	}
+	if r.Unhidden > 0 {
+		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, visible again", r.Unhidden)
 	}
 	return msg + "\n"
 }

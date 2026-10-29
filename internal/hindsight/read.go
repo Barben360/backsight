@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RecallRequest is POST /memories/recall. Tags empty: the whole bank.
@@ -108,6 +109,27 @@ type MemoryDetail struct {
 func (c *Client) GetMemory(ctx context.Context, bank, id string) (MemoryDetail, error) {
 	var m MemoryDetail
 	return m, c.get(ctx, bankPath(bank, "/memories/"+url.PathEscape(id)), nil, &m)
+}
+
+// HistoryEntry is one change the server made to an observation.
+type HistoryEntry struct {
+	ChangedAt time.Time
+}
+
+// History lists an observation's changes, oldest first (none for a raw
+// fact); an *APIError of kind NotFound when the memory is gone.
+func (c *Client) History(ctx context.Context, bank, id string) ([]HistoryEntry, error) {
+	var raw []struct {
+		ChangedAt string `json:"changed_at"`
+	}
+	if err := c.get(ctx, bankPath(bank, "/memories/"+url.PathEscape(id)+"/history"), nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]HistoryEntry, 0, len(raw))
+	for _, h := range raw {
+		out = append(out, HistoryEntry{ChangedAt: serverTime(h.ChangedAt)})
+	}
+	return out, nil
 }
 
 // TagCount is one tag and how many memories carry it.

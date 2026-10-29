@@ -211,10 +211,10 @@ func turnOver(s *pendingShow, turn string, turns []Event, stopped map[string]boo
 
 // Settle decides the shows of dir's journal that can settle at now,
 // journals them as one settle event carrying p, and brings ledger.json up
-// to date: the settle and forget events since its watermark, in time
-// order. Under the ledger lock: a concurrent settle gets a
-// *state.HeldError and changes nothing. A ledger of another schema is left
-// alone, and nothing is journaled.
+// to date: the settle, forget, retire, hide and unhide events since its
+// watermark, in time order. Under the ledger lock: a concurrent settle
+// gets a *state.HeldError and changes nothing. A ledger of another schema
+// is left alone, and nothing is journaled.
 func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	var res SettleResult
 	release, err := lockLedger(dir)
@@ -232,8 +232,8 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	}
 	var apply []Event
 	for _, e := range events {
-		if (e.Kind == "settle" || e.Kind == "forget") && e.TS.After(l.Watermark) && !e.TS.After(now) {
-			apply = append(apply, e) // a ledger write that failed, and forgets since the last settle
+		if (e.Kind == "settle" || folded(e.Kind)) && e.TS.After(l.Watermark) && !e.TS.After(now) {
+			apply = append(apply, e) // a ledger write that failed, and forgets and retirements since the last settle
 		}
 	}
 	settled, late := Decide(events, p, now)

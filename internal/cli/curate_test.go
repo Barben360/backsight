@@ -404,7 +404,7 @@ func forgottenIDs(t *testing.T, home string) []string {
 }
 
 // A forget journals the memories it retired, so the ledger drops them; a
-// failed forget or a restore journals nothing.
+// failed forget or a restore journals no forget.
 func TestForgetJournalsTheRetiredMemories(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
@@ -434,5 +434,104 @@ func TestForgetJournalsTheRetiredMemories(t *testing.T) {
 	}
 	if got := forgottenIDs(t, home); len(got) != 0 {
 		t.Errorf("disabled feedback journaled %q", got)
+	}
+}
+
+// unhiddenIDs is the ids of the journal's unhide events with outcome,
+// one "outcome:ids" string per event.
+func unhiddenIDs(t *testing.T, home string) []string {
+	t.Helper()
+	events, _, err := feedback.Read(pathsOf(home).FeedbackDir(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range events {
+		if e.Kind == feedback.KindUnhide {
+			out = append(out, e.Outcome+":"+strings.Join(e.IDs, ","))
+		}
+	}
+	return out
+}
+
+// forget --restore undoes a retirement: a retired raw fact is valid again
+// and loses its verdicts, an observation's restored sources too, and a
+// hidden observation is visible again even when the server has nothing to
+// restore (it was never invalidated there), hidden since the last settle
+// included. A restore the server refuses journals nothing.
+func TestRestoreUndoesARetirement(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	dir := pathsOf(home).FeedbackDir()
+	memories["f1"] = fact("f1", "conversation:s1")
+	memories["o1"] = `{"id":"o1","text":"obs","type":"observation","tags":["project:billing"],"source_memories":[{"id":"f2","type":"world"},{"id":"f3","type":"world"}]}`
+	memories["f2"], memories["f3"] = fact("f2", ""), fact("f3", "")
+	memories["o3"] = `{"id":"o3","text":"obs","type":"observation","tags":["project:billing"],"source_memories":[]}`
+	memoryStatus["GET o3"] = http.StatusInternalServerError
+	memories["f9"] = fact("f9", "conversation:s9")
+	memoryStatus["PATCH f9"] = http.StatusInternalServerError
+	j := feedback.NewJournal(dir, feedback.Common{Session: "s1"})
+	start := time.Now().Add(-time.Hour)
+	for i, e := range []feedback.Event{
+		{Kind: feedback.KindRetire, IDs: []string{"f1"}, Verdict: "wrong", Outcome: "invalidated", Note: "n1"},
+		{Kind: feedback.KindRetire, IDs: []string{"f2"}, Verdict: "outdated", Outcome: "invalidated", Note: "n2"},
+		{Kind: feedback.KindHide, IDs: []string{"o1"}, Verdict: "wrong", Note: "n3"},
+		{Kind: feedback.KindHide, IDs: []string{"o3"}, Verdict: "wrong", Note: "n4"},
+		{Kind: feedback.KindRetire, IDs: []string{"f9"}, Verdict: "wrong", Outcome: "invalidated", Note: "n5"},
+	} {
+		e.TS = start.Add(time.Duration(i) * time.Minute)
+		if err := j.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := feedback.Settle(dir, feedback.Params{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// Hidden after the last settle: the ledger file does not know it yet.
+	if err := j.Append(feedback.Event{Kind: feedback.KindHide, IDs: []string{"o2"}, Verdict: "outdated", Note: "n6"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, out, errOut := run(t, "forget", "--restore", "f1"); code != output.OK || !strings.Contains(out, "f1 restored") {
+		t.Fatalf("f1: exit %d\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := run(t, "forget", "--restore", "o1"); code != output.OK || !strings.Contains(out, "visible to recall again") {
+		t.Fatalf("o1: exit %d\n%s%s", code, out, errOut)
+	}
+	for _, id := range []string{"o2", "o3"} { // not on the server, or not readable there
+		if code, out, errOut := run(t, "forget", "--restore", id); code != output.OK || !strings.Contains(out, id+" restored") || !strings.Contains(out, "visible to recall again") {
+			t.Errorf("%s: exit %d\n%s%s", id, code, out, errOut)
+		}
+	}
+	if code, _, _ := run(t, "forget", "--restore", "f9"); code == output.OK {
+		t.Error("f9: a refused restore succeeded")
+	}
+	if code, _, _ := run(t, "forget", "--restore", "nope"); code != output.Usage {
+		t.Errorf("unknown id: exit %d", code)
+	}
+	got := strings.Join(curation, "\n")
+	for _, id := range []string{"f1", "f2", "f3"} {
+		if !strings.Contains(got, "memories/"+id+` {"reason":"restored by the user (backsight forget --restore)","state":"valid"}`) {
+			t.Errorf("%s not restored on the server:\n%s", id, got)
+		}
+	}
+	if want := "restored:f1 restored:o1,f2,f3 restored:o2 restored:o3"; strings.Join(unhiddenIDs(t, home), " ") != want {
+		t.Errorf("unhide events %q, want %q", unhiddenIDs(t, home), want)
+	}
+
+	if _, err := feedback.Settle(dir, feedback.Params{}, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	l, err := feedback.LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"f1", "f2", "o1", "o2", "o3"} {
+		if m := l.Memories[id]; m.Wrong != 0 || m.Hidden != nil {
+			t.Errorf("%s still retired: %+v", id, m)
+		}
+	}
+	if l.Memories["f9"].Wrong != 1 {
+		t.Errorf("f9, not restored, lost its verdict: %+v", l.Memories["f9"])
 	}
 }

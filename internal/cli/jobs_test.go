@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -480,5 +483,117 @@ func TestTickSettlesWhileTheServerIsDown(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(d.FeedbackDir(), "ledger.json")); err == nil {
 		t.Error("disabled feedback wrote a ledger")
+	}
+}
+
+// hideAll journals a hide of each id at at, as the memory_credit tool does.
+func hideAll(t *testing.T, dir string, at time.Time, ids ...string) {
+	t.Helper()
+	j := feedback.NewJournal(dir, feedback.Common{Session: "s1"})
+	for _, id := range ids {
+		if err := j.Append(feedback.Event{Kind: feedback.KindHide, TS: at, IDs: []string{id}, Verdict: "wrong", Note: "n-" + id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// historyCalls counts the history reads the fake server answered.
+func historyCalls() int {
+	n := 0
+	for _, c := range bankCalls {
+		if strings.HasSuffix(c, "/history") {
+			n++
+		}
+	}
+	return n
+}
+
+// The tick lifts a hiding the server made moot: an observation rewritten
+// after it was hidden, or gone from the server. One changed only before,
+// or whose history the server fails to give, stays hidden; once lifted, a
+// hiding is not journaled again. With feedback off, nothing is read.
+func TestHiddenObservationIsLiftedWhenRewritten(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	dir := pathsOf(home).FeedbackDir()
+	hidAt := time.Now().Add(-2 * time.Hour).UTC()
+	change := func(at time.Time) string {
+		return `[{"previous_text":"old","changed_at":"` + at.Format("2006-01-02T15:04:05.999999-07:00") + `"}]`
+	}
+	memoryHistory["o-after"] = `[{"previous_text":null,"changed_at":"` + hidAt.Add(-time.Hour).Format(time.RFC3339) + `"},` + change(hidAt.Add(time.Hour))[1:]
+	memoryHistory["o-before"] = change(hidAt.Add(-time.Minute))
+	memoryHistory["o-error"] = change(hidAt.Add(time.Hour))
+	memoryStatus["GET o-error/history"] = http.StatusInternalServerError
+	hideAll(t, dir, hidAt, "o-after", "o-before", "o-gone", "o-error")
+
+	tick := func() tickResult {
+		t.Helper()
+		_, out, errOut := run(t, "jobs", "tick", "--json")
+		var env struct {
+			Data tickResult `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil {
+			t.Fatalf("not an envelope: %s %s", out, errOut)
+		}
+		return env.Data
+	}
+	if res := tick(); res.Unhidden != 2 || historyCalls() != 4 {
+		t.Errorf("unhidden %d, %d history reads, want 2 of 4", res.Unhidden, historyCalls())
+	}
+	if want := "rewritten:o-after gone:o-gone"; strings.Join(unhiddenIDs(t, home), " ") != want {
+		t.Errorf("unhide events %q, want %q", unhiddenIDs(t, home), want)
+	}
+	bankCalls = nil
+	if res := tick(); res.Unhidden != 0 || historyCalls() != 2 || len(unhiddenIDs(t, home)) != 2 {
+		t.Errorf("second tick: unhidden %d, %d history reads, unhides %q", res.Unhidden, historyCalls(), unhiddenIDs(t, home))
+	}
+	l, _ := feedback.LoadLedger(dir)
+	for id, hidden := range map[string]bool{"o-after": false, "o-gone": false, "o-before": true, "o-error": true} {
+		if (l.Memories[id].Hidden != nil) != hidden {
+			t.Errorf("%s: hidden %+v, want %v", id, l.Memories[id].Hidden, hidden)
+		}
+	}
+
+	// [feedback] enabled = false: no history is read.
+	cfg, _ := os.ReadFile(pathsOf(home).ConfigFile())
+	_ = os.WriteFile(pathsOf(home).ConfigFile(), append(cfg, "[feedback]\nenabled = false\n"...), 0o600)
+	bankCalls = nil
+	if res := tick(); res.Unhidden != 0 || historyCalls() != 0 {
+		t.Errorf("disabled feedback: unhidden %d, %d history reads", res.Unhidden, historyCalls())
+	}
+}
+
+// One tick reads at most 20 histories, the longest hidden first, and none
+// once its time is up.
+func TestHiddenChecksAreCapped(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	start := time.Now().Add(-48 * time.Hour)
+	for i := range 25 {
+		hideAll(t, dir, start.Add(time.Duration(i)*time.Minute), "o"+strconv.Itoa(i))
+	}
+	var mu sync.Mutex
+	var read []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		read = append(read, strings.TrimSuffix(r.URL.Path[strings.Index(r.URL.Path, "/memories/")+len("/memories/"):], "/history"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+	cl, _ := hindsight.New(srv.URL, "k", 5*time.Second)
+	if n := checkHidden(context.Background(), cl, "b", dir, time.Now()); n != 0 || len(read) != 20 {
+		t.Fatalf("lifted %d, %d reads, want 0 and 20", n, len(read))
+	}
+	slices.Sort(read)
+	for i := range 20 {
+		if !slices.Contains(read, "o"+strconv.Itoa(i)) {
+			t.Errorf("o%d, among the 20 longest hidden, not read: %v", i, read)
+		}
+	}
+	read = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if n := checkHidden(ctx, cl, "b", dir, time.Now()); n != 0 || len(read) != 0 {
+		t.Errorf("out of time: lifted %d, %d reads", n, len(read))
 	}
 }

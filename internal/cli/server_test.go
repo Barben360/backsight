@@ -227,7 +227,8 @@ var (
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
-	memoryStatus       map[string]int // "<METHOD> <memory id>" → the status that call answers
+	memoryStatus       map[string]int    // "<METHOD> <memory id>" → the status that call answers ("GET <id>/history" for a history)
+	memoryHistory      map[string]string // GET /memories/{id}/history answer (a JSON list) by id; absent: 404
 	projectEntities    map[string]string
 	retainedTags       []string
 	retainedContents   []string // the content of every accepted item
@@ -266,7 +267,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
 	fakeDocCreated = map[string]time.Time{}
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
-	memoryStatus = map[string]int{}
+	memoryStatus, memoryHistory = map[string]int{}, map[string]string{}
 	recallQueries, recallSourceFacts, recallAskedSources = nil, "", 0
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
@@ -574,6 +575,18 @@ func fakeHindsight(t *testing.T) (port int) {
 			body, _ := io.ReadAll(r.Body)
 			recallTags = append(recallTags, string(body))
 			_, _ = w.Write([]byte(`{"text":"Billing keeps PostgreSQL 16.","usage":{"input_tokens":1200,"output_tokens":40}}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && strings.HasSuffix(r.URL.Path, "/history"):
+			id := strings.TrimSuffix(r.URL.Path[strings.Index(r.URL.Path, "/memories/")+len("/memories/"):], "/history")
+			h, ok := memoryHistory[id]
+			switch {
+			case memoryStatus["GET "+id+"/history"] != 0:
+				w.WriteHeader(memoryStatus["GET "+id+"/history"])
+			case !ok:
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"Memory unit '` + id + `' not found"}`))
+			default:
+				_, _ = w.Write([]byte(h))
+			}
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
 			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]
 			if !ok {
