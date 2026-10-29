@@ -15,6 +15,7 @@ The server turns this text into memories: short facts tagged with their project,
 | To | What | When |
 |---|---|---|
 | **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only, unless you open it to your other PCs on a private address (`backsight server expose --private`); its API and web UI always require a key. | Each session, report and stored fact. |
+| **The server's host**, on a PC that joined another's server ([below](#several-pcs)) | The same, over your private network, with recall queries and their results, and the API key in every request. | Each session, report and stored fact, each prompt and memory search, each `jobs tick`. |
 | **The LLM provider you chose at setup** | Session text, reports and stored facts, which the server sends it to extract and consolidate memories, and the server's own summaries (the briefing pages). With `ollama`, nothing: the model runs on your machine. | In the background, after each send. |
 | **Hugging Face** (`huggingface.co`) | Nothing of yours: the server downloads its embedding model and its reranker from there, into a Docker volume. | The server's first start, and after its model cache is deleted. |
 | **The image registries** (`ghcr.io` for Hindsight, Docker Hub for pgvector) | Nothing of yours: Docker pulls the server's images, by digest. | Setup, and server upgrades. |
@@ -46,6 +47,7 @@ The third-party software and models the server runs come under their own licence
 
 Before anything is written to memory, backsight replaces secrets with `[redacted:<kind>]`:
 
+- **a connection token** (`bst1.…`), whole: it holds the server's API key;
 - **backsight's own secrets**: the exact values of `secrets.toml` and of the secret-named entries of the server's `.env`, in their URL-escaped forms too, whatever their shape; and any age identity (`AGE-SECRET-KEY-1…`), the shape of your backup key;
 - **private keys**: PEM blocks (`-----BEGIN … PRIVATE KEY-----`) and PGP private key blocks, whole;
 - **known token shapes**: `sk-` and `sk-ant-`, Stripe (`sk_live_`, `rk_test_`…), GitHub (`ghp_`, `github_pat_`…), GitLab (`glpat-`…), npm, Slack (`xoxb-`…), AWS (`AKIA`, `ASIA`), Google (`AIza`), DigitalOcean (`dop_v1_`, `doo_v1_`, `dor_v1_`), Shopify (`shpat_`, `shpca_`, `shppa_`, `shpss_`), Twilio API key SIDs (`SK` and 32 hex), JWTs, and Slack and Discord webhook URLs;
@@ -88,6 +90,16 @@ A client that does not know about tombstones (an older backsight on another mach
 ## Secrets on disk
 
 Keys live only in `secrets.toml` (backsight's config directory) and the server's rendered `.env`, both readable by your user only (mode 0600). They never appear in command lines or answers: you type them at a prompt with `backsight secret set <name>`. Claude is told never to ask for a key in the conversation.
+
+## Several PCs
+
+When your PCs share one memory ([several-pcs.md](several-pcs.md)), each PC that joined (a client) talks to the server on another machine (the host):
+
+- **What travels** between a client and the host: the text of its sessions and subagent reports, the notes stored on it, its recall queries and the memories they return, briefing pages, tombstones, and the shared counts of which memories Claude used or hid (`feedback.share_ledger`: memory ids, numbers and times only).
+- **The API key goes with every request.** On a tailnet address (Tailscale), WireGuard encrypts the link, the key included. On a LAN address, the key travels in clear, readable by anyone on that network: that is why `backsight server expose` asks for `--answer cleartext_lan=yes` first. The web UI, opened from another PC at the host's private address, takes its own key the same way.
+- **The connection token holds the API key** (never the LLM key). `backsight server token --out <file>` writes it readable by you only (mode 0600); `backsight connect` reads it from a file or stdin and refuses it as an argument, where your shell history would keep it. Redaction masks a token before a session or note is stored, and `backsight report` and the errors a command prints mask it too. If it leaked anyway (pasted into a chat, a lost laptop), give the server a new key on the host: `backsight server token --rotate --out <file>`, then `backsight connect --token-file <file>` on each PC ([A lost laptop](several-pcs.md#a-lost-laptop)).
+- **`backsight server install --ssh`** sends the host's LLM key on the stdin of `backsight secret set` there, over your ssh connection, never on a command line. The token comes back the same way and is neither shown nor written on this PC.
+- **Whoever runs the host reads every PC's memories**: the server, its web UI and its backups hold them all, as on a server of your own. Share a host only with people you would show all your sessions to.
 
 ## Backups
 

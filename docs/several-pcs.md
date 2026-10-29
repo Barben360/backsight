@@ -1,6 +1,6 @@
 # Several PCs, one memory
 
-How to share one memory between your PCs. One machine holds the server: the **host**. The other PCs join it with `backsight connect`: the **clients**. Words you may not know are in the [glossary](glossary.md).
+How to share one memory between your PCs. One machine holds the server: the [**host**](glossary.md#host). The other PCs join it with `backsight connect`: the [**clients**](glossary.md#client). Words you may not know are in the [glossary](glossary.md).
 
 - **Shared**: the memory itself, so a decision stored on one PC is recalled on the others, and which memories Claude used or hid on each PC (memory ids, numbers and times only; `feedback.share_ledger` in [configuration.md](configuration.md#feedback-which-memories-claude-used)).
 - **Kept on each PC**: Claude Code's transcripts, the queue of notes waiting for the server, `config.toml` and `secrets.toml`.
@@ -24,7 +24,7 @@ backsight server expose --private <ip> --plan
 backsight server expose --private <ip> --out <file>
 ```
 
-The server then listens on that address as well as on `127.0.0.1`, and the host itself keeps using `127.0.0.1`. expose restarts the server under the maintenance lock, checks it answers on both addresses, and writes the connection token to `<file>` ([below](#the-connection-token)). If the server does not come back healthy, `config.toml` is put back and the server started as before.
+The server then listens on that address as well as on `127.0.0.1`, and the host itself keeps using `127.0.0.1`. expose restarts the server under the maintenance lock, checks it answers on both addresses, and writes the [connection token](glossary.md#connection-token) to `<file>` ([below](#the-connection-token)). If the server does not come back healthy, `config.toml` is put back and the server started as before.
 
 - **A tailnet address** (Tailscale: `100.x`) keeps the API key encrypted on the way.
 - **A LAN address** sends the API key in clear to anyone on that network. expose stops and asks: on a network you trust, rerun with `--answer cleartext_lan=yes`.
@@ -38,7 +38,7 @@ After a reboot, Docker may start before the address exists (Tailscale or DHCP st
 
 ## The connection token
 
-A client joins with a connection token. It holds the server's address on your private network and its web UI's, the bank, the **API key**, the server's id and Hindsight version, and the host's LLM provider, model and prices (for cost estimates). Never the LLM key.
+A client joins with a connection token. It holds the server's address on your private network and its web UI's, the bank, the **API key**, the [server's id](glossary.md#server-id) and Hindsight version, and the host's LLM provider, model and prices (for cost estimates). Never the LLM key.
 
 `backsight server expose --private <ip> --out <file>` already wrote one. To make another at any time, on the host:
 
@@ -148,7 +148,7 @@ The old key and every token handed out before are refused from then on. The host
 
 ## A session continued on two PCs
 
-You copy a transcript to another PC and resume the session on both. Nothing is lost: each PC sends the turns the server does not hold from it, as the session's next part. The part both PCs share may be stored twice. doctor's `split-session` check names such sessions, as information.
+You copy a transcript to another PC and resume the session on both: a [split session](glossary.md#split-session). Nothing is lost: each PC sends the turns the server does not hold from it, as the session's next part. The part both PCs share may be stored twice. doctor's `split-session` check names such sessions, as information.
 
 One case is caught later: both PCs sent the session's first part before the server stored either, and the later one replaced the other. The PC whose part was replaced reads the session back at a later `jobs tick` and sends its missing turns again. If it still cannot compare after 24 hours, it gives up, and doctor's `replace-unconfirmed` check warns: see [doctor: a session part was never confirmed](troubleshooting.md#doctor-a-session-part-was-never-confirmed).
 

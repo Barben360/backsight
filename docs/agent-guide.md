@@ -79,10 +79,58 @@ To finish the import now, with the user's go-ahead, run `backsight retain backfi
 
 `backsight doctor --json` checks the whole install at any time. About an hour after the user's first real session, `backsight verify --live --json` checks the real pipeline, read-only: exit 0 means this machine's latest settled session reached the server and an observation was consolidated from it; exit 40 means not yet, rerun after `data.wait_s` seconds; exit 20 means it failed, with `data.fix`. `backsight setup --undo --json` reverses setup and keeps the config, the secrets and the memories.
 
+## Joining a shared memory or installing a remote server
+
+The user's PCs can share one memory, held by the server on one machine, the host: [several-pcs.md](several-pcs.md). The other PCs join it with a connection token, which holds the server's API key.
+
+**Never read, print, copy or pass a token's value or a key**, never ask the user to paste one into the conversation, and never open the token file. If a token reached the conversation anyway, tell the user to give the server a new key on the host: `backsight server token --rotate --out <file>`, in a terminal of their own.
+
+### Joining the host from this PC
+
+1. Ask the user to make a token on the host, in a terminal of their own: `backsight server token --out <file>` (the server must be exposed first: `backsight server expose --private <ip> --out <file>` writes one too). They carry the file to this PC themselves (`scp`, a USB stick), never through a chat, and give you its path only.
+2. If `backsight version` fails, install the binary (step 1). A PC that joins needs Claude Code, not Docker.
+3. Show the plan:
+
+   ```sh
+   backsight connect --plan --json --token-file <file>
+   ```
+
+   Show the user `data.steps`, `data.warnings` (a different Hindsight version on the host is a warning, never a refusal) and, for a PC that runs its own server, `data.own_server` (its server is backed up, verified, then stopped). When `data.questions` holds `ack_subscription`, the host extracts with a Claude subscription: show its caveat; only the user accepts it.
+4. When they agree, run it with the answers the plan named:
+
+   ```sh
+   backsight connect --non-interactive --json --token-file <file> --answer consent=yes
+   ```
+
+   Add `--answer ack_subscription=yes` once the user accepted those terms. connect then runs setup's client steps: exit 10 and 20 mean what they mean for setup (ask each of `error.questions` with `"asked": true`, then run `error.resume`; or show the failed checks and their fix). Each refusal before the change leaves the PC as it was.
+5. On exit 0, relay `data.next_steps`: the user deletes the token file on both machines, and restarts Claude Code (or runs `/reload-plugins`).
+
+### Installing the server on another machine over ssh
+
+For a Linux machine without Claude Code that the user reaches with `ssh user@host` (their keys, their `known_hosts`: an unknown host key is refused, so they connect once themselves and check the fingerprint first):
+
+1. Show the plan, which reads the host and changes nothing:
+
+   ```sh
+   backsight server install --ssh user@host --plan --json
+   ```
+
+   Pass the host's setup answers the user chose, as in step 2 (`--answer provider=<p>`, `--answer model=<m>`…). An exit 10 names what is missing: the address the other PCs will use (`--private <ip>`, a tailnet or LAN address of the host; a LAN one also needs `--answer cleartext_lan=yes`, the user's call, since the API key then travels in clear on that network), or a signature checker on the host. A plan step `ack_subscription` means the host would extract with a Claude subscription: show its caveat, and add `--answer ack_subscription=yes` only once the user accepted it.
+2. The run sends the host's LLM key to it, and the key must never reach you. Recommended: the user runs the command in a terminal of their own, with the flags and answers you agreed, without `--plan` nor `--json`; it asks the key at a hidden prompt and their consent there. If they want you to run it, they first write the key to a file only they can read, in their own terminal (for example `(umask 077; pass show <entry> > <file>)`), and you run, without opening that file:
+
+   ```sh
+   backsight server install --ssh user@host --non-interactive --json --answer consent=yes --llm-key-from-file <file>
+   ```
+
+   and once it exits 0, ask them to delete it (a resumed run reads it again). Never use `--llm-key-from-env`: the key would sit in your environment. The key step is skipped when the host already has one, or when its provider needs none.
+3. Progress lines arrive on stderr (`host:<step>` for the host's own). It then joins the server from this PC as connect does: relay `data.connect` and `data.next_steps`. After a failure (exit 40 when the ssh connection ended part way), fix what the message says, then run `error.resume`, the same command, which goes on from where it stopped; the host is never rolled back (`backsight setup --undo` there undoes it).
+
+No ssh access to the host: `backsight server install --print-commands --json` lists the commands to run, each with where (the host or this PC) and why. Show them to the user, who runs them: the host's key at its own hidden prompt, and the token file carried by hand.
+
 ## When something goes wrong
 
 `backsight report --json` builds a redacted diagnostic (versions, the doctor report, local counts, recent backsight errors; no memory text, prompt, transcript, secret, home path, project name or git remote) with `data.search_url` (existing issues with the same error class), `data.issue_url` (a new issue with the title and a summary filled in) and `data.paste` (the full diagnostic to paste into it). It sends nothing. Show the user the diagnostic and both links; never open, submit or post them yourself: the user decides whether to report.
 
 ## More
 
-The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md).
+The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md).

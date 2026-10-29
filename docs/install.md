@@ -142,6 +142,7 @@ It prints Ollama's version. Setup then tests the model itself: its LLM check run
 - If you accepted the backfill, the import has already started and goes on in the background; `backsight doctor` shows its progress.
 - `backsight doctor` checks the whole install at any time.
 - Daily use: [daily-use.md](daily-use.md).
+- To share this memory with another PC, open this server to it and join it from there with `backsight connect`: [several-pcs.md](several-pcs.md).
 
 ## Install with a coding agent
 
@@ -176,7 +177,7 @@ backsight setup --role server
 
 Setup writes `role = "server"` under `[server]` in `config.toml`, installs the server, the documentation bank and the scheduler entries, and skips what wires Claude Code: its pre-flight does not look for the `claude` command, it asks neither the retention, the reference nor the backfill question, and its `client`, `retention`, `verify`, `reference` and `backfill` steps read `skipped: server-only host`. Both scheduled jobs are installed: `jobs maintain` makes the daily backup, and `jobs tick` starts the server again once its private address is back after a reboot. `backsight doctor` reports the checks that look at Claude Code as `not a client: server-only host`. `backsight setup --undo` reverses what setup did there.
 
-Then open the server to your other PCs with `backsight server expose --private <address>` (a tailnet address keeps the API key encrypted), which hands out the connection token they join with; `backsight server token` writes it again. The token holds the API key: carry it to the other PC yourself.
+Then open the server to your other PCs with `backsight server expose --private <address>` (a tailnet address keeps the API key encrypted), which hands out the connection token they join with; `backsight server token` writes it again. The token holds the API key: carry it to the other PC yourself. Joining, offline laptops and a lost laptop: [several-pcs.md](several-pcs.md).
 
 The PCs that join also share, through the server, which memories Claude used or hid on each (memory ids, numbers and times only; `feedback.share_ledger` in [configuration.md](configuration.md#feedback-which-memories-claude-used)).
 
