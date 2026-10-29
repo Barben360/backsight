@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 const (
@@ -636,5 +638,101 @@ func TestTwoMachinesShareOneLedger(t *testing.T) {
 	}
 	if got := search("A, 6 h later", a); order(got) != uB {
 		t.Fatalf("A after B's restore: %s", got)
+	}
+}
+
+// A document is trusted only under its own name: one whose machine is not
+// its id's (another machine's, or this one's) is skipped and counted, so
+// it can neither replace that machine's own document nor pass for this
+// one's.
+func TestShareTrustsADocumentOnlyUnderItsOwnName(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(nil)
+	c := sharedMeta(t, "pc-c", shareT0.Add(-time.Hour), map[string]feedback.SharedEntry{shareM1: {Credits: 1, CreditsAt: shareT0.Add(-time.Hour)}})
+	m.put("pc-c", c)
+	m.put("pc-b", sharedMeta(t, "pc-c", shareT0, map[string]feedback.SharedEntry{shareM1: {HiddenSince: shareT0}}))
+	m.put("pc-d", sharedMeta(t, "pc-a", shareT0, map[string]feedback.SharedEntry{shareM2: {Credits: 9, CreditsAt: shareT0}}))
+	_, machines, skipped, err := m.share(shareT0)
+	if err != nil || machines != 1 || skipped != 2 {
+		t.Fatalf("%d machine(s), %d skipped, %v", machines, skipped, err)
+	}
+	if cache, _ := m.cache(); len(cache.Docs) != 1 || string(cache.Docs[0]) != c {
+		t.Errorf("cache %s", cache.Docs)
+	}
+	if r, _, err := m.combined(shareT0); err != nil || !r[shareM1].HiddenSince.IsZero() || r[shareM1].Credits == 0 || r[shareM2].Credits != 0 {
+		t.Errorf("combined %+v, %v", r, err)
+	}
+}
+
+// A refresh caches no document a month old (a machine no longer in use,
+// never deleted from the server) and at most the 64 newest.
+func TestShareCachesOnlyRecentDocuments(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(nil)
+	month := 30 * 24 * time.Hour
+	m.put("pc-month", sharedMeta(t, "pc-month", shareT0.Add(-month), nil))
+	m.put("pc-gone", sharedMeta(t, "pc-gone", shareT0.Add(-month-time.Second), nil))
+	_, machines, skipped, err := m.share(shareT0)
+	if err != nil || machines != 1 || skipped != 0 {
+		t.Fatalf("%d machine(s), %d skipped, %v", machines, skipped, err)
+	}
+	if _, docs := m.cache(); len(docs) != 1 || docs[0].Machine != "pc-month" {
+		t.Errorf("cache %+v", docs)
+	}
+
+	m = newShareMachine(t)
+	m.ledger(nil)
+	for i := range 70 {
+		name := fmt.Sprintf("pc-%02d", i)
+		m.put(name, sharedMeta(t, name, shareT0.Add(-time.Duration(i)*time.Minute), nil))
+	}
+	if _, machines, _, err := m.share(shareT0); err != nil || machines != 64 {
+		t.Fatalf("%d machine(s), %v", machines, err)
+	}
+	_, docs := m.cache()
+	var names []string
+	for _, d := range docs {
+		names = append(names, d.Machine)
+	}
+	if len(names) != 64 || !slices.Contains(names, "pc-00") || !slices.Contains(names, "pc-63") || slices.Contains(names, "pc-64") || slices.Contains(names, "pc-69") {
+		t.Errorf("cached %v", names)
+	}
+}
+
+// The upload record names the server and bank it went to: another one
+// (another joined server id, or another address while none is known, or
+// another bank) gets this machine's document at once, unchanged.
+func TestShareResendsAfterAServerChange(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: shareT0, LastShown: shareT0}})
+	at := shareT0
+	step := func(name string, change func(), want bool) {
+		t.Helper()
+		change()
+		at = at.Add(15 * time.Minute)
+		if up, _, _, err := m.share(at); err != nil || up != want {
+			t.Errorf("%s: uploaded %v, want %v (%v)", name, up, want, err)
+		}
+	}
+	joined := func(id, url string) func() {
+		return func() {
+			m.cfg.Server.Mode, m.cfg.Server.URL = "remote", url
+			if err := state.Update(m.d, "test", func(s *state.State) error {
+				s.RemoteServer = &state.RemoteServer{ID: id, URL: url}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	step("first", func() {}, true)
+	step("same server", func() {}, false)
+	step("another address", func() { m.cfg.Server.URL = "http://10.0.0.9:8888" }, true)
+	step("another bank", func() { m.cfg.Server.Bank = "work" }, true)
+	step("joined server", joined("srv-1", "http://10.0.0.9:8888"), true)
+	step("same server, new address", joined("srv-1", "http://10.0.0.7:8888"), false)
+	step("another joined server", joined("srv-2", "http://10.0.0.7:8888"), true)
+	if rec, ok := feedback.LoadSharedUpload(m.d.FeedbackDir()); !ok || !strings.Contains(rec.Server, "srv-2") {
+		t.Errorf("record %+v", rec)
 	}
 }

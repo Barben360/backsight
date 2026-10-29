@@ -75,11 +75,12 @@ func SharedMachines(docs []SharedDoc, self string, now time.Time) int {
 }
 
 // SharedUpload is <state>/feedback/shared-upload.json: when jobs tick
-// last sent this machine's shared document, the hash of its entries (its
-// time left out, so that the same counts hash the same) and of its
-// hidden ids.
+// last sent this machine's shared document, to which server and bank,
+// the hash of its entries (its time left out, so that the same counts
+// hash the same) and of its hidden ids.
 type SharedUpload struct {
 	At         time.Time `json:"at"`
+	Server     string    `json:"server,omitempty"`
 	Hash       string    `json:"hash"`
 	HiddenHash string    `json:"hidden_hash"`
 }

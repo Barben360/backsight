@@ -241,11 +241,15 @@ func CombineRemote(docs []SharedDoc, self string, now time.Time, p Params) Remot
 	return r
 }
 
+// Expired: d's at is more than sharedMaxAge before now, a machine no
+// longer in use that every reader ignores.
+func (d SharedDoc) Expired(now time.Time) bool { return now.Sub(d.At) > sharedMaxAge }
+
 // current: d is at most sharedMaxAge old at now, and neither it nor any
 // of its times more than sharedMaxSkew ahead.
 func (d SharedDoc) current(now time.Time) bool {
 	late := now.Add(sharedMaxSkew)
-	if now.Sub(d.At) > sharedMaxAge || d.At.After(late) {
+	if d.Expired(now) || d.At.After(late) {
 		return false
 	}
 	for _, e := range d.Entries {
