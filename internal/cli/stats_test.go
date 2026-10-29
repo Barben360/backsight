@@ -403,13 +403,14 @@ func TestStatsLedgerSplitsImported(t *testing.T) {
 }
 
 // statsAt fixes the clock and points this PC, a client of a shared server
-// at 127.0.0.1, at a port where nothing answers.
+// at 127.0.0.1, at a port where nothing answers. The URL carries a fake
+// secret in its query, which stats must never show.
 func statsAt(t *testing.T, at time.Time) string {
 	t.Helper()
 	home := devInstall(t, true)
 	withClock(t, at)
 	cfg := pathsOf(home).ConfigFile()
-	if err := os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"http://127.0.0.1:1\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"http://127.0.0.1:1/?key=fakevalue\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home
@@ -454,8 +455,8 @@ func TestStatsShowsAnUnreachableServer(t *testing.T) {
 	if l := serverLine(t, out); code != output.OK || l != want {
 		t.Errorf("exit %d\n got %q\nwant %q", code, l, want)
 	}
-	if strings.Contains(out, "fakevalue") || strings.Contains(out, "127.0.0.1:1 ") {
-		t.Errorf("the line names more than the host:\n%s", out)
+	if l := serverLine(t, out); strings.Contains(l, "fakevalue") || strings.Contains(l, "127.0.0.1:1") {
+		t.Errorf("the line names more than the host: %q", l)
 	}
 	code, out, _ = run(t, "stats", "--json")
 	var env struct {
@@ -465,6 +466,9 @@ func TestStatsShowsAnUnreachableServer(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(out), &env); code != output.OK || err != nil {
 		t.Fatalf("exit %d, %v\n%s", code, err, out)
+	}
+	if raw, _ := json.Marshal(env.Data.Server); strings.Contains(string(raw), "fakevalue") {
+		t.Errorf("json server names the secret: %s", raw)
 	}
 	s := env.Data.Server
 	if s["failing_since"] != "2026-10-28T10:00:00Z" || s["last_ok"] != "2026-10-28T09:30:00Z" || s["breaker_open_until"] != "2026-10-28T12:03:00Z" ||

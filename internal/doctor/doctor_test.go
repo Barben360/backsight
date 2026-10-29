@@ -708,14 +708,51 @@ func TestDoctorReplaceUnconfirmedNamesFive(t *testing.T) {
 	f := newFixture(t)
 	f.env.Now = func() time.Time { return now }
 	var b strings.Builder
-	for i := 1; i <= 6; i++ {
-		b.WriteString(unconfirmedEvent(now.Add(-time.Duration(i)*time.Hour), "session"+strconv.Itoa(i)+"xyz", "conversation:s"+strconv.Itoa(i)))
+	for i := 1; i <= 6; i++ { // one a day: the oldest, 6 days ago, dates "since"
+		b.WriteString(unconfirmedEvent(now.Add(-time.Duration(i)*24*time.Hour), "session"+strconv.Itoa(i)+"xyz", "conversation:s"+strconv.Itoa(i)))
 	}
 	put(t, filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), b.String(), 0o600)
 	c := check(t, f.run(), "replace-unconfirmed")
-	want := "6 session part(s) never confirmed on the server since 2026-10-28: session1/conversation:s1, session2/conversation:s2, session3/conversation:s3, session4/conversation:s4, session5/conversation:s5, …"
+	want := "6 session part(s) never confirmed on the server since 2026-10-22: session1/conversation:s1, session2/conversation:s2, session3/conversation:s3, session4/conversation:s4, session5/conversation:s5, …"
 	if c.Status != Warn || c.Detail != want {
 		t.Errorf("got %q\nwant %q", c.Detail, want)
+	}
+}
+
+// The window is the last 30 days: a part given up 29 days ago warns, one
+// given up 31 days ago does not.
+func TestDoctorReplaceUnconfirmedWindowEdge(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	put31 := func(age time.Duration, session string) {
+		at := now.Add(-age)
+		p := filepath.Join(f.env.Dirs.TelemetryDir(), "events-"+at.Format("2006-01")+".jsonl")
+		old, _ := os.ReadFile(p)
+		put(t, p, string(old)+unconfirmedEvent(at, session, "conversation:"+session), 0o600)
+	}
+	put31(31*24*time.Hour, "day31")
+	if c := check(t, f.run(), "replace-unconfirmed"); c.Status != OK {
+		t.Errorf("31 days: %+v", c)
+	}
+	put31(29*24*time.Hour, "day29")
+	c := check(t, f.run(), "replace-unconfirmed")
+	if c.Status != Warn || c.Detail != "1 session part(s) never confirmed on the server since 2026-09-29: day29/conversation:day29" {
+		t.Errorf("29 days: %+v", c)
+	}
+}
+
+// Telemetry that cannot be read warns, saying so: the check cannot tell
+// whether a part was given up.
+func TestDoctorReplaceUnconfirmedUnreadableTelemetry(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	if err := os.MkdirAll(filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), 0o700); err != nil { // a directory: unreadable
+		t.Fatal(err)
+	}
+	if c := check(t, f.run(), "replace-unconfirmed"); c.Status != Warn || c.Summary != "telemetry unreadable" || c.Detail == "" {
+		t.Errorf("%+v", c)
 	}
 }
 
