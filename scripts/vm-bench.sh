@@ -596,8 +596,18 @@ m6_on() {
     a) m6_sh a "exec \"\$HOME/backsight\" $(m6_q "$@")" ;;
     srv) m6_sh srv "exec \"\$HOME/.local/share/backsight/bin/current\" $(m6_q "$@")" ;;
     b)
+      # B never needs a server command: server install would put a server
+      # on this host's Docker, next to the user's own; with --ssh, OpenSSH
+      # would use the user's ~/.ssh.
       for a in "$@"; do
-        [ "$a" != --ssh ] || fail "client B never runs server install --ssh: OpenSSH would use the user's ~/.ssh"
+        case $a in --ssh | --ssh=*) fail "client B never runs server install --ssh: OpenSSH would use the user's ~/.ssh" ;; esac
+      done
+      for a in "$@"; do
+        case $a in
+          -*) ;;
+          server) fail "client B never runs a server command (backsight server …): this host's Docker runs the user's own server" ;;
+          *) break ;;
+        esac
       done
       vb_b "$VB_DIR/bin/backsight" "$@"
       ;;
@@ -644,6 +654,14 @@ vb_untrust_new_key() {
   mv "$VB_DIR/known_hosts.tmp" "$VB_DIR/known_hosts"
 }
 
+# vb_authorize_a: run's preparation, before any check: A's login key in
+# bs's authorized_keys on the server, as the user's ssh-copy-id would put
+# it (provisioning, not proof: the host key stays unknown to A).
+vb_authorize_a() {
+  m6_get a "$(m6_home a)/.ssh/id_ed25519.pub" | m6_sh srv 'mkdir -p -m 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' ||
+    vb_fail "cannot authorize A's login key for bs on bs-m6-server"
+}
+
 # vb_results_table <jsonl>: one markdown row a check.
 vb_results_table() {
   printf '| Check | Status | Detail |\n|---|---|---|\n'
@@ -675,9 +693,10 @@ vb_run() {
   . "$VB_ROOT/scripts/m6-proofs.sh"
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   M6_RESULTS=$VB_DIR/results/$stamp.jsonl M6_WORK=$VB_DIR/work/run M6_ROOT=$VB_ROOT M6_VERSION=$VB_VERSION
-  M6_COMMIT=$(git -C "$VB_ROOT" rev-parse --short HEAD 2> /dev/null || echo unknown)
+  M6_COMMIT=$(git -C "$VB_ROOT" describe --always --dirty --abbrev=7 2> /dev/null || echo unknown)
   M6_SERVER_IP=$(awk '$1 == "HostName" { print $2; exit }' "$VB_DIR/ssh_config")
   : > "$M6_RESULTS"
+  vb_authorize_a
   # However the run ends, A's link is up and the bench trusts only its keys.
   trap 'vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true; vb_untrust_new_key' EXIT
   for c in "${order[@]}"; do

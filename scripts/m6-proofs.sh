@@ -44,14 +44,15 @@ m6_scrub() { sed -E 's/bst1\.[A-Za-z0-9_.=-]*/[token]/g'; }
 
 # m6_result <check> <PASS|FAIL|RECORDED|NOT RUN> <detail> [values-json]:
 # one line `bs-m6 <check>: <STATUS> <detail>` and one JSONL record. A key
-# named for a secret (api_key, token, secret, password, key) is dropped
-# from values, and a string holding a token masked.
+# named for a secret (api_key, *_token, secret, password, *_key) is dropped
+# from values (a count such as tokens or max_tokens stays), and a string
+# holding a token masked.
 m6_result() {
   local check=$1 status=$2 detail values=${4:-'{}'} rec
   detail=$(printf '%s' "$3" | m6_scrub)
   rec=$(jq -cn --arg check "$check" --arg status "$status" --arg detail "$detail" --argjson values "$values" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg version "${M6_VERSION:-}" --arg commit "${M6_COMMIT:-}" '
-    def scrub: walk(if type == "object" then with_entries(select(.key | test("api_key|token|secret|password|(^|_)key$"; "i") | not))
+    def scrub: walk(if type == "object" then with_entries(select(.key | test("(^|_)token$|api_key|secret|password|(^|_)key$"; "i") | not))
       elif type == "string" then gsub("bst1\\.[A-Za-z0-9_.=-]*"; "[token]") else . end);
     {check: $check, status: $status, detail: $detail, values: ($values | scrub), at: $at, version: $version, commit: $commit}') ||
     fail "the result of $check has values that are not JSON"
@@ -104,7 +105,8 @@ m6_check() {
   )
   rc=$?
   if [ "$errexit" = 1 ]; then set -e; fi
-  if [ "$rc" = 0 ] && [ "$(m6_results_of "$name")" -gt "$before" ]; then
+  # A fail its caller swallowed (x=$(…) || true) still fails the check.
+  if [ "$rc" = 0 ] && [ ! -s "$M6_FAIL_FILE" ] && [ "$(m6_results_of "$name")" -gt "$before" ]; then
     return 0
   fi
   M6_STOPPED=$name
@@ -214,20 +216,23 @@ m6_queue_wait() {
   fail "the bank's queue never drained ($n operation(s) left)"
 }
 
-# m6_tick <who>: `jobs tick --json` there, its envelope on stdout. A tick
-# skipped because another runs (the scheduler's) is no tick: it is tried
-# again every M6_TICK_EVERY s (5) for M6_TICK_WAIT s (120), then fails.
+# m6_tick <who>: `jobs tick --json` there, its envelope on stdout. A
+# skipped tick (another one running, the scheduler's; a maintenance) is no
+# tick: it is tried again every M6_TICK_EVERY s (5) for M6_TICK_WAIT s
+# (120), then fails. A tick that did not succeed (ok not true) fails.
 m6_tick() {
   local who=$1 out rc deadline=$((SECONDS + ${M6_TICK_WAIT:-120}))
   while :; do
     rc=0
     out=$(m6_on "$who" jobs tick --json < /dev/null) || rc=$?
     out=$(m6_json "jobs tick on $who (exit $rc)" "$out") || exit 1
-    if [ "$(jq -r '.data.reason // ""' <<<"$out")" != "another tick is running" ]; then
+    jq -e '.ok == true' > /dev/null <<<"$out" ||
+      fail "jobs tick on $who did not succeed (exit $rc): $(jq -r '.error.message // .data.status // "no message"' <<<"$out" | m6_scrub)"
+    if [ "$(jq -r '.data.status // ""' <<<"$out")" != skipped ]; then
       printf '%s\n' "$out"
       return 0
     fi
-    [ "$SECONDS" -lt "$deadline" ] || fail "jobs tick on $who: another tick was still running after ${M6_TICK_WAIT:-120} s"
+    [ "$SECONDS" -lt "$deadline" ] || fail "jobs tick on $who: still skipped ($(jq -r '.data.reason // ""' <<<"$out")) after ${M6_TICK_WAIT:-120} s"
     sleep "${M6_TICK_EVERY:-5}"
   done
 }
@@ -337,10 +342,6 @@ m6_check_ssh_unknown_host_key() {
   m6_sh srv 'test -d "$HOME" && test ! -e "$HOME/.local/share/backsight"' ||
     fail "the server already holds ~/.local/share/backsight (or cannot be read): the check would prove nothing"
   before=$(m6_hash a "$kh")
-  # The user's login key, as ssh-copy-id installs it: what is refused below
-  # is the host key alone.
-  m6_get a "$h/.ssh/id_ed25519.pub" | m6_sh srv 'mkdir -p -m 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' ||
-    fail "cannot authorize A's key for bs on the server"
   pl_untraced printf 'mock-not-a-key\n' | m6_put a "$h/mock-key" || fail "cannot write A's mock key"
   m6_install_args
   out=$(m6_on a "${M6_I[@]}" < /dev/null 2> "$M6_WORK/unknown-host.err") || rc=$?
@@ -437,9 +438,12 @@ m6_check_ssh_install() {
     fail "doctor on A reports errors: $(jq -c '[.data.checks[]? | select(.status == "error") | {id, summary}]' <<<"$doc")"
   [ "$(jq -r '[.data.checks[] | select(.id == "server-id") | .status][0]' <<<"$doc")" = ok ] ||
     fail "doctor's server-id on A: $(jq -c '[.data.checks[] | select(.id == "server-id")]' <<<"$doc")"
-  # server-reach is info at best (never ok): present, and no warning.
-  case $(jq -r '[.data.checks[] | select(.id == "server-reach") | .status][0] // "missing"' <<<"$doc") in
-    info | ok) ;;
+  # server-id ok is a live read of the server's id (retain.CheckServer):
+  # it carries the proof that A reaches the server. server-reach, info at
+  # best (never ok), must be evaluated (not skipped) and not warn.
+  case $(jq -r '[.data.checks[] | select(.id == "server-reach") | "\(.status) \(.summary // "")"][0] // "missing"' <<<"$doc") in
+    "info skipped"* | "ok skipped"*) fail "doctor's server-reach on A was skipped: $(jq -c '[.data.checks[] | select(.id == "server-reach")]' <<<"$doc")" ;;
+    info\ * | ok\ *) ;;
     *) fail "doctor's server-reach on A: $(jq -c '[.data.checks[] | select(.id == "server-reach")]' <<<"$doc")" ;;
   esac
   # For timers: A's tick timer right after the install.
@@ -473,7 +477,7 @@ m6_check_ssh_changed_host_key() {
   out=$(m6_json "the plan on A with a changed key (exit $rc)" "$out") || exit 1
   msg=$(jq -r '.error.message // ""' <<<"$out")
   [ "$rc" = 20 ] || fail "the plan with a changed host key: exit $rc, want 20 ($msg)"
-  case $msg in *changed*) ;; *) fail "the refusal does not say the key changed: $msg" ;; esac
+  case $msg in *"changed since"*) ;; *) fail "the refusal does not say the key changed: $msg" ;; esac
   case $(jq -c .error <<<"$out") in *"ssh-keygen -R"*) fail "the refusal tells to remove the old key (ssh-keygen -R): $msg" ;; esac
   [ "$(m6_hash a "$kh")" = "$before" ] || fail "A's known_hosts changed"
   [ "$(m6_hash srv "$cfg")" = "$cfg_before" ] || fail "the server's config.toml changed"
