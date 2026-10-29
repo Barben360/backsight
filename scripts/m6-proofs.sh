@@ -187,7 +187,8 @@ m6_doc() {
 
 # m6_facts <docid>: how many facts (memory units but observations) the
 # server holds from that document, read with B's key. Any answer but 200,
-# or a page that does not hold them all, fails: it never reads as fewer.
+# a page that does not hold them all, or an item of another document,
+# fails: it never reads as fewer, nor as more.
 m6_facts() {
   local out code server
   server=$(m6_server) || exit 1
@@ -203,6 +204,12 @@ m6_facts() {
     rm -f "$out"
     fail "the memories of $1: $code read"
   }
+  # A server that ignored the filter would count another document's.
+  code=$(jq -r --arg d "$1" '[.items[] | select(.document_id != $d) | .document_id // "none"] | unique | join(", ")' < "$out")
+  if [ -n "$code" ]; then
+    rm -f "$out"
+    fail "the memories listed for $1 include another document's ($code)"
+  fi
   jq '[.items[] | select(.fact_type != "observation")] | length' < "$out"
   rm -f "$out"
 }
@@ -415,10 +422,26 @@ until (set -C; printf '{"pid":%d,"command":"bs-m6 bench retain_since","since":"%
   sleep 0.1
 done
 trap 'rm -f "$s/locks/state.lock"' EXIT
-jq --arg at "$at" 'if (.retain_since // "") == "" or .retain_since > $at then .retain_since = $at else . end' "$s/state.json" > "$s/state.json.bs-m6" &&
-  mv "$s/state.json.bs-m6" "$s/state.json"
+if jq --arg at "$at" 'if (.retain_since // "") == "" or .retain_since > $at then .retain_since = $at else . end' "$s/state.json" > "$s/state.json.bs-m6" &&
+  mv "$s/state.json.bs-m6" "$s/state.json"; then exit 0; fi
+rm -f "$s/state.json.bs-m6"
+exit 1
 EOF
   )" || fail "cannot move $who's retain_since back to $at (the state lock stayed held, or state.json did not read)"
+}
+
+# m6_scheduler <who>: the scheduler answer (on, off) that machine's last
+# setup recorded (setup.json), the one a reconnect keeps: the VM bench's A
+# runs its timers, B and the CI chain's homes answered off. None recorded
+# fails rather than guessing.
+m6_scheduler() {
+  local f v
+  f=$(m6_paths "$1" | jq -r .state)/setup.json
+  v=$(m6_sh "$1" "if [ -e $(m6_q "$f") ]; then cat $(m6_q "$f"); fi" | jq -r '.answers.scheduler // empty' 2> /dev/null || true)
+  case $v in
+    on | off) printf '%s\n' "$v" ;;
+    *) fail "$1's setup recorded no scheduler answer" ;;
+  esac
 }
 
 # m6_banks_code: the HTTP code of the banks list on B's server with B's key.
@@ -919,7 +942,13 @@ m6_check_key_rotation() {
   esac
   [ "$(m6_hash b "$sec")" = "$sec_before" ] || fail "the refused connect changed B's secrets.toml"
   m6_sh b "rm -f $(m6_q "$old")" || fail "cannot remove the old token on B"
-  # The new token, to each PC (0600, removed once used).
+  # The new token, to each PC (0600, removed once used, and on any way
+  # out of the check: a fail must not leave it on a machine).
+  # The paths are expanded now: the function's locals are gone by the time
+  # its subshell exits.
+  trap "m6_sh srv $(m6_q "rm -f $(m6_q "$state/bench-token2")") > /dev/null 2>&1 || true
+    m6_sh a $(m6_q "rm -f $(m6_q "$(m6_home a)/token2")") > /dev/null 2>&1 || true
+    m6_sh b $(m6_q "rm -f $(m6_q "$(m6_home b)/token2")") > /dev/null 2>&1 || true" EXIT
   for who in b a; do
     tok=$(m6_home "$who")/token2
     m6_get srv "$state/bench-token2" | m6_put "$who" "$tok" || fail "cannot copy the new token to $who"
@@ -929,8 +958,7 @@ m6_check_key_rotation() {
   for who in b a; do
     tok=$(m6_home "$who")/token2
     cb=$(m6_cursors "$who" | grep -v ' \./kr-') || fail "$who has no session cursor: a reset would prove nothing"
-    ask=(--answer consent=yes --answer backfill=no --answer retention=keep)
-    if [ "$who" = b ]; then ask+=(--answer scheduler=off); fi
+    ask=(--answer consent=yes --answer backfill=no --answer retention=keep --answer "scheduler=$(m6_scheduler "$who")")
     rc=0
     out=$(m6_on "$who" connect --token-file "$tok" "${ask[@]}" --non-interactive --json < /dev/null 2> "$M6_WORK/connect2-$who.err") || rc=$?
     m6_sh "$who" "rm -f $(m6_q "$tok")" || fail "cannot remove the new token on $who"
@@ -986,6 +1014,6 @@ m6_check_timers() {
     sleep "${M6_TIMERS_EVERY:-30}"
   done
   [ "$status" = 0 ] || fail "$svc's last run exited $status"
-  m6_result timers PASS "$unit active after the install; $svc ran $((exit_at - at)) s after it, exit 0" \
+  m6_result timers PASS "$unit active after the install; $svc ran $((exit_at - at)) s after the install$([ "$after" -le 0 ] || printf " and %s s after key-rotation's new key" "$((exit_at - after))"), exit 0" \
     "$(jq -cn --arg u "$unit" --argjson after "$((exit_at - at))" '{unit: $u, ran_after_install_s: $after}')"
 }

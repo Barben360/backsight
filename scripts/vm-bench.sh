@@ -674,9 +674,10 @@ vb_authorize_a() {
 # its own keys, and no token stays in B's home (two-clients' and
 # key-rotation's).
 vb_run_end() {
+  # First: a later step that fails must not leave a token behind.
+  rm -f "$(vb_b_home)/token" "$(vb_b_home)/token2"
   vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true
   vb_untrust_new_key
-  rm -f "$(vb_b_home)/token" "$(vb_b_home)/token2"
 }
 
 # vb_results_table <jsonl>: one markdown row a check.

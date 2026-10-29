@@ -765,7 +765,23 @@ func TestM6LiveSinceOnlyMovesRetainSinceBack(t *testing.T) {
 			t.Errorf("%s: left behind %v %v", tc.name, left, tmp)
 		}
 	}
-	dir := setup(`,"retain_since":"2020-01-02T03:04:05Z"`)
+	// state.json that jq cannot read: the helper fails and leaves neither
+	// a temp file nor its lock.
+	dir := setup("")
+	writeLines(t, filepath.Join(dir, "a", "state", "state.json"), "{not json")
+	if _, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_live_since a 150`); code == 0 || !strings.Contains(stderr, "FAIL: cannot move a's retain_since back") {
+		t.Errorf("unreadable state.json: exit %d, stderr:\n%s", code, stderr)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "a", "state", "locks", "*")); len(left) > 0 {
+		t.Errorf("unreadable state.json: the lock stayed: %v", left)
+	}
+	if tmp, _ := filepath.Glob(filepath.Join(dir, "a", "state", "state.json?*")); len(tmp) > 0 {
+		t.Errorf("unreadable state.json: a temp file stayed: %v", tmp)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "a", "state", "state.json")); string(raw) != "{not json\n" {
+		t.Errorf("unreadable state.json was replaced: %q", raw)
+	}
+	dir = setup(`,"retain_since":"2020-01-02T03:04:05Z"`)
 	if _, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_live_since a 150`); code != 0 {
 		t.Fatalf("earlier: exit %d, stderr:\n%s", code, stderr)
 	}
@@ -857,7 +873,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 	for _, tc := range []struct {
 		name, after, want string
 	}{
-		{"a key change at 2000", "2000", "bs-m6 timers: PASS backsight-tick.timer active after the install; backsight-tick.service ran 1100 s after it, exit 0"},
+		{"a key change at 2000", "2000", "bs-m6 timers: PASS backsight-tick.timer active after the install; backsight-tick.service ran 1100 s after the install and 100 s after key-rotation's new key, exit 0"},
 		{"no key change", "", "bs-m6 timers: FAIL backsight-tick.service's last run exited 1"},
 	} {
 		dir := t.TempDir()
@@ -899,6 +915,139 @@ func TestVMBenchRunEndRemovesBsTokens(t *testing.T) {
 	if calls := benchCalls(t, fakes, "virsh"); !strings.Contains(strings.Join(calls, "\n"), "domif-setlink bs-m6-client") {
 		t.Errorf("the run's end did not bring A's link up: virsh calls %q", calls)
 	}
+	// The tokens go first: a later step that stops the trap leaves none.
+	for _, n := range []string{"token", "token2"} {
+		writeLines(t, filepath.Join(bench, "client-b", n), "x")
+	}
+	vmBench(t, fakes, t.TempDir(), bench, `vb_untrust_new_key() { false; }; vb_run_end`)
+	for _, n := range []string{"token", "token2"} {
+		if _, err := os.Stat(filepath.Join(bench, "client-b", n)); err == nil {
+			t.Errorf("client-b/%s stayed when a later step of the run's end failed", n)
+		}
+	}
+}
+
+// m6KeyRotationFake is each machine's backsight for key-rotation, by WHO:
+// paths under its home, the server's rotation writing the new token, a
+// queued note, the old key's partial tick, the old token refused, and the
+// new token's connect ok (same-server) but on the machine <T>/fails names.
+// It logs every call to <T>/calls.
+const m6KeyRotationFake = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+echo "$WHO $*" >> "$t/calls"
+case "$*" in
+  "paths --json") printf '{"ok":true,"data":{"state":"%s/state","config_file":"%s/config.toml","secrets_file":"%s/secrets.toml"}}\n' "$HOME" "$HOME" "$HOME" ;;
+  "server token --rotate --out "*) out=${4#--out }; out=$5; umask 077; echo bst1.new > "$out"; echo '{"ok":true,"data":{}}' ;;
+  store*) echo '{"ok":true,"data":{"status":"queued","document":"note:1"}}' ;;
+  "jobs tick --json") echo '{"ok":false,"data":{"status":"partial","sessions":{"retry":1},"notes":{"sent":0,"kept":1}},"error":{"code":20,"message":"401"}}'; exit 20 ;;
+  "connect --token-file "*/token\ *) echo '{"ok":false,"error":{"code":20,"message":"the server rejected this token'"'"'s key (rotated?): ask the host"}}'; exit 20 ;;
+  "connect --token-file "*/token2\ *)
+    if [ "$WHO" != "$(cat "$t/fails")" ]; then echo '{"ok":true,"data":{"situation":"same-server"}}'; exit 0; fi
+    echo '{"ok":false,"error":{"code":20,"message":"'"$WHO"' could not connect"}}'; exit 20 ;;
+  *) echo '{"ok":false}'; exit 1 ;;
+esac
+`
+
+// m6KeyRotationCurl: the banks list answers 200 once, then 401 (the
+// rotated key); every document is absent.
+const m6KeyRotationCurl = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+for a in "$@"; do last=$a; done
+case $last in
+  */banks) n=$(($(cat "$t/banks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$t/banks"
+    if [ "$n" = 1 ]; then printf 200; else printf 401; fi ;;
+  *) printf 404 ;;
+esac
+`
+
+// key-rotation reconnects each PC with the scheduler answer its own setup
+// recorded (A on, B off: the CI chain's homes answer off), never one
+// tied to the driver; whatever step fails after the new token was handed
+// out, the token is removed on every machine.
+func TestM6KeyRotationKeepsEachSchedulerAndRemovesTheNewToken(t *testing.T) {
+	run := func(fails string) (stdout, stderr, calls, dir string) {
+		dir = t.TempDir()
+		m6Lib(t, dir, m6TestDriver, "true")
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), m6KeyRotationFake)
+		writeExec(t, filepath.Join(dir, "bin", "curl"), m6KeyRotationCurl)
+		writeLines(t, filepath.Join(dir, "fails"), fails)
+		for who, sched := range map[string]string{"a": "on", "b": "off", "srv": ""} {
+			if err := os.MkdirAll(filepath.Join(dir, who, "state", "cursors"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeLines(t, filepath.Join(dir, who, "state", "state.json"), `{"schema_version":1}`)
+			writeLines(t, filepath.Join(dir, who, "state", "cursors", "tc-"+who+".json"), `{"last_uuid":"tc-r3"}`)
+			if sched != "" {
+				writeLines(t, filepath.Join(dir, who, "state", "setup.json"), `{"answers":{"scheduler":"`+sched+`","consent":"yes"}}`)
+			}
+		}
+		writeLines(t, filepath.Join(dir, "b", "config.toml"), "[server]", `url = "http://10.0.0.9:8888"`, `bank = "bk"`)
+		writeLines(t, filepath.Join(dir, "b", "secrets.toml"), `api_key = "old"`)
+		if err := os.WriteFile(filepath.Join(dir, "b", "token"), []byte("bst1.old\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, _ = m6Lib(t, dir, m6TestDriver, `m6_check key-rotation m6_check_key_rotation`, "M6_TICK_EVERY=0", "M6_LOCK_WAIT=3")
+		raw, _ := os.ReadFile(filepath.Join(dir, "calls"))
+		return stdout, stderr, string(raw), dir
+	}
+	tokensGone := func(name, dir string) {
+		for _, f := range []string{filepath.Join("a", "token2"), filepath.Join("b", "token2"), filepath.Join("srv", "state", "bench-token2")} {
+			if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+				t.Errorf("%s: %s stayed after the check failed", name, f)
+			}
+		}
+	}
+	// A fails: both connects ran, each with its machine's own answer.
+	stdout, stderr, calls, dir := run("a")
+	if !strings.HasPrefix(stdout, "bs-m6 key-rotation: FAIL connect on a with the new token: exit 20 (a could not connect)") {
+		t.Fatalf("A failing: stdout %q; stderr:\n%s", stdout, stderr)
+	}
+	var connects []string
+	for _, l := range strings.Split(calls, "\n") {
+		if strings.Contains(l, "connect --token-file") && strings.Contains(l, "/token2 ") {
+			connects = append(connects, l)
+		}
+	}
+	if len(connects) != 2 || !strings.HasPrefix(connects[0], "b ") || !strings.Contains(connects[0], "--answer scheduler=off") ||
+		!strings.HasPrefix(connects[1], "a ") || !strings.Contains(connects[1], "--answer scheduler=on") {
+		t.Errorf("the new token's connects, want B with scheduler=off then A with scheduler=on:\n%s", strings.Join(connects, "\n"))
+	}
+	tokensGone("A failing", dir)
+	// B fails first: A's copy of the new token was never used, and goes too.
+	stdout, stderr, _, dir = run("b")
+	if !strings.HasPrefix(stdout, "bs-m6 key-rotation: FAIL connect on b with the new token: exit 20 (b could not connect)") {
+		t.Fatalf("B failing: stdout %q; stderr:\n%s", stdout, stderr)
+	}
+	tokensGone("B failing", dir)
+}
+
+// m6_scheduler reads the scheduler answer that machine's setup recorded;
+// none recorded fails rather than guessing.
+func TestM6SchedulerIsTheMachinesOwnAnswer(t *testing.T) {
+	for _, tc := range []struct{ setup, want string }{
+		{`{"answers":{"scheduler":"on"}}`, "on"},
+		{`{"answers":{"scheduler":"off"}}`, "off"},
+		{`{"answers":{"consent":"yes"}}`, "FAIL: a's setup recorded no scheduler answer"},
+		{"", "FAIL: a's setup recorded no scheduler answer"},
+	} {
+		dir := t.TempDir()
+		m6Lib(t, dir, m6TestDriver, "true")
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), m6StateFake)
+		if err := os.MkdirAll(filepath.Join(dir, "a", "state"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if tc.setup != "" {
+			writeLines(t, filepath.Join(dir, "a", "state", "setup.json"), tc.setup)
+		}
+		stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `s=$(m6_scheduler a); echo "S[$s]"`)
+		if strings.HasPrefix(tc.want, "FAIL: ") {
+			if code == 0 || strings.Contains(stdout, "S[") || !strings.Contains(stderr, tc.want) {
+				t.Errorf("%q: exit %d, stdout %q, stderr:\n%s", tc.setup, code, stdout, stderr)
+			}
+		} else if code != 0 || strings.TrimSpace(stdout) != "S["+tc.want+"]" {
+			t.Errorf("%q: exit %d, stdout %q, stderr:\n%s", tc.setup, code, stdout, stderr)
+		}
+	}
 }
 
 // RF 2: a document's facts are counted from the server's memory list of
@@ -908,9 +1057,10 @@ func TestM6FactsCountsADocumentsFacts(t *testing.T) {
 	for _, tc := range []struct {
 		name, code, body, want string
 	}{
-		{"facts", "200", `{"total":3,"items":[{"fact_type":"world"},{"fact_type":"experience"},{"fact_type":"observation"}]}`, "2"},
+		{"facts", "200", `{"total":3,"items":[{"fact_type":"world","document_id":"conversation:cc1"},{"fact_type":"experience","document_id":"conversation:cc1"},{"fact_type":"observation","document_id":"conversation:cc1"}]}`, "2"},
+		{"the filter ignored", "200", `{"total":2,"items":[{"fact_type":"world","document_id":"conversation:cc1"},{"fact_type":"world","document_id":"conversation:tc-a"}]}`, "FAIL: the memories listed for conversation:cc1 include another document's (conversation:tc-a)"},
 		{"none", "200", `{"total":0,"items":[]}`, "0"},
-		{"a short page", "200", `{"total":600,"items":[{"fact_type":"world"}]}`, "FAIL: the memories of conversation:cc1: 1 of 600 read"},
+		{"a short page", "200", `{"total":600,"items":[{"fact_type":"world","document_id":"conversation:cc1"}]}`, "FAIL: the memories of conversation:cc1: 1 of 600 read"},
 		{"401", "401", `{}`, "FAIL: reading the memories of conversation:cc1: HTTP 401"},
 		{"refused", "refused", `{}`, "FAIL: reading the memories of conversation:cc1: HTTP 000"},
 	} {
@@ -944,7 +1094,8 @@ func TestVMBenchRunRebuildsBeforeTheFirstCheck(t *testing.T) {
 	// version check.
 	writeExec(t, filepath.Join(fakes, "make"), `#!/bin/sh
 d=$(dirname "$0")
-echo make >> "$d/order"
+echo "make $*" >> "$d/order"
+[ ! -e "$d/make-fails" ] || exit 2
 for a in "$@"; do case $a in OUT=*) printf 'built-this-run\n' > "${a#OUT=}" ;; esac; done
 `)
 	writeExec(t, filepath.Join(fakes, "ssh"), `#!/bin/sh
@@ -973,12 +1124,13 @@ exit 0
 	writeLines(t, filepath.Join(root, "LICENSE"), "l")
 	writeLines(t, filepath.Join(root, "README.md"), "r")
 	writeLines(t, filepath.Join(root, "scripts", "m6-proofs.sh"), `m6_check() { echo "check $1" >> "$ORDER"; }`)
-	_, stderr, code := vmBench(t, fakes, t.TempDir(), bench, `VB_ROOT=`+root+`
+	script := `VB_ROOT=` + root + `
 vb_is_up() { :; }
 vb_reset() { echo reset >> "$ORDER"; }
 vb_b_claude() { :; }
 vb_authorize_a() { :; }
-vb_run two-clients`, "ORDER="+order)
+vb_run two-clients`
+	_, stderr, code := vmBench(t, fakes, t.TempDir(), bench, script, "ORDER="+order)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
 	}
@@ -1006,5 +1158,20 @@ vb_run two-clients`, "ORDER="+order)
 	}
 	if calls := strings.Join(benchCalls(t, fakes, "minisign"), "\n"); !strings.Contains(calls, "-S ") {
 		t.Errorf("the release was not signed: minisign calls %q", calls)
+	}
+	// The build trusts the bench's minisign key (a testkey build).
+	if build < 0 || !strings.Contains(lines[build], "TEST_KEY=RWPUB") || !strings.Contains(lines[build], "VERSION=0.940.0") {
+		t.Errorf("the build does not trust the bench's key: %q", lines[max(build, 0)])
+	}
+	// A failing build stops the run before any check.
+	writeLines(t, filepath.Join(fakes, "make-fails"), "x")
+	if err := os.Remove(order); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := vmBench(t, fakes, t.TempDir(), bench, script, "ORDER="+order); code == 0 || !strings.Contains(stderr, "make build failed") {
+		t.Errorf("a failing build: exit %d, stderr %q", code, stderr)
+	}
+	if raw, _ := os.ReadFile(order); strings.Contains(string(raw), "check ") {
+		t.Errorf("a check ran after a failing build:\n%s", raw)
 	}
 }
