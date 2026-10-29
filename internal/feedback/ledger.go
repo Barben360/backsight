@@ -1,14 +1,10 @@
 package feedback
 
 import (
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io/fs"
-	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -59,60 +55,13 @@ type Hidden struct {
 // and unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
 // JournalAt where the journal ended when it was read for this ledger,
 // HistoryImported when an import of earlier history last went through
-// every source (zero: never), ImportKeys the keys of the imported shows
-// it counted.
+// every source (zero: never).
 type Ledger struct {
 	Schema          int              `json:"schema"`
 	Watermark       time.Time        `json:"watermark,omitzero"`
 	JournalAt       JournalPos       `json:"journal_at,omitzero"`
 	HistoryImported time.Time        `json:"history_imported,omitzero"`
-	ImportKeys      ImportKeys       `json:"import_keys,omitempty"`
 	Memories        map[string]Entry `json:"memories"`
-}
-
-// ImportKeys is a set of import keys, each held as its 64-bit FNV-1a
-// hash: an imported show counts once even when two imports journaled it
-// (a manual import beside the tick's). Written as the hashes in order,
-// 8 bytes each, in base64.
-type ImportKeys map[uint64]struct{}
-
-// add puts key in k and reports whether it was not there yet.
-func (k *ImportKeys) add(key string) bool {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(key))
-	sum := h.Sum64()
-	if _, ok := (*k)[sum]; ok {
-		return false
-	}
-	if *k == nil {
-		*k = ImportKeys{}
-	}
-	(*k)[sum] = struct{}{}
-	return true
-}
-
-func (k ImportKeys) MarshalJSON() ([]byte, error) {
-	raw := make([]byte, 0, 8*len(k))
-	for _, sum := range slices.Sorted(maps.Keys(k)) {
-		raw = binary.BigEndian.AppendUint64(raw, sum)
-	}
-	return json.Marshal(base64.StdEncoding.EncodeToString(raw))
-}
-
-func (k *ImportKeys) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err != nil {
-		return err
-	}
-	raw, err := base64.StdEncoding.DecodeString(s)
-	if err != nil || len(raw)%8 != 0 {
-		return fmt.Errorf("import_keys: not a list of 8-byte hashes")
-	}
-	*k = make(ImportKeys, len(raw)/8)
-	for i := 0; i < len(raw); i += 8 {
-		(*k)[binary.BigEndian.Uint64(raw[i:])] = struct{}{}
-	}
-	return nil
 }
 
 // JournalPos is a place in dir's journal: a month file's base name and a
@@ -142,13 +91,13 @@ func journalEnd(dir string) JournalPos {
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
 
 // Apply adds a settle event's shows to the ledger, adds an import event's
-// shows and credits (to Imported too) whose keys it has not counted yet,
-// drops a forget event's memories, counts a retire, sets a hide, or
-// clears both on an unhide (of a memory with an entry only). A settle or
-// an import decays under the half-lives it recorded, p's when it recorded
-// none, each show from its own time; a forgotten show counts nowhere, an
-// import never counts a miss. Sums decay order-independently, so applying
-// events as they come and folding them all later agree.
+// shows and credits (to Imported too), drops a forget event's memories,
+// counts a retire, sets a hide, or clears both on an unhide (of a memory
+// with an entry only). A settle or an import decays under the half-lives
+// it recorded, p's when it recorded none, each show from its own time; a
+// forgotten show counts nowhere, an import never counts a miss. Sums
+// decay order-independently, so applying events as they come and folding
+// them all later agree.
 func (l *Ledger) Apply(e Event, p Params) {
 	if l.Memories == nil {
 		l.Memories = map[string]Entry{}
@@ -167,7 +116,7 @@ func (l *Ledger) Apply(e Event, p Params) {
 		}
 		p = p.recorded(e.Params)
 		for _, s := range e.Settled {
-			if s.Outcome != OutcomeShown && s.Outcome != OutcomeCredit || !l.ImportKeys.add(s.Key) {
+			if s.Outcome != OutcomeShown && s.Outcome != OutcomeCredit {
 				continue
 			}
 			m := l.Memories[s.ID].settled(s, p)
@@ -243,8 +192,8 @@ func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Ho
 
 // Fold is the ledger of events' settle, import, forget, retire, hide and
 // unhide events, applied in
-// (ts, seq) order, each settle key and each import key once; its
-// watermark is the last settle's time.
+// (ts, seq) order, each settle key once; its watermark is the last
+// settle's time.
 func Fold(events []Event, p Params) Ledger {
 	l := newLedger()
 	applied := map[string]bool{}

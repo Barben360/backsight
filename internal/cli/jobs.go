@@ -269,7 +269,7 @@ var importTickBudget = 60 * time.Second
 // through every source (the ledger's HistoryImported). A run cut short
 // keeps what it journaled, and the next tick goes on. Best effort: what
 // it did, "" when there is nothing to do (feedback off, done already, the
-// ledger unreadable).
+// ledger unreadable) or another import is running.
 func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config) string {
 	if !cfg.Feedback.Enabled {
 		return ""
@@ -279,9 +279,11 @@ func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 	}
 	ctx, cancel := context.WithTimeout(ctx, importTickBudget)
 	defer cancel()
-	res, err := importHistory(ctx, d, home, time.Time{}, false)
+	res, err := importHistory(ctx, d, home, time.Time{}, false, "jobs tick")
 	shows, credits := res.totals()
 	switch {
+	case errors.As(err, new(importRunning)):
+		return "" // the run in progress reports
 	case err != nil:
 		return "earlier history not imported (" + err.Error() + ")"
 	case !res.Complete:

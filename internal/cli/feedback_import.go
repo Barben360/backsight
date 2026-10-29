@@ -86,7 +86,7 @@ func newFeedbackImportCmd(e *env) *cobra.Command {
 			"times it was shown there, and, from telemetry only, a credit for a turn whose reply cited memory and that showed exactly " +
 			"one. It never counts a miss. Imported counts stay apart (feedback rebuild --no-import leaves them out), a show already " +
 			"imported or journaled live is not counted again, and ids the server no longer knows are dropped (checked read-only). The " +
-			"jobs tick runs it until one run goes through every source. --plan counts per source and writes nothing.",
+			"jobs tick runs it until one run goes through every source; one import runs at a time. --plan counts per source and writes nothing.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var from time.Time
@@ -101,7 +101,10 @@ func newFeedbackImportCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := importHistory(cmd.Context(), d, home, from, plan)
+			res, err := importHistory(cmd.Context(), d, home, from, plan, "feedback import")
+			if running := (importRunning{}); errors.As(err, &running) {
+				err = &output.Error{Code: output.Blocked, Message: running.Error()}
+			}
 			return e.report("feedback import", res, func() string { return importText(res) }, err)
 		},
 	}
@@ -121,8 +124,10 @@ var afterImportUnit func()
 // first, then each transcript, so that a run ctx cuts short has kept
 // what it did and the next one goes on (keys make it idempotent). A run
 // that goes through every source journals the mark of a complete import.
-// Refused while feedback is off.
-func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Time, plan bool) (importResult, error) {
+// Refused while feedback is off. One run at a time, as command, under
+// the import lock: beside a run that holds it, importRunning and nothing
+// done (a plan, which writes nothing, takes no lock).
+func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Time, plan bool, command string) (importResult, error) {
 	res := importResult{Plan: plan, Sources: map[string]*importSource{sourceTelemetry: {}, sourceTranscripts: {}}}
 	if !from.IsZero() {
 		res.Since = from.Format("2006-01-02")
@@ -138,6 +143,15 @@ func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Tim
 	}
 	if !cfg.Feedback.Enabled {
 		return res, &output.Error{Code: output.NeedsUser, Message: "feedback is off on this machine (feedback.enabled = false in config.toml): nothing records which memories are used, so there is nothing to import into"}
+	}
+	if !plan {
+		// Taken before the journal is read: what a run before it
+		// journaled counts as imported already.
+		release, err := lockImport(d, command)
+		if err != nil {
+			return res, err
+		}
+		defer release()
 	}
 	dir := d.FeedbackDir()
 	journal, _, err := feedback.Read(dir, time.Time{})
@@ -199,6 +213,28 @@ func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Tim
 	}
 	res.Complete = true
 	return res, nil
+}
+
+// importRunning: another import holds the import lock (by: its command).
+type importRunning struct{ by string }
+
+func (e importRunning) Error() string {
+	return "an import of earlier history is already running (" + e.by + "): try again when it is over"
+}
+
+// lockImport takes <state>/locks/feedback-import.lock for command,
+// without waiting, breaking a lock whose owner is gone; importRunning
+// while a live owner holds it.
+func lockImport(d paths.Dirs, command string) (release func(), err error) {
+	l, _, err := state.Acquire(filepath.Join(d.LocksDir(), "feedback-import.lock"), command)
+	var held *state.HeldError
+	if errors.As(err, &held) {
+		return nil, importRunning{by: held.Owner.Command}
+	}
+	if err != nil {
+		return nil, blocked(err)
+	}
+	return func() { _ = l.Release() }, nil
 }
 
 // historyImport is one run of importHistory, unit after unit.

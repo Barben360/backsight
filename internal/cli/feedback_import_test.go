@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 const (
@@ -453,5 +456,66 @@ func TestImportNeedsFeedbackOn(t *testing.T) {
 	}
 	if _, err := os.Stat(pathsOf(home).FeedbackDir()); err == nil {
 		t.Error("feedback off: the feedback directory was written")
+	}
+}
+
+// One import runs at a time: a manual import beside the tick's would
+// journal the same shows twice. While a run holds the import lock, a
+// second does nothing: the command says so (exit 20), the tick says
+// nothing, --plan (which writes nothing) still runs; the first goes on,
+// and each key is journaled once.
+func TestOneImportRunsAtATime(t *testing.T) {
+	home := devInstall(t, true)
+	history(t, home)
+	d := pathsOf(home)
+	lock, err := state.TryAcquire(filepath.Join(d.LocksDir(), "feedback-import.lock"), "jobs tick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "feedback", "import", "--json")
+	if code != output.Blocked || !strings.Contains(out, "already running (jobs tick)") {
+		t.Errorf("manual import beside a running one: exit %d\n%s", code, out)
+	}
+	if r := tickOf(t); r.History != "" {
+		t.Errorf("tick beside a running import: %q", r.History)
+	}
+	if code, out, _ := run(t, "feedback", "import", "--plan"); code != output.OK {
+		t.Errorf("--plan beside a running import: exit %d\n%s", code, out)
+	}
+	if n := len(importEvents(t, home)); n != 0 || importMarks(t, home) != 0 {
+		t.Errorf("%d events, %d marks journaled beside a running import", n, importMarks(t, home))
+	}
+	_ = lock.Release()
+
+	var second error
+	tried := false
+	afterImportUnit = func() {
+		if !tried { // inside the first run, its telemetry journaled
+			tried = true
+			if _, second = importHistory(context.Background(), d, home, time.Time{}, false, "feedback import"); second == nil {
+				second = errors.New("ran beside the first")
+			}
+		}
+	}
+	t.Cleanup(func() { afterImportUnit = nil })
+	if r := tickOf(t); r.History != "earlier history imported: 5 shows and 1 credits" {
+		t.Errorf("first run: %q", r.History)
+	}
+	if !errors.As(second, new(importRunning)) {
+		t.Errorf("second run beside the first: %v", second)
+	}
+	keys := map[string]int{}
+	for _, e := range importEvents(t, home) {
+		for _, s := range e.Settled {
+			keys[s.Key]++
+		}
+	}
+	for k, n := range keys {
+		if n != 1 {
+			t.Errorf("%s journaled %d times", k, n)
+		}
+	}
+	if len(keys) != 5 || importMarks(t, home) != 1 {
+		t.Errorf("%d keys, %d marks: want 5 and 1", len(keys), importMarks(t, home))
 	}
 }
