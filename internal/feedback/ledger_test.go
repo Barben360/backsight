@@ -471,3 +471,35 @@ func TestAppendFoldedJournalsWhenTheLockStaysHeld(t *testing.T) {
 		t.Errorf("journal %+v", events)
 	}
 }
+
+// The boost follows k × ((c + α) / (c + m + α + β) − α / (α + β)), with c
+// and m decayed to now: a memory with no entry, or with nothing settled,
+// scores exactly 0; credits raise it, misses lower it, both fade.
+func TestBoostFormula(t *testing.T) {
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	p := Params{Weight: 0.1, PriorCredits: 3, PriorMisses: 9, CreditHalfLife: 365 * 24 * time.Hour, MissHalfLife: 90 * 24 * time.Hour}
+	l := Ledger{Schema: LedgerSchema, Memories: map[string]Entry{
+		"used":   {Shown: 3, Credits: 3, CreditsAt: at},
+		"shown":  {Shown: 4},
+		"missed": {Shown: 2, Misses: 2, MissesAt: at},
+	}}
+	if b := l.Boost("absent", p, at); b != 0 {
+		t.Errorf("no entry: %v, want exactly 0", b)
+	}
+	if b := l.Boost("shown", p, at); b != 0 {
+		t.Errorf("shown, never settled: %v, want exactly 0", b)
+	}
+	if b, want := l.Boost("used", p, at), 0.1*(6.0/15-0.25); math.Abs(b-want) > 1e-12 {
+		t.Errorf("credits 3: %v, want %v", b, want)
+	}
+	if b, want := l.Boost("missed", p, at), 0.1*(3.0/14-0.25); math.Abs(b-want) > 1e-12 || b >= 0 {
+		t.Errorf("misses 2: %v, want %v", b, want)
+	}
+	// One miss half-life later the two misses weigh one.
+	if b, want := l.Boost("missed", p, at.Add(90*24*time.Hour)), 0.1*(3.0/13-0.25); math.Abs(b-want) > 1e-12 {
+		t.Errorf("misses decayed: %v, want %v", b, want)
+	}
+	if b := l.Boost("used", Params{PriorCredits: 3, PriorMisses: 9}, at); b != 0 {
+		t.Errorf("k = 0: %v", b)
+	}
+}

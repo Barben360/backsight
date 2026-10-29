@@ -22,12 +22,16 @@ const Schema = 1
 
 // Item is one memory of a show, with its place in the list shown and the
 // project it belongs to (empty when the path does not tell, and on lines
-// written before the field).
+// written before the field). Boost is what the ledger added to its score,
+// RankWithoutBoost its place in the same list without it (both empty when
+// recall had no ledger, and on lines written before the fields).
 type Item struct {
-	ID       string  `json:"id"`
-	Rank     int     `json:"rank,omitempty"`
-	Reranker float64 `json:"reranker,omitempty"`
-	Project  string  `json:"project,omitempty"`
+	ID               string  `json:"id"`
+	Rank             int     `json:"rank,omitempty"`
+	Reranker         float64 `json:"reranker,omitempty"`
+	Project          string  `json:"project,omitempty"`
+	Boost            float64 `json:"boost,omitempty"`
+	RankWithoutBoost int     `json:"rank_without_boost,omitempty"`
 }
 
 // Settled is the outcome a settle gave one show: credit, confident_miss,
@@ -40,7 +44,8 @@ type Settled struct {
 }
 
 // Event is one journal line. Kind is turn, shows, credit, stop, settle,
-// forget, retire, hide, unhide or stale; each kind fills the fields it needs.
+// forget, retire, hide, unhide, stale or recall (KindRecall); each kind
+// fills the fields it needs.
 // Note is the correction note a retire or hide comes with (its id, never
 // its text).
 type Event struct {
@@ -81,6 +86,16 @@ const (
 // KindStale: the memories `backsight memory stale` listed to the user.
 // The ledger does not fold it.
 const KindStale = "stale"
+
+// KindRecall: what a memory_search returned, with each hit's boost and
+// rank without it, and whether the boost changed the set or the order
+// (FlagSetChanged, FlagOrderChanged). An audit: neither settled nor
+// folded; the hook journals the same hits as shows.
+const (
+	KindRecall       = "recall"
+	FlagSetChanged   = "set_changed"
+	FlagOrderChanged = "order_changed"
+)
 
 // Common fields Append puts on every event that leaves them empty.
 type Common struct {

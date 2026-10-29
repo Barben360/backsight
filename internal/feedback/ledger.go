@@ -199,6 +199,21 @@ func (e Entry) DecayedTo(t time.Time, p Params) Entry {
 	return e
 }
 
+// Boost is what recall adds to id's score: k × ((c + α) / (c + m + α + β)
+// − α / (α + β)), c and m its credits and misses decayed to now, k, α
+// and β p's Weight, PriorCredits and PriorMisses. Between −k × α / (α + β)
+// and k × β / (α + β); exactly 0 for a memory without an entry, or with
+// nothing settled, and for priors that do not add up to a positive sum.
+func (l Ledger) Boost(id string, p Params, now time.Time) float64 {
+	m, ok := l.Memories[id]
+	a, b := p.PriorCredits, p.PriorMisses
+	if !ok || a+b <= 0 {
+		return 0
+	}
+	m = m.DecayedTo(now, p)
+	return p.Weight * ((m.Credits+a)/(m.Credits+m.Misses+a+b) - a/(a+b))
+}
+
 func laterOf(a, b time.Time) time.Time {
 	if b.After(a) {
 		return b

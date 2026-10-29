@@ -501,14 +501,16 @@ func TestOwnOwnersAreRead(t *testing.T) {
 // binary refuses a config.toml with keys it does not know.
 func TestFeedbackDefaultsAndValidation(t *testing.T) {
 	got := Default(dirs, "/home/u").Feedback
-	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10}); got != want {
+	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
+		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9}); got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 	cfg, err := Load(write(t, "[feedback]\nenabled = false\nconfident_rank = 1\nmiss_half_life_days = 0\ncredit_half_life_days = 30\nstop_check = \"cited\"\n"), dirs, "/home/u")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited", MaxRetirements: 3, StaleShows: 10}); cfg.Feedback != want {
+	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited", MaxRetirements: 3, StaleShows: 10,
+		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9}); cfg.Feedback != want {
 		t.Errorf("read %+v, want %+v", cfg.Feedback, want)
 	}
 	for body, key := range map[string]string{
@@ -552,5 +554,28 @@ func TestStaleShowsKey(t *testing.T) {
 	}
 	if _, err := Load(write(t, "[feedback]\nstale_shows = 0\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "feedback.stale_shows") {
 		t.Errorf("0: %v", err)
+	}
+}
+
+// The boost's weight k and priors α, β: defaults 0.1, 3 and 9; k = 0 turns
+// the boost off, a negative k or a prior of 0 is refused.
+func TestBoostKeysValidate(t *testing.T) {
+	f := Default(dirs, "/home/u").Feedback
+	if f.BoostWeight != 0.1 || f.PriorCredits != 3 || f.PriorMisses != 9 {
+		t.Errorf("defaults %v %v %v", f.BoostWeight, f.PriorCredits, f.PriorMisses)
+	}
+	cfg, err := Load(write(t, "[feedback]\nboost_weight = 0\nprior_credits = 0.5\nprior_misses = 20\n"), dirs, "/home/u")
+	if err != nil || cfg.Feedback.BoostWeight != 0 || cfg.Feedback.PriorCredits != 0.5 || cfg.Feedback.PriorMisses != 20 {
+		t.Errorf("read: %v %+v", err, cfg.Feedback)
+	}
+	for body, key := range map[string]string{
+		"boost_weight = -0.1": "feedback.boost_weight",
+		"prior_credits = 0":   "feedback.prior_credits",
+		"prior_credits = -1":  "feedback.prior_credits",
+		"prior_misses = 0":    "feedback.prior_misses",
+	} {
+		if _, err := Load(write(t, "[feedback]\n"+body+"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: got %v, want an error naming %s", body, err, key)
+		}
 	}
 }

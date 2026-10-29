@@ -611,7 +611,7 @@ func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
 		"\nHidden, not rewritten for 7 days\n" +
 		"55555555  shown 3  2w ago  backsight forget --restore " + staleID(5) + "\n" +
 		"99999999  shown 1  -  backsight forget --restore " + staleID(9) + "\n" +
-		"Marked hidden on this machine until the server rewrites them (recall does not skip them yet); `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
+		"Hidden on this machine, so recall here skips them, until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
 		"\nReported wrong or outdated\n" +
 		"77777777  shown 11  5d ago  backsight forget " + staleID(7) + " --purge\n" +
 		"88888888  shown 2  4d ago  backsight forget " + staleID(8) + " --purge\n" +

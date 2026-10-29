@@ -1317,3 +1317,84 @@ func TestVerdictWaitsForMaintenance(t *testing.T) {
 		t.Errorf("written during maintenance: %q", curation)
 	}
 }
+
+// recallEvents are the recall audit events of the journal.
+func recallEvents(t *testing.T, home string) []feedback.Event {
+	t.Helper()
+	return eventsOf(journalEvents(t, home), feedback.KindRecall)
+}
+
+// A memory_search journals what it returned for the session: each hit's
+// rank, rank without the boost, server's score and boost, and whether the
+// boost changed the order or the set; nothing changed, no flag.
+func TestSearchJournalsARecallAuditEvent(t *testing.T) {
+	cs, home := creditSession(t)
+	if err := feedback.SetTurn(pathsOf(home).FeedbackDir(), "S", feedback.Turn{ID: "p-7", N: 7, At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	recallAnswer = `[{"id":"m1","text":"Proj keeps PostgreSQL 16.","type":"observation","tags":["project:proj"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.72}},
+		{"id":"m2","text":"Proj moved to Postgres 16.","type":"observation","tags":["project:proj"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.70}}]`
+	if _, isErr := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}}); isErr {
+		t.Fatal("search failed")
+	}
+	evs := recallEvents(t, home)
+	if len(evs) != 1 || evs[0].Session != "S" || evs[0].Turn != "p-7" || evs[0].Path != "search" || len(evs[0].Flags) != 0 ||
+		itemsText(evs[0].Items) != "m1:1:0.72,m2:2:0.7" || evs[0].Items[0].RankWithoutBoost != 0 || evs[0].Items[0].Project != "" {
+		t.Fatalf("without a ledger: %+v", evs)
+	}
+
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m2":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
+	out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}})
+	if strings.Index(out, "m2") > strings.Index(out, "m1") {
+		t.Errorf("m2 not first:\n%s", out)
+	}
+	ev := recallEvents(t, home)[1]
+	m2, m1 := ev.Items[0], ev.Items[1]
+	if strings.Join(ev.Flags, ",") != feedback.FlagOrderChanged || m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost <= 0 ||
+		m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 {
+		t.Errorf("boosted: %+v", ev)
+	}
+	// One hit returned: m2 ranked past it without the boost.
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}, "limit": 1})
+	if ev := recallEvents(t, home)[2]; strings.Join(ev.Flags, ",") != feedback.FlagSetChanged+","+feedback.FlagOrderChanged || len(ev.Items) != 1 {
+		t.Errorf("limit 1: %+v", ev)
+	}
+	// A ledger whose boost leaves the order: no flag.
+	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m1":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}})
+	if ev := recallEvents(t, home)[3]; len(ev.Flags) != 0 || ev.Items[0].ID != "m1" || ev.Items[0].RankWithoutBoost != 1 || ev.Items[0].Boost <= 0 {
+		t.Errorf("same order: %+v", ev)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).FeedbackDir(), "journal-"+time.Now().UTC().Format("2006-01")+".jsonl")); strings.Contains(string(raw), "Postgres") {
+		t.Errorf("text in the journal:\n%s", raw)
+	}
+}
+
+// Without its session, or in a paused one, or with feedback off, a search
+// journals nothing.
+func TestSearchWithoutItsSessionJournalsNoRecall(t *testing.T) {
+	answer := `[{"id":"m1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.72}}]`
+	cs := mcpSession(t)
+	home := os.Getenv("HOME")
+	recallAnswer = answer
+	if out, _ := call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}}); !strings.Contains(out, "m1") {
+		t.Fatalf("search:\n%s", out)
+	}
+	if evs := recallEvents(t, home); len(evs) != 0 {
+		t.Errorf("no record: %+v", evs)
+	}
+	cs, home = creditSession(t)
+	recallAnswer = answer
+	_ = sessions(home).Update("S", func(st *session.State) error { st.Paused = true; return nil })
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}})
+	if evs := recallEvents(t, home); len(evs) != 0 {
+		t.Errorf("paused: %+v", evs)
+	}
+	cs, home = creditSessionWith(t, "\n[feedback]\nenabled = false\n")
+	recallAnswer = answer
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}})
+	if evs := recallEvents(t, home); len(evs) != 0 {
+		t.Errorf("feedback off: %+v", evs)
+	}
+}

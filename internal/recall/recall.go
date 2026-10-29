@@ -7,9 +7,12 @@
 package recall
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +39,9 @@ type Engine struct {
 	Timeout    time.Duration // the whole search: every call and the raw fallback
 	Now        func() time.Time
 	Boost      float64 // current-project boost; 0 = ProjectBoost (A.1 recall.project_boost)
+	// Adjust is what this machine learned of a memory: a boost added to
+	// its score, or hidden to drop it. Nil: neither.
+	Adjust func(id string) (boost float64, hidden bool)
 }
 
 // Query is one search.
@@ -61,15 +67,19 @@ type Query struct {
 
 // Hit is one merged result.
 type Hit struct {
-	ID       string    `json:"id"`
-	Text     string    `json:"text"`
-	Project  string    `json:"project"`
-	Type     string    `json:"type"`
-	Scope    string    `json:"scope"`
-	Score    float64   `json:"score"`    // reranker + current-project boost
-	Reranker float64   `json:"reranker"` // the server's score
-	Date     time.Time `json:"date"`
-	Age      string    `json:"age"`
+	ID       string  `json:"id"`
+	Text     string  `json:"text"`
+	Project  string  `json:"project"`
+	Type     string  `json:"type"`
+	Scope    string  `json:"scope"`
+	Score    float64 `json:"score"`    // reranker + current-project boost + Boost
+	Reranker float64 `json:"reranker"` // the server's score
+	// Boost: what Engine.Adjust added to Score. RankWithoutBoost: the
+	// hit's place without it, from 1; only when the engine has an Adjust.
+	Boost            float64   `json:"boost,omitempty"`
+	RankWithoutBoost int       `json:"rank_without_boost,omitempty"`
+	Date             time.Time `json:"date"`
+	Age              string    `json:"age"`
 	// Kinds: the kinds (decision, pitfall...) of the facts the memory was
 	// built from, or of the fact itself for a raw hit; only on a search that
 	// asked for them (Query.Kinds). Subagent: some of those facts came from
@@ -183,26 +193,60 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 			if q.GlobalMinReranker > 0 && h.Reranker < q.GlobalMinReranker && !e.near(q, h.Project) {
 				continue
 			}
-			if prev, ok := best[h.ID]; h.Score >= q.MinScore && h.Reranker >= q.MinReranker && (!ok || h.Score > prev.Score) {
+			if prev, ok := best[h.ID]; h.Reranker >= q.MinReranker && (!ok || h.Score > prev.Score) {
 				best[h.ID] = h
 			}
 		}
 		res.Scopes[a.scope] = m
 	}
-	for _, h := range best {
-		res.Hits = append(res.Hits, h)
-	}
-	sort.Slice(res.Hits, func(i, j int) bool {
-		if res.Hits[i].Score != res.Hits[j].Score {
-			return res.Hits[i].Score > res.Hits[j].Score
-		}
-		return res.Hits[i].ID < res.Hits[j].ID
-	})
+	res.Hits = e.adjust(best, q.MinScore)
 	if q.Limit > 0 && len(res.Hits) > q.Limit {
 		res.Hits = res.Hits[:q.Limit]
 	}
 	return res
 }
+
+// adjust applies Engine.Adjust to the merged hits, after the floors on
+// the server's score: hidden ones are dropped, each boost is added to its
+// score, which MinScore then sees. The hits come best first, each with its
+// RankWithoutBoost when the engine has an Adjust.
+func (e *Engine) adjust(best map[string]Hit, minScore float64) []Hit {
+	var hits []Hit
+	base := map[string]float64{} // the score without the boost
+	for _, h := range best {
+		base[h.ID] = h.Score
+		if e.Adjust != nil {
+			b, hidden := e.Adjust(h.ID)
+			if hidden {
+				continue
+			}
+			if b = round4(b); b != 0 {
+				h.Boost, h.Score = b, round4(h.Score+b)
+			}
+		}
+		if h.Score >= minScore {
+			hits = append(hits, h)
+		}
+	}
+	byScore := func(score func(Hit) float64) func(a, b Hit) int {
+		return func(a, b Hit) int {
+			if c := cmp.Compare(score(b), score(a)); c != 0 {
+				return c
+			}
+			return strings.Compare(a.ID, b.ID)
+		}
+	}
+	if e.Adjust != nil {
+		slices.SortFunc(hits, byScore(func(h Hit) float64 { return base[h.ID] }))
+		for i := range hits {
+			hits[i].RankWithoutBoost = i + 1
+		}
+	}
+	slices.SortFunc(hits, byScore(func(h Hit) float64 { return h.Score }))
+	return hits
+}
+
+func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
 
 type answer struct {
 	scope string

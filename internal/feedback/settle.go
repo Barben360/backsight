@@ -32,12 +32,14 @@ const (
 	settleWindow = 62 * 24 * time.Hour
 )
 
-// Params are the values settling and folding use; a half-life of 0 means
-// no decay.
+// Params are the values settling, folding and the boost use; a half-life
+// of 0 means no decay. Weight (k) and the priors PriorCredits (α) and
+// PriorMisses (β) shape Ledger.Boost.
 type Params struct {
-	ConfidentRank                int
-	MissHalfLife, CreditHalfLife time.Duration
-	TurnTimeout                  time.Duration
+	ConfidentRank                     int
+	MissHalfLife, CreditHalfLife      time.Duration
+	TurnTimeout                       time.Duration
+	Weight, PriorCredits, PriorMisses float64
 }
 
 // Keys of the half-lives in a settle event's params.

@@ -712,3 +712,44 @@ func TestFeedbackOffJournalsNothing(t *testing.T) {
 		t.Errorf("feedback dir written with feedback off: %v", err)
 	}
 }
+
+// The prompt recall follows the ledger, and its shows say how: m2, used
+// often, is injected over m1, 0.02 above it, each item with its boost and
+// its rank without it.
+func TestPromptShowsJournalTheBoost(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.82, 0.80)
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m2":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
+	h := prompt(t, home, "s1", longPrompt)
+	if i, j := strings.Index(h.Specific.Context, "memory m2"), strings.Index(h.Specific.Context, "memory m1"); i < 0 || j < 0 || i > j {
+		t.Fatalf("m2 not injected first:\n%s", h.Specific.Context)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || len(shows[0].Items) != 2 {
+		t.Fatalf("shows %+v", shows)
+	}
+	m2, m1 := shows[0].Items[0], shows[0].Items[1]
+	if m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost < 0.034 || m2.Boost > 0.035 || m2.Reranker != 0.8 {
+		t.Errorf("m2 %+v", m2)
+	}
+	if m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 {
+		t.Errorf("m1 %+v", m1)
+	}
+}
+
+// A memory hidden since the last settle is skipped by the next recall:
+// the journal's hide counts before the tick folds it.
+func TestAFreshHidingSkipsTheNextRecall(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.82, 0.80)
+	writeLedger(t, home, `{"schema":1,"watermark":"2026-10-01T00:00:00Z","memories":{}}`)
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: "s0"})
+	if err := j.AppendFolded(feedback.Event{Kind: feedback.KindHide, IDs: []string{"m1"}, Verdict: "wrong"}); err != nil {
+		t.Fatal(err)
+	}
+	h := prompt(t, home, "s1", longPrompt)
+	if strings.Contains(h.Specific.Context, "memory m1") || !strings.Contains(h.Specific.Context, "memory m2") {
+		t.Errorf("context:\n%s", h.Specific.Context)
+	}
+}

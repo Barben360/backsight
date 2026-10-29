@@ -26,6 +26,31 @@ func feedbackParams(cfg config.Config) feedback.Params {
 		MissHalfLife:   time.Duration(cfg.Feedback.MissHalfLifeDays) * day,
 		CreditHalfLife: time.Duration(cfg.Feedback.CreditHalfLifeDays) * day,
 		TurnTimeout:    feedback.TurnTimeout,
+		Weight:         cfg.Feedback.BoostWeight,
+		PriorCredits:   cfg.Feedback.PriorCredits,
+		PriorMisses:    cfg.Feedback.PriorMisses,
+	}
+}
+
+// ledgerAdjust is recall's Engine.Adjust from this machine's ledger, with
+// what was journaled since its last settle (a hiding applies to the next
+// recall), read once: a memory's boost at now, and whether it is hidden.
+// Nil, so recall is as without a ledger, when feedback is off, the ledger
+// cannot be read (another schema, a broken file) or it holds nothing.
+func ledgerAdjust(d paths.Dirs, cfg config.Config, at time.Time) func(string) (float64, bool) {
+	if !cfg.Feedback.Enabled {
+		return nil
+	}
+	l, err := feedback.Current(d.FeedbackDir())
+	if err != nil || len(l.Memories) == 0 {
+		return nil
+	}
+	p := feedbackParams(cfg)
+	return func(id string) (float64, bool) {
+		if l.Memories[id].Hidden != nil {
+			return 0, true
+		}
+		return l.Boost(id, p, at), false
 	}
 }
 
