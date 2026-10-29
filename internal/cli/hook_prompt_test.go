@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -659,6 +660,36 @@ func TestVerdictCreditIsJournaled(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(journalEvents(t, home)), "psql") {
 		t.Error("the evidence reached the journal")
+	}
+}
+
+// The hook journals the facts of a Sources answer line by line: a line
+// whose short id does not start its full id, or that is not a whole fact
+// line, is skipped; the others are journaled, in order.
+func TestSourcesShowsSkipBadLines(t *testing.T) {
+	home := hookHome(t)
+	const (
+		one = "61616161-0000-4000-8000-000000000061"
+		two = "62626262-0000-4000-8000-000000000062"
+		odd = "63636363-0000-4000-8000-000000000063"
+	)
+	answer := "Sources: only raw facts are retired, and an observation is drawn from them; nothing was retired or stored.\n" +
+		"0f0f0f0f is drawn from:\n" +
+		"- [billing · 61616161] Billing ran PostgreSQL 14. (" + one + ")\n" +
+		"- [billing · 99999999] its short id is another's. (" + odd + ")\n" +
+		"- [billing · 63636363] no full id at the end\n" +
+		"- [atlas-spec · 62626262] The replicas run 14. (" + two + ")\n" +
+		"Call memory_credit again with the verdict, naming the source facts that are wrong (or all of them)."
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+		"tool_input":    map[string]any{"ids": []string{"0f0f0f0f"}, "verdict": "outdated", "correction": "Billing runs PostgreSQL 16.", "evidence": "psql printed 16.4"},
+		"tool_response": []map[string]string{{"type": "text", "text": answer}}})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	want := []feedback.Item{{ID: one, Project: "billing"}, {ID: two, Project: "atlas-spec"}}
+	if len(shows) != 1 || shows[0].Path != "sources" || !slices.Equal(shows[0].Items, want) {
+		t.Errorf("shows %+v", shows)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 0 {
+		t.Errorf("a Sources answer journaled %d credits", n)
 	}
 }
 

@@ -42,13 +42,14 @@ const (
 type sourceFact struct{ id, project, text string }
 
 // retirePlan is what a verdict does with each id it names: retire (a raw
-// fact), hide (no listable sources), skip (an observation whose facts
-// named in the same call carry the verdict) or, for an observation none
-// of whose facts is named, list its sources first.
+// fact), hide (no listable sources; unread among them when the server
+// could not be read), skip (an observation whose facts named in the same
+// call carry the verdict) or, for an observation none of whose facts is
+// named, list its sources first.
 type retirePlan struct {
-	retire, hide, skip []string
-	sources            map[string][]sourceFact // observation → its facts, in order
-	listed             []string                // the observations of sources, in id order
+	retire, hide, unread, skip []string
+	sources                    map[string][]sourceFact // observation → its facts, in order
+	listed                     []string                // the observations of sources, in id order
 }
 
 // acted is how many memories the plan retires or hides: what counts
@@ -82,6 +83,7 @@ func (d mcpDeps) classify(ctx context.Context, key *mcpKey, ids []string, owner 
 		switch {
 		case err != nil:
 			plan.hide = append(plan.hide, id)
+			plan.unread = append(plan.unread, id)
 		case m.Type == "world" || m.Type == "experience":
 			plan.retire = append(plan.retire, id)
 		case m.Type == "observation" && len(m.Sources) > 0:
@@ -170,7 +172,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 		}
 	}
 	if failure != nil && len(retired)+len(hidden) == 0 {
-		lines := []string{fmt.Sprintf("the server refused the retirement (%v): nothing retired; the correction is stored (%s), do not store it again; tell the user, who can retire them from a terminal:", failure, note)}
+		lines := []string{fmt.Sprintf("the server refused the retirement (%v): nothing retired. The correction is already stored as %s: do not call memory_credit again for these memories; tell the user, who can retire them from a terminal:", failure, note)}
 		for _, id := range notRetired {
 			lines = append(lines, "backsight forget "+id)
 		}
@@ -188,8 +190,26 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	if len(retired) > 0 {
 		b.WriteString("Invalidated on the server: " + strings.Join(retired, ", ") + "\n")
 	}
-	if len(hidden) > 0 {
-		b.WriteString("Hidden on this machine (the server listed no facts to retire): " + strings.Join(hidden, ", ") + "\n")
+	var empty, unread []string
+	for _, id := range hidden {
+		if slices.Contains(plan.unread, id) {
+			unread = append(unread, id)
+		} else {
+			empty = append(empty, id)
+		}
+	}
+	if len(empty) > 0 {
+		b.WriteString("Hidden on this machine (the server lists no facts to retire): " + strings.Join(empty, ", ") + "\n")
+	}
+	if len(unread) > 0 {
+		b.WriteString("Hidden on this machine only (the server could not be read; the user can retire them on the server from a terminal: backsight forget <id>): ")
+		for i, id := range unread {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString("backsight forget " + id)
+		}
+		b.WriteString("\n")
 	}
 	if len(plan.skip) > 0 {
 		b.WriteString("Observations retired through the facts named: " + strings.Join(plan.skip, ", ") + "\n")

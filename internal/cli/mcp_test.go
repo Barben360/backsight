@@ -1129,6 +1129,16 @@ func TestObservationWithoutSourcesIsHidden(t *testing.T) {
 	if len(patches()) != 0 {
 		t.Errorf("an observation was invalidated: %q", curation)
 	}
+	// the one the server could not read says how to retire it there; the
+	// one with no sources has nothing to retire on the server
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(l, obsO) && (!strings.HasPrefix(l, "Hidden") || !strings.Contains(l, "backsight forget "+obsO) || strings.Contains(l, empty)):
+			t.Errorf("unread line %q", l)
+		case strings.Contains(l, empty) && (!strings.HasPrefix(l, "Hidden") || strings.Contains(l, "backsight forget")):
+			t.Errorf("no-sources line %q", l)
+		}
+	}
 	h := retireEvents(t, home, feedback.KindHide)
 	if len(h) != 2 || strings.Join(h[0].IDs, ",") != obsO || strings.Join(h[1].IDs, ",") != empty || h[0].Verdict != "outdated" || h[0].Note != note || h[0].Outcome != "" {
 		t.Errorf("hide events %+v", h)
@@ -1205,7 +1215,8 @@ func TestFailedRetirementRetiresNothingSilently(t *testing.T) {
 	memoryStatus["PATCH "+creditA] = 500
 	showIn(t, home, "S", creditA)
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa"))
-	if !isErr || !strings.Contains(out, "nothing retired") || !strings.Contains(out, "backsight forget "+creditA) || noteIDRE.FindString(out) == "" {
+	if !isErr || !strings.Contains(out, "nothing retired") || !strings.Contains(out, "backsight forget "+creditA) || noteIDRE.FindString(out) == "" ||
+		!strings.Contains(out, "do not call memory_credit again for these memories") || strings.Contains(out, "store it again") {
 		t.Errorf("%v %s", isErr, out)
 	}
 	if len(retireEvents(t, home, feedback.KindRetire)) != 0 {
