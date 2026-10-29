@@ -20,6 +20,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root/scripts/ports.sh"
 # shellcheck source=scripts/proof-lib.sh
 . "$root/scripts/proof-lib.sh"
+# Functions only (rc_auth and the restore chain), used from step 5b on.
+# shellcheck source=scripts/restore-chain.sh
+. "$root/scripts/restore-chain.sh"
 port=$(slot_port 28400 "${1:-}")
 project=${PROJECT:-bs-fresh}
 [ "$project" != backsight ] || { echo "PROJECT=backsight would be the machine's own install" >&2; exit 2; }
@@ -130,9 +133,9 @@ mem_bank=${mem_bank:-claude-memory}
 docs_bank=$mem_bank-docs
 # llm_calls <bank>: the LLM calls the server logged for bank today; every
 # bucket must carry its total, or a renamed field would read as 0 calls.
+# The key goes through curl -K (rc_auth), never curl's argv.
 llm_calls() {
-  curl -fsS -H "Authorization: Bearer $(sed -n "s/^api_key *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$BACKSIGHT_HOME/config/secrets.toml" | head -n 1)" \
-    "http://127.0.0.1:$port/v1/default/banks/$1/llm-requests/stats?period=1d&call_type=llm" |
+  curl -fsS -K <(rc_auth) "http://127.0.0.1:$port/v1/default/banks/$1/llm-requests/stats?period=1d&call_type=llm" |
     jq -e 'if (.buckets | type) == "array" and (.buckets | all(has("total"))) then [.buckets[].total] | add // 0 else error("no bucket totals") end'
 }
 # Positive control: step 4's note was extracted by the mock LLM in the
@@ -151,8 +154,6 @@ docs_llm=$(llm_calls "$docs_bank") || fail "the LLM request stats of $docs_bank 
 # A first jobs tick records retain_since: live retain takes the sessions
 # started after it. The live session's first segment goes out before the
 # backup, its second after it.
-# shellcheck source=scripts/restore-chain.sh
-. "$root/scripts/restore-chain.sh"
 "$bin" jobs tick --json > "$work/tick-since.json" || { cat "$work/tick-since.json" >&2; fail "the first jobs tick failed"; }
 jq -e '.ok and .data.status == "done"' "$work/tick-since.json" >/dev/null || { cat "$work/tick-since.json" >&2; fail "the first jobs tick did not run"; }
 rc_send restore-proof-kept
@@ -229,8 +230,12 @@ if [ -z "$priv_ip" ]; then
 else
   health() { curl -fsS --max-time 10 "http://$1:$port/health" >/dev/null; } # health <ip>
   # banks_status <key variable>: the HTTP status of the banks list with the
-  # key that variable holds (its name, not its value, is what a trace shows).
-  banks_status_raw() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${!1}" "http://127.0.0.1:$port/v1/default/banks"; }
+  # key that variable holds (its name, not its value, is what a trace
+  # shows). The key reaches curl through -K, never its argv (ps-visible):
+  # auth_of <var> prints the curl config, untraced, in a process
+  # substitution as rc_auth does.
+  auth_of() { { set +x; } 2>/dev/null; printf 'header = "Authorization: Bearer %s"\n' "${!1}"; }
+  banks_status_raw() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 -K <(auth_of "$1") "http://127.0.0.1:$port/v1/default/banks"; }
   banks_status() { pl_untraced banks_status_raw "$1"; }
   # The commands' JSON never carries the key; a failure shows it anyway
   # with any api_key value masked.

@@ -24,8 +24,11 @@
 #                                       driver's own trust of it
 #
 # Secrets: a key or token is never in an argv, a trace or a result. B's
-# API key is read in a process substitution (m6_auth, curl -K) and every
-# result's detail and values are scrubbed (m6_result).
+# API key is read in a process substitution (m6_auth, curl -K). Every
+# result's detail and values, and every fail message, are scrubbed
+# (m6_scrub): connection tokens (bst1.…), and the API keys the run has
+# learnt (m6_learn_key: the server's, before and after a rotation, and each
+# client's), read from a 0600 file, never an argv.
 
 # shellcheck source=scripts/proof-lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/proof-lib.sh"
@@ -39,21 +42,71 @@ m6_q() {
   printf '%s' "$out"
 }
 
-# m6_scrub: stdin with every connection token (bst1.…) masked.
-m6_scrub() { sed -E 's/bst1\.[A-Za-z0-9_.=-]*/[token]/g'; }
+# m6_keys: the file of the API keys this run knows, one a line (0600,
+# under M6_WORK); empty when M6_WORK is not set.
+m6_keys() { printf '%s' "${M6_WORK:+$M6_WORK/known-keys}"; }
+
+# m6_learn_key <who>: adds that machine's API key (api_key in its
+# secrets.toml), when it has one, to the keys m6_scrub masks. The key goes
+# from the file there to the keys file through pipes, with xtrace off:
+# never an argv, a trace or the terminal. Best effort: a machine with no
+# backsight or no key adds nothing, and never fails the caller.
+m6_learn_key() {
+  local f out sec
+  f=$(m6_keys)
+  [ -n "$f" ] || return 0
+  out=$(m6_on "$1" paths --json < /dev/null 2> /dev/null) || return 0
+  sec=$(jq -r '.data.secrets_file // empty' <<<"$out" 2> /dev/null) || return 0
+  [ -n "$sec" ] || return 0
+  (
+    { set +x; } 2> /dev/null
+    umask 077
+    m6_get "$1" "$sec" 2> /dev/null | m6_toml '' api_key | grep -E '^.{16,}$' >> "$f" || true
+    [ ! -s "$f" ] || sort -u -o "$f" "$f"
+  ) || true
+}
+
+# m6_scrub: stdin with every connection token (bst1.…) masked as [token],
+# and every key m6_learn_key learnt (16 bytes or more) as [key].
+m6_scrub() {
+  local keys
+  keys=$(m6_keys)
+  if [ -n "$keys" ] && [ -s "$keys" ]; then
+    sed -E 's/bst1\.[A-Za-z0-9_.=-]*/[token]/g' | awk '
+      NR == FNR { if (length($0) >= 16) k[++n] = $0; next }
+      { for (i = 1; i <= n; i++) while ((p = index($0, k[i])) > 0) $0 = substr($0, 1, p - 1) "[key]" substr($0, p + length(k[i])); print }' "$keys" -
+  else
+    sed -E 's/bst1\.[A-Za-z0-9_.=-]*/[token]/g'
+  fi
+}
+
+# m6_secret_hits: how many lines of stdin hold the mock LLM key, a token
+# (bst1.) or a key m6_learn_key learnt (read from its file, never an argv).
+m6_secret_hits() {
+  local keys
+  keys=$(m6_keys)
+  if [ -n "$keys" ] && [ -s "$keys" ]; then
+    grep -c -F -e mock-not-a-key -e bst1. -f "$keys" || true
+  else
+    grep -c -F -e mock-not-a-key -e bst1. || true
+  fi
+}
 
 # m6_result <check> <PASS|FAIL|RECORDED|NOT RUN> <detail> [values-json]:
 # one line `bs-m6 <check>: <STATUS> <detail>` and one JSONL record. A key
 # named for a secret (api_key, *_token, secret, password, *_key) is dropped
 # from values (a count such as tokens or max_tokens stays), and a string
-# holding a token masked.
+# holding a token or a known key masked (m6_scrub).
 m6_result() {
-  local check=$1 status=$2 detail values=${4:-'{}'} rec
+  local check=$1 status=$2 detail values=${4:-'{}'} rec keys
   detail=$(printf '%s' "$3" | m6_scrub)
-  rec=$(jq -cn --arg check "$check" --arg status "$status" --arg detail "$detail" --argjson values "$values" \
+  keys=$(m6_keys)
+  [ -n "$keys" ] && [ -s "$keys" ] || keys=/dev/null
+  rec=$(jq -cn --arg check "$check" --arg status "$status" --arg detail "$detail" --argjson values "$values" --rawfile keys "$keys" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg version "${M6_VERSION:-}" --arg commit "${M6_COMMIT:-}" '
+    ($keys | split("\n") | map(select(length >= 16))) as $ks |
     def scrub: walk(if type == "object" then with_entries(select(.key | test("(^|_)token$|api_key|secret|password|(^|_)key$"; "i") | not))
-      elif type == "string" then gsub("bst1\\.[A-Za-z0-9_.=-]*"; "[token]") else . end);
+      elif type == "string" then gsub("bst1\\.[A-Za-z0-9_.=-]*"; "[token]") | reduce $ks[] as $k (.; split($k) | join("[key]")) else . end);
     {check: $check, status: $status, detail: $detail, values: ($values | scrub), at: $at, version: $version, commit: $commit}') ||
     fail "the result of $check has values that are not JSON"
   printf 'bs-m6 %s: %s %s\n' "$check" "$status" "$detail"
@@ -97,8 +150,10 @@ m6_check() {
     set -e
     shopt -s inherit_errexit
     fail() {
-      printf '%s\n' "$*" >> "$M6_FAIL_FILE"
-      printf 'bs-m6 %s: %s\n' "$name" "$*" >&2
+      local msg
+      msg=$(printf '%s' "$*" | m6_scrub)
+      printf '%s\n' "$msg" >> "$M6_FAIL_FILE"
+      printf 'bs-m6 %s: %s\n' "$name" "$msg" >&2
       exit 1
     }
     "$fn"
@@ -525,7 +580,10 @@ m6_check_ssh_unknown_host_key() {
 
 # ssh-dropped-mid-install: A's link is cut for M6_DROP_S s (90; ssh's
 # keep-alives give up after 60 s) while the host runs its setup. The
-# install stops resumable (exit 40), and nothing it printed holds a key.
+# install stops resumable (exit 40), and nothing it printed holds a key:
+# the mock LLM key, a token, or the server's API key when the cut setup
+# already wrote one (ssh-install scans this output again with A's key,
+# once the resume gave it one).
 m6_check_ssh_dropped_mid_install() {
   local h d rc out seen=0 _ hits
   h=$(m6_home a) d=$(m6_home a)/m6-drop
@@ -564,15 +622,18 @@ m6_check_ssh_dropped_mid_install() {
   jq -r .error.resume <<<"$out" > "$M6_WORK/resume"
   # Positive control: the reader sees what the install printed.
   m6_sh a "grep -q '\"event\":\"progress\"' $(m6_q "$d/err") && test -s $(m6_q "$d/out")" || fail "the install printed no progress line: the key check would prove nothing"
-  hits=$(m6_sh a "cat $(m6_q "$d/out") $(m6_q "$d/err") | grep -c -e mock-not-a-key -e 'bst1\\.' || true")
-  [ "$hits" = 0 ] || fail "the install's output holds the LLM key or a token ($hits line(s))"
+  m6_learn_key srv
+  hits=$({ m6_get a "$d/out" && m6_get a "$d/err"; } | m6_secret_hits) || fail "cannot read the install's output on A"
+  [ "$hits" = 0 ] || fail "the install's output holds the LLM key, a token or the server's API key ($hits line(s))"
   m6_result ssh-dropped-mid-install PASS "link down ${M6_DROP_S:-90} s during host:server; exit 40, resumable; no key in the output ($(jq -r .error.message <<<"$out" | cut -c1-160))"
 }
 
 # ssh-install: the resume, once the host's setup cut by the drop is gone,
-# installs the server and joins it from A.
+# installs the server and joins it from A. Neither the dropped install's
+# output nor the resumed one's holds the server's API key (A's now), the
+# mock LLM key or a token.
 m6_check_ssh_install() {
-  local h resume out rc=0 deadline state cfg url mode doc srvshell unit active at
+  local h resume out rc=0 deadline state cfg url mode doc srvshell unit active at hits
   h=$(m6_home a)
   [ -s "$M6_WORK/resume" ] || fail "no resume command from ssh-dropped-mid-install"
   resume=$(cat "$M6_WORK/resume")
@@ -586,6 +647,14 @@ m6_check_ssh_install() {
   [ "$rc" = 0 ] || fail "the resumed install: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub))"
   [ "$(jq -r '[.data.steps[] | select(.name == "release")][0].status' <<<"$out")" = skipped ] ||
     fail "the resume did not skip the release step: $(jq -c '[.data.steps[] | select(.name == "release")]' <<<"$out")"
+  m6_learn_key a
+  m6_learn_key srv
+  # Positive controls: a key to look for, and output to look in.
+  [ -s "$(m6_keys)" ] || fail "no API key learnt from A or the server: the key scan would prove nothing"
+  grep -q '"event":"progress"' "$M6_WORK/install.err" || fail "the resumed install printed no progress line: the key scan would prove nothing"
+  hits=$({ m6_get a "$h/m6-drop/out" && m6_get a "$h/m6-drop/err" && cat "$M6_WORK/install.err"; } | m6_secret_hits) ||
+    fail "cannot read the dropped install's output on A"
+  [ "$hits" = 0 ] || fail "the dropped or the resumed install's output holds the server's API key, the LLM key or a token ($hits line(s))"
   # Positive control: the install ran through bs's tcsh.
   srvshell=$(m6_sh srv 'getent passwd bs')
   [ "${srvshell##*:}" = /usr/bin/tcsh ] || fail "bs's login shell on the server is ${srvshell##*:}, not /usr/bin/tcsh: the install did not go through a non-POSIX shell"
@@ -616,7 +685,7 @@ m6_check_ssh_install() {
   active=$(m6_sh a "systemctl --user is-active $(m6_q "$unit")" || true)
   at=$(m6_sh a 'date +%s')
   printf '%s %s %s\n' "$unit" "$active" "$at" > "$M6_WORK/timers"
-  m6_result ssh-install PASS "resumed: exit 0, release skipped; server role, compose bs-m6, no handback token; A remote on $url, doctor clean, server-id ok; bs's shell tcsh" \
+  m6_result ssh-install PASS "resumed: exit 0, release skipped; server role, compose bs-m6, no handback token; A remote on $url, doctor clean, server-id ok; bs's shell tcsh; no key in either install's output" \
     "$(jq -cn --argjson steps "$(jq -c '[.data.steps[] | {name, status}]' <<<"$out")" '{steps: $steps}')"
 }
 
@@ -676,6 +745,8 @@ m6_check_login_shells() {
 # machine id, both clients bound to the same server id.
 m6_check_two_clients() {
   local state tok out rc=0 who sid mid ids doc counts sa sb ia ib
+  m6_learn_key srv
+  m6_learn_key a
   state=$(m6_paths srv | jq -r .state)
   out=$(m6_on srv server token --out "$state/bench-token" --json < /dev/null) || fail "server token on the server failed: $(jq -r '.error.message // ""' <<<"$out" 2> /dev/null)"
   tok=$(m6_home b)/token
@@ -686,6 +757,7 @@ m6_check_two_clients() {
   out=$(m6_on b connect --token-file "$tok" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
     --non-interactive --json < /dev/null 2> "$M6_WORK/connect-b.err") || rc=$?
   out=$(m6_json "connect on B (exit $rc)" "$out") || exit 1
+  m6_learn_key b
   [ "$rc" = 0 ] && jq -e .ok > /dev/null <<<"$out" || fail "connect on B: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub))"
   for who in a b; do
     sid=tc-$who
@@ -918,8 +990,10 @@ m6_check_key_rotation() {
   trap "m6_sh srv $(m6_q "rm -f $(m6_q "$state/bench-token2")") > /dev/null 2>&1 || true
     m6_sh a $(m6_q "rm -f $(m6_q "$(m6_home a)/token2")") > /dev/null 2>&1 || true
     m6_sh b $(m6_q "rm -f $(m6_q "$(m6_home b)/token2")") > /dev/null 2>&1 || true" EXIT
-  out=$(m6_on srv server token --rotate --out "$state/bench-token2" --json < /dev/null 2> "$M6_WORK/rotate.err") ||
-    fail "server token --rotate on the server failed: $(jq -r '.error.message // ""' <<<"$out" 2> /dev/null | m6_scrub)"
+  rc=0
+  out=$(m6_on srv server token --rotate --out "$state/bench-token2" --json < /dev/null 2> "$M6_WORK/rotate.err") || rc=$?
+  m6_learn_key srv # the new key, masked from here on
+  [ "$rc" = 0 ] || fail "server token --rotate on the server failed: $(jq -r '.error.message // ""' <<<"$out" 2> /dev/null | m6_scrub)"
   code=$(m6_banks_code) || exit 1
   [ "$code" = 401 ] || fail "the banks list with the old key after the rotation: HTTP $code, want 401"
   # The old key's period: a note and a session on each PC, nothing sent.
@@ -963,6 +1037,7 @@ m6_check_key_rotation() {
     ask=(--answer consent=yes --answer backfill=no --answer retention=keep --answer "scheduler=$(m6_scheduler "$who")")
     rc=0
     out=$(m6_on "$who" connect --token-file "$tok" "${ask[@]}" --non-interactive --json < /dev/null 2> "$M6_WORK/connect2-$who.err") || rc=$?
+    m6_learn_key "$who"
     m6_sh "$who" "rm -f $(m6_q "$tok")" || fail "cannot remove the new token on $who"
     out=$(m6_json "connect on $who with the new token (exit $rc)" "$out") || exit 1
     [ "$rc" = 0 ] && jq -e '.ok == true' > /dev/null <<<"$out" || fail "connect on $who with the new token: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub))"

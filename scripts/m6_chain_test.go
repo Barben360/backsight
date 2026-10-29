@@ -76,3 +76,21 @@ func TestM6ChainClientsNeverRunAServerCommand(t *testing.T) {
 		}
 	}
 }
+
+// A failure of the chain's setup or A's connect shows what the command
+// printed through m6_scrub only (tokens and the server's API key masked),
+// never a raw cat of the run's files.
+func TestM6ChainShowsItsFilesScrubbed(t *testing.T) {
+	raw, err := os.ReadFile(mustAbs(t, "m6-chain.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := regexp.MustCompile(`(?m)^.*cat "\$work/.*$`).Find(raw); l != nil {
+		t.Errorf("a file of the run is shown unscrubbed: %s", l)
+	}
+	for _, f := range []string{"setup.json", "setup.err", "expose.json", "connect-a.json", "connect-a.err"} {
+		if !strings.Contains(string(raw), `m6_scrub < "$work/`+f+`" >&2`) {
+			t.Errorf("%s is not shown through m6_scrub on failure", f)
+		}
+	}
+}

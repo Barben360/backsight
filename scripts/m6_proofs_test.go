@@ -262,6 +262,55 @@ func TestM6ResultWritesALineAndARecord(t *testing.T) {
 	}
 }
 
+// The keys the run learnt (m6_learn_key: B's, the server's old and new)
+// are masked in a result's detail and values and in a check's fail
+// message, on stderr and in its FAIL record; tokens in a fail message too.
+// Learning a key never traces it, and a machine with no backsight adds
+// nothing and fails nothing.
+func TestM6ScrubMasksTheKeysTheRunKnows(t *testing.T) {
+	const kb, ks1, ks2 = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", "s1s1s1s1-s1s1s1s1_s1s1s1s1", "s2s2s2s2s2s2s2s2s2s2s2s2s2s2"
+	dir := t.TempDir()
+	m6ServerFakes(t, dir)
+	if err := os.MkdirAll(filepath.Join(dir, "srv"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeLines(t, filepath.Join(dir, "b", "secrets.toml"), `api_key = "`+kb+`"`)
+	writeLines(t, filepath.Join(dir, "srv", "secrets.toml"), `api_key = "`+ks1+`"`)
+	if err := os.WriteFile(filepath.Join(dir, "new"), []byte(ks2), 0o600); err != nil { // the key after the rotation
+		t.Fatal(err)
+	}
+	stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `mkdir -p "$M6_WORK"
+set -x
+m6_learn_key b; m6_learn_key srv
+m6_learn_key nobody
+set +x
+printf 'api_key = "%s"\n' "$(cat "$T/new")" > "$T/srv/secrets.toml"
+m6_learn_key srv
+m6_result c1 PASS "B said '`+kb+`' and the server '`+ks1+`'" '{"note":"`+ks2+` rotated","n":2}'
+c2() { fail "the flush printed `+ks2+` and bst1.abc_DEF"; }
+m6_check c2 c2
+stat -c %a "$M6_WORK/known-keys"`, "PS4=+ ")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	want := "bs-m6 c1: PASS B said '[key]' and the server '[key]'\nbs-m6 c2: FAIL the flush printed [key] and [token]\n600\n"
+	if stdout != want {
+		t.Errorf("stdout\n%s\nwant\n%s", stdout, want)
+	}
+	if !strings.Contains(stderr, "bs-m6 c2: the flush printed [key] and [token]\n") {
+		t.Errorf("the fail line on stderr is not scrubbed:\n%s", stderr)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "results.jsonl"))
+	if !strings.Contains(string(raw), `"values":{"note":"[key] rotated","n":2}`) {
+		t.Errorf("values not scrubbed:\n%s", raw)
+	}
+	for _, k := range []string{kb, ks1, ks2} {
+		if strings.Contains(stdout+stderr+string(raw), k) {
+			t.Errorf("key %s shown:\nstdout %s\nstderr %s\nrecords %s", k, stdout, stderr, raw)
+		}
+	}
+}
+
 // A run stops at the first FAIL: the checks after it are NOT RUN, and do
 // not run. A fail inside a command substitution, or a failing command,
 // ends the check; one that records nothing fails too; m6_check refuses to
@@ -373,9 +422,13 @@ m6_sh() {
     *pgrep*) return 1 ;;
     *"get /home/a/m6-drop/code") echo 40 ;;
     *"get /home/a/m6-drop/out") echo '{"ok":false,"error":{"code":40,"message":"dropped","resume":"backsight server install --ssh bs@10.0.0.9 --non-interactive"}}' ;;
-    "a "*"server install"*) echo '{"ok":true,"data":{"steps":[{"name":"release","status":"skipped"}]}}' ;;
+    *"get /home/a/m6-drop/err") echo '{"event":"progress","step":"host:server"}'; [ ! -e "$T/leak-drop" ] || cat "$T/leak-drop" ;;
+    "a "*"server install"*)
+      echo '{"event":"progress","step":"host:server"}' >&2
+      [ ! -e "$T/leak-resume" ] || cat "$T/leak-resume" >&2
+      echo '{"ok":true,"data":{"steps":[{"name":"release","status":"skipped"}]}}' ;;
     *"get /c/config.toml") printf '[server]\nmode = "remote"\nurl = "http://10.0.0.9:8888"\n' ;;
-    *"get /c/secrets.toml") echo 'api_key = "k"' ;;
+    *"get /c/secrets.toml") echo 'api_key = "k3y-0f-the-server-0123456789"' ;;
     *"get /s/machine_id") echo "mid-$1" ;;
     *"get /s/state.json") echo '{"remote_server":{"id":"srv-1"}}' ;;
     *"get /s/bench-token") echo bst1.fake ;;
@@ -449,6 +502,29 @@ func TestM6ProofsNeverRunSSHInstallOnB(t *testing.T) {
 		}
 		if c == "two-clients" && !strings.Contains(calls, "on b connect --token-file") {
 			t.Errorf("%s: B never ran connect (the check would prove nothing):\n%s", c, calls)
+		}
+	}
+}
+
+// The server's API key (A's once installed) is looked for in the dropped
+// install's output by ssh-dropped-mid-install, and in both the dropped and
+// the resumed install's output by ssh-install; a hit fails the check,
+// without showing the key.
+func TestM6InstallOutputHoldsNoServerKey(t *testing.T) {
+	const key = "k3y-0f-the-server-0123456789"
+	for _, c := range []struct{ check, leak, want string }{
+		{"ssh-dropped-mid-install", "leak-drop", "the install's output holds the LLM key, a token or the server's API key (1 line(s))"},
+		{"ssh-install", "leak-drop", "the dropped or the resumed install's output holds the server's API key, the LLM key or a token (1 line(s))"},
+		{"ssh-install", "leak-resume", "the dropped or the resumed install's output holds the server's API key, the LLM key or a token (1 line(s))"},
+	} {
+		dir := t.TempDir()
+		writeLines(t, filepath.Join(dir, c.leak), `{"event":"progress","detail":"key `+key+`"}`)
+		stdout, stderr, _ := m6Chain(t, dir, c.check)
+		if want := "bs-m6 " + c.check + ": FAIL " + c.want + "\n"; stdout != want {
+			t.Errorf("%s with the key in %s: stdout %q, want %q\nstderr:\n%s", c.check, c.leak, stdout, want, stderr)
+		}
+		if strings.Contains(stdout+stderr, key) {
+			t.Errorf("%s shows the key:\n%s%s", c.check, stdout, stderr)
 		}
 	}
 }

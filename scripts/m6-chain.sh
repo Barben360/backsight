@@ -146,7 +146,9 @@ m6c_main() {
   hfc_seed "$project"
   m6_on srv setup --role server --non-interactive --json --answer provider=mock --answer model=mock-model --answer consent=yes \
     --answer project="$project" --answer api_port="$port" --answer ui_port=$((port + 1111)) --answer scheduler=off \
-    < /dev/null > "$work/setup.json" 2> "$work/setup.err" || { cat "$work/setup.json" "$work/setup.err" >&2; fail "setup --role server failed"; }
+    < /dev/null > "$work/setup.json" 2> "$work/setup.err" ||
+    { m6_learn_key srv; m6_scrub < "$work/setup.json" >&2; m6_scrub < "$work/setup.err" >&2; fail "setup --role server failed"; }
+  m6_learn_key srv # its API key, masked in every result and failure from here on
   hfc_save "$project"
   m6_on srv server expose --private "$ip" --answer cleartext_lan=yes --json < /dev/null > "$work/expose.json" ||
     { m6_scrub < "$work/expose.json" >&2; fail "server expose --private $ip failed"; }
@@ -158,7 +160,7 @@ m6c_main() {
   m6_sh srv "rm -f $(m6_q "$state/a-token")" || fail "cannot remove the token on the server"
   m6_on a connect --token-file "$tok" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
     --non-interactive --json < /dev/null > "$work/connect-a.json" 2> "$work/connect-a.err" ||
-    { m6_scrub < "$work/connect-a.json" >&2; cat "$work/connect-a.err" >&2; fail "connect on A failed"; }
+    { m6_scrub < "$work/connect-a.json" >&2; m6_scrub < "$work/connect-a.err" >&2; fail "connect on A failed"; }
   m6_sh a "rm -f $(m6_q "$tok")" || fail "cannot remove the token on A"
 
   for c in "${M6C_CHECKS[@]}"; do

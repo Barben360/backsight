@@ -182,3 +182,27 @@ func TestRestoreChainAuthConfigIsNeverTraced(t *testing.T) {
 		t.Errorf("stderr:\n%s", e.String())
 	}
 }
+
+// fresh-install.sh is not sourceable (it runs on load), so this reads it:
+// no curl gets the API key in its argv (ps-visible): no Authorization
+// header passed with -H, and each authenticated call (llm_calls,
+// banks_status_raw, the tombstones and stats reads) takes its key from a
+// curl config in a process substitution.
+func TestFreshInstallKeepsTheKeyOffCurlsArgv(t *testing.T) {
+	raw, err := os.ReadFile(mustAbs(t, "fresh-install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := 0
+	for i, l := range strings.Split(string(raw), "\n") {
+		if strings.Contains(l, "Authorization") && !strings.Contains(l, "printf 'header = ") {
+			t.Errorf("fresh-install.sh:%d puts the key outside a curl config: %s", i+1, strings.TrimSpace(l))
+		}
+		if strings.Contains(l, "curl ") && (strings.Contains(l, "-K <(rc_auth)") || strings.Contains(l, `-K <(auth_of "$1")`)) {
+			k++
+		}
+	}
+	if k != 4 {
+		t.Errorf("%d curl calls take the key from -K, want 4 (llm_calls, the tombstones read, banks_status_raw, the stats read)", k)
+	}
+}
