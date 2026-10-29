@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
@@ -1262,6 +1263,34 @@ func TestFailedRetirementRetiresNothingSilently(t *testing.T) {
 	}
 	if got := retireTelemetry(t, home); len(got) != 0 {
 		t.Errorf("retire telemetry %q for a retirement the server refused", got)
+	}
+}
+
+// The whole chain, before any settle: a shown fact reported outdated is
+// invalidated, memory stale lists it as reported, and forget --restore
+// makes it valid again and drops it from the list.
+func TestOutdatedFactIsListedStaleUntilRestored(t *testing.T) {
+	cs, home := creditSession(t)
+	rawFact(creditA)
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); isErr || !strings.HasPrefix(out, "Retired.") {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], "/memories/"+creditA+" ") || !strings.Contains(p[0], `"state":"invalidated"`) {
+		t.Fatalf("patches %q", p)
+	}
+	code, out, errOut := run(t, "memory", "stale")
+	if code != output.OK || !strings.Contains(out, "Reported wrong or outdated\naaaaaaaa ") || !strings.Contains(out, "backsight forget "+creditA+" --purge") {
+		t.Fatalf("stale after the verdict: exit %d\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := run(t, "forget", "--restore", creditA); code != output.OK || !strings.Contains(out, creditA+" restored") {
+		t.Fatalf("restore: exit %d\n%s%s", code, out, errOut)
+	}
+	if p := patches(); len(p) != 2 || !strings.Contains(p[1], `"state":"valid"`) {
+		t.Errorf("patches after restore %q", p)
+	}
+	if code, out, errOut := run(t, "memory", "stale"); code != output.OK || strings.Contains(out, "aaaaaaaa") || !strings.HasPrefix(out, "Nothing needs review") {
+		t.Errorf("stale after the restore: exit %d\n%s%s", code, out, errOut)
 	}
 }
 
