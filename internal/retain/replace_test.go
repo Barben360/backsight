@@ -333,6 +333,114 @@ func TestARestoreGivesAnExpiredMarkAFullWindow(t *testing.T) {
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
 }
 
+// The race of the tests above, restored twice from the same backup: once
+// 6 h after the send, then 40 h after it on a fresh host, which may
+// write the epoch number A already holds. Either restore is another one
+// (its restored_at tells), so each gives the mark a full window: a queue
+// busy at the first look after the second keeps the mark, and a look
+// with the queue clear re-sends a2 a3, once. Before, a restore under the
+// same number left the window running from the first one: given up.
+func TestASecondRestoreGivesTheMarkAFullWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		epoch int
+	}{
+		{"same number", 1},
+		{"higher number", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := betaReplacedByB(t)
+			t0 := a.clock
+			snap := a.hs.backup()
+			restore := func(epoch int, at time.Time) {
+				t.Helper()
+				a.hs.restore(snap, epoch, t0.Add(5*time.Hour), at)
+				a.clock = at
+				a.hs.queued = 0
+				if rec, err := a.f.Reconcile(context.Background()); err != nil || len(rec.Resend) != 0 {
+					t.Fatalf("reconcile: %+v %v", rec, err)
+				}
+				a.hs.queued = 1
+				if r := a.tick(); len(r.Unconfirmed) != 0 {
+					t.Fatalf("given up at the first busy look after a restore to epoch %d: %+v", epoch, r.Unconfirmed)
+				}
+				if _, ok := a.replaces()["beta"]; !ok {
+					t.Fatalf("mark dropped after a restore to epoch %d: %+v", epoch, a.replaces())
+				}
+			}
+			restore(1, t0.Add(6*time.Hour))
+			restore(tc.epoch, t0.Add(40*time.Hour))
+			if p := a.replaces()["beta"]; p.Epoch != tc.epoch || !p.RestoredAt.Equal(a.clock) {
+				t.Errorf("mark after the second restore: %+v, want epoch %d, restored at %v", p, tc.epoch, a.clock)
+			}
+			a.hs.queued = 0
+			expect(t, a.tick(), Sent, 2, 2)
+			a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+			a.splitOn(betaDoc)
+		})
+	}
+}
+
+// A mark written before it kept its epoch's restored_at, at epoch 1,
+// restored 3 h before the send. Another restore under that number later
+// is told by the times (the mark synced to its epoch before it): a full
+// window, as above, once. With no other restore, nothing starts over:
+// the 24 h run from the send, and a mark never confirmed is given up.
+func TestAMarkWithoutItsEpochsIdentity(t *testing.T) {
+	legacy := func(t *testing.T) (*env, time.Time) {
+		a, _ := betaReplacedByB(t)
+		t0 := a.clock
+		if err := state.Update(a.f.Dirs, "test", func(s *state.State) error {
+			s.RestoreEpoch = &state.RestoreEpoch{Bank: a.f.Bank, Epoch: 1, ReconciledAt: t0.Add(-2 * time.Hour), RestoredAt: t0.Add(-3 * time.Hour)}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		cur := a.sp1Cursor()
+		for p, pr := range cur.Replaces {
+			pr.Epoch, pr.EpochRestoredAt = 1, time.Time{}
+			cur.Replaces[p] = pr
+		}
+		if err := SaveCursor(a.f.Dirs.CursorsDir(), "sp1", cur); err != nil {
+			t.Fatal(err)
+		}
+		return a, t0
+	}
+	t.Run("another restore under its number", func(t *testing.T) {
+		a, t0 := legacy(t)
+		a.hs.restore(a.hs.backup(), 1, t0.Add(5*time.Hour), t0.Add(40*time.Hour))
+		a.clock = t0.Add(40 * time.Hour)
+		if rec, err := a.f.Reconcile(context.Background()); err != nil || len(rec.Resend) != 0 {
+			t.Fatalf("reconcile: %+v %v", rec, err)
+		}
+		a.hs.queued = 1
+		for range 2 {
+			if r := a.tick(); len(r.Unconfirmed) != 0 {
+				t.Fatalf("given up at a busy look: %+v", r.Unconfirmed)
+			}
+		}
+		if p := a.replaces()["beta"]; !p.RestoredAt.Equal(a.clock.Add(-15*time.Minute)) || !p.EpochRestoredAt.Equal(t0.Add(40*time.Hour)) {
+			t.Fatalf("mark: %+v, want started over once, at the first look after the restore", p)
+		}
+		a.hs.queued = 0
+		expect(t, a.tick(), Sent, 2, 2)
+		a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+	})
+	t.Run("no other restore", func(t *testing.T) {
+		a, t0 := legacy(t)
+		a.hs.queued = 1
+		a.tick()
+		if p := a.replaces()["beta"]; !p.RestoredAt.IsZero() {
+			t.Fatalf("started over with no restore: %+v", p)
+		}
+		a.clock = t0.Add(PendingLimit)
+		r := a.tick()
+		if !slices.ContainsFunc(r.Unconfirmed, func(u Unconfirmed) bool { return u.Document == betaDoc }) {
+			t.Fatalf("not given up %v after the send: %+v, pending %+v", PendingLimit, r.Unconfirmed, a.replaces())
+		}
+	})
+}
+
 // The same race, with A's send after the backup (12:00, the backup at
 // 11:30): the reconcile judges A's cursor and drops it with its mark; the
 // resync sends what the server lacks once, and the mark sends nothing
