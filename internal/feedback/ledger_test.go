@@ -1,6 +1,7 @@
 package feedback
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // assertSameEntries: a and b hold the same memories, with the same counts
@@ -395,7 +398,9 @@ func TestAnEventAtTheWatermarkFolds(t *testing.T) {
 	if _, err := Settle(dir, testParams, at(120)); err != nil {
 		t.Fatal(err)
 	}
-	writeJournal(t, dir, Event{Kind: KindRetire, TS: at(120), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"})
+	if err := NewJournal(dir, Common{}).AppendFolded(Event{Kind: KindRetire, TS: at(120), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Settle(dir, testParams, at(140)); err != nil {
 		t.Fatal(err)
 	}
@@ -407,5 +412,62 @@ func TestAnEventAtTheWatermarkFolds(t *testing.T) {
 	assertSameEntries(t, live, rebuilt, 0)
 	if live.Memories["m1"].Wrong != 1 {
 		t.Errorf("m1: %+v", live.Memories["m1"])
+	}
+}
+
+// A retirement journaled while a settle runs, stamped before the settle's
+// time, waits for the ledger lock and lands after the settle's watermark:
+// the next settle folds it, as a rebuild does.
+func TestARetirementDuringASettleFolds(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, at(100)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	afterSettleRead = func() {
+		go func() {
+			done <- NewJournal(dir, Common{}).AppendFolded(Event{Kind: KindRetire, TS: at(110), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"})
+		}()
+		time.Sleep(100 * time.Millisecond) // the append runs now, unless it waits for the lock
+	}
+	t.Cleanup(func() { afterSettleRead = nil })
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	afterSettleRead = nil
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle(dir, testParams, at(140)); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := LoadLedger(dir)
+	rebuilt, err := Rebuild(dir, testParams, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+	if live.Memories["m1"].Wrong != 1 {
+		t.Errorf("m1: %+v", live.Memories["m1"])
+	}
+}
+
+// A ledger lock held past the wait still journals the event (a session's
+// retirements are counted from the journal) and says the lock was held.
+func TestAppendFoldedJournalsWhenTheLockStaysHeld(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	release, err := lockLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	err = NewJournal(dir, Common{Session: "s1"}).AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}, Verdict: "wrong"})
+	var held *state.HeldError
+	if !errors.As(err, &held) {
+		t.Errorf("want the held lock, got %v", err)
+	}
+	if events, _, _ := Read(dir, time.Time{}); len(events) != 1 || events[0].Kind != KindRetire {
+		t.Errorf("journal %+v", events)
 	}
 }

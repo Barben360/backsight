@@ -1,6 +1,7 @@
 package feedback
 
 import (
+	"errors"
 	"path/filepath"
 	"time"
 
@@ -209,6 +210,9 @@ func turnOver(s *pendingShow, turn string, turns []Event, stopped map[string]boo
 	return false
 }
 
+// afterSettleRead, when set (tests), runs once Settle has read the journal.
+var afterSettleRead func()
+
 // Settle decides the shows of dir's journal that can settle at now,
 // journals them as one settle event carrying p, and brings ledger.json up
 // to date: the settle, forget, retire, hide and unhide events since its
@@ -229,6 +233,9 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	events, _, err := Read(dir, now.Add(-settleWindow))
 	if err != nil {
 		return res, err
+	}
+	if afterSettleRead != nil {
+		afterSettleRead()
 	}
 	var apply []Event
 	for _, e := range events {
@@ -271,6 +278,20 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// lockLedgerWait is lockLedger, trying again while a live owner holds
+// the lock, for at most wait.
+func lockLedgerWait(dir string, wait time.Duration) (release func(), err error) {
+	deadline := time.Now().Add(wait)
+	for {
+		release, err = lockLedger(dir)
+		var held *state.HeldError
+		if !errors.As(err, &held) || !time.Now().Before(deadline) {
+			return release, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // lockLedger takes <state>/locks/feedback-ledger.lock (dir is

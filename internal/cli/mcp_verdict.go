@@ -239,16 +239,16 @@ func singleLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// journal appends e for the session this server belongs to, under its
-// current turn (the hooks' pointer; the agent stays empty); a failure is
-// logged, never fails the call.
+// journal appends a retire or hide e for the session this server belongs
+// to, under its current turn (the hooks' pointer; the agent stays empty),
+// under the ledger lock; a failure is logged, never fails the call.
 func (d mcpDeps) journal(live session.Live, e feedback.Event) {
 	dir := d.dirs.FeedbackDir()
 	if t, ok := feedback.CurrentTurn(dir, live.SessionID); ok {
 		e.Turn = t.ID
 	}
 	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version})
-	if err := j.Append(e); err != nil {
+	if err := j.AppendFolded(e); err != nil {
 		d.tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
 	}
 }

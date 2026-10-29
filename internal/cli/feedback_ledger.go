@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -55,7 +56,8 @@ func journalUnhide(ids []string) {
 	journalUser(feedback.Event{Kind: feedback.KindUnhide, IDs: ids, Outcome: "restored"})
 }
 
-// journalUser journals an event of a user command, when feedback is on.
+// journalUser journals a forget or unhide of a user command, under the
+// ledger lock, when feedback is on.
 func journalUser(e feedback.Event) {
 	cfg, _, err := loadServerConfig()
 	if err != nil || !cfg.Feedback.Enabled {
@@ -65,7 +67,7 @@ func journalUser(e feedback.Event) {
 	if err != nil {
 		return
 	}
-	_ = feedback.NewJournal(d.FeedbackDir(), feedback.Common{Binary: buildinfo.Version}).Append(e)
+	_ = feedback.NewJournal(d.FeedbackDir(), feedback.Common{Binary: buildinfo.Version}).AppendFolded(e)
 }
 
 // hiddenHere: id is hidden on this machine, by the ledger with what was
@@ -149,7 +151,10 @@ func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, at
 		default:
 			continue
 		}
-		if j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: at.UTC(), IDs: []string{h.id}, Outcome: outcome}) == nil {
+		// Under the ledger lock, which the tick's settle has released; a
+		// lock held too long still journals it.
+		var held *state.HeldError
+		if err := j.AppendFolded(feedback.Event{Kind: feedback.KindUnhide, TS: at.UTC(), IDs: []string{h.id}, Outcome: outcome}); err == nil || errors.As(err, &held) {
 			lifted++
 		}
 	}

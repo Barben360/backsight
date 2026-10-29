@@ -103,21 +103,14 @@ func (j *Journal) file(t time.Time) string {
 }
 
 // Append writes e as one line, after setting its schema, its seq, its ts
-// (now, unless set) and the common fields it leaves empty. An event the
-// ledger folds as it comes (forget, retire, hide, unhide) is stamped
-// after the ledger's watermark: Settle folds only what is newer, a
-// rebuild folds everything, and they must agree. Callers fail open on its
-// error: a lost event never fails a hook or a recall.
+// (now, unless set) and the common fields it leaves empty. Events the
+// ledger folds as they come go through AppendFolded. Callers fail open on
+// its error: a lost event never fails a hook or a recall.
 func (j *Journal) Append(e Event) error {
 	now := j.now()
 	e.Schema, e.Seq = Schema, seq.Add(1)
 	if e.TS.IsZero() {
 		e.TS = now.UTC()
-	}
-	if folded(e.Kind) {
-		if l, err := LoadLedger(j.dir); err == nil && !e.TS.After(l.Watermark) {
-			e.TS = l.Watermark.Add(time.Nanosecond)
-		}
 	}
 	fill := func(field *string, v string) {
 		if *field == "" {
@@ -251,4 +244,33 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 		}
 	}
 	return events, skipped, nil
+}
+
+// foldedLockWait: how long AppendFolded waits for a settle to release the
+// ledger lock (a settle reads and writes local files only).
+const foldedLockWait = 2 * time.Second
+
+// AppendFolded appends an event the ledger folds as it comes (forget,
+// retire, hide, unhide) under the ledger lock, stamped at its ts (now,
+// unless set) or just after the ledger's watermark when that is later.
+// Settle reads the journal and moves the watermark under the same lock,
+// and folds only what is newer: the event is either read by a settle or
+// stamped after it, as a rebuild folds it. When the lock stays held, the
+// event is journaled all the same (the journal counts a session's
+// retirements) and the lock's error returned, for the caller to log.
+func (j *Journal) AppendFolded(e Event) error {
+	release, lerr := lockLedgerWait(j.dir, foldedLockWait)
+	if lerr == nil {
+		defer release()
+	}
+	if e.TS.IsZero() {
+		e.TS = j.now().UTC()
+	}
+	if l, err := LoadLedger(j.dir); err == nil && !e.TS.After(l.Watermark) {
+		e.TS = l.Watermark.Add(time.Nanosecond)
+	}
+	if err := j.Append(e); err != nil {
+		return err
+	}
+	return lerr
 }
