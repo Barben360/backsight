@@ -115,7 +115,8 @@ type Common struct {
 // several processes write the same journal.
 var seq atomic.Int64
 
-// Journal appends events to <dir>/journal-YYYY-MM.jsonl (UTC month).
+// Journal appends events to <dir>/journal-YYYY-MM.jsonl, the UTC month of
+// each event's ts.
 type Journal struct {
 	dir    string
 	common Common
@@ -126,19 +127,20 @@ func NewJournal(dir string, c Common) *Journal {
 	return &Journal{dir: dir, common: c, now: time.Now}
 }
 
-func (j *Journal) file(t time.Time) string {
-	return filepath.Join(j.dir, "journal-"+t.UTC().Format("2006-01")+".jsonl")
-}
+func (j *Journal) file(t time.Time) string { return filepath.Join(j.dir, monthFile(t)) }
 
-// Append writes e as one line, after setting its schema, its seq, its ts
-// (now, unless set) and the common fields it leaves empty. Events the
-// ledger folds as they come go through AppendFolded. Callers fail open on
-// its error: a lost event never fails a hook or a recall.
+// monthFile is the base name of the journal file of t's UTC month.
+func monthFile(t time.Time) string { return "journal-" + t.UTC().Format("2006-01") + ".jsonl" }
+
+// Append writes e as one line of its ts's month file, after setting its
+// schema, its seq, its ts (now, unless set) and the common fields it
+// leaves empty. Events the ledger folds as they come go through
+// AppendFolded. Callers fail open on its error: a lost event never fails a
+// hook or a recall.
 func (j *Journal) Append(e Event) error {
-	now := j.now()
 	e.Schema, e.Seq = Schema, seq.Add(1)
 	if e.TS.IsZero() {
-		e.TS = now.UTC()
+		e.TS = j.now().UTC()
 	}
 	fill := func(field *string, v string) {
 		if *field == "" {
@@ -156,7 +158,7 @@ func (j *Journal) Append(e Event) error {
 	if err := os.MkdirAll(j.dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(j.file(now), os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(j.file(e.TS), os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
@@ -198,7 +200,7 @@ func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
 		return nil, 0, err
 	}
 	slices.Sort(files) // journal-YYYY-MM sorts by month
-	first := "journal-" + from.UTC().Format("2006-01") + ".jsonl"
+	first := monthFile(from)
 	for _, f := range files {
 		if filepath.Base(f) < first {
 			continue

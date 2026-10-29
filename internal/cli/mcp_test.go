@@ -953,6 +953,54 @@ func TestVerdictCorrectionHonoursSecretsAndPause(t *testing.T) {
 	}
 }
 
+// A verdict that passes every check runs the note checks once: before
+// the server is asked, not again when the correction is stored.
+func TestVerdictChecksNoteOnce(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	rawFact(creditA)
+	checks := 0
+	noteChecked = func() { checks++ }
+	t.Cleanup(func() { noteChecked = nil })
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); isErr || !retiredRE.MatchString(out) {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	if checks != 1 {
+		t.Errorf("the note checks ran %d times, want 1", checks)
+	}
+}
+
+// While another server answers at the joined address, a verdict is
+// refused as forget is: no note stored or queued, nothing invalidated or
+// hidden, nothing journaled. Once the joined server answers again, the
+// same verdict goes through.
+func TestVerdictRefusedOnAnotherServer(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	recordMismatch(t, home)
+	mcpParentPID = 4848
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpConnect(t, home)
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "proj", At: time.Now()})
+	showIn(t, home, "S", creditA, creditB)
+	rawFact(creditA) // creditB unknown to the server: it would be hidden
+	before := retained.Load()
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb"))
+	if !isErr || !strings.Contains(out, "a different server answers at this address (server b, joined a)") || !strings.Contains(out, "nothing was changed") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if len(patches()) != 0 || !nothingStored(t, home, before) || len(retireEvents(t, home, feedback.KindRetire))+len(retireEvents(t, home, feedback.KindHide)) != 0 {
+		t.Errorf("a verdict acted on another server: %q", curation)
+	}
+	if got := retireTelemetry(t, home); len(got) != 0 {
+		t.Errorf("retire telemetry %q", got)
+	}
+	setMismatch(t, home, "")
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb")); isErr || !strings.HasPrefix(out, "Retired.") {
+		t.Errorf("the joined server: %v %s", isErr, out)
+	}
+}
+
 // rawFact makes each id a world fact of project proj on the fake server.
 func rawFact(ids ...string) {
 	for _, id := range ids {

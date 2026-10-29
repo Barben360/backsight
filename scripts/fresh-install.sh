@@ -445,9 +445,10 @@ mark=$(sysctl_mark)
 "$shim" uninstall --delete-data --purge-local --answer "confirm_bank=${bank:-claude-memory}" --answer identity_saved=yes --json > "$work/uninstall.json" ||
   { cat "$work/uninstall.json" >&2; fail "uninstall failed"; }
 jq -e --arg backups "$backups_dir" '.ok and .data.server == "delete-data"
-    and (.data.steps | length > 0) and all(.data.steps[]; .status == "done")
+    and (.data.steps | length > 0)
+    and all(.data.steps[]; .status == "done" or (.name == "shared counts" and .status == "skipped"))
     and any(.data.kept[]; contains($backups))' "$work/uninstall.json" >/dev/null ||
-  { jq -c '.ok, .data.server, [.data.steps[] | {name, status}], .data.kept' "$work/uninstall.json" >&2; fail "uninstall.json: want ok, server delete-data, every step done, the backups kept"; }
+  { jq -c '.ok, .data.server, [.data.steps[] | {name, status}], .data.kept' "$work/uninstall.json" >&2; fail "uninstall.json: want ok, server delete-data, every step done (shared counts may be skipped), the backups kept"; }
 if docker volume inspect "$volume" >/dev/null 2>&1; then fail "the database volume $volume survived --delete-data"; fi
 if docker volume inspect "$cache" >/dev/null 2>&1; then fail "the model cache volume $cache survived --delete-data"; fi
 if plugin_wired; then fail "the plugin survived uninstall"; fi

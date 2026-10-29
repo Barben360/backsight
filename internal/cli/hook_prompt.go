@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
@@ -238,7 +240,7 @@ func (h *hookEnv) userPrompt() []byte {
 	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
-		text, chosen, items, res := h.promptRecall(st, prompt, reason)
+		text, chosen, flags, items, res := h.promptRecall(st, prompt, reason)
 		ev.Scopes = map[string]telemetry.ScopeResult{}
 		failed := len(res.Scopes) > 0
 		for name, m := range res.Scopes {
@@ -257,7 +259,7 @@ func (h *hookEnv) userPrompt() []byte {
 			parts = append(parts, text+"\n"+h.texts().RecallEnd)
 			injected = items
 			memoryChars = len([]rune(text))
-			h.journalShows("prompt", itemsFromHits(chosen))
+			h.journalShows("prompt", itemsFromHits(chosen), flags...)
 		}
 	}
 	if n == 1 && len([]rune(prompt)) >= rc.ReminderMinChars {
@@ -344,23 +346,66 @@ func (h *hookEnv) sticky() session.Sticky {
 }
 
 // promptRecall searches the prompt and keeps up to PromptHits unseen,
-// unmuted memories above the reranker floor, within PromptChars.
-func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (string, []recall.Hit, []session.Injection, recall.Result) {
-	_, res := h.searchPrompt(prompt)
+// unmuted memories above the reranker floor, within PromptChars; flags
+// holds set_changed when the boost changed which ones (boostChangedSet).
+func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block string, chosen []recall.Hit, flags []string, items []session.Injection, res recall.Result) {
+	_, res = h.searchPrompt(prompt)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
-	block, chosen := selectHits(res.Hits, rc, func(hit recall.Hit) bool {
+	skip := func(hit recall.Hit) bool {
 		return slices.Contains(st.Seen, hit.ID) || session.Muted(counts, hit.ID, hit.Reranker, rc.StickyMax, rc.StickyBypass)
-	})
+	}
+	block, chosen = selectHits(res.Hits, rc, skip)
 	if len(chosen) == 0 {
-		return "", nil, nil, res
+		return "", nil, nil, nil, res
+	}
+	if boostChangedSet(res.Hits, chosen, rc, skip) {
+		flags = []string{feedback.FlagSetChanged}
 	}
 	at := now()
-	items := make([]session.Injection, 0, len(chosen))
+	items = make([]session.Injection, 0, len(chosen))
 	for _, hit := range chosen {
 		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
 	}
-	return block, chosen, items, res
+	return block, chosen, flags, items, res
+}
+
+// boostChangedSet: the boost changed which hits a prompt injects. The
+// order without it is already known (each hit's RankWithoutBoost, from
+// the search), so the same selection runs again on it: another set, or a
+// hit only the boost let in, changes it; so does a rank missing before
+// the last one picked (a hit the boost pushed out of the list). Without
+// a ledger, no hit has a rank without the boost: nothing changed.
+func boostChangedSet(hits, chosen []recall.Hit, rc config.Recall, skip func(recall.Hit) bool) bool {
+	var plain []recall.Hit
+	for _, h := range hits {
+		switch {
+		case h.RankWithoutBoost != 0:
+			plain = append(plain, h)
+		case h.Boost != 0 && slices.ContainsFunc(chosen, func(c recall.Hit) bool { return c.ID == h.ID }):
+			return true // only the boost let it in
+		}
+	}
+	if len(plain) == 0 {
+		return false
+	}
+	slices.SortFunc(plain, func(a, b recall.Hit) int { return cmp.Compare(a.RankWithoutBoost, b.RankWithoutBoost) })
+	_, picked := selectHits(plain, rc, skip)
+	if len(picked) != len(chosen) {
+		return true
+	}
+	if len(picked) > 0 {
+		last := picked[len(picked)-1]
+		if i := slices.IndexFunc(plain, func(p recall.Hit) bool { return p.ID == last.ID }); plain[i].RankWithoutBoost != i+1 {
+			return true // a rank missing before the last pick
+		}
+	}
+	for _, h := range picked {
+		if !slices.ContainsFunc(chosen, func(c recall.Hit) bool { return c.ID == h.ID }) {
+			return true
+		}
+	}
+	return false
 }
 
 // searchPrompt is the prompt path's query and recall (SPEC §10.2), shared

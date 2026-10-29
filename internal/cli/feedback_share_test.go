@@ -736,3 +736,162 @@ func TestShareResendsAfterAServerChange(t *testing.T) {
 		t.Errorf("record %+v", rec)
 	}
 }
+
+// viewLine is a combined view's line of id, as the tick wrote it.
+func viewLine(t *testing.T, dir, id string) string {
+	t.Helper()
+	raw, _ := os.ReadFile(feedback.SharedCombinedFile(dir))
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if strings.HasPrefix(line, id+"\t") {
+			return line
+		}
+	}
+	return ""
+}
+
+// A half-life changed in config: the tick's local step combines the view
+// again from shared.json under the new half-lives, at once; the same
+// half-lives leave it as it is, and a view an older binary wrote (no
+// half-lives recorded) is combined again once.
+func TestViewRebuiltWhenHalfLivesChange(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(nil)
+	dir := m.d.FeedbackDir()
+	m.put("pc-b", sharedMeta(t, "pc-b", shareT0.Add(-time.Hour), map[string]feedback.SharedEntry{
+		shareM1: {Credits: 2, CreditsAt: shareT0.Add(-100 * 24 * time.Hour), Misses: 3, MissesAt: shareT0.Add(-50 * 24 * time.Hour)},
+	}))
+	if _, _, _, err := m.share(shareT0); err != nil {
+		t.Fatal(err)
+	}
+	cache, _ := os.ReadFile(feedback.SharedCacheFile(dir))
+	_, docs := m.cache()
+	later := shareT0.Add(time.Hour)
+
+	if err := recombineShared(m.d, m.cfg, "pc-a", later); err != nil {
+		t.Fatal(err)
+	}
+	if _, when, err := m.combined(later); err != nil || !when.Equal(shareT0) {
+		t.Errorf("same half-lives: combined again at %s, %v", when, err)
+	}
+
+	old, _, _ := m.combined(later)
+	m.cfg.Feedback.CreditHalfLifeDays, m.cfg.Feedback.MissHalfLifeDays = 30, 7
+	if err := recombineShared(m.d, m.cfg, "pc-a", later); err != nil {
+		t.Fatal(err)
+	}
+	r, when, err := m.combined(later)
+	want := feedback.CombineRemote(docs, "pc-a", later, feedbackParams(m.cfg))
+	if err != nil || !when.Equal(later) || len(r) != 1 ||
+		math.Abs(r[shareM1].Credits-want[shareM1].Credits) > 1e-12 || math.Abs(r[shareM1].Misses-want[shareM1].Misses) > 1e-12 {
+		t.Errorf("new half-lives: %+v at %s (%v), want %+v", r, when, err, want)
+	}
+	if math.Abs(old[shareM1].Credits-want[shareM1].Credits) < 0.1 || math.Abs(old[shareM1].Misses-want[shareM1].Misses) < 0.1 {
+		t.Fatalf("the test's half-lives change nothing: %+v vs %+v", old, want)
+	}
+	if again, _ := os.ReadFile(feedback.SharedCacheFile(dir)); string(again) != string(cache) {
+		t.Error("shared.json changed")
+	}
+
+	// A view as the previous binary wrote it: combined again once.
+	line := viewLine(t, dir, shareM1)
+	if line == "" {
+		t.Fatal("no line for the memory")
+	}
+	legacy := fmt.Sprintf("v1 %d\n%s\n", later.Unix(), line)
+	if err := os.WriteFile(feedback.SharedCombinedFile(dir), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := feedback.LoadSharedCombined(dir, later); err != nil || c.Empty() {
+		t.Fatalf("recall no longer reads the previous binary's view: %v", err)
+	}
+	next := later.Add(15 * time.Minute)
+	if err := recombineShared(m.d, m.cfg, "pc-a", next); err != nil {
+		t.Fatal(err)
+	}
+	if _, when, err := m.combined(next); err != nil || !when.Equal(next) {
+		t.Errorf("previous binary's view: combined at %s, %v", when, err)
+	}
+	if err := recombineShared(m.d, m.cfg, "pc-a", next.Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, when, _ := m.combined(next); !when.Equal(next) {
+		t.Errorf("combined again at %s with nothing changed", when)
+	}
+}
+
+// A machine whose document turns 30 days old leaves the view at the next
+// local step, not at the next 6 h refresh; not a second before.
+func TestViewDropsADocumentPast30Days(t *testing.T) {
+	m := newShareMachine(t)
+	m.ledger(nil)
+	turns := shareT0.Add(time.Hour) // pc-b's document is 30 days old then
+	m.put("pc-b", sharedMeta(t, "pc-b", turns.Add(-30*24*time.Hour), map[string]feedback.SharedEntry{shareM1: {Credits: 1, CreditsAt: shareT0.Add(-31 * 24 * time.Hour)}}))
+	m.put("pc-c", sharedMeta(t, "pc-c", shareT0, map[string]feedback.SharedEntry{shareM2: {Credits: 1, CreditsAt: shareT0}}))
+	if _, _, _, err := m.share(shareT0); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, err := m.combined(shareT0); err != nil || r[shareM1].Credits == 0 || r[shareM2].Credits == 0 {
+		t.Fatalf("both machines first: %+v, %v", r, err)
+	}
+	if err := recombineShared(m.d, m.cfg, "pc-a", turns); err != nil {
+		t.Fatal(err)
+	}
+	if r, when, _ := m.combined(turns); !when.Equal(shareT0) || r[shareM1].Credits == 0 {
+		t.Errorf("at 30 days: %+v combined at %s", r, when)
+	}
+	past := turns.Add(time.Second)
+	if err := recombineShared(m.d, m.cfg, "pc-a", past); err != nil {
+		t.Fatal(err)
+	}
+	if r, when, err := m.combined(past); err != nil || !when.Equal(past) || len(r) != 1 || r[shareM2].Credits == 0 {
+		t.Errorf("past 30 days: %+v combined at %s, %v", r, when, err)
+	}
+}
+
+// The tick combines the view again while the server is down: from
+// shared.json, never fetched; without shared.json it leaves the view as
+// it is.
+func TestViewRebuildNeedsNoServer(t *testing.T) {
+	home := devInstall(t, true) // its server does not answer
+	d := pathsOf(home)
+	dir := d.FeedbackDir()
+	writeShareLedger(t, d, nil)
+	at := time.Now().Add(-time.Hour).Truncate(time.Second)
+	b := sharedMeta(t, "pc-b", at, map[string]feedback.SharedEntry{shareM1: {Credits: 2, CreditsAt: at.Add(-100 * 24 * time.Hour)}})
+	gone := sharedMeta(t, "pc-c", at.Add(-31*24*time.Hour), map[string]feedback.SharedEntry{shareM2: {Credits: 5, CreditsAt: at.Add(-31 * 24 * time.Hour)}})
+	if err := feedback.SaveSharedCache(dir, feedback.SharedCache{FetchedAt: at, Docs: []json.RawMessage{json.RawMessage(b), json.RawMessage(gone)}}); err != nil {
+		t.Fatal(err)
+	}
+	// The previous binary's view, still counting pc-c.
+	legacy := fmt.Sprintf("v1 %d\n%s\t2\t%d\t0\t0\t0\n%s\t5\t%d\t0\t0\t0\n", at.Unix(), shareM1, at.Unix(), shareM2, at.Unix())
+	if err := os.WriteFile(feedback.SharedCombinedFile(dir), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache, _ := os.ReadFile(feedback.SharedCacheFile(dir))
+	run(t, "jobs", "tick")
+	c, err := feedback.LoadSharedCombined(dir, time.Now())
+	if err != nil || !c.At().After(at) {
+		t.Fatalf("not combined again: at %s, %v", c.At(), err)
+	}
+	cfg, _ := config.Load(d.ConfigFile(), d, home)
+	docs, _ := (feedback.SharedCache{Docs: []json.RawMessage{json.RawMessage(b)}}).Parsed()
+	want := feedback.CombineRemote(docs, "", c.At(), feedbackParams(cfg))
+	if r := c.Remote(); len(r) != 1 || math.Abs(r[shareM1].Credits-want[shareM1].Credits) > 1e-12 {
+		t.Errorf("combined %+v, want %+v", r, want)
+	}
+	if again, _ := os.ReadFile(feedback.SharedCacheFile(dir)); string(again) != string(cache) {
+		t.Error("shared.json changed")
+	}
+
+	// No shared.json: the view stays as it is.
+	if err := os.Remove(feedback.SharedCacheFile(dir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(feedback.SharedCombinedFile(dir), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(t, "jobs", "tick")
+	if again, _ := os.ReadFile(feedback.SharedCombinedFile(dir)); string(again) != legacy {
+		t.Errorf("without shared.json the view changed:\n%s", again)
+	}
+}

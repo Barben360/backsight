@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -92,7 +93,8 @@ func (h *hookEnv) setTurn(t feedback.Turn) {
 }
 
 // startSessionTurn is a started, resumed or cleared session's pointer: no
-// turn yet, its journal reads starting here, before the briefing.
+// turn yet, its journal reads starting here, before the briefing. The
+// month the session began stays that of its first pointer.
 func (h *hookEnv) startSessionTurn() {
 	switch h.in.Source {
 	case "startup", "", "resume", "clear":
@@ -102,8 +104,18 @@ func (h *hookEnv) startSessionTurn() {
 	if !h.feedbackEnabled() {
 		return
 	}
+	prev, had := h.turnPointer()
 	file, offset := h.journal.Position()
-	h.setTurn(feedback.Turn{At: now(), File: file, Offset: offset})
+	h.setTurn(feedback.Turn{At: now(), File: file, Offset: offset, Since: sessionSince(prev, had, file)})
+}
+
+// sessionSince is the Since of a session's next pointer: prev's when the
+// session had a pointer, else file's (the journal's month file now).
+func sessionSince(prev feedback.Turn, had bool, file string) string {
+	if had {
+		return prev.Since
+	}
+	return filepath.Base(file)
 }
 
 // beginTurn is UserPromptSubmit's pointer and turn event, before any
@@ -128,7 +140,7 @@ func (h *hookEnv) beginTurn(n int, machine bool) {
 	if had && (prev.N == 0 || machine) && prev.File != "" {
 		file, offset = prev.File, prev.Offset
 	}
-	h.setTurn(feedback.Turn{ID: id, N: n, At: now(), Machine: machine, File: file, Offset: offset})
+	h.setTurn(feedback.Turn{ID: id, N: n, At: now(), Machine: machine, File: file, Offset: offset, Since: sessionSince(prev, had, file)})
 	if h.feedbackOn() {
 		h.feedbackError(h.journal.Append(feedback.Event{Kind: "turn", Turn: id, N: n, Machine: machine}))
 	}
@@ -155,12 +167,12 @@ func (h *hookEnv) creditedSinceTurn() bool {
 }
 
 // journalShows records items shown to the agent on path (prompt, gate,
-// briefing, search, read).
-func (h *hookEnv) journalShows(path string, items []feedback.Item) {
+// briefing, search, read), with flags (a prompt's set_changed).
+func (h *hookEnv) journalShows(path string, items []feedback.Item, flags ...string) {
 	if !h.feedbackOn() || len(items) == 0 {
 		return
 	}
-	h.feedbackError(h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items}))
+	h.feedbackError(h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items, Flags: flags}))
 }
 
 // itemsFromHits ranks hits from 1 in the order shown, each with its boost,
@@ -316,11 +328,11 @@ func (h *hookEnv) readShow(raw json.RawMessage) []feedback.Item {
 	return []feedback.Item{{ID: id}}
 }
 
-// shownInSession is what session sess was shown: the journal's shows of
-// the last 62 days and, when the journal cannot be read, the session
-// state's seen ids too.
+// shownInSession is what session sess was shown: the journal's shows
+// since the month it began (sessionJournal) and, when the journal cannot
+// be read, the session state's seen ids too.
 func shownInSession(d paths.Dirs, sess string) []feedback.Show {
-	events, _, err := feedback.Read(d.FeedbackDir(), now().AddDate(0, 0, -62))
+	events, err := sessionJournal(d, sess)
 	shown := feedback.Shows(events, sess)
 	if err != nil {
 		st, _ := session.Store{Dir: d.SessionsDir()}.Load(sess)
@@ -329,6 +341,13 @@ func shownInSession(d paths.Dirs, sess string) []feedback.Show {
 		}
 	}
 	return shown
+}
+
+// sessionJournal is the journal's events from the month session sess
+// began on, or of the last 62 days when its turn pointer does not say.
+func sessionJournal(d paths.Dirs, sess string) ([]feedback.Event, error) {
+	events, _, err := feedback.ReadSession(d.FeedbackDir(), sess, now().AddDate(0, 0, -62))
+	return events, err
 }
 
 // journalCredit records a memory_credit call the server accepted (its

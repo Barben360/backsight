@@ -205,3 +205,37 @@ func TestKeepShownTextsIsCapped(t *testing.T) {
 		t.Errorf("a batch over the cap: %d texts kept", len(st.ShownTexts))
 	}
 }
+
+// Past 50, the texts shown longest ago make room, whatever the map's
+// order: 51 shown one by one drop the first; a memory shown again counts
+// as just shown.
+func TestKeepShownTextsEvictsOldest(t *testing.T) {
+	kept := func(st State, from, to int, gone string) string {
+		if len(st.ShownTexts) != maxShownTexts {
+			return fmt.Sprintf("%d texts kept", len(st.ShownTexts))
+		}
+		if _, ok := st.ShownTexts[gone]; ok {
+			return gone + ", shown longest ago, was kept"
+		}
+		for i := from; i <= to; i++ {
+			if id := fmt.Sprintf("m%02d", i); id != gone && st.ShownTexts[id] == "" {
+				return id + " dropped"
+			}
+		}
+		return ""
+	}
+	for run := range 20 {
+		var st State
+		for i := range 51 {
+			st.KeepShownTexts(map[string]string{fmt.Sprintf("m%02d", i): "x"})
+		}
+		if why := kept(st, 1, 50, "m00"); why != "" {
+			t.Fatalf("run %d: %s", run, why)
+		}
+		st.KeepShownTexts(map[string]string{"m01": "again"})
+		st.KeepShownTexts(map[string]string{"m51": "x"})
+		if why := kept(st, 1, 51, "m02"); why != "" || st.ShownTexts["m01"] != "again" {
+			t.Fatalf("run %d, m01 shown again: %s %q", run, why, st.ShownTexts["m01"])
+		}
+	}
+}

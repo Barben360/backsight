@@ -1187,15 +1187,21 @@ func TestSetupWithoutTerminalNamesTheAgentPath(t *testing.T) {
 	}
 }
 
-// freePort is a loopback port nothing listens on now.
-func freePort(t *testing.T) int {
+// twoFreePorts is two distinct loopback ports nothing listens on now: both
+// listeners stay open until the second is taken, so the kernel cannot hand
+// the same port out twice (closing the first before taking the second can).
+func twoFreePorts(t *testing.T) (int, int) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	var ports [2]int
+	for i := range ports {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = ln.Close() }()
+		ports[i] = ln.Addr().(*net.TCPAddr).Port
 	}
-	defer func() { _ = ln.Close() }()
-	return ln.Addr().(*net.TCPAddr).Port
+	return ports[0], ports[1]
 }
 
 // The documented recovery from a mistyped LLM key, in order: setup's
@@ -1231,7 +1237,7 @@ func TestSetupRecoversFromARejectedKeyWithSecretSetAndResume(t *testing.T) {
 	}
 	f.fail["server install"] = rejected
 
-	api, ui := freePort(t), freePort(t)
+	api, ui := twoFreePorts(t)
 	ports := []string{"--answer", fmt.Sprintf("api_port=%d", api), "--answer", fmt.Sprintf("ui_port=%d", ui)}
 	code, out, errOut := run(t, append([]string{"setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"}, ports...)...)
 	if code != output.NeedsUser {
@@ -1298,7 +1304,7 @@ func TestSetupResumeRefusesPortsBacksightDoesNotHold(t *testing.T) {
 		return p
 	}
 	f.fail["server install"] = &output.Error{Code: output.NeedsUser, Message: "the deepseek API rejected the key in llm_api_key", Secrets: []string{"llm_api_key"}}
-	api, ui := freePort(t), freePort(t)
+	api, ui := twoFreePorts(t)
 	ports := []string{"--answer", fmt.Sprintf("api_port=%d", api), "--answer", fmt.Sprintf("ui_port=%d", ui)}
 	if code, out, errOut := run(t, append([]string{"setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive"}, ports...)...); code != output.NeedsUser {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)

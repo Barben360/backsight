@@ -123,6 +123,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
 			res.Feedback = settleFeedback(d, cfg, tw) // local only: before the server start, which can wait
+			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
+				tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+			}
 			// First: a server left down at boot makes every send below fail.
 			sctx, scancel := context.WithTimeout(cmd.Context(), serverCheckTimeout)
 			res.Server = startLateServer(sctx, d, cfg)
@@ -278,6 +281,9 @@ func tickText(r tickResult) string {
 	if r.Server != "" {
 		msg += ", " + r.Server
 	}
+	if r.Feedback.Rebuilt != "" {
+		msg += ", feedback ledger unreadable: kept as " + r.Feedback.Rebuilt + ", rebuilt from the journal"
+	}
 	if r.Unhidden > 0 {
 		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, no longer marked hidden", r.Unhidden)
 	}
@@ -325,6 +331,8 @@ func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 		return "" // the run in progress reports
 	case err != nil:
 		return "earlier history not imported (" + err.Error() + ")"
+	case res.Waiting:
+		return fmt.Sprintf("earlier history: %d shows and %d credits imported; marked complete once the server answers", shows, credits)
 	case !res.Complete:
 		return fmt.Sprintf("earlier history: %d shows and %d credits imported, the rest at the next tick", shows, credits)
 	}

@@ -115,7 +115,7 @@ func TestRebuildEqualsTheLiveLedger(t *testing.T) {
 		if round == 7 {
 			now = end.Add(3 * time.Hour)
 		}
-		res, err := Settle(dir, testParams, now)
+		res, err := Settle(dir, testParams, fixedClock(now))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,14 +204,14 @@ func TestForgetDropsTheEntry(t *testing.T) {
 	// The live ledger drops it at the next settle, as a rebuild does.
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, at(120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	if l, _ := LoadLedger(dir); l.Memories["m1"].Shown != 1 {
 		t.Fatalf("m1 not settled: %+v", l.Memories)
 	}
 	writeJournal(t, dir, Event{Kind: "forget", TS: at(130), IDs: []string{"m1", "m3"}})
-	if _, err := Settle(dir, testParams, at(140)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(140))); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
@@ -273,7 +273,7 @@ func TestRebuildUsesTheRecordedHalfLives(t *testing.T) {
 		evCredit("s1", "p1", "", "used", 2, "m2"),
 		evStop("s1", "p1", "", "declared", 3),
 	)
-	if _, err := Settle(dir, testParams, at(120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	writeJournal(t, dir,
@@ -282,7 +282,7 @@ func TestRebuildUsesTheRecordedHalfLives(t *testing.T) {
 		evCredit("s1", "p2", "", "used", 40*day+2, "m2"),
 		evStop("s1", "p2", "", "declared", 40*day+3),
 	)
-	if _, err := Settle(dir, testParams, at(40*day+120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(40*day+120))); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
@@ -320,7 +320,7 @@ func TestLedgerFoldsRetirements(t *testing.T) {
 	)...)
 	settleAndCompare := func(now time.Time) Ledger {
 		t.Helper()
-		if _, err := Settle(dir, testParams, now); err != nil {
+		if _, err := Settle(dir, testParams, fixedClock(now)); err != nil {
 			t.Fatal(err)
 		}
 		live, err := LoadLedger(dir)
@@ -373,7 +373,7 @@ func TestUnhideSetsUnhiddenAt(t *testing.T) {
 		Event{Kind: KindHide, TS: at(20), IDs: []string{"o1", "o2"}, Verdict: "wrong", Note: "n1"},
 		Event{Kind: KindRetire, TS: at(21), IDs: []string{"m1"}, Verdict: "wrong", Note: "n2"},
 	)...)
-	if _, err := Settle(dir, testParams, at(120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); strings.Contains(string(raw), "unhidden_at") {
@@ -398,7 +398,7 @@ func TestUnhideSetsUnhiddenAt(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("current", cur)
-	if _, err := Settle(dir, testParams, at(140)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(140))); err != nil {
 		t.Fatal(err)
 	}
 	live, err := LoadLedger(dir)
@@ -421,7 +421,7 @@ func TestUnhideSetsUnhiddenAt(t *testing.T) {
 func TestCurrentAppliesRetirementsSinceTheWatermark(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, at(120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(filepath.Join(dir, "ledger.json"))
@@ -448,13 +448,13 @@ func TestCurrentAppliesRetirementsSinceTheWatermark(t *testing.T) {
 func TestAnEventAtTheWatermarkFolds(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, at(120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	if err := NewJournal(dir, Common{}).AppendFolded(Event{Kind: KindRetire, TS: at(120), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, testParams, at(140)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(140))); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
@@ -474,7 +474,7 @@ func TestAnEventAtTheWatermarkFolds(t *testing.T) {
 func TestARetirementDuringASettleFolds(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, at(100)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(100))); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -485,14 +485,14 @@ func TestARetirementDuringASettleFolds(t *testing.T) {
 		time.Sleep(100 * time.Millisecond) // the append runs now, unless it waits for the lock
 	}
 	t.Cleanup(func() { afterSettleRead = nil })
-	if _, err := Settle(dir, testParams, at(120)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
 		t.Fatal(err)
 	}
 	afterSettleRead = nil
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, testParams, at(140)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(140))); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
@@ -580,7 +580,7 @@ func TestCurrentReadsOnlyTheJournalsTail(t *testing.T) {
 	}
 	p := Params{ConfidentRank: 2, TurnTimeout: TurnTimeout, MissHalfLife: 90 * 24 * time.Hour, CreditHalfLife: 365 * 24 * time.Hour}
 	settleAt := base.Add(3 * time.Hour)
-	if _, err := Settle(dir, p, settleAt); err != nil {
+	if _, err := Settle(dir, p, fixedClock(settleAt)); err != nil {
 		t.Fatal(err)
 	}
 	j.now = func() time.Time { return settleAt.Add(time.Minute) }
@@ -668,7 +668,7 @@ func TestCurrentFindsAFoldedEventNewerThanTheSettleItPreceded(t *testing.T) {
 	if err := j.AppendFolded(Event{Kind: KindHide, TS: at.Add(time.Hour), IDs: []string{"m1"}, Verdict: "wrong"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, at.Add(time.Minute)); err != nil {
+	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, fixedClock(at.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	l, err := Current(dir)
@@ -688,7 +688,7 @@ func TestCurrentSkipsATailLineAtOrBeforeTheWatermark(t *testing.T) {
 	if err := j.AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, at.Add(time.Minute)); err != nil {
+	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, fixedClock(at.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := LoadLedger(dir)

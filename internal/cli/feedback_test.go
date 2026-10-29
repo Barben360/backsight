@@ -45,7 +45,7 @@ func feedbackJournal(t *testing.T, home string) string {
 			t.Fatal(err)
 		}
 	}
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), logStart.Add(3*time.Hour)); err != nil {
+	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -511,7 +511,7 @@ func ptr(v float64) *float64 { return &v }
 func TestReplayIsReadOnly(t *testing.T) {
 	home := isolate(t)
 	dir := replayJournal(t, home)
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), logStart.Add(3*time.Hour)); err != nil {
+	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
@@ -543,6 +543,39 @@ func TestReplayPrintsNoNegativeZero(t *testing.T) {
 	_, raw, _ := run(t, "feedback", "replay", "--set", "boost_weight=0", "--json")
 	if !regexp.MustCompile(`"after":\s*0\s*[,}]`).MatchString(raw) || regexp.MustCompile(`:\s*-0\s*[,}]`).MatchString(raw) {
 		t.Errorf("JSON with a negative zero, or no move to 0:\n%s", raw)
+	}
+}
+
+// A change of sign is judged on the boosts as computed, not as printed: a
+// boost too small to show at 4 decimals still has its sign, one within
+// 1e-9 of zero has none.
+func TestReplaySignOnUnroundedValues(t *testing.T) {
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	p := feedback.Params{CreditHalfLife: 365 * 24 * time.Hour, MissHalfLife: 90 * 24 * time.Hour, PriorCredits: 3, PriorMisses: 9, Weight: 0.1}
+	entry := func(credits, misses float64) feedback.Entry {
+		return feedback.Entry{Shown: 1, LastShown: at, Credits: credits, CreditsAt: at, Misses: misses, MissesAt: at}
+	}
+	before := feedback.Ledger{Memories: map[string]feedback.Entry{
+		"up": entry(0, 0.001), "down": entry(0.001, 0), // about ∓0.000002 and +0.000006: 0 at 4 decimals
+		"nil-down": entry(1, 0), "nil-up": entry(0, 1),
+	}}
+	after := feedback.Ledger{Memories: map[string]feedback.Entry{
+		"up": entry(1, 0), "down": entry(0, 1),
+		"nil-down": entry(0, 1e-12), "nil-up": entry(1e-12, 0), // a boost of about ∓1e-15: no sign
+	}}
+	for _, id := range []string{"up", "down"} {
+		if b := before.Boost(id, p, at); b == 0 || round4(b) != 0 {
+			t.Fatalf("%s: boost before %v, want a value that rounds to 0", id, b)
+		}
+	}
+	for _, id := range []string{"nil-down", "nil-up"} {
+		if b := after.Boost(id, p, at); b == 0 || math.Abs(b) > 1e-9 {
+			t.Fatalf("%s: boost after %v, want a value within 1e-9 of 0, not 0", id, b)
+		}
+	}
+	res := compareReplays(nil, before, after, p, p, at, 3)
+	if strings.Join(res.TurnedPositive, ",") != "up" || strings.Join(res.TurnedNegative, ",") != "down" {
+		t.Errorf("turned positive %v, negative %v: want up and down", res.TurnedPositive, res.TurnedNegative)
 	}
 }
 

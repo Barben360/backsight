@@ -171,6 +171,22 @@ func TestHonestyFlags(t *testing.T) {
 	}
 }
 
+// A reply without a word to compare (blank, or a word too short to
+// count) cannot tell whether a credited memory was used: no flag. A reply
+// with words still flags an unechoed credit.
+func TestNoOverlapFlagOnEmptyReply(t *testing.T) {
+	texts := map[string]string{idB: "Deploys go through the staging cluster first."}
+	c := Check{Shown: []Show{{ID: idB}}, Declared: true, Credited: []string{idB}}
+	for _, reply := range []string{"", " \n\t", "OK.", "👍", "--- ok ---"} {
+		if got := c.Flags(reply, texts); len(got) != 0 {
+			t.Errorf("reply %q flagged %v", reply, got)
+		}
+	}
+	if got := strings.Join(c.Flags("Fixed the billing query.", texts), ","); got != FlagCreditWithoutOverlap {
+		t.Errorf("a reply that does not echo the credit: %q", got)
+	}
+}
+
 func TestRetirementsCountTheSessionsRetiredIDs(t *testing.T) {
 	events := []Event{
 		{Kind: KindRetire, Session: "s1", Turn: "p-1", IDs: []string{idA}},

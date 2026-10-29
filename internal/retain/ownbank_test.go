@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,5 +67,50 @@ func TestShareWritesAndListsControlDocuments(t *testing.T) {
 	var foreign *ForeignBank
 	if err := WriteControlDocument(ctx, cl, "other", "backsight:feedback:pc-a", "x", map[string]string{"feedback": "{}"}); !errors.As(err, &foreign) {
 		t.Errorf("foreign control bank: %v", err)
+	}
+}
+
+// DeleteControlDocument deletes that document alone; a document or a
+// control bank already gone is nothing to do, and a control bank that is
+// not backsight's gets no delete.
+func TestDeleteControlDocument(t *testing.T) {
+	ctx := context.Background()
+	h := &banksHS{docs: map[string]map[string]json.RawMessage{}, configs: map[string]map[string]any{}}
+	cl := h.client(t)
+	if err := DeleteControlDocument(ctx, cl, "notes", "backsight:feedback:pc-a"); err != nil {
+		t.Errorf("no control bank: %v", err)
+	}
+	for _, pc := range []string{"pc-a", "pc-b"} {
+		if err := WriteControlDocument(ctx, cl, "notes", "backsight:feedback:"+pc, "x", map[string]string{"feedback": "{}"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := DeleteControlDocument(ctx, cl, "notes", "backsight:feedback:pc-a"); err != nil {
+		t.Fatal(err)
+	}
+	if docs, _ := ControlDocuments(ctx, cl, "notes", "backsight:feedback:"); len(docs) != 1 || docs[0].ID != "backsight:feedback:pc-b" {
+		t.Errorf("left %+v", docs)
+	}
+	if err := DeleteControlDocument(ctx, cl, "notes", "backsight:feedback:pc-a"); err != nil {
+		t.Errorf("already gone: %v", err)
+	}
+	h.mu.Lock()
+	h.docs["other-control"] = map[string]json.RawMessage{"backsight:feedback:pc-a": json.RawMessage(`{}`)}
+	h.names["other-control"] = "someone's"
+	h.calls = nil
+	h.mu.Unlock()
+	var foreign *ForeignBank
+	if err := DeleteControlDocument(ctx, cl, "other", "backsight:feedback:pc-a"); !errors.As(err, &foreign) {
+		t.Errorf("foreign control bank: %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.calls {
+		if strings.HasPrefix(c, "DELETE") {
+			t.Errorf("a delete reached someone else's bank: %s", c)
+		}
+	}
+	if _, ok := h.docs["other-control"]["backsight:feedback:pc-a"]; !ok {
+		t.Error("someone else's document deleted")
 	}
 }
