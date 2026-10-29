@@ -14,7 +14,7 @@ The server turns this text into memories: short facts tagged with their project,
 
 | To | What | When |
 |---|---|---|
-| **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only; its API and web UI always require a key. | Each session, report and stored fact. |
+| **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only, unless you open it to your other PCs on a private address (`backsight server expose --private`); its API and web UI always require a key. | Each session, report and stored fact. |
 | **The LLM provider you chose at setup** | Session text, reports and stored facts, which the server sends it to extract and consolidate memories, and the server's own summaries (the briefing pages). With `ollama`, nothing: the model runs on your machine. | In the background, after each send. |
 | **Hugging Face** (`huggingface.co`) | Nothing of yours: the server downloads its embedding model and its reranker from there, into a Docker volume. | The server's first start, and after its model cache is deleted. |
 | **The image registries** (`ghcr.io` for Hindsight, Docker Hub for pgvector) | Nothing of yours: Docker pulls the server's images, by digest. | Setup, and server upgrades. |

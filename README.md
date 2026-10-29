@@ -39,7 +39,7 @@ This memory layer is what I'm sharing here. First so you can benefit from it, bu
 
 - **Remembers your sessions.** When a session ends, its text is redacted and sent to your server, which extracts durable facts: decisions, fixes, conventions, pitfalls.
 - **Recalls at the right moment.** Each session starts with a briefing on the current project. Each prompt brings the few most relevant memories into Claude's context, and Claude searches the memory before answering factual questions. Every search runs on your machine, with no LLM call.
-- **Stays yours.** The server runs on your machine, on `127.0.0.1`. You choose which LLM extracts the memories, and can pause or exclude anything.
+- **Stays yours.** The server runs on your machine, on `127.0.0.1`, or on another of your machines that your other PCs also use. You choose which LLM extracts the memories, and can pause or exclude anything.
 - **Looks after itself.** Daily encrypted backups, signed updates that roll back on failure, and `backsight doctor` to say what is wrong and how to fix it.
 
 New words (bank, observation, transverse…) are in the [glossary](docs/glossary.md).
@@ -72,18 +72,18 @@ Each hook's time limit and exact behaviour: [how-it-works.md](docs/how-it-works.
 
 ## How it works
 
-A session and the memory, step by step. The green part runs on your machine and costs nothing; only the orange part, in the background, calls your LLM provider.
+A session and the memory, step by step. The green part runs on your machines and costs nothing; only the orange part, in the background, calls your LLM provider. The server runs on this PC, or on another of your machines that your other PCs also use ([install.md](docs/install.md#a-server-only-host)).
 
 ```mermaid
 sequenceDiagram
     actor You
     participant CC as Claude Code
     participant BS as backsight
-    participant HS as Hindsight server (local)
+    participant HS as Hindsight server (yours)
     participant LLM as LLM provider
 
     rect rgba(46, 160, 67, 0.12)
-    Note over CC,HS: On your machine, free
+    Note over CC,HS: On your machines, free
     You->>CC: open a session
     CC->>BS: SessionStart hook
     BS->>HS: read the project's briefing
@@ -91,7 +91,8 @@ sequenceDiagram
     You->>CC: a prompt
     CC->>BS: UserPromptSubmit hook
     BS->>HS: recall (search + local reranker)
-    BS-->>CC: up to 3 relevant memories
+    Note over BS: reorder by what helped before (local record)
+    BS-->>CC: up to 3 relevant memories, with short ids
     CC->>BS: memory_search, memory_read
     BS->>HS: search
     BS-->>CC: memories, to cite
@@ -99,6 +100,14 @@ sequenceDiagram
     BS-->>CC: refused once: search the memory first
     CC->>BS: memory_store, a subagent's report
     BS->>HS: redacted fact or report
+    CC->>BS: memory_credit: the memories that helped, or none
+    BS-->>CC: the citation line to print
+    CC->>BS: memory_credit: one proved wrong or outdated
+    BS->>HS: correction note, the wrong fact retired
+    CC->>BS: Stop hook, the reply ends
+    opt memories shown, no memory_credit yet
+    BS-->>CC: asked once which ones helped
+    end
     You->>CC: end the session (or leave it idle 30 min)
     CC->>BS: SessionEnd hook
     BS->>HS: redacted session text
@@ -115,8 +124,8 @@ Background jobs keep it running (systemd user timers):
 
 ```mermaid
 flowchart LR
-    tick(["jobs tick<br/>every 15 min"]) --> t1["send idle sessions<br/>and queued notes"] --> t2["pace the import<br/>of past sessions"] --> t3["purge again a document<br/>an older client rewrote"]
-    maintain(["jobs maintain<br/>daily, 04:00 ± 30 min"]) --> m1["encrypted backup"] --> m2["move memories<br/>to their project"] --> m3["check purged<br/>documents"] --> m4["check for<br/>a new release"] --> m5["doctor snapshot"]
+    tick(["jobs tick<br/>every 15 min"]) --> t1["settle which memories<br/>helped (local)"] --> t2["start the server if down,<br/>send idle sessions and queued notes"] --> t3["pace the import<br/>of past sessions"] --> t4["purge again a document<br/>an older client rewrote"] --> t5["share what helped<br/>with your other PCs"]
+    maintain(["jobs maintain<br/>daily, 04:00 to 04:30"]) --> m1["encrypted backup<br/>(on the server's host)"] --> m2["move memories<br/>to their project"] --> m3["check purged<br/>documents"] --> m4["check for<br/>a new release"] --> m5["doctor snapshot"]
 ```
 
 Every hook, threshold and time limit: [how-it-works.md](docs/how-it-works.md).
@@ -241,7 +250,7 @@ backsight adds the memory to your prompt, and Claude answers with it:
 
 ## Privacy
 
-- The server runs locally, on loopback, with its API and web UI behind keys. Recall and searches never leave the machine.
+- The server runs locally, on loopback, with its API and web UI behind keys, unless you open it to your other PCs on a private address (`backsight server expose --private`; a tailnet address keeps the API key encrypted). Recall and searches never leave your machines.
 - Session text goes to the LLM provider you chose, under that provider's terms. With Ollama, it stays on the machine.
 - The server downloads its two search models from Hugging Face on its first start, and Docker pulls its images; no memory text goes with them.
 - Secrets are redacted before anything is stored, facts that look like secrets are refused, and Claude is told never to ask you for a key in the conversation.
