@@ -910,6 +910,13 @@ m6_check_key_rotation() {
   code=$(m6_banks_code) || exit 1
   [ "$code" = 200 ] || fail "the banks list with B's key before the rotation: HTTP $code, want 200: a 401 after it would prove nothing"
   state=$(m6_paths srv | jq -r .state)
+  # The new token leaves no copy on any machine, whatever way the check
+  # ends: armed before the rotation writes it (a file not there yet is no
+  # harm). The paths are expanded now: the function's locals are gone by
+  # the time its subshell exits.
+  trap "m6_sh srv $(m6_q "rm -f $(m6_q "$state/bench-token2")") > /dev/null 2>&1 || true
+    m6_sh a $(m6_q "rm -f $(m6_q "$(m6_home a)/token2")") > /dev/null 2>&1 || true
+    m6_sh b $(m6_q "rm -f $(m6_q "$(m6_home b)/token2")") > /dev/null 2>&1 || true" EXIT
   out=$(m6_on srv server token --rotate --out "$state/bench-token2" --json < /dev/null 2> "$M6_WORK/rotate.err") ||
     fail "server token --rotate on the server failed: $(jq -r '.error.message // ""' <<<"$out" 2> /dev/null | m6_scrub)"
   code=$(m6_banks_code) || exit 1
@@ -942,13 +949,7 @@ m6_check_key_rotation() {
   esac
   [ "$(m6_hash b "$sec")" = "$sec_before" ] || fail "the refused connect changed B's secrets.toml"
   m6_sh b "rm -f $(m6_q "$old")" || fail "cannot remove the old token on B"
-  # The new token, to each PC (0600, removed once used, and on any way
-  # out of the check: a fail must not leave it on a machine).
-  # The paths are expanded now: the function's locals are gone by the time
-  # its subshell exits.
-  trap "m6_sh srv $(m6_q "rm -f $(m6_q "$state/bench-token2")") > /dev/null 2>&1 || true
-    m6_sh a $(m6_q "rm -f $(m6_q "$(m6_home a)/token2")") > /dev/null 2>&1 || true
-    m6_sh b $(m6_q "rm -f $(m6_q "$(m6_home b)/token2")") > /dev/null 2>&1 || true" EXIT
+  # The new token, to each PC (0600, removed once used).
   for who in b a; do
     tok=$(m6_home "$who")/token2
     m6_get srv "$state/bench-token2" | m6_put "$who" "$tok" || fail "cannot copy the new token to $who"

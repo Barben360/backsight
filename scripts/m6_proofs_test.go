@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -949,34 +950,44 @@ esac
 `
 
 // m6KeyRotationCurl: the banks list answers 200 once, then 401 (the
-// rotated key); every document is absent.
+// rotated key), or 200 always when <T>/old-key-kept exists; every document
+// is absent.
 const m6KeyRotationCurl = `#!/bin/sh
 t=$(dirname "$(dirname "$0")")
 for a in "$@"; do last=$a; done
 case $last in
   */banks) n=$(($(cat "$t/banks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$t/banks"
-    if [ "$n" = 1 ]; then printf 200; else printf 401; fi ;;
+    if [ "$n" = 1 ] || [ -e "$t/old-key-kept" ]; then printf 200; else printf 401; fi ;;
   *) printf 404 ;;
 esac
 `
 
 // key-rotation reconnects each PC with the scheduler answer its own setup
 // recorded (A on, B off: the CI chain's homes answer off), never one
-// tied to the driver; whatever step fails after the new token was handed
-// out, the token is removed on every machine.
+// tied to the driver; whatever step fails once the rotation wrote the new
+// token, it is removed on every machine. Each copy the trap removes is
+// one a case needs: the server's (a fail before the token is handed out),
+// A's (B fails first) and B's (a fail before B's connect).
 func TestM6KeyRotationKeepsEachSchedulerAndRemovesTheNewToken(t *testing.T) {
-	run := func(fails string) (stdout, stderr, calls, dir string) {
+	run := func(fails string, opts ...string) (stdout, stderr, calls, dir string) {
 		dir = t.TempDir()
 		m6Lib(t, dir, m6TestDriver, "true")
 		writeExec(t, filepath.Join(dir, "bin", "backsight"), m6KeyRotationFake)
 		writeExec(t, filepath.Join(dir, "bin", "curl"), m6KeyRotationCurl)
 		writeLines(t, filepath.Join(dir, "fails"), fails)
+		for _, o := range opts {
+			if o == "old-key-kept" {
+				writeLines(t, filepath.Join(dir, "old-key-kept"), "x")
+			}
+		}
 		for who, sched := range map[string]string{"a": "on", "b": "off", "srv": ""} {
 			if err := os.MkdirAll(filepath.Join(dir, who, "state", "cursors"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			writeLines(t, filepath.Join(dir, who, "state", "state.json"), `{"schema_version":1}`)
-			writeLines(t, filepath.Join(dir, who, "state", "cursors", "tc-"+who+".json"), `{"last_uuid":"tc-r3"}`)
+			if who != "b" || !slices.Contains(opts, "b-no-cursor") {
+				writeLines(t, filepath.Join(dir, who, "state", "cursors", "tc-"+who+".json"), `{"last_uuid":"tc-r3"}`)
+			}
 			if sched != "" {
 				writeLines(t, filepath.Join(dir, who, "state", "setup.json"), `{"answers":{"scheduler":"`+sched+`","consent":"yes"}}`)
 			}
@@ -1019,6 +1030,22 @@ func TestM6KeyRotationKeepsEachSchedulerAndRemovesTheNewToken(t *testing.T) {
 		t.Fatalf("B failing: stdout %q; stderr:\n%s", stdout, stderr)
 	}
 	tokensGone("B failing", dir)
+	// A fail before B's connect: B's copy (and A's) were never used.
+	stdout, stderr, _, dir = run("none", "b-no-cursor")
+	if !strings.HasPrefix(stdout, "bs-m6 key-rotation: FAIL b has no session cursor") {
+		t.Fatalf("no cursor on B: stdout %q; stderr:\n%s", stdout, stderr)
+	}
+	tokensGone("no cursor on B", dir)
+	// A fail between the rotation and the old token's connect (the old key
+	// still accepted): the server's new token goes.
+	stdout, stderr, calls, dir = run("none", "old-key-kept")
+	if !strings.HasPrefix(stdout, "bs-m6 key-rotation: FAIL the banks list with the old key after the rotation: HTTP 200, want 401") {
+		t.Fatalf("old key kept: stdout %q; stderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(calls, "srv server token --rotate --out ") {
+		t.Fatalf("old key kept: the rotation never ran (the case would prove nothing):\n%s", calls)
+	}
+	tokensGone("old key kept", dir)
 }
 
 // m6_scheduler reads the scheduler answer that machine's setup recorded;
