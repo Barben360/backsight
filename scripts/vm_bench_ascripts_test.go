@@ -314,6 +314,37 @@ func TestVMBenchOfflineScriptStopsAtItsBound(t *testing.T) {
 	}
 }
 
+// The watchdog goes with the script however it ends: here an early exit
+// (backsight paths fails) leaves nothing of the script's session running,
+// though the bound is far; the offline script's done is still written.
+func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
+	for _, c := range []struct{ fn, dir string }{
+		{"vb_offline_script", "m6-offline"},
+		{"vb_latency_script", "m6-latency"},
+	} {
+		home, bin := aHome(t)
+		writeExec(t, filepath.Join(home, "backsight"), "#!/bin/sh\nexit 1\n")
+		d := filepath.Join(home, c.dir)
+		args := append([]string{"laptop", "http://srv:8888", "600", "bs-m6-offline", "of1"}, offlinePrompts()...)
+		if c.fn == "vb_latency_script" {
+			args = []string{"20", "bs-m6-latency", "600", "a prompt"}
+		}
+		_, _, code := runAScript(t, home, bin, c.fn, d, args)
+		if code == 0 {
+			t.Errorf("%s: exit 0 with backsight paths failing", c.fn)
+		}
+		sid := readFile(t, filepath.Join(d, "pgid"))
+		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-s", sid).Run() })
+		time.Sleep(200 * time.Millisecond)
+		if out, err := exec.Command("pgrep", "-s", sid).Output(); err == nil {
+			t.Errorf("%s: its session still runs after an early exit (watchdog left): pids %s", c.fn, strings.Fields(string(out)))
+		}
+		if c.fn == "vb_offline_script" {
+			readFile(t, filepath.Join(d, "done"))
+		}
+	}
+}
+
 // The latency script: it waits for an open breaker, then a startup and
 // one prompt hook a prompt of session lt<d>, and answers with their wall
 // times, the session's prompt events since its start and only the hook

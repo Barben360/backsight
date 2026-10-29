@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The checks of the client VM's network (offline-laptop, offline-hung,
@@ -282,6 +285,10 @@ func TestVMBenchOfflineBringsTheLinkBack(t *testing.T) {
 			if len(links) < 2 || links[0] != "down" || links[len(links)-1] != "up" {
 				t.Errorf("A's link: %q, want down first and up last", links)
 			}
+			// The refused up is the check's own; the trap's up follows it.
+			if c.name == "the link refuses to come back once" && !slices.Equal(links, []string{"down", "up", "up"}) {
+				t.Errorf("A's link: %q, want down, the refused up, then the trap's up", links)
+			}
 			cleanedA(t, dir, "m6-offline")
 		})
 	}
@@ -329,6 +336,20 @@ func TestVMBenchOfflineHungDropsAndLiftsTheRule(t *testing.T) {
 		{"the tick fails once lifted", "FAIL", "jobs tick on a did not succeed", func(t *testing.T, dir, _ string) {
 			writeLines(t, filepath.Join(dir, "tick-fails"), "x")
 		}},
+		// Dying while the rule is set (waiting for the script): the trap
+		// lifts it.
+		{"killed while the rule is set", "FAIL", "exited 143", func(t *testing.T, dir, _ string) {
+			writeLines(t, filepath.Join(dir, "never-done"), "x")
+			writeLines(t, filepath.Join(dir, "kill-in-sleep"), "x")
+		}},
+		{"the drop rule stayed", "FAIL", "the drop rule stayed on A", func(t *testing.T, _, fakes string) {
+			writeLines(t, filepath.Join(fakes, "sticky-drop"), "x")
+		}},
+		// The breaker skipped prompt 2 while prompt 3 still tried the
+		// server: the tries did not all come before it opened.
+		{"a try after the breaker opened", "FAIL", "the breaker skipped prompt 2 before prompt 3 tried the server", func(t *testing.T, dir, _ string) {
+			editFixture(t, filepath.Join(dir, "telemetry"), `"n":2,"decision":"recall","reason":"topic_shift","scopes":{"project":{"ok":false,"ms":17000,"raw":0},"global":{"ok":false,"ms":17000,"raw":0}}`, `"n":2,"decision":"skip","reason":"breaker"`)
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -343,10 +364,13 @@ func TestVMBenchOfflineHungDropsAndLiftsTheRule(t *testing.T) {
 			if rec["status"] != c.status || !strings.Contains(rec["detail"].(string), c.detail) {
 				t.Errorf("%s %q, want %s naming %q (stderr %s)", rec["status"], rec["detail"], c.status, c.detail, stderr)
 			}
-			if _, err := os.Stat(filepath.Join(fakes, "drop")); err == nil {
+			if _, err := os.Stat(filepath.Join(fakes, "drop")); err == nil && c.name != "the drop rule stayed" {
 				t.Errorf("the drop rule stayed on A")
 			}
 			calls := strings.Join(benchCalls(t, fakes, "ssh"), "\n")
+			if c.name == "killed while the rule is set" && !strings.Contains(calls, "s/^-A /-D /") {
+				t.Errorf("the rule was never lifted after the kill: %s", calls)
+			}
 			if c.name != "the drop never applied" && !strings.Contains(calls, "sudo iptables -I OUTPUT -d 192.168.122.196 -m comment --comment bs-m6-hung -j DROP") {
 				t.Errorf("no drop rule set: %s", calls)
 			}
@@ -422,7 +446,7 @@ case "$4" in
   *"qdisc del"*) rm -f "$d/netem" ;;
   *"qdisc show"*) cat "$d/netem" 2> /dev/null || echo "qdisc fq_codel 0: dev enp1s0 root refcnt 2" ;;
   *"iptables -I OUTPUT"*) [ -e "$d/ignore-drop" ] || echo "-A OUTPUT -d 192.168.122.196/32 -m comment --comment bs-m6-hung -j DROP" > "$d/drop" ;;
-  *'s/^-A /-D /'*) rm -f "$d/drop" ;;
+  *'s/^-A /-D /'*) if [ -e "$d/sticky-drop" ]; then exit 1; fi; rm -f "$d/drop" ;;
   *"iptables -S OUTPUT"*) echo "-P OUTPUT ACCEPT"; cat "$d/drop" 2> /dev/null ;;
 esac
 exit 0
@@ -498,10 +522,47 @@ func TestVMBenchLatencyLeavesNoNetem(t *testing.T) {
 			}
 			a, _ := os.ReadFile(filepath.Join(dir, "m6sh.calls"))
 			lines := strings.Split(strings.TrimSpace(string(a)), "\n")
-			if last := lines[len(lines)-1]; !strings.Contains(last, "rm -rf ~/m6-latency ~/m6-latency.sh") {
+			last := lines[len(lines)-1]
+			if !strings.Contains(last, "rm -rf ~/m6-latency ~/m6-latency.sh") {
 				t.Errorf("the latency files stayed on A: last call %q", last)
 			}
+			if c.name == "20 ms" {
+				stopsTheLatencySession(t, strings.TrimPrefix(last, "a "))
+			}
 		})
+	}
+}
+
+// stopsTheLatencySession runs the latency check's cleanup on A (cmd) in a
+// home whose ~/m6-latency/pgid names a session still running (a script
+// that outlived its ssh): the session must be stopped.
+func stopsTheLatencySession(t *testing.T, cmd string) {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "m6-latency"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	left := exec.Command("setsid", "sleep", "60")
+	if err := left.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = left.Wait(); close(done) }()
+	t.Cleanup(func() { _ = left.Process.Kill(); <-done })
+	time.Sleep(100 * time.Millisecond) // setsid has made it a session leader
+	writeLines(t, filepath.Join(home, "m6-latency", "pgid"), strconv.Itoa(left.Process.Pid))
+	run := exec.Command("sh", "-c", cmd)
+	run.Env = append(os.Environ(), "HOME="+home)
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Logf("cleanup: %v %s", err, out)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Errorf("the latency script's session still runs after the cleanup: %s", cmd)
+	}
+	if _, err := os.Stat(filepath.Join(home, "m6-latency")); err == nil {
+		t.Error("~/m6-latency stayed")
 	}
 }
 

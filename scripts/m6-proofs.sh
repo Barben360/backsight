@@ -14,6 +14,9 @@
 #   M6_RESULTS                          the JSONL file the results go to
 #   M6_WORK                             a private scratch directory here
 #   M6_VERSION, M6_COMMIT               what the results are of
+#   M6_ABORT (optional)                 a file: once it holds a line (the
+#                                       run's watchdog), the check running
+#                                       FAILs with it, the rest NOT RUN
 #   fail <message>                      stops the caller
 # A is a PC with Claude Code (the bench's bs-m6-client), B the other one
 # (the bench's host client), srv the server's host. The checks of the VM
@@ -133,6 +136,11 @@ m6_check() {
     m6_result "$name" "NOT RUN" "after the FAIL of $M6_STOPPED"
     return 0
   fi
+  if [ -n "${M6_ABORT:-}" ] && [ -s "$M6_ABORT" ]; then
+    M6_STOPPED=$name
+    m6_result "$name" FAIL "$(head -n 1 "$M6_ABORT")"
+    return 0
+  fi
   case $- in *e*) errexit=1 ;; esac
   set +e
   probe=$(
@@ -160,6 +168,11 @@ m6_check() {
   )
   rc=$?
   if [ "$errexit" = 1 ]; then set -e; fi
+  # Stopped by the run's watchdog: its reason first.
+  if [ -n "${M6_ABORT:-}" ] && [ -s "$M6_ABORT" ]; then
+    { head -n 1 "$M6_ABORT"; cat "$M6_FAIL_FILE" 2> /dev/null || true; } > "$M6_FAIL_FILE.abort"
+    mv "$M6_FAIL_FILE.abort" "$M6_FAIL_FILE"
+  fi
   # A fail its caller swallowed (x=$(…) || true) still fails the check.
   if [ "$rc" = 0 ] && [ ! -s "$M6_FAIL_FILE" ] && [ "$(m6_results_of "$name")" -gt "$before" ]; then
     return 0
@@ -1103,12 +1116,23 @@ m6_reconciles() {
 # driver runs them, may have left a session or a note): each ticks, the
 # queue drains, until every tick of a round sent nothing; still sending
 # after M6_SETTLE_ROUNDS rounds (5) fails.
+# It waits for sends only, never for a session still settling (its last
+# turn under 30 min old, e.g. unsent-cost's 200 transcripts): such a
+# session would go out during the counted ticks and break their strict
+# counts. A tick that reports one fails at once, naming the transcripts
+# written in the last 30 min: run restore and purge before such checks,
+# or 30 min after them.
 m6_settle() {
-  local round who tick sent left
+  local round who tick sent left waiting names
   for round in $(seq 1 "${M6_SETTLE_ROUNDS:-5}"); do
     left=
     for who in "$@"; do
       tick=$(m6_tick "$who") || exit 1
+      waiting=$(jq -r '.data.sessions.waiting // 0' <<<"$tick")
+      if [ "$waiting" != 0 ]; then
+        names=$(m6_sh "$who" 'find "$HOME/.claude/projects" -name "*.jsonl" -mmin -30 -printf "%f\n" 2> /dev/null | sed "s/\.jsonl\$//" | sort | head -n 5 | paste -sd " " -' || true)
+        fail "$who has $waiting session(s) still settling (last turn under 30 min old; written in the last 30 min: ${names:-none found}): they would be sent during the counted ticks; run this check before such sessions, or 30 min after them"
+      fi
       sent=$(jq -r '(.data.sessions.sent // 0) + (.data.notes.sent // 0)' <<<"$tick")
       [ "$sent" = 0 ] || left+="${left:+; }$who sent $(jq -c '.data.sessions | {sent}' <<<"$tick") (notes $(jq -r '.data.notes.sent // 0' <<<"$tick"))"
     done

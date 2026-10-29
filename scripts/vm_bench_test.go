@@ -326,6 +326,8 @@ Host *
   BatchMode yes
   ForwardAgent no
   ConnectTimeout 10
+  ServerAliveInterval 15
+  ServerAliveCountMax 4
 `
 	if conf != want {
 		t.Errorf("ssh_config:\n%s\nwant\n%s", conf, want)
@@ -674,5 +676,39 @@ func TestVMBenchSnapshotEjectsTheSeedFirst(t *testing.T) {
 	}
 	if eject < 0 || snap < 0 || eject > snap {
 		t.Errorf("eject at call %d, snapshot at call %d: want both, eject first\n%s", eject, snap, strings.Join(benchCalls(t, fakes, "virsh"), "\n"))
+	}
+}
+
+// Every ssh the bench's host side runs goes through the bench's own
+// config (ssh -F "$VB_DIR/ssh_config", directly or in vb_ssh), so none
+// reads the user's ~/.ssh: a static look at vm-bench.sh and m6-proofs.sh,
+// whose machines are reached through the driver alone. Quoted text (a
+// command sent to a VM, a message) and comments are left out; no scp,
+// sftp or rsync at all.
+func TestVMBenchEverySSHUsesTheBenchConfig(t *testing.T) {
+	quoted := regexp.MustCompile(`'[^']*'|"(?:[^"\\]|\\.)*"`)
+	word := regexp.MustCompile(`(^|[\s;|&(\x60]|\$\()(ssh|scp|sftp|rsync)(\s|$)`)
+	for file, want := range map[string]int{"vm-bench.sh": 3, "m6-proofs.sh": 0} {
+		raw, err := os.ReadFile(mustAbs(t, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for i, l := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			m := word.FindStringSubmatch(quoted.ReplaceAllString(l, `""`))
+			if m == nil {
+				continue
+			}
+			n++
+			if m[2] != "ssh" || !strings.Contains(l, `ssh -F "$VB_DIR/ssh_config" `) {
+				t.Errorf("%s:%d runs %s without the bench's config: %s", file, i+1, m[2], strings.TrimSpace(l))
+			}
+		}
+		if n != want {
+			t.Errorf("%s: %d ssh invocations found, want %d (vb_ssh, the cloud-init wait, vb_main ssh): the look would prove nothing", file, n, want)
+		}
 	}
 }

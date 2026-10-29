@@ -12,6 +12,7 @@
 #   scripts/vm-bench.sh run [check…]    reset, this tree built and given to A and B, the
 #                                       install chain and two-clients, then the checks
 #                                       named (default: all); results/<UTC stamp>.md
+#   (a run's checks are bounded: VB_RUN_BOUND_S, 3 h by default)
 #
 # Run by hand only, when the user asks: never on CI, from a timer or a hook
 # (it refuses when CI or GITHUB_ACTIONS is set). Every libvirt resource it
@@ -153,6 +154,8 @@ Host *
   BatchMode yes
   ForwardAgent no
   ConnectTimeout 10
+  ServerAliveInterval 15
+  ServerAliveCountMax 4
 EOF
     for vm in server client; do
       printf 'bs-m6-%s %s\n' "$vm" "$(cut -d' ' -f1,2 < "$VB_DIR/hostkeys/$vm/ssh_host_ed25519_key.pub")"
@@ -682,6 +685,7 @@ vb_authorize_a() {
 vb_run_end() {
   # First: a later step that fails must not leave a token behind.
   rm -f "$(vb_b_home)/token" "$(vb_b_home)/token2"
+  vb_stop_watchdog
   vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true
   vb_no_netem > /dev/null 2>&1 || true
   vb_no_drop > /dev/null 2>&1 || true
@@ -743,7 +747,9 @@ VB_PROMPTS=(
 
 # vb_hook_lib: the A-side helpers of the offline and latency scripts, run
 # in a session of their own (setsid) that their watchdog stops whole once
-# bound s have passed ($bound must be set).
+# bound s have passed ($bound must be set). The watchdog is stopped with
+# the script however it ends (its EXIT trap, on_exit); a script's own exit
+# step goes in on_exit_too, set before the lib.
 #   hk <name> <Event> <subject> <json>  runs the command hooks.json wires for
 #     that event (its group whose matcher takes the subject, or has none),
 #     the json on stdin, as Claude Code would, killed 2 s past its timeout;
@@ -761,12 +767,27 @@ vb_hook_lib() {
 echo $$ > pgid
 trap 'exit 143' TERM
 (
+  # Stopped (TERM), it takes its current sleep with it.
+  s=
+  trap 'kill "$s" 2> /dev/null; exit 0' TERM
   i=0
-  while [ "$i" -lt "$bound" ]; do sleep 1; i=$((i + 1)); done
+  while [ "$i" -lt "$bound" ]; do
+    sleep 1 &
+    s=$!
+    wait "$s"
+    i=$((i + 1))
+  done
   echo "the script passed its bound of $bound s" >> error
   pkill -TERM -s "$(cat pgid)"
 ) > /dev/null 2>&1 &
 wd=$!
+# However the script ends (an early exit, a TERM), its watchdog goes with
+# it; then the script's own exit step (on_exit_too), if it set one.
+on_exit() {
+  kill "$wd" 2> /dev/null
+  if [ -n "${on_exit_too:-}" ]; then eval "$on_exit_too"; fi
+}
+trap on_exit EXIT
 hk() {
   local name=$1 event=$2 subj=$3 json=$4 spec t0 t1 rc=0 to cmd
   spec=$(jq -c --arg e "$event" --arg s "$subj" '[.hooks[$e][]? | (.matcher // "") as $m | select($m == "" or ($s | test("^(" + $m + ")$")))][0].hooks[0] // empty' "$hooks") || spec=
@@ -835,7 +856,7 @@ EOF
 # done holds the seconds taken.
 vb_offline_script() {
   printf 'set -u\nmode=$1 url=$2 bound=$3 p=$4 sid=$5\nshift 5\nd=$(dirname "$(readlink -f "$0")")\ncd "$d" || exit 1\nt0=$(date +%%s)\n'
-  printf 'trap '\''echo $(($(date +%%s) - t0)) > "$d/done"'\'' EXIT\n'
+  printf 'on_exit_too='\''echo $(($(date +%%s) - t0)) > "$d/done"'\''\n'
   printf 'tdir=$HOME/.claude/projects/-bs-m6-$p cwd=$HOME/work/$p\n'
   vb_hook_lib
   cat << 'EOF'
@@ -1146,6 +1167,9 @@ vb_check_hung() {
   jq -e 'all(.[]; (.scopes // {}) | length > 0 and all(.[]; .ok == false))' > /dev/null <<< "$tried" ||
     fail "a recall of oh1 reached the server: the drop did not hold ($tried)"
   first=$(jq -r -s '[.[] | select(.event == "prompt" and .session == "oh1" and .reason == "breaker") | .n] | min // "none"' <<< "$ev")
+  # The tried prompts came before the breaker opened, as the detail says.
+  [ "$first" = none ] || [ "$first" -gt "$(jq 'map(.n) | max' <<< "$tried")" ] ||
+    fail "the breaker skipped prompt $first before prompt $(jq 'map(.n) | max' <<< "$tried") tried the server: the tries did not all come before it opened"
   open=$(jq -r '.open_until // ""' "$w/breaker-end.json")
   mapfile -t notes < <(vb_offline_notes "$w" hung)
   [ "${#notes[@]}" = 2 ] || exit 1
@@ -1204,7 +1228,9 @@ vb_check_latency() {
   local d=$1 name=latency-$1ms iface qd rtt out slow r h stats
   h=$(m6_home a)
   iface=$(vb_a_iface) || exit 1
-  trap 'vb_no_netem > /dev/null 2>&1 || true; m6_sh a "rm -rf ~/m6-latency ~/m6-latency.sh" > /dev/null 2>&1 || true' EXIT
+  # However the check ends: no netem, the latency script's session stopped
+  # (setsid -w outlives a dropped ssh), its files gone.
+  trap 'vb_no_netem > /dev/null 2>&1 || true; m6_sh a "d=\$HOME/m6-latency; if [ -s \"\$d/pgid\" ]; then pkill -TERM -s \"\$(cat \"\$d/pgid\")\"; fi; rm -rf ~/m6-latency ~/m6-latency.sh" > /dev/null 2>&1 || true' EXIT
   vb_no_netem > /dev/null || fail "cannot clear A's netem"
   if [ "$d" -gt 0 ]; then
     vb_ssh bs-m6-client "sudo tc qdisc replace dev $iface root netem delay ${d}ms" < /dev/null || fail "cannot set netem delay ${d}ms on A's $iface"
@@ -1255,12 +1281,56 @@ vb_results_table() {
   jq -r '"| \(.check) | \(.status) | \(.detail | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$1"
 }
 
+# vb_kill_tree <pid> <spare>: TERMs every descendant of pid, deepest
+# first, but spare and its own.
+vb_kill_tree() {
+  local c
+  for c in $(pgrep -P "$1" 2> /dev/null || true); do
+    [ "$c" != "$2" ] || continue
+    vb_kill_tree "$c" "$2"
+    kill -TERM "$c" 2> /dev/null || true
+  done
+}
+
+# vb_watchdog <bound s> <pid>: once bound s have passed, ends the run whose
+# shell is pid. The reason goes to M6_ABORT (m6_check: the check running
+# is FAIL with it, the rest NOT RUN), every process the run started is
+# stopped (a hung ssh with them), and the run goes on to its table and its
+# EXIT trap (vb_run_end). Should the shell itself be stuck, it is stopped a
+# minute later, and its EXIT trap still runs. In 1 s sleeps: stopped, it
+# leaves no long sleep behind.
+vb_watchdog() {
+  local i=0
+  while [ "$i" -lt "$1" ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  printf 'the run passed its bound of %s s (VB_RUN_BOUND_S)\n' "$1" >> "$M6_ABORT"
+  vb_kill_tree "$2" "$BASHPID"
+  i=0
+  while [ "$i" -lt 60 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  kill -TERM "$2" 2> /dev/null || true
+}
+
+# vb_stop_watchdog: the run's watchdog, if any, stopped (vb_run_end).
+vb_stop_watchdog() {
+  [ -n "${VB_RUN_WD:-}" ] || return 0
+  vb_kill_tree "$VB_RUN_WD" ""
+  kill -TERM "$VB_RUN_WD" 2> /dev/null || true
+  VB_RUN_WD=
+}
+
 # vb_run [check…]: reset, then the install chain and two-clients always,
 # then the checks named (all by default) in the table's order, timers
 # last; the first FAIL marks the rest NOT RUN. The table goes to stdout
-# and results/<stamp>.md, the records to results/<stamp>.jsonl.
+# and results/<stamp>.md, the records to results/<stamp>.jsonl. The checks
+# are bounded by VB_RUN_BOUND_S (10800, 3 h): past it the watchdog stops
+# the run, the check running is FAIL, and vb_run_end cleans up.
 vb_run() {
-  local want=("$@") c n stamp failed
+  local want=("$@") c n stamp failed self
   local order=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key two-clients)
   vb_check_dir
   for n in "${want[@]}"; do
@@ -1288,9 +1358,14 @@ vb_run() {
   M6_RESULTS=$VB_DIR/results/$stamp.jsonl M6_WORK=$VB_DIR/work/run M6_ROOT=$VB_ROOT M6_VERSION=$VB_VERSION
   M6_COMMIT=$(git -C "$VB_ROOT" describe --always --dirty --abbrev=7 2> /dev/null || echo unknown)
   M6_SERVER_IP=$(awk '$1 == "HostName" { print $2; exit }' "$VB_DIR/ssh_config")
+  M6_ABORT=$M6_WORK/abort
   : > "$M6_RESULTS"
+  rm -f "$M6_ABORT"
   vb_authorize_a
   trap vb_run_end EXIT
+  self=$BASHPID # expanded here: in the background command it would be the watchdog's
+  vb_watchdog "${VB_RUN_BOUND_S:-10800}" "$self" > /dev/null 2>&1 < /dev/null &
+  VB_RUN_WD=$!
   for c in "${order[@]}"; do
     m6_check "$c" "m6_check_${c//-/_}" < /dev/null
   done

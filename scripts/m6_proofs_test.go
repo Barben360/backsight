@@ -1279,6 +1279,75 @@ vb_run two-clients`
 	}
 }
 
+// A run past VB_RUN_BOUND_S is stopped by its watchdog: the check
+// running (here hung, as on a half-open ssh) is FAIL naming the bound, the
+// rest NOT RUN, and vb_run_end still brings A's link up. Nothing it
+// started is left running (the test would wait for it).
+func TestVMBenchRunStopsAtItsBound(t *testing.T) {
+	fakes := newBenchFakes(t)
+	writeExec(t, filepath.Join(fakes, "make"), `#!/bin/sh
+for a in "$@"; do case $a in OUT=*) printf 'built\n' > "${a#OUT=}" ;; esac; done
+`)
+	writeExec(t, filepath.Join(fakes, "ssh"), `#!/bin/sh
+case "$*" in *"version --json"*) echo '{"data":{"version":"0.940.0"}}' ;; *"cat > "*|*"tar -xf"*) cat > /dev/null ;; esac
+exit 0
+`)
+	bench := filepath.Join(t.TempDir(), "bs-m6")
+	root := t.TempDir()
+	for _, d := range []string{filepath.Join(bench, "bin"), filepath.Join(root, "scripts")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLines(t, filepath.Join(bench, "bin", "backsight"), "built-at-up")
+	writeLines(t, filepath.Join(bench, "ssh_config"), "Host bs-m6-server", "  HostName 10.0.0.9")
+	writeLines(t, filepath.Join(bench, "minisign.key"), "k")
+	writeLines(t, filepath.Join(bench, "minisign.pub"), "untrusted comment", "RWPUB")
+	writeLines(t, filepath.Join(root, "LICENSE"), "l")
+	writeLines(t, filepath.Join(root, "README.md"), "r")
+	writeLines(t, filepath.Join(root, "scripts", "m6-proofs.sh"), `. `+mustAbs(t, "m6-proofs.sh"),
+		`m6_check_ssh_unknown_host_key() { sleep 120; m6_result ssh-unknown-host-key PASS "never"; }`,
+		`m6_check_ssh_dropped_mid_install() { touch "$T/second-ran"; m6_result ssh-dropped-mid-install PASS "never"; }`)
+	tmp := t.TempDir()
+	script := `VB_ROOT=` + root + `
+vb_is_up() { :; }
+vb_reset() { :; }
+vb_b_claude() { :; }
+vb_authorize_a() { :; }
+vb_run ssh-unknown-host-key ssh-dropped-mid-install`
+	start := time.Now()
+	stdout, stderr, code := vmBench(t, fakes, t.TempDir(), bench, script, "VB_RUN_BOUND_S=2", "T="+tmp)
+	if took := time.Since(start); took > 60*time.Second {
+		t.Errorf("the run took %s: the watchdog did not stop it", took)
+	}
+	if code == 0 {
+		t.Fatalf("exit 0 past the bound\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	results, _ := filepath.Glob(filepath.Join(bench, "results", "*.jsonl"))
+	if len(results) != 1 {
+		t.Fatalf("results %v\nstderr:\n%s", results, stderr)
+	}
+	raw, _ := os.ReadFile(results[0])
+	var got []string
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var r struct{ Check, Status, Detail string }
+		if err := json.Unmarshal([]byte(l), &r); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r.Check+" "+r.Status+" "+r.Detail)
+	}
+	want := []string{"ssh-unknown-host-key FAIL the run passed its bound of 2 s (VB_RUN_BOUND_S)", "ssh-dropped-mid-install NOT RUN after the FAIL of ssh-unknown-host-key"}
+	if !slices.Equal(got[:min(2, len(got))], want) {
+		t.Errorf("records:\n%s\nwant first\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "second-ran")); err == nil {
+		t.Error("a check ran after the bound")
+	}
+	if calls := strings.Join(benchCalls(t, fakes, "virsh"), "\n"); !strings.Contains(calls, "domif-setlink bs-m6-client 52:54:00:b6:06:02 up") {
+		t.Errorf("vb_run_end did not bring A's link up: virsh calls\n%s", calls)
+	}
+}
+
 // RF 2: the reconciles of a PC are read from its telemetry, the product's
 // record of every tick, the VM timer's too: one line per tick since the
 // time given (its epoch line, "-" for none), not a skipped tick, another
@@ -1360,6 +1429,7 @@ echo '{"total":0}'
 	const zero = `{"ok":true,"data":{"status":"done","sessions":{"nothing":2},"notes":{"sent":0}}}`
 	const one = `{"ok":true,"data":{"status":"done","sessions":{"sent":1},"notes":{"sent":0}}}`
 	const note = `{"ok":true,"data":{"status":"done","sessions":{"nothing":2},"notes":{"sent":1}}}`
+	const settling = `{"ok":true,"data":{"status":"done","sessions":{"nothing":1,"waiting":2},"notes":{"sent":0}}}`
 	for _, tc := range []struct {
 		name         string
 		a, b         []string
@@ -1369,6 +1439,9 @@ echo '{"total":0}'
 		{"a sends then nothing", []string{one, zero}, []string{zero}, "2 2", ""},
 		{"b's note then nothing", []string{zero}, []string{note, zero}, "2 2", ""},
 		{"a keeps sending", []string{one}, []string{zero}, "3 3", "a session from an earlier check was still pending after 3 settle round(s): a sent {\"sent\":1} (notes 0)"},
+		// A session still settling fails at once, named, before B ticks.
+		{"a has sessions settling", []string{settling}, []string{zero}, "1 ", "a has 2 session(s) still settling (last turn under 30 min old; written in the last 30 min: unsent-1 unsent-2): they would be sent during the counted ticks"},
+		{"b has sessions settling", []string{zero}, []string{settling}, "1 1", "b has 2 session(s) still settling (last turn under 30 min old; written in the last 30 min: none found)"},
 	} {
 		dir := t.TempDir()
 		m6ServerFakes(t, dir)
@@ -1376,13 +1449,24 @@ echo '{"total":0}'
 		writeExec(t, filepath.Join(dir, "bin", "curl"), curl)
 		writeLines(t, filepath.Join(dir, "ticks-a"), tc.a...)
 		writeLines(t, filepath.Join(dir, "ticks-b"), tc.b...)
+		// A's transcripts: two written now, one two hours ago (not named).
+		proj := filepath.Join(dir, "a", ".claude", "projects", "-bs-m6-unsent")
+		if err := os.MkdirAll(proj, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range []string{"unsent-2", "unsent-1", "old"} {
+			writeLines(t, filepath.Join(proj, n+".jsonl"), "{}")
+		}
+		if err := os.Chtimes(filepath.Join(proj, "old.jsonl"), time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
 		stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_settle a b; echo SETTLED`, "M6_SETTLE_ROUNDS=3", "M6_TICK_EVERY=0")
 		ca, _ := os.ReadFile(filepath.Join(dir, "calls-a"))
 		cb, _ := os.ReadFile(filepath.Join(dir, "calls-b"))
 		if got := strings.TrimSpace(string(ca)) + " " + strings.TrimSpace(string(cb)); got != tc.calls {
 			t.Errorf("%s: ticks a b %q, want %q", tc.name, got, tc.calls)
 		}
-		if q, _ := os.ReadFile(filepath.Join(dir, "queue.calls")); len(q) == 0 {
+		if q, _ := os.ReadFile(filepath.Join(dir, "queue.calls")); len(q) == 0 && !strings.Contains(tc.name, "settling") {
 			t.Errorf("%s: the queue was never waited for", tc.name)
 		}
 		if tc.fails == "" {
