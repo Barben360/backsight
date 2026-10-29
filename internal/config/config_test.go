@@ -501,14 +501,14 @@ func TestOwnOwnersAreRead(t *testing.T) {
 // binary refuses a config.toml with keys it does not know.
 func TestFeedbackDefaultsAndValidation(t *testing.T) {
 	got := Default(dirs, "/home/u").Feedback
-	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always"}); got != want {
+	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10}); got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 	cfg, err := Load(write(t, "[feedback]\nenabled = false\nconfident_rank = 1\nmiss_half_life_days = 0\ncredit_half_life_days = 30\nstop_check = \"cited\"\n"), dirs, "/home/u")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited"}); cfg.Feedback != want {
+	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited", MaxRetirements: 3, StaleShows: 10}); cfg.Feedback != want {
 		t.Errorf("read %+v, want %+v", cfg.Feedback, want)
 	}
 	for body, key := range map[string]string{
@@ -526,5 +526,31 @@ func TestFeedbackDefaultsAndValidation(t *testing.T) {
 		if _, err := Load(write(t, "[feedback]\nstop_check = \""+s+"\"\n"), dirs, "/home/u"); err != nil {
 			t.Errorf("stop_check %q refused: %v", s, err)
 		}
+	}
+}
+
+func TestMaxRetirementsKey(t *testing.T) {
+	if got := Default(dirs, "/home/u").Feedback.MaxRetirements; got != 3 {
+		t.Errorf("default %d", got)
+	}
+	cfg, err := Load(write(t, "[feedback]\nmax_retirements = 0\n"), dirs, "/home/u")
+	if err != nil || cfg.Feedback.MaxRetirements != 0 {
+		t.Errorf("0: %v %d", err, cfg.Feedback.MaxRetirements)
+	}
+	if _, err := Load(write(t, "[feedback]\nmax_retirements = -1\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "feedback.max_retirements") {
+		t.Errorf("-1: %v", err)
+	}
+}
+
+func TestStaleShowsKey(t *testing.T) {
+	if got := Default(dirs, "/home/u").Feedback.StaleShows; got != 10 {
+		t.Errorf("default %d", got)
+	}
+	cfg, err := Load(write(t, "[feedback]\nstale_shows = 1\n"), dirs, "/home/u")
+	if err != nil || cfg.Feedback.StaleShows != 1 {
+		t.Errorf("1: %v %d", err, cfg.Feedback.StaleShows)
+	}
+	if _, err := Load(write(t, "[feedback]\nstale_shows = 0\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "feedback.stale_shows") {
+		t.Errorf("0: %v", err)
 	}
 }

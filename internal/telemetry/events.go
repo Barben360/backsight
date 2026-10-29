@@ -72,6 +72,16 @@ type Credit struct {
 	OK      bool   `json:"ok"`
 }
 
+// Retire is what a wrong or outdated verdict did: retired (raw facts
+// invalidated), partly (some, before the server refused one), hidden
+// (observations hidden on this machine) or sources (observations whose
+// facts were listed first), with how many memories. A verdict that both
+// invalidated and hid emits one event of each. Never an id or a text.
+type Retire struct {
+	Action string `json:"action"` // retired | partly | hidden | sources
+	IDs    int    `json:"ids_n"`
+}
+
 // CreditCheck is the end-of-turn check of one agent's turn that showed
 // memories: declared, blocked, undeclared or check_skipped, with the
 // honesty flags of its declaration. AfterBlock: a declared or undeclared
@@ -147,6 +157,7 @@ func (Tool) EventName() string            { return "tool" }
 func (Gate) EventName() string            { return "gate" }
 func (CreditCheck) EventName() string     { return "credit_check" }
 func (Credit) EventName() string          { return "credit" }
+func (Retire) EventName() string          { return "retire" }
 func (FeedbackSettle) EventName() string  { return "feedback_settle" }
 func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }

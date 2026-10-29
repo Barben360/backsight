@@ -96,7 +96,7 @@ func TestStatsCountsFeedback(t *testing.T) {
 	tw.Emit(telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1})
 	_, out, _ := run(t, "stats", "1")
 	for _, want := range []string{
-		"\nCredits      turns with memories shown: declared 2, after a block 1, undeclared 1, skipped 1; used 2, none 1, refused 2\n",
+		"\nCredits      turns with memories shown: declared 2, after a block 1, undeclared 1, skipped 1; used 2, none 1, wrong 0, outdated 0, refused 2\n",
 		"\nLedger       settled 10 shows: 2 credits, 3 confident misses (38% of uncredited), 1 unknown, 1 late; honesty flags: credit_without_overlap 1, none_with_overlap 1\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -108,6 +108,33 @@ func TestStatsCountsFeedback(t *testing.T) {
 	pointAt(t, empty, fakeHindsight(t))
 	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none\n") {
 		t.Errorf("empty window:\n%s", out)
+	}
+}
+
+// The verdicts that retire: wrong and outdated on the Credits line, and
+// what they retired on their own line.
+func TestStatsCountsVerdicts(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	tw := telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"})
+	for _, c := range []telemetry.Credit{{Verdict: "used", IDs: 1, OK: true}, {Verdict: "wrong", IDs: 2, OK: true}, {Verdict: "outdated", IDs: 1, OK: true},
+		{Verdict: "wrong", IDs: 1, OK: true}, {Verdict: "outdated", IDs: 1}} {
+		tw.Emit(c)
+	}
+	for _, r := range []telemetry.Retire{{Action: "retired", IDs: 2}, {Action: "partly", IDs: 1}, {Action: "hidden", IDs: 1}, {Action: "sources", IDs: 2}} {
+		tw.Emit(r)
+	}
+	_, out, _ := run(t, "stats", "1")
+	for _, want := range []string{
+		"; used 1, none 0, wrong 2, outdated 1, refused 1\n",
+		"\nRetirements  3 raw fact(s) invalidated on the server (1 verdict(s) the server refused halfway), 1 observation(s) hidden on this machine\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	if code, out, _ := run(t, "stats", "1", "--json"); code != output.OK || !strings.Contains(out, `"retired": 3`) || !strings.Contains(out, `"hidden": 1`) || !strings.Contains(out, `"partly": 1`) {
+		t.Errorf("json: exit %d\n%s", code, out)
 	}
 }
 

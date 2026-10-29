@@ -55,11 +55,13 @@ type Event struct {
 	Details      map[string]any
 	Hook         string // hook_failure
 	Error        string // the *_error and *_failed events
-	// feedback: credit_check, credit, feedback_settle
+	// feedback: credit_check, credit, retire, feedback_settle
 	Outcome    string
 	Flags      []string
 	AfterBlock bool `json:"after_block"`
 	Verdict    string
+	Action     string // retire
+	IDsN       int    `json:"ids_n"`
 	Shows      int
 	Credits    int
 	Misses     int
@@ -237,6 +239,12 @@ type Report struct {
 			Unknown int `json:"unknown"`
 		} `json:"settled"`
 		Flags map[string]int `json:"flags"`
+		// What the wrong and outdated verdicts retired: raw facts
+		// invalidated, observations hidden on this machine, and the
+		// verdicts the server refused halfway.
+		Retired int `json:"retired"`
+		Hidden  int `json:"hidden"`
+		Partly  int `json:"partly"`
 	} `json:"feedback"`
 }
 
@@ -414,6 +422,16 @@ func Compute(events []Event, from, to time.Time) Report {
 				r.Feedback.Verdicts[e.Verdict]++
 			} else {
 				r.Feedback.Refused++
+			}
+		case "retire":
+			switch e.Action {
+			case "retired":
+				r.Feedback.Retired += e.IDsN
+			case "partly":
+				r.Feedback.Retired += e.IDsN
+				r.Feedback.Partly++
+			case "hidden":
+				r.Feedback.Hidden += e.IDsN
 			}
 		case "feedback_settle":
 			s := &r.Feedback.Settled

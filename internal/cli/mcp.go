@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -22,8 +23,11 @@ import (
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -46,8 +50,10 @@ type storeArgs struct {
 }
 
 type creditArgs struct {
-	IDs     []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
-	Verdict string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; none: no memory shown informed it"`
+	IDs        []string `json:"ids,omitempty" jsonschema:"1-10 ids of memories shown in this session, full or their first 8 characters; none with verdict none"`
+	Verdict    string   `json:"verdict,omitempty" jsonschema:"used (default): these memories informed your answer; none: no memory shown informed it; wrong: this session shows them false; outdated: they were true but no longer are"`
+	Correction string   `json:"correction,omitempty" jsonschema:"with wrong or outdated: the right fact, 1-3 sentences, as for memory_store"`
+	Evidence   string   `json:"evidence,omitempty" jsonschema:"with wrong or outdated: what in this session shows it (the user's words, a file, a command output), at most 300 characters"`
 }
 
 // live is the session and project of the Claude Code session this server
@@ -278,16 +284,20 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 		})
 	if deps.cfg.Feedback.Enabled {
 		mcp.AddTool(s, &mcp.Tool{Name: "memory_credit", Description: instructions.CreditDescription},
-			func(_ context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, _ *mcp.CallToolRequest, a creditArgs) (*mcp.CallToolResult, any, error) {
 				verdict := a.Verdict
 				if verdict == "" {
 					verdict = "used"
 				}
-				text, err := deps.credit(verdict, a.IDs)
+				text, err := deps.credit(ctx, key, verdict, a)
 				if !slices.Contains([]string{"used", "none", "wrong", "outdated"}, verdict) {
 					verdict = "invalid" // telemetry holds enums, never what the agent typed
 				}
-				deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+				// A Sources: answer reports nothing yet: the call naming the
+				// facts counts the report, once (its retire event counts sources).
+				if err != nil || !strings.HasPrefix(text, creditSourcesPrefix) {
+					deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+				}
 				if err != nil {
 					return errorResult(err.Error()), nil, nil
 				}
@@ -303,13 +313,16 @@ const (
 	creditUsedPrefix = "Credited."
 	creditNonePrefix = "Noted:"
 	maxCreditIDs     = 10
+	maxEvidence      = 300 // characters
 )
 
 // credit is memory_credit's answer: for used, the line to print, once
 // every id resolves to one shown in this session (all or nothing); for
-// none, a note. It journals nothing: the PostToolUse hook does, with the
-// turn and the agent only hooks receive.
-func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
+// none, a note; for wrong and outdated, the correction stored and the
+// memories retired (correct). It journals no credit: the PostToolUse hook
+// does, with the turn and the agent only hooks receive.
+func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a creditArgs) (string, error) {
+	refs := a.IDs
 	switch verdict {
 	case "used":
 		if len(refs) == 0 || len(refs) > maxCreditIDs {
@@ -320,9 +333,17 @@ func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
 			return "", errors.New(`verdict none takes no ids: drop them, or credit them with verdict "used"`)
 		}
 	case "wrong", "outdated":
-		return "", fmt.Errorf("verdict %s comes in a later version: store the correction with memory_store", verdict)
+		if len(refs) == 0 || len(refs) > maxCreditIDs {
+			return "", fmt.Errorf("ids: give 1 to 10 ids of memories shown in this session that are %s", verdict)
+		}
+		if strings.TrimSpace(a.Correction) == "" {
+			return "", fmt.Errorf("correction: give the right fact, 1-3 sentences, with verdict %s", verdict)
+		}
+		if n := utf8.RuneCountInString(strings.TrimSpace(a.Evidence)); n == 0 || n > maxEvidence {
+			return "", fmt.Errorf("evidence: give what in this session shows it, 1 to %d characters (the user's words, a file, a command output)", maxEvidence)
+		}
 	default:
-		return "", errors.New(`verdict: "used" or "none"`)
+		return "", errors.New(`verdict: "used", "none", "wrong" or "outdated"`)
 	}
 	live, found := d.live()
 	if found != "record" {
@@ -348,29 +369,15 @@ func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
 	if len(problems) > 0 {
 		return "", errors.New(strings.Join(problems, "\n"))
 	}
-	// One line per project, in the order the ids were given. A memory's
-	// project is the one its latest show names; a read names none (its
-	// show carries the session's), so it only fills in for an id that no
-	// other show named.
-	project := map[string]string{}
-	for _, s := range shown {
-		if s.Path != "read" {
-			project[s.ID] = s.Project
-		}
+	owner := shownProjects(shown, live.Project)
+	if verdict == "wrong" || verdict == "outdated" {
+		return d.correct(ctx, key, live, verdict, a, ids, owner)
 	}
-	for _, s := range shown {
-		if _, ok := project[s.ID]; !ok {
-			project[s.ID] = s.Project
-		}
-	}
+	// One line per project, in the order the ids were given.
 	var order []string
 	groups := map[string][]string{}
 	for _, id := range ids {
-		p := project[id]
-		if p == "" {
-			p = live.Project
-		}
-		p = safeProject(p)
+		p := safeProject(owner(id))
 		if groups[p] == nil {
 			order = append(order, p)
 		}
@@ -385,6 +392,108 @@ func (d mcpDeps) credit(verdict string, refs []string) (string, error) {
 		what = "these lines"
 	}
 	return creditUsedPrefix + " Print " + what + " in your final message:\n" + strings.Join(lines, "\n"), nil
+}
+
+// shownProjects is the project of each memory shown: the one its latest
+// show names; a read names none (its show carries the session's), so it
+// only fills in for an id that no other show named; else current.
+func shownProjects(shown []feedback.Show, current string) func(id string) string {
+	of := map[string]string{}
+	for _, s := range shown {
+		if s.Path != "read" {
+			of[s.ID] = s.Project
+		}
+	}
+	for _, s := range shown {
+		if _, ok := of[s.ID]; !ok {
+			of[s.ID] = s.Project
+		}
+	}
+	return func(id string) string {
+		if p := of[id]; p != "" {
+			return p
+		}
+		return current
+	}
+}
+
+// correct answers a wrong or outdated verdict on ids, each shown in this
+// session: every guard first (each memory's project allowed, the
+// correction and the evidence through the note checks, the session's
+// retirements under feedback.max_retirements, counting what will be
+// retired or hidden), then the correction stored as a note naming the
+// memories it replaces, then the retirement. An observation none of whose
+// facts is named stops the call before anything is stored: its facts are
+// listed for a second call. The correction and the evidence go into the
+// note and the invalidation reason only, never the journal or telemetry.
+func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, verdict string, a creditArgs, ids []string, owner func(string) string) (string, error) {
+	cfg := d.freshPrivacy()
+	// Allowed: the session's project, the transverse pool and the projects
+	// it links (as memory_search scopes them); another project's memory is
+	// the user's to retire.
+	linked := linkedProjects(d.dirs, cfg, project.New(d.home, cfg.Projects.Transverse), live.Cwd, live.Project)
+	var problems []string
+	pool := true
+	for _, id := range ids {
+		p := owner(id)
+		pool = pool && isPool(cfg, p)
+		if p != live.Project && !isPool(cfg, p) && !slices.Contains(linked, p) {
+			problems = append(problems, fmt.Sprintf("%s: a memory of project %s, outside this session's project and the projects it links: nothing stored; the user can retire it from a terminal: backsight forget %s",
+				shortID(id), safeProject(p), id))
+		}
+	}
+	if len(problems) > 0 {
+		return "", errors.New(strings.Join(problems, "\n"))
+	}
+	// The note goes to the session's project, or to the pool when every
+	// memory it replaces is transverse.
+	proj := live.Project
+	if pool {
+		proj = owner(ids[0])
+	}
+	correction, evidence := strings.TrimSpace(a.Correction), singleLine(a.Evidence)
+	if err := checkNote(d.dirs, d.home, cfg, live.SessionID, live.Cwd, "correction", proj, correction); err != nil {
+		return "", err
+	}
+	if _, kinds := redact.Text(evidence); len(kinds) > 0 {
+		return "", errors.New("the evidence holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory")
+	}
+	// Retiring writes to the server: not during maintenance (a restore
+	// would undo it silently), never to another server than the joined one.
+	if held := state.Inspect(d.dirs.MaintenanceLock()); held != nil {
+		return "", heldRefusal(held)
+	}
+	if err := otherServerRefusal(d.dirs, cfg); err != nil {
+		return "", err
+	}
+	// Every call retires at least one memory: a session at its limit is
+	// refused before the server is asked anything.
+	done, limit := retirementsInSession(d.dirs, live.SessionID), cfg.Feedback.MaxRetirements
+	if done >= limit {
+		return "", capRefusal(limit, done, ids)
+	}
+	plan := d.classify(ctx, key, ids, owner)
+	if len(plan.listed) > 0 {
+		d.tw.Emit(telemetry.Retire{Action: "sources", IDs: len(plan.listed)})
+		return sourcesText(plan), nil
+	}
+	if acted := plan.acted(); done+len(acted) > limit {
+		return "", capRefusal(limit, done, acted)
+	}
+	sec, _ := key.get()
+	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence})
+	if err != nil {
+		return "", err
+	}
+	return d.retire(ctx, key, live, verdict, res.Document, invalidationReason(verdict, evidence, correction, res.Document), ids, plan)
+}
+
+// retirementsInSession is how many memories session sess retired, from
+// the journal's last 62 days; an unreadable journal counts what it could
+// read (a journal failure never fails a tool call).
+func retirementsInSession(d paths.Dirs, sess string) int {
+	events, _, _ := feedback.Read(d.FeedbackDir(), now().AddDate(0, 0, -62))
+	return feedback.Retirements(events, sess)
 }
 
 // readID is the memory id memory_read's ref names: the id of a memory

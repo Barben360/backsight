@@ -69,3 +69,5 @@ confident_rank = 2
 miss_half_life_days = 90
 credit_half_life_days = 365
 stop_check = "always"
+max_retirements = 3
+stale_shows = 10

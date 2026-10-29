@@ -39,8 +39,10 @@ type Settled struct {
 	Outcome string    `json:"outcome"`
 }
 
-// Event is one journal line. Kind is turn, shows, credit, stop, settle or
-// forget; each kind fills the fields it needs.
+// Event is one journal line. Kind is turn, shows, credit, stop, settle,
+// forget, retire, hide, unhide or stale; each kind fills the fields it needs.
+// Note is the correction note a retire or hide comes with (its id, never
+// its text).
 type Event struct {
 	Schema    int                `json:"schema"`
 	Seq       int64              `json:"seq"`
@@ -64,7 +66,21 @@ type Event struct {
 	Flags     []string           `json:"flags,omitempty"`
 	Settled   []Settled          `json:"settled,omitempty"`
 	Params    map[string]float64 `json:"params,omitempty"`
+	Note      string             `json:"note,omitempty"`
 }
+
+// Kinds of the events that retire a memory shown in a session (a raw fact
+// invalidated, an observation hidden): each counts toward the session's
+// feedback.max_retirements. Unhide undoes a retire or a hide.
+const (
+	KindRetire = "retire"
+	KindHide   = "hide"
+	KindUnhide = "unhide"
+)
+
+// KindStale: the memories `backsight memory stale` listed to the user.
+// The ledger does not fold it.
+const KindStale = "stale"
 
 // Common fields Append puts on every event that leaves them empty.
 type Common struct {
@@ -91,8 +107,9 @@ func (j *Journal) file(t time.Time) string {
 }
 
 // Append writes e as one line, after setting its schema, its seq, its ts
-// (now, unless set) and the common fields it leaves empty. Callers fail
-// open on its error: a lost event never fails a hook or a recall.
+// (now, unless set) and the common fields it leaves empty. Events the
+// ledger folds as they come go through AppendFolded. Callers fail open on
+// its error: a lost event never fails a hook or a recall.
 func (j *Journal) Append(e Event) error {
 	now := j.now()
 	e.Schema, e.Seq = Schema, seq.Add(1)
@@ -231,4 +248,33 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 		}
 	}
 	return events, skipped, nil
+}
+
+// foldedLockWait: how long AppendFolded waits for a settle to release the
+// ledger lock (a settle reads and writes local files only).
+const foldedLockWait = 2 * time.Second
+
+// AppendFolded appends an event the ledger folds as it comes (forget,
+// retire, hide, unhide) under the ledger lock, stamped at its ts (now,
+// unless set) or just after the ledger's watermark when that is later.
+// Settle reads the journal and moves the watermark under the same lock,
+// and folds only what is newer: the event is either read by a settle or
+// stamped after it, as a rebuild folds it. When the lock stays held, the
+// event is journaled all the same (the journal counts a session's
+// retirements) and the lock's error returned, for the caller to log.
+func (j *Journal) AppendFolded(e Event) error {
+	release, lerr := lockLedgerWait(j.dir, foldedLockWait)
+	if lerr == nil {
+		defer release()
+	}
+	if e.TS.IsZero() {
+		e.TS = j.now().UTC()
+	}
+	if l, err := LoadLedger(j.dir); err == nil && !e.TS.After(l.Watermark) {
+		e.TS = l.Watermark.Add(time.Nanosecond)
+	}
+	if err := j.Append(e); err != nil {
+		return err
+	}
+	return lerr
 }

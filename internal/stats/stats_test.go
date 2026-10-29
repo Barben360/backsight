@@ -264,3 +264,30 @@ func TestComputeCountsFeedback(t *testing.T) {
 		t.Errorf("flags %v", f.Flags)
 	}
 }
+
+// The verdicts that retire: wrong and outdated counted with the other
+// accepted credits, the memories invalidated (partly refused calls
+// included) and hidden summed from the retire events, the partly refused
+// calls counted; a Sources answer retires nothing.
+func TestComputeCountsVerdicts(t *testing.T) {
+	state := t.TempDir()
+	tw := telemetry.New(state, telemetry.Common{Session: "s1"})
+	for _, c := range []telemetry.Credit{{Verdict: "wrong", IDs: 2, OK: true}, {Verdict: "outdated", IDs: 1, OK: true}, {Verdict: "wrong", IDs: 1, OK: true}, {Verdict: "outdated", IDs: 1}} {
+		tw.Emit(c)
+	}
+	for _, r := range []telemetry.Retire{{Action: "retired", IDs: 2}, {Action: "hidden", IDs: 1}, {Action: "partly", IDs: 1}, {Action: "hidden", IDs: 2}, {Action: "sources", IDs: 3}} {
+		tw.Emit(r)
+	}
+	now := time.Now()
+	ev, err := Load(filepath.Join(state, "telemetry"), now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := Compute(ev, now.Add(-time.Hour), now.Add(time.Hour)).Feedback
+	if f.Verdicts["wrong"] != 2 || f.Verdicts["outdated"] != 1 || f.Refused != 1 {
+		t.Errorf("verdicts %v, refused %d", f.Verdicts, f.Refused)
+	}
+	if f.Retired != 3 || f.Hidden != 3 || f.Partly != 1 {
+		t.Errorf("retired %d, hidden %d, partly %d; want 3, 3, 1", f.Retired, f.Hidden, f.Partly)
+	}
+}

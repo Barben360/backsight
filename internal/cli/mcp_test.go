@@ -2,17 +2,25 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
@@ -514,9 +522,15 @@ const (
 // current record for session S, project proj.
 func creditSession(t *testing.T) (*mcp.ClientSession, string) {
 	t.Helper()
+	return creditSessionWith(t, "")
+}
+
+// creditSessionWith is creditSession with extra TOML in the config.
+func creditSessionWith(t *testing.T, extra string) (*mcp.ClientSession, string) {
+	t.Helper()
 	mcpParentPID = 4848
 	t.Cleanup(func() { mcpParentPID = 0 })
-	cs := mcpSession(t)
+	cs := mcpSessionWith(t, extra)
 	home := os.Getenv("HOME")
 	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "proj", At: time.Now()})
 	return cs, home
@@ -652,11 +666,11 @@ func TestCreditNoneNeedsNoIDs(t *testing.T) {
 		t.Errorf("eleven ids: %v %s", isErr, out)
 	}
 	for _, v := range []string{"wrong", "outdated"} {
-		if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": v}); !isErr || !strings.Contains(out, "later version") {
-			t.Errorf("%s: %v %s", v, isErr, out)
+		if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": v}); !isErr || !strings.Contains(out, "correction") {
+			t.Errorf("%s without a correction: %v %s", v, isErr, out)
 		}
 	}
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used" or "none"`) {
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used", "none", "wrong" or "outdated"`) {
 		t.Errorf("unknown verdict: %v %s", isErr, out)
 	}
 }
@@ -714,5 +728,592 @@ func TestMCPReadTakesAShortIDShownInTheSession(t *testing.T) {
 	showIn(t, home, "S", "aaaaaaaa-9999-4000-8000-000000000009")
 	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "aaaaaaaa"}); !isErr || !strings.Contains(out, "aaaaaaaa: matches several memories") {
 		t.Errorf("ambiguous short id: %v %s", isErr, out)
+	}
+}
+
+// verdict is a memory_credit call of verdict on ids, with a correction
+// and evidence that pass every check.
+func verdict(v string, ids ...string) map[string]any {
+	return map[string]any{"ids": ids, "verdict": v, "correction": "Billing runs PostgreSQL 16 since 2026-10-20.", "evidence": "psql --version printed 16.4"}
+}
+
+// retireIn journals what Task 2's retirements write: one event of kind
+// per id, in session sess, in an earlier turn.
+func retireIn(t *testing.T, home, sess, kind string, ids ...string) {
+	t.Helper()
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: sess, Project: "proj"})
+	for _, id := range ids {
+		if err := j.Append(feedback.Event{Kind: kind, Turn: "p-0", IDs: []string{id}, Verdict: "wrong", Outcome: "invalidated"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// nothingStored: no note reached the server since before, none waits in
+// the outbox.
+func nothingStored(t *testing.T, home string, before int64) bool {
+	t.Helper()
+	n, _ := notesOutbox(pathsOf(home)).Pending()
+	return retained.Load() == before && n == 0
+}
+
+// retiredRE: a verdict that retired everything it named, its correction
+// stored.
+var retiredRE = regexp.MustCompile(`(?s)^Retired\. .*note:[0-9a-f-]{36}`)
+
+func TestVerdictNeedsCorrectionAndEvidence(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	rawFact(creditA)
+	before := retained.Load()
+	for name, c := range map[string]struct {
+		args map[string]any
+		want string
+	}{
+		"no correction":    {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "wrong", "evidence": "the user said so"}, "correction"},
+		"blank correction": {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "wrong", "correction": "  ", "evidence": "the user said so"}, "correction"},
+		"no evidence":      {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "outdated", "correction": "Billing runs PostgreSQL 16."}, "evidence"},
+		"long evidence":    {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "outdated", "correction": "Billing runs PostgreSQL 16.", "evidence": strings.Repeat("é", 301)}, "300"},
+		"no ids":           {map[string]any{"verdict": "wrong", "correction": "Billing runs PostgreSQL 16.", "evidence": "the user said so"}, "ids"},
+	} {
+		if out, isErr := call(t, cs, "memory_credit", c.args); !isErr || !strings.Contains(out, c.want) {
+			t.Errorf("%s: %v %s", name, isErr, out)
+		}
+	}
+	if !nothingStored(t, home, before) {
+		t.Errorf("a refused verdict stored a note: %d sent", retained.Load()-before)
+	}
+	// 300 characters is the limit, not over it
+	args := verdict("outdated", "aaaaaaaa")
+	args["evidence"] = strings.Repeat("é", 300)
+	if out, isErr := call(t, cs, "memory_credit", args); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("300 characters: %v %s", isErr, out)
+	}
+}
+
+func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
+	cs, home := creditSessionWith(t, "\n[feedback]\nmax_retirements = 10\n") // five retirements below
+	cfg, _, _ := loadServerConfig()
+	alias := cfg.Projects.Transverse[0]
+	_ = os.MkdirAll(filepath.Join(home, "proj"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, "proj", ".backsight.toml"), []byte(`related = ["atlas-spec"]`+"\n"), 0o600)
+	const (
+		foreign = "cccccccc-0000-4000-8000-000000000003"
+		linked  = "dddddddd-0000-4000-8000-000000000004"
+		pool    = "eeeeeeee-0000-4000-8000-000000000005"
+	)
+	showItems(t, home, "S", "search", "proj", feedback.Item{ID: creditA, Rank: 1, Project: "proj"}, feedback.Item{ID: foreign, Rank: 2, Project: "other"},
+		feedback.Item{ID: linked, Rank: 3, Project: "atlas-spec"}, feedback.Item{ID: pool, Rank: 4, Project: alias})
+	rawFact(creditA, foreign, linked, pool)
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "ffffffff")); !isErr || !strings.Contains(out, "ffffffff: not shown in this session") {
+		t.Errorf("unshown: %v %s", isErr, out)
+	}
+	// all or nothing: a foreign id refuses the call, the allowed one with it
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "cccccccc"))
+	if !isErr || !strings.Contains(out, "cccccccc") || !strings.Contains(out, "other") || !strings.Contains(out, "backsight forget "+foreign) {
+		t.Errorf("foreign: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Fatalf("a refused verdict stored a note: %d sent", retained.Load()-before)
+	}
+	// a linked project's memory and the session's own: the session's project
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "dddddddd", "aaaaaaaa")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("linked: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:proj,") {
+		t.Errorf("linked: note tags %q", last)
+	}
+	// only transverse memories: the note goes to the pool
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "eeeeeeee")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("transverse: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:"+alias+",") {
+		t.Errorf("transverse: note tags %q", last)
+	}
+	// mixed projects: the session's
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "eeeeeeee", "aaaaaaaa")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("mixed: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:proj,") {
+		t.Errorf("mixed: note tags %q", last)
+	}
+}
+
+func TestRetirementsAreCappedPerSession(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA, creditB)
+	rawFact(creditA, creditB)
+	retireIn(t, home, "S2", feedback.KindRetire, "11111111-0000-4000-8000-000000000001", "22222222-0000-4000-8000-000000000002", "33333333-0000-4000-8000-000000000003")
+	retireIn(t, home, "S", feedback.KindRetire, "44444444-0000-4000-8000-000000000004")
+	retireIn(t, home, "S", feedback.KindHide, "55555555-0000-4000-8000-000000000005")
+	before := retained.Load()
+	// 2 earlier + 2 asked > 3: refused, whatever another session retired
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb")); !isErr || !strings.Contains(out, "backsight forget") || !strings.Contains(out, "at most 3 per session (feedback.max_retirements)") {
+		t.Errorf("over the cap: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Fatalf("a refused verdict stored a note")
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); isErr || !retiredRE.MatchString(out) {
+		t.Errorf("the third: %v %s", isErr, out)
+	}
+	// the server journaled the third itself
+	before = retained.Load()
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "bbbbbbbb")); !isErr || !strings.Contains(out, "backsight forget "+creditB) {
+		t.Errorf("the fourth: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Error("a refused verdict stored a note")
+	}
+}
+
+// max_retirements = 0: no verdict retires anything in a session.
+func TestRetirementsCapOfZeroRefusesEveryVerdict(t *testing.T) {
+	mcpParentPID = 4848
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSessionWith(t, "\n[feedback]\nmax_retirements = 0\n")
+	home := os.Getenv("HOME")
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "proj", At: time.Now()})
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); !isErr || !strings.Contains(out, "backsight forget") {
+		t.Errorf("%v %s", isErr, out)
+	}
+}
+
+func TestCorrectionNoteCarriesReplacesAndEvidence(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA, creditB)
+	rawFact(creditA, creditB)
+	args := verdict("wrong", "aaaaaaaa", creditB)
+	out, isErr := call(t, cs, "memory_credit", args)
+	if isErr || !retiredRE.MatchString(out) {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	doc := noteIDRE.FindString(out)
+	cfg, sec, _ := loadServerConfig()
+	cl, _ := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
+	d, err := cl.GetDocument(context.Background(), cfg.Server.Bank, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Metadata["replaces"] != creditA+","+creditB || d.Metadata["evidence"] != args["evidence"] || d.Metadata["kind"] != "correction" || d.Metadata["session"] != "S" {
+		t.Errorf("metadata %v", d.Metadata)
+	}
+	if d.OriginalText != args["correction"] || !slices.Contains(d.Tags, "kind:correction") || !slices.Contains(d.Tags, "project:proj") {
+		t.Errorf("document %+v", d)
+	}
+	// the correction and the evidence live in the note only
+	journal := ""
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "*"))
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		journal += string(b)
+	}
+	for _, text := range []string{"PostgreSQL 16", "psql"} {
+		if strings.Contains(journal, text) || strings.Contains(telemetryText(t, home), text) {
+			t.Errorf("%q left the note", text)
+		}
+	}
+	if !creditEvent(t, home, `"verdict":"wrong"`, `"ids_n":2`, `"ok":true`) {
+		t.Errorf("telemetry:\n%s", telemetryText(t, home))
+	}
+}
+
+func TestVerdictCorrectionHonoursSecretsAndPause(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	before := retained.Load()
+	secret := "DB_PASSWORD=" + "Zx9kLmQ2" + "wPq8"
+	args := verdict("wrong", "aaaaaaaa")
+	args["correction"] = "Use " + secret + " for prod."
+	if out, isErr := call(t, cs, "memory_credit", args); !isErr || !strings.Contains(out, "secret") {
+		t.Errorf("secret in the correction: %v %s", isErr, out)
+	}
+	args = verdict("wrong", "aaaaaaaa")
+	args["evidence"] = "the .env holds " + secret
+	if out, isErr := call(t, cs, "memory_credit", args); !isErr || !strings.Contains(out, "secret") {
+		t.Errorf("secret in the evidence: %v %s", isErr, out)
+	}
+	// an opt-out taken during the session: the directory excluded
+	appendConfig(t, home, "[privacy]\nexclude_paths = [\""+filepath.Join(home, "proj")+"\"]")
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); !isErr || !strings.Contains(out, "excluded") {
+		t.Errorf("opted out: %v %s", isErr, out)
+	}
+	_ = sessions(home).Update("S", func(st *session.State) error { st.Paused = true; return nil })
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); !isErr || !strings.Contains(out, "paused") {
+		t.Errorf("paused: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Errorf("a refused verdict stored a note: %d sent", retained.Load()-before)
+	}
+}
+
+// rawFact makes each id a world fact of project proj on the fake server.
+func rawFact(ids ...string) {
+	for _, id := range ids {
+		memories[id] = `{"id":"` + id + `","text":"Billing runs PostgreSQL 14.","type":"world","tags":["project:proj"]}`
+	}
+}
+
+// observation makes id an observation of project proj drawn from sources
+// ("<id>|<project>|<text>"), each a world fact on the fake server too.
+func observation(id string, sources ...string) {
+	var list []string
+	for _, s := range sources {
+		f := strings.SplitN(s, "|", 3)
+		fact := `{"id":"` + f[0] + `","text":` + strconv.Quote(f[2]) + `,"type":"world","tags":["project:` + f[1] + `"]}`
+		memories[f[0]] = fact
+		list = append(list, fact)
+	}
+	memories[id] = `{"id":"` + id + `","text":"Billing runs PostgreSQL 14 everywhere.","type":"observation","tags":["project:proj"],"source_memories":[` + strings.Join(list, ",") + `]}`
+}
+
+// patches are the PATCH calls the fake server accepted on memories.
+func patches() []string {
+	var out []string
+	for _, c := range curation {
+		if strings.HasPrefix(c, "PATCH ") && strings.Contains(c, "/memories/") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// retireEvents are the journal's events of kind in session S.
+func retireEvents(t *testing.T, home, kind string) []feedback.Event {
+	t.Helper()
+	var out []feedback.Event
+	for _, e := range eventsOf(journalEvents(t, home), kind) {
+		if e.Session == "S" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+const (
+	wantRestore = "Tell the user which memory you retired, why, and that `backsight forget --restore <id>` undoes it."
+	creditC     = "cccccccc-0000-4000-8000-000000000003"
+	obsO        = "0f0f0f0f-0000-4000-8000-00000000000f"
+	srcOne      = "51515151-0000-4000-8000-000000000051"
+	srcTwo      = "52525252-0000-4000-8000-000000000052"
+	srcThree    = "53535353-0000-4000-8000-000000000053"
+)
+
+var noteIDRE = regexp.MustCompile(`note:[0-9a-f-]{36}`)
+
+func TestWrongRawFactIsInvalidated(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	rawFact(creditA)
+	_ = feedback.SetTurn(pathsOf(home).FeedbackDir(), "S", feedback.Turn{ID: "p-7", N: 7})
+	args := verdict("wrong", "aaaaaaaa")
+	args["evidence"] = "psql --version\nprinted\x07 16.4"
+	args["correction"] = "Billing runs PostgreSQL 16 since 2026-10-20, " + strings.Repeat("on the primary and on every replica of the cluster, ", 8) + "as psql shows."
+	out, isErr := call(t, cs, "memory_credit", args)
+	note := noteIDRE.FindString(out)
+	if isErr || !strings.HasPrefix(out, "Retired.") || !strings.Contains(out, wantRestore) || !strings.Contains(out, creditA) || note == "" {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	p := patches()
+	if len(p) != 1 || !strings.Contains(p[0], "/memories/"+creditA+" ") {
+		t.Fatalf("patches %q", p)
+	}
+	var body struct{ State, Reason string }
+	_, raw, _ := strings.Cut(p[0], " {")
+	if err := json.Unmarshal([]byte("{"+raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	suffix := " (" + note + ")"
+	head, cut := strings.CutSuffix(body.Reason, suffix)
+	if body.State != "invalidated" || !cut || !strings.HasPrefix(body.Reason, "wrong: psql --version printed 16.4 → Billing runs PostgreSQL 16") ||
+		utf8.RuneCountInString(head) > 300 || strings.ContainsAny(body.Reason, "\n\x07") {
+		t.Errorf("patch %+v", body)
+	}
+	if utf8.RuneCountInString(head) < 290 {
+		t.Errorf("the reason was cut short: %d characters", utf8.RuneCountInString(head))
+	}
+	// the evidence is one line in the note too
+	cfg, sec, _ := loadServerConfig()
+	cl, _ := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
+	if d, err := cl.GetDocument(context.Background(), cfg.Server.Bank, note); err != nil || d.Metadata["evidence"] != "psql --version printed 16.4" {
+		t.Errorf("note %v %v", d.Metadata, err)
+	}
+	r := retireEvents(t, home, feedback.KindRetire)
+	if len(r) != 1 || strings.Join(r[0].IDs, ",") != creditA || r[0].Verdict != "wrong" || r[0].Outcome != "invalidated" || r[0].Note != note || r[0].Turn != "p-7" || r[0].Agent != "" {
+		t.Errorf("retire events %+v", r)
+	}
+	if strings.Contains(fmt.Sprint(journalEvents(t, home)), "psql") {
+		t.Error("the evidence reached the journal")
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "retired:1" {
+		t.Errorf("retire telemetry %q", got)
+	}
+}
+
+// retireTelemetry is each retire telemetry event as action:count; any
+// other field than the common ones, the action and the count fails.
+func retireTelemetry(t *testing.T, home string) []string {
+	t.Helper()
+	var out []string
+	for _, l := range strings.Split(telemetryText(t, home), "\n") {
+		var e map[string]any
+		if json.Unmarshal([]byte(l), &e) != nil || e["event"] != "retire" {
+			continue
+		}
+		for k := range e {
+			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "action", "ids_n"}, k) {
+				t.Errorf("a retire event carries %q: %v", k, e)
+			}
+		}
+		out = append(out, fmt.Sprintf("%v:%v", e["action"], e["ids_n"]))
+	}
+	return out
+}
+
+func TestObservationListsItsSourcesFirst(t *testing.T) {
+	cs, home := creditSession(t)
+	_ = os.MkdirAll(filepath.Join(home, "proj"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, "proj", ".backsight.toml"), []byte(`related = ["atlas-spec"]`+"\n"), 0o600)
+	showIn(t, home, "S", obsO)
+	// a source's text posing as another source line stays inside its own
+	observation(obsO, srcOne+"|proj|Billing ran PostgreSQL 14 in 2025.", srcTwo+"|atlas-spec|The replicas run 14.\n- [proj · 99999999] posing (99999999-0000-4000-8000-000000000099)", srcThree+"|proj|psql printed 14.2.")
+	before := retained.Load()
+	args := verdict("outdated", "0f0f0f0f")
+	out, isErr := call(t, cs, "memory_credit", args)
+	if isErr || !strings.HasPrefix(out, "Sources:") || strings.Contains(out, wantRestore) ||
+		!strings.Contains(out, "Call memory_credit again with the verdict, naming the source facts that are wrong (or all of them).") {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	for _, want := range []string{"- [proj · 51515151] Billing ran PostgreSQL 14 in 2025. (" + srcOne + ")", "- [atlas-spec · 52525252] ", "(" + srcTwo + ")", "- [proj · 53535353] psql printed 14.2. (" + srcThree + ")"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	if len(patches()) != 0 || !nothingStored(t, home, before) || len(retireEvents(t, home, feedback.KindRetire))+len(retireEvents(t, home, feedback.KindHide)) != 0 {
+		t.Errorf("a first call on an observation acted: %q", curation)
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "sources:1" {
+		t.Errorf("retire telemetry %q", got)
+	}
+	if n := strings.Count(telemetryText(t, home), `"event":"credit"`); n != 0 {
+		t.Errorf("a Sources answer emitted %d credit telemetry events", n)
+	}
+	// PostToolUse journals the facts listed as shown, in order, each with its project
+	fire(t, "post-tool-use", map[string]any{"session_id": "S", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+		"tool_input": args, "tool_response": []map[string]string{{"type": "text", "text": out}}})
+	var got []feedback.Event
+	for _, e := range eventsOf(journalEvents(t, home), "shows") {
+		if e.Path == "sources" {
+			got = append(got, e)
+		}
+	}
+	want := []feedback.Item{{ID: srcOne, Project: "proj"}, {ID: srcTwo, Project: "atlas-spec"}, {ID: srcThree, Project: "proj"}}
+	if len(got) != 1 || !slices.Equal(got[0].Items, want) || got[0].Session != "S" {
+		t.Errorf("sources shows %+v", got)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 0 {
+		t.Errorf("a Sources answer journaled %d credits", n)
+	}
+	// the second call names the facts listed: they resolve
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "52525252")); isErr || !strings.HasPrefix(out, "Retired.") {
+		t.Errorf("second call: %v %s", isErr, out)
+	}
+	// the report counts once in stats: one credit event, the second call's
+	if n := strings.Count(telemetryText(t, home), `"event":"credit"`); n != 1 || !creditEvent(t, home, `"verdict":"outdated"`, `"ok":true`) {
+		t.Errorf("%d credit telemetry events for one report:\n%s", n, telemetryText(t, home))
+	}
+}
+
+func TestNamedSourcesAreRetired(t *testing.T) {
+	cs, home := creditSession(t)
+	observation(obsO, srcOne+"|proj|one", srcTwo+"|proj|two", srcThree+"|proj|three")
+	showIn(t, home, "S", obsO)
+	showItems(t, home, "S", "sources", "proj", feedback.Item{ID: srcOne, Project: "proj"}, feedback.Item{ID: srcTwo, Project: "proj"}, feedback.Item{ID: srcThree, Project: "proj"})
+	// 1 earlier + the 2 facts named = 3: the observation itself does not count
+	retireIn(t, home, "S", feedback.KindRetire, "44444444-0000-4000-8000-000000000004")
+	before := retained.Load()
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "0f0f0f0f", "51515151", srcTwo))
+	if isErr || !strings.HasPrefix(out, "Retired.") || !strings.Contains(out, srcOne) || !strings.Contains(out, srcTwo) || strings.Contains(out, srcThree) {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	p := patches()
+	if len(p) != 2 || !strings.Contains(p[0], "/memories/"+srcOne+" ") || !strings.Contains(p[1], "/memories/"+srcTwo+" ") {
+		t.Errorf("patches %q", p)
+	}
+	r := retireEvents(t, home, feedback.KindRetire)
+	if len(r) != 3 || strings.Join(r[1].IDs, ",") != srcOne || strings.Join(r[2].IDs, ",") != srcTwo || len(retireEvents(t, home, feedback.KindHide)) != 0 {
+		t.Errorf("retire events %+v", r)
+	}
+	if retained.Load()-before != 1 {
+		t.Errorf("%d notes sent", retained.Load()-before)
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "retired:2" {
+		t.Errorf("retire telemetry %q", got)
+	}
+}
+
+func TestObservationWithoutSourcesIsHidden(t *testing.T) {
+	cs, home := creditSession(t)
+	const empty = "0e0e0e0e-0000-4000-8000-00000000000e"
+	observation(obsO, srcOne+"|proj|one")
+	memoryStatus["GET "+obsO] = 500 // its sources cannot be listed
+	memories[empty] = `{"id":"` + empty + `","text":"x","type":"observation","tags":["project:proj"],"source_memories":[]}`
+	showIn(t, home, "S", obsO, empty)
+	out, isErr := call(t, cs, "memory_credit", verdict("outdated", "0f0f0f0f", "0e0e0e0e"))
+	note := noteIDRE.FindString(out)
+	if isErr || !strings.HasPrefix(out, "Hidden.") || !strings.Contains(out, obsO) || !strings.Contains(out, empty) || !strings.Contains(out, wantRestore) || note == "" {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	if len(patches()) != 0 {
+		t.Errorf("an observation was invalidated: %q", curation)
+	}
+	// the one the server could not read says how to retire it there; the
+	// one with no sources has nothing to retire on the server
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(l, obsO) && (!strings.HasPrefix(l, "Hidden") || !strings.Contains(l, "backsight forget "+obsO) || strings.Contains(l, empty)):
+			t.Errorf("unread line %q", l)
+		case strings.Contains(l, empty) && (!strings.HasPrefix(l, "Hidden") || strings.Contains(l, "backsight forget")):
+			t.Errorf("no-sources line %q", l)
+		}
+	}
+	h := retireEvents(t, home, feedback.KindHide)
+	if len(h) != 2 || strings.Join(h[0].IDs, ",") != obsO || strings.Join(h[1].IDs, ",") != empty || h[0].Verdict != "outdated" || h[0].Note != note || h[0].Outcome != "" {
+		t.Errorf("hide events %+v", h)
+	}
+	if len(retireEvents(t, home, feedback.KindRetire)) != 0 {
+		t.Error("a hidden observation was journaled retired")
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "hidden:2" {
+		t.Errorf("retire telemetry %q", got)
+	}
+}
+
+// A raw fact retired and an observation hidden in one call: Retired.,
+// with the hidden one on its own line.
+func TestRetiredAndHiddenAnswerSaysWhich(t *testing.T) {
+	cs, home := creditSession(t)
+	rawFact(creditA)
+	memoryStatus["GET "+obsO] = 500
+	showIn(t, home, "S", creditA, obsO)
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "0f0f0f0f"))
+	if isErr || !strings.HasPrefix(out, "Retired.") {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	var hiddenLine string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, obsO) {
+			hiddenLine = l
+		}
+	}
+	if !strings.HasPrefix(hiddenLine, "Hidden") || strings.Contains(hiddenLine, creditA) {
+		t.Errorf("hidden line %q in\n%s", hiddenLine, out)
+	}
+	if len(patches()) != 1 || len(retireEvents(t, home, feedback.KindRetire)) != 1 || len(retireEvents(t, home, feedback.KindHide)) != 1 {
+		t.Errorf("patches %q", patches())
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "retired:1 hidden:1" {
+		t.Errorf("retire telemetry %q", got)
+	}
+}
+
+func TestPartialRetirementSaysWhatHappened(t *testing.T) {
+	cs, home := creditSession(t)
+	rawFact(creditA, creditB, creditC)
+	memoryStatus["PATCH "+creditB] = 500
+	showIn(t, home, "S", creditA, creditB, creditC)
+	before := retained.Load()
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb", "cccccccc"))
+	if isErr || !strings.HasPrefix(out, "Partly retired.") || !strings.Contains(out, wantRestore) {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	var retiredLine, notLine string
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(l, "Invalidated"):
+			retiredLine = l
+		case strings.HasPrefix(l, "Not retired"):
+			notLine = l
+		}
+	}
+	if !strings.Contains(retiredLine, creditA) || strings.Contains(retiredLine, creditB) || !strings.Contains(notLine, creditB) || !strings.Contains(notLine, creditC) || strings.Contains(notLine, creditA) {
+		t.Errorf("retired %q, not retired %q in\n%s", retiredLine, notLine, out)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], creditA) {
+		t.Errorf("patches %q", p)
+	}
+	if r := retireEvents(t, home, feedback.KindRetire); len(r) != 1 || strings.Join(r[0].IDs, ",") != creditA {
+		t.Errorf("retire events %+v", r)
+	}
+	n, _ := notesOutbox(pathsOf(home)).Pending()
+	if sent := retained.Load() - before; sent+int64(n) != 1 {
+		t.Errorf("notes: %d sent, %d queued", sent, n)
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "partly:1" {
+		t.Errorf("retire telemetry %q", got)
+	}
+}
+
+// The server refuses the first retirement: nothing retired, said so, and
+// the correction stored once all the same.
+func TestFailedRetirementRetiresNothingSilently(t *testing.T) {
+	cs, home := creditSession(t)
+	rawFact(creditA)
+	memoryStatus["PATCH "+creditA] = 500
+	showIn(t, home, "S", creditA)
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa"))
+	if !isErr || !strings.Contains(out, "nothing retired") || !strings.Contains(out, "backsight forget "+creditA) || noteIDRE.FindString(out) == "" ||
+		!strings.Contains(out, "do not call memory_credit again for these memories") || strings.Contains(out, "store it again") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if len(retireEvents(t, home, feedback.KindRetire)) != 0 {
+		t.Error("a refused retirement was journaled")
+	}
+	if got := retireTelemetry(t, home); len(got) != 0 {
+		t.Errorf("retire telemetry %q for a retirement the server refused", got)
+	}
+}
+
+// The whole chain, before any settle: a shown fact reported outdated is
+// invalidated, memory stale lists it as reported, and forget --restore
+// makes it valid again and drops it from the list.
+func TestOutdatedFactIsListedStaleUntilRestored(t *testing.T) {
+	cs, home := creditSession(t)
+	rawFact(creditA)
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); isErr || !strings.HasPrefix(out, "Retired.") {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], "/memories/"+creditA+" ") || !strings.Contains(p[0], `"state":"invalidated"`) {
+		t.Fatalf("patches %q", p)
+	}
+	code, out, errOut := run(t, "memory", "stale")
+	if code != output.OK || !strings.Contains(out, "Reported wrong or outdated\naaaaaaaa ") || !strings.Contains(out, "backsight forget "+creditA+" --purge") {
+		t.Fatalf("stale after the verdict: exit %d\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := run(t, "forget", "--restore", creditA); code != output.OK || !strings.Contains(out, creditA+" restored") {
+		t.Fatalf("restore: exit %d\n%s%s", code, out, errOut)
+	}
+	if p := patches(); len(p) != 2 || !strings.Contains(p[1], `"state":"valid"`) {
+		t.Errorf("patches after restore %q", p)
+	}
+	if code, out, errOut := run(t, "memory", "stale"); code != output.OK || strings.Contains(out, "aaaaaaaa") || !strings.HasPrefix(out, "Nothing needs review") {
+		t.Errorf("stale after the restore: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// Maintenance holds the server's writes: nothing asked, stored or retired.
+func TestVerdictWaitsForMaintenance(t *testing.T) {
+	cs, home := creditSession(t)
+	rawFact(creditA)
+	showIn(t, home, "S", creditA)
+	d := pathsOf(home)
+	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"backup create","since":"`+time.Now().UTC().Format(time.RFC3339)+`"}`), 0o600)
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); !isErr || !strings.Contains(out, "maintenance in progress") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if len(patches()) != 0 || !nothingStored(t, home, before) {
+		t.Errorf("written during maintenance: %q", curation)
 	}
 }

@@ -1,12 +1,17 @@
 package feedback
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // assertSameEntries: a and b hold the same memories, with the same counts
@@ -26,12 +31,16 @@ func assertSameEntries(t *testing.T, a, b Ledger, tol float64) {
 			t.Errorf("%s: %+v vs %+v", id, x, y)
 		case math.Abs(x.Credits-y.Credits) > tol || math.Abs(x.Misses-y.Misses) > tol:
 			t.Errorf("%s: credits %v vs %v, misses %v vs %v", id, x.Credits, y.Credits, x.Misses, y.Misses)
+		case x.Wrong != y.Wrong || (x.Hidden == nil) != (y.Hidden == nil) || (x.Hidden != nil && (!x.Hidden.Since.Equal(y.Hidden.Since) ||
+			x.Hidden.Verdict != y.Hidden.Verdict || x.Hidden.Note != y.Hidden.Note)):
+			t.Errorf("%s: wrong %d vs %d, hidden %+v vs %+v", id, x.Wrong, y.Wrong, x.Hidden, y.Hidden)
 		}
 	}
 }
 
 // randomJournal is n random shows over days days, with credits, stops,
-// subagents and a few forgets, in time order.
+// subagents, a few forgets, retirements, hidings and their undoing, in
+// time order.
 func randomJournal(r *rand.Rand, n, days int) []Event {
 	paths := []string{"prompt", "search", "gate", "briefing", "read", "failure"}
 	var events []Event
@@ -80,6 +89,12 @@ func randomJournal(r *rand.Rand, n, days int) []Event {
 		if r.IntN(8) == 0 {
 			events = append(events, Event{Kind: "forget", TS: at(m), IDs: []string{fmt.Sprintf("m%d", r.IntN(30))}})
 		}
+		if r.IntN(4) == 0 {
+			m++
+			id := fmt.Sprintf("m%d", r.IntN(30))
+			kind := []string{KindRetire, KindRetire, KindHide, KindUnhide}[r.IntN(4)]
+			events = append(events, Event{Kind: kind, TS: at(m), IDs: []string{id}, Verdict: "wrong", Note: "n-" + id})
+		}
 	}
 	return events
 }
@@ -110,8 +125,17 @@ func TestRebuildEqualsTheLiveLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total.Shows < 500 || total.Credits == 0 || total.Misses == 0 || len(live.Memories) == 0 {
-		t.Fatalf("a weak sample: %+v, %d memories", total, len(live.Memories))
+	wrong, hidden := 0, 0
+	for _, m := range live.Memories {
+		if m.Wrong > 0 {
+			wrong++
+		}
+		if m.Hidden != nil {
+			hidden++
+		}
+	}
+	if total.Shows < 500 || total.Credits == 0 || total.Misses == 0 || len(live.Memories) == 0 || wrong == 0 || hidden == 0 {
+		t.Fatalf("a weak sample: %+v, %d memories, %d wrong, %d hidden", total, len(live.Memories), wrong, hidden)
 	}
 	rebuilt, err := Rebuild(dir, testParams, false)
 	if err != nil {
@@ -280,5 +304,170 @@ func TestRebuildUsesTheRecordedHalfLives(t *testing.T) {
 	}, shorter)
 	if got := bare.Memories["m1"].Misses; math.Abs(got-1.5) > 1e-12 {
 		t.Errorf("misses without params %v, want 1.5 under the caller's 30 days", got)
+	}
+}
+
+// Retirements fold into the entry: each retire counts one more wrong, a
+// hide sets the hiding with its time, verdict and note, an unhide clears
+// both; a rebuilt ledger equals the live one at each step.
+func TestLedgerFoldsRetirements(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, append(sampleSession(),
+		Event{Kind: KindRetire, TS: at(20), IDs: []string{"m1"}, Verdict: "wrong", Outcome: "invalidated", Note: "n1"},
+		Event{Kind: KindRetire, TS: at(21), IDs: []string{"m1"}, Verdict: "outdated", Outcome: "invalidated", Note: "n2"},
+		Event{Kind: KindHide, TS: at(22), IDs: []string{"o1"}, Verdict: "outdated", Note: "n3"},
+	)...)
+	settleAndCompare := func(now time.Time) Ledger {
+		t.Helper()
+		if _, err := Settle(dir, testParams, now); err != nil {
+			t.Fatal(err)
+		}
+		live, err := LoadLedger(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rebuilt, err := Rebuild(dir, testParams, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSameEntries(t, live, rebuilt, 0)
+		return live
+	}
+	l := settleAndCompare(at(120))
+	if m := l.Memories["m1"]; m.Wrong != 2 || m.Hidden != nil || m.Shown != 1 {
+		t.Errorf("m1 after two retires: %+v", m)
+	}
+	h := l.Memories["o1"].Hidden
+	if h == nil || !h.Since.Equal(at(22)) || h.Verdict != "outdated" || h.Note != "n3" || l.Memories["o1"].Wrong != 0 {
+		t.Fatalf("o1 after a hide: %+v", l.Memories["o1"])
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "ledger.json"))
+	if !strings.Contains(string(raw), `"wrong":2`) || !strings.Contains(string(raw), `"hidden":{"since":"2026-09-01T09:22:00Z","verdict":"outdated","note":"n3"}`) {
+		t.Errorf("ledger.json: %s", raw)
+	}
+
+	writeJournal(t, dir, Event{Kind: KindUnhide, TS: at(130), IDs: []string{"m1", "o1", "never-seen"}, Outcome: "restored"})
+	l = settleAndCompare(at(140))
+	if m := l.Memories["m1"]; m.Wrong != 0 || m.Hidden != nil || m.Shown != 1 {
+		t.Errorf("m1 after an unhide: %+v", m)
+	}
+	if m, ok := l.Memories["o1"]; !ok || m.Wrong != 0 || m.Hidden != nil {
+		t.Errorf("o1 after an unhide: %+v (kept: %v)", m, ok)
+	}
+	if _, ok := l.Memories["never-seen"]; ok {
+		t.Error("an unhide of an unknown memory made an entry")
+	}
+	raw, _ = os.ReadFile(filepath.Join(dir, "ledger.json"))
+	if strings.Contains(string(raw), `"wrong"`) || strings.Contains(string(raw), `"hidden"`) {
+		t.Errorf("cleared fields still written: %s", raw)
+	}
+}
+
+// Current is the ledger with the retirements journaled since its last
+// settle: a hide or unhide counts at once, the file stays as it was.
+func TestCurrentAppliesRetirementsSinceTheWatermark(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(dir, "ledger.json"))
+	writeJournal(t, dir,
+		Event{Kind: KindHide, TS: at(130), IDs: []string{"o1"}, Verdict: "wrong", Note: "n1"},
+		Event{Kind: KindRetire, TS: at(131), IDs: []string{"m1"}, Verdict: "wrong", Note: "n2"},
+		Event{Kind: KindHide, TS: at(132), IDs: []string{"o2"}, Verdict: "wrong", Note: "n3"},
+		Event{Kind: KindUnhide, TS: at(133), IDs: []string{"o2"}, Outcome: "rewritten"},
+	)
+	l, err := Current(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Memories["o1"].Hidden == nil || l.Memories["m1"].Wrong != 1 || l.Memories["o2"].Hidden != nil || l.Memories["m1"].Shown != 1 {
+		t.Errorf("current: %+v", l.Memories)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); string(after) != string(before) {
+		t.Error("Current wrote the ledger")
+	}
+}
+
+// A retirement journaled at the very instant of the last settle folds at
+// the next one, as a rebuild folds it.
+func TestAnEventAtTheWatermarkFolds(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewJournal(dir, Common{}).AppendFolded(Event{Kind: KindRetire, TS: at(120), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle(dir, testParams, at(140)); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := LoadLedger(dir)
+	rebuilt, err := Rebuild(dir, testParams, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+	if live.Memories["m1"].Wrong != 1 {
+		t.Errorf("m1: %+v", live.Memories["m1"])
+	}
+}
+
+// A retirement journaled while a settle runs, stamped before the settle's
+// time, waits for the ledger lock and lands after the settle's watermark:
+// the next settle folds it, as a rebuild does.
+func TestARetirementDuringASettleFolds(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, at(100)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	afterSettleRead = func() {
+		go func() {
+			done <- NewJournal(dir, Common{}).AppendFolded(Event{Kind: KindRetire, TS: at(110), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"})
+		}()
+		time.Sleep(100 * time.Millisecond) // the append runs now, unless it waits for the lock
+	}
+	t.Cleanup(func() { afterSettleRead = nil })
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	afterSettleRead = nil
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle(dir, testParams, at(140)); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := LoadLedger(dir)
+	rebuilt, err := Rebuild(dir, testParams, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+	if live.Memories["m1"].Wrong != 1 {
+		t.Errorf("m1: %+v", live.Memories["m1"])
+	}
+}
+
+// A ledger lock held past the wait still journals the event (a session's
+// retirements are counted from the journal) and says the lock was held.
+func TestAppendFoldedJournalsWhenTheLockStaysHeld(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	release, err := lockLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	err = NewJournal(dir, Common{Session: "s1"}).AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}, Verdict: "wrong"})
+	var held *state.HeldError
+	if !errors.As(err, &held) {
+		t.Errorf("want the held lock, got %v", err)
+	}
+	if events, _, _ := Read(dir, time.Time{}); len(events) != 1 || events[0].Kind != KindRetire {
+		t.Errorf("journal %+v", events)
 	}
 }

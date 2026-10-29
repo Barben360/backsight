@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -622,6 +623,73 @@ func TestPostToolUseJournalsTheCredit(t *testing.T) {
 	credit("p-3", map[string]any{"verdict": "none"}, "Noted: no memory used.")
 	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 2 {
 		t.Errorf("feedback off journaled a credit: %d", n)
+	}
+}
+
+// A wrong or outdated verdict the server carried out is a credit of the
+// turn, with its verdict and the full ids; a Sources answer or a refusal
+// is none.
+func TestVerdictCreditIsJournaled(t *testing.T) {
+	home := hookHome(t)
+	full := "0b4c2a52-0000-4000-8000-000000000001"
+	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+	credit := func(verdict, response string) {
+		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+			"tool_input":    map[string]any{"ids": []string{"0b4c2a52"}, "verdict": verdict, "correction": "Billing runs PostgreSQL 16.", "evidence": "psql printed 16.4"},
+			"tool_response": []map[string]string{{"type": "text", "text": response}}})
+	}
+	tail := "\nTell the user which memory you retired, why, and that `backsight forget --restore <id>` undoes it."
+	credit("outdated", "Sources: these observations are drawn from the facts below; only facts are retired.\nCall memory_credit again with the verdict, naming the source facts that are wrong (or all of them).")
+	credit("wrong", "retirements: at most 3 per session (feedback.max_retirements), 3 already: nothing stored")
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 0 {
+		t.Fatalf("no credit expected yet: %d", n)
+	}
+	credit("outdated", "Retired. Correction stored: note:11111111-0000-4000-8000-000000000001.\nInvalidated on the server: "+full+tail)
+	credit("wrong", "Partly retired. The server refused a retirement: x. Correction stored: note:11111111-0000-4000-8000-000000000002."+tail)
+	credit("wrong", "Hidden. Correction stored: note:11111111-0000-4000-8000-000000000003."+tail)
+	credits := eventsOf(journalEvents(t, home), "credit")
+	if len(credits) != 3 {
+		t.Fatalf("credits %+v", credits)
+	}
+	for i, v := range []string{"outdated", "wrong", "wrong"} {
+		if c := credits[i]; c.Verdict != v || strings.Join(c.IDs, ",") != full || c.Turn != "p-2" || c.Session != "s1" {
+			t.Errorf("credit %d: %+v", i, c)
+		}
+	}
+	if strings.Contains(fmt.Sprint(journalEvents(t, home)), "psql") {
+		t.Error("the evidence reached the journal")
+	}
+}
+
+// The hook journals the facts of a Sources answer line by line: a line
+// whose short id does not start its full id, or that is not a whole fact
+// line, is skipped; the others are journaled, in order.
+func TestSourcesShowsSkipBadLines(t *testing.T) {
+	home := hookHome(t)
+	const (
+		one = "61616161-0000-4000-8000-000000000061"
+		two = "62626262-0000-4000-8000-000000000062"
+		odd = "63636363-0000-4000-8000-000000000063"
+	)
+	answer := "Sources: only raw facts are retired, and an observation is drawn from them; nothing was retired or stored.\n" +
+		"0f0f0f0f is drawn from:\n" +
+		"- [billing · 61616161] Billing ran PostgreSQL 14. (" + one + ")\n" +
+		"- [billing · 99999999] its short id is another's. (" + odd + ")\n" +
+		"- [billing · 63636363] no full id at the end\n" +
+		"- [atlas-spec · 62626262] The replicas run 14. (" + two + ")\n" +
+		"Call memory_credit again with the verdict, naming the source facts that are wrong (or all of them)."
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+		"tool_input":    map[string]any{"ids": []string{"0f0f0f0f"}, "verdict": "outdated", "correction": "Billing runs PostgreSQL 16.", "evidence": "psql printed 16.4"},
+		"tool_response": []map[string]string{{"type": "text", "text": answer}}})
+	shows := eventsOf(journalEvents(t, home), "shows")
+	want := []feedback.Item{{ID: one, Project: "billing"}, {ID: two, Project: "atlas-spec"}}
+	if len(shows) != 1 || shows[0].Path != "sources" || !slices.Equal(shows[0].Items, want) {
+		t.Errorf("shows %+v", shows)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 0 {
+		t.Errorf("a Sources answer journaled %d credits", n)
 	}
 }
 

@@ -19,8 +19,9 @@ const LedgerSchema = 1
 
 // Entry is what the settled journal says of one memory: how often it was
 // shown, its credits and confident misses as sums decayed to CreditsAt and
-// MissesAt (each event weighs 2^-(age/half-life)), and when it was last
-// shown and credited.
+// MissesAt (each event weighs 2^-(age/half-life)), when it was last shown
+// and credited, how often it was retired as wrong or outdated, and its
+// local hiding when its retirement could only hide it.
 type Entry struct {
 	Shown        int       `json:"shown"`
 	Credits      float64   `json:"credits,omitempty"`
@@ -29,10 +30,20 @@ type Entry struct {
 	MissesAt     time.Time `json:"misses_at,omitzero"`
 	LastShown    time.Time `json:"last_shown,omitzero"`
 	LastCredited time.Time `json:"last_credited,omitzero"`
+	Wrong        int       `json:"wrong,omitempty"`
+	Hidden       *Hidden   `json:"hidden,omitempty"`
 }
 
-// Ledger is a cache of the journal's settle and forget events, by memory
-// id: Rebuild recomputes it. Watermark is when settling last ran.
+// Hidden is an observation hidden on this machine: since when, under which
+// verdict, with the correction note's id.
+type Hidden struct {
+	Since   time.Time `json:"since"`
+	Verdict string    `json:"verdict,omitempty"`
+	Note    string    `json:"note,omitempty"`
+}
+
+// Ledger is a cache of the journal's settle, forget, retire, hide and
+// unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran.
 type Ledger struct {
 	Schema    int              `json:"schema"`
 	Watermark time.Time        `json:"watermark,omitzero"`
@@ -41,8 +52,9 @@ type Ledger struct {
 
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
 
-// Apply adds a settle event's shows to the ledger, or drops a forget
-// event's memories. A settle decays under the half-lives it recorded, p's
+// Apply adds a settle event's shows to the ledger, drops a forget event's
+// memories, counts a retire, sets a hide, or clears both on an unhide (of
+// a memory with an entry only). A settle decays under the half-lives it recorded, p's
 // when it recorded none; a forgotten show counts nowhere. Sums decay
 // order-independently, so applying settle events as they come and folding
 // them all later agree.
@@ -73,7 +85,36 @@ func (l *Ledger) Apply(e Event, p Params) {
 		for _, id := range e.IDs {
 			delete(l.Memories, id)
 		}
+	case KindRetire:
+		for _, id := range e.IDs {
+			m := l.Memories[id]
+			m.Wrong++
+			l.Memories[id] = m
+		}
+	case KindHide:
+		for _, id := range e.IDs {
+			m := l.Memories[id]
+			m.Hidden = &Hidden{Since: e.TS, Verdict: e.Verdict, Note: e.Note}
+			l.Memories[id] = m
+		}
+	case KindUnhide:
+		for _, id := range e.IDs {
+			if m, ok := l.Memories[id]; ok {
+				m.Wrong, m.Hidden = 0, nil
+				l.Memories[id] = m
+			}
+		}
 	}
+}
+
+// folded: an event Settle applies to the ledger as it comes, besides its
+// own settle events.
+func folded(kind string) bool {
+	switch kind {
+	case "forget", KindRetire, KindHide, KindUnhide:
+		return true
+	}
+	return false
 }
 
 // recorded is p with the half-lives a settle event's params carry.
@@ -89,7 +130,8 @@ func (p Params) recorded(params map[string]float64) Params {
 
 func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Hour)) }
 
-// Fold is the ledger of events' settle and forget events, applied in
+// Fold is the ledger of events' settle, forget, retire, hide and unhide
+// events, applied in
 // (ts, seq) order, each settle key once; its watermark is the last
 // settle's time.
 func Fold(events []Event, p Params) Ledger {
@@ -217,6 +259,26 @@ func Rebuild(dir string, p Params, write bool) (Ledger, error) {
 	if write {
 		if err := saveLedger(dir, l); err != nil {
 			return l, err
+		}
+	}
+	return l, nil
+}
+
+// Current is dir's ledger with the forget, retire, hide and unhide events
+// journaled since its watermark applied, in time order, written nowhere:
+// what a command reads between two settles.
+func Current(dir string) (Ledger, error) {
+	l, err := LoadLedger(dir)
+	if err != nil {
+		return l, err
+	}
+	events, _, err := Read(dir, l.Watermark)
+	if err != nil {
+		return l, err
+	}
+	for _, e := range sortedByTime(events) {
+		if folded(e.Kind) && e.TS.After(l.Watermark) {
+			l.Apply(e, Params{})
 		}
 	}
 	return l, nil

@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
@@ -51,6 +52,11 @@ type Note struct {
 	// Session: the Claude Code session a note was stored from ("" from a
 	// shell), kept in the document's metadata so `memory notes` shows it.
 	Session string `json:"session,omitempty"`
+	// Replaces and Evidence: the memories a correction reported wrong or
+	// outdated replaces, and what in the session showed it, kept in the
+	// document's metadata.
+	Replaces []string `json:"replaces,omitempty"`
+	Evidence string   `json:"evidence,omitempty"`
 }
 
 // NewNote builds a note with its document and operation ids.
@@ -100,6 +106,12 @@ func (n Note) Item(machineID string) hindsight.RetainItem {
 	}
 	if n.Session != "" {
 		item.Metadata["session"] = n.Session
+	}
+	if len(n.Replaces) > 0 {
+		item.Metadata["replaces"] = strings.Join(n.Replaces, ",")
+	}
+	if n.Evidence != "" {
+		item.Metadata["evidence"] = n.Evidence
 	}
 	return item
 }

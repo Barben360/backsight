@@ -52,9 +52,19 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 	}
 }
 
-func TestGuideV7(t *testing.T) {
-	if Version != "v7" {
+// v8: memory_credit takes the verdicts wrong and outdated, with their
+// rubric and an example each.
+func TestGuideV8(t *testing.T) {
+	if Version != "v8" {
 		t.Errorf("version %s", Version)
+	}
+	for _, want := range []string{
+		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output).",
+		`"verdict": "wrong"`, `"verdict": "outdated"`, `"correction":`, `"evidence":`,
+	} {
+		if !strings.Contains(CreditDescription, want) {
+			t.Errorf("credit description lacks %q: %s", want, CreditDescription)
+		}
 	}
 	for _, c := range []struct {
 		name string
@@ -317,6 +327,7 @@ var wordings = map[string]string{
 	"v6": "08ae29b8359ba847e94edb12c320d9ff4a3bfab837c6597c2a32a9422cde7228",
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 	"v7": "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
+	"v8": "12d06be831db7e934a0f7b733c2908eb1fde75d73d6f00d7a7fd645f23faa87b",
 }
 
 func wordingHash() string {

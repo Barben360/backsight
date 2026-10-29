@@ -202,6 +202,12 @@ type Feedback struct {
 	// StopCheck: when the end of a turn asks Claude to report what it used
 	// ("always", "cited" or "off").
 	StopCheck string `toml:"stop_check" json:"stop_check"`
+	// MaxRetirements: the most memories Claude may report wrong or
+	// outdated in one session; 0: none.
+	MaxRetirements int `toml:"max_retirements" json:"max_retirements"`
+	// StaleShows: memory stale lists a memory shown this many times or
+	// more and never used.
+	StaleShows int `toml:"stale_shows" json:"stale_shows"`
 }
 
 // DefaultBank is the memory bank setup and server install write into a new
@@ -232,7 +238,7 @@ func Default(d paths.Dirs, home string) Config {
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
-		Feedback:   Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always"},
+		Feedback:   Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10},
 	}
 }
 
@@ -406,6 +412,8 @@ func (c Config) Validate() error {
 	atLeast("feedback.miss_half_life_days", c.Feedback.MissHalfLifeDays, 0)
 	atLeast("feedback.credit_half_life_days", c.Feedback.CreditHalfLifeDays, 0)
 	oneOf("feedback.stop_check", c.Feedback.StopCheck, "always", "cited", "off")
+	atLeast("feedback.max_retirements", c.Feedback.MaxRetirements, 0)
+	atLeast("feedback.stale_shows", c.Feedback.StaleShows, 1)
 	if c.Update.Source != "" && !filepath.IsAbs(c.Update.Source) {
 		bad("update.source", "%q must be empty (GitHub releases) or an absolute directory path", c.Update.Source)
 	}
