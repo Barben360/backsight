@@ -173,3 +173,37 @@ func TestRecallAsksForSourceFactsAndReadsTheirTags(t *testing.T) {
 		t.Errorf("a plain recall must not ask for source facts (err %v): %s", err, got)
 	}
 }
+
+// The observation history as Hindsight 1.1.0 answers it: a list, oldest
+// change first, each with its changed_at (with or without a zone).
+func TestHistoryReadsChanges(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method != http.MethodGet:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		case r.URL.EscapedPath() == "/v1/default/banks/b/memories/o1/history":
+			_, _ = w.Write([]byte(`[{"previous_text":null,"previous_tags":[],"previous_occurred_start":null,"previous_occurred_end":null,"previous_mentioned_at":null,"changed_at":"2026-10-20T09:00:00.123456+00:00","new_source_memory_ids":["f1"],"source_facts":[{"id":"f1","text":"a fact","type":"world","context":null,"is_new":true}]},` +
+				`{"previous_text":"old","previous_tags":["project:p"],"changed_at":"2026-10-28T11:30:00","new_source_memory_ids":[],"source_facts":[]}]`))
+		case r.URL.EscapedPath() == "/v1/default/banks/b/memories/f1/history":
+			_, _ = w.Write([]byte(`[]`)) // a raw fact has no history
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Memory unit 'nope' not found"}`))
+		}
+	})
+	h, err := c.History(context.Background(), "b", "o1")
+	if err != nil || len(h) != 2 {
+		t.Fatalf("%+v %v", h, err)
+	}
+	if !h[0].ChangedAt.Equal(time.Date(2026, 10, 20, 9, 0, 0, 123456000, time.UTC)) || !h[1].ChangedAt.Equal(time.Date(2026, 10, 28, 11, 30, 0, 0, time.UTC)) {
+		t.Errorf("changed_at %v, %v", h[0].ChangedAt, h[1].ChangedAt)
+	}
+	if h, err := c.History(context.Background(), "b", "f1"); err != nil || len(h) != 0 {
+		t.Errorf("raw fact: %+v %v", h, err)
+	}
+	_, err = c.History(context.Background(), "b", "nope")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != NotFound {
+		t.Errorf("want NotFound, got %v", err)
+	}
+}

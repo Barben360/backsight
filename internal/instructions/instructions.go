@@ -24,8 +24,9 @@ import (
 // project's recent history, the header of the memories recalled after a
 // failed tool call; v7: the agent declares the memories it used with
 // memory_credit, whose answer carries the line to print, instead of citing
-// them in a fixed format).
-const Version = "v7"
+// them in a fixed format; v8: memory_credit takes the verdicts wrong and
+// outdated, with the correction and the evidence).
+const Version = "v8"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -198,7 +199,11 @@ const (
 	CreditDescription = "Name the memories shown to you in this session that informed your answer: call it once you know what you used, before your final message. " +
 		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
 		"Memories were shown but none informed the answer: `verdict: none`, without ids. Only memories shown in this session count: a search sent in the same message " +
-		"must return its result first. Examples: {\"ids\": [\"0b4c2a52\"]} after using that memory · {\"verdict\": \"none\"} when the memories shown were off-topic."
+		"must return its result first. " +
+		"Use verdict wrong when this session shows the memory is false, outdated when it was true but no longer is; give the right fact as correction and what in this session shows it as evidence (the user's words, a file, a command output). " +
+		"Examples: {\"ids\": [\"0b4c2a52\"]} after using that memory · {\"verdict\": \"none\"} when the memories shown were off-topic · " +
+		"{\"ids\": [\"7e1f9d03\"], \"verdict\": \"wrong\", \"correction\": \"Billing runs PostgreSQL 16, not 15.\", \"evidence\": \"psql --version printed 16.4\"} · " +
+		"{\"ids\": [\"c93a0e17\"], \"verdict\": \"outdated\", \"correction\": \"Deploys moved from Jenkins to GitHub Actions on 2026-10-20.\", \"evidence\": \"the user: we dropped Jenkins last week\"}."
 )
 
 // CreditLine is the line memory_credit hands back for the agent to print:

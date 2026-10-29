@@ -459,22 +459,21 @@ func (s *SentIndex) Remove(uuids ...string) error {
 	return nil
 }
 
-// ReadMachineID reads the id MachineID created in dir/machine_id, and
-// creates nothing: false when the file is absent, unreadable or malformed.
-func ReadMachineID(dir string) (string, bool) {
-	raw, err := os.ReadFile(filepath.Join(dir, "machine_id"))
-	if err != nil || len(bytes.TrimSpace(raw)) != 36 {
-		return "", false
+// ReadMachineID is the id MachineID created in dir, never creating one:
+// "" when there is none yet.
+func ReadMachineID(dir string) string {
+	if raw, err := os.ReadFile(filepath.Join(dir, "machine_id")); err == nil && len(bytes.TrimSpace(raw)) == 36 {
+		return string(bytes.TrimSpace(raw))
 	}
-	return string(bytes.TrimSpace(raw)), true
+	return ""
 }
 
 // MachineID is a random id created once in dir/machine_id.
 func MachineID(dir string) (string, error) {
-	p := filepath.Join(dir, "machine_id")
-	if id, ok := ReadMachineID(dir); ok {
+	if id := ReadMachineID(dir); id != "" {
 		return id, nil
 	}
+	p := filepath.Join(dir, "machine_id")
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	b[6] = (b[6] & 0x0f) | 0x40
@@ -482,7 +481,7 @@ func MachineID(dir string) (string, error) {
 	x := hex.EncodeToString(b)
 	id := x[:8] + "-" + x[8:12] + "-" + x[12:16] + "-" + x[16:20] + "-" + x[20:]
 	if err := fsutil.ReplaceIfUnchanged(p, []byte(id+"\n"), 0o600, fsutil.Absent); err != nil {
-		if id, ok := ReadMachineID(dir); ok {
+		if id := ReadMachineID(dir); id != "" {
 			return id, nil // another process won the race
 		}
 		return "", err

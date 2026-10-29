@@ -122,16 +122,11 @@ func WriteTombstonesAs(ctx context.Context, cl *hindsight.Client, bank string, t
 	if err != nil {
 		return 0, err
 	}
-	cb := ControlBank(bank)
-	if err := quietControl(ctx, cl, bank, adopt); err != nil {
+	content := fmt.Sprintf("purge tombstones of bank %s: %d document(s) deleted by forget --purge", bank, len(all.Tombstones))
+	if err := writeControlDocument(ctx, cl, bank, TombstonesDocument, content, map[string]string{"tombstones": string(raw)}, adopt); err != nil {
 		return 0, err
 	}
-	return len(all.Tombstones), cl.RetainNow(ctx, cb, []hindsight.RetainItem{{
-		Content:    fmt.Sprintf("purge tombstones of bank %s: %d document(s) deleted by forget --purge", bank, len(all.Tombstones)),
-		DocumentID: TombstonesDocument,
-		Tags:       []string{},
-		Metadata:   map[string]string{"tombstones": string(raw)},
-	}})
+	return len(all.Tombstones), nil
 }
 
 // syncTombstones makes this client's tombstones and the control bank's

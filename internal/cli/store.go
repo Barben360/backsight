@@ -106,11 +106,18 @@ func sendsGate(d paths.Dirs, generation int) func() error {
 	}
 }
 
+// noteOptions is what a correction from memory_credit adds to its note:
+// the memories it replaces and the evidence.
+type noteOptions struct {
+	Replaces []string
+	Evidence string
+}
+
 // storeNote validates and queues one note, then tries to send it now (the
 // outbox keeps it otherwise), unless connect started this PC's sends over
 // since generation was read with cfg: then the next jobs tick sends it.
-// Shared by the CLI and memory_store.
-func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, generation int, sid, cwd, kind, proj, text string) (storeResult, error) {
+// Shared by the CLI, memory_store and memory_credit (opts: at most one).
+func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, generation int, sid, cwd, kind, proj, text string, opts ...noteOptions) (storeResult, error) {
 	if err := checkNote(d, home, cfg, sid, cwd, kind, proj, text); err != nil {
 		return storeResult{}, err
 	}
@@ -121,6 +128,9 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 	}
 	n := retain.NewNote(cfg.Server.Bank, kind, proj, text, now())
 	n.Session = sid
+	for _, o := range opts {
+		n.Replaces, n.Evidence = o.Replaces, o.Evidence
+	}
 	ob := notesOutboxFor(d, cfg)
 	warn, err := ob.Append(n)
 	if err != nil {

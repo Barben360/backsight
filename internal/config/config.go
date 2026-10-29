@@ -202,6 +202,21 @@ type Feedback struct {
 	// StopCheck: when the end of a turn asks Claude to report what it used
 	// ("always", "cited" or "off").
 	StopCheck string `toml:"stop_check" json:"stop_check"`
+	// MaxRetirements: the most memories Claude may report wrong or
+	// outdated in one session; 0: none.
+	MaxRetirements int `toml:"max_retirements" json:"max_retirements"`
+	// StaleShows: memory stale lists a memory shown this many times or
+	// more and never used.
+	StaleShows int `toml:"stale_shows" json:"stale_shows"`
+	// BoostWeight (k), PriorCredits (α), PriorMisses (β): recall adds
+	// k × ((credits + α) / (credits + misses + α + β) − α / (α + β)) to
+	// a memory's score; k = 0 turns it off.
+	BoostWeight  float64 `toml:"boost_weight" json:"boost_weight"`
+	PriorCredits float64 `toml:"prior_credits" json:"prior_credits"`
+	PriorMisses  float64 `toml:"prior_misses" json:"prior_misses"`
+	// ShareLedger: this machine's counts go to the user's server for the
+	// other machines, and theirs come back; false: neither.
+	ShareLedger bool `toml:"share_ledger" json:"share_ledger"`
 }
 
 // DefaultBank is the memory bank setup and server install write into a new
@@ -232,7 +247,8 @@ func Default(d paths.Dirs, home string) Config {
 		Network:    Network{Exposure: "loopback", BreakerFailures: 3, BreakerPauseMin: 5},
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
-		Feedback:   Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always"},
+		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
+			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true},
 	}
 }
 
@@ -406,6 +422,16 @@ func (c Config) Validate() error {
 	atLeast("feedback.miss_half_life_days", c.Feedback.MissHalfLifeDays, 0)
 	atLeast("feedback.credit_half_life_days", c.Feedback.CreditHalfLifeDays, 0)
 	oneOf("feedback.stop_check", c.Feedback.StopCheck, "always", "cited", "off")
+	atLeast("feedback.max_retirements", c.Feedback.MaxRetirements, 0)
+	atLeast("feedback.stale_shows", c.Feedback.StaleShows, 1)
+	if c.Feedback.BoostWeight < 0 {
+		bad("feedback.boost_weight", "must be ≥ 0, got %v", c.Feedback.BoostWeight)
+	}
+	for key, v := range map[string]float64{"feedback.prior_credits": c.Feedback.PriorCredits, "feedback.prior_misses": c.Feedback.PriorMisses} {
+		if v <= 0 {
+			bad(key, "must be > 0, got %v", v)
+		}
+	}
 	if c.Update.Source != "" && !filepath.IsAbs(c.Update.Source) {
 		bad("update.source", "%q must be empty (GitHub releases) or an absolute directory path", c.Update.Source)
 	}

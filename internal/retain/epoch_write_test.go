@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -25,6 +26,7 @@ type banksHS struct {
 	configs map[string]map[string]any             // bank → config set
 	names   map[string]string                     // bank → name (PUT); "" for a bank made otherwise
 	calls   []string                              // "METHOD bank /sub"
+	retains []string                              // the body of every retain, as sent
 }
 
 func (h *banksHS) client(t *testing.T) *hindsight.Client {
@@ -62,6 +64,8 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 			h.names[bank] = body.Name
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPost && sub == "memories":
+			raw, _ := io.ReadAll(r.Body)
+			h.retains = append(h.retains, string(raw))
 			var body struct {
 				Async bool `json:"async"`
 				Items []struct {
@@ -69,7 +73,7 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 					Metadata   json.RawMessage `json:"metadata"`
 				} `json:"items"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.Unmarshal(raw, &body)
 			if !exists {
 				docs = map[string]json.RawMessage{}
 				h.docs[bank] = docs

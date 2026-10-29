@@ -44,6 +44,29 @@ func TestNoteItem(t *testing.T) {
 	}
 }
 
+// A correction names the memories it replaces and what showed them wrong,
+// in its document's metadata; any other note names neither.
+func TestCorrectionNoteItemCarriesReplacesAndEvidence(t *testing.T) {
+	n := NewNote("b", "correction", "billing", "Billing runs PostgreSQL 16.", at)
+	if it := n.Item("m1"); len(it.Metadata) != 3 {
+		t.Errorf("a plain note carries %v", it.Metadata)
+	}
+	n.Replaces, n.Evidence = []string{"id-1", "id-2"}, "psql --version printed 16.4"
+	it := n.Item("m1")
+	if it.Metadata["replaces"] != "id-1,id-2" || it.Metadata["evidence"] != "psql --version printed 16.4" || it.Metadata["kind"] != "correction" {
+		t.Errorf("metadata %v", it.Metadata)
+	}
+	// kept through the outbox
+	o := outbox(t)
+	if _, err := o.Append(n); err != nil {
+		t.Fatal(err)
+	}
+	notes, err := o.read()
+	if err != nil || len(notes) != 1 || strings.Join(notes[0].Replaces, ",") != "id-1,id-2" || notes[0].Evidence != n.Evidence {
+		t.Errorf("%+v %v", notes, err)
+	}
+}
+
 func TestOutboxFlushSendsAndEmpties(t *testing.T) {
 	e := newEnv(t)
 	o := outbox(t)

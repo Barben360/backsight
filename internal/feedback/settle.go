@@ -1,7 +1,9 @@
 package feedback
 
 import (
+	"errors"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
@@ -31,12 +33,14 @@ const (
 	settleWindow = 62 * 24 * time.Hour
 )
 
-// Params are the values settling and folding use; a half-life of 0 means
-// no decay.
+// Params are the values settling, folding and the boost use; a half-life
+// of 0 means no decay. Weight (k) and the priors PriorCredits (α) and
+// PriorMisses (β) shape Ledger.Boost.
 type Params struct {
-	ConfidentRank                int
-	MissHalfLife, CreditHalfLife time.Duration
-	TurnTimeout                  time.Duration
+	ConfidentRank                     int
+	MissHalfLife, CreditHalfLife      time.Duration
+	TurnTimeout                       time.Duration
+	Weight, PriorCredits, PriorMisses float64
 }
 
 // Keys of the half-lives in a settle event's params.
@@ -65,6 +69,11 @@ type SettleResult struct {
 	Late    int `json:"late"`
 }
 
+// PathSources: the facts a memory_credit Sources: answer listed, journaled
+// as shows so the next verdict can name them; they are never settled, so
+// they count neither as shown nor as a miss.
+const PathSources = "sources"
+
 // missPath: a show on this path can be a confident miss. The briefing,
 // reads and failure recalls never are.
 func missPath(path string) bool {
@@ -77,10 +86,10 @@ type pendingShow struct {
 	credited, settled bool
 }
 
-// Decide is the outcome of every show of events not yet in a settle event
-// that can settle at now: at least TurnTimeout old, and its turn over (a
-// later turn of its session, or a stop of its turn by its agent or the
-// main agent) or the show openTurnLimit old. Events after now are not
+// Decide is the outcome of every show of events (PathSources ones aside)
+// not yet in a settle event that can settle at now: at least TurnTimeout
+// old, and its turn over (a later turn of its session, or a stop of its
+// turn by its agent or the main agent) or the show openTurnLimit old. Events after now are not
 // seen. Each used credit, in time order, attaches to its id's latest
 // earlier show of its session neither credited nor settled; late counts
 // the used credits since the last settle event that found none. A show
@@ -110,6 +119,9 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 		case "turn":
 			turns[e.Session] = append(turns[e.Session], e)
 		case "shows":
+			if e.Path == PathSources {
+				continue // only lets the next verdict name a listed fact: never settled
+			}
 			for _, s := range showsOf(e) {
 				if byKey[s.Key] != nil {
 					continue
@@ -169,6 +181,22 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 	return settled, late
 }
 
+// Replay is the ledger events would give had every show been decided
+// under p: the settle events they hold left out, every show decided
+// again at now by Decide (a sources show never), and the outcomes
+// folded at now with the import, forget, retire, hide and unhide events,
+// as Fold does. Events after now are not seen. Pure: it writes nothing.
+func Replay(events []Event, p Params, now time.Time) Ledger {
+	var kept []Event
+	for _, e := range events {
+		if e.Kind != "settle" && !e.TS.After(now) {
+			kept = append(kept, e)
+		}
+	}
+	settled, _ := Decide(kept, p, now)
+	return Fold(append(kept, Event{Kind: "settle", TS: now.UTC(), Settled: settled}), p)
+}
+
 // attach credits the latest of shows neither credited nor settled; false
 // when there is none.
 func attach(shows []*pendingShow) bool {
@@ -209,12 +237,15 @@ func turnOver(s *pendingShow, turn string, turns []Event, stopped map[string]boo
 	return false
 }
 
+// afterSettleRead, when set (tests), runs once Settle has read the journal.
+var afterSettleRead func()
+
 // Settle decides the shows of dir's journal that can settle at now,
 // journals them as one settle event carrying p, and brings ledger.json up
-// to date: the settle and forget events since its watermark, in time
-// order. Under the ledger lock: a concurrent settle gets a
-// *state.HeldError and changes nothing. A ledger of another schema is left
-// alone, and nothing is journaled.
+// to date: the settle, forget, retire, hide and unhide events since its
+// watermark, in time order. Under the ledger lock: a concurrent settle
+// gets a *state.HeldError and changes nothing. A ledger of another schema
+// is left alone, and nothing is journaled.
 func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	var res SettleResult
 	release, err := lockLedger(dir)
@@ -226,14 +257,18 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	if err != nil {
 		return res, err
 	}
+	at := journalEnd(dir)
 	events, _, err := Read(dir, now.Add(-settleWindow))
 	if err != nil {
 		return res, err
 	}
+	if afterSettleRead != nil {
+		afterSettleRead()
+	}
 	var apply []Event
 	for _, e := range events {
-		if (e.Kind == "settle" || e.Kind == "forget") && e.TS.After(l.Watermark) && !e.TS.After(now) {
-			apply = append(apply, e) // a ledger write that failed, and forgets since the last settle
+		if (e.Kind == "settle" || folded(e.Kind)) && e.TS.After(l.Watermark) && !e.TS.After(now) {
+			apply = append(apply, e) // a ledger write that failed, and forgets and retirements since the last settle
 		}
 	}
 	settled, late := Decide(events, p, now)
@@ -252,6 +287,13 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		l.Apply(e, p)
 	}
 	l.Watermark = now.UTC()
+	// Current reads on from where this read began, unless a folded event
+	// before it is newer than the watermark: left for Current to apply,
+	// it needs the read from the watermark.
+	l.JournalAt = at
+	if slices.ContainsFunc(events, func(e Event) bool { return folded(e.Kind) && e.TS.After(now) }) {
+		l.JournalAt = JournalPos{}
+	}
 	if err := saveLedger(dir, l); err != nil {
 		return res, err
 	}
@@ -271,6 +313,20 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// lockLedgerWait is lockLedger, trying again while a live owner holds
+// the lock, for at most wait.
+func lockLedgerWait(dir string, wait time.Duration) (release func(), err error) {
+	deadline := time.Now().Add(wait)
+	for {
+		release, err = lockLedger(dir)
+		var held *state.HeldError
+		if !errors.As(err, &held) || !time.Now().Before(deadline) {
+			return release, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // lockLedger takes <state>/locks/feedback-ledger.lock (dir is

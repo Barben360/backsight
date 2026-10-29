@@ -413,3 +413,114 @@ func TestSearchKindsOfRawFactsComeFromTheirOwnTags(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// adjust is an Engine.Adjust from fixed boosts and hidden ids.
+func adjust(boosts map[string]float64, hidden ...string) func(string) (float64, bool) {
+	return func(id string) (float64, bool) {
+		for _, h := range hidden {
+			if h == id {
+				return 0, true
+			}
+		}
+		return boosts[id], false
+	}
+}
+
+func hitIDs(hits []Hit) string {
+	var ids []string
+	for _, h := range hits {
+		ids = append(ids, h.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+// A memory the ledger credits often climbs over one 0.02 above it; each
+// hit says where it would have stood without the boost.
+func TestBoostReordersHits(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"top", "first by the server", "infra", 0.72}, {"used", "credited often", "infra", 0.70}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(map[string]float64{"used": 0.04})
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})
+	if hitIDs(res.Hits) != "used,top" {
+		t.Fatalf("order %s", hitIDs(res.Hits))
+	}
+	used, top := res.Hits[0], res.Hits[1]
+	if used.RankWithoutBoost != 2 || top.RankWithoutBoost != 1 {
+		t.Errorf("rank without boost: used %d, top %d", used.RankWithoutBoost, top.RankWithoutBoost)
+	}
+	if used.Boost != 0.04 || used.Score != 0.74 || used.Reranker != 0.70 || top.Boost != 0 || top.Score != 0.72 {
+		t.Errorf("scores: %+v %+v", used, top)
+	}
+	// A negative boost sinks a memory under one it led, and a floor on the
+	// boosted score sees it.
+	e.Adjust = adjust(map[string]float64{"top": -0.03})
+	if res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4}); hitIDs(res.Hits) != "used,top" || res.Hits[1].Score != 0.69 {
+		t.Errorf("negative boost: %+v", res.Hits)
+	}
+	if res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.7}); hitIDs(res.Hits) != "used" {
+		t.Errorf("MinScore on the boosted score: %+v", res.Hits)
+	}
+	// The limit keeps the boosted order's head.
+	e.Adjust = adjust(map[string]float64{"used": 0.04})
+	if res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4, Limit: 1}); hitIDs(res.Hits) != "used" || res.Hits[0].RankWithoutBoost != 2 {
+		t.Errorf("limit: %+v", res.Hits)
+	}
+}
+
+// The server's score floors come first: no boost lets a hit under them in.
+func TestBoostNeverAdmitsARefusedHit(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"weak", "under the floor", "billing", 0.45}, {"ok", "over it", "billing", 0.6}, {"far", "another project", "infra", 0.55}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(map[string]float64{"weak": 5, "far": 5})
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinReranker: 0.5, GlobalMinReranker: 0.58})
+	if hitIDs(res.Hits) != "ok" {
+		t.Errorf("hits %+v", res.Hits)
+	}
+}
+
+// A memory hidden on this machine is never returned, whatever its score.
+func TestHiddenHitsDisappear(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"h", "hidden", "billing", 0.9}, {"a", "kept", "billing", 0.6}, {"b", "kept too", "billing", 0.5}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(nil, "h")
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})
+	if hitIDs(res.Hits) != "a,b" || res.Hits[0].RankWithoutBoost != 1 || res.Hits[1].RankWithoutBoost != 2 {
+		t.Errorf("hits %+v", res.Hits)
+	}
+}
+
+// Without an Adjust nothing changes: no boost, no rank without it.
+func TestNoAdjustLeavesHitsAsBefore(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"a", "one", "billing", 0.6}, {"b", "two", "infra", 0.62}}}}
+	res := engine(t, f).Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.4})
+	raw, _ := json.Marshal(res.Hits)
+	if hitIDs(res.Hits) != "a,b" || strings.Contains(string(raw), "boost") {
+		t.Errorf("hits %s", raw)
+	}
+}
+
+// MinScore sees the boosted score: a boost may lift a hit over it, which
+// would not have been returned without the boost (no rank without it),
+// while a hit under the server's floor stays out whatever its boost.
+func TestBoostCanLiftAHitOverMinScoreNotMinReranker(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"ok", "over both", "infra", 0.65}, {"lifted", "under MinScore", "infra", 0.57}, {"refused", "under MinReranker", "infra", 0.45}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(map[string]float64{"lifted": 0.05, "refused": 0.5})
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.6, MinReranker: 0.5})
+	if hitIDs(res.Hits) != "ok,lifted" || res.Hits[0].RankWithoutBoost != 1 || res.Hits[1].RankWithoutBoost != 0 || res.Hits[1].Score != 0.62 {
+		t.Errorf("hits %+v", res.Hits)
+	}
+}
+
+// The rank without the boost is the place in the list recall would have
+// returned without it, MinScore applied to the unboosted score: a hit a
+// negative boost sinks under MinScore still holds its place there.
+func TestRankWithoutBoostCountsAHitTheBoostSank(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"sunk", "first by the server", "infra", 0.72}, {"b", "second", "infra", 0.70}, {"c", "third", "infra", 0.65}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(map[string]float64{"sunk": -0.05})
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.68})
+	if hitIDs(res.Hits) != "b" || res.Hits[0].RankWithoutBoost != 2 {
+		t.Errorf("hits %+v", res.Hits)
+	}
+}

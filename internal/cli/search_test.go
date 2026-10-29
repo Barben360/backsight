@@ -185,3 +185,100 @@ func TestSearchShowsIgnoreFakeMarkers(t *testing.T) {
 		}
 	}
 }
+
+// writeLedger writes this machine's feedback ledger as given.
+func writeLedger(t *testing.T, home, content string) {
+	t.Helper()
+	dir := pathsOf(home).FeedbackDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// creditedLedger: m2 used ten times just now, m1 hidden after a report.
+func creditedLedger() string {
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	return `{"schema":1,"watermark":"` + at + `","memories":{"m2":{"shown":10,"credits":10,"credits_at":"` + at + `"},"m1":{"shown":1,"hidden":{"since":"` + at + `","verdict":"wrong"}}}}`
+}
+
+// boostAnswer: m1 0.02 above m2, with m3 under them.
+const boostAnswer = `[{"id":"m1","text":"PostgreSQL 16 stays for billing.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.72}},
+	{"id":"m2","text":"Billing moved to Postgres 16 in October.","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.70}},
+	{"id":"m3","text":"Infra runs Postgres 15.","type":"observation","tags":["project:infra"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.5}}]`
+
+// searchHits is `backsight search --json`'s hits, as printed.
+func searchHits(t *testing.T) string {
+	t.Helper()
+	code, out, errOut := run(t, "search", "postgres version", "--json")
+	var env struct {
+		Data struct {
+			Hits json.RawMessage `json:"hits"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+		t.Fatalf("exit %d: %v\n%s%s", code, err, out, errOut)
+	}
+	return string(env.Data.Hits)
+}
+
+// The ledger reorders search hits and hides what was reported: m2, used
+// often, climbs over m1, hidden.
+func TestSearchFollowsTheLedger(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	t.Setenv("BACKSIGHT_PROJECT", "billing")
+	recallAnswer = boostAnswer
+	writeLedger(t, home, creditedLedger())
+	var hits []recall.Hit
+	if err := json.Unmarshal([]byte(searchHits(t)), &hits); err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 || hits[0].ID != "m2" || hits[0].Boost <= 0 || hits[0].RankWithoutBoost != 1 || hits[1].ID != "m3" || hits[1].Boost != 0 || hits[1].RankWithoutBoost != 2 {
+		t.Errorf("hits %+v", hits)
+	}
+}
+
+// A ledger recall cannot read (garbage, another schema) changes nothing:
+// the same hits, in the same order, printed byte for byte as without one.
+func TestRecallIgnoresABrokenLedger(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	t.Setenv("BACKSIGHT_PROJECT", "billing")
+	recallAnswer = boostAnswer
+	want := searchHits(t)
+	if strings.Contains(want, `"boost"`) || !strings.Contains(want, `"m1"`) {
+		t.Fatalf("without a ledger: %s", want)
+	}
+	for name, content := range map[string]string{
+		"garbage":        "{not json",
+		"another schema": strings.Replace(creditedLedger(), `"schema":1`, `"schema":2`, 1),
+	} {
+		writeLedger(t, home, content)
+		if got := searchHits(t); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", name, got, want)
+		}
+	}
+	// An empty ledger is no ledger either.
+	writeLedger(t, home, `{"schema":1,"memories":{}}`)
+	if got := searchHits(t); got != want {
+		t.Errorf("empty ledger:\n got %s\nwant %s", got, want)
+	}
+}
+
+// With feedback off the ledger is not read: no boost, nothing hidden,
+// output identical to a machine without a ledger.
+func TestFeedbackOffMeansNoBoost(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	t.Setenv("BACKSIGHT_PROJECT", "billing")
+	recallAnswer = boostAnswer
+	appendConfig(t, home, "[feedback]\nenabled = false")
+	want := searchHits(t)
+	writeLedger(t, home, creditedLedger())
+	if got := searchHits(t); got != want || strings.Contains(got, `"boost"`) || !strings.Contains(got, `"m1"`) {
+		t.Errorf("feedback off:\n got %s\nwant %s", got, want)
+	}
+}

@@ -356,7 +356,7 @@ func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, err
 	in := livecheck.Input{Server: srv, Bank: cfg.Server.Bank, Transcripts: files, CursorsDir: d.CursorsDir(), Now: now()}
 	// Read, never created (verify only reads): none leaves it empty, and
 	// then no segment counts as another PC's.
-	in.MachineID, _ = retain.ReadMachineID(d.State)
+	in.MachineID = retain.ReadMachineID(d.State)
 	if st, err := state.Load(d.StateFile()); err == nil && st.RetainSince != nil {
 		in.RetainSince = *st.RetainSince
 	}

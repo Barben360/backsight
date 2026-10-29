@@ -2,8 +2,10 @@ package feedback
 
 import (
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -383,7 +385,7 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 	if k := settleKeys(t, dir); k[key("s1", "p1", 1, "m1")] != 1 {
 		t.Errorf("the forgotten show is not marked settled once: %v", k)
 	}
-	rebuilt, _ := Rebuild(dir, testParams, false)
+	rebuilt, _ := Rebuild(dir, testParams, false, true)
 	assertSameEntries(t, live, rebuilt, 0)
 
 	// Shown again after the forget: that show counts.
@@ -399,6 +401,121 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 	if live.Memories["m1"].Shown != 1 {
 		t.Errorf("m1 shown after its forget: %+v", live.Memories["m1"])
 	}
-	rebuilt, _ = Rebuild(dir, testParams, false)
+	rebuilt, _ = Rebuild(dir, testParams, false, true)
 	assertSameEntries(t, live, rebuilt, 0)
+}
+
+// The facts a Sources: answer listed are journaled as shows only so that
+// the next verdict can name them: never settled, they add no show and no
+// miss, and the live ledger still equals a rebuild.
+func TestSourcesShowsAreNeverSettled(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir,
+		evTurn("s1", "p1", 0),
+		evShows("s1", "p1", "", "prompt", 1, Item{ID: "obs", Rank: 1}),
+		evShows("s1", "p1", "", PathSources, 2, Item{ID: "src1"}, Item{ID: "src2"}),
+		evCredit("s1", "p1", "", "outdated", 3, "src1"),
+		evStop("s1", "p1", "", "declared", 4),
+	)
+	res, err := Settle(dir, testParams, at(180))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Shows != 1 || res.Misses != 1 {
+		t.Errorf("settled %+v, want the prompt show alone (a miss)", res)
+	}
+	live, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"src1", "src2"} {
+		if m, ok := live.Memories[id]; ok {
+			t.Errorf("%s, only listed as a source, has an entry: %+v", id, m)
+		}
+	}
+	if m := live.Memories["obs"]; m.Shown != 1 {
+		t.Errorf("obs %+v", m)
+	}
+	rebuilt, err := Rebuild(dir, testParams, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+}
+
+// Replayed with the parameters the journal was settled with, the journal
+// gives the live ledger back: every show re-decided at the settle's time,
+// the recorded settle events left out (a settle that says otherwise
+// changes nothing), imports, forgets, retirements and hidings folded as
+// Fold does. Another confident rank changes the misses; another credit
+// half-life the credits.
+func TestReplayWithCurrentParamsChangesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	events := randomJournal(rand.New(rand.NewPCG(3, 74)), 400, 30)
+	end := t0
+	for _, e := range events {
+		end = laterOf(end, e.TS)
+	}
+	imported := ImportEvent("telemetry", "s-old", []ImportShow{{Session: "s-old", Ref: "1", Path: "prompt", ID: "m1", Rank: 1, At: at(-600), Credit: true}}, testParams)
+	imported.TS = at(-1)
+	events = append(events, imported)
+	writeJournal(t, dir, events...)
+	now := end.Add(3 * time.Hour)
+	if _, err := Settle(dir, testParams, now); err != nil {
+		t.Fatal(err)
+	}
+	live, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _, err := Read(dir, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	misses, credits := 0.0, 0.0
+	for _, m := range live.Memories {
+		misses, credits = misses+m.Misses, credits+m.Credits
+	}
+	if misses == 0 || credits == 0 || live.Memories["m1"].Imported.Credits != 1 {
+		t.Fatalf("a weak sample: misses %v, credits %v, m1 %+v", misses, credits, live.Memories["m1"])
+	}
+	replayed := Replay(all, testParams, now)
+	assertSameEntries(t, live, replayed, 1e-9)
+	if replayed.Memories["m1"].Imported != live.Memories["m1"].Imported {
+		t.Errorf("imported %+v, live %+v", replayed.Memories["m1"].Imported, live.Memories["m1"].Imported)
+	}
+
+	// A recorded settle is not trusted: every show is decided again.
+	var some Settled
+	for _, s := range all[len(all)-1].Settled {
+		if s.Outcome == OutcomeShown || s.Outcome == OutcomeUnknown {
+			some = s
+			break
+		}
+	}
+	if some.Key == "" {
+		t.Fatal("no show settled as shown")
+	}
+	some.Outcome = OutcomeCredit
+	planted := append(slices.Clone(all), Event{Kind: "settle", TS: now.Add(-time.Hour), Settled: []Settled{some}})
+	assertSameEntries(t, live, Replay(planted, testParams, now), 1e-9)
+
+	other := testParams
+	other.ConfidentRank = 1
+	if fewer := Replay(all, other, now); sumOf(fewer, func(m Entry) float64 { return m.Misses }) >= misses {
+		t.Errorf("confident rank 1: misses %v, not fewer than %v", sumOf(fewer, func(m Entry) float64 { return m.Misses }), misses)
+	}
+	other = testParams
+	other.CreditHalfLife = 7 * 24 * time.Hour
+	if faded := Replay(all, other, now); sumOf(faded, func(m Entry) float64 { return m.DecayedTo(now, other).Credits }) >= credits {
+		t.Errorf("a 7-day credit half-life leaves credits %v of %v", sumOf(faded, func(m Entry) float64 { return m.DecayedTo(now, other).Credits }), credits)
+	}
+}
+
+func sumOf(l Ledger, f func(Entry) float64) float64 {
+	s := 0.0
+	for _, m := range l.Memories {
+		s += f(m)
+	}
+	return s
 }

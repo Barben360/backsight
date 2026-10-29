@@ -37,6 +37,9 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.11-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | PCs on one server share which memories Claude used and hid, and rank with all their counts (`feedback.share_ledger`); `forget --restore` applies on the machine where it is run; Linux amd64 tested ([notes](releases/v0.1.11-m6.md)) |
+| v0.1.10-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | recall ranks with what Claude used, within a small bound, and skips hidden memories; earlier history imported into the counts (`feedback import`), `feedback replay`; Linux amd64 tested ([notes](releases/v0.1.10-m6.md)) |
+| v0.1.9-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | Claude reports wrong or outdated memories and retires them (`forget --restore` undoes it), `memory stale`, the memory server installed on another machine (`server install --ssh`, `--print-commands`); Linux amd64 tested ([notes](releases/v0.1.9-m6.md)) |
 | v0.1.8-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | one memory for all your PCs (`server expose`, `server token`, `connect`, `setup --role server`), `memory_credit` and the record of which memories Claude used (`feedback log`, `feedback rebuild`); Linux amd64 tested ([notes](releases/v0.1.8-m6.md)) |
 | v0.1.7-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | doctor knows the `tools-used` transcript records; Linux amd64 tested ([notes](releases/v0.1.7-m5.md)) |
 | v0.1.6-m5 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | memory kinds on search results, search and close-the-loop guidance, retro rewrite, tool-failure pitfalls (off by default); Linux amd64 tested ([notes](releases/v0.1.6-m5.md)) |

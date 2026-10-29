@@ -178,6 +178,8 @@ Setup writes `role = "server"` under `[server]` in `config.toml`, installs the s
 
 Then open the server to your other PCs with `backsight server expose --private <address>` (a tailnet address keeps the API key encrypted), which hands out the connection token they join with; `backsight server token` writes it again. The token holds the API key: carry it to the other PC yourself.
 
+The PCs that join also share, through the server, which memories Claude used or hid on each (memory ids, numbers and times only; `feedback.share_ledger` in [configuration.md](configuration.md#feedback-which-memories-claude-used)).
+
 On a machine already set up for Claude Code (`role = "both"`, the default), `--role server` stops with a usage error naming `server.role`: setup does not unwire Claude Code.
 
 ## Undo setup

@@ -82,6 +82,7 @@ func TestCheckTurn(t *testing.T) {
 		{Kind: "shows", Session: "s2", Turn: "t1", Path: "prompt", Items: []Item{{ID: "other", Rank: 1}}},
 		{Kind: "credit", Session: "s1", Turn: "t1", Verdict: "none"},
 		{Kind: "credit", Session: "s1", Turn: "t1", Agent: "a1", Verdict: "used", IDs: []string{idB}},
+		{Kind: "credit", Session: "s1", Turn: "t1", Agent: "a1", Verdict: "wrong", IDs: []string{idA}}, // a report, not a use
 		{Kind: "stop", Session: "s1", Turn: "t1", Agent: "a1", Outcome: "blocked"},
 		{Kind: "stop", Session: "s1", Turn: "t1", Outcome: "undeclared"},
 		{Kind: "credit", Session: "s2", Turn: "t2", Verdict: "none"},
@@ -167,5 +168,22 @@ func TestHonestyFlags(t *testing.T) {
 		if got := (Check{Shown: shown, Declared: true, Credited: []string{idB}}).Flags(blank, texts); len(got) != 0 {
 			t.Errorf("blank reply %q flagged %v", blank, got)
 		}
+	}
+}
+
+func TestRetirementsCountTheSessionsRetiredIDs(t *testing.T) {
+	events := []Event{
+		{Kind: KindRetire, Session: "s1", Turn: "p-1", IDs: []string{idA}},
+		{Kind: KindHide, Session: "s1", Turn: "p-2", IDs: []string{idB}},
+		{Kind: KindRetire, Session: "s1", Turn: "p-3", IDs: []string{idA2, "m1"}},
+		{Kind: KindRetire, Session: "s2", IDs: []string{idA}},
+		{Kind: "credit", Session: "s1", Verdict: "wrong", IDs: []string{idA}},
+		{Kind: "forget", Session: "s1", IDs: []string{idB}},
+	}
+	if n := Retirements(events, "s1"); n != 4 {
+		t.Errorf("s1: %d, want 4", n)
+	}
+	if n := Retirements(events, "s3"); n != 0 {
+		t.Errorf("s3: %d", n)
 	}
 }

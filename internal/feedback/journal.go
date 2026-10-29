@@ -22,25 +22,40 @@ const Schema = 1
 
 // Item is one memory of a show, with its place in the list shown and the
 // project it belongs to (empty when the path does not tell, and on lines
-// written before the field).
+// written before the field). Boost is what the ledger added to its score,
+// RankWithoutBoost its place in the same list without it (both empty when
+// recall had no ledger, and on lines written before the fields).
+// ScoreWithoutBoost is its score before the boost: the server's score
+// with the current-project boost, what feedback replay orders a list by
+// again; nil on lines written before the field (a score of 0 is written).
 type Item struct {
-	ID       string  `json:"id"`
-	Rank     int     `json:"rank,omitempty"`
-	Reranker float64 `json:"reranker,omitempty"`
-	Project  string  `json:"project,omitempty"`
+	ID                string   `json:"id"`
+	Rank              int      `json:"rank,omitempty"`
+	Reranker          float64  `json:"reranker,omitempty"`
+	Project           string   `json:"project,omitempty"`
+	Boost             float64  `json:"boost,omitempty"`
+	RankWithoutBoost  int      `json:"rank_without_boost,omitempty"`
+	ScoreWithoutBoost *float64 `json:"score_without_boost,omitempty"`
 }
 
 // Settled is the outcome a settle gave one show: credit, confident_miss,
-// shown or unknown. Key names the show (session, turn, call, id).
+// shown or unknown. Key names the show (session, turn, call, id). An
+// import event's items are Settled too, shown or credit, with the show's
+// rank.
 type Settled struct {
 	Key     string    `json:"key"`
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
 	Outcome string    `json:"outcome"`
+	Rank    int       `json:"rank,omitempty"`
 }
 
-// Event is one journal line. Kind is turn, shows, credit, stop, settle or
-// forget; each kind fills the fields it needs.
+// Event is one journal line. Kind is turn, shows, credit, stop, settle,
+// forget, retire, hide, unhide, stale, recall (KindRecall) or import
+// (KindImport); each kind fills the fields it needs.
+// Note is the correction note a retire or hide comes with (its id, never
+// its text). Source is where an import event's shows were found
+// (telemetry, transcripts).
 type Event struct {
 	Schema    int                `json:"schema"`
 	Seq       int64              `json:"seq"`
@@ -64,7 +79,32 @@ type Event struct {
 	Flags     []string           `json:"flags,omitempty"`
 	Settled   []Settled          `json:"settled,omitempty"`
 	Params    map[string]float64 `json:"params,omitempty"`
+	Note      string             `json:"note,omitempty"`
+	Source    string             `json:"source,omitempty"`
 }
+
+// Kinds of the events that retire a memory shown in a session (a raw fact
+// invalidated, an observation hidden): each counts toward the session's
+// feedback.max_retirements. Unhide undoes a retire or a hide.
+const (
+	KindRetire = "retire"
+	KindHide   = "hide"
+	KindUnhide = "unhide"
+)
+
+// KindStale: the memories `backsight memory stale` listed to the user.
+// The ledger does not fold it.
+const KindStale = "stale"
+
+// KindRecall: what a memory_search returned, with each hit's boost and
+// rank without it, and whether the boost changed the set or the order
+// (FlagSetChanged, FlagOrderChanged). An audit: neither settled nor
+// folded; the hook journals the same hits as shows.
+const (
+	KindRecall       = "recall"
+	FlagSetChanged   = "set_changed"
+	FlagOrderChanged = "order_changed"
+)
 
 // Common fields Append puts on every event that leaves them empty.
 type Common struct {
@@ -91,8 +131,9 @@ func (j *Journal) file(t time.Time) string {
 }
 
 // Append writes e as one line, after setting its schema, its seq, its ts
-// (now, unless set) and the common fields it leaves empty. Callers fail
-// open on its error: a lost event never fails a hook or a recall.
+// (now, unless set) and the common fields it leaves empty. Events the
+// ledger folds as they come go through AppendFolded. Callers fail open on
+// its error: a lost event never fails a hook or a recall.
 func (j *Journal) Append(e Event) error {
 	now := j.now()
 	e.Schema, e.Seq = Schema, seq.Add(1)
@@ -171,6 +212,9 @@ func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
 	return events, skipped, nil
 }
 
+// decodedLine, when set (tests), runs for each line ReadFrom decodes.
+var decodedLine func()
+
 // ReadFrom returns the events of file from byte offset on; a missing file is
 // no events.
 func ReadFrom(file string, offset int64) (events []Event, skipped int, err error) {
@@ -189,6 +233,9 @@ func ReadFrom(file string, offset int64) (events []Event, skipped int, err error
 	for {
 		line, rerr := r.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
+			if decodedLine != nil {
+				decodedLine()
+			}
 			var e Event
 			if json.Unmarshal(line, &e) != nil || e.Schema != Schema {
 				skipped++
@@ -231,4 +278,35 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 		}
 	}
 	return events, skipped, nil
+}
+
+// foldedLockWait: how long AppendFolded waits for a settle to release the
+// ledger lock (a settle reads and writes local files only). A variable so
+// tests can shrink it.
+var foldedLockWait = 2 * time.Second
+
+// AppendFolded appends an event the ledger folds as it comes (forget,
+// retire, hide, unhide, import) under the ledger lock, stamped at its ts
+// (now, unless set) or just after the ledger's watermark when that is
+// later.
+// Settle reads the journal and moves the watermark under the same lock,
+// and folds only what is newer: the event is either read by a settle or
+// stamped after it, as a rebuild folds it. When the lock stays held, the
+// event is journaled all the same (the journal counts a session's
+// retirements) and the lock's error returned, for the caller to log.
+func (j *Journal) AppendFolded(e Event) error {
+	release, lerr := lockLedgerWait(j.dir, foldedLockWait)
+	if lerr == nil {
+		defer release()
+	}
+	if e.TS.IsZero() {
+		e.TS = j.now().UTC()
+	}
+	if l, err := LoadLedger(j.dir); err == nil && !e.TS.After(l.Watermark) {
+		e.TS = l.Watermark.Add(time.Nanosecond)
+	}
+	if err := j.Append(e); err != nil {
+		return err
+	}
+	return lerr
 }

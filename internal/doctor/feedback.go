@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 const (
@@ -109,7 +110,7 @@ func checkFeedbackLedger(d paths.Dirs, enabled bool) Check {
 		c.Fix = "backsight jobs tick settles it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
 		return c
 	}
-	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", len(l.Memories), l.Watermark.UTC().Format("2006-01-02 15:04"))
+	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", l.Counted(), l.Watermark.UTC().Format("2006-01-02 15:04"))
 	return c
 }
 
@@ -133,4 +134,51 @@ func newestEvents(dir string) (first, last time.Time, ok bool) {
 		}
 	}
 	return first, last, false
+}
+
+// sharedCacheWarn: a cache of the other machines' counts this old, while
+// the server answers, is no longer being fetched by the ticks.
+const sharedCacheWarn = 24 * time.Hour
+
+// checkFeedbackShared: how many other machines' counts the local cache
+// holds and how old it is (jobs tick fetches it every 6 hours).
+func checkFeedbackShared(d paths.Dirs, enabled, share bool, now time.Time) Check {
+	c := Check{ID: "feedback-shared", Status: OK}
+	switch {
+	case !enabled:
+		c.Status, c.Summary = Info, feedbackOff
+		return c
+	case !share:
+		c.Status, c.Summary = Info, "sharing off ([feedback] share_ledger = false): this machine's counts are neither sent to the server nor read from the other machines"
+		return c
+	}
+	fix := "backsight jobs tick fetches it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
+	r := state.LoadReach(d)
+	answers := !r.LastOK.IsZero() && now.Sub(r.LastOK) <= sharedCacheWarn
+	cache, err := feedback.LoadSharedCache(d.FeedbackDir())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Every send is followed by a fetch: a send a day old with no
+		// cache yet, while the server answers, is a fetch that fails.
+		c.Summary = "the other machines' counts are not fetched yet"
+		if up, ok := feedback.LoadSharedUpload(d.FeedbackDir()); ok && answers && now.Sub(up.At) > sharedCacheWarn {
+			c.Status, c.Fix = Warn, fix
+			c.Summary = fmt.Sprintf("the other machines' counts were never fetched, though this machine sent its own %s ago", now.Sub(up.At).Round(time.Hour))
+		}
+		return c
+	case err != nil:
+		c.Status, c.Summary = Info, "the cache of the other machines' counts is unreadable: "+err.Error()
+		if answers {
+			c.Status, c.Fix = Warn, fix
+		}
+		return c
+	}
+	docs, _ := cache.Parsed()
+	age := now.Sub(cache.FetchedAt).Round(time.Hour)
+	c.Summary = fmt.Sprintf("counts of %d other machine(s), fetched %s ago", feedback.SharedMachines(docs, "", now), age)
+	if answers && now.Sub(cache.FetchedAt) > sharedCacheWarn {
+		c.Status, c.Fix = Warn, fix
+		c.Detail = "recall here goes on with the counts fetched last"
+	}
+	return c
 }

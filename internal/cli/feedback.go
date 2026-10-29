@@ -27,23 +27,30 @@ func newFeedbackCmd(e *env) *cobra.Command {
 		Use:   "feedback",
 		Short: "Read which memories were shown to Claude and which it used, and recompute their counts",
 	}
-	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e))
+	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e), newFeedbackReplayCmd(e))
 	return cmd
 }
 
 // feedbackSetup is the feedback directory and the ledger's parameters; a
-// machine without config.toml uses the defaults (both commands only read
+// machine without config.toml uses the defaults (these commands only read
 // local files).
 func feedbackSetup() (string, feedback.Params, error) {
+	dir, cfg, err := feedbackConfig()
+	return dir, feedbackParams(cfg), err
+}
+
+// feedbackConfig is the feedback directory and this machine's
+// configuration, the defaults without config.toml.
+func feedbackConfig() (string, config.Config, error) {
 	d, home, err := machine()
 	if err != nil {
-		return "", feedback.Params{}, err
+		return "", config.Config{}, err
 	}
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", feedback.Params{}, blocked(err)
+		return "", config.Config{}, blocked(err)
 	}
-	return d.FeedbackDir(), feedbackParams(cfg), nil
+	return d.FeedbackDir(), cfg, nil
 }
 
 // logEvent is one line of a timeline: a journal event narrowed to the
@@ -373,8 +380,9 @@ type ledgerTotals struct {
 }
 
 type rebuildResult struct {
-	Plan bool      `json:"plan"`
-	At   time.Time `json:"at"` // credits and misses read at it
+	Plan     bool      `json:"plan"`
+	NoImport bool      `json:"no_import,omitempty"`
+	At       time.Time `json:"at"` // credits and misses read at it
 	// Rebuilt is the journal's fold, Current the ledger before.
 	Rebuilt      ledgerTotals `json:"rebuilt"`
 	Current      ledgerTotals `json:"current"`
@@ -385,7 +393,7 @@ type rebuildResult struct {
 }
 
 func newFeedbackRebuildCmd(e *env) *cobra.Command {
-	var plan bool
+	var plan, noImport bool
 	cmd := &cobra.Command{
 		Use:   "rebuild",
 		Short: "Recompute every memory's counts of times shown, credited and missed from the journal",
@@ -405,8 +413,11 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 				if err != nil {
 					return blocked(err)
 				}
+				if noImport {
+					events = feedback.DropImports(events)
+				}
 				rebuilt = feedback.Fold(events, p)
-			} else if rebuilt, err = feedback.Rebuild(dir, p, true); err != nil {
+			} else if rebuilt, err = feedback.Rebuild(dir, p, true, !noImport); err != nil {
 				var held *state.HeldError
 				if errors.As(err, &held) {
 					return &output.Error{Code: output.Blocked, Message: "the ledger is being settled (" + held.Owner.Command + "): try again in a moment"}
@@ -414,7 +425,7 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res := compareLedgers(rebuilt, current, p, now().UTC())
-			res.Plan = plan
+			res.Plan, res.NoImport = plan, noImport
 			if curErr != nil {
 				res.CurrentError = curErr.Error()
 			}
@@ -422,6 +433,7 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show the counts and the difference with the current ledger, writing nothing")
+	cmd.Flags().BoolVar(&noImport, "no-import", false, "leave out the counts feedback import added from earlier history")
 	return cmd
 }
 
@@ -430,9 +442,13 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 func compareLedgers(rebuilt, current feedback.Ledger, p feedback.Params, t time.Time) rebuildResult {
 	res := rebuildResult{At: t, Rebuilt: totals(rebuilt, p, t), Current: totals(current, p, t)}
 	same := func(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+	// An entry holding only a restore time is no memory (RestoreOnly).
 	for id, r := range rebuilt.Memories {
+		if r.RestoreOnly() {
+			continue
+		}
 		c, ok := current.Memories[id]
-		if !ok {
+		if !ok || c.RestoreOnly() {
 			res.New++
 			continue
 		}
@@ -442,8 +458,8 @@ func compareLedgers(rebuilt, current feedback.Ledger, p feedback.Params, t time.
 			res.Changed++
 		}
 	}
-	for id := range current.Memories {
-		if _, ok := rebuilt.Memories[id]; !ok {
+	for id, c := range current.Memories {
+		if r, ok := rebuilt.Memories[id]; !c.RestoreOnly() && (!ok || r.RestoreOnly()) {
 			res.Dropped++
 		}
 	}
@@ -451,7 +467,7 @@ func compareLedgers(rebuilt, current feedback.Ledger, p feedback.Params, t time.
 }
 
 func totals(l feedback.Ledger, p feedback.Params, t time.Time) ledgerTotals {
-	tot := ledgerTotals{Memories: len(l.Memories)}
+	tot := ledgerTotals{Memories: l.Counted()}
 	for _, m := range l.Memories {
 		m = m.DecayedTo(t, p)
 		tot.Shown += m.Shown
@@ -470,6 +486,9 @@ func rebuildText(r rebuildResult) string {
 		before = "ledger before"
 		fmt.Fprintf(&b, "Ledger rebuilt from the journal (credits and misses as of %s UTC)\n", r.At.Format("2006-01-02 15:04"))
 	}
+	if r.NoImport {
+		b.WriteString("without the counts feedback import added from earlier history\n")
+	}
 	fmt.Fprintf(&b, "%-10s  %-12s  %s\n", "", "journal", before)
 	fmt.Fprintf(&b, "%-10s  %-12d  %d\n", "memories", r.Rebuilt.Memories, r.Current.Memories)
 	fmt.Fprintf(&b, "%-10s  %-12d  %d\n", "shows", r.Rebuilt.Shown, r.Current.Shown)
@@ -480,7 +499,11 @@ func rebuildText(r rebuildResult) string {
 	}
 	fmt.Fprintf(&b, "%d new, %d dropped, %d changed\n", r.New, r.Dropped, r.Changed)
 	if r.Plan {
-		b.WriteString("backsight feedback rebuild writes it\n")
+		if r.NoImport {
+			b.WriteString("backsight feedback rebuild --no-import writes it\n")
+		} else {
+			b.WriteString("backsight feedback rebuild writes it\n")
+		}
 	}
 	return b.String()
 }

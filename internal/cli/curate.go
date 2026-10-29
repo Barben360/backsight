@@ -149,23 +149,48 @@ func newForgetCmd(e *env) *cobra.Command {
 				if err := heldWrites(); err != nil {
 					return err
 				}
+				// A memory hidden on this machine, or on another one whose
+				// hiding recall here follows, was never invalidated on the
+				// server: restoring it there may find nothing, and its mark
+				// is cleared here all the same.
+				var local, remote bool
+				if restore {
+					local, remote = hiddenHere(id)
+				}
+				hidden := local || remote
 				// Only raw facts can be curated: an observation is retired
 				// through its source facts and regenerates without them.
 				targets, err := curatable(ctx, cl, bank, id)
-				if err != nil {
+				if err != nil && !hidden {
 					return curateError(err, id)
 				}
 				reason := map[bool]string{true: "restored by the user (backsight forget --restore)", false: "forgotten by the user (backsight forget)"}[restore]
+				var done []string
 				for _, t := range targets {
-					if err := cl.Invalidate(ctx, bank, t, reason, restore); err != nil {
-						return curateError(err, t)
+					if err = cl.Invalidate(ctx, bank, t, reason, restore); err != nil {
+						if !hidden {
+							return curateError(err, t)
+						}
+						break
 					}
+					done = append(done, t)
 				}
 				res.Action = map[bool]string{true: "restored", false: "forgotten"}[restore]
-				if len(targets) != 1 || targets[0] != id {
-					res.Sources = targets
+				if len(done) > 0 && (len(done) != 1 || done[0] != id) {
+					res.Sources = done
 				}
-				if !restore {
+				if hidden {
+					res.Note = "no longer marked hidden on this machine"
+					if !local {
+						res.Note = "hidden by another machine, visible again on this machine"
+					}
+					if err != nil {
+						res.Note += " (on the server: " + err.Error() + ")"
+					}
+				}
+				if restore {
+					journalUnhide(append([]string{id}, res.Sources...))
+				} else {
 					journalForget(append([]string{id}, res.Sources...))
 				}
 			default:
@@ -185,7 +210,7 @@ func newForgetCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "delete the memory, its source facts and the documents they came from (leaked secret)")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm --purge")
-	cmd.Flags().BoolVar(&restore, "restore", false, "undo a plain forget")
+	cmd.Flags().BoolVar(&restore, "restore", false, "undo a plain forget, or a retirement Claude reported")
 	cmd.Flags().StringVar(&pf.project, "project", "", "every memory of this project, on the configured bank")
 	cmd.Flags().StringVar(&pf.source, "source", "", "with --project: only the raw facts tagged source:<s> (chat, subagent, note…) and the observations drawn from them")
 	cmd.Flags().BoolVar(&pf.plan, "plan", false, "with --project: list the documents and counts, changing nothing")
@@ -409,6 +434,9 @@ func forgetText(r forgetResult) string {
 		if len(r.Sources) > 0 {
 			what = fmt.Sprintf("%s (through its %d source fact(s): observations are derived)", r.ID, len(r.Sources))
 		}
+		if r.Action == "restored" && r.Note != "" {
+			return what + " restored: " + r.Note + "\n"
+		}
 		if r.Action == "restored" {
 			return what + " restored\n"
 		}
@@ -444,10 +472,12 @@ type scanFinding struct {
 	Preview string   `json:"preview"` // redacted
 }
 
-// newMemoryCmd groups `memory scan` (SPEC §13 threats).
+// newMemoryCmd groups `memory scan` (SPEC §13 threats), `memory notes`
+// and `memory stale`.
 func newMemoryCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "memory", Short: "Inspect the memory itself"}
 	cmd.AddCommand(newMemoryNotesCmd(e))
+	cmd.AddCommand(newMemoryStaleCmd(e))
 	cmd.AddCommand(&cobra.Command{
 		Use:   "scan",
 		Short: "List stored memories that look like they hold a secret, with the command that purges each",

@@ -32,6 +32,18 @@ func Shows(events []Event, session string) []Show {
 	return out
 }
 
+// Retirements counts the memories session retired: the ids of its retire
+// and hide events, whatever turn they came in (feedback.max_retirements).
+func Retirements(events []Event, session string) int {
+	n := 0
+	for _, e := range events {
+		if (e.Kind == KindRetire || e.Kind == KindHide) && e.Session == session {
+			n += len(e.IDs)
+		}
+	}
+	return n
+}
+
 // showsOf is the shows of one shows event.
 func showsOf(e Event) []Show {
 	at := strconv.FormatInt(e.TS.UnixNano(), 10)
@@ -111,6 +123,9 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 		case e.Kind == "credit":
 			c.Declared = true
 			c.None = c.None || e.Verdict == "none"
+			if e.Verdict != "used" {
+				continue // a wrong/outdated report need not echo the memory
+			}
 			for _, id := range e.IDs {
 				if !slices.Contains(c.Credited, id) {
 					c.Credited = append(c.Credited, id)

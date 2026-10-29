@@ -19,8 +19,11 @@ const LedgerSchema = 1
 
 // Entry is what the settled journal says of one memory: how often it was
 // shown, its credits and confident misses as sums decayed to CreditsAt and
-// MissesAt (each event weighs 2^-(age/half-life)), and when it was last
-// shown and credited.
+// MissesAt (each event weighs 2^-(age/half-life)), when it was last shown
+// and credited, how often it was retired as wrong or outdated, its local
+// hiding when its retirement could only hide it, when an unhide last
+// cleared it (a hiding elsewhere older than that stays lifted here), and
+// how much of Shown and Credits came from earlier history (import events).
 type Entry struct {
 	Shown        int       `json:"shown"`
 	Credits      float64   `json:"credits,omitempty"`
@@ -29,22 +32,75 @@ type Entry struct {
 	MissesAt     time.Time `json:"misses_at,omitzero"`
 	LastShown    time.Time `json:"last_shown,omitzero"`
 	LastCredited time.Time `json:"last_credited,omitzero"`
+	Wrong        int       `json:"wrong,omitempty"`
+	Hidden       *Hidden   `json:"hidden,omitempty"`
+	UnhiddenAt   time.Time `json:"unhidden_at,omitzero"`
+	Imported     Imported  `json:"imported,omitzero"`
 }
 
-// Ledger is a cache of the journal's settle and forget events, by memory
-// id: Rebuild recomputes it. Watermark is when settling last ran.
+// Imported is the part of an entry's counts import events gave: shows,
+// and credits counted without decay (each also in Shown and Credits).
+type Imported struct {
+	Shown   int     `json:"shown"`
+	Credits float64 `json:"credits"`
+}
+
+// Hidden is an observation hidden on this machine: since when, under which
+// verdict, with the correction note's id.
+type Hidden struct {
+	Since   time.Time `json:"since"`
+	Verdict string    `json:"verdict,omitempty"`
+	Note    string    `json:"note,omitempty"`
+}
+
+// Ledger is a cache of the journal's settle, import, forget, retire, hide
+// and unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
+// JournalAt where the journal ended when it was read for this ledger,
+// HistoryImported when an import of earlier history last went through
+// every source (zero: never).
 type Ledger struct {
-	Schema    int              `json:"schema"`
-	Watermark time.Time        `json:"watermark,omitzero"`
-	Memories  map[string]Entry `json:"memories"`
+	Schema          int              `json:"schema"`
+	Watermark       time.Time        `json:"watermark,omitzero"`
+	JournalAt       JournalPos       `json:"journal_at,omitzero"`
+	HistoryImported time.Time        `json:"history_imported,omitzero"`
+	Memories        map[string]Entry `json:"memories"`
+}
+
+// JournalPos is a place in dir's journal: a month file's base name and a
+// byte offset in it.
+type JournalPos struct {
+	File   string `json:"file"`
+	Offset int64  `json:"offset"`
+}
+
+// journalEnd is where dir's journal ends: its last month file and that
+// file's size; zero without a journal. Taken under the ledger lock before
+// a read, so that no folded event lands between it and the read.
+func journalEnd(dir string) JournalPos {
+	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	if err != nil || len(files) == 0 {
+		return JournalPos{}
+	}
+	slices.Sort(files)
+	last := files[len(files)-1]
+	fi, err := os.Stat(last)
+	if err != nil {
+		return JournalPos{}
+	}
+	return JournalPos{File: filepath.Base(last), Offset: fi.Size()}
 }
 
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
 
-// Apply adds a settle event's shows to the ledger, or drops a forget
-// event's memories. A settle decays under the half-lives it recorded, p's
-// when it recorded none; a forgotten show counts nowhere. Sums decay
-// order-independently, so applying settle events as they come and folding
+// Apply adds a settle event's shows to the ledger, adds an import event's
+// shows and credits (to Imported too), drops a forget event's memories,
+// counts a retire, sets a hide, or clears both on an unhide and stamps the
+// entry with its time (an entry holding only that time for a memory
+// without one, for a restore here to beat a hiding elsewhere). A settle or an
+// import decays under the half-lives it recorded, p's when it recorded
+// none, each show from its own time; a forgotten show counts nowhere, an
+// import never counts a miss. Sums
+// decay order-independently, so applying events as they come and folding
 // them all later agree.
 func (l *Ledger) Apply(e Event, p Params) {
 	if l.Memories == nil {
@@ -54,18 +110,23 @@ func (l *Ledger) Apply(e Event, p Params) {
 	case "settle":
 		p = p.recorded(e.Params)
 		for _, s := range e.Settled {
-			if s.Outcome == OutcomeForgotten {
+			if s.Outcome != OutcomeForgotten {
+				l.Memories[s.ID] = l.Memories[s.ID].settled(s, p)
+			}
+		}
+	case KindImport:
+		if e.Outcome == ImportComplete {
+			l.HistoryImported = laterOf(l.HistoryImported, e.TS)
+		}
+		p = p.recorded(e.Params)
+		for _, s := range e.Settled {
+			if s.Outcome != OutcomeShown && s.Outcome != OutcomeCredit {
 				continue
 			}
-			m := l.Memories[s.ID]
-			m.Shown++
-			m.LastShown = laterOf(m.LastShown, s.At)
-			switch s.Outcome {
-			case OutcomeCredit:
-				m.Credits, m.CreditsAt = add(m.Credits, m.CreditsAt, s.At, p.CreditHalfLife)
-				m.LastCredited = laterOf(m.LastCredited, s.At)
-			case OutcomeMiss:
-				m.Misses, m.MissesAt = add(m.Misses, m.MissesAt, s.At, p.MissHalfLife)
+			m := l.Memories[s.ID].settled(s, p)
+			m.Imported.Shown++
+			if s.Outcome == OutcomeCredit {
+				m.Imported.Credits++
 			}
 			l.Memories[s.ID] = m
 		}
@@ -73,7 +134,51 @@ func (l *Ledger) Apply(e Event, p Params) {
 		for _, id := range e.IDs {
 			delete(l.Memories, id)
 		}
+	case KindRetire:
+		for _, id := range e.IDs {
+			m := l.Memories[id]
+			m.Wrong++
+			l.Memories[id] = m
+		}
+	case KindHide:
+		for _, id := range e.IDs {
+			m := l.Memories[id]
+			m.Hidden = &Hidden{Since: e.TS, Verdict: e.Verdict, Note: e.Note}
+			l.Memories[id] = m
+		}
+	case KindUnhide:
+		for _, id := range e.IDs {
+			m := l.Memories[id]
+			m.Wrong, m.Hidden = 0, nil
+			m.UnhiddenAt = laterOf(m.UnhiddenAt, e.TS)
+			l.Memories[id] = m
+		}
 	}
+}
+
+// settled is m with one settled show added: shown, and credited or
+// missed by its outcome, decayed from the show's time.
+func (m Entry) settled(s Settled, p Params) Entry {
+	m.Shown++
+	m.LastShown = laterOf(m.LastShown, s.At)
+	switch s.Outcome {
+	case OutcomeCredit:
+		m.Credits, m.CreditsAt = add(m.Credits, m.CreditsAt, s.At, p.CreditHalfLife)
+		m.LastCredited = laterOf(m.LastCredited, s.At)
+	case OutcomeMiss:
+		m.Misses, m.MissesAt = add(m.Misses, m.MissesAt, s.At, p.MissHalfLife)
+	}
+	return m
+}
+
+// folded: an event Settle applies to the ledger as it comes, besides its
+// own settle events.
+func folded(kind string) bool {
+	switch kind {
+	case "forget", KindRetire, KindHide, KindUnhide, KindImport:
+		return true
+	}
+	return false
 }
 
 // recorded is p with the half-lives a settle event's params carry.
@@ -89,7 +194,8 @@ func (p Params) recorded(params map[string]float64) Params {
 
 func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Hour)) }
 
-// Fold is the ledger of events' settle and forget events, applied in
+// Fold is the ledger of events' settle, import, forget, retire, hide and
+// unhide events, applied in
 // (ts, seq) order, each settle key once; its watermark is the last
 // settle's time.
 func Fold(events []Event, p Params) Ledger {
@@ -148,13 +254,60 @@ func decay(v float64, ref, t time.Time, h time.Duration) float64 {
 // half-lives, each referenced at t from then on (a t before a reference
 // leaves that sum as it is).
 func (e Entry) DecayedTo(t time.Time, p Params) Entry {
-	if e.Credits != 0 && t.After(e.CreditsAt) {
-		e.Credits, e.CreditsAt = decay(e.Credits, e.CreditsAt, t, p.CreditHalfLife), t
-	}
-	if e.Misses != 0 && t.After(e.MissesAt) {
-		e.Misses, e.MissesAt = decay(e.Misses, e.MissesAt, t, p.MissHalfLife), t
-	}
+	e.Credits, e.CreditsAt = readAt(e.Credits, e.CreditsAt, t, p.CreditHalfLife)
+	e.Misses, e.MissesAt = readAt(e.Misses, e.MissesAt, t, p.MissHalfLife)
 	return e
+}
+
+// readAt is v referenced at ref, read at t and referenced there when t is
+// later and v not 0; else v at ref as they are.
+func readAt(v float64, ref, t time.Time, h time.Duration) (float64, time.Time) {
+	if v == 0 || !t.After(ref) {
+		return v, ref
+	}
+	return decay(v, ref, t, h), t
+}
+
+// RestoreOnly: e holds nothing but UnhiddenAt, left by a restore of a
+// memory this machine never counted. It is not one of the ledger's
+// memories.
+func (e Entry) RestoreOnly() bool {
+	return e.Shown == 0 && e.Credits == 0 && e.Misses == 0 && e.Wrong == 0 && e.Hidden == nil &&
+		e.LastShown.IsZero() && e.LastCredited.IsZero() && e.Imported == (Imported{})
+}
+
+// Counted is how many memories l holds, entries RestoreOnly left out.
+func (l Ledger) Counted() int {
+	n := 0
+	for _, e := range l.Memories {
+		if !e.RestoreOnly() {
+			n++
+		}
+	}
+	return n
+}
+
+// Boost is what recall adds to id's score: k × ((c + α) / (c + m + α + β)
+// − α / (α + β)), c and m its credits and misses decayed to now, k, α
+// and β p's Weight, PriorCredits and PriorMisses. Between −k × α / (α + β)
+// and k × β / (α + β); exactly 0 for a memory without an entry, or with
+// nothing settled, and for priors that do not add up to a positive sum.
+func (l Ledger) Boost(id string, p Params, now time.Time) float64 {
+	m, ok := l.Memories[id]
+	if !ok {
+		return 0
+	}
+	return m.Boost(p, now)
+}
+
+// Boost is Ledger.Boost of the memory whose entry is e.
+func (e Entry) Boost(p Params, now time.Time) float64 {
+	a, b := p.PriorCredits, p.PriorMisses
+	if a+b <= 0 {
+		return 0
+	}
+	e = e.DecayedTo(now, p)
+	return p.Weight * ((e.Credits+a)/(e.Credits+e.Misses+a+b) - a/(a+b))
 }
 
 func laterOf(a, b time.Time) time.Time {
@@ -199,25 +352,78 @@ func saveLedger(dir string, l Ledger) error {
 }
 
 // Rebuild folds every journal file of dir, under the ledger lock, and
-// writes the result only when write. Each settle event folds with the
-// half-lives it recorded, so a rebuild after a config change gives the
-// live ledger back; p's half-lives serve only settle events that recorded
-// none. Recomputing under other parameters is not a rebuild.
-func Rebuild(dir string, p Params, write bool) (Ledger, error) {
+// writes the result only when write; without withImport, it leaves the
+// import events out (the ledger without earlier history). Each settle
+// or import event folds with the half-lives it recorded, so a rebuild
+// after a config change gives the live ledger back; p's half-lives serve
+// only events that recorded none. Recomputing under other parameters is
+// not a rebuild.
+func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
 	release, err := lockLedger(dir)
 	if err != nil {
 		return Ledger{}, err
 	}
 	defer release()
+	at := journalEnd(dir)
 	events, _, err := Read(dir, time.Time{})
 	if err != nil {
 		return Ledger{}, err
 	}
-	l := Fold(events, p)
+	kept := events
+	if !withImport {
+		kept = DropImports(events)
+	}
+	l := Fold(kept, p)
+	l.JournalAt = at // Fold applied every folded event before it
+	// Nor does the next settle apply them again (an import left out
+	// included): it applies what is newer than the watermark.
+	for _, e := range events {
+		if folded(e.Kind) {
+			l.Watermark = laterOf(l.Watermark, e.TS)
+		}
+	}
 	if write {
 		if err := saveLedger(dir, l); err != nil {
 			return l, err
 		}
 	}
 	return l, nil
+}
+
+// Current is dir's ledger with the forget, retire, hide, unhide and
+// import events journaled since its watermark applied, in time order, written nowhere:
+// what a command reads between two settles. It reads the journal from the
+// ledger's JournalAt on (recall reads it at every prompt), or the whole
+// months since the watermark when the ledger has no JournalAt or its file
+// is gone or shorter (rewritten, truncated).
+func Current(dir string) (Ledger, error) {
+	l, err := LoadLedger(dir)
+	if err != nil {
+		return l, err
+	}
+	events, err := journalSince(dir, l)
+	if err != nil {
+		return l, err
+	}
+	for _, e := range sortedByTime(events) {
+		if folded(e.Kind) && e.TS.After(l.Watermark) {
+			l.Apply(e, Params{})
+		}
+	}
+	return l, nil
+}
+
+// journalSince is what dir's journal holds after l was written: from
+// l.JournalAt when it still names a file at least that long, else the
+// months since l's watermark.
+func journalSince(dir string, l Ledger) ([]Event, error) {
+	if at := l.JournalAt; at.File != "" && filepath.Base(at.File) == at.File {
+		file := filepath.Join(dir, at.File)
+		if fi, err := os.Stat(file); err == nil && fi.Size() >= at.Offset {
+			events, _, err := ReadSince(file, at.Offset)
+			return events, err
+		}
+	}
+	events, _, err := Read(dir, l.Watermark)
+	return events, err
 }

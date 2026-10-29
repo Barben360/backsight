@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -96,7 +97,7 @@ func TestStatsCountsFeedback(t *testing.T) {
 	tw.Emit(telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1})
 	_, out, _ := run(t, "stats", "1")
 	for _, want := range []string{
-		"\nCredits      turns with memories shown: declared 2, after a block 1, undeclared 1, skipped 1; used 2, none 1, refused 2\n",
+		"\nCredits      turns with memories shown: declared 2, after a block 1, undeclared 1, skipped 1; used 2, none 1, wrong 0, outdated 0, refused 2\n",
 		"\nLedger       settled 10 shows: 2 credits, 3 confident misses (38% of uncredited), 1 unknown, 1 late; honesty flags: credit_without_overlap 1, none_with_overlap 1\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -108,6 +109,33 @@ func TestStatsCountsFeedback(t *testing.T) {
 	pointAt(t, empty, fakeHindsight(t))
 	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none\n") {
 		t.Errorf("empty window:\n%s", out)
+	}
+}
+
+// The verdicts that retire: wrong and outdated on the Credits line, and
+// what they retired on their own line.
+func TestStatsCountsVerdicts(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	tw := telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"})
+	for _, c := range []telemetry.Credit{{Verdict: "used", IDs: 1, OK: true}, {Verdict: "wrong", IDs: 2, OK: true}, {Verdict: "outdated", IDs: 1, OK: true},
+		{Verdict: "wrong", IDs: 1, OK: true}, {Verdict: "outdated", IDs: 1}} {
+		tw.Emit(c)
+	}
+	for _, r := range []telemetry.Retire{{Action: "retired", IDs: 2}, {Action: "partly", IDs: 1}, {Action: "hidden", IDs: 1}, {Action: "sources", IDs: 2}} {
+		tw.Emit(r)
+	}
+	_, out, _ := run(t, "stats", "1")
+	for _, want := range []string{
+		"; used 1, none 0, wrong 2, outdated 1, refused 1\n",
+		"\nRetirements  3 raw fact(s) invalidated on the server (1 verdict(s) the server refused halfway), 1 observation(s) hidden on this machine\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	if code, out, _ := run(t, "stats", "1", "--json"); code != output.OK || !strings.Contains(out, `"retired": 3`) || !strings.Contains(out, `"hidden": 1`) || !strings.Contains(out, `"partly": 1`) {
+		t.Errorf("json: exit %d\n%s", code, out)
 	}
 }
 
@@ -239,5 +267,47 @@ func TestStatsAbsoluteWindowExtraction(t *testing.T) {
 	}
 	if _, out, _ := run(t, "stats", "--since", day(40), "--until", day(9)); !strings.Contains(out, "5000000 input") || !strings.Contains(out, "(last 20 days: the server keeps no more)") {
 		t.Errorf("a window cut by the server's 30 days:\n%s", out)
+	}
+}
+
+// The Ledger line names how many other machines' counts recall weighs
+// (those in use: neither this machine nor one silent for 30 days), and
+// only when there are any and sharing is on.
+func TestStatsNamesSharedMachines(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	self, err := retain.MachineID(pathsOf(home).State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := otherMachine("pc-old", nil)
+	gone.At = gone.At.Add(-31 * 24 * time.Hour)
+	writeSharedCache(t, home, otherMachine("pc-b", nil), otherMachine("pc-c", nil), otherMachine("pc-c", nil), otherMachine(self, nil), gone)
+	line := "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none"
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 2 other machines\n") {
+		t.Errorf("two other machines:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "1", "--json"); !strings.Contains(out, `"shared_machines": 2`) {
+		t.Errorf("json:\n%s", out)
+	}
+	writeSharedCache(t, home, otherMachine("pc-b", nil))
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 1 other machine\n") {
+		t.Errorf("one other machine:\n%s", out)
+	}
+	// No machine id yet: every document counts, and stats creates none.
+	idFile := filepath.Join(pathsOf(home).State, "machine_id")
+	if err := os.Remove(idFile); err != nil {
+		t.Fatal(err)
+	}
+	writeSharedCache(t, home, otherMachine("pc-b", nil), otherMachine(self, nil))
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 2 other machines\n") {
+		t.Errorf("no machine id:\n%s", out)
+	}
+	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
+		t.Errorf("stats created the machine id: %v", err)
+	}
+	appendConfig(t, home, "[feedback]\nshare_ledger = false")
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"\n") {
+		t.Errorf("sharing off:\n%s", out)
 	}
 }

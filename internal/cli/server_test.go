@@ -227,9 +227,12 @@ var (
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
+	memoryStatus       map[string]int    // "<METHOD> <memory id>" → the status that call answers ("GET <id>/history" for a history)
+	memoryHistory      map[string]string // GET /memories/{id}/history answer (a JSON list) by id; absent: 404
 	projectEntities    map[string]string
 	retainedTags       []string
-	retainedContents   []string // the content of every accepted item
+	retainedContents   []string     // the content of every accepted item
+	sharedSends        atomic.Int64 // shared ledger documents retained (not in retained)
 	// fakeDocCreated overrides a document's created_at (default: when the
 	// fake accepted it).
 	fakeDocCreated   map[string]time.Time
@@ -248,6 +251,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	t.Helper()
 	// Shared counters start clean for every test.
 	retained.Store(0)
+	sharedSends.Store(0)
 	llmInput.Store(0)
 	llmPerRetain.Store(0)
 	queued.Store(0)
@@ -265,6 +269,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
 	fakeDocCreated = map[string]time.Time{}
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
+	memoryStatus, memoryHistory = map[string]int{}, map[string]string{}
 	recallQueries, recallSourceFacts, recallAskedSources = nil, "", 0
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
@@ -326,6 +331,9 @@ func fakeHindsight(t *testing.T) (port int) {
 			bankCalls = append(bankCalls, r.Method+" "+bank+" /"+sub)
 		}
 		switch {
+		case strings.Contains(r.URL.Path, "/memories/") && memoryStatus[r.Method+" "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]] != 0:
+			w.WriteHeader(memoryStatus[r.Method+" "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]])
+			_, _ = w.Write([]byte(`{"detail":"internal error"}`))
 		case r.URL.Path == "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","database":"connected"}`))
 		case r.URL.Path == "/version" && fakeAPIVersion == "":
@@ -569,6 +577,18 @@ func fakeHindsight(t *testing.T) (port int) {
 			body, _ := io.ReadAll(r.Body)
 			recallTags = append(recallTags, string(body))
 			_, _ = w.Write([]byte(`{"text":"Billing keeps PostgreSQL 16.","usage":{"input_tokens":1200,"output_tokens":40}}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && strings.HasSuffix(r.URL.Path, "/history"):
+			id := strings.TrimSuffix(r.URL.Path[strings.Index(r.URL.Path, "/memories/")+len("/memories/"):], "/history")
+			h, ok := memoryHistory[id]
+			switch {
+			case memoryStatus["GET "+id+"/history"] != 0:
+				w.WriteHeader(memoryStatus["GET "+id+"/history"])
+			case !ok:
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"Memory unit '` + id + `' not found"}`))
+			default:
+				_, _ = w.Write([]byte(h))
+			}
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/memories/") && !strings.HasSuffix(r.URL.Path, "/list"):
 			m, ok := memories[r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]]
 			if !ok {
@@ -616,6 +636,10 @@ func fakeHindsight(t *testing.T) (port int) {
 				bankDocs[bank][it.DocumentID] = true
 				docs[bank+"/"+it.DocumentID] = it.Metadata // documents are per bank, like the server's
 				docInfos[bank+"/"+it.DocumentID] = docInfo{tags: it.Tags, text: it.Content, created: time.Now().UTC()}
+				if strings.HasPrefix(it.DocumentID, sharedDocPrefix) {
+					sharedSends.Add(1)
+					continue // a machine's shared counts, not a memory sent
+				}
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())
 				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))

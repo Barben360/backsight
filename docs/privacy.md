@@ -14,7 +14,7 @@ The server turns this text into memories: short facts tagged with their project,
 
 | To | What | When |
 |---|---|---|
-| **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only; its API and web UI always require a key. | Each session, report and stored fact. |
+| **Your Hindsight server** | Everything above. It runs in Docker on your machine and listens on `127.0.0.1` only, unless you open it to your other PCs on a private address (`backsight server expose --private`); its API and web UI always require a key. | Each session, report and stored fact. |
 | **The LLM provider you chose at setup** | Session text, reports and stored facts, which the server sends it to extract and consolidate memories, and the server's own summaries (the briefing pages). With `ollama`, nothing: the model runs on your machine. | In the background, after each send. |
 | **Hugging Face** (`huggingface.co`) | Nothing of yours: the server downloads its embedding model and its reranker from there, into a Docker volume. | The server's first start, and after its model cache is deleted. |
 | **The image registries** (`ghcr.io` for Hindsight, Docker Hub for pgvector) | Nothing of yours: Docker pulls the server's images, by digest. | Setup, and server upgrades. |
@@ -23,7 +23,7 @@ The server turns this text into memories: short facts tagged with their project,
 Setup shows the provider data flow and asks for your consent before anything is stored. Nothing else leaves the machine:
 
 - backsight's own logs and usage events stay in local files (`backsight paths` shows the state directory); they are never sent. So does the record of which project each turn was filed under and which repositories its tool calls named (project names and counts, no text), which files subagent reports and shows how often the main conversation would have been filed elsewhere;
-- the feedback journal and ledger (`feedback/` in the state directory that `backsight paths` shows) record which memories were shown and credited: memory ids, ranks, outcomes and counts only, never memory or conversation text. They stay local, and `backsight uninstall --purge-local` removes them;
+- the feedback journal and ledger (`feedback/` in the state directory that `backsight paths` shows) record which memories were shown and credited: memory ids, ranks, outcomes and counts only, never memory or conversation text. They stay local, and `backsight uninstall --purge-local` removes them. With `feedback.share_ledger` on (the default), `backsight jobs tick` copies the ledger's counts to one document per machine in your server's `<bank>-control` bank, for your other machines to weigh: memory ids, numbers (uses, misses) and times only, plus a random id of the machine, never text, a session or a project. `share_ledger = false` stops it; the last copy stays on the server, and your other machines ignore it after 30 days;
 - `backsight report` builds a diagnostic for a bug report but sends nothing: you read it and decide;
 - backsight turns on none of Hindsight's optional tracing or metrics exporters.
 

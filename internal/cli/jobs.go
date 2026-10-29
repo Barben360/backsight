@@ -52,7 +52,22 @@ type tickResult struct {
 	Server string `json:"server,omitempty"`
 	// Feedback: what the settle of the feedback journal decided.
 	Feedback feedback.SettleResult `json:"feedback"`
-	MS       int                   `json:"ms"`
+	// Unhidden: the hidden observations the server rewrote or dropped
+	// since, no longer marked hidden (checkHidden).
+	Unhidden int `json:"unhidden,omitempty"`
+	// History: the import of earlier history (importInTick), "" once done
+	// or with feedback off.
+	History string `json:"history,omitempty"`
+	// SharedUp: this machine's counts were sent to the server for the
+	// other machines; SharedMachines: how many other machines' counts the
+	// local cache holds; SharedSkipped: fetched documents that did not
+	// parse; SharedError: why sharing failed, "" when it did not
+	// (shareLedger).
+	SharedUp       bool   `json:"shared_up,omitempty"`
+	SharedMachines int    `json:"shared_machines,omitempty"`
+	SharedSkipped  int    `json:"shared_skipped,omitempty"`
+	SharedError    string `json:"shared_error,omitempty"`
+	MS             int    `json:"ms"`
 }
 
 // reachCheckTimeout bounds the tick's one health call.
@@ -82,7 +97,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History,
+						"shared_up": res.SharedUp, "shared_machines": res.SharedMachines, "shared_skipped": res.SharedSkipped, "shared_error": res.SharedError}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -121,6 +137,23 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			hctx, hcancel := context.WithTimeout(cmd.Context(), reachCheckTimeout)
 			_, herr := f.Client.Health(hctx)
 			hcancel()
+			// Lifts the hidings the server made moot, then shares this
+			// machine's counts with its other machines (shareTickBudget):
+			// only on a server that answers and is the one this PC joined
+			// (another one holds none of its memories, which would read as
+			// gone).
+			feedbackSteps := func() {
+				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil {
+					return
+				}
+				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, d.FeedbackDir(), now())
+				sctx, cancel := context.WithTimeout(cmd.Context(), shareTickBudget)
+				defer cancel()
+				var err error
+				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedger(sctx, f.Client, d, cfg, f.MachineID, now()); err != nil {
+					res.SharedError = err.Error()
+				}
+			}
 			files := transcripts(home)
 			if !cfg.Components.Write { // migration flag: another integration writes (SPEC §5 exclusivity)
 				recordReach(d, cfg, herr)
@@ -129,9 +162,11 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 				}
+				feedbackSteps()
 				if otherServer(d, cfg) == nil { // nothing is written to another server
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				}
+				res.History = importInTick(cmd.Context(), d, home, cfg)
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -189,6 +224,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
+			feedbackSteps() // after the sends: a slow server delays this look, never them
+			res.History = importInTick(cmd.Context(), d, home, cfg)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -237,7 +274,57 @@ func tickText(r tickResult) string {
 	if r.Server != "" {
 		msg += ", " + r.Server
 	}
+	if r.Unhidden > 0 {
+		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, no longer marked hidden", r.Unhidden)
+	}
+	if r.History != "" {
+		msg += ", " + r.History
+	}
+	if r.SharedUp {
+		msg += ", this machine's counts sent to the server"
+	}
+	if r.SharedMachines > 0 {
+		msg += fmt.Sprintf(", counts of %d other machine(s) in use", r.SharedMachines)
+	}
+	if r.SharedError != "" {
+		msg += ", counts not shared (" + r.SharedError + "): the next tick retries"
+	}
+	if r.SharedSkipped > 0 {
+		msg += fmt.Sprintf(", %d shared document(s) skipped (unreadable or of a newer version)", r.SharedSkipped)
+	}
 	return msg + "\n"
+}
+
+// importTickBudget bounds a tick's import of earlier history, its local
+// reading included (its server checks keep their importCheckBudget).
+var importTickBudget = 60 * time.Second
+
+// importInTick imports earlier history, once the binary that brings it
+// is installed: at each tick, within importTickBudget, until a run goes
+// through every source (the ledger's HistoryImported). A run cut short
+// keeps what it journaled, and the next tick goes on. Best effort: what
+// it did, "" when there is nothing to do (feedback off, done already, the
+// ledger unreadable) or another import is running.
+func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config) string {
+	if !cfg.Feedback.Enabled {
+		return ""
+	}
+	if l, err := feedback.Current(d.FeedbackDir()); err != nil || !l.HistoryImported.IsZero() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, importTickBudget)
+	defer cancel()
+	res, err := importHistory(ctx, d, home, time.Time{}, false, "jobs tick")
+	shows, credits := res.totals()
+	switch {
+	case errors.As(err, new(importRunning)):
+		return "" // the run in progress reports
+	case err != nil:
+		return "earlier history not imported (" + err.Error() + ")"
+	case !res.Complete:
+		return fmt.Sprintf("earlier history: %d shows and %d credits imported, the rest at the next tick", shows, credits)
+	}
+	return fmt.Sprintf("earlier history imported: %d shows and %d credits", shows, credits)
 }
 
 // sessionTTL: session state older than this is deleted (it holds prompt
