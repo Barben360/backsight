@@ -544,7 +544,8 @@ vb_status() {
 
 # The checks, in the order of decision 0073 block 4's table.
 VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients timers
-  dedup-copied dedup-concurrent dedup-split key-rotation)
+  dedup-copied dedup-concurrent dedup-split key-rotation
+  offline-laptop unsent-cost latency-0ms latency-20ms latency-80ms)
 
 # vb_remote <sh script>: one word any login shell (tcsh, fish…) hands to
 # sh unchanged: the script travels base64-encoded.
@@ -677,8 +678,423 @@ vb_run_end() {
   # First: a later step that fails must not leave a token behind.
   rm -f "$(vb_b_home)/token" "$(vb_b_home)/token2"
   vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true
+  vb_no_netem > /dev/null 2>&1 || true
   vb_untrust_new_key
 }
+
+# ---- The checks of the client VM's network (offline-laptop, unsent-cost,
+# latency-*): they cut A's link or slow it, which only the bench can do.
+
+# The project of the offline session and of the latency sessions.
+VB_OFFLINE_PROJECT=bs-m6-offline
+VB_LATENCY_PROJECT=bs-m6-latency
+
+# Forty prompts of eight words or more and at least recall_min_chars (60),
+# on unrelated topics, so that recall runs on each (a topic shift, C12):
+# the offline session takes the first ten.
+VB_PROMPTS=(
+  "How should the garden irrigation timer be set for the dry summer weeks ahead?"
+  "Which sourdough hydration works best for a loaf baked in a cast iron pot?"
+  "What is the safest way to replace a cracked bathroom tile without new grout?"
+  "Explain how compound interest changes a small monthly savings plan over ten years."
+  "Which stretches help a cyclist recover after a long mountain climb in the cold?"
+  "How do I teach a young dog to walk calmly on a leash in busy streets?"
+  "What makes a Romanesque church different from a Gothic cathedral in its windows?"
+  "Suggest a weekly menu for a vegetarian family of four on a tight budget."
+  "How does a heat pump keep a house warm when the outside air is freezing?"
+  "Which birds can be seen in a wetland reserve during the spring migration season?"
+  "What are the rules of the board game Go for a complete beginner player?"
+  "How should a beginner tune a classical guitar without an electronic tuner nearby?"
+  "Which houseplants survive in a dark north facing apartment with dry winter air?"
+  "Describe the main causes of the French Revolution for a school history essay."
+  "How long should a family rest between two hikes at high altitude in the Alps?"
+  "What is the difference between baking soda and baking powder in a sponge cake?"
+  "Which knots should a sailor learn first before taking a small dinghy out alone?"
+  "How can a small library organise its children's books so readers find them easily?"
+  "What should a first aid kit for a week of camping in the forest contain?"
+  "Explain why the sky looks red at sunset and blue in the middle of the day."
+  "How do volcanoes form along the edges of tectonic plates under the ocean floor?"
+  "Which watercolour paper weight suits quick landscape sketches made outdoors on a trip?"
+  "How should a runner plan training for a first half marathon over twelve weeks?"
+  "What is the best way to store winter clothes so moths do not damage the wool?"
+  "Which chess openings suit a club player who likes quiet positional games with pawns?"
+  "How do bees communicate the direction of flowers to the other bees in their hive?"
+  "Suggest a calm evening routine that helps a toddler fall asleep before eight o'clock."
+  "What is the right way to sharpen a kitchen knife on a whetstone at home?"
+  "How did the printing press change the spread of books across Europe after 1450?"
+  "Which fruit trees grow well in a small urban garden with clay soil and wind?"
+  "How should a beginner photographer use manual exposure for a portrait taken at dusk?"
+  "What causes the tides, and why are there two high tides on most coastal days?"
+  "Which exercises strengthen the lower back of someone who sits at a desk all day?"
+  "How do you make a simple tomato sauce that freezes well for later winter meals?"
+  "What should travellers know about the night trains that cross the Alps in winter?"
+  "Explain how a bicycle derailleur moves the chain between the gears on the cassette."
+  "Which wildflowers attract butterflies to a balcony box during the long summer months?"
+  "How can a choir improve its breathing so long phrases stay steady and in tune?"
+  "What is the history of the lighthouse on the rocky island near the old harbour?"
+  "How should a family prepare an old wooden table before painting it a new colour?"
+)
+
+# vb_hook_lib: the A-side helpers of the offline and latency scripts.
+#   hk <name> <Event> <subject> <json>  runs the command hooks.json wires for
+#     that event (its group whose matcher takes the subject, or has none),
+#     the json on stdin, as Claude Code would; appends {name, event, ms,
+#     timeout_s, rc} to hooks.jsonl, its stdout to out/<name>.
+#   ev <session> <Event> [key value…]  Claude Code's JSON for the event.
+#   tk <name>  jobs tick --json to <name>.json, a skipped one tried again
+#     (A's own timer may hold the tick lock) for 90 s.
+vb_hook_lib() {
+  cat << 'EOF'
+hk() {
+  local name=$1 event=$2 subj=$3 json=$4 spec t0 t1 rc=0 cmd
+  spec=$(jq -c --arg e "$event" --arg s "$subj" '[.hooks[$e][]? | (.matcher // "") as $m | select($m == "" or ($s | test("^(" + $m + ")$")))][0].hooks[0] // empty' "$hooks") || spec=
+  if [ -z "$spec" ]; then echo "hooks.json ($hooks) wires no $event hook for '$subj'" >> error; exit 1; fi
+  mapfile -t cmd < <(jq -r '.command, .args[]' <<< "$spec")
+  t0=$(date +%s%N)
+  printf '%s' "$json" | "${cmd[@]}" > "out/$name" 2> "out/$name.err" || rc=$?
+  t1=$(date +%s%N)
+  jq -cn --arg n "$name" --arg e "$event" --argjson ms $(((t1 - t0) / 1000000)) --argjson to "$(jq '.timeout // 0' <<< "$spec")" --argjson rc "$rc" \
+    '{name: $n, event: $e, ms: $ms, timeout_s: $to, rc: $rc}' >> hooks.jsonl
+}
+ev() {
+  local s=$1 e=$2
+  shift 2
+  jq -cn --arg s "$s" --arg e "$e" --arg t "$tdir/$s.jsonl" --arg c "$cwd" --args \
+    '$ARGS.positional as $kv | reduce range(0; $kv | length; 2) as $i ({session_id: $s, transcript_path: $t, cwd: $c, hook_event_name: $e}; .[$kv[$i]] = $kv[$i + 1])' "$@"
+}
+tk() {
+  local n=0 out
+  while :; do
+    out=$("$HOME/backsight" jobs tick --json 2> /dev/null) || true
+    [ "$(jq -r '.data.status // ""' <<< "$out" 2> /dev/null)" = skipped ] || break
+    n=$((n + 1))
+    [ "$n" -lt 45 ] || break
+    sleep 2
+  done
+  printf '%s\n' "$out" > "$1.json"
+}
+paths=$("$HOME/backsight" paths --json) || { echo "backsight paths failed" >> error; exit 1; }
+st=$(jq -r .data.state <<< "$paths")
+hooks=$(jq -r .data.data <<< "$paths")/marketplace/plugins/backsight/hooks/hooks.json
+since=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+mkdir -p out
+EOF
+}
+
+# vb_offline_script: run on A, detached, while the bench cuts its link
+# (the bench's ssh dies with it). Args: the server's URL, the script's
+# bound in s, the project, then the prompts. It waits until /health fails,
+# then runs Claude Code's hooks of a session of1 and of2 (their wall times
+# against hooks.json), two notes, a tick, doctor, reach.json backdated 2 h
+# (the banner and doctor's warning come after an hour of silence), then
+# unsent-cost's two ticks around 200 uncursored transcripts of 50 records,
+# which it deletes; last, /health must still fail (health-end). Everything
+# lands in ~/m6-offline; done holds the seconds taken.
+vb_offline_script() {
+  printf 'set -u\nurl=$1 bound=$2 p=$3\nshift 3\nd=$HOME/m6-offline\ncd "$d" || exit 1\nt0=$(date +%%s)\n'
+  printf 'trap '\''echo $(($(date +%%s) - t0)) > done'\'' EXIT\n'
+  printf 'tdir=$HOME/.claude/projects/-bs-m6-$p cwd=$HOME/work/$p\n'
+  vb_hook_lib
+  cat << 'EOF'
+echo "$since" > since
+n=0
+until ! curl -fsS --max-time 2 -o /dev/null "$url/health" 2> /dev/null; do
+  n=$((n + 1))
+  if [ "$n" -ge 60 ]; then echo "the server still answered $url/health 60 s after the cut" >> error; exit 1; fi
+  sleep 1
+done
+echo "$n" > down-after
+mkdir -p "$tdir" "$cwd"
+hk start1 SessionStart startup "$(ev of1 SessionStart source startup)"
+# The session's records, 40 min old: settled (30 min) once the link is back.
+now=$(date +%s)
+for i in 1 2 3; do
+  ts=$(date -u -d "@$((now - 2400 + i))" +%Y-%m-%dT%H:%M:%S.000Z)
+  jq -cn --arg u "of1-r$i" --arg ts "$ts" --arg c "$cwd" --arg t "of1 turn $i: the offline laptop kept working on the export job. [rec of1-r$i]" \
+    '{type: "user", uuid: $u, sessionId: "of1", cwd: $c, timestamp: $ts, message: {role: "user", content: $t}}' >> "$tdir/of1.jsonl"
+done
+touch -d "@$((now - 2397))" "$tdir/of1.jsonl"
+i=0
+for prompt in "$@"; do
+  i=$((i + 1))
+  hk "p$i" UserPromptSubmit "" "$(ev of1 UserPromptSubmit prompt "$prompt" prompt_id "of1-p$i")"
+done
+for i in 1 2; do
+  "$HOME/backsight" store --json --kind decision --project "$p" "bs-m6 offline-laptop: note $i, the export pages by 200, decided with the server silent" > "store$i.json" 2> /dev/null || true
+done
+hk end SessionEnd "" "$(ev of1 SessionEnd reason other)"
+tk tick1
+"$HOME/backsight" doctor --json > doctor1.json 2> /dev/null || true
+cp "$st/reach.json" reach-before.json 2> /dev/null || echo '{}' > reach-before.json
+back=$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)
+echo "$back" > backdated
+jq --arg b "$back" '.failing_since = $b | .last_ok = $b' reach-before.json > "$st/reach.json.bs-m6" && mv "$st/reach.json.bs-m6" "$st/reach.json"
+hk start2 SessionStart startup "$(ev of2 SessionStart source startup)"
+"$HOME/backsight" doctor --json > doctor2.json 2> /dev/null || true
+# unsent-cost: the same tick, then with 200 uncursored transcripts more.
+tk tick-base
+cp "$st/reach.json" reach-base.json
+ud=$HOME/.claude/projects/-bs-m6-bs-m6-unsent uc=$HOME/work/bs-m6-unsent
+mkdir -p "$ud" "$uc"
+now=$(date +%s)
+for i in $(seq 1 50); do tss[i]=$(date -u -d "@$((now - 600 + i))" +%Y-%m-%dT%H:%M:%S.000Z); done
+for s in $(seq -w 1 200); do
+  for i in $(seq 1 50); do
+    ts=${tss[i]}
+    if [ $((i % 2)) = 1 ]; then
+      printf '{"type":"user","uuid":"un%s-r%s","sessionId":"un%s","cwd":"%s","timestamp":"%s","message":{"role":"user","content":"un%s turn %s: the export job of the M6 bench failed at page %s. [rec un%s-r%s]"}}\n' "$s" "$i" "$s" "$uc" "$ts" "$s" "$i" "$i" "$s" "$i"
+    else
+      printf '{"type":"assistant","uuid":"un%s-r%s","sessionId":"un%s","cwd":"%s","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"Noted for un%s: the export pages by 200. [rec un%s-r%s]"}]}}\n' "$s" "$i" "$s" "$uc" "$ts" "$s" "$s" "$i"
+    fi
+  done > "$ud/un$s.jsonl"
+done
+ls "$ud" | grep -c '\.jsonl$' > unsent-files
+tk tick-unsent
+cp "$st/reach.json" reach-unsent.json
+rm -rf "$ud" "$uc"
+if curl -fsS --max-time 2 -o /dev/null "$url/health" 2> /dev/null; then echo up > health-end; else echo down > health-end; fi
+EOF
+}
+
+# vb_latency_script: run on A. Args: the delay, the project, the prompts.
+# Waits until the hooks' breaker is closed (an earlier check may have
+# opened it), then a startup hook and one UserPromptSubmit hook a prompt
+# of session lt<delay>; prints {waited_s, hooks, prompts, failures}: the
+# hooks' wall times, the session's prompt telemetry and every hook_failure
+# timeout since its start.
+vb_latency_script() {
+  printf 'set -u\ndelay=$1 p=$2\nshift 2\nd=$HOME/m6-latency\nrm -rf "$d" && mkdir -p "$d" && cd "$d" || exit 1\n'
+  printf 'tdir=$HOME/.claude/projects/-bs-m6-$p cwd=$HOME/work/$p\n'
+  vb_hook_lib
+  cat << 'EOF'
+mkdir -p "$tdir" "$cwd"
+waited=0
+if [ -s "$st/breaker.json" ]; then
+  open=$(jq -r '.open_until // empty' "$st/breaker.json")
+  left=$(($(date -d "${open:-1970-01-01T00:00:00Z}" +%s) - $(date +%s)))
+  if [ "$left" -gt 360 ]; then echo "the breaker stays open $left s more" >&2; exit 1; fi
+  if [ "$left" -gt 0 ]; then sleep $((left + 2)); waited=$((left + 2)); fi
+fi
+s=lt$delay
+hk start SessionStart startup "$(ev "$s" SessionStart source startup)"
+i=0
+for prompt in "$@"; do
+  i=$((i + 1))
+  hk "p$i" UserPromptSubmit "" "$(ev "$s" UserPromptSubmit prompt "$prompt" prompt_id "$s-p$i")"
+done
+cat "$st"/telemetry/events-*.jsonl | jq -cR --arg since "$since" 'fromjson? | select(.ts >= $since)' > events.jsonl
+jq -cn --argjson w "$waited" --arg s "$s" --slurpfile h hooks.jsonl --slurpfile e events.jsonl \
+  '{waited_s: $w, hooks: $h, prompts: [$e[] | select(.event == "prompt" and .session == $s) | {n, decision, reason, ms}],
+    failures: [$e[] | select(.event == "hook_failure" and .kind == "timeout")]}'
+EOF
+}
+
+# vb_wait_a: A's ssh answers again (5 min), as a check's fail.
+vb_wait_a() {
+  local deadline=$((SECONDS + 300))
+  until vb_ssh bs-m6-client-bs true < /dev/null 2> /dev/null; do
+    [ "$SECONDS" -lt "$deadline" ] || fail "A's ssh did not come back within 5 min of its link"
+    sleep 5
+  done
+}
+
+# vb_offline_cleanup: however the offline run ends, A's link is up, its
+# script stopped and unsent-cost's transcripts gone.
+vb_offline_cleanup() {
+  vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true
+  (vb_wait_a) > /dev/null 2>&1 || true
+  m6_sh a 'pkill -f "m6-offline/run.sh" || true; rm -rf "$HOME/.claude/projects/-bs-m6-bs-m6-unsent" "$HOME/work/bs-m6-unsent"' > /dev/null 2>&1 || true
+}
+
+# vb_offline_run: the offline script, once a run (offline-laptop and
+# unsent-cost share it), collected into M6_WORK/offline. The bench cuts
+# A's link right after starting it, waits its bound (M6_OFFLINE_S, 360 s),
+# brings the link back and collects. Positive controls: A reads /health
+# before the cut, and the script saw it fail; it fails again at the
+# script's end, else the run is void.
+vb_offline_run() {
+  local w=$M6_WORK/offline h url bound=${M6_OFFLINE_S:-360} _
+  [ ! -e "$w/collected" ] || return 0
+  rm -rf "$w"
+  mkdir -p "$w"
+  h=$(m6_home a)
+  url=$(m6_get a "$(m6_paths a | jq -r .config_file)" | m6_toml server url)
+  url=${url%/}
+  [ -n "$url" ] || fail "A's config names no server url"
+  [ "$(m6_outbox a)" = 0 ] || fail "A's outbox holds notes before the cut: its 2 queued would prove nothing"
+  m6_live_since a "$M6_LIVE_MIN"
+  m6_sh a "curl -fsS --max-time 5 -o /dev/null $(m6_q "$url/health")" ||
+    fail "A cannot read $url/health with its link up: that it fails with the link down would prove nothing"
+  m6_sh a "rm -rf ~/m6-offline && mkdir -p ~/m6-offline" || fail "cannot make ~/m6-offline on A"
+  vb_offline_script | m6_put a "$h/m6-offline/run.sh" || fail "cannot write the offline script on A"
+  trap vb_offline_cleanup EXIT
+  m6_sh a "setsid nohup bash $(m6_q "$h/m6-offline/run.sh" "$url" "$bound" "$VB_OFFLINE_PROJECT" "${VB_PROMPTS[@]:0:10}") > /dev/null 2>&1 < /dev/null &" ||
+    fail "cannot start the offline script on A"
+  m6_link a down
+  sleep "$bound"
+  m6_link a up
+  vb_wait_a
+  for _ in $(seq 1 60); do
+    if m6_sh a 'test -e ~/m6-offline/done'; then break; fi
+    sleep 2
+  done
+  m6_sh a 'test -e ~/m6-offline/done' || fail "the offline script on A did not end within 2 min of the link coming back"
+  m6_sh a 'tar -C ~/m6-offline -cf - .' | tar -C "$w" -xf - || fail "cannot collect ~/m6-offline from A"
+  [ ! -s "$w/error" ] || fail "the offline script on A: $(paste -sd ' ' "$w/error")"
+  [ -s "$w/down-after" ] || fail "the offline script never saw /health fail"
+  [ "$(cat "$w/health-end" 2> /dev/null)" = down ] ||
+    fail "the link came back too early: /health answered A at the offline script's end ($(cat "$w/done" 2> /dev/null || echo ?) s, bound $bound s)"
+  touch "$w/collected"
+}
+
+# vb_hooks_in_time <hooks.jsonl>: every hook's wall time under its
+# hooks.json timeout, which must be known; prints the slowest per event.
+vb_hooks_in_time() {
+  local late
+  jq -e -s 'length > 0 and all(.timeout_s > 0)' "$1" > /dev/null || fail "a hook ran without a hooks.json timeout, or none ran"
+  late=$(jq -r -s '[.[] | select(.ms >= .timeout_s * 1000) | "\(.name) (\(.event)) \(.ms) ms, deadline \(.timeout_s) s"] | join("; ")' "$1")
+  [ -z "$late" ] || fail "past its deadline: $late"
+  jq -c -s 'group_by(.event) | map({(.[0].event): (map(.ms) | max)}) | add' "$1"
+}
+
+# vb_telemetry_since <since>: A's telemetry events at or after since (A's clock).
+vb_telemetry_since() {
+  m6_sh a "st=\$(\"\$HOME/backsight\" paths --json | jq -r .data.state) && cat \"\$st\"/telemetry/events-*.jsonl | jq -cR --arg s $(m6_q "$1") 'fromjson? | select(.ts >= \$s)'" ||
+    fail "cannot read A's telemetry"
+}
+
+# offline-laptop: A's link cut, its hooks stay within their deadlines,
+# doctor and the banner say the server is silent, and once the link is
+# back everything is sent once.
+vb_check_offline() {
+  local w=$M6_WORK/offline slow ev n back want msg reach reach1 doc i note notes=() counts tick1
+  vb_offline_run
+  slow=$(vb_hooks_in_time "$w/hooks.jsonl") || exit 1
+  [ "$(grep -c . "$w/hooks.jsonl")" = 13 ] || fail "$(grep -c . "$w/hooks.jsonl") hooks ran, want 13 (2 startups, 10 prompts, the end)"
+  ev=$(vb_telemetry_since "$(cat "$w/since")") || exit 1
+  # Positive control: the telemetry read is the hooks' own (each prompt is one event).
+  n=$(jq -s '[.[] | select(.event == "prompt" and .session == "of1")] | length' <<< "$ev")
+  [ "$n" = 10 ] || fail "A's telemetry holds $n prompt events of of1 since the start, want 10: the timeout look would prove nothing"
+  n=$(jq -s '[.[] | select(.event == "hook_failure" and .kind == "timeout")] | length' <<< "$ev")
+  [ "$n" = 0 ] || fail "A's telemetry holds $n hook_failure timeout(s) since the start"
+  back=$(cat "$w/backdated")
+  jq -e '(.failing_since // "") != ""' "$w/reach-before.json" > /dev/null || fail "reach.json recorded no failure while the server was silent: $(cat "$w/reach-before.json")"
+  want="memory server silent since $(date -u -d "$back" '+%Y-%m-%d %H:%M') UTC"
+  msg=$(jq -r '.systemMessage // ""' "$w/out/start2" 2> /dev/null || true)
+  case $msg in *"$want"*) ;; *) fail "the second startup's banner lacks '$want': $msg" ;; esac
+  reach=$(jq -c '[.data.checks[]? | select(.id == "server-reach")][0] // {}' "$w/doctor2.json")
+  jq -e '.status == "warn" and (.summary | contains("2 note(s) queued"))' > /dev/null <<< "$reach" || fail "doctor's server-reach with reach.json 2 h silent: $reach, want warn naming 2 queued notes"
+  for i in 1 2; do
+    jq -e '.data.status == "queued"' "$w/store$i.json" > /dev/null || fail "store $i with the server silent: $(cat "$w/store$i.json"), want queued"
+    notes+=("$(jq -r .data.document "$w/store$i.json")")
+  done
+  tick1=$(jq -c '.data | {status, ms, sessions}' "$w/tick1.json") || fail "the offline tick answered no JSON"
+  reach1=$(jq -c '[.data.checks[]? | select(.id == "server-reach")][0] // {}' "$w/doctor1.json") || fail "the first offline doctor answered no JSON"
+  # The link is back: one tick sends the session and both notes, once.
+  m6_tick a > /dev/null
+  m6_queue_wait
+  m6_wait_doc of1 > /dev/null
+  counts=$(m6_uuid_counts of1) || exit 1
+  [ "$counts" = "$(printf 'of1-r%s 1\n' 1 2 3)" ] || fail "conversation:of1 holds the records $(paste -sd ' ' <<< "$counts"), want r1 r2 r3 once each"
+  for note in "${notes[@]}"; do
+    [ -n "$(m6_doc "$note")" ] || fail "the note $note queued offline is not on the server"
+  done
+  [ "$(m6_outbox a)" = 0 ] || fail "A's outbox still holds $(m6_outbox a) note(s)"
+  doc=$(m6_doctor a) || exit 1
+  [ "$(jq -r '[.data.checks[] | select(.id == "server-id") | .status][0]' <<< "$doc")" = ok ] ||
+    fail "doctor's server-id on A after the link came back: $(jq -c '[.data.checks[] | select(.id == "server-id")]' <<< "$doc")"
+  reach=$(jq -c '[.data.checks[]? | select(.id == "server-reach")][0] // {}' <<< "$doc")
+  jq -e '(.status == "info" or .status == "ok") and (.summary | test("silent|skipped") | not) and (.summary | contains("0 note(s) queued"))' > /dev/null <<< "$reach" ||
+    fail "doctor's server-reach on A after the link came back: $reach"
+  m6_result offline-laptop PASS "link down ${M6_OFFLINE_S:-360} s, the offline script done in $(cat "$w/done") s; 13 hooks within their deadlines (slowest ms: $(jq -r 'to_entries | map("\(.key) \(.value)") | join(", ")' <<< "$slow")), no hook timeout; banner and doctor: silent since $back, 2 notes queued; back up: of1 and both notes on the server once, outbox empty, server-reach ok" \
+    "$(jq -cn --argjson slow "$slow" --argjson t "$tick1" --arg back "$back" --argjson down "$(cat "$w/down-after")" --argjson r1 "$reach1" '{slowest_ms: $slow, offline_tick: $t, backdated: $back, health_failed_after_s: $down, doctor_reach_offline: $r1}')"
+}
+
+# unsent-cost (recorded): what the offline tick pays for 200 uncursored
+# transcripts of 50 records (Unsent, reach.json's sessions_waiting), and
+# BenchmarkUnsent on this host. Above 2 000 ms more, a block 5 follow-up.
+vb_check_unsent() {
+  local w=$M6_WORK/offline base unsent wb wu ns diff note=''
+  vb_offline_run
+  base=$(jq -er '.data | select(.status != "skipped") | .ms' "$w/tick-base.json") || fail "the offline tick without the transcripts measured nothing: $(cat "$w/tick-base.json")"
+  unsent=$(jq -er '.data | select(.status != "skipped") | .ms' "$w/tick-unsent.json") || fail "the offline tick with the transcripts measured nothing: $(cat "$w/tick-unsent.json")"
+  wb=$(jq -r '.sessions_waiting // 0' "$w/reach-base.json") wu=$(jq -r '.sessions_waiting // 0' "$w/reach-unsent.json")
+  # Positive control: the tick counted the 200 transcripts.
+  [ "$(cat "$w/unsent-files")" = 200 ] && [ "$wu" -ge $((wb + 200)) ] ||
+    fail "the tick with $(cat "$w/unsent-files") transcripts counted $wu sessions waiting, $wb before: it did not survey them"
+  ns=$(cd "$M6_ROOT" && go test ./internal/retain/ -run '^$' -bench '^BenchmarkUnsent$' -benchtime 3x 2>&1 | awk '$1 ~ /^BenchmarkUnsent/ { print $3 }' || true)
+  [ -n "$ns" ] || fail "BenchmarkUnsent reported nothing"
+  diff=$((unsent - base))
+  if [ "$diff" -gt 2000 ]; then note="; above 2 000 ms: block 5 follow-up (cache Unsent by path, size and mtime)"; fi
+  m6_result unsent-cost RECORDED "offline tick $base ms, $unsent ms with 200 uncursored transcripts of 50 records (+$diff ms, waiting $wb -> $wu); BenchmarkUnsent on the host $ns ns/op$note" \
+    "$(jq -cn --argjson b "$base" --argjson u "$unsent" --argjson d "$diff" --argjson ns "$ns" --argjson wb "$wb" --argjson wu "$wu" \
+      '{tick_ms: $b, tick_unsent_ms: $u, diff_ms: $d, benchmark_ns_op: $ns, sessions_waiting: {before: $wb, with_unsent: $wu}, follow_up: ($d > 2000)}')"
+}
+
+# vb_a_iface: A's interface towards the server.
+vb_a_iface() {
+  local i
+  i=$(m6_sh a "ip -o route get $(m6_q "$M6_SERVER_IP")" | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+  [[ $i =~ ^[a-z0-9]+$ ]] || fail "cannot tell A's interface to $M6_SERVER_IP ('$i')"
+  echo "$i"
+}
+
+# vb_no_netem: no netem qdisc left on A (its root qdisc back to the
+# default); fails when one stays.
+vb_no_netem() {
+  vb_ssh bs-m6-client 'tc qdisc show | awk '\''$2 == "netem" { print $5 }'\'' | while read -r i; do sudo tc qdisc del dev "$i" root; done; ! tc qdisc show | grep -q netem' < /dev/null
+}
+
+# vb_check_latency <ms>: netem delays A's packets by ms (0: none, removed
+# whatever way the check ends); a startup and 40 prompt hooks of session
+# lt<ms>. Recorded: p50 and p95 of the recall prompts' wall time and
+# telemetry prompt.ms; FAIL only for a hook past its deadline, a hook
+# timeout, or too few recalls to measure (20).
+vb_check_latency() {
+  local d=$1 name=latency-$1ms iface qd rtt out slow r h stats
+  h=$(m6_home a)
+  iface=$(vb_a_iface) || exit 1
+  trap 'vb_no_netem > /dev/null 2>&1 || true' EXIT
+  vb_no_netem > /dev/null || fail "cannot clear A's netem"
+  if [ "$d" -gt 0 ]; then
+    vb_ssh bs-m6-client "sudo tc qdisc replace dev $iface root netem delay ${d}ms" < /dev/null || fail "cannot set netem delay ${d}ms on A's $iface"
+  fi
+  # Positive control: the delay is there, and the packets feel it.
+  qd=$(vb_ssh bs-m6-client "tc qdisc show dev $iface" < /dev/null) || fail "cannot read A's qdisc"
+  if [ "$d" -gt 0 ]; then
+    case $qd in *"netem"*"delay ${d}ms"*) ;; *) fail "netem delay ${d}ms is not on A's $iface: $qd" ;; esac
+  else
+    case $qd in *netem*) fail "a netem qdisc is on A's $iface with no delay asked: $qd" ;; esac
+  fi
+  rtt=$(m6_sh a "ping -n -c 11 -i 0.2 $(m6_q "$M6_SERVER_IP") || true" | sed -n 's/.*time=\([0-9.]*\) ms.*/\1/p' | sort -n | awk '{ v[NR] = $1 } END { if (NR) print v[int((NR + 1) / 2)] }')
+  [ -n "$rtt" ] || fail "no ping reply from the server: the delay could not be measured"
+  awk -v r="$rtt" -v d="$d" 'BEGIN { exit !(r >= d) }' || fail "median RTT to the server $rtt ms, below the ${d} ms netem delay: netem did not apply"
+  vb_latency_script | m6_put a "$h/m6-latency.sh" || fail "cannot write the latency script on A"
+  out=$(m6_sh a "bash $(m6_q "$h/m6-latency.sh" "$d" "$VB_LATENCY_PROJECT" "${VB_PROMPTS[@]}")") || fail "the latency hooks on A failed: $(printf '%s' "$out" | tail -n 2)"
+  out=$(m6_json "the latency hooks on A" "$out") || exit 1
+  jq -c '.hooks[]' <<< "$out" > "$M6_WORK/$name.hooks"
+  slow=$(vb_hooks_in_time "$M6_WORK/$name.hooks") || exit 1
+  [ "$(grep -c . "$M6_WORK/$name.hooks")" = 41 ] || fail "$(grep -c . "$M6_WORK/$name.hooks") hooks ran, want 41"
+  [ "$(jq '.failures | length' <<< "$out")" = 0 ] || fail "hook timeouts in A's telemetry: $(jq -c .failures <<< "$out")"
+  r=$(jq '[.prompts[] | select(.decision == "recall")] | length' <<< "$out")
+  [ "$r" -ge 20 ] || fail "$r of 40 prompts recalled, want 20 or more: nothing measured ($(jq -c '[.prompts[] | .reason] | group_by(.) | map({(.[0]): length}) | add' <<< "$out"))"
+  vb_no_netem > /dev/null || fail "netem stayed on A"
+  stats=$(jq -c '
+    def pct($p): sort | .[((length * $p | ceil) - 1) | if . < 0 then 0 else . end];
+    ([.prompts[] | select(.decision == "recall") | .n]) as $ns
+    | ([.hooks[] | select(.name | test("^p[0-9]+$")) | select((.name[1:] | tonumber) as $i | $ns | index($i) != null) | .ms]) as $wall
+    | ([.prompts[] | select(.decision == "recall") | .ms]) as $tms
+    | {recall: ($ns | length), wall_p50: ($wall | pct(0.5)), wall_p95: ($wall | pct(0.95)), prompt_ms_p50: ($tms | pct(0.5)), prompt_ms_p95: ($tms | pct(0.95)),
+       startup_ms: ([.hooks[] | select(.name == "start") | .ms][0]), breaker_wait_s: .waited_s}' <<< "$out")
+  m6_result "$name" PASS "netem ${d} ms (median RTT $rtt ms); 41 hooks within their deadlines, no hook timeout; $(jq -r .recall <<< "$stats") recall prompts of 40: wall p50 $(jq -r .wall_p50 <<< "$stats") p95 $(jq -r .wall_p95 <<< "$stats") ms, prompt.ms p50 $(jq -r .prompt_ms_p50 <<< "$stats") p95 $(jq -r .prompt_ms_p95 <<< "$stats") ms; startup $(jq -r .startup_ms <<< "$stats") ms" \
+    "$(jq -cn --argjson s "$stats" --argjson d "$d" --arg rtt "$rtt" --argjson slow "$slow" '$s + {delay_ms: $d, rtt_median_ms: ($rtt | tonumber), slowest_ms: $slow}')"
+}
+
+m6_check_offline_laptop() { vb_check_offline; }
+m6_check_unsent_cost() { vb_check_unsent; }
+m6_check_latency_0ms() { vb_check_latency 0; }
+m6_check_latency_20ms() { vb_check_latency 20; }
+m6_check_latency_80ms() { vb_check_latency 80; }
 
 # vb_results_table <jsonl>: one markdown row a check.
 vb_results_table() {
