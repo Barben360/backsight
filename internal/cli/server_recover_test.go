@@ -531,3 +531,42 @@ func TestServerStartLogRotates(t *testing.T) {
 		t.Errorf("the next start did not rotate: %v, %d lines", err, lines(log))
 	}
 }
+
+// A reboot ends the streak: the failures before it may have been fixed
+// outside backsight (a port freed, docker started by hand), so the first
+// look after it starts the server whatever the wait left, and counts from
+// one again. Within the same boot the wait holds.
+func TestABackoffEndsAtAReboot(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := bootID
+	boot := "boot-1"
+	bootID = func() string { return boot }
+	t.Cleanup(func() { bootID = old })
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for {
+		withClock(t, at)
+		startLateServer(context.Background(), d, cfg)
+		b, _ := readStartBackoff(t, d)
+		if b.NextAt.Sub(at) == 6*time.Hour {
+			break
+		}
+		at = b.NextAt
+	}
+	streak := len(fx.spawns)
+	withClock(t, at.Add(time.Hour))
+	if startLateServer(context.Background(), d, cfg); len(fx.spawns) != streak {
+		t.Fatalf("the same boot: %d spawn(s) within the wait", len(fx.spawns)-streak)
+	}
+	boot = "boot-2"
+	if startLateServer(context.Background(), d, cfg); len(fx.spawns) != streak+1 {
+		t.Fatalf("after a reboot: %d spawn(s), want 1", len(fx.spawns)-streak)
+	}
+	if b, _ := readStartBackoff(t, d); b.Attempts != 1 || !b.NextAt.Equal(at.Add(time.Hour+15*time.Minute)) {
+		t.Errorf("not counted from one again: %+v", b)
+	}
+}

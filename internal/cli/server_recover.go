@@ -50,6 +50,21 @@ const (
 type startBackoff struct {
 	Attempts int       `json:"attempts"`
 	NextAt   time.Time `json:"next_at"`
+	// Boot: the boot the attempts were made in (bootID). Another boot
+	// ends the streak: what failed may have been fixed outside backsight,
+	// and a host must not wait hours after a reboot. "": unknown (another
+	// system, or a file from before it was kept), the wait holds.
+	Boot string `json:"boot,omitempty"`
+}
+
+// bootID names this boot of the machine: Linux's boot_id, "" elsewhere or
+// when it cannot be read. A variable for tests.
+var bootID = func() string {
+	raw, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // startWait is how long the attempts-th start in a row holds the next.
@@ -166,8 +181,8 @@ func spawnServerStart(d paths.Dirs, notes ...string) error {
 // and says what it did ("": nothing to do). Never while a restore did not
 // finish (server start would resume it with nobody there) or while a
 // command holds server.lock (it is restarting the server itself), nor
-// before the backoff's next_at: it does not even look then. A look that
-// settles the matter removes the backoff.
+// before the backoff's next_at, in the same boot: it does not even look
+// then. A look that settles the matter removes the backoff.
 func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) string {
 	if state.RestoreIncomplete(d) {
 		return ""
@@ -179,6 +194,10 @@ func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) strin
 	var b startBackoff
 	if raw, err := os.ReadFile(path); err == nil && json.Unmarshal(raw, &b) != nil {
 		b = startBackoff{} // unreadable: start the count over
+	}
+	boot := bootID()
+	if b.Boot != "" && boot != "" && b.Boot != boot {
+		b = startBackoff{} // a reboot since: the count starts over
 	}
 	// A next_at further than serverStartMaxWait is a clock set back: ignored.
 	exposed := cfg.Server.Mode == "local" && cfg.Network.Exposure == "private"
@@ -196,7 +215,7 @@ func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) strin
 	// all the same, and said: a bookkeeping failure never keeps the
 	// server down (the stamp and the tick's period still bound the looks).
 	b.Attempts++
-	b.NextAt = now().UTC().Add(startWait(b.Attempts))
+	b.NextAt, b.Boot = now().UTC().Add(startWait(b.Attempts)), boot
 	raw, _ := json.Marshal(b)
 	var notes []string
 	if err := fsutil.WriteAtomic(path, raw, 0o600); err != nil {
