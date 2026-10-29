@@ -256,3 +256,24 @@ func TestReadSinceCrossesAMonth(t *testing.T) {
 		t.Error("a journal that is a directory read without an error")
 	}
 }
+
+// A line goes to the month file of its own ts: an event of 31 January
+// 23:59:59 written on 1 February is January's. One without a ts takes the
+// clock's month.
+func TestJournalMonthFromEventTime(t *testing.T) {
+	dir := t.TempDir()
+	j := NewJournal(dir, common)
+	j.now = func() time.Time { return time.Date(2026, 2, 1, 0, 0, 5, 0, time.UTC) }
+	if err := j.Append(Event{Kind: "turn", Turn: "late", TS: time.Date(2026, 1, 31, 23, 59, 59, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(Event{Kind: "turn", Turn: "now"}); err != nil {
+		t.Fatal(err)
+	}
+	for file, turn := range map[string]string{"journal-2026-01.jsonl": "late", "journal-2026-02.jsonl": "now"} {
+		events, _, err := ReadFrom(filepath.Join(dir, file), 0)
+		if err != nil || len(events) != 1 || events[0].Turn != turn {
+			t.Errorf("%s: %+v %v, want the %q turn alone", file, events, err, turn)
+		}
+	}
+}

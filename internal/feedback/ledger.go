@@ -203,19 +203,26 @@ func Fold(events []Event, p Params) Ledger {
 	applied := map[string]bool{}
 	for _, e := range sortedByTime(events) {
 		if e.Kind == "settle" {
-			var fresh []Settled
-			for _, s := range e.Settled {
-				if !applied[s.Key] {
-					applied[s.Key] = true
-					fresh = append(fresh, s)
-				}
-			}
-			e.Settled = fresh
+			e = unapplied(e, applied)
 			l.Watermark = laterOf(l.Watermark, e.TS)
 		}
 		l.Apply(e, p)
 	}
 	return l
+}
+
+// unapplied is settle event e without the shows whose key applied holds;
+// the keys it keeps join applied.
+func unapplied(e Event, applied map[string]bool) Event {
+	var fresh []Settled
+	for _, s := range e.Settled {
+		if !applied[s.Key] {
+			applied[s.Key] = true
+			fresh = append(fresh, s)
+		}
+	}
+	e.Settled = fresh
+	return e
 }
 
 // sortedByTime is a copy of events in (ts, seq) order, file order kept
@@ -319,9 +326,13 @@ func laterOf(a, b time.Time) time.Time {
 
 func ledgerFile(dir string) string { return filepath.Join(dir, "ledger.json") }
 
-// LoadLedger reads dir's ledger. A missing file is an empty ledger; one of
-// another schema is an empty ledger and an error, for doctor to report:
-// never guessed.
+// ErrCorruptLedger: ledger.json does not parse. The next settle keeps it
+// aside and rebuilds the ledger from the journal.
+var ErrCorruptLedger = errors.New("does not parse")
+
+// LoadLedger reads dir's ledger. A missing file is an empty ledger; one
+// that does not parse (ErrCorruptLedger) or of another schema is an empty
+// ledger and an error, for doctor to report: never guessed.
 func LoadLedger(dir string) (Ledger, error) {
 	raw, err := os.ReadFile(ledgerFile(dir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -332,7 +343,7 @@ func LoadLedger(dir string) (Ledger, error) {
 	}
 	var l Ledger
 	if err := json.Unmarshal(raw, &l); err != nil {
-		return newLedger(), fmt.Errorf("%s: %w", ledgerFile(dir), err)
+		return newLedger(), fmt.Errorf("%s %w: %w", ledgerFile(dir), ErrCorruptLedger, err)
 	}
 	if l.Schema != LedgerSchema {
 		return newLedger(), fmt.Errorf("%s has schema %d, this binary reads %d", ledgerFile(dir), l.Schema, LedgerSchema)
@@ -364,6 +375,21 @@ func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
 		return Ledger{}, err
 	}
 	defer release()
+	l, err := rebuild(dir, p, withImport)
+	if err != nil {
+		return Ledger{}, err
+	}
+	if write {
+		if err := saveLedger(dir, l); err != nil {
+			return l, err
+		}
+	}
+	return l, nil
+}
+
+// rebuild is Rebuild's fold, written nowhere, for a caller holding the
+// ledger lock.
+func rebuild(dir string, p Params, withImport bool) (Ledger, error) {
 	at := journalEnd(dir)
 	events, _, err := Read(dir, time.Time{})
 	if err != nil {
@@ -380,11 +406,6 @@ func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
 	for _, e := range events {
 		if folded(e.Kind) {
 			l.Watermark = laterOf(l.Watermark, e.TS)
-		}
-	}
-	if write {
-		if err := saveLedger(dir, l); err != nil {
-			return l, err
 		}
 	}
 	return l, nil

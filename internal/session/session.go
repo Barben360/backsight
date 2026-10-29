@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -57,16 +58,19 @@ type State struct {
 	FailureSigs []string `json:"failure_sigs,omitempty"`
 	LastCredit  string   `json:"last_credit"` // how the last reply cited memory: exact | empty | free | ""
 	// ShownTexts: the texts of memories shown lately, by id, for the end
-	// of turn's check (at most maxShownTexts).
+	// of turn's check (at most maxShownTexts); ShownOrder, their ids from
+	// the one shown longest ago.
 	ShownTexts map[string]string `json:"shown_texts,omitempty"`
+	ShownOrder []string          `json:"shown_order,omitempty"`
 }
 
 // maxShownTexts bounds ShownTexts: a turn shows a dozen memories at most.
 const maxShownTexts = 50
 
 // KeepShownTexts records the texts of memories just shown; past the cap,
-// older texts make room (in no set order: a map has none), then, for a
-// batch over the cap, some of its own.
+// the texts shown longest ago make room (first those an older binary kept
+// without an order), then, for a batch over the cap, its first ids in
+// sorted order.
 func (s *State) KeepShownTexts(texts map[string]string) {
 	if len(texts) == 0 {
 		return
@@ -74,21 +78,25 @@ func (s *State) KeepShownTexts(texts map[string]string) {
 	if s.ShownTexts == nil {
 		s.ShownTexts = map[string]string{}
 	}
+	var order []string
+	for _, id := range slices.Sorted(maps.Keys(s.ShownTexts)) {
+		if !slices.Contains(s.ShownOrder, id) {
+			order = append(order, id)
+		}
+	}
+	for _, id := range s.ShownOrder {
+		if _, kept := s.ShownTexts[id]; kept && !slices.Contains(order, id) {
+			order = append(order, id)
+		}
+	}
+	order = slices.DeleteFunc(order, func(id string) bool { _, now := texts[id]; return now })
+	order = append(order, slices.Sorted(maps.Keys(texts))...)
 	maps.Copy(s.ShownTexts, texts)
-	for id := range s.ShownTexts {
-		if len(s.ShownTexts) <= maxShownTexts {
-			return
-		}
-		if _, now := texts[id]; !now {
-			delete(s.ShownTexts, id)
-		}
+	for len(order) > maxShownTexts {
+		delete(s.ShownTexts, order[0])
+		order = order[1:]
 	}
-	for id := range s.ShownTexts {
-		if len(s.ShownTexts) <= maxShownTexts {
-			return
-		}
-		delete(s.ShownTexts, id)
-	}
+	s.ShownOrder = order
 }
 
 // Span is one paused stretch; a zero To is still open.

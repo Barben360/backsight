@@ -2,8 +2,10 @@ package feedback
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
@@ -60,13 +62,16 @@ func (p Params) record() map[string]float64 {
 }
 
 // SettleResult counts what one settle decided: shows by outcome, and the
-// used credits that found no unsettled show to attach to (late).
+// used credits that found no unsettled show to attach to (late). Rebuilt
+// names the file a ledger.json that did not parse was kept as, before the
+// ledger was rebuilt from the journal; "" when it parsed.
 type SettleResult struct {
-	Shows   int `json:"shows"`
-	Credits int `json:"credits"`
-	Misses  int `json:"misses"`
-	Unknown int `json:"unknown"`
-	Late    int `json:"late"`
+	Shows   int    `json:"shows"`
+	Credits int    `json:"credits"`
+	Misses  int    `json:"misses"`
+	Unknown int    `json:"unknown"`
+	Late    int    `json:"late"`
+	Rebuilt string `json:"rebuilt,omitempty"`
 }
 
 // PathSources: the facts a memory_credit Sources: answer listed, journaled
@@ -240,20 +245,26 @@ func turnOver(s *pendingShow, turn string, turns []Event, stopped map[string]boo
 // afterSettleRead, when set (tests), runs once Settle has read the journal.
 var afterSettleRead func()
 
-// Settle decides the shows of dir's journal that can settle at now,
-// journals them as one settle event carrying p, and brings ledger.json up
-// to date: the settle, forget, retire, hide and unhide events since its
-// watermark, in time order. Under the ledger lock: a concurrent settle
+// Settle decides the shows of dir's journal that can settle at now, the
+// clock read once it holds the ledger lock, journals them as one settle
+// event carrying p, and brings ledger.json up to date: the settle,
+// forget, retire, hide and unhide events since its watermark, in time
+// order, each settle key once. Under the ledger lock: a concurrent settle
 // gets a *state.HeldError and changes nothing. A ledger of another schema
-// is left alone, and nothing is journaled.
-func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
+// is left alone, and nothing is journaled; one that does not parse is
+// kept aside and rebuilt from the journal first (rebuildCorrupt).
+func Settle(dir string, p Params, clock func() time.Time) (SettleResult, error) {
 	var res SettleResult
 	release, err := lockLedger(dir)
 	if err != nil {
 		return res, err
 	}
 	defer release()
+	now := clock()
 	l, err := LoadLedger(dir)
+	if errors.Is(err, ErrCorruptLedger) {
+		l, res.Rebuilt, err = rebuildCorrupt(dir, p, now)
+	}
 	if err != nil {
 		return res, err
 	}
@@ -266,8 +277,14 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		afterSettleRead()
 	}
 	var apply []Event
+	applied := map[string]bool{} // the keys of the settle events the ledger holds
 	for _, e := range events {
-		if (e.Kind == "settle" || folded(e.Kind)) && e.TS.After(l.Watermark) && !e.TS.After(now) {
+		switch {
+		case e.Kind == "settle" && !e.TS.After(l.Watermark):
+			for _, s := range e.Settled {
+				applied[s.Key] = true
+			}
+		case (e.Kind == "settle" || folded(e.Kind)) && e.TS.After(l.Watermark) && !e.TS.After(now):
 			apply = append(apply, e) // a ledger write that failed, and forgets and retirements since the last settle
 		}
 	}
@@ -284,6 +301,9 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		apply = append(apply, e)
 	}
 	for _, e := range sortedByTime(apply) {
+		if e.Kind == "settle" {
+			e = unapplied(e, applied) // a settle run while its lock was wrongly broken
+		}
 		l.Apply(e, p)
 	}
 	l.Watermark = now.UTC()
@@ -313,6 +333,24 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// rebuildCorrupt rebuilds dir's ledger from the journal, as feedback
+// rebuild does, keeps the ledger.json that did not parse as
+// ledger.json.corrupt-<now in unix s>, and writes the rebuilt one in its
+// place; it returns the ledger and the name the old file was kept as. For
+// a caller holding the ledger lock. A journal it cannot read leaves the
+// file as it was, for the next settle to try again.
+func rebuildCorrupt(dir string, p Params, now time.Time) (Ledger, string, error) {
+	l, err := rebuild(dir, p, true)
+	if err != nil {
+		return l, "", err
+	}
+	aside := ledgerFile(dir) + ".corrupt-" + strconv.FormatInt(now.Unix(), 10)
+	if err := os.Rename(ledgerFile(dir), aside); err != nil {
+		return l, "", err
+	}
+	return l, filepath.Base(aside), saveLedger(dir, l)
 }
 
 // lockLedgerWait is lockLedger, trying again while a live owner holds

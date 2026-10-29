@@ -270,6 +270,9 @@ func tickText(r tickResult) string {
 	if r.Server != "" {
 		msg += ", " + r.Server
 	}
+	if r.Feedback.Rebuilt != "" {
+		msg += ", feedback ledger unreadable: kept as " + r.Feedback.Rebuilt + ", rebuilt from the journal"
+	}
 	if r.Unhidden > 0 {
 		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, no longer marked hidden", r.Unhidden)
 	}

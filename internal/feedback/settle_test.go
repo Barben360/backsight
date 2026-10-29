@@ -23,6 +23,9 @@ var (
 // at is t0 plus m minutes.
 func at(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
 
+// fixedClock is a clock that always reads t.
+func fixedClock(t time.Time) func() time.Time { return func() time.Time { return t } }
+
 func evTurn(sess, turn string, m int) Event {
 	return Event{Kind: "turn", Session: sess, Turn: turn, TS: at(m)}
 }
@@ -191,9 +194,8 @@ func TestOpenTurnWaits(t *testing.T) {
 // its own ts.
 func writeJournal(t *testing.T, dir string, events ...Event) {
 	t.Helper()
+	j := NewJournal(dir, Common{})
 	for _, e := range events {
-		j := NewJournal(dir, Common{})
-		j.now = func() time.Time { return e.TS }
 		if err := j.Append(e); err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +234,7 @@ func TestSettleIsIdempotent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
 	now := at(120)
-	first, err := Settle(dir, testParams, now)
+	first, err := Settle(dir, testParams, fixedClock(now))
 	if err != nil || first.Shows != 3 || first.Credits != 1 || first.Misses != 1 || first.Unknown != 1 {
 		t.Fatalf("first settle: %+v %v", first, err)
 	}
@@ -240,7 +242,7 @@ func TestSettleIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Settle(dir, testParams, now.Add(15*time.Minute))
+	second, err := Settle(dir, testParams, fixedClock(now.Add(15*time.Minute)))
 	if err != nil || second != (SettleResult{}) {
 		t.Errorf("second settle: %+v %v", second, err)
 	}
@@ -270,13 +272,13 @@ func TestSettleIsIdempotent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var held *state.HeldError
-			if _, err := Settle(dir, testParams, now); err != nil && !errors.As(err, &held) {
+			if _, err := Settle(dir, testParams, fixedClock(now)); err != nil && !errors.As(err, &held) {
 				t.Error(err)
 			}
 		}()
 	}
 	wg.Wait()
-	if _, err := Settle(dir, testParams, now); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(now)); err != nil {
 		t.Fatal(err)
 	}
 	keys := settleKeys(t, dir)
@@ -303,7 +305,7 @@ func TestResumedSessionSettlesOnlyNewShows(t *testing.T) {
 		evCredit("s1", "p1", "", "none", 2),
 		evStop("s1", "p1", "", "declared", 3),
 	)
-	if res, err := Settle(dir, testParams, at(180)); err != nil || res.Shows != 2 || res.Misses != 1 {
+	if res, err := Settle(dir, testParams, fixedClock(at(180))); err != nil || res.Shows != 2 || res.Misses != 1 {
 		t.Fatalf("first settle: %+v %v", res, err)
 	}
 	// Resumed a day later: a new briefing, belonging to the first turn
@@ -315,7 +317,7 @@ func TestResumedSessionSettlesOnlyNewShows(t *testing.T) {
 		evCredit("s1", "p9", "", "used", 1443, "m1"),
 		evStop("s1", "p9", "", "declared", 1444),
 	)
-	res, err := Settle(dir, testParams, at(1440+180))
+	res, err := Settle(dir, testParams, fixedClock(at(1440+180)))
 	if err != nil || res.Shows != 2 || res.Credits != 1 || res.Misses != 0 || res.Unknown != 0 || res.Late != 0 {
 		t.Fatalf("after resume: %+v %v", res, err)
 	}
@@ -348,7 +350,7 @@ func TestLoadLedgerRefusesAnUnknownSchema(t *testing.T) {
 	}
 	// Settle leaves a newer binary's ledger alone and journals nothing.
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, at(120)); err == nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err == nil {
 		t.Error("settle over an unknown ledger schema succeeded")
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); string(raw) != `{"schema":99,"memories":{"m1":{"shown":3}}}` {
@@ -371,7 +373,7 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 		Event{Kind: "forget", TS: at(5), IDs: []string{"m1"}},
 		evStop("s1", "p1", "", "declared", 6),
 	)
-	res, err := Settle(dir, testParams, at(120))
+	res, err := Settle(dir, testParams, fixedClock(at(120)))
 	if err != nil || res.Shows != 1 || res.Credits != 0 || res.Misses != 1 {
 		t.Fatalf("settle: %+v %v", res, err)
 	}
@@ -379,7 +381,7 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 	if _, ok := live.Memories["m1"]; ok || live.Memories["m2"].Shown != 1 {
 		t.Errorf("live after a forget before settle: %+v", live.Memories)
 	}
-	if again, err := Settle(dir, testParams, at(240)); err != nil || again != (SettleResult{}) {
+	if again, err := Settle(dir, testParams, fixedClock(at(240))); err != nil || again != (SettleResult{}) {
 		t.Errorf("second settle: %+v %v", again, err)
 	}
 	if k := settleKeys(t, dir); k[key("s1", "p1", 1, "m1")] != 1 {
@@ -394,7 +396,7 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 		evShows("s1", "p2", "", "search", 301, Item{ID: "m1", Rank: 3}),
 		evStop("s1", "p2", "", "undeclared", 302),
 	)
-	if res, err := Settle(dir, testParams, at(420)); err != nil || res.Shows != 1 {
+	if res, err := Settle(dir, testParams, fixedClock(at(420))); err != nil || res.Shows != 1 {
 		t.Fatalf("settle after the new show: %+v %v", res, err)
 	}
 	live, _ = LoadLedger(dir)
@@ -417,7 +419,7 @@ func TestSourcesShowsAreNeverSettled(t *testing.T) {
 		evCredit("s1", "p1", "", "outdated", 3, "src1"),
 		evStop("s1", "p1", "", "declared", 4),
 	)
-	res, err := Settle(dir, testParams, at(180))
+	res, err := Settle(dir, testParams, fixedClock(at(180)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +463,7 @@ func TestReplayWithCurrentParamsChangesNothing(t *testing.T) {
 	events = append(events, imported)
 	writeJournal(t, dir, events...)
 	now := end.Add(3 * time.Hour)
-	if _, err := Settle(dir, testParams, now); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(now)); err != nil {
 		t.Fatal(err)
 	}
 	live, err := LoadLedger(dir)
@@ -518,4 +520,133 @@ func sumOf(l Ledger, f func(Entry) float64) float64 {
 		s += f(m)
 	}
 	return s
+}
+
+// settleLines is the settled shows of each settle line of dir's journal,
+// in file order.
+func settleLines(t *testing.T, dir string) [][]Settled {
+	t.Helper()
+	events, _, err := Read(dir, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines [][]Settled
+	for _, e := range events {
+		if e.Kind == "settle" {
+			lines = append(lines, e.Settled)
+		}
+	}
+	return lines
+}
+
+// Settle lines that repeat a key (a settle run while its lock was wrongly
+// broken, a ledger write that failed): the live ledger counts each show
+// once, as a rebuild does, whether the key was already counted or comes
+// twice after the watermark.
+func TestFoldCountsASettledKeyOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
+		t.Fatal(err)
+	}
+	counted := settleLines(t, dir)[0]
+	fresh := Settled{Key: "s2|q1|1|m9", ID: "m9", At: at(100), Outcome: OutcomeCredit}
+	writeJournal(t, dir,
+		Event{Kind: "settle", TS: at(125), Settled: counted},
+		Event{Kind: "settle", TS: at(126), Settled: []Settled{fresh}},
+		Event{Kind: "settle", TS: at(127), Settled: []Settled{fresh}},
+	)
+	if _, err := Settle(dir, testParams, fixedClock(at(130))); err != nil {
+		t.Fatal(err)
+	}
+	live, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m1, m9 := live.Memories["m1"], live.Memories["m9"]; m1.Shown != 1 || m1.Credits != 1 || m9.Shown != 1 || m9.Credits != 1 {
+		t.Errorf("m1 %+v, m9 %+v: want each shown and credited once", m1, m9)
+	}
+	rebuilt, err := Rebuild(dir, testParams, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 1e-9)
+}
+
+// A ledger.json that does not parse: the settle keeps it aside as
+// ledger.json.corrupt-<unix s>, rebuilds the ledger from the journal as
+// feedback rebuild does, then settles as usual and says so.
+func TestSettleRebuildsACorruptLedger(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
+		t.Fatal(err)
+	}
+	writeJournal(t, dir,
+		Event{Kind: KindRetire, TS: at(125), IDs: []string{"m1"}, Verdict: "wrong"},
+		evTurn("s1", "p3", 130),
+		evShows("s1", "p3", "", "prompt", 131, Item{ID: "m4", Rank: 1}),
+		evStop("s1", "p3", "", "undeclared", 132),
+	)
+	garbage := []byte(`{"schema":1,"memories":{"m1":`)
+	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), garbage, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := Current(dir); err == nil || len(l.Memories) != 0 {
+		t.Errorf("before the settle, recall reads %+v, %v: want an empty ledger and an error", l.Memories, err)
+	}
+	res, err := Settle(dir, testParams, fixedClock(at(200)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := "ledger.json.corrupt-" + strconv.FormatInt(at(200).Unix(), 10)
+	if res.Rebuilt != corrupt || res.Shows != 1 {
+		t.Errorf("result %+v, want %s kept aside and one show settled", res, corrupt)
+	}
+	if kept, err := os.ReadFile(filepath.Join(dir, corrupt)); err != nil || string(kept) != string(garbage) {
+		t.Errorf("%s: %q %v", corrupt, kept, err)
+	}
+	live, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m1, m4 := live.Memories["m1"], live.Memories["m4"]; m1.Shown != 1 || m1.Wrong != 1 || m4.Shown != 1 {
+		t.Errorf("m1 %+v, m4 %+v", m1, m4)
+	}
+	rebuilt, err := Rebuild(dir, testParams, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 1e-9)
+	// A readable ledger is settled as usual: nothing kept aside again.
+	if res, err := Settle(dir, testParams, fixedClock(at(300))); err != nil || res.Rebuilt != "" {
+		t.Errorf("next settle: %+v %v", res, err)
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, "ledger.json.corrupt-*")); len(files) != 1 {
+		t.Errorf("corrupt files %v", files)
+	}
+}
+
+// Settle reads its clock once it holds the ledger lock: a settle that
+// waited for it decides at the time it runs.
+func TestSettleReadsTheClockUnderTheLock(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	reads := 0
+	clock := func() time.Time {
+		reads++
+		var held *state.HeldError
+		release, err := lockLedger(dir)
+		switch {
+		case err == nil:
+			release()
+			t.Error("the clock was read before the ledger lock was held")
+		case !errors.As(err, &held):
+			t.Error(err)
+		}
+		return at(120)
+	}
+	if res, err := Settle(dir, testParams, clock); err != nil || res.Shows != 3 || reads != 1 {
+		t.Errorf("%+v %v, clock read %d time(s)", res, err, reads)
+	}
 }

@@ -214,7 +214,7 @@ func TestImportCreditsOnlyUnambiguousTurns(t *testing.T) {
 func TestImportFoldsApartAndOnce(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	if _, err := Settle(dir, testParams, at(100)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(100))); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
@@ -264,7 +264,7 @@ func TestImportFoldsApartAndOnce(t *testing.T) {
 	if _, err := Rebuild(dir, testParams, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, testParams, at(200)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(200))); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := LoadLedger(dir)
@@ -293,7 +293,7 @@ func TestSettleAfterARebuildAppliesNothingTwice(t *testing.T) {
 	if _, err := Rebuild(dir, Params{}, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, start.Add(time.Hour)); err != nil {
+	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, fixedClock(start.Add(time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	if l, _ := LoadLedger(dir); l.Memories["m1"].Wrong != 1 {
@@ -318,7 +318,7 @@ func TestCurrentFindsAFoldedEventAppendedDuringASettle(t *testing.T) {
 		j.now = func() time.Time { return at(105) }
 		appendErr = j.AppendFolded(Event{Kind: KindHide, IDs: []string{"m2"}, Verdict: "wrong"})
 	}
-	if _, err := Settle(dir, testParams, at(100)); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(at(100))); err != nil {
 		t.Fatal(err)
 	}
 	afterSettleRead = nil
@@ -353,7 +353,7 @@ func TestCurrentReadsAcrossAMonthBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Settle(dir, testParams, end); err != nil {
+	if _, err := Settle(dir, testParams, fixedClock(end)); err != nil {
 		t.Fatal(err)
 	}
 	if l, _ := LoadLedger(dir); l.JournalAt.File != "journal-2026-09.jsonl" {

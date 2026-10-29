@@ -490,10 +490,11 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 }
 
 // retirementsInSession is how many memories session sess retired, from
-// the journal's last 62 days; an unreadable journal counts what it could
-// read (a journal failure never fails a tool call).
+// the journal since the month it began (sessionJournal); an unreadable
+// journal counts what it could read (a journal failure never fails a tool
+// call).
 func retirementsInSession(d paths.Dirs, sess string) int {
-	events, _, _ := feedback.Read(d.FeedbackDir(), now().AddDate(0, 0, -62))
+	events, _ := sessionJournal(d, sess)
 	return feedback.Retirements(events, sess)
 }
 

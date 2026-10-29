@@ -485,7 +485,7 @@ func TestRestoreUndoesARetirement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := feedback.Settle(dir, feedback.Params{}, time.Now()); err != nil {
+	if _, err := feedback.Settle(dir, feedback.Params{}, time.Now); err != nil {
 		t.Fatal(err)
 	}
 	// Hidden after the last settle: the ledger file does not know it yet.
@@ -520,7 +520,7 @@ func TestRestoreUndoesARetirement(t *testing.T) {
 		t.Errorf("unhide events %q, want %q", unhiddenIDs(t, home), want)
 	}
 
-	if _, err := feedback.Settle(dir, feedback.Params{}, time.Now().Add(time.Minute)); err != nil {
+	if _, err := feedback.Settle(dir, feedback.Params{}, func() time.Time { return time.Now().Add(time.Minute) }); err != nil {
 		t.Fatal(err)
 	}
 	l, err := feedback.LoadLedger(dir)

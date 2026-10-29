@@ -45,7 +45,7 @@ func feedbackJournal(t *testing.T, home string) string {
 			t.Fatal(err)
 		}
 	}
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), logStart.Add(3*time.Hour)); err != nil {
+	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -511,7 +511,7 @@ func ptr(v float64) *float64 { return &v }
 func TestReplayIsReadOnly(t *testing.T) {
 	home := isolate(t)
 	dir := replayJournal(t, home)
-	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), logStart.Add(3*time.Hour)); err != nil {
+	if _, err := feedback.Settle(dir, feedbackParams(config.Default(pathsOf(home), home)), func() time.Time { return logStart.Add(3 * time.Hour) }); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := state.TryAcquire(filepath.Join(pathsOf(home).LocksDir(), "feedback-ledger.lock"), "jobs tick")
