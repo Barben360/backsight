@@ -341,6 +341,58 @@ func TestNoBriefingPageIsCreatedOnAnotherServer(t *testing.T) {
 	}
 }
 
+// briefingAcrossConnect fires SessionStart for billing, which has memories
+// and no page, with the sends seam set: raise makes it raise the sends
+// generation once the hook loaded its config, as a whole connect then
+// would. It returns the hook's output and whether the seam ran.
+func briefingAcrossConnect(t *testing.T, raise bool) (hookOut, bool) {
+	t.Helper()
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	ran := false
+	old := sendsConfigLoaded
+	sendsConfigLoaded = func() {
+		ran = true
+		if raise {
+			if err := state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sendsConfigLoaded = old // one connect
+	}
+	t.Cleanup(func() { sendsConfigLoaded = old })
+	return fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}), ran
+}
+
+// mentalPosts counts the page creations the fake server saw.
+func mentalPosts() int {
+	n := 0
+	for _, c := range mentalCalls {
+		if strings.HasPrefix(c, "POST ") {
+			n++
+		}
+	}
+	return n
+}
+
+// A SessionStart whose config predates a whole connect still gives its
+// briefing (a read), but creates no page: that write would go to the old
+// server.
+func TestBriefingPageWaitsAcrossConnect(t *testing.T) {
+	h, ran := briefingAcrossConnect(t, true)
+	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 0 {
+		t.Errorf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+}
+
+// The control: nothing moved, the page is created once.
+func TestBriefingPageCreatedWhenNothingMoved(t *testing.T) {
+	h, ran := briefingAcrossConnect(t, false)
+	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 1 {
+		t.Errorf("seam ran %v, page creations %d (want 1), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+}
+
 // A page written as one long line is clipped, not reduced to "…".
 func TestAOneLinePageIsClipped(t *testing.T) {
 	home := hookHome(t)
