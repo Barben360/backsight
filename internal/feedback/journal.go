@@ -35,19 +35,23 @@ type Item struct {
 }
 
 // Settled is the outcome a settle gave one show: credit, confident_miss,
-// shown or unknown. Key names the show (session, turn, call, id).
+// shown or unknown. Key names the show (session, turn, call, id). An
+// import event's items are Settled too, shown or credit, with the show's
+// rank.
 type Settled struct {
 	Key     string    `json:"key"`
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
 	Outcome string    `json:"outcome"`
+	Rank    int       `json:"rank,omitempty"`
 }
 
 // Event is one journal line. Kind is turn, shows, credit, stop, settle,
-// forget, retire, hide, unhide, stale or recall (KindRecall); each kind
-// fills the fields it needs.
+// forget, retire, hide, unhide, stale, recall (KindRecall) or import
+// (KindImport); each kind fills the fields it needs.
 // Note is the correction note a retire or hide comes with (its id, never
-// its text).
+// its text). Source is where an import event's shows were found
+// (telemetry, transcripts).
 type Event struct {
 	Schema    int                `json:"schema"`
 	Seq       int64              `json:"seq"`
@@ -72,6 +76,7 @@ type Event struct {
 	Settled   []Settled          `json:"settled,omitempty"`
 	Params    map[string]float64 `json:"params,omitempty"`
 	Note      string             `json:"note,omitempty"`
+	Source    string             `json:"source,omitempty"`
 }
 
 // Kinds of the events that retire a memory shown in a session (a raw fact
@@ -276,8 +281,9 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 const foldedLockWait = 2 * time.Second
 
 // AppendFolded appends an event the ledger folds as it comes (forget,
-// retire, hide, unhide) under the ledger lock, stamped at its ts (now,
-// unless set) or just after the ledger's watermark when that is later.
+// retire, hide, unhide, import) under the ledger lock, stamped at its ts
+// (now, unless set) or just after the ledger's watermark when that is
+// later.
 // Settle reads the journal and moves the watermark under the same lock,
 // and folds only what is newer: the event is either read by a settle or
 // stamped after it, as a rebuild folds it. When the lock stays held, the

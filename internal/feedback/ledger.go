@@ -20,8 +20,9 @@ const LedgerSchema = 1
 // Entry is what the settled journal says of one memory: how often it was
 // shown, its credits and confident misses as sums decayed to CreditsAt and
 // MissesAt (each event weighs 2^-(age/half-life)), when it was last shown
-// and credited, how often it was retired as wrong or outdated, and its
-// local hiding when its retirement could only hide it.
+// and credited, how often it was retired as wrong or outdated, its local
+// hiding when its retirement could only hide it, and how much of Shown
+// and Credits came from earlier history (import events).
 type Entry struct {
 	Shown        int       `json:"shown"`
 	Credits      float64   `json:"credits,omitempty"`
@@ -32,6 +33,14 @@ type Entry struct {
 	LastCredited time.Time `json:"last_credited,omitzero"`
 	Wrong        int       `json:"wrong,omitempty"`
 	Hidden       *Hidden   `json:"hidden,omitempty"`
+	Imported     Imported  `json:"imported,omitzero"`
+}
+
+// Imported is the part of an entry's counts import events gave: shows,
+// and credits counted without decay (each also in Shown and Credits).
+type Imported struct {
+	Shown   int     `json:"shown"`
+	Credits float64 `json:"credits"`
 }
 
 // Hidden is an observation hidden on this machine: since when, under which
@@ -42,8 +51,8 @@ type Hidden struct {
 	Note    string    `json:"note,omitempty"`
 }
 
-// Ledger is a cache of the journal's settle, forget, retire, hide and
-// unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
+// Ledger is a cache of the journal's settle, import, forget, retire, hide
+// and unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
 // JournalAt where the journal ended when it was read for this ledger.
 type Ledger struct {
 	Schema    int              `json:"schema"`
@@ -78,11 +87,13 @@ func journalEnd(dir string) JournalPos {
 
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
 
-// Apply adds a settle event's shows to the ledger, drops a forget event's
-// memories, counts a retire, sets a hide, or clears both on an unhide (of
-// a memory with an entry only). A settle decays under the half-lives it recorded, p's
-// when it recorded none; a forgotten show counts nowhere. Sums decay
-// order-independently, so applying settle events as they come and folding
+// Apply adds a settle event's shows to the ledger, adds an import event's
+// shows and credits (to Imported too), drops a forget event's memories,
+// counts a retire, sets a hide, or clears both on an unhide (of a memory
+// with an entry only). A settle or an import decays under the half-lives
+// it recorded, p's when it recorded none, each show from its own time; a
+// forgotten show counts nowhere, an import never counts a miss. Sums
+// decay order-independently, so applying events as they come and folding
 // them all later agree.
 func (l *Ledger) Apply(e Event, p Params) {
 	if l.Memories == nil {
@@ -92,18 +103,20 @@ func (l *Ledger) Apply(e Event, p Params) {
 	case "settle":
 		p = p.recorded(e.Params)
 		for _, s := range e.Settled {
-			if s.Outcome == OutcomeForgotten {
+			if s.Outcome != OutcomeForgotten {
+				l.Memories[s.ID] = l.Memories[s.ID].settled(s, p)
+			}
+		}
+	case KindImport:
+		p = p.recorded(e.Params)
+		for _, s := range e.Settled {
+			if s.Outcome != OutcomeShown && s.Outcome != OutcomeCredit {
 				continue
 			}
-			m := l.Memories[s.ID]
-			m.Shown++
-			m.LastShown = laterOf(m.LastShown, s.At)
-			switch s.Outcome {
-			case OutcomeCredit:
-				m.Credits, m.CreditsAt = add(m.Credits, m.CreditsAt, s.At, p.CreditHalfLife)
-				m.LastCredited = laterOf(m.LastCredited, s.At)
-			case OutcomeMiss:
-				m.Misses, m.MissesAt = add(m.Misses, m.MissesAt, s.At, p.MissHalfLife)
+			m := l.Memories[s.ID].settled(s, p)
+			m.Imported.Shown++
+			if s.Outcome == OutcomeCredit {
+				m.Imported.Credits++
 			}
 			l.Memories[s.ID] = m
 		}
@@ -133,11 +146,26 @@ func (l *Ledger) Apply(e Event, p Params) {
 	}
 }
 
+// settled is m with one settled show added: shown, and credited or
+// missed by its outcome, decayed from the show's time.
+func (m Entry) settled(s Settled, p Params) Entry {
+	m.Shown++
+	m.LastShown = laterOf(m.LastShown, s.At)
+	switch s.Outcome {
+	case OutcomeCredit:
+		m.Credits, m.CreditsAt = add(m.Credits, m.CreditsAt, s.At, p.CreditHalfLife)
+		m.LastCredited = laterOf(m.LastCredited, s.At)
+	case OutcomeMiss:
+		m.Misses, m.MissesAt = add(m.Misses, m.MissesAt, s.At, p.MissHalfLife)
+	}
+	return m
+}
+
 // folded: an event Settle applies to the ledger as it comes, besides its
 // own settle events.
 func folded(kind string) bool {
 	switch kind {
-	case "forget", KindRetire, KindHide, KindUnhide:
+	case "forget", KindRetire, KindHide, KindUnhide, KindImport:
 		return true
 	}
 	return false
@@ -156,8 +184,8 @@ func (p Params) recorded(params map[string]float64) Params {
 
 func days(d float64) time.Duration { return time.Duration(d * float64(24*time.Hour)) }
 
-// Fold is the ledger of events' settle, forget, retire, hide and unhide
-// events, applied in
+// Fold is the ledger of events' settle, import, forget, retire, hide and
+// unhide events, applied in
 // (ts, seq) order, each settle key once; its watermark is the last
 // settle's time.
 func Fold(events []Event, p Params) Ledger {
@@ -282,11 +310,13 @@ func saveLedger(dir string, l Ledger) error {
 }
 
 // Rebuild folds every journal file of dir, under the ledger lock, and
-// writes the result only when write. Each settle event folds with the
-// half-lives it recorded, so a rebuild after a config change gives the
-// live ledger back; p's half-lives serve only settle events that recorded
-// none. Recomputing under other parameters is not a rebuild.
-func Rebuild(dir string, p Params, write bool) (Ledger, error) {
+// writes the result only when write; without withImport, it leaves the
+// import events out (the ledger without earlier history). Each settle
+// or import event folds with the half-lives it recorded, so a rebuild
+// after a config change gives the live ledger back; p's half-lives serve
+// only events that recorded none. Recomputing under other parameters is
+// not a rebuild.
+func Rebuild(dir string, p Params, write, withImport bool) (Ledger, error) {
 	release, err := lockLedger(dir)
 	if err != nil {
 		return Ledger{}, err
@@ -297,8 +327,19 @@ func Rebuild(dir string, p Params, write bool) (Ledger, error) {
 	if err != nil {
 		return Ledger{}, err
 	}
-	l := Fold(events, p)
+	kept := events
+	if !withImport {
+		kept = DropImports(events)
+	}
+	l := Fold(kept, p)
 	l.JournalAt = at // Fold applied every folded event before it
+	// Nor does the next settle apply them again (an import left out
+	// included): it applies what is newer than the watermark.
+	for _, e := range events {
+		if folded(e.Kind) {
+			l.Watermark = laterOf(l.Watermark, e.TS)
+		}
+	}
 	if write {
 		if err := saveLedger(dir, l); err != nil {
 			return l, err
@@ -307,8 +348,8 @@ func Rebuild(dir string, p Params, write bool) (Ledger, error) {
 	return l, nil
 }
 
-// Current is dir's ledger with the forget, retire, hide and unhide events
-// journaled since its watermark applied, in time order, written nowhere:
+// Current is dir's ledger with the forget, retire, hide, unhide and
+// import events journaled since its watermark applied, in time order, written nowhere:
 // what a command reads between two settles. It reads the journal from the
 // ledger's JournalAt on (recall reads it at every prompt), or the whole
 // months since the watermark when the ledger has no JournalAt or its file

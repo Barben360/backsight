@@ -383,7 +383,7 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 	if k := settleKeys(t, dir); k[key("s1", "p1", 1, "m1")] != 1 {
 		t.Errorf("the forgotten show is not marked settled once: %v", k)
 	}
-	rebuilt, _ := Rebuild(dir, testParams, false)
+	rebuilt, _ := Rebuild(dir, testParams, false, true)
 	assertSameEntries(t, live, rebuilt, 0)
 
 	// Shown again after the forget: that show counts.
@@ -399,7 +399,7 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 	if live.Memories["m1"].Shown != 1 {
 		t.Errorf("m1 shown after its forget: %+v", live.Memories["m1"])
 	}
-	rebuilt, _ = Rebuild(dir, testParams, false)
+	rebuilt, _ = Rebuild(dir, testParams, false, true)
 	assertSameEntries(t, live, rebuilt, 0)
 }
 
@@ -434,7 +434,7 @@ func TestSourcesShowsAreNeverSettled(t *testing.T) {
 	if m := live.Memories["obs"]; m.Shown != 1 {
 		t.Errorf("obs %+v", m)
 	}
-	rebuilt, err := Rebuild(dir, testParams, false)
+	rebuilt, err := Rebuild(dir, testParams, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}

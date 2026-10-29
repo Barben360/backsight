@@ -137,7 +137,7 @@ func TestRebuildEqualsTheLiveLedger(t *testing.T) {
 	if total.Shows < 500 || total.Credits == 0 || total.Misses == 0 || len(live.Memories) == 0 || wrong == 0 || hidden == 0 {
 		t.Fatalf("a weak sample: %+v, %d memories, %d wrong, %d hidden", total, len(live.Memories), wrong, hidden)
 	}
-	rebuilt, err := Rebuild(dir, testParams, false)
+	rebuilt, err := Rebuild(dir, testParams, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestForgetDropsTheEntry(t *testing.T) {
 	if _, ok := live.Memories["m1"]; ok || len(live.Memories) != 1 || live.Memories["m2"].Shown != 1 {
 		t.Errorf("live after forget: %+v", live.Memories)
 	}
-	rebuilt, _ := Rebuild(dir, testParams, false)
+	rebuilt, _ := Rebuild(dir, testParams, false, true)
 	assertSameEntries(t, live, rebuilt, 0)
 }
 
@@ -291,7 +291,7 @@ func TestRebuildUsesTheRecordedHalfLives(t *testing.T) {
 	}
 	shorter := testParams
 	shorter.MissHalfLife, shorter.CreditHalfLife = 30*24*time.Hour, 30*24*time.Hour
-	rebuilt, err := Rebuild(dir, shorter, false)
+	rebuilt, err := Rebuild(dir, shorter, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestLedgerFoldsRetirements(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rebuilt, err := Rebuild(dir, testParams, false)
+		rebuilt, err := Rebuild(dir, testParams, false, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -405,7 +405,7 @@ func TestAnEventAtTheWatermarkFolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
-	rebuilt, err := Rebuild(dir, testParams, false)
+	rebuilt, err := Rebuild(dir, testParams, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +443,7 @@ func TestARetirementDuringASettleFolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	live, _ := LoadLedger(dir)
-	rebuilt, err := Rebuild(dir, testParams, false)
+	rebuilt, err := Rebuild(dir, testParams, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +593,7 @@ func TestCurrentAfterARebuildAppliesNothingTwice(t *testing.T) {
 	if err := j.AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Rebuild(dir, Params{}, true); err != nil {
+	if _, err := Rebuild(dir, Params{}, true, true); err != nil {
 		t.Fatal(err)
 	}
 	n := 0
