@@ -165,7 +165,7 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 // fill the rest, and setup's doctor wants 6 GB free. A restored model
 // cache tar is dropped once seeded (it is never saved again).
 func TestStackJobsFreeTheDiskFirst(t *testing.T) {
-	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install)\.sh`)
+	stack := regexp.MustCompile(`scripts/(sandbox|fresh-install|m6-chain)\.sh`)
 	jobs := 0
 	for _, w := range workflows(t) {
 		for _, j := range w.jobs {
@@ -189,8 +189,8 @@ func TestStackJobsFreeTheDiskFirst(t *testing.T) {
 			}
 		}
 	}
-	if jobs < 2 {
-		t.Errorf("%d stack jobs found, want sandbox and fresh-install: the check proves nothing", jobs)
+	if jobs < 3 {
+		t.Errorf("%d stack jobs found, want sandbox, fresh-install and m6-chain: the check proves nothing", jobs)
 	}
 }
 

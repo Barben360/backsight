@@ -67,7 +67,7 @@ func TestSlotPortNeedsTheSlotOnCI(t *testing.T) {
 func TestScratchPortsAreBelowTheEphemeralRangeAndApart(t *testing.T) {
 	call := regexp.MustCompile(`slot_port (\d+) "\$\{1:-\}"`)
 	owner := map[int]string{}
-	for _, script := range []string{"sandbox.sh", "fresh-install.sh", "restore-proof.sh", "agent-install.sh", "reattribute-proof.sh", "purge-guard-proof.sh"} {
+	for _, script := range []string{"sandbox.sh", "fresh-install.sh", "restore-proof.sh", "agent-install.sh", "reattribute-proof.sh", "purge-guard-proof.sh", "m6-chain.sh"} {
 		src, err := os.ReadFile(script)
 		if err != nil {
 			t.Fatal(err)
