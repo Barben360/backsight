@@ -79,9 +79,9 @@ It then shows its plan and asks (`--answer consent=yes` without a terminal), and
 
 Last, it runs setup's client steps: Claude Code's wiring, transcript retention, the background jobs, `backsight verify`, and the offer to import your past sessions ([backfill](glossary.md#backfill)), priced with the host's LLM. Nothing about the provider or backups: those are the host's. If the host extracts with a Claude subscription (the `claude-code` provider), your sessions are extracted on it too, so connect asks you to accept its terms first (`--answer ack_subscription=yes` without a terminal). If a setup step stops, `backsight setup --resume` goes on. Every flag is in [commands.md](commands.md#install-and-wiring).
 
-Restart Claude Code (or run `/reload-plugins`): sessions open while you ran connect keep the server they started with until then.
+Restart Claude Code (or run `/reload-plugins`). Until then, a session open while you ran connect recalls from the new server at once (each hook reads the config when it runs), but its memory tools keep the old one: their searches and reads still go there, and they write nothing to it (a note Claude stores waits in this PC's queue for the new server).
 
-A Claude Code session open while you ran connect started before this PC joined, so live sending leaves it to the backfill, even the turns you type after. Decline the backfill and it is not sent, unless you send it later with `backsight retain backfill` or `backsight retain flush --session <id>`.
+Such a session started before this PC joined. The 15-minute job leaves it to the backfill, but when Claude Code ends it, it is sent whole to the new server, its turns from before the connect included, whatever you answered to the backfill offer: declining the backfill keeps out only the sessions that ended before. To keep a session off the shared server, end it before you run connect, and decline the backfill.
 
 ## A PC that already has its own server
 
@@ -148,11 +148,11 @@ The old key and every token handed out before are refused from then on. The host
 
 ## A session continued on two PCs
 
-You copy a transcript to another PC and resume the session on both: a [split session](glossary.md#split-session). Nothing is lost: each PC sends the turns the server does not hold from it, as the session's next part. The part both PCs share may be stored twice. doctor's `split-session` check names such sessions, as information.
+You copy a transcript to another PC and resume the session on both: a [split session](glossary.md#split-session). Each PC sends the turns the server does not hold from it, as the session's next part, so nothing is lost unless a part is given up (below). The part both PCs share may be stored twice. doctor's `split-session` check names such sessions, as information.
 
 One case is caught later: both PCs sent the session's first part before the server stored either, and the later one replaced the other. The PC whose part was replaced reads the session back at a later `jobs tick` and sends its missing turns again. If it still cannot compare after 24 hours, it gives up, and doctor's `replace-unconfirmed` check warns: see [doctor: a session part was never confirmed](troubleshooting.md#doctor-a-session-part-was-never-confirmed).
 
-After a restore of the host, this PC's part of such a session is sent again: stored twice rather than lost.
+After a restore of the host, the PC that did not send the session's last part may send the whole session again, as its transcript holds it, the part both PCs share included: stored twice rather than lost.
 
 ## What a client does not do
 
