@@ -402,3 +402,41 @@ func TestForgetBeforeSettleKeepsTheEntryGone(t *testing.T) {
 	rebuilt, _ = Rebuild(dir, testParams, false)
 	assertSameEntries(t, live, rebuilt, 0)
 }
+
+// The facts a Sources: answer listed are journaled as shows only so that
+// the next verdict can name them: never settled, they add no show and no
+// miss, and the live ledger still equals a rebuild.
+func TestSourcesShowsAreNeverSettled(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir,
+		evTurn("s1", "p1", 0),
+		evShows("s1", "p1", "", "prompt", 1, Item{ID: "obs", Rank: 1}),
+		evShows("s1", "p1", "", PathSources, 2, Item{ID: "src1"}, Item{ID: "src2"}),
+		evCredit("s1", "p1", "", "outdated", 3, "src1"),
+		evStop("s1", "p1", "", "declared", 4),
+	)
+	res, err := Settle(dir, testParams, at(180))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Shows != 1 || res.Misses != 1 {
+		t.Errorf("settled %+v, want the prompt show alone (a miss)", res)
+	}
+	live, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"src1", "src2"} {
+		if m, ok := live.Memories[id]; ok {
+			t.Errorf("%s, only listed as a source, has an entry: %+v", id, m)
+		}
+	}
+	if m := live.Memories["obs"]; m.Shown != 1 {
+		t.Errorf("obs %+v", m)
+	}
+	rebuilt, err := Rebuild(dir, testParams, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+}

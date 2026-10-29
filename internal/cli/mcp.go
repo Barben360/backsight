@@ -293,7 +293,11 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				if !slices.Contains([]string{"used", "none", "wrong", "outdated"}, verdict) {
 					verdict = "invalid" // telemetry holds enums, never what the agent typed
 				}
-				deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+				// A Sources: answer reports nothing yet: the call naming the
+				// facts counts the report, once (its retire event counts sources).
+				if err != nil || !strings.HasPrefix(text, creditSourcesPrefix) {
+					deps.tw.Emit(telemetry.Credit{Verdict: verdict, IDs: len(a.IDs), OK: err == nil})
+				}
 				if err != nil {
 					return errorResult(err.Error()), nil, nil
 				}

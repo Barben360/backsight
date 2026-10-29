@@ -457,7 +457,7 @@ func unhiddenIDs(t *testing.T, home string) []string {
 
 // forget --restore undoes a retirement: a retired raw fact is valid again
 // and loses its verdicts, an observation's restored sources too, and a
-// hidden observation is visible again even when the server has nothing to
+// hidden observation is no longer marked hidden even when the server has nothing to
 // restore (it was never invalidated there), hidden since the last settle
 // included. A restore the server refuses journals nothing.
 func TestRestoreUndoesARetirement(t *testing.T) {
@@ -496,11 +496,11 @@ func TestRestoreUndoesARetirement(t *testing.T) {
 	if code, out, errOut := run(t, "forget", "--restore", "f1"); code != output.OK || !strings.Contains(out, "f1 restored") {
 		t.Fatalf("f1: exit %d\n%s%s", code, out, errOut)
 	}
-	if code, out, errOut := run(t, "forget", "--restore", "o1"); code != output.OK || !strings.Contains(out, "visible to recall again") {
+	if code, out, errOut := run(t, "forget", "--restore", "o1"); code != output.OK || !strings.Contains(out, "no longer marked hidden on this machine") {
 		t.Fatalf("o1: exit %d\n%s%s", code, out, errOut)
 	}
 	for _, id := range []string{"o2", "o3"} { // not on the server, or not readable there
-		if code, out, errOut := run(t, "forget", "--restore", id); code != output.OK || !strings.Contains(out, id+" restored") || !strings.Contains(out, "visible to recall again") {
+		if code, out, errOut := run(t, "forget", "--restore", id); code != output.OK || !strings.Contains(out, id+" restored") || !strings.Contains(out, "no longer marked hidden on this machine") {
 			t.Errorf("%s: exit %d\n%s%s", id, code, out, errOut)
 		}
 	}
@@ -611,7 +611,7 @@ func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
 		"\nHidden, not rewritten for 7 days\n" +
 		"55555555  shown 3  2w ago  backsight forget --restore " + staleID(5) + "\n" +
 		"99999999  shown 1  -  backsight forget --restore " + staleID(9) + "\n" +
-		"Hidden from recall until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
+		"Marked hidden on this machine until the server rewrites them (recall does not skip them yet); `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
 		"\nReported wrong or outdated\n" +
 		"77777777  shown 11  5d ago  backsight forget " + staleID(7) + " --purge\n" +
 		"88888888  shown 2  4d ago  backsight forget " + staleID(8) + " --purge\n" +

@@ -123,6 +123,9 @@ func CheckTurn(events []Event, session, turn, agent string, withBriefing bool) C
 		case e.Kind == "credit":
 			c.Declared = true
 			c.None = c.None || e.Verdict == "none"
+			if e.Verdict != "used" {
+				continue // a wrong/outdated report need not echo the memory
+			}
 			for _, id := range e.IDs {
 				if !slices.Contains(c.Credited, id) {
 					c.Credited = append(c.Credited, id)

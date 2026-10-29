@@ -1094,6 +1094,9 @@ func TestObservationListsItsSourcesFirst(t *testing.T) {
 	if got := retireTelemetry(t, home); strings.Join(got, " ") != "sources:1" {
 		t.Errorf("retire telemetry %q", got)
 	}
+	if n := strings.Count(telemetryText(t, home), `"event":"credit"`); n != 0 {
+		t.Errorf("a Sources answer emitted %d credit telemetry events", n)
+	}
 	// PostToolUse journals the facts listed as shown, in order, each with its project
 	fire(t, "post-tool-use", map[string]any{"session_id": "S", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
 		"tool_input": args, "tool_response": []map[string]string{{"type": "text", "text": out}}})
@@ -1113,6 +1116,10 @@ func TestObservationListsItsSourcesFirst(t *testing.T) {
 	// the second call names the facts listed: they resolve
 	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "52525252")); isErr || !strings.HasPrefix(out, "Retired.") {
 		t.Errorf("second call: %v %s", isErr, out)
+	}
+	// the report counts once in stats: one credit event, the second call's
+	if n := strings.Count(telemetryText(t, home), `"event":"credit"`); n != 1 || !creditEvent(t, home, `"verdict":"outdated"`, `"ok":true`) {
+		t.Errorf("%d credit telemetry events for one report:\n%s", n, telemetryText(t, home))
 	}
 }
 

@@ -150,8 +150,8 @@ func newForgetCmd(e *env) *cobra.Command {
 					return err
 				}
 				// A memory hidden on this machine was never invalidated on
-				// the server: restoring it there may find nothing, and it is
-				// visible again all the same.
+				// the server: restoring it there may find nothing, and its
+				// mark is cleared all the same.
 				hidden := restore && hiddenHere(id)
 				// Only raw facts can be curated: an observation is retired
 				// through its source facts and regenerates without them.
@@ -175,7 +175,7 @@ func newForgetCmd(e *env) *cobra.Command {
 					res.Sources = done
 				}
 				if hidden {
-					res.Note = "no longer hidden on this machine, visible to recall again"
+					res.Note = "no longer marked hidden on this machine"
 					if err != nil {
 						res.Note += " (on the server: " + err.Error() + ")"
 					}

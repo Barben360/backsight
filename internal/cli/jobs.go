@@ -53,7 +53,7 @@ type tickResult struct {
 	// Feedback: what the settle of the feedback journal decided.
 	Feedback feedback.SettleResult `json:"feedback"`
 	// Unhidden: the hidden observations the server rewrote or dropped
-	// since, visible again (checkHidden).
+	// since, no longer marked hidden (checkHidden).
 	Unhidden int `json:"unhidden,omitempty"`
 	MS       int `json:"ms"`
 }
@@ -247,7 +247,7 @@ func tickText(r tickResult) string {
 		msg += ", " + r.Server
 	}
 	if r.Unhidden > 0 {
-		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, visible again", r.Unhidden)
+		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, no longer marked hidden", r.Unhidden)
 	}
 	return msg + "\n"
 }

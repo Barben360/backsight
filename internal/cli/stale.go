@@ -124,7 +124,7 @@ func staleText(r staleResult, at time.Time) string {
 		ms            []staleMemory
 	}{
 		{"Shown often, never used", "", r.NeverUsed},
-		{"Hidden, not rewritten for 7 days", "Hidden from recall until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.", r.Hidden},
+		{"Hidden, not rewritten for 7 days", "Marked hidden on this machine until the server rewrites them (recall does not skip them yet); `backsight forget <id>` retires one for good once the server lists its source facts.", r.Hidden},
 		{"Reported wrong or outdated", "", r.Reported},
 	} {
 		if len(sec.ms) == 0 {

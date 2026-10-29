@@ -66,6 +66,11 @@ type SettleResult struct {
 	Late    int `json:"late"`
 }
 
+// PathSources: the facts a memory_credit Sources: answer listed, journaled
+// as shows so the next verdict can name them; they are never settled, so
+// they count neither as shown nor as a miss.
+const PathSources = "sources"
+
 // missPath: a show on this path can be a confident miss. The briefing,
 // reads and failure recalls never are.
 func missPath(path string) bool {
@@ -78,10 +83,10 @@ type pendingShow struct {
 	credited, settled bool
 }
 
-// Decide is the outcome of every show of events not yet in a settle event
-// that can settle at now: at least TurnTimeout old, and its turn over (a
-// later turn of its session, or a stop of its turn by its agent or the
-// main agent) or the show openTurnLimit old. Events after now are not
+// Decide is the outcome of every show of events (PathSources ones aside)
+// not yet in a settle event that can settle at now: at least TurnTimeout
+// old, and its turn over (a later turn of its session, or a stop of its
+// turn by its agent or the main agent) or the show openTurnLimit old. Events after now are not
 // seen. Each used credit, in time order, attaches to its id's latest
 // earlier show of its session neither credited nor settled; late counts
 // the used credits since the last settle event that found none. A show
@@ -111,6 +116,9 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 		case "turn":
 			turns[e.Session] = append(turns[e.Session], e)
 		case "shows":
+			if e.Path == PathSources {
+				continue // only lets the next verdict name a listed fact: never settled
+			}
 			for _, s := range showsOf(e) {
 				if byKey[s.Key] != nil {
 					continue

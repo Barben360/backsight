@@ -82,6 +82,7 @@ func TestCheckTurn(t *testing.T) {
 		{Kind: "shows", Session: "s2", Turn: "t1", Path: "prompt", Items: []Item{{ID: "other", Rank: 1}}},
 		{Kind: "credit", Session: "s1", Turn: "t1", Verdict: "none"},
 		{Kind: "credit", Session: "s1", Turn: "t1", Agent: "a1", Verdict: "used", IDs: []string{idB}},
+		{Kind: "credit", Session: "s1", Turn: "t1", Agent: "a1", Verdict: "wrong", IDs: []string{idA}}, // a report, not a use
 		{Kind: "stop", Session: "s1", Turn: "t1", Agent: "a1", Outcome: "blocked"},
 		{Kind: "stop", Session: "s1", Turn: "t1", Outcome: "undeclared"},
 		{Kind: "credit", Session: "s2", Turn: "t2", Verdict: "none"},

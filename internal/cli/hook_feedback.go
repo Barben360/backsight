@@ -327,12 +327,9 @@ func (h *hookEnv) journalCredit(text string) {
 	case strings.HasPrefix(text, creditNonePrefix):
 		verdict = "none"
 	case strings.HasPrefix(text, creditRetiredPrefix), strings.HasPrefix(text, creditPartlyPrefix), strings.HasPrefix(text, creditHiddenPrefix):
-		if in.Verdict != "wrong" && in.Verdict != "outdated" {
-			return
-		}
-		verdict = in.Verdict
+		verdict = in.Verdict // only a wrong or outdated call answers these
 	case strings.HasPrefix(text, creditSourcesPrefix):
-		h.journalShows("sources", sourcesShows(text))
+		h.journalShows(feedback.PathSources, sourcesShows(text))
 		return
 	default:
 		return
