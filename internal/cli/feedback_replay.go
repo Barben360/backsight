@@ -209,7 +209,8 @@ func boostedOrder(items []feedback.Item, l feedback.Ledger, p feedback.Params, t
 	return ids
 }
 
-func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
+// round4 rounds v to 4 decimals; + 0 turns a negative zero into 0.
+func round4(v float64) float64 { return math.Round(v*10000)/10000 + 0 }
 
 func replayText(r replayResult) string {
 	var b strings.Builder

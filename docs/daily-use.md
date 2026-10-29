@@ -165,7 +165,7 @@ It lists the memories worth a look, from this machine's record of what was shown
 
 | Section | Lists | Command |
 |---|---|---|
-| Shown often, never used | Memories shown at least 10 times (`feedback.stale_shows`) that Claude never reported using. | `backsight forget <id>` retires one. |
+| Shown often, never used | Memories shown at least 10 times (`feedback.stale_shows`) that Claude never reported using. Only the shows recorded live count, not those imported from earlier history. | `backsight forget <id>` retires one. |
 | Hidden, not rewritten for 7 days | Observations hidden after a report, because the server could not list the facts they are drawn from, and not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget --restore <id>` clears the mark. Until the server rewrites them they stay hidden on this machine, and recall here skips them; `backsight forget <id>` retires one for good once the server lists its source facts. |
 | Reported wrong or outdated | Raw facts Claude reported, already invalidated. | `backsight forget <id> --purge` alone only lists what deleting one for good would remove; adding `--yes` deletes it. |
 

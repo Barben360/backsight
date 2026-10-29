@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -527,5 +528,20 @@ func TestReplayIsReadOnly(t *testing.T) {
 	}
 	if after := filesUnder(t, filepath.Dir(dir)); !reflect.DeepEqual(before, after) {
 		t.Errorf("feedback replay wrote:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// With the boost off, a memory whose boost was negative moves to 0, not
+// to a negative zero: neither the text nor the JSON prints "-0".
+func TestReplayPrintsNoNegativeZero(t *testing.T) {
+	home := isolate(t)
+	replayJournal(t, home)
+	_, out, _ := run(t, "feedback", "replay", "--set", "boost_weight=0")
+	if !strings.Contains(out, "+0.0000") || strings.Contains(out, "-0.0000") {
+		t.Errorf("text with a negative zero, or no move to 0:\n%s", out)
+	}
+	_, raw, _ := run(t, "feedback", "replay", "--set", "boost_weight=0", "--json")
+	if !regexp.MustCompile(`"after":\s*0\s*[,}]`).MatchString(raw) || regexp.MustCompile(`:\s*-0\s*[,}]`).MatchString(raw) {
+		t.Errorf("JSON with a negative zero, or no move to 0:\n%s", raw)
 	}
 }

@@ -519,3 +519,34 @@ func TestOneImportRunsAtATime(t *testing.T) {
 		t.Errorf("%d keys, %d marks: want 5 and 1", len(keys), importMarks(t, home))
 	}
 }
+
+// A run from --since leaves the earlier history to the tick: it writes no
+// mark, says so, and the next tick imports what it left.
+func TestImportSinceLeavesTheRestToTheTick(t *testing.T) {
+	home := devInstall(t, true)
+	history(t, home)
+	next := histStart.Add(24 * time.Hour).Format("2006-01-02")
+	if env := runImport(t, "--since", next); env.Data.Complete || importMarks(t, home) != 0 {
+		t.Errorf("--since marked the import complete: %+v, %d marks", env.Data, importMarks(t, home))
+	}
+	if code, out, _ := run(t, "feedback", "import", "--since", next); code != output.OK || !strings.Contains(out, "a run without --since imports the earlier ones") {
+		t.Errorf("text: exit %d\n%s", code, out)
+	}
+	if r := tickOf(t); r.History != "earlier history imported: 5 shows and 1 credits" || importMarks(t, home) != 1 {
+		t.Errorf("tick after --since: %q, %d marks", r.History, importMarks(t, home))
+	}
+}
+
+// Telemetry stamps are cut to the millisecond, and the prompt hook writes
+// its telemetry just after its first journal line: a show stamped in the
+// millisecond the session's journal began is live, one before it is not.
+func TestLiveCutoffCoversTheTelemetryMillisecond(t *testing.T) {
+	ms := time.Date(2026, 10, 29, 4, 16, 28, 154_000_000, time.UTC)
+	k := journalKnown([]feedback.Event{{Kind: "turn", Session: "s", TS: ms.Add(800 * time.Microsecond)}})
+	if !k.live(feedback.ImportShow{Session: "s", At: ms}) {
+		t.Error("the first prompt's telemetry, stamped in the journal's first millisecond, is imported again")
+	}
+	if k.live(feedback.ImportShow{Session: "s", At: ms.Add(-time.Millisecond)}) {
+		t.Error("a show the millisecond before the journal began counts as live")
+	}
+}

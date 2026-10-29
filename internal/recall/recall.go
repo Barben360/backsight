@@ -260,7 +260,8 @@ func (e *Engine) adjust(best map[string]Hit, minScore float64) []Hit {
 	return hits
 }
 
-func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
+// round4 rounds v to 4 decimals; + 0 turns a negative zero into 0.
+func round4(v float64) float64 { return math.Round(v*10000)/10000 + 0 }
 
 type answer struct {
 	scope string

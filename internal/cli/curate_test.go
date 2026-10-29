@@ -751,3 +751,23 @@ func TestMemoryStaleJournalsNothingWhenEmptyOrOff(t *testing.T) {
 		t.Errorf("%d stale events with feedback off", n)
 	}
 }
+
+// "Shown often, never used" counts the shows recorded live: an import
+// never counts a miss, so imported shows alone say nothing of use.
+func TestNeverUsedCountsLiveShowsOnly(t *testing.T) {
+	now := time.Now().UTC()
+	l := feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{
+		staleID(1): {Shown: 20, LastShown: now, Imported: feedback.Imported{Shown: 20}}, // imported only
+		staleID(2): {Shown: 20, LastShown: now},                                         // live only
+		staleID(3): {Shown: 25, LastShown: now, Imported: feedback.Imported{Shown: 20}}, // 5 live
+		staleID(4): {Shown: 30, LastShown: now, Imported: feedback.Imported{Shown: 15}}, // 15 live
+	}}
+	res := staleOf(l, 10, now)
+	var got []string
+	for _, m := range res.NeverUsed {
+		got = append(got, m.ID[:8])
+	}
+	if strings.Join(got, " ") != "44444444 22222222" {
+		t.Errorf("never used %v, want the memories with 10 live shows or more: 44444444 22222222", got)
+	}
+}

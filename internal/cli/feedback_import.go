@@ -64,7 +64,7 @@ type importResult struct {
 	Why       string `json:"unchecked_reason,omitempty"`
 	Events    int    `json:"events"` // import events journaled
 	// Complete: the run went through every source and journaled the mark
-	// that ends the import (never with --plan).
+	// that ends the import (never with --plan or --since).
 	Complete bool `json:"complete"`
 }
 
@@ -86,7 +86,7 @@ func newFeedbackImportCmd(e *env) *cobra.Command {
 			"times it was shown there, and, from telemetry only, a credit for a turn whose reply cited memory and that showed exactly " +
 			"one. It never counts a miss. Imported counts stay apart (feedback rebuild --no-import leaves them out), a show already " +
 			"imported or journaled live is not counted again, and ids the server no longer knows are dropped (checked read-only). The " +
-			"jobs tick runs it until one run goes through every source; one import runs at a time. --plan counts per source and writes nothing.",
+			"jobs tick runs it until one run without --since goes through every source; one import runs at a time. --plan counts per source and writes nothing.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var from time.Time
@@ -204,7 +204,9 @@ func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Tim
 			return res, im.err
 		}
 	}
-	if plan {
+	// Only a run over all history completes it: one from --since leaves
+	// the older shows to the tick, which stops at the mark.
+	if plan || !from.IsZero() {
 		return res, nil
 	}
 	var held *state.HeldError
@@ -378,10 +380,12 @@ func (k journalIndex) take(s feedback.ImportShow) {
 }
 
 // live: s is journaled already, its session's journal having begun at or
-// before it.
+// before it. Telemetry stamps are cut to the millisecond, and the prompt
+// hook writes its telemetry after its first journal line, within the
+// same millisecond at times: the cutoff is cut the same way.
 func (k journalIndex) live(s feedback.ImportShow) bool {
 	t, ok := k.liveFrom[s.Session]
-	return ok && !s.At.Before(t)
+	return ok && !s.At.Before(t.Truncate(time.Millisecond))
 }
 
 func numeric(s string) bool {
@@ -540,6 +544,8 @@ func importText(r importResult) string {
 	case r.Plan:
 	case r.Complete:
 		fmt.Fprintf(&b, "imported %d shows and %d credits (never a miss)\n", shows, credits)
+	case r.Since != "":
+		fmt.Fprintf(&b, "imported %d shows and %d credits from %s on (never a miss); a run without --since imports the earlier ones\n", shows, credits, r.Since)
 	default:
 		fmt.Fprintf(&b, "imported %d shows and %d credits so far (never a miss); stopped before the end: run it again\n", shows, credits)
 	}

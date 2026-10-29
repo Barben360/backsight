@@ -623,3 +623,32 @@ func TestCurrentFindsAFoldedEventNewerThanTheSettleItPreceded(t *testing.T) {
 		t.Errorf("hide stamped after the settle lost: %v %+v", err, l.Memories)
 	}
 }
+
+// A folded line in the journal's tail but stamped at or before the
+// watermark (journaled with a stale stamp after the settle read) belongs
+// to what the ledger already holds: Current does not apply it.
+func TestCurrentSkipsATailLineAtOrBeforeTheWatermark(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	j := NewJournal(dir, Common{Session: "s"})
+	j.now = func() time.Time { return at }
+	if err := j.AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadLedger(dir)
+	if err != nil || saved.JournalAt.File == "" || saved.Memories["m1"].Wrong != 1 {
+		t.Fatalf("after the settle: %v %+v", err, saved)
+	}
+	for _, ts := range []time.Time{saved.Watermark, saved.Watermark.Add(-time.Second)} {
+		if err := j.Append(Event{Kind: KindRetire, TS: ts, IDs: []string{"m1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l, err := Current(dir)
+	if err != nil || l.Memories["m1"].Wrong != 1 {
+		t.Errorf("lines at or before the watermark applied: %v, wrong %d, want 1", err, l.Memories["m1"].Wrong)
+	}
+}
