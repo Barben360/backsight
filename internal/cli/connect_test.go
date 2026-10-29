@@ -1416,6 +1416,9 @@ func TestConnectUndo(t *testing.T) {
 	if code != output.OK || env.Data.Plan || !env.Data.RestartRequired {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
+	if !openSessionSaid(env.Data.NextSteps) {
+		t.Errorf("next steps %q", env.Data.NextSteps)
+	}
 	sameContents(t, before)
 	if _, err := os.Stat(filepath.Join(d.CursorsDir(), "s2.json")); err == nil {
 		t.Error("the shared server's cursor stayed")
@@ -1840,4 +1843,14 @@ func TestConnectSameServerDoesNotAskTheAckAgain(t *testing.T) {
 	if rec, _ := setup.Load(d.SetupFile()); rec == nil || rec.Answers["ack_subscription"] != "yes" {
 		t.Errorf("record: %+v", rec)
 	}
+}
+
+// openSessionSaid: connect's next steps say what a session open across it
+// does: only its memory tools keep the old server, its prompt recall
+// follows at once, and it is sent whole to the new server when it ends.
+func openSessionSaid(steps []string) bool {
+	return slices.ContainsFunc(steps, func(s string) bool {
+		return strings.Contains(s, "restart Claude Code") && strings.Contains(s, "memory tools keep the old server") &&
+			strings.Contains(s, "prompt recall") && strings.Contains(s, "sent whole") && !strings.Contains(s, "keeps the server it started with")
+	})
 }

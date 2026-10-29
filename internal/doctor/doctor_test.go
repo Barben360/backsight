@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/backup"
 	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/retain"
@@ -422,26 +422,26 @@ func TestReferenceURLCredentialsNeverPrinted(t *testing.T) {
 	}
 }
 
-// The fake server listens on this machine's first non-loopback address, so
-// the key would cross a network: no DNS, no outside traffic.
+// The server is reached at a LAN address (the client is pointed at a
+// loopback fake, whatever this machine's addresses are): a warning with a
+// fix that exists today, no TLS proxy promised.
 func TestCleartextKeyWarned(t *testing.T) {
-	ip := localNonLoopback(t)
-	ln, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
-	if err != nil {
-		t.Skipf("cannot listen on %s: %v", ip, err)
-	}
-	srv := httptest.NewUnstartedServer(fakeHandler(nil))
-	_ = srv.Listener.Close()
-	srv.Listener = ln
-	srv.Start()
+	srv := httptest.NewServer(fakeHandler(nil))
 	t.Cleanup(srv.Close)
+	old := serverClient
+	serverClient = func(_, token string, timeout time.Duration) (*hindsight.Client, error) {
+		return hindsight.New(srv.URL, token, timeout)
+	}
+	t.Cleanup(func() { serverClient = old })
 	f := newFixture(t)
-	f.reference("http://" + ln.Addr().String())
+	f.reference("http://192.168.77.10:8888")
 	c := check(t, f.run(), "server")
 	expect(t, c, Warn, "Hindsight 1.1.0")
 	if !strings.Contains(c.Detail, "unencrypted") || strings.Contains(c.Fix, "TLS") || !strings.Contains(c.Fix, "backsight server expose --private <tailnet address>") {
 		t.Errorf("detail %q, fix %q", c.Detail, c.Fix)
 	}
+	f.reference("http://100.101.1.2:8888") // a tailnet address: information
+	expect(t, check(t, f.run(), "server"), Info, "Hindsight 1.1.0")
 }
 
 // How the key travels, once the server answered: loopback and https say
@@ -463,17 +463,6 @@ func TestServerTransport(t *testing.T) {
 			t.Errorf("%s: %q", url, detail)
 		}
 	}
-}
-
-func localNonLoopback(t *testing.T) string {
-	addrs, _ := net.InterfaceAddrs()
-	for _, a := range addrs {
-		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil && !n.IP.IsLinkLocalUnicast() {
-			return n.IP.String()
-		}
-	}
-	t.Skip("no non-loopback IPv4 address")
-	return ""
 }
 
 // A valid config.toml without secrets.toml is a server without a key.

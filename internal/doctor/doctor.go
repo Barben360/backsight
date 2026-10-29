@@ -272,6 +272,10 @@ func checkDocker(ctx context.Context, env Env) Check {
 	return c
 }
 
+// serverClient builds the server check's client. A variable for tests,
+// which answer a LAN or tailnet URL from a loopback server.
+var serverClient = hindsight.New
+
 // checkServer returns the server check and, when it passed, a client.
 func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsight.Client) {
 	c := Check{ID: "server"}
@@ -280,7 +284,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 		return c, nil
 	}
 	from := " (from " + t.Source + ")"
-	cl, err := hindsight.New(t.URL, string(t.Token), env.Timeout)
+	cl, err := serverClient(t.URL, string(t.Token), env.Timeout)
 	if err != nil {
 		c.Status, c.Summary = Error, "unusable server URL"+from
 		c.Detail, c.Fix = err.Error(), "correct the server URL in the "+t.Source

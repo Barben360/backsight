@@ -182,6 +182,12 @@ func publicAddress(tok token.Token) error {
 		"On the server's host, open it on a private address instead (backsight server expose --private <ip>, a LAN or tailnet address) and hand out a new token"}
 }
 
+// openSessionStep is what a session open across connect (or connect
+// --undo) does until Claude Code restarts: hooks read the config on each
+// run, the memory server only at its start.
+const openSessionStep = "restart Claude Code (or run /reload-plugins): until then an open session's memory tools keep the old server (they write nothing to it); " +
+	"its prompt recall already uses the new one, and when the session ends it is sent whole to the new one"
+
 // probe is what connect learnt from the server, read-only.
 type probe struct {
 	Version string
@@ -522,7 +528,7 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 			fmt.Fprint(e.stdout, stepLine(res.Steps[i]))
 		}
 	}
-	res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins): an open session keeps the server it started with")
+	res.NextSteps = append(res.NextSteps, openSessionStep)
 	if sr := subcommand(ctx, "server", "start"); sr.Err != nil {
 		res.Steps[3].Status = "failed"
 		return res, &output.Error{Code: output.Partial, Resume: "backsight server start",
@@ -906,7 +912,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	sr, err := runSetup(ctx, e, setupFlags{answers: append(setupAnswers, "consent=yes"), answersFile: f.answersFile, nonInteractive: f.nonInteractive, configDir: f.configDir})
 	res.Setup = &sr
 	if res.RestartRequired && !sr.RestartRequired { // else setup says it
-		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins): an open session keeps the server it started with")
+		res.NextSteps = append(res.NextSteps, openSessionStep)
 	}
 	for i := range res.Steps {
 		if res.Steps[i].Name == "setup" {

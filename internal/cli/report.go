@@ -338,7 +338,8 @@ func bankProjects(ctx context.Context, doc doctor.Report) []string {
 	}
 	reached := false
 	for _, c := range doc.Checks {
-		reached = reached || c.ID == "server" && (c.Status == doctor.OK || c.Status == doctor.Warn)
+		// Any answer: OK, Warn (cleartext LAN), Info (a tailnet address).
+		reached = reached || c.ID == "server" && c.Status != doctor.Error
 	}
 	if !reached {
 		return nil

@@ -95,7 +95,7 @@ The user's PCs can share one memory, held by the server on one machine, the host
    backsight connect --plan --json --token-file <file>
    ```
 
-   Show the user `data.steps`, `data.warnings` (a different Hindsight version on the host is a warning, never a refusal) and, for a PC that runs its own server, `data.own_server` (its server is backed up, verified, then stopped). When `data.questions` holds `ack_subscription`, the host extracts with a Claude subscription: show its caveat; only the user accepts it.
+   Show the user `data.steps`, `data.warnings` (a different major or minor Hindsight version on the host is a warning, never a refusal), `data.notes` (information, such as a host whose Hindsight differs only by its patch version: nothing to do) and, for a PC that runs its own server, `data.own_server` (its server is backed up, verified, then stopped). When `data.questions` holds `ack_subscription`, the host extracts with a Claude subscription: show its caveat; only the user accepts it.
 4. When they agree, run it with the answers the plan named:
 
    ```sh
