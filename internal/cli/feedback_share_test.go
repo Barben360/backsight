@@ -176,6 +176,38 @@ func TestShareUploadsWhenChanged(t *testing.T) {
 	}
 }
 
+// An unchanged export is sent again once the last send is 7 days old, so
+// that the other machines never take a quiet machine for one no longer
+// in use; before that it is not. A record of the last send dated ahead of
+// the clock (stepped back since) makes a changed export due at once.
+func TestShareResendsAQuietLedgerWeekly(t *testing.T) {
+	m := newShareMachine(t)
+	quiet := map[string]feedback.Entry{shareM1: {Shown: 3, Credits: 2, CreditsAt: shareT0.Add(-time.Hour), LastShown: shareT0.Add(-time.Hour)}}
+	m.ledger(quiet)
+	if up, _, _, err := m.share(shareT0); !up || err != nil {
+		t.Fatalf("first share: up %v, %v", up, err)
+	}
+	if up, _, _, _ := m.share(shareT0.Add(2 * time.Hour)); up || sharedSends.Load() != 1 {
+		t.Errorf("unchanged, 2 h later: up %v, %d send(s)", up, sharedSends.Load())
+	}
+	if up, _, _, _ := m.share(shareT0.Add(7*24*time.Hour - time.Minute)); up {
+		t.Error("unchanged, 1 minute short of 7 days: sent")
+	}
+	week := shareT0.Add(7 * 24 * time.Hour)
+	if up, _, _, _ := m.share(week); !up || sharedSends.Load() != 2 {
+		t.Errorf("unchanged, 7 days later: up %v, %d send(s)", up, sharedSends.Load())
+	}
+	if doc, _, _ := m.uploaded(); !doc.At.Equal(week) || doc.Entries[shareM1].Credits != 2 {
+		t.Errorf("re-sent %+v", doc)
+	}
+
+	// The clock stepped back an hour: the record is ahead of it.
+	m.ledger(map[string]feedback.Entry{shareM1: {Shown: 4, Credits: 3, CreditsAt: week.Add(-2 * time.Hour), LastShown: week.Add(-2 * time.Hour)}})
+	if up, _, _, _ := m.share(week.Add(-time.Hour)); !up {
+		t.Error("changed, record ahead of the clock: not sent")
+	}
+}
+
 // The other machines' documents are fetched every 6 hours, as they are;
 // one that does not parse or of another version is skipped and counted.
 func TestShareRefreshesTheCacheEvery6h(t *testing.T) {
@@ -311,6 +343,23 @@ func TestShareSurvivesAnUnreachableServer(t *testing.T) {
 	cl, _ := hindsight.New(serverURL(t, home), "k", 5*time.Second)
 	if docs, _ := retain.ControlDocuments(context.Background(), cl, config.LegacyBank, "backsight:feedback:"); len(docs) != 1 || docs[0].ID != "backsight:feedback:"+machine {
 		t.Fatalf("server holds %+v", docs)
+	}
+
+	// A send the server refuses: the tick is done, says so, and the cache
+	// stays as it was.
+	cacheBefore, _ := os.ReadFile(feedback.SharedCacheFile(d.FeedbackDir()))
+	if err := os.Remove(feedback.SharedUploadFile(d.FeedbackDir())); err != nil { // a send due
+		t.Fatal(err)
+	}
+	retainStatus.Store(http.StatusInternalServerError)
+	_, out, _ := run(t, "jobs", "tick")
+	r := tickOf(t)
+	retainStatus.Store(0)
+	if r.Status != "done" || r.SharedUp || r.SharedError == "" || !strings.Contains(out, "counts not shared") {
+		t.Errorf("refused send: %+v\n%s", r, out)
+	}
+	if again, _ := os.ReadFile(feedback.SharedCacheFile(d.FeedbackDir())); len(cacheBefore) == 0 || string(again) != string(cacheBefore) {
+		t.Errorf("cache changed:\n%s\nwas\n%s", again, cacheBefore)
 	}
 
 	// ...not while another server answers there...

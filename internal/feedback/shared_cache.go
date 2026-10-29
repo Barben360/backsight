@@ -73,3 +73,36 @@ func SharedMachines(docs []SharedDoc, self string, now time.Time) int {
 	}
 	return len(seen)
 }
+
+// SharedUpload is <state>/feedback/shared-upload.json: when jobs tick
+// last sent this machine's shared document, the hash of its entries (its
+// time left out, so that the same counts hash the same) and of its
+// hidden ids.
+type SharedUpload struct {
+	At         time.Time `json:"at"`
+	Hash       string    `json:"hash"`
+	HiddenHash string    `json:"hidden_hash"`
+}
+
+// SharedUploadFile is where dir (the feedback directory) keeps the record.
+func SharedUploadFile(dir string) string { return filepath.Join(dir, "shared-upload.json") }
+
+// LoadSharedUpload reads dir's record: false when it is missing, does
+// not parse or names no time (never sent, as far as this machine knows).
+func LoadSharedUpload(dir string) (SharedUpload, bool) {
+	var u SharedUpload
+	raw, err := os.ReadFile(SharedUploadFile(dir))
+	if err != nil || json.Unmarshal(raw, &u) != nil || u.At.IsZero() {
+		return SharedUpload{}, false
+	}
+	return u, true
+}
+
+// SaveSharedUpload replaces dir's record with u in one rename.
+func SaveSharedUpload(dir string, u SharedUpload) error {
+	raw, err := json.Marshal(u)
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(SharedUploadFile(dir), raw, 0o600)
+}

@@ -158,10 +158,16 @@ func checkFeedbackShared(d paths.Dirs, enabled, share bool, now time.Time) Check
 	cache, err := feedback.LoadSharedCache(d.FeedbackDir())
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		// Every send is followed by a fetch: a send a day old with no
+		// cache yet, while the server answers, is a fetch that fails.
 		c.Summary = "the other machines' counts are not fetched yet"
+		if up, ok := feedback.LoadSharedUpload(d.FeedbackDir()); ok && answers && now.Sub(up.At) > sharedCacheWarn {
+			c.Status, c.Fix = Warn, fix
+			c.Summary = fmt.Sprintf("the other machines' counts were never fetched, though this machine sent its own %s ago", now.Sub(up.At).Round(time.Hour))
+		}
 		return c
 	case err != nil:
-		c.Summary = "the cache of the other machines' counts is unreadable: " + err.Error()
+		c.Status, c.Summary = Info, "the cache of the other machines' counts is unreadable: "+err.Error()
 		if answers {
 			c.Status, c.Fix = Warn, fix
 		}

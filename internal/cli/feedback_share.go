@@ -8,15 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
-	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
@@ -26,27 +23,19 @@ import (
 // sharedDocPrefix+<machine id>, its counts under the metadata key
 // sharedMetaKey and nothing else there. It is sent again when it changed
 // and the last send is shareUploadEvery old, at once when the set of
-// hidden memories changed; the other machines' are fetched every
-// shareRefreshEvery.
+// hidden memories changed, and unchanged once the last send is
+// shareResendEvery old (the other machines ignore a document a month
+// old); the other machines' are fetched every shareRefreshEvery.
 const (
-	sharedDocPrefix    = "backsight:feedback:"
-	sharedMetaKey      = "feedback"
-	shareUploadEvery   = time.Hour
-	shareRefreshEvery  = 6 * time.Hour
-	shareUploadRecName = "shared-upload.json"
+	sharedDocPrefix   = "backsight:feedback:"
+	sharedMetaKey     = "feedback"
+	shareUploadEvery  = time.Hour
+	shareResendEvery  = 7 * 24 * time.Hour
+	shareRefreshEvery = 6 * time.Hour
 )
 
 // shareTickBudget bounds the tick's sharing step, send and fetch.
 var shareTickBudget = 10 * time.Second
-
-// shareUpload is <state>/feedback/shared-upload.json: when this machine
-// last sent its document, the hash of its entries (its time left out, so
-// that the same counts hash the same) and of its hidden ids.
-type shareUpload struct {
-	At         time.Time `json:"at"`
-	Hash       string    `json:"hash"`
-	HiddenHash string    `json:"hidden_hash"`
-}
 
 // shareLedger is the tick's sharing step, with feedback and share_ledger
 // on (the tick checks first that its server answers and is the one this
@@ -66,8 +55,9 @@ func shareLedger(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg co
 }
 
 // uploadShared sends this machine's document when it was never sent (or
-// the record of it is unreadable), its hidden ids changed, or its entries
-// changed and the last send is an hour old.
+// the record of it is unreadable or dated ahead of now: the clock stepped
+// back), its hidden ids changed, its entries changed and the last send is
+// an hour old, or the last send is a week old.
 func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg config.Config, machine string, now time.Time) (bool, error) {
 	l, err := feedback.Current(d.FeedbackDir())
 	if err != nil {
@@ -91,22 +81,17 @@ func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg c
 		}
 	}
 	slices.Sort(hidden)
-	next := shareUpload{At: now, Hash: sha256Hex(entries), HiddenHash: sha256Hex(strings.Join(hidden, "\n"))}
-	file := filepath.Join(d.FeedbackDir(), shareUploadRecName)
-	var last shareUpload
-	if raw, err := os.ReadFile(file); err == nil && json.Unmarshal(raw, &last) == nil && !last.At.IsZero() &&
-		last.HiddenHash == next.HiddenHash && (last.Hash == next.Hash || now.Sub(last.At) < shareUploadEvery) {
-		return false, nil
+	next := feedback.SharedUpload{At: now, Hash: sha256Hex(entries), HiddenHash: sha256Hex(strings.Join(hidden, "\n"))}
+	if last, ok := feedback.LoadSharedUpload(d.FeedbackDir()); ok && !last.At.After(now) && last.HiddenHash == next.HiddenHash {
+		if age := now.Sub(last.At); age < shareUploadEvery || (last.Hash == next.Hash && age < shareResendEvery) {
+			return false, nil
+		}
 	}
 	content := fmt.Sprintf("feedback counts of machine %s: %d memories", machine, len(doc.Entries))
 	if err := retain.WriteControlDocument(ctx, cl, cfg.Server.Bank, sharedDocPrefix+machine, content, map[string]string{sharedMetaKey: meta}); err != nil {
 		return false, err
 	}
-	raw, err := json.Marshal(next)
-	if err != nil {
-		return true, err
-	}
-	return true, fsutil.WriteAtomic(file, raw, 0o600)
+	return true, feedback.SaveSharedUpload(d.FeedbackDir(), next)
 }
 
 // refreshShared fetches the other machines' documents into shared.json,

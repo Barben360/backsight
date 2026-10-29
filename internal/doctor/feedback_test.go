@@ -176,9 +176,27 @@ func TestDoctorWarnsOnAStaleSharedCache(t *testing.T) {
 	if c := checkFeedbackShared(dirs(time.Time{}, usageNow.Add(-25*time.Hour)), true, true, usageNow); c.Status != OK {
 		t.Errorf("25 h old, server never reached: %+v", c)
 	}
-	// Not fetched yet.
+	// Not fetched yet: fine while this machine has not sent its counts, or
+	// sent them within a day; a warning once that send is older, the
+	// server answering (the fetch that follows every send never came).
 	if c := checkFeedbackShared(dirs(answered, time.Time{}), true, true, usageNow); c.Status != OK || !strings.Contains(c.Summary, "not fetched yet") {
-		t.Errorf("no cache: %+v", c)
+		t.Errorf("no cache, never sent: %+v", c)
+	}
+	sentAt := func(d paths.Dirs, at time.Time) paths.Dirs {
+		t.Helper()
+		if err := feedback.SaveSharedUpload(d.FeedbackDir(), feedback.SharedUpload{At: at, Hash: "h", HiddenHash: "hh"}); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if c := checkFeedbackShared(sentAt(dirs(answered, time.Time{}), usageNow.Add(-23*time.Hour)), true, true, usageNow); c.Status != OK {
+		t.Errorf("no cache, sent 23 h ago: %+v", c)
+	}
+	if c := checkFeedbackShared(sentAt(dirs(answered, time.Time{}), usageNow.Add(-25*time.Hour)), true, true, usageNow); c.Status != Warn || !strings.Contains(c.Fix, "backsight jobs tick") {
+		t.Errorf("no cache, sent 25 h ago, server answering: %+v", c)
+	}
+	if c := checkFeedbackShared(sentAt(dirs(usageNow.Add(-48*time.Hour), time.Time{}), usageNow.Add(-25*time.Hour)), true, true, usageNow); c.Status != OK {
+		t.Errorf("no cache, sent 25 h ago, server silent: %+v", c)
 	}
 	// An unreadable cache, the server answering: a warning.
 	broken := dirs(answered, time.Time{})
@@ -186,6 +204,12 @@ func TestDoctorWarnsOnAStaleSharedCache(t *testing.T) {
 	_ = os.WriteFile(feedback.SharedCacheFile(broken.FeedbackDir()), []byte("{"), 0o600)
 	if c := checkFeedbackShared(broken, true, true, usageNow); c.Status != Warn || !strings.Contains(c.Fix, "backsight jobs tick") {
 		t.Errorf("unreadable: %+v", c)
+	}
+	silent := dirs(usageNow.Add(-48*time.Hour), time.Time{})
+	_ = os.MkdirAll(silent.FeedbackDir(), 0o700)
+	_ = os.WriteFile(feedback.SharedCacheFile(silent.FeedbackDir()), []byte("{"), 0o600)
+	if c := checkFeedbackShared(silent, true, true, usageNow); c.Status != Info || !strings.Contains(c.Summary, "unreadable") {
+		t.Errorf("unreadable, server silent: %+v", c)
 	}
 	// Sharing off, or feedback off: information, whatever the cache says.
 	if c := checkFeedbackShared(dirs(answered, usageNow.Add(-25*time.Hour)), true, false, usageNow); c.Status != Info || !strings.Contains(c.Summary, "share_ledger = false") {
