@@ -60,6 +60,9 @@ type Check struct {
 	// version is the Hindsight version the server check read, for the
 	// checks that compare it.
 	version string
+	// answered: the server replied to the check (any status but a failure
+	// to reply; Info alone also means no server configured).
+	answered bool
 }
 
 type Report struct {
@@ -222,6 +225,9 @@ func Run(ctx context.Context, env Env) Report {
 }
 
 func skipReason(srv Check) string {
+	if srv.answered { // Info too: a tailnet server answers with it
+		return "bank not usable"
+	}
 	switch srv.Status {
 	case Info:
 		return "no server"
@@ -324,6 +330,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 	}
 	c.Status, c.Summary = OK, fmt.Sprintf("Hindsight %s at %s%s", v.APIVersion, t.Display(), from)
 	c.version = v.APIVersion
+	c.answered = true
 	if st, detail, fix := transport(*t); st != OK {
 		c.Status, c.Detail, c.Fix = st, detail, fix
 	}
@@ -722,7 +729,7 @@ func checkReach(env Env, tg *target.Target, srv Check) Check {
 		breaker = "open until " + at(b.OpenUntil)
 	}
 	pending, _ := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl")}.Pending()
-	answers := srv.Status == OK || srv.Status == Warn // Warn: it answered, in cleartext
+	answers := srv.answered // OK, Warn (cleartext) or Info (tailnet): not "no server"
 	if answers && !r.FailingSince.IsZero() {
 		last = "now; it was silent from " + at(r.FailingSince)
 	}

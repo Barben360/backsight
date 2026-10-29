@@ -1214,3 +1214,60 @@ func TestVersionSkewOnlyOnAClient(t *testing.T) {
 		}
 	}
 }
+
+// tailnetServer points the server check at a tailnet-looking address that
+// a loopback fake answers, whatever this machine's interfaces are.
+func tailnetServer(t *testing.T, overrides map[string]reply) string {
+	srv := fakeServerWith(t, overrides)
+	old := serverClient
+	serverClient = func(_, token string, timeout time.Duration) (*hindsight.Client, error) {
+		return hindsight.New(srv.URL, token, timeout)
+	}
+	t.Cleanup(func() { serverClient = old })
+	return "http://100.101.1.2:8888"
+}
+
+// A tailnet server answers with Info (WireGuard encrypts the key): that is
+// still an answer, so a record of an old silence does not warn.
+func TestServerReachCountsATailnetAnswer(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+tailnetServer(t, nil)+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	r := f.run()
+	expect(t, check(t, r, "server"), Info, "Hindsight")
+	c := check(t, r, "server-reach")
+	if c.Status == Warn || c.Fix != "" || !strings.Contains(c.Summary, "last answer now; it was silent from 2026-10-28 10:00 UTC") {
+		t.Errorf("tailnet answers now: %+v", c)
+	}
+}
+
+// No server configured is Info too, but nothing answered: server-reach
+// keeps its outcome (skipped, no backsight config) and never says "now".
+func TestServerReachWithoutAServerIsNotAnAnswer(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	if err := os.Remove(f.env.Dirs.ConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	r := f.run()
+	expect(t, check(t, r, "server"), Info, "no server")
+	expect(t, check(t, r, "server-reach"), Info, "skipped: no backsight config")
+}
+
+// A tailnet server that answers while its bank does not: the checks that
+// need the bank say so, not "no server".
+func TestSkipReasonTailnetServerAnswering(t *testing.T) {
+	url := tailnetServer(t, map[string]reply{"/v1/default/banks": {500, `{}`}})
+	f := newFixture(t)
+	f.reference(url)
+	r := f.run()
+	expect(t, check(t, r, "server"), Info, "Hindsight")
+	expect(t, check(t, r, "bank"), Error, "cannot list banks")
+	expect(t, check(t, r, "untagged"), Info, "skipped: bank not usable")
+	if got := skipReason(check(t, r, "server")); got != "bank not usable" {
+		t.Errorf("skipReason = %q", got)
+	}
+	if got := skipReason(Check{Status: Info}); got != "no server" {
+		t.Errorf("no server: %q", got)
+	}
+}
