@@ -768,7 +768,7 @@ func uuidHits() string {
 
 // writeSharedCache writes docs as the tick's shared.json, each through
 // MarshalMeta as the other machines upload it, and combines them now as
-// the tick does into shared-combined.json, which recall reads.
+// the tick does into shared-combined, which recall reads.
 func writeSharedCache(t *testing.T, home string, docs ...feedback.SharedDoc) {
 	t.Helper()
 	c := feedback.SharedCache{FetchedAt: time.Now().UTC()}

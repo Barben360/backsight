@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,8 +19,11 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/session"
 )
 
 const (
@@ -425,7 +429,7 @@ func serverURL(t *testing.T, home string) string {
 	return cfg.Server.URL
 }
 
-// combined is this machine's shared-combined.json read at now.
+// combined is this machine's shared-combined read at now.
 func (m *shareMachine) combined(now time.Time) (feedback.Remote, time.Time, error) {
 	c, err := feedback.LoadSharedCombined(m.d.FeedbackDir(), now)
 	return c.Remote(), c.At(), err
@@ -486,5 +490,151 @@ func TestShareCombinesAtEveryRefresh(t *testing.T) {
 	}
 	if r, when, err := m.combined(refresh); err != nil || !when.Equal(refresh) || r[shareM2].Misses < 0.99 || r[shareM2].Credits != 0 {
 		t.Errorf("after the refresh: %+v at %s, %v", r, when, err)
+	}
+}
+
+// Two machines on one server, through the commands: A's credits rank a
+// memory up in B's search once B's tick fetched them; A hides an
+// observation (a verdict on one whose sources cannot be listed), which
+// leaves B's search at B's next refresh, not before; B's restore brings
+// it back on B, while A still hides it.
+func TestTwoMachinesShareOneLedger(t *testing.T) {
+	port := fakeHindsight(t)
+	newMachine := func() string {
+		home := devInstall(t, true)
+		pointAt(t, home, port)
+		return home
+	}
+	a, b := newMachine(), newMachine()
+	use := func(home string) {
+		t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
+		t.Setenv("HOME", home)
+	}
+	t.Setenv("BACKSIGHT_PROJECT", "billing")
+	oldNow := now
+	t.Cleanup(func() { now = oldNow })
+	// A first by the server's score; A has no sources to retire.
+	memories[uA] = `{"id":"` + uA + `","text":"memory A about billing","type":"observation","tags":["project:billing"],"source_memories":[]}`
+	memories[uB] = `{"id":"` + uB + `","text":"memory B about billing","type":"observation","tags":["project:billing"]}`
+	recallAnswer = `[{"id":"` + uA + `","text":"memory A about billing","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.82}},` +
+		`{"id":"` + uB + `","text":"memory B about billing","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.81}}]`
+	search := func(name, home string) []string {
+		t.Helper()
+		use(home)
+		code, out, errOut := run(t, "search", "billing", "--json")
+		var env struct {
+			Data recall.Result `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+			t.Fatalf("%s search: exit %d\n%s%s", name, code, out, errOut)
+		}
+		var ids []string
+		for _, h := range env.Data.Hits {
+			ids = append(ids, h.ID)
+		}
+		_, text, _ := run(t, "search", "billing")
+		t.Logf("%s$ backsight search billing\n%s", name, text)
+		return ids
+	}
+	tick := func(name, home string) tickResult {
+		t.Helper()
+		use(home)
+		r := tickOf(t)
+		t.Logf("%s$ backsight jobs tick\n%s", name, tickText(r))
+		return r
+	}
+	order := func(ids []string) string { return strings.Join(ids, " ") }
+
+	if got := search("B", b); order(got) != uA+" "+uB {
+		t.Fatalf("B before any sharing: %s", got)
+	}
+
+	// A: three turns shown A and B, B credited each time, settled by the
+	// tick (shows 3 h old), which sends A's counts.
+	use(a)
+	j := feedback.NewJournal(pathsOf(a).FeedbackDir(), feedback.Common{Session: "s1", Project: "billing"})
+	start := time.Now().Add(-3 * time.Hour)
+	for i := range 3 {
+		turn, at := "p-"+strconv.Itoa(i+1), start.Add(time.Duration(i)*time.Minute)
+		if err := j.Append(feedback.Event{Kind: "shows", TS: at, Turn: turn, Path: "search", Items: []feedback.Item{{ID: uA, Rank: 1, Project: "billing"}, {ID: uB, Rank: 2, Project: "billing"}}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Append(feedback.Event{Kind: "credit", TS: at.Add(10 * time.Second), Turn: turn, IDs: []string{uB}, Verdict: "used"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := tick("A", a); !r.SharedUp || r.Feedback.Credits != 3 {
+		t.Fatalf("A's first tick: %+v", r)
+	}
+
+	// B: its first tick fetches A's counts; B now comes first.
+	if r := tick("B", b); r.SharedMachines != 1 {
+		t.Fatalf("B's first tick: %+v", r)
+	}
+	idA, idB := retain.ReadMachineID(pathsOf(a).State), retain.ReadMachineID(pathsOf(b).State)
+	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
+	docs, _ := retain.ControlDocuments(context.Background(), cl, config.LegacyBank, "backsight:feedback:")
+	var held []string
+	for _, d := range docs {
+		held = append(held, d.ID)
+	}
+	if idA == "" || idA == idB || len(held) != 2 || !slices.Contains(held, "backsight:feedback:"+idA) || !slices.Contains(held, "backsight:feedback:"+idB) {
+		t.Fatalf("machines %q and %q, the server holds %q", idA, idB, held)
+	}
+	if got := search("B", b); order(got) != uB+" "+uA {
+		t.Fatalf("B after fetching A's credits: %s", got)
+	}
+
+	// A: a verdict on A, whose sources cannot be listed, hides it there;
+	// the hiding is sent at once.
+	use(a)
+	mcpParentPID = 4848
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpConnect(t, a)
+	_ = session.WriteLive(pathsOf(a).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(a, "billing"), Project: "billing", At: time.Now()})
+	showItems(t, a, "S", "search", "billing", feedback.Item{ID: uA, Rank: 1, Project: "billing"})
+	out, isErr := call(t, cs, "memory_credit", verdict("outdated", uA))
+	t.Logf("A: memory_credit outdated %s\n%s", uA, out)
+	if isErr || !strings.HasPrefix(out, "Hidden.") {
+		t.Fatalf("A's verdict: %v %s", isErr, out)
+	}
+	if got := search("A", a); order(got) != uB {
+		t.Fatalf("A after its verdict: %s", got)
+	}
+	if r := tick("A", a); !r.SharedUp {
+		t.Fatalf("A's tick after the hiding: %+v", r)
+	}
+
+	// B: its cache is fresh, so A stays; 6 h later B's tick fetches again
+	// and A is gone from B's search.
+	if r := tick("B", b); r.SharedMachines != 1 {
+		t.Fatalf("B's tick: %+v", r)
+	}
+	if got := search("B", b); order(got) != uB+" "+uA {
+		t.Fatalf("B before its next fetch: %s", got)
+	}
+	now = func() time.Time { return time.Now().Add(6*time.Hour + time.Minute) }
+	tick("B, 6 h later", b)
+	if got := search("B, 6 h later", b); order(got) != uB {
+		t.Fatalf("B after fetching A's hiding: %s", got)
+	}
+
+	// B restores A: back on B, still hidden on A, whose next fetch reads
+	// B's document.
+	use(b)
+	code, out, errOut := run(t, "forget", "--restore", uA)
+	t.Logf("B, 6 h later$ backsight forget --restore %s\n%s%s", uA, out, errOut)
+	if code != output.OK || !strings.Contains(out, "visible again on this machine") {
+		t.Fatalf("B's restore: exit %d\n%s%s", code, out, errOut)
+	}
+	if got := search("B, 6 h later", b); order(got) != uB+" "+uA {
+		t.Fatalf("B after its restore: %s", got)
+	}
+	tick("B, 6 h later", b)
+	if r := tick("A, 6 h later", a); r.SharedMachines != 1 {
+		t.Fatalf("A's tick: %+v", r)
+	}
+	if got := search("A, 6 h later", a); order(got) != uB {
+		t.Fatalf("A after B's restore: %s", got)
 	}
 }

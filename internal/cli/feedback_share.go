@@ -98,7 +98,7 @@ func uploadShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, cfg c
 // when the cache is shareRefreshEvery old (or dated ahead of now),
 // missing or unreadable: those ParseSharedDoc reads, as the server holds
 // them, this machine's left out whatever their id. Then it combines them
-// under p into shared-combined.json, which recall reads (combineShared),
+// under p into shared-combined, which recall reads (combineShared),
 // also when only that file is missing or unreadable. machines is counted
 // from the cache as it stands after.
 func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank, machine string, now time.Time, p feedback.Params) (machines, skipped int, err error) {
