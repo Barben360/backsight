@@ -185,6 +185,28 @@ m6_doc() {
   rm -f "$out"
 }
 
+# m6_facts <docid>: how many facts (memory units but observations) the
+# server holds from that document, read with B's key. Any answer but 200,
+# or a page that does not hold them all, fails: it never reads as fewer.
+m6_facts() {
+  local out code server
+  server=$(m6_server) || exit 1
+  out=$(mktemp "$M6_WORK/facts.XXXXXX")
+  code=$(pl_untraced curl -sS -o "$out" -w '%{http_code}' -K <(m6_auth) \
+    "${server% *}/v1/default/banks/${server#* }/memories/list?document_id=$(m6_urlencode "$1")&limit=500") || code=000
+  if [ "$code" != 200 ]; then
+    rm -f "$out"
+    fail "reading the memories of $1: HTTP $code"
+  fi
+  jq -e '(.items | length) == .total' > /dev/null < "$out" || {
+    code=$(jq -r '"\(.items | length) of \(.total)"' < "$out")
+    rm -f "$out"
+    fail "the memories of $1: $code read"
+  }
+  jq '[.items[] | select(.fact_type != "observation")] | length' < "$out"
+  rm -f "$out"
+}
+
 # m6_uuid_counts <sid>: "<uuid> <n>" for every [rec <uuid>] in the
 # original_text of conversation:<sid> (every segment appended to it), one
 # a line, sorted. Fails when the document is absent or has no
@@ -712,12 +734,17 @@ m6_check_dedup_copied() {
 }
 
 # dedup-concurrent: five sessions on both PCs, each flushed on A and on B
-# at once: each stored once, whoever won.
+# at once: each stored once, whoever won: its records once in the
+# document, and no more facts than the same session sent by one PC (cb1,
+# the baseline: the mock LLM extracts a fixed set from such a segment).
+# Recorded: how many races had both flushes send.
 m6_check_dedup_concurrent() {
-  local i sid who w rc out st both doc counts
+  local i sid who w rc out st both doc counts base n facts=()
   w=$M6_WORK/concurrent
   rm -rf "$w"
   mkdir -p "$w"
+  m6_session a cb1 "$M6_DEDUP" 1 3 r 120
+  m6_flush_sent a cb1 cb1-r3 > /dev/null
   for i in 1 2 3 4 5; do
     m6_session a "cc$i" "$M6_DEDUP" 1 3 r 120
     m6_copy a b "cc$i" "$M6_DEDUP"
@@ -750,9 +777,20 @@ m6_check_dedup_concurrent() {
     counts=$(m6_uuid_counts "$sid") || exit 1
     [ "$counts" = "$(printf '%s 1\n' "$sid-r1" "$sid-r2" "$sid-r3")" ] || fail "conversation:$sid holds the records $(paste -sd ' ' <<<"$counts"), want r1 r2 r3 once each"
   done
+  # The queue drained: every extraction is done. Positive control: the
+  # baseline produced facts, so a doubled store would show.
+  m6_wait_doc cb1 > /dev/null
+  base=$(m6_facts conversation:cb1) || exit 1
+  [ "$base" -gt 0 ] || fail "conversation:cb1, sent by A alone, produced no fact: a doubled store would not show"
+  for i in 1 2 3 4 5; do
+    n=$(m6_facts "conversation:cc$i") || exit 1
+    [ "$n" -le "$base" ] || fail "conversation:cc$i holds $n facts, the same session sent by one PC $base: it was stored twice"
+    facts+=("$n")
+  done
   both=$(awk '$3 == "sent" { n[$1]++ } END { c = 0; for (s in n) if (n[s] == 2) c++; print c }' "$w/statuses")
-  m6_result dedup-concurrent PASS "cc1-cc5 flushed on A and B at once, both exit 0: each on the server once, 3 records; both sent $both of 5" \
-    "$(jq -Rn --argjson both "$both" '{both_sent: $both, statuses: [inputs | split(" ") | {session: .[0], pc: .[1], status: .[2]}]}' < "$w/statuses")"
+  m6_result dedup-concurrent PASS "cc1-cc5 flushed on A and B at once, both exit 0: each on the server once, 3 records, facts ${facts[*]} (one PC's: $base); both sent $both of 5" \
+    "$(jq -Rn --argjson both "$both" --argjson base "$base" --arg facts "${facts[*]}" \
+      '{both_sent: $both, baseline_facts: $base, facts: ($facts | split(" ") | map(tonumber)), statuses: [inputs | split(" ") | {session: .[0], pc: .[1], status: .[2]}]}' < "$w/statuses")"
 }
 
 # m6_verify_split <who>: verify --live --json there; its data on stdout.
@@ -766,9 +804,9 @@ m6_verify_split() {
 
 # dedup-split: a session sent by A, copied to B and continued on both:
 # nothing lost (every record on the server), each PC's doctor names the
-# split, and neither verify --live fails on a segment or a last record
-# (another PC's later segment is no loss). Recorded: the shared records
-# stored twice, and how far the mock LLM let verify get.
+# split, and verify --live passes on both, B's naming the document A
+# continued after it (another PC's later segment is no loss). Recorded:
+# the shared records stored twice.
 m6_check_dedup_split() {
   local out st doc ma cur seg_b counts u n twice who v sess summary status deadline wait_s left va=pending vb=pending ce_b
   m6_session a sp1 "$M6_DEDUP" 1 3 r 90
@@ -821,18 +859,18 @@ m6_check_dedup_split() {
       case $status in
         pass) ;;
         pending) [ "$(jq -r '.wait_s // 300' <<<"$v")" -ge "$wait_s" ] || wait_s=$(jq -r '.wait_s // 300' <<<"$v") ;;
-        # The mock LLM's facts: past every segment and last record check.
-        fail) case $summary in "consolidation failed for "* | "no observation was consolidated "*) status="fail-llm" ;; *) fail "verify --live on $who: fail: $summary" ;; esac ;;
-        *) fail "verify --live on $who: status $status: $summary" ;;
+        *) fail "verify --live on $who: $status: $summary ($(jq -r '.detail // ""' <<<"$v"))" ;;
       esac
       if [ "$who" = a ]; then va=$status; else vb=$status ce_b=$(jq -c '.continued_elsewhere // []' <<<"$v"); fi
     done
-    [ "$va" != pending ] && [ "$vb" != pending ] && break
+    [ "$va" = pass ] && [ "$vb" = pass ] && break
     left=$((deadline - SECONDS))
-    [ "$left" -gt 0 ] || break
+    [ "$left" -gt 0 ] || fail "verify --live still pending after ${M6_VERIFY_WAIT:-600} s: A $va, B $vb"
     sleep $((wait_s < 10 ? 10 : (wait_s > left ? left : wait_s)))
   done
-  m6_result dedup-split PASS "sp1 continued on A and B: r1-3 a4 a5 a6 b4 b5 all on the server, both doctors name the split; verify --live A $va, B $vb (B: continued elsewhere ${ce_b:-[]}); stored twice: ${twice:-none}" \
+  jq -e 'index("conversation:sp1") != null' > /dev/null <<<"$ce_b" ||
+    fail "verify --live on B passed without naming conversation:sp1 as continued on another PC ($ce_b)"
+  m6_result dedup-split PASS "sp1 continued on A and B: r1-3 a4 a5 a6 b4 b5 all on the server, both doctors name the split; verify --live passes on A and on B (continued elsewhere: $ce_b); stored twice: ${twice:-none}" \
     "$(jq -cn --arg twice "$twice" --arg va "$va" --arg vb "$vb" --argjson ce "${ce_b:-[]}" '{stored_twice: ($twice | split(" ") | map(select(. != ""))), verify: {a: $va, b: $vb}, continued_elsewhere_b: $ce}')"
 }
 

@@ -900,3 +900,111 @@ func TestVMBenchRunEndRemovesBsTokens(t *testing.T) {
 		t.Errorf("the run's end did not bring A's link up: virsh calls %q", calls)
 	}
 }
+
+// RF 2: a document's facts are counted from the server's memory list of
+// that document (observations aside); a page that does not hold them all,
+// or any answer but 200, fails rather than reading as fewer facts.
+func TestM6FactsCountsADocumentsFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, body, want string
+	}{
+		{"facts", "200", `{"total":3,"items":[{"fact_type":"world"},{"fact_type":"experience"},{"fact_type":"observation"}]}`, "2"},
+		{"none", "200", `{"total":0,"items":[]}`, "0"},
+		{"a short page", "200", `{"total":600,"items":[{"fact_type":"world"}]}`, "FAIL: the memories of conversation:cc1: 1 of 600 read"},
+		{"401", "401", `{}`, "FAIL: reading the memories of conversation:cc1: HTTP 401"},
+		{"refused", "refused", `{}`, "FAIL: reading the memories of conversation:cc1: HTTP 000"},
+	} {
+		dir := t.TempDir()
+		m6ServerFakes(t, dir)
+		writeLines(t, filepath.Join(dir, "code"), tc.code)
+		writeLines(t, filepath.Join(dir, "body"), tc.body)
+		stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `n=$(m6_facts conversation:cc1); echo "N[$n]"`)
+		if strings.HasPrefix(tc.want, "FAIL: ") {
+			if code == 0 || strings.Contains(stdout, "N[") || !strings.Contains(stderr, tc.want) {
+				t.Errorf("%s: exit %d, stdout %q, stderr:\n%s", tc.name, code, stdout, stderr)
+			}
+		} else if code != 0 || strings.TrimSpace(stdout) != "N["+tc.want+"]" {
+			t.Errorf("%s: exit %d, stdout %q, want N[%s]; stderr:\n%s", tc.name, code, stdout, tc.want, stderr)
+		}
+		calls, _ := os.ReadFile(filepath.Join(dir, "curl.calls"))
+		if !strings.Contains(string(calls), "http://10.0.0.9:8888/v1/default/banks/bk/memories/list?document_id=conversation%3Acc1&limit=500") {
+			t.Errorf("%s: curl was called with %q", tc.name, calls)
+		}
+	}
+}
+
+// Every run tests the tree it runs from: after the reset and before the
+// first check, run builds the binary and its signed release afresh, gives
+// them to A (~/backsight, ~/release) and is B's binary (VB_DIR/bin).
+func TestVMBenchRunRebuildsBeforeTheFirstCheck(t *testing.T) {
+	fakes := newBenchFakes(t)
+	order := filepath.Join(fakes, "order")
+	// make: the build writes OUT with this run's content; ssh logs its host
+	// and command, keeps what A's ~/backsight receives, and answers A's
+	// version check.
+	writeExec(t, filepath.Join(fakes, "make"), `#!/bin/sh
+d=$(dirname "$0")
+echo make >> "$d/order"
+for a in "$@"; do case $a in OUT=*) printf 'built-this-run\n' > "${a#OUT=}" ;; esac; done
+`)
+	writeExec(t, filepath.Join(fakes, "ssh"), `#!/bin/sh
+d=$(dirname "$0")
+host=$3
+shift 3
+echo "ssh $host $*" >> "$d/order"
+case "$*" in
+  *"cat > ~/backsight"*) cat > "$d/a-backsight" ;;
+  *"tar -xf"*) cat > "$d/a-release.tar" ;;
+  *"version --json"*) echo '{"data":{"version":"0.940.0"}}' ;;
+esac
+exit 0
+`)
+	bench := filepath.Join(t.TempDir(), "bs-m6")
+	root := t.TempDir()
+	for _, d := range []string{filepath.Join(bench, "bin"), filepath.Join(root, "scripts")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLines(t, filepath.Join(bench, "bin", "backsight"), "built-at-up")
+	writeLines(t, filepath.Join(bench, "ssh_config"), "Host bs-m6-server", "  HostName 10.0.0.9")
+	writeLines(t, filepath.Join(bench, "minisign.key"), "k")
+	writeLines(t, filepath.Join(bench, "minisign.pub"), "untrusted comment", "RWPUB")
+	writeLines(t, filepath.Join(root, "LICENSE"), "l")
+	writeLines(t, filepath.Join(root, "README.md"), "r")
+	writeLines(t, filepath.Join(root, "scripts", "m6-proofs.sh"), `m6_check() { echo "check $1" >> "$ORDER"; }`)
+	_, stderr, code := vmBench(t, fakes, t.TempDir(), bench, `VB_ROOT=`+root+`
+vb_is_up() { :; }
+vb_reset() { echo reset >> "$ORDER"; }
+vb_b_claude() { :; }
+vb_authorize_a() { :; }
+vb_run two-clients`, "ORDER="+order)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	raw, _ := os.ReadFile(order)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	idx := func(prefix string) int {
+		for i, l := range lines {
+			if strings.HasPrefix(l, prefix) {
+				return i
+			}
+		}
+		return -1
+	}
+	reset, build, bin, rel, check := idx("reset"), idx("make"), idx("ssh bs-m6-client-bs cat > ~/backsight"), idx("ssh bs-m6-client-bs rm -rf ~/release"), idx("check ")
+	if reset < 0 || build <= reset || bin <= build || rel <= build || check <= bin || check <= rel || lines[check] != "check ssh-unknown-host-key" {
+		t.Errorf("want reset, build, A's binary and release, then the first check; got:\n%s", raw)
+	}
+	for _, f := range []string{filepath.Join(bench, "bin", "backsight"), filepath.Join(fakes, "a-backsight"), filepath.Join(bench, "release", "v0.940.0", "backsight_0.940.0_linux_amd64")} {
+		if b, err := os.ReadFile(f); err != nil || string(b) != "built-this-run\n" {
+			t.Errorf("%s holds %q (%v), want this run's build", f, b, err)
+		}
+	}
+	if tarball, _ := os.ReadFile(filepath.Join(fakes, "a-release.tar")); !bytes.Contains(tarball, []byte("release/v0.940.0/checksums.txt")) {
+		t.Error("A did not receive the new release with its checksums")
+	}
+	if calls := strings.Join(benchCalls(t, fakes, "minisign"), "\n"); !strings.Contains(calls, "-S ") {
+		t.Errorf("the release was not signed: minisign calls %q", calls)
+	}
+}

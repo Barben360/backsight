@@ -9,8 +9,9 @@
 #   scripts/vm-bench.sh reset           both VMs back to bs-m6-clean
 #   scripts/vm-bench.sh down [--purge]  every bs-m6-* domain, snapshot and volume, and VB_DIR
 #                                       but results/ and cache/ (--purge: cache/ too)
-#   scripts/vm-bench.sh run [check…]    reset, the install chain and two-clients, then the
-#                                       checks named (default: all); results/<UTC stamp>.md
+#   scripts/vm-bench.sh run [check…]    reset, this tree built and given to A and B, the
+#                                       install chain and two-clients, then the checks
+#                                       named (default: all); results/<UTC stamp>.md
 #
 # Run by hand only, when the user asks: never on CI, from a timer or a hook
 # (it refuses when CI or GITHUB_ACTIONS is set). Every libvirt resource it
@@ -381,13 +382,19 @@ vb_provision_client() {
     "$VB_CLAUDE "*) ;;
     *) vb_fail "client: claude is not $VB_CLAUDE on bs's PATH" ;;
   esac
+  vb_push_a
+  vb_ssh bs-m6-client-bs 'test -s ~/.ssh/id_ed25519' < /dev/null || vb_fail "client: bs has no ssh key"
+  vb_ssh bs-m6-client 'sudo tc qdisc add dev lo root netem delay 1ms && sudo tc qdisc del dev lo root' < /dev/null 2>> "$(vb_log)" ||
+    vb_fail "client: netem does not work (see $(vb_log))"
+}
+
+# vb_push_a: the bench build to A (~/backsight) with its release
+# (~/release), the one ssh install sends the server.
+vb_push_a() {
   vb_ssh bs-m6-client-bs 'cat > ~/backsight && chmod 755 ~/backsight' < "$VB_DIR/bin/backsight" || vb_fail "client: cannot copy backsight"
   tar -C "$VB_DIR" -cf - release | vb_ssh bs-m6-client-bs 'rm -rf ~/release && tar -xf - -C ~' || vb_fail "client: cannot copy the release"
   [ "$(vb_ssh bs-m6-client-bs '~/backsight version --json' < /dev/null | jq -r .data.version)" = "$VB_VERSION" ] ||
     vb_fail "client: ~/backsight is not $VB_VERSION"
-  vb_ssh bs-m6-client-bs 'test -s ~/.ssh/id_ed25519' < /dev/null || vb_fail "client: bs has no ssh key"
-  vb_ssh bs-m6-client 'sudo tc qdisc add dev lo root netem delay 1ms && sudo tc qdisc del dev lo root' < /dev/null 2>> "$(vb_log)" ||
-    vb_fail "client: netem does not work (see $(vb_log))"
 }
 
 # vb_snapshot <vm>: the seed ISO (the host's private key) ejected, then
@@ -698,6 +705,12 @@ vb_run() {
   vb_is_up || vb_refuse "the bench is not up (scripts/vm-bench.sh status; up first)"
   vb_reset
   vb_mkdir "$VB_DIR/results" "$VB_DIR/work/run" "$VB_DIR/logs"
+  # The snapshot holds the build of up's day: every run tests this tree,
+  # built again (B's binary is VB_DIR/bin's) and given to A with its
+  # release.
+  vb_say "building backsight $VB_VERSION (testkey) and its release from this tree"
+  vb_build
+  vb_push_a
   vb_b_claude
   # shellcheck source=scripts/m6-proofs.sh
   . "$VB_ROOT/scripts/m6-proofs.sh"
@@ -719,7 +732,7 @@ vb_run() {
 fail() { vb_fail "$@"; }
 
 vb_usage() {
-  sed -n '6,13p' "${BASH_SOURCE[0]}" | sed 's/^# //' >&2
+  sed -n '6,14p' "${BASH_SOURCE[0]}" | sed 's/^# //' >&2
   exit 2
 }
 
