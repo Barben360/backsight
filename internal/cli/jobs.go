@@ -65,14 +65,18 @@ func newJobsTickCmd(e *env) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
-			cfg, sec, err := loadServerConfig()
-			if err != nil {
-				return err
-			}
 			d, home, err := machine()
 			if err != nil {
 				return err
 			}
+			// Before the config it goes with: a connect between the two
+			// (or during startLateServer below) stops this tick's sends.
+			generation := sendsGeneration(d)
+			cfg, sec, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
+			sendsConfigLoaded()
 			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
 			res := tickResult{Status: "done"}
 			finish := func(failed error) error {
@@ -108,7 +112,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Server = startLateServer(sctx, d, cfg)
 			scancel()
 
-			f, err := newFlusher(d, home, cfg, sec, true)
+			f, err := newFlusher(d, home, cfg, sec, generation, true)
 			if err != nil {
 				return err
 			}

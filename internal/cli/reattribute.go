@@ -130,15 +130,17 @@ func reattribute(ctx context.Context, f reattributeFlags, opt reattributeOptions
 			return res, &output.Error{Code: output.Usage, Message: "unknown answer " + k + ": retain reattribute asks resend and backup"}
 		}
 	}
-	cfg, sec, err := loadServerConfig()
-	if err != nil {
-		return res, err
-	}
 	d, home, err := machine()
 	if err != nil {
 		return res, err
 	}
-	fl, err := newFlusher(d, home, cfg, sec, false)
+	generation := sendsGeneration(d) // before the config it goes with
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		return res, err
+	}
+	sendsConfigLoaded()
+	fl, err := newFlusher(d, home, cfg, sec, generation, false)
 	if err != nil {
 		return res, err
 	}

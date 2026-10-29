@@ -78,6 +78,22 @@ func TestRetainFlushSendsLiveSessions(t *testing.T) {
 	}
 }
 
+// retain flush whose config predates a whole connect sends nothing to
+// either server and saves no cursor; the next one sends to the new server.
+func TestRetainFlushWhoseConfigPredatesConnectSendsNothing(t *testing.T) {
+	hosts, newHost, cursor := configPredatesConnect(t)
+	code, out, errOut := run(t, "retain", "flush", "--session", "settled", "--json")
+	if got := hosts(); len(got) != 0 {
+		t.Fatalf("retains sent to %v\nexit %d\n%s%s", got, code, out, errOut)
+	}
+	if _, err := os.Stat(cursor); err == nil {
+		t.Errorf("cursor saved\n%s", out)
+	}
+	if code, out, errOut := run(t, "retain", "flush", "--session", "settled", "--json"); code != output.OK || !sentOnlyTo(hosts(), newHost) {
+		t.Fatalf("next flush: exit %d, retains to %v, want %s\n%s%s", code, hosts(), newHost, out, errOut)
+	}
+}
+
 func TestRetainFlushServerDownIsPartial(t *testing.T) {
 	home := devInstall(t, true) // closed port
 	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))

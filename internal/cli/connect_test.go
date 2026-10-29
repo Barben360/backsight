@@ -640,12 +640,13 @@ func TestConnectStopsAFlusherBuiltBefore(t *testing.T) {
 	})
 	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
 	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	generation := sendsGeneration(d)
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sec, _ := config.LoadSecrets(d.SecretsFile())
-	stale, err := newFlusher(d, home, cfg, sec, false)
+	stale, err := newFlusher(d, home, cfg, sec, generation, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -807,6 +808,109 @@ func TestConnectResumesAFailedBinding(t *testing.T) {
 	if st, _ := state.Load(d.StateFile()); st.RemoteServer.ID != tok.ServerID {
 		t.Errorf("binding: %+v", st.RemoteServer)
 	}
+}
+
+// serverSetup is the server URL config.toml names and the API key
+// secrets.toml holds.
+type serverSetup struct{ url, key string }
+
+func serverSetupOf(t *testing.T, home string) serverSetup {
+	t.Helper()
+	d := pathsOf(home)
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := config.LoadSecrets(d.SecretsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serverSetup{cfg.Server.URL, sec.APIKey}
+}
+
+// A process that loads its config while connect or connect --undo runs
+// (a store, an MCP server, a tick) reads the sends generation first, then
+// config.toml, then the key: whatever step it reads at, it holds the old
+// URL or the old key, and its sends gate refuses once the command ended.
+func TestConnectWindowReadersAreStopped(t *testing.T) {
+	for _, row := range []struct {
+		step   string
+		undo   bool
+		newURL bool // the step comes after config.toml's write
+	}{
+		{"config", false, false},
+		{"secrets", false, true},
+		{"undo-config", true, false},
+		{"undo-secrets", true, true},
+	} {
+		t.Run(row.step, func(t *testing.T) {
+			home, _ := setupMachine(t)
+			d := pathsOf(home)
+			args := []string{"connect", "--undo", "--json"}
+			if row.undo {
+				connectedFromOwnServer(t, home)
+			} else {
+				tok := joinableHost(t)
+				switchingClient(t, home)
+				args = []string{"connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"}
+			}
+			before := serverSetupOf(t, home)
+			gen, read := 0, false
+			var held serverSetup
+			old := connectFault
+			connectFault = func(step string) error {
+				if step == row.step { // a store process loading its config now
+					gen, read = sendsGeneration(d), true
+					held = serverSetupOf(t, home)
+				}
+				return nil
+			}
+			t.Cleanup(func() { connectFault = old })
+
+			if code, out, errOut := run(t, args...); code != output.OK || !read {
+				t.Fatalf("exit %d, read at %s: %v\n%s%s", code, row.step, read, out, errOut)
+			}
+			after := serverSetupOf(t, home)
+			if before.url == after.url || before.key == after.key {
+				t.Fatalf("the command changed URL %v, key %v: the row proves nothing", before.url != after.url, before.key != after.key)
+			}
+			want := serverSetup{before.url, before.key}
+			if row.newURL {
+				want.url = after.url
+			}
+			if held != want {
+				t.Errorf("read at %s: URL %s, old key %v; want URL %s, old key", row.step, held.url, held.key == before.key, want.url)
+			}
+			if err := sendsGate(d, gen)(); !errors.Is(err, retain.ErrStartedOver) {
+				t.Errorf("the reader's gate at generation %d: %v, want ErrStartedOver", gen, err)
+			}
+		})
+	}
+}
+
+// A failure raising the sends generation, once config.toml and the key
+// are written, puts everything back (exit 30): the generation as it was,
+// config.toml and secrets.toml byte for byte.
+func TestConnectRaisedGenerationRollsBack(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	if err := state.Update(d, "test", func(s *state.State) error { s.SendsGeneration = 4; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	files := contentsOf(t, []string{d.ConfigFile(), d.SecretsFile()})
+	before := treeOf(t, home)
+	withConnectFault(t, "generation")
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.RolledBack || env.Error == nil || !strings.Contains(env.Error.Message, "injected generation failure") || leaked(out+errOut, tok) {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if st, _ := state.Load(d.StateFile()); st.SendsGeneration != 4 {
+		t.Errorf("sends_generation %d, want 4", st.SendsGeneration)
+	}
+	sameContents(t, files)
+	sameTree(t, before, treeOf(t, home))
 }
 
 // A token typed as a flag's value by mistake is quoted back by the flag

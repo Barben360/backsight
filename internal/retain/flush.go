@@ -80,7 +80,8 @@ type Flusher struct {
 	// ServerID: the id of the server this client joined (connect); ""
 	// when it joined none, which checks no id.
 	ServerID string
-	// SendsGeneration: state.json's when the flusher was built. Once
+	// SendsGeneration: state.json's when the caller started to read its
+	// config, before it (and the key) were read. Once
 	// connect started the sends over for another server, this flusher's
 	// client, bank and sent index are the old server's: it sends nothing
 	// and saves no cursor, a next run does.

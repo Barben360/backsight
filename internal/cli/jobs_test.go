@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -367,6 +369,72 @@ func TestTickRecordsNoAnswerFromAnotherServer(t *testing.T) {
 	run(t, "jobs", "tick")
 	if r := state.LoadReach(pathsOf(home)); !r.LastOK.Equal(last) || !r.FailingSince.IsZero() {
 		t.Errorf("another server: %+v", r)
+	}
+}
+
+// configPredatesConnect makes home a PC that sends to fake A, a session
+// settled, and a whole connect to fake B happen once the next process
+// loaded its config (config.toml rewritten, the sends generation raised).
+// It returns the hosts each retain went to, B's host and the session's
+// cursor.
+func configPredatesConnect(t *testing.T) (hosts func() []string, newHost, cursor string) {
+	t.Helper()
+	home := devInstall(t, true)
+	a, b := fakeHindsight(t), fakeHindsight(t)
+	pointAt(t, home, a)
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // first tick: retain_since = 08:00
+	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	var mu sync.Mutex
+	var seen []string
+	fakeHook = func(r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories") {
+			mu.Lock()
+			seen = append(seen, r.Host)
+			mu.Unlock()
+		}
+	}
+	old := sendsConfigLoaded
+	sendsConfigLoaded = func() {
+		pointAt(t, home, b)
+		if err := state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		sendsConfigLoaded = old // one connect
+	}
+	t.Cleanup(func() { sendsConfigLoaded = old })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}, "127.0.0.1:" + strconv.Itoa(b), filepath.Join(pathsOf(home).CursorsDir(), "settled.json")
+}
+
+// sentOnlyTo: at least one retain, every one to host.
+func sentOnlyTo(hosts []string, host string) bool {
+	return len(hosts) > 0 && !slices.ContainsFunc(hosts, func(h string) bool { return h != host })
+}
+
+// A tick whose config predates a whole connect (read before connect wrote
+// the new server's, the flusher built after connect raised the sends
+// generation) sends nothing to either server and saves no cursor; the
+// next tick sends the session to the new server.
+func TestTickWhoseConfigPredatesConnectSendsNothing(t *testing.T) {
+	hosts, newHost, cursor := configPredatesConnect(t)
+	code, out, errOut := run(t, "jobs", "tick", "--json")
+	if got := hosts(); len(got) != 0 {
+		t.Fatalf("retains sent to %v\nexit %d\n%s%s", got, code, out, errOut)
+	}
+	if _, err := os.Stat(cursor); err == nil {
+		t.Errorf("cursor saved\n%s", out)
+	}
+	// The session was sendable: the next tick sends it, to B only.
+	if code, out, errOut := run(t, "jobs", "tick", "--json"); code != output.OK || !sentOnlyTo(hosts(), newHost) {
+		t.Fatalf("next tick: exit %d, retains to %v, want %s\n%s%s", code, hosts(), newHost, out, errOut)
+	}
+	if _, err := os.Stat(cursor); err != nil {
+		t.Errorf("next tick saved no cursor: %v", err)
 	}
 }
 

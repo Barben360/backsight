@@ -66,9 +66,10 @@ type State struct {
 	// RemoteServer: the server this client joined (connect); nil on a
 	// machine that joined none, which checks no server id.
 	RemoteServer *RemoteServer `json:"remote_server,omitempty"`
-	// SendsGeneration counts the times connect (or connect --undo) started
-	// this PC's sends over for another server: a flusher built before
-	// sends nothing after (retain.Flusher.SendsGeneration).
+	// SendsGeneration grows each time connect (or connect --undo) starts
+	// this PC's sends over for another server, once as it moves the sends
+	// aside and once its config and key are written: a process that read
+	// its config before sends nothing after (retain.Flusher.SendsGeneration).
 	SendsGeneration int `json:"sends_generation,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
