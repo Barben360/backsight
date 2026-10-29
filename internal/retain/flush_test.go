@@ -858,6 +858,11 @@ func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	if e.hs.gets != gets+1 {
 		t.Errorf("%d document reads, want the append's one check (movedElsewhere)", e.hs.gets-gets)
 	}
+	// A resync rebuilds the cursor, its record count from zero: an
+	// incremental append adds to the count the resync left (1).
+	if cur, _, _ = LoadCursor(e.f.Dirs.CursorsDir(), "s1"); cur.Records != 2 {
+		t.Errorf("records %d, want 2: the third flush resynced", cur.Records)
+	}
 }
 
 // Issue 101 for a side document: its first segment is not readable yet and

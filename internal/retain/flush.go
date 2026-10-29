@@ -313,8 +313,9 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 // another record), started a document this cursor never wrote to, or the
 // segment is invalid. The resync then numbers this PC's segment after the
 // server's and records the split. A document still where cur left it, or
-// at an earlier segment of this PC's own (an append of its own not
-// applied yet), or not readable yet after this PC's sends, is unchanged:
+// at an earlier segment of this PC's own or at the position its last
+// split numbered from (an append of its own not applied yet), or not
+// readable yet after this PC's sends, is unchanged:
 // the append goes out as before. A read that fails is an error: nothing
 // is sent. One read per document, only when there is something to send.
 func (f *Flusher) movedElsewhere(ctx context.Context, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone) (bool, error) {
@@ -354,7 +355,9 @@ func (f *Flusher) unchangedSince(cur Cursor, sid, p string, d serverDoc) bool {
 	case seg == mine:
 		return d.lastUUID == last || (last == "" && own)
 	}
-	return own // an earlier segment: this PC's, its later ones still pending
+	// An earlier segment: this PC's, or the other PC's one this PC's last
+	// split numbered from; this PC's later segments are still pending.
+	return own || cur.SplitBases[p] == SplitBase{Segment: seg, LastUUID: d.lastUUID}
 }
 
 // resync rebuilds the cursor from the server's documents (decision 0038):
@@ -428,6 +431,12 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	for p, seg := range pos.segments {
 		cur.Segments[p], cur.LastUUIDs[p] = seg, pos.last[p]
 		cur.setDoc(sid, p, LiveDocumentID(sid, cur.Home, p, tombs))
+		if pos.split[p] {
+			if cur.SplitBases == nil {
+				cur.SplitBases = map[string]SplitBase{}
+			}
+			cur.SplitBases[p] = SplitBase{Segment: seg, LastUUID: pos.last[p]}
+		}
 	}
 	cur.Legacy = pos.legacyUUID
 	// Released from quarantine after a first segment the server never

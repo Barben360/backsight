@@ -30,7 +30,7 @@ func (consolidated) QueuedOperations(context.Context, string) (int, error) { ret
 // passes and names the document B continued: B's segment is a later one,
 // from another machine id, not a loss of A's.
 func TestLiveCheckPassesOnThePCWhoseSegmentAnotherPCFollowed(t *testing.T) {
-	pc := retain.ContinuedElsewhere(t)
+	pc := retain.ContinueElsewhere(t)
 	written := pc.SentAt.Add(-time.Hour)
 	if err := os.Chtimes(pc.Transcript, written, written); err != nil {
 		t.Fatal(err)

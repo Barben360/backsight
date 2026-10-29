@@ -207,6 +207,18 @@ type Cursor struct {
 	// it is not DocumentID's (a purge moved the project to a successor id,
 	// LiveDocumentID).
 	SegmentDocs map[string]string `json:"segment_documents,omitempty"`
+	// SplitBases: for each project whose document the last resync found
+	// split (decision 0073), the server's position it numbered from. Until
+	// the server applies this PC's later segments, it still reads there:
+	// this PC's own lag, not another PC's move (movedElsewhere).
+	SplitBases map[string]SplitBase `json:"split_bases,omitempty"`
+}
+
+// SplitBase is a document's position on the server: its segment and the
+// last record of that segment.
+type SplitBase struct {
+	Segment  int    `json:"segment"`
+	LastUUID string `json:"last_uuid"`
 }
 
 // setDoc records doc as project p's document (kept only when it is not

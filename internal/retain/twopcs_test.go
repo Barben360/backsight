@@ -138,6 +138,29 @@ func TestAppendAfterAnotherPCMovedTheDocument(t *testing.T) {
 	}
 }
 
+// After its split, B's own segment 3 is not applied yet (async retain):
+// the server still names A's segment 2, the position B's resync rebuilt
+// from. That is B's own lag, not a new move: B's next segment is 4, not a
+// second resync sending 3 again.
+func TestAnAppendAfterASplitWhileTheServerLagsFollowsThisPCsSegment(t *testing.T) {
+	a, b := continuedOnTwoPCs(t)
+	a.hs.stale = true // nothing B sends from now on is applied to the metadata
+	expect(t, b.flush("sp1", Options{}), Sent, 2, 3)
+	b.turns(5, "b6")
+	expect(t, b.flush("sp1", Options{}), Sent, 1, 4)
+	var segs []string
+	for _, it := range a.hs.itemsOf("conversation:sp1") {
+		segs = append(segs, it.Metadata["segment"])
+	}
+	if !reflect.DeepEqual(segs, []string{"1", "2", "3", "4"}) {
+		t.Errorf("segments sent %v, want 1 2 3 4", segs)
+	}
+	a.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "a4", "a5", "b4", "b5", "b6")
+	if c := b.sp1Cursor(); c.Segments[c.Home] != 4 || c.LastUUIDs[c.Home] != "b6" {
+		t.Errorf("B's cursor: segments %v last %v", c.Segments, c.LastUUIDs)
+	}
+}
+
 // The server still holds what this PC's cursor says: the append goes out
 // as before, one read of its document, no split; a flush with nothing to
 // send reads nothing.
@@ -231,20 +254,22 @@ func TestAFirstSegmentOfADocumentAnotherPCStartedFollowsIt(t *testing.T) {
 	}
 }
 
-// PCAfterAContinuationElsewhere is A's side once B appended its segment
-// (TestAppendAfterAnotherPCMovedTheDocument's first part), for
-// verify --live's test: A's transcript, cursors and machine id, and the
-// server both PCs sent to.
-type PCAfterAContinuationElsewhere struct {
+// ContinuedElsewhere is A's side once B appended its segment 3 after A's
+// segment 2 (TestAppendAfterAnotherPCMovedTheDocument's first part), for
+// verify --live's test: the server both PCs sent to, A's bank, machine id,
+// transcript and cursors directory, and when A sent.
+type ContinuedElsewhere struct {
 	Server             *hindsight.Client
 	Bank, MachineID    string
 	Transcript, Cursor string
 	SentAt             time.Time
 }
 
-func ContinuedElsewhere(t *testing.T) PCAfterAContinuationElsewhere {
+// ContinueElsewhere plays sp1 continued on A and B, B flushing last, and
+// returns A's side (ContinuedElsewhere).
+func ContinueElsewhere(t *testing.T) ContinuedElsewhere {
 	a, b := continuedOnTwoPCs(t)
 	expect(t, b.flush("sp1", Options{}), Sent, 2, 3)
-	return PCAfterAContinuationElsewhere{Server: a.f.Client, Bank: a.f.Bank, MachineID: a.f.MachineID,
+	return ContinuedElsewhere{Server: a.f.Client, Bank: a.f.Bank, MachineID: a.f.MachineID,
 		Transcript: filepath.Join(a.dir, "sp1.jsonl"), Cursor: a.f.Dirs.CursorsDir(), SentAt: a.clock}
 }
