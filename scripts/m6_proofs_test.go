@@ -1238,6 +1238,85 @@ func TestM6ReconcilesReadsEveryTickSince(t *testing.T) {
 	if code != 0 || stdout != want {
 		t.Errorf("exit %d, lines\n%s\nwant\n%s\nstderr:\n%s", code, stdout, want, stderr)
 	}
+	// m6_ticks: the same ticks as whole events, so a timer's reconcile
+	// tells what it sent.
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_ticks a `+since+` | jq -r '"\(.ts) \(.details.sessions.sent // "-")"'`)
+	if want := "2026-10-29T10:00:04.000Z -\n2026-10-29T10:01:00.000Z -\n2026-10-29T10:02:00.000Z -\n2026-11-01T00:00:00.000Z -\n"; code != 0 || stdout != want {
+		t.Errorf("m6_ticks: exit %d, stdout\n%s\nwant\n%s\nstderr:\n%s", code, stdout, want, stderr)
+	}
+	writeLines(t, filepath.Join(tel, "events-2026-12.jsonl"),
+		`{"ts":"2026-12-01T00:00:00.000Z","event":"job","name":"tick","status":"done","details":{"epoch":"restore epoch 3 -> 4: 1 session(s) resume from the server","sessions":{"sent":1}}}`)
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_ticks a 2026-12-01T00:00:00.000Z | jq -r '.details.sessions.sent'`)
+	if code != 0 || stdout != "1\n" {
+		t.Errorf("m6_ticks sent: exit %d, stdout %q; stderr:\n%s", code, stdout, stderr)
+	}
+	// A telemetry that cannot be read fails: never "no tick".
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_sh() { return 3; }; m6_reconciles a `+since+`; echo END`)
+	if code == 0 || strings.Contains(stdout, "END") || !strings.Contains(stderr, "FAIL: cannot read a's telemetry") {
+		t.Errorf("unreadable telemetry: exit %d, stdout %q, stderr:\n%s", code, stdout, stderr)
+	}
+}
+
+// RF 2 and the order of checks (the CI chain runs another): before a check
+// counts what each tick sends, both PCs are settled: each ticks, the queue
+// drains, until both ticks send nothing (sessions or notes); a PC that
+// keeps sending fails the check after M6_SETTLE_ROUNDS rounds, never
+// passing on a count an earlier check's session would spoil.
+func TestM6SettleTicksUntilNothingIsSent(t *testing.T) {
+	const fake = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+case "$*" in
+  "jobs tick --json")
+    n=$(($(cat "$t/calls-$WHO" 2>/dev/null || echo 0) + 1))
+    echo "$n" > "$t/calls-$WHO"
+    line=$(sed -n "${n}p" "$t/ticks-$WHO")
+    [ -n "$line" ] || line=$(tail -n 1 "$t/ticks-$WHO")
+    echo "$line" ;;
+  "paths --json") printf '{"ok":true,"data":{"config_file":"%s/config.toml","secrets_file":"%s/secrets.toml","state":"%s/state"}}\n' "$HOME" "$HOME" "$HOME" ;;
+  *) echo '{"ok":false}'; exit 1 ;;
+esac
+`
+	const curl = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+echo x >> "$t/queue.calls"
+echo '{"total":0}'
+`
+	const zero = `{"ok":true,"data":{"status":"done","sessions":{"nothing":2},"notes":{"sent":0}}}`
+	const one = `{"ok":true,"data":{"status":"done","sessions":{"sent":1},"notes":{"sent":0}}}`
+	const note = `{"ok":true,"data":{"status":"done","sessions":{"nothing":2},"notes":{"sent":1}}}`
+	for _, tc := range []struct {
+		name         string
+		a, b         []string
+		calls, fails string
+	}{
+		{"settled at once", []string{zero}, []string{zero}, "1 1", ""},
+		{"a sends then nothing", []string{one, zero}, []string{zero}, "2 2", ""},
+		{"b's note then nothing", []string{zero}, []string{note, zero}, "2 2", ""},
+		{"a keeps sending", []string{one}, []string{zero}, "3 3", "a session from an earlier check was still pending after 3 settle round(s): a sent {\"sent\":1} (notes 0)"},
+	} {
+		dir := t.TempDir()
+		m6ServerFakes(t, dir)
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), fake)
+		writeExec(t, filepath.Join(dir, "bin", "curl"), curl)
+		writeLines(t, filepath.Join(dir, "ticks-a"), tc.a...)
+		writeLines(t, filepath.Join(dir, "ticks-b"), tc.b...)
+		stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_settle a b; echo SETTLED`, "M6_SETTLE_ROUNDS=3", "M6_TICK_EVERY=0")
+		ca, _ := os.ReadFile(filepath.Join(dir, "calls-a"))
+		cb, _ := os.ReadFile(filepath.Join(dir, "calls-b"))
+		if got := strings.TrimSpace(string(ca)) + " " + strings.TrimSpace(string(cb)); got != tc.calls {
+			t.Errorf("%s: ticks a b %q, want %q", tc.name, got, tc.calls)
+		}
+		if q, _ := os.ReadFile(filepath.Join(dir, "queue.calls")); len(q) == 0 {
+			t.Errorf("%s: the queue was never waited for", tc.name)
+		}
+		if tc.fails == "" {
+			if code != 0 || stdout != "SETTLED\n" {
+				t.Errorf("%s: exit %d, stdout %q; stderr:\n%s", tc.name, code, stdout, stderr)
+			}
+		} else if code == 0 || strings.Contains(stdout, "SETTLED") || !strings.Contains(stderr, "FAIL: "+tc.fails) {
+			t.Errorf("%s: exit %d, stdout %q, want FAIL: %s; stderr:\n%s", tc.name, code, stdout, tc.fails, stderr)
+		}
+	}
 }
 
 // The tombstones a purge recorded are read from the server's control bank

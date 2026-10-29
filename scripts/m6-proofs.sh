@@ -1002,17 +1002,45 @@ m6_epoch() {
   jq -r '.restore_epoch.epoch // 0' <<<"$st"
 }
 
-# m6_reconciles <who> <since>: one line per jobs tick that PC ran since
-# <since> (an ISO time of that machine's clock, UTC): its restore epoch
-# reconcile (details.epoch of the tick's telemetry event), "-" for a tick
-# that reconciled nothing. A tick the VM bench's timer ran is seen as one
-# run by m6_tick; the telemetry is the product's own record of both.
-m6_reconciles() {
-  local tel
+# m6_ticks <who> <since>: every jobs tick that PC ran since <since> (an
+# ISO time of that machine's clock, UTC), skipped ones aside: its telemetry
+# event (JSON), one a line. A tick the VM bench's timer ran is seen as one
+# run by m6_tick: the telemetry is the product's own record of both. No
+# telemetry is no tick; one that cannot be read fails.
+m6_ticks() {
+  local tel raw
   tel=$(m6_paths "$1" | jq -r .state)/telemetry
-  m6_sh "$1" "if [ -d $(m6_q "$tel") ]; then cat $(m6_q "$tel")/events-*.jsonl 2> /dev/null || true; fi" |
-    jq -rR --arg s "$2" 'fromjson? | select(.event == "job" and .name == "tick" and .status != "skipped" and .ts >= $s) | (.details.epoch // "") | if . == "" then "-" else . end' ||
+  raw=$(m6_sh "$1" "if [ -d $(m6_q "$tel") ]; then cat $(m6_q "$tel")/events-*.jsonl 2> /dev/null || true; fi") ||
     fail "cannot read $1's telemetry"
+  jq -cR --arg s "$2" 'fromjson? | select(.event == "job" and .name == "tick" and .status != "skipped" and .ts >= $s)' <<<"$raw"
+}
+
+# m6_reconciles <who> <since>: one line per tick of m6_ticks: its restore
+# epoch reconcile (details.epoch), "-" for a tick that reconciled nothing.
+m6_reconciles() {
+  local ticks
+  ticks=$(m6_ticks "$1" "$2") || exit 1
+  [ -z "$ticks" ] || jq -r '(.details.epoch // "") | if . == "" then "-" else . end' <<<"$ticks"
+}
+
+# m6_settle <who…>: those PCs have nothing left to send before a check
+# counts what each tick sends (an earlier check, in whatever order the
+# driver runs them, may have left a session or a note): each ticks, the
+# queue drains, until every tick of a round sent nothing; still sending
+# after M6_SETTLE_ROUNDS rounds (5) fails.
+m6_settle() {
+  local round who tick sent left
+  for round in $(seq 1 "${M6_SETTLE_ROUNDS:-5}"); do
+    left=
+    for who in "$@"; do
+      tick=$(m6_tick "$who") || exit 1
+      sent=$(jq -r '(.data.sessions.sent // 0) + (.data.notes.sent // 0)' <<<"$tick")
+      [ "$sent" = 0 ] || left+="${left:+; }$who sent $(jq -c '.data.sessions | {sent}' <<<"$tick") (notes $(jq -r '.data.notes.sent // 0' <<<"$tick"))"
+    done
+    m6_queue_wait
+    [ -n "$left" ] || return 0
+  done
+  fail "a session from an earlier check was still pending after ${M6_SETTLE_ROUNDS:-5} settle round(s): $left"
 }
 
 # m6_tombstoned <docid>: the server's control bank lists that document
@@ -1031,7 +1059,10 @@ m6_tombstoned() {
 # warns), each one's next tick reconciles and re-sends its own lost
 # session once, and nothing the archive holds (tc-a, tc-b) goes again.
 m6_check_restore_across_clients() {
-  local p=bs-m6-restore out rc=0 archive since who sid tick ep new lines n by=() old_a old_b old meta cur
+  local p=bs-m6-restore out rc=0 archive since who sid tick ep new lines n by_a by_b by old_a old_b old meta cur sent
+  # Each tick below is counted (one session re-sent, then none): nothing
+  # an earlier check left may go out with them.
+  m6_settle a b
   # Before the archive: tc-a and tc-b (two-clients) as the server holds
   # them and as each PC's cursor says.
   for who in a b; do
@@ -1077,7 +1108,11 @@ m6_check_restore_across_clients() {
   # tc-b, and both PCs are behind the bank's epoch (A's timer may have
   # reconciled A already: its telemetry then says so).
   for who in a b; do
-    [ -z "$(m6_doc "conversation:rs-$who")" ] || fail "conversation:rs-$who survived the restore: the check would prove nothing"
+    # Present again only if A's timer reconciled and re-sent it already.
+    if [ -n "$(m6_doc "conversation:rs-$who")" ]; then
+      [ "$(m6_reconciles "$who" "$(cat "$M6_WORK/restore-since-$who")" | grep -c '^restore epoch ')" = 1 ] ||
+        fail "conversation:rs-$who survived the restore, and no tick of $who reconciled: the check would prove nothing"
+    fi
     [ -n "$(m6_doc "conversation:tc-$who")" ] || fail "conversation:tc-$who, which the archive holds, is not on the server after the restore"
     case $(m6_doctor_status "$who" restore-epoch) in
       warn) ;;
@@ -1097,11 +1132,14 @@ m6_check_restore_across_clients() {
     tick=$(m6_tick "$who") || exit 1
     ep=$(jq -r '.data.epoch // ""' <<<"$tick")
     if [ -n "$ep" ]; then
-      [ "$(jq -r '.data.sessions.sent // 0' <<<"$tick")" = 1 ] || fail "the tick that reconciled $who sent $(jq -c '.data.sessions' <<<"$tick"), want rs-$who alone"
-      by+=("$who: this tick")
+      by=tick sent=$(jq -c '.data.sessions' <<<"$tick")
     else
-      by+=("$who: its timer's tick")
+      # A's timer reconciled first: what its tick sent, from its telemetry.
+      by=timer sent=$(m6_ticks "$who" "$(cat "$M6_WORK/restore-since-$who")" |
+        jq -sc '[.[] | select((.details.epoch // "") | startswith("restore epoch "))][0].details.sessions // {}')
     fi
+    [ "$(jq -r '.sent // 0' <<<"$sent")" = 1 ] || fail "the $by tick that reconciled $who sent $sent, want rs-$who alone"
+    if [ "$who" = a ]; then by_a=$by; else by_b=$by; fi
     # Every tick since the restore, this one too (positive control of the
     # telemetry): one reconciled, and only rs-<who> resumed.
     lines=$(m6_reconciles "$who" "$(cat "$M6_WORK/restore-since-$who")")
@@ -1141,9 +1179,9 @@ m6_check_restore_across_clients() {
   for who in a b; do
     [ "$(m6_meta "rs-$who")" = "$(cat "$M6_WORK/restore-rs-$who.meta")" ] || fail "conversation:rs-$who changed after the next tick: $(m6_meta "rs-$who")"
   done
-  m6_result restore-across-clients PASS "the host restored an archive taken before rs-a and rs-b (epoch $old_a/$old_b -> $new): both doctors warned, each tick reconciled and re-sent its own lost session once (${by[*]}); tc-a, tc-b not sent again; next ticks sent nothing" \
-    "$(jq -cn --argjson new "$new" --argjson a "$old_a" --argjson b "$old_b" --arg ea "$(cat "$M6_WORK/restore-epoch-a")" --arg eb "$(cat "$M6_WORK/restore-epoch-b")" --arg by "${by[*]}" \
-      '{epoch: {a: $a, b: $b, new: $new}, reconcile: {a: $ea, b: $eb}, reconciled_by: $by}')"
+  m6_result restore-across-clients PASS "the host restored an archive taken before rs-a and rs-b (epoch $old_a/$old_b -> $new): both doctors warned, each tick reconciled and re-sent its own lost session once (by A's $by_a, B's $by_b); tc-a, tc-b not sent again; next ticks sent nothing" \
+    "$(jq -cn --argjson new "$new" --argjson a "$old_a" --argjson b "$old_b" --arg ea "$(cat "$M6_WORK/restore-epoch-a")" --arg eb "$(cat "$M6_WORK/restore-epoch-b")" --arg ba "$by_a" --arg bb "$by_b" \
+      '{epoch: {a: $a, b: $b, new: $new}, reconcile: {a: $ea, b: $eb}, reconciled_by: {a: $ba, b: $bb}}')"
 }
 
 # purge-across-clients: A purges a project B holds a copy of; B learns the
@@ -1151,11 +1189,17 @@ m6_check_restore_across_clients() {
 # document again nor any record the purge covered: only its turn written
 # after it goes out, to the document's successor (conversation:pg1#2).
 m6_check_purge_across_clients() {
-  local p=bs-m6-purge out rc=0 st cur counts
+  local p=bs-m6-purge out rc=0 st cur counts facts who
+  # The ticks below must send nothing: nothing an earlier check left may
+  # go out with them (restore-across-clients settles them too, before it).
+  m6_settle a b
   m6_session a pg1 "$p" 1 3 r 120
   m6_flush_sent a pg1 pg1-r3 > /dev/null
   m6_queue_wait
   m6_wait_doc pg1 > /dev/null
+  # Positive control of the purge: pg1 produced facts, which it deletes.
+  facts=$(m6_facts conversation:pg1) || exit 1
+  [ "$facts" -gt 0 ] || fail "conversation:pg1 produced no fact: their purge would prove nothing"
   m6_copy a b pg1 "$p"
   out=$(m6_flush b pg1) || exit 1
   st=$(jq -r '[.data.results[]? | select(.session == "pg1") | .status][0] // "nothing"' <<<"$out")
@@ -1178,14 +1222,17 @@ m6_check_purge_across_clients() {
     fail "B's flush of pg1-b4 after the purge: $(jq -c '.data.results // .error' <<<"$out" | m6_scrub), want it sent"
   m6_get b "$(m6_paths b | jq -r .state)/state.json" | jq -e '[.tombstones[]?.document] | index("conversation:pg1") != null' > /dev/null ||
     fail "B's state.json holds no tombstone of conversation:pg1 after its flush"
-  out=$(m6_tick b) || exit 1
-  [ "$(jq -r '.data.sessions.sent // 0' <<<"$out")" = 0 ] || fail "B's tick after the purge sent $(jq -c .data.sessions <<<"$out")"
+  for who in b a; do
+    out=$(m6_tick "$who") || exit 1
+    [ "$(jq -r '.data.sessions.sent // 0' <<<"$out")" = 0 ] || fail "$who's tick after the purge sent $(jq -c .data.sessions <<<"$out")"
+  done
   m6_queue_wait
   [ -z "$(m6_doc conversation:pg1)" ] || fail "conversation:pg1 is on the server again after B's sends: B did not honour A's purge"
   counts=$(m6_uuid_counts 'pg1#2') || exit 1
   [ "$counts" = "pg1-b4 1" ] || fail "conversation:pg1#2 holds the records $(paste -sd ' ' <<<"$counts"), want pg1-b4 alone, once (the purged r1-r3 never again)"
-  m6_result purge-across-clients PASS "A purged project $p (conversation:pg1 deleted and tombstoned); B, holding a copy, learned the tombstone: its later flush and tick left conversation:pg1 absent and sent only pg1-b4, to conversation:pg1#2" \
-    "$(jq -cn --arg c "$counts" '{successor: "conversation:pg1#2", successor_records: ($c | split("\n"))}')"
+  [ "$(m6_facts conversation:pg1)" = 0 ] || fail "conversation:pg1's facts are on the server again after B's sends: $(m6_facts conversation:pg1)"
+  m6_result purge-across-clients PASS "A purged project $p (conversation:pg1 deleted and tombstoned); B, holding a copy, learned the tombstone: its later flush and tick left conversation:pg1 absent (its $facts facts too) and sent only pg1-b4, to conversation:pg1#2; A's tick sent nothing" \
+    "$(jq -cn --arg c "$counts" --argjson f "$facts" '{facts_before_purge: $f, successor: "conversation:pg1#2", successor_records: ($c | split("\n"))}')"
 }
 
 # timers (evaluated last): A's tick timer was active right after the
