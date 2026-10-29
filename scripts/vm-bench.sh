@@ -544,9 +544,12 @@ vb_status() {
 # CLAUDE_CONFIG_DIR, XDG_* or ssh agent, and never server install --ssh
 # (OpenSSH would read the user's ~/.ssh whatever HOME says).
 
-# The checks, in the order of decision 0073 block 4's table.
+# The checks, in the order of decision 0073 block 4's table, but restore
+# and purge run before the offline and latency checks, which leave
+# sessions on A for its timer to send while the restore check counts what
+# each tick re-sends.
 VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients timers
-  dedup-copied dedup-concurrent dedup-split key-rotation
+  dedup-copied dedup-concurrent dedup-split key-rotation restore-across-clients purge-across-clients
   offline-laptop offline-hung unsent-cost latency-0ms latency-20ms latency-80ms)
 
 # vb_remote <sh script>: one word any login shell (tcsh, fish…) hands to

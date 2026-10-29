@@ -165,15 +165,16 @@ m6_auth() {
 # m6_urlencode <s>: s with every byte but [A-Za-z0-9._~-] %-encoded.
 m6_urlencode() { jq -rn --arg s "$1" '$s | @uri'; }
 
-# m6_doc <docid>: the document's JSON on B's server with B's key; empty on
-# 404. Any other answer (401, 5xx, no server) fails: it never reads as
-# "absent".
+# m6_doc <docid> [bank suffix]: the document's JSON on B's server with B's
+# key, in B's bank (or the bank of that name plus the suffix: -control,
+# the control bank); empty on 404. Any other answer (401, 5xx, no server)
+# fails: it never reads as "absent".
 m6_doc() {
   local out code server
   server=$(m6_server) || exit 1
   out=$(mktemp "$M6_WORK/doc.XXXXXX")
   code=$(pl_untraced curl -sS -o "$out" -w '%{http_code}' -K <(m6_auth) \
-    "${server% *}/v1/default/banks/${server#* }/documents/$(m6_urlencode "$1")") || code=000
+    "${server% *}/v1/default/banks/${server#* }${2:-}/documents/$(m6_urlencode "$1")") || code=000
   case $code in
     200) cat "$out" ;;
     404) ;;
@@ -989,6 +990,202 @@ m6_check_key_rotation() {
   [ -n "$(m6_doc "$note")" ] || fail "the note A stored with the old key ($note) is not on the server"
   m6_result key-rotation PASS "old key 401, old token refused (exit 20, B's key unchanged); with the new token both same-server, cursors kept; kr-a, kr-b and the note on the server once, outboxes empty" \
     "$(jq -cn --argjson ta "$(jq -c '.data | {sessions, notes}' < "$M6_WORK/rotation-tick-a")" --argjson tb "$(jq -c '.data | {sessions, notes}' < "$M6_WORK/rotation-tick-b")" '{old_key_ticks: {a: $ta, b: $tb}}')"
+}
+
+# ---- Restore and purge across clients (decision 0044 and its tombstones,
+# seen from two PCs).
+
+# m6_epoch <who>: the restore epoch that PC last reconciled with (0: none).
+m6_epoch() {
+  local st
+  st=$(m6_get "$1" "$(m6_paths "$1" | jq -r .state)/state.json") || fail "cannot read $1's state.json"
+  jq -r '.restore_epoch.epoch // 0' <<<"$st"
+}
+
+# m6_reconciles <who> <since>: one line per jobs tick that PC ran since
+# <since> (an ISO time of that machine's clock, UTC): its restore epoch
+# reconcile (details.epoch of the tick's telemetry event), "-" for a tick
+# that reconciled nothing. A tick the VM bench's timer ran is seen as one
+# run by m6_tick; the telemetry is the product's own record of both.
+m6_reconciles() {
+  local tel
+  tel=$(m6_paths "$1" | jq -r .state)/telemetry
+  m6_sh "$1" "if [ -d $(m6_q "$tel") ]; then cat $(m6_q "$tel")/events-*.jsonl 2> /dev/null || true; fi" |
+    jq -rR --arg s "$2" 'fromjson? | select(.event == "job" and .name == "tick" and .status != "skipped" and .ts >= $s) | (.details.epoch // "") | if . == "" then "-" else . end' ||
+    fail "cannot read $1's telemetry"
+}
+
+# m6_tombstoned <docid>: the server's control bank lists that document
+# among its purge tombstones (read with B's key; no tombstones document,
+# or one that does not parse, fails).
+m6_tombstoned() {
+  local doc
+  doc=$(m6_doc backsight:tombstones -control) || exit 1
+  [ -n "$doc" ] || fail "the control bank holds no tombstones document"
+  jq -e --arg d "$1" '.document_metadata.tombstones | fromjson | map(.document) | index($d) != null' > /dev/null <<<"$doc" 2> /dev/null ||
+    fail "the control bank's tombstones do not name $1: $(jq -c '.document_metadata.tombstones // "none"' <<<"$doc" 2> /dev/null | cut -c1-300)"
+}
+
+# restore-across-clients: the host restores a backup taken before each PC
+# sent a session (rs-a, rs-b): both PCs see the new restore epoch (doctor
+# warns), each one's next tick reconciles and re-sends its own lost
+# session once, and nothing the archive holds (tc-a, tc-b) goes again.
+m6_check_restore_across_clients() {
+  local p=bs-m6-restore out rc=0 archive since who sid tick ep new lines n by=() old_a old_b old meta cur
+  # Before the archive: tc-a and tc-b (two-clients) as the server holds
+  # them and as each PC's cursor says.
+  for who in a b; do
+    sid=tc-$who
+    m6_meta "$sid" > "$M6_WORK/restore-$sid.meta" || exit 1
+    cur=$(m6_cursor "$who" "$sid") || exit 1
+    [ -n "$cur" ] || fail "$who has no cursor of $sid: two-clients sent it, the check would prove nothing"
+    printf '%s\n' "$cur" > "$M6_WORK/restore-$sid.cursor"
+  done
+  out=$(m6_on srv backup create --json < /dev/null 2> "$M6_WORK/backup.err") || rc=$?
+  out=$(m6_json "backup create on the server (exit $rc)" "$out") || exit 1
+  archive=$(jq -r 'select(.ok == true and (.data.skipped // "") == "") | .data.path // empty' <<<"$out")
+  [ "$rc" = 0 ] && [ -n "$archive" ] || fail "backup create on the server: exit $rc, no archive ($(jq -c '.data.skipped // .error.message // ""' <<<"$out"))"
+  m6_sh srv "test -s $(m6_q "$archive")" || fail "the archive $archive is not on the server"
+  # After the archive: one session from each PC, sent and stored.
+  m6_session a rs-a "$p" 1 3 r 120
+  m6_session b rs-b "$p" 1 3 r 120
+  m6_flush_sent a rs-a rs-a-r3 > /dev/null
+  out=$(m6_flush b rs-b) || exit 1
+  jq -e '.ok and ([.data.results[] | select(.session == "rs-b" and .status == "sent")] | length == 1)' > /dev/null <<<"$out" ||
+    fail "b did not send rs-b: $(jq -c '.data.results // .error' <<<"$out" | m6_scrub)"
+  m6_queue_wait
+  for who in a b; do
+    m6_meta "rs-$who" > "$M6_WORK/restore-rs-$who.meta" || exit 1
+    m6_cursor "$who" "rs-$who" > "$M6_WORK/restore-rs-$who.cursor" || exit 1
+  done
+  old_a=$(m6_epoch a)
+  old_b=$(m6_epoch b)
+  # Every tick the PCs run from here is read back from their telemetry
+  # (A's timer may run one between the restore and m6_tick).
+  since=$(m6_sh a 'date -u +%Y-%m-%dT%H:%M:%S.000Z')
+  printf '%s\n' "$since" > "$M6_WORK/restore-since-a"
+  m6_sh b 'date -u +%Y-%m-%dT%H:%M:%S.000Z' > "$M6_WORK/restore-since-b"
+  rc=0
+  out=$(m6_on srv restore --json --non-interactive "$archive" < /dev/null 2> "$M6_WORK/restore.err") || rc=$?
+  out=$(m6_json "restore on the server (exit $rc)" "$out") || exit 1
+  [ "$rc" = 0 ] && jq -e '.ok and (.data.rolled_back // false | not) and (.data.epoch.epoch > 0) and
+    ([.data.steps[] | select(.status == "done") | .name] | index("counts") != null and index("recall") != null and index("epoch") != null)' > /dev/null <<<"$out" ||
+    fail "restore on the server: exit $rc ($(jq -c '.error.message // [.data.steps[]? | {name, status}]' <<<"$out" | m6_scrub))"
+  new=$(jq -r .data.epoch.epoch <<<"$out")
+  [ "$new" -gt "$old_a" ] && [ "$new" -gt "$old_b" ] || fail "the restore wrote epoch $new, not above A's $old_a and B's $old_b"
+  # Positive controls: the restore lost rs-a and rs-b and kept tc-a and
+  # tc-b, and both PCs are behind the bank's epoch (A's timer may have
+  # reconciled A already: its telemetry then says so).
+  for who in a b; do
+    [ -z "$(m6_doc "conversation:rs-$who")" ] || fail "conversation:rs-$who survived the restore: the check would prove nothing"
+    [ -n "$(m6_doc "conversation:tc-$who")" ] || fail "conversation:tc-$who, which the archive holds, is not on the server after the restore"
+    case $(m6_doctor_status "$who" restore-epoch) in
+      warn) ;;
+      ok)
+        [ "$(m6_reconciles "$who" "$(cat "$M6_WORK/restore-since-$who")" | grep -c '^restore epoch ')" = 1 ] ||
+          fail "right after the restore, $who's doctor restore-epoch is ok, and no tick of $who reconciled: want warn"
+        ;;
+      *) fail "right after the restore, $who's doctor restore-epoch is $(m6_doctor_status "$who" restore-epoch), want warn" ;;
+    esac
+  done
+  for who in a b; do
+    old=$old_a
+    [ "$who" = a ] || old=$old_b
+    # A reconcile holds while the bank has queued operations: the restored
+    # queue first, then the re-send of the PC that reconciled before.
+    m6_queue_wait
+    tick=$(m6_tick "$who") || exit 1
+    ep=$(jq -r '.data.epoch // ""' <<<"$tick")
+    if [ -n "$ep" ]; then
+      [ "$(jq -r '.data.sessions.sent // 0' <<<"$tick")" = 1 ] || fail "the tick that reconciled $who sent $(jq -c '.data.sessions' <<<"$tick"), want rs-$who alone"
+      by+=("$who: this tick")
+    else
+      by+=("$who: its timer's tick")
+    fi
+    # Every tick since the restore, this one too (positive control of the
+    # telemetry): one reconciled, and only rs-<who> resumed.
+    lines=$(m6_reconciles "$who" "$(cat "$M6_WORK/restore-since-$who")")
+    [ -n "$lines" ] || fail "$who's telemetry holds no tick since the restore, not even this one: the reconcile would prove nothing"
+    n=$(grep -c '^restore epoch ' <<<"$lines" || true)
+    [ "$n" = 1 ] || fail "$n tick(s) of $who reconciled since the restore, want one: $(paste -sd '|' <<<"$lines")"
+    ep=$(grep '^restore epoch ' <<<"$lines")
+    case $ep in
+      "restore epoch $old -> $new: 1 session(s) resume from the server"*) ;;
+      *) fail "$who's reconcile: '$ep', want restore epoch $old -> $new: 1 session(s) resume from the server" ;;
+    esac
+    printf '%s\n' "$ep" > "$M6_WORK/restore-epoch-$who"
+  done
+  m6_queue_wait
+  for who in a b; do
+    sid=rs-$who
+    meta=$(m6_meta "$sid") || exit 1
+    [ "$meta" = "$(cat "$M6_WORK/restore-$sid.meta")" ] || fail "conversation:$sid after the reconcile: $meta, before the restore: $(cat "$M6_WORK/restore-$sid.meta")"
+    out=$(m6_uuid_counts "$sid") || exit 1
+    [ "$out" = "$(printf '%s 1\n' "$sid-r1" "$sid-r2" "$sid-r3")" ] || fail "conversation:$sid holds the records $(paste -sd ' ' <<<"$out"), want r1 r2 r3 once each"
+    [ "$(m6_cursor "$who" "$sid")" != "$(cat "$M6_WORK/restore-$sid.cursor")" ] || fail "$who's cursor of $sid did not move: it was not sent again"
+    sid=tc-$who
+    [ "$(m6_meta "$sid")" = "$(cat "$M6_WORK/restore-$sid.meta")" ] || fail "conversation:$sid, which the archive holds, changed: $(m6_meta "$sid"), was $(cat "$M6_WORK/restore-$sid.meta")"
+    [ "$(m6_cursor "$who" "$sid")" = "$(cat "$M6_WORK/restore-$sid.cursor")" ] || fail "$who's cursor of $sid, which the archive holds, changed: it was sent again"
+    [ "$(m6_doctor_status "$who" restore-epoch)" = ok ] || fail "$who's doctor restore-epoch is not ok after the reconcile"
+    [ "$(m6_epoch "$who")" = "$new" ] || fail "$who did not record epoch $new (it holds $(m6_epoch "$who"))"
+  done
+  # Once: the next tick on each PC reconciles and sends nothing more.
+  for who in a b; do
+    cur=$(m6_cursor "$who" "rs-$who") || exit 1
+    tick=$(m6_tick "$who") || exit 1
+    [ -z "$(jq -r '.data.epoch // ""' <<<"$tick")" ] && [ "$(jq -r '.data.sessions.sent // 0' <<<"$tick")" = 0 ] ||
+      fail "the next tick on $who reconciled or sent again: epoch '$(jq -r '.data.epoch // ""' <<<"$tick")', sessions $(jq -c .data.sessions <<<"$tick")"
+    [ "$(m6_cursor "$who" "rs-$who")" = "$cur" ] || fail "$who's cursor of rs-$who moved on the next tick"
+  done
+  m6_queue_wait
+  for who in a b; do
+    [ "$(m6_meta "rs-$who")" = "$(cat "$M6_WORK/restore-rs-$who.meta")" ] || fail "conversation:rs-$who changed after the next tick: $(m6_meta "rs-$who")"
+  done
+  m6_result restore-across-clients PASS "the host restored an archive taken before rs-a and rs-b (epoch $old_a/$old_b -> $new): both doctors warned, each tick reconciled and re-sent its own lost session once (${by[*]}); tc-a, tc-b not sent again; next ticks sent nothing" \
+    "$(jq -cn --argjson new "$new" --argjson a "$old_a" --argjson b "$old_b" --arg ea "$(cat "$M6_WORK/restore-epoch-a")" --arg eb "$(cat "$M6_WORK/restore-epoch-b")" --arg by "${by[*]}" \
+      '{epoch: {a: $a, b: $b, new: $new}, reconcile: {a: $ea, b: $eb}, reconciled_by: $by}')"
+}
+
+# purge-across-clients: A purges a project B holds a copy of; B learns the
+# tombstone, and its later sends of that session never write the purged
+# document again nor any record the purge covered: only its turn written
+# after it goes out, to the document's successor (conversation:pg1#2).
+m6_check_purge_across_clients() {
+  local p=bs-m6-purge out rc=0 st cur counts
+  m6_session a pg1 "$p" 1 3 r 120
+  m6_flush_sent a pg1 pg1-r3 > /dev/null
+  m6_queue_wait
+  m6_wait_doc pg1 > /dev/null
+  m6_copy a b pg1 "$p"
+  out=$(m6_flush b pg1) || exit 1
+  st=$(jq -r '[.data.results[]? | select(.session == "pg1") | .status][0] // "nothing"' <<<"$out")
+  [ "$st" = nothing ] && jq -e '.ok == true' > /dev/null <<<"$out" || fail "B's flush of its copy of pg1: $st ($(jq -c '.error // .data.counts' <<<"$out" | m6_scrub)), want nothing sent"
+  # Positive control: B holds pg1 as sent, up to the server's last record:
+  # a later send of B's would append to conversation:pg1.
+  cur=$(m6_cursor b pg1) || exit 1
+  [ "$(jq -r '.last_uuid // ""' <<<"${cur:-null}")" = pg1-r3 ] || fail "B's cursor of pg1 is '$(jq -c . <<<"${cur:-null}")', want last_uuid pg1-r3: the check would prove nothing"
+  out=$(m6_on a forget --json --project "$p" --purge --answer "confirm_project=$p" < /dev/null 2> "$M6_WORK/forget.err") || rc=$?
+  out=$(m6_json "forget --purge on A (exit $rc)" "$out") || exit 1
+  [ "$rc" = 0 ] && jq -e '.ok and .data.action == "purged" and ([.data.documents[].id] | index("conversation:pg1") != null) and ((.data.note // "") | contains("not yet in bank") | not)' > /dev/null <<<"$out" ||
+    fail "forget --project $p --purge on A: exit $rc ($(jq -c '.error.message // {action: .data.action, documents: [.data.documents[]?.id], note: .data.note}' <<<"$out" | m6_scrub))"
+  [ -z "$(m6_doc conversation:pg1)" ] || fail "conversation:pg1 survived A's purge"
+  m6_tombstoned conversation:pg1
+  # B continues the session after the purge: its flush learns the
+  # tombstone and sends the new turn alone, to the successor id.
+  m6_session b pg1 "$p" 4 4 b 120
+  out=$(m6_flush b pg1) || exit 1
+  jq -e '.ok and ([.data.results[] | select(.session == "pg1" and .status == "sent")] | length == 1)' > /dev/null <<<"$out" ||
+    fail "B's flush of pg1-b4 after the purge: $(jq -c '.data.results // .error' <<<"$out" | m6_scrub), want it sent"
+  m6_get b "$(m6_paths b | jq -r .state)/state.json" | jq -e '[.tombstones[]?.document] | index("conversation:pg1") != null' > /dev/null ||
+    fail "B's state.json holds no tombstone of conversation:pg1 after its flush"
+  out=$(m6_tick b) || exit 1
+  [ "$(jq -r '.data.sessions.sent // 0' <<<"$out")" = 0 ] || fail "B's tick after the purge sent $(jq -c .data.sessions <<<"$out")"
+  m6_queue_wait
+  [ -z "$(m6_doc conversation:pg1)" ] || fail "conversation:pg1 is on the server again after B's sends: B did not honour A's purge"
+  counts=$(m6_uuid_counts 'pg1#2') || exit 1
+  [ "$counts" = "pg1-b4 1" ] || fail "conversation:pg1#2 holds the records $(paste -sd ' ' <<<"$counts"), want pg1-b4 alone, once (the purged r1-r3 never again)"
+  m6_result purge-across-clients PASS "A purged project $p (conversation:pg1 deleted and tombstoned); B, holding a copy, learned the tombstone: its later flush and tick left conversation:pg1 absent and sent only pg1-b4, to conversation:pg1#2" \
+    "$(jq -cn --arg c "$counts" '{successor: "conversation:pg1#2", successor_records: ($c | split("\n"))}')"
 }
 
 # timers (evaluated last): A's tick timer was active right after the

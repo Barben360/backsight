@@ -1202,3 +1202,102 @@ vb_run two-clients`
 		t.Errorf("a check ran after a failing build:\n%s", raw)
 	}
 }
+
+// RF 2: the reconciles of a PC are read from its telemetry, the product's
+// record of every tick, the VM timer's too: one line per tick since the
+// time given (its epoch line, "-" for none), not a skipped tick, another
+// job or an earlier tick, across the months' files. No telemetry is no
+// tick: an empty answer, which the check's own tick must then fill.
+func TestM6ReconcilesReadsEveryTickSince(t *testing.T) {
+	dir := t.TempDir()
+	m6ServerFakes(t, dir)
+	tel := filepath.Join(dir, "a", "state", "telemetry")
+	since := "2026-10-29T10:00:00.000Z"
+	stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_reconciles a `+since+`; echo END`)
+	if code != 0 || stdout != "END\n" {
+		t.Errorf("no telemetry: exit %d, stdout %q, want nothing; stderr:\n%s", code, stdout, stderr)
+	}
+	if err := os.MkdirAll(tel, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeLines(t, filepath.Join(tel, "events-2026-09.jsonl"),
+		`{"ts":"2026-09-30T10:00:00.000Z","event":"job","name":"tick","status":"done","details":{"epoch":"restore epoch 0 -> 1: 1 session(s) resume from the server"}}`)
+	writeLines(t, filepath.Join(tel, "events-2026-10.jsonl"),
+		`{"ts":"2026-10-29T09:59:59.999Z","event":"job","name":"tick","status":"done","details":{"epoch":"restore epoch 1 -> 2: 3 session(s) resume from the server"}}`,
+		`{"ts":"2026-10-29T10:00:01.000Z","event":"job","name":"tick","status":"skipped","details":{"reason":"maintenance in progress"}}`,
+		`{"ts":"2026-10-29T10:00:02.000Z","event":"job","name":"maintain","status":"done","details":{"epoch":"restore epoch 9 -> 9"}}`,
+		`{"ts":"2026-10-29T10:00:03.000Z","event":"hook","name":"tick","details":{"epoch":"restore epoch 8 -> 8"}}`,
+		`not json`,
+		`{"ts":"2026-10-29T10:00:04.000Z","event":"job","name":"tick","status":"partial","details":{"epoch":"held: restore epoch not reconciled: maintenance"}}`,
+		`{"ts":"2026-10-29T10:01:00.000Z","event":"job","name":"tick","status":"done","details":{"epoch":"restore epoch 2 -> 3: 1 session(s) resume from the server"}}`,
+		`{"ts":"2026-10-29T10:02:00.000Z","event":"job","name":"tick","status":"done","details":{"sessions":{"nothing":2}}}`)
+	writeLines(t, filepath.Join(tel, "events-2026-11.jsonl"),
+		`{"ts":"2026-11-01T00:00:00.000Z","event":"job","name":"tick","status":"done","details":{"epoch":""}}`)
+	stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_reconciles a `+since)
+	want := "held: restore epoch not reconciled: maintenance\nrestore epoch 2 -> 3: 1 session(s) resume from the server\n-\n-\n"
+	if code != 0 || stdout != want {
+		t.Errorf("exit %d, lines\n%s\nwant\n%s\nstderr:\n%s", code, stdout, want, stderr)
+	}
+}
+
+// The tombstones a purge recorded are read from the server's control bank
+// (<bank>-control) with B's key: the document is listed, or the read
+// fails, never passes on an absent record, another document's tombstone,
+// metadata that does not parse or an answer but 200.
+func TestM6TombstonedNeedsTheControlBanksRecord(t *testing.T) {
+	const listed = `{"id":"backsight:tombstones","document_metadata":{"tombstones":"[{\"bank\":\"bk\",\"document\":\"conversation:pg1\"}]"}}`
+	for _, tc := range []struct {
+		name, code, body, fail string
+	}{
+		{"listed", "200", listed, ""},
+		{"another document's", "200", `{"document_metadata":{"tombstones":"[{\"document\":\"conversation:pg2\"}]"}}`, "the control bank's tombstones do not name conversation:pg1"},
+		{"no tombstones field", "200", `{"document_metadata":{}}`, "the control bank's tombstones do not name conversation:pg1"},
+		{"not a list", "200", `{"document_metadata":{"tombstones":"{oops"}}`, "the control bank's tombstones do not name conversation:pg1"},
+		{"no document", "404", `{}`, "the control bank holds no tombstones document"},
+		{"401", "401", listed, "reading document backsight:tombstones: HTTP 401"},
+		{"refused", "refused", listed, "reading document backsight:tombstones: HTTP 000"},
+	} {
+		dir := t.TempDir()
+		m6ServerFakes(t, dir)
+		writeLines(t, filepath.Join(dir, "code"), tc.code)
+		writeLines(t, filepath.Join(dir, "body"), tc.body)
+		stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_tombstoned conversation:pg1; echo OK`)
+		if tc.fail == "" {
+			if code != 0 || stdout != "OK\n" {
+				t.Errorf("%s: exit %d, stdout %q; stderr:\n%s", tc.name, code, stdout, stderr)
+			}
+		} else if code == 0 || strings.Contains(stdout, "OK") || !strings.Contains(stderr, "FAIL: "+tc.fail) {
+			t.Errorf("%s: exit %d, stdout %q, want FAIL: %s; stderr:\n%s", tc.name, code, stdout, tc.fail, stderr)
+		}
+		calls, _ := os.ReadFile(filepath.Join(dir, "curl.calls"))
+		if !strings.Contains(string(calls), "http://10.0.0.9:8888/v1/default/banks/bk-control/documents/backsight%3Atombstones") {
+			t.Errorf("%s: curl was called with %q, want the control bank's tombstones on B's server", tc.name, calls)
+		}
+	}
+}
+
+// The restore epoch a PC reconciled with is its state.json's, 0 when it
+// never reconciled; an unreadable state fails rather than reading as 0.
+func TestM6EpochIsThePCsOwn(t *testing.T) {
+	dir := t.TempDir()
+	m6ServerFakes(t, dir)
+	st := filepath.Join(dir, "a", "state")
+	if err := os.MkdirAll(st, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ state, want string }{
+		{`{"restore_epoch":{"bank":"bk","epoch":3}}`, "3"},
+		{`{"retain_since":"2026-10-29T10:00:00Z"}`, "0"},
+	} {
+		writeLines(t, filepath.Join(st, "state.json"), tc.state)
+		if stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `e=$(m6_epoch a); echo "E[$e]"`); code != 0 || stdout != "E["+tc.want+"]\n" {
+			t.Errorf("%s: exit %d, stdout %q, want E[%s]; stderr:\n%s", tc.state, code, stdout, tc.want, stderr)
+		}
+	}
+	if err := os.Remove(filepath.Join(st, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	if stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `e=$(m6_epoch a); echo "E[$e]"`); code == 0 || strings.Contains(stdout, "E[") || !strings.Contains(stderr, "FAIL: cannot read a's state.json") {
+		t.Errorf("no state.json: exit %d, stdout %q, stderr:\n%s", code, stdout, stderr)
+	}
+}
