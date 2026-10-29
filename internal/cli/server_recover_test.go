@@ -570,3 +570,38 @@ func TestABackoffEndsAtAReboot(t *testing.T) {
 		t.Errorf("not counted from one again: %+v", b)
 	}
 }
+
+// An unknown boot on either side keeps the wait: a system without boot_id
+// (bootID ""), or a backoff file written before the boot was kept.
+func TestABackoffHoldsWhenTheBootIsUnknown(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := bootID
+	t.Cleanup(func() { bootID = old })
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	file := filepath.Join(d.State, "server-start-backoff.json")
+	for name, c := range map[string]struct{ file, boot string }{
+		"no boot here":        {`{"attempts":3,"next_at":"2026-10-29T10:00:00Z","boot":"boot-1"}`, ""},
+		"no boot in the file": {`{"attempts":3,"next_at":"2026-10-29T10:00:00Z"}`, "boot-2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bootID = func() string { return c.boot }
+			_ = os.MkdirAll(d.State, 0o700)
+			if err := os.WriteFile(file, []byte(c.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			withClock(t, at)
+			n := len(fx.spawns)
+			if startLateServer(context.Background(), d, cfg); len(fx.spawns) != n {
+				t.Errorf("spawned within the wait")
+			}
+			if b, _ := readStartBackoff(t, d); b.Attempts != 3 {
+				t.Errorf("count reset: %+v", b)
+			}
+		})
+	}
+}
