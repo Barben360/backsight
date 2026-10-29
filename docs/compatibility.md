@@ -37,6 +37,7 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.12-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | Fixes to the record of which memories helped: a damaged record rebuilt by the next job, bounded journal reads, the import marked complete only once the server answered, `stats` `Boost` line, other machines' counts follow a half-life change within one job, `uninstall --purge-local` removes this machine's shared counts; Linux amd64 tested ([notes](releases/v0.1.12-m6.md)) |
 | v0.1.11-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | PCs on one server share which memories Claude used and hid, and rank with all their counts (`feedback.share_ledger`); `forget --restore` applies on the machine where it is run; Linux amd64 tested ([notes](releases/v0.1.11-m6.md)) |
 | v0.1.10-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | recall ranks with what Claude used, within a small bound, and skips hidden memories; earlier history imported into the counts (`feedback import`), `feedback replay`; Linux amd64 tested ([notes](releases/v0.1.10-m6.md)) |
 | v0.1.9-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | Claude reports wrong or outdated memories and retires them (`forget --restore` undoes it), `memory stale`, the memory server installed on another machine (`server install --ssh`, `--print-commands`); Linux amd64 tested ([notes](releases/v0.1.9-m6.md)) |
