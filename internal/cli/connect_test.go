@@ -783,21 +783,30 @@ func sameTreeButGeneration(t *testing.T, home string, before map[string]string, 
 	sameTree(t, before, after)
 }
 
-// When putting back fails too, connect exits 20 and says what is left and
-// where meta.json records the state as it was.
+// When putting back fails too, connect exits 20 and says what is left,
+// where meta.json records the state as it was, and that a process started
+// during connect may still send to the server it rolled away from (the
+// sends generation stays at the reset's).
 func TestConnectSaysWhatIsLeftWhenTheRollbackFails(t *testing.T) {
-	home, _ := setupMachine(t)
-	tok := joinableHost(t)
-	switchingClient(t, home)
-	withConnectFault(t, "secrets", "undo")
-	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
-	env := parseConnect(t, out)
-	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "putting this PC back failed") {
-		t.Fatalf("exit %d\n%s%s", code, out, errOut)
-	}
-	runs, _ := filepath.Glob(filepath.Join(pathsOf(home).ConnectDir(), "*", "meta.json"))
-	if len(runs) != 1 || !strings.Contains(env.Error.Message, runs[0]) {
-		t.Errorf("meta.json %v not named:\n%s", runs, env.Error.Message)
+	for _, first := range []string{"secrets", "generation"} {
+		t.Run(first, func(t *testing.T) {
+			home, _ := setupMachine(t)
+			tok := joinableHost(t)
+			switchingClient(t, home)
+			withConnectFault(t, first, "undo")
+			code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+			env := parseConnect(t, out)
+			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "putting this PC back failed") {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			runs, _ := filepath.Glob(filepath.Join(pathsOf(home).ConnectDir(), "*", "meta.json"))
+			if len(runs) != 1 || !strings.Contains(env.Error.Message, runs[0]) {
+				t.Errorf("meta.json %v not named:\n%s", runs, env.Error.Message)
+			}
+			if want := "a process started during connect may still send to " + tok.URL + " until state.json's sends_generation is raised (any later connect does)"; !strings.Contains(env.Error.Message, want) {
+				t.Errorf("stale-sender risk not named (%q):\n%s", want, env.Error.Message)
+			}
+		})
 	}
 }
 

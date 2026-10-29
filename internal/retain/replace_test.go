@@ -2,6 +2,7 @@ package retain
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -649,6 +650,32 @@ func TestAMarkEndsAfterPendingLimit(t *testing.T) {
 		}
 		expectUnconfirmed(t, r, "HTTP 500")
 	})
+}
+
+// A run whose reads are spent leaves its marks pending, even past
+// PendingLimit: they are not given up unlooked. The next run with reads
+// looks, and re-sends what B's segment 1 replaced.
+func TestAMarkPastPendingLimitWaitsForARunWithReads(t *testing.T) {
+	a, _ := betaReplacedByB(t)
+	before := slices.Sorted(maps.Keys(a.replaces()))
+	if len(before) < 2 {
+		t.Fatalf("want A's home and beta marks, got %v", before)
+	}
+	old := maxReplaceReads
+	maxReplaceReads = 0
+	t.Cleanup(func() { maxReplaceReads = old })
+	a.clock = a.clock.Add(PendingLimit)
+	sent := len(a.hs.retains)
+	r := a.tick()
+	if got := slices.Sorted(maps.Keys(a.replaces())); !slices.Equal(got, before) {
+		t.Errorf("marks after a run without reads: %v, want %v kept", got, before)
+	}
+	if len(r.Unconfirmed) != 0 || len(a.hs.retains) != sent {
+		t.Errorf("a run without reads gave up %+v, sent %d", r.Unconfirmed, len(a.hs.retains)-sent)
+	}
+	maxReplaceReads = old
+	expect(t, a.tick(), Sent, 2, 2)
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
 }
 
 // The parts a pending replace remembers stay few: consecutive segments

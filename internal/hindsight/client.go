@@ -30,9 +30,13 @@ var (
 	maxPages       = 10000 // 2 million memories at 200 per page
 )
 
-// connectTimeout bounds the TCP connect alone: a server that silently drops
-// packets fails a call here, not after its whole budget. A LAN or tailnet
-// connect takes milliseconds; 3 s leaves room for a far tailnet peer.
+// connectTimeout bounds the dial: name resolution and the TCP connect
+// together (net.Dialer.Timeout), split between the addresses a name
+// resolves to. A server that silently drops packets fails a call here, not
+// after its whole budget. A LAN or tailnet connect takes milliseconds; 3 s
+// leaves room for a far tailnet peer. A host name slower than 3 s to
+// resolve fails like a dead server; an IP URL, which the token flow
+// writes, resolves nothing.
 const connectTimeout = 3 * time.Second
 
 // dialContext opens the connection; a variable so tests need no network.

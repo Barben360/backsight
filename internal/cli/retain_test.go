@@ -81,7 +81,7 @@ func TestRetainFlushSendsLiveSessions(t *testing.T) {
 // retain flush whose config predates a whole connect sends nothing to
 // either server and saves no cursor; the next one sends to the new server.
 func TestRetainFlushWhoseConfigPredatesConnectSendsNothing(t *testing.T) {
-	hosts, newHost, cursor := configPredatesConnect(t)
+	hosts, newHost, cursor, _, _ := configPredatesConnect(t)
 	code, out, errOut := run(t, "retain", "flush", "--session", "settled", "--json")
 	if got := hosts(); len(got) != 0 {
 		t.Fatalf("retains sent to %v\nexit %d\n%s%s", got, code, out, errOut)

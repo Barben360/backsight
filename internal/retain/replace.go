@@ -155,6 +155,7 @@ type look int
 
 const (
 	lookNot     look = iota // could not look: why says it
+	lookSpent               // not looked at: this run's reads are spent
 	lookAbsent              // the document is not on the server
 	lookUnknown             // nothing to compare (no original_text)
 	lookPresent             // this PC's records are there
@@ -173,9 +174,11 @@ const (
 //   - anything else (no look possible, absent, nothing to compare): left
 //     pending; the session's flush goes on as usual.
 //
-// PendingLimit after its send, a part ends whatever the look gives: found,
-// it is confirmed, missing, sent again, else given up and reported in
-// res.Unconfirmed (never quarantined: the session's sends go on).
+// PendingLimit after its send, a part ends at its next look whatever it
+// gives: found, it is confirmed, missing, sent again, else given up and
+// reported in res.Unconfirmed (never quarantined: the session's sends go
+// on). A part this run has no read left for is not looked at, so it stays
+// pending, even past PendingLimit.
 //
 // done: the flush ends here with the result returned; otherwise the
 // result goes on to the flush.
@@ -215,6 +218,10 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 		}
 		got, why, doc, missing := f.lookAt(ctx, pr, tr)
 		switch {
+		case got == lookSpent:
+			// Left pending even past PendingLimit: a mark is never given
+			// up unlooked; the next run reads it (the backlog drains at
+			// maxReplaceReads a run).
 		case got == lookMissing:
 			changed = false // resendReplaced saves the cursor
 			return f.resendReplaced(ctx, res, cur, sid, p, pr.Document, doc.Metadata, missing, now), true
@@ -282,7 +289,7 @@ func (t *transcriptOnce) records() ([]transcript.Record, []time.Time, error) {
 func (f *Flusher) lookAt(ctx context.Context, pr PendingReplace, tr *transcriptOnce) (look, string, hindsight.Document, []transcript.Record) {
 	var none hindsight.Document
 	if f.replaceReads >= maxReplaceReads {
-		return lookNot, "not looked at: this run's reads were spent", none, nil
+		return lookSpent, "not looked at: this run's reads were spent", none, nil
 	}
 	switch q := f.queuedRetains(ctx); {
 	case q.err != nil:

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -374,25 +376,33 @@ func TestTickRecordsNoAnswerFromAnotherServer(t *testing.T) {
 }
 
 // configPredatesConnect makes home a PC that sends to fake A, a session
-// settled, and a whole connect to fake B happen once the next process
-// loaded its config (config.toml rewritten, the sends generation raised).
-// It returns the hosts each retain went to, B's host and the session's
-// cursor.
-func configPredatesConnect(t *testing.T) (hosts func() []string, newHost, cursor string) {
+// settled, a ledger entry queued for sharing (feedback on), and a whole
+// connect to fake B happen once the next process loaded its config
+// (config.toml rewritten, the sends generation raised). It returns the
+// hosts each retain went to, B's host, the session's cursor, the hosts
+// each backsight:feedback:* control write went to, and home.
+func configPredatesConnect(t *testing.T) (hosts func() []string, newHost, cursor string, shared func() []string, home string) {
 	t.Helper()
-	home := devInstall(t, true)
+	home = devInstall(t, true)
 	a, b := fakeHindsight(t), fakeHindsight(t)
 	pointAt(t, home, a)
 	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
 	run(t, "jobs", "tick") // first tick: retain_since = 08:00
 	writeTranscript(t, home, "settled", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	appendConfig(t, home, "[feedback]\nenabled = true\nshare_ledger = true")
+	writeShareLedger(t, pathsOf(home), map[string]feedback.Entry{shareM1: {Shown: 1, Credits: 1, CreditsAt: time.Now(), LastShown: time.Now()}})
 	var mu sync.Mutex
-	var seen []string
+	var seen, feedbackWrites []string
 	fakeHook = func(r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories") {
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
 			mu.Lock()
 			seen = append(seen, r.Host)
+			if strings.Contains(r.URL.Path, "-control/") && strings.Contains(string(body), "backsight:feedback:") {
+				feedbackWrites = append(feedbackWrites, r.Host)
+			}
 			mu.Unlock()
 		}
 	}
@@ -406,10 +416,14 @@ func configPredatesConnect(t *testing.T) (hosts func() []string, newHost, cursor
 	}
 	t.Cleanup(func() { sendsConfigLoaded = old })
 	return func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return slices.Clone(seen)
-	}, "127.0.0.1:" + strconv.Itoa(b), filepath.Join(pathsOf(home).CursorsDir(), "settled.json")
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(seen)
+		}, "127.0.0.1:" + strconv.Itoa(b), filepath.Join(pathsOf(home).CursorsDir(), "settled.json"), func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(feedbackWrites)
+		}, home
 }
 
 // sentOnlyTo: at least one retain, every one to host.
@@ -419,11 +433,14 @@ func sentOnlyTo(hosts []string, host string) bool {
 
 // A tick whose config predates a whole connect (read before connect wrote
 // the new server's, the flusher built after connect raised the sends
-// generation) sends nothing to either server and saves no cursor; the
-// next tick sends the session to the new server.
+// generation) sends nothing to either server, shares no ledger counts and
+// saves no cursor; the next tick sends the session to the new server.
 func TestTickWhoseConfigPredatesConnectSendsNothing(t *testing.T) {
-	hosts, newHost, cursor := configPredatesConnect(t)
+	hosts, newHost, cursor, shared, _ := configPredatesConnect(t)
 	code, out, errOut := run(t, "jobs", "tick", "--json")
+	if got := shared(); len(got) != 0 {
+		t.Fatalf("ledger counts shared to %v\nexit %d\n%s%s", got, code, out, errOut)
+	}
 	if got := hosts(); len(got) != 0 {
 		t.Fatalf("retains sent to %v\nexit %d\n%s%s", got, code, out, errOut)
 	}
@@ -436,6 +453,26 @@ func TestTickWhoseConfigPredatesConnectSendsNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(cursor); err != nil {
 		t.Errorf("next tick saved no cursor: %v", err)
+	}
+}
+
+// With recording off, a tick whose config predates a whole connect still
+// writes nothing to the old server: no ledger counts shared, no idle
+// briefing page pruned.
+func TestWriteOffTickWhoseConfigPredatesConnectWritesNothing(t *testing.T) {
+	_, _, _, shared, home := configPredatesConnect(t)
+	appendConfig(t, home, "[components]\nwrite = false")
+	recentHasEventTime.Store(true)
+	idle := briefingModelID("old")
+	old := time.Now().Add(-20 * 24 * time.Hour).UTC()
+	mentalModels[idle] = `{"id":"` + idle + `","content":"x","tags":["project:old"],"last_refreshed_at":"` + old.Format(time.RFC3339Nano) + `"}`
+	recentByTag["project:old"] = `[{"id":"b","text":"t","mentioned_at":"` + old.Format(time.RFC3339) + `"}]`
+	code, out, errOut := run(t, "jobs", "tick", "--json")
+	if got := shared(); len(got) != 0 {
+		t.Errorf("ledger counts shared to %v\nexit %d\n%s%s", got, code, out, errOut)
+	}
+	if _, ok := mentalModels[idle]; !ok {
+		t.Errorf("the idle project's page was pruned\nexit %d\n%s%s", code, out, errOut)
 	}
 }
 

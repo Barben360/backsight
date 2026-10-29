@@ -297,9 +297,8 @@ type connectMeta struct {
 	Backfill     *state.Backfill     `json:"backfill,omitempty"`
 	RestoreEpoch *state.RestoreEpoch `json:"restore_epoch,omitempty"`
 	RemoteServer *state.RemoteServer `json:"remote_server,omitempty"`
-	// SendsGeneration: state.json's before the reset raised it, a record
-	// only: a rollback raises the generation again, never puts this back.
-	SendsGeneration int `json:"sends_generation,omitempty"`
+	// No sends generation: it is never put back (a rollback raises it
+	// again), so meta.json has nothing to record of it.
 }
 
 // resetRetain starts this PC's sends over for another server: the session
@@ -321,7 +320,7 @@ func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Ti
 	if err != nil {
 		return err
 	}
-	meta := connectMeta{MovedAt: at.UTC(), RetainSince: st.RetainSince, Backfill: st.Backfill, RestoreEpoch: st.RestoreEpoch, RemoteServer: st.RemoteServer, SendsGeneration: st.SendsGeneration}
+	meta := connectMeta{MovedAt: at.UTC(), RetainSince: st.RetainSince, Backfill: st.Backfill, RestoreEpoch: st.RestoreEpoch, RemoteServer: st.RemoteServer}
 	if home, herr := os.UserHomeDir(); herr == nil {
 		if cfg, cerr := config.Load(d.ConfigFile(), d, home); cerr == nil {
 			meta.URL, meta.Mode = cfg.Server.URL, cfg.Server.Mode
@@ -1142,8 +1141,15 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		}
 		if keep != "" {
 			if err := undoRetainReset(d, keep, !keepCopy, true); err != nil {
-				left = append(left, "this PC's session cursors, sent-index and split sessions may still be in "+keep+
-					", and state.json's retain_since, backfill and restore_epoch changed; "+filepath.Join(keep, "meta.json")+" records them as they were ("+err.Error()+")")
+				msg := "this PC's session cursors, sent-index and split sessions may still be in " + keep +
+					", and state.json's retain_since, backfill and restore_epoch changed; " + filepath.Join(keep, "meta.json") + " records them as they were (" + err.Error() + ")"
+				if wrote {
+					// The generation stays at the reset's: a process that
+					// read config.toml or the key as connect wrote them
+					// passes its gate once the maintenance lock is released.
+					msg += "; a process started during connect may still send to " + tok.URL + " until state.json's sends_generation is raised (any later connect does)"
+				}
+				left = append(left, msg)
 			}
 		}
 		if len(left) > 0 {

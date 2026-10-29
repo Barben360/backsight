@@ -141,9 +141,11 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// machine's counts with its other machines (shareTickBudget):
 			// only on a server that answers and is the one this PC joined
 			// (another one holds none of its memories, which would read as
-			// gone).
+			// gone), and while this PC's sends have not started over for
+			// another server since the tick began (connect: the client is
+			// the old server's).
 			feedbackSteps := func() {
-				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil {
+				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil || f.StartedOver() != nil {
 					return
 				}
 				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, d.FeedbackDir(), now())
@@ -163,7 +165,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 				}
 				feedbackSteps()
-				if otherServer(d, cfg) == nil { // nothing is written to another server
+				// Nothing is written to another server, nor to the old one
+				// once connect started this PC's sends over.
+				if otherServer(d, cfg) == nil && f.StartedOver() == nil {
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				}
 				res.History = importInTick(cmd.Context(), d, home, cfg)
