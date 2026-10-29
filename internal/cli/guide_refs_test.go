@@ -25,6 +25,8 @@ var guideWords = map[string]bool{
 
 // Every `guide <topic>#<section>` reference in the code's strings names a
 // section the embedded docs hold, so the pointer a message gives is not dead.
+// Only whole string literals of internal/ are read: a reference built with
+// Sprintf or by concatenation, and one inside docs/ or the skills, is not.
 func TestGuideRefsInCodeResolve(t *testing.T) {
 	c, err := guide.Embedded()
 	if err != nil {
