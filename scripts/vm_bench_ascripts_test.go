@@ -48,7 +48,9 @@ in=$(cat)
 printf '%s\t%s\n' "$*" "$in" >> "$HOOKLOG"
 if [ -n "${SLOW_HOOK:-}" ] && [ "$2" = "$SLOW_HOOK" ]; then sleep "$SLOW_S"; fi
 if [ "$2" = user-prompt-submit ] && [ -n "${TEL:-}" ]; then
-  jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" '{ts: $ts, event: "prompt", session: .session_id, n: (.prompt_id | split("-p")[1] | tonumber), decision: "recall", ms: 5}' <<< "$in" >> "$TEL"
+  jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" '{ts: $ts, event: "prompt", session: .session_id, n: (.prompt_id | split("-p")[1] | tonumber), decision: "recall", ms: 5}' >> "$TEL" <<EOT
+$in
+EOT
 fi
 echo '{}'
 `

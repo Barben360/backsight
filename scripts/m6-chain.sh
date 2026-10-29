@@ -99,7 +99,7 @@ m6c_cleanup() {
 }
 
 m6c_main() {
-  local root port project ip c state tok out code
+  local root port ip c state tok out code
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   # shellcheck source=scripts/ports.sh
   . "$root/scripts/ports.sh"
