@@ -844,7 +844,7 @@ func TestForgetWritesNothingAfterAConnect(t *testing.T) {
 			documentUnits["conversation:s9"] = 1
 			connectAfterLoad(t, home)
 			code, out, errOut := run(t, args...)
-			if code != output.Blocked || !strings.Contains(out+errOut, "joined another server") {
+			if code != output.Blocked || !strings.Contains(out+errOut, "the server configuration changed while this command ran: nothing was changed; check backsight doctor, then run it again") || strings.Contains(out+errOut, "joined") {
 				t.Errorf("exit %d\n%s%s", code, out, errOut)
 			}
 			mu.Lock()

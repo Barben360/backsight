@@ -82,8 +82,14 @@ func curateWriter() (cl *hindsight.Client, bank string, gate func() error, err e
 	sendsConfigLoaded()
 	sent := sendsGate(d, generation)
 	return cl, bank, func() error {
-		if err := sent(); err != nil {
-			return &output.Error{Code: output.Blocked, Message: startedOverText(err, "this command") + ": nothing was changed; run it again"}
+		// Neutral: a connect that rolled back raises the generation too,
+		// and the same command run again acts on the server config.toml
+		// names now.
+		switch err := sent(); {
+		case errors.Is(err, retain.ErrStartedOver):
+			return &output.Error{Code: output.Blocked, Message: "the server configuration changed while this command ran: nothing was changed; check backsight doctor, then run it again"}
+		case err != nil:
+			return &output.Error{Code: output.Blocked, Message: startedOverText(err, "this command") + ": nothing was changed; check backsight doctor, then run it again"}
 		}
 		return nil
 	}, nil

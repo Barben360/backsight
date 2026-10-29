@@ -121,13 +121,12 @@ func (k *mcpKey) refresh(used string) bool {
 	if k.sec.APIKey != used {
 		return true
 	}
-	gen := sendsGeneration(k.dirs)
-	cfg, err := config.Load(k.dirs.ConfigFile(), k.dirs, k.home)
-	if err != nil || gen != k.generation || cfg.Server.URL != k.cfg.Server.URL || cfg.Server.Bank != k.cfg.Server.Bank {
+	if !k.sameServer() {
 		return false
 	}
+	mcpKeyBetweenReads()
 	sec, err := config.LoadSecrets(k.dirs.SecretsFile())
-	if err != nil || sec.APIKey == "" || sec.APIKey == used || sendsGeneration(k.dirs) != k.generation {
+	if err != nil || sec.APIKey == "" || sec.APIKey == used || !k.sameServer() {
 		return false
 	}
 	eng, err := newEngine(k.cfg, sec)
@@ -137,6 +136,20 @@ func (k *mcpKey) refresh(used string) bool {
 	k.sec, k.engine = sec, eng
 	return true
 }
+
+// sameServer: the sends generation and config.toml's server and bank are
+// still the ones this process loaded. refresh asks before and after
+// reading secrets.toml: a connect in between (one to the same server
+// raises no generation) may have written another address and its key.
+func (k *mcpKey) sameServer() bool {
+	gen := sendsGeneration(k.dirs)
+	cfg, err := config.Load(k.dirs.ConfigFile(), k.dirs, k.home)
+	return err == nil && gen == k.generation && cfg.Server.URL == k.cfg.Server.URL && cfg.Server.Bank == k.cfg.Server.Bank
+}
+
+// mcpKeyBetweenReads runs between refresh's first look and its read of
+// secrets.toml. A variable for tests.
+var mcpKeyBetweenReads = func() {}
 
 func unauthorized(err error) bool {
 	var apiErr *hindsight.APIError

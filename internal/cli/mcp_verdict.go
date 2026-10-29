@@ -148,6 +148,7 @@ func capRefusal(limit, done int, ids []string) error {
 func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, verdict, note, reason string, ids []string, plan retirePlan) (string, error) {
 	var retired, hidden, notRetired []string
 	var failure error
+	local := false // the failure is this PC's sends gate, not the server's answer
 	for i, id := range ids {
 		switch {
 		case slices.Contains(plan.hide, id):
@@ -157,7 +158,7 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 			// Each retirement checks the sends generation: a connect
 			// meanwhile moved this PC to another server.
 			if failure = sendsGate(d.dirs, d.generation)(); failure != nil {
-				failure = joinedElsewhere(failure)
+				failure, local = joinedElsewhere(failure), true
 			} else {
 				failure = onServer(key, func(cl *hindsight.Client) error {
 					return cl.Invalidate(ctx, d.cfg.Server.Bank, id, reason, false)
@@ -182,6 +183,9 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	if failure != nil && moved && len(retired)+len(hidden) == 0 {
 		return "", fmt.Errorf("%w: nothing retired. The correction is queued as %s: do not call memory_credit again for these memories", failure, note)
 	}
+	if failure != nil && local && len(retired)+len(hidden) == 0 {
+		return "", fmt.Errorf("%w: nothing retired (backsight doctor). The correction is already stored as %s: do not call memory_credit again for these memories", failure, note)
+	}
 	if failure != nil && len(retired)+len(hidden) == 0 {
 		lines := []string{fmt.Sprintf("the server refused the retirement (%v): nothing retired. The correction is already stored as %s: do not call memory_credit again for these memories; tell the user, who can retire them from a terminal:", failure, note)}
 		for _, id := range notRetired {
@@ -201,6 +205,8 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	}
 	var b strings.Builder
 	switch {
+	case local && !moved:
+		fmt.Fprintf(&b, "%s The rest was not sent: %v. Correction stored: %s.\n", creditPartlyPrefix, failure, note)
 	case moved:
 		fmt.Fprintf(&b, "%s This PC joined another server since this session started (restart Claude Code: its memory tools then use that server). Correction stored: %s.\n", creditPartlyPrefix, note)
 	case failure != nil:

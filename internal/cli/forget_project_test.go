@@ -484,7 +484,7 @@ func TestForgetProjectWritesNothingAfterAConnect(t *testing.T) {
 				args = append(args, "--purge")
 			}
 			code, env, out := forgetProject(t, args...)
-			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "joined another server") {
+			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "the server configuration changed while this command ran") || strings.Contains(env.Error.Message, "joined") {
 				t.Errorf("exit %d\n%s", code, out)
 			}
 			if len(b.writes) != 0 {

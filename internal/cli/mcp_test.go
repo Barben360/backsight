@@ -1554,3 +1554,68 @@ func TestMCPNeverSendsANewKeyToTheOldServer(t *testing.T) {
 		})
 	}
 }
+
+// A connect between refresh's reads of config.toml and secrets.toml: a
+// same-server reconnect that moved the address (no generation raised),
+// or one that raised the generation. The key read after it is never sent
+// to the address loaded before it.
+func TestMCPRefreshRereadsAfterTheKey(t *testing.T) {
+	for name, change := range map[string]func(t *testing.T, home string){
+		"address moved": func(t *testing.T, home string) { pointAt(t, home, closedPort(t)) },
+		"generation raised": func(t *testing.T, home string) {
+			if err := state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil }); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cs := mcpSession(t)
+			home := os.Getenv("HOME")
+			memories["m1"] = `{"id":"m1","text":"PostgreSQL 16 stays.","type":"observation","tags":["project:billing"]}`
+			rotateTo(t, home)
+			fresh, _ := config.LoadSecrets(secretsFile(home))
+			old := mcpKeyBetweenReads
+			mcpKeyBetweenReads = func() { change(t, home) }
+			t.Cleanup(func() { mcpKeyBetweenReads = old })
+			var mu sync.Mutex
+			var keys []string
+			fakeHook = func(r *http.Request) {
+				mu.Lock()
+				keys = append(keys, r.Header.Get("Authorization"))
+				mu.Unlock()
+			}
+			t.Cleanup(func() { fakeHook = nil })
+			refusedCalls.Store(0)
+			if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "m1"}); !isErr || refusedCalls.Load() != 1 {
+				t.Errorf("%d calls, %v %s", refusedCalls.Load(), isErr, out)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if slices.Contains(keys, "Bearer "+fresh.APIKey) {
+				t.Error("the key read after the connect reached the old address")
+			}
+		})
+	}
+}
+
+// state.json unreadable while a verdict retires: the retirement after it
+// is not sent, and the answer says why, never that the server refused.
+func TestRetirementStopsAtAnUnreadableGeneration(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA, creditB)
+	rawFact(creditA, creditB)
+	var once sync.Once
+	fakeHook = func(r *http.Request) {
+		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/memories/") {
+			once.Do(func() { _ = os.WriteFile(pathsOf(home).StateFile(), []byte("{"), 0o600) })
+		}
+	}
+	t.Cleanup(func() { fakeHook = nil })
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb"))
+	if isErr || !strings.HasPrefix(out, "Partly retired. The rest was not sent: cannot read this PC's sends generation") || strings.Contains(out, "refused") {
+		t.Errorf("%v %s", isErr, out)
+	}
+	if p := patches(); len(p) != 1 || !strings.Contains(p[0], creditA) {
+		t.Errorf("patches %q", p)
+	}
+}
