@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,11 @@ import (
 // now is the clock of retain commands; tests replace it.
 var now = time.Now
 
+// sendsConfigLoaded runs once a sending process read its sends
+// generation, then its config; a test seam (a whole connect happening
+// then), a no-op in the binary.
+var sendsConfigLoaded = func() {}
+
 func newRetainCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "retain", Short: "Send settled sessions to the memory", Args: cobra.NoArgs}
 	cmd.AddCommand(newRetainFlushCmd(e), newRetainRetryCmd(e), newRetainBackfillCmd(e), newRetainReattributeCmd(e), newRetainPurgeAgainCmd(e))
@@ -36,7 +42,10 @@ func newRetainCmd(e *env) *cobra.Command {
 // the first time live retain runs.
 // Only jobs tick records retain_since (decision 0050); other callers use a
 // transient boundary of now, so history stays with backfill either way.
-func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets, setSince bool) (*retain.Flusher, error) {
+// generation is sendsGeneration's, read before cfg and sec were: a
+// connect that wrote another server's config since makes the flusher
+// send nothing (-1: it never sends).
+func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets, generation int, setSince bool) (*retain.Flusher, error) {
 	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 60*time.Second)
 	if err != nil {
 		return nil, blocked(err)
@@ -51,20 +60,19 @@ func newFlusher(d paths.Dirs, home string, cfg config.Config, sec config.Secrets
 	}
 	since := now().UTC().Truncate(time.Second)
 	var joined *state.RemoteServer
-	generation := 0
 	if setSince {
 		err = state.Update(d, "jobs tick", func(s *state.State) error {
 			if s.RetainSince == nil {
 				s.RetainSince = &since
 			}
-			since, joined, generation = *s.RetainSince, s.RemoteServer, s.SendsGeneration
+			since, joined = *s.RetainSince, s.RemoteServer
 			return nil
 		})
 	} else if st, lerr := state.Load(d.StateFile()); lerr == nil {
 		if st.RetainSince != nil {
 			since = *st.RetainSince
 		}
-		joined, generation = st.RemoteServer, st.SendsGeneration
+		joined = st.RemoteServer
 	} else {
 		err = lerr
 	}
@@ -139,6 +147,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		if len(r.Unknown) > 0 {
 			tw.Emit(telemetry.Raw{Name: "transcript_unknown", Fields: map[string]any{"types": r.Unknown}})
 		}
+		reportUnconfirmed(tw, cmd.ErrOrStderr(), r)
 		if len(r.Turns) > 0 {
 			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
 			for _, t := range r.Turns {
@@ -151,6 +160,18 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		}
 	}
 	return out
+}
+
+// reportUnconfirmed reports the replacing parts a flush gave up on
+// unconfirmed, retain.PendingLimit after their send
+// (retain.Result.Unconfirmed): one replace_unconfirmed event each, and a
+// line on errw (the scheduler's log for a tick). Their records may be lost
+// on the server; verify --live compares.
+func reportUnconfirmed(tw *telemetry.Writer, errw io.Writer, r retain.Result) {
+	for _, u := range r.Unconfirmed {
+		tw.Emit(telemetry.Raw{Name: "replace_unconfirmed", Fields: map[string]any{"session": r.Session, "document": u.Document, "reason": u.Reason}})
+		_, _ = fmt.Fprintf(errw, "backsight: session %s: %s was never confirmed on the server (%s); backsight verify --live compares it\n", r.Session, u.Document, u.Reason)
+	}
 }
 
 // retainEvents are one flush's telemetry: one event per document it wrote
@@ -259,15 +280,17 @@ func newRetainFlushCmd(e *env) *cobra.Command {
 		Short: "Send the unsent turns of every session (or one) now, without the 30-minute wait",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, sec, err := loadServerConfig()
-			if err != nil {
-				return err
-			}
 			d, home, err := machine()
 			if err != nil {
 				return err
 			}
-			f, err := newFlusher(d, home, cfg, sec, false)
+			generation := sendsGeneration(d) // before the config it goes with
+			cfg, sec, err := loadServerConfig()
+			if err != nil {
+				return err
+			}
+			sendsConfigLoaded()
+			f, err := newFlusher(d, home, cfg, sec, generation, false)
 			if err != nil {
 				return err
 			}

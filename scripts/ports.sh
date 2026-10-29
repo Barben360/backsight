@@ -16,6 +16,7 @@
 #   28450  agent-install.sh  28450-28480     29561-29591
 #   28500  reattribute-proof.sh 28500-28530  29611-29641
 #   28550  purge-guard-proof.sh 28550-28580  29661-29691
+#   28600  m6-chain.sh     28600-28630     29711-29741
 
 # slot_port base [port]: the port given, else base + slot x 10; refuses a
 # slot outside 0-3, no slot on CI, and an API or UI port of the live

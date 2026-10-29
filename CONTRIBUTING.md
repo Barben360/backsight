@@ -56,6 +56,23 @@ HOME=/tmp/bs-dev/home BACKSIGHT_HOME=/tmp/bs-dev/backsight ./bin/backsight docto
 
 Scripts that start a server (`scripts/sandbox.sh`, `scripts/fresh-install.sh` and the other proofs) take their Compose project and ports from `scripts/ports.sh`, below 32768 and away from the default ports 8888 and 9999. They use Hindsight's mock LLM, so they cost nothing, and remove their stack afterwards. Never give a scratch stack the Compose project name `backsight`: that is the real install's.
 
+## The M6 VM bench
+
+`scripts/vm-bench.sh` proves on two libvirt VMs what several PCs sharing one memory need (decision 0073, block 4): `server install --ssh` to a fresh host, two clients on one server, a session never stored twice, a laptop offline, key rotation, restore and purge seen by both clients, and the prompt hook's latency at 0, 20 and 80 ms. It runs only by hand, when a change touches what clients share; never on CI, from a timer or a hook (it refuses when `CI` or `GITHUB_ACTIONS` is set). CI re-runs the dedup and rotation checks on every pull request with `scripts/m6-chain.sh` instead, client homes on the runner.
+
+Prerequisites: libvirt on `qemu:///system` with your user in the `libvirt` group, its `default` network and pool active, `virt-install` that knows `ubuntu24.04`, `xorriso`, `minisign`, `jq`, Go, and 16 GiB of `MemAvailable` and 80 GiB free in the pool (`up` refuses otherwise). `run` also needs the host's `npm` 11 or newer (Node 24): it installs client B's Claude Code under the bench's `cache/` with `npm install --allow-scripts`, which older npm lacks (`up` does not check it, so an older one fails at `run`, after the reset and the build).
+
+| Command | What it does |
+|---|---|
+| `scripts/vm-bench.sh up` | downloads the pinned Ubuntu 24.04 cloud image once (checksum verified), boots `bs-m6-server` (4 vCPU, 8 GB, Docker) and `bs-m6-client` (2 vCPU, 4 GB, the `claude` CLI, real systemd timers), and snapshots them as `bs-m6-clean` |
+| `scripts/vm-bench.sh run [check…]` | resets both VMs to `bs-m6-clean`, builds this tree and a signed release with a throwaway key, installs the server through `server install --ssh` from the client, then runs the checks named (default: all); the table goes to `results/<UTC stamp>.md` and stops at the first FAIL |
+| `scripts/vm-bench.sh reset` | both VMs back to `bs-m6-clean` |
+| `scripts/vm-bench.sh ssh <vm> [cmd]` | a shell on `server` or `client` (`server-bs`, `client-bs`: the user `bs`) |
+| `scripts/vm-bench.sh status` | the domains, their states, addresses and snapshot |
+| `scripts/vm-bench.sh down [--purge]` | removes every `bs-m6-*` domain, snapshot and volume, and the bench directory but its `results/` and `cache/` (`--purge`: `cache/` too) |
+
+The bench lives in `${XDG_STATE_HOME:-~/.local/state}/bs-m6` (`BS_M6_DIR` overrides it; its last component must be `bs-m6`, and it must not be a symlink: the script refuses any other with exit 2). It never reads or writes your `~/.ssh`, `~/.claude` or install: every ssh uses the bench's own config, key and `known_hosts`, whose host keys the bench generated, so nothing is trusted on first use. The second client, B, is an isolated home on this machine (fresh-install's isolation); it joins with `connect` and is refused any `server` command or `--ssh`. The LLM is Hindsight's mock: a run costs nothing.
+
 ## The gate
 
 Before every commit, `make check` must pass. It runs, and stops at the first failure:
@@ -65,7 +82,7 @@ Before every commit, `make check` must pass. It runs, and stops at the first fai
 - `make cross`;
 - `gitleaks dir . --no-banner --redact`, when gitleaks is installed.
 
-Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) runs the tests, a signed snapshot release with a throwaway key, the sandbox tests and the fresh-install chain: setup from nothing, verify, store and search, backup and restore, update with rolled-back failures, undo and uninstall.
+Run `bash -n` on every shell script you change. CI (`.github/workflows/ci.yml`) runs the tests, a signed snapshot release with a throwaway key, the sandbox tests and the fresh-install chain: setup from nothing, verify, store and search, backup and restore, update with rolled-back failures, undo and uninstall; and the M6 chain (`scripts/m6-chain.sh`): a server and two client homes, the dedup and key-rotation proofs.
 
 ## Tests
 

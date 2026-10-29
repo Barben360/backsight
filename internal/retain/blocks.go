@@ -71,6 +71,24 @@ type line struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
+// turnLine is turn t as a segment carries it: its text redacted, its time
+// in UTC, RFC 3339.
+func turnLine(t transcript.Turn) line {
+	text, _ := redact.Text(t.Content)
+	return line{Role: t.Role, Content: text, Timestamp: t.Timestamp.UTC().Format(time.RFC3339)}
+}
+
+// encodeLine is l as one line of a segment's content (JSON, HTML left
+// unescaped, no newline). Hindsight keeps the lines byte for byte in the
+// document's original_text, which checkReplaces searches for them.
+func encodeLine(l line) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(l)
+	return strings.TrimSuffix(buf.String(), "\n")
+}
+
 // DocumentID is the document of a session's records of project: the
 // session's home project (its first record's) keeps conversation:<sid>,
 // every other project gets conversation:<sid>@<project>. One document never
@@ -118,19 +136,16 @@ func BaseDocumentID(id string) string {
 // used whatever the records say (a resumed or forked file keeps one
 // identity).
 func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
+	var lines []string
 	if segment == 1 {
-		_ = enc.Encode(line{Role: "system", Content: "REF-ID: " + doc})
+		lines = append(lines, encodeLine(line{Role: "system", Content: "REF-ID: " + doc}))
 	}
 	for _, r := range recs {
 		for _, t := range r.Turns {
-			text, _ := redact.Text(t.Content)
-			_ = enc.Encode(line{Role: t.Role, Content: text, Timestamp: t.Timestamp.UTC().Format(time.RFC3339)})
+			lines = append(lines, encodeLine(turnLine(t)))
 		}
 	}
-	content := strings.TrimSuffix(buf.String(), "\n")
+	content := strings.Join(lines, "\n")
 	first, last := recs[0], recs[len(recs)-1]
 	ts := first.Timestamp
 	item := hindsight.RetainItem{
@@ -207,6 +222,23 @@ type Cursor struct {
 	// it is not DocumentID's (a purge moved the project to a successor id,
 	// LiveDocumentID).
 	SegmentDocs map[string]string `json:"segment_documents,omitempty"`
+	// SplitBases: for each project whose document the last resync found
+	// split (decision 0073), the server's position it numbered from. Until
+	// the server applies this PC's later segments, it still reads there:
+	// this PC's own lag, not another PC's move (movedElsewhere).
+	SplitBases map[string]SplitBase `json:"split_bases,omitempty"`
+	// Replaces: by project, the part this PC sent that replaces its
+	// document (its segment 1), until the server is seen to hold this PC's
+	// records there. Another PC's segment 1 applied after it would replace
+	// them: the tick then sends them again (checkReplaces).
+	Replaces map[string]PendingReplace `json:"replaces,omitempty"`
+}
+
+// SplitBase is a document's position on the server: its segment and the
+// last record of that segment.
+type SplitBase struct {
+	Segment  int    `json:"segment"`
+	LastUUID string `json:"last_uuid"`
 }
 
 // setDoc records doc as project p's document (kept only when it is not
@@ -469,8 +501,8 @@ func MachineID(dir string) (string, error) {
 	x := hex.EncodeToString(b)
 	id := x[:8] + "-" + x[8:12] + "-" + x[12:16] + "-" + x[16:20] + "-" + x[20:]
 	if err := fsutil.ReplaceIfUnchanged(p, []byte(id+"\n"), 0o600, fsutil.Absent); err != nil {
-		if raw, rerr := os.ReadFile(p); rerr == nil && len(bytes.TrimSpace(raw)) == 36 {
-			return string(bytes.TrimSpace(raw)), nil // another process won the race
+		if id := ReadMachineID(dir); id != "" {
+			return id, nil // another process won the race
 		}
 		return "", err
 	}

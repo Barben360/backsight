@@ -297,8 +297,8 @@ type connectMeta struct {
 	Backfill     *state.Backfill     `json:"backfill,omitempty"`
 	RestoreEpoch *state.RestoreEpoch `json:"restore_epoch,omitempty"`
 	RemoteServer *state.RemoteServer `json:"remote_server,omitempty"`
-	// SendsGeneration: state.json's before the reset bumped it.
-	SendsGeneration int `json:"sends_generation,omitempty"`
+	// No sends generation: it is never put back (a rollback raises it
+	// again), so meta.json has nothing to record of it.
 }
 
 // resetRetain starts this PC's sends over for another server: the session
@@ -320,7 +320,7 @@ func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Ti
 	if err != nil {
 		return err
 	}
-	meta := connectMeta{MovedAt: at.UTC(), RetainSince: st.RetainSince, Backfill: st.Backfill, RestoreEpoch: st.RestoreEpoch, RemoteServer: st.RemoteServer, SendsGeneration: st.SendsGeneration}
+	meta := connectMeta{MovedAt: at.UTC(), RetainSince: st.RetainSince, Backfill: st.Backfill, RestoreEpoch: st.RestoreEpoch, RemoteServer: st.RemoteServer}
 	if home, herr := os.UserHomeDir(); herr == nil {
 		if cfg, cerr := config.Load(d.ConfigFile(), d, home); cerr == nil {
 			meta.URL, meta.Mode = cfg.Server.URL, cfg.Server.Mode
@@ -357,8 +357,11 @@ func retainFiles(d paths.Dirs) []string {
 // fields meta.json recorded, then removes keep unless told to keep it
 // (it holds a file still to put back). No meta.json: nothing was moved
 // yet. rollback: the reset is undone within its own run, so the sends
-// generation goes back too (a flusher built before it targets the old
-// server, which this PC uses again); otherwise it only grows.
+// generation is raised once more, in the same update, never put back: a
+// process that read the generation before the run and the config once
+// the run wrote the other server's would pass the gate again, and one
+// that read the raised generation could pass it after the next connect's
+// reset. A flusher built before the run stops once; the next one sends.
 func undoRetainReset(d paths.Dirs, keep string, remove, rollback bool) error {
 	if err := connectFault("undo"); err != nil {
 		return err
@@ -387,7 +390,7 @@ func undoRetainReset(d paths.Dirs, keep string, remove, rollback bool) error {
 	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
 		s.RetainSince, s.Backfill, s.RestoreEpoch = meta.RetainSince, meta.Backfill, meta.RestoreEpoch
 		if rollback {
-			s.SendsGeneration = meta.SendsGeneration
+			s.SendsGeneration++
 		}
 		return nil
 	}); err != nil {
@@ -398,6 +401,29 @@ func undoRetainReset(d paths.Dirs, keep string, remove, rollback bool) error {
 		_ = os.Remove(d.ConnectDir()) // when empty
 	}
 	return nil
+}
+
+// keyUnread stands for the hash of a secrets.toml connect wrote but could
+// not read back: no file matches it, so the rollback leaves the file as
+// it is and says so.
+const keyUnread = "unread"
+
+// putKeyBack puts secrets.toml back as it was before connect wrote the key
+// (was, its hash wasHash; removed when it did not exist), unless it is no
+// longer what connect wrote (written): another writer's change is kept
+// (fsutil.ErrConflict).
+func putKeyBack(path string, was []byte, wasHash, written string) error {
+	if wasHash != fsutil.Absent {
+		return fsutil.ReplaceIfUnchanged(path, was, 0o600, written)
+	}
+	got, err := fsutil.HashFile(path)
+	if err != nil {
+		return err
+	}
+	if got != written {
+		return fmt.Errorf("%s: %w", path, fsutil.ErrConflict)
+	}
+	return os.Remove(path)
 }
 
 // keepOwnConfig copies config.toml (raw, as it was read under the lock)
@@ -550,7 +576,13 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 		}
 		return rollback(fmt.Errorf("moving the shared server's sends aside: %w", err))
 	}
+	if err := connectFault("undo-config"); err != nil {
+		return rollback(err)
+	}
 	if err := fsutil.WriteAtomic(d.ConfigFile(), keptCfg, 0o600); err != nil {
+		return rollback(err)
+	}
+	if err := connectFault("undo-secrets"); err != nil {
 		return rollback(err)
 	}
 	if err := fsutil.WriteAtomic(d.SecretsFile(), keptSec, 0o600); err != nil {
@@ -560,8 +592,16 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 		return &output.Error{Code: output.Blocked, Message: "config.toml and secrets.toml are back as they were before connect, but this PC's sends to its own server are not (" + err.Error() +
 			"): they are in " + pre + ", whose meta.json records the state they went with"}
 	}
-	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error { s.RemoteServer = nil; return nil }); err != nil {
-		return &output.Error{Code: output.Blocked, Message: "this PC is back on its own server, but forgetting the shared server's id in " + d.StateFile() + " failed (" + err.Error() + "): the sends stop until it is removed"}
+	// A process that read its config while the files were being put back
+	// holds the generation resetRetain raised, with the shared server's
+	// config or key: raised again, it sends nothing.
+	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
+		s.RemoteServer = nil
+		s.SendsGeneration++
+		return nil
+	}); err != nil {
+		return &output.Error{Code: output.Blocked, Message: "this PC is back on its own server, but forgetting the shared server's id in " + d.StateFile() + " failed (" + err.Error() +
+			"): the sends stop until it is removed; a process started during connect --undo may still send to the shared server"}
 	}
 	return nil
 }
@@ -1020,10 +1060,15 @@ func backupOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec c
 // config.toml still names), then config.toml, the key, and the binding
 // last; leaving this PC's own server (own, nil otherwise), it stops that
 // server first, once the plan is read again, and keeps its config.toml
-// and secrets.toml with the moved retain state. A failure up to the key
-// puts back what was done, starting a stopped server again (exit 30; 20
-// when that fails too, saying what is left); a failure of the binding leaves
-// the rest done, for resume to finish (exit 40).
+// and secrets.toml with the moved retain state. Once the key is written,
+// the sends generation is raised again: a process that read its config
+// while connect ran holds the old config or key with the generation
+// resetRetain raised, and sends nothing. A failure up to that raise puts
+// back what was done (the key too, unless another writer changed it
+// since; the sends generation is raised once more, never put back),
+// starting a stopped server again
+// (exit 30; 20 when that fails too, saying what is left); a failure of the
+// binding leaves the rest done, for resume to finish (exit 40).
 func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Token, p probe, situation string, at time.Time, resume string, own server.Runtime) error {
 	unlock, _, err := serverMaintenanceLock(d, "connect")
 	if err != nil {
@@ -1055,8 +1100,18 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		return err
 	}
 	keep, wrote, stopped := "", false, false
+	// secrets.toml before the key was written, and as connect wrote it
+	// (keyWritten, fsutil.Absent until then).
+	keyWas, keyWasHash, keyWritten := []byte(nil), fsutil.Absent, fsutil.Absent
 	rollback := func(cause error) error {
 		var left []string
+		if keyWritten != fsutil.Absent {
+			if err := putKeyBack(d.SecretsFile(), keyWas, keyWasHash, keyWritten); errors.Is(err, fsutil.ErrConflict) {
+				left = append(left, d.SecretsFile()+" is no longer as connect wrote it (another writer changed it, or it could not be read back): it is kept as it is, and may still hold the API key of "+tok.URL)
+			} else if err != nil {
+				left = append(left, d.SecretsFile()+" still holds the API key of "+tok.URL+" ("+err.Error()+")")
+			}
+		}
 		keepCopy := false // keep holds the config.toml to put back by hand
 		if wrote {
 			err := connectFault("putback")
@@ -1086,8 +1141,15 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		}
 		if keep != "" {
 			if err := undoRetainReset(d, keep, !keepCopy, true); err != nil {
-				left = append(left, "this PC's session cursors, sent-index and split sessions may still be in "+keep+
-					", and state.json's retain_since, backfill and restore_epoch changed; "+filepath.Join(keep, "meta.json")+" records them as they were ("+err.Error()+")")
+				msg := "this PC's session cursors, sent-index and split sessions may still be in " + keep +
+					", and state.json's retain_since, backfill and restore_epoch changed; " + filepath.Join(keep, "meta.json") + " records them as they were (" + err.Error() + ")"
+				if wrote {
+					// The generation stays at the reset's: a process that
+					// read config.toml or the key as connect wrote them
+					// passes its gate once the maintenance lock is released.
+					msg += "; a process started during connect may still send to " + tok.URL + " until state.json's sends_generation is raised (any later connect does)"
+				}
+				left = append(left, msg)
 			}
 		}
 		if len(left) > 0 {
@@ -1130,8 +1192,29 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 	if err := connectFault("secrets"); err != nil {
 		return rollback(err)
 	}
+	if keyWas, keyWasHash, err = fsutil.ReadHashed(d.SecretsFile()); err != nil {
+		return rollback(err)
+	}
 	if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", tok.APIKey) }); err != nil {
 		return rollback(fmt.Errorf("writing the API key to %s: %w", d.SecretsFile(), err))
+	}
+	if keyWritten, err = fsutil.HashFile(d.SecretsFile()); err != nil || keyWritten == fsutil.Absent {
+		keyWritten = keyUnread
+		if err == nil {
+			err = fs.ErrNotExist
+		}
+		return rollback(fmt.Errorf("reading %s back after writing the API key: %w", d.SecretsFile(), err))
+	}
+	if situation == joinOther || situation == joinOwn {
+		// Raised with the reset already (atomic with dropping backfill),
+		// raised again now config.toml and the key name the new server.
+		err := connectFault("generation")
+		if err == nil {
+			err = state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error { s.SendsGeneration++; return nil })
+		}
+		if err != nil {
+			return rollback(fmt.Errorf("raising this PC's sends generation in %s: %w", d.StateFile(), err))
+		}
 	}
 	err = connectFault("binding")
 	if err == nil {

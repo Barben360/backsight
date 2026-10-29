@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,6 +29,20 @@ var (
 	maxBody  int64 = 32 << 20
 	maxPages       = 10000 // 2 million memories at 200 per page
 )
+
+// connectTimeout bounds the dial: name resolution and the TCP connect
+// together (net.Dialer.Timeout), split between the addresses a name
+// resolves to. A server that silently drops packets fails a call here, not
+// after its whole budget. A LAN or tailnet connect takes milliseconds; 3 s
+// leaves room for a far tailnet peer. A host name slower than 3 s to
+// resolve fails like a dead server; an IP URL, which the token flow
+// writes, resolves nothing.
+const connectTimeout = 3 * time.Second
+
+// dialContext opens the connection; a variable so tests need no network.
+var dialContext = func(ctx context.Context, d *net.Dialer, network, addr string) (net.Conn, error) {
+	return d.DialContext(ctx, network, addr)
+}
 
 // Kind classifies HTTP errors so callers can pick a fix.
 type Kind string
@@ -79,7 +94,13 @@ func New(baseURL, token string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		return nil, fmt.Errorf("invalid Hindsight timeout %s", timeout)
 	}
-	hc := &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+	bound := min(connectTimeout, timeout)
+	dialer := &net.Dialer{Timeout: bound, KeepAlive: 30 * time.Second}
+	tr := http.DefaultTransport.(*http.Transport).Clone() // keeps the environment's proxy and TLS defaults
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialContext(ctx, dialer, network, addr)
+	}
+	hc := &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
 	return &Client{base: u, token: token, http: hc}, nil

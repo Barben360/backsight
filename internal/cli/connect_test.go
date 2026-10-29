@@ -640,12 +640,13 @@ func TestConnectStopsAFlusherBuiltBefore(t *testing.T) {
 	})
 	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
 	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	generation := sendsGeneration(d)
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sec, _ := config.LoadSecrets(d.SecretsFile())
-	stale, err := newFlusher(d, home, cfg, sec, false)
+	stale, err := newFlusher(d, home, cfg, sec, generation, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,13 +742,14 @@ func switchingClient(t *testing.T, home string) {
 
 // A write that fails before the key is saved puts back what connect had
 // changed (moved retain state, state fields, config.toml) and exits 30,
-// naming the cause.
+// naming the cause; the sends generation only grows.
 func TestConnectRollsBackAFailedWrite(t *testing.T) {
 	for _, step := range []string{"config", "secrets"} {
 		t.Run(step, func(t *testing.T) {
 			home, f := setupMachine(t)
 			tok := joinableHost(t)
 			switchingClient(t, home)
+			gen := sendsGeneration(pathsOf(home))
 			before := treeOf(t, home)
 			withConnectFault(t, step)
 			code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
@@ -755,7 +757,7 @@ func TestConnectRollsBackAFailedWrite(t *testing.T) {
 				!strings.Contains(env.Error.Message, "this PC is as it was") || leaked(out+errOut, tok) {
 				t.Errorf("exit %d\n%s%s", code, out, errOut)
 			}
-			sameTree(t, before, treeOf(t, home))
+			sameTreeButGeneration(t, home, before, gen)
 			if len(f.calls) != 0 {
 				t.Errorf("setup ran: %v", f.commands())
 			}
@@ -763,21 +765,48 @@ func TestConnectRollsBackAFailedWrite(t *testing.T) {
 	}
 }
 
-// When putting back fails too, connect exits 20 and says what is left and
-// where meta.json records the state as it was.
-func TestConnectSaysWhatIsLeftWhenTheRollbackFails(t *testing.T) {
-	home, _ := setupMachine(t)
-	tok := joinableHost(t)
-	switchingClient(t, home)
-	withConnectFault(t, "secrets", "undo")
-	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
-	env := parseConnect(t, out)
-	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "putting this PC back failed") {
-		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+// sameTreeButGeneration: home is as before was, but for state.json, whose
+// sends generation is above gen and whose other fields are as they were.
+func sameTreeButGeneration(t *testing.T, home string, before map[string]string, gen int) {
+	t.Helper()
+	d := pathsOf(home)
+	st, err := state.Load(d.StateFile())
+	if err != nil || st.SendsGeneration <= gen {
+		t.Errorf("sends_generation %d, want above %d (%v)", st.SendsGeneration, gen, err)
 	}
-	runs, _ := filepath.Glob(filepath.Join(pathsOf(home).ConnectDir(), "*", "meta.json"))
-	if len(runs) != 1 || !strings.Contains(env.Error.Message, runs[0]) {
-		t.Errorf("meta.json %v not named:\n%s", runs, env.Error.Message)
+	after := treeOf(t, home)
+	st.SendsGeneration = gen // the rest of state.json as it was
+	if err := state.Save(d.StateFile(), st); err != nil {
+		t.Fatal(err)
+	}
+	after[d.StateFile()] = treeOf(t, home)[d.StateFile()]
+	sameTree(t, before, after)
+}
+
+// When putting back fails too, connect exits 20 and says what is left,
+// where meta.json records the state as it was, and that a process started
+// during connect may still send to the server it rolled away from (the
+// sends generation stays at the reset's).
+func TestConnectSaysWhatIsLeftWhenTheRollbackFails(t *testing.T) {
+	for _, first := range []string{"secrets", "generation"} {
+		t.Run(first, func(t *testing.T) {
+			home, _ := setupMachine(t)
+			tok := joinableHost(t)
+			switchingClient(t, home)
+			withConnectFault(t, first, "undo")
+			code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+			env := parseConnect(t, out)
+			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "putting this PC back failed") {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			runs, _ := filepath.Glob(filepath.Join(pathsOf(home).ConnectDir(), "*", "meta.json"))
+			if len(runs) != 1 || !strings.Contains(env.Error.Message, runs[0]) {
+				t.Errorf("meta.json %v not named:\n%s", runs, env.Error.Message)
+			}
+			if want := "a process started during connect may still send to " + tok.URL + " until state.json's sends_generation is raised (any later connect does)"; !strings.Contains(env.Error.Message, want) {
+				t.Errorf("stale-sender risk not named (%q):\n%s", want, env.Error.Message)
+			}
+		})
 	}
 }
 
@@ -806,6 +835,211 @@ func TestConnectResumesAFailedBinding(t *testing.T) {
 	}
 	if st, _ := state.Load(d.StateFile()); st.RemoteServer.ID != tok.ServerID {
 		t.Errorf("binding: %+v", st.RemoteServer)
+	}
+}
+
+// serverSetup is the server URL config.toml names and the API key
+// secrets.toml holds.
+type serverSetup struct{ url, key string }
+
+func serverSetupOf(t *testing.T, home string) serverSetup {
+	t.Helper()
+	d := pathsOf(home)
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := config.LoadSecrets(d.SecretsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serverSetup{cfg.Server.URL, sec.APIKey}
+}
+
+// joinFrom makes home a PC in situation from (joinOther, joinOwn, or
+// joinUndo: one that joined the host from its own server) and returns the
+// connect command that switches it.
+func joinFrom(t *testing.T, home, from string) []string {
+	t.Helper()
+	switch from {
+	case joinUndo:
+		connectedFromOwnServer(t, home)
+		return []string{"connect", "--undo", "--json"}
+	case joinOwn:
+		ownServerPC(t, home)
+		tok := joinableHost(t)
+		noKeyRequired()
+		withBackupDocker(t)
+		return []string{"connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"}
+	}
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	return []string{"connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json"}
+}
+
+// A process that loads its config while connect or connect --undo runs
+// (a store, an MCP server, a tick) reads the sends generation first, then
+// config.toml, then the key: whatever step it reads at, it holds the old
+// URL or the old key, and its sends gate refuses once the command ended.
+func TestConnectWindowReadersAreStopped(t *testing.T) {
+	for _, row := range []struct {
+		name, step string
+		from       string // joinOther, joinOwn or joinUndo (connect --undo of an own-server join)
+		newURL     bool   // the step comes after config.toml's write
+	}{
+		{"other config", "config", joinOther, false},
+		{"other secrets", "secrets", joinOther, true},
+		{"own config", "config", joinOwn, false},
+		{"own secrets", "secrets", joinOwn, true},
+		{"undo-config", "undo-config", joinUndo, false},
+		{"undo-secrets", "undo-secrets", joinUndo, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			home, _ := setupMachine(t)
+			d := pathsOf(home)
+			args := joinFrom(t, home, row.from)
+			before := serverSetupOf(t, home)
+			gen, read := 0, false
+			var held serverSetup
+			old := connectFault
+			connectFault = func(step string) error {
+				if step == row.step { // a store process loading its config now
+					gen, read = sendsGeneration(d), true
+					held = serverSetupOf(t, home)
+				}
+				return nil
+			}
+			t.Cleanup(func() { connectFault = old })
+
+			if code, out, errOut := run(t, args...); code != output.OK || !read {
+				t.Fatalf("exit %d, read at %s: %v\n%s%s", code, row.step, read, out, errOut)
+			}
+			after := serverSetupOf(t, home)
+			if before.url == after.url || before.key == after.key {
+				t.Fatalf("the command changed URL %v, key %v: the row proves nothing", before.url != after.url, before.key != after.key)
+			}
+			want := serverSetup{before.url, before.key}
+			if row.newURL {
+				want.url = after.url
+			}
+			if held != want {
+				t.Errorf("read at %s: URL %s, old key %v; want URL %s, old key", row.step, held.url, held.key == before.key, want.url)
+			}
+			if err := sendsGate(d, gen)(); !errors.Is(err, retain.ErrStartedOver) {
+				t.Errorf("the reader's gate at generation %d: %v, want ErrStartedOver", gen, err)
+			}
+		})
+	}
+}
+
+// A failure raising the sends generation, once config.toml and the key
+// are written, puts everything back (exit 30), config.toml and
+// secrets.toml byte for byte, but for the generation: it only grows.
+func TestConnectRaisedGenerationRollsBack(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	if err := state.Update(d, "test", func(s *state.State) error { s.SendsGeneration = 4; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	files := contentsOf(t, []string{d.ConfigFile(), d.SecretsFile()})
+	before := treeOf(t, home)
+	withConnectFault(t, "generation")
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.RolledBack || env.Error == nil || !strings.Contains(env.Error.Message, "injected generation failure") || leaked(out+errOut, tok) {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	sameContents(t, files)
+	sameTreeButGeneration(t, home, before, 4)
+}
+
+// A process that read the sends generation before connect (or connect
+// --undo) and its config once the new server's was written sends nothing
+// after a rollback: the rollback raises the generation, never puts it
+// back. joinOwn is the case no server-id check covers.
+func TestConnectRollbackStopsAReaderOfTheNewServer(t *testing.T) {
+	for _, row := range []struct{ from, step string }{
+		{joinOther, "generation"},
+		{joinOwn, "generation"},
+		{joinUndo, "undo-secrets"},
+	} {
+		t.Run(row.from, func(t *testing.T) {
+			home, _ := setupMachine(t)
+			d := pathsOf(home)
+			args := joinFrom(t, home, row.from)
+			before := serverSetupOf(t, home)
+			files := contentsOf(t, []string{d.ConfigFile(), d.SecretsFile()})
+			gen := sendsGeneration(d) // a store process starting now
+			var held serverSetup
+			old := connectFault
+			connectFault = func(step string) error {
+				if step == row.step { // it loads its config now: the new server's
+					held = serverSetupOf(t, home)
+					return errors.New("injected " + step + " failure")
+				}
+				return nil
+			}
+			t.Cleanup(func() { connectFault = old })
+
+			if code, out, errOut := run(t, args...); code != output.RolledBack {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			if held.url == "" || held.url == before.url {
+				t.Fatalf("the reader held URL %q, the old one %q: the row proves nothing", held.url, before.url)
+			}
+			sameContents(t, files)
+			if err := sendsGate(d, gen)(); !errors.Is(err, retain.ErrStartedOver) {
+				t.Errorf("the reader's gate at generation %d: %v, want ErrStartedOver", gen, err)
+			}
+		})
+	}
+}
+
+// A PC with no secrets.toml before connect has none after a rollback.
+func TestConnectRollbackRemovesTheKeyItAdded(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	if err := os.Remove(d.SecretsFile()); err != nil {
+		t.Fatal(err)
+	}
+	withConnectFault(t, "generation")
+	if code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json"); code != output.RolledBack {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if _, err := os.Stat(d.SecretsFile()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("secrets.toml left: %v", err)
+	}
+}
+
+// A rollback keeps a secrets.toml changed by another writer since connect
+// wrote the key, and says so (exit 20).
+func TestConnectRollbackKeepsAKeyFileChangedSince(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	tok := joinableHost(t)
+	switchingClient(t, home)
+	var theirs []byte
+	old := connectFault
+	connectFault = func(step string) error {
+		if step != "generation" {
+			return nil
+		}
+		if err := config.UpdateSecrets(d.SecretsFile(), func(s *config.Secrets) error { return s.Set("llm_api_key", "written-meanwhile") }); err != nil {
+			t.Fatal(err)
+		}
+		theirs, _ = os.ReadFile(d.SecretsFile())
+		return errors.New("injected generation failure")
+	}
+	t.Cleanup(func() { connectFault = old })
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, d.SecretsFile()+" is no longer as connect wrote it") || leaked(out+errOut, tok) {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if raw, _ := os.ReadFile(d.SecretsFile()); string(raw) != string(theirs) {
+		t.Errorf("the other writer's secrets.toml was overwritten")
 	}
 }
 

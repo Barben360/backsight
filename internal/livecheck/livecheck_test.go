@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -564,5 +565,93 @@ func TestASessionSentToAnotherBankIsNotSentHere(t *testing.T) {
 	want(t, w.check(), Fail, "not sent")
 	if w.srv.called("GET ") {
 		t.Errorf("read another bank's document: %q", w.srv.calls)
+	}
+}
+
+// continued: this PC sent segment 2 of s ending at s-a5; the server holds
+// the segment and machine id of doc, with s's facts consolidated and one
+// observation from them.
+func (w *world) continued(doc map[string]string) {
+	w.t.Helper()
+	p := w.transcript("s", now.Add(-2*time.Hour))
+	fi, _ := os.Stat(p)
+	c := retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "s-a5", Segment: 2, Document: "conversation:s", Bank: "b", SentAt: now.Add(-90 * time.Minute)}
+	if err := retain.SaveCursor(w.cursors, "s", c); err != nil {
+		w.t.Fatal(err)
+	}
+	w.srv.docs["conversation:s"] = hindsight.Document{ID: "conversation:s", Metadata: doc}
+	w.fact("s", "f1", true)
+	w.observation("o1", now.Add(-80*time.Minute), "f1")
+}
+
+func (w *world) checkAs(machineID string) Result {
+	return Check(context.Background(), Input{Server: w.srv, Bank: "b", Transcripts: w.files, CursorsDir: w.cursors, Now: now, MachineID: machineID})
+}
+
+// A session copied to another PC and continued there: the other PC sent
+// segment 3, which this PC's cursor does not know of. The document
+// matches, and the check goes on to its facts.
+func TestLiveCheckPassesADocumentAnotherPCContinued(t *testing.T) {
+	w := newWorld(t)
+	w.continued(map[string]string{"segment": "3", "last_uuid": "s-b5", "machine_id": "other"})
+	r := w.checkAs("this-pc")
+	want(t, r, Pass, "continued on another PC: conversation:s")
+	if len(r.ContinuedElsewhere) != 1 || r.ContinuedElsewhere[0] != "conversation:s" {
+		t.Errorf("continued elsewhere %q", r.ContinuedElsewhere)
+	}
+	if r.Segment != 2 || r.ServerSegment != 3 || r.Facts != 1 || r.Observations != 1 {
+		t.Errorf("%+v", r)
+	}
+	// The facts are still judged: unconsolidated long after the send fails.
+	w.srv.memories[0].ConsolidatedAt = ""
+	want(t, w.checkAs("this-pc"), Fail, "not consolidated")
+}
+
+// Everything but a later segment another PC wrote still fails, with the
+// summary naming the segment or the last record as before.
+func TestLiveCheckStillFailsWhatThisPCWrote(t *testing.T) {
+	for _, tc := range []struct {
+		name, machineID, inSummary string
+		doc                        map[string]string
+	}{
+		{"a later segment this PC wrote (a lost cursor)", "this-pc", "the server holds segment 3 of conversation:s, this machine sent segment 2",
+			map[string]string{"segment": "3", "last_uuid": "s-b5", "machine_id": "this-pc"}},
+		{"a later segment without machine_id", "this-pc", "the server holds segment 3 of conversation:s, this machine sent segment 2",
+			map[string]string{"segment": "3", "last_uuid": "s-b5"}},
+		{"this PC's machine id unknown", "", "the server holds segment 3 of conversation:s, this machine sent segment 2",
+			map[string]string{"segment": "3", "last_uuid": "s-b5", "machine_id": "other"}},
+		{"an earlier segment from another PC", "this-pc", "the server holds segment 1 of conversation:s, this machine sent segment 2",
+			map[string]string{"segment": "1", "last_uuid": "s-b5", "machine_id": "other"}},
+		{"the same segment from another PC ending elsewhere", "this-pc", "does not match what this machine sent",
+			map[string]string{"segment": "2", "last_uuid": "s-b5", "machine_id": "other"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.continued(tc.doc)
+			r := w.checkAs(tc.machineID)
+			want(t, r, Fail, tc.inSummary)
+			if len(r.ContinuedElsewhere) != 0 || strings.Contains(r.Summary, "another PC") {
+				t.Errorf("%+v", r)
+			}
+		})
+	}
+}
+
+// The session's facts formed no observation but an earlier session's did:
+// the pass through that earlier session names the document another PC
+// continued too.
+func TestLiveCheckEarlierProofNamesADocumentAnotherPCContinued(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s0", now.Add(-6*time.Hour))
+	w.sent("s0", 1, now.Add(-5*time.Hour))
+	w.stored("s0", 1)
+	w.fact("s0", "f0", true)
+	w.observation("o0", now.Add(-5*time.Hour+time.Minute), "f0")
+	w.continued(map[string]string{"segment": "3", "last_uuid": "s-b5", "machine_id": "other"})
+	w.srv.memories = slices.DeleteFunc(w.srv.memories, func(m hindsight.Memory) bool { return m.ID == "o1" })
+	r := w.checkAs("this-pc")
+	want(t, r, Pass, "consolidation works; continued on another PC: conversation:s")
+	if r.Session != "s" || r.ObservedIn != "s0" || len(r.ContinuedElsewhere) != 1 || r.ContinuedElsewhere[0] != "conversation:s" {
+		t.Errorf("%+v", r)
 	}
 }

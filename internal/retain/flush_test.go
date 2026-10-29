@@ -61,6 +61,11 @@ type fakeHS struct {
 	failDelete   map[string]bool     // deletes of these documents answer 503
 	deleteStatus int                 // non-zero: document deletes answer with it
 	failGet      map[string]bool     // reads of these documents answer 500
+	noText       bool                // reads answer no original_text
+	// opsList: the pending operations the bank lists (beside queued,
+	// counted but not listed); opsStatus non-zero: listing them answers it.
+	opsList   []hindsight.Operation
+	opsStatus int
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +185,12 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		raw, _ := json.Marshal(map[string]any{"id": id, "document_metadata": meta, "tags": h.tags[id]})
+		// original_text: every segment's content, appended ones too.
+		answer := map[string]any{"id": id, "document_metadata": meta, "tags": h.tags[id], "original_text": h.content[id]}
+		if h.noText {
+			delete(answer, "original_text")
+		}
+		raw, _ := json.Marshal(answer)
 		_, _ = w.Write(raw)
 	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && h.failDelete[docOf(r)]:
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -200,11 +210,16 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"items":[],"total":0}`)) // no fact extracted in this fake
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/operations"):
-		n := 0
-		if r.URL.Query().Get("status") == "pending" {
-			n = h.queued
+		if h.opsStatus != 0 {
+			w.WriteHeader(h.opsStatus)
+			return
 		}
-		_, _ = fmt.Fprintf(w, `{"total":%d,"operations":[]}`, n)
+		n, ops := 0, []hindsight.Operation{}
+		if r.URL.Query().Get("status") == "pending" {
+			n, ops = h.queued+len(h.opsList), append(ops, h.opsList...)
+		}
+		raw, _ := json.Marshal(map[string]any{"total": n, "operations": ops})
+		_, _ = w.Write(raw)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -829,7 +844,8 @@ func TestSplitSideDocument(t *testing.T) {
 }
 
 // A cursor written before per-project documents (no home) resyncs once from
-// the server, appends to the home document, then flushes as usual.
+// the server, appends to the home document, then flushes as usual (one
+// read of the document it appends to, movedElsewhere).
 func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	e := newEnv(t)
 	e.record("s1", "u1", "user", 0, "first")
@@ -854,8 +870,13 @@ func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	e.record("s1", "u3", "user", 120, "third")
 	gets = e.hs.gets
 	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
-	if e.hs.gets != gets {
-		t.Errorf("resynced again: %d reads", e.hs.gets-gets)
+	if e.hs.gets != gets+1 {
+		t.Errorf("%d document reads, want the append's one check (movedElsewhere)", e.hs.gets-gets)
+	}
+	// A resync rebuilds the cursor, its record count from zero: an
+	// incremental append adds to the count the resync left (1).
+	if cur, _, _ = LoadCursor(e.f.Dirs.CursorsDir(), "s1"); cur.Records != 2 {
+		t.Errorf("records %d, want 2: the third flush resynced", cur.Records)
 	}
 }
 

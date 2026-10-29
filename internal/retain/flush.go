@@ -80,7 +80,8 @@ type Flusher struct {
 	// ServerID: the id of the server this client joined (connect); ""
 	// when it joined none, which checks no id.
 	ServerID string
-	// SendsGeneration: state.json's when the flusher was built. Once
+	// SendsGeneration: state.json's when the caller started to read its
+	// config, before it (and the key) were read. Once
 	// connect started the sends over for another server, this flusher's
 	// client, bank and sent index are the old server's: it sends nothing
 	// and saves no cursor, a next run does.
@@ -102,6 +103,11 @@ type Flusher struct {
 	// applied one, and decides rebuilt reports' projects as SubagentStop
 	// does (decision 0072); a zero Dir records nothing.
 	Attribution Attributor
+	// replaceReads counts the documents this run read to confirm a
+	// replacing part (maxReplaceReads); queue is the bank's queue as this
+	// run first read it (checkReplaces). A Flusher is one run.
+	replaceReads int
+	queue        *queuedRetains
 }
 
 // Options change the timing rules for explicit flushes.
@@ -137,6 +143,9 @@ type Result struct {
 	NeedsFix bool `json:"-"`
 	// Turns are the main turns this flush recorded (Flusher.Attribution).
 	Turns []TurnEntry `json:"-"`
+	// Unconfirmed: the replacing parts this flush gave up on unconfirmed,
+	// PendingLimit after their send (checkReplaces).
+	Unconfirmed []Unconfirmed `json:"unconfirmed,omitempty"`
 }
 
 // FlushFile sends what is settled and unsent in one transcript.
@@ -175,7 +184,18 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	// Under the session's lock, whatever the flush did: the path rule's
 	// shadow answers are local and never wait for the server.
 	defer func() { res.Turns = f.recordTurns(sid, path, opt.Force) }()
+	res, done := f.checkReplaces(ctx, res, sid, path)
+	if done {
+		return res
+	}
+	return f.flushLocked(ctx, res, sid, path, opt, false)
+}
 
+// flushLocked is FlushFile under the session's lock. resyncFirst: rebuild
+// the cursor from the server whatever it says, as when another PC moved a
+// document since this cursor (movedElsewhere).
+func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string, opt Options, resyncFirst bool) Result {
+	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }
 	cursorDir := f.Dirs.CursorsDir()
 	cur, haveCursor, err := LoadCursor(cursorDir, sid)
 	if err != nil {
@@ -193,7 +213,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	}
 	// A cursor without Segments predates per-project documents: its
 	// Segment counts every project's runs, all sent to conversation:<sid>.
-	resync := !haveCursor || !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
+	resync := resyncFirst || !haveCursor || !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
 	if haveCursor {
 		fp, err := Fingerprint(path, cur.Offset)
 		if err != nil {
@@ -229,12 +249,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	}
 	res.read = st
 	now := f.Now()
-	for i := range recs {
-		recs[i].Timestamp = clampTime(recs[i].Timestamp, fi.ModTime(), now)
-		for j := range recs[i].Turns {
-			recs[i].Turns[j].Timestamp = recs[i].Timestamp
-		}
-	}
+	clampRecords(recs, fi.ModTime(), now)
 
 	// Read before the cursor is rebuilt: the projects whose last sends
 	// went to a purged id (lostToPurged).
@@ -250,7 +265,13 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 		if haveCursor && cur.Segments != nil {
 			home = cur.Home
 		}
-		cur = Cursor{Transcript: path, Bank: f.Bank, Home: home, Segments: map[string]int{}, LastUUIDs: map[string]string{}}
+		// The replacing parts still to confirm are this PC's sends, which
+		// the server's documents may have lost (checkReplaces).
+		var replaces map[string]PendingReplace
+		if haveCursor && state.SameBank(cur.Bank, f.Bank) {
+			replaces = cur.Replaces
+		}
+		cur = Cursor{Transcript: path, Bank: f.Bank, Home: home, Segments: map[string]int{}, LastUUIDs: map[string]string{}, Replaces: replaces}
 		if len(recs) == 0 {
 			return fail(Nothing, "")
 		}
@@ -284,7 +305,72 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 		}
 		send = recs[:n]
 	}
+	if !resync {
+		// A valid cursor numbers the next segments, unless another PC moved
+		// a document since (decision 0073): then the server numbers them.
+		moved, err := f.movedElsewhere(ctx, cur, sid, send, attrs, tombs)
+		switch {
+		case err != nil:
+			res.Stop, res.NeedsFix = true, needsFix(err)
+			return fail(Retry, errSummary(err))
+		case moved:
+			return f.flushLocked(ctx, Result{Session: sid, Transcript: path, Unconfirmed: res.Unconfirmed}, sid, path, opt, true)
+		}
+	}
 	return f.sendRuns(ctx, res, cur, sid, send, attrs, tombs, now)
+}
+
+// movedElsewhere reads, before an append, each document send would write
+// to, and reports whether one is no longer where cur left it: another PC
+// continued the session (a later segment, or the same number ending at
+// another record), started a document this cursor never wrote to, or the
+// segment is invalid. The resync then numbers this PC's segment after the
+// server's and records the split. A document still where cur left it, or
+// at an earlier segment of this PC's own or at the position its last
+// split numbered from (an append of its own not applied yet), or not
+// readable yet after this PC's sends, is unchanged:
+// the append goes out as before. A read that fails is an error: nothing
+// is sent. One read per document, only when there is something to send.
+func (f *Flusher) movedElsewhere(ctx context.Context, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone) (bool, error) {
+	seen := map[string]bool{}
+	for _, r := range send {
+		k := f.runKeyOf(sid, r, attrs)
+		if k.held || k.optOut || seen[k.project] {
+			continue
+		}
+		seen[k.project] = true
+		d, err := f.readDocument(ctx, LiveDocumentID(sid, cur.Home, k.project, tombs))
+		if err != nil {
+			return false, err
+		}
+		if !f.unchangedSince(cur, sid, k.project, d) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// unchangedSince says whether d, project p's document, is still where cur
+// left it (movedElsewhere).
+func (f *Flusher) unchangedSince(cur Cursor, sid, p string, d serverDoc) bool {
+	mine, last := cur.Segments[p], cur.LastUUIDs[p]
+	switch {
+	case mine == 0:
+		return !d.found // never written here: nor by another PC
+	case !d.found:
+		return true // this PC's first segment not readable yet (issue 101)
+	}
+	own := ownKey(f.Index, f.Bank, sid, d.lastUUID) != ""
+	seg, err := strconv.Atoi(d.segment)
+	switch {
+	case err != nil || seg < 1 || seg > mine:
+		return false
+	case seg == mine:
+		return d.lastUUID == last || (last == "" && own)
+	}
+	// An earlier segment: this PC's, or the other PC's one this PC's last
+	// split numbered from; this PC's later segments are still pending.
+	return own || cur.SplitBases[p] == SplitBase{Segment: seg, LastUUID: d.lastUUID}
 }
 
 // resync rebuilds the cursor from the server's documents (decision 0038):
@@ -358,6 +444,12 @@ func (f *Flusher) resync(ctx context.Context, res Result, cur *Cursor, sid strin
 	for p, seg := range pos.segments {
 		cur.Segments[p], cur.LastUUIDs[p] = seg, pos.last[p]
 		cur.setDoc(sid, p, LiveDocumentID(sid, cur.Home, p, tombs))
+		if pos.split[p] {
+			if cur.SplitBases == nil {
+				cur.SplitBases = map[string]SplitBase{}
+			}
+			cur.SplitBases[p] = SplitBase{Segment: seg, LastUUID: pos.last[p]}
+		}
 	}
 	cur.Legacy = pos.legacyUUID
 	// Released from quarantine after a first segment the server never
@@ -484,18 +576,7 @@ type runKey struct {
 // and opted-out ones (attribute). It stops at the first failure, with the
 // cursor after the last run done; the cursor is saved after every segment.
 func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone, now time.Time) Result {
-	key := func(r transcript.Record) runKey {
-		a := attrs[r.End]
-		switch {
-		case ownKey(f.Index, f.Bank, sid, r.UUID) != "":
-			return runKey{held: true}
-		case a.out:
-			return runKey{optOut: true, reason: a.why}
-		case f.headless(r.Entrypoint):
-			return runKey{optOut: true, reason: "headless session (entrypoint " + r.Entrypoint + "): privacy.skip_entrypoints"}
-		}
-		return runKey{project: a.project}
-	}
+	key := func(r transcript.Record) runKey { return f.runKeyOf(sid, r, attrs) }
 	status, detail := Nothing, ""
 	for len(send) > 0 {
 		k := key(send[0])
@@ -536,6 +617,21 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 	return f.save(res, cur, status, detail)
 }
 
+// runKeyOf is r's run: held (sent already by this session), opted out
+// (with why), or sent to its project's document.
+func (f *Flusher) runKeyOf(sid string, r transcript.Record, attrs map[int64]attr) runKey {
+	a := attrs[r.End]
+	switch {
+	case ownKey(f.Index, f.Bank, sid, r.UUID) != "":
+		return runKey{held: true}
+	case a.out:
+		return runKey{optOut: true, reason: a.why}
+	case f.headless(r.Entrypoint):
+		return runKey{optOut: true, reason: "headless session (entrypoint " + r.Entrypoint + "): privacy.skip_entrypoints"}
+	}
+	return runKey{project: a.project}
+}
+
 func (f *Flusher) headless(entrypoint string) bool {
 	return f.Headless != nil && f.Headless(entrypoint)
 }
@@ -549,15 +645,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	if cur.Segments[project] > 0 && cur.docOf(sid, project) != doc {
 		segNo = 1 // the segments counted were of a purged document
 	}
-	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
-	if cur.Generation > 0 {
-		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
-	}
-	if doc == cur.Document && cur.Legacy != "" {
-		// carried forward: a later resync still knows that this document
-		// holds every project's records up to there
-		seg.Item.Metadata["legacy_last_uuid"] = cur.Legacy
-	}
+	seg := f.segment(cur, sid, doc, run, segNo, project)
 	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
 		res.FailedDocument = doc
 		if refusesDocument(err) {
@@ -576,10 +664,12 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	if err := f.Index.Add(uuids...); err != nil {
 		detail = "sent, but the fork-guard index was not updated: " + err.Error()
 	}
+	prev := cur.LastUUID // the record before run, when the cursor was at it
 	cur.advance(last, attr{project: project})
 	cur.SentAt = now
 	cur.Segments[project], cur.LastUUIDs[project] = segNo, last.UUID
 	cur.setDoc(sid, project, doc)
+	f.noteSent(&cur, project, doc, segNo, prev, run[0].UUID, last.UUID, now)
 	cur.Records += len(run)
 	res.Records += len(run)
 	if !slices.Contains(res.Documents, doc) {
@@ -587,6 +677,21 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	}
 	res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, project
 	return res, cur, Sent, detail, false
+}
+
+// segment builds segment segNo of project's document doc from run, its
+// operation id salted by the cursor's generation.
+func (f *Flusher) segment(cur Cursor, sid, doc string, run []transcript.Record, segNo int, project string) Segment {
+	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
+	if cur.Generation > 0 {
+		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
+	}
+	if doc == cur.Document && cur.Legacy != "" {
+		// carried forward: a later resync still knows that this document
+		// holds every project's records up to there
+		seg.Item.Metadata["legacy_last_uuid"] = cur.Legacy
+	}
+	return seg
 }
 
 // checkpoint saves the cursor between two segments: a crash later in the
@@ -629,6 +734,16 @@ func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 		res.Detail = "sent, but the cursor was not saved: " + err.Error()
 	}
 	return res
+}
+
+// clampRecords gives each record, and its turns, its clampTime.
+func clampRecords(recs []transcript.Record, mtime, now time.Time) {
+	for i := range recs {
+		recs[i].Timestamp = clampTime(recs[i].Timestamp, mtime, now)
+		for j := range recs[i].Turns {
+			recs[i].Turns[j].Timestamp = recs[i].Timestamp
+		}
+	}
 }
 
 // clampTime gives a missing or future time (a clock moved back) the file's

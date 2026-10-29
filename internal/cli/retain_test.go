@@ -78,6 +78,22 @@ func TestRetainFlushSendsLiveSessions(t *testing.T) {
 	}
 }
 
+// retain flush whose config predates a whole connect sends nothing to
+// either server and saves no cursor; the next one sends to the new server.
+func TestRetainFlushWhoseConfigPredatesConnectSendsNothing(t *testing.T) {
+	hosts, newHost, cursor, _, _ := configPredatesConnect(t)
+	code, out, errOut := run(t, "retain", "flush", "--session", "settled", "--json")
+	if got := hosts(); len(got) != 0 {
+		t.Fatalf("retains sent to %v\nexit %d\n%s%s", got, code, out, errOut)
+	}
+	if _, err := os.Stat(cursor); err == nil {
+		t.Errorf("cursor saved\n%s", out)
+	}
+	if code, out, errOut := run(t, "retain", "flush", "--session", "settled", "--json"); code != output.OK || !sentOnlyTo(hosts(), newHost) {
+		t.Fatalf("next flush: exit %d, retains to %v, want %s\n%s%s", code, hosts(), newHost, out, errOut)
+	}
+}
+
 func TestRetainFlushServerDownIsPartial(t *testing.T) {
 	home := devInstall(t, true) // closed port
 	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
@@ -212,5 +228,35 @@ func TestRetainEventsNameTheDocumentsWritten(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A replacing part never confirmed within retain.PendingLimit (here the
+// bank's queue stays busy) is given up: one replace_unconfirmed event with
+// the session and the document, and a line on stderr. Nothing is held.
+func TestFlushReportsAReplaceGivenUpUnconfirmed(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // live retain begins
+	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
+	run(t, "retain", "flush")
+	if retained.Load() != 1 {
+		t.Fatalf("%d sent", retained.Load())
+	}
+	processing.Store(1)
+	withClock(t, time.Date(2026, 10, 25, 12, 30, 0, 0, time.UTC))
+	_, _, errOut := run(t, "retain", "flush")
+	tel := telemetryText(t, home)
+	if strings.Count(tel, `"event":"replace_unconfirmed"`) != 1 || !strings.Contains(tel, `"session":"live"`) || !strings.Contains(tel, `"document":"conversation:live"`) {
+		t.Errorf("telemetry:\n%s", tel)
+	}
+	if !strings.Contains(errOut, "conversation:live") || !strings.Contains(errOut, "never confirmed") {
+		t.Errorf("stderr: %q", errOut)
+	}
+	run(t, "retain", "flush")
+	if n := strings.Count(telemetryText(t, home), `"event":"replace_unconfirmed"`); n != 1 {
+		t.Errorf("%d events: the mark was not dropped", n)
 	}
 }

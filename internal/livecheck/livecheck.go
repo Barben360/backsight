@@ -35,6 +35,10 @@ type Input struct {
 	CursorsDir  string
 	RetainSince time.Time // sessions last written before it are backfill's
 	Now         time.Time
+	// MachineID is this PC's (retain.ReadMachineID): a later segment of a
+	// document sent by another machine id is that PC's continuation of
+	// the session, not a loss. Empty, no segment counts as another PC's.
+	MachineID string
 }
 
 // Statuses.
@@ -79,6 +83,9 @@ type Result struct {
 	// ObservedIn: the earlier session whose facts gave the observation,
 	// when the latest one's formed none.
 	ObservedIn string `json:"observed_in,omitempty"`
+	// ContinuedElsewhere: the documents whose later segments another PC
+	// sent (the session was copied there and continued).
+	ContinuedElsewhere []string `json:"continued_elsewhere,omitempty"`
 }
 
 type session struct {
@@ -271,6 +278,10 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		switch {
 		case seg < sd.Segment && mayWork():
 			return waiting(fmt.Sprintf("session %s: the server holds segment %d of %s, segment %d is still being stored", s.sid, seg, sd.Document, sd.Segment))
+		case seg > sd.Segment && continuedElsewhere(doc, in.MachineID):
+			// The session was copied to another PC and continued there: its
+			// later segments are that PC's, not a loss of this one's.
+			r.ContinuedElsewhere = append(r.ContinuedElsewhere, sd.Document)
 		case seg != sd.Segment:
 			return fail(fmt.Sprintf("session %s: the server holds segment %d of %s, this machine sent segment %d", s.sid, seg, sd.Document, sd.Segment),
 				"the document "+sd.Document+" does not hold what this machine recorded as sent", "backsight doctor (restore-epoch, writes)")
@@ -318,7 +329,7 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	r.Observations = n
 	if n > 0 {
 		r.Status = Pass
-		r.Summary = fmt.Sprintf("session %s reached the server (%s) and %d observation(s) were consolidated from its %d fact(s)", s.sid, docList(docs), n, len(facts))
+		r.Summary = fmt.Sprintf("session %s reached the server (%s) and %d observation(s) were consolidated from its %d fact(s)", s.sid, docList(docs), n, len(facts)) + continuedNote(r)
 		return r
 	}
 	// Its facts formed no new observation (none extracted, transient, or
@@ -335,7 +346,7 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 		}
 		if m > 0 {
 			r.Status, r.Observations, r.ObservedIn = Pass, m, e.sid
-			r.Summary = fmt.Sprintf("session %s reached the server (%s); consolidation works", s.sid, docList(docs))
+			r.Summary = fmt.Sprintf("session %s reached the server (%s); consolidation works", s.sid, docList(docs)) + continuedNote(r)
 			r.Detail = fmt.Sprintf("its %d fact(s) formed no new observation (transient or already known); %d observation(s) came from the earlier session %s", len(facts), m, e.sid)
 			return r
 		}
@@ -343,6 +354,23 @@ func checkSent(ctx context.Context, in Input, s session, earlier []session) Resu
 	return fail(fmt.Sprintf("no observation was consolidated from this machine's last %d sent session(s)", 1+len(earlier)),
 		fmt.Sprintf("session %s: %d fact(s), all consolidated, none in an observation", s.sid, len(facts)),
 		"backsight doctor (bank-config: the bank's missions decide what becomes an observation; backsight bank apply restores them)")
+}
+
+// continuedElsewhere reports whether doc's segment was written by
+// another PC: one whose machine id is known and differs from this one's,
+// itself known. A segment without a machine id, or with this PC's, is
+// this PC's.
+func continuedElsewhere(doc hindsight.Document, machineID string) bool {
+	other := doc.Metadata["machine_id"]
+	return other != "" && machineID != "" && other != machineID
+}
+
+// continuedNote names, on a pass, the documents another PC continued.
+func continuedNote(r Result) string {
+	if len(r.ContinuedElsewhere) == 0 {
+		return ""
+	}
+	return "; continued on another PC: " + strings.Join(r.ContinuedElsewhere, ", ")
 }
 
 // sessionFacts lists the facts extracted from every document of a session.

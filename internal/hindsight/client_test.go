@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -475,5 +477,60 @@ func TestGetDocumentKeepsPerProjectIDs(t *testing.T) {
 	}
 	if escaped != "/v1/default/banks/b/documents/conversation%3As1@my%20project" || decoded != "/v1/default/banks/b/documents/conversation:s1@my project" {
 		t.Errorf("escaped %s, decoded %s", escaped, decoded)
+	}
+}
+
+// A fake dial that blocks until its context ends stands for a server that
+// silently drops the SYN; the call must fail at the connect bound, far
+// before its 20 s budget, and read as a timeout like any other.
+func TestClientFailsAtTheConnectBoundOnASilentServer(t *testing.T) {
+	old := dialContext
+	t.Cleanup(func() { dialContext = old })
+	dialContext = func(ctx context.Context, d *net.Dialer, network, addr string) (net.Conn, error) {
+		if d.Timeout != connectTimeout {
+			t.Errorf("dialer timeout = %s, want %s", d.Timeout, connectTimeout)
+		}
+		ctx, cancel := context.WithTimeout(ctx, d.Timeout) // what net.Dialer does with its Timeout
+		defer cancel()
+		<-ctx.Done()
+		return nil, &net.OpError{Op: "dial", Net: network, Err: os.ErrDeadlineExceeded}
+	}
+	c, err := New("http://192.0.2.1:9", token, 20*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = c.Health(context.Background())
+	el := time.Since(start)
+	if !errors.Is(err, ErrTimeout) || errors.Is(err, ErrUnreachable) {
+		t.Errorf("want ErrTimeout, got %v", err)
+	}
+	if el < connectTimeout-100*time.Millisecond || el > connectTimeout+2*time.Second {
+		t.Errorf("failed after %s, want about %s", el, connectTimeout)
+	}
+}
+
+func TestClientConnectBoundNeverExceedsTheCallTimeout(t *testing.T) {
+	c, _ := New("http://192.0.2.1:9", token, time.Second)
+	old := dialContext
+	t.Cleanup(func() { dialContext = old })
+	var got time.Duration
+	dialContext = func(ctx context.Context, d *net.Dialer, network, addr string) (net.Conn, error) {
+		got = d.Timeout
+		return nil, errors.New("stop")
+	}
+	_, _ = c.Health(context.Background())
+	if got != time.Second {
+		t.Errorf("dialer timeout = %s, want 1s (the call timeout)", got)
+	}
+}
+
+func TestClientKeepsTheEnvironmentsProxy(t *testing.T) {
+	c, _ := New("http://127.0.0.1:1", token, time.Second)
+	tr, ok := c.http.Transport.(*http.Transport)
+	// ProxyFromEnvironment reads the environment once per process, so the
+	// presence of the hook is what can be asserted here.
+	if !ok || tr.Proxy == nil {
+		t.Fatalf("transport = %#v, want an http.Transport with Proxy set", c.http.Transport)
 	}
 }

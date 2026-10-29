@@ -396,8 +396,9 @@ func TestBackfillInterruptPauses(t *testing.T) {
 			Sessions: []string{filepath.Join(home, ".claude", "projects", "-home-u-billing", "a.jsonl")}}
 		return nil
 	})
+	generation := sendsGeneration(d)
 	cfg, sec, _ := loadServerConfig()
-	f, _ := newFlusher(d, home, cfg, sec, false)
+	f, _ := newFlusher(d, home, cfg, sec, generation, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := runBackfill(ctx, f, d, cfg, retain.PricesFor(cfg.LLM.Model, 0, 0, 0, "USD"), false, nil)
@@ -735,8 +736,9 @@ func spanningConnect(t *testing.T, sr spanRun) spanned {
 		s.Backfill = &state.Backfill{Total: len(sessions), MaxCost: 10, Currency: "USD", StartDay: "2026-10-24", Sessions: sessions}
 		return nil
 	})
+	generation := sendsGeneration(d)
 	cfg, sec, _ := loadServerConfig()
-	f, err := newFlusher(d, home, cfg, sec, false)
+	f, err := newFlusher(d, home, cfg, sec, generation, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,8 +867,9 @@ func TestBackfillSpanningConnectLeavesTheNewQueue(t *testing.T) {
 		t.Fatalf("the new backfill: %+v, %d retained", b, retained.Load())
 	}
 	d := pathsOf(r.home)
+	generation := sendsGeneration(d)
 	cfg, sec, _ := loadServerConfig()
-	f, err := newFlusher(d, r.home, cfg, sec, false)
+	f, err := newFlusher(d, r.home, cfg, sec, generation, false)
 	if err != nil {
 		t.Fatal(err)
 	}

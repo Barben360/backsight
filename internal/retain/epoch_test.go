@@ -168,7 +168,23 @@ func TestNoEpochDocumentIsEpochZero(t *testing.T) {
 	if err != nil || rec.From != 0 || rec.To != 0 || len(rec.Resend) != 0 || e.hs.gets != gets+2 {
 		t.Fatalf("%+v %v (%d reads)", rec, err, e.hs.gets-gets)
 	}
-	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	// The cursor is kept: no resync. The server lost u2 with no epoch to
+	// say so; s1's segment 1, not confirmed yet, finds it missing there
+	// and sends it again after the server's segment (checkReplaces).
+	kept, ok, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+	if !ok {
+		t.Fatal("s1's cursor dropped")
+	}
+	expect(t, e.flush("s1", Options{}), Sent, 1, 2)
+	after, _, _ := LoadCursor(e.f.Dirs.CursorsDir(), "s1")
+	if after.Offset != kept.Offset || after.LastUUID != kept.LastUUID || after.Fingerprint != kept.Fingerprint {
+		t.Errorf("cursor moved: %+v, was %+v", after, kept)
+	}
+	// A resync would read s1's document again; the kept cursor reads none.
+	gets = e.hs.gets
+	if r := e.flush("s1", Options{}); r.Status != Nothing || e.hs.gets != gets {
+		t.Errorf("%+v, %d reads", r, e.hs.gets-gets)
+	}
 
 	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
 		s.RestoreEpoch = &state.RestoreEpoch{Bank: "claude-memory", Epoch: 3}
