@@ -111,7 +111,7 @@ To stop depending on the address, `backsight server expose --loopback` takes the
 
 ## doctor: a different server answers at this address
 
-doctor's `server-id` check in error, and the session banner "⚠️ a different memory server answers at the joined address": this PC joined a server, and the one answering at its address now has another id (or none). Its host was reinstalled without a restore, or the address now leads to another machine. Each server has its own id, kept in its data, so a host replaced by a fresh install and a restore of its backup keeps its id and its clients.
+doctor's `server-id` check in error, and the session banner "⚠️ a different memory server answers at the joined address": this PC joined a server, and the one answering at its address now has another id (or none). Its host was reinstalled without a restore, or the address now leads to another machine. Each server has its own id, kept in its data, so a host replaced by a fresh install and a restore of its backup keeps its id. Its API key is new, though, and it listens on `127.0.0.1` only (a restore brings back the database, not `config.toml` nor `secrets.toml`): open it there again with `backsight server expose --private <ip> --out <file>`, then join it from each PC with `backsight connect --token-file <file>`; their sends go on where they were ([Several PCs, one memory](several-pcs.md#restore-and-purge-with-several-pcs)).
 
 While it lasts, this PC sends nothing: sessions stay in Claude Code's transcripts and notes in this PC's queue, so nothing is lost. Nor does it write anything else there: `forget` (with `--restore`, `--purge` or `--project`) refuses, `verify`'s round trip fails saying why, and no briefing page is created at session start; recall and the briefing still read what that server holds. To go on with the server now at that address, make a token on its host (`backsight server token --out <file>`) and join it again with `backsight connect --token-file <file>`. If the old server comes back at the address, sending resumes on its own at the next `backsight jobs tick`.
 
@@ -129,7 +129,7 @@ Some of that session's turns from this PC may be missing on the server. They are
 - **"connect: the server rejected this token's key (rotated?)"**: the host gave its server a new API key (`backsight server token --rotate`) after this token was made. Make a new token on the host (`backsight server token --out <file>`) and run `backsight connect --token-file <file>` with it.
 - **"the server at <url> is not the one this token was made for: get a fresh token there"**: another server answers at the token's address. Its host was reinstalled without a restore (a new server has a new id), or the address now leads to another machine. Make a token on the machine that runs the server now (`backsight server token --out <file>`).
 - **"is a public address"**: the token names a public IP address, where the API key would cross the internet. On the server's host, open it on a LAN or tailnet address instead (`backsight server expose --private <ip>`), which hands out a new token.
-- **"does not answer"**: see the next section.
+- **"does not answer"**: this PC does not reach the server: see [Another PC cannot reach the server](#another-pc-cannot-reach-the-server).
 - **"an update did not finish"**: an update stopped half way, and its way back would write `state.json` and `config.toml` back as they were before it, undoing part of the switch. Run `backsight doctor`, which says how to finish or roll back the update, then run `backsight connect` again (the same for `connect --undo`).
 - **"a send of session <id> is still running"**: connect, and `connect --undo`, start this PC's sends over for the other server, and wait up to 2 minutes for the sends already running to end first (one would otherwise record its session as sent to the new server). Run the same command again a little later.
 - **"a restore-epoch reconcile is running"**: after a restore of the server, `backsight jobs tick` catches this PC up with it, which may mark sessions to send again. connect, and `connect --undo`, wait up to 2 minutes for that to end before they start the sends over (it would otherwise mark sessions among the new server's). Run the same command again a little later.
@@ -155,6 +155,15 @@ Once the backup verified, connect stops the server under the maintenance lock, t
 - **"the API key travels unencrypted on this network"**: the address is on a LAN, not a tailnet, and every request carries the API key in clear to anyone on that network. Prefer the host's tailnet address (Tailscale: `100.x`). On a network you trust, rerun the same command with `--answer cleartext_lan=yes`.
 
 If the command exits 30, the server did not answer on the new address: `config.toml` was put back and the server started as before. If it exits 20 after the change, `config.toml` was put back but the server did not start again on it: the message says what to run.
+
+From the other PC, `backsight connect` says **"the server at <url> does not answer"**, or, on a PC that joined, doctor's `server` check says **"Hindsight unreachable at …"**. Nothing changed on that PC. Check, in order:
+
+- On the host: `backsight server status` shows the server running, and `network.bind_ip` in its `config.toml` is the address the token names.
+- From the other PC: `curl http://<ip>:8888/health` (the API port, 8888 unless you chose another). Any answer proves the path; a timeout or a refused connection does not.
+- A tailnet: Tailscale is up on both machines (`tailscale status` lists the host), and no Tailscale ACL keeps this PC from the host's API port.
+- A LAN: both machines are on the same network, not a guest Wi-Fi that isolates its devices, and no firewall on the host blocks the API port (with ufw: `sudo ufw allow from <subnet> to any port 8888 proto tcp`).
+
+Then run `backsight connect` again; a PC that joined sends what waited at its next `backsight jobs tick`.
 
 `backsight server install` (and setup's server step) gives the server an id, which every connection token carries. If the server does not answer that step, install warns `server id: …` and goes on: memory works on this machine without it. `backsight server install` again writes it, and so does the first connection token made: `backsight server expose --private <ip>`, or `backsight server token` once the server is exposed.
 

@@ -38,9 +38,9 @@ After a reboot, Docker may start before the address exists (Tailscale or DHCP st
 
 ## The connection token
 
-A client joins with a connection token. It holds the server's address on your private network, the bank, the **API key**, the server's id, and the host's LLM provider, model and prices (for cost estimates). Never the LLM key.
+A client joins with a connection token. It holds the server's address on your private network and its web UI's, the bank, the **API key**, the server's id and Hindsight version, and the host's LLM provider, model and prices (for cost estimates). Never the LLM key.
 
-On the host:
+`backsight server expose --private <ip> --out <file>` already wrote one. To make another at any time, on the host:
 
 ```sh
 backsight server token --out <file>
@@ -49,7 +49,7 @@ backsight server token --out <file>
 The file is readable by you only (mode 0600; an existing file is replaced). Without `--out`, the token goes to a terminal only: `--json` or a piped output needs `--out`. The server must be exposed and running.
 
 - Carry the file to the other PC yourself (`scp` over your own ssh, a USB stick), never through a chat or a shared folder.
-- Delete it once `connect` is done: connect reminds you, and never deletes it itself.
+- Once `connect` is done, delete it on both machines: the host keeps the file it wrote, and connect reminds you but never deletes it itself.
 - Never paste it into a chat with Claude or another agent. backsight masks it before it stores the session, but the transcript on disk and the agent's provider have it: rotate the key ([A lost laptop](#a-lost-laptop)). connect refuses a token given on its command line, where your shell history keeps it, and tells you to rotate too.
 
 ## Join from another PC
@@ -61,7 +61,7 @@ The file is readable by you only (mode 0600; an existing file is replaced). With
    backsight connect --token-file <file> --plan
    ```
 
-3. Join, then delete the file:
+3. Join, then delete the file here and on the host:
 
    ```sh
    backsight connect --token-file <file>
@@ -69,7 +69,7 @@ The file is readable by you only (mode 0600; an existing file is replaced). With
 
    `backsight connect --token -` reads the token on stdin instead, at a hidden prompt in a terminal.
 
-connect first checks the server, reading only: it answers, accepts the key, holds the token's bank and has the token's server id. A token naming a public IP address is refused. When the server's Hindsight differs from this backsight's pin, connect warns and goes on. Each refusal leaves this PC as it was: see [connect refuses the token](troubleshooting.md#connect-refuses-the-token).
+connect first checks the server, reading only: it answers, accepts the key, holds the token's bank and has the token's server id. A token naming a public IP address is refused. When the server's Hindsight differs from this backsight's pin, connect warns and goes on. Each refusal leaves this PC as it was: see [connect refuses the token](troubleshooting.md#connect-refuses-the-token). When the server does not answer from this PC (Tailscale down, a firewall, a guest Wi-Fi), see [Another PC cannot reach the server](troubleshooting.md#another-pc-cannot-reach-the-server).
 
 It then shows its plan and asks (`--answer consent=yes` without a terminal), and writes:
 
@@ -112,11 +112,11 @@ No ssh access to the host? `backsight server install --print-commands` prints th
 
 ## Away from home
 
-A laptop off the home network, or a host that is off, costs you recall, not data:
+With a tailnet address, a laptop reaches the host from anywhere Tailscale is up; with a LAN address, only at home. A laptop that cannot reach the host, or a host that is off, costs you recall, not data:
 
 - **Prompts.** backsight gives the server 3 s to accept a connection. Each prompt then costs at most about 3 s, until 3 prompts in a row failed: recall pauses for 5 minutes and prompts are no longer delayed (`network.breaker_*` in [configuration.md](configuration.md#network)). Hooks keep their time limits.
 - **Notes** Claude stores wait in this PC's queue, and **sessions** in Claude Code's transcripts.
-- **After an hour** without an answer, the session line adds "⚠️ memory server silent since …", and doctor's `server-reach` check warns: when the server last answered, whether recall is paused, how many notes are queued and how many sessions wait. The `Server` line of `backsight stats` shows the same record, read on this PC without asking the server.
+- **After an hour** without an answer, the next session's start line adds "⚠️ memory server silent since …", and doctor's `server-reach` check warns: when the server last answered, whether recall is paused, how many notes are queued and how many sessions wait. The `Server` line of `backsight stats` shows the same record, read on this PC without asking the server.
 - **Back home**, the next `backsight jobs tick` (every 15 minutes) sends everything that waited.
 
 Measured on a test machine, the prompt hook's 95th percentile was about 1.2 s with the client and the server on the same network, and about 1.4 s with 80 ms of delay added to the link.
@@ -127,7 +127,7 @@ Each backsight pins one Hindsight version. When the server runs another, doctor'
 
 The bank's extraction settings are the host's. A client never sends its own, and its `backsight update apply` skips the server and the bank: doctor's `bank-config` check says so.
 
-To update, run `backsight update apply` on the host first: it moves the server to its new pin and gives the bank the new settings. Then update each PC. Until both run the same release, the PC's `version-skew` check reports the difference. See [update.md](update.md).
+To update, run `backsight update apply` on the host first: it moves the server to its new pin and gives the bank the new settings. Then update each PC. The PC's `version-skew` check compares Hindsight versions, not backsight releases: it reports a difference until the PC's backsight pins the Hindsight version the server runs. See [update.md](update.md).
 
 ## A lost laptop
 
@@ -138,7 +138,7 @@ backsight server token --rotate --plan
 backsight server token --rotate --out <file>
 ```
 
-The old key and every token handed out before are refused from then on. The host follows on its own. On every other PC, run `backsight connect --token-file <file>` with the new token, then delete the file. Sessions open there follow at their next memory call. If the rotation fails, the old key is put back and the old token still works.
+The old key and every token handed out before are refused from then on. The host follows on its own. On every other PC, run `backsight connect --token-file <file>` with the new token, then delete the file. Sessions open there follow at their next memory call. If the server does not run on the new key, the old key is put back and the server started on it, and the old token still works; when that fails too, the message says what to run.
 
 ## Restore and purge with several PCs
 
