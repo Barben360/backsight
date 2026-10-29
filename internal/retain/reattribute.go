@@ -403,9 +403,15 @@ func (f *Flusher) sessionHeld(sid string) string {
 // less than it will: a restore or an update not finished, a restore epoch
 // not reconciled (Hold), or retains still queued (a document read now
 // could gain a segment after a delete, which Hindsight would recreate
-// holding that segment alone).
+// holding that segment alone), or a connect since the run began.
 func (f *Flusher) ReattributionGuard(ctx context.Context) error {
 	if err := f.restoreHold(); err != nil {
+		return err
+	}
+	// connect moved this PC to another server since the run began (its
+	// backup takes minutes): nothing goes to the old one, and the cursors
+	// are the new one's.
+	if err := f.StartedOver(); err != nil {
 		return err
 	}
 	if f.Hold != "" {
@@ -450,6 +456,9 @@ func (f *Flusher) journal(action, phase string, fields map[string]any) error {
 // read back: the document and every memory extracted from it must carry
 // the new project, else it is a failure (the next run tries again).
 func (f *Flusher) ApplyRetag(ctx context.Context, r Retag, oldTags []string) error {
+	if err := f.StartedOver(); err != nil {
+		return err
+	}
 	if r.Kind == KindConversation {
 		unlock, err := f.lockSession(r.Session)
 		if err != nil {
@@ -526,6 +535,9 @@ func (f *Flusher) ApplyResend(ctx context.Context, r Resend) error {
 	// recreate it holding that segment alone, which the resync trusts. So
 	// no re-send while anything is queued (a re-tag's consolidation, a
 	// note), and nothing changes here before it is known.
+	if err := f.StartedOver(); err != nil {
+		return err
+	}
 	if n, err := f.Client.QueuedOperations(ctx, f.Bank); err != nil {
 		return errors.New(errSummary(err))
 	} else if n > 0 {

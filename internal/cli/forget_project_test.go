@@ -469,3 +469,27 @@ func TestForgetProjectExcludesTheIDForm(t *testing.T) {
 		t.Errorf("writes %q", b.writes)
 	}
 }
+
+// A connect while forget --project runs: neither the plain forget nor the
+// purge writes to the server it loaded.
+func TestForgetProjectWritesNothingAfterAConnect(t *testing.T) {
+	for _, purge := range []bool{false, true} {
+		t.Run(map[bool]string{false: "forget", true: "purge"}[purge], func(t *testing.T) {
+			home := devInstall(t, true)
+			b := newBulkBank(t, home)
+			b.add(false, "f1", "world", "conversation:s1", billing)
+			connectAfterLoad(t, home)
+			args := []string{"--project", "billing", "--answer", "confirm_project=billing"}
+			if purge {
+				args = append(args, "--purge")
+			}
+			code, env, out := forgetProject(t, args...)
+			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "joined another server") {
+				t.Errorf("exit %d\n%s", code, out)
+			}
+			if len(b.writes) != 0 {
+				t.Errorf("written after the connect: %q", b.writes)
+			}
+		})
+	}
+}

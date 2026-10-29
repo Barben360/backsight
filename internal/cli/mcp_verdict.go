@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -153,9 +154,15 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 			hidden = append(hidden, id)
 			d.journal(live, feedback.Event{Kind: feedback.KindHide, IDs: []string{id}, Verdict: verdict, Note: note})
 		case slices.Contains(plan.retire, id):
-			failure = onServer(key, func(cl *hindsight.Client) error {
-				return cl.Invalidate(ctx, d.cfg.Server.Bank, id, reason, false)
-			})
+			// Each retirement checks the sends generation: a connect
+			// meanwhile moved this PC to another server.
+			if failure = sendsGate(d.dirs, d.generation)(); failure != nil {
+				failure = joinedElsewhere(failure)
+			} else {
+				failure = onServer(key, func(cl *hindsight.Client) error {
+					return cl.Invalidate(ctx, d.cfg.Server.Bank, id, reason, false)
+				})
+			}
 			if failure == nil {
 				retired = append(retired, id)
 				d.journal(live, feedback.Event{Kind: feedback.KindRetire, IDs: []string{id}, Verdict: verdict, Outcome: "invalidated", Note: note})
@@ -170,6 +177,10 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 		if failure != nil {
 			break
 		}
+	}
+	moved := errors.Is(failure, errJoinedElsewhere)
+	if failure != nil && moved && len(retired)+len(hidden) == 0 {
+		return "", fmt.Errorf("%w: nothing retired. The correction is queued as %s: do not call memory_credit again for these memories", failure, note)
 	}
 	if failure != nil && len(retired)+len(hidden) == 0 {
 		lines := []string{fmt.Sprintf("the server refused the retirement (%v): nothing retired. The correction is already stored as %s: do not call memory_credit again for these memories; tell the user, who can retire them from a terminal:", failure, note)}
@@ -190,6 +201,8 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	}
 	var b strings.Builder
 	switch {
+	case moved:
+		fmt.Fprintf(&b, "%s This PC joined another server since this session started (restart Claude Code: its memory tools then use that server). Correction stored: %s.\n", creditPartlyPrefix, note)
 	case failure != nil:
 		fmt.Fprintf(&b, "%s The server refused a retirement (%v). Correction stored: %s.\n", creditPartlyPrefix, failure, note)
 	case len(retired) > 0:
@@ -224,11 +237,27 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	if len(plan.skip) > 0 {
 		b.WriteString("Observations retired through the facts named: " + strings.Join(plan.skip, ", ") + "\n")
 	}
-	if len(notRetired) > 0 {
+	switch {
+	case len(notRetired) > 0 && moved:
+		b.WriteString("Not retired (this PC no longer writes to that server): " + strings.Join(notRetired, ", ") + "\n")
+	case len(notRetired) > 0:
 		b.WriteString("Not retired (the user can retire them from a terminal: backsight forget <id>): " + strings.Join(notRetired, ", ") + "\n")
 	}
 	b.WriteString(restoreAsk)
 	return b.String(), nil
+}
+
+// errJoinedElsewhere: connect moved this PC to another server since this
+// memory server loaded its config (retain.ErrStartedOver, said for the
+// agent).
+var errJoinedElsewhere = errors.New("this PC joined another server since this session started (restart Claude Code: its memory tools then use that server)")
+
+// joinedElsewhere is a failed sends gate, as a memory tool says it.
+func joinedElsewhere(err error) error {
+	if errors.Is(err, retain.ErrStartedOver) {
+		return errJoinedElsewhere
+	}
+	return fmt.Errorf("cannot read this PC's sends generation (%w)", err)
 }
 
 // invalidationReason is "<verdict>: <evidence> → <correction>" on one

@@ -599,3 +599,25 @@ func TestVerifyLiveSendsOnlyGetRequests(t *testing.T) {
 		t.Errorf("not every read was exercised: %q", reqs)
 	}
 }
+
+// A connect while verify runs (after it read its config): the round trip
+// writes nothing to the server it loaded, and fails saying why.
+func TestVerifyWritesNothingAfterAConnect(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	asShim(t)
+	fastVerify(t)
+	connectAfterLoad(t, home)
+	code, out, _ := run(t, "verify", "--json")
+	if c := parseVerify(t, out)["round_trip"]; code != output.Blocked || c.Status != "fail" || !strings.Contains(c.Summary, "joined another server") {
+		t.Errorf("exit %d %+v", code, c)
+	}
+	for _, c := range bankCalls {
+		if f := strings.Fields(c); f[0] != "GET" {
+			t.Errorf("written after the connect: %s", c)
+		}
+	}
+	if retained.Load() != 0 {
+		t.Errorf("%d retained after the connect", retained.Load())
+	}
+}

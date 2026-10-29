@@ -89,7 +89,7 @@ func runForgetProject(ctx context.Context, f forgetProjectFlags) (forgetProjectR
 	if confirmed && got != f.project {
 		return res, &output.Error{Code: output.Usage, Message: fmt.Sprintf("the project name %q is not the one to forget (%s): nothing was changed", got, f.project)}
 	}
-	cl, bank, err := curateClient()
+	cl, bank, gate, err := curateWriter()
 	if err != nil {
 		return res, err
 	}
@@ -160,9 +160,12 @@ func runForgetProject(ctx context.Context, f forgetProjectFlags) (forgetProjectR
 		if err := heldWrites(); err != nil { // a purge refuses in purgeWrite
 			return res, err
 		}
+		if err := gate(); err != nil {
+			return res, err
+		}
 		return forgetProjectFacts(ctx, cl, bank, f, sel, res)
 	}
-	return purgeProject(ctx, cl, bank, f, sel, res)
+	return purgeProject(ctx, cl, bank, gate, f, sel, res)
 }
 
 // selectProject lists the raw facts tagged project:P (and source:S when
@@ -231,14 +234,14 @@ func forgetProjectFacts(ctx context.Context, cl *hindsight.Client, bank string, 
 // the maintenance lock, then checks that the selected observations are
 // gone: one drawn only from facts already archived has no live fact to
 // clear it through.
-func purgeProject(ctx context.Context, cl *hindsight.Client, bank string, f forgetProjectFlags, sel projectSelection, res forgetProjectResult) (forgetProjectResult, error) {
+func purgeProject(ctx context.Context, cl *hindsight.Client, bank string, gate func() error, f forgetProjectFlags, sel projectSelection, res forgetProjectResult) (forgetProjectResult, error) {
 	tagged := append([]hindsight.MemoryDetail{}, sel.facts...)
 	for _, t := range sel.obsTags {
 		tagged = append(tagged, hindsight.MemoryDetail{Tags: t})
 	}
 	projects := projectsOf(tagged)
 	projects[f.project] = true
-	pages, mirror, err := purgeWrite(ctx, cl, bank, sel.facts, res.Documents, projects, "run the same command again to finish")
+	pages, mirror, err := purgeWrite(ctx, cl, bank, gate, sel.facts, res.Documents, projects, "run the same command again to finish")
 	res.Pages = pages
 	if err != nil {
 		var oe *output.Error

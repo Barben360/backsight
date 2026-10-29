@@ -86,14 +86,16 @@ func newVerifyCmd(e *env) *cobra.Command {
 
 func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyResult, error) {
 	res := verifyResult{Checks: []verifyCheck{}}
-	cfg, sec, err := loadServerConfig()
-	if err != nil {
-		return res, err
-	}
 	d, _, err := machine()
 	if err != nil {
 		return res, err
 	}
+	generation := sendsGeneration(d) // before the config it goes with
+	cfg, sec, err := loadServerConfig()
+	if err != nil {
+		return res, err
+	}
+	sendsConfigLoaded()
 	add := func(c verifyCheck) {
 		res.Checks = append(res.Checks, c)
 		if c.Status == "fail" {
@@ -140,6 +142,10 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 	}
 	if mm := otherServer(d, cfg); mm != nil { // its scratch bank is a write too
 		add(verifyCheck{ID: "round_trip", Status: "fail", Summary: mm.Error() + "; the round trip writes nothing to it (backsight doctor)"})
+		return res, nil
+	}
+	if err := sendsGate(d, generation)(); err != nil { // nor to the server connect moved this PC from
+		add(verifyCheck{ID: "round_trip", Status: "fail", Summary: startedOverText(err, "verify") + "; the round trip writes nothing: run verify again"})
 		return res, nil
 	}
 	add(roundTrip(ctx, cfg, sec))

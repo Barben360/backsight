@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,6 +165,31 @@ func TestReattributeRefusesWhenItIsNotSafe(t *testing.T) {
 				t.Errorf("exit %d (want %d), patches %v\n%s", code, c.code, docPatches, out)
 			}
 		})
+	}
+}
+
+// A connect while reattribute's backup runs (it takes minutes): once the
+// maintenance lock is taken, nothing is moved or deleted on the server
+// this run began with.
+func TestReattributeWritesNothingAfterAConnectDuringItsBackup(t *testing.T) {
+	home := devInstall(t, true)
+	port := fakeHindsight(t)
+	pointAt(t, home, port)
+	dk := withBackupDocker(t)
+	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
+	reportToMove(t, home, port)
+	mixedSessionDoc(t, home, port, "s2")
+	var once sync.Once
+	dk.onCall = func(line string) {
+		if strings.Contains(line, "pg_dump") {
+			once.Do(func() {
+				_ = state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil })
+			})
+		}
+	}
+	code, out, errOut := run(t, "retain", "reattribute", "--answer", "resend=yes")
+	if code != output.Blocked || len(docPatches) != 0 || len(deletedDocs()) != 0 || !strings.Contains(out+errOut, "started over") {
+		t.Errorf("exit %d, patches %v, deleted %v\n%s%s", code, docPatches, deletedDocs(), out, errOut)
 	}
 }
 
