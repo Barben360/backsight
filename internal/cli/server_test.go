@@ -231,7 +231,8 @@ var (
 	memoryHistory      map[string]string // GET /memories/{id}/history answer (a JSON list) by id; absent: 404
 	projectEntities    map[string]string
 	retainedTags       []string
-	retainedContents   []string // the content of every accepted item
+	retainedContents   []string     // the content of every accepted item
+	sharedSends        atomic.Int64 // shared ledger documents retained (not in retained)
 	// fakeDocCreated overrides a document's created_at (default: when the
 	// fake accepted it).
 	fakeDocCreated   map[string]time.Time
@@ -250,6 +251,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	t.Helper()
 	// Shared counters start clean for every test.
 	retained.Store(0)
+	sharedSends.Store(0)
 	llmInput.Store(0)
 	llmPerRetain.Store(0)
 	queued.Store(0)
@@ -634,6 +636,10 @@ func fakeHindsight(t *testing.T) (port int) {
 				bankDocs[bank][it.DocumentID] = true
 				docs[bank+"/"+it.DocumentID] = it.Metadata // documents are per bank, like the server's
 				docInfos[bank+"/"+it.DocumentID] = docInfo{tags: it.Tags, text: it.Content, created: time.Now().UTC()}
+				if strings.HasPrefix(it.DocumentID, sharedDocPrefix) {
+					sharedSends.Add(1)
+					continue // a machine's shared counts, not a memory sent
+				}
 				retained.Add(1)
 				llmInput.Add(llmPerRetain.Load())
 				retainedTags = append(retainedTags, strings.Join(it.Tags, ","))

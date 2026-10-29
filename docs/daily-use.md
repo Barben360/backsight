@@ -145,7 +145,7 @@ When a memory shown in a session proves false or no longer true, Claude reports 
 
 - a [raw fact](glossary.md#fact) is invalidated on the server: recall stops returning it;
 - for an [observation](glossary.md#observation), Claude is first shown the facts it is drawn from, then names the wrong ones, which are invalidated;
-- an observation whose facts the server cannot list is hidden on this machine: recall here stops returning it, until the server rewrites or drops it.
+- an observation whose facts the server cannot list is hidden on this machine: recall here stops returning it, until the server rewrites or drops it. Your other machines on the same server hide it too, from their next fetch of the shared counts (within 6 hours, `feedback.share_ledger`).
 
 Claude tells you which memory it retired and why. To undo it:
 
@@ -153,7 +153,7 @@ Claude tells you which memory it retired and why. To undo it:
 backsight forget --restore <id>
 ```
 
-The fact is valid again, or the observation no longer marked hidden, and the report no longer counts against it.
+The fact is valid again, or the observation no longer marked hidden, and the report no longer counts against it. For a hidden observation, the restore applies on the machine where you run it: run it on each machine where you want it back.
 
 ## Reviewing stale memories
 
@@ -166,7 +166,7 @@ It lists the memories worth a look, from this machine's record of what was shown
 | Section | Lists | Command |
 |---|---|---|
 | Shown often, never used | Memories shown at least 10 times (`feedback.stale_shows`) that Claude never reported using. Only the shows recorded live count, not those imported from earlier history. | `backsight forget <id>` retires one. |
-| Hidden, not rewritten for 7 days | Observations hidden after a report, because the server could not list the facts they are drawn from, and not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget --restore <id>` clears the mark. Until the server rewrites them they stay hidden on this machine, and recall here skips them; `backsight forget <id>` retires one for good once the server lists its source facts. |
+| Hidden, not rewritten for 7 days | Observations hidden after a report, because the server could not list the facts they are drawn from, and not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget --restore <id>` clears the mark. Until the server rewrites them they stay hidden on this machine, and recall here skips them (your other machines on the same server follow a hiding from their next fetch of the shared counts; a restore applies on the machine where it is run); `backsight forget <id>` retires one for good once the server lists its source facts. |
 | Reported wrong or outdated | Raw facts Claude reported, already invalidated. | `backsight forget <id> --purge` alone only lists what deleting one for good would remove; adding `--yes` deletes it. |
 
 `backsight forget --restore <id>` undoes a retirement. The command reads local files only and changes nothing in the memory; `--json` gives the same lists.

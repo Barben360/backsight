@@ -245,6 +245,10 @@ type Report struct {
 		Retired int `json:"retired"`
 		Hidden  int `json:"hidden"`
 		Partly  int `json:"partly"`
+		// SharedMachines: how many other machines' counts recall weighs
+		// with this one's, from the shared cache, not from telemetry
+		// (the caller sets it). Every other count is this machine's.
+		SharedMachines int `json:"shared_machines,omitempty"`
 	} `json:"feedback"`
 }
 

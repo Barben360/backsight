@@ -47,6 +47,13 @@ func mcpSessionWith(t *testing.T, extra string) *mcp.ClientSession {
 		raw, _ := os.ReadFile(cfgPath)
 		_ = os.WriteFile(cfgPath, append(raw, []byte(extra)...), 0o600)
 	}
+	return mcpConnect(t, home)
+}
+
+// mcpConnect starts the memory server of home, the machine the
+// environment points at, and connects a client.
+func mcpConnect(t *testing.T, home string) *mcp.ClientSession {
+	t.Helper()
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		t.Fatal(err)

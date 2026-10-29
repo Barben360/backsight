@@ -94,3 +94,42 @@ func quietControl(ctx context.Context, cl *hindsight.Client, bank string, adopt 
 	}
 	return err
 }
+
+// WriteControlDocument writes document id into bank's control bank,
+// synchronously, with content and only the metadata meta: no extraction,
+// the control bank being set up first with its ownership check
+// (QuietBank). A bank that is not backsight's is left alone
+// (*ForeignBank).
+func WriteControlDocument(ctx context.Context, cl *hindsight.Client, bank, id, content string, meta map[string]string) error {
+	return writeControlDocument(ctx, cl, bank, id, content, meta, false)
+}
+
+// writeControlDocument is WriteControlDocument; adopt: a control bank it
+// creates is adopted (AdoptedControlMarker).
+func writeControlDocument(ctx context.Context, cl *hindsight.Client, bank, id, content string, meta map[string]string, adopt bool) error {
+	if err := quietControl(ctx, cl, bank, adopt); err != nil {
+		return err
+	}
+	return cl.RetainNow(ctx, ControlBank(bank), []hindsight.RetainItem{{Content: content, DocumentID: id, Tags: []string{}, Metadata: meta}})
+}
+
+// ControlDocuments lists the documents of bank's control bank whose id
+// starts with prefix, with their metadata: none when the control bank
+// does not exist.
+func ControlDocuments(ctx context.Context, cl *hindsight.Client, bank, prefix string) ([]hindsight.DocumentItem, error) {
+	docs, err := cl.ListDocuments(ctx, ControlBank(bank))
+	var apiErr *hindsight.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	var out []hindsight.DocumentItem
+	for _, d := range docs {
+		if strings.HasPrefix(d.ID, prefix) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}

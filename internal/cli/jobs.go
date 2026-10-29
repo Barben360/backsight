@@ -58,7 +58,16 @@ type tickResult struct {
 	// History: the import of earlier history (importInTick), "" once done
 	// or with feedback off.
 	History string `json:"history,omitempty"`
-	MS      int    `json:"ms"`
+	// SharedUp: this machine's counts were sent to the server for the
+	// other machines; SharedMachines: how many other machines' counts the
+	// local cache holds; SharedSkipped: fetched documents that did not
+	// parse; SharedError: why sharing failed, "" when it did not
+	// (shareLedger).
+	SharedUp       bool   `json:"shared_up,omitempty"`
+	SharedMachines int    `json:"shared_machines,omitempty"`
+	SharedSkipped  int    `json:"shared_skipped,omitempty"`
+	SharedError    string `json:"shared_error,omitempty"`
+	MS             int    `json:"ms"`
 }
 
 // reachCheckTimeout bounds the tick's one health call.
@@ -84,7 +93,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History,
+						"shared_up": res.SharedUp, "shared_machines": res.SharedMachines, "shared_skipped": res.SharedSkipped, "shared_error": res.SharedError}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -123,12 +133,21 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			hctx, hcancel := context.WithTimeout(cmd.Context(), reachCheckTimeout)
 			_, herr := f.Client.Health(hctx)
 			hcancel()
-			// Lifts the hidings the server made moot: only on a server that
-			// answers and is the one this PC joined (another one holds none
-			// of its memories, which would read as gone).
-			liftHidden := func() {
-				if cfg.Feedback.Enabled && herr == nil && otherServer(d, cfg) == nil {
-					res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, d.FeedbackDir(), now())
+			// Lifts the hidings the server made moot, then shares this
+			// machine's counts with its other machines (shareTickBudget):
+			// only on a server that answers and is the one this PC joined
+			// (another one holds none of its memories, which would read as
+			// gone).
+			feedbackSteps := func() {
+				if !cfg.Feedback.Enabled || herr != nil || otherServer(d, cfg) != nil {
+					return
+				}
+				res.Unhidden = checkHidden(cmd.Context(), f.Client, cfg.Server.Bank, d.FeedbackDir(), now())
+				sctx, cancel := context.WithTimeout(cmd.Context(), shareTickBudget)
+				defer cancel()
+				var err error
+				if res.SharedUp, res.SharedMachines, res.SharedSkipped, err = shareLedger(sctx, f.Client, d, cfg, f.MachineID, now()); err != nil {
+					res.SharedError = err.Error()
 				}
 			}
 			files := transcripts(home)
@@ -139,7 +158,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if cfg.Components.Read {
 					res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 				}
-				liftHidden()
+				feedbackSteps()
 				if otherServer(d, cfg) == nil { // nothing is written to another server
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				}
@@ -201,7 +220,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				}
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
-			liftHidden() // after the sends: a slow server delays this look, never them
+			feedbackSteps() // after the sends: a slow server delays this look, never them
 			res.History = importInTick(cmd.Context(), d, home, cfg)
 			pruneSessions(d)
 			if failed != nil {
@@ -256,6 +275,18 @@ func tickText(r tickResult) string {
 	}
 	if r.History != "" {
 		msg += ", " + r.History
+	}
+	if r.SharedUp {
+		msg += ", this machine's counts sent to the server"
+	}
+	if r.SharedMachines > 0 {
+		msg += fmt.Sprintf(", counts of %d other machine(s) in use", r.SharedMachines)
+	}
+	if r.SharedError != "" {
+		msg += ", counts not shared (" + r.SharedError + "): the next tick retries"
+	}
+	if r.SharedSkipped > 0 {
+		msg += fmt.Sprintf(", %d shared document(s) skipped (unreadable or of a newer version)", r.SharedSkipped)
 	}
 	return msg + "\n"
 }

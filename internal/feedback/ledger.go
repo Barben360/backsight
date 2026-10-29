@@ -21,8 +21,9 @@ const LedgerSchema = 1
 // shown, its credits and confident misses as sums decayed to CreditsAt and
 // MissesAt (each event weighs 2^-(age/half-life)), when it was last shown
 // and credited, how often it was retired as wrong or outdated, its local
-// hiding when its retirement could only hide it, and how much of Shown
-// and Credits came from earlier history (import events).
+// hiding when its retirement could only hide it, when an unhide last
+// cleared it (a hiding elsewhere older than that stays lifted here), and
+// how much of Shown and Credits came from earlier history (import events).
 type Entry struct {
 	Shown        int       `json:"shown"`
 	Credits      float64   `json:"credits,omitempty"`
@@ -33,6 +34,7 @@ type Entry struct {
 	LastCredited time.Time `json:"last_credited,omitzero"`
 	Wrong        int       `json:"wrong,omitempty"`
 	Hidden       *Hidden   `json:"hidden,omitempty"`
+	UnhiddenAt   time.Time `json:"unhidden_at,omitzero"`
 	Imported     Imported  `json:"imported,omitzero"`
 }
 
@@ -92,10 +94,12 @@ func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[stri
 
 // Apply adds a settle event's shows to the ledger, adds an import event's
 // shows and credits (to Imported too), drops a forget event's memories,
-// counts a retire, sets a hide, or clears both on an unhide (of a memory
-// with an entry only). A settle or an import decays under the half-lives
-// it recorded, p's when it recorded none, each show from its own time; a
-// forgotten show counts nowhere, an import never counts a miss. Sums
+// counts a retire, sets a hide, or clears both on an unhide and stamps the
+// entry with its time (an entry holding only that time for a memory
+// without one, for a restore here to beat a hiding elsewhere). A settle or an
+// import decays under the half-lives it recorded, p's when it recorded
+// none, each show from its own time; a forgotten show counts nowhere, an
+// import never counts a miss. Sums
 // decay order-independently, so applying events as they come and folding
 // them all later agree.
 func (l *Ledger) Apply(e Event, p Params) {
@@ -144,10 +148,10 @@ func (l *Ledger) Apply(e Event, p Params) {
 		}
 	case KindUnhide:
 		for _, id := range e.IDs {
-			if m, ok := l.Memories[id]; ok {
-				m.Wrong, m.Hidden = 0, nil
-				l.Memories[id] = m
-			}
+			m := l.Memories[id]
+			m.Wrong, m.Hidden = 0, nil
+			m.UnhiddenAt = laterOf(m.UnhiddenAt, e.TS)
+			l.Memories[id] = m
 		}
 	}
 }
@@ -250,13 +254,37 @@ func decay(v float64, ref, t time.Time, h time.Duration) float64 {
 // half-lives, each referenced at t from then on (a t before a reference
 // leaves that sum as it is).
 func (e Entry) DecayedTo(t time.Time, p Params) Entry {
-	if e.Credits != 0 && t.After(e.CreditsAt) {
-		e.Credits, e.CreditsAt = decay(e.Credits, e.CreditsAt, t, p.CreditHalfLife), t
-	}
-	if e.Misses != 0 && t.After(e.MissesAt) {
-		e.Misses, e.MissesAt = decay(e.Misses, e.MissesAt, t, p.MissHalfLife), t
-	}
+	e.Credits, e.CreditsAt = readAt(e.Credits, e.CreditsAt, t, p.CreditHalfLife)
+	e.Misses, e.MissesAt = readAt(e.Misses, e.MissesAt, t, p.MissHalfLife)
 	return e
+}
+
+// readAt is v referenced at ref, read at t and referenced there when t is
+// later and v not 0; else v at ref as they are.
+func readAt(v float64, ref, t time.Time, h time.Duration) (float64, time.Time) {
+	if v == 0 || !t.After(ref) {
+		return v, ref
+	}
+	return decay(v, ref, t, h), t
+}
+
+// RestoreOnly: e holds nothing but UnhiddenAt, left by a restore of a
+// memory this machine never counted. It is not one of the ledger's
+// memories.
+func (e Entry) RestoreOnly() bool {
+	return e.Shown == 0 && e.Credits == 0 && e.Misses == 0 && e.Wrong == 0 && e.Hidden == nil &&
+		e.LastShown.IsZero() && e.LastCredited.IsZero() && e.Imported == (Imported{})
+}
+
+// Counted is how many memories l holds, entries RestoreOnly left out.
+func (l Ledger) Counted() int {
+	n := 0
+	for _, e := range l.Memories {
+		if !e.RestoreOnly() {
+			n++
+		}
+	}
+	return n
 }
 
 // Boost is what recall adds to id's score: k × ((c + α) / (c + m + α + β)
@@ -266,12 +294,20 @@ func (e Entry) DecayedTo(t time.Time, p Params) Entry {
 // nothing settled, and for priors that do not add up to a positive sum.
 func (l Ledger) Boost(id string, p Params, now time.Time) float64 {
 	m, ok := l.Memories[id]
-	a, b := p.PriorCredits, p.PriorMisses
-	if !ok || a+b <= 0 {
+	if !ok {
 		return 0
 	}
-	m = m.DecayedTo(now, p)
-	return p.Weight * ((m.Credits+a)/(m.Credits+m.Misses+a+b) - a/(a+b))
+	return m.Boost(p, now)
+}
+
+// Boost is Ledger.Boost of the memory whose entry is e.
+func (e Entry) Boost(p Params, now time.Time) float64 {
+	a, b := p.PriorCredits, p.PriorMisses
+	if a+b <= 0 {
+		return 0
+	}
+	e = e.DecayedTo(now, p)
+	return p.Weight * ((e.Credits+a)/(e.Credits+e.Misses+a+b) - a/(a+b))
 }
 
 func laterOf(a, b time.Time) time.Time {

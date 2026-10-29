@@ -754,3 +754,199 @@ func TestAFreshHidingSkipsTheNextRecall(t *testing.T) {
 		t.Errorf("context:\n%s", h.Specific.Context)
 	}
 }
+
+// Two memories with ids a shared document can name: uA 0.02 above uB.
+const (
+	uA = "a1111111-0000-4000-8000-000000000001"
+	uB = "b2222222-0000-4000-8000-000000000002"
+)
+
+func uuidHits() string {
+	return `[{"id":"` + uA + `","text":"memory A about billing","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.82}},` +
+		`{"id":"` + uB + `","text":"memory B about billing","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.80}}]`
+}
+
+// writeSharedCache writes docs as the tick's shared.json, each through
+// MarshalMeta as the other machines upload it, and combines them now as
+// the tick does into shared-combined, which recall reads.
+func writeSharedCache(t *testing.T, home string, docs ...feedback.SharedDoc) {
+	t.Helper()
+	c := feedback.SharedCache{FetchedAt: time.Now().UTC()}
+	for _, d := range docs {
+		meta, err := d.MarshalMeta()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Docs = append(c.Docs, json.RawMessage(meta))
+	}
+	dir := pathsOf(home).FeedbackDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := feedback.SaveSharedCache(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := combineShared(dir, c, "", time.Now(), feedbackParams(cfg)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// otherMachine is a document of another machine at now, with entries.
+func otherMachine(machine string, entries map[string]feedback.SharedEntry) feedback.SharedDoc {
+	if entries == nil {
+		entries = map[string]feedback.SharedEntry{}
+	}
+	return feedback.SharedDoc{V: feedback.SharedVersion, Machine: machine, At: time.Now().Truncate(time.Second), Entries: entries}
+}
+
+// injectedFirst: A comes before B in the context (false when either is
+// missing).
+func injectedFirst(ctx, a, b string) bool {
+	i, j := strings.Index(ctx, a), strings.Index(ctx, b)
+	return i >= 0 && j >= 0 && i < j
+}
+
+// A memory this machine never credited, used often on another machine,
+// climbs over its neighbour here, this machine's ledger empty; with
+// share_ledger off the shared counts are not read.
+func TestRecallUsesOtherMachinesCredits(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	credited := map[string]feedback.SharedEntry{uB: {Credits: 10, CreditsAt: now}}
+	home := hookHome(t)
+	recallAnswer = uuidHits()
+	writeSharedCache(t, home, otherMachine("pc-b", credited))
+	h := prompt(t, home, "s1", longPrompt)
+	if !injectedFirst(h.Specific.Context, "memory B", "memory A") {
+		t.Fatalf("B, credited on another machine, not injected first:\n%s", h.Specific.Context)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || len(shows[0].Items) != 2 || shows[0].Items[0].ID != uB || shows[0].Items[0].Boost < 0.034 || shows[0].Items[0].RankWithoutBoost != 2 {
+		t.Errorf("shows %+v", shows)
+	}
+
+	off := hookHome(t)
+	recallAnswer = uuidHits()
+	appendConfig(t, off, "[feedback]\nshare_ledger = false")
+	writeSharedCache(t, off, otherMachine("pc-b", credited))
+	if h := prompt(t, off, "s1", longPrompt); !injectedFirst(h.Specific.Context, "memory A", "memory B") {
+		t.Errorf("share_ledger off still read the shared counts:\n%s", h.Specific.Context)
+	}
+}
+
+// A memory another machine hid is skipped here, until this machine
+// restores it after that hiding.
+func TestRemoteHidingHidesHere(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = uuidHits()
+	writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uA: {HiddenSince: time.Now().Add(-time.Hour).Truncate(time.Second)}}))
+	h := prompt(t, home, "s1", longPrompt)
+	if strings.Contains(h.Specific.Context, "memory A") || !strings.Contains(h.Specific.Context, "memory B") {
+		t.Fatalf("hidden on another machine, still recalled here:\n%s", h.Specific.Context)
+	}
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{})
+	if err := j.AppendFolded(feedback.Event{Kind: feedback.KindUnhide, IDs: []string{uA}, Outcome: "restored"}); err != nil {
+		t.Fatal(err)
+	}
+	if h := prompt(t, home, "s2", longPrompt); !strings.Contains(h.Specific.Context, "memory A") {
+		t.Errorf("restored here after the hiding, still skipped:\n%s", h.Specific.Context)
+	}
+}
+
+// Shared counts recall cannot use leave it on this machine's ledger: the
+// same context, byte for byte, and the same shows as with none at all.
+// So do a combined view that is garbage, of an unknown version or 30
+// days old, documents of an unknown version (the tick combines nothing
+// of them), and documents never combined: recall reads the combined view
+// alone, never a document.
+func TestRecallIgnoresABrokenSharedCache(t *testing.T) {
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	local := `{"schema":1,"watermark":"` + at + `","memories":{"` + uA + `":{"shown":10,"credits":10,"credits_at":"` + at + `"}}}`
+	run := func(cache func(home string)) (string, []feedback.Item) {
+		t.Helper()
+		home := hookHome(t)
+		recallAnswer = uuidHits()
+		writeLedger(t, home, local)
+		cache(home)
+		h := prompt(t, home, "s1", longPrompt)
+		shows := eventsOf(journalEvents(t, home), "shows")
+		if len(shows) != 1 {
+			t.Fatalf("shows %+v", shows)
+		}
+		return h.Specific.Context, shows[0].Items
+	}
+	file := func(name func(string) string, content string) func(string) {
+		return func(home string) {
+			dir := pathsOf(home).FeedbackDir()
+			if err := os.WriteFile(name(dir), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// What a usable view would do: credit B far above A, and hide A.
+	now := time.Now().Unix()
+	view := func(header string) string {
+		return fmt.Sprintf("%s\n%s\t0\t0\t0\t0\t%d\n%s\t50\t%d\t0\t0\t0\n", header, uA, now, uB, now)
+	}
+	entries := fmt.Sprintf(`{"%s":[50,%d,0,0,0],"%s":[0,0,0,0,%d]}`, uB, now, uA, now)
+	wantCtx, wantItems := run(func(string) {})
+	if !injectedFirst(wantCtx, "memory A", "memory B") || wantItems[0].Boost <= 0 {
+		t.Fatalf("baseline without the local boost:\n%s\n%+v", wantCtx, wantItems)
+	}
+	if ctx, _ := run(file(feedback.SharedCombinedFile, view(fmt.Sprintf("v1 %d", now)))); strings.Contains(ctx, "memory A") || !strings.Contains(ctx, "memory B") {
+		t.Fatalf("the usable view is not used, the cases below prove nothing:\n%s", ctx)
+	}
+	for name, cache := range map[string]func(string){
+		"garbage":         file(feedback.SharedCombinedFile, "{not json"),
+		"unknown version": file(feedback.SharedCombinedFile, view(fmt.Sprintf("v2 %d", now))),
+		"31 days old":     file(feedback.SharedCombinedFile, view(fmt.Sprintf("v1 %d", now-31*24*3600))),
+		"documents of an unknown version": func(home string) {
+			c := feedback.SharedCache{FetchedAt: time.Now(), Docs: []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"v":2,"machine":"pc-b","at":%d,"entries":%s}`, now, entries))}}
+			if err := feedback.SaveSharedCache(pathsOf(home).FeedbackDir(), c); err != nil {
+				t.Fatal(err)
+			}
+			if err := combineShared(pathsOf(home).FeedbackDir(), c, "", time.Now(), feedback.Params{}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"documents never combined": func(home string) {
+			writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uB: {Credits: 50, CreditsAt: time.Now().Truncate(time.Second)}}))
+			if err := os.Remove(feedback.SharedCombinedFile(pathsOf(home).FeedbackDir())); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		ctx, items := run(cache)
+		if ctx != wantCtx {
+			t.Errorf("%s: context differs:\n%s\nwant:\n%s", name, ctx, wantCtx)
+		}
+		if !slices.EqualFunc(items, wantItems, func(a, b feedback.Item) bool {
+			return a.ID == b.ID && a.Rank == b.Rank && a.Boost == b.Boost && a.RankWithoutBoost == b.RankWithoutBoost
+		}) {
+			t.Errorf("%s: shows %+v, want %+v", name, items, wantItems)
+		}
+	}
+}
+
+// Recall reads the combined view, never the documents nor the machine
+// id: with shared.json unreadable it still weighs the other machines'
+// counts, and it creates no machine id.
+func TestRecallReadsOnlyTheCombinedCounts(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = uuidHits()
+	writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uB: {Credits: 10, CreditsAt: time.Now().Truncate(time.Second)}}))
+	dir := pathsOf(home).FeedbackDir()
+	if err := os.WriteFile(feedback.SharedCacheFile(dir), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(pathsOf(home).State, "machine_id"))
+	if h := prompt(t, home, "s1", longPrompt); !injectedFirst(h.Specific.Context, "memory B", "memory A") {
+		t.Errorf("the combined counts not used:\n%s", h.Specific.Context)
+	}
+	if _, err := os.Stat(filepath.Join(pathsOf(home).State, "machine_id")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("recall created the machine id: %v", err)
+	}
+}

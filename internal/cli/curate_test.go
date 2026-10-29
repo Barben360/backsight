@@ -771,3 +771,54 @@ func TestNeverUsedCountsLiveShowsOnly(t *testing.T) {
 		t.Errorf("never used %v, want the memories with 10 live shows or more: 44444444 22222222", got)
 	}
 }
+
+// forget --restore of a memory only another machine hid: never retired
+// on the server, which is left alone, it is restored on this machine (an
+// unhide journaled after that hiding) and recall here no longer skips it.
+func TestRestoreOfAMemoryHiddenOnAnotherMachine(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	hiddenAt := time.Now().Add(-time.Hour).Truncate(time.Second)
+	writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uA: {HiddenSince: hiddenAt}}))
+	cfg, _, err := loadServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenHereNow := func() bool {
+		adjust := ledgerAdjust(pathsOf(home), cfg, time.Now())
+		if adjust == nil {
+			return false
+		}
+		_, hidden := adjust(uA)
+		return hidden
+	}
+	if !hiddenHereNow() {
+		t.Fatal("the other machine's hiding does not apply here")
+	}
+	code, out, errOut := run(t, "forget", "--restore", uA)
+	if code != output.OK || !strings.Contains(out, uA+" restored") || !strings.Contains(out, "visible again on this machine") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if len(curation) != 0 {
+		t.Errorf("the server was written: %v", curation)
+	}
+	if want := "restored:" + uA; strings.Join(unhiddenIDs(t, home), " ") != want {
+		t.Errorf("unhide events %q, want %q", unhiddenIDs(t, home), want)
+	}
+	l, err := feedback.Current(pathsOf(home).FeedbackDir())
+	if err != nil || !l.Memories[uA].UnhiddenAt.After(hiddenAt) {
+		t.Errorf("restore time %v (%v), hiding %v", l.Memories[uA].UnhiddenAt, err, hiddenAt)
+	}
+	if hiddenHereNow() {
+		t.Error("still hidden here after the restore")
+	}
+	// Restored for good: a second restore finds it hidden nowhere, and
+	// the server does not hold it.
+	if code, out, errOut := run(t, "forget", "--restore", uA); code != output.Usage {
+		t.Errorf("second restore: exit %d\n%s%s", code, out, errOut)
+	}
+	// Hidden nowhere, and not on the server: nothing to restore.
+	if code, _, _ := run(t, "forget", "--restore", uB); code != output.Usage {
+		t.Errorf("%s: exit %d", uB, code)
+	}
+}

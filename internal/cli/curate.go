@@ -149,10 +149,15 @@ func newForgetCmd(e *env) *cobra.Command {
 				if err := heldWrites(); err != nil {
 					return err
 				}
-				// A memory hidden on this machine was never invalidated on
-				// the server: restoring it there may find nothing, and its
-				// mark is cleared all the same.
-				hidden := restore && hiddenHere(id)
+				// A memory hidden on this machine, or on another one whose
+				// hiding recall here follows, was never invalidated on the
+				// server: restoring it there may find nothing, and its mark
+				// is cleared here all the same.
+				var local, remote bool
+				if restore {
+					local, remote = hiddenHere(id)
+				}
+				hidden := local || remote
 				// Only raw facts can be curated: an observation is retired
 				// through its source facts and regenerates without them.
 				targets, err := curatable(ctx, cl, bank, id)
@@ -176,6 +181,9 @@ func newForgetCmd(e *env) *cobra.Command {
 				}
 				if hidden {
 					res.Note = "no longer marked hidden on this machine"
+					if !local {
+						res.Note = "hidden by another machine, visible again on this machine"
+					}
 					if err != nil {
 						res.Note += " (on the server: " + err.Error() + ")"
 					}

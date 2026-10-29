@@ -34,24 +34,55 @@ func feedbackParams(cfg config.Config) feedback.Params {
 
 // ledgerAdjust is recall's Engine.Adjust from this machine's ledger, with
 // what was journaled since its last settle (a hiding applies to the next
-// recall), read once: a memory's boost at now, and whether it is hidden.
-// Nil, so recall is as without a ledger, when feedback is off, the ledger
-// cannot be read (another schema, a broken file) or it holds nothing.
+// recall) and the other machines' counts and hidings (sharedCounts), read
+// once: a memory's boost at now, and whether it is hidden. Nil, so recall
+// is as without a ledger, when feedback is off, the ledger cannot be read
+// (another schema, a broken file) or both hold nothing.
 func ledgerAdjust(d paths.Dirs, cfg config.Config, at time.Time) func(string) (float64, bool) {
 	if !cfg.Feedback.Enabled {
 		return nil
 	}
 	l, err := feedback.Current(d.FeedbackDir())
-	if err != nil || len(l.Memories) == 0 {
+	if err != nil {
+		return nil
+	}
+	shared := sharedCounts(d, cfg, at)
+	if len(l.Memories) == 0 && shared.Empty() {
 		return nil
 	}
 	p := feedbackParams(cfg)
 	return func(id string) (float64, bool) {
-		if l.Memories[id].Hidden != nil {
+		m := withShared(l.Memories[id], shared, id, p, at)
+		if m.Hidden != nil {
 			return 0, true
 		}
-		return l.Boost(id, p, at), false
+		return m.Boost(p, at), false
 	}
+}
+
+// sharedCounts is the other machines' counts and hidings as jobs tick
+// last combined them (shared-combined): one file read, each memory
+// looked up when ranked, no document parsed, never the server. Empty, so
+// recall uses the local counts alone, when share_ledger is off, or that
+// file is missing, of another version or more than 30 days old.
+func sharedCounts(d paths.Dirs, cfg config.Config, at time.Time) feedback.Combined {
+	if !cfg.Feedback.ShareLedger {
+		return feedback.Combined{}
+	}
+	c, err := feedback.LoadSharedCombined(d.FeedbackDir(), at)
+	if err != nil {
+		return feedback.Combined{}
+	}
+	return c
+}
+
+// withShared is m, id's local entry, with what shared holds of id added
+// at now: a view, never saved.
+func withShared(m feedback.Entry, shared feedback.Combined, id string, p feedback.Params, at time.Time) feedback.Entry {
+	if s, ok := shared.Get(id); ok {
+		return m.WithRemote(s, p, at)
+	}
+	return m
 }
 
 // settleFeedback is the tick's settle: local files only, so a server down
@@ -96,19 +127,27 @@ func journalUser(e feedback.Event) {
 }
 
 // hiddenHere: id is hidden on this machine, by the ledger with what was
-// journaled since its last settle. False when feedback is off or the
-// ledger cannot be read.
-func hiddenHere(id string) bool {
+// journaled since its last settle (local), or else by another machine's
+// hiding recall here follows (remote: sharedCounts). Both false when
+// feedback is off or the ledger cannot be read.
+func hiddenHere(id string) (local, remote bool) {
 	cfg, _, err := loadServerConfig()
 	if err != nil || !cfg.Feedback.Enabled {
-		return false
+		return false, false
 	}
 	d, _, err := machine()
 	if err != nil {
-		return false
+		return false, false
 	}
 	l, err := feedback.Current(d.FeedbackDir())
-	return err == nil && l.Memories[id].Hidden != nil
+	if err != nil {
+		return false, false
+	}
+	if l.Memories[id].Hidden != nil {
+		return true, false
+	}
+	at := now()
+	return false, withShared(l.Memories[id], sharedCounts(d, cfg, at), id, feedbackParams(cfg), at).Hidden != nil
 }
 
 // A tick reads at most hiddenChecks histories, within hiddenCheckTimeout.
