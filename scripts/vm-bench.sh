@@ -536,7 +536,8 @@ vb_status() {
 # (OpenSSH would read the user's ~/.ssh whatever HOME says).
 
 # The checks, in the order of decision 0073 block 4's table.
-VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients timers)
+VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients timers
+  dedup-copied dedup-concurrent dedup-split key-rotation)
 
 # vb_remote <sh script>: one word any login shell (tcsh, fish…) hands to
 # sh unchanged: the script travels base64-encoded.
@@ -662,6 +663,15 @@ vb_authorize_a() {
     vb_fail "cannot authorize A's login key for bs on bs-m6-server"
 }
 
+# vb_run_end: however a run ends, A's link is up, the bench trusts only
+# its own keys, and no token stays in B's home (two-clients' and
+# key-rotation's).
+vb_run_end() {
+  vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true
+  vb_untrust_new_key
+  rm -f "$(vb_b_home)/token" "$(vb_b_home)/token2"
+}
+
 # vb_results_table <jsonl>: one markdown row a check.
 vb_results_table() {
   printf '| Check | Status | Detail |\n|---|---|---|\n'
@@ -697,8 +707,7 @@ vb_run() {
   M6_SERVER_IP=$(awk '$1 == "HostName" { print $2; exit }' "$VB_DIR/ssh_config")
   : > "$M6_RESULTS"
   vb_authorize_a
-  # However the run ends, A's link is up and the bench trusts only its keys.
-  trap 'vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true; vb_untrust_new_key' EXIT
+  trap vb_run_end EXIT
   for c in "${order[@]}"; do
     m6_check "$c" "m6_check_${c//-/_}" < /dev/null
   done

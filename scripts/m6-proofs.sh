@@ -216,16 +216,22 @@ m6_queue_wait() {
   fail "the bank's queue never drained ($n operation(s) left)"
 }
 
-# m6_tick <who>: `jobs tick --json` there, its envelope on stdout. A
-# skipped tick (another one running, the scheduler's; a maintenance) is no
-# tick: it is tried again every M6_TICK_EVERY s (5) for M6_TICK_WAIT s
-# (120), then fails. A tick that did not succeed (ok not true) fails.
+# m6_tick <who> [partial]: `jobs tick --json` there, its envelope on
+# stdout. A skipped tick (another one running, the scheduler's; a
+# maintenance) is no tick: it is tried again every M6_TICK_EVERY s (5) for
+# M6_TICK_WAIT s (120), then fails. A tick that did not succeed (ok not
+# true) fails, but with partial a partial one (data.status partial: the
+# server refused a send) is taken.
 m6_tick() {
-  local who=$1 out rc deadline=$((SECONDS + ${M6_TICK_WAIT:-120}))
+  local who=$1 mode=${2:-} out rc deadline=$((SECONDS + ${M6_TICK_WAIT:-120}))
   while :; do
     rc=0
     out=$(m6_on "$who" jobs tick --json < /dev/null) || rc=$?
     out=$(m6_json "jobs tick on $who (exit $rc)" "$out") || exit 1
+    if [ "$mode" = partial ] && [ "$(jq -r '.data.status // ""' <<<"$out")" = partial ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
     jq -e '.ok == true' > /dev/null <<<"$out" ||
       fail "jobs tick on $who did not succeed (exit $rc): $(jq -r '.error.message // .data.status // "no message"' <<<"$out" | m6_scrub)"
     if [ "$(jq -r '.data.status // ""' <<<"$out")" != skipped ]; then
@@ -243,6 +249,44 @@ m6_flush() {
   local out rc=0
   out=$(m6_on "$1" retain flush --json --session "$2" < /dev/null) || rc=$?
   m6_json "retain flush of $2 on $1 (exit $rc)" "$out"
+}
+
+# m6_cursor <who> <sid>: the session's cursor there (JSON), empty when it
+# has none.
+m6_cursor() {
+  local c
+  c=$(m6_paths "$1" | jq -r .state)/cursors/$2.json
+  m6_sh "$1" "if [ -e $(m6_q "$c") ]; then cat $(m6_q "$c"); fi" || fail "cannot read $1's cursor of $2"
+}
+
+# m6_flush_sent <who> <sid> <uuid>: flushes the session there until its
+# records up to <uuid> are out, and says how: sent (this flush sent
+# them) or tick (a jobs tick, A's timer, sent them first: the flush finds
+# nothing new and the cursor already ends at <uuid>; only the cursor
+# proves it, never a flush that sent nothing alone). Another flusher
+# holding the session (locked) is waited for as m6_tick waits; any other
+# status fails.
+m6_flush_sent() {
+  local who=$1 sid=$2 want=$3 out st last deadline=$((SECONDS + ${M6_TICK_WAIT:-120}))
+  while :; do
+    out=$(m6_flush "$who" "$sid") || exit 1
+    st=$(jq -r --arg s "$sid" '[.data.results[]? | select(.session == $s) | .status][0] // "nothing"' <<<"$out")
+    case $st in
+      sent)
+        echo sent
+        return 0
+        ;;
+      locked) [ "$SECONDS" -lt "$deadline" ] || fail "the flush of $sid on $who: still locked after ${M6_TICK_WAIT:-120} s" ;;
+      nothing)
+        last=$(m6_cursor "$who" "$sid" | jq -r '.last_uuid // empty')
+        [ "$last" = "$want" ] || fail "the flush of $sid on $who sent nothing, and its cursor ends at ${last:-none}, not $want"
+        echo tick
+        return 0
+        ;;
+      *) fail "the flush of $sid on $who: $st (exit $(jq -r '.error.code // 0' <<<"$out")): $(jq -c --arg s "$sid" '[.data.results[]? | select(.session == $s) | .detail]' <<<"$out" | m6_scrub)" ;;
+    esac
+    sleep "${M6_TICK_EVERY:-5}"
+  done
 }
 
 # m6_doctor <who>: `doctor --json` there (non-zero when it finds an error).
@@ -263,13 +307,22 @@ m6_doctor_status() {
 # records <sid>-<tag><from>…<sid>-<tag><to> (tag r) to
 # <home>/.claude/projects/-bs-m6-<project>/<sid>.jsonl, in rc_session's
 # format, each text carrying [rec <uuid>], the newest age_min (0) minutes
-# old and each earlier one a second older; the file's mtime is the
-# newest record's time. The records' cwd is <home>/work/<project>.
+# old and each earlier one a second older, all after the file's records
+# already there; the file's mtime is the newest record's time. The
+# records' cwd is <home>/work/<project>.
 m6_session() {
-  local who=$1 sid=$2 project=$3 from=$4 to=$5 tag=${6:-r} age=${7:-0} home dir cwd newest i ts uuid role content
+  local who=$1 sid=$2 project=$3 from=$4 to=$5 tag=${6:-r} age=${7:-0} home dir cwd newest last i ts uuid role content
   home=$(m6_home "$who")
   dir=$home/.claude/projects/-bs-m6-$project cwd=$home/work/$project
   newest=$(($(date +%s) - age * 60))
+  # Appended records follow the file's last one, whatever age says: a
+  # session continued, here or on the PC it was copied to, goes on after it.
+  last=$(m6_sh "$who" "tail -n 1 $(m6_q "$dir/$sid.jsonl") 2> /dev/null || true") || fail "cannot read session $sid on $who"
+  if [ -n "$last" ]; then
+    last=$(jq -r '.timestamp // empty' <<<"$last") && [ -n "$last" ] && last=$(date -u -d "$last" +%s) ||
+      fail "session $sid on $who: its last record has no time this can read"
+    [ $((newest - (to - from))) -gt "$last" ] || newest=$((last + 1 + to - from))
+  fi
   for i in $(seq "$from" "$to"); do
     ts=$(date -u -d "@$((newest - (to - i)))" +%Y-%m-%dT%H:%M:%S.000Z)
     uuid=$sid-$tag$i
@@ -315,6 +368,71 @@ m6_wait_doc() {
     sleep 3
   done
   fail "conversation:$1 never reached the server with its metadata"
+}
+
+# m6_live_since <who> <minutes>: that PC has retained live for <minutes>:
+# state.json's retain_since moves back to then, never forward, under the
+# state lock (the product's own lock file, held by this edit's shell and
+# waited for up to M6_LOCK_WAIT tries of 0.1 s). Only jobs tick writes
+# retain_since, at its first run, and live retain and verify --live leave
+# whatever started before it to backfill: a bench PC installed minutes
+# ago would have no settled session for either.
+m6_live_since() {
+  local who=$1 min=$2 state at
+  state=$(m6_paths "$who" | jq -r .state)
+  at=$(date -u -d "@$(($(date +%s) - min * 60))" +%Y-%m-%dT%H:%M:%SZ)
+  m6_sh "$who" "s=$(m6_q "$state") at=$(m6_q "$at") tries=${M6_LOCK_WAIT:-300}
+$(
+    cat << 'EOF'
+umask 077
+n=0
+mkdir -p "$s/locks" || exit 1
+until (set -C; printf '{"pid":%d,"command":"bs-m6 bench retain_since","since":"%s"}' $$ "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$s/locks/state.lock") 2> /dev/null; do
+  n=$((n + 1))
+  [ "$n" -lt "$tries" ] || exit 75
+  sleep 0.1
+done
+trap 'rm -f "$s/locks/state.lock"' EXIT
+jq --arg at "$at" 'if (.retain_since // "") == "" or .retain_since > $at then .retain_since = $at else . end' "$s/state.json" > "$s/state.json.bs-m6" &&
+  mv "$s/state.json.bs-m6" "$s/state.json"
+EOF
+  )" || fail "cannot move $who's retain_since back to $at (the state lock stayed held, or state.json did not read)"
+}
+
+# m6_banks_code: the HTTP code of the banks list on B's server with B's key.
+m6_banks_code() {
+  local server code
+  server=$(m6_server) || exit 1
+  code=$(pl_untraced curl -sS -o /dev/null -w '%{http_code}' -K <(m6_auth) "${server% *}/v1/default/banks") || code=000
+  printf '%s\n' "$code"
+}
+
+# m6_cursors <who>: "<sha256>  ./<sid>.json" for every cursor there, sorted.
+m6_cursors() {
+  local c
+  c=$(m6_paths "$1" | jq -r .state)/cursors
+  m6_sh "$1" "cd $(m6_q "$c") && find . -maxdepth 1 -type f -name '*.json' | sort | xargs -r sha256sum" || fail "cannot read $1's cursors"
+}
+
+# m6_outbox <who>: how many notes wait in that PC's outbox.
+m6_outbox() {
+  local f
+  f=$(m6_paths "$1" | jq -r .state)/outbox/notes.jsonl
+  m6_sh "$1" "if [ -e $(m6_q "$f") ]; then grep -c . $(m6_q "$f") || true; else echo 0; fi" || fail "cannot read $1's outbox"
+}
+
+# m6_meta <sid>: segment, records, last_uuid and machine_id of
+# conversation:<sid> on the server (it must be there).
+m6_meta() { m6_wait_doc "$1" | jq -c '.document_metadata | {segment, records, last_uuid, machine_id}'; }
+
+# m6_split_names <who> <sid>: doctor's split-session check there is info
+# and names the session among those continued on two PCs.
+m6_split_names() {
+  local out c
+  out=$(m6_doctor "$1") || exit 1
+  c=$(jq -c '[.data.checks[]? | select(.id == "split-session")][0] // {}' <<<"$out")
+  jq -e --arg s "$2" '.status == "info" and ((.detail // "") | split(", ") | index($s) != null)' > /dev/null <<<"$c" ||
+    fail "$1's doctor split-session is $c, want info naming $2"
 }
 
 # ---- The install chain: A installs the server over real ssh (VM bench).
@@ -558,23 +676,276 @@ m6_check_two_clients() {
     "$(jq -cn --arg id "$ia" '{server_id: $id, records: 6}')"
 }
 
+# ---- Dedup and key rotation (also the CI chain's checks).
+
+# The project of the dedup sessions, and how long the bench PCs have
+# retained live (m6_live_since) when a check needs live retain or verify
+# --live to see sessions 90 and 120 min old.
+M6_DEDUP=bs-m6-dedup
+M6_LIVE_MIN=150
+
+# dedup-copied: a session A sent, copied to B before B's retain_since
+# (backfill's), is not stored again by B's backfill nor its tick.
+m6_check_dedup_copied() {
+  local before after out rc=0 tick cur counts
+  m6_session a cp1 "$M6_DEDUP" 1 3 r 120
+  m6_flush_sent a cp1 cp1-r3 > /dev/null
+  m6_queue_wait
+  before=$(m6_meta cp1) || exit 1
+  m6_copy a b cp1 "$M6_DEDUP"
+  # Mock prices are unknown: --max-cost is refused, --max-tokens caps.
+  out=$(m6_on b retain backfill --json --project "$M6_DEDUP" --max-tokens 1000000 < /dev/null 2> "$M6_WORK/backfill-b.err") || rc=$?
+  out=$(m6_json "retain backfill on B (exit $rc)" "$out") || exit 1
+  [ "$rc" = 0 ] && jq -e '.ok == true' > /dev/null <<<"$out" || fail "retain backfill on B: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub))"
+  tick=$(m6_tick b) || exit 1
+  m6_queue_wait
+  # Positive control: B saw the session, its cursor at the last record.
+  cur=$(m6_cursor b cp1) || exit 1
+  [ "$(jq -r '.last_uuid // ""' <<<"${cur:-null}")" = cp1-r3 ] ||
+    fail "B's cursor of cp1 is '$(jq -c . <<<"${cur:-null}")', want last_uuid cp1-r3: B never saw the copy, the check would prove nothing"
+  after=$(m6_meta cp1) || exit 1
+  [ "$after" = "$before" ] || fail "conversation:cp1 was stored again: $before before B's backfill, $after after"
+  counts=$(m6_uuid_counts cp1) || exit 1
+  [ "$counts" = "$(printf 'cp1-r%s 1\n' 1 2 3)" ] || fail "conversation:cp1 holds the records $(paste -sd ' ' <<<"$counts"), want r1 r2 r3 once each"
+  m6_result dedup-copied PASS "cp1 sent by A, copied to B: B's backfill and tick stored nothing again (segment $(jq -r .segment <<<"$after"), $(jq -r .records <<<"$after") records, last $(jq -r .last_uuid <<<"$after")); B's cursor at cp1-r3" \
+    "$(jq -cn --argjson b "$(jq -c '.data | {total, done, finished}' <<<"$out")" --argjson t "$(jq -c '.data.sessions // {}' <<<"$tick")" '{backfill: $b, tick_sessions: $t}')"
+}
+
+# dedup-concurrent: five sessions on both PCs, each flushed on A and on B
+# at once: each stored once, whoever won.
+m6_check_dedup_concurrent() {
+  local i sid who w rc out st both doc counts
+  w=$M6_WORK/concurrent
+  rm -rf "$w"
+  mkdir -p "$w"
+  for i in 1 2 3 4 5; do
+    m6_session a "cc$i" "$M6_DEDUP" 1 3 r 120
+    m6_copy a b "cc$i" "$M6_DEDUP"
+  done
+  for i in 1 2 3 4 5; do
+    sid=cc$i
+    for who in a b; do
+      (
+        rc=0
+        m6_on "$who" retain flush --json --session "$sid" < /dev/null > "$w/$sid.$who" 2> "$w/$sid.$who.err" || rc=$?
+        echo "$rc" > "$w/$sid.$who.rc"
+      ) &
+    done
+    wait
+    for who in a b; do
+      rc=$(cat "$w/$sid.$who.rc")
+      out=$(m6_json "retain flush of $sid on $who (exit $rc)" "$(cat "$w/$sid.$who")") || exit 1
+      [ "$rc" = 0 ] && jq -e '.ok == true' > /dev/null <<<"$out" ||
+        fail "the flush of $sid on $who, at the same time as the other PC's: exit $rc ($(jq -c '.error // .data.results' <<<"$out" | m6_scrub))"
+      st=$(jq -r --arg s "$sid" '[.data.results[]? | select(.session == $s) | .status][0] // "nothing"' <<<"$out")
+      printf '%s %s %s\n' "$sid" "$who" "$st" >> "$w/statuses"
+    done
+  done
+  m6_queue_wait
+  for i in 1 2 3 4 5; do
+    sid=cc$i
+    doc=$(m6_wait_doc "$sid") || exit 1
+    [ "$(jq -r '.document_metadata.records // ""' <<<"$doc")" = 3 ] ||
+      fail "conversation:$sid's last segment holds $(jq -r '.document_metadata.records // "no"' <<<"$doc") records, want 3"
+    counts=$(m6_uuid_counts "$sid") || exit 1
+    [ "$counts" = "$(printf '%s 1\n' "$sid-r1" "$sid-r2" "$sid-r3")" ] || fail "conversation:$sid holds the records $(paste -sd ' ' <<<"$counts"), want r1 r2 r3 once each"
+  done
+  both=$(awk '$3 == "sent" { n[$1]++ } END { c = 0; for (s in n) if (n[s] == 2) c++; print c }' "$w/statuses")
+  m6_result dedup-concurrent PASS "cc1-cc5 flushed on A and B at once, both exit 0: each on the server once, 3 records; both sent $both of 5" \
+    "$(jq -Rn --argjson both "$both" '{both_sent: $both, statuses: [inputs | split(" ") | {session: .[0], pc: .[1], status: .[2]}]}' < "$w/statuses")"
+}
+
+# m6_verify_split <who>: verify --live --json there; its data on stdout.
+m6_verify_split() {
+  local out rc=0
+  out=$(m6_on "$1" verify --live --json < /dev/null 2> /dev/null) || rc=$?
+  out=$(m6_json "verify --live on $1 (exit $rc)" "$out") || exit 1
+  jq -e '.data.status // empty' > /dev/null <<<"$out" || fail "verify --live on $1 (exit $rc) gave no verdict: $(jq -c '.error // .' <<<"$out" | m6_scrub)"
+  jq -c .data <<<"$out"
+}
+
+# dedup-split: a session sent by A, copied to B and continued on both:
+# nothing lost (every record on the server), each PC's doctor names the
+# split, and neither verify --live fails on a segment or a last record
+# (another PC's later segment is no loss). Recorded: the shared records
+# stored twice, and how far the mock LLM let verify get.
+m6_check_dedup_split() {
+  local out st doc ma cur seg_b counts u n twice who v sess summary status deadline wait_s left va=pending vb=pending ce_b
+  m6_session a sp1 "$M6_DEDUP" 1 3 r 90
+  m6_flush_sent a sp1 sp1-r3 > /dev/null
+  m6_queue_wait
+  m6_wait_doc sp1 > /dev/null
+  m6_copy a b sp1 "$M6_DEDUP"
+  out=$(m6_flush b sp1) || exit 1
+  st=$(jq -r '[.data.results[]? | select(.session == "sp1") | .status][0] // "nothing"' <<<"$out")
+  [ "$st" = nothing ] && jq -e '.ok == true' > /dev/null <<<"$out" || fail "B's flush of its copy of sp1: $st ($(jq -c '.error // .data.counts' <<<"$out" | m6_scrub)), want nothing sent"
+  [ "$(m6_cursor b sp1 | jq -r '.last_uuid // empty')" = sp1-r3 ] || fail "B's cursor of sp1 does not end at sp1-r3: B did not take the server's position"
+  m6_session a sp1 "$M6_DEDUP" 4 5 a 90
+  m6_flush_sent a sp1 sp1-a5 > /dev/null
+  m6_queue_wait
+  doc=$(m6_meta sp1) || exit 1
+  [ "$(jq -r '"\(.segment) \(.last_uuid)"' <<<"$doc")" = "2 sp1-a5" ] || fail "after A's a4 a5, conversation:sp1 is $doc, want segment 2 ending at sp1-a5"
+  m6_session b sp1 "$M6_DEDUP" 4 5 b 90
+  m6_flush_sent b sp1 sp1-b5 > /dev/null
+  m6_queue_wait
+  m6_split_names b sp1
+  m6_session a sp1 "$M6_DEDUP" 6 6 a 90
+  m6_flush_sent a sp1 sp1-a6 > /dev/null
+  m6_queue_wait
+  m6_split_names a sp1
+  counts=$(m6_uuid_counts sp1) || exit 1
+  for u in r1 r2 r3 a4 a5 a6 b4 b5; do
+    n=$(awk -v u="sp1-$u" '$1 == u { print $2 }' <<<"$counts")
+    [ "${n:-0}" -ge 1 ] || fail "sp1-$u is not on the server (records: $(paste -sd ' ' <<<"$counts"))"
+  done
+  twice=$(awk '$2 > 1 { printf "%s%s", (n++ ? " " : ""), $1 }' <<<"$counts")
+  # Positive control of the verify: A wrote the last segment, above the one
+  # B's cursor holds, so B's verify meets another PC's later segment.
+  doc=$(m6_meta sp1) || exit 1
+  ma=$(m6_get a "$(m6_paths a | jq -r .state)/machine_id") || fail "cannot read A's machine_id"
+  cur=$(m6_cursor b sp1) || exit 1
+  seg_b=$(jq -r '.segment // 0' <<<"${cur:-null}")
+  [ "$(jq -r .machine_id <<<"$doc")" = "$ma" ] && [ "$(jq -r .segment <<<"$doc")" -gt "$seg_b" ] ||
+    fail "conversation:sp1 is $doc, B's cursor at segment $seg_b: A's later segment is not above B's, the verify would prove nothing"
+  m6_live_since a "$M6_LIVE_MIN"
+  m6_live_since b "$M6_LIVE_MIN"
+  deadline=$((SECONDS + ${M6_VERIFY_WAIT:-600}))
+  while :; do
+    wait_s=300
+    for who in a b; do
+      [ "$who" = a ] && [ "$va" != pending ] && continue
+      [ "$who" = b ] && [ "$vb" != pending ] && continue
+      v=$(m6_verify_split "$who") || exit 1
+      sess=$(jq -r '.session // ""' <<<"$v") status=$(jq -r .status <<<"$v") summary=$(jq -r '.summary // ""' <<<"$v")
+      [ "$sess" = sp1 ] || fail "verify --live on $who checked '${sess:-no session}' ($status: $summary), not sp1: it would prove nothing"
+      case $status in
+        pass) ;;
+        pending) [ "$(jq -r '.wait_s // 300' <<<"$v")" -ge "$wait_s" ] || wait_s=$(jq -r '.wait_s // 300' <<<"$v") ;;
+        # The mock LLM's facts: past every segment and last record check.
+        fail) case $summary in "consolidation failed for "* | "no observation was consolidated "*) status="fail-llm" ;; *) fail "verify --live on $who: fail: $summary" ;; esac ;;
+        *) fail "verify --live on $who: status $status: $summary" ;;
+      esac
+      if [ "$who" = a ]; then va=$status; else vb=$status ce_b=$(jq -c '.continued_elsewhere // []' <<<"$v"); fi
+    done
+    [ "$va" != pending ] && [ "$vb" != pending ] && break
+    left=$((deadline - SECONDS))
+    [ "$left" -gt 0 ] || break
+    sleep $((wait_s < 10 ? 10 : (wait_s > left ? left : wait_s)))
+  done
+  m6_result dedup-split PASS "sp1 continued on A and B: r1-3 a4 a5 a6 b4 b5 all on the server, both doctors name the split; verify --live A $va, B $vb (B: continued elsewhere ${ce_b:-[]}); stored twice: ${twice:-none}" \
+    "$(jq -cn --arg twice "$twice" --arg va "$va" --arg vb "$vb" --argjson ce "${ce_b:-[]}" '{stored_twice: ($twice | split(" ") | map(select(. != ""))), verify: {a: $va, b: $vb}, continued_elsewhere_b: $ce}')"
+}
+
+# key-rotation: the server's key rotates; the old token is refused, and
+# what both PCs wrote meanwhile (sessions, a note) reaches the server once
+# each holds the new one, with no reset of their cursors.
+m6_check_key_rotation() {
+  local old state code out rc=0 note st tick who sec sec_before tok cb ca p=bs-m6-rot ask
+  old=$(m6_home b)/token
+  [ "$(m6_sh b "stat -c %a $(m6_q "$old") 2> /dev/null" || true)" = 600 ] || fail "two-clients left no old token in $old: the check needs it"
+  m6_live_since a "$M6_LIVE_MIN"
+  m6_live_since b "$M6_LIVE_MIN"
+  # Positive control: the old key lists the banks before the rotation.
+  code=$(m6_banks_code) || exit 1
+  [ "$code" = 200 ] || fail "the banks list with B's key before the rotation: HTTP $code, want 200: a 401 after it would prove nothing"
+  state=$(m6_paths srv | jq -r .state)
+  out=$(m6_on srv server token --rotate --out "$state/bench-token2" --json < /dev/null 2> "$M6_WORK/rotate.err") ||
+    fail "server token --rotate on the server failed: $(jq -r '.error.message // ""' <<<"$out" 2> /dev/null | m6_scrub)"
+  code=$(m6_banks_code) || exit 1
+  [ "$code" = 401 ] || fail "the banks list with the old key after the rotation: HTTP $code, want 401"
+  # The old key's period: a note and a session on each PC, nothing sent.
+  rc=0
+  out=$(m6_on a store --json --kind decision --project "$p" "bs-m6 key-rotation: the export pages by 200, decided while the key rotated" < /dev/null 2> /dev/null) || rc=$?
+  out=$(m6_json "store on A (exit $rc)" "$out") || exit 1
+  [ "$rc" = 0 ] && [ "$(jq -r '.data.status // ""' <<<"$out")" = queued ] || fail "store on A with the old key: exit $rc, $(jq -c '.data // .error' <<<"$out" | m6_scrub), want queued"
+  note=$(jq -r .data.document <<<"$out")
+  m6_session a kr-a "$p" 1 3 r 120
+  m6_session b kr-b "$p" 1 3 r 120
+  for who in a b; do
+    tick=$(m6_tick "$who" partial) || exit 1
+    [ "$(jq -r '.data.sessions.sent // 0' <<<"$tick")" = 0 ] || fail "with the old key, the tick on $who sent $(jq -c .data.sessions <<<"$tick")"
+    [ "$(jq -r '.data.notes.sent // 0' <<<"$tick")" = 0 ] || fail "with the old key, the tick on $who sent a note"
+    printf '%s\n' "$tick" > "$M6_WORK/rotation-tick-$who"
+  done
+  [ "$(jq -r '.data.notes.kept // 0' < "$M6_WORK/rotation-tick-a")" -ge 1 ] || fail "with the old key, A's tick kept no note queued: $(jq -c .data.notes < "$M6_WORK/rotation-tick-a")"
+  # B with the old token: refused, its key untouched.
+  sec=$(m6_paths b | jq -r .secrets_file)
+  sec_before=$(m6_hash b "$sec")
+  rc=0
+  out=$(m6_on b connect --token-file "$old" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
+    --non-interactive --json < /dev/null 2> /dev/null) || rc=$?
+  out=$(m6_json "connect on B with the old token (exit $rc)" "$out") || exit 1
+  case "$rc $(jq -r '.error.message // ""' <<<"$out")" in
+    "20 "*"the server rejected this token's key"*) ;;
+    *) fail "connect on B with the old token: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub)), want 20, the server rejected this token's key" ;;
+  esac
+  [ "$(m6_hash b "$sec")" = "$sec_before" ] || fail "the refused connect changed B's secrets.toml"
+  m6_sh b "rm -f $(m6_q "$old")" || fail "cannot remove the old token on B"
+  # The new token, to each PC (0600, removed once used).
+  for who in b a; do
+    tok=$(m6_home "$who")/token2
+    m6_get srv "$state/bench-token2" | m6_put "$who" "$tok" || fail "cannot copy the new token to $who"
+    [ "$(m6_sh "$who" "stat -c %a $(m6_q "$tok")")" = 600 ] || fail "$who's new token file is not 0600"
+  done
+  m6_sh srv "rm -f $(m6_q "$state/bench-token2")" || fail "cannot remove the new token on the server"
+  for who in b a; do
+    tok=$(m6_home "$who")/token2
+    cb=$(m6_cursors "$who" | grep -v ' \./kr-') || fail "$who has no session cursor: a reset would prove nothing"
+    ask=(--answer consent=yes --answer backfill=no --answer retention=keep)
+    if [ "$who" = b ]; then ask+=(--answer scheduler=off); fi
+    rc=0
+    out=$(m6_on "$who" connect --token-file "$tok" "${ask[@]}" --non-interactive --json < /dev/null 2> "$M6_WORK/connect2-$who.err") || rc=$?
+    m6_sh "$who" "rm -f $(m6_q "$tok")" || fail "cannot remove the new token on $who"
+    out=$(m6_json "connect on $who with the new token (exit $rc)" "$out") || exit 1
+    [ "$rc" = 0 ] && jq -e '.ok == true' > /dev/null <<<"$out" || fail "connect on $who with the new token: exit $rc ($(jq -r '.error.message // ""' <<<"$out" | m6_scrub))"
+    st=$(jq -r '.data.situation // ""' <<<"$out")
+    [ "$st" = same-server ] || fail "connect on $who with the new token: situation $st, want same-server"
+    ca=$(m6_cursors "$who")
+    [ -z "$(comm -23 <(printf '%s\n' "$cb") <(printf '%s\n' "$ca"))" ] || fail "connect on $who moved or changed its cursors (a reset): $(comm -23 <(printf '%s\n' "$cb") <(printf '%s\n' "$ca") | paste -sd ' ')"
+    if [ "$who" = b ]; then
+      # Read with B's new key: A, still on the old one, sent nothing.
+      [ -z "$(m6_doc conversation:kr-a)" ] || fail "conversation:kr-a reached the server while A held the old key"
+    fi
+  done
+  # For timers: the run judged comes after A's new key.
+  m6_sh a 'date +%s' > "$M6_WORK/timers-after"
+  for who in a b; do
+    tick=$(m6_tick "$who") || exit 1
+  done
+  m6_queue_wait
+  for who in a b; do
+    m6_wait_doc "kr-$who" > /dev/null
+    out=$(m6_uuid_counts "kr-$who") || exit 1
+    [ "$out" = "$(printf 'kr-%s-r%s 1\n' "$who" 1 "$who" 2 "$who" 3)" ] || fail "conversation:kr-$who holds the records $(paste -sd ' ' <<<"$out"), want r1 r2 r3 once each"
+    [ "$(m6_outbox "$who")" = 0 ] || fail "$who's outbox still holds $(m6_outbox "$who") note(s)"
+  done
+  [ -n "$(m6_doc "$note")" ] || fail "the note A stored with the old key ($note) is not on the server"
+  m6_result key-rotation PASS "old key 401, old token refused (exit 20, B's key unchanged); with the new token both same-server, cursors kept; kr-a, kr-b and the note on the server once, outboxes empty" \
+    "$(jq -cn --argjson ta "$(jq -c '.data | {sessions, notes}' < "$M6_WORK/rotation-tick-a")" --argjson tb "$(jq -c '.data | {sessions, notes}' < "$M6_WORK/rotation-tick-b")" '{old_key_ticks: {a: $ta, b: $tb}}')"
+}
+
 # timers (evaluated last): A's tick timer was active right after the
 # install, and once 15 min have passed the timer has run the tick, which
-# exited 0, after the install (real timers, decision 0073).
+# exited 0, after the install and after key-rotation's new key (real
+# timers, decision 0073).
 m6_check_timers() {
-  local unit active at svc show status exit_at now deadline
+  local unit active at svc show status exit_at now deadline since after=0
   [ -s "$M6_WORK/timers" ] || fail "ssh-install recorded no timer"
   read -r unit active at < "$M6_WORK/timers"
   [ "$active" = active ] || fail "right after the install, $unit was $active"
   svc=${unit%.timer}.service
-  deadline=$((at + 20 * 60))
+  # A tick between key-rotation's rotation and A's new key fails on the
+  # old one: the run judged comes after both the install and that change.
+  if [ -s "$M6_WORK/timers-after" ]; then read -r after < "$M6_WORK/timers-after"; fi
+  since=$((after > at ? after : at))
+  deadline=$((at + 20 * 60 > since + 16 * 60 ? at + 20 * 60 : since + 16 * 60))
   while :; do
     now=$(m6_sh a 'date +%s')
     show=$(m6_sh a "systemctl --user show $(m6_q "$svc") -p ExecMainStatus -p ExecMainExitTimestamp --timestamp=unix")
     status=$(sed -n 's/^ExecMainStatus=//p' <<<"$show") exit_at=$(sed -n 's/^ExecMainExitTimestamp=@//p' <<<"$show")
-    if [ "$now" -ge $((at + 15 * 60)) ] && [ -n "$exit_at" ] && [ "$exit_at" -gt "$at" ]; then break; fi
-    [ "$now" -lt "$deadline" ] || fail "$svc did not run after the install within 20 min ($(paste -sd ' ' <<<"$show"))"
-    sleep 30
+    if [ "$now" -ge $((at + 15 * 60)) ] && [ -n "$exit_at" ] && [ "$exit_at" -gt "$since" ]; then break; fi
+    [ "$now" -lt "$deadline" ] || fail "$svc did not run after the install and the last key change within $(((deadline - at) / 60)) min ($(paste -sd ' ' <<<"$show"))"
+    sleep "${M6_TIMERS_EVERY:-30}"
   done
   [ "$status" = 0 ] || fail "$svc's last run exited $status"
   m6_result timers PASS "$unit active after the install; $svc ran $((exit_at - at)) s after it, exit 0" \

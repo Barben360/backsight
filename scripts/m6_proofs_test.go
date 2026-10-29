@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The test driver of scripts/m6-proofs.sh: each machine is a directory of
@@ -549,5 +551,352 @@ func TestVMBenchClientBIsIsolated(t *testing.T) {
 	}
 	if pwd, _ := os.ReadFile(filepath.Join(bench, "backsight.pwd")); strings.TrimSpace(string(pwd)) != filepath.Join(bench, "client-b") {
 		t.Errorf("B runs in %q", pwd)
+	}
+}
+
+// m6Record is one line of a synthetic transcript m6_session writes.
+type m6Record struct {
+	Type, UUID, SessionID, Cwd, Timestamp string
+	Message                               struct {
+		Role    string
+		Content json.RawMessage
+	}
+}
+
+func m6Transcript(t *testing.T, path string) []m6Record {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recs []m6Record
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var r m6Record
+		if err := json.Unmarshal([]byte(l), &r); err != nil {
+			t.Fatalf("%s: %v", l, err)
+		}
+		recs = append(recs, r)
+	}
+	return recs
+}
+
+// A session continued (here, or on the PC it was copied to) goes on after
+// its last record, whatever age the caller gives: the shared records r and
+// this PC's own (a), in order, each text naming its uuid; the file's mtime
+// is its newest record's time.
+func TestM6SessionWritesSharedAndOwnRecords(t *testing.T) {
+	dir := t.TempDir()
+	start := time.Now()
+	_, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_session a sp1 bs-m6-dedup 1 3 r 90
+m6_session a sp1 bs-m6-dedup 4 4 a 90
+m6_session a sp1 bs-m6-dedup 5 5 a 120`)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	path := filepath.Join(dir, "a", ".claude", "projects", "-bs-m6-bs-m6-dedup", "sp1.jsonl")
+	recs := m6Transcript(t, path)
+	var uuids []string
+	var prev time.Time
+	for i, r := range recs {
+		uuids = append(uuids, r.UUID)
+		if r.SessionID != "sp1" || r.Cwd != filepath.Join(dir, "a", "work", "bs-m6-dedup") || !strings.Contains(string(r.Message.Content), "[rec "+r.UUID+"]") {
+			t.Errorf("record %d: session %q, cwd %q, content %s", i, r.SessionID, r.Cwd, r.Message.Content)
+		}
+		ts, err := time.Parse(time.RFC3339Nano, r.Timestamp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i > 0 && !ts.After(prev) {
+			t.Errorf("record %s at %s is not after the one before it (%s)", r.UUID, r.Timestamp, prev.UTC().Format(time.RFC3339))
+		}
+		prev = ts
+	}
+	if strings.Join(uuids, " ") != "sp1-r1 sp1-r2 sp1-r3 sp1-a4 sp1-a5" {
+		t.Errorf("records %v, want sp1-r1 sp1-r2 sp1-r3 sp1-a4 sp1-a5", uuids)
+	}
+	r3, _ := time.Parse(time.RFC3339Nano, recs[2].Timestamp)
+	if want := start.Add(-90 * time.Minute); r3.Before(want.Add(-5*time.Second)) || r3.After(time.Now().Add(-90*time.Minute).Add(5*time.Second)) {
+		t.Errorf("sp1-r3 at %s, want 90 min ago (%s)", recs[2].Timestamp, want.UTC().Format(time.RFC3339))
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.ModTime().Unix() != prev.Unix() {
+		t.Errorf("mtime %s, want the newest record's time %s", fi.ModTime().UTC(), prev.UTC())
+	}
+}
+
+// The copy is the transcript as it is, with its mtime: a session written
+// 120 min ago stays 120 min old on the other PC.
+func TestM6CopyKeepsTheMtime(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_session a cp1 bs-m6-dedup 1 3 r 120; m6_copy a b cp1 bs-m6-dedup`)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	rel := filepath.Join(".claude", "projects", "-bs-m6-bs-m6-dedup", "cp1.jsonl")
+	src, _ := os.ReadFile(filepath.Join(dir, "a", rel))
+	dst, err := os.ReadFile(filepath.Join(dir, "b", rel))
+	if err != nil || !bytes.Equal(src, dst) || len(src) == 0 {
+		t.Fatalf("B's copy differs from A's transcript (%v):\n%s\n---\n%s", err, src, dst)
+	}
+	fa, _ := os.Stat(filepath.Join(dir, "a", rel))
+	fb, _ := os.Stat(filepath.Join(dir, "b", rel))
+	if !fa.ModTime().Equal(fb.ModTime()) {
+		t.Errorf("B's copy has mtime %s, A's %s", fb.ModTime(), fa.ModTime())
+	}
+	if age := time.Since(fb.ModTime()); age < 119*time.Minute || age > 121*time.Minute {
+		t.Errorf("B's copy is %s old, want 120 min", age.Round(time.Second))
+	}
+}
+
+// m6TickFake answers jobs tick: skipped <T>/skips times, then <T>/final
+// with exit <T>/final-code; it counts its calls in <T>/calls.
+const m6TickFake = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+n=$(($(cat "$t/calls" 2>/dev/null || echo 0) + 1))
+echo "$n" > "$t/calls"
+if [ "$n" -le "$(cat "$t/skips")" ]; then
+  echo '{"ok":true,"data":{"status":"skipped","reason":"another tick is running"}}'
+else
+  cat "$t/final"
+  exit "$(cat "$t/final-code")"
+fi
+`
+
+// The old key's tick (key-rotation) is partial: m6_tick takes it only when
+// told to, still retries a skipped tick first, and fails any other failure.
+func TestM6TickTakesAPartialTickOnlyWhenAsked(t *testing.T) {
+	const partial = `{"ok":false,"data":{"status":"partial","sessions":{"retry":1},"notes":{"sent":0,"kept":1}},"error":{"code":20,"message":"the server refused backsight (401): run backsight doctor"}}`
+	run := func(skips, final, finalCode, script string) (stdout, stderr, calls string, code int) {
+		dir := t.TempDir()
+		m6Lib(t, dir, m6TestDriver, "true")
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), m6TickFake)
+		writeLines(t, filepath.Join(dir, "skips"), skips)
+		writeLines(t, filepath.Join(dir, "final"), final)
+		writeLines(t, filepath.Join(dir, "final-code"), finalCode)
+		stdout, stderr, code = m6Lib(t, dir, m6TestDriver, script, "M6_TICK_EVERY=0")
+		raw, _ := os.ReadFile(filepath.Join(dir, "calls"))
+		return stdout, stderr, strings.TrimSpace(string(raw)), code
+	}
+	if stdout, stderr, _, code := run("0", partial, "20", `m6_tick a`); code == 0 || stdout != "" || !strings.Contains(stderr, "FAIL: jobs tick on a did not succeed (exit 20)") {
+		t.Errorf("a partial tick, not asked for: exit %d, stdout %q, stderr:\n%s", code, stdout, stderr)
+	}
+	if stdout, stderr, calls, code := run("2", partial, "20", `m6_tick a partial`); code != 0 || strings.TrimSpace(stdout) != partial || calls != "3" {
+		t.Errorf("a partial tick, asked for, after two skips: exit %d, %s call(s), stdout %q, stderr:\n%s", code, calls, stdout, stderr)
+	}
+	const usage = `{"ok":false,"error":{"code":2,"message":"unknown flag"}}`
+	if stdout, stderr, _, code := run("0", usage, "2", `m6_tick a partial`); code == 0 || stdout != "" || !strings.Contains(stderr, "FAIL: jobs tick on a did not succeed (exit 2): unknown flag") {
+		t.Errorf("a failed tick that is not partial, partial asked for: exit %d, stdout %q, stderr:\n%s", code, stdout, stderr)
+	}
+}
+
+// m6StateFake answers backsight paths --json with the state dir
+// <HOME>/state, and retain flush --json from <T>/flush.<n> (n: the call),
+// counted in <T>/flushes.
+const m6StateFake = `#!/bin/sh
+t=$(dirname "$(dirname "$0")")
+case "$*" in
+  "paths --json") printf '{"ok":true,"data":{"state":"%s/state"}}\n' "$HOME" ;;
+  "retain flush --json --session"*)
+    n=$(($(cat "$t/flushes" 2>/dev/null || echo 0) + 1))
+    echo "$n" > "$t/flushes"
+    cat "$t/flush.$n" ;;
+  *) echo '{"ok":false}'; exit 1 ;;
+esac
+`
+
+// m6_live_since moves state.json's retain_since back, never forward,
+// keeping every other field and the file's mode, under the state lock it
+// takes and releases; a lock someone else holds is waited for, then the
+// helper fails with state.json and that lock left as they were.
+func TestM6LiveSinceOnlyMovesRetainSinceBack(t *testing.T) {
+	setup := func(retainSince string) string {
+		dir := t.TempDir()
+		m6Lib(t, dir, m6TestDriver, "true")
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), m6StateFake)
+		if err := os.MkdirAll(filepath.Join(dir, "a", "state", "locks"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		st := `{"schema_version":1,"remote_server":{"id":"s1"}` + retainSince + `}`
+		if err := os.WriteFile(filepath.Join(dir, "a", "state", "state.json"), []byte(st), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	read := func(dir string) (since time.Time, raw []byte) {
+		raw, err := os.ReadFile(filepath.Join(dir, "a", "state", "state.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var st struct {
+			SchemaVersion int                 `json:"schema_version"`
+			RemoteServer  struct{ ID string } `json:"remote_server"`
+			RetainSince   time.Time           `json:"retain_since"`
+		}
+		if err := json.Unmarshal(raw, &st); err != nil {
+			t.Fatalf("%v: %s", err, raw)
+		}
+		if st.SchemaVersion != 1 || st.RemoteServer.ID != "s1" {
+			t.Errorf("state.json lost its other fields: %s", raw)
+		}
+		return st.RetainSince, raw
+	}
+	near := func(got, want time.Time) bool { d := got.Sub(want); return d > -time.Minute && d < time.Minute }
+	for _, tc := range []struct{ name, field string }{
+		{"absent", ""},
+		{"later", `,"retain_since":"` + time.Now().UTC().Format(time.RFC3339) + `"`},
+	} {
+		dir := setup(tc.field)
+		if _, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_live_since a 150`); code != 0 {
+			t.Fatalf("%s: exit %d, stderr:\n%s", tc.name, code, stderr)
+		}
+		if since, raw := read(dir); !near(since, time.Now().Add(-150*time.Minute)) {
+			t.Errorf("%s: retain_since %s, want 150 min ago: %s", tc.name, since, raw)
+		}
+		fi, _ := os.Stat(filepath.Join(dir, "a", "state", "state.json"))
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s: state.json is %v, want 0600", tc.name, fi.Mode().Perm())
+		}
+		left, _ := filepath.Glob(filepath.Join(dir, "a", "state", "locks", "*"))
+		tmp, _ := filepath.Glob(filepath.Join(dir, "a", "state", "state.json?*"))
+		if len(left)+len(tmp) > 0 {
+			t.Errorf("%s: left behind %v %v", tc.name, left, tmp)
+		}
+	}
+	dir := setup(`,"retain_since":"2020-01-02T03:04:05Z"`)
+	if _, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_live_since a 150`); code != 0 {
+		t.Fatalf("earlier: exit %d, stderr:\n%s", code, stderr)
+	}
+	if since, raw := read(dir); !since.Equal(time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)) {
+		t.Errorf("an earlier retain_since moved forward: %s", raw)
+	}
+	dir = setup(`,"retain_since":"2026-10-29T02:45:00Z"`)
+	lock := filepath.Join(dir, "a", "state", "locks", "state.lock")
+	writeLines(t, lock, `{"pid":1,"command":"jobs tick","since":"2026-10-29T02:45:00Z"}`)
+	_, before := read(dir)
+	if _, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_live_since a 150`, "M6_LOCK_WAIT=3"); code == 0 || !strings.Contains(stderr, "FAIL: cannot move a's retain_since back") {
+		t.Errorf("a held state lock: exit %d, stderr:\n%s", code, stderr)
+	}
+	if _, after := read(dir); !bytes.Equal(before, after) {
+		t.Errorf("state.json changed under another process's lock:\n%s\n%s", before, after)
+	}
+	if raw, err := os.ReadFile(lock); err != nil || !strings.Contains(string(raw), "jobs tick") {
+		t.Errorf("the other process's lock was removed or changed (%v): %s", err, raw)
+	}
+}
+
+// m6_flush_sent: the flush sent the session, or a tick (A's timer) did
+// before it, which only the cursor at the wanted record proves; another
+// flusher holding the session is waited for; anything else fails.
+func TestM6FlushSentNeedsTheCursorToProveATicksSend(t *testing.T) {
+	const sent = `{"ok":true,"data":{"results":[{"session":"sp1","status":"sent","segment":2}],"counts":{"sent":1}}}`
+	const nothing = `{"ok":true,"data":{"results":[],"counts":{"nothing":1}}}`
+	const locked = `{"ok":true,"data":{"results":[{"session":"sp1","status":"locked"}],"counts":{"locked":1}}}`
+	const retry = `{"ok":false,"data":{"results":[{"session":"sp1","status":"retry","detail":"server busy"}],"counts":{"retry":1}},"error":{"code":40,"message":"some sessions could not be sent now"}}`
+	for _, tc := range []struct {
+		name    string
+		answers []string
+		cursor  string // last_uuid of the cursor; "" none
+		want    string // stdout, or "FAIL: …" in stderr
+		flushes string
+	}{
+		{"sent", []string{sent}, "", "sent", "1"},
+		{"locked then sent", []string{locked, sent}, "", "sent", "2"},
+		{"sent by a tick", []string{nothing}, "sp1-a5", "tick", "1"},
+		{"nothing, cursor elsewhere", []string{nothing}, "sp1-r3", "FAIL: the flush of sp1 on a sent nothing, and its cursor ends at sp1-r3, not sp1-a5", "1"},
+		{"nothing, no cursor", []string{nothing}, "", "FAIL: the flush of sp1 on a sent nothing, and its cursor ends at none, not sp1-a5", "1"},
+		{"retry", []string{retry}, "", "FAIL: the flush of sp1 on a: retry (exit", "1"},
+	} {
+		dir := t.TempDir()
+		m6Lib(t, dir, m6TestDriver, "true")
+		writeExec(t, filepath.Join(dir, "bin", "backsight"), m6StateFake)
+		for i, a := range tc.answers {
+			writeLines(t, filepath.Join(dir, "flush."+strconv.Itoa(i+1)), a)
+		}
+		if tc.cursor != "" {
+			if err := os.MkdirAll(filepath.Join(dir, "a", "state", "cursors"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeLines(t, filepath.Join(dir, "a", "state", "cursors", "sp1.json"), `{"last_uuid":"`+tc.cursor+`","segment":2}`)
+		}
+		stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_flush_sent a sp1 sp1-a5`, "M6_TICK_EVERY=0")
+		flushes, _ := os.ReadFile(filepath.Join(dir, "flushes"))
+		if strings.TrimSpace(string(flushes)) != tc.flushes {
+			t.Errorf("%s: %s flush(es), want %s", tc.name, flushes, tc.flushes)
+		}
+		if strings.HasPrefix(tc.want, "FAIL: ") {
+			if code == 0 || stdout != "" || !strings.Contains(stderr, tc.want) {
+				t.Errorf("%s: exit %d, stdout %q, stderr:\n%s", tc.name, code, stdout, stderr)
+			}
+			continue
+		}
+		if code != 0 || strings.TrimSpace(stdout) != tc.want {
+			t.Errorf("%s: exit %d, stdout %q, want %s; stderr:\n%s", tc.name, code, stdout, tc.want, stderr)
+		}
+	}
+}
+
+// timers: a tick that ran before key-rotation's new key (and failed on the
+// old one) is not the run the check judges: it waits for one after both
+// the install and the key change.
+func TestM6TimersJudgesARunAfterTheKeyChange(t *testing.T) {
+	const driver = `
+m6_home() { echo "$T/$1"; }
+m6_sh() {
+  case $2 in
+    "date +%s") n=$(($(cat "$T/now") + 300)); echo "$n" > "$T/now"; echo "$n" ;;
+    *"systemctl --user show"*)
+      if [ "$(cat "$T/now")" -lt 2100 ]; then printf 'ExecMainStatus=1\nExecMainExitTimestamp=@1500\n'
+      else printf 'ExecMainStatus=0\nExecMainExitTimestamp=@2100\n'; fi ;;
+  esac
+}
+fail() { echo "FAIL: $*" >&2; exit 1; }
+`
+	for _, tc := range []struct {
+		name, after, want string
+	}{
+		{"a key change at 2000", "2000", "bs-m6 timers: PASS backsight-tick.timer active after the install; backsight-tick.service ran 1100 s after it, exit 0"},
+		{"no key change", "", "bs-m6 timers: FAIL backsight-tick.service's last run exited 1"},
+	} {
+		dir := t.TempDir()
+		m6Lib(t, dir, driver, "true")
+		writeLines(t, filepath.Join(dir, "work", "timers"), "backsight-tick.timer active 1000")
+		writeLines(t, filepath.Join(dir, "now"), "1660")
+		if tc.after != "" {
+			writeLines(t, filepath.Join(dir, "work", "timers-after"), tc.after)
+		}
+		stdout, stderr, _ := m6Lib(t, dir, driver, `m6_check timers m6_check_timers`, "M6_TIMERS_EVERY=0")
+		if !strings.HasPrefix(stdout, tc.want) {
+			t.Errorf("%s: stdout %q, want %q; stderr:\n%s", tc.name, stdout, tc.want, stderr)
+		}
+	}
+}
+
+// However a run ends, no token stays in client B's home: two-clients'
+// (the old one once the key rotated) and key-rotation's new one.
+func TestVMBenchRunEndRemovesBsTokens(t *testing.T) {
+	fakes := newBenchFakes(t)
+	bench := filepath.Join(t.TempDir(), "bs-m6")
+	if err := os.MkdirAll(filepath.Join(bench, "client-b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"token", "token2", "keep.txt"} {
+		writeLines(t, filepath.Join(bench, "client-b", n), "x")
+	}
+	if _, stderr, code := vmBench(t, fakes, t.TempDir(), bench, `vb_run_end`); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	for _, n := range []string{"token", "token2"} {
+		if _, err := os.Stat(filepath.Join(bench, "client-b", n)); err == nil {
+			t.Errorf("client-b/%s is still there", n)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(bench, "client-b", "keep.txt")); err != nil {
+		t.Errorf("the run's end removed another file of B's: %v", err)
+	}
+	if calls := benchCalls(t, fakes, "virsh"); !strings.Contains(strings.Join(calls, "\n"), "domif-setlink bs-m6-client") {
+		t.Errorf("the run's end did not bring A's link up: virsh calls %q", calls)
 	}
 }
