@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -279,7 +280,9 @@ func TestExposeRollsBack(t *testing.T) {
 			before := fx.config(t)
 			f := filepath.Join(t.TempDir(), "join.token")
 			code, out, errOut := run(t, "server", "expose", "--private", "100.101.1.2", "--out", f)
-			if code != output.RolledBack || !strings.Contains(errOut, "config.toml is back as it was") {
+			// Started again on the old config, whatever it was before (a
+			// stopped server runs now): never "as before".
+			if code != output.RolledBack || !strings.Contains(errOut, "config.toml is back as it was and the server started again on it") || strings.Contains(errOut, "as before") {
 				t.Fatalf("exit %d\n%s%s", code, out, errOut)
 			}
 			// Hooks queue and jobs skip meanwhile; a Ctrl-C cannot kill the rollback.
@@ -389,5 +392,31 @@ func TestExposeFailedRollbackSaysSo(t *testing.T) {
 	}
 	if after := fx.config(t); string(after) != string(before) || len(fx.dk.ups) != 2 {
 		t.Errorf("%d starts, config.toml:\n%s", len(fx.dk.ups), after)
+	}
+}
+
+// --out naming a symlink: refused before anything changes, exit 2; the
+// link's target, config.toml and the server as they were.
+func TestExposeRefusesASymlinkOut(t *testing.T) {
+	fx := exposeHost(t)
+	before := fx.config(t)
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(victim, []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "join.token")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	code, out, errOut := run(t, "server", "expose", "--private", "100.101.1.2", "--out", link)
+	if code != output.Usage || !strings.Contains(errOut, "nothing was written") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if raw, _ := os.ReadFile(victim); string(raw) != "mine\n" {
+		t.Errorf("the link's target was written (%d bytes)", len(raw))
+	}
+	if !bytes.Equal(fx.config(t), before) || len(fx.dk.ups) != 0 {
+		t.Errorf("changed: config %v, %d starts", !bytes.Equal(fx.config(t), before), len(fx.dk.ups))
 	}
 }

@@ -127,6 +127,9 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 
 	// 1. The change, validated as config.toml is, on an address of this
 	// machine. Nothing changes before step 4.
+	if err := tokenFileRefusal(f.out); err != nil {
+		return err
+	}
 	cfg, sec, err := loadServerConfig()
 	if err != nil {
 		return err
@@ -255,7 +258,7 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 			return redacted(fmt.Errorf("the server did not run %s (%s); config.toml is back as it was, but the server did not start healthy on it (%s): "+
 				"run backsight server start, then backsight server status", target, cause, rerr.Error()), sec)
 		}
-		return redacted(&output.Error{Code: output.RolledBack, Message: fmt.Sprintf("the server did not run %s (%s): config.toml is back as it was and the server runs as before", target, cause)}, sec)
+		return redacted(&output.Error{Code: output.RolledBack, Message: fmt.Sprintf("the server did not run %s (%s): config.toml is back as it was and the server started again on it", target, cause)}, sec)
 	}
 	res.Changes = ch
 

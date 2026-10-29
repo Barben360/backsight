@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1082,8 +1083,14 @@ func TestConnectWarnsOnAVersionSkew(t *testing.T) {
 	patch, _ := strconv.Atoi(pin[2])
 	fakeAPIVersion = pin[0] + "." + pin[1] + "." + strconv.Itoa(patch+1)
 	code, out, errOut := run(t, "connect", "--token-file", f, "--plan", "--json")
-	if env := parseConnect(t, out); code != output.OK || env.Data.Skew != doctor.Info || !strings.Contains(strings.Join(env.Data.Warnings, "\n"), "only the patch differs") {
+	if env := parseConnect(t, out); code != output.OK || env.Data.Skew != doctor.Info || !strings.Contains(strings.Join(env.Data.Notes, "\n"), "only the patch differs") ||
+		strings.Contains(strings.Join(env.Data.Warnings, "\n"), "only the patch differs") {
 		t.Errorf("patch: exit %d\n%s%s", code, out, errOut)
+	}
+	// Information, not a warning, in the text too.
+	code, out, errOut = run(t, "connect", "--token-file", f, "--plan")
+	if code != output.OK || !strings.Contains(out, "note     the server runs Hindsight") || strings.Contains(out, "warning  the server runs Hindsight") {
+		t.Errorf("patch, text: exit %d\n%s%s", code, out, errOut)
 	}
 	fakeAPIVersion = ""
 	code, out, errOut = run(t, "connect", "--token-file", f, "--plan", "--json")
@@ -1547,7 +1554,8 @@ func TestConnectOwnServerLockTakenAfterTheBackup(t *testing.T) {
 	}
 	t.Cleanup(func() { connectFault = old })
 	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
-	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "maintenance in progress") {
+	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "maintenance in progress") ||
+		!backupNamed(env.Error.Message) {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 	if i := composeStopped(dk.calls); i >= 0 {
@@ -1556,6 +1564,39 @@ func TestConnectOwnServerLockTakenAfterTheBackup(t *testing.T) {
 	sameContents(t, before)
 	if _, err := os.Stat(d.ConnectDir()); err == nil {
 		t.Error("retain state moved aside")
+	}
+}
+
+// backupNamed: a message of a connect that stopped after backing up this
+// PC's own server names the archive made, never "nothing was changed"
+// alone.
+func backupNamed(msg string) bool {
+	return regexp.MustCompile(`this PC's server was backed up to \S+backsight-\d{8}T\d{6}Z\.tar\.gz\.age`).MatchString(msg) &&
+		!regexp.MustCompile(`nothing was changed($|[.;:])`).MatchString(msg)
+}
+
+// A send still running after the backup (the 2-minute wait): the
+// message says the backup was made, and names it.
+func TestConnectOwnServerSendRunningAfterTheBackup(t *testing.T) {
+	home, _ := setupMachine(t)
+	ownServerPC(t, home)
+	tok := joinableHost(t)
+	noKeyRequired()
+	withBackupDocker(t)
+	oldWait, oldPoll := connectSendsWait, connectSendsPoll
+	connectSendsWait, connectSendsPoll = 30*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { connectSendsWait, connectSendsPoll = oldWait, oldPoll })
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.LocksDir(), 0o700)
+	l, err := state.TryAcquire(filepath.Join(d.LocksDir(), "session-s1.lock"), "retain flush")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Release() })
+	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--non-interactive", "--json")
+	if env := parseConnect(t, out); code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "a send of session s1 is still running") ||
+		!backupNamed(env.Error.Message) {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
 	}
 }
 

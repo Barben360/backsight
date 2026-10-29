@@ -99,3 +99,22 @@ func TestDisplayAndCleartext(t *testing.T) {
 		}
 	}
 }
+
+// A tailnet host (Tailscale's ranges, or a MagicDNS name): WireGuard
+// encrypts the link. A LAN address, a plain name or loopback is not one.
+func TestTailnet(t *testing.T) {
+	for url, want := range map[string]bool{
+		"http://100.101.102.103:8888":   true,
+		"http://[fd7a:115c:a1e0::1]:88": true,
+		"http://host.tail1234.ts.net:8": true,
+		"http://192.168.1.10:8888":      false,
+		"http://100.128.0.1:8888":       false, // outside 100.64.0.0/10
+		"http://nas.local:8888":         false,
+		"http://127.0.0.1:8888":         false,
+		"http://evil-ts.net.example:80": false,
+	} {
+		if got := (Target{URL: url}).Tailnet(); got != want {
+			t.Errorf("%s: tailnet %v, want %v", url, got, want)
+		}
+	}
+}

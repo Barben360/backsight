@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/target"
 )
 
 func put(t *testing.T, p, content string, mode os.FileMode) {
@@ -438,8 +439,29 @@ func TestCleartextKeyWarned(t *testing.T) {
 	f.reference("http://" + ln.Addr().String())
 	c := check(t, f.run(), "server")
 	expect(t, c, Warn, "Hindsight 1.1.0")
-	if !strings.Contains(c.Detail, "unencrypted") {
-		t.Errorf("detail: %q", c.Detail)
+	if !strings.Contains(c.Detail, "unencrypted") || strings.Contains(c.Fix, "TLS") || !strings.Contains(c.Fix, "backsight server expose --private <tailnet address>") {
+		t.Errorf("detail %q, fix %q", c.Detail, c.Fix)
+	}
+}
+
+// How the key travels, once the server answered: loopback and https say
+// nothing; a tailnet address is Info (WireGuard encrypts it); any other
+// host warns, with a fix that exists today (no TLS proxy promised).
+func TestServerTransport(t *testing.T) {
+	for url, want := range map[string]Status{
+		"http://127.0.0.1:8888":       OK,
+		"https://mem.example:443":     OK,
+		"http://100.101.102.103:8888": Info,
+		"http://host.tail1234.ts.net": Info,
+		"http://192.168.1.10:8888":    Warn,
+	} {
+		st, detail, fix := transport(target.Target{URL: url})
+		if st != want || strings.Contains(fix, "TLS") || (st != OK) != (detail != "") {
+			t.Errorf("%s: %s %q %q, want %s", url, st, detail, fix, want)
+		}
+		if st == Info && !strings.Contains(detail, "WireGuard") {
+			t.Errorf("%s: %q", url, detail)
+		}
 	}
 }
 

@@ -303,7 +303,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 		}
 		if t.Source == "config" && env.ExposureDetail != nil {
 			if detail, fix := env.ExposureDetail(); detail != "" {
-				c.Detail = detail
+				c.Detail = detail + " (" + err.Error() + ")"
 				if fix != "" {
 					c.Fix = fix
 				}
@@ -320,12 +320,25 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 	}
 	c.Status, c.Summary = OK, fmt.Sprintf("Hindsight %s at %s%s", v.APIVersion, t.Display(), from)
 	c.version = v.APIVersion
-	if t.Cleartext() {
-		c.Status = Warn
-		c.Detail = "the API key travels unencrypted to a non-loopback host"
-		c.Fix = "reach the server over a tailnet or WireGuard, or keep it on loopback until the TLS proxy exists"
+	if st, detail, fix := transport(*t); st != OK {
+		c.Status, c.Detail, c.Fix = st, detail, fix
 	}
 	return c, cl
+}
+
+// transport is how the API key travels to t's host: nothing to say over
+// loopback or https; Info over a tailnet (WireGuard encrypts it); a
+// warning otherwise (a LAN address, which expose and connect accept with
+// cleartext_lan=yes, or a name that may lead anywhere).
+func transport(t target.Target) (st Status, detail, fix string) {
+	switch {
+	case !t.Cleartext():
+		return OK, "", ""
+	case t.Tailnet():
+		return Info, "over a tailnet address: WireGuard encrypts the link, the API key included (unless this 100.64.0.0/10 address is a carrier's NAT rather than Tailscale)", ""
+	}
+	return Warn, "the API key travels unencrypted on the network to this address, readable by anyone on it",
+		"prefer a tailnet address (Tailscale: 100.x): on the server's host, backsight server expose --private <tailnet address> --out <file>; then here, backsight connect --token-file <file>"
 }
 
 func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Check {

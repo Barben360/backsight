@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/url"
+	"strings"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
@@ -79,6 +80,21 @@ func (t Target) Cleartext() bool {
 	}
 	ip := net.ParseIP(host)
 	return ip == nil || !ip.IsLoopback()
+}
+
+// Tailnet reports whether the URL's host is on a tailnet, where WireGuard
+// encrypts the link: a Tailscale address (config.IsTailnet) or a MagicDNS
+// name (under .ts.net).
+func (t Target) Tailnet() bool {
+	u, err := url.Parse(t.URL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		return config.IsTailnet(ip)
+	}
+	return strings.HasSuffix(strings.ToLower(host), ".ts.net")
 }
 
 func (t Target) String() string {

@@ -24,13 +24,13 @@ backsight server expose --private <ip> --plan
 backsight server expose --private <ip> --out <file>
 ```
 
-The server then listens on that address as well as on `127.0.0.1`, and the host itself keeps using `127.0.0.1`. expose restarts the server under the maintenance lock, checks it answers on both addresses, and writes the [connection token](glossary.md#connection-token) to `<file>` ([below](#the-connection-token)). If the server does not come back healthy, `config.toml` is put back and the server started as before.
+The server then listens on that address as well as on `127.0.0.1`, and the host itself keeps using `127.0.0.1`. expose restarts the server under the maintenance lock, checks it answers on both addresses, and writes the [connection token](glossary.md#connection-token) to `<file>` ([below](#the-connection-token)). If the server does not come back healthy, `config.toml` is put back and the server started again on it (even one that was stopped before expose).
 
 - **A tailnet address** (Tailscale: `100.x`) keeps the API key encrypted on the way.
 - **A LAN address** sends the API key in clear to anyone on that network. expose stops and asks: on a network you trust, rerun with `--answer cleartext_lan=yes`.
 - **A public address** is refused, and so is an address no interface of the host has: the message lists the ones it has ([Another PC cannot reach the server](troubleshooting.md#another-pc-cannot-reach-the-server)).
 
-On every client, doctor's `server` check warns that the API key travels unencrypted to a host that is not loopback: it cannot tell a tailnet from a LAN. Over a tailnet, WireGuard encrypts the link anyway.
+On every client, doctor's `server` check says how the API key travels: over a tailnet address (or a `*.ts.net` name), as information, that WireGuard encrypts it; over any other address, as a warning, that it travels unencrypted on that network, with the way to move the server to a tailnet address.
 
 `backsight server expose --loopback` closes the server to the other PCs again.
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -44,6 +45,12 @@ type serverReach struct {
 	BreakerOpenUntil time.Time `json:"breaker_open_until,omitzero"` // set while recall is paused
 	NotesQueued      int       `json:"notes_queued"`
 	SessionsWaiting  int       `json:"sessions_waiting"`
+	// OtherServer: the id of another server that answers at a client's
+	// joined address (state.RemoteServer.Mismatch), since HeldSince:
+	// every write is held, whatever it answers.
+	OtherServer string    `json:"other_server,omitempty"`
+	JoinedID    string    `json:"-"`
+	HeldSince   time.Time `json:"held_since,omitzero"`
 }
 
 type statsResult struct {
@@ -142,6 +149,9 @@ func reachOf(d paths.Dirs, home string, now time.Time) serverReach {
 		if u, err := url.Parse(cfg.Server.URL); err == nil {
 			s.Host = u.Hostname()
 		}
+		if st, err := state.Load(d.StateFile()); err == nil && st.RemoteServer != nil && st.RemoteServer.Mismatch != "" {
+			s.OtherServer, s.JoinedID, s.HeldSince = st.RemoteServer.Mismatch, st.RemoteServer.ID, st.RemoteServer.MismatchAt.UTC()
+		}
 	}
 	return s
 }
@@ -153,6 +163,14 @@ func reachText(s serverReach, now time.Time) string {
 		host = s.Host + " "
 	}
 	switch {
+	case s.OtherServer != "":
+		at := cmp.Or(s.Host, "the joined address")
+		since := ""
+		if !s.HeldSince.IsZero() {
+			since = fmt.Sprintf(" since %s (%s)", s.HeldSince.Format(time.RFC3339), recall.Age(now.Sub(s.HeldSince)))
+		}
+		return fmt.Sprintf("a different server answers at %s (server %s, joined %s)%s: writes held; %s queued, %s not sent yet", at, s.OtherServer, s.JoinedID, since,
+			plural(s.NotesQueued, "note"), plural(s.SessionsWaiting, "session"))
 	case !s.FailingSince.IsZero():
 		recallState := "recall on"
 		if !s.BreakerOpenUntil.IsZero() {

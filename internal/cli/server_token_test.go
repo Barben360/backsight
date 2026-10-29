@@ -411,3 +411,35 @@ func TestTokenWaitsForServerLock(t *testing.T) {
 		t.Errorf("lock released: exit %d\n%s%s", code, out, errOut)
 	}
 }
+
+// --out naming a symlink (another user's /tmp link to a file of yours) or
+// a directory: refused, exit 2, nothing written, the link's target as it
+// was; with --rotate the key is not rotated either.
+func TestTokenRefusesASymlinkOut(t *testing.T) {
+	home, _, _ := tokenHost(t)
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "authorized_keys")
+	if err := os.WriteFile(victim, []byte("ssh-ed25519 AAAA mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "bs-token")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	before, _ := config.LoadSecrets(secretsFile(home))
+	for _, args := range [][]string{{"server", "token", "--out", link}, {"server", "token", "--rotate", "--out", link}, {"server", "token", "--out", dir}} {
+		code, out, errOut := run(t, args...)
+		if code != output.Usage || !strings.Contains(errOut, "nothing was written") {
+			t.Errorf("%v: exit %d\n%s%s", args, code, out, errOut)
+		}
+	}
+	if raw, _ := os.ReadFile(victim); string(raw) != "ssh-ed25519 AAAA mine\n" {
+		t.Errorf("the link's target was written (%d bytes)", len(raw))
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced: %v %v", fi, err)
+	}
+	if after, _ := config.LoadSecrets(secretsFile(home)); after.APIKey != before.APIKey {
+		t.Error("the key was rotated")
+	}
+}

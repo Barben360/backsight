@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -509,5 +510,37 @@ func TestStatsWithoutReachRecord(t *testing.T) {
 	}
 	if _, out, _ := run(t, "stats", "--json"); strings.Contains(out, "last_ok") || !strings.Contains(out, `"server": {`) {
 		t.Errorf("json:\n%s", out)
+	}
+}
+
+// Another server answers at the joined address: the line says that every
+// write is held, since when, and what waits here, never "answering"
+// (that server answers, the joined one does not); --json names it too.
+func TestStatsShowsAHeldServer(t *testing.T) {
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	home := statsAt(t, at)
+	stateFile(t, home, "reach.json", `{"last_ok":"2026-10-28T08:00:00Z","sessions_waiting":3}`)
+	if err := state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RemoteServer = &state.RemoteServer{ID: "a", URL: "http://127.0.0.1:1", Mismatch: "b", MismatchAt: time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "stats")
+	want := "Server       a different server answers at 127.0.0.1 (server b, joined a) since 2026-10-28T10:00:00Z (2h): writes held; 0 notes queued, 3 sessions not sent yet"
+	if l := serverLine(t, out); code != output.OK || l != want {
+		t.Errorf("exit %d\n got %q\nwant %q", code, l, want)
+	}
+	code, out, _ = run(t, "stats", "--json")
+	var env struct {
+		Data struct {
+			Server map[string]any `json:"server"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); code != output.OK || err != nil {
+		t.Fatalf("exit %d, %v\n%s", code, err, out)
+	}
+	if s := env.Data.Server; s["other_server"] != "b" || s["held_since"] != "2026-10-28T10:00:00Z" {
+		t.Errorf("json server: %v", s)
 	}
 }

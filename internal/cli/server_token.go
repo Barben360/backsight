@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -49,6 +50,19 @@ func tokenOut(e *env, out string) error {
 	if out == "" && (e.json || !stdoutIsTerminal()) {
 		return &output.Error{Code: output.Usage, Message: "the token holds the API key: write it with --out FILE"}
 	}
+	return tokenFileRefusal(out)
+}
+
+// tokenFileRefusal refuses an --out that is a symlink or not a regular
+// file: the token would replace what another user's link points to (a
+// file of yours, or one in a synced folder).
+func tokenFileRefusal(out string) error {
+	if out == "" {
+		return nil
+	}
+	if err := fsutil.RegularOrAbsent(out); err != nil {
+		return &output.Error{Code: output.Usage, Message: "--out: " + err.Error() + ": give the real path of a file of yours; nothing was written"}
+	}
 	return nil
 }
 
@@ -56,7 +70,7 @@ func tokenOut(e *env, out string) error {
 const onTerminal = "the terminal"
 
 // writeToken writes the encoded token to out (atomically, mode 0600, an
-// existing file replaced) or, with no out, prints it to a terminal; where
+// existing regular file replaced, a symlink refused) or, with no out, prints it to a terminal; where
 // says which.
 func writeToken(e *env, tok token.Token, out string) (where string, err error) {
 	if err := tokenOut(e, out); err != nil {
@@ -71,7 +85,9 @@ func writeToken(e *env, tok token.Token, out string) (where string, err error) {
 	if abs, err := filepath.Abs(out); err == nil {
 		out = abs
 	}
-	if err := fsutil.WriteAtomic(out, []byte(token.Encode(tok)+"\n"), 0o600); err != nil {
+	if err := fsutil.WriteAtomicNoFollow(out, []byte(token.Encode(tok)+"\n"), 0o600); errors.Is(err, fsutil.ErrNotRegular) {
+		return "", tokenFileRefusal(out)
+	} else if err != nil {
 		return "", blocked(err)
 	}
 	return out, nil

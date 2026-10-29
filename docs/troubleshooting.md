@@ -154,7 +154,7 @@ Once the backup verified, connect stops the server under the maintenance lock, t
 - **"is not an address of this machine"**: the address belongs to no network interface of the host, so the server could not listen on it. Pick one of the private addresses the message lists; for a tailnet, check that Tailscale is up (`tailscale ip -4`).
 - **"the API key travels unencrypted on this network"**: the address is on a LAN, not a tailnet, and every request carries the API key in clear to anyone on that network. Prefer the host's tailnet address (Tailscale: `100.x`). On a network you trust, rerun the same command with `--answer cleartext_lan=yes`.
 
-If the command exits 30, the server did not answer on the new address: `config.toml` was put back and the server started as before. If it exits 20 after the change, `config.toml` was put back but the server did not start again on it: the message says what to run.
+If the command exits 30, the server did not answer on the new address: `config.toml` was put back and the server started again on it. If it exits 20 after the change, `config.toml` was put back but the server did not start again on it: the message says what to run.
 
 From the other PC, `backsight connect` says **"the server at <url> does not answer"**, or, on a PC that joined, doctor's `server` check says **"Hindsight unreachable at …"**. Nothing changed on that PC. Check, in order:
 

@@ -213,14 +213,15 @@ func TestDoctorNamesTheLateAddress(t *testing.T) {
 		t.Fatalf("no server check:\n%s", out)
 		return "", "", ""
 	}
+	// The call's own error stays in the detail (a timeout reads apart from a refusal).
 	if st, d, fix := detail(); st != doctor.Error || !strings.Contains(d, "backsight server start") || strings.Contains(d, "not on this machine") ||
-		!strings.Contains(fix, "backsight server start") {
+		!strings.Contains(d, "hindsight server unreachable") || !strings.Contains(fix, "backsight server start") {
 		t.Errorf("address present: %s %q, fix %q", st, d, fix)
 	}
 	withAddrs(t, "127.0.0.1/8")
-	want := "the private address 100.101.1.2 is not on this machine yet: the server starts once it appears (jobs tick, or the next Claude Code session); to stop depending on it: backsight server expose --loopback"
+	want := "the private address 100.101.1.2 is not on this machine yet: the server starts once it appears (jobs tick, or the next Claude Code session); to stop depending on it: backsight server expose --loopback (hindsight server unreachable"
 	// server start would fail on the missing address: not the fix.
-	if st, d, fix := detail(); st != doctor.Error || d != want || strings.Contains(fix, "server start") || !strings.Contains(fix, "backsight server expose --loopback") {
+	if st, d, fix := detail(); st != doctor.Error || !strings.HasPrefix(d, want) || strings.Contains(fix, "server start") || !strings.Contains(fix, "backsight server expose --loopback") {
 		t.Errorf("address absent: %s %q, fix %q", st, d, fix)
 	}
 }

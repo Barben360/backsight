@@ -80,6 +80,7 @@ type connectResult struct {
 	Plan             bool             `json:"plan"`
 	Declined         bool             `json:"declined,omitempty"`
 	Warnings         []string         `json:"warnings,omitempty"`
+	Notes            []string         `json:"notes,omitempty"` // information, nothing to do
 	Steps            []step           `json:"steps"`
 	Questions        []setup.Question `json:"questions,omitempty"`
 	OwnServer        *ownServer       `json:"own_server,omitempty"`
@@ -759,7 +760,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	case doctor.Warn:
 		res.Warnings = append(res.Warnings, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: on the server's host, backsight update apply; or update this PC to the host's backsight", p.Version, server.PinnedVersion()))
 	case doctor.Info:
-		res.Warnings = append(res.Warnings, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: only the patch differs, nothing to do", p.Version, server.PinnedVersion()))
+		res.Notes = append(res.Notes, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: only the patch differs, nothing to do", p.Version, server.PinnedVersion()))
 	case "":
 		res.Warnings = append(res.Warnings, "the server's Hindsight version could not be read: backsight doctor compares it with this backsight's pin once connected")
 	}
@@ -862,6 +863,9 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	}
 	at := now().UTC()
 	if err := applyConnect(ctx, d, home, tok, p, situation, at, resume, own); err != nil {
+		if res.OwnServer != nil && res.OwnServer.Backup != "" {
+			err = afterOwnBackup(err, res.OwnServer.Backup, d, localSec)
+		}
 		return res, redacted(redacted(err, localSec), config.Secrets{APIKey: tok.APIKey})
 	}
 	for i := range res.Steps {
@@ -1057,6 +1061,28 @@ func backupOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec c
 	return b.Path, nil
 }
 
+// afterOwnBackup is applyConnect's error once this PC's own server was
+// backed up to archive: the backup was made and stays (with the backup
+// identity it may have added to secrets.toml), so "nothing was changed"
+// says so, and any other message names it too.
+func afterOwnBackup(err error, archive string, d paths.Dirs, sec config.Secrets) error {
+	made := "this PC's server was backed up to " + archive
+	if fresh, ferr := config.LoadSecrets(d.SecretsFile()); ferr == nil && sec.BackupIdentity == "" && fresh.BackupIdentity != "" {
+		made += ", and the backup identity it needed added to secrets.toml (backsight backup identity show)"
+	}
+	oe, ok := err.(*output.Error) //nolint:errorlint // its own message only, not one it wraps
+	if !ok {
+		return fmt.Errorf("%w; before that, %s", err, made)
+	}
+	out := *oe
+	if strings.Contains(out.Message, "nothing was changed") {
+		out.Message = strings.Replace(out.Message, "nothing was changed", "nothing else was changed than the backup ("+made+")", 1)
+	} else {
+		out.Message += "; before that, " + made
+	}
+	return &out
+}
+
 // applyConnect writes what the plan said, under the maintenance lock
 // (hooks queue, jobs skip): the retain reset first (it records the server
 // config.toml still names), then config.toml, the key, and the binding
@@ -1244,6 +1270,9 @@ func connectPlanText(r connectResult) string {
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(&b, "note     %s\n", n)
+	}
 	b.WriteString(will)
 	for _, s := range r.Steps {
 		fmt.Fprintf(&b, "  %-8s %s\n", s.Name, s.Detail)
@@ -1278,6 +1307,9 @@ func connectText(r connectResult) string {
 	b.WriteString(setupText(*r.Setup))
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(&b, "note     %s\n", n)
 	}
 	for _, n := range r.NextSteps {
 		b.WriteString("- " + n + "\n")
