@@ -1043,6 +1043,29 @@ func TestWrongRawFactIsInvalidated(t *testing.T) {
 	if strings.Contains(fmt.Sprint(journalEvents(t, home)), "psql") {
 		t.Error("the evidence reached the journal")
 	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "retired:1" {
+		t.Errorf("retire telemetry %q", got)
+	}
+}
+
+// retireTelemetry is each retire telemetry event as action:count; any
+// other field than the common ones, the action and the count fails.
+func retireTelemetry(t *testing.T, home string) []string {
+	t.Helper()
+	var out []string
+	for _, l := range strings.Split(telemetryText(t, home), "\n") {
+		var e map[string]any
+		if json.Unmarshal([]byte(l), &e) != nil || e["event"] != "retire" {
+			continue
+		}
+		for k := range e {
+			if !slices.Contains([]string{"ts", "v", "event", "session", "project", "binary_version", "action", "ids_n"}, k) {
+				t.Errorf("a retire event carries %q: %v", k, e)
+			}
+		}
+		out = append(out, fmt.Sprintf("%v:%v", e["action"], e["ids_n"]))
+	}
+	return out
 }
 
 func TestObservationListsItsSourcesFirst(t *testing.T) {
@@ -1066,6 +1089,9 @@ func TestObservationListsItsSourcesFirst(t *testing.T) {
 	}
 	if len(patches()) != 0 || !nothingStored(t, home, before) || len(retireEvents(t, home, feedback.KindRetire))+len(retireEvents(t, home, feedback.KindHide)) != 0 {
 		t.Errorf("a first call on an observation acted: %q", curation)
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "sources:1" {
+		t.Errorf("retire telemetry %q", got)
 	}
 	// PostToolUse journals the facts listed as shown, in order, each with its project
 	fire(t, "post-tool-use", map[string]any{"session_id": "S", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
@@ -1112,6 +1138,9 @@ func TestNamedSourcesAreRetired(t *testing.T) {
 	if retained.Load()-before != 1 {
 		t.Errorf("%d notes sent", retained.Load()-before)
 	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "retired:2" {
+		t.Errorf("retire telemetry %q", got)
+	}
 }
 
 func TestObservationWithoutSourcesIsHidden(t *testing.T) {
@@ -1146,6 +1175,9 @@ func TestObservationWithoutSourcesIsHidden(t *testing.T) {
 	if len(retireEvents(t, home, feedback.KindRetire)) != 0 {
 		t.Error("a hidden observation was journaled retired")
 	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "hidden:2" {
+		t.Errorf("retire telemetry %q", got)
+	}
 }
 
 // A raw fact retired and an observation hidden in one call: Retired.,
@@ -1170,6 +1202,9 @@ func TestRetiredAndHiddenAnswerSaysWhich(t *testing.T) {
 	}
 	if len(patches()) != 1 || len(retireEvents(t, home, feedback.KindRetire)) != 1 || len(retireEvents(t, home, feedback.KindHide)) != 1 {
 		t.Errorf("patches %q", patches())
+	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "retired:1 hidden:1" {
+		t.Errorf("retire telemetry %q", got)
 	}
 }
 
@@ -1205,6 +1240,9 @@ func TestPartialRetirementSaysWhatHappened(t *testing.T) {
 	if sent := retained.Load() - before; sent+int64(n) != 1 {
 		t.Errorf("notes: %d sent, %d queued", sent, n)
 	}
+	if got := retireTelemetry(t, home); strings.Join(got, " ") != "partly:1" {
+		t.Errorf("retire telemetry %q", got)
+	}
 }
 
 // The server refuses the first retirement: nothing retired, said so, and
@@ -1221,6 +1259,9 @@ func TestFailedRetirementRetiresNothingSilently(t *testing.T) {
 	}
 	if len(retireEvents(t, home, feedback.KindRetire)) != 0 {
 		t.Error("a refused retirement was journaled")
+	}
+	if got := retireTelemetry(t, home); len(got) != 0 {
+		t.Errorf("retire telemetry %q for a retirement the server refused", got)
 	}
 }
 

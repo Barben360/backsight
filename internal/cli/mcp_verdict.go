@@ -178,6 +178,16 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 		}
 		return "", errors.New(strings.Join(lines, "\n"))
 	}
+	// Counts and enums only, as the answer decided them.
+	switch {
+	case failure != nil:
+		d.tw.Emit(telemetry.Retire{Action: "partly", IDs: len(retired)})
+	case len(retired) > 0:
+		d.tw.Emit(telemetry.Retire{Action: "retired", IDs: len(retired)})
+	}
+	if len(hidden) > 0 {
+		d.tw.Emit(telemetry.Retire{Action: "hidden", IDs: len(hidden)})
+	}
 	var b strings.Builder
 	switch {
 	case failure != nil:

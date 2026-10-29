@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -533,5 +534,168 @@ func TestRestoreUndoesARetirement(t *testing.T) {
 	}
 	if l.Memories["f9"].Wrong != 1 {
 		t.Errorf("f9, not restored, lost its verdict: %+v", l.Memories["f9"])
+	}
+}
+
+// staleID is the full id of memory n in the memory stale tests: its first
+// 8 characters are n's digit repeated.
+func staleID(n int) string {
+	d := strconv.Itoa(n)
+	return strings.Repeat(d, 8) + "-0000-4000-8000-00000000000" + d
+}
+
+// writeStaleLedger writes a ledger whose watermark is now, with one memory
+// of each kind memory stale lists or leaves out, and journals a retire
+// after the watermark that only feedback.Current knows. It returns the
+// ledger file's bytes.
+func writeStaleLedger(t *testing.T, home string) []byte {
+	t.Helper()
+	dir := pathsOf(home).FeedbackDir()
+	now := time.Now().UTC()
+	day := 24 * time.Hour
+	l := feedback.Ledger{Schema: feedback.LedgerSchema, Watermark: now, Memories: map[string]feedback.Entry{
+		staleID(1): {Shown: 12, LastShown: now.Add(-3 * day)},                                                                              // never used
+		staleID(2): {Shown: 15, LastShown: now.Add(-1 * day)},                                                                              // never used, shown most
+		staleID(3): {Shown: 9, LastShown: now.Add(-2 * day)},                                                                               // shown too few times
+		staleID(4): {Shown: 20, LastShown: now.Add(-2 * day), Credits: 0.4, CreditsAt: now.Add(-9 * day), LastCredited: now.Add(-9 * day)}, // credited
+		staleID(5): {Shown: 3, LastShown: now.Add(-20 * day), Hidden: &feedback.Hidden{Since: now.Add(-8 * day), Verdict: "wrong", Note: "n5"}},
+		staleID(6): {Shown: 30, LastShown: now.Add(-1 * day), Hidden: &feedback.Hidden{Since: now.Add(-2 * day), Verdict: "outdated"}}, // waits for a rewrite
+		staleID(7): {Shown: 11, LastShown: now.Add(-5 * day), Wrong: 1},                                                                // reported, not never used
+		staleID(8): {Shown: 2, LastShown: now.Add(-4 * day)},                                                                           // reported after the watermark
+		staleID(9): {Shown: 1, Wrong: 2, Hidden: &feedback.Hidden{Since: now.Add(-10 * day)}},                                          // hidden first
+	}}
+	raw, err := json.Marshal(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.MkdirAll(dir, 0o700)
+	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j := feedback.NewJournal(dir, feedback.Common{Session: "s1"})
+	if err := j.Append(feedback.Event{Kind: feedback.KindRetire, TS: now.Add(time.Minute), IDs: []string{staleID(8)}, Verdict: "wrong", Outcome: "invalidated", Note: "n8"}); err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+type staleOut struct {
+	Data struct {
+		NeverUsed []staleMemory `json:"never_used"`
+		Hidden    []staleMemory `json:"hidden"`
+		Reported  []staleMemory `json:"reported"`
+	} `json:"data"`
+}
+
+func staleIDs(ms []staleMemory) string {
+	var out []string
+	for _, m := range ms {
+		out = append(out, m.ID[:8]+"|"+m.Command)
+	}
+	return strings.Join(out, " ")
+}
+
+// memory stale lists, once each, what was shown often and never used,
+// what stayed hidden 7 days without a rewrite and what was reported wrong
+// or outdated, each with the command that moves it on; a credited memory,
+// one shown fewer than stale_shows times and one hidden for less than 7
+// days are not listed.
+func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	writeStaleLedger(t, home)
+	code, out, errOut := run(t, "memory", "stale")
+	want := "Shown often, never used\n" +
+		"22222222  shown 15  1d ago  backsight forget " + staleID(2) + "\n" +
+		"11111111  shown 12  3d ago  backsight forget " + staleID(1) + "\n" +
+		"\nHidden, not rewritten for 7 days\n" +
+		"55555555  shown 3  2w ago  backsight forget " + staleID(5) + "\n" +
+		"99999999  shown 1  -  backsight forget " + staleID(9) + "\n" +
+		"\nReported wrong or outdated\n" +
+		"77777777  shown 11  5d ago  backsight forget " + staleID(7) + " --purge\n" +
+		"88888888  shown 2  4d ago  backsight forget " + staleID(8) + " --purge\n" +
+		"\nbacksight forget --restore <id> undoes a retirement.\n"
+	if code != output.OK || out != want {
+		t.Fatalf("exit %d\n%s%s\nwant\n%s", code, out, errOut, want)
+	}
+
+	code, out, _ = run(t, "memory", "stale", "--json")
+	var s staleOut
+	if err := json.Unmarshal([]byte(out), &s); err != nil || code != output.OK {
+		t.Fatalf("exit %d %v\n%s", code, err, out)
+	}
+	if got, want := staleIDs(s.Data.NeverUsed), "22222222|backsight forget "+staleID(2)+" 11111111|backsight forget "+staleID(1); got != want {
+		t.Errorf("never_used %q, want %q", got, want)
+	}
+	if got, want := staleIDs(s.Data.Hidden), "55555555|backsight forget "+staleID(5)+" 99999999|backsight forget "+staleID(9); got != want {
+		t.Errorf("hidden %q, want %q", got, want)
+	}
+	if got, want := staleIDs(s.Data.Reported), "77777777|backsight forget "+staleID(7)+" --purge 88888888|backsight forget "+staleID(8)+" --purge"; got != want {
+		t.Errorf("reported %q, want %q", got, want)
+	}
+	if h := s.Data.Hidden[0]; h.Shown != 3 || h.HiddenSince.IsZero() || s.Data.Reported[0].Wrong != 1 || s.Data.NeverUsed[0].LastShown.IsZero() {
+		t.Errorf("fields %+v %+v %+v", h, s.Data.Reported[0], s.Data.NeverUsed[0])
+	}
+
+	// stale_shows moves the bar
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[feedback]\nstale_shows = 9\n")...), 0o600)
+	if _, out, _ := run(t, "memory", "stale"); !strings.Contains(out, "33333333  shown 9  2d ago  backsight forget "+staleID(3)+"\n") {
+		t.Errorf("stale_shows = 9 leaves out the memory shown 9 times:\n%s", out)
+	}
+
+	// a reported fact restored is no longer listed as reported: shown
+	// often and never used, it is listed with a plain forget
+	memories[staleID(7)] = fact(staleID(7), "conversation:s1")
+	if code, out, errOut := run(t, "forget", "--restore", staleID(7)); code != output.OK {
+		t.Fatalf("restore: exit %d\n%s%s", code, out, errOut)
+	}
+	if _, out, _ := run(t, "memory", "stale"); strings.Contains(out, staleID(7)+" --purge") || !strings.Contains(out, "77777777  shown 11  5d ago  backsight forget "+staleID(7)+"\n") {
+		t.Errorf("a restored fact is still listed as reported:\n%s", out)
+	}
+
+	// nothing to review: one line
+	empty := devInstall(t, true)
+	pointAt(t, empty, fakeHindsight(t))
+	if code, out, _ := run(t, "memory", "stale"); code != output.OK || out != "Nothing needs review: no memory shown often and never used, hidden for 7 days, or reported wrong or outdated.\n" {
+		t.Errorf("empty: exit %d\n%s", code, out)
+	}
+	if code, out, _ := run(t, "memory", "stale", "--json"); code != output.OK || !strings.Contains(out, `"never_used": []`) || !strings.Contains(out, `"reported": []`) {
+		t.Errorf("empty json: exit %d\n%s", code, out)
+	}
+}
+
+// memory stale writes no ledger and journals one stale event naming every
+// memory it listed; a journal it cannot write changes nothing it prints.
+func TestMemoryStaleIsReadOnlyButJournals(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	before := writeStaleLedger(t, home)
+	dir := pathsOf(home).FeedbackDir()
+	code, out, _ := run(t, "memory", "stale")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); string(after) != string(before) {
+		t.Errorf("the ledger was written:\n%s\nwas\n%s", after, before)
+	}
+	stale := eventsOf(journalEvents(t, home), "stale")
+	want := strings.Join([]string{staleID(2), staleID(1), staleID(5), staleID(9), staleID(7), staleID(8)}, ",")
+	if len(stale) != 1 || strings.Join(stale[0].IDs, ",") != want {
+		t.Fatalf("stale events %+v, want one with %s", stale, want)
+	}
+
+	// an unwritable journal: the same output, still a success
+	files, _ := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	for _, f := range files {
+		_ = os.Chmod(f, 0o400)
+		t.Cleanup(func() { _ = os.Chmod(f, 0o600) })
+	}
+	if code, again, errOut := run(t, "memory", "stale"); code != output.OK || again != out || errOut != "" {
+		t.Errorf("unwritable journal: exit %d\n%s\nstderr %q", code, again, errOut)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "stale")); n != 1 {
+		t.Errorf("%d stale events, the journal was not read-only", n)
 	}
 }

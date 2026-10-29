@@ -223,8 +223,11 @@ func statsText(r statsResult) string {
 			a.Main, a.Disagree, pct(a.Disagree, a.Main), a.Subagents, a.Moved)
 	}
 	f := r.Feedback
-	fmt.Fprintf(&b, "Credits      turns with memories shown: declared %d, after a block %d, undeclared %d, skipped %d; used %d, none %d, refused %d\n",
-		f.Checks["declared"]-f.DeclaredAfterBlock, f.DeclaredAfterBlock, f.Checks["undeclared"], f.Checks["check_skipped"], f.Verdicts["used"], f.Verdicts["none"], f.Refused)
+	fmt.Fprintf(&b, "Credits      turns with memories shown: declared %d, after a block %d, undeclared %d, skipped %d; used %d, none %d, wrong %d, outdated %d, refused %d\n",
+		f.Checks["declared"]-f.DeclaredAfterBlock, f.DeclaredAfterBlock, f.Checks["undeclared"], f.Checks["check_skipped"],
+		f.Verdicts["used"], f.Verdicts["none"], f.Verdicts["wrong"], f.Verdicts["outdated"], f.Refused)
+	fmt.Fprintf(&b, "Retirements  %d raw fact(s) invalidated on the server (%d verdict(s) the server refused halfway), %d observation(s) hidden on this machine\n",
+		f.Retired, f.Partly, f.Hidden)
 	st := f.Settled
 	fmt.Fprintf(&b, "Ledger       settled %d shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; honesty flags: %s\n",
 		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, counts(f.Flags))

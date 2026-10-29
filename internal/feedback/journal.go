@@ -40,7 +40,7 @@ type Settled struct {
 }
 
 // Event is one journal line. Kind is turn, shows, credit, stop, settle,
-// forget, retire, hide or unhide; each kind fills the fields it needs.
+// forget, retire, hide, unhide or stale; each kind fills the fields it needs.
 // Note is the correction note a retire or hide comes with (its id, never
 // its text).
 type Event struct {
@@ -77,6 +77,10 @@ const (
 	KindHide   = "hide"
 	KindUnhide = "unhide"
 )
+
+// KindStale: the memories `backsight memory stale` listed to the user.
+// The ledger does not fold it.
+const KindStale = "stale"
 
 // Common fields Append puts on every event that leaves them empty.
 type Common struct {

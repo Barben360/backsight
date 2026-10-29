@@ -470,6 +470,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	}
 	plan := d.classify(ctx, key, ids, owner)
 	if len(plan.listed) > 0 {
+		d.tw.Emit(telemetry.Retire{Action: "sources", IDs: len(plan.listed)})
 		return sourcesText(plan), nil
 	}
 	if acted := plan.acted(); done+len(acted) > limit {

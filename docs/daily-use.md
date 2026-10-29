@@ -8,7 +8,7 @@ You use Claude Code as usual. backsight works through hooks and memory tools:
 
 - **At session start**, Claude gets a short guide on using the memory, and a briefing for the current project: a page the server keeps from the project's memories (open items, recent work, rules in force).
 - **On each prompt**, backsight searches the memory with your prompt and adds the few most relevant memories to Claude's context, framed as notes to verify.
-- **Claude searches and stores** with four memory tools: `memory_search`, `memory_read`, `memory_store` and `memory_credit`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls; `memory_credit` names the memories shown to it that informed an answer, and returns the citation line it prints. A turn that showed memories and ends without that report is held once: Claude is asked to make it, then finishes.
+- **Claude searches and stores** with four memory tools: `memory_search`, `memory_read`, `memory_store` and `memory_credit`. It is told to search before factual questions, recommendations and new tasks, and to store durable decisions, corrections, conventions and pitfalls; `memory_credit` names the memories shown to it that informed an answer, and returns the citation line it prints; with the same tool, Claude reports a memory that proved wrong or outdated, which retires it ([below](#memories-claude-reports-wrong)). A turn that showed memories and ends without that report is held once: Claude is asked to make it, then finishes.
 - **Before Claude asks you a question** with its question tool, it must have searched the memory during this prompt: the first attempt is sent back once, with the memories that match the question ([details](how-it-works.md#before-claude-asks-you-a-question)).
 - **When you state a rule or approve something** ("from now on…", "we decided…", "ok"), a line asks Claude to store it if it is durable ([the save detector](how-it-works.md#the-save-detector)).
 - **When the session ends**, or once its last turn is 30 minutes old, its text is redacted and sent to your server, which extracts memories from it in the background.
@@ -139,6 +139,38 @@ backsight forget --project old-prototype --answer confirm_project=old-prototype
 
 The plan lists the project's documents and memory counts, changing nothing. The second command retires every [raw fact](glossary.md#fact) of the project; `--purge` deletes its documents and [observations](glossary.md#observation) for good instead. `--source subagent` (or `chat`, `note`) keeps to the facts of one source. See [privacy.md](privacy.md#removing-what-was-stored).
 
+## Memories Claude reports wrong
+
+When a memory shown in a session proves false or no longer true, Claude reports it with `memory_credit` (`verdict: wrong` or `outdated`), giving the right fact and what in the session shows it. backsight stores the right fact as a note and retires the wrong memory, at most 3 per session (`feedback.max_retirements`). Nothing is deleted:
+
+- a [raw fact](glossary.md#fact) is invalidated on the server: recall stops returning it;
+- for an [observation](glossary.md#observation), Claude is first shown the facts it is drawn from, then names the wrong ones, which are invalidated;
+- an observation whose facts the server cannot list is marked hidden on this machine, until the server rewrites or drops it.
+
+Claude tells you which memory it retired and why. To undo it:
+
+```sh
+backsight forget --restore <id>
+```
+
+The fact is valid again, or the observation no longer hidden, and the report no longer counts against it.
+
+## Reviewing stale memories
+
+```sh
+backsight memory stale
+```
+
+It lists the memories worth a look, from this machine's record of what was shown to Claude and what it used. Each memory appears once, in the first section that fits, with its short id, the times it was shown, when it was last shown and the command that deals with it:
+
+| Section | Lists | Command |
+|---|---|---|
+| Shown often, never used | Memories shown at least 10 times (`feedback.stale_shows`) that Claude never reported using. | `backsight forget <id>` retires one. |
+| Hidden, not rewritten for 7 days | Observations hidden after a report, which the server has not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget <id>` retires one through its facts. |
+| Reported wrong or outdated | Raw facts Claude reported, already invalidated. | `backsight forget <id> --purge` lists what deleting one for good takes; add `--yes` to delete. |
+
+`backsight forget --restore <id>` undoes a retirement. The command reads local files only and changes nothing in the memory; `--json` gives the same lists.
+
 ## Pausing memory
 
 | Command | Effect |
@@ -174,7 +206,7 @@ To import a queue setup left to `jobs tick` in one go rather than three sessions
 ## Seeing what memory does
 
 - `backsight why` shows the last memories the hooks injected, with their scores and the rule that let them through.
-- `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, extraction cost (`backsight stats 30` for 30 days).
+- `backsight stats` shows the last 7 days: recalls, searches, citations, which memories Claude reported using, wrong or outdated, what those reports retired, extraction cost (`backsight stats 30` for 30 days).
 - `backsight feedback log --id <id>` shows the timeline of one memory: each time it was shown to Claude, where and at which rank, each time Claude reported using it, and how each showing was settled (credited, a confident miss when it was near the top and unused, or unknown when the turn ended without a report), then its counts. `--session <id>` shows a whole session instead (its first 8 characters are enough).
 - `backsight doctor` checks the whole install.
 
