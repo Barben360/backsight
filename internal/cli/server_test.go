@@ -227,6 +227,7 @@ var (
 	bankCalls          []string          // "METHOD bank /rest" of every bank-scoped request
 	retainBody         string            // body of a refused retain
 	memories           map[string]string
+	memoryStatus       map[string]int // "<METHOD> <memory id>" → the status that call answers
 	projectEntities    map[string]string
 	retainedTags       []string
 	retainedContents   []string // the content of every accepted item
@@ -265,6 +266,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	retainedTags, queueAtRetain, retainedContents = nil, nil, nil
 	fakeDocCreated = map[string]time.Time{}
 	recallAnswer, recallTags, memories, projectEntities = "[]", nil, map[string]string{}, map[string]string{}
+	memoryStatus = map[string]int{}
 	recallQueries, recallSourceFacts, recallAskedSources = nil, "", 0
 	recentAnswer, listAnswer, curation = map[string]string{}, map[string]string{}, nil
 	recentByTag, tagCounts, documentUnits = map[string]string{}, map[string]int{}, map[string]int{}
@@ -326,6 +328,9 @@ func fakeHindsight(t *testing.T) (port int) {
 			bankCalls = append(bankCalls, r.Method+" "+bank+" /"+sub)
 		}
 		switch {
+		case strings.Contains(r.URL.Path, "/memories/") && memoryStatus[r.Method+" "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]] != 0:
+			w.WriteHeader(memoryStatus[r.Method+" "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]])
+			_, _ = w.Write([]byte(`{"detail":"internal error"}`))
 		case r.URL.Path == "/health":
 			_, _ = w.Write([]byte(`{"status":"healthy","database":"connected"}`))
 		case r.URL.Path == "/version" && fakeAPIVersion == "":

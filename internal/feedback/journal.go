@@ -39,8 +39,10 @@ type Settled struct {
 	Outcome string    `json:"outcome"`
 }
 
-// Event is one journal line. Kind is turn, shows, credit, stop, settle or
-// forget; each kind fills the fields it needs.
+// Event is one journal line. Kind is turn, shows, credit, stop, settle,
+// forget, retire, hide or unhide; each kind fills the fields it needs.
+// Note is the correction note a retire or hide comes with (its id, never
+// its text).
 type Event struct {
 	Schema    int                `json:"schema"`
 	Seq       int64              `json:"seq"`
@@ -64,14 +66,16 @@ type Event struct {
 	Flags     []string           `json:"flags,omitempty"`
 	Settled   []Settled          `json:"settled,omitempty"`
 	Params    map[string]float64 `json:"params,omitempty"`
+	Note      string             `json:"note,omitempty"`
 }
 
 // Kinds of the events that retire a memory shown in a session (a raw fact
 // invalidated, an observation hidden): each counts toward the session's
-// feedback.max_retirements.
+// feedback.max_retirements. Unhide undoes a retire or a hide.
 const (
 	KindRetire = "retire"
 	KindHide   = "hide"
+	KindUnhide = "unhide"
 )
 
 // Common fields Append puts on every event that leaves them empty.

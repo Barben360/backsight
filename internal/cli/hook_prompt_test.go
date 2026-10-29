@@ -625,6 +625,43 @@ func TestPostToolUseJournalsTheCredit(t *testing.T) {
 	}
 }
 
+// A wrong or outdated verdict the server carried out is a credit of the
+// turn, with its verdict and the full ids; a Sources answer or a refusal
+// is none.
+func TestVerdictCreditIsJournaled(t *testing.T) {
+	home := hookHome(t)
+	full := "0b4c2a52-0000-4000-8000-000000000001"
+	res := recall.Result{Hits: []recall.Hit{{ID: full, Text: "first", Project: "billing", Age: "2d", Score: 0.9}}}
+	fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-1", "tool_name": "mcp__plugin_backsight_memory__memory_search",
+		"tool_response": []map[string]string{{"type": "text", "text": mcpSearchText(res, true)}}})
+	credit := func(verdict, response string) {
+		fire(t, "post-tool-use", map[string]any{"session_id": "s1", "prompt_id": "p-2", "tool_name": "mcp__plugin_backsight_memory__memory_credit",
+			"tool_input":    map[string]any{"ids": []string{"0b4c2a52"}, "verdict": verdict, "correction": "Billing runs PostgreSQL 16.", "evidence": "psql printed 16.4"},
+			"tool_response": []map[string]string{{"type": "text", "text": response}}})
+	}
+	tail := "\nTell the user which memory you retired, why, and that `backsight forget --restore <id>` undoes it."
+	credit("outdated", "Sources: these observations are drawn from the facts below; only facts are retired.\nCall memory_credit again with the verdict, naming the source facts that are wrong (or all of them).")
+	credit("wrong", "retirements: at most 3 per session (feedback.max_retirements), 3 already: nothing stored")
+	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 0 {
+		t.Fatalf("no credit expected yet: %d", n)
+	}
+	credit("outdated", "Retired. Correction stored: note:11111111-0000-4000-8000-000000000001.\nInvalidated on the server: "+full+tail)
+	credit("wrong", "Partly retired. The server refused a retirement: x. Correction stored: note:11111111-0000-4000-8000-000000000002."+tail)
+	credit("wrong", "Hidden. Correction stored: note:11111111-0000-4000-8000-000000000003."+tail)
+	credits := eventsOf(journalEvents(t, home), "credit")
+	if len(credits) != 3 {
+		t.Fatalf("credits %+v", credits)
+	}
+	for i, v := range []string{"outdated", "wrong", "wrong"} {
+		if c := credits[i]; c.Verdict != v || strings.Join(c.IDs, ",") != full || c.Turn != "p-2" || c.Session != "s1" {
+			t.Errorf("credit %d: %+v", i, c)
+		}
+	}
+	if strings.Contains(fmt.Sprint(journalEvents(t, home)), "psql") {
+		t.Error("the evidence reached the journal")
+	}
+}
+
 // With feedback off nothing reaches the journal or the turn pointers; the
 // lines the agent reads keep their short ids.
 func TestFeedbackOffJournalsNothing(t *testing.T) {

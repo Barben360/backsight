@@ -308,26 +308,37 @@ func shownInSession(d paths.Dirs, sess string) []feedback.Show {
 
 // journalCredit records a memory_credit call the server accepted (its
 // answer starts with one of the credit prefixes; a refusal records
-// nothing), prefixes resolved to the full ids shown.
+// nothing), prefixes resolved to the full ids shown. A Sources answer is
+// no credit: the facts it lists are journaled as shown, for the second
+// call to name them.
 func (h *hookEnv) journalCredit(text string) {
 	if !h.feedbackOn() {
 		return
 	}
+	var in struct {
+		IDs     []string `json:"ids"`
+		Verdict string   `json:"verdict"`
+	}
+	_ = json.Unmarshal(h.in.ToolInput, &in)
 	var verdict string
 	switch {
 	case strings.HasPrefix(text, creditUsedPrefix):
 		verdict = "used"
 	case strings.HasPrefix(text, creditNonePrefix):
 		verdict = "none"
+	case strings.HasPrefix(text, creditRetiredPrefix), strings.HasPrefix(text, creditPartlyPrefix), strings.HasPrefix(text, creditHiddenPrefix):
+		if in.Verdict != "wrong" && in.Verdict != "outdated" {
+			return
+		}
+		verdict = in.Verdict
+	case strings.HasPrefix(text, creditSourcesPrefix):
+		h.journalShows("sources", sourcesShows(text))
+		return
 	default:
 		return
 	}
-	var in struct {
-		IDs []string `json:"ids"`
-	}
-	_ = json.Unmarshal(h.in.ToolInput, &in)
 	var ids []string
-	if verdict == "used" {
+	if verdict != "none" {
 		shown := shownInSession(h.dirs, h.in.SessionID)
 		for _, ref := range in.IDs {
 			if id, err := feedback.Resolve(strings.TrimSpace(ref), shown); err == nil && !slices.Contains(ids, id) {
@@ -335,8 +346,41 @@ func (h *hookEnv) journalCredit(text string) {
 			}
 		}
 		if len(ids) == 0 {
-			return // a used credit naming nothing shown credits nothing
+			return // a credit naming nothing shown credits nothing
 		}
 	}
 	h.feedbackError(h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, IDs: ids, Verdict: verdict}))
+}
+
+var (
+	// sourceLineRE: a fact line of a Sources answer, whole: its project
+	// and short id in the tag, its full id last.
+	sourceLineRE = regexp.MustCompile(`^- \[(.+?) · ([^\s\]]+)\] .* \(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)\r?$`)
+	// sourceDashRE: any line that starts like a fact line.
+	sourceDashRE = regexp.MustCompile(`(?m)^- \[`)
+)
+
+// sourcesShows reads the facts a Sources answer lists, in order, each
+// once, unranked, with its project. Only whole fact lines whose short id
+// starts their full id count, and only when every line that starts like
+// one is one: anything else journals nothing rather than a wrong show.
+func sourcesShows(text string) []feedback.Item {
+	var items []feedback.Item
+	matched := 0
+	for _, line := range strings.Split(text, "\n") {
+		l := sourceLineRE.FindStringSubmatch(line)
+		if l == nil {
+			continue
+		}
+		if matched++; !strings.HasPrefix(l[3], l[2]) {
+			return nil
+		}
+		if !slices.ContainsFunc(items, func(it feedback.Item) bool { return it.ID == l[3] }) {
+			items = append(items, feedback.Item{ID: l[3], Project: l[1]})
+		}
+	}
+	if matched != len(sourceDashRE.FindAllStringIndex(text, -1)) {
+		return nil
+	}
+	return items
 }

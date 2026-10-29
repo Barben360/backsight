@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -313,9 +314,9 @@ const (
 
 // credit is memory_credit's answer: for used, the line to print, once
 // every id resolves to one shown in this session (all or nothing); for
-// none, a note; for wrong and outdated, the correction stored (correct).
-// It journals nothing: the PostToolUse hook does, with the turn and the
-// agent only hooks receive.
+// none, a note; for wrong and outdated, the correction stored and the
+// memories retired (correct). It journals no credit: the PostToolUse hook
+// does, with the turn and the agent only hooks receive.
 func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a creditArgs) (string, error) {
 	refs := a.IDs
 	switch verdict {
@@ -366,7 +367,7 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 	}
 	owner := shownProjects(shown, live.Project)
 	if verdict == "wrong" || verdict == "outdated" {
-		return d.correct(ctx, key, live, a, ids, owner)
+		return d.correct(ctx, key, live, verdict, a, ids, owner)
 	}
 	// One line per project, in the order the ids were given.
 	var order []string
@@ -414,11 +415,14 @@ func shownProjects(shown []feedback.Show, current string) func(id string) string
 
 // correct answers a wrong or outdated verdict on ids, each shown in this
 // session: every guard first (each memory's project allowed, the
-// session's retirements under feedback.max_retirements, the correction
-// and the evidence through the note checks), then the correction stored
-// as a note naming the memories it replaces. The correction and the
-// evidence go into the note only, never the journal or telemetry.
-func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, a creditArgs, ids []string, owner func(string) string) (string, error) {
+// correction and the evidence through the note checks, the session's
+// retirements under feedback.max_retirements, counting what will be
+// retired or hidden), then the correction stored as a note naming the
+// memories it replaces, then the retirement. An observation none of whose
+// facts is named stops the call before anything is stored: its facts are
+// listed for a second call. The correction and the evidence go into the
+// note and the invalidation reason only, never the journal or telemetry.
+func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, verdict string, a creditArgs, ids []string, owner func(string) string) (string, error) {
 	cfg := d.freshPrivacy()
 	// Allowed: the session's project, the transverse pool and the projects
 	// it links (as memory_search scopes them); another project's memory is
@@ -437,32 +441,46 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, a 
 	if len(problems) > 0 {
 		return "", errors.New(strings.Join(problems, "\n"))
 	}
-	if done, limit := retirementsInSession(d.dirs, live.SessionID), cfg.Feedback.MaxRetirements; done+len(ids) > limit {
-		lines := []string{fmt.Sprintf("retirements: at most %d per session (feedback.max_retirements), %d already: nothing stored; tell the user, who can retire them from a terminal:", limit, done)}
-		for _, id := range ids {
-			lines = append(lines, "backsight forget "+id)
-		}
-		return "", errors.New(strings.Join(lines, "\n"))
-	}
 	// The note goes to the session's project, or to the pool when every
 	// memory it replaces is transverse.
 	proj := live.Project
 	if pool {
 		proj = owner(ids[0])
 	}
-	correction, evidence := strings.TrimSpace(a.Correction), strings.TrimSpace(a.Evidence)
+	correction, evidence := strings.TrimSpace(a.Correction), singleLine(a.Evidence)
 	if err := checkNote(d.dirs, d.home, cfg, live.SessionID, live.Cwd, "correction", proj, correction); err != nil {
 		return "", err
 	}
 	if _, kinds := redact.Text(evidence); len(kinds) > 0 {
 		return "", errors.New("the evidence holds a secret (" + strings.Join(kinds, ", ") + "): remove it, secrets never go to memory")
 	}
+	// Retiring writes to the server: not during maintenance (a restore
+	// would undo it silently), never to another server than the joined one.
+	if held := state.Inspect(d.dirs.MaintenanceLock()); held != nil {
+		return "", heldRefusal(held)
+	}
+	if err := otherServerRefusal(d.dirs, cfg); err != nil {
+		return "", err
+	}
+	// Every call retires at least one memory: a session at its limit is
+	// refused before the server is asked anything.
+	done, limit := retirementsInSession(d.dirs, live.SessionID), cfg.Feedback.MaxRetirements
+	if done >= limit {
+		return "", capRefusal(limit, done, ids)
+	}
+	plan := d.classify(ctx, key, ids, owner)
+	if len(plan.listed) > 0 {
+		return sourcesText(plan), nil
+	}
+	if acted := plan.acted(); done+len(acted) > limit {
+		return "", capRefusal(limit, done, acted)
+	}
 	sec, _ := key.get()
 	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence})
 	if err != nil {
 		return "", err
 	}
-	return "Correction stored: " + res.Document + ".", nil
+	return d.retire(ctx, key, live, verdict, res.Document, invalidationReason(verdict, evidence, correction, res.Document), ids, plan)
 }
 
 // retirementsInSession is how many memories session sess retired, from
