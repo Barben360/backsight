@@ -431,6 +431,37 @@ func TestVerifyLiveSendsThisPCsMachineID(t *testing.T) {
 	}
 }
 
+// verify --live only reads, locally too: on a PC without a machine id it
+// creates none, and with no id of its own no segment is another PC's.
+func TestVerifyLiveCreatesNoMachineID(t *testing.T) {
+	home := devInstall(t, true)
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	f := &liveFake{docs: map[string]hindsight.Document{}}
+	withLiveServer(t, f)
+	d := pathsOf(home)
+	idFile := filepath.Join(d.State, "machine_id")
+	p := liveSession(t, home, "s1", at.Add(-2*time.Hour))
+	fi, _ := os.Stat(p)
+	_ = retain.SaveCursor(d.CursorsDir(), "s1", retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u9", Segment: 2,
+		Document: "conversation:s1", Bank: "claude-memory", SentAt: at.Add(-90 * time.Minute)})
+	f.docs["conversation:s1"] = hindsight.Document{Metadata: map[string]string{"segment": "3", "last_uuid": "x5", "machine_id": "9b2f6c1e-0000-4000-8000-000000000000"}}
+	f.memories = []hindsight.Memory{
+		{ID: "f1", FactType: "world", DocumentID: "conversation:s1", ConsolidatedAt: "2026-10-25T10:40:00+00:00"},
+		{ID: "o1", FactType: "observation", SourceMemoryIDs: []string{"f1"}},
+	}
+	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s exists (%v)", idFile, err)
+	}
+	code, out, _ := run(t, "verify", "--live", "--json")
+	if res, _ := parseLive(t, out); code != output.Blocked || res.Status != livecheck.Fail || !strings.Contains(res.Summary, "segment 3") {
+		t.Errorf("no machine id: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(idFile); !os.IsNotExist(err) {
+		t.Errorf("verify --live created %s (%v)", idFile, err)
+	}
+}
+
 func TestVerifyLiveRefusesNoRoundTrip(t *testing.T) {
 	devInstall(t, true)
 	withLiveServer(t, &liveFake{})

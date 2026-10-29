@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -633,5 +634,24 @@ func TestLiveCheckStillFailsWhatThisPCWrote(t *testing.T) {
 				t.Errorf("%+v", r)
 			}
 		})
+	}
+}
+
+// The session's facts formed no observation but an earlier session's did:
+// the pass through that earlier session names the document another PC
+// continued too.
+func TestLiveCheckEarlierProofNamesADocumentAnotherPCContinued(t *testing.T) {
+	w := newWorld(t)
+	w.transcript("s0", now.Add(-6*time.Hour))
+	w.sent("s0", 1, now.Add(-5*time.Hour))
+	w.stored("s0", 1)
+	w.fact("s0", "f0", true)
+	w.observation("o0", now.Add(-5*time.Hour+time.Minute), "f0")
+	w.continued(map[string]string{"segment": "3", "last_uuid": "s-b5", "machine_id": "other"})
+	w.srv.memories = slices.DeleteFunc(w.srv.memories, func(m hindsight.Memory) bool { return m.ID == "o1" })
+	r := w.checkAs("this-pc")
+	want(t, r, Pass, "consolidation works; continued on another PC: conversation:s")
+	if r.Session != "s" || r.ObservedIn != "s0" || len(r.ContinuedElsewhere) != 1 || r.ContinuedElsewhere[0] != "conversation:s" {
+		t.Errorf("%+v", r)
 	}
 }

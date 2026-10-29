@@ -354,7 +354,9 @@ func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, err
 		files, _ = filepath.Glob(filepath.Join(loc.Projects, "*", "*.jsonl"))
 	}
 	in := livecheck.Input{Server: srv, Bank: cfg.Server.Bank, Transcripts: files, CursorsDir: d.CursorsDir(), Now: now()}
-	in.MachineID, _ = retain.MachineID(d.State) // an error leaves it empty: no segment counts as another PC's
+	// Read, never created (verify only reads): none leaves it empty, and
+	// then no segment counts as another PC's.
+	in.MachineID, _ = retain.ReadMachineID(d.State)
 	if st, err := state.Load(d.StateFile()); err == nil && st.RetainSince != nil {
 		in.RetainSince = *st.RetainSince
 	}

@@ -227,3 +227,31 @@ func TestOwnKeyFollowsTheRenamedBank(t *testing.T) {
 		}
 	}
 }
+
+// ReadMachineID reads the id MachineID created and creates nothing: an
+// absent or malformed file is no id, and stays as it was.
+func TestReadMachineIDCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "machine_id")
+	if id, ok := ReadMachineID(dir); ok || id != "" {
+		t.Errorf("absent: %q %v", id, ok)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("ReadMachineID created %s: %v", p, err)
+	}
+	_ = os.WriteFile(p, []byte("short\n"), 0o600)
+	if id, ok := ReadMachineID(dir); ok || id != "" {
+		t.Errorf("malformed: %q %v", id, ok)
+	}
+	if raw, _ := os.ReadFile(p); string(raw) != "short\n" {
+		t.Errorf("malformed file rewritten: %q", raw)
+	}
+	_ = os.Remove(p)
+	made, err := MachineID(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := ReadMachineID(dir); !ok || id != made {
+		t.Errorf("got %q %v, want %q", id, ok, made)
+	}
+}

@@ -35,7 +35,7 @@ type Input struct {
 	CursorsDir  string
 	RetainSince time.Time // sessions last written before it are backfill's
 	Now         time.Time
-	// MachineID is this PC's (retain.MachineID): a later segment of a
+	// MachineID is this PC's (retain.ReadMachineID): a later segment of a
 	// document sent by another machine id is that PC's continuation of
 	// the session, not a loss. Empty, no segment counts as another PC's.
 	MachineID string
