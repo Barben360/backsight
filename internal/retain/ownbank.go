@@ -113,6 +113,20 @@ func writeControlDocument(ctx context.Context, cl *hindsight.Client, bank, id, c
 	return cl.RetainNow(ctx, ControlBank(bank), []hindsight.RetainItem{{Content: content, DocumentID: id, Tags: []string{}, Metadata: meta}})
 }
 
+// DeleteControlDocument deletes document id from bank's control bank:
+// nothing to do when the bank or the document is missing; a bank that is
+// not backsight's is left alone (*ForeignBank).
+func DeleteControlDocument(ctx context.Context, cl *hindsight.Client, bank, id string) error {
+	if _, exists, err := OwnedControl(ctx, cl, bank); err != nil || !exists {
+		return err
+	}
+	err := cl.DeleteDocument(ctx, ControlBank(bank), id)
+	if apiErr := (*hindsight.APIError)(nil); errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound {
+		return nil
+	}
+	return err
+}
+
 // ControlDocuments lists the documents of bank's control bank whose id
 // starts with prefix, with their metadata: none when the control bank
 // does not exist.

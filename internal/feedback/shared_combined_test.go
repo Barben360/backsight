@@ -26,7 +26,7 @@ func TestCombinedThenDecayedEqualsCombiningLater(t *testing.T) {
 	}
 	dir := t.TempDir()
 	combinedAt := sharedNow.Add(-5 * time.Hour)
-	if err := SaveSharedCombined(dir, combinedAt, CombineRemote(docs, "pc-a", combinedAt, sharedParams)); err != nil {
+	if err := SaveSharedCombined(dir, combinedAt, CombineRemote(docs, "pc-a", combinedAt, sharedParams), BasisOf(docs, "pc-a", combinedAt, sharedParams)); err != nil {
 		t.Fatal(err)
 	}
 	c, err := LoadSharedCombined(dir, sharedNow)
@@ -74,7 +74,7 @@ func TestLoadSharedCombinedRefuses(t *testing.T) {
 		"a day ahead":     {sharedNow.Add(24 * time.Hour), true},
 		"a day and 1 s":   {sharedNow.Add(24*time.Hour + time.Second), false},
 	} {
-		if err := SaveSharedCombined(dir, c.at, r); err != nil {
+		if err := SaveSharedCombined(dir, c.at, r, CombinedBasis{}); err != nil {
 			t.Fatal(err)
 		}
 		got, err := LoadSharedCombined(dir, sharedNow)
@@ -118,7 +118,7 @@ func TestCombinedGetFindsEveryMemory(t *testing.T) {
 	for i := range 1000 {
 		r[fmt.Sprintf("%08x-0000-4000-8000-000000000000", i*7)] = SharedEntry{Credits: float64(i), CreditsAt: daysBefore(1)}
 	}
-	if err := SaveSharedCombined(dir, sharedNow, r); err != nil {
+	if err := SaveSharedCombined(dir, sharedNow, r, CombinedBasis{}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := LoadSharedCombined(dir, sharedNow)
@@ -137,7 +137,7 @@ func TestCombinedGetFindsEveryMemory(t *testing.T) {
 		}
 	}
 	if empty, err := (func() (Combined, error) {
-		_ = SaveSharedCombined(dir, sharedNow, Remote{})
+		_ = SaveSharedCombined(dir, sharedNow, Remote{}, CombinedBasis{})
 		return LoadSharedCombined(dir, sharedNow)
 	})(); err != nil || !empty.Empty() {
 		t.Errorf("empty view: %v %v", empty.Empty(), err)
@@ -157,7 +157,7 @@ func BenchmarkSharedCombinedPerHook(b *testing.B) {
 			local.Memories[id] = Entry{Shown: 3, Credits: 1, CreditsAt: daysBefore(2)}
 		}
 	}
-	if err := SaveSharedCombined(dir, sharedNow, r); err != nil {
+	if err := SaveSharedCombined(dir, sharedNow, r, CombinedBasis{}); err != nil {
 		b.Fatal(err)
 	}
 	for b.Loop() {

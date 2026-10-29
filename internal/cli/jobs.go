@@ -119,6 +119,9 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			// update apply needs to record the new binary.
 			res.Binary = ensureSelfCheck(d)
 			res.Feedback = settleFeedback(d, cfg, tw) // local only: before the server start, which can wait
+			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
+				tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+			}
 			// First: a server left down at boot makes every send below fail.
 			sctx, scancel := context.WithTimeout(cmd.Context(), serverCheckTimeout)
 			res.Server = startLateServer(sctx, d, cfg)

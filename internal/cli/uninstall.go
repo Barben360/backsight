@@ -18,6 +18,8 @@ import (
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -108,6 +110,9 @@ func shellWord(s string) string {
 
 // jobLockWait bounds the wait for a running jobs tick or jobs maintain.
 var jobLockWait = 2 * time.Minute
+
+// uninstallShareBudget bounds the delete of this machine's shared counts.
+var uninstallShareBudget = 5 * time.Second
 
 var uninstallAnswers = map[string][]string{"confirm_bank": nil, "retention": {"keep", "restore"}, "identity_saved": {"yes"},
 	"pre_images_ack": {"yes"}, "drop_queued": {"yes"}}
@@ -423,6 +428,12 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		}
 	}
 	saveRecord(func(u *setup.Undo) { u.ClientProfiles = nil })
+
+	// This machine's shared counts, with the machine id they are named
+	// after: before the server stops.
+	if f.purgeLocal {
+		add(uninstallSharedCounts(ctx, d, cfg, sec, f.plan))
+	}
 
 	// 4. The server: kept, stopped, or deleted with its data. Its images
 	// stay for a later install; how to remove them is said, read before
@@ -813,6 +824,43 @@ func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
 		removeIfEmpty(dir)
 	}
 	return foreign, nil
+}
+
+// uninstallSharedCounts deletes this machine's shared counts document
+// from the server this PC joined, for an uninstall that deletes the
+// machine id it is named after: the other machines would weigh it for 30
+// more days. Skipped when this machine never sent one, or another server
+// answers at the joined address. A server that fails or does not answer
+// within uninstallShareBudget keeps it (status kept): the uninstall goes
+// on.
+func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, plan bool) undoAction {
+	a := undoAction{Name: "shared counts"}
+	machine := retain.ReadMachineID(d.State)
+	if _, err := os.Stat(feedback.SharedUploadFile(d.FeedbackDir())); machine == "" || errors.Is(err, fs.ErrNotExist) {
+		a.Status, a.Detail = "skipped", "this machine never shared its counts"
+		return a
+	}
+	if otherServer(d, cfg) != nil {
+		a.Status, a.Detail = "skipped", "another server answers at "+cfg.Server.URL+": nothing is deleted there (the other machines ignore this machine's counts after 30 days)"
+		return a
+	}
+	id := sharedDocPrefix + machine
+	if plan {
+		a.Status, a.Detail = "planned", "this machine's counts ("+id+") deleted from the server"
+		return a
+	}
+	ctx, cancel := context.WithTimeout(ctx, uninstallShareBudget)
+	defer cancel()
+	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, uninstallShareBudget)
+	if err == nil {
+		err = retain.DeleteControlDocument(ctx, cl, cfg.Server.Bank, id)
+	}
+	if err != nil {
+		a.Status, a.Detail = "kept", "this machine's counts ("+id+") stay on the server, "+errMessage(err)+": the other machines ignore them after 30 days"
+		return a
+	}
+	a.Status, a.Detail = "done", "this machine's counts ("+id+") deleted from the server"
+	return a
 }
 
 func uninstallServer(ctx context.Context, cfg config.Config, mode string, plan bool) (undoAction, error) {
