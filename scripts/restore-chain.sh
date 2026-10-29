@@ -14,6 +14,10 @@
 rc_toml() { sed -n "s/^$1 *= *[\"']\([^\"']*\)[\"'] *\$/\1/p" "$2" | head -n 1; } # rc_toml <key> <file>: a top-level string
 rc_bank() { local b; b=$(rc_toml bank "$BACKSIGHT_HOME/config/config.toml"); echo "${b:-claude-memory}"; }
 rc_key() { rc_toml api_key "$BACKSIGHT_HOME/config/secrets.toml"; }
+# rc_auth: a curl config holding the key's header, for `curl -K <(rc_auth)`:
+# the key then never sits in a traced argv. Only in a process substitution
+# (it turns xtrace off for good in the shell it runs in).
+rc_auth() { { set +x; } 2>/dev/null; printf 'header = "Authorization: Bearer %s"\n' "$(rc_key)"; }
 
 # rc_session <sid> [project]: a settled three-record session (two hours
 # old, so the tick's 30-minute wait is over) in the scratch profile's
@@ -42,7 +46,7 @@ rc_session() {
 rc_doc() {
   local out code
   out=$(mktemp "$work/doc.XXXXXX")
-  code=$(curl -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $(rc_key)" \
+  code=$(curl -sS -o "$out" -w '%{http_code}' -K <(rc_auth) \
     "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/documents/conversation%3A$1") || code=000
   case $code in
     200) cat "$out" ;;
@@ -82,7 +86,7 @@ rc_queue_wait() {
   for _ in $(seq 1 100); do
     n=0
     for status in pending processing; do
-      total=$(curl -fsS -H "Authorization: Bearer $(rc_key)" \
+      total=$(curl -fsS -K <(rc_auth) \
         "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/operations?status=$status&limit=1" | jq -er '.total') ||
         fail "cannot read the bank's $status operations"
       n=$((n + total))

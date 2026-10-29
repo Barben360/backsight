@@ -113,3 +113,72 @@ func mustAbs(t *testing.T, p string) string {
 	}
 	return a
 }
+
+func TestProofLibUntracedLeavesTraceOffForAnUntracedCaller(t *testing.T) {
+	stderr, code := proofLib(t, "", `pl_untraced true; case $- in *x*) echo "x is on" >&2; exit 3 ;; esac`)
+	if code != 0 {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+func TestProofLibSecretLeavesTraceOffForAnUntracedCaller(t *testing.T) {
+	stderr, code := proofLib(t, "", `emit() { printf s; }; pl_secret k emit; case $- in *x*) exit 3 ;; esac`)
+	if code != 0 {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+func TestProofLibNonemptyAndDifferTakeNamesAndNeverTraceValues(t *testing.T) {
+	const pre = `emit1() { printf s3cr3t-one; }; emit2() { printf s3cr3t-two; }; pl_secret a emit1; pl_secret b emit2; `
+	stderr, code := proofLib(t, "-x", pre+`pl_nonempty a && pl_differ a b && echo ok`)
+	if code != 0 || !strings.Contains(stderr, "+ echo ok") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+	if strings.Contains(stderr, "s3cr3t") {
+		t.Errorf("a value was traced:\n%s", stderr)
+	}
+	// The refusals: empty, unset, equal.
+	for name, script := range map[string]string{
+		"empty": `e=; pl_nonempty e`,
+		"unset": `pl_nonempty nope`,
+		"equal": pre + `pl_secret c emit1; pl_differ a c`,
+	} {
+		if stderr, code := proofLib(t, "-x", script); code != 1 || strings.Contains(stderr, "s3cr3t") {
+			t.Errorf("%s: exit %d (want 1), stderr:\n%s", name, code, stderr)
+		}
+	}
+	// Trace resumes afterwards.
+	stderr, _ = proofLib(t, "-x", pre+`pl_nonempty a; pl_differ a b; echo after`)
+	if !strings.Contains(stderr, "+ echo after") {
+		t.Errorf("trace did not resume:\n%s", stderr)
+	}
+}
+
+func TestRestoreChainAuthConfigIsNeverTraced(t *testing.T) {
+	root, _ := filepath.Abs("..")
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config", "secrets.toml"), []byte("api_key = \"s3cr3t-key\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := t.TempDir()
+	// A curl that reads its -K config like the real one and shows the header on stdout.
+	if err := os.WriteFile(filepath.Join(fake, "curl"), []byte("#!/bin/sh\ncat \"$2\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-x", "-c", `. "$1/scripts/restore-chain.sh"; curl -K <(rc_auth); echo after`, "rc", root)
+	cmd.Env = append(os.Environ(), "BACKSIGHT_HOME="+home, "PATH="+fake+":"+os.Getenv("PATH"))
+	var o, e bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &o, &e
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.String())
+	}
+	if !strings.Contains(o.String(), "Authorization: Bearer s3cr3t-key") {
+		t.Errorf("curl did not get the header:\n%s", o.String())
+	}
+	if strings.Contains(e.String(), "s3cr3t-key") || !strings.Contains(e.String(), "+ echo after") {
+		t.Errorf("stderr:\n%s", e.String())
+	}
+}

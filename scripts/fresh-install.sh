@@ -193,7 +193,7 @@ jq -e --arg d "conversation:$purged" '([.data.purged_after_archive[]?.document] 
 
 rc_restore_resends "$archive" restore-proof-lost restore-proof-kept restore-proof-live
 # The restored control bank got the purge back, and the ticks sent nothing of it.
-curl -fsS -H "Authorization: Bearer $(rc_key)" "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)-control/documents/backsight%3Atombstones" |
+curl -fsS -K <(rc_auth) "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)-control/documents/backsight%3Atombstones" |
   jq -e --arg d "conversation:$purged" '.document_metadata.tombstones | fromjson | map(.document) | index($d) != null' >/dev/null ||
   fail "the restored control bank lacks the purge of $purged"
 [ -z "$(rc_meta "$purged")" ] || fail "the purged session $purged was sent again after the restore"
@@ -251,12 +251,12 @@ else
   [ -s "$work/token2" ] && [ -s "$work/token2b" ] || fail "server token wrote no token file"
   # The key stays in these variables: never echoed, never traced.
   pl_secret old_key rc_key
-  [ -n "$old_key" ] || fail "no api_key in the isolated secrets.toml"
+  pl_nonempty old_key || fail "no api_key in the isolated secrets.toml"
   [ "$(banks_status old_key)" = 200 ] || fail "the banks list refuses the current key before the rotation"
   "$sv" server token --rotate --json --out "$work/token3" > "$work/token3.json" || { show "$work/token3.json"; fail "server token --rotate failed"; }
   [ -s "$work/token3" ] || fail "server token --rotate wrote no token file"
   pl_secret new_key rc_key
-  [ -n "$new_key" ] && [ "$new_key" != "$old_key" ] || fail "the rotation left the same api_key in secrets.toml"
+  pl_nonempty new_key && pl_differ new_key old_key || fail "the rotation left the same api_key in secrets.toml"
   [ "$(banks_status old_key)" = 401 ] || fail "the old key still works after the rotation (want 401)"
   [ "$(banks_status new_key)" = 200 ] || fail "the new key is refused after the rotation (want 200)"
   [ "$(jq -r '.data.server_id' "$work/token3.json")" = "$sid" ] || fail "the rotation changed the server id"
@@ -266,7 +266,7 @@ else
   # rotated token. scheduler=off: no entry named like the user's own install.
   # Its key stays in its secrets.toml, never printed.
   bank_docs_raw() { # the key is read here, inside the untraced call
-    curl -fsS --max-time 10 -H "Authorization: Bearer $(rc_key)" "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/stats" | jq -er '.total_documents'
+    curl -fsS --max-time 10 -K <(rc_auth) "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/stats" | jq -er '.total_documents'
   }
   bank_docs() { pl_untraced bank_docs_raw; } # the host bank's document count
   c2() { HOME=$work/home2 BACKSIGHT_HOME=$work/backsight2 "$@"; }
