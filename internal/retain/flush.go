@@ -103,6 +103,11 @@ type Flusher struct {
 	// applied one, and decides rebuilt reports' projects as SubagentStop
 	// does (decision 0072); a zero Dir records nothing.
 	Attribution Attributor
+	// replaceReads counts the documents this run read to confirm a
+	// replacing part (maxReplaceReads); queue is the bank's queue as this
+	// run first read it (checkReplaces). A Flusher is one run.
+	replaceReads int
+	queue        *queuedRetains
 }
 
 // Options change the timing rules for explicit flushes.
@@ -176,6 +181,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	// Under the session's lock, whatever the flush did: the path rule's
 	// shadow answers are local and never wait for the server.
 	defer func() { res.Turns = f.recordTurns(sid, path, opt.Force) }()
+	if r, done := f.checkReplaces(ctx, res, sid, path); done {
+		return r
+	}
 	return f.flushLocked(ctx, res, sid, path, opt, false)
 }
 
@@ -258,7 +266,13 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 		if haveCursor && cur.Segments != nil {
 			home = cur.Home
 		}
-		cur = Cursor{Transcript: path, Bank: f.Bank, Home: home, Segments: map[string]int{}, LastUUIDs: map[string]string{}}
+		// The replacing parts still to confirm are this PC's sends, which
+		// the server's documents may have lost (checkReplaces).
+		var replaces map[string]PendingReplace
+		if haveCursor && state.SameBank(cur.Bank, f.Bank) {
+			replaces = cur.Replaces
+		}
+		cur = Cursor{Transcript: path, Bank: f.Bank, Home: home, Segments: map[string]int{}, LastUUIDs: map[string]string{}, Replaces: replaces}
 		if len(recs) == 0 {
 			return fail(Nothing, "")
 		}
@@ -632,15 +646,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	if cur.Segments[project] > 0 && cur.docOf(sid, project) != doc {
 		segNo = 1 // the segments counted were of a purged document
 	}
-	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
-	if cur.Generation > 0 {
-		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
-	}
-	if doc == cur.Document && cur.Legacy != "" {
-		// carried forward: a later resync still knows that this document
-		// holds every project's records up to there
-		seg.Item.Metadata["legacy_last_uuid"] = cur.Legacy
-	}
+	seg := f.segment(cur, sid, doc, run, segNo, project)
 	if err := f.Client.Retain(ctx, f.Bank, []hindsight.RetainItem{seg.Item}, seg.OperationID); err != nil {
 		res.FailedDocument = doc
 		if refusesDocument(err) {
@@ -663,6 +669,7 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	cur.SentAt = now
 	cur.Segments[project], cur.LastUUIDs[project] = segNo, last.UUID
 	cur.setDoc(sid, project, doc)
+	f.noteSent(&cur, project, doc, segNo, run[0].UUID, last.UUID, now)
 	cur.Records += len(run)
 	res.Records += len(run)
 	if !slices.Contains(res.Documents, doc) {
@@ -670,6 +677,21 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	}
 	res.Segment, res.Chars, res.Project = segNo, res.Chars+seg.Chars, project
 	return res, cur, Sent, detail, false
+}
+
+// segment builds segment segNo of project's document doc from run, its
+// operation id salted by the cursor's generation.
+func (f *Flusher) segment(cur Cursor, sid, doc string, run []transcript.Record, segNo int, project string) Segment {
+	seg := BuildSegment(f.Bank, sid, doc, run, segNo, project, f.MachineID, f.Version)
+	if cur.Generation > 0 {
+		seg.OperationID = uuid5(nsBacksight, seg.OperationID+"\n"+strconv.Itoa(cur.Generation))
+	}
+	if doc == cur.Document && cur.Legacy != "" {
+		// carried forward: a later resync still knows that this document
+		// holds every project's records up to there
+		seg.Item.Metadata["legacy_last_uuid"] = cur.Legacy
+	}
+	return seg
 }
 
 // checkpoint saves the cursor between two segments: a crash later in the

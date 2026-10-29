@@ -61,6 +61,7 @@ type fakeHS struct {
 	failDelete   map[string]bool     // deletes of these documents answer 503
 	deleteStatus int                 // non-zero: document deletes answer with it
 	failGet      map[string]bool     // reads of these documents answer 500
+	noText       bool                // reads answer no original_text
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +181,12 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		raw, _ := json.Marshal(map[string]any{"id": id, "document_metadata": meta, "tags": h.tags[id]})
+		// original_text: every segment's content, appended ones too.
+		answer := map[string]any{"id": id, "document_metadata": meta, "tags": h.tags[id], "original_text": h.content[id]}
+		if h.noText {
+			delete(answer, "original_text")
+		}
+		raw, _ := json.Marshal(answer)
 		_, _ = w.Write(raw)
 	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/documents/") && h.failDelete[docOf(r)]:
 		w.WriteHeader(http.StatusServiceUnavailable)

@@ -212,6 +212,11 @@ type Cursor struct {
 	// the server applies this PC's later segments, it still reads there:
 	// this PC's own lag, not another PC's move (movedElsewhere).
 	SplitBases map[string]SplitBase `json:"split_bases,omitempty"`
+	// Replaces: by project, the part this PC sent that replaces its
+	// document (its segment 1), until the server is seen to hold this PC's
+	// records there. Another PC's segment 1 applied after it would replace
+	// them: the tick then sends them again (checkReplaces).
+	Replaces map[string]PendingReplace `json:"replaces,omitempty"`
 }
 
 // SplitBase is a document's position on the server: its segment and the

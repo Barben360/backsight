@@ -11,10 +11,10 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 )
 
-// otherPC is a second PC sending to e's server under machineID: its own
-// state, sent index and transcripts, with e's directories and project
+// otherPC is a second PC sending to e's server under machine id m2: its
+// own state, sent index and transcripts, with e's directories and project
 // rule, as a transcript copied between two PCs keeps its paths.
-func (e *env) otherPC(machineID string) *env {
+func (e *env) otherPC() *env {
 	e.t.Helper()
 	root := e.t.TempDir()
 	d := paths.Dirs{State: filepath.Join(root, "state")}
@@ -26,19 +26,19 @@ func (e *env) otherPC(machineID string) *env {
 	if err := os.MkdirAll(o.dir, 0o700); err != nil {
 		e.t.Fatal(err)
 	}
-	o.f = &Flusher{Client: e.f.Client, Bank: e.f.Bank, Dirs: d, Resolver: e.f.Resolver, MachineID: machineID, Version: "test",
+	o.f = &Flusher{Client: e.f.Client, Bank: e.f.Bank, Dirs: d, Resolver: e.f.Resolver, MachineID: "m2", Version: "test",
 		Now: func() time.Time { return o.clock }, Index: idx}
 	return o
 }
 
-// copyTo copies session sid's transcript from e to o.
-func (e *env) copyTo(o *env, sid string) {
+// copyTo copies session sp1's transcript from e to o.
+func (e *env) copyTo(o *env) {
 	e.t.Helper()
-	raw, err := os.ReadFile(filepath.Join(e.dir, sid+".jsonl"))
+	raw, err := os.ReadFile(filepath.Join(e.dir, "sp1.jsonl"))
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(o.dir, sid+".jsonl"), raw, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(o.dir, "sp1.jsonl"), raw, 0o600); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -83,8 +83,8 @@ func continuedOnTwoPCs(t *testing.T) (a, b *env) {
 	a.f.MachineID = "m1"
 	a.turns(0, "r1", "r2", "r3")
 	expect(t, a.flush("sp1", Options{}), Sent, 3, 1)
-	b = a.otherPC("m2")
-	a.copyTo(b, "sp1")
+	b = a.otherPC()
+	a.copyTo(b)
 	expect(t, b.flush("sp1", Options{}), Nothing, 0, 0)
 	if c := b.sp1Cursor(); c.Segments[c.Home] != 1 || c.LastUUIDs[c.Home] != "r3" {
 		t.Fatalf("B's cursor after the copy: %+v", c)
@@ -238,8 +238,8 @@ func TestAFirstSegmentOfADocumentAnotherPCStartedFollowsIt(t *testing.T) {
 	beta := a.repo("beta")
 	a.turns(0, "r1")
 	expect(t, a.flush("sp1", Options{}), Sent, 1, 1)
-	b := a.otherPC("m2")
-	a.copyTo(b, "sp1")
+	b := a.otherPC()
+	a.copyTo(b)
 	expect(t, b.flush("sp1", Options{}), Nothing, 0, 0)
 	a.recordIn(beta, "sp1", "a2", "user", 1, "turn a2")
 	expect(t, a.flush("sp1", Options{}), Sent, 1, 1)
