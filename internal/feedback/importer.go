@@ -16,8 +16,13 @@ import (
 // KindImport: shows and credits found in earlier history (telemetry and
 // retained transcripts), each with its show's time, journaled through
 // AppendFolded. Folded like a settle's shown and credit outcomes, and
-// counted apart in Entry.Imported; never a miss.
-const KindImport = "import"
+// counted apart in Entry.Imported; never a miss. An import event with
+// Outcome ImportComplete and no items marks an import run that went
+// through every source: the ledger's HistoryImported.
+const (
+	KindImport     = "import"
+	ImportComplete = "complete"
+)
 
 // ImportShow is one memory a turn of earlier history showed: Ref is what
 // names it in its session (a transcript record's uuid, or a telemetry
@@ -77,10 +82,11 @@ func ImportEvent(source, session string, shows []ImportShow, p Params) Event {
 	return e
 }
 
-// DropImports is events without their import events: the journal as if
-// nothing had been imported.
+// DropImports is events without the shows of their import events: the
+// journal as if nothing had been imported. The marks of complete imports
+// stay, so that nothing imports the same history again.
 func DropImports(events []Event) []Event {
-	return slices.DeleteFunc(slices.Clone(events), func(e Event) bool { return e.Kind == KindImport })
+	return slices.DeleteFunc(slices.Clone(events), func(e Event) bool { return e.Kind == KindImport && e.Outcome != ImportComplete })
 }
 
 // importHitRE: a memory_search hit line of any version: its metadata in
@@ -214,10 +220,12 @@ const maxTranscriptLine = 16 << 20
 // TranscriptTurns is the turns of a Claude Code transcript's main thread:
 // each prompt (a user record with text) begins one; the hits of each
 // memory_search result in it are its shows (path search), keyed by the
-// record that holds the result, at its time; cited tells whether the
-// assistant's text in the turn cites memory. Sidechain, meta and
-// compaction records are skipped, and lines that do not parse.
-func TranscriptTurns(r io.Reader, cited func(reply string) bool) ([]ImportTurn, error) {
+// record that holds the result, at its time. Never cited: a transcript
+// does not name the memories injected with the prompt, so a turn that
+// seems to show one memory may have shown more, and its credit would be
+// a guess. Sidechain, meta and compaction records are skipped, and lines
+// that do not parse.
+func TranscriptTurns(r io.Reader) ([]ImportTurn, error) {
 	type block struct {
 		Type      string          `json:"type"`
 		ID        string          `json:"id"`
@@ -228,14 +236,11 @@ func TranscriptTurns(r io.Reader, cited func(reply string) bool) ([]ImportTurn, 
 	}
 	var out []ImportTurn
 	var cur *ImportTurn
-	var reply strings.Builder
 	end := func() {
 		if cur != nil && len(cur.Shows) > 0 {
-			cur.Cited = cited(reply.String())
 			out = append(out, *cur)
 		}
 		cur = nil
-		reply.Reset()
 	}
 	searches := map[string]bool{} // memory_search tool_use ids
 	br := bufio.NewReaderSize(r, 1<<16)
@@ -258,12 +263,8 @@ func TranscriptTurns(r io.Reader, cited func(reply string) bool) ([]ImportTurn, 
 				}
 				switch rec.Type {
 				case "assistant":
-					reply.WriteString(text)
 					for _, b := range blocks {
-						switch {
-						case b.Type == "text":
-							reply.WriteString("\n" + b.Text)
-						case b.Type == "tool_use" && strings.HasSuffix(b.Name, "memory_search"):
+						if b.Type == "tool_use" && strings.HasSuffix(b.Name, "memory_search") {
 							searches[b.ID] = true
 						}
 					}

@@ -2,11 +2,14 @@ package feedback
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/state"
 )
 
 const (
@@ -85,7 +88,7 @@ func TestImportRanksOldSearchOutputs(t *testing.T) {
 		transcriptLine(t, "assistant", "a1", at.Add(time.Second), toolUse("t1"), nil) +
 		transcriptLine(t, "user", "r1", at.Add(2*time.Second), toolResult("t1", old), nil) +
 		transcriptLine(t, "assistant", "a2", at.Add(3*time.Second), textBlocks("It stays on PostgreSQL."), nil)
-	turns, err := TranscriptTurns(strings.NewReader(tr), func(string) bool { return false })
+	turns, err := TranscriptTurns(strings.NewReader(tr))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,8 +180,8 @@ func TestImportCreditsOnlyUnambiguousTurns(t *testing.T) {
 		t.Errorf("an imported miss or unknown counted: %+v", l.Memories)
 	}
 
-	// A transcript turn: one memory shown and a citation in the reply.
-	cites := func(reply string) bool { return strings.Contains(reply, "(memory") }
+	// A transcript turn shows only, even with one memory shown and a
+	// citation: the memories injected with its prompt are not named there.
 	one := "[billing]\n- #1 the fact (2026-10-20, 3d ago, " + impA + ", 0.90)\n"
 	two := "[billing]\n- #1 the fact (2026-10-20, 3d ago, " + impA + ", 0.90)\n- #2 another (2026-10-20, 3d ago, " + impB + ", 0.80)\n"
 	tr := transcriptLine(t, "user", "u1", impStart, "first question", nil) +
@@ -190,7 +193,7 @@ func TestImportCreditsOnlyUnambiguousTurns(t *testing.T) {
 		transcriptLine(t, "user", "r2", impStart.Add(62*time.Second), toolResult("t2", two), nil) +
 		transcriptLine(t, "assistant", "a4", impStart.Add(63*time.Second), textBlocks("Both apply (memory 0a000000)."), nil) +
 		transcriptLine(t, "assistant", "side", impStart.Add(64*time.Second), toolUse("t3"), map[string]any{"isSidechain": true})
-	trTurns, err := TranscriptTurns(strings.NewReader(tr), cites)
+	trTurns, err := TranscriptTurns(strings.NewReader(tr))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +203,7 @@ func TestImportCreditsOnlyUnambiguousTurns(t *testing.T) {
 			got = append(got, s.Ref+" "+s.ID[:2]+map[bool]string{true: " credit", false: ""}[s.Credit])
 		}
 	}
-	if strings.Join(got, ", ") != "r1 0a credit, r2 0a, r2 0b" {
+	if strings.Join(got, ", ") != "r1 0a, r2 0a, r2 0b" {
 		t.Errorf("transcript shows %q", got)
 	}
 }
@@ -240,12 +243,20 @@ func TestImportFoldsApartAndOnce(t *testing.T) {
 		t.Errorf("m1 credits %v at the live credit's time, want %v", got, want)
 	}
 
+	// The mark of a complete import: in Current, and kept without imports.
+	if err := j.AppendFolded(Event{Kind: KindImport, Outcome: ImportComplete}); err != nil {
+		t.Fatal(err)
+	}
+	if cur, _ := Current(dir); !cur.HistoryImported.Equal(at(110).Add(time.Nanosecond)) && !cur.HistoryImported.Equal(at(110)) {
+		t.Errorf("history imported %v", cur.HistoryImported)
+	}
+	all, _, _ = Read(dir, time.Time{})
 	without, err := Rebuild(dir, testParams, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertSameEntries(t, without, Fold(DropImports(all), testParams), 0)
-	if _, ok := without.Memories["m9"]; ok || without.Memories["m1"].Imported.Shown != 0 {
+	if _, ok := without.Memories["m9"]; ok || without.Memories["m1"].Imported.Shown != 0 || without.HistoryImported.IsZero() {
 		t.Errorf("rebuild without imports: %+v", without.Memories)
 	}
 
@@ -290,28 +301,30 @@ func TestSettleAfterARebuildAppliesNothingTwice(t *testing.T) {
 	}
 }
 
-// Current reads the journal from journal_at: a folded event appended
-// while a settle runs (after its read, before its ledger write) is found,
-// and Current equals the fold.
+// Current reads the journal from journal_at: a folded event journaled
+// while a settle holds the lock (after its read, before its ledger write:
+// AppendFolded gave up waiting) is found, and Current equals the fold.
+// A settle that recorded where the journal ended after its read would
+// skip it.
 func TestCurrentFindsAFoldedEventAppendedDuringASettle(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, sampleSession()...)
-	done := make(chan error, 1)
+	old := foldedLockWait
+	foldedLockWait = time.Millisecond
+	t.Cleanup(func() { foldedLockWait, afterSettleRead = old, nil })
+	var appendErr error
 	afterSettleRead = func() {
-		go func() {
-			j := NewJournal(dir, Common{})
-			j.now = func() time.Time { return at(105) }
-			done <- j.AppendFolded(Event{Kind: KindHide, IDs: []string{"m2"}, Verdict: "wrong"})
-		}()
-		time.Sleep(100 * time.Millisecond) // the append runs now, unless it waits for the lock
+		j := NewJournal(dir, Common{})
+		j.now = func() time.Time { return at(105) }
+		appendErr = j.AppendFolded(Event{Kind: KindHide, IDs: []string{"m2"}, Verdict: "wrong"})
 	}
-	t.Cleanup(func() { afterSettleRead = nil })
 	if _, err := Settle(dir, testParams, at(100)); err != nil {
 		t.Fatal(err)
 	}
 	afterSettleRead = nil
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	var held *state.HeldError
+	if !errors.As(appendErr, &held) {
+		t.Fatalf("the append did not run under the settle's lock: %v", appendErr)
 	}
 	cur, err := Current(dir)
 	if err != nil {

@@ -25,7 +25,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
-	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/migrate"
@@ -662,7 +661,6 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 	if why := serverStepSkipped(a.d, a.cfg); why != "" {
 		add("server", "skipped", why)
 		a.planDocs()
-		a.planHistory()
 		return nil
 	}
 	senv, err := runChild(ctx, staged, a.fl.serverUpgrade("--plan")...)
@@ -677,7 +675,6 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 		add("server", "planned", "the new binary pins "+sp.Target+", which the server runs already")
 	}
 	a.planDocs()
-	a.planHistory()
 	return nil
 }
 
@@ -802,11 +799,9 @@ func (a *applyRun) steps(ctx context.Context) error {
 		_ = state.WriteUpdateMarker(a.d, a.marker)
 
 		// 7. The new binary's bank template and docs (M5 review rules,
-		// decision 0069), then its import of earlier history, once:
-		// warnings, never a rollback.
+		// decision 0069): warnings, never a rollback.
 		a.bank(ctx)
 		a.docs(ctx)
-		a.history(ctx)
 	}
 
 	// 8. Recorded: the shim's target and the one to roll back to.
@@ -850,68 +845,6 @@ func (a *applyRun) docs(ctx context.Context) {
 		var r guide.IndexResult
 		_ = json.Unmarshal(env.Data, &r)
 		a.add("docs", "done", fmt.Sprintf("%d section(s) in bank %s: %d sent, %d unchanged", r.Sections, r.Bank, r.Sent, r.Unchanged+r.Retagged))
-	}
-}
-
-// importStepWait bounds the new binary's feedback import: local files,
-// and its own importCheckBudget of server checks.
-var importStepWait = 2 * time.Minute
-
-// historySkipped says why the new binary's feedback import does not run:
-// no config, feedback off, or earlier history imported already (the
-// journal holds an import event).
-func (a *applyRun) historySkipped() string {
-	switch {
-	case !a.configured():
-		return "no server configured on this machine"
-	case !a.cfg.Feedback.Enabled:
-		return "feedback is off on this machine"
-	case importedBefore(a.d.FeedbackDir()):
-		return "earlier history imported already"
-	}
-	return ""
-}
-
-// importedBefore: dir's journal holds an import event.
-func importedBefore(dir string) bool {
-	events, _, err := feedback.Read(dir, time.Time{})
-	return err == nil && slices.ContainsFunc(events, func(e feedback.Event) bool { return e.Kind == feedback.KindImport })
-}
-
-func (a *applyRun) planHistory() {
-	if why := a.historySkipped(); why != "" {
-		a.add("history", "skipped", why)
-		return
-	}
-	a.add("history", "planned", "would run the new binary's feedback import once: the memories shown and the unambiguous credits of earlier history (local files; ids checked read-only)")
-}
-
-// history runs the new binary's feedback import, once: while the journal
-// holds no import event. A failure is a warning, never a rollback:
-// backsight feedback import runs it again.
-func (a *applyRun) history(ctx context.Context) {
-	if why := a.historySkipped(); why != "" {
-		a.add("history", "skipped", why)
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, importStepWait)
-	defer cancel()
-	env, err := runChild(ctx, a.target, "feedback", "import")
-	var ce *childError
-	switch {
-	case errors.As(err, &ce) && ce.code == output.Usage:
-		a.add("history", "skipped", "the new binary has no feedback import")
-	case err != nil:
-		a.res.Warnings = append(a.res.Warnings, "earlier history was not imported ("+err.Error()+"): run backsight feedback import")
-		a.add("history", "failed", err.Error())
-	default:
-		var r importResult
-		_ = json.Unmarshal(env.Data, &r)
-		shows, credits := 0, 0
-		for _, s := range r.Sources {
-			shows, credits = shows+s.Shows, credits+s.Credits
-		}
-		a.add("history", "done", fmt.Sprintf("%d shows and %d credits from earlier history (never a miss)", shows, credits))
 	}
 }
 

@@ -53,12 +53,15 @@ type Hidden struct {
 
 // Ledger is a cache of the journal's settle, import, forget, retire, hide
 // and unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
-// JournalAt where the journal ended when it was read for this ledger.
+// JournalAt where the journal ended when it was read for this ledger,
+// HistoryImported when an import of earlier history last went through
+// every source (zero: never).
 type Ledger struct {
-	Schema    int              `json:"schema"`
-	Watermark time.Time        `json:"watermark,omitzero"`
-	JournalAt JournalPos       `json:"journal_at,omitzero"`
-	Memories  map[string]Entry `json:"memories"`
+	Schema          int              `json:"schema"`
+	Watermark       time.Time        `json:"watermark,omitzero"`
+	JournalAt       JournalPos       `json:"journal_at,omitzero"`
+	HistoryImported time.Time        `json:"history_imported,omitzero"`
+	Memories        map[string]Entry `json:"memories"`
 }
 
 // JournalPos is a place in dir's journal: a month file's base name and a
@@ -108,6 +111,9 @@ func (l *Ledger) Apply(e Event, p Params) {
 			}
 		}
 	case KindImport:
+		if e.Outcome == ImportComplete {
+			l.HistoryImported = laterOf(l.HistoryImported, e.TS)
+		}
 		p = p.recorded(e.Params)
 		for _, s := range e.Settled {
 			if s.Outcome != OutcomeShown && s.Outcome != OutcomeCredit {

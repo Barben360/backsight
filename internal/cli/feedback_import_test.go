@@ -146,6 +146,7 @@ type importEnvelope struct {
 		Unchecked int    `json:"ids_unchecked"`
 		Why       string `json:"unchecked_reason"`
 		Events    int    `json:"events"`
+		Complete  bool   `json:"complete"`
 	} `json:"data"`
 }
 
@@ -159,7 +160,8 @@ func runImport(t *testing.T, args ...string) importEnvelope {
 	return env
 }
 
-// importEvents is the import events of home's journal.
+// importEvents is the import events of home's journal with shows (not
+// the marks of a complete import).
 func importEvents(t *testing.T, home string) []feedback.Event {
 	t.Helper()
 	events, _, err := feedback.Read(pathsOf(home).FeedbackDir(), time.Time{})
@@ -168,7 +170,7 @@ func importEvents(t *testing.T, home string) []feedback.Event {
 	}
 	var out []feedback.Event
 	for _, e := range events {
-		if e.Kind == feedback.KindImport {
+		if e.Kind == feedback.KindImport && e.Outcome != feedback.ImportComplete {
 			out = append(out, e)
 		}
 	}
@@ -185,7 +187,7 @@ func TestImportPlanWritesNothing(t *testing.T) {
 
 	env := runImport(t, "--plan")
 	tel, tr := env.Data.Sources["telemetry"], env.Data.Sources["transcripts"]
-	if !env.Data.Plan || tel.Sessions != 1 || tel.Shows != 4 || tel.Credits != 1 || tr.Sessions != 1 || tr.Shows != 1 || tr.Credits != 1 || env.Data.Unchecked != 0 {
+	if !env.Data.Plan || tel.Sessions != 1 || tel.Shows != 4 || tel.Credits != 1 || tr.Sessions != 1 || tr.Shows != 1 || tr.Credits != 0 || env.Data.Unchecked != 0 || env.Data.Complete {
 		t.Errorf("plan %+v", env.Data)
 	}
 	if after := filesUnder(t, filepath.Join(home, "backsight")); len(after) != len(before) {
@@ -229,7 +231,7 @@ func TestImportIsIdempotentAndSeparable(t *testing.T) {
 	live, _ := feedback.LoadLedger(dir)
 
 	first := runImport(t)
-	if first.Data.Events == 0 || first.Data.Sources["telemetry"].Shows != 5 || first.Data.Sources["transcripts"].Shows != 1 {
+	if first.Data.Events == 0 || !first.Data.Complete || first.Data.Sources["telemetry"].Shows != 5 || first.Data.Sources["transcripts"].Shows != 1 {
 		t.Fatalf("first run %+v", first.Data)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); string(raw) != string(ledgerBefore) {
@@ -268,7 +270,8 @@ func TestImportIsIdempotentAndSeparable(t *testing.T) {
 	if a := cur.Memories[histA]; a.Shown != 2 || a.Credits != 1 || a.Imported.Credits != 1 || a.Misses != 0 {
 		t.Errorf("A %+v", a)
 	}
-	if d := cur.Memories[histD]; d.Credits != 1 || !d.LastShown.Equal(histStart.Add(22*time.Minute)) {
+	// A transcript-only session: shows, never a credit.
+	if d := cur.Memories[histD]; d.Shown != 1 || d.Credits != 0 || !d.LastShown.Equal(histStart.Add(22*time.Minute)) {
 		t.Errorf("D %+v", d)
 	}
 
@@ -332,6 +335,17 @@ func TestImportDropsUnknownIDs(t *testing.T) {
 	if _, out, _ := run(t, "feedback", "import", "--plan"); !strings.Contains(out, "4 memory ids not checked") || !strings.Contains(out, "kept") {
 		t.Errorf("text:\n%s", out)
 	}
+
+	// Another server answers at the joined address: it holds none of these
+	// memories, so it is not asked and nothing is dropped.
+	third := devInstall(t, false)
+	fakeMemoryServer(t, third, map[string]int{histA: http.StatusNotFound, histB: http.StatusNotFound, histC: http.StatusNotFound, histD: http.StatusNotFound})
+	recordMismatch(t, third)
+	history(t, third)
+	mm := runImport(t, "--plan")
+	if mm.Data.Sources["telemetry"].Dropped != 0 || mm.Data.Sources["transcripts"].Dropped != 0 || mm.Data.Unchecked != 4 {
+		t.Errorf("another server %+v", mm.Data)
+	}
 }
 
 // The cheap pass over a transcript finds the word across two reads.
@@ -346,5 +360,98 @@ func TestContainsWordAcrossReads(t *testing.T) {
 	}
 	if containsWord(strings.NewReader(pad+"memory_searc"), word) {
 		t.Error("found a word that is not there")
+	}
+}
+
+// importMarks counts the marks of a complete import in home's journal.
+func importMarks(t *testing.T, home string) int {
+	t.Helper()
+	events, _, _ := feedback.Read(pathsOf(home).FeedbackDir(), time.Time{})
+	n := 0
+	for _, e := range events {
+		if e.Kind == feedback.KindImport && e.Outcome == feedback.ImportComplete {
+			n++
+		}
+	}
+	return n
+}
+
+func tickOf(t *testing.T) tickResult {
+	t.Helper()
+	_, out, errOut := run(t, "jobs", "tick", "--json")
+	var env struct {
+		Data tickResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("not an envelope: %s %s", out, errOut)
+	}
+	return env.Data
+}
+
+// After the upgrade, the tick imports earlier history, marks it complete,
+// and leaves it alone from then on.
+func TestTickImportsEarlierHistoryOnce(t *testing.T) {
+	home := devInstall(t, true) // the server down: ids kept, unchecked
+	history(t, home)
+	if r := tickOf(t); r.History != "earlier history imported: 5 shows and 1 credits" {
+		t.Errorf("first tick: %q", r.History)
+	}
+	l, err := feedback.Current(pathsOf(home).FeedbackDir())
+	if err != nil || l.HistoryImported.IsZero() || l.Memories[histA].Imported.Shown != 2 || importMarks(t, home) != 1 {
+		t.Errorf("after the first tick: %v %+v, %d marks", err, l.Memories[histA], importMarks(t, home))
+	}
+	events := len(importEvents(t, home))
+	if r := tickOf(t); r.History != "" || len(importEvents(t, home)) != events || importMarks(t, home) != 1 {
+		t.Errorf("second tick: %q, %d events (was %d), %d marks", r.History, len(importEvents(t, home)), events, importMarks(t, home))
+	}
+	if _, out, _ := run(t, "jobs", "tick"); strings.Contains(out, "earlier history") {
+		t.Errorf("a done import still reported: %s", out)
+	}
+}
+
+// A tick that runs out of its budget keeps what it journaled and leaves
+// no mark; the next tick imports the rest and marks it complete.
+func TestTickImportCutByItsBudgetGoesOn(t *testing.T) {
+	home := devInstall(t, true)
+	history(t, home)
+	oldBudget := importTickBudget
+	importTickBudget = 300 * time.Millisecond
+	units := 0
+	afterImportUnit = func() {
+		if units++; units == 1 {
+			time.Sleep(400 * time.Millisecond) // past the budget, after the telemetry
+		}
+	}
+	t.Cleanup(func() { importTickBudget, afterImportUnit = oldBudget, nil })
+	if r := tickOf(t); r.History != "earlier history: 4 shows and 1 credits imported, the rest at the next tick" {
+		t.Errorf("cut tick: %q", r.History)
+	}
+	if n := len(importEvents(t, home)); n != 1 || importMarks(t, home) != 0 {
+		t.Fatalf("after the cut: %d events, %d marks", n, importMarks(t, home))
+	}
+	importTickBudget = oldBudget
+	if r := tickOf(t); r.History != "earlier history imported: 1 shows and 0 credits" {
+		t.Errorf("next tick: %q", r.History)
+	}
+	l, _ := feedback.Current(pathsOf(home).FeedbackDir())
+	if importMarks(t, home) != 1 || l.Memories[histA].Imported.Shown != 2 || l.Memories[histD].Imported.Shown != 1 {
+		t.Errorf("after the next tick: %d marks, A %+v, D %+v", importMarks(t, home), l.Memories[histA], l.Memories[histD])
+	}
+}
+
+// Feedback off: the tick imports nothing, and the command refuses.
+func TestImportNeedsFeedbackOn(t *testing.T) {
+	home := devInstall(t, true)
+	history(t, home)
+	configure(t, home, "[feedback]\nenabled = false")
+	if r := tickOf(t); r.History != "" {
+		t.Errorf("tick with feedback off: %q", r.History)
+	}
+	code, out, _ := run(t, "feedback", "import", "--json")
+	if code != output.NeedsUser || !strings.Contains(out, "feedback is off") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(pathsOf(home).FeedbackDir()); err == nil {
+		t.Error("feedback off: the feedback directory was written")
 	}
 }

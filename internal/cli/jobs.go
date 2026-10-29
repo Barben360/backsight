@@ -55,7 +55,10 @@ type tickResult struct {
 	// Unhidden: the hidden observations the server rewrote or dropped
 	// since, no longer marked hidden (checkHidden).
 	Unhidden int `json:"unhidden,omitempty"`
-	MS       int `json:"ms"`
+	// History: the import of earlier history (importInTick), "" once done
+	// or with feedback off.
+	History string `json:"history,omitempty"`
+	MS      int    `json:"ms"`
 }
 
 // reachCheckTimeout bounds the tick's one health call.
@@ -81,7 +84,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			finish := func(failed error) error {
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
-					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden}})
+					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History}})
 				return e.report("jobs tick", res, func() string { return tickText(res) }, failed)
 			}
 
@@ -140,6 +143,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				if otherServer(d, cfg) == nil { // nothing is written to another server
 					res.Pruned = pruneBriefings(cmd.Context(), cfg.Server.Bank, briefingFor(cfg), f.Client)
 				}
+				res.History = importInTick(cmd.Context(), d, home, cfg)
 				pruneSessions(d)
 				return finish(nil)
 			}
@@ -198,6 +202,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			}
 			res.Index = refreshIndex(cmd.Context(), d, cfg.Server.Bank, f.Client)
 			liftHidden() // after the sends: a slow server delays this look, never them
+			res.History = importInTick(cmd.Context(), d, home, cfg)
 			pruneSessions(d)
 			if failed != nil {
 				res.Status = "partial"
@@ -249,7 +254,40 @@ func tickText(r tickResult) string {
 	if r.Unhidden > 0 {
 		msg += fmt.Sprintf(", %d hidden memory(ies) rewritten or gone, no longer marked hidden", r.Unhidden)
 	}
+	if r.History != "" {
+		msg += ", " + r.History
+	}
 	return msg + "\n"
+}
+
+// importTickBudget bounds a tick's import of earlier history, its local
+// reading included (its server checks keep their importCheckBudget).
+var importTickBudget = 60 * time.Second
+
+// importInTick imports earlier history, once the binary that brings it
+// is installed: at each tick, within importTickBudget, until a run goes
+// through every source (the ledger's HistoryImported). A run cut short
+// keeps what it journaled, and the next tick goes on. Best effort: what
+// it did, "" when there is nothing to do (feedback off, done already, the
+// ledger unreadable).
+func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Config) string {
+	if !cfg.Feedback.Enabled {
+		return ""
+	}
+	if l, err := feedback.Current(d.FeedbackDir()); err != nil || !l.HistoryImported.IsZero() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, importTickBudget)
+	defer cancel()
+	res, err := importHistory(ctx, d, home, time.Time{}, false)
+	shows, credits := res.totals()
+	switch {
+	case err != nil:
+		return "earlier history not imported (" + err.Error() + ")"
+	case !res.Complete:
+		return fmt.Sprintf("earlier history: %d shows and %d credits imported, the rest at the next tick", shows, credits)
+	}
+	return fmt.Sprintf("earlier history imported: %d shows and %d credits", shows, credits)
 }
 
 // sessionTTL: session state older than this is deleted (it holds prompt

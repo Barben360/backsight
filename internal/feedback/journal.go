@@ -277,8 +277,9 @@ func ReadSince(file string, offset int64) (events []Event, skipped int, err erro
 }
 
 // foldedLockWait: how long AppendFolded waits for a settle to release the
-// ledger lock (a settle reads and writes local files only).
-const foldedLockWait = 2 * time.Second
+// ledger lock (a settle reads and writes local files only). A variable so
+// tests can shrink it.
+var foldedLockWait = 2 * time.Second
 
 // AppendFolded appends an event the ledger folds as it comes (forget,
 // retire, hide, unhide, import) under the ledger lock, stamped at its ts

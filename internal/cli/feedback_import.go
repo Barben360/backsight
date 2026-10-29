@@ -63,6 +63,17 @@ type importResult struct {
 	Unchecked int    `json:"ids_unchecked"`
 	Why       string `json:"unchecked_reason,omitempty"`
 	Events    int    `json:"events"` // import events journaled
+	// Complete: the run went through every source and journaled the mark
+	// that ends the import (never with --plan).
+	Complete bool `json:"complete"`
+}
+
+// totals is the shows and credits of every source.
+func (r importResult) totals() (shows, credits int) {
+	for _, s := range r.Sources {
+		shows, credits = shows+s.Shows, credits+s.Credits
+	}
+	return shows, credits
 }
 
 func newFeedbackImportCmd(e *env) *cobra.Command {
@@ -72,10 +83,10 @@ func newFeedbackImportCmd(e *env) *cobra.Command {
 		Use:   "import",
 		Short: "Count the memories shown and the unambiguous credits of earlier history (telemetry, retained transcripts), once",
 		Long: "Import reads this machine's telemetry and the Claude Code transcripts still on disk, and adds to each memory's counts the " +
-			"times it was shown there, and a credit for a turn whose reply cited memory and that showed exactly one. It never counts a " +
-			"miss. Imported counts stay apart (feedback rebuild --no-import leaves them out), a show already imported or journaled live " +
-			"is not counted again, and ids the server no longer knows are dropped (checked read-only). --plan counts per source and " +
-			"writes nothing.",
+			"times it was shown there, and, from telemetry only, a credit for a turn whose reply cited memory and that showed exactly " +
+			"one. It never counts a miss. Imported counts stay apart (feedback rebuild --no-import leaves them out), a show already " +
+			"imported or journaled live is not counted again, and ids the server no longer knows are dropped (checked read-only). The " +
+			"jobs tick runs it until one run goes through every source. --plan counts per source and writes nothing.",
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var from time.Time
@@ -99,10 +110,18 @@ func newFeedbackImportCmd(e *env) *cobra.Command {
 	return cmd
 }
 
+// afterImportUnit, when set (tests), runs after each unit of an import
+// (telemetry, then each transcript) is journaled.
+var afterImportUnit func()
+
 // importHistory finds the shows of earlier history from from on (zero:
 // all), keeps those neither imported already nor journaled live, of
 // memories not forgotten and still known to the server, and journals
-// them (unless plan) as one import event per source and session.
+// them (unless plan) as import events by source and session: telemetry
+// first, then each transcript, so that a run ctx cuts short has kept
+// what it did and the next one goes on (keys make it idempotent). A run
+// that goes through every source journals the mark of a complete import.
+// Refused while feedback is off.
 func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Time, plan bool) (importResult, error) {
 	res := importResult{Plan: plan, Sources: map[string]*importSource{sourceTelemetry: {}, sourceTranscripts: {}}}
 	if !from.IsZero() {
@@ -117,96 +136,147 @@ func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Tim
 	case err != nil:
 		return res, err
 	}
+	if !cfg.Feedback.Enabled {
+		return res, &output.Error{Code: output.NeedsUser, Message: "feedback is off on this machine (feedback.enabled = false in config.toml): nothing records which memories are used, so there is nothing to import into"}
+	}
 	dir := d.FeedbackDir()
 	journal, _, err := feedback.Read(dir, time.Time{})
 	if err != nil {
 		return res, blocked(err)
 	}
-	known := journalKnown(journal)
-
 	tel, err := telemetryEvents(d.TelemetryDir(), from)
 	if err != nil {
 		return res, blocked(err)
 	}
+	ck := &memoryCheck{status: map[string]string{}}
+	switch mm := otherServer(d, cfg); {
+	case !configured:
+		ck.why = "no server configured on this machine"
+	case mm != nil:
+		ck.why = mm.Error() // its answers would say every memory is gone
+	default:
+		ck.cl, err = hindsight.New(cfg.Server.URL, sec.APIKey, importCheckTimeout)
+		if err != nil {
+			ck.why = err.Error()
+		}
+		ck.bank = cfg.Server.Bank
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, importCheckBudget)
+	defer cancel()
+	im := &historyImport{ctx: ctx, checkCtx: checkCtx, res: &res, from: from, plan: plan, known: journalKnown(journal), check: ck,
+		taken:    journalIndex{keys: map[string]bool{}, records: map[string]bool{}},
+		sessions: map[string]map[string]bool{}, dropped: map[string]map[string]bool{},
+		journal: feedback.NewJournal(dir, feedback.Common{Binary: buildinfo.Version}), params: feedbackParams(cfg)}
+
 	telSessions := map[string]bool{}
 	for _, e := range tel {
 		telSessions[e.Session] = true
 	}
-	found := map[string][]feedback.ImportTurn{sourceTelemetry: feedback.TelemetryTurns(tel)}
+	if !im.unit(sourceTelemetry, feedback.TelemetryTurns(tel)) {
+		return res, im.err
+	}
 	// A session telemetry knows is imported from it alone: its transcript
-	// holds the same searches.
+	// holds the same searches, and cannot tell its credits.
 	for _, f := range transcripts(home) {
-		turns, err := transcriptTurns(f)
+		turns, err := transcriptTurns(ctx, f)
+		if ctx.Err() != nil {
+			return res, nil
+		}
 		if err != nil {
 			continue // a transcript that cannot be read adds nothing
 		}
-		for _, t := range turns {
-			if len(t.Shows) > 0 && !telSessions[t.Shows[0].Session] {
-				found[sourceTranscripts] = append(found[sourceTranscripts], t)
-			}
+		turns = slices.DeleteFunc(turns, func(t feedback.ImportTurn) bool { return len(t.Shows) == 0 || telSessions[t.Shows[0].Session] })
+		if !im.unit(sourceTranscripts, turns) {
+			return res, im.err
 		}
-	}
-
-	candidates := map[string][]feedback.ImportShow{}
-	ids := map[string]bool{}
-	taken := journalIndex{keys: map[string]bool{}, records: map[string]bool{}} // a resumed session's transcript repeats its records
-	for _, source := range []string{sourceTelemetry, sourceTranscripts} {
-		for _, t := range found[source] {
-			for _, s := range t.Credited() {
-				if !from.IsZero() && s.At.Before(from) || known.live(s) || known.forgotten[s.ID] || taken.imported(s) {
-					continue
-				}
-				if known.imported(s) {
-					res.Already++
-					continue
-				}
-				taken.take(s)
-				candidates[source] = append(candidates[source], s)
-				ids[s.ID] = true
-			}
-		}
-	}
-
-	var gone map[string]bool
-	if configured {
-		gone, res.Unchecked, res.Why = checkMemories(ctx, cfg, sec, slices.Sorted(maps.Keys(ids)))
-	} else {
-		res.Unchecked, res.Why = len(ids), "no server configured on this machine"
-	}
-
-	kept := map[string]map[string][]feedback.ImportShow{} // source → session → shows
-	for source, shows := range candidates {
-		src, dropped, sessions := res.Sources[source], map[string]bool{}, map[string][]feedback.ImportShow{}
-		for _, s := range shows {
-			if gone[s.ID] {
-				dropped[s.ID] = true
-				continue
-			}
-			sessions[s.Session] = append(sessions[s.Session], s)
-			src.Shows++
-			if s.Credit {
-				src.Credits++
-			}
-		}
-		src.Sessions, src.Dropped, kept[source] = len(sessions), len(dropped), sessions
 	}
 	if plan {
 		return res, nil
 	}
+	var held *state.HeldError
+	if err := im.journal.AppendFolded(feedback.Event{Kind: feedback.KindImport, Outcome: feedback.ImportComplete}); err != nil && !errors.As(err, &held) {
+		return res, blocked(err)
+	}
+	res.Complete = true
+	return res, nil
+}
 
-	p := feedbackParams(cfg)
-	j := feedback.NewJournal(dir, feedback.Common{Binary: buildinfo.Version})
-	for _, source := range []string{sourceTelemetry, sourceTranscripts} {
-		for _, session := range slices.Sorted(maps.Keys(kept[source])) {
-			// Under the ledger lock; one held too long still journals it.
-			var held *state.HeldError
-			if err := j.AppendFolded(feedback.ImportEvent(source, session, kept[source][session], p)); err != nil && !errors.As(err, &held) {
-				return res, blocked(err)
+// historyImport is one run of importHistory, unit after unit.
+type historyImport struct {
+	ctx, checkCtx context.Context
+	res           *importResult
+	from          time.Time
+	plan          bool
+	known, taken  journalIndex // the journal's, and this run's (a resumed session's transcript repeats its records)
+	check         *memoryCheck
+	// sessions and dropped: by source, the sessions with a show kept and
+	// the ids the server no longer knows.
+	sessions, dropped map[string]map[string]bool
+	journal           *feedback.Journal
+	params            feedback.Params
+	err               error
+}
+
+// unit imports the shows of one unit's turns; false when the run stops
+// there: ctx done (nothing of the unit journaled), or a journal error.
+func (im *historyImport) unit(source string, turns []feedback.ImportTurn) bool {
+	var shows []feedback.ImportShow
+	for _, t := range turns {
+		for _, s := range t.Credited() {
+			if !im.from.IsZero() && s.At.Before(im.from) || im.known.live(s) || im.known.forgotten[s.ID] || im.taken.imported(s) {
+				continue
 			}
-			res.Events++
+			if im.known.imported(s) {
+				im.res.Already++
+				continue
+			}
+			im.taken.take(s)
+			shows = append(shows, s)
 		}
 	}
-	return res, nil
+	ids := map[string]bool{}
+	for _, s := range shows {
+		ids[s.ID] = true
+	}
+	im.check.run(im.checkCtx, slices.Sorted(maps.Keys(ids)))
+	if im.ctx.Err() != nil {
+		return false
+	}
+	src := im.res.Sources[source]
+	if im.sessions[source] == nil {
+		im.sessions[source], im.dropped[source] = map[string]bool{}, map[string]bool{}
+	}
+	bySession := map[string][]feedback.ImportShow{}
+	for _, s := range shows {
+		if im.check.status[s.ID] == checkGone {
+			im.dropped[source][s.ID] = true
+			continue
+		}
+		bySession[s.Session] = append(bySession[s.Session], s)
+		im.sessions[source][s.Session] = true
+		src.Shows++
+		if s.Credit {
+			src.Credits++
+		}
+	}
+	src.Sessions, src.Dropped = len(im.sessions[source]), len(im.dropped[source])
+	im.res.Unchecked, im.res.Why = im.check.unchecked, im.check.why
+	if im.plan {
+		return true
+	}
+	for _, session := range slices.Sorted(maps.Keys(bySession)) {
+		// Under the ledger lock; one held too long still journals it.
+		var held *state.HeldError
+		if err := im.journal.AppendFolded(feedback.ImportEvent(source, session, bySession[session], im.params)); err != nil && !errors.As(err, &held) {
+			im.err = blocked(err)
+			return false
+		}
+		im.res.Events++
+	}
+	if afterImportUnit != nil {
+		afterImportUnit()
+	}
+	return true
 }
 
 // journalIndex is what the journal says of the shows to import: the
@@ -315,22 +385,20 @@ func telemetryEvents(dir string, from time.Time) ([]feedback.TelemetryEvent, err
 
 // transcriptTurns is the turns of the transcript at path that searched
 // memory; nothing, without decoding it, when it never called memory_search.
-func transcriptTurns(path string) ([]feedback.ImportTurn, error) {
+// Reading stops once ctx is done.
+func transcriptTurns(ctx context.Context, path string) ([]feedback.ImportTurn, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	if !containsWord(f, []byte("memory_search")) {
-		return nil, nil
+	if !containsWord(ctxReader{ctx, f}, []byte("memory_search")) {
+		return nil, ctx.Err()
 	}
 	if _, err := f.Seek(0, 0); err != nil {
 		return nil, err
 	}
-	return feedback.TranscriptTurns(f, func(reply string) bool {
-		k := replyKind(reply)
-		return k != nil && (*k == "exact" || *k == "free")
-	})
+	return feedback.TranscriptTurns(ctxReader{ctx, f})
 }
 
 // containsWord: r holds word, read in chunks.
@@ -351,21 +419,31 @@ func containsWord(r io.Reader, word []byte) bool {
 	}
 }
 
-// checkMemories asks the server for each id, importChecks at a time
-// within importCheckBudget, reading only: gone holds the ids it answers
-// not found for. An id it fails on, or not asked about in time, is kept
-// and counted unchecked, with the first reason.
-func checkMemories(ctx context.Context, cfg config.Config, sec config.Secrets, ids []string) (gone map[string]bool, unchecked int, why string) {
-	gone = map[string]bool{}
-	if len(ids) == 0 {
-		return gone, 0, ""
+// What the server said of an id: it holds it, or no longer.
+const (
+	checkKnown = "known"
+	checkGone  = "gone"
+)
+
+// memoryCheck asks the server for ids, reading only, importChecks at a
+// time: status holds what it answered, each id asked once. An id it fails
+// on, or not asked about before ctx is done, is kept: counted unchecked,
+// with the first reason. Without a client, every id is unchecked for why.
+type memoryCheck struct {
+	cl        *hindsight.Client
+	bank, why string
+	status    map[string]string
+	unchecked int
+}
+
+func (c *memoryCheck) run(ctx context.Context, ids []string) {
+	ids = slices.DeleteFunc(ids, func(id string) bool { _, asked := c.status[id]; return asked })
+	if c.cl == nil {
+		for _, id := range ids {
+			c.status[id], c.unchecked = "unchecked", c.unchecked+1
+		}
+		return
 	}
-	cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, importCheckTimeout)
-	if err != nil {
-		return gone, len(ids), err.Error()
-	}
-	ctx, cancel := context.WithTimeout(ctx, importCheckBudget)
-	defer cancel()
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	next := make(chan string)
@@ -376,17 +454,18 @@ func checkMemories(ctx context.Context, cfg config.Config, sec config.Secrets, i
 			for id := range next {
 				var err error
 				if err = ctx.Err(); err == nil {
-					_, err = cl.GetMemory(ctx, cfg.Server.Bank, id)
+					_, err = c.cl.GetMemory(ctx, c.bank, id)
 				}
 				mu.Lock()
 				switch {
 				case err == nil:
+					c.status[id] = checkKnown
 				case notFound(err):
-					gone[id] = true
+					c.status[id] = checkGone
 				default:
-					unchecked++
-					if why == "" {
-						why = err.Error()
+					c.status[id], c.unchecked = "unchecked", c.unchecked+1
+					if c.why == "" {
+						c.why = err.Error()
 					}
 				}
 				mu.Unlock()
@@ -398,7 +477,6 @@ func checkMemories(ctx context.Context, cfg config.Config, sec config.Secrets, i
 	}
 	close(next)
 	wg.Wait()
-	return gone, unchecked, why
 }
 
 func importText(r importResult) string {
@@ -422,8 +500,12 @@ func importText(r importResult) string {
 	if r.Unchecked > 0 {
 		fmt.Fprintf(&b, "%d memory ids not checked (%s): kept\n", r.Unchecked, r.Why)
 	}
-	if !r.Plan {
+	switch {
+	case r.Plan:
+	case r.Complete:
 		fmt.Fprintf(&b, "imported %d shows and %d credits (never a miss)\n", shows, credits)
+	default:
+		fmt.Fprintf(&b, "imported %d shows and %d credits so far (never a miss); stopped before the end: run it again\n", shows, credits)
 	}
 	return b.String()
 }
