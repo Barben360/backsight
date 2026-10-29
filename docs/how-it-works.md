@@ -68,6 +68,11 @@ backsight keeps a local record of which memories Claude was shown and which it u
 4. **The turn settles**: every 15 minutes, the background job settles the memories shown at least 30 minutes ago in turns that are over. Each becomes a **credit** (Claude reported using it), a **confident miss** (shown in the top 2, `feedback.confident_rank`, of a prompt, a search or a refused question, in a turn Claude reported on, and not used), **unknown** (Claude never reported on that turn), or simply shown. A credit made after its memory settled counts nowhere and is counted as late.
 5. **Recall uses them**: a memory Claude often uses rises in later recalls, one often shown near the top and left unused sinks, by a small, bounded amount added to its score (at most +0.075 or −0.025 by default, `feedback.boost_weight`, `feedback.prior_credits`, `feedback.prior_misses`). A memory with nothing counted keeps its score, and counts fade with their half-lives, so an old use matters less than a recent one. The floors on the server's score (`recall.min_score`, `recall.global_min_score`) apply first: the boost reorders what passed them and never lets a memory under them in; `memory_search`'s `min_score` sees the boosted score. A hidden observation is skipped from the next recall on, before the background job has run. When the record cannot be read, recall goes on as if it were empty. `memory_search` notes in the record, for its session, each hit's boost and the rank it would have had without it.
 
+How the boost moves with the counts, before they fade, with one uncredited show in three counted as a miss: a memory credited one time in ten stays where the reranker put it, one credited more often rises and one credited less often sinks.
+
+<img alt="How a memory's rank moves: over 50 shows, a memory never credited sinks, one credited one time in ten stays at zero, one always credited rises." src="assets/feedback-curve-light.svg#gh-light-mode-only">
+<img alt="How a memory's rank moves: over 50 shows, a memory never credited sinks, one credited one time in ten stays at zero, one always credited rises." src="assets/feedback-curve-dark.svg#gh-dark-mode-only">
+
 `backsight stats` shows these counts on its `Credits` line (how turns ended and what Claude reported) and its `Ledger` line (what settled).
 
 ## Before Claude asks you a question
