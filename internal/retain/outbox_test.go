@@ -305,3 +305,67 @@ func TestOutboxConfiguredLimitsAreHonoured(t *testing.T) {
 		t.Errorf("the default still takes notes: %v", err)
 	}
 }
+
+// A gate that refuses (connect started this PC's sends over) sends no
+// note: every note stays as it was, and Flush says why. It is asked
+// before each note: one that refuses from the second note on lets the
+// first go, and keeps the second unsent.
+func TestOutboxGateKeepsEveryNote(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+	_, _ = o.Append(NewNote("b", "lesson", "p", "two", at))
+	gate := errors.New("started over")
+	o.Gate = func() error { return gate }
+	_, err := o.Flush(context.Background(), e.f.Client, "b", "m1")
+	if !errors.Is(err, gate) || len(e.hs.retains) != 0 {
+		t.Fatalf("flush: %v, %d retained", err, len(e.hs.retains))
+	}
+	notes, _ := o.read()
+	if len(notes) != 2 || notes[0].Content != "one" || notes[1].Content != "two" || notes[0].Attempts != 0 || notes[1].Attempts != 0 || notes[0].LastError != "" {
+		t.Errorf("kept: %+v", notes)
+	}
+
+	// Open for the first note, its send and the look after it; shut from
+	// the second note on.
+	asked := 0
+	o.Gate = func() error {
+		if asked++; asked > 2 {
+			return gate
+		}
+		return nil
+	}
+	res, err := o.Flush(context.Background(), e.f.Client, "b", "m1")
+	if !errors.Is(err, gate) || len(e.hs.retains) != 1 || res.Sent != 1 {
+		t.Fatalf("flush: %+v %v, %d retained", res, err, len(e.hs.retains))
+	}
+	if notes, _ := o.read(); len(notes) != 1 || notes[0].Content != "two" || notes[0].Attempts != 0 {
+		t.Errorf("kept: %+v, want the second note unsent", notes)
+	}
+}
+
+// A gate that shuts during a send (connect started over while the note
+// went to the old server) keeps that note queued for the next server,
+// operation ids being per server, and sends nothing more.
+func TestOutboxGateShutDuringASendKeepsTheNote(t *testing.T) {
+	e := newEnv(t)
+	o := outbox(t)
+	_, _ = o.Append(NewNote("b", "lesson", "p", "one", at))
+	_, _ = o.Append(NewNote("b", "lesson", "p", "two", at))
+	gate := errors.New("started over")
+	asked := 0
+	o.Gate = func() error {
+		if asked++; asked > 1 {
+			return gate
+		}
+		return nil
+	}
+	res, err := o.Flush(context.Background(), e.f.Client, "b", "m1")
+	if !errors.Is(err, gate) || len(e.hs.retains) != 1 || res.Sent != 0 || len(res.SentDocs) != 0 {
+		t.Fatalf("flush: %+v %v, %d retained (want the first note's send only)", res, err, len(e.hs.retains))
+	}
+	notes, _ := o.read()
+	if len(notes) != 2 || notes[0].Content != "one" || notes[1].Content != "two" || notes[0].Attempts != 0 || notes[1].Attempts != 0 {
+		t.Errorf("kept: %+v, want both notes as they were", notes)
+	}
+}

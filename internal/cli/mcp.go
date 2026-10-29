@@ -149,6 +149,7 @@ type mcpDeps struct {
 	tw          *telemetry.Writer
 	parentPID   int       // the Claude Code process that started this server
 	parentStart time.Time // when it started; zero when the system cannot tell
+	generation  int       // the sends generation, read before cfg (sendsGeneration)
 }
 
 func textResult(s string) *mcp.CallToolResult {
@@ -257,7 +258,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				sec, eng = key.get()
 				similar = eng.Search(ctx, q)
 			}
-			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, sec, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
+			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, sec, deps.generation, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
 			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found})
 			if res.Document == "" {
 				return errorResult(err.Error()), nil, nil
@@ -446,11 +447,12 @@ func newMCPCmd() *cobra.Command {
 		Args:   usageArgs(cobra.NoArgs),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, sec, err := loadServerConfig()
+			d, home, err := machine()
 			if err != nil {
 				return err
 			}
-			d, home, err := machine()
+			generation := sendsGeneration(d) // before the config it goes with
+			cfg, sec, err := loadServerConfig()
 			if err != nil {
 				return err
 			}
@@ -462,7 +464,7 @@ func newMCPCmd() *cobra.Command {
 			tw := telemetry.New(d.State, telemetry.Common{V: instructions.Version, Project: current, BinaryVersion: buildinfo.Version})
 			ppid := os.Getppid()
 			pstart, _ := session.ProcessStart(ppid)
-			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart})
+			s := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: current, tw: tw, parentPID: ppid, parentStart: pstart, generation: generation})
 			// Claude Code ends a session by closing stdin: a clean exit.
 			if err := s.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return &output.Error{Code: output.Blocked, Message: err.Error()}

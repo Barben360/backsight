@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/token"
 )
@@ -52,6 +53,10 @@ type connectFlags struct {
 	answersFile      string
 	nonInteractive   bool
 	configDir        string
+	// Not flags: server install --ssh brought the token back over ssh
+	// (preread: not read again) and resumes with its own command line.
+	preread *token.Token
+	resume  string
 }
 
 // ownServer is what joining another server does to this PC's own.
@@ -66,20 +71,21 @@ type ownServer struct {
 // connectResult is what connect did or would do. It never holds the key
 // nor the token.
 type connectResult struct {
-	URL              string        `json:"url"`
-	Bank             string        `json:"bank"`
-	ServerID         string        `json:"server_id"`
-	HindsightVersion string        `json:"hindsight_version,omitempty"`
-	Situation        string        `json:"situation"`
-	Skew             doctor.Status `json:"version_skew,omitempty"`
-	Plan             bool          `json:"plan"`
-	Declined         bool          `json:"declined,omitempty"`
-	Warnings         []string      `json:"warnings,omitempty"`
-	Steps            []step        `json:"steps"`
-	OwnServer        *ownServer    `json:"own_server,omitempty"`
-	Setup            *setupResult  `json:"setup,omitempty"`
-	RestartRequired  bool          `json:"restart_required"`
-	NextSteps        []string      `json:"next_steps,omitempty"`
+	URL              string           `json:"url"`
+	Bank             string           `json:"bank"`
+	ServerID         string           `json:"server_id"`
+	HindsightVersion string           `json:"hindsight_version,omitempty"`
+	Situation        string           `json:"situation"`
+	Skew             doctor.Status    `json:"version_skew,omitempty"`
+	Plan             bool             `json:"plan"`
+	Declined         bool             `json:"declined,omitempty"`
+	Warnings         []string         `json:"warnings,omitempty"`
+	Steps            []step           `json:"steps"`
+	Questions        []setup.Question `json:"questions,omitempty"`
+	OwnServer        *ownServer       `json:"own_server,omitempty"`
+	Setup            *setupResult     `json:"setup,omitempty"`
+	RestartRequired  bool             `json:"restart_required"`
+	NextSteps        []string         `json:"next_steps,omitempty"`
 }
 
 func newConnectCmd(e *env) *cobra.Command {
@@ -509,6 +515,11 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 	if err := waitSends(ctx, d, "connect --undo"); err != nil {
 		return err
 	}
+	release, err := holdEpochLock(ctx, d, "connect --undo")
+	if err != nil {
+		return err
+	}
+	defer release()
 	var keptCfg, keptSec, curCfg, curSec []byte
 	for p, dst := range map[string]*[]byte{filepath.Join(pre, "config.toml"): &keptCfg, filepath.Join(pre, "secrets.toml"): &keptSec, d.ConfigFile(): &curCfg, d.SecretsFile(): &curSec} {
 		if *dst, err = os.ReadFile(p); err != nil {
@@ -593,6 +604,34 @@ func waitSends(ctx context.Context, d paths.Dirs, command string) error {
 	return nil
 }
 
+// holdEpochLock takes epoch.lock for command, waiting up to
+// connectSendsWait for a restore-epoch reconcile that holds it: one
+// running while the sends start over would drop cursors among the new
+// server's. A reconcile that takes it after sees the new generation
+// under it and stops. Nothing is changed yet when it refuses (exit 20).
+func holdEpochLock(ctx context.Context, d paths.Dirs, command string) (release func(), err error) {
+	path := filepath.Join(d.LocksDir(), "epoch.lock")
+	deadline := time.Now().Add(connectSendsWait)
+	for {
+		l, _, err := state.Acquire(path, command) // a dead reconcile's lock is taken over
+		if err == nil {
+			return func() { _ = l.Release() }, nil
+		}
+		var held *state.HeldError
+		if !errors.As(err, &held) {
+			return nil, blocked(err)
+		}
+		if time.Now().After(deadline) {
+			return nil, &output.Error{Code: output.Blocked, Message: "a restore-epoch reconcile is running: nothing was changed. Run backsight " + command + " again later"}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(connectSendsPoll):
+		}
+	}
+}
+
 // updateIncomplete refuses connect while an update did not finish: its
 // way back writes state.json and config.toml back as they were before it,
 // which would undo the switch but for the key and the moved sends.
@@ -621,8 +660,11 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	if slices.ContainsFunc(values, looksLikeToken) {
 		return res, &output.Error{Code: output.Usage, Message: tokenArgument}
 	}
-	tok, err := readToken(e, f.token, f.tokenFile)
-	if err != nil {
+	var tok token.Token
+	var err error
+	if f.preread != nil {
+		tok = *f.preread
+	} else if tok, err = readToken(e, f.token, f.tokenFile); err != nil {
 		return res, err
 	}
 	if err := publicAddress(tok); err != nil {
@@ -700,32 +742,70 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		res.Steps = append([]step{ownServerStep(own.Deployed)}, res.Steps...)
 	}
 	res.RestartRequired = cfg == nil || cfg.Server.URL != tok.URL
+	// A host extracting with a Claude subscription extracts this PC's
+	// sessions on it too: the caveat is asked here, before any switch. A
+	// reconnect to the same kind of host, already accepted, is not asked
+	// again.
+	askAck := tok.LLM.Provider == "claude-code" && answers["ack_subscription"] != "yes"
+	if askAck && cfg != nil && cfg.LLM.Provider == "claude-code" {
+		if rec, _ := setup.Load(d.SetupFile()); rec != nil && rec.Answers["ack_subscription"] == "yes" {
+			askAck = false
+		}
+	}
+	ack := setup.SubscriptionQuestion(true)
+	if askAck {
+		res.Questions = []setup.Question{ack}
+		res.Steps = append(res.Steps, step{Name: "ack_subscription", Status: "planned", Detail: "ask: " + ack.Prompt})
+	}
 	if f.plan {
 		return res, nil
 	}
 
+	resume, consentResume, planCmd := "backsight connect --token-file F --answer consent=yes", "backsight connect --token-file F --answer consent=yes", "backsight connect --token-file F --plan"
+	switch {
+	case f.resume != "":
+		resume, consentResume, planCmd = f.resume, f.resume+" --answer consent=yes", f.resume+" --plan"
+	case f.tokenFile != "":
+		if abs, err := filepath.Abs(f.tokenFile); err == nil {
+			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
+		}
+	}
 	interactive := !e.json && !f.nonInteractive && stdinIsTerminal() && stdoutIsTerminal()
 	switch consent := answers["consent"]; {
 	case consent == "" && interactive:
 		fmt.Fprint(e.stdout, connectPlanText(res))
+		if askAck {
+			fmt.Fprintf(e.stdout, "\n%s\n", ack.Prompt)
+			if !confirm(e, "Accept? [y/N] ") {
+				res.Declined = true
+				return res, nil
+			}
+			answers["ack_subscription"], askAck = "yes", false
+		}
 		if !confirm(e, "Join this server? [y/N] ") {
 			res.Declined = true
 			return res, nil
 		}
 	case consent == "":
-		return res, &output.Error{Code: output.NeedsUser, Message: "connect changes this PC's config and key: read the plan (backsight connect --token-file F --plan), then rerun with --answer consent=yes",
-			Resume: "backsight connect --token-file F --answer consent=yes"}
+		return res, &output.Error{Code: output.NeedsUser, Message: "connect changes this PC's config and key: read the plan (" + planCmd + "), then rerun with --answer consent=yes",
+			Resume: consentResume}
 	case consent != "yes":
 		res.Declined = true
 		return res, nil
 	}
-
-	resume := "backsight connect --token-file F --answer consent=yes"
-	if f.tokenFile != "" {
-		if abs, err := filepath.Abs(f.tokenFile); err == nil {
-			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
+	if askAck && interactive { // the consent was given as an answer
+		fmt.Fprintf(e.stdout, "\n%s\n", ack.Prompt)
+		if !confirm(e, "Accept? [y/N] ") {
+			res.Declined = true
+			return res, nil
 		}
+		answers["ack_subscription"], askAck = "yes", false
 	}
+	if askAck {
+		return res, &output.Error{Code: output.NeedsUser, Message: "the server's host extracts with a Claude subscription: connect asks you to accept its terms before it changes anything (nothing was changed); rerun with --answer ack_subscription=yes",
+			Questions: res.Questions, Resume: resume + " --answer ack_subscription=yes"}
+	}
+
 	var own server.Runtime // this PC's server, stopped once its backup verified
 	if res.OwnServer != nil && res.OwnServer.Deployed {
 		archive, err := backupOwnServer(ctx, d, *cfg, localSec)
@@ -770,6 +850,9 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		if k, _, _ := strings.Cut(a, "="); strings.TrimSpace(k) != "consent" {
 			setupAnswers = append(setupAnswers, a)
 		}
+	}
+	if answers["ack_subscription"] == "yes" && !slices.ContainsFunc(setupAnswers, func(a string) bool { k, _, _ := strings.Cut(a, "="); return strings.TrimSpace(k) == "ack_subscription" }) {
+		setupAnswers = append(setupAnswers, "ack_subscription=yes") // given at the prompt
 	}
 	sr, err := runSetup(ctx, e, setupFlags{answers: append(setupAnswers, "consent=yes"), answersFile: f.answersFile, nonInteractive: f.nonInteractive, configDir: f.configDir})
 	res.Setup = &sr
@@ -951,6 +1034,11 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 		if err := waitSends(ctx, d, "connect"); err != nil {
 			return err
 		}
+		release, err := holdEpochLock(ctx, d, "connect")
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
 	// Read again under the lock: the plan was made from what was there.
 	want, raw := fsutil.Absent, []byte(nil)

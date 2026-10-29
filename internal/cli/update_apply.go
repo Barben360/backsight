@@ -976,43 +976,63 @@ func removeStaleStaging(d paths.Dirs, keep string) {
 	}
 }
 
-// fetchVerified downloads the archive, checksums.txt and its signature
-// into work, verifies the signature with the embedded keys and the
-// archive's hash, unpacks the binary, checks it against the bare binary's
-// hash when the release lists it, and runs it once: it must report the
-// release's version. It returns the unpacked binary.
-func fetchVerified(ctx context.Context, src release.Source, rel release.Release, archive, work string, res *updateApplyResult, add func(name, status, detail string)) (string, error) {
-	names := []string{archive, selfcheck.ChecksumsFile, selfcheck.SignatureFile}
+// verifyRelease downloads the archive, checksums.txt and its signature
+// into work and verifies the signature with the embedded keys and the
+// archive's hash. assets lists what it downloaded and keyID the signer
+// once the signature passed, also on a later failure; every failure
+// changed nothing (exit 20).
+func verifyRelease(ctx context.Context, src release.Source, rel release.Release, archive, work string) (assets []release.Asset, keyID string, err error) {
 	dctx, cancel := context.WithTimeout(ctx, downloadTimeout)
 	defer cancel()
-	for _, name := range names {
+	for _, name := range []string{archive, selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
 		if err := download(dctx, src, rel, name, filepath.Join(work, name)); err != nil {
-			return "", nothingChanged("cannot download %s (%v)", name, err)
+			return assets, "", nothingChanged("cannot download %s (%v)", name, err)
 		}
 		a, _ := rel.Asset(name)
-		res.Assets = append(res.Assets, a)
+		assets = append(assets, a)
 	}
 	cancel()
-	add("download", "done", strings.Join(names, ", "))
 	sums, err := os.ReadFile(filepath.Join(work, selfcheck.ChecksumsFile))
 	if err != nil {
-		return "", blocked(err)
+		return assets, "", blocked(err)
 	}
 	sig, err := os.ReadFile(filepath.Join(work, selfcheck.SignatureFile))
 	if err != nil {
-		return "", blocked(err)
+		return assets, "", blocked(err)
 	}
-	if res.KeyID, err = signing.VerifyChecksums(sums, sig); err != nil {
-		return "", nothingChanged("release %s fails the signature check (%v)", rel.Version, err)
+	if keyID, err = signing.VerifyChecksums(sums, sig); err != nil {
+		return assets, "", nothingChanged("release %s fails the signature check (%v)", rel.Version, err)
 	}
 	f, err := os.Open(filepath.Join(work, archive))
 	if err != nil {
-		return "", blocked(err)
+		return assets, "", blocked(err)
 	}
 	err = signing.ArchiveSum(sums, archive, f)
 	_ = f.Close()
 	if err != nil {
-		return "", nothingChanged("release %s fails the checksum check (%v)", rel.Version, err)
+		return assets, keyID, nothingChanged("release %s fails the checksum check (%v)", rel.Version, err)
+	}
+	return assets, keyID, nil
+}
+
+// fetchVerified downloads and verifies the release (verifyRelease),
+// unpacks the binary, checks it against the bare binary's hash when the
+// release lists it, and runs it once: it must report the release's
+// version. It returns the unpacked binary.
+func fetchVerified(ctx context.Context, src release.Source, rel release.Release, archive, work string, res *updateApplyResult, add func(name, status, detail string)) (string, error) {
+	names := []string{archive, selfcheck.ChecksumsFile, selfcheck.SignatureFile}
+	assets, keyID, err := verifyRelease(ctx, src, rel, archive, work)
+	res.Assets = append(res.Assets, assets...)
+	if len(assets) == len(names) {
+		add("download", "done", strings.Join(names, ", "))
+	}
+	res.KeyID = keyID
+	if err != nil {
+		return "", err
+	}
+	sums, err := os.ReadFile(filepath.Join(work, selfcheck.ChecksumsFile))
+	if err != nil {
+		return "", blocked(err)
 	}
 	staged := filepath.Join(work, "bin", binaryName())
 	if err := unpackBinary(filepath.Join(work, archive), staged); err != nil {

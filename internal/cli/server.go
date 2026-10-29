@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -191,13 +193,44 @@ func conflicts(cmd *cobra.Command, cfg config.Config, f installFlags) []string {
 	return out
 }
 
+// sshFlags are server install's flags for another machine: without
+// --ssh they mean nothing.
+var sshFlags = []string{"private", "source", "llm-key-from-env", "llm-key-from-file", "answer", "non-interactive", "config-dir"}
+
 func newServerInstallCmd(e *env) *cobra.Command {
 	var f installFlags
+	var sf sshInstallFlags
+	var printOnly bool
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install and start the local Hindsight server (idempotent)",
-		Args:  cobra.NoArgs,
+		Short: "Install and start the local Hindsight server (idempotent), or with --ssh one on another machine",
+		Long: "--ssh user@host installs the memory server on that machine over the system ssh, with your keys and known_hosts, " +
+			"and joins it from this PC; it works from a client too. The LLM key goes from --llm-key-from-env, --llm-key-from-file " +
+			"or a hidden prompt to the host on the stdin of secret set; the connection token comes back over ssh and is never shown. " +
+			"Every step can run again: a rerun goes on from where a run stopped. --print-commands prints those steps for a host you have no ssh access to, and runs nothing.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if printOnly {
+				sf.install, sf.plan, sf.changed = f, f.plan, cmd.Flags().Changed
+				res, err := printCommands(sf, buildinfo.Version)
+				if err != nil {
+					return err
+				}
+				return e.emit("server install", res, func() string { return printedCommandsText(res) })
+			}
+			if cmd.Flags().Changed("ssh") {
+				sf.install, sf.plan, sf.changed = f, f.plan, cmd.Flags().Changed
+				res, err := runSSHInstall(cmd.Context(), e, sf)
+				if len(res.Steps) == 0 {
+					return err
+				}
+				return e.report("server install", res, func() string { return sshInstallText(res) }, err)
+			}
+			for _, fl := range sshFlags {
+				if cmd.Flags().Changed(fl) {
+					return &output.Error{Code: output.Usage, Message: "--" + fl + " goes with --ssh user@host (it installs the server on another machine) or --print-commands"}
+				}
+			}
 			d, home, err := machine()
 			if err != nil {
 				return err
@@ -386,6 +419,15 @@ func newServerInstallCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&f.model, "model", "", "LLM model (default deepseek-flash)")
 	cmd.Flags().StringVar(&f.base, "base-url", "", "LLM base URL for compatible endpoints")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "list the steps without acting")
+	cmd.Flags().StringVar(&sf.target, "ssh", "", "install the server on this machine instead ([user@]host, as ssh takes it) and join it from this PC")
+	cmd.Flags().BoolVar(&printOnly, "print-commands", false, "print the commands that install the server on another machine by hand (a host you have no ssh access to), and run nothing")
+	cmd.Flags().StringVar(&sf.private, "private", "", "with --ssh or --print-commands: open the server on this LAN or tailnet address of the host (--ssh default: the address ssh reached)")
+	cmd.Flags().StringVar(&sf.source, "source", "", "with --ssh: read the release from this local release directory")
+	cmd.Flags().StringVar(&sf.keyEnv, "llm-key-from-env", "", "with --ssh: read the host's LLM API key from this environment variable")
+	cmd.Flags().StringVar(&sf.keyFile, "llm-key-from-file", "", "with --ssh: read the host's LLM API key from the first line of this file")
+	cmd.Flags().StringArrayVar(&sf.answers, "answer", nil, "with --ssh: consent=yes to go ahead without a terminal; with --ssh or --print-commands: setup's answers for the host or this PC (id=value, repeatable)")
+	cmd.Flags().BoolVar(&sf.nonInteractive, "non-interactive", false, "with --ssh: never prompt: exit 10 when the consent, the key or another answer is missing")
+	cmd.Flags().StringVar(&sf.configDir, "config-dir", "", "with --ssh: this PC's Claude Code directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	return cmd
 }
 
@@ -900,15 +942,71 @@ func serverMaintenanceLock(d paths.Dirs, command string) (unlock func(), note st
 }
 
 // redacted is blocked() with every known secret value masked: Docker and
-// provider output can quote configuration.
+// provider output can quote configuration, and another backsight's error
+// (over ssh) its actions and questions too.
 func redacted(err error, sec config.Secrets) error {
 	var oe *output.Error
 	if errors.As(err, &oe) {
 		out := *oe
 		out.Message = server.Redact(oe.Message, sec)
+		if oe.Actions != nil {
+			out.Actions = make([]output.Action, len(oe.Actions))
+			for i, a := range oe.Actions {
+				a.Cmd, a.Why = server.Redact(a.Cmd, sec), server.Redact(a.Why, sec)
+				out.Actions[i] = a
+			}
+		}
+		out.Questions = redactedTree(oe.Questions, sec)
 		return &out
 	}
 	return &output.Error{Code: output.Blocked, Message: server.Redact(err.Error(), sec)}
+}
+
+// redactedTree is v with sec's values masked in every string it holds, as
+// its JSON form; v itself when it holds none.
+func redactedTree(v any, sec config.Secrets) any {
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil // never shown unmasked
+	}
+	if s := string(raw); server.Redact(server.Redact(s, sec), jsonEscaped(sec)) == s {
+		return v
+	}
+	var tree any
+	if json.Unmarshal(raw, &tree) != nil {
+		return nil
+	}
+	var walk func(any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case string:
+			return server.Redact(t, sec)
+		case []any:
+			for i := range t {
+				t[i] = walk(t[i])
+			}
+		case map[string]any:
+			for k := range t {
+				t[k] = walk(t[k])
+			}
+		}
+		return x
+	}
+	return walk(tree)
+}
+
+// jsonEscaped is sec with each value as JSON writes it inside a string:
+// a value holding " \ < > & or a control character is escaped there, and
+// masking its raw form would miss it.
+func jsonEscaped(sec config.Secrets) config.Secrets {
+	esc := func(v string) string {
+		b, _ := json.Marshal(v)
+		return strings.TrimSuffix(strings.TrimPrefix(string(b), `"`), `"`)
+	}
+	return config.Secrets{APIKey: esc(sec.APIKey), UIKey: esc(sec.UIKey), DBPassword: esc(sec.DBPassword), LLMAPIKey: esc(sec.LLMAPIKey), BackupIdentity: esc(sec.BackupIdentity)}
 }
 
 func installWarnings(cfg config.Config) []string {

@@ -124,6 +124,7 @@ While it lasts, this PC sends nothing: sessions stay in Claude Code's transcript
 - **"does not answer"**: see the next section.
 - **"an update did not finish"**: an update stopped half way, and its way back would write `state.json` and `config.toml` back as they were before it, undoing part of the switch. Run `backsight doctor`, which says how to finish or roll back the update, then run `backsight connect` again (the same for `connect --undo`).
 - **"a send of session <id> is still running"**: connect, and `connect --undo`, start this PC's sends over for the other server, and wait up to 2 minutes for the sends already running to end first (one would otherwise record its session as sent to the new server). Run the same command again a little later.
+- **"a restore-epoch reconcile is running"**: after a restore of the server, `backsight jobs tick` catches this PC up with it, which may mark sessions to send again. connect, and `connect --undo`, wait up to 2 minutes for that to end before they start the sends over (it would otherwise mark sessions among the new server's). Run the same command again a little later.
 
 ## connect stopped because the backup did not verify
 
@@ -148,6 +149,39 @@ Once the backup verified, connect stops the server under the maintenance lock, t
 If the command exits 30, the server did not answer on the new address: `config.toml` was put back and the server started as before. If it exits 20 after the change, `config.toml` was put back but the server did not start again on it: the message says what to run.
 
 `backsight server install` (and setup's server step) gives the server an id, which every connection token carries. If the server does not answer that step, install warns `server id: …` and goes on: memory works on this machine without it. `backsight server install` again writes it, and so does the first connection token made: `backsight server expose --private <ip>`, or `backsight server token` once the server is exposed.
+
+## server install --ssh stopped
+
+`backsight server install --ssh user@host` reads the host, plans and asks before it changes anything there. Each refusal below, up to the consent and the key, leaves both machines as they were.
+
+- **"this PC has no ssh client (OpenSSH)"** (exit 20): install OpenSSH's client here, or print the steps to run on the host yourself with `backsight server install --print-commands`.
+- **"this PC is a server-only host"** (exit 2): a server-only host holds no memory of its own to join from. Run the command from a PC that uses the memory.
+- **"…'s host key is not in your known_hosts and backsight never accepts an unknown one"** (exit 10): backsight never accepts a host key it does not know. Connect once yourself (`ssh user@host`), check that the fingerprint ssh shows matches the host's (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there), accept it, then run the command again.
+- **"the host key of … changed since you last connected"**, or **"is marked revoked"** (exit 20): an attack, or a host reinstalled since. Check with whoever runs it; backsight never removes a host key from `known_hosts`.
+- **"ssh could not log in to … without a prompt"** (exit 10): backsight runs ssh without a password prompt. Load your key into the agent (`ssh-add`) or install it on the host (`ssh-copy-id user@host`). **"ssh could not reach …"** quotes ssh's own reason (name, network, firewall).
+- **"did not answer the probe as sh does"** or **"cannot read what … runs"**: the host's login shell printed something else than the answer, or the probe failed there (its last line is quoted). Check that `ssh user@host uname -s` prints only `Linux`.
+- **"installs on a Linux host only for now"**, **"for which backsight has no release"**: the host is not x86_64 or aarch64 Linux. Install backsight by hand there, as on any machine ([install.md](install.md)); `backsight server install --print-commands` prints the steps to run there.
+- **"neither minisign nor OpenSSL 3"** (exit 10): the host needs one of them to check the release signature: install `minisign` (or OpenSSL 3) there. **"lacks tar"** or **"mktemp"**: install them there.
+- **"on user@host: backsight … gave no answer backsight can read"**, **"… exited with code …"** or **"… answered something backsight here cannot read"** (exit 20): backsight on the host answered with something else than its JSON, or failed without one (its last stderr line is quoted). Check that `ssh user@host` runs a login shell that prints nothing extra, and that backsight there works (`backsight version` there).
+- **"release … has no archive for linux/…"** (exit 20): the release matching this PC carries no build for the host's machine; nothing was changed there. Install by hand there, or use `backsight server install --print-commands` once a release covers it.
+- **"… runs backsight x and this PC y"**: an install over ssh never replaces the backsight of an existing install (its updates migrate data). Run `backsight update apply` on the older one so both run the same release, then run the command again.
+- **"is set up as a PC with Claude Code"**: the host already uses the memory itself. Open its server there instead (`backsight server expose --private <ip>`, then `backsight server token --out <file>`), carry the file here and run `backsight connect --token-file <file>`. **"is a client of another memory server"**: install the server on that server's host instead.
+- **"the ssh connection reached … at …, which other PCs cannot use"** (exit 10): your ssh went through a loopback, a public address or a tunnel, so that address is no good for your other PCs. Rerun with `--private <ip>`, a LAN or tailnet address of the host (`tailscale ip -4` or `ip addr` there). **"is not a tailnet address"**: as for `backsight server expose`, a LAN address carries the API key in clear; rerun with `--answer cleartext_lan=yes` on a network you trust, or give a tailnet address.
+- **"this backsight is a development build"**: no release matches it, so there is nothing to copy. Run the command from a released backsight (`backsight server install --print-commands` refuses a development build too). **"the release source has no version"**: the release of this PC's version cannot be found; with `--source <dir>`, point it at a directory holding that release.
+- **"no terminal and nothing on stdin"**, or **"--non-interactive asks no key at a prompt"** (exit 10): the LLM key has nowhere to come from. Pass it with `--llm-key-from-file <file>` (first line), `--llm-key-from-env <var>` or piped on stdin (first line), never as an answer.
+- **"would extract with a Claude subscription"** (exit 10): the host's provider is `claude-code`. Read the terms the question shows, then rerun with `--answer ack_subscription=yes`; at a terminal the command asks them itself.
+
+Once the host started changing, a failure keeps what was done there (the host is never rolled back) and prints the same command as `resume`: every step can run again, so running it goes on from where it stopped: the release the host already runs is not sent again, setup resumes from its journal, and the LLM key is set again only when the command carries `--llm-key-from-file` or `--llm-key-from-env` (without either, a key already set on the host is kept).
+
+- **"the release did not install on …"** (exit 20): the host's `install.sh` refused the release this PC sent (its reason is quoted: a signature or checksum mismatch, a cut transfer), and the host may still run its previous backsight. The host's `install.sh` trusts this version's signing key only: during a signing key rotation, a release signed by the next key may pass this PC's check and fail there. Run the command again; if it keeps failing, report it.
+- **"on user@host: …"**: backsight on the host refused a step (setup, server expose, server token) with its own exit code and reason, for example Docker not running there. Fix it on the host as the message says, then run the same command here.
+- **"the connection token could not be read back"**, **"came back unreadable"** or **"did not come back over ssh"** (exit 20): `backsight server token` ran on the host, but its token did not reach this PC whole. The file it wrote is removed once read; run the same command again, which writes a new one.
+- **"the install on … stopped part way"** (exit 40), or **"the ssh connection to … dropped"**: the connection ended during a step, which may have run in part. Run the same command again.
+- **"lingering is off"** (a warning): on the host, your user's services stop when you log out, so its backups and update checks only run while you are logged in there. Turn lingering on there: `sudo loginctl enable-linger <user>`.
+
+Declining connect's own question once the host is installed leaves the host installed and this PC as it was (exit 0, connect skipped): running the same command later joins it.
+
+To undo the install on the host, run `backsight setup --undo` there; on this PC, `backsight connect --undo` goes back to its own server when it had one.
 
 ## Memories are not recalled
 
@@ -195,6 +229,7 @@ doctor's `writes` check counts what is waiting:
 - **Queued notes** wait for the server: bring it back, then `backsight jobs tick`.
 - **[Quarantined](glossary.md#quarantine) sessions or notes** were refused by the server. The reasons are in the quarantine folder doctor names. Fix the cause, then `backsight retain retry-quarantine`.
 - **The notes queue is full** (`hooks.outbox_max_mb`, 500 MB by default): an error. Bring the server back, then `backsight jobs tick`.
+- **"nothing sent: this PC's sends started over for another server (connect) since this tick began"** (a `jobs tick`), or **"backfill stopped: this PC's sends started over for another server (connect) since it began"** (a `retain backfill`): `backsight connect` ran while they did. They send nothing more to the old server, delete nothing there (no purge done again, no briefing page pruned) and record nothing for it; the queued notes stay queued. The next `backsight jobs tick` sends to the new server; a backfill is offered again by connect's setup steps.
 
 doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl --user list-timers 'backsight-*'` shows the timers. User timers stop while you are logged out unless lingering is on (`loginctl enable-linger`); sessions are then sent at the next login.
 

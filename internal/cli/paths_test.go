@@ -79,3 +79,49 @@ func TestPathsErrorJSONEnvelope(t *testing.T) {
 		t.Errorf("exit %d: %s (stderr %q)", code, out, errOut)
 	}
 }
+
+// paths says what the install is (an ssh install reads it on the host):
+// the server's role and mode, empty without a config.
+func TestPathsReportsRoleAndMode(t *testing.T) {
+	unsetMachineEnv(t)
+	home := t.TempDir()
+	t.Setenv("BACKSIGHT_HOME", home)
+	read := func() (role, mode string, raw string) {
+		code, out, _ := run(t, "paths", "--json")
+		var env struct {
+			Data struct {
+				Role string `json:"server_role"`
+				Mode string `json:"server_mode"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+			t.Fatalf("exit %d: %v\n%s", code, err, out)
+		}
+		return env.Data.Role, env.Data.Mode, out
+	}
+	if role, mode, out := read(); role != "" || mode != "" || strings.Contains(out, "server_role") {
+		t.Errorf("no config: role %q mode %q\n%s", role, mode, out)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(home, "config", "config.toml")
+	if err := os.WriteFile(cfg, []byte("schema_version = 1\n[server]\nrole = \"server\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if role, mode, _ := read(); role != "server" || mode != "local" {
+		t.Errorf("server-only host: role %q mode %q", role, mode)
+	}
+	if err := os.WriteFile(cfg, []byte("schema_version = 1\n[server]\nmode = \"remote\"\nurl = \"http://100.101.1.2:8888\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if role, mode, _ := read(); role != "both" || mode != "remote" {
+		t.Errorf("client: role %q mode %q", role, mode)
+	}
+	if err := os.WriteFile(cfg, []byte("not toml ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if role, mode, _ := read(); role != "" || mode != "" {
+		t.Errorf("unparsable: role %q mode %q", role, mode)
+	}
+}

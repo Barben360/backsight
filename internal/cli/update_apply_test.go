@@ -161,13 +161,14 @@ type relOpts struct {
 	legacy        bool                 // a legacy (not prehashed) signature
 	noBareBinary  bool                 // checksums.txt lists no bare binary
 	noNewline     bool                 // checksums.txt's last line has no newline
+	platform      string               // the archive's <os>_<arch> (default: this machine's)
 }
 
 func sha(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 // signedRelease writes the goreleaser release of version v under
-// root/v<v>: this platform's archive, the bare binary, checksums.txt and
-// its signature.
+// root/v<v>: this platform's archive (or o.platform's), the bare binary,
+// checksums.txt and its signature.
 func signedRelease(t *testing.T, root, v string, key minisign.PrivateKey, o relOpts) {
 	t.Helper()
 	dir := filepath.Join(root, "v"+v)
@@ -186,8 +187,12 @@ func signedRelease(t *testing.T, root, v string, key minisign.PrivateKey, o relO
 	}
 	_ = tw.Close()
 	_ = gz.Close()
-	archive := "backsight_" + v + "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
-	bare := selfcheck.BinaryName(v, runtime.GOOS, runtime.GOARCH)
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	if o.platform != "" {
+		goos, goarch, _ = strings.Cut(o.platform, "_")
+	}
+	archive := "backsight_" + v + "_" + goos + "_" + goarch + ".tar.gz"
+	bare := selfcheck.BinaryName(v, goos, goarch)
 	sums := sha(tgz.Bytes()) + "  " + archive + "\n"
 	if !o.noBareBinary {
 		sums += sha(body) + "  " + bare + "\n"

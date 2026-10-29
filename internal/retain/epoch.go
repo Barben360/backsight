@@ -212,7 +212,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	if state.MaintenanceHeld(f.Dirs.MaintenanceLock()) {
 		return rec, errors.New("maintenance in progress")
 	}
-	if err := f.startedOver(); err != nil {
+	if err := f.StartedOver(); err != nil {
 		return rec, err
 	}
 	// The purge tombstones first, every run: another client's, or the
@@ -238,6 +238,12 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	}
 	defer func() { _ = l.Release() }()
 	if st, err = state.Load(f.Dirs.StateFile()); err != nil {
+		return rec, err
+	}
+	// Again under the lock: connect holds it while it starts the sends
+	// over, so a reconcile past this point drops no cursor of the new
+	// server's and records no epoch for it.
+	if err := f.startedOverIn(st); err != nil {
 		return rec, err
 	}
 	if rec.From = st.EpochOf(f.Bank); rec.To == rec.From {

@@ -41,9 +41,11 @@ type fakeHS struct {
 	refuse  map[string]int  // retains into these documents answer with this status
 	// onRetain sees each item before it is stored.
 	onRetain func(hindsight.RetainItem)
-	gets     int      // document reads
-	reads    []string // the documents read, in order
-	seenOps  map[string]bool
+	// onDocument sees the id of each document read, before the answer.
+	onDocument func(id string)
+	gets       int      // document reads
+	reads      []string // the documents read, in order
+	seenOps    map[string]bool
 	// epochStatus non-zero: reads of the restore epoch answer with it;
 	// tombStatus the same for the purge tombstones.
 	epochStatus, tombStatus int
@@ -158,6 +160,9 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		h.gets++
 		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.Index(r.URL.EscapedPath(), "/documents/")+len("/documents/"):])
 		h.reads = append(h.reads, id)
+		if h.onDocument != nil {
+			h.onDocument(id)
+		}
 		if h.failGet[id] {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
