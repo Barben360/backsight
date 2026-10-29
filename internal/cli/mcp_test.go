@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
@@ -652,11 +655,11 @@ func TestCreditNoneNeedsNoIDs(t *testing.T) {
 		t.Errorf("eleven ids: %v %s", isErr, out)
 	}
 	for _, v := range []string{"wrong", "outdated"} {
-		if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": v}); !isErr || !strings.Contains(out, "later version") {
-			t.Errorf("%s: %v %s", v, isErr, out)
+		if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": v}); !isErr || !strings.Contains(out, "correction") {
+			t.Errorf("%s without a correction: %v %s", v, isErr, out)
 		}
 	}
-	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used" or "none"`) {
+	if out, isErr := call(t, cs, "memory_credit", map[string]any{"verdict": "maybe"}); !isErr || !strings.Contains(out, `"used", "none", "wrong" or "outdated"`) {
 		t.Errorf("unknown verdict: %v %s", isErr, out)
 	}
 }
@@ -714,5 +717,209 @@ func TestMCPReadTakesAShortIDShownInTheSession(t *testing.T) {
 	showIn(t, home, "S", "aaaaaaaa-9999-4000-8000-000000000009")
 	if out, isErr := call(t, cs, "memory_read", map[string]any{"id": "aaaaaaaa"}); !isErr || !strings.Contains(out, "aaaaaaaa: matches several memories") {
 		t.Errorf("ambiguous short id: %v %s", isErr, out)
+	}
+}
+
+// verdict is a memory_credit call of verdict on ids, with a correction
+// and evidence that pass every check.
+func verdict(v string, ids ...string) map[string]any {
+	return map[string]any{"ids": ids, "verdict": v, "correction": "Billing runs PostgreSQL 16 since 2026-10-20.", "evidence": "psql --version printed 16.4"}
+}
+
+// retireIn journals what Task 2's retirements write: one event of kind
+// per id, in session sess, in an earlier turn.
+func retireIn(t *testing.T, home, sess, kind string, ids ...string) {
+	t.Helper()
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: sess, Project: "proj"})
+	for _, id := range ids {
+		if err := j.Append(feedback.Event{Kind: kind, Turn: "p-0", IDs: []string{id}, Verdict: "wrong", Outcome: "invalidated"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// nothingStored: no note reached the server since before, none waits in
+// the outbox.
+func nothingStored(t *testing.T, home string, before int64) bool {
+	t.Helper()
+	n, _ := notesOutbox(pathsOf(home)).Pending()
+	return retained.Load() == before && n == 0
+}
+
+var correctionStoredRE = regexp.MustCompile(`^Correction stored: note:[0-9a-f-]{36}\.$`)
+
+func TestVerdictNeedsCorrectionAndEvidence(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	before := retained.Load()
+	for name, c := range map[string]struct {
+		args map[string]any
+		want string
+	}{
+		"no correction":    {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "wrong", "evidence": "the user said so"}, "correction"},
+		"blank correction": {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "wrong", "correction": "  ", "evidence": "the user said so"}, "correction"},
+		"no evidence":      {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "outdated", "correction": "Billing runs PostgreSQL 16."}, "evidence"},
+		"long evidence":    {map[string]any{"ids": []string{"aaaaaaaa"}, "verdict": "outdated", "correction": "Billing runs PostgreSQL 16.", "evidence": strings.Repeat("é", 301)}, "300"},
+		"no ids":           {map[string]any{"verdict": "wrong", "correction": "Billing runs PostgreSQL 16.", "evidence": "the user said so"}, "ids"},
+	} {
+		if out, isErr := call(t, cs, "memory_credit", c.args); !isErr || !strings.Contains(out, c.want) {
+			t.Errorf("%s: %v %s", name, isErr, out)
+		}
+	}
+	if !nothingStored(t, home, before) {
+		t.Errorf("a refused verdict stored a note: %d sent", retained.Load()-before)
+	}
+	// 300 characters is the limit, not over it
+	args := verdict("outdated", "aaaaaaaa")
+	args["evidence"] = strings.Repeat("é", 300)
+	if out, isErr := call(t, cs, "memory_credit", args); isErr || !correctionStoredRE.MatchString(out) {
+		t.Errorf("300 characters: %v %s", isErr, out)
+	}
+}
+
+func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
+	cs, home := creditSession(t)
+	cfg, _, _ := loadServerConfig()
+	alias := cfg.Projects.Transverse[0]
+	_ = os.MkdirAll(filepath.Join(home, "proj"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, "proj", ".backsight.toml"), []byte(`related = ["atlas-spec"]`+"\n"), 0o600)
+	const (
+		foreign = "cccccccc-0000-4000-8000-000000000003"
+		linked  = "dddddddd-0000-4000-8000-000000000004"
+		pool    = "eeeeeeee-0000-4000-8000-000000000005"
+	)
+	showItems(t, home, "S", "search", "proj", feedback.Item{ID: creditA, Rank: 1, Project: "proj"}, feedback.Item{ID: foreign, Rank: 2, Project: "other"},
+		feedback.Item{ID: linked, Rank: 3, Project: "atlas-spec"}, feedback.Item{ID: pool, Rank: 4, Project: alias})
+	before := retained.Load()
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "ffffffff")); !isErr || !strings.Contains(out, "ffffffff: not shown in this session") {
+		t.Errorf("unshown: %v %s", isErr, out)
+	}
+	// all or nothing: a foreign id refuses the call, the allowed one with it
+	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "cccccccc"))
+	if !isErr || !strings.Contains(out, "cccccccc") || !strings.Contains(out, "other") || !strings.Contains(out, "backsight forget "+foreign) {
+		t.Errorf("foreign: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Fatalf("a refused verdict stored a note: %d sent", retained.Load()-before)
+	}
+	// a linked project's memory and the session's own: the session's project
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "dddddddd", "aaaaaaaa")); isErr || !correctionStoredRE.MatchString(out) {
+		t.Errorf("linked: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:proj,") {
+		t.Errorf("linked: note tags %q", last)
+	}
+	// only transverse memories: the note goes to the pool
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "eeeeeeee")); isErr || !correctionStoredRE.MatchString(out) {
+		t.Errorf("transverse: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:"+alias+",") {
+		t.Errorf("transverse: note tags %q", last)
+	}
+	// mixed projects: the session's
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "eeeeeeee", "aaaaaaaa")); isErr || !correctionStoredRE.MatchString(out) {
+		t.Errorf("mixed: %v %s", isErr, out)
+	} else if last := retainedTags[len(retainedTags)-1]; !strings.Contains(last, "project:proj,") {
+		t.Errorf("mixed: note tags %q", last)
+	}
+}
+
+func TestRetirementsAreCappedPerSession(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA, creditB)
+	retireIn(t, home, "S2", feedback.KindRetire, "11111111-0000-4000-8000-000000000001", "22222222-0000-4000-8000-000000000002", "33333333-0000-4000-8000-000000000003")
+	retireIn(t, home, "S", feedback.KindRetire, "44444444-0000-4000-8000-000000000004")
+	retireIn(t, home, "S", feedback.KindHide, "55555555-0000-4000-8000-000000000005")
+	before := retained.Load()
+	// 2 earlier + 2 asked > 3: refused, whatever another session retired
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb")); !isErr || !strings.Contains(out, "backsight forget") || !strings.Contains(out, "3") {
+		t.Errorf("over the cap: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Fatalf("a refused verdict stored a note")
+	}
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); isErr || !correctionStoredRE.MatchString(out) {
+		t.Errorf("the third: %v %s", isErr, out)
+	}
+	retireIn(t, home, "S", feedback.KindRetire, creditA)
+	before = retained.Load()
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "bbbbbbbb")); !isErr || !strings.Contains(out, "backsight forget "+creditB) {
+		t.Errorf("the fourth: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Error("a refused verdict stored a note")
+	}
+}
+
+// max_retirements = 0: no verdict retires anything in a session.
+func TestRetirementsCapOfZeroRefusesEveryVerdict(t *testing.T) {
+	mcpParentPID = 4848
+	t.Cleanup(func() { mcpParentPID = 0 })
+	cs := mcpSessionWith(t, "\n[feedback]\nmax_retirements = 0\n")
+	home := os.Getenv("HOME")
+	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4848, session.Live{SessionID: "S", Cwd: filepath.Join(home, "proj"), Project: "proj", At: time.Now()})
+	showIn(t, home, "S", creditA)
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa")); !isErr || !strings.Contains(out, "backsight forget") {
+		t.Errorf("%v %s", isErr, out)
+	}
+}
+
+func TestCorrectionNoteCarriesReplacesAndEvidence(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA, creditB)
+	args := verdict("wrong", "aaaaaaaa", creditB)
+	out, isErr := call(t, cs, "memory_credit", args)
+	if isErr || !correctionStoredRE.MatchString(out) {
+		t.Fatalf("%v %s", isErr, out)
+	}
+	doc := strings.TrimSuffix(strings.TrimPrefix(out, "Correction stored: "), ".")
+	cfg, sec, _ := loadServerConfig()
+	cl, _ := hindsight.New(cfg.Server.URL, sec.APIKey, 5*time.Second)
+	d, err := cl.GetDocument(context.Background(), cfg.Server.Bank, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Metadata["replaces"] != creditA+","+creditB || d.Metadata["evidence"] != args["evidence"] || d.Metadata["kind"] != "correction" || d.Metadata["session"] != "S" {
+		t.Errorf("metadata %v", d.Metadata)
+	}
+	if d.OriginalText != args["correction"] || !slices.Contains(d.Tags, "kind:correction") || !slices.Contains(d.Tags, "project:proj") {
+		t.Errorf("document %+v", d)
+	}
+	// the correction and the evidence live in the note only
+	journal := ""
+	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "*"))
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		journal += string(b)
+	}
+	for _, text := range []string{"PostgreSQL 16", "psql"} {
+		if strings.Contains(journal, text) || strings.Contains(telemetryText(t, home), text) {
+			t.Errorf("%q left the note", text)
+		}
+	}
+	if !creditEvent(t, home, `"verdict":"wrong"`, `"ids_n":2`, `"ok":true`) {
+		t.Errorf("telemetry:\n%s", telemetryText(t, home))
+	}
+}
+
+func TestVerdictCorrectionHonoursSecretsAndPause(t *testing.T) {
+	cs, home := creditSession(t)
+	showIn(t, home, "S", creditA)
+	before := retained.Load()
+	secret := "DB_PASSWORD=" + "Zx9kLmQ2" + "wPq8"
+	args := verdict("wrong", "aaaaaaaa")
+	args["correction"] = "Use " + secret + " for prod."
+	if out, isErr := call(t, cs, "memory_credit", args); !isErr || !strings.Contains(out, "secret") {
+		t.Errorf("secret in the correction: %v %s", isErr, out)
+	}
+	args = verdict("wrong", "aaaaaaaa")
+	args["evidence"] = "the .env holds " + secret
+	if out, isErr := call(t, cs, "memory_credit", args); !isErr || !strings.Contains(out, "secret") {
+		t.Errorf("secret in the evidence: %v %s", isErr, out)
+	}
+	_ = sessions(home).Update("S", func(st *session.State) error { st.Paused = true; return nil })
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); !isErr || !strings.Contains(out, "paused") {
+		t.Errorf("paused: %v %s", isErr, out)
+	}
+	if !nothingStored(t, home, before) {
+		t.Errorf("a refused verdict stored a note: %d sent", retained.Load()-before)
 	}
 }

@@ -66,6 +66,14 @@ type Event struct {
 	Params    map[string]float64 `json:"params,omitempty"`
 }
 
+// Kinds of the events that retire a memory shown in a session (a raw fact
+// invalidated, an observation hidden): each counts toward the session's
+// feedback.max_retirements.
+const (
+	KindRetire = "retire"
+	KindHide   = "hide"
+)
+
 // Common fields Append puts on every event that leaves them empty.
 type Common struct {
 	Session, Project, Binary, V string
