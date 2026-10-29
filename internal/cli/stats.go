@@ -9,8 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/stats"
 )
@@ -90,6 +92,7 @@ func newStatsCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to)}
+			res.Feedback.SharedMachines = sharedMachines(d)
 			res.Extraction = extractionOver(cmd, from, to)
 			if parity {
 				res.Parity = stats.Parity(res.Report)
@@ -102,6 +105,23 @@ func newStatsCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the baseline measured on the Hindsight integration backsight replaced")
 	_ = cmd.Flags().MarkHidden("parity")
 	return cmd
+}
+
+// sharedMachines is how many other machines' counts recall weighs with
+// this one's: those of the shared cache in use now. 0 when feedback or
+// share_ledger is off, or the cache cannot be read.
+func sharedMachines(d paths.Dirs) int {
+	cfg, _, err := loadServerConfig()
+	if err != nil || !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger {
+		return 0
+	}
+	c, err := feedback.LoadSharedCache(d.FeedbackDir())
+	if err != nil {
+		return 0
+	}
+	docs, _ := c.Parsed()
+	self, _ := retain.MachineID(d.State)
+	return feedback.SharedMachines(docs, self, now())
 }
 
 // parseWhen reads a window bound; a date alone is midnight UTC.
@@ -229,8 +249,15 @@ func statsText(r statsResult) string {
 	fmt.Fprintf(&b, "Retirements  %d raw fact(s) invalidated on the server (%d verdict(s) the server refused halfway), %d observation(s) hidden on this machine\n",
 		f.Retired, f.Partly, f.Hidden)
 	st := f.Settled
-	fmt.Fprintf(&b, "Ledger       settled %d shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; honesty flags: %s\n",
+	fmt.Fprintf(&b, "Ledger       settled %d shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; honesty flags: %s",
 		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, counts(f.Flags))
+	switch {
+	case f.SharedMachines == 1:
+		b.WriteString("; shared with 1 other machine")
+	case f.SharedMachines > 1:
+		fmt.Fprintf(&b, "; shared with %d other machines", f.SharedMachines)
+	}
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "Hook failures %s; unknown transcript records: %s\n", counts(r.HookFailures), counts(r.Unknown))
 	x := r.Extraction
 	switch {

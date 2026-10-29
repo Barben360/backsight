@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -266,5 +267,35 @@ func TestStatsAbsoluteWindowExtraction(t *testing.T) {
 	}
 	if _, out, _ := run(t, "stats", "--since", day(40), "--until", day(9)); !strings.Contains(out, "5000000 input") || !strings.Contains(out, "(last 20 days: the server keeps no more)") {
 		t.Errorf("a window cut by the server's 30 days:\n%s", out)
+	}
+}
+
+// The Ledger line names how many other machines' counts recall weighs
+// (those in use: neither this machine nor one silent for 30 days), and
+// only when there are any and sharing is on.
+func TestStatsNamesSharedMachines(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	self, err := retain.MachineID(pathsOf(home).State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := otherMachine("pc-old", nil)
+	gone.At = gone.At.Add(-31 * 24 * time.Hour)
+	writeSharedCache(t, home, otherMachine("pc-b", nil), otherMachine("pc-c", nil), otherMachine("pc-c", nil), otherMachine(self, nil), gone)
+	line := "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none"
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 2 other machines\n") {
+		t.Errorf("two other machines:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "1", "--json"); !strings.Contains(out, `"shared_machines": 2`) {
+		t.Errorf("json:\n%s", out)
+	}
+	writeSharedCache(t, home, otherMachine("pc-b", nil))
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 1 other machine\n") {
+		t.Errorf("one other machine:\n%s", out)
+	}
+	appendConfig(t, home, "[feedback]\nshare_ledger = false")
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"\n") {
+		t.Errorf("sharing off:\n%s", out)
 	}
 }

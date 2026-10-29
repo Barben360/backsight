@@ -72,6 +72,8 @@ How the boost moves with the counts, before they fade, with one uncredited show 
 
 `backsight stats` shows these counts on its `Credits` line (how turns ended and what Claude reported) and its `Ledger` line (what settled).
 
+With several machines on one server, each shares its counts with the others (`feedback.share_ledger`, on by default): every 15 minutes its background job sends them to the server's control bank, memory ids, numbers and times only, and fetches the other machines' every 6 hours. Recall adds their uses and misses to this machine's, each faded by its age, and skips a memory another machine hid, unless `backsight forget --restore <id>` restored it here after that hiding, which shows it again on this machine only. A machine silent for 30 days no longer counts. Recall reads the copy fetched last, never the server: when that copy is missing or cannot be read, it uses this machine's counts alone. `backsight memory stale`, `backsight feedback replay` and the counts of `backsight stats` stay this machine's; the `Ledger` line of `stats` adds how many other machines recall weighs.
+
 ## Before Claude asks you a question
 
 When Claude is about to ask you a question with its `AskUserQuestion` tool and has not searched the memory during this prompt, the first attempt is refused with a reason: search the memory first, then ask again saying "nothing in memory" if it has no answer. Up to 2 memories that match the question, found within 6 seconds, come with the reason. This happens at most once per prompt, and never while the memory is unavailable, so a question is delayed, never blocked.

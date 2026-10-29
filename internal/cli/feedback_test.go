@@ -414,7 +414,7 @@ func TestReplayCountsSignChangesAndMovers(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	lines := strings.Split(out, "\n")
-	for _, want := range [][]string{{"prior_misses=1.5", "nothing written"}, {"13 memories", "1 turning negative", "0 turning positive"}, {repM1[:8], "+0.0017", "-0.013"}} {
+	for _, want := range [][]string{{"Replay of this machine's journal", "prior_misses=1.5", "nothing written"}, {"13 memories", "1 turning negative", "0 turning positive"}, {repM1[:8], "+0.0017", "-0.013"}} {
 		if lineIndex(lines, want...) < 0 {
 			t.Errorf("no line with %q:\n%s", want, out)
 		}
@@ -543,5 +543,28 @@ func TestReplayPrintsNoNegativeZero(t *testing.T) {
 	_, raw, _ := run(t, "feedback", "replay", "--set", "boost_weight=0", "--json")
 	if !regexp.MustCompile(`"after":\s*0\s*[,}]`).MatchString(raw) || regexp.MustCompile(`:\s*-0\s*[,}]`).MatchString(raw) {
 		t.Errorf("JSON with a negative zero, or no move to 0:\n%s", raw)
+	}
+}
+
+// An entry holding only a restore time (a restore of a memory this
+// machine never counted) is not a memory: rebuild's totals, its new and
+// dropped counts and replay's count leave it out.
+func TestARestoreAloneIsNotAMemory(t *testing.T) {
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	p := feedback.Params{CreditHalfLife: 30 * 24 * time.Hour, MissHalfLife: 30 * 24 * time.Hour, PriorCredits: 1, PriorMisses: 9, Weight: 0.1}
+	shown := feedback.Entry{Shown: 2, LastShown: at}
+	withRestore := feedback.Ledger{Memories: map[string]feedback.Entry{"m1": shown, "m2": {UnhiddenAt: at}}}
+	without := feedback.Ledger{Memories: map[string]feedback.Entry{"m1": shown}}
+	if tot := totals(withRestore, p, at); tot.Memories != 1 || tot.Shown != 2 {
+		t.Errorf("totals %+v", tot)
+	}
+	if res := compareLedgers(withRestore, without, p, at); res.New != 0 || res.Dropped != 0 || res.Rebuilt.Memories != 1 {
+		t.Errorf("rebuilt holds the restore: %+v", res)
+	}
+	if res := compareLedgers(without, withRestore, p, at); res.New != 0 || res.Dropped != 0 || res.Current.Memories != 1 {
+		t.Errorf("current holds the restore: %+v", res)
+	}
+	if res := compareReplays(nil, withRestore, withRestore, p, p, at, 3); res.Memories != 1 {
+		t.Errorf("replay counts %d memories", res.Memories)
 	}
 }

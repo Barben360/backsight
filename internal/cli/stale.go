@@ -46,9 +46,10 @@ func (r staleResult) ids() []string {
 }
 
 // newMemoryStaleCmd is `memory stale`: what the ledger (with what was
-// journaled since its last settle) says needs the user's review. Local
-// files only, the ledger never written; it journals what it listed, best
-// effort.
+// journaled since its last settle) says needs the user's review. This
+// machine's ledger only: the other machines' counts and hidings, which
+// recall weighs, are theirs to list. Local files only, the ledger never
+// written; it journals what it listed, best effort.
 func newMemoryStaleCmd(e *env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "stale",

@@ -268,6 +268,25 @@ func readAt(v float64, ref, t time.Time, h time.Duration) (float64, time.Time) {
 	return decay(v, ref, t, h), t
 }
 
+// RestoreOnly: e holds nothing but UnhiddenAt, left by a restore of a
+// memory this machine never counted. It is not one of the ledger's
+// memories.
+func (e Entry) RestoreOnly() bool {
+	return e.Shown == 0 && e.Credits == 0 && e.Misses == 0 && e.Wrong == 0 && e.Hidden == nil &&
+		e.LastShown.IsZero() && e.LastCredited.IsZero() && e.Imported == (Imported{})
+}
+
+// Counted is how many memories l holds, entries RestoreOnly left out.
+func (l Ledger) Counted() int {
+	n := 0
+	for _, e := range l.Memories {
+		if !e.RestoreOnly() {
+			n++
+		}
+	}
+	return n
+}
+
 // Boost is what recall adds to id's score: k × ((c + α) / (c + m + α + β)
 // − α / (α + β)), c and m its credits and misses decayed to now, k, α
 // and β p's Weight, PriorCredits and PriorMisses. Between −k × α / (α + β)

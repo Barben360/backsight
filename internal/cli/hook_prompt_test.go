@@ -754,3 +754,145 @@ func TestAFreshHidingSkipsTheNextRecall(t *testing.T) {
 		t.Errorf("context:\n%s", h.Specific.Context)
 	}
 }
+
+// Two memories with ids a shared document can name: uA 0.02 above uB.
+const (
+	uA = "a1111111-0000-4000-8000-000000000001"
+	uB = "b2222222-0000-4000-8000-000000000002"
+)
+
+func uuidHits() string {
+	return `[{"id":"` + uA + `","text":"memory A about billing","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.82}},` +
+		`{"id":"` + uB + `","text":"memory B about billing","type":"observation","tags":["project:billing"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.80}}]`
+}
+
+// writeSharedCache writes docs as the tick's shared.json, each through
+// MarshalMeta as the other machines upload it.
+func writeSharedCache(t *testing.T, home string, docs ...feedback.SharedDoc) {
+	t.Helper()
+	c := feedback.SharedCache{FetchedAt: time.Now().UTC()}
+	for _, d := range docs {
+		meta, err := d.MarshalMeta()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Docs = append(c.Docs, json.RawMessage(meta))
+	}
+	dir := pathsOf(home).FeedbackDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := feedback.SaveSharedCache(dir, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// otherMachine is a document of another machine at now, with entries.
+func otherMachine(machine string, entries map[string]feedback.SharedEntry) feedback.SharedDoc {
+	if entries == nil {
+		entries = map[string]feedback.SharedEntry{}
+	}
+	return feedback.SharedDoc{V: feedback.SharedVersion, Machine: machine, At: time.Now().Truncate(time.Second), Entries: entries}
+}
+
+// injectedFirst: A comes before B in the context (false when either is
+// missing).
+func injectedFirst(ctx, a, b string) bool {
+	i, j := strings.Index(ctx, a), strings.Index(ctx, b)
+	return i >= 0 && j >= 0 && i < j
+}
+
+// A memory this machine never credited, used often on another machine,
+// climbs over its neighbour here, this machine's ledger empty; with
+// share_ledger off the shared counts are not read.
+func TestRecallUsesOtherMachinesCredits(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	credited := map[string]feedback.SharedEntry{uB: {Credits: 10, CreditsAt: now}}
+	home := hookHome(t)
+	recallAnswer = uuidHits()
+	writeSharedCache(t, home, otherMachine("pc-b", credited))
+	h := prompt(t, home, "s1", longPrompt)
+	if !injectedFirst(h.Specific.Context, "memory B", "memory A") {
+		t.Fatalf("B, credited on another machine, not injected first:\n%s", h.Specific.Context)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || len(shows[0].Items) != 2 || shows[0].Items[0].ID != uB || shows[0].Items[0].Boost < 0.034 || shows[0].Items[0].RankWithoutBoost != 2 {
+		t.Errorf("shows %+v", shows)
+	}
+
+	off := hookHome(t)
+	recallAnswer = uuidHits()
+	appendConfig(t, off, "[feedback]\nshare_ledger = false")
+	writeSharedCache(t, off, otherMachine("pc-b", credited))
+	if h := prompt(t, off, "s1", longPrompt); !injectedFirst(h.Specific.Context, "memory A", "memory B") {
+		t.Errorf("share_ledger off still read the shared counts:\n%s", h.Specific.Context)
+	}
+}
+
+// A memory another machine hid is skipped here, until this machine
+// restores it after that hiding.
+func TestRemoteHidingHidesHere(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = uuidHits()
+	writeSharedCache(t, home, otherMachine("pc-b", map[string]feedback.SharedEntry{uA: {HiddenSince: time.Now().Add(-time.Hour).Truncate(time.Second)}}))
+	h := prompt(t, home, "s1", longPrompt)
+	if strings.Contains(h.Specific.Context, "memory A") || !strings.Contains(h.Specific.Context, "memory B") {
+		t.Fatalf("hidden on another machine, still recalled here:\n%s", h.Specific.Context)
+	}
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{})
+	if err := j.AppendFolded(feedback.Event{Kind: feedback.KindUnhide, IDs: []string{uA}, Outcome: "restored"}); err != nil {
+		t.Fatal(err)
+	}
+	if h := prompt(t, home, "s2", longPrompt); !strings.Contains(h.Specific.Context, "memory A") {
+		t.Errorf("restored here after the hiding, still skipped:\n%s", h.Specific.Context)
+	}
+}
+
+// A shared cache recall cannot use (garbage, a document of an unknown
+// version, no file) leaves recall on this machine's ledger: the same
+// context, byte for byte, and the same shows as with no cache at all.
+func TestRecallIgnoresABrokenSharedCache(t *testing.T) {
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	local := `{"schema":1,"watermark":"` + at + `","memories":{"` + uA + `":{"shown":10,"credits":10,"credits_at":"` + at + `"}}}`
+	run := func(cache func(home string)) (string, []feedback.Item) {
+		t.Helper()
+		home := hookHome(t)
+		recallAnswer = uuidHits()
+		writeLedger(t, home, local)
+		cache(home)
+		h := prompt(t, home, "s1", longPrompt)
+		shows := eventsOf(journalEvents(t, home), "shows")
+		if len(shows) != 1 {
+			t.Fatalf("shows %+v", shows)
+		}
+		return h.Specific.Context, shows[0].Items
+	}
+	raw := func(content string) func(string) {
+		return func(home string) {
+			dir := pathsOf(home).FeedbackDir()
+			if err := os.WriteFile(feedback.SharedCacheFile(dir), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	wantCtx, wantItems := run(func(string) {})
+	if !injectedFirst(wantCtx, "memory A", "memory B") || wantItems[0].Boost <= 0 {
+		t.Fatalf("baseline without the local boost:\n%s\n%+v", wantCtx, wantItems)
+	}
+	now := time.Now().Unix()
+	for name, cache := range map[string]func(string){
+		"garbage":         raw("{not json"),
+		"unknown version": raw(fmt.Sprintf(`{"fetched_at":"%s","docs":[{"v":2,"machine":"pc-b","at":%d,"entries":{"%s":[50,%d,0,0,0],"%s":[0,0,0,0,%d]}}]}`, at, now, uB, now, uA, now)),
+		"not a list":      raw(`{"fetched_at":"` + at + `","docs":7}`),
+	} {
+		ctx, items := run(cache)
+		if ctx != wantCtx {
+			t.Errorf("%s: context differs:\n%s\nwant:\n%s", name, ctx, wantCtx)
+		}
+		if !slices.EqualFunc(items, wantItems, func(a, b feedback.Item) bool {
+			return a.ID == b.ID && a.Rank == b.Rank && a.Boost == b.Boost && a.RankWithoutBoost == b.RankWithoutBoost
+		}) {
+			t.Errorf("%s: shows %+v, want %+v", name, items, wantItems)
+		}
+	}
+}

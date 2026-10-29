@@ -442,9 +442,13 @@ func newFeedbackRebuildCmd(e *env) *cobra.Command {
 func compareLedgers(rebuilt, current feedback.Ledger, p feedback.Params, t time.Time) rebuildResult {
 	res := rebuildResult{At: t, Rebuilt: totals(rebuilt, p, t), Current: totals(current, p, t)}
 	same := func(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+	// An entry holding only a restore time is no memory (RestoreOnly).
 	for id, r := range rebuilt.Memories {
+		if r.RestoreOnly() {
+			continue
+		}
 		c, ok := current.Memories[id]
-		if !ok {
+		if !ok || c.RestoreOnly() {
 			res.New++
 			continue
 		}
@@ -454,8 +458,8 @@ func compareLedgers(rebuilt, current feedback.Ledger, p feedback.Params, t time.
 			res.Changed++
 		}
 	}
-	for id := range current.Memories {
-		if _, ok := rebuilt.Memories[id]; !ok {
+	for id, c := range current.Memories {
+		if r, ok := rebuilt.Memories[id]; !c.RestoreOnly() && (!ok || r.RestoreOnly()) {
 			res.Dropped++
 		}
 	}
@@ -463,7 +467,7 @@ func compareLedgers(rebuilt, current feedback.Ledger, p feedback.Params, t time.
 }
 
 func totals(l feedback.Ledger, p feedback.Params, t time.Time) ledgerTotals {
-	tot := ledgerTotals{Memories: len(l.Memories)}
+	tot := ledgerTotals{Memories: l.Counted()}
 	for _, m := range l.Memories {
 		m = m.DecayedTo(t, p)
 		tot.Shown += m.Shown

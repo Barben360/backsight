@@ -55,7 +55,7 @@ func newFeedbackReplayCmd(e *env) *cobra.Command {
 	var sets []string
 	cmd := &cobra.Command{
 		Use:   "replay",
-		Short: "Measure a change of the feedback parameters on the journal's history, writing nothing",
+		Short: "Measure a change of the feedback parameters on this machine's journal, writing nothing",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
 			dir, cfg, err := feedbackConfig()
@@ -135,11 +135,12 @@ func setFeedbackKey(f *config.Feedback, kv string) (string, float64, error) {
 func compareReplays(events []feedback.Event, before, after feedback.Ledger, p, q feedback.Params, t time.Time, promptHits int) replayResult {
 	res := replayResult{At: t, TurnedNegative: []string{}, TurnedPositive: []string{}, Movers: []replayMover{}}
 	ids := map[string]bool{}
-	for id := range before.Memories {
-		ids[id] = true
-	}
-	for id := range after.Memories {
-		ids[id] = true
+	for _, l := range []feedback.Ledger{before, after} {
+		for id, m := range l.Memories {
+			if !m.RestoreOnly() { // a restore alone is not a memory, its boost 0
+				ids[id] = true
+			}
+		}
 	}
 	res.Memories = len(ids)
 	for _, id := range slices.Sorted(maps.Keys(ids)) {
@@ -222,7 +223,7 @@ func replayText(r replayResult) string {
 		}
 		with = strings.Join(kv, ", ") + " against the current parameters"
 	}
-	fmt.Fprintf(&b, "Replay of the journal with %s (boosts as of %s UTC), nothing written\n", with, r.At.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "Replay of this machine's journal with %s (boosts as of %s UTC), nothing written\n", with, r.At.Format("2006-01-02 15:04"))
 	fmt.Fprintf(&b, "%d memories, %d turning negative, %d turning positive\n", r.Memories, len(r.TurnedNegative), len(r.TurnedPositive))
 	if len(r.Movers) == 0 {
 		b.WriteString("no boost moves\n")

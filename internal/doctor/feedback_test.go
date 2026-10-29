@@ -219,3 +219,22 @@ func TestDoctorWarnsOnAStaleSharedCache(t *testing.T) {
 		t.Errorf("feedback off: %+v", c)
 	}
 }
+
+// A restore of a memory this machine never showed leaves an entry
+// holding only its time: the ledger check does not count it.
+func TestDoctorDoesNotCountARestoreAsAMemory(t *testing.T) {
+	d := feedbackDirs(t, usageNow.Add(-time.Hour), usageNow.Add(-20*time.Minute))
+	j := feedback.NewJournal(d.FeedbackDir(), feedback.Common{})
+	if err := j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: usageNow.Add(-15 * time.Minute), IDs: []string{"never-shown"}, Outcome: "restored"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, usageNow.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := feedback.LoadLedger(d.FeedbackDir()); len(l.Memories) != 1 {
+		t.Fatalf("ledger %+v", l.Memories)
+	}
+	if c := checkFeedbackLedger(d, true); c.Status != OK || !strings.HasPrefix(c.Summary, "0 memories,") {
+		t.Errorf("%+v", c)
+	}
+}

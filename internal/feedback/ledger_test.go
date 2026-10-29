@@ -705,3 +705,28 @@ func TestCurrentSkipsATailLineAtOrBeforeTheWatermark(t *testing.T) {
 		t.Errorf("lines at or before the watermark applied: %v, wrong %d, want 1", err, l.Memories["m1"].Wrong)
 	}
 }
+
+// Only an entry holding nothing but its restore time is RestoreOnly:
+// any count, verdict, hiding or show makes it a memory.
+func TestRestoreOnlyEntries(t *testing.T) {
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	l := Ledger{Memories: map[string]Entry{
+		"restore":  {UnhiddenAt: at},
+		"empty":    {},
+		"shown":    {Shown: 1, UnhiddenAt: at},
+		"credits":  {Credits: 0.5, CreditsAt: at, UnhiddenAt: at},
+		"misses":   {Misses: 0.5, MissesAt: at},
+		"wrong":    {Wrong: 1, UnhiddenAt: at},
+		"hidden":   {Hidden: &Hidden{Since: at}},
+		"imported": {Imported: Imported{Shown: 1}},
+		"seen":     {LastShown: at},
+	}}
+	for id, e := range l.Memories {
+		if want := id == "restore" || id == "empty"; e.RestoreOnly() != want {
+			t.Errorf("%s: RestoreOnly %v", id, !want)
+		}
+	}
+	if n := l.Counted(); n != 7 {
+		t.Errorf("Counted %d, want 7", n)
+	}
+}

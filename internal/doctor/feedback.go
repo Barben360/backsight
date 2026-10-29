@@ -110,7 +110,7 @@ func checkFeedbackLedger(d paths.Dirs, enabled bool) Check {
 		c.Fix = "backsight jobs tick settles it (its output says why if it cannot); the jobs check says whether the scheduler runs it"
 		return c
 	}
-	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", len(l.Memories), l.Watermark.UTC().Format("2006-01-02 15:04"))
+	c.Summary = fmt.Sprintf("%d memories, settled up to %s UTC", l.Counted(), l.Watermark.UTC().Format("2006-01-02 15:04"))
 	return c
 }
 
