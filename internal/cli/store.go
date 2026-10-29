@@ -107,10 +107,12 @@ func sendsGate(d paths.Dirs, generation int) func() error {
 }
 
 // noteOptions is what a correction from memory_credit adds to its note:
-// the memories it replaces and the evidence.
+// the memories it replaces and the evidence; checked when the caller ran
+// checkNote on the same note before asking the server anything.
 type noteOptions struct {
 	Replaces []string
 	Evidence string
+	checked  bool
 }
 
 // storeNote validates and queues one note, then tries to send it now (the
@@ -118,8 +120,10 @@ type noteOptions struct {
 // since generation was read with cfg: then the next jobs tick sends it.
 // Shared by the CLI, memory_store and memory_credit (opts: at most one).
 func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config, sec config.Secrets, generation int, sid, cwd, kind, proj, text string, opts ...noteOptions) (storeResult, error) {
-	if err := checkNote(d, home, cfg, sid, cwd, kind, proj, text); err != nil {
-		return storeResult{}, err
+	if !slices.ContainsFunc(opts, func(o noteOptions) bool { return o.checked }) {
+		if err := checkNote(d, home, cfg, sid, cwd, kind, proj, text); err != nil {
+			return storeResult{}, err
+		}
 	}
 	text = strings.TrimSpace(text)
 	proj, err := noteTarget(cfg, proj, project.New(home, cfg.Projects.Transverse).Project(cwd), "--project transverse")
@@ -199,10 +203,16 @@ const storeFlushBudget = 10 * time.Second
 // the configured aliases are.
 const TransverseKeyword = retain.TransverseKeyword
 
+// noteChecked, when set (tests), runs at each checkNote.
+var noteChecked func()
+
 // checkNote refuses a note before anything leaves the machine: bad kind,
 // empty text, a secret, or a session or directory opted out of memory (SPEC
 // §7, §13; notes honour pause and opt-outs, 0051).
 func checkNote(d paths.Dirs, home string, cfg config.Config, sid, cwd, kind, proj, text string) error {
+	if noteChecked != nil {
+		noteChecked()
+	}
 	if !retain.Kinds[kind] {
 		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("kind %q: one of %s", kind, kindList())}
 	}

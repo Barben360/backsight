@@ -320,6 +320,8 @@ func importInTick(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 		return "" // the run in progress reports
 	case err != nil:
 		return "earlier history not imported (" + err.Error() + ")"
+	case res.Waiting:
+		return fmt.Sprintf("earlier history: %d shows and %d credits imported; marked complete once the server answers", shows, credits)
 	case !res.Complete:
 		return fmt.Sprintf("earlier history: %d shows and %d credits imported, the rest at the next tick", shows, credits)
 	}

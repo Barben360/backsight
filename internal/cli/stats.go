@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,6 +94,7 @@ func newStatsCmd(e *env) *cobra.Command {
 			}
 			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to)}
 			res.Feedback.SharedMachines = sharedMachines(d)
+			journalCounts(d, &res.Report)
 			res.Extraction = extractionOver(cmd, from, to)
 			if parity {
 				res.Parity = stats.Parity(res.Report)
@@ -123,6 +125,40 @@ func sharedMachines(d paths.Dirs) int {
 	// Read only: stats never creates the machine id. Without one, every
 	// document counts (the tick leaves this machine's out anyway).
 	return feedback.SharedMachines(docs, retain.ReadMachineID(d.State), now())
+}
+
+// journalCounts sets r's counts that the feedback journal holds, over r's
+// window: the prompt recalls and searches whose shown set the boost
+// changed (their set_changed flag), and the shows imported from earlier
+// history. A journal that cannot be read counts what it could.
+func journalCounts(d paths.Dirs, r *stats.Report) {
+	events, _, _ := feedback.Read(d.FeedbackDir(), r.From)
+	f := &r.Feedback
+	for _, e := range events {
+		if e.TS.Before(r.From) || !e.TS.Before(r.To) {
+			continue
+		}
+		changed := slices.Contains(e.Flags, feedback.FlagSetChanged)
+		switch {
+		case e.Kind == "shows" && e.Path == "prompt":
+			f.Boost.Prompts++
+			if changed {
+				f.Boost.PromptsSetChanged++
+			}
+		case e.Kind == feedback.KindRecall:
+			f.Boost.Searches++
+			if changed {
+				f.Boost.SearchesSetChanged++
+			}
+		case e.Kind == feedback.KindImport:
+			for _, s := range e.Settled {
+				f.Imported.Shows++
+				if s.Outcome == feedback.OutcomeCredit {
+					f.Imported.Credits++
+				}
+			}
+		}
+	}
 }
 
 // parseWhen reads a window bound; a date alone is midnight UTC.
@@ -250,8 +286,8 @@ func statsText(r statsResult) string {
 	fmt.Fprintf(&b, "Retirements  %d raw fact(s) invalidated on the server (%d verdict(s) the server refused halfway), %d observation(s) hidden on this machine\n",
 		f.Retired, f.Partly, f.Hidden)
 	st := f.Settled
-	fmt.Fprintf(&b, "Ledger       settled %d shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; honesty flags: %s",
-		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, counts(f.Flags))
+	fmt.Fprintf(&b, "Ledger       settled %d live shows: %d credits, %d confident misses (%s of uncredited), %d unknown, %d late; imported %d shows of earlier history (%d credits); honesty flags: %s",
+		st.Shows, st.Credits, st.Misses, pct(st.Misses, st.Shows-st.Credits), st.Unknown, f.Late, f.Imported.Shows, f.Imported.Credits, counts(f.Flags))
 	switch {
 	case f.SharedMachines == 1:
 		b.WriteString("; shared with 1 other machine")
@@ -259,6 +295,9 @@ func statsText(r statsResult) string {
 		fmt.Fprintf(&b, "; shared with %d other machines", f.SharedMachines)
 	}
 	b.WriteString("\n")
+	bo := f.Boost
+	fmt.Fprintf(&b, "Boost        changed the shown set of %d of %d prompt recalls (%s) and %d of %d searches (%s)\n",
+		bo.PromptsSetChanged, bo.Prompts, pct(bo.PromptsSetChanged, bo.Prompts), bo.SearchesSetChanged, bo.Searches, pct(bo.SearchesSetChanged, bo.Searches))
 	fmt.Fprintf(&b, "Hook failures %s; unknown transcript records: %s\n", counts(r.HookFailures), counts(r.Unknown))
 	x := r.Extraction
 	switch {

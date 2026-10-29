@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -98,7 +99,7 @@ func TestStatsCountsFeedback(t *testing.T) {
 	_, out, _ := run(t, "stats", "1")
 	for _, want := range []string{
 		"\nCredits      turns with memories shown: declared 2, after a block 1, undeclared 1, skipped 1; used 2, none 1, wrong 0, outdated 0, refused 2\n",
-		"\nLedger       settled 10 shows: 2 credits, 3 confident misses (38% of uncredited), 1 unknown, 1 late; honesty flags: credit_without_overlap 1, none_with_overlap 1\n",
+		"\nLedger       settled 10 live shows: 2 credits, 3 confident misses (38% of uncredited), 1 unknown, 1 late; imported 0 shows of earlier history (0 credits); honesty flags: credit_without_overlap 1, none_with_overlap 1\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("lacks %q:\n%s", want, out)
@@ -107,7 +108,7 @@ func TestStatsCountsFeedback(t *testing.T) {
 	// No feedback events: zeros, no share, no flags.
 	empty := devInstall(t, true)
 	pointAt(t, empty, fakeHindsight(t))
-	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none\n") {
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nLedger       settled 0 live shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; imported 0 shows of earlier history (0 credits); honesty flags: none\n") {
 		t.Errorf("empty window:\n%s", out)
 	}
 }
@@ -283,7 +284,7 @@ func TestStatsNamesSharedMachines(t *testing.T) {
 	gone := otherMachine("pc-old", nil)
 	gone.At = gone.At.Add(-31 * 24 * time.Hour)
 	writeSharedCache(t, home, otherMachine("pc-b", nil), otherMachine("pc-c", nil), otherMachine("pc-c", nil), otherMachine(self, nil), gone)
-	line := "\nLedger       settled 0 shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; honesty flags: none"
+	line := "\nLedger       settled 0 live shows: 0 credits, 0 confident misses (- of uncredited), 0 unknown, 0 late; imported 0 shows of earlier history (0 credits); honesty flags: none"
 	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"; shared with 2 other machines\n") {
 		t.Errorf("two other machines:\n%s", out)
 	}
@@ -309,5 +310,94 @@ func TestStatsNamesSharedMachines(t *testing.T) {
 	appendConfig(t, home, "[feedback]\nshare_ledger = false")
 	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, line+"\n") {
 		t.Errorf("sharing off:\n%s", out)
+	}
+}
+
+// journalIn appends events to home's journal, each at its own TS.
+func journalIn(t *testing.T, home string, events ...feedback.Event) {
+	t.Helper()
+	j := feedback.NewJournal(pathsOf(home).FeedbackDir(), feedback.Common{Session: "s1"})
+	for _, e := range events {
+		if err := j.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Under the feedback lines, the share of the window's prompt recalls and
+// searches whose shown set the boost changed, from the journal: a gate
+// show, a search's shows (its audit counts) and what lies outside the
+// window are not counted, nor is an order changed alone.
+func TestStatsBoostChangedShare(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	hour, old := time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-3*24*time.Hour)
+	items := []feedback.Item{{ID: "m1", Rank: 1}}
+	set, order := []string{feedback.FlagSetChanged}, []string{feedback.FlagOrderChanged}
+	journalIn(t, home,
+		feedback.Event{Kind: "shows", Path: "prompt", TS: hour, Items: items, Flags: set},
+		feedback.Event{Kind: "shows", Path: "prompt", TS: hour, Items: items},
+		feedback.Event{Kind: "shows", Path: "prompt", TS: hour, Items: items},
+		feedback.Event{Kind: "shows", Path: "prompt", TS: old, Items: items, Flags: set},
+		feedback.Event{Kind: "shows", Path: "gate", TS: hour, Items: items, Flags: set},
+		feedback.Event{Kind: "shows", Path: "search", TS: hour, Items: items},
+		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: hour, Items: items, Flags: []string{feedback.FlagSetChanged, feedback.FlagOrderChanged}},
+		feedback.Event{Kind: feedback.KindRecall, Path: "search", TS: hour, Items: items, Flags: order},
+	)
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nBoost        changed the shown set of 1 of 3 prompt recalls (33%) and 1 of 2 searches (50%)\n") {
+		t.Errorf("1 day:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "7"); !strings.Contains(out, "\nBoost        changed the shown set of 2 of 4 prompt recalls (50%) and 1 of 2 searches (50%)\n") {
+		t.Errorf("7 days:\n%s", out)
+	}
+	_, raw, _ := run(t, "stats", "1", "--json")
+	var env struct {
+		Data struct {
+			Feedback struct {
+				Boost map[string]int `json:"boost"`
+			} `json:"feedback"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		t.Fatal(err)
+	}
+	if b := env.Data.Feedback.Boost; b["prompts"] != 3 || b["prompts_set_changed"] != 1 || b["searches"] != 2 || b["searches_set_changed"] != 1 {
+		t.Errorf("json boost %v", b)
+	}
+	empty := devInstall(t, true)
+	pointAt(t, empty, fakeHindsight(t))
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nBoost        changed the shown set of 0 of 0 prompt recalls (-) and 0 of 0 searches (-)\n") {
+		t.Errorf("empty journal:\n%s", out)
+	}
+}
+
+// The Ledger line splits the shows counted into the live ones settled in
+// the window and those imported from earlier history in it (by when the
+// import journaled them, not when they were shown).
+func TestStatsLedgerSplitsImported(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	telemetry.New(pathsOf(home).State, telemetry.Common{Session: "s1"}).Emit(telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1})
+	hour, old := time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-3*24*time.Hour)
+	shown := func(outcomes ...string) []feedback.Settled { // shows of earlier history
+		var out []feedback.Settled
+		for i, o := range outcomes {
+			out = append(out, feedback.Settled{Key: "k" + itoa(i), ID: "m" + itoa(i), At: histStart, Outcome: o})
+		}
+		return out
+	}
+	journalIn(t, home,
+		feedback.Event{Kind: feedback.KindImport, Source: "telemetry", TS: hour, Settled: shown(feedback.OutcomeShown, feedback.OutcomeCredit, feedback.OutcomeShown)},
+		feedback.Event{Kind: feedback.KindImport, Source: "transcripts", TS: old, Settled: shown(feedback.OutcomeShown, feedback.OutcomeShown)},
+		feedback.Event{Kind: feedback.KindImport, Outcome: feedback.ImportComplete, TS: hour},
+	)
+	if _, out, _ := run(t, "stats", "1"); !strings.Contains(out, "\nLedger       settled 4 live shows: 1 credits, 1 confident misses (33% of uncredited), 0 unknown, 0 late; imported 3 shows of earlier history (1 credits); honesty flags: none\n") {
+		t.Errorf("1 day:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "7"); !strings.Contains(out, "; imported 5 shows of earlier history (1 credits);") {
+		t.Errorf("7 days:\n%s", out)
+	}
+	if _, raw, _ := run(t, "stats", "1", "--json"); !strings.Contains(raw, `"imported": {`) || !strings.Contains(raw, `"shows": 3,`) {
+		t.Errorf("json:\n%s", raw)
 	}
 }

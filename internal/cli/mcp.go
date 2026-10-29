@@ -482,7 +482,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		return "", capRefusal(limit, done, acted)
 	}
 	sec, _ := key.get()
-	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence})
+	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence, checked: true})
 	if err != nil {
 		return "", err
 	}

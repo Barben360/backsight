@@ -167,12 +167,12 @@ func (h *hookEnv) creditedSinceTurn() bool {
 }
 
 // journalShows records items shown to the agent on path (prompt, gate,
-// briefing, search, read).
-func (h *hookEnv) journalShows(path string, items []feedback.Item) {
+// briefing, search, read), with flags (a prompt's set_changed).
+func (h *hookEnv) journalShows(path string, items []feedback.Item, flags ...string) {
 	if !h.feedbackOn() || len(items) == 0 {
 		return
 	}
-	h.feedbackError(h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items}))
+	h.feedbackError(h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items, Flags: flags}))
 }
 
 // itemsFromHits ranks hits from 1 in the order shown, each with its boost,
