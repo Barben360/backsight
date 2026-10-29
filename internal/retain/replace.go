@@ -2,7 +2,6 @@ package retain
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"slices"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
-	"github.com/Barben360/backsight/internal/redact"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/transcript"
 )
@@ -26,7 +24,8 @@ import (
 // later run, once the bank's queue no longer names the document, reads it.
 // Its records there: confirmed. Some missing: they go again as the next
 // segment, numbered after the server's, and the split is recorded
-// (decision 0073, "never lose" over "never store twice").
+// (decision 0073, "never lose" over "never store twice"). A mark never
+// holds the session's sends, and ends PendingLimit after its send.
 
 // PendingReplace is a part this PC sent that replaces its document (its
 // segment 1), not confirmed on the server yet.
@@ -40,11 +39,22 @@ type PendingReplace struct {
 	// since makes the reconcile the judge of what the server lost.
 	Epoch  int       `json:"epoch"`
 	SentAt time.Time `json:"sent_at"`
+	// LastAt: when the last part was sent. A record whose time is after it
+	// (or missing) was given the send's time (clampTime), which a later
+	// read cannot give again: it is matched without its time.
+	LastAt time.Time `json:"last_at"`
 	// SeenAt: when a run first found this PC's records there, the queue
 	// clear. A second look, replaceConfirmGap later, confirms: another
 	// PC that read the document absent before this part was applied may
 	// have sent its segment 1 just after the first look.
 	SeenAt time.Time `json:"seen_at,omitempty"`
+}
+
+// Unconfirmed is a replacing part given up PendingLimit after its send,
+// unconfirmed: its document and why it could not be confirmed.
+type Unconfirmed struct {
+	Document string `json:"document"`
+	Reason   string `json:"reason"`
 }
 
 // RecordRange is the first and last record of one part sent; the part is
@@ -78,8 +88,6 @@ type queuedRetains struct {
 	err  error
 }
 
-func (q *queuedRetains) names(doc string) bool { return q.err != nil || q.all || q.docs[doc] }
-
 // queuedRetains reads the bank's queue once per run.
 func (f *Flusher) queuedRetains(ctx context.Context) *queuedRetains {
 	if f.queue != nil {
@@ -111,9 +119,12 @@ func (f *Flusher) queuedRetains(ctx context.Context) *queuedRetains {
 }
 
 // noteSent records, in cur, the part [first, last] this PC just sent to
-// project's document doc as segment segNo: a segment 1 starts a pending
-// replace, a later one joins the pending replace of that document.
-func (f *Flusher) noteSent(cur *Cursor, project, doc string, segNo int, first, last string, now time.Time) {
+// project's document doc as segment segNo; prev is the record the cursor
+// was at before it. A segment 1 starts a pending replace; a later one
+// joins the pending replace of that document, as one range with the part
+// before when it follows it in the transcript (prev is that part's last):
+// a long send in chunks is one range.
+func (f *Flusher) noteSent(cur *Cursor, project, doc string, segNo int, prev, first, last string, now time.Time) {
 	part := RecordRange{First: first, Last: last}
 	if segNo == 1 {
 		epoch := -1
@@ -123,29 +134,51 @@ func (f *Flusher) noteSent(cur *Cursor, project, doc string, segNo int, first, l
 		if cur.Replaces == nil {
 			cur.Replaces = map[string]PendingReplace{}
 		}
-		cur.Replaces[project] = PendingReplace{Document: doc, Parts: []RecordRange{part}, Epoch: epoch, SentAt: now}
+		cur.Replaces[project] = PendingReplace{Document: doc, Parts: []RecordRange{part}, Epoch: epoch, SentAt: now, LastAt: now}
 		return
 	}
-	if p, ok := cur.Replaces[project]; ok && p.Document == doc {
-		p.Parts = append(p.Parts, part)
-		cur.Replaces[project] = p
+	p, ok := cur.Replaces[project]
+	if !ok || p.Document != doc {
+		return
 	}
+	if n := len(p.Parts); n > 0 && p.Parts[n-1].Last == prev {
+		p.Parts[n-1].Last = last
+	} else {
+		p.Parts = append(p.Parts, part)
+	}
+	p.LastAt = now
+	cur.Replaces[project] = p
 }
+
+// A look at one pending replace.
+type look int
+
+const (
+	lookNot     look = iota // could not look: why says it
+	lookAbsent              // the document is not on the server
+	lookUnknown             // nothing to compare (no original_text)
+	lookPresent             // this PC's records are there
+	lookMissing             // some are not
+)
 
 // checkReplaces confirms or repairs the replacing parts session sid's
 // cursor holds, before the flush. Only the tick, the detached flush and
-// backfill flush: no hook reads the server. A part is looked at once
-// replaceCheckAfter passed and the bank's queue names no retain of its
-// document:
-//   - tombstoned (a purge) or sent under another restore epoch: dropped,
-//     never written again;
+// backfill flush: no hook reads the server. A part is dropped, never
+// written again, when its document is tombstoned (a purge) or the bank's
+// restore epoch changed since. Otherwise it is looked at from
+// replaceCheckAfter after its send (lookAt):
 //   - this PC's records there: seen, then confirmed at a second look;
-//   - some missing: sent again (resendReplaced), then dropped;
-//   - absent, or holding no text to compare: left pending, dropped after
-//     PendingLimit (never recreated);
-//   - unreadable: the run stops, nothing is sent, a later run retries.
+//   - some missing: sent again (resendReplaced), then dropped; the flush
+//     ends there;
+//   - anything else (no look possible, absent, nothing to compare): left
+//     pending; the session's flush goes on as usual.
 //
-// done: the flush ends here with res.
+// PendingLimit after its send, a part ends whatever the look gives: found,
+// it is confirmed, missing, sent again, else given up and reported in
+// res.Unconfirmed (never quarantined: the session's sends go on).
+//
+// done: the flush ends here with the result returned; otherwise the
+// result goes on to the flush.
 func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path string) (Result, bool) {
 	cursorDir := f.Dirs.CursorsDir()
 	cur, ok, err := LoadCursor(cursorDir, sid)
@@ -163,7 +196,8 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 			_ = SaveCursor(cursorDir, sid, cur)
 		}
 	}()
-	var recs []transcript.Record
+	drop := func(p string) { delete(cur.Replaces, p); changed = true }
+	tr := &transcriptOnce{path: path, now: now}
 	projects := make([]string, 0, len(cur.Replaces))
 	for p := range cur.Replaces {
 		projects = append(projects, p)
@@ -171,94 +205,130 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 	slices.Sort(projects)
 	for _, p := range projects {
 		pr := cur.Replaces[p]
+		expired := now.Sub(pr.SentAt) >= PendingLimit
 		switch {
 		case pr.Epoch >= 0 && pr.Epoch != epoch, slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == pr.Document }):
-			delete(cur.Replaces, p)
-			changed = true
+			drop(p)
 			continue
-		case now.Sub(pr.SentAt) < replaceCheckAfter, f.replaceReads >= maxReplaceReads, f.queuedRetains(ctx).names(pr.Document):
+		case !expired && now.Sub(pr.SentAt) < replaceCheckAfter:
 			continue
 		}
-		f.replaceReads++
-		doc, err := f.Client.GetDocument(ctx, f.Bank, pr.Document)
-		var apiErr *hindsight.APIError
+		got, why, doc, missing := f.lookAt(ctx, pr, tr)
 		switch {
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
-			if now.Sub(pr.SentAt) >= PendingLimit {
-				delete(cur.Replaces, p)
-				changed = true
-			}
-			continue
-		case err != nil:
-			res.Stop, res.NeedsFix = true, needsFix(err)
-			res.FailedDocument = pr.Document
-			res.Status, res.Detail = Retry, errSummary(err)
-			return res, true
-		}
-		if recs == nil {
-			if recs, err = readRecords(path, now); err != nil {
-				continue
-			}
-		}
-		missing, judged := f.missingFrom(pr, doc, recs)
-		switch {
-		case !judged:
-			if now.Sub(pr.SentAt) >= PendingLimit {
-				delete(cur.Replaces, p)
-				changed = true
-			}
-		case len(missing) > 0:
+		case got == lookMissing:
 			changed = false // resendReplaced saves the cursor
 			return f.resendReplaced(ctx, res, cur, sid, p, pr.Document, doc.Metadata, missing, now), true
-		case pr.SeenAt.IsZero():
+		case got == lookPresent && (expired || !pr.SeenAt.IsZero() && now.Sub(pr.SeenAt) >= replaceConfirmGap):
+			drop(p)
+		case got == lookPresent && pr.SeenAt.IsZero():
 			pr.SeenAt = now
 			cur.Replaces[p] = pr
 			changed = true
-		case now.Sub(pr.SeenAt) >= replaceConfirmGap:
-			delete(cur.Replaces, p)
-			changed = true
+		case got != lookPresent && expired:
+			drop(p)
+			res.Unconfirmed = append(res.Unconfirmed, Unconfirmed{Document: pr.Document, Reason: why})
 		}
 	}
 	return res, false
 }
 
-// readRecords reads every record of a transcript, their times clamped as
-// a flush does.
-func readRecords(path string, now time.Time) ([]transcript.Record, error) {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil, err
+// transcriptOnce reads a transcript's records once, on first need.
+type transcriptOnce struct {
+	path string
+	now  time.Time
+	read bool
+	recs []transcript.Record
+	// raw: the records' times as read, before clampRecords.
+	raw []time.Time
+	err error
+}
+
+func (t *transcriptOnce) records() ([]transcript.Record, []time.Time, error) {
+	if t.read {
+		return t.recs, t.raw, t.err
 	}
+	t.read = true
+	fh, err := os.Open(t.path)
+	if err != nil {
+		t.err = err
+		return nil, nil, err
+	}
+	defer func() { _ = fh.Close() }()
 	fi, err := fh.Stat()
 	if err != nil {
-		_ = fh.Close()
-		return nil, err
+		t.err = err
+		return nil, nil, err
 	}
-	recs, _, err := transcript.Read(fh, 0)
-	_ = fh.Close()
+	if t.recs, _, t.err = transcript.Read(fh, 0); t.err != nil {
+		return nil, nil, t.err
+	}
+	t.raw = make([]time.Time, len(t.recs))
+	for i, r := range t.recs {
+		t.raw[i] = r.Timestamp
+	}
+	clampRecords(t.recs, fi.ModTime(), t.now)
+	return t.recs, t.raw, nil
+}
+
+// lookAt reads pr's document, once the bank's queue names no retain that
+// may write it, and says whether this PC's records are there (missing:
+// those that are not, from the transcript tr). why says what kept it from
+// looking or judging. At most maxReplaceReads documents per run.
+//
+// Cost: every read downloads the whole document, original_text included,
+// and a new document is usually read twice (seen, then confirmed): on a
+// single-PC install too, after a backfill about two reads per session
+// sent, 50 a run. Only the tick, the detached flush and backfill read.
+func (f *Flusher) lookAt(ctx context.Context, pr PendingReplace, tr *transcriptOnce) (look, string, hindsight.Document, []transcript.Record) {
+	var none hindsight.Document
+	if f.replaceReads >= maxReplaceReads {
+		return lookNot, "not looked at: this run's reads were spent", none, nil
+	}
+	switch q := f.queuedRetains(ctx); {
+	case q.err != nil:
+		return lookNot, "the bank's queue cannot be read: " + errSummary(q.err), none, nil
+	case q.all:
+		return lookNot, "the bank's queue holds a retain of several documents, or more than is read", none, nil
+	case q.docs[pr.Document]:
+		return lookNot, "the bank's queue still holds a retain of it", none, nil
+	}
+	f.replaceReads++
+	doc, err := f.Client.GetDocument(ctx, f.Bank, pr.Document)
+	var apiErr *hindsight.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		return lookAbsent, "not on the server, with no purge or restore to explain it", none, nil
+	case err != nil:
+		return lookNot, "cannot be read: " + errSummary(err), none, nil
+	}
+	recs, raw, err := tr.records()
 	if err != nil {
-		return nil, err
+		return lookNot, "the transcript cannot be read: " + err.Error(), none, nil
 	}
-	for i := range recs {
-		recs[i].Timestamp = clampTime(recs[i].Timestamp, fi.ModTime(), now)
-		for j := range recs[i].Turns {
-			recs[i].Turns[j].Timestamp = recs[i].Timestamp
-		}
+	missing, judged := f.missingFrom(pr, doc, recs, raw)
+	switch {
+	case !judged:
+		return lookUnknown, "no original_text to compare", none, nil
+	case len(missing) > 0:
+		return lookMissing, "", doc, missing
 	}
-	return recs, nil
+	return lookPresent, "", doc, nil
 }
 
 // missingFrom lists the records of pr's parts the server's document d
-// lacks, in order. judged is false when d gives nothing to compare.
+// lacks, in order (raw: the records' times as read, before clamping).
+// judged is false when d gives nothing to compare.
 //
 // When pr is a lone segment 1 and d's metadata names it (this machine,
 // segment 1, its last record), this PC's replace is the last part the
-// server applied: nothing is missing. Otherwise each record is looked for
-// in d's original_text, in order: every turn's text, as sent (redacted),
-// either as it is or JSON-escaped (the content sent is JSON lines). A
-// record whose every turn's text is found after the previous record found
-// is there; a short turn repeated elsewhere may read as there.
-func (f *Flusher) missingFrom(pr PendingReplace, d hindsight.Document, recs []transcript.Record) ([]transcript.Record, bool) {
+// server applied: nothing is missing. Otherwise a record is there when
+// each of its turns' lines, encoded as BuildSegment encodes them, is in
+// d's original_text, which Hindsight keeps byte for byte. A record whose
+// time was missing or after pr.LastAt was given its send's time
+// (clampTime), unknown here: its lines are matched up to their time. A
+// change of the redaction rules between the send and the look makes a
+// line differ: sent again, stored twice, never lost.
+func (f *Flusher) missingFrom(pr PendingReplace, d hindsight.Document, recs []transcript.Record, raw []time.Time) ([]transcript.Record, bool) {
 	m := d.Metadata
 	if len(pr.Parts) == 1 && f.MachineID != "" && m["machine_id"] == f.MachineID && m["segment"] == "1" && m["last_uuid"] == pr.Parts[0].Last {
 		return nil, true
@@ -266,67 +336,54 @@ func (f *Flusher) missingFrom(pr PendingReplace, d hindsight.Document, recs []tr
 	if d.OriginalText == "" {
 		return nil, false
 	}
+	lastAt := pr.LastAt
+	if lastAt.IsZero() {
+		lastAt = pr.SentAt
+	}
 	var missing []transcript.Record
-	at := 0
 	for _, part := range pr.Parts {
 		i, j := indexOf(recs, part.First), indexOf(recs, part.Last)
 		if i < 0 || j < i {
 			continue // no longer in the transcript: nothing to send again
 		}
-		for _, r := range recs[i : j+1] {
-			if next, ok := findRecord(d.OriginalText, at, r); ok {
-				at = next
-			} else {
-				missing = append(missing, r)
+		for k := i; k <= j; k++ {
+			clamped := raw[k].IsZero() || raw[k].After(lastAt)
+			if !holdsRecord(d.OriginalText, recs[k], clamped) {
+				missing = append(missing, recs[k])
 			}
 		}
 	}
 	return missing, true
 }
 
-// findRecord looks for each of r's turns in text from offset at, in
-// order, and returns the offset after the last one found.
-func findRecord(text string, at int, r transcript.Record) (int, bool) {
+// holdsRecord says whether text holds every turn line of r; clamped: up
+// to their time only.
+func holdsRecord(text string, r transcript.Record, clamped bool) bool {
 	for _, t := range r.Turns {
-		red, _ := redact.Text(t.Content)
-		if red == "" {
-			continue
+		l := turnLine(t)
+		want := encodeLine(l)
+		if clamped {
+			l.Timestamp = ""
+			want = strings.TrimSuffix(encodeLine(l), "}") + `,"timestamp":"`
 		}
-		best, n := -1, 0
-		for _, form := range []string{red, jsonEscaped(red)} {
-			if k := strings.Index(text[at:], form); k >= 0 && (best < 0 || k < best) {
-				best, n = k, len(form)
-			}
+		if !strings.Contains(text, want) {
+			return false
 		}
-		if best < 0 {
-			return at, false
-		}
-		at += best + n
 	}
-	return at, true
-}
-
-// jsonEscaped is s as BuildSegment's encoder writes it inside a JSON
-// string, without the quotes.
-func jsonEscaped(s string) string {
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(s)
-	out := strings.TrimSuffix(b.String(), "\n")
-	return out[1 : len(out)-1]
+	return true
 }
 
 // resendReplaced sends missing, records of project's document doc another
 // PC's segment 1 replaced, as the next segments after the server's (meta:
 // the document's metadata as read), and records the split. The pending
 // replace goes once they are all sent. Like every send, it goes only to
-// the server this run began with (StartedOver).
+// the server this run began with (StartedOver). A server segment that is
+// not a number quarantines the session, as a send would (movedElsewhere,
+// serverPosition).
 func (f *Flusher) resendReplaced(ctx context.Context, res Result, cur Cursor, sid, project, doc string, meta map[string]string, missing []transcript.Record, now time.Time) Result {
 	base, err := strconv.Atoi(meta["segment"])
 	if err != nil || base < 1 {
-		res.Status, res.Detail = Retry, "the server's document "+doc+" has no valid segment number; this PC's records it lacks are sent once it has"
-		return res
+		return f.quarantine(res, &cur, "the server's document "+doc+" has no valid segment number; sending would replace it")
 	}
 	if err := f.StartedOver(); err != nil {
 		res.Stop = true

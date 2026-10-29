@@ -62,6 +62,10 @@ type fakeHS struct {
 	deleteStatus int                 // non-zero: document deletes answer with it
 	failGet      map[string]bool     // reads of these documents answer 500
 	noText       bool                // reads answer no original_text
+	// opsList: the pending operations the bank lists (beside queued,
+	// counted but not listed); opsStatus non-zero: listing them answers it.
+	opsList   []hindsight.Operation
+	opsStatus int
 }
 
 func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
@@ -206,11 +210,16 @@ func (h *fakeHS) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"items":[],"total":0}`)) // no fact extracted in this fake
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/operations"):
-		n := 0
-		if r.URL.Query().Get("status") == "pending" {
-			n = h.queued
+		if h.opsStatus != 0 {
+			w.WriteHeader(h.opsStatus)
+			return
 		}
-		_, _ = fmt.Fprintf(w, `{"total":%d,"operations":[]}`, n)
+		n, ops := 0, []hindsight.Operation{}
+		if r.URL.Query().Get("status") == "pending" {
+			n, ops = h.queued+len(h.opsList), append(ops, h.opsList...)
+		}
+		raw, _ := json.Marshal(map[string]any{"total": n, "operations": ops})
+		_, _ = w.Write(raw)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

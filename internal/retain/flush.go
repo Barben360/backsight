@@ -143,6 +143,9 @@ type Result struct {
 	NeedsFix bool `json:"-"`
 	// Turns are the main turns this flush recorded (Flusher.Attribution).
 	Turns []TurnEntry `json:"-"`
+	// Unconfirmed: the replacing parts this flush gave up on unconfirmed,
+	// PendingLimit after their send (checkReplaces).
+	Unconfirmed []Unconfirmed `json:"unconfirmed,omitempty"`
 }
 
 // FlushFile sends what is settled and unsent in one transcript.
@@ -181,8 +184,9 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	// Under the session's lock, whatever the flush did: the path rule's
 	// shadow answers are local and never wait for the server.
 	defer func() { res.Turns = f.recordTurns(sid, path, opt.Force) }()
-	if r, done := f.checkReplaces(ctx, res, sid, path); done {
-		return r
+	res, done := f.checkReplaces(ctx, res, sid, path)
+	if done {
+		return res
 	}
 	return f.flushLocked(ctx, res, sid, path, opt, false)
 }
@@ -245,12 +249,7 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 	}
 	res.read = st
 	now := f.Now()
-	for i := range recs {
-		recs[i].Timestamp = clampTime(recs[i].Timestamp, fi.ModTime(), now)
-		for j := range recs[i].Turns {
-			recs[i].Turns[j].Timestamp = recs[i].Timestamp
-		}
-	}
+	clampRecords(recs, fi.ModTime(), now)
 
 	// Read before the cursor is rebuilt: the projects whose last sends
 	// went to a purged id (lostToPurged).
@@ -315,7 +314,7 @@ func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string,
 			res.Stop, res.NeedsFix = true, needsFix(err)
 			return fail(Retry, errSummary(err))
 		case moved:
-			return f.flushLocked(ctx, Result{Session: sid, Transcript: path}, sid, path, opt, true)
+			return f.flushLocked(ctx, Result{Session: sid, Transcript: path, Unconfirmed: res.Unconfirmed}, sid, path, opt, true)
 		}
 	}
 	return f.sendRuns(ctx, res, cur, sid, send, attrs, tombs, now)
@@ -665,11 +664,12 @@ func (f *Flusher) sendPart(ctx context.Context, res Result, cur Cursor, sid stri
 	if err := f.Index.Add(uuids...); err != nil {
 		detail = "sent, but the fork-guard index was not updated: " + err.Error()
 	}
+	prev := cur.LastUUID // the record before run, when the cursor was at it
 	cur.advance(last, attr{project: project})
 	cur.SentAt = now
 	cur.Segments[project], cur.LastUUIDs[project] = segNo, last.UUID
 	cur.setDoc(sid, project, doc)
-	f.noteSent(&cur, project, doc, segNo, run[0].UUID, last.UUID, now)
+	f.noteSent(&cur, project, doc, segNo, prev, run[0].UUID, last.UUID, now)
 	cur.Records += len(run)
 	res.Records += len(run)
 	if !slices.Contains(res.Documents, doc) {
@@ -734,6 +734,16 @@ func (f *Flusher) save(res Result, cur Cursor, status, detail string) Result {
 		res.Detail = "sent, but the cursor was not saved: " + err.Error()
 	}
 	return res
+}
+
+// clampRecords gives each record, and its turns, its clampTime.
+func clampRecords(recs []transcript.Record, mtime, now time.Time) {
+	for i := range recs {
+		recs[i].Timestamp = clampTime(recs[i].Timestamp, mtime, now)
+		for j := range recs[i].Turns {
+			recs[i].Turns[j].Timestamp = recs[i].Timestamp
+		}
+	}
 }
 
 // clampTime gives a missing or future time (a clock moved back) the file's

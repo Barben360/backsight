@@ -71,6 +71,24 @@ type line struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
+// turnLine is turn t as a segment carries it: its text redacted, its time
+// in UTC, RFC 3339.
+func turnLine(t transcript.Turn) line {
+	text, _ := redact.Text(t.Content)
+	return line{Role: t.Role, Content: text, Timestamp: t.Timestamp.UTC().Format(time.RFC3339)}
+}
+
+// encodeLine is l as one line of a segment's content (JSON, HTML left
+// unescaped, no newline). Hindsight keeps the lines byte for byte in the
+// document's original_text, which checkReplaces searches for them.
+func encodeLine(l line) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(l)
+	return strings.TrimSuffix(buf.String(), "\n")
+}
+
 // DocumentID is the document of a session's records of project: the
 // session's home project (its first record's) keeps conversation:<sid>,
 // every other project gets conversation:<sid>@<project>. One document never
@@ -118,19 +136,16 @@ func BaseDocumentID(id string) string {
 // used whatever the records say (a resumed or forked file keeps one
 // identity).
 func BuildSegment(bank, sid, doc string, recs []transcript.Record, segment int, project, machineID, version string) Segment {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
+	var lines []string
 	if segment == 1 {
-		_ = enc.Encode(line{Role: "system", Content: "REF-ID: " + doc})
+		lines = append(lines, encodeLine(line{Role: "system", Content: "REF-ID: " + doc}))
 	}
 	for _, r := range recs {
 		for _, t := range r.Turns {
-			text, _ := redact.Text(t.Content)
-			_ = enc.Encode(line{Role: t.Role, Content: text, Timestamp: t.Timestamp.UTC().Format(time.RFC3339)})
+			lines = append(lines, encodeLine(turnLine(t)))
 		}
 	}
-	content := strings.TrimSuffix(buf.String(), "\n")
+	content := strings.Join(lines, "\n")
 	first, last := recs[0], recs[len(recs)-1]
 	ts := first.Timestamp
 	item := hindsight.RetainItem{

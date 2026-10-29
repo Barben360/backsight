@@ -230,3 +230,33 @@ func TestRetainEventsNameTheDocumentsWritten(t *testing.T) {
 		}
 	}
 }
+
+// A replacing part never confirmed within retain.PendingLimit (here the
+// bank's queue stays busy) is given up: one replace_unconfirmed event with
+// the session and the document, and a line on stderr. Nothing is held.
+func TestFlushReportsAReplaceGivenUpUnconfirmed(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick") // live retain begins
+	writeTranscript(t, home, "live", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	withClock(t, time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
+	run(t, "retain", "flush")
+	if retained.Load() != 1 {
+		t.Fatalf("%d sent", retained.Load())
+	}
+	processing.Store(1)
+	withClock(t, time.Date(2026, 10, 25, 12, 30, 0, 0, time.UTC))
+	_, _, errOut := run(t, "retain", "flush")
+	tel := telemetryText(t, home)
+	if strings.Count(tel, `"event":"replace_unconfirmed"`) != 1 || !strings.Contains(tel, `"session":"live"`) || !strings.Contains(tel, `"document":"conversation:live"`) {
+		t.Errorf("telemetry:\n%s", tel)
+	}
+	if !strings.Contains(errOut, "conversation:live") || !strings.Contains(errOut, "never confirmed") {
+		t.Errorf("stderr: %q", errOut)
+	}
+	run(t, "retain", "flush")
+	if n := strings.Count(telemetryText(t, home), `"event":"replace_unconfirmed"`); n != 1 {
+		t.Errorf("%d events: the mark was not dropped", n)
+	}
+}

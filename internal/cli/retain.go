@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -146,6 +147,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		if len(r.Unknown) > 0 {
 			tw.Emit(telemetry.Raw{Name: "transcript_unknown", Fields: map[string]any{"types": r.Unknown}})
 		}
+		reportUnconfirmed(tw, cmd.ErrOrStderr(), r)
 		if len(r.Turns) > 0 {
 			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
 			for _, t := range r.Turns {
@@ -158,6 +160,18 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		}
 	}
 	return out
+}
+
+// reportUnconfirmed reports the replacing parts a flush gave up on
+// unconfirmed, retain.PendingLimit after their send
+// (retain.Result.Unconfirmed): one replace_unconfirmed event each, and a
+// line on errw (the scheduler's log for a tick). Their records may be lost
+// on the server; verify --live compares.
+func reportUnconfirmed(tw *telemetry.Writer, errw io.Writer, r retain.Result) {
+	for _, u := range r.Unconfirmed {
+		tw.Emit(telemetry.Raw{Name: "replace_unconfirmed", Fields: map[string]any{"session": r.Session, "document": u.Document, "reason": u.Reason}})
+		_, _ = fmt.Fprintf(errw, "backsight: session %s: %s was never confirmed on the server (%s); backsight verify --live compares it\n", r.Session, u.Document, u.Reason)
+	}
 }
 
 // retainEvents are one flush's telemetry: one event per document it wrote

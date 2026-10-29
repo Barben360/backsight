@@ -5,9 +5,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -245,40 +248,92 @@ func TestAnEpochChangeDropsThePendingMark(t *testing.T) {
 	}
 }
 
-// The document cannot be read: nothing goes out, the run stops, the mark
-// stays as it was; a later tick repairs.
-func TestAFailedReadOfAReplacedSegmentSendsNothing(t *testing.T) {
+// The document cannot be read: nothing goes to it and the mark stays as
+// it was, but the check never holds the session or the run: the flush
+// sends the session's new turn as usual. A later tick repairs.
+func TestAFailedReadOfAReplacedSegmentSendsNothingThere(t *testing.T) {
 	a, _ := betaReplacedByB(t)
 	before := a.replaces()
 	a.hs.failGet = map[string]bool{betaDoc: true}
+	a.gammaTurn("r9")
 	sent := len(a.hs.retains)
 	r := a.tick()
-	if r.Status != Retry || !r.Stop || len(a.hs.retains) != sent {
-		t.Fatalf("%+v, %d items sent", r, len(a.hs.retains)-sent)
+	expect(t, r, Sent, 1, 1)
+	if r.Stop || len(a.hs.retains) != sent+1 || a.hs.retains[sent].DocumentID != "conversation:sp1@gamma" {
+		t.Fatalf("%+v, items %+v", r, a.hs.retains[sent:])
 	}
-	if !reflect.DeepEqual(a.replaces(), before) {
+	if !reflect.DeepEqual(a.replaces()["beta"], before["beta"]) {
 		t.Errorf("mark changed: %+v, was %+v", a.replaces(), before)
 	}
 	a.hs.failGet = nil
 	expect(t, a.tick(), Sent, 2, 2)
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+	a.hs.expectEachOnce(t, "conversation:sp1@gamma", "r9")
 }
 
-// The bank's queue still holds retains: the server may not have applied
-// either segment 1. Nothing is read or sent until it is done.
-func TestAReplacedSegmentWaitsForTheQueue(t *testing.T) {
-	a, _ := betaReplacedByB(t)
-	a.hs.queued = 1
-	reads, sent := a.hs.readsOf(betaDoc), len(a.hs.retains)
-	expect(t, a.tick(), Nothing, 0, 0)
-	if n := a.hs.readsOf(betaDoc) - reads; n != 0 || len(a.hs.retains) != sent {
-		t.Errorf("read %d times, sent %d items while the queue is busy", n, len(a.hs.retains)-sent)
+// The bank's queue decides when the document is read: a retain naming it
+// (or naming no single document) may be either PC's segment 1 not applied
+// yet, so the mark waits; an empty queue, or one naming only other
+// documents, lets the tick look.
+func TestAReplacedSegmentWaitsForAQueueNamingIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ops  []hindsight.Operation
+		look bool
+	}{
+		{"this document", []hindsight.Operation{{ID: "o1", Type: "retain", Status: "pending", DocumentID: betaDoc}}, false},
+		{"no single document", []hindsight.Operation{{ID: "o1", Type: "batch_retain", Status: "pending"}}, false},
+		{"another document", []hindsight.Operation{{ID: "o1", Type: "retain", Status: "pending", DocumentID: "conversation:other"}}, true},
+		{"an empty queue", nil, true},
+		{"only consolidations", []hindsight.Operation{{ID: "o1", Type: "consolidation", Status: "pending"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := betaReplacedByB(t)
+			a.hs.opsList = tc.ops
+			reads, sent := a.hs.readsOf(betaDoc), len(a.hs.retains)
+			r := a.tick()
+			read := a.hs.readsOf(betaDoc) > reads
+			if read != tc.look {
+				t.Errorf("read the document: %v, want %v", read, tc.look)
+			}
+			if tc.look {
+				expect(t, r, Sent, 2, 2)
+				return
+			}
+			if len(a.hs.retains) != sent {
+				t.Errorf("sent %+v while the queue names it", a.hs.retains[sent:])
+			}
+			if _, ok := a.replaces()["beta"]; !ok {
+				t.Errorf("mark dropped: %+v", a.replaces())
+			}
+			a.hs.opsList = nil
+			expect(t, a.tick(), Sent, 2, 2)
+		})
 	}
-	if _, ok := a.replaces()["beta"]; !ok {
-		t.Errorf("mark dropped: %+v", a.replaces())
+}
+
+// A queue that cannot be read, or is longer than read: no look, the mark
+// stays, and the session's new turn still goes out (never held by it).
+func TestAnUnreadableQueueLetsTheFlushGoOn(t *testing.T) {
+	for name, set := range map[string]func(h *fakeHS){
+		"unreadable": func(h *fakeHS) { h.opsStatus = 500 },
+		"too long":   func(h *fakeHS) { h.queued = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, _ := betaReplacedByB(t)
+			set(a.hs)
+			a.gammaTurn("r9")
+			reads := a.hs.readsOf(betaDoc)
+			r := a.tick()
+			expect(t, r, Sent, 1, 1)
+			if r.Stop || a.hs.readsOf(betaDoc) != reads {
+				t.Errorf("%+v, %d reads of beta", r, a.hs.readsOf(betaDoc)-reads)
+			}
+			if _, ok := a.replaces()["beta"]; !ok {
+				t.Errorf("mark dropped: %+v", a.replaces())
+			}
+		})
 	}
-	a.hs.queued = 0
-	expect(t, a.tick(), Sent, 2, 2)
 }
 
 // A connect started this PC's sends over between the send and the tick
@@ -412,10 +467,11 @@ func TestWithoutOriginalTextOnlyTheMetadataConfirms(t *testing.T) {
 			t.Errorf("mark dropped: %+v", a.replaces())
 		}
 		a.clock = a.clock.Add(PendingLimit)
-		a.tick()
+		r := a.tick()
 		if _, ok := a.replaces()["beta"]; ok || len(a.hs.retains) != sent {
 			t.Errorf("after PendingLimit: %+v, %d sent", a.replaces(), len(a.hs.retains)-sent)
 		}
+		expectUnconfirmed(t, r, "no original_text")
 	})
 }
 
@@ -431,13 +487,14 @@ func TestAnAbsentReplacedDocumentIsNeverRecreated(t *testing.T) {
 		t.Errorf("mark %+v, %d sent", a.replaces(), len(a.hs.retains)-sent)
 	}
 	a.clock = a.clock.Add(PendingLimit)
-	a.tick()
+	r := a.tick()
 	if _, ok := a.replaces()["beta"]; ok || len(a.hs.retains) != sent {
 		t.Errorf("after PendingLimit: %+v, %d sent", a.replaces(), len(a.hs.retains)-sent)
 	}
 	if _, ok := a.hs.docs[betaDoc]; ok {
 		t.Error("recreated")
 	}
+	expectUnconfirmed(t, r, "not on the server")
 }
 
 // Only A's append is missing (the shared r1-r3 are in B's segment 1): the
@@ -461,4 +518,220 @@ func TestAResentAppendIsNotCollapsedWithTheOriginal(t *testing.T) {
 	}
 	expect(t, a.tick(), Sent, 1, 2)
 	a.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "a4", "b4")
+}
+
+// expectUnconfirmed fails unless r reports beta's document given up, for
+// a reason containing why.
+func expectUnconfirmed(t *testing.T, r Result, why string) {
+	t.Helper()
+	if !slices.ContainsFunc(r.Unconfirmed, func(u Unconfirmed) bool { return u.Document == betaDoc && strings.Contains(u.Reason, why) }) {
+		t.Errorf("unconfirmed %+v, want %s (%s)", r.Unconfirmed, betaDoc, why)
+	}
+}
+
+// gammaTurn records a new turn of sp1 in a third project, gamma: a send
+// to another document than beta's.
+func (e *env) gammaTurn(uuid string) {
+	e.t.Helper()
+	e.recordIn(e.repo("gamma"), "sp1", uuid, "user", 5, "turn "+uuid)
+}
+
+// betaReplacedWith is betaReplacedByB with A's beta turns and B's own as
+// given: text a2 at minute 1, "turn a3" at 2, B's text b2 at minute 3.
+func betaReplacedWith(t *testing.T, a2, b2 string) (a, b *env) {
+	a = newEnv(t)
+	a.f.MachineID = "m1"
+	beta := a.repo("beta")
+	a.turns(0, "r1")
+	expect(t, a.flush("sp1", Options{}), Sent, 1, 1)
+	b = a.otherPC()
+	a.copyTo(b)
+	expect(t, b.flush("sp1", Options{}), Nothing, 0, 0)
+	a.hs.hide = map[string]bool{betaDoc: true}
+	a.recordIn(beta, "sp1", "a2", "user", 1, a2)
+	a.recordIn(beta, "sp1", "a3", "user", 2, "turn a3")
+	expect(t, a.flush("sp1", Options{}), Sent, 2, 1)
+	b.recordIn(beta, "sp1", "b2", "user", 3, b2)
+	expect(t, b.flush("sp1", Options{}), Sent, 1, 1)
+	a.hs.hide = nil
+	return a, b
+}
+
+// A short or recurring turn of A's, lost under B's segment 1 whose text
+// holds the same words (B's own turn, the role, a timestamp's digits), is
+// still missing: matched by its whole line, it goes again.
+func TestAShortTurnLostUnderTheSameWordsIsSentAgain(t *testing.T) {
+	for _, text := range []string{"yes", "2", "user"} {
+		t.Run(text, func(t *testing.T) {
+			a, _ := betaReplacedWith(t, text, text)
+			sent := len(a.hs.retains)
+			expect(t, a.tick(), Sent, 2, 2)
+			if len(a.hs.retains) != sent+1 {
+				t.Fatalf("%d items sent", len(a.hs.retains)-sent)
+			}
+			line := `{"role":"user","content":` + strconv.Quote(text) + `,"timestamp":"2026-10-24T09:01:00Z"}`
+			if n := a.hs.countIn(betaDoc, line); n != 1 {
+				t.Errorf("A's %q (09:01) stored %d times:\n%s", text, n, a.hs.content[betaDoc])
+			}
+		})
+	}
+}
+
+// A record whose time was in the future when sent was given the send's
+// time (clampTime), which a later read gives otherwise: matched without
+// its time, it is found on the server, not sent twice.
+func TestARecordClampedAtItsSendIsFoundWithoutItsTime(t *testing.T) {
+	e := newEnv(t)
+	e.turns(0, "r1")
+	expect(t, e.flush("sp1", Options{}), Sent, 1, 1)
+	e.record("sp1", "f2", "user", 60*24*400, "turn from a clock ahead")
+	expect(t, e.flush("sp1", Options{Force: true}), Sent, 1, 2)
+	e.tick()
+	e.tick()
+	if len(e.hs.retains) != 2 {
+		t.Errorf("sent again: %+v", e.hs.retains[2:])
+	}
+	if len(e.replaces()) != 0 {
+		t.Errorf("not confirmed: %+v", e.replaces())
+	}
+}
+
+// A server segment that is not a number, with records missing: the
+// session is quarantined as a send would quarantine it (movedElsewhere),
+// never retried at every tick.
+func TestAnInvalidServerSegmentQuarantinesTheRepair(t *testing.T) {
+	a, _ := betaReplacedByB(t)
+	a.hs.docs[betaDoc]["segment"] = "x"
+	sent := len(a.hs.retains)
+	r := a.tick()
+	if r.Status != Quarantined || len(a.hs.retains) != sent {
+		t.Fatalf("%+v, %d sent", r, len(a.hs.retains)-sent)
+	}
+	if r := a.tick(); r.Status != Held {
+		t.Errorf("next tick: %+v", r)
+	}
+}
+
+// A mark always ends 24 hours after its send. Past that, a tick that can
+// still look does once (here it confirms, nothing to report); one that
+// cannot drops it and reports the document given up.
+func TestAMarkEndsAfterPendingLimit(t *testing.T) {
+	t.Run("looked at once more", func(t *testing.T) {
+		e := newEnv(t)
+		e.turns(0, "r1")
+		expect(t, e.flush("sp1", Options{}), Sent, 1, 1)
+		e.clock = e.clock.Add(PendingLimit)
+		r := e.tick()
+		if len(e.replaces()) != 0 || len(r.Unconfirmed) != 0 {
+			t.Errorf("%+v, unconfirmed %+v", e.replaces(), r.Unconfirmed)
+		}
+	})
+	t.Run("queue busy", func(t *testing.T) {
+		a, _ := betaReplacedByB(t)
+		a.hs.queued = 1
+		a.tick()
+		a.clock = a.clock.Add(PendingLimit)
+		a.gammaTurn("r9")
+		r := a.tick()
+		expect(t, r, Sent, 1, 1)
+		if _, ok := a.replaces()["beta"]; ok {
+			t.Errorf("mark kept: %+v", a.replaces())
+		}
+		expectUnconfirmed(t, r, "queue")
+	})
+	t.Run("read failing", func(t *testing.T) {
+		a, _ := betaReplacedByB(t)
+		a.hs.failGet = map[string]bool{betaDoc: true}
+		a.clock = a.clock.Add(PendingLimit)
+		r := a.tick()
+		if _, ok := a.replaces()["beta"]; ok || r.Stop {
+			t.Errorf("mark kept: %+v, %+v", a.replaces(), r)
+		}
+		expectUnconfirmed(t, r, "HTTP 500")
+	})
+}
+
+// The parts a pending replace remembers stay few: consecutive segments
+// sent to its document (a long first send, in chunks) are one range.
+func TestConsecutiveSegmentsAreOnePart(t *testing.T) {
+	old := maxSegmentRecords
+	maxSegmentRecords = 2
+	t.Cleanup(func() { maxSegmentRecords = old })
+	e := newEnv(t)
+	e.turns(0, "r1", "r2", "r3", "r4", "r5")
+	expect(t, e.flush("sp1", Options{}), Sent, 5, 3)
+	e.turns(5, "r6")
+	expect(t, e.flush("sp1", Options{}), Sent, 1, 4)
+	if p := e.replaces()["billing"]; !reflect.DeepEqual(p.Parts, []RecordRange{{First: "r1", Last: "r6"}}) {
+		t.Errorf("parts %+v", p.Parts)
+	}
+}
+
+// A's first look finds its segment 1 (B has not sent yet); B, which read
+// the document absent before A's was applied, replaces it just after. The
+// second look, not a confirmation, finds A's records gone and repairs.
+func TestTheSecondLookCatchesALateReplace(t *testing.T) {
+	a := newEnv(t)
+	a.f.MachineID = "m1"
+	beta := a.repo("beta")
+	a.turns(0, "r1")
+	expect(t, a.flush("sp1", Options{}), Sent, 1, 1)
+	b := a.otherPC()
+	a.copyTo(b)
+	expect(t, b.flush("sp1", Options{}), Nothing, 0, 0)
+	a.recordIn(beta, "sp1", "a2", "user", 1, "turn a2")
+	expect(t, a.flush("sp1", Options{}), Sent, 1, 1)
+	expect(t, a.tick(), Nothing, 0, 0)
+	if p := a.replaces()["beta"]; p.SeenAt.IsZero() {
+		t.Fatalf("first look not recorded: %+v", a.replaces())
+	}
+	a.hs.hide = map[string]bool{betaDoc: true} // B read it before A's was applied
+	b.recordIn(beta, "sp1", "b2", "user", 2, "turn b2")
+	expect(t, b.flush("sp1", Options{}), Sent, 1, 1)
+	a.hs.hide = nil
+	expect(t, a.tick(), Sent, 1, 2)
+	a.hs.expectEachOnce(t, betaDoc, "a2", "b2")
+}
+
+// Both PCs look in the same window. B looks first (its segment 1 won, by
+// its metadata), A repairs, then B's second look reads A's append on top:
+// B's records are still there, by the text. Nothing B sent goes twice.
+func TestTheWinnerConfirmsByTextAfterTheLosersRepair(t *testing.T) {
+	a, b := betaReplacedByB(t)
+	expect(t, b.tick(), Nothing, 0, 0)
+	expect(t, a.tick(), Sent, 2, 2)
+	b.clock = b.clock.Add(time.Minute)
+	expect(t, b.tick(), Nothing, 0, 0)
+	if len(b.replaces()) != 0 {
+		t.Errorf("B not confirmed: %+v", b.replaces())
+	}
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+}
+
+// Out-of-order workers leave each PC's records partly missing (B's append
+// applied before its own segment 1, A's segment 1 under B's): each PC
+// sends again only its own missing records; the part both share (the
+// copied r1-r3) is not sent again by either.
+func TestBothPCsRepairingSendOnlyTheirOwn(t *testing.T) {
+	a := newEnv(t)
+	a.f.MachineID = "m1"
+	a.turns(0, "r1", "r2", "r3")
+	b := a.otherPC()
+	a.copyTo(b)
+	a.turns(3, "a4")
+	b.turns(3, "b4")
+	a.hs.hide = map[string]bool{"conversation:sp1": true}
+	expect(t, a.flush("sp1", Options{}), Sent, 4, 1)
+	expect(t, b.flush("sp1", Options{}), Sent, 4, 1)
+	b.turns(4, "b5")
+	expect(t, b.flush("sp1", Options{}), Sent, 1, 2)
+	a.hs.hide = nil
+	// What the server holds: A's segment 1 replaced by B's, which itself
+	// arrived after B's append b5 (lost with A's).
+	items := a.hs.itemsOf("conversation:sp1")
+	a.hs.content["conversation:sp1"] = items[1].Content
+	a.hs.docs["conversation:sp1"] = items[1].Metadata
+	expect(t, a.tick(), Sent, 1, 2)
+	expect(t, b.tick(), Sent, 1, 3)
+	a.hs.expectEachOnce(t, "conversation:sp1", "r1", "r2", "r3", "a4", "b4", "b5")
 }
