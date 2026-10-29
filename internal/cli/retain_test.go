@@ -249,7 +249,13 @@ func TestFlushReportsAReplaceGivenUpUnconfirmed(t *testing.T) {
 	withClock(t, time.Date(2026, 10, 25, 12, 30, 0, 0, time.UTC))
 	_, _, errOut := run(t, "retain", "flush")
 	tel := telemetryText(t, home)
-	if strings.Count(tel, `"event":"replace_unconfirmed"`) != 1 || !strings.Contains(tel, `"session":"live"`) || !strings.Contains(tel, `"document":"conversation:live"`) {
+	var given string
+	for l := range strings.SplitSeq(tel, "\n") {
+		if strings.Contains(l, `"event":"replace_unconfirmed"`) {
+			given = l
+		}
+	}
+	if strings.Count(tel, `"event":"replace_unconfirmed"`) != 1 || !strings.Contains(given, `"session":"live"`) || !strings.Contains(given, `"document":"conversation:live"`) {
 		t.Errorf("telemetry:\n%s", tel)
 	}
 	if !strings.Contains(errOut, "conversation:live") || !strings.Contains(errOut, "never confirmed") {

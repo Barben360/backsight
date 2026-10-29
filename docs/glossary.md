@@ -76,7 +76,27 @@ The record a purge leaves for each document it deleted: its id, session, project
 
 ## Epoch
 
-Short for **restore epoch**: a counter that each restore of a backup raises on the server. Every machine compares it with the one it last saw, and when it moved, catches up before sending anything: it sends again what the restored backup lacks and purges again what was purged since. `backsight jobs tick` does it.
+Short for **restore epoch**: a counter that each restore of a backup raises on the server. Every machine compares it, and the time of that restore, with the ones it last saw, and when either changed (a host restored on a new machine may count from a number a client already holds), catches up before sending anything: it sends again what the restored backup lacks and purges again what was purged since. `backsight jobs tick` does it.
+
+## Host
+
+The machine that runs the memory server your PCs share: a PC that also uses Claude Code, or a home server set up with `backsight setup --role server`. The server's backups, updates and restores are its job. See [several-pcs.md](several-pcs.md).
+
+## Client
+
+A PC that uses the memory server of another machine, the host, since `backsight connect` (`server.mode = "remote"` in its `config.toml`). It keeps its own transcripts, queue of notes and secrets, and leaves managing the server to the host.
+
+## Connection token
+
+What a PC joins a host with, as a file that `backsight server expose` or `backsight server token` writes on the host: the server's private address and its web UI's, its bank, its API key, its id and Hindsight version, and the host's LLM provider, model and prices, never the LLM key. It holds the API key: carry it yourself, never through a chat.
+
+## Server id
+
+A random id the server keeps in its `<bank>-control` bank, written by `backsight server install` (or by the first connection token made) and carried by every connection token. A client records it at `connect` and checks it, so it notices when another server answers at the host's address; a restore keeps it.
+
+## Split session
+
+A session resumed on two PCs from a copied transcript. Each PC sends the turns the server does not hold from it as the session's next part, so the part both share may be stored twice; doctor's `split-session` check names such sessions.
 
 ## Shim
 

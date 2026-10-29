@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -31,7 +33,48 @@ const (
 	// the hook's deadline; jobs tick has serverCheckTimeout.
 	serverCheckBudget  = 1500 * time.Millisecond
 	serverCheckTimeout = 30 * time.Second
+	// serverStartBackoff, in the state directory, holds how many starts
+	// were spawned in a row and when the next may be: a start that does
+	// not bring the server up (a port taken, a broken image) waits
+	// serverStartFirstWait, twice as long each time, at most
+	// serverStartMaxWait.
+	serverStartBackoff   = "server-start-backoff.json"
+	serverStartFirstWait = 15 * time.Minute
+	serverStartMaxWait   = 6 * time.Hour
+	// serverStartLogMax: a server-start.log over this size moves to
+	// server-start.log.1 before the next start writes to it.
+	serverStartLogMax = 1 << 20
 )
+
+// startBackoff is serverStartBackoff's content.
+type startBackoff struct {
+	Attempts int       `json:"attempts"`
+	NextAt   time.Time `json:"next_at"`
+	// Boot: the boot the attempts were made in (bootID). Another boot
+	// ends the streak: what failed may have been fixed outside backsight,
+	// and a host must not wait hours after a reboot. "": unknown (another
+	// system, or a file from before it was kept), the wait holds.
+	Boot string `json:"boot,omitempty"`
+}
+
+// bootID names this boot of the machine: Linux's boot_id, "" elsewhere or
+// when it cannot be read. A variable for tests.
+var bootID = func() string {
+	raw, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// startWait is how long the attempts-th start in a row holds the next.
+func startWait(attempts int) time.Duration {
+	w := serverStartFirstWait
+	for i := 1; i < attempts && w < serverStartMaxWait; i++ {
+		w *= 2
+	}
+	return min(w, serverStartMaxWait)
+}
 
 // spawnLogged starts `backsight <args>` detached, its output going to out;
 // tests replace it.
@@ -44,40 +87,48 @@ var spawnLogged = startDetachedTo
 // stopped), and whose bind_ip is now an address of this machine. why says
 // which condition decided.
 func exposureNeedsStart(ctx context.Context, cfg config.Config, rt server.Runtime) (start bool, why string) {
+	start, why, _ = exposureLook(ctx, cfg, rt)
+	return start, why
+}
+
+// exposureLook is exposureNeedsStart, and whether what it found ends a
+// run of failed starts (settled): the server runs, was stopped by hand, or
+// is no longer a local server exposed on a private address.
+func exposureLook(ctx context.Context, cfg config.Config, rt server.Runtime) (start bool, why string, settled bool) {
 	switch {
 	case cfg.Server.Mode != "local":
-		return false, "the server is on another machine"
+		return false, "the server is on another machine", true
 	case cfg.Network.Exposure != "private":
-		return false, "the server listens on loopback only"
+		return false, "the server listens on loopback only", true
 	}
 	if v, err := rt.Deployed(); err != nil || v == "" {
-		return false, "the server is not installed on this machine"
+		return false, "the server is not installed on this machine", false
 	}
 	ip := cfg.Network.BindIP
 	here, err := addressHere(net.ParseIP(ip))
 	switch {
 	case err != nil:
-		return false, "cannot list this machine's addresses: " + err.Error()
+		return false, "cannot list this machine's addresses: " + err.Error(), false
 	case !here:
-		return false, "waiting for " + ip + " to appear on this machine"
+		return false, "waiting for " + ip + " to appear on this machine", false
 	}
 	list, err := rt.Status(ctx)
 	if err != nil {
-		return false, "cannot read the server's state: " + err.Error()
+		return false, "cannot read the server's state: " + err.Error(), false
 	}
 	db := false
 	for _, c := range list {
 		switch {
 		case c.Service == "hindsight" && (c.State == "running" || c.State == "restarting"):
-			return false, "the server runs"
+			return false, "the server runs", true
 		case c.Service == "db" && c.State == "running":
 			db = true
 		}
 	}
 	if !db {
-		return false, "the server was stopped"
+		return false, "the server was stopped", true
 	}
-	return true, ip + " is on this machine and the server is not running"
+	return true, ip + " is on this machine and the server is not running", false
 }
 
 // addressHere reports whether ip is an address of this machine.
@@ -98,27 +149,40 @@ func addressHere(ip net.IP) (bool, error) {
 }
 
 // spawnServerStart starts `backsight server start` detached, its output
-// appended to the logs directory's server-start.log; it never waits.
+// appended to the logs directory's server-start.log (moved to
+// server-start.log.1 first once over serverStartLogMax); it never waits.
 // server start takes the server lock and refuses during maintenance or a
-// pending restore: a start then simply exits.
-func spawnServerStart(d paths.Dirs) error {
+// pending restore: a start then simply exits. Each note is a line of the
+// log after the start's own.
+func spawnServerStart(d paths.Dirs, notes ...string) error {
 	dir := filepath.Join(d.State, "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "server-start.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	log := filepath.Join(dir, "server-start.log")
+	// Best effort: on Windows a start still running holds the file, and
+	// the next start rotates it.
+	if fi, err := os.Stat(log); err == nil && fi.Size() > serverStartLogMax {
+		_ = os.Rename(log, log+".1")
+	}
+	f, err := os.OpenFile(log, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = fmt.Fprintf(f, "%s: starting the server, its private address is on this machine\n", now().UTC().Format(time.RFC3339))
+	for _, n := range notes {
+		_, _ = fmt.Fprintf(f, "%s: %s\n", now().UTC().Format(time.RFC3339), n)
+	}
 	return spawnLogged(f, "server", "start")
 }
 
 // startLateServer spawns `server start` when exposureNeedsStart says so,
 // and says what it did ("": nothing to do). Never while a restore did not
 // finish (server start would resume it with nobody there) or while a
-// command holds server.lock (it is restarting the server itself).
+// command holds server.lock (it is restarting the server itself), nor
+// before the backoff's next_at, in the same boot: it does not even look
+// then. A look that settles the matter removes the backoff.
 func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) string {
 	if state.RestoreIncomplete(d) {
 		return ""
@@ -126,14 +190,45 @@ func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) strin
 	if h := state.Inspect(filepath.Join(d.LocksDir(), "server.lock")); h != nil && !h.Stale {
 		return ""
 	}
-	start, why := exposureNeedsStart(ctx, cfg, runtimeFor(cfg))
+	path := filepath.Join(d.State, serverStartBackoff)
+	var b startBackoff
+	if raw, err := os.ReadFile(path); err == nil && json.Unmarshal(raw, &b) != nil {
+		b = startBackoff{} // unreadable: start the count over
+	}
+	boot := bootID()
+	if b.Boot != "" && boot != "" && b.Boot != boot {
+		b = startBackoff{} // a reboot since: the count starts over
+	}
+	// A next_at further than serverStartMaxWait is a clock set back: ignored.
+	exposed := cfg.Server.Mode == "local" && cfg.Network.Exposure == "private"
+	if wait := b.NextAt.Sub(now()); exposed && wait > 0 && wait <= serverStartMaxWait {
+		return ""
+	}
+	start, why, settled := exposureLook(ctx, cfg, runtimeFor(cfg))
+	if settled {
+		_ = os.Remove(path)
+	}
 	if !start {
 		return ""
 	}
-	if err := spawnServerStart(d); err != nil {
+	// Recorded before the spawn. A start that cannot be counted is made
+	// all the same, and said: a bookkeeping failure never keeps the
+	// server down (the stamp and the tick's period still bound the looks).
+	b.Attempts++
+	b.NextAt, b.Boot = now().UTC().Add(startWait(b.Attempts)), boot
+	raw, _ := json.Marshal(b)
+	var notes []string
+	if err := fsutil.WriteAtomic(path, raw, 0o600); err != nil {
+		notes = append(notes, "its backoff cannot be recorded, the next look starts it again: "+err.Error())
+	}
+	if err := spawnServerStart(d, notes...); err != nil {
 		return "server start failed to spawn: " + err.Error()
 	}
-	return "server start spawned (" + why + ")"
+	got := "server start spawned (" + why + ")"
+	for _, n := range notes {
+		got += "; " + n
+	}
+	return got
 }
 
 // startLateServer, in SessionStart: at most every serverCheckEvery per

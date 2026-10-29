@@ -863,7 +863,8 @@ m6_check_dedup_copied() {
 # at once: each stored once, whoever won: its records once in the
 # document, and no more facts than the same session sent by one PC (cb1,
 # the baseline: the mock LLM extracts a fixed set from such a segment).
-# Recorded: how many races had both flushes send.
+# At least one pair must have raced (both flushes sent): five pairs that
+# all ran one after the other prove only what dedup-copied does.
 m6_check_dedup_concurrent() {
   local i sid who w rc out st both doc counts base n facts=()
   w=$M6_WORK/concurrent
@@ -894,6 +895,8 @@ m6_check_dedup_concurrent() {
       printf '%s %s %s\n' "$sid" "$who" "$st" >> "$w/statuses"
     done
   done
+  both=$(awk '$3 == "sent" { n[$1]++ } END { c = 0; for (s in n) if (n[s] == 2) c++; print c }' "$w/statuses")
+  [ "$both" -ge 1 ] || fail "no pair raced: in each of cc1-cc5 one PC sent and the other found it sent ($(awk '{ printf "%s%s %s %s", sep, $1, $2, $3; sep = ", " }' "$w/statuses")): the check would prove nothing dedup-copied does not"
   m6_queue_wait
   for i in 1 2 3 4 5; do
     sid=cc$i
@@ -913,7 +916,6 @@ m6_check_dedup_concurrent() {
     [ "$n" -le "$base" ] || fail "conversation:cc$i holds $n facts, the same session sent by one PC $base: it was stored twice"
     facts+=("$n")
   done
-  both=$(awk '$3 == "sent" { n[$1]++ } END { c = 0; for (s in n) if (n[s] == 2) c++; print c }' "$w/statuses")
   m6_result dedup-concurrent PASS "cc1-cc5 flushed on A and B at once, both exit 0: each on the server once, 3 records, facts ${facts[*]} (one PC's: $base); both sent $both of 5" \
     "$(jq -Rn --argjson both "$both" --argjson base "$base" --arg facts "${facts[*]}" \
       '{both_sent: $both, baseline_facts: $base, facts: ($facts | split(" ") | map(tonumber)), statuses: [inputs | split(" ") | {session: .[0], pc: .[1], status: .[2]}]}' < "$w/statuses")"

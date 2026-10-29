@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,7 +34,8 @@ var privateRefs = []struct {
 	what string
 	re   *regexp.Regexp
 }{
-	{"a design-record number", regexp.MustCompile(`(?i)\b(?:decisions?|plan) \d{4}\b`)},
+	{"a design-record number", regexp.MustCompile(`(?i)\b(?:decisions?|plan) \d{4}\b|\b00\d{2}\b`)},
+	{"a plan's block", regexp.MustCompile(`(?i)\bblocks? \d+\b`)},
 	{"a spec section", regexp.MustCompile(`\bSPEC\b|§`)},
 	{"an experiment, review or milestone code", regexp.MustCompile(`\b[CEM]\d{1,2}\b`)},
 	{"the roadmap or a review round", regexp.MustCompile(`(?i)\bROADMAP\b|\bblock review\b|\bsecurity review [A-Z]\d`)},
@@ -87,6 +89,9 @@ func TestPrivateReferencePatterns(t *testing.T) {
 		"see issue #281",
 		"until then the reference stack stays (ROADMAP v7)",
 		"the agent-driven install (plan 0063)",
+		"as 0073 says, a client never stops silently",
+		"carried to block 4",
+		"blocks 1-4 built it",
 	}
 	for _, s := range cited {
 		if privateRefsIn(s) == "" {
@@ -103,6 +108,9 @@ func TestPrivateReferencePatterns(t *testing.T) {
 		"known limit: https://github.com/Barben360/backsight/issues/5",
 		"e2e tests and a 2 min E2E run",
 		"keeps transcripts 3650 days",
+		"chmod 0600 on the file",
+		"at 00:30 every night",
+		"a block of 4 lines",
 	}
 	for _, s := range plain {
 		if refs := privateRefsIn(s); refs != "" {
@@ -277,14 +285,20 @@ func TestStringLiteralsNameNoPrivateReference(t *testing.T) {
 	}
 }
 
-// What a release publishes for its readers: the release notes and the
-// documents they point to for versions and support.
+// What a release publishes for its readers: the release notes, the
+// documents they point to for versions and support, the README and every
+// docs page (CONTRIBUTING.md is for contributors and stays out).
 func TestReleaseDocumentsNameNoPrivateReference(t *testing.T) {
 	notes, err := filepath.Glob(filepath.Join("..", "..", "docs", "releases", "*.md"))
 	if err != nil || len(notes) == 0 {
 		t.Fatalf("no release notes in docs/releases: %v", err)
 	}
-	for _, f := range append(notes, securityDoc, compatibilityDoc) {
+	pages, err := filepath.Glob(filepath.Join("..", "..", "docs", "*.md"))
+	if err != nil || len(pages) == 0 {
+		t.Fatalf("no pages in docs: %v", err)
+	}
+	files := slices.Concat(notes, pages, []string{securityDoc, compatibilityDoc, filepath.Join("..", "..", "README.md")})
+	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

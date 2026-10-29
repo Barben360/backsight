@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,11 +18,14 @@ import (
 	"filippo.io/age"
 
 	"github.com/Barben360/backsight/internal/backup"
+	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/target"
 )
 
 func put(t *testing.T, p, content string, mode os.FileMode) {
@@ -420,37 +422,47 @@ func TestReferenceURLCredentialsNeverPrinted(t *testing.T) {
 	}
 }
 
-// The fake server listens on this machine's first non-loopback address, so
-// the key would cross a network: no DNS, no outside traffic.
+// The server is reached at a LAN address (the client is pointed at a
+// loopback fake, whatever this machine's addresses are): a warning with a
+// fix that exists today, no TLS proxy promised.
 func TestCleartextKeyWarned(t *testing.T) {
-	ip := localNonLoopback(t)
-	ln, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
-	if err != nil {
-		t.Skipf("cannot listen on %s: %v", ip, err)
-	}
-	srv := httptest.NewUnstartedServer(fakeHandler(nil))
-	_ = srv.Listener.Close()
-	srv.Listener = ln
-	srv.Start()
+	srv := httptest.NewServer(fakeHandler(nil))
 	t.Cleanup(srv.Close)
+	old := serverClient
+	serverClient = func(_, token string, timeout time.Duration) (*hindsight.Client, error) {
+		return hindsight.New(srv.URL, token, timeout)
+	}
+	t.Cleanup(func() { serverClient = old })
 	f := newFixture(t)
-	f.reference("http://" + ln.Addr().String())
+	f.reference("http://192.168.77.10:8888")
 	c := check(t, f.run(), "server")
 	expect(t, c, Warn, "Hindsight 1.1.0")
-	if !strings.Contains(c.Detail, "unencrypted") {
-		t.Errorf("detail: %q", c.Detail)
+	if !strings.Contains(c.Detail, "unencrypted") || strings.Contains(c.Fix, "TLS") || !strings.Contains(c.Fix, "backsight server expose --private <tailnet address>") {
+		t.Errorf("detail %q, fix %q", c.Detail, c.Fix)
 	}
+	f.reference("http://100.101.1.2:8888") // a tailnet address: information
+	expect(t, check(t, f.run(), "server"), Info, "Hindsight 1.1.0")
 }
 
-func localNonLoopback(t *testing.T) string {
-	addrs, _ := net.InterfaceAddrs()
-	for _, a := range addrs {
-		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil && !n.IP.IsLinkLocalUnicast() {
-			return n.IP.String()
+// How the key travels, once the server answered: loopback and https say
+// nothing; a tailnet address is Info (WireGuard encrypts it); any other
+// host warns, with a fix that exists today (no TLS proxy promised).
+func TestServerTransport(t *testing.T) {
+	for url, want := range map[string]Status{
+		"http://127.0.0.1:8888":       OK,
+		"https://mem.example:443":     OK,
+		"http://100.101.102.103:8888": Info,
+		"http://host.tail1234.ts.net": Info,
+		"http://192.168.1.10:8888":    Warn,
+	} {
+		st, detail, fix := transport(target.Target{URL: url})
+		if st != want || strings.Contains(fix, "TLS") || (st != OK) != (detail != "") {
+			t.Errorf("%s: %s %q %q, want %s", url, st, detail, fix, want)
+		}
+		if st == Info && !strings.Contains(detail, "WireGuard") {
+			t.Errorf("%s: %q", url, detail)
 		}
 	}
-	t.Skip("no non-loopback IPv4 address")
-	return ""
 }
 
 // A valid config.toml without secrets.toml is a server without a key.
@@ -654,6 +666,123 @@ func TestSplitSessionIsInfo(t *testing.T) {
 	if c.Status != Info || c.Summary != "2 session(s) continued on two PCs: their shared part may be stored twice" ||
 		c.Detail != "s1, s2" || c.Fix != "" {
 		t.Errorf("two: %+v", c)
+	}
+}
+
+// unconfirmedEvent is a replace_unconfirmed telemetry line, as the flush
+// writes it, at "at".
+func unconfirmedEvent(at time.Time, session, document string) string {
+	return `{"ts":"` + at.UTC().Format("2006-01-02T15:04:05.000Z") + `","event":"replace_unconfirmed","session":"` + session +
+		`","document":"` + document + `","reason":"never readable","binary_version":"dev"}` + "\n"
+}
+
+// A session part given up unconfirmed in the last 30 days warns, naming it
+// (its session's first 8 characters and its document): some of this PC's
+// turns may be missing on the server. An older one is no longer reported.
+func TestDoctorReplaceUnconfirmedWarns(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	dir := f.env.Dirs.TelemetryDir()
+	old := now.Add(-40 * 24 * time.Hour) // September's file
+	put(t, filepath.Join(dir, "events-"+old.Format("2006-01")+".jsonl"), unconfirmedEvent(old, "oldsession99", "conversation:oldsession99"), 0o600)
+	if c := check(t, f.run(), "replace-unconfirmed"); c.Status != OK || c.Detail != "" {
+		t.Errorf("only an old event: %+v", c)
+	}
+	recent := now.Add(-3 * 24 * time.Hour)
+	put(t, filepath.Join(dir, "events-"+recent.Format("2006-01")+".jsonl"),
+		`{"ts":"2026-10-25T11:00:00.000Z","event":"prompt","session":"s1"}`+"\n"+unconfirmedEvent(recent, "0123456789abcdef", "conversation:0123456789abcdef@beta"), 0o600)
+	c := check(t, f.run(), "replace-unconfirmed")
+	const ref = "troubleshooting#doctor-a-session-part-was-never-confirmed"
+	if c.Status != Warn || c.Detail != "1 session part(s) never confirmed on the server since 2026-10-25: 01234567/conversation:0123456789abcdef@beta" ||
+		c.Fix != "backsight guide "+ref {
+		t.Errorf("recent: %+v", c)
+	}
+	corpus, err := guide.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tp := range corpus.Topics {
+		for _, s := range tp.Sections {
+			found = found || s.Ref() == ref
+		}
+	}
+	if !found {
+		t.Errorf("the docs have no section %s", ref)
+	}
+}
+
+// At most 5 parts are named, the newest first; the count is all of them.
+func TestDoctorReplaceUnconfirmedNamesFive(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	var b strings.Builder
+	for i := 1; i <= 6; i++ { // one a day: the oldest, 6 days ago, dates "since"
+		b.WriteString(unconfirmedEvent(now.Add(-time.Duration(i)*24*time.Hour), "session"+strconv.Itoa(i)+"xyz", "conversation:s"+strconv.Itoa(i)))
+	}
+	put(t, filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), b.String(), 0o600)
+	c := check(t, f.run(), "replace-unconfirmed")
+	want := "6 session part(s) never confirmed on the server since 2026-10-22: session1/conversation:s1, session2/conversation:s2, session3/conversation:s3, session4/conversation:s4, session5/conversation:s5, …"
+	if c.Status != Warn || c.Detail != want {
+		t.Errorf("got %q\nwant %q", c.Detail, want)
+	}
+}
+
+// The window is the last 30 days: a part given up 29 days ago warns, one
+// given up 31 days ago does not.
+func TestDoctorReplaceUnconfirmedWindowEdge(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	put31 := func(age time.Duration, session string) {
+		at := now.Add(-age)
+		p := filepath.Join(f.env.Dirs.TelemetryDir(), "events-"+at.Format("2006-01")+".jsonl")
+		old, _ := os.ReadFile(p)
+		put(t, p, string(old)+unconfirmedEvent(at, session, "conversation:"+session), 0o600)
+	}
+	put31(31*24*time.Hour, "day31")
+	if c := check(t, f.run(), "replace-unconfirmed"); c.Status != OK {
+		t.Errorf("31 days: %+v", c)
+	}
+	put31(29*24*time.Hour, "day29")
+	c := check(t, f.run(), "replace-unconfirmed")
+	if c.Status != Warn || c.Detail != "1 session part(s) never confirmed on the server since 2026-09-29: day29/conversation:day29" {
+		t.Errorf("29 days: %+v", c)
+	}
+}
+
+// Telemetry that cannot be read warns, saying so: the check cannot tell
+// whether a part was given up.
+func TestDoctorReplaceUnconfirmedUnreadableTelemetry(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	if err := os.MkdirAll(filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), 0o700); err != nil { // a directory: unreadable
+		t.Fatal(err)
+	}
+	if c := check(t, f.run(), "replace-unconfirmed"); c.Status != Warn || c.Summary != "telemetry unreadable" || c.Detail == "" {
+		t.Errorf("%+v", c)
+	}
+}
+
+// A server-only host runs no flush: the check is not a client's there.
+func TestDoctorReplaceUnconfirmedNotAClientOnServerOnlyHost(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
+	put(t, filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), unconfirmedEvent(now.Add(-time.Hour), "s1", "conversation:s1"), 0o600)
+	r := f.run()
+	n := 0
+	for _, c := range r.Checks {
+		if c.ID == "replace-unconfirmed" {
+			n++
+		}
+	}
+	if c := check(t, r, "replace-unconfirmed"); n != 1 || c.Status != Info || c.Summary != "not a client: server-only host" {
+		t.Errorf("%d check(s), %+v", n, c)
 	}
 }
 
@@ -896,6 +1025,15 @@ func TestCheckRestoreEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, check(t, f.run(), "restore-epoch"), OK, "epoch 2")
+	// The same number from another restore (a host restored elsewhere
+	// from an older archive): not reconciled yet.
+	if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+		RestoreEpoch: &state.RestoreEpoch{Bank: "coding-agent::memoire", Epoch: 2, RestoredAt: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := check(t, f.run(), "restore-epoch"); c.Status != Warn || !strings.Contains(c.Summary, "restored again") || c.Fix != "backsight jobs tick" {
+		t.Errorf("another restore: %+v", c)
+	}
 
 	g := newFixture(t) // no epoch document: epoch 0, which a new client is on
 	put(t, g.env.Dirs.ConfigFile(), "[server]\nurl = \""+fakeServer(t).URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
@@ -1074,5 +1212,62 @@ func TestVersionSkewOnlyOnAClient(t *testing.T) {
 		if ch.ID == "version-skew" {
 			t.Errorf("local: %+v", ch)
 		}
+	}
+}
+
+// tailnetServer points the server check at a tailnet-looking address that
+// a loopback fake answers, whatever this machine's interfaces are.
+func tailnetServer(t *testing.T, overrides map[string]reply) string {
+	srv := fakeServerWith(t, overrides)
+	old := serverClient
+	serverClient = func(_, token string, timeout time.Duration) (*hindsight.Client, error) {
+		return hindsight.New(srv.URL, token, timeout)
+	}
+	t.Cleanup(func() { serverClient = old })
+	return "http://100.101.1.2:8888"
+}
+
+// A tailnet server answers with Info (WireGuard encrypts the key): that is
+// still an answer, so a record of an old silence does not warn.
+func TestServerReachCountsATailnetAnswer(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+tailnetServer(t, nil)+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	r := f.run()
+	expect(t, check(t, r, "server"), Info, "Hindsight")
+	c := check(t, r, "server-reach")
+	if c.Status == Warn || c.Fix != "" || !strings.Contains(c.Summary, "last answer now; it was silent from 2026-10-28 10:00 UTC") {
+		t.Errorf("tailnet answers now: %+v", c)
+	}
+}
+
+// No server configured is Info too, but nothing answered: server-reach
+// keeps its outcome (skipped, no backsight config) and never says "now".
+func TestServerReachWithoutAServerIsNotAnAnswer(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
+	if err := os.Remove(f.env.Dirs.ConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	r := f.run()
+	expect(t, check(t, r, "server"), Info, "no server")
+	expect(t, check(t, r, "server-reach"), Info, "skipped: no backsight config")
+}
+
+// A tailnet server that answers while its bank does not: the checks that
+// need the bank say so, not "no server".
+func TestSkipReasonTailnetServerAnswering(t *testing.T) {
+	url := tailnetServer(t, map[string]reply{"/v1/default/banks": {500, `{}`}})
+	f := newFixture(t)
+	f.reference(url)
+	r := f.run()
+	expect(t, check(t, r, "server"), Info, "Hindsight")
+	expect(t, check(t, r, "bank"), Error, "cannot list banks")
+	expect(t, check(t, r, "untagged"), Info, "skipped: bank not usable")
+	if got := skipReason(check(t, r, "server")); got != "bank not usable" {
+		t.Errorf("skipReason = %q", got)
+	}
+	if got := skipReason(Check{Status: Info}); got != "no server" {
+		t.Errorf("no server: %q", got)
 	}
 }

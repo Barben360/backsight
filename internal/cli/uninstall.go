@@ -152,10 +152,12 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	if state.UpdateIncomplete(d) {
 		return res, &output.Error{Code: output.Blocked, Message: "an update did not finish (" + d.UpdateMarker() + "): run backsight doctor for the way back"}
 	}
+	generation := sendsGeneration(d) // before the config it goes with
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if errors.Is(err, fs.ErrNotExist) {
 		cfg, err = config.Default(d, home), nil
 	}
+	sendsConfigLoaded()
 	if err != nil {
 		return res, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
@@ -432,7 +434,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// This machine's shared counts, with the machine id they are named
 	// after: before the server stops.
 	if f.purgeLocal {
-		add(uninstallSharedCounts(ctx, d, cfg, sec, f.plan))
+		add(uninstallSharedCounts(ctx, d, cfg, sec, generation, f.plan))
 	}
 
 	// 4. The server: kept, stopped, or deleted with its data. Its images
@@ -829,11 +831,12 @@ func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
 // uninstallSharedCounts deletes this machine's shared counts document
 // from the server this PC joined, for an uninstall that deletes the
 // machine id it is named after: the other machines would weigh it for 30
-// more days. Skipped when this machine never sent one, or another server
-// answers at the joined address. A server that fails or does not answer
+// more days. Skipped when this machine never sent one, another server
+// answers at the joined address, or connect moved this PC to another
+// server since uninstall read its config. A server that fails or does not answer
 // within uninstallShareBudget keeps it (status kept, one line: the
 // server's answer folded onto it): the uninstall goes on.
-func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, plan bool) undoAction {
+func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, generation int, plan bool) undoAction {
 	a := undoAction{Name: "shared counts"}
 	machine := retain.ReadMachineID(d.State)
 	if _, err := os.Stat(feedback.SharedUploadFile(d.FeedbackDir())); machine == "" || errors.Is(err, fs.ErrNotExist) {
@@ -847,6 +850,10 @@ func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config,
 	id := sharedDocPrefix + machine
 	if plan {
 		a.Status, a.Detail = "planned", "this machine's counts ("+id+") deleted from the server"
+		return a
+	}
+	if err := sendsGate(d, generation)(); err != nil {
+		a.Status, a.Detail = "skipped", startedOverText(err, "uninstall")+": nothing is deleted on "+cfg.Server.URL
 		return a
 	}
 	ctx, cancel := context.WithTimeout(ctx, uninstallShareBudget)

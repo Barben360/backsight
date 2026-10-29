@@ -90,13 +90,17 @@ func (d mcpDeps) freshPrivacy() config.Config {
 // mcpKey holds what carries the API key for the server's whole life. A
 // `server token --rotate` on this host gives secrets.toml a new key (hooks
 // and jobs read it on each run): a tool call the server refuses reads it
-// again and, when it changed, is tried once more with it.
+// again and, when it changed, is tried once more with it. Only for the
+// server this process loaded (cfg, read after generation): a key never
+// goes to an address it was not loaded for.
 type mcpKey struct {
-	mu     sync.Mutex
-	file   string // secrets.toml
-	cfg    config.Config
-	sec    config.Secrets
-	engine *recall.Engine
+	mu         sync.Mutex
+	dirs       paths.Dirs
+	home       string
+	cfg        config.Config
+	generation int
+	sec        config.Secrets
+	engine     *recall.Engine
 }
 
 func (k *mcpKey) get() (config.Secrets, *recall.Engine) {
@@ -107,15 +111,22 @@ func (k *mcpKey) get() (config.Secrets, *recall.Engine) {
 
 // refresh follows secrets.toml after the server refused used, the key of
 // the refused call, and says whether to try the call again: the key
-// changed, now or in a concurrent call. An unchanged key: no retry.
+// changed, now or in a concurrent call. An unchanged key: no retry. Nor
+// once config.toml names another server or bank, or connect raised the
+// sends generation, since this process loaded them: the key secrets.toml
+// holds then is another server's, never sent to this one's address.
 func (k *mcpKey) refresh(used string) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.sec.APIKey != used {
 		return true
 	}
-	sec, err := config.LoadSecrets(k.file)
-	if err != nil || sec.APIKey == "" || sec.APIKey == used {
+	if !k.sameServer() {
+		return false
+	}
+	mcpKeyBetweenReads()
+	sec, err := config.LoadSecrets(k.dirs.SecretsFile())
+	if err != nil || sec.APIKey == "" || sec.APIKey == used || !k.sameServer() {
 		return false
 	}
 	eng, err := newEngine(k.cfg, sec)
@@ -125,6 +136,20 @@ func (k *mcpKey) refresh(used string) bool {
 	k.sec, k.engine = sec, eng
 	return true
 }
+
+// sameServer: the sends generation and config.toml's server and bank are
+// still the ones this process loaded. refresh asks before and after
+// reading secrets.toml: a connect in between (one to the same server
+// raises no generation) may have written another address and its key.
+func (k *mcpKey) sameServer() bool {
+	gen := sendsGeneration(k.dirs)
+	cfg, err := config.Load(k.dirs.ConfigFile(), k.dirs, k.home)
+	return err == nil && gen == k.generation && cfg.Server.URL == k.cfg.Server.URL && cfg.Server.Bank == k.cfg.Server.Bank
+}
+
+// mcpKeyBetweenReads runs between refresh's first look and its read of
+// secrets.toml. A variable for tests.
+var mcpKeyBetweenReads = func() {}
 
 func unauthorized(err error) bool {
 	var apiErr *hindsight.APIError
@@ -171,7 +196,7 @@ func errorResult(s string) *mcp.CallToolResult {
 // newMCPServer builds the memory server (SPEC §7).
 func newMCPServer(deps mcpDeps) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "memory", Version: buildinfo.Version}, &mcp.ServerOptions{Instructions: instructions.For(deps.cfg.Feedback.Enabled).ShortGuide})
-	key := &mcpKey{file: deps.dirs.SecretsFile(), cfg: deps.cfg, sec: deps.sec, engine: deps.engine}
+	key := &mcpKey{dirs: deps.dirs, home: deps.home, cfg: deps.cfg, generation: deps.generation, sec: deps.sec, engine: deps.engine}
 	mcp.AddTool(s, &mcp.Tool{Name: "memory_search", Description: instructions.SearchDescription, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
 			start := time.Now()
@@ -466,6 +491,11 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	}
 	if err := otherServerRefusal(d.dirs, cfg); err != nil {
 		return "", err
+	}
+	// Nor to the server this process loaded once connect moved this PC
+	// to another: the memories it would retire are not this PC's now.
+	if err := sendsGate(d.dirs, d.generation)(); err != nil {
+		return "", fmt.Errorf("%w: nothing was changed", joinedElsewhere(err))
 	}
 	// Every call retires at least one memory: a session at its limit is
 	// refused before the server is asked anything.

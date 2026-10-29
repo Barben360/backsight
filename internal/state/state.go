@@ -244,6 +244,11 @@ type RestoreEpoch struct {
 	Bank         string    `json:"bank"`
 	Epoch        int       `json:"epoch"`
 	ReconciledAt time.Time `json:"reconciled_at"`
+	// RestoredAt: the epoch's restored_at, its identity. A host restored
+	// elsewhere from an older archive may write a number this client
+	// already holds, or a lower one: another restored_at says it is
+	// another restore. Zero: recorded before it was (or epoch 0).
+	RestoredAt time.Time `json:"restored_at,omitempty"`
 }
 
 // Tombstone is one document a purge deleted, read just before the delete.

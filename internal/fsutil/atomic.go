@@ -75,6 +75,39 @@ func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 	return write(target, data, perm, nil)
 }
 
+// ErrNotRegular: a path that is a symlink or not a regular file, which
+// WriteAtomicNoFollow refuses.
+var ErrNotRegular = errors.New("not a regular file")
+
+// RegularOrAbsent is nil when path does not exist or is a regular file (not
+// a symlink); an error wrapping ErrNotRegular, or the Lstat error,
+// otherwise.
+func RegularOrAbsent(path string) error {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symlink: %w", path, ErrNotRegular)
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("%s is %w", path, ErrNotRegular)
+	}
+	return nil
+}
+
+// WriteAtomicNoFollow is WriteAtomic for a path another user may have
+// prepared (a file in /tmp): path itself is replaced, never what a
+// symlink there points to, and a symlink or a non-regular file there is
+// refused (RegularOrAbsent), first and again right before the rename.
+func WriteAtomicNoFollow(path string, data []byte, perm fs.FileMode) error {
+	if err := RegularOrAbsent(path); err != nil {
+		return err
+	}
+	return write(path, data, perm, func() error { return RegularOrAbsent(path) })
+}
+
 // write puts data at path through a synced temp file; check, when set, runs
 // right before the rename and aborts it with its error.
 func write(path string, data []byte, perm fs.FileMode, check func() error) error {

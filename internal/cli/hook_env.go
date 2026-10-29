@@ -58,9 +58,12 @@ type hookEnv struct {
 	// (decision 0045).
 	resolver *project.Resolver
 	cwd      string
-	store    session.Store
-	tw       *telemetry.Writer
-	client   *hindsight.Client
+	// generation is the sends generation read before cfg: the briefing
+	// page is written only while it still holds (sendsGate).
+	generation int
+	store      session.Store
+	tw         *telemetry.Writer
+	client     *hindsight.Client
 	// journal records the memories shown to the agent (feedback); turn is
 	// the turn this process started, when turnSet.
 	journal *feedback.Journal
@@ -85,9 +88,11 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	if h.dirs, h.home, err = machine(); err != nil {
 		return nil, false
 	}
+	h.generation = sendsGeneration(h.dirs)
 	if h.cfg, h.sec, err = loadServerConfig(); err != nil {
 		return nil, false
 	}
+	sendsConfigLoaded()
 	cwd := h.in.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()

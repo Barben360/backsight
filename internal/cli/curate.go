@@ -67,6 +67,34 @@ func curateClient() (*hindsight.Client, string, error) {
 	return cl, cfg.Server.Bank, nil
 }
 
+// curateWriter is curateClient for a command that writes to the server.
+// gate refuses, before a write, once connect moved this PC to another
+// server since the config was read (the sends generation, read first).
+func curateWriter() (cl *hindsight.Client, bank string, gate func() error, err error) {
+	d, _, err := machine()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	generation := sendsGeneration(d) // before the config it goes with
+	if cl, bank, err = curateClient(); err != nil {
+		return nil, "", nil, err
+	}
+	sendsConfigLoaded()
+	sent := sendsGate(d, generation)
+	return cl, bank, func() error {
+		// Neutral: a connect that rolled back raises the generation too,
+		// and the same command run again acts on the server config.toml
+		// names now.
+		switch err := sent(); {
+		case errors.Is(err, retain.ErrStartedOver):
+			return &output.Error{Code: output.Blocked, Message: "the server configuration changed while this command ran: nothing was changed; check backsight doctor, then run it again"}
+		case err != nil:
+			return &output.Error{Code: output.Blocked, Message: startedOverText(err, "this command") + ": nothing was changed; check backsight doctor, then run it again"}
+		}
+		return nil
+	}, nil
+}
+
 // heldWrites refuses a write to the server while another server answers
 // at the joined address (decision 0073), before any write.
 func heldWrites() error {
@@ -138,7 +166,7 @@ func newForgetCmd(e *env) *cobra.Command {
 			case len(args) != 1:
 				return &output.Error{Code: output.Usage, Message: "forget needs a memory id, or --project <name>"}
 			}
-			cl, bank, err := curateClient()
+			cl, bank, gate, err := curateWriter()
 			if err != nil {
 				return err
 			}
@@ -165,6 +193,9 @@ func newForgetCmd(e *env) *cobra.Command {
 					return curateError(err, id)
 				}
 				reason := map[bool]string{true: "restored by the user (backsight forget --restore)", false: "forgotten by the user (backsight forget)"}[restore]
+				if err := gate(); err != nil {
+					return err
+				}
 				var done []string
 				for _, t := range targets {
 					if err = cl.Invalidate(ctx, bank, t, reason, restore); err != nil {
@@ -194,7 +225,7 @@ func newForgetCmd(e *env) *cobra.Command {
 					journalForget(append([]string{id}, res.Sources...))
 				}
 			default:
-				res, err = purgeMemory(ctx, cl, bank, id, yes)
+				res, err = purgeMemory(ctx, cl, bank, id, yes, gate)
 				if err != nil {
 					return curateError(err, id)
 				}
@@ -244,7 +275,7 @@ func curatable(ctx context.Context, cl *hindsight.Client, bank, id string) ([]st
 // one, since an observation's source list carries no document; purgeWrite
 // does the writes. A fact with no document stays in the archive: the purge
 // says so instead of claiming it.
-func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes bool) (forgetResult, error) {
+func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes bool, gate func() error) (forgetResult, error) {
 	res := forgetResult{ID: id, Action: "purge_planned"}
 	m, err := cl.GetMemory(ctx, bank, id)
 	if err != nil {
@@ -269,7 +300,7 @@ func purgeMemory(ctx context.Context, cl *hindsight.Client, bank, id string, yes
 		return res, err
 	}
 	var mirror string
-	res.Pages, mirror, err = purgeWrite(ctx, cl, bank, facts, res.Documents, projectsOf(append([]hindsight.MemoryDetail{m}, facts...)),
+	res.Pages, mirror, err = purgeWrite(ctx, cl, bank, gate, facts, res.Documents, projectsOf(append([]hindsight.MemoryDetail{m}, facts...)),
 		"rerun on one of the source facts: backsight forget <fact id> --purge")
 	if err != nil {
 		return res, err
@@ -336,8 +367,9 @@ func projectsOf(ms []hindsight.MemoryDetail) map[string]bool {
 // the documents go, and with them every fact, live or archived, extracted
 // from them; last, the tombstones are mirrored into the control bank, for
 // the other clients and a reinstall. rerun says how to finish when a
-// document delete fails.
-func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, string, error) {
+// document delete fails. gate (curateWriter's) is checked under the lock,
+// which connect takes too.
+func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, gate func() error, facts []hindsight.MemoryDetail, docs []purgeDoc, projects map[string]bool, rerun string) ([]string, string, error) {
 	// The writes hold the maintenance lock: a backup cannot dump a half-purged
 	// database, and one that dumped before is listed below, done or not.
 	d, _, err := machine()
@@ -361,6 +393,9 @@ func purgeWrite(ctx context.Context, cl *hindsight.Client, bank string, facts []
 		return nil, "", err
 	}
 	defer func() { _ = l.Release() }()
+	if err := gate(); err != nil {
+		return nil, "", err
+	}
 	// Before any delete: a purge stopped half way still holds what it
 	// deleted. A tombstone of a document left in place costs nothing (the
 	// server holds those records anyway).

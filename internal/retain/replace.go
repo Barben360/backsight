@@ -25,7 +25,8 @@ import (
 // Its records there: confirmed. Some missing: they go again as the next
 // segment, numbered after the server's, and the split is recorded
 // (decision 0073, "never lose" over "never store twice"). A mark never
-// holds the session's sends, and ends PendingLimit after its send.
+// holds the session's sends, and ends PendingLimit after its send (or
+// after the first run that found a restore since).
 
 // PendingReplace is a part this PC sent that replaces its document (its
 // segment 1), not confirmed on the server yet.
@@ -35,10 +36,23 @@ type PendingReplace struct {
 	// that replace, first and last: an append applied before the other
 	// PC's segment 1 is replaced with it.
 	Parts []RecordRange `json:"parts"`
-	// Epoch: the bank's restore epoch at the send; -1 unknown. A restore
-	// since makes the reconcile the judge of what the server lost.
-	Epoch  int       `json:"epoch"`
-	SentAt time.Time `json:"sent_at"`
+	// Epoch: the bank's restore epoch at the send, or at the last look
+	// since a restore; -1 unknown. A restore since starts the looks over
+	// against the restored document: the reconcile judges only cursors
+	// sent after the backup, and a race before it is in the backup.
+	Epoch int `json:"epoch"`
+	// EpochRestoredAt: that epoch's restored_at, its identity, as this PC
+	// recorded it. A host restored elsewhere may write the number Epoch
+	// holds: another restored_at says it is another restore all the same.
+	// Zero: epoch 0, or a record (mark or epoch) written before it was
+	// kept.
+	EpochRestoredAt time.Time `json:"epoch_restored_at,omitempty"`
+	SentAt          time.Time `json:"sent_at"`
+	// RestoredAt: when a run first found a restore since the send (another
+	// epoch). The mark's PendingLimit runs from it then, not from SentAt:
+	// right after a restore the queue is at its busiest, and a mark past
+	// its limit would get a single look.
+	RestoredAt time.Time `json:"restored_at,omitempty"`
 	// LastAt: when the last part was sent. A record whose time is after it
 	// (or missing) was given the send's time (clampTime), which a later
 	// read cannot give again: it is matched without its time.
@@ -127,14 +141,14 @@ func (f *Flusher) queuedRetains(ctx context.Context) *queuedRetains {
 func (f *Flusher) noteSent(cur *Cursor, project, doc string, segNo int, prev, first, last string, now time.Time) {
 	part := RecordRange{First: first, Last: last}
 	if segNo == 1 {
-		epoch := -1
+		epoch, epochAt := -1, time.Time{}
 		if st, err := state.Load(f.Dirs.StateFile()); err == nil {
-			epoch = st.EpochOf(f.Bank)
+			epoch, epochAt = st.EpochOf(f.Bank), epochRestoredAt(st, f.Bank)
 		}
 		if cur.Replaces == nil {
 			cur.Replaces = map[string]PendingReplace{}
 		}
-		cur.Replaces[project] = PendingReplace{Document: doc, Parts: []RecordRange{part}, Epoch: epoch, SentAt: now, LastAt: now}
+		cur.Replaces[project] = PendingReplace{Document: doc, Parts: []RecordRange{part}, Epoch: epoch, EpochRestoredAt: epochAt, SentAt: now, LastAt: now}
 		return
 	}
 	p, ok := cur.Replaces[project]
@@ -148,6 +162,42 @@ func (f *Flusher) noteSent(cur *Cursor, project, doc string, segNo int, prev, fi
 	}
 	p.LastAt = now
 	cur.Replaces[project] = p
+}
+
+// epochRestoredAt is the restored_at st records for bank's epoch: zero
+// for epoch 0 or a record written before it was kept.
+func epochRestoredAt(st state.State, bank string) time.Time {
+	if re := st.RestoreEpoch; re != nil && state.SameBank(re.Bank, bank) {
+		return re.RestoredAt
+	}
+	return time.Time{}
+}
+
+// restoredSince says whether the bank's epoch, numbered epoch with the
+// identity restoredAt (zero: unknown), is another restore than the one pr
+// was sent or last looked at under: another number, or the same number
+// with another restored_at (a host restored elsewhere from an older
+// archive), as the reconcile judges it (anotherRestore). A mark without
+// the identity (written before it was kept) saw another when it last
+// took its epoch (its send, or its last restore) before restoredAt,
+// within the clock skew: taken for nothing, a restore costs two looks;
+// missed, it may give up a repair.
+func (pr PendingReplace) restoredSince(epoch int, restoredAt time.Time) bool {
+	switch {
+	case pr.Epoch < 0:
+		return false
+	case pr.Epoch != epoch:
+		return true
+	case restoredAt.IsZero():
+		return false
+	case !pr.EpochRestoredAt.IsZero():
+		return !pr.EpochRestoredAt.Equal(restoredAt)
+	}
+	last := pr.SentAt
+	if pr.RestoredAt.After(last) {
+		last = pr.RestoredAt
+	}
+	return last.Before(restoredAt.Add(epochSkew))
 }
 
 // A look at one pending replace.
@@ -165,8 +215,9 @@ const (
 // checkReplaces confirms or repairs the replacing parts session sid's
 // cursor holds, before the flush. Only the tick, the detached flush and
 // backfill flush: no hook reads the server. A part is dropped, never
-// written again, when its document is tombstoned (a purge) or the bank's
-// restore epoch changed since. Otherwise it is looked at from
+// written again, when its document is tombstoned (a purge). A restore
+// since its send (another epoch: number or restored_at) starts its looks
+// over against the restored document. It is looked at from
 // replaceCheckAfter after its send (lookAt):
 //   - this PC's records there: seen, then confirmed at a second look;
 //   - some missing: sent again (resendReplaced), then dropped; the flush
@@ -174,7 +225,7 @@ const (
 //   - anything else (no look possible, absent, nothing to compare): left
 //     pending; the session's flush goes on as usual.
 //
-// PendingLimit after its send, a part ends at its next look whatever it
+// PendingLimit after its send (or its restore), a part ends at its next look whatever it
 // gives: found, it is confirmed, missing, sent again, else given up and
 // reported in res.Unconfirmed (never quarantined: the session's sends go
 // on). A part this run has no read left for is not looked at, so it stays
@@ -192,7 +243,7 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 	if err != nil {
 		return res, false
 	}
-	epoch, tombs, now := st.EpochOf(f.Bank), st.TombstonesOf(f.Bank), f.Now()
+	epoch, epochAt, tombs, now := st.EpochOf(f.Bank), epochRestoredAt(st, f.Bank), st.TombstonesOf(f.Bank), f.Now()
 	changed := false
 	defer func() {
 		if changed {
@@ -208,12 +259,26 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 	slices.Sort(projects)
 	for _, p := range projects {
 		pr := cur.Replaces[p]
-		expired := now.Sub(pr.SentAt) >= PendingLimit
 		switch {
-		case pr.Epoch >= 0 && pr.Epoch != epoch, slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == pr.Document }):
+		case slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == pr.Document }):
 			drop(p)
 			continue
-		case !expired && now.Sub(pr.SentAt) < replaceCheckAfter:
+		case pr.restoredSince(epoch, epochAt):
+			// A restore since: a cursor sent after its backup was the
+			// reconcile's to judge (dropSession removes it, the mark with
+			// it); this one predates the backup, which may hold the other
+			// PC's segment 1 alone. Looked at again, twice, against the
+			// restored document, with a full PendingLimit from now.
+			pr.Epoch, pr.EpochRestoredAt, pr.SeenAt, pr.RestoredAt = epoch, epochAt, time.Time{}, now
+			cur.Replaces[p] = pr
+			changed = true
+		}
+		window := pr.SentAt
+		if pr.RestoredAt.After(window) {
+			window = pr.RestoredAt
+		}
+		expired := now.Sub(window) >= PendingLimit
+		if !expired && now.Sub(pr.SentAt) < replaceCheckAfter {
 			continue
 		}
 		got, why, doc, missing := f.lookAt(ctx, pr, tr)

@@ -982,12 +982,18 @@ vb_no_drop() {
 # vb_offline_cleanup <dir>: however an offline run ends, A's link is up
 # and no drop rule stays, the offline script's session is stopped when it
 # did not end, and what the offline checks write on A is gone: their
-# directory, their transcripts, a backdated reach.json's temp file.
+# directory, their transcripts, a backdated reach.json's temp file. It
+# records A's time for the timers check (M6_WORK/timers-after).
 vb_offline_cleanup() {
   local dir=${1:-m6-offline}
   vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true
   vb_no_drop > /dev/null 2>&1 || true
   (vb_wait_a) > /dev/null 2>&1 || true
+  # For timers: a tick while A was cut off exits 40, rightly; the run
+  # judged comes after the link is back (as after key-rotation's key).
+  local t
+  t=$(m6_sh a 'date +%s' 2> /dev/null) || t=
+  if [[ $t =~ ^[0-9]+$ ]] && [ -n "${M6_WORK:-}" ]; then printf '%s\n' "$t" > "$M6_WORK/timers-after"; fi
   m6_sh a "d=\$HOME/$dir; if [ -s \"\$d/pgid\" ] && [ ! -e \"\$d/done\" ]; then pkill -TERM -s \"\$(cat \"\$d/pgid\")\"; fi; st=\$(\"\$HOME/backsight\" paths --json 2> /dev/null | jq -r '.data.state // empty'); rm -rf \"\$d\" \"\$HOME/.claude/projects/-bs-m6-bs-m6-offline\" \"\$HOME/work/bs-m6-offline\" \"\$HOME/.claude/projects/-bs-m6-bs-m6-unsent\" \"\$HOME/work/bs-m6-unsent\"; if [ -n \"\$st\" ]; then rm -f \"\$st/reach.json.bs-m6\"; fi" > /dev/null 2>&1 || true
 }
 

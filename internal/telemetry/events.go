@@ -143,6 +143,9 @@ type Job struct {
 }
 
 // Raw is an ad-hoc event for experiments and tools outside the A.4 list.
+// The writer owns ts, v, event, session, project and binary_version: a
+// field of Fields with one of those names is overwritten (set the session
+// in the Writer's Common).
 type Raw struct {
 	Name   string
 	Fields map[string]any

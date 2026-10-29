@@ -205,6 +205,8 @@ The agent never sees your LLM key: you type it yourself. Or install by hand:
 
 3. Restart Claude Code (or run `/reload-plugins` in it).
 
+4. Another PC: install the binary the same way, then `backsight connect --token-file <file>` with the connection token the first PC hands out (`backsight server expose --private <ip> --out <file>` there, then `backsight server token --out <file>` for each new token). Carry the file yourself, never through a chat. See [several PCs](docs/several-pcs.md).
+
 Every detail: [docs/install.md](docs/install.md).
 
 ## Check it works
@@ -250,7 +252,7 @@ backsight adds the memory to your prompt, and Claude answers with it:
 
 ## Privacy
 
-- The server runs locally, on loopback, with its API and web UI behind keys, unless you open it to your other PCs on a private address (`backsight server expose --private`; a tailnet address keeps the API key encrypted). Recall and searches never leave your machines.
+- The server runs locally, on loopback, with its API and web UI behind keys, unless you open it to your other PCs on a private address (`backsight server expose --private`; a tailnet address keeps the API key encrypted, a LAN carries it in clear). Recall and searches never leave your machines. Whoever runs the host reads every PC's memories: see [several PCs](docs/several-pcs.md) and [privacy.md](docs/privacy.md#several-pcs).
 - Session text goes to the LLM provider you chose, under that provider's terms. With Ollama, it stays on the machine.
 - The server downloads its two search models from Hugging Face on its first start, and Docker pulls its images; no memory text goes with them.
 - Secrets are redacted before anything is stored, facts that look like secrets are refused, and Claude is told never to ask you for a key in the conversation.
@@ -284,6 +286,7 @@ You mostly use Claude Code as before. Commands you may need:
 | [daily use](docs/daily-use.md) | Sessions, projects, skills, searching, storing, forgetting. |
 | [how it works](docs/how-it-works.md) | Recall, the question gate, the save detector, latency and context cost, the hooks. |
 | [configuration](docs/configuration.md) | Every `config.toml` key. |
+| [several PCs](docs/several-pcs.md) | One memory shared by your PCs: the host, joining, offline laptops, a lost laptop. |
 | [privacy](docs/privacy.md) | What is stored, what leaves the machine, each provider's terms. |
 | [commands](docs/commands.md) | Every command and flag. |
 | [backups and restore](docs/backups-and-restore.md), [update](docs/update.md), [uninstall](docs/uninstall.md) | Keeping the install safe and current. |
@@ -292,7 +295,7 @@ You mostly use Claude Code as before. Commands you may need:
 
 ## Status
 
-backsight is a **preview**: it runs daily on its author's machine, but expect rough edges and changes between releases. Linux is the only tested platform. Each release pins one Hindsight version, listed in [docs/compatibility.md](docs/compatibility.md).
+backsight is a **preview**: it is used daily by its author, but expect rough edges and changes between releases. Linux is the only tested platform. Each release pins one Hindsight version, listed in [docs/compatibility.md](docs/compatibility.md).
 
 Found a problem? Ask Claude `/backsight:doctor`: it diagnoses, fixes with your OK, and drafts the issue it files only once you confirm. Or run `backsight report` yourself: it prints a redacted diagnostic and a link to file a GitHub issue, and sends nothing itself. For a security problem, see [SECURITY.md](SECURITY.md).
 

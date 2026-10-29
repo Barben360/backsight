@@ -106,6 +106,16 @@ func sendsGate(d paths.Dirs, generation int) func() error {
 	}
 }
 
+// startedOverText says why a sends gate refused command's write: connect
+// moved this PC to another server since command read its config
+// (retain.ErrStartedOver), or the generation cannot be read.
+func startedOverText(err error, command string) string {
+	if errors.Is(err, retain.ErrStartedOver) {
+		return "this PC joined another server (backsight connect) since " + command + " read its config"
+	}
+	return "this PC's sends generation cannot be read (" + err.Error() + ")"
+}
+
 // noteOptions is what a correction from memory_credit adds to its note:
 // the memories it replaces and the evidence; checked when the caller ran
 // checkNote on the same note before asking the server anything.

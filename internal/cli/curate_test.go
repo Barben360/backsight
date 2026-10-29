@@ -822,3 +822,36 @@ func TestRestoreOfAMemoryHiddenOnAnotherMachine(t *testing.T) {
 		t.Errorf("%s: exit %d", uB, code)
 	}
 }
+
+// A connect while forget runs (after it read its config): forget,
+// --restore and --purge write nothing to the server it loaded, and no
+// tombstone is recorded for the server this PC joined.
+func TestForgetWritesNothingAfterAConnect(t *testing.T) {
+	for _, args := range [][]string{{"forget", "f9"}, {"forget", "--restore", "f9"}, {"forget", "f9", "--purge", "--yes"}} {
+		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
+			home := devInstall(t, true)
+			var mu sync.Mutex
+			var writes []string
+			pointAt(t, home, proxyHindsight(t, fakeHindsight(t), func(_ http.ResponseWriter, r *http.Request) bool {
+				if r.Method != http.MethodGet {
+					mu.Lock()
+					writes = append(writes, r.Method+" "+r.URL.Path)
+					mu.Unlock()
+				}
+				return false
+			}))
+			memories["f9"] = fact("f9", "conversation:s9")
+			documentUnits["conversation:s9"] = 1
+			connectAfterLoad(t, home)
+			code, out, errOut := run(t, args...)
+			if code != output.Blocked || !strings.Contains(out+errOut, "the server configuration changed while this command ran: nothing was changed; check backsight doctor, then run it again") || strings.Contains(out+errOut, "joined") {
+				t.Errorf("exit %d\n%s%s", code, out, errOut)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if st, _ := state.Load(pathsOf(home).StateFile()); len(writes) != 0 || len(st.Tombstones) != 0 {
+				t.Errorf("writes %v, tombstones %+v", writes, st.Tombstones)
+			}
+		})
+	}
+}

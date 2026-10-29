@@ -341,6 +341,81 @@ func TestNoBriefingPageIsCreatedOnAnotherServer(t *testing.T) {
 	}
 }
 
+// briefingAcrossConnect fires SessionStart for billing, which has memories
+// and, when page is not "", that briefing page, with the sends seam set:
+// raise makes it raise the sends generation once the hook loaded its
+// config, as a whole connect then would. It returns the hook's output and
+// whether the seam ran.
+func briefingAcrossConnect(t *testing.T, raise bool, page string) (hookOut, bool) {
+	t.Helper()
+	home := hookHome(t)
+	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	if page != "" {
+		mentalModels[briefingModelID("billing")] = pageJSON(briefingModelID("billing"), page)
+	}
+	ran := false
+	old := sendsConfigLoaded
+	sendsConfigLoaded = func() {
+		ran = true
+		if raise {
+			if err := state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sendsConfigLoaded = old // one connect
+	}
+	t.Cleanup(func() { sendsConfigLoaded = old })
+	return fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}), ran
+}
+
+// mentalPosts counts the page creations the fake server saw.
+func mentalPosts() int {
+	n := 0
+	for _, c := range mentalCalls {
+		if strings.HasPrefix(c, "POST ") {
+			n++
+		}
+	}
+	return n
+}
+
+// A SessionStart whose config predates a whole connect still gives its
+// briefing (a read), but creates no page: that write would go to the old
+// server. The next SessionStart, a process that read the raised
+// generation, creates it once: the gate holds back a stale process only,
+// never every PC that ever connected.
+func TestBriefingPageWaitsAcrossConnect(t *testing.T) {
+	h, ran := briefingAcrossConnect(t, true, "")
+	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 0 {
+		t.Fatalf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+	home := os.Getenv("HOME")
+	if g := sendsGeneration(pathsOf(home)); g == 0 {
+		t.Fatalf("sends generation %d: the connect did not raise it, the second start proves nothing", g)
+	}
+	fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if n := mentalPosts(); n != 1 {
+		t.Errorf("after the connect, a new session created the page %d times, want 1", n)
+	}
+}
+
+// Reading the page stays ungated: across a connect, an existing page is
+// still the briefing (a read from the old server does no harm).
+func TestBriefingPageStillReadAcrossConnect(t *testing.T) {
+	h, ran := briefingAcrossConnect(t, true, "## In force\n- Billing exports run on Fridays.")
+	if !ran || !strings.Contains(h.Specific.Context, "Billing exports run on Fridays.") || strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 0 {
+		t.Errorf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+}
+
+// The control: nothing moved, the page is created once.
+func TestBriefingPageCreatedWhenNothingMoved(t *testing.T) {
+	h, ran := briefingAcrossConnect(t, false, "")
+	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 1 {
+		t.Errorf("seam ran %v, page creations %d (want 1), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+}
+
 // A page written as one long line is clipped, not reduced to "…".
 func TestAOneLinePageIsClipped(t *testing.T) {
 	home := hookHome(t)

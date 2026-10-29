@@ -345,6 +345,38 @@ func TestRotateFailedRollbackSaysSo(t *testing.T) {
 	}
 }
 
+// The server does not run on the new key, and the old key cannot be put
+// back: exit 20, saying secrets.toml holds the new key (which it does),
+// that the old token no longer works, and what to run; Docker's output
+// quoting the new key is masked, and neither key is printed.
+func TestRotateSaysWhenTheOldKeyCannotBePutBack(t *testing.T) {
+	home, _, dk := tokenHost(t)
+	old, _ := config.LoadSecrets(secretsFile(home))
+	dk.only, dk.echo = "neither-key", true
+	configLockedAtFirstUp(t, home)
+	f := filepath.Join(t.TempDir(), "join.token")
+	code, out, errOut := run(t, "server", "token", "--rotate", "--out", f)
+	if code != output.Blocked || len(dk.keys) != 1 || !strings.Contains(errOut, "the server did not run on the new API key (") ||
+		!strings.Contains(errOut, "[redacted]") || !strings.Contains(errOut, "and putting the old key back in "+secretsFile(home)+" failed (") ||
+		!strings.Contains(errOut, "secrets.toml holds the new key, which no token carries, and the old token no longer works: run backsight server start, then backsight server status") ||
+		strings.Contains(errOut, "the old token still works") {
+		t.Fatalf("exit %d, %d starts\n%s%s", code, len(dk.keys), out, errOut)
+	}
+	now, err := config.LoadSecrets(secretsFile(home))
+	if err != nil || now.APIKey == old.APIKey || now.APIKey != dk.keys[0] {
+		t.Errorf("secrets.toml: %v, old key %v, the key the server was started on %v; want the new one, as the message says",
+			err, now.APIKey == old.APIKey, now.APIKey == dk.keys[0])
+	}
+	for i, k := range []string{dk.keys[0], old.APIKey} {
+		if strings.Contains(out+errOut, k) {
+			t.Errorf("key %d reached the output:\n%s%s", i, out, errOut)
+		}
+	}
+	if _, err := os.Stat(f); err == nil {
+		t.Error("a token was written")
+	}
+}
+
 // Docker output quoting a key, on the new key and then on the old one:
 // both are masked in the message.
 func TestRotateMasksBothKeys(t *testing.T) {
@@ -409,5 +441,37 @@ func TestTokenWaitsForServerLock(t *testing.T) {
 	_ = l.Release()
 	if code, out, errOut := run(t, "server", "token", "--out", f); code != output.OK {
 		t.Errorf("lock released: exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// --out naming a symlink (another user's /tmp link to a file of yours) or
+// a directory: refused, exit 2, nothing written, the link's target as it
+// was; with --rotate the key is not rotated either.
+func TestTokenRefusesASymlinkOut(t *testing.T) {
+	home, _, _ := tokenHost(t)
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "authorized_keys")
+	if err := os.WriteFile(victim, []byte("ssh-ed25519 AAAA mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "bs-token")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	before, _ := config.LoadSecrets(secretsFile(home))
+	for _, args := range [][]string{{"server", "token", "--out", link}, {"server", "token", "--rotate", "--out", link}, {"server", "token", "--out", dir}} {
+		code, out, errOut := run(t, args...)
+		if code != output.Usage || !strings.Contains(errOut, "nothing was written") {
+			t.Errorf("%v: exit %d\n%s%s", args, code, out, errOut)
+		}
+	}
+	if raw, _ := os.ReadFile(victim); string(raw) != "ssh-ed25519 AAAA mine\n" {
+		t.Errorf("the link's target was written (%d bytes)", len(raw))
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced: %v %v", fi, err)
+	}
+	if after, _ := config.LoadSecrets(secretsFile(home)); after.APIKey != before.APIKey {
+		t.Error("the key was rotated")
 	}
 }

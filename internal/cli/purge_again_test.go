@@ -387,3 +387,41 @@ func TestRetainPurgeAgainRefusesAnotherServer(t *testing.T) {
 		t.Errorf("wrote to another server: %v", writes)
 	}
 }
+
+// connectAfterLoad raises home's sends generation once, right after the
+// next command read its config: a connect that moved this PC to another
+// server while the command ran.
+func connectAfterLoad(t *testing.T, home string) {
+	t.Helper()
+	old := sendsConfigLoaded
+	sendsConfigLoaded = func() {
+		_ = state.Update(pathsOf(home), "connect", func(s *state.State) error { s.SendsGeneration++; return nil })
+		sendsConfigLoaded = old // one connect
+	}
+	t.Cleanup(func() { sendsConfigLoaded = old })
+}
+
+// A connect while jobs maintain or retain purge-again runs: neither
+// mirrors the tombstones into the old server's control bank nor deletes
+// there.
+func TestPurgeAgainWritesNothingAfterAConnect(t *testing.T) {
+	for name, args := range map[string][]string{
+		"jobs maintain":      {"jobs", "maintain"},
+		"retain purge-again": {"retain", "purge-again", "--allow-subscription"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := devInstall(t, true)
+			rs := withRecreated(t, home)
+			configWith(t, home, "\n[backup]\nenabled = false\n")
+			rs.set(func() { rs.writes = nil })
+			connectAfterLoad(t, home)
+			_, out, errOut := run(t, args...)
+			rs.mu.Lock()
+			writes := rs.writes
+			rs.mu.Unlock()
+			if exists, _ := rs.state(); !exists || len(writes) != 0 {
+				t.Errorf("wrote after the connect: %v\n%s%s", writes, out, errOut)
+			}
+		})
+	}
+}

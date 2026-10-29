@@ -335,9 +335,16 @@ func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
 		}
 		sid := readFile(t, filepath.Join(d, "pgid"))
 		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-s", sid).Run() })
-		time.Sleep(200 * time.Millisecond)
-		if out, err := exec.Command("pgrep", "-s", sid).Output(); err == nil {
-			t.Errorf("%s: its session still runs after an early exit (watchdog left): pids %s", c.fn, strings.Fields(string(out)))
+		// A killed watchdog may not be reaped yet: polled, not judged at once.
+		var left []byte
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			out, err := exec.Command("pgrep", "-s", sid).Output()
+			if left = out; err != nil || time.Now().After(deadline) {
+				break
+			}
+		}
+		if len(left) > 0 {
+			t.Errorf("%s: its session still runs 5 s after an early exit (watchdog left): pids %s", c.fn, strings.Fields(string(left)))
 		}
 		if c.fn == "vb_offline_script" {
 			readFile(t, filepath.Join(d, "done"))

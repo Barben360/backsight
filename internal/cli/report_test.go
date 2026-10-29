@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/report"
+	"github.com/Barben360/backsight/internal/target"
 )
 
 // reportPlant is what a report must never show, planted where a real
@@ -698,4 +701,22 @@ func TestReportHidesLANAddressesHostsAndURLUsers(t *testing.T) {
 		"dial tcp <lan-ip>:18888", `"http://<lan-ip>:8888/health"`, "dial tcp [<lan-ip>]:8888", "lookup <lan-host> on 127.0.0.53:53",
 		"http://<lan-host>:8888 and <lan-host> and <lan-host>", "https://<user>@8.8.4.4/v1 via 127.0.0.1:8888",
 	})
+}
+
+// A tailnet client's server check is Info (WireGuard encrypts the link),
+// not OK: the server was reached all the same, so the bank's project tags
+// are hidden too.
+func TestReportAsksTheBankProjectsOfATailnetServer(t *testing.T) {
+	devInstall(t, true)
+	port := fakeHindsight(t)
+	projectEntities["atlas-secret"] = `[]`
+	tg := &target.Target{URL: "http://127.0.0.1:" + strconv.Itoa(port), Bank: "claude-memory"}
+	doc := doctor.Report{Server: tg, Checks: []doctor.Check{{ID: "server", Status: doctor.Info, Summary: "Hindsight 1.1.0 at http://100.101.1.2:8888"}}}
+	if got := bankProjects(context.Background(), doc); !slices.Contains(got, "atlas-secret") {
+		t.Errorf("bank projects %v", got)
+	}
+	doc.Checks[0].Status = doctor.Error
+	if got := bankProjects(context.Background(), doc); len(got) != 0 {
+		t.Errorf("asked an unreached server: %v", got)
+	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -148,6 +149,8 @@ func TestSessionStartStartsServerAtMostEvery5Min(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(fx.home, "billing"), 0o700)
 	start := func() []byte {
 		t.Helper()
+		// The 5-minute stamp alone: the backoff has its own test.
+		_ = os.Remove(filepath.Join(pathsOf(fx.home).State, serverStartBackoff))
 		raw, _ := json.Marshal(map[string]any{"session_id": "s1", "cwd": filepath.Join(fx.home, "billing"), "source": "startup"})
 		out, err := handleHook(context.Background(), "session-start", raw)
 		if err != nil {
@@ -210,14 +213,15 @@ func TestDoctorNamesTheLateAddress(t *testing.T) {
 		t.Fatalf("no server check:\n%s", out)
 		return "", "", ""
 	}
+	// The call's own error stays in the detail (a timeout reads apart from a refusal).
 	if st, d, fix := detail(); st != doctor.Error || !strings.Contains(d, "backsight server start") || strings.Contains(d, "not on this machine") ||
-		!strings.Contains(fix, "backsight server start") {
+		!strings.Contains(d, "hindsight server unreachable") || !strings.Contains(fix, "backsight server start") {
 		t.Errorf("address present: %s %q, fix %q", st, d, fix)
 	}
 	withAddrs(t, "127.0.0.1/8")
-	want := "the private address 100.101.1.2 is not on this machine yet: the server starts once it appears (jobs tick, or the next Claude Code session); to stop depending on it: backsight server expose --loopback"
+	want := "the private address 100.101.1.2 is not on this machine yet: the server starts once it appears (jobs tick, or the next Claude Code session); to stop depending on it: backsight server expose --loopback (hindsight server unreachable"
 	// server start would fail on the missing address: not the fix.
-	if st, d, fix := detail(); st != doctor.Error || d != want || strings.Contains(fix, "server start") || !strings.Contains(fix, "backsight server expose --loopback") {
+	if st, d, fix := detail(); st != doctor.Error || !strings.HasPrefix(d, want) || strings.Contains(fix, "server start") || !strings.Contains(fix, "backsight server expose --loopback") {
 		t.Errorf("address absent: %s %q, fix %q", st, d, fix)
 	}
 }
@@ -260,5 +264,344 @@ func TestLateServerWaitsForRestoreAndServerLock(t *testing.T) {
 	_ = l.Release()
 	if _, out, _ := run(t, "jobs", "tick"); len(fx.spawns) != 1 {
 		t.Errorf("nothing held: spawns %q\n%s", fx.spawns, out)
+	}
+}
+
+// readStartBackoff reads server-start-backoff.json; ok false when absent.
+func readStartBackoff(t *testing.T, d paths.Dirs) (b struct {
+	Attempts int       `json:"attempts"`
+	NextAt   time.Time `json:"next_at"`
+}, ok bool) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(d.State, "server-start-backoff.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return b, false
+	}
+	if err != nil || json.Unmarshal(raw, &b) != nil {
+		t.Fatalf("backoff file: %v %s", err, raw)
+	}
+	return b, true
+}
+
+// A server start that does not bring the server up is not repeated at
+// every look: 15 minutes, then twice as long each time, at most 6 hours.
+// A look that finds the server running, stopped by hand, or no longer
+// exposed on a private address starts the count over.
+func TestLateServerStartBacksOffAndResets(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	look := func(at time.Time, c config.Config) int {
+		t.Helper()
+		withClock(t, at)
+		n := len(fx.spawns)
+		startLateServer(context.Background(), d, c)
+		return len(fx.spawns) - n
+	}
+	for _, s := range []struct {
+		after time.Duration
+		spawn int
+	}{{0, 1}, {10 * time.Minute, 0}, {15 * time.Minute, 1}, {40 * time.Minute, 0}, {45 * time.Minute, 1}} {
+		if got := look(t0.Add(s.after), cfg); got != s.spawn {
+			t.Fatalf("t0+%s: %d spawn(s), want %d", s.after, got, s.spawn)
+		}
+	}
+	// Each further attempt at its due time, up to 10.
+	for b, _ := readStartBackoff(t, d); b.Attempts < 10; b, _ = readStartBackoff(t, d) {
+		if look(b.NextAt.Add(-time.Minute), cfg) != 0 || look(b.NextAt, cfg) != 1 {
+			t.Fatalf("attempt %d: not spawned exactly at its due time %s", b.Attempts+1, b.NextAt)
+		}
+	}
+	b, _ := readStartBackoff(t, d)
+	if wait := b.NextAt.Sub(now()); wait != 6*time.Hour {
+		t.Errorf("after %d attempts the next is due in %s, want 6h", b.Attempts, wait)
+	}
+	// The server runs: the file goes, and the next failure spawns at once.
+	fx.ps.ps = `{"Service":"db","State":"running","Health":"healthy"}` + "\n" + `{"Service":"hindsight","State":"running","Health":"healthy"}`
+	due := b.NextAt
+	if look(due, cfg) != 0 {
+		t.Fatal("spawned while the server runs")
+	}
+	if _, ok := readStartBackoff(t, d); ok {
+		t.Fatal("the backoff survived a running server")
+	}
+	fx.ps.ps = downAtBootPS
+	if look(due, cfg) != 1 {
+		t.Fatal("the failure after a running server waited")
+	}
+	if b, _ := readStartBackoff(t, d); b.Attempts != 1 || !b.NextAt.Equal(due.Add(15*time.Minute)) {
+		t.Errorf("counted again from %+v", b)
+	}
+	// A next_at beyond 6 hours is a clock set back: it holds nothing.
+	_ = os.WriteFile(filepath.Join(d.State, "server-start-backoff.json"), []byte(`{"attempts":3,"next_at":"`+due.Add(7*time.Hour).Format(time.RFC3339)+`"}`), 0o600)
+	if look(due, cfg) != 1 {
+		t.Fatal("a next_at 7 hours ahead held the start")
+	}
+	// Stopped by hand (database down too), or no longer private: the
+	// count starts over as well.
+	loopback := cfg
+	loopback.Network.Exposure, loopback.Network.BindIP = "loopback", ""
+	for _, c := range []struct {
+		name string
+		ps   string
+		cfg  config.Config
+	}{
+		{"server stop", `{"Service":"db","State":"exited","Health":""}` + "\n" + `{"Service":"hindsight","State":"exited","Health":""}`, cfg},
+		{"loopback exposure", downAtBootPS, loopback},
+	} {
+		b, _ := readStartBackoff(t, d)
+		fx.ps.ps = c.ps
+		if look(b.NextAt, c.cfg) != 0 {
+			t.Fatalf("%s: spawned", c.name)
+		}
+		if _, ok := readStartBackoff(t, d); ok {
+			t.Errorf("%s: the backoff survived", c.name)
+		}
+		fx.ps.ps = downAtBootPS
+		if look(b.NextAt, cfg) != 1 {
+			t.Fatalf("%s: the next failure waited", c.name)
+		}
+	}
+}
+
+// A successful server start (the one spawned, or the user's) ends the
+// streak: after a 6 h wait, the server comes up and later goes down again
+// (a reboot with the address late), and the next look starts it at once.
+func TestServerStartEndsTheBackoff(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for {
+		withClock(t, at)
+		startLateServer(context.Background(), d, cfg)
+		b, _ := readStartBackoff(t, d)
+		if b.NextAt.Sub(at) == 6*time.Hour {
+			break
+		}
+		at = b.NextAt
+	}
+	streak := len(fx.spawns)
+	deployFile(t, fx.home, server.HindsightImage) // on this binary's pin
+	withCompose(t)
+	if code, out, errOut := run(t, "server", "start"); code != output.OK {
+		t.Fatalf("server start: exit %d\n%s%s", code, out, errOut)
+	}
+	if _, ok := readStartBackoff(t, d); ok {
+		t.Fatal("the backoff survived a successful server start")
+	}
+	composeRunner = fx.ps // down again
+	withClock(t, at.Add(5*time.Hour))
+	if startLateServer(context.Background(), d, cfg); len(fx.spawns) != streak+1 {
+		t.Errorf("down again within the old wait: %d spawn(s), want 1", len(fx.spawns)-streak)
+	}
+}
+
+// If the backoff cannot be recorded, the server is started all the same
+// (a bookkeeping failure never keeps it down), and the log says so.
+func TestLateServerStartsWhenItsBackoffCannotBeRecorded(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory where the file goes: unwritable, unreadable.
+	if err := os.MkdirAll(filepath.Join(d.State, "server-start-backoff.json", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withClock(t, time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC))
+	got := startLateServer(context.Background(), d, cfg)
+	if len(fx.spawns) != 1 || !strings.Contains(got, "server start spawned") || !strings.Contains(got, "backoff") {
+		t.Fatalf("spawns %q, result %q", fx.spawns, got)
+	}
+	raw, _ := os.ReadFile(filepath.Join(d.State, "logs", "server-start.log"))
+	if !strings.Contains(string(raw), "backoff") {
+		t.Errorf("server-start.log does not say the backoff was not recorded:\n%s", raw)
+	}
+}
+
+// An unreadable backoff file starts the count over: the start is made and
+// the file holds the first attempt.
+func TestUnreadableStartBackoffStartsOver(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	_ = os.MkdirAll(d.State, 0o700)
+	if err := os.WriteFile(filepath.Join(d.State, "server-start-backoff.json"), []byte(`{"attempts":4,"next_at":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startLateServer(context.Background(), d, cfg)
+	if b, _ := readStartBackoff(t, d); len(fx.spawns) != 1 || b.Attempts != 1 || !b.NextAt.Equal(at.Add(15*time.Minute)) {
+		t.Errorf("spawns %q, backoff %+v", fx.spawns, b)
+	}
+}
+
+// jobs tick goes through the backoff: a start at t0, none at t0+10 min,
+// the next at t0+15 min.
+func TestTickBacksOffALateServerStart(t *testing.T) {
+	fx := recoverHost(t)
+	t0 := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for _, s := range []struct {
+		after time.Duration
+		want  int
+	}{{0, 1}, {10 * time.Minute, 1}, {15 * time.Minute, 2}} {
+		withClock(t, t0.Add(s.after))
+		if _, out, errOut := run(t, "jobs", "tick"); len(fx.spawns) != s.want {
+			t.Fatalf("t0+%s: %d spawn(s) in all, want %d\n%s%s", s.after, len(fx.spawns), s.want, out, errOut)
+		}
+	}
+}
+
+// server-start.log over 1 MiB moves to server-start.log.1 (replacing an
+// earlier one) before the next start writes to it; at 1 MiB it stays.
+func TestServerStartLogRotates(t *testing.T) {
+	old := spawnLogged
+	spawnLogged = func(*os.File, ...string) error { return nil }
+	t.Cleanup(func() { spawnLogged = old })
+	d := paths.Dirs{State: t.TempDir()}
+	log := filepath.Join(d.State, "logs", "server-start.log")
+	_ = os.MkdirAll(filepath.Dir(log), 0o700)
+	lines := func(p string) int {
+		t.Helper()
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(raw), "\n")
+	}
+
+	full := strings.Repeat("x", 1<<20-1) + "\n"
+	if err := os.WriteFile(log, []byte(full), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := spawnServerStart(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log + ".1"); !errors.Is(err, os.ErrNotExist) || lines(log) != 2 {
+		t.Fatalf("1 MiB exactly: rotated (%v) or not appended (%d lines)", err, lines(log))
+	}
+
+	if err := os.WriteFile(log, []byte(full+"y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(log+".1", []byte("an earlier rotation\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := spawnServerStart(d); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(log + ".1"); err != nil || fi.Size() != 1<<20+1 {
+		t.Fatalf("server-start.log.1: %v %v, want %d bytes", fi, err, 1<<20+1)
+	}
+	if n := lines(log); n != 1 {
+		t.Errorf("new server-start.log holds %d lines, want 1", n)
+	}
+
+	// The rename fails (server-start.log.1 a non-empty directory): the
+	// start is still made, its line appended; the next start rotates.
+	_ = os.Remove(log + ".1")
+	_ = os.MkdirAll(filepath.Join(log+".1", "x"), 0o700)
+	if err := os.WriteFile(log, []byte(full+"y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := spawnServerStart(d); err != nil {
+		t.Fatalf("a failed rotation stopped the start: %v", err)
+	}
+	if fi, err := os.Stat(log); err != nil || fi.Size() <= 1<<20+1 {
+		t.Fatalf("not appended to the unrotated log: %v %v", fi, err)
+	}
+	_ = os.RemoveAll(log + ".1")
+	if err := spawnServerStart(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log + ".1"); err != nil || lines(log) != 1 {
+		t.Errorf("the next start did not rotate: %v, %d lines", err, lines(log))
+	}
+}
+
+// A reboot ends the streak: the failures before it may have been fixed
+// outside backsight (a port freed, docker started by hand), so the first
+// look after it starts the server whatever the wait left, and counts from
+// one again. Within the same boot the wait holds.
+func TestABackoffEndsAtAReboot(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := bootID
+	boot := "boot-1"
+	bootID = func() string { return boot }
+	t.Cleanup(func() { bootID = old })
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for {
+		withClock(t, at)
+		startLateServer(context.Background(), d, cfg)
+		b, _ := readStartBackoff(t, d)
+		if b.NextAt.Sub(at) == 6*time.Hour {
+			break
+		}
+		at = b.NextAt
+	}
+	streak := len(fx.spawns)
+	withClock(t, at.Add(time.Hour))
+	if startLateServer(context.Background(), d, cfg); len(fx.spawns) != streak {
+		t.Fatalf("the same boot: %d spawn(s) within the wait", len(fx.spawns)-streak)
+	}
+	boot = "boot-2"
+	if startLateServer(context.Background(), d, cfg); len(fx.spawns) != streak+1 {
+		t.Fatalf("after a reboot: %d spawn(s), want 1", len(fx.spawns)-streak)
+	}
+	if b, _ := readStartBackoff(t, d); b.Attempts != 1 || !b.NextAt.Equal(at.Add(time.Hour+15*time.Minute)) {
+		t.Errorf("not counted from one again: %+v", b)
+	}
+}
+
+// An unknown boot on either side keeps the wait: a system without boot_id
+// (bootID ""), or a backoff file written before the boot was kept.
+func TestABackoffHoldsWhenTheBootIsUnknown(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := bootID
+	t.Cleanup(func() { bootID = old })
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	file := filepath.Join(d.State, "server-start-backoff.json")
+	for name, c := range map[string]struct{ file, boot string }{
+		"no boot here":        {`{"attempts":3,"next_at":"2026-10-29T10:00:00Z","boot":"boot-1"}`, ""},
+		"no boot in the file": {`{"attempts":3,"next_at":"2026-10-29T10:00:00Z"}`, "boot-2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bootID = func() string { return c.boot }
+			_ = os.MkdirAll(d.State, 0o700)
+			if err := os.WriteFile(file, []byte(c.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			withClock(t, at)
+			n := len(fx.spawns)
+			if startLateServer(context.Background(), d, cfg); len(fx.spawns) != n {
+				t.Errorf("spawned within the wait")
+			}
+			if b, _ := readStartBackoff(t, d); b.Attempts != 3 {
+				t.Errorf("count reset: %+v", b)
+			}
+		})
 	}
 }

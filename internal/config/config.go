@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -391,8 +392,8 @@ func (c Config) Validate() error {
 		bad("llm.provider", "must not be empty")
 	}
 	for key, v := range map[string]float64{"llm.price_input": c.LLM.PriceInput, "llm.price_cached": c.LLM.PriceCached, "llm.price_output": c.LLM.PriceOutput} {
-		if v < 0 {
-			bad(key, "must be ≥ 0, got %v", v)
+		if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+			bad(key, "must be a number ≥ 0, got %v", v)
 		}
 	}
 	oneOf("embeddings.preset", c.Embeddings.Preset, "multilingual", "english")

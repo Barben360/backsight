@@ -149,6 +149,10 @@ func (f *Flusher) syncTombstones(ctx context.Context) error {
 	local := st.TombstonesOf(f.Bank)
 	if probe := (state.State{Tombstones: local}); probe.AddTombstones(remote...) > 0 {
 		if err := state.Update(f.Dirs, "purge tombstones", func(s *state.State) error {
+			// Another server's tombstones never join the new one's.
+			if err := f.startedOverIn(*s); err != nil {
+				return err
+			}
 			s.AddTombstones(remote...)
 			local = s.TombstonesOf(f.Bank)
 			return nil
@@ -159,6 +163,11 @@ func (f *Flusher) syncTombstones(ctx context.Context) error {
 	have := state.State{Tombstones: remote}
 	if unreadable == nil && have.AddTombstones(local...) == 0 {
 		return nil
+	}
+	// Nothing goes to the server this run began with once connect moved
+	// this PC to another (the tombstones above are the new one's).
+	if err := f.StartedOver(); err != nil {
+		return err
 	}
 	_, _ = WriteTombstones(ctx, f.Client, f.Bank, local)
 	return nil

@@ -80,6 +80,7 @@ type connectResult struct {
 	Plan             bool             `json:"plan"`
 	Declined         bool             `json:"declined,omitempty"`
 	Warnings         []string         `json:"warnings,omitempty"`
+	Notes            []string         `json:"notes,omitempty"` // information, nothing to do
 	Steps            []step           `json:"steps"`
 	Questions        []setup.Question `json:"questions,omitempty"`
 	OwnServer        *ownServer       `json:"own_server,omitempty"`
@@ -181,11 +182,19 @@ func publicAddress(tok token.Token) error {
 		"On the server's host, open it on a private address instead (backsight server expose --private <ip>, a LAN or tailnet address) and hand out a new token"}
 }
 
+// openSessionStep is what a session open across connect (or connect
+// --undo) does until Claude Code restarts: hooks read the config on each
+// run, the memory server only at its start.
+const openSessionStep = "restart Claude Code (or run /reload-plugins): until then an open session's memory tools keep the old server (they write nothing to it); " +
+	"its prompt recall already uses the new one, and when the session ends it is sent whole to the new one"
+
 // probe is what connect learnt from the server, read-only.
 type probe struct {
 	Version string
 	Skew    doctor.Status
 	Epoch   int
+	// RestoredAt: the epoch's identity (state.RestoreEpoch.RestoredAt).
+	RestoredAt time.Time
 }
 
 // probeToken checks the server tok names, reading only: it answers, its
@@ -234,7 +243,7 @@ func probeToken(ctx context.Context, tok token.Token) (probe, error) {
 	if v, err := cl.Version(ctx); err == nil && v.APIVersion != "" {
 		version = v.APIVersion
 	}
-	p := probe{Version: version, Epoch: ep.Epoch}
+	p := probe{Version: version, Epoch: ep.Epoch, RestoredAt: ep.RestoredAt}
 	if version != "" {
 		p.Skew = doctor.VersionSkew(version, server.PinnedVersion())
 	}
@@ -519,7 +528,7 @@ func undoConnect(ctx context.Context, e *env, plan bool) (connectResult, error) 
 			fmt.Fprint(e.stdout, stepLine(res.Steps[i]))
 		}
 	}
-	res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins): an open session keeps the server it started with")
+	res.NextSteps = append(res.NextSteps, openSessionStep)
 	if sr := subcommand(ctx, "server", "start"); sr.Err != nil {
 		res.Steps[3].Status = "failed"
 		return res, &output.Error{Code: output.Partial, Resume: "backsight server start",
@@ -595,11 +604,14 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 	// A process that read its config while the files were being put back
 	// holds the generation resetRetain raised, with the shared server's
 	// config or key: raised again, it sends nothing.
-	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
-		s.RemoteServer = nil
-		s.SendsGeneration++
-		return nil
-	}); err != nil {
+	if err = connectFault("undo-binding"); err == nil {
+		err = state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
+			s.RemoteServer = nil
+			s.SendsGeneration++
+			return nil
+		})
+	}
+	if err != nil {
 		return &output.Error{Code: output.Blocked, Message: "this PC is back on its own server, but forgetting the shared server's id in " + d.StateFile() + " failed (" + err.Error() +
 			"): the sends stop until it is removed; a process started during connect --undo may still send to the shared server"}
 	}
@@ -757,7 +769,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	case doctor.Warn:
 		res.Warnings = append(res.Warnings, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: on the server's host, backsight update apply; or update this PC to the host's backsight", p.Version, server.PinnedVersion()))
 	case doctor.Info:
-		res.Warnings = append(res.Warnings, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: only the patch differs, nothing to do", p.Version, server.PinnedVersion()))
+		res.Notes = append(res.Notes, fmt.Sprintf("the server runs Hindsight %s and this backsight pins %s: only the patch differs, nothing to do", p.Version, server.PinnedVersion()))
 	case "":
 		res.Warnings = append(res.Warnings, "the server's Hindsight version could not be read: backsight doctor compares it with this backsight's pin once connected")
 	}
@@ -860,6 +872,9 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	}
 	at := now().UTC()
 	if err := applyConnect(ctx, d, home, tok, p, situation, at, resume, own); err != nil {
+		if res.OwnServer != nil && res.OwnServer.Backup != "" {
+			err = afterOwnBackup(err, res.OwnServer.Backup, d, localSec)
+		}
 		return res, redacted(redacted(err, localSec), config.Secrets{APIKey: tok.APIKey})
 	}
 	for i := range res.Steps {
@@ -897,7 +912,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 	sr, err := runSetup(ctx, e, setupFlags{answers: append(setupAnswers, "consent=yes"), answersFile: f.answersFile, nonInteractive: f.nonInteractive, configDir: f.configDir})
 	res.Setup = &sr
 	if res.RestartRequired && !sr.RestartRequired { // else setup says it
-		res.NextSteps = append(res.NextSteps, "restart Claude Code (or run /reload-plugins): an open session keeps the server it started with")
+		res.NextSteps = append(res.NextSteps, openSessionStep)
 	}
 	for i := range res.Steps {
 		if res.Steps[i].Name == "setup" {
@@ -1055,6 +1070,28 @@ func backupOwnServer(ctx context.Context, d paths.Dirs, cfg config.Config, sec c
 	return b.Path, nil
 }
 
+// afterOwnBackup is applyConnect's error once this PC's own server was
+// backed up to archive: the backup was made and stays (with the backup
+// identity it may have added to secrets.toml), so "nothing was changed"
+// says so, and any other message names it too.
+func afterOwnBackup(err error, archive string, d paths.Dirs, sec config.Secrets) error {
+	made := "this PC's server was backed up to " + archive
+	if fresh, ferr := config.LoadSecrets(d.SecretsFile()); ferr == nil && sec.BackupIdentity == "" && fresh.BackupIdentity != "" {
+		made += ", and the backup identity it needed added to secrets.toml (backsight backup identity show)"
+	}
+	oe, ok := err.(*output.Error) //nolint:errorlint // its own message only, not one it wraps
+	if !ok {
+		return fmt.Errorf("%w; before that, %s", err, made)
+	}
+	out := *oe
+	if strings.Contains(out.Message, "nothing was changed") {
+		out.Message = strings.Replace(out.Message, "nothing was changed", "nothing else was changed than the backup ("+made+")", 1)
+	} else {
+		out.Message += "; before that, " + made
+	}
+	return &out
+}
+
 // applyConnect writes what the plan said, under the maintenance lock
 // (hooks queue, jobs skip): the retain reset first (it records the server
 // config.toml still names), then config.toml, the key, and the binding
@@ -1165,7 +1202,7 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 	}
 	if situation == joinOther || situation == joinOwn {
 		keep = keepDir(d, at, "")
-		if err := resetRetain(d, keep, state.RestoreEpoch{Bank: tok.Bank, Epoch: p.Epoch, ReconciledAt: at}, at); err != nil {
+		if err := resetRetain(d, keep, state.RestoreEpoch{Bank: tok.Bank, Epoch: p.Epoch, ReconciledAt: at, RestoredAt: p.RestoredAt.UTC()}, at); err != nil {
 			if errors.Is(err, fs.ErrExist) { // another run's directory: not this one's to undo
 				keep = ""
 			}
@@ -1242,6 +1279,9 @@ func connectPlanText(r connectResult) string {
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(&b, "note     %s\n", n)
+	}
 	b.WriteString(will)
 	for _, s := range r.Steps {
 		fmt.Fprintf(&b, "  %-8s %s\n", s.Name, s.Detail)
@@ -1276,6 +1316,9 @@ func connectText(r connectResult) string {
 	b.WriteString(setupText(*r.Setup))
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(&b, "note     %s\n", n)
 	}
 	for _, n := range r.NextSteps {
 		b.WriteString("- " + n + "\n")

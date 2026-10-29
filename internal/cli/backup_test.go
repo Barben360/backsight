@@ -29,6 +29,8 @@ type backupDocker struct {
 	failDump    bool
 	failRestore bool
 	cpDest      string // where compose cp wrote the clear dump
+	// onCall, when not nil, sees each command line first (under the lock).
+	onCall func(line string)
 }
 
 func (f *backupDocker) Run(_ context.Context, args ...string) ([]byte, error) {
@@ -36,6 +38,9 @@ func (f *backupDocker) Run(_ context.Context, args ...string) ([]byte, error) {
 	defer f.mu.Unlock()
 	line := strings.Join(args, " ")
 	f.calls = append(f.calls, line)
+	if f.onCall != nil {
+		f.onCall(line)
+	}
 	switch {
 	case strings.Contains(line, "pg_dump") && f.failDump:
 		return []byte("pg_dump: error"), os.ErrPermission

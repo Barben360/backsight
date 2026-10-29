@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -10,11 +13,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/stats"
 )
 
@@ -29,14 +35,34 @@ type extraction struct {
 	Error    string  `json:"error,omitempty"` // the server could not be read
 }
 
+// serverReach is what this PC recorded of its server's answers
+// (state.Reach), the breaker and the notes queue: read from local files,
+// never from the network, so stats reports a server that is down.
+type serverReach struct {
+	Host             string    `json:"host,omitempty"` // a client's server.url host
+	LastOK           time.Time `json:"last_ok,omitzero"`
+	FailingSince     time.Time `json:"failing_since,omitzero"`
+	BreakerOpenUntil time.Time `json:"breaker_open_until,omitzero"` // set while recall is paused
+	NotesQueued      int       `json:"notes_queued"`
+	SessionsWaiting  int       `json:"sessions_waiting"`
+	// OtherServer: the id of another server that answers at a client's
+	// joined address (state.RemoteServer.Mismatch), since HeldSince:
+	// every write is held, whatever it answers.
+	OtherServer string    `json:"other_server,omitempty"`
+	JoinedID    string    `json:"-"`
+	HeldSince   time.Time `json:"held_since,omitzero"`
+}
+
 type statsResult struct {
 	Days int `json:"days"`
 	// Window: set by --since, the report is [from, to) instead of the
 	// last Days days.
 	Window bool `json:"window,omitempty"`
 	stats.Report
+	Server     serverReach        `json:"server"`
 	Extraction extraction         `json:"extraction"`
 	Parity     []stats.ParityLine `json:"parity,omitempty"`
+	now        time.Time
 }
 
 // newStatsCmd is `stats [days]` (SPEC §15): the C12 report from local
@@ -84,7 +110,7 @@ func newStatsCmd(e *env) *cobra.Command {
 				from = t
 				days = int((to.Sub(from) + 24*time.Hour - 1) / (24 * time.Hour))
 			}
-			d, _, err := machine()
+			d, home, err := machine()
 			if err != nil {
 				return err
 			}
@@ -92,7 +118,8 @@ func newStatsCmd(e *env) *cobra.Command {
 			if err != nil {
 				return blocked(err)
 			}
-			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to)}
+			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to), now: now()}
+			res.Server = reachOf(d, home, res.now)
 			res.Feedback.SharedMachines = sharedMachines(d)
 			journalCounts(d, &res.Report)
 			res.Extraction = extractionOver(cmd, from, to)
@@ -107,6 +134,61 @@ func newStatsCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the baseline measured on the Hindsight integration backsight replaced")
 	_ = cmd.Flags().MarkHidden("parity")
 	return cmd
+}
+
+// reachOf reads what this PC recorded of its server at now. On a client
+// (server.mode remote) it names the server's host, never the whole URL.
+func reachOf(d paths.Dirs, home string, now time.Time) serverReach {
+	r := state.LoadReach(d)
+	s := serverReach{LastOK: r.LastOK.UTC(), FailingSince: r.FailingSince.UTC(), SessionsWaiting: r.SessionsWaiting}
+	if b := state.LoadBreaker(d); now.Before(b.OpenUntil) {
+		s.BreakerOpenUntil = b.OpenUntil.UTC()
+	}
+	s.NotesQueued, _ = retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl")}.Pending()
+	if cfg, err := config.Load(d.ConfigFile(), d, home); err == nil && cfg.Server.Mode == "remote" {
+		if u, err := url.Parse(cfg.Server.URL); err == nil {
+			s.Host = u.Hostname()
+		}
+		if st, err := state.Load(d.StateFile()); err == nil && st.RemoteServer != nil && st.RemoteServer.Mismatch != "" {
+			s.OtherServer, s.JoinedID, s.HeldSince = st.RemoteServer.Mismatch, st.RemoteServer.ID, st.RemoteServer.MismatchAt.UTC()
+		}
+	}
+	return s
+}
+
+// reachText is the Server line's text after its label.
+func reachText(s serverReach, now time.Time) string {
+	host := ""
+	if s.Host != "" {
+		host = s.Host + " "
+	}
+	switch {
+	case s.OtherServer != "":
+		at := cmp.Or(s.Host, "the joined address")
+		since := ""
+		if !s.HeldSince.IsZero() {
+			since = fmt.Sprintf(" since %s (%s)", s.HeldSince.Format(time.RFC3339), recall.Age(now.Sub(s.HeldSince)))
+		}
+		return fmt.Sprintf("a different server answers at %s (server %s, joined %s)%s: writes held; %s queued, %s not sent yet", at, s.OtherServer, s.JoinedID, since,
+			plural(s.NotesQueued, "note"), plural(s.SessionsWaiting, "session"))
+	case !s.FailingSince.IsZero():
+		recallState := "recall on"
+		if !s.BreakerOpenUntil.IsZero() {
+			recallState = "recall paused until " + s.BreakerOpenUntil.Format(time.RFC3339)
+		}
+		return fmt.Sprintf("%ssilent since %s (%s): %s; %s queued, %s not sent yet", host, s.FailingSince.Format(time.RFC3339),
+			recall.Age(now.Sub(s.FailingSince)), recallState, plural(s.NotesQueued, "note"), plural(s.SessionsWaiting, "session"))
+	case !s.LastOK.IsZero():
+		return fmt.Sprintf("%sanswering (last answer %s ago)", host, recall.Age(now.Sub(s.LastOK)))
+	}
+	return host + "not recorded yet"
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // sharedMachines is how many other machines' counts recall weighs with
@@ -257,6 +339,7 @@ func statsText(r statsResult) string {
 	} else {
 		fmt.Fprintf(&b, "Memory over the last %d day(s), %s (UTC)\n\n", r.Days, span)
 	}
+	fmt.Fprintf(&b, "Server       %s\n", reachText(r.Server, r.now))
 	fmt.Fprintf(&b, "Prompts      %d typed, %d machine messages; recalls %d (%s injected something); skipped: %s\n",
 		p.Human, p.Machine, p.Recalls, pct(p.WithHits, p.Recalls), counts(p.Skips))
 	fmt.Fprintf(&b, "Recall       p50 %d ms, p95 %d ms; scope calls failed %d / %d\n", p.P50MS, p.P95MS, p.ScopeFailures, p.ScopeCalls)

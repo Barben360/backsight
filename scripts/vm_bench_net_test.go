@@ -35,6 +35,7 @@ m6_sh() {
     "test -e ~/m6-offline"*"/done") [ ! -e "$T/never-done" ] ;;
     "ip -o route get"*) echo "192.168.122.196 dev enp1s0 src 192.168.122.195 uid 1000" ;;
     "ping "*) cat "$T/ping" ;;
+    "date +%s") echo 1761700000 ;;
     "setsid -w bash "*m6-latency/run.sh*) cat "$T/latency.json" ;;
   esac
 }
@@ -290,6 +291,11 @@ func TestVMBenchOfflineBringsTheLinkBack(t *testing.T) {
 				t.Errorf("A's link: %q, want down, the refused up, then the trap's up", links)
 			}
 			cleanedA(t, dir, "m6-offline")
+			// The timers check judges a tick after the link came back: a
+			// tick while A was cut off exits 40, rightly.
+			if b, err := os.ReadFile(filepath.Join(dir, "work", "timers-after")); err != nil || strings.TrimSpace(string(b)) != "1761700000" {
+				t.Errorf("timers-after: %q %v, want A's time once the link is back", b, err)
+			}
 		})
 	}
 }
@@ -549,7 +555,13 @@ func stopsTheLatencySession(t *testing.T, cmd string) {
 	done := make(chan struct{})
 	go func() { _ = left.Wait(); close(done) }()
 	t.Cleanup(func() { _ = left.Process.Kill(); <-done })
-	time.Sleep(100 * time.Millisecond) // setsid has made it a session leader
+	// Until setsid has made it a session leader, the cleanup's pkill -s
+	// would find nothing.
+	for deadline := time.Now().Add(5 * time.Second); !sessionLeader(left.Process.Pid); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d is not a session leader after 5 s", left.Process.Pid)
+		}
+	}
 	writeLines(t, filepath.Join(home, "m6-latency", "pgid"), strconv.Itoa(left.Process.Pid))
 	run := exec.Command("sh", "-c", cmd)
 	run.Env = append(os.Environ(), "HOME="+home)
@@ -564,6 +576,18 @@ func stopsTheLatencySession(t *testing.T, cmd string) {
 	if _, err := os.Stat(filepath.Join(home, "m6-latency")); err == nil {
 		t.Error("~/m6-latency stayed")
 	}
+}
+
+// sessionLeader says whether pid leads its own session: its session id,
+// the fourth field after the command name in /proc/<pid>/stat, is pid.
+func sessionLeader(pid int) bool {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	s := string(raw)
+	f := strings.Fields(s[strings.LastIndexByte(s, ')')+1:])
+	return len(f) > 3 && f[3] == strconv.Itoa(pid)
 }
 
 // The run's end removes a netem or a drop rule a check could not (a run

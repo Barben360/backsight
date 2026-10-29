@@ -397,6 +397,12 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 			waiting[t.Document] = hold{"maintenance in progress: " + errSummary(err), false}
 			continue
 		}
+		// Under the lock connect takes: no purge on the server this run
+		// began with once connect moved this PC to another.
+		if err := f.StartedOver(); err != nil {
+			_ = l.Release()
+			return g, err
+		}
 		done, err := PurgeFound(ctx, f.Client, f.Bank, []state.Tombstone{t})
 		_ = l.Release()
 		g.Purged.Observations += done.Observations
@@ -436,6 +442,9 @@ func (f *Flusher) GuardPurges(ctx context.Context, opt GuardOptions) (Guarded, e
 		return g, nil
 	}
 	return g, state.Update(f.Dirs, "purge guard", func(s *state.State) error {
+		if f.startedOverIn(*s) != nil {
+			return nil // the old server's look is not the new one's
+		}
 		s.PurgeGuard = &next
 		return nil
 	})

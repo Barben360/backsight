@@ -185,6 +185,8 @@ func TestValidate(t *testing.T) {
 		{"preset", func(c *Config) { c.Embeddings.Preset = "huge" }, "embeddings.preset"},
 		{"provider empty", func(c *Config) { c.LLM.Provider = "" }, "llm.provider"},
 		{"negative price", func(c *Config) { c.LLM.PriceOutput = -1 }, "llm.price_output"},
+		{"NaN price", func(c *Config) { c.LLM.PriceInput = math.NaN() }, "llm.price_input"},
+		{"infinite price", func(c *Config) { c.LLM.PriceCached = math.Inf(1) }, "llm.price_cached"},
 		{"no transverse alias", func(c *Config) { c.Projects.Transverse = nil }, "projects.transverse"},
 		{"outbox order", func(c *Config) { c.Hooks.OutboxWarnMB = 600 }, "hooks.outbox_warn_mb"},
 		{"backup keep", func(c *Config) { c.Backup.KeepDaily = -1 }, "backup.keep_daily"},

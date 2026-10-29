@@ -192,3 +192,20 @@ func TestUninstallSkipsAMachineThatNeverShared(t *testing.T) {
 		}
 	}
 }
+
+// A connect while uninstall runs (after it read its config): this
+// machine's counts are not deleted on the server it loaded.
+func TestUninstallDeletesNothingAfterAConnect(t *testing.T) {
+	m, _, cl := sharedInstall(t)
+	connectAfterLoad(t, m.home)
+	code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if s := stepNamed(env.Data, "shared counts"); s == nil || s.Status != "skipped" || !strings.Contains(s.Detail, "joined another server") {
+		t.Errorf("step: %+v", s)
+	}
+	if got := sharedDocs(t, cl); len(got) != 2 {
+		t.Errorf("deleted after the connect: %v left", got)
+	}
+}

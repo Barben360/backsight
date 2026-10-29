@@ -31,6 +31,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/stats"
 	"github.com/Barben360/backsight/internal/target"
 )
 
@@ -59,6 +60,9 @@ type Check struct {
 	// version is the Hindsight version the server check read, for the
 	// checks that compare it.
 	version string
+	// answered: the server replied to the check (any status but a failure
+	// to reply; Info alone also means no server configured).
+	answered bool
 }
 
 type Report struct {
@@ -108,7 +112,7 @@ const (
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
 var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "noise-headless", "noise-subagent",
-	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
+	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "replace-unconfirmed", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
 	"transverse-keyword", "usage", "version-skew", "writes"}
 
 // Run performs every check in a fixed order.
@@ -184,7 +188,12 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkWrites(env))
 	add(checkReach(env, tg, srv))
 	add(checkBackfill(env.Dirs))
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
 	add(checkSplit(env.Dirs))
+	add(checkReplaceUnconfirmed(env.Dirs.TelemetryDir(), now()))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
@@ -192,10 +201,6 @@ func Run(ctx context.Context, env Env) Report {
 		add(checkClient(env, loc))
 	}
 	add(checkGPU(env.GPUs()))
-	now := time.Now
-	if env.Now != nil {
-		now = env.Now
-	}
 	writeOff := cfgErr == nil && !cfg.Components.Write
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	add(checkBackup(env, now()))
@@ -220,6 +225,9 @@ func Run(ctx context.Context, env Env) Report {
 }
 
 func skipReason(srv Check) string {
+	if srv.answered { // Info too: a tailnet server answers with it
+		return "bank not usable"
+	}
 	switch srv.Status {
 	case Info:
 		return "no server"
@@ -270,6 +278,10 @@ func checkDocker(ctx context.Context, env Env) Check {
 	return c
 }
 
+// serverClient builds the server check's client. A variable for tests,
+// which answer a LAN or tailnet URL from a loopback server.
+var serverClient = hindsight.New
+
 // checkServer returns the server check and, when it passed, a client.
 func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsight.Client) {
 	c := Check{ID: "server"}
@@ -278,7 +290,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 		return c, nil
 	}
 	from := " (from " + t.Source + ")"
-	cl, err := hindsight.New(t.URL, string(t.Token), env.Timeout)
+	cl, err := serverClient(t.URL, string(t.Token), env.Timeout)
 	if err != nil {
 		c.Status, c.Summary = Error, "unusable server URL"+from
 		c.Detail, c.Fix = err.Error(), "correct the server URL in the "+t.Source
@@ -301,7 +313,7 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 		}
 		if t.Source == "config" && env.ExposureDetail != nil {
 			if detail, fix := env.ExposureDetail(); detail != "" {
-				c.Detail = detail
+				c.Detail = detail + " (" + err.Error() + ")"
 				if fix != "" {
 					c.Fix = fix
 				}
@@ -318,12 +330,26 @@ func checkServer(ctx context.Context, env Env, t *target.Target) (Check, *hindsi
 	}
 	c.Status, c.Summary = OK, fmt.Sprintf("Hindsight %s at %s%s", v.APIVersion, t.Display(), from)
 	c.version = v.APIVersion
-	if t.Cleartext() {
-		c.Status = Warn
-		c.Detail = "the API key travels unencrypted to a non-loopback host"
-		c.Fix = "reach the server over a tailnet or WireGuard, or keep it on loopback until the TLS proxy exists"
+	c.answered = true
+	if st, detail, fix := transport(*t); st != OK {
+		c.Status, c.Detail, c.Fix = st, detail, fix
 	}
 	return c, cl
+}
+
+// transport is how the API key travels to t's host: nothing to say over
+// loopback or https; Info over a tailnet (WireGuard encrypts it); a
+// warning otherwise (a LAN address, which expose and connect accept with
+// cleartext_lan=yes, or a name that may lead anywhere).
+func transport(t target.Target) (st Status, detail, fix string) {
+	switch {
+	case !t.Cleartext():
+		return OK, "", ""
+	case t.Tailnet():
+		return Info, "over a tailnet address: WireGuard encrypts the link, the API key included (unless this 100.64.0.0/10 address is a carrier's NAT rather than Tailscale)", ""
+	}
+	return Warn, "the API key travels unencrypted on the network to this address, readable by anyone on it",
+		"prefer a tailnet address (Tailscale: 100.x): on the server's host, backsight server expose --private <tailnet address> --out <file>; then here, backsight connect --token-file <file>"
 }
 
 func checkBank(ctx context.Context, cl *hindsight.Client, t *target.Target) Check {
@@ -515,7 +541,16 @@ func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.
 		c.Fix = "check backsight server status; the next backsight jobs tick purges them again (as forget --purge does) and reconciles"
 		return c
 	}
+	// Another restore under the same or a lower number (a host restored
+	// elsewhere from an older archive): its restored_at tells.
+	re := st.RestoreEpoch
+	another := re != nil && state.SameBank(re.Bank, bank) && !re.RestoredAt.IsZero() && !ep.RestoredAt.IsZero() && !re.RestoredAt.Equal(ep.RestoredAt)
 	switch local := st.EpochOf(bank); {
+	case another:
+		c.Status = Warn
+		c.Summary = fmt.Sprintf("client on an earlier restore (epoch %d; the bank was restored again, to epoch %d, on %s UTC)", local, ep.Epoch, ep.RestoredAt.UTC().Format("2006-01-02 15:04"))
+		c.Detail = "what this machine sent after the backup of " + ep.BackupCreatedAt.UTC().Format("2006-01-02 15:04") + " UTC is missing from the server until it reconciles"
+		c.Fix = "backsight jobs tick"
 	case local == ep.Epoch:
 		c.Status, c.Summary = OK, fmt.Sprintf("client on the bank's restore epoch %d", ep.Epoch)
 	case local < ep.Epoch:
@@ -694,7 +729,7 @@ func checkReach(env Env, tg *target.Target, srv Check) Check {
 		breaker = "open until " + at(b.OpenUntil)
 	}
 	pending, _ := retain.Outbox{Path: filepath.Join(d.OutboxDir(), "notes.jsonl")}.Pending()
-	answers := srv.Status == OK || srv.Status == Warn // Warn: it answered, in cleartext
+	answers := srv.answered // OK, Warn (cleartext) or Info (tailnet): not "no server"
 	if answers && !r.FailingSince.IsZero() {
 		last = "now; it was silent from " + at(r.FailingSince)
 	}
@@ -841,6 +876,51 @@ func checkSplit(d paths.Dirs) Check {
 		c.Status, c.Summary = Info, fmt.Sprintf("%d session(s) continued on two PCs: their shared part may be stored twice", len(splits))
 		c.Detail = strings.Join(slices.Sorted(maps.Keys(splits)), ", ")
 	}
+	return c
+}
+
+// unconfirmedListed: the session parts checkReplaceUnconfirmed names.
+const unconfirmedListed = 5
+
+// checkReplaceUnconfirmed reports the session parts this PC gave up
+// unconfirmed in the last 30 days (replace_unconfirmed telemetry events): a
+// part replacing a document was never confirmed on the server within 24 h
+// of its send, so some of this PC's turns may be missing there. It warns,
+// naming the newest few: nothing re-sends such a part.
+func checkReplaceUnconfirmed(dir string, now time.Time) Check {
+	c := Check{ID: "replace-unconfirmed", Status: OK, Summary: "no session part given up unconfirmed in the last 30 days"}
+	ev, err := stats.Load(dir, now.Add(-30*24*time.Hour), now)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "telemetry unreadable", err.Error()
+		return c
+	}
+	var parts []stats.Event
+	for _, e := range ev {
+		if e.Event == "replace_unconfirmed" {
+			parts = append(parts, e)
+		}
+	}
+	if len(parts) == 0 {
+		return c
+	}
+	slices.SortStableFunc(parts, func(a, b stats.Event) int { return b.TS.Compare(a.TS) })
+	names := make([]string, 0, unconfirmedListed+1)
+	for i, e := range parts {
+		if i == unconfirmedListed {
+			names = append(names, "…")
+			break
+		}
+		session := e.Session
+		if len(session) > 8 {
+			session = session[:8]
+		}
+		names = append(names, session+"/"+e.Document)
+	}
+	c.Status = Warn
+	c.Summary = fmt.Sprintf("%d session part(s) given up unconfirmed in the last 30 days: some of this PC's turns may be missing on the server", len(parts))
+	c.Detail = fmt.Sprintf("%d session part(s) never confirmed on the server since %s: %s",
+		len(parts), parts[len(parts)-1].TS.UTC().Format("2006-01-02"), strings.Join(names, ", "))
+	c.Fix = "backsight guide troubleshooting#doctor-a-session-part-was-never-confirmed"
 	return c
 }
 

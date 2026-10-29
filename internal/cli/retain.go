@@ -147,7 +147,7 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 		if len(r.Unknown) > 0 {
 			tw.Emit(telemetry.Raw{Name: "transcript_unknown", Fields: map[string]any{"types": r.Unknown}})
 		}
-		reportUnconfirmed(tw, cmd.ErrOrStderr(), r)
+		reportUnconfirmed(d.State, cmd.ErrOrStderr(), r)
 		if len(r.Turns) > 0 {
 			sw := telemetry.New(d.State, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
 			for _, t := range r.Turns {
@@ -166,10 +166,16 @@ func flushAll(cmd *cobra.Command, f *retain.Flusher, files []string, opt retain.
 // unconfirmed, retain.PendingLimit after their send
 // (retain.Result.Unconfirmed): one replace_unconfirmed event each, and a
 // line on errw (the scheduler's log for a tick). Their records may be lost
-// on the server; verify --live compares.
-func reportUnconfirmed(tw *telemetry.Writer, errw io.Writer, r retain.Result) {
+// on the server; verify --live compares. The event carries the session in
+// the writer's common field (telemetry.Raw cannot set it), which doctor's
+// replace-unconfirmed check names.
+func reportUnconfirmed(stateDir string, errw io.Writer, r retain.Result) {
+	if len(r.Unconfirmed) == 0 {
+		return
+	}
+	tw := telemetry.New(stateDir, telemetry.Common{Session: r.Session, BinaryVersion: buildinfo.Version})
 	for _, u := range r.Unconfirmed {
-		tw.Emit(telemetry.Raw{Name: "replace_unconfirmed", Fields: map[string]any{"session": r.Session, "document": u.Document, "reason": u.Reason}})
+		tw.Emit(telemetry.Raw{Name: "replace_unconfirmed", Fields: map[string]any{"document": u.Document, "reason": u.Reason}})
 		_, _ = fmt.Fprintf(errw, "backsight: session %s: %s was never confirmed on the server (%s); backsight verify --live compares it\n", r.Session, u.Document, u.Reason)
 	}
 }
