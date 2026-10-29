@@ -94,8 +94,9 @@ func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[stri
 
 // Apply adds a settle event's shows to the ledger, adds an import event's
 // shows and credits (to Imported too), drops a forget event's memories,
-// counts a retire, sets a hide, or clears both on an unhide (of a memory
-// with an entry only, stamped with the unhide's time). A settle or an
+// counts a retire, sets a hide, or clears both on an unhide and stamps the
+// entry with its time (an entry holding only that time for a memory
+// without one, for a restore here to beat a hiding elsewhere). A settle or an
 // import decays under the half-lives it recorded, p's when it recorded
 // none, each show from its own time; a forgotten show counts nowhere, an
 // import never counts a miss. Sums
@@ -147,11 +148,10 @@ func (l *Ledger) Apply(e Event, p Params) {
 		}
 	case KindUnhide:
 		for _, id := range e.IDs {
-			if m, ok := l.Memories[id]; ok {
-				m.Wrong, m.Hidden = 0, nil
-				m.UnhiddenAt = laterOf(m.UnhiddenAt, e.TS)
-				l.Memories[id] = m
-			}
+			m := l.Memories[id]
+			m.Wrong, m.Hidden = 0, nil
+			m.UnhiddenAt = laterOf(m.UnhiddenAt, e.TS)
+			l.Memories[id] = m
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -19,11 +20,25 @@ const SharedVersion = 1
 // A shared document holds at most sharedMaxEntries memories, leaving out
 // one not hidden whose credits and misses both decayed below
 // sharedMinCount; one whose at is older than sharedMaxAge is a machine no
-// longer in use, ignored.
+// longer in use, ignored. A reader refuses a document of more than
+// sharedMaxBytes or sharedMaxEntries, with a count below 0 or above
+// sharedMaxCount, or a time before sharedEpoch or after sharedLastTime;
+// it ignores one dated, or holding a time, more than sharedMaxSkew ahead
+// of its clock.
 const (
 	sharedMaxEntries = 5000
 	sharedMinCount   = 0.01
 	sharedMaxAge     = 30 * 24 * time.Hour
+	sharedMaxBytes   = 4 << 20
+	sharedMaxCount   = 1e6
+	sharedMaxSkew    = 24 * time.Hour
+)
+
+var (
+	sharedEpoch    = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	sharedLastTime = time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
+	// memoryID is a memory id as the server gives it, a lowercase UUID.
+	memoryID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 // ErrSharedVersion: a shared document of a version this binary does not
@@ -73,8 +88,14 @@ func (d SharedDoc) MarshalMeta() (string, error) {
 }
 
 // ParseSharedDoc reads a metadata value MarshalMeta wrote. A document of
-// another version is ErrSharedVersion, whatever its entries hold.
+// another version is ErrSharedVersion, whatever its entries hold; one too
+// large, with a count or a time out of range, or a malformed entry is an
+// error, never partly read; an entry under an id that is not a memory id
+// is skipped.
 func ParseSharedDoc(s string) (SharedDoc, error) {
+	if len(s) > sharedMaxBytes {
+		return SharedDoc{}, fmt.Errorf("shared ledger document of %d bytes, over %d", len(s), sharedMaxBytes)
+	}
 	var head struct {
 		V int `json:"v"`
 	}
@@ -88,14 +109,47 @@ func ParseSharedDoc(s string) (SharedDoc, error) {
 	if err := json.Unmarshal([]byte(s), &w); err != nil {
 		return SharedDoc{}, fmt.Errorf("shared ledger document: %w", err)
 	}
-	d := SharedDoc{V: w.V, Machine: w.Machine, At: fromUnixSeconds(w.At), Entries: make(map[string]SharedEntry, len(w.Entries))}
+	if len(w.Entries) > sharedMaxEntries {
+		return SharedDoc{}, fmt.Errorf("shared ledger document of %d entries, over %d", len(w.Entries), sharedMaxEntries)
+	}
+	at, err := sharedTime(w.At)
+	if err != nil || at.IsZero() {
+		return SharedDoc{}, fmt.Errorf("shared ledger document: at %v out of range", w.At)
+	}
+	d := SharedDoc{V: w.V, Machine: w.Machine, At: at, Entries: make(map[string]SharedEntry, len(w.Entries))}
 	for id, a := range w.Entries {
-		if len(a) != 5 {
-			return SharedDoc{}, fmt.Errorf("shared ledger document: memory %s has %d values, want 5", id, len(a))
+		if !memoryID.MatchString(id) {
+			continue
 		}
-		d.Entries[id] = SharedEntry{Credits: a[0], CreditsAt: fromUnixSeconds(a[1]), Misses: a[2], MissesAt: fromUnixSeconds(a[3]), HiddenSince: fromUnixSeconds(a[4])}
+		e, err := sharedEntry(a)
+		if err != nil {
+			return SharedDoc{}, fmt.Errorf("shared ledger document: memory %s: %w", id, err)
+		}
+		d.Entries[id] = e
 	}
 	return d, nil
+}
+
+// sharedEntry is one entry's [credits, credits_at, misses, misses_at,
+// hidden_since], each value in range.
+func sharedEntry(a []float64) (SharedEntry, error) {
+	if len(a) != 5 {
+		return SharedEntry{}, fmt.Errorf("%d values, want 5", len(a))
+	}
+	for _, c := range []float64{a[0], a[2]} {
+		if !(c >= 0 && c <= sharedMaxCount) {
+			return SharedEntry{}, fmt.Errorf("count %v out of range", c)
+		}
+	}
+	var times [3]time.Time
+	for i, v := range []float64{a[1], a[3], a[4]} {
+		t, err := sharedTime(v)
+		if err != nil {
+			return SharedEntry{}, err
+		}
+		times[i] = t
+	}
+	return SharedEntry{Credits: a[0], CreditsAt: times[0], Misses: a[2], MissesAt: times[1], HiddenSince: times[2]}, nil
 }
 
 func round4(v float64) float64 { return math.Round(v*1e4) / 1e4 }
@@ -107,11 +161,16 @@ func unixSeconds(t time.Time) float64 {
 	return float64(t.Unix())
 }
 
-func fromUnixSeconds(s float64) time.Time {
+// sharedTime is unix seconds s as a time: 0 a zero time, else between
+// sharedEpoch and sharedLastTime.
+func sharedTime(s float64) (time.Time, error) {
 	if s == 0 {
-		return time.Time{}
+		return time.Time{}, nil
 	}
-	return time.Unix(int64(math.Round(s)), 0).UTC()
+	if !(s >= float64(sharedEpoch.Unix()) && s <= float64(sharedLastTime.Unix())) {
+		return time.Time{}, fmt.Errorf("time %v out of range", s)
+	}
+	return time.Unix(int64(math.Round(s)), 0).UTC(), nil
 }
 
 // Export is l as machine's shared document at now: each memory's sums at
@@ -159,20 +218,42 @@ func compareBool(a, b bool) int {
 // the latest of their hidings.
 type Remote map[string]SharedEntry
 
-// CombineRemote sums docs into a Remote at now, under p's half-lives,
-// leaving out self's own document and every document older than
-// sharedMaxAge.
+// CombineRemote sums docs into a Remote at now, under p's half-lives:
+// the newest document of each machine but self, among those neither
+// older than sharedMaxAge nor dated or holding a time more than
+// sharedMaxSkew ahead of now.
 func CombineRemote(docs []SharedDoc, self string, now time.Time, p Params) Remote {
-	r := Remote{}
+	newest := map[string]SharedDoc{}
 	for _, d := range docs {
-		if d.Machine == self || now.Sub(d.At) > sharedMaxAge {
+		if d.Machine == self || !d.current(now) {
 			continue
 		}
-		for id, e := range d.Entries {
+		if n, ok := newest[d.Machine]; !ok || d.At.After(n.At) {
+			newest[d.Machine] = d
+		}
+	}
+	r := Remote{}
+	for _, m := range slices.Sorted(maps.Keys(newest)) {
+		for id, e := range newest[m].Entries {
 			r[id] = r[id].plus(e, now, p)
 		}
 	}
 	return r
+}
+
+// current: d is at most sharedMaxAge old at now, and neither it nor any
+// of its times more than sharedMaxSkew ahead.
+func (d SharedDoc) current(now time.Time) bool {
+	late := now.Add(sharedMaxSkew)
+	if now.Sub(d.At) > sharedMaxAge || d.At.After(late) {
+		return false
+	}
+	for _, e := range d.Entries {
+		if e.CreditsAt.After(late) || e.MissesAt.After(late) || e.HiddenSince.After(late) {
+			return false
+		}
+	}
+	return true
 }
 
 // WithRemote is a copy of l whose memories r names have their credits

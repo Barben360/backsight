@@ -5,12 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
 
 // sharedNow is a whole second, as the shared document keeps times.
 var sharedNow = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+
+// Memory ids as the server gives them: a document's entry under another
+// id is skipped.
+const (
+	idM1 = "0b6f3c1e-1d2a-4c55-9a8e-3f1c2b7d9e01"
+	idM2 = "0b6f3c1e-1d2a-4c55-9a8e-3f1c2b7d9e02"
+	idO1 = "0b6f3c1e-1d2a-4c55-9a8e-3f1c2b7d9e03"
+	idR1 = "0b6f3c1e-1d2a-4c55-9a8e-3f1c2b7d9e04"
+)
 
 func daysBefore(d float64) time.Time {
 	return sharedNow.Add(-time.Duration(d * float64(24*time.Hour)))
@@ -22,8 +32,8 @@ func daysBefore(d float64) time.Time {
 // reads back, a zero time stays zero, an unknown v is ErrSharedVersion.
 func TestSharedDocRoundTrip(t *testing.T) {
 	doc := SharedDoc{V: SharedVersion, Machine: "pc-a", At: sharedNow, Entries: map[string]SharedEntry{
-		"m1": {Credits: 1.23456789, CreditsAt: daysBefore(10), Misses: 0.5, MissesAt: daysBefore(3)},
-		"o1": {HiddenSince: daysBefore(1)},
+		idM1: {Credits: 1.23456789, CreditsAt: daysBefore(10), Misses: 0.5, MissesAt: daysBefore(3)},
+		idO1: {HiddenSince: daysBefore(1)},
 	}}
 	s, err := doc.MarshalMeta()
 	if err != nil {
@@ -40,7 +50,7 @@ func TestSharedDocRoundTrip(t *testing.T) {
 	_ = json.Unmarshal(raw["entries"], &entries)
 	wantM1 := fmt.Sprintf("[1.2346,%d,0.5,%d,0]", daysBefore(10).Unix(), daysBefore(3).Unix())
 	wantO1 := fmt.Sprintf("[0,0,0,0,%d]", daysBefore(1).Unix())
-	if len(entries) != 2 || string(entries["m1"]) != wantM1 || string(entries["o1"]) != wantO1 {
+	if len(entries) != 2 || string(entries[idM1]) != wantM1 || string(entries[idO1]) != wantO1 {
 		t.Errorf("entries: %s, want m1 %s and o1 %s", raw["entries"], wantM1, wantO1)
 	}
 
@@ -48,15 +58,15 @@ func TestSharedDocRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m1, o1 := back.Entries["m1"], back.Entries["o1"]
+	m1, o1 := back.Entries[idM1], back.Entries[idO1]
 	if back.V != 1 || back.Machine != "pc-a" || !back.At.Equal(sharedNow) || len(back.Entries) != 2 ||
 		m1.Credits != 1.2346 || !m1.CreditsAt.Equal(daysBefore(10)) || m1.Misses != 0.5 || !m1.MissesAt.Equal(daysBefore(3)) || !m1.HiddenSince.IsZero() ||
 		o1.Credits != 0 || !o1.CreditsAt.IsZero() || !o1.MissesAt.IsZero() || !o1.HiddenSince.Equal(daysBefore(1)) {
 		t.Errorf("parsed back: %+v", back)
 	}
 
-	reordered, err := ParseSharedDoc(`{"entries":{"m2":[2,1792000000,0,0,0]},"at":1793000000,"machine":"pc-b","v":1}`)
-	if m2 := reordered.Entries["m2"]; err != nil || reordered.Machine != "pc-b" || reordered.At.Unix() != 1793000000 ||
+	reordered, err := ParseSharedDoc(`{"entries":{"` + idM2 + `":[2,1792000000,0,0,0]},"at":1793000000,"machine":"pc-b","v":1}`)
+	if m2 := reordered.Entries[idM2]; err != nil || reordered.Machine != "pc-b" || reordered.At.Unix() != 1793000000 ||
 		m2.Credits != 2 || m2.CreditsAt.Unix() != 1792000000 || !m2.MissesAt.IsZero() || !m2.HiddenSince.IsZero() {
 		t.Errorf("reordered keys: %+v %v", reordered, err)
 	}
@@ -69,7 +79,7 @@ func TestSharedDocRoundTrip(t *testing.T) {
 			t.Errorf("%s: %v, want ErrSharedVersion", s, err)
 		}
 	}
-	for _, s := range []string{`not json`, `{"v":1,"machine":"pc-c","at":1,"entries":{"m1":[1,2,3,4]}}`} {
+	for _, s := range []string{`not json`, `{"v":1,"machine":"pc-c","at":1793000000,"entries":{"` + idM1 + `":[1,2,3,4]}}`} {
 		if _, err := ParseSharedDoc(s); err == nil || errors.Is(err, ErrSharedVersion) {
 			t.Errorf("%s: %v, want a parse error", s, err)
 		}
@@ -100,7 +110,17 @@ func TestExportCapsAndPrunes(t *testing.T) {
 		t.Errorf("with a hidden memory: %d exported, m0000 %v, m0001 %v, hidden %+v", len(doc.Entries), kept0, kept1, doc.Entries["hidden-old"])
 	}
 
-	// 2^-7 ≈ 0.0078 is below 0.01, 2^-6 ≈ 0.0156 is not.
+	// Shown at the same time, the 5001st by id is the one left out.
+	tied := newLedger()
+	for i := range 5001 {
+		tied.Memories[fmt.Sprintf("m%04d", i)] = Entry{Shown: 1, Credits: 1, CreditsAt: daysBefore(1), LastShown: daysBefore(1)}
+	}
+	doc = tied.Export("pc-a", sharedNow, testParams)
+	if _, ok := doc.Entries["m5000"]; ok || len(doc.Entries) != 5000 || doc.Entries["m0000"].Credits != 1 || doc.Entries["m4999"].Credits != 1 {
+		t.Errorf("tied: %d exported, m5000 kept %v", len(doc.Entries), ok)
+	}
+
+	// 2^-7 ≈ 0.0078 is below 0.01, 2^-6 ≈ 0.0156 is not; exactly 0.01 stays.
 	small := Ledger{Memories: map[string]Entry{
 		"faded":        {Shown: 9, Credits: 1, CreditsAt: daysBefore(7 * 365), Misses: 1, MissesAt: daysBefore(7 * 90), LastShown: sharedNow},
 		"credits-left": {Shown: 9, Credits: 1, CreditsAt: daysBefore(6 * 365), Misses: 1, MissesAt: daysBefore(7 * 90)},
@@ -125,6 +145,17 @@ func TestExportCapsAndPrunes(t *testing.T) {
 		if later.Entries[id] != e {
 			t.Errorf("%s an hour later: %+v, was %+v", id, later.Entries[id], e)
 		}
+	}
+
+	edge := Ledger{Memories: map[string]Entry{
+		"credits-min": {Shown: 1, Credits: 0.01, CreditsAt: sharedNow},
+		"misses-min":  {Shown: 1, Misses: 0.01, MissesAt: sharedNow},
+		"below-min":   {Shown: 1, Credits: 0.0099, CreditsAt: sharedNow, Misses: 0.0099, MissesAt: sharedNow},
+	}}
+	doc = edge.Export("pc-a", sharedNow, testParams)
+	_, below := doc.Entries["below-min"]
+	if len(doc.Entries) != 2 || below {
+		t.Errorf("at the 0.01 edge: %+v", doc.Entries)
 	}
 }
 
@@ -152,18 +183,18 @@ func viaMeta(t *testing.T, doc SharedDoc) SharedDoc {
 // changes nothing and the boosts agree within 1e-12.
 func TestCombinedSumsMachines(t *testing.T) {
 	local := Ledger{Schema: LedgerSchema, Watermark: daysBefore(1), Memories: map[string]Entry{
-		"m1": {Shown: 4, Credits: 1, CreditsAt: daysBefore(10), LastShown: daysBefore(10), LastCredited: daysBefore(10), Wrong: 1, Imported: Imported{Shown: 2, Credits: 1}},
+		idM1: {Shown: 4, Credits: 1, CreditsAt: daysBefore(10), LastShown: daysBefore(10), LastCredited: daysBefore(10), Wrong: 1, Imported: Imported{Shown: 2, Credits: 1}},
 	}}
 	docs := []SharedDoc{
 		viaMeta(t, SharedDoc{V: 1, Machine: "pc-b", At: daysBefore(2), Entries: map[string]SharedEntry{
-			"m1": {Credits: 2, CreditsAt: daysBefore(100)},
+			idM1: {Credits: 2, CreditsAt: daysBefore(100)},
 		}}),
 		viaMeta(t, SharedDoc{V: 1, Machine: "pc-c", At: daysBefore(5), Entries: map[string]SharedEntry{
-			"m1": {Credits: 1.5, CreditsAt: daysBefore(200), Misses: 1, MissesAt: daysBefore(50)},
-			"r1": {Misses: 2.25, MissesAt: daysBefore(90)},
+			idM1: {Credits: 1.5, CreditsAt: daysBefore(200), Misses: 1, MissesAt: daysBefore(50)},
+			idR1: {Misses: 2.25, MissesAt: daysBefore(90)},
 		}}),
 		viaMeta(t, SharedDoc{V: 1, Machine: "pc-a", At: daysBefore(1), Entries: map[string]SharedEntry{
-			"m1": {Credits: 50, CreditsAt: daysBefore(1)},
+			idM1: {Credits: 50, CreditsAt: daysBefore(1)},
 		}}),
 	}
 	got := local.WithRemote(CombineRemote(docs, "pc-a", sharedNow, sharedParams), sharedParams, sharedNow)
@@ -171,46 +202,163 @@ func TestCombinedSumsMachines(t *testing.T) {
 	c := 1*math.Exp2(-10.0/365) + 2*math.Exp2(-100.0/365) + 1.5*math.Exp2(-200.0/365)
 	m := math.Exp2(-50.0 / 90)
 	want := 0.1 * ((c+3)/(c+m+12) - 0.25)
-	if b := got.Boost("m1", sharedParams, sharedNow); math.Abs(b-want) > 1e-12 {
+	if b := got.Boost(idM1, sharedParams, sharedNow); math.Abs(b-want) > 1e-12 {
 		t.Errorf("m1 boost %v, want %v (credits %v, misses %v)", b, want, c, m)
 	}
 	wantR1 := 0.1 * (3/(1.125+12) - 0.25)
-	if b := got.Boost("r1", sharedParams, sharedNow); math.Abs(b-wantR1) > 1e-12 || got.Memories["r1"].Shown != 0 {
-		t.Errorf("r1 boost %v, want %v; entry %+v", b, wantR1, got.Memories["r1"])
+	if b := got.Boost(idR1, sharedParams, sharedNow); math.Abs(b-wantR1) > 1e-12 || got.Memories[idR1].Shown != 0 {
+		t.Errorf("r1 boost %v, want %v; entry %+v", b, wantR1, got.Memories[idR1])
 	}
-	e := got.Memories["m1"]
+	e := got.Memories[idM1]
 	if e.Shown != 4 || !e.LastShown.Equal(daysBefore(10)) || !e.LastCredited.Equal(daysBefore(10)) || e.Wrong != 1 || e.Imported != (Imported{Shown: 2, Credits: 1}) {
 		t.Errorf("m1's own counts changed: %+v", e)
 	}
 	if !got.Watermark.Equal(local.Watermark) || got.Schema != LedgerSchema {
 		t.Errorf("ledger header changed: %+v", got)
 	}
-	if lm := local.Memories["m1"]; len(local.Memories) != 1 || lm.Credits != 1 || !lm.CreditsAt.Equal(daysBefore(10)) {
+	if lm := local.Memories[idM1]; len(local.Memories) != 1 || lm.Credits != 1 || !lm.CreditsAt.Equal(daysBefore(10)) {
 		t.Errorf("WithRemote changed the ledger: %+v", local.Memories)
 	}
 }
 
 // A document whose at is more than 30 days old is a machine no longer in
-// use: it counts nowhere.
+// use: it counts nowhere; one exactly 30 days old still counts.
 func TestOldDocumentsAreIgnored(t *testing.T) {
 	docs := []SharedDoc{
-		{V: 1, Machine: "pc-old", At: daysBefore(31), Entries: map[string]SharedEntry{
+		{V: 1, Machine: "pc-old", At: daysBefore(30).Add(-time.Second), Entries: map[string]SharedEntry{
 			"m1": {Credits: 1, CreditsAt: daysBefore(31)},
 			"o1": {HiddenSince: daysBefore(31)},
 		}},
-		{V: 1, Machine: "pc-recent", At: daysBefore(29), Entries: map[string]SharedEntry{
-			"m2": {Credits: 1, CreditsAt: daysBefore(29)},
+		{V: 1, Machine: "pc-recent", At: daysBefore(30), Entries: map[string]SharedEntry{
+			"m2": {Credits: 1, CreditsAt: daysBefore(30)},
 		}},
 	}
 	r := CombineRemote(docs, "pc-a", sharedNow, sharedParams)
 	if _, ok := r["m1"]; ok {
-		t.Errorf("31 days old counted: %+v", r)
+		t.Errorf("30 days and 1 s old counted: %+v", r)
 	}
 	if _, ok := r["o1"]; ok {
-		t.Errorf("31 days old hiding counted: %+v", r)
+		t.Errorf("30 days and 1 s old hiding counted: %+v", r)
 	}
-	if want := math.Exp2(-29.0 / 365); math.Abs(r["m2"].Credits-want) > 1e-12 {
-		t.Errorf("29 days old: %+v, want credits %v", r["m2"], want)
+	if want := math.Exp2(-30.0 / 365); math.Abs(r["m2"].Credits-want) > 1e-12 {
+		t.Errorf("exactly 30 days old: %+v, want credits %v", r["m2"], want)
+	}
+}
+
+// A document dated more than a day ahead of this machine's clock, or with
+// any time that far ahead, counts nowhere, none of its entries: a broken
+// clock never keeps a document alive nor skews recall. A day ahead still
+// counts.
+func TestFutureDocumentsAreIgnored(t *testing.T) {
+	ahead := sharedNow.Add(24 * time.Hour)
+	docs := []SharedDoc{
+		{V: 1, Machine: "pc-ahead", At: ahead.Add(time.Second), Entries: map[string]SharedEntry{"m1": {Credits: 1, CreditsAt: daysBefore(1)}}},
+		{V: 1, Machine: "pc-entry", At: sharedNow, Entries: map[string]SharedEntry{
+			"m2": {Credits: 1, CreditsAt: daysBefore(1)},
+			"o1": {HiddenSince: ahead.Add(time.Second)},
+		}},
+		{V: 1, Machine: "pc-day", At: ahead, Entries: map[string]SharedEntry{"m3": {Credits: 1, CreditsAt: ahead}}},
+	}
+	r := CombineRemote(docs, "pc-a", sharedNow, sharedParams)
+	if _, ok := r["m1"]; ok {
+		t.Errorf("a document dated a day and 1 s ahead counted: %+v", r)
+	}
+	if _, ok := r["m2"]; ok {
+		t.Errorf("a document holding a time a day and 1 s ahead counted: %+v", r)
+	}
+	if r["m3"].Credits != 1 || len(r) != 1 {
+		t.Errorf("a day ahead: %+v", r)
+	}
+}
+
+// Two documents under one machine id (a copied machine): only the newer
+// counts, whatever their order.
+func TestCombineKeepsTheNewestDocumentPerMachine(t *testing.T) {
+	older := SharedDoc{V: 1, Machine: "pc-b", At: daysBefore(2), Entries: map[string]SharedEntry{
+		"m1": {Credits: 5, CreditsAt: sharedNow},
+		"m2": {Credits: 1, CreditsAt: sharedNow},
+	}}
+	newer := SharedDoc{V: 1, Machine: "pc-b", At: daysBefore(1), Entries: map[string]SharedEntry{
+		"m1": {Credits: 1, CreditsAt: sharedNow},
+	}}
+	other := SharedDoc{V: 1, Machine: "pc-c", At: daysBefore(3), Entries: map[string]SharedEntry{
+		"m1": {Credits: 2, CreditsAt: sharedNow},
+	}}
+	for _, docs := range [][]SharedDoc{{older, newer, other}, {newer, other, older}} {
+		r := CombineRemote(docs, "pc-a", sharedNow, sharedParams)
+		if _, ok := r["m2"]; ok || r["m1"].Credits != 3 {
+			t.Errorf("%v then %v: %+v, want m1 3 (newer pc-b 1 + pc-c 2) and no m2", docs[0].At, docs[1].At, r)
+		}
+	}
+}
+
+// A document is refused whole, never partly read, when it holds a count
+// below 0 or above 1e6, a time before 2020, more than 5000 entries or
+// more than 4 MiB; an entry under an id that is not a memory id is
+// skipped, the rest read.
+func TestParseRefusesACorruptDocument(t *testing.T) {
+	ok := fmt.Sprintf("[1,%d,0,0,0]", daysBefore(1).Unix())
+	doc := func(at int64, entries ...string) string {
+		return fmt.Sprintf(`{"v":1,"machine":"pc-b","at":%d,"entries":{%s}}`, at, strings.Join(entries, ","))
+	}
+	entry := func(id, values string) string { return fmt.Sprintf("%q:%s", id, values) }
+	now := sharedNow.Unix()
+	before2020 := time.Date(2019, 12, 31, 23, 59, 59, 0, time.UTC).Unix()
+	many := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = entry(fmt.Sprintf("0b6f3c1e-1d2a-4c55-9a8e-%012d", i), ok)
+		}
+		return out
+	}
+	refused := map[string]string{
+		"negative credits":       doc(now, entry(idM1, ok), entry(idM2, fmt.Sprintf("[-12,%d,0,0,0]", now))),
+		"negative misses":        doc(now, entry(idM1, fmt.Sprintf("[0,0,-0.5,%d,0]", now))),
+		"credits above 1e6":      doc(now, entry(idM1, fmt.Sprintf("[1000000.0001,%d,0,0,0]", now))),
+		"misses out of range":    doc(now, entry(idM1, fmt.Sprintf("[0,0,1e400,%d,0]", now))),
+		"at before 2020":         doc(before2020, entry(idM1, ok)),
+		"at 0":                   doc(0, entry(idM1, ok)),
+		"at absurd":              `{"v":1,"machine":"pc-b","at":1e30,"entries":{}}`,
+		"credits_at before 2020": doc(now, entry(idM1, fmt.Sprintf("[1,%d,0,0,0]", before2020))),
+		"misses_at absurd":       doc(now, entry(idM1, "[0,0,1,1e30,0]")),
+		"hidden_since negative":  doc(now, entry(idM1, "[0,0,0,0,-5]")),
+		"5001 entries":           doc(now, many(5001)...),
+		"over 4 MiB":             fmt.Sprintf(`{"v":1,"machine":%q,"at":%d,"entries":{}}`, strings.Repeat("x", 4<<20), now),
+	}
+	for name, s := range refused {
+		if d, err := ParseSharedDoc(s); err == nil || errors.Is(err, ErrSharedVersion) {
+			t.Errorf("%s: %v, %d entries read, want refused", name, err, len(d.Entries))
+		}
+	}
+
+	d, err := ParseSharedDoc(doc(now, append(many(4999), entry(idM1, fmt.Sprintf("[1000000,%d,1000000,%d,%d]", now, now, now)))...))
+	if err != nil || len(d.Entries) != 5000 || d.Entries[idM1].Credits != 1e6 {
+		t.Errorf("5000 entries, counts at 1e6: %v, %d entries", err, len(d.Entries))
+	}
+	d, err = ParseSharedDoc(doc(now, entry(idM1, ok), entry("m1", ok), entry("../x", ok), entry(strings.ToUpper(idM2), ok)))
+	if _, kept := d.Entries[idM1]; err != nil || len(d.Entries) != 1 || !kept {
+		t.Errorf("ids not memory ids: %v, %+v, want only %s", err, d.Entries, idM1)
+	}
+}
+
+// A memory never shown here, restored here after another machine hid
+// it, stays visible here; a hiding newer than the restore hides it. The
+// restore alone exports nothing.
+func TestARestoreBeatsAHidingOfAMemoryNeverShownHere(t *testing.T) {
+	ten, eleven, twelve := sharedNow.Add(-2*time.Hour), sharedNow.Add(-time.Hour), sharedNow
+	l := Fold([]Event{{Kind: KindUnhide, TS: eleven, IDs: []string{idO1}, Outcome: "restored"}}, testParams)
+	hiddenAt := func(since time.Time) *Hidden {
+		docs := []SharedDoc{{V: 1, Machine: "pc-b", At: sharedNow, Entries: map[string]SharedEntry{idO1: {HiddenSince: since}}}}
+		return l.WithRemote(CombineRemote(docs, "pc-a", sharedNow, sharedParams), sharedParams, sharedNow).Memories[idO1].Hidden
+	}
+	if h := hiddenAt(ten); h != nil {
+		t.Errorf("hidden at 10:00 elsewhere, restored here at 11:00: %+v", h)
+	}
+	if h := hiddenAt(twelve); h == nil {
+		t.Error("hidden at 12:00 elsewhere, restored here at 11:00: not hidden")
+	}
+	if doc := l.Export("pc-a", sharedNow, testParams); len(doc.Entries) != 0 {
+		t.Errorf("a restore alone exported: %+v", doc.Entries)
 	}
 }
 

@@ -309,7 +309,8 @@ func TestRebuildUsesTheRecordedHalfLives(t *testing.T) {
 
 // Retirements fold into the entry: each retire counts one more wrong, a
 // hide sets the hiding with its time, verdict and note, an unhide clears
-// both; a rebuilt ledger equals the live one at each step.
+// both, and records its time even for a memory never shown here; a
+// rebuilt ledger equals the live one at each step.
 func TestLedgerFoldsRetirements(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	writeJournal(t, dir, append(sampleSession(),
@@ -354,8 +355,8 @@ func TestLedgerFoldsRetirements(t *testing.T) {
 	if m, ok := l.Memories["o1"]; !ok || m.Wrong != 0 || m.Hidden != nil {
 		t.Errorf("o1 after an unhide: %+v (kept: %v)", m, ok)
 	}
-	if _, ok := l.Memories["never-seen"]; ok {
-		t.Error("an unhide of an unknown memory made an entry")
+	if m, ok := l.Memories["never-seen"]; !ok || !m.UnhiddenAt.Equal(at(130)) || m.Shown != 0 || m.Credits != 0 || m.Misses != 0 || m.Hidden != nil || m.Wrong != 0 {
+		t.Errorf("an unhide of an unknown memory: %+v (kept: %v), want an entry holding only its time", m, ok)
 	}
 	raw, _ = os.ReadFile(filepath.Join(dir, "ledger.json"))
 	if strings.Contains(string(raw), `"wrong"`) || strings.Contains(string(raw), `"hidden"`) {
