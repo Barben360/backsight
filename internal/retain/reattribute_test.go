@@ -314,6 +314,24 @@ func TestASessionContinuedElsewhereIsNeverResentFromHere(t *testing.T) {
 	}
 }
 
+// A document this PC found split (another PC continued the session, then
+// this one appended after it, so its last record is this PC's): deleting
+// it would erase the other PC's segments, which that PC takes as held
+// (M6 review). The session is left alone, not re-sent.
+func TestASplitSessionIsNeverResentFromHere(t *testing.T) {
+	e := mixedSession(t)
+	if p := e.plan(); len(p.Resends) != 1 {
+		t.Fatalf("not a re-send before the split: %+v", p)
+	}
+	if err := RecordSplit(e.f.Dirs.State, "s1", "conversation:s1", e.clock); err != nil {
+		t.Fatal(err)
+	}
+	p := e.plan()
+	if len(p.Resends) != 0 || len(p.Held) != 1 || p.Held[0].Reason != HeldElsewhere {
+		t.Fatalf("plan %+v", p)
+	}
+}
+
 // Quarantined, backfill-queued and pending sessions are left alone, and
 // so is one whose directories are gone (today's names would be guesses).
 func TestUnsettledOrUnknowableSessionsAreLeftAlone(t *testing.T) {

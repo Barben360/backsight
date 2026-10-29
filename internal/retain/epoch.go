@@ -143,7 +143,8 @@ const epochSkew = time.Hour
 
 // Reconcile brings the cursors to the bank's restore epoch (decision 0044),
 // after making this client's purge tombstones and the control bank's the
-// same (syncTombstones). On a higher epoch, each session sent after the backup was taken, of
+// same (syncTombstones). On a higher epoch, or another restore under the
+// same or a lower one (anotherRestore), each session sent after the backup was taken, of
 // which the server now holds less, loses its cursor and the sent-index
 // entries of what the server lacks; then the epoch is recorded in state.
 // Anything that stops it (an unreadable epoch, maintenance, a session
@@ -229,8 +230,8 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	if err != nil {
 		return rec, err
 	}
-	if rec.To = ep.Epoch; rec.To == rec.From {
-		return rec, nil
+	if rec.To = ep.Epoch; rec.To == rec.From && !anotherRestore(st, f.Bank, ep) {
+		return rec, f.recordRestoredAt(st, ep)
 	}
 	l, _, err := state.Acquire(filepath.Join(f.Dirs.LocksDir(), "epoch.lock"), "restore epoch reconcile")
 	if err != nil {
@@ -246,10 +247,14 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 	if err := f.startedOverIn(st); err != nil {
 		return rec, err
 	}
-	if rec.From = st.EpochOf(f.Bank); rec.To == rec.From {
+	another := anotherRestore(st, f.Bank, ep)
+	if rec.From = st.EpochOf(f.Bank); rec.To == rec.From && !another {
 		return rec, nil // another process reconciled meanwhile
 	}
-	if rec.To > rec.From { // a lower epoch is another server's history: nothing to undo
+	// A lower epoch, the same restore, is another server's history:
+	// nothing to undo. Another restore, whatever its number, is this
+	// server's (the server id is checked first) restored elsewhere.
+	if rec.To > rec.From || another {
 		// A restored queue lags the documents' metadata: a document read
 		// now could say less than the server will hold, and resending
 		// from it would send twice.
@@ -293,7 +298,7 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		}
 	}
 	return rec, state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error {
-		s.RestoreEpoch = &state.RestoreEpoch{Bank: f.Bank, Epoch: rec.To, ReconciledAt: f.Now().UTC()}
+		s.RestoreEpoch = &state.RestoreEpoch{Bank: f.Bank, Epoch: rec.To, ReconciledAt: f.Now().UTC(), RestoredAt: ep.RestoredAt.UTC()}
 		// Another server state: the look for recreated purged documents
 		// starts again from its newest document, and looks at all once.
 		if g := s.PurgeGuard; g != nil && state.SameBank(g.Bank, f.Bank) {
@@ -301,6 +306,40 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 		}
 		if s.PurgeHold != nil && state.SameBank(s.PurgeHold.Bank, f.Bank) {
 			s.PurgeHold = nil
+		}
+		return nil
+	})
+}
+
+// anotherRestore says whether the server's epoch ep is another restore
+// than the one this client recorded for bank, whatever its number: a host
+// restored on a fresh machine from an older archive counts from what that
+// machine holds, and may write the number this client holds, or a lower
+// one (M6 review). Its restored_at tells. A record without one (written
+// before it was kept) reconciled before ep's restore, within the clock
+// skew, saw another: a reconcile taken for nothing costs reads, one
+// missed loses what the client sent since. Epoch 0 (no restore) is never
+// another.
+func anotherRestore(st state.State, bank string, ep Epoch) bool {
+	re := st.RestoreEpoch
+	if ep.RestoredAt.IsZero() || re == nil || !state.SameBank(re.Bank, bank) {
+		return false
+	}
+	if !re.RestoredAt.IsZero() {
+		return !re.RestoredAt.Equal(ep.RestoredAt)
+	}
+	return re.ReconciledAt.Before(ep.RestoredAt.Add(epochSkew))
+}
+
+// recordRestoredAt adds ep's restored_at to a record of the same restore
+// that lacks it; nothing to write otherwise.
+func (f *Flusher) recordRestoredAt(st state.State, ep Epoch) error {
+	if re := st.RestoreEpoch; ep.RestoredAt.IsZero() || re == nil || !state.SameBank(re.Bank, f.Bank) || re.Epoch != ep.Epoch || !re.RestoredAt.IsZero() {
+		return nil
+	}
+	return state.Update(f.Dirs, "restore epoch reconcile", func(s *state.State) error {
+		if re := s.RestoreEpoch; f.startedOverIn(*s) == nil && re != nil && state.SameBank(re.Bank, f.Bank) && re.Epoch == ep.Epoch && re.RestoredAt.IsZero() {
+			re.RestoredAt = ep.RestoredAt.UTC()
 		}
 		return nil
 	})

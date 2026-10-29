@@ -517,7 +517,16 @@ func checkEpoch(ctx context.Context, cl *hindsight.Client, bank string, d paths.
 		c.Fix = "check backsight server status; the next backsight jobs tick purges them again (as forget --purge does) and reconciles"
 		return c
 	}
+	// Another restore under the same or a lower number (a host restored
+	// elsewhere from an older archive): its restored_at tells.
+	re := st.RestoreEpoch
+	another := re != nil && state.SameBank(re.Bank, bank) && !re.RestoredAt.IsZero() && !ep.RestoredAt.IsZero() && !re.RestoredAt.Equal(ep.RestoredAt)
 	switch local := st.EpochOf(bank); {
+	case another:
+		c.Status = Warn
+		c.Summary = fmt.Sprintf("client on an earlier restore (epoch %d; the bank was restored again, to epoch %d, on %s UTC)", local, ep.Epoch, ep.RestoredAt.UTC().Format("2006-01-02 15:04"))
+		c.Detail = "what this machine sent after the backup of " + ep.BackupCreatedAt.UTC().Format("2006-01-02 15:04") + " UTC is missing from the server until it reconciles"
+		c.Fix = "backsight jobs tick"
 	case local == ep.Epoch:
 		c.Status, c.Summary = OK, fmt.Sprintf("client on the bank's restore epoch %d", ep.Epoch)
 	case local < ep.Epoch:

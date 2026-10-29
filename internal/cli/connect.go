@@ -186,6 +186,8 @@ type probe struct {
 	Version string
 	Skew    doctor.Status
 	Epoch   int
+	// RestoredAt: the epoch's identity (state.RestoreEpoch.RestoredAt).
+	RestoredAt time.Time
 }
 
 // probeToken checks the server tok names, reading only: it answers, its
@@ -234,7 +236,7 @@ func probeToken(ctx context.Context, tok token.Token) (probe, error) {
 	if v, err := cl.Version(ctx); err == nil && v.APIVersion != "" {
 		version = v.APIVersion
 	}
-	p := probe{Version: version, Epoch: ep.Epoch}
+	p := probe{Version: version, Epoch: ep.Epoch, RestoredAt: ep.RestoredAt}
 	if version != "" {
 		p.Skew = doctor.VersionSkew(version, server.PinnedVersion())
 	}
@@ -1165,7 +1167,7 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 	}
 	if situation == joinOther || situation == joinOwn {
 		keep = keepDir(d, at, "")
-		if err := resetRetain(d, keep, state.RestoreEpoch{Bank: tok.Bank, Epoch: p.Epoch, ReconciledAt: at}, at); err != nil {
+		if err := resetRetain(d, keep, state.RestoreEpoch{Bank: tok.Bank, Epoch: p.Epoch, ReconciledAt: at, RestoredAt: p.RestoredAt.UTC()}, at); err != nil {
 			if errors.Is(err, fs.ErrExist) { // another run's directory: not this one's to undo
 				keep = ""
 			}

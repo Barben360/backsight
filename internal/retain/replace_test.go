@@ -228,10 +228,10 @@ func TestAPurgedReplacedSegmentIsNeverSentAgain(t *testing.T) {
 	}
 }
 
-// A restore moved the bank's epoch since the send: what the server holds
-// is the backup's, the reconcile's to compare. The mark goes, nothing is
-// sent.
-func TestAnEpochChangeDropsThePendingMark(t *testing.T) {
+// A restore moved the bank's epoch since the send, without a reconcile
+// that judged this session (its cursor predates the backup): the mark
+// stays, and is looked at against the restored document.
+func TestAnEpochChangeKeepsThePendingMark(t *testing.T) {
 	a, _ := betaReplacedByB(t)
 	if err := state.Update(a.f.Dirs, "test", func(s *state.State) error {
 		s.RestoreEpoch = &state.RestoreEpoch{Bank: a.f.Bank, Epoch: 1, ReconciledAt: a.clock}
@@ -239,12 +239,90 @@ func TestAnEpochChangeDropsThePendingMark(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sent := len(a.hs.retains)
-	expect(t, a.tick(), Nothing, 0, 0)
-	if len(a.hs.retains) != sent {
-		t.Errorf("sent after the epoch change: %+v", a.hs.retains[sent:])
+	expect(t, a.tick(), Sent, 2, 2)
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+	a.splitOn(betaDoc)
+}
+
+// A mark seen before a restore is not confirmed by that first look: the
+// two looks start over on the restored server.
+func TestARestoreStartsTheLooksOver(t *testing.T) {
+	e := newEnv(t)
+	e.turns(0, "r1")
+	expect(t, e.flush("sp1", Options{}), Sent, 1, 1)
+	expect(t, e.tick(), Nothing, 0, 0)
+	if p := e.replaces()["billing"]; p.SeenAt.IsZero() {
+		t.Fatalf("first look not recorded: %+v", e.replaces())
 	}
-	if len(a.replaces()) != 0 {
+	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
+		s.RestoreEpoch = &state.RestoreEpoch{Bank: e.f.Bank, Epoch: 1, ReconciledAt: e.clock}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, e.tick(), Nothing, 0, 0)
+	if p, ok := e.replaces()["billing"]; !ok || p.Epoch != 1 || !p.SeenAt.Equal(e.clock) {
+		t.Fatalf("after the restore: %+v, want seen again now at epoch 1", e.replaces())
+	}
+	expect(t, e.tick(), Nothing, 0, 0)
+	if len(e.replaces()) != 0 {
+		t.Errorf("not confirmed: %+v", e.replaces())
+	}
+}
+
+// The race happened before the nightly backup: A sent its segment 1 at
+// 12:00 (B's replaced it), then went offline; the backup at 15:00 holds
+// B's segment 1 only, and the server is restored from it at 16:00. The
+// reconcile does not look at A's cursor (sent before the backup), so the
+// mark is what repairs: A's tick re-sends a2 a3 after B's segment, and
+// records the split. Before, the epoch change dropped the mark: lost,
+// silently.
+func TestARaceBeforeARestoredBackupIsRepairedAfterTheRestore(t *testing.T) {
+	a, _ := betaReplacedByB(t)
+	snap := a.hs.backup()
+	a.hs.restore(snap, 1, clockAt(15, 0), clockAt(16, 0))
+	a.clock = clockAt(16, 0)
+	rec, err := a.f.Reconcile(context.Background())
+	if err != nil || rec.To != 1 || len(rec.Resend) != 0 {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	sent := len(a.hs.retains)
+	expect(t, a.tick(), Sent, 2, 2)
+	if len(a.hs.retains) != sent+1 {
+		t.Fatalf("%d items sent, want 1", len(a.hs.retains)-sent)
+	}
+	if it := a.hs.retains[sent]; it.DocumentID != betaDoc || it.UpdateMode != "append" || it.Metadata["segment"] != "2" {
+		t.Errorf("A's repair: %s %q segment %s", it.DocumentID, it.UpdateMode, it.Metadata["segment"])
+	}
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+	a.splitOn(betaDoc)
+	if _, ok := a.replaces()["beta"]; ok {
+		t.Errorf("still pending: %+v", a.replaces())
+	}
+	for range 2 {
+		expect(t, a.tick(), Nothing, 0, 0)
+	}
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+}
+
+// The same race, with A's send after the backup (12:00, the backup at
+// 11:30): the reconcile judges A's cursor and drops it with its mark; the
+// resync sends what the server lacks once, and the mark sends nothing
+// more.
+func TestARaceAfterARestoredBackupIsTheReconcilesAlone(t *testing.T) {
+	a, _ := betaReplacedByB(t)
+	snap := a.hs.backup()
+	a.hs.restore(snap, 1, clockAt(11, 30), clockAt(13, 0))
+	a.clock = clockAt(13, 0)
+	rec, err := a.f.Reconcile(context.Background())
+	if err != nil || !reflect.DeepEqual(rec.Resend, []string{"sp1"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	for range 3 {
+		a.tick()
+	}
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+	if _, ok := a.replaces()["beta"]; ok {
 		t.Errorf("still pending: %+v", a.replaces())
 	}
 }

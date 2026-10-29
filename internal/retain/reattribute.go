@@ -85,7 +85,7 @@ const (
 	HeldQuarantined = "quarantined"     // retain retry-quarantine lifts it first
 	HeldBackfill    = "backfill"        // the backfill queue sends it
 	HeldPending     = "pending"         // a first segment the server has not stored yet
-	HeldElsewhere   = "another machine" // a document holds records this transcript lacks
+	HeldElsewhere   = "another machine" // a document holds records this transcript lacks, or this PC found it split
 	HeldGone        = "directory gone"  // a directory of its records no longer exists: today's names would be guesses
 )
 
@@ -170,9 +170,18 @@ func (f *Flusher) PlanReattribution(docs []hindsight.DocumentItem, transcripts [
 			sessions[sid] = append(sessions[sid], d)
 		}
 	}
+	// A document this PC found split holds another PC's segments, under
+	// this PC's last one: a re-send deletes it, and that PC takes its
+	// records as held (they are in its sent index). Unreadable: every
+	// session is held, as one may be split.
+	splits, splitErr := SplitSessions(f.Dirs.State)
 	for _, sid := range order {
 		path, ok := paths[sid]
 		if !ok {
+			continue
+		}
+		if splitErr != nil || slices.ContainsFunc(sessions[sid], func(d hindsight.DocumentItem) bool { return slices.Contains(splits[sid].Documents, d.ID) }) {
+			plan.Held = append(plan.Held, HeldSession{Session: sid, Reason: HeldElsewhere})
 			continue
 		}
 		if why := f.sessionHeld(sid); why != "" {

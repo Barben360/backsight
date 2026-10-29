@@ -1014,6 +1014,15 @@ func TestCheckRestoreEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, check(t, f.run(), "restore-epoch"), OK, "epoch 2")
+	// The same number from another restore (a host restored elsewhere
+	// from an older archive): not reconciled yet.
+	if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
+		RestoreEpoch: &state.RestoreEpoch{Bank: "coding-agent::memoire", Epoch: 2, RestoredAt: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := check(t, f.run(), "restore-epoch"); c.Status != Warn || !strings.Contains(c.Summary, "restored again") || c.Fix != "backsight jobs tick" {
+		t.Errorf("another restore: %+v", c)
+	}
 
 	g := newFixture(t) // no epoch document: epoch 0, which a new client is on
 	put(t, g.env.Dirs.ConfigFile(), "[server]\nurl = \""+fakeServer(t).URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)

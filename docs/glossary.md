@@ -76,7 +76,7 @@ The record a purge leaves for each document it deleted: its id, session, project
 
 ## Epoch
 
-Short for **restore epoch**: a counter that each restore of a backup raises on the server. Every machine compares it with the one it last saw, and when it moved, catches up before sending anything: it sends again what the restored backup lacks and purges again what was purged since. `backsight jobs tick` does it.
+Short for **restore epoch**: a counter that each restore of a backup raises on the server. Every machine compares it, and the time of that restore, with the ones it last saw, and when either changed (a host restored on a new machine may count from a number a client already holds), catches up before sending anything: it sends again what the restored backup lacks and purges again what was purged since. `backsight jobs tick` does it.
 
 ## Host
 

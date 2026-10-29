@@ -35,8 +35,10 @@ type PendingReplace struct {
 	// that replace, first and last: an append applied before the other
 	// PC's segment 1 is replaced with it.
 	Parts []RecordRange `json:"parts"`
-	// Epoch: the bank's restore epoch at the send; -1 unknown. A restore
-	// since makes the reconcile the judge of what the server lost.
+	// Epoch: the bank's restore epoch at the send, or at the last look
+	// since a restore; -1 unknown. A restore since starts the looks over
+	// against the restored document: the reconcile judges only cursors
+	// sent after the backup, and a race before it is in the backup.
 	Epoch  int       `json:"epoch"`
 	SentAt time.Time `json:"sent_at"`
 	// LastAt: when the last part was sent. A record whose time is after it
@@ -165,8 +167,9 @@ const (
 // checkReplaces confirms or repairs the replacing parts session sid's
 // cursor holds, before the flush. Only the tick, the detached flush and
 // backfill flush: no hook reads the server. A part is dropped, never
-// written again, when its document is tombstoned (a purge) or the bank's
-// restore epoch changed since. Otherwise it is looked at from
+// written again, when its document is tombstoned (a purge). A restore
+// since its send (the bank's epoch changed) starts its looks over against
+// the restored document. It is looked at from
 // replaceCheckAfter after its send (lookAt):
 //   - this PC's records there: seen, then confirmed at a second look;
 //   - some missing: sent again (resendReplaced), then dropped; the flush
@@ -210,10 +213,20 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 		pr := cur.Replaces[p]
 		expired := now.Sub(pr.SentAt) >= PendingLimit
 		switch {
-		case pr.Epoch >= 0 && pr.Epoch != epoch, slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == pr.Document }):
+		case slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == pr.Document }):
 			drop(p)
 			continue
-		case !expired && now.Sub(pr.SentAt) < replaceCheckAfter:
+		case pr.Epoch >= 0 && pr.Epoch != epoch:
+			// A restore since: a cursor sent after its backup was the
+			// reconcile's to judge (dropSession removes it, the mark with
+			// it); this one predates the backup, which may hold the other
+			// PC's segment 1 alone. Looked at again, twice, against the
+			// restored document.
+			pr.Epoch, pr.SeenAt = epoch, time.Time{}
+			cur.Replaces[p] = pr
+			changed = true
+		}
+		if !expired && now.Sub(pr.SentAt) < replaceCheckAfter {
 			continue
 		}
 		got, why, doc, missing := f.lookAt(ctx, pr, tr)

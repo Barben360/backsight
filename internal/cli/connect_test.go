@@ -382,6 +382,7 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 	split := retain.SplitSessionsFile(d.State) // the old server's split sessions
 	_ = os.WriteFile(split, []byte(`{"s9":{"document":"conversation:s9"}}`), 0o600)
 	tok := joinableHost(t) // the new server: holds nothing of s1
+	epochDoc = `{"epoch":"2","restored_at":"2026-10-24T09:50:00Z","backup_created_at":"2026-10-24T03:00:00Z"}`
 	code, out, errOut := run(t, "connect", "--token-file", tokenFile(t, tok), "--answer", "consent=yes", "--answer", "backfill=no", "--non-interactive", "--json")
 	if env := parseConnect(t, out); code != output.OK || env.Data.Situation != joinOther || !hasConnectStep(env.Data.Steps, "history", "done", "start over") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
@@ -406,7 +407,8 @@ func TestConnectToAnotherServerResendsHistory(t *testing.T) {
 	}
 	st, _ := state.Load(d.StateFile())
 	if st.RetainSince == nil || !st.RetainSince.Equal(time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)) || st.Backfill != nil ||
-		st.RestoreEpoch == nil || st.RestoreEpoch.Bank != config.DefaultBank || st.RestoreEpoch.Epoch != 0 || st.RemoteServer.ID != tok.ServerID {
+		st.RestoreEpoch == nil || st.RestoreEpoch.Bank != config.DefaultBank || st.RestoreEpoch.Epoch != 2 ||
+		!st.RestoreEpoch.RestoredAt.Equal(time.Date(2026, 10, 24, 9, 50, 0, 0, time.UTC)) || st.RemoteServer.ID != tok.ServerID {
 		t.Errorf("state: since %v, epoch %+v, binding %+v", st.RetainSince, st.RestoreEpoch, st.RemoteServer)
 	}
 	before := retained.Load()

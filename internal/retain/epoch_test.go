@@ -3,6 +3,7 @@ package retain
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func (h *fakeHS) backup() snapshot {
 func (h *fakeHS) restore(s snapshot, epoch int, backupAt, restoredAt time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.docs, h.content, h.seenOps = s.docs, s.content, s.ops
+	h.docs, h.content, h.seenOps = maps.Clone(s.docs), maps.Clone(s.content), maps.Clone(s.ops)
 	h.docs[EpochDocument] = map[string]string{"epoch": strconv.Itoa(epoch),
 		"backup_created_at": backupAt.UTC().Format(time.RFC3339), "restored_at": restoredAt.UTC().Format(time.RFC3339)}
 }
@@ -422,5 +423,114 @@ func TestReconcileSpanningConnectDropsNothing(t *testing.T) {
 	}
 	if len(e.hs.deleted) != 0 {
 		t.Errorf("deleted %v", e.hs.deleted)
+	}
+}
+
+// freshHostEnv: s1 goes out at 12:00 and the archive is taken at 12:30;
+// the old host is restored from it at 13:00 (epoch 1) and this client
+// reconciles; s2 goes out at 14:00; then the old host's disk dies, and a
+// fresh host restores the same archive at 15:00. With nothing on the
+// fresh host to count from, its epoch is 1 again: the number this client
+// holds (M6 review).
+func freshHostEnv(t *testing.T) *env {
+	e := newEnv(t)
+	e.record("s1", "u1", "user", 0, "kept by the archive")
+	expect(t, e.flush("s1", Options{}), Sent, 1, 1)
+	snap := e.hs.backup()
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(13, 0))
+	e.clock = clockAt(13, 0)
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || rec.To != 1 || len(rec.Resend) != 0 {
+		t.Fatalf("reconcile of the old host's restore: %+v %v", rec, err)
+	}
+	e.clock = clockAt(14, 0)
+	e.record("s2", "w1", "user", 30, "sent after the old host's restore")
+	expect(t, e.flush("s2", Options{}), Sent, 1, 1)
+	e.hs.restore(snap, 1, clockAt(12, 30), clockAt(15, 0))
+	e.clock = clockAt(15, 0)
+	return e
+}
+
+// The fresh host's epoch is the number this client holds, but another
+// restore (its restored_at differs): s2, which the archive lacks, is sent
+// again; s1 is not. Before, an equal number reconciled nothing: s2 was
+// lost.
+func TestAFreshHostRestoredToTheSameEpochIsReconciled(t *testing.T) {
+	e := freshHostEnv(t)
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || rec.From != 1 || rec.To != 1 || !reflect.DeepEqual(rec.Resend, []string{"s2"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	sent := len(e.hs.retains)
+	expect(t, e.flush("s2", Options{}), Sent, 1, 1)
+	expect(t, e.flush("s1", Options{}), Nothing, 0, 0)
+	if len(e.hs.retains) != sent+1 || !strings.Contains(e.hs.content["conversation:s2"], "after the old host's restore") {
+		t.Errorf("s2 on the server: %q", e.hs.content["conversation:s2"])
+	}
+	st, _ := state.Load(e.f.Dirs.StateFile())
+	if re := st.RestoreEpoch; re == nil || re.Epoch != 1 || !re.RestoredAt.Equal(clockAt(15, 0)) {
+		t.Errorf("recorded %+v, want epoch 1 restored at 15:00", st.RestoreEpoch)
+	}
+	gets := e.hs.gets
+	if rec, err := e.f.Reconcile(context.Background()); err != nil || len(rec.Resend) != 0 || e.hs.gets != gets+2 {
+		t.Errorf("a reconciled client reconciles again: %+v %v (%d reads)", rec, err, e.hs.gets-gets)
+	}
+}
+
+// The same with an epoch below this client's (the archive predates a
+// second restore of the old host): this server's history, restored
+// elsewhere, not another server's (the server id is the same).
+func TestAFreshHostRestoredToALowerEpochIsReconciled(t *testing.T) {
+	e := freshHostEnv(t)
+	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
+		s.RestoreEpoch.Epoch = 2
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := e.f.Reconcile(context.Background())
+	if err != nil || rec.From != 2 || rec.To != 1 || !reflect.DeepEqual(rec.Resend, []string{"s2"}) {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	expect(t, e.flush("s2", Options{}), Sent, 1, 1)
+}
+
+// A client that recorded its epoch before restored_at was recorded: a
+// reconcile before the restore's time (within the clock skew) is another
+// restore's, and reconciles; one well after it is this restore's, and
+// only records restored_at, with no session read.
+func TestAnEpochRecordedWithoutItsRestoreTime(t *testing.T) {
+	t.Run("reconciled before this restore", func(t *testing.T) {
+		e := freshHostEnv(t)
+		legacy(t, e, clockAt(13, 5))
+		rec, err := e.f.Reconcile(context.Background())
+		if err != nil || !reflect.DeepEqual(rec.Resend, []string{"s2"}) {
+			t.Fatalf("reconcile: %+v %v", rec, err)
+		}
+	})
+	t.Run("reconciled after it", func(t *testing.T) {
+		e := freshHostEnv(t)
+		legacy(t, e, clockAt(16, 5))
+		e.clock = clockAt(16, 30)
+		gets := e.hs.gets
+		rec, err := e.f.Reconcile(context.Background())
+		if err != nil || len(rec.Resend) != 0 || e.hs.gets != gets+2 {
+			t.Fatalf("reconcile: %+v %v (%d reads)", rec, err, e.hs.gets-gets)
+		}
+		st, _ := state.Load(e.f.Dirs.StateFile())
+		if re := st.RestoreEpoch; re == nil || !re.RestoredAt.Equal(clockAt(15, 0)) || !re.ReconciledAt.Equal(clockAt(16, 5)) {
+			t.Errorf("recorded %+v, want restored_at 15:00 added", st.RestoreEpoch)
+		}
+	})
+}
+
+// legacy rewrites this client's recorded epoch as a release before
+// restored_at wrote it: the number and the reconcile time only.
+func legacy(t *testing.T, e *env, reconciledAt time.Time) {
+	t.Helper()
+	if err := state.Update(e.f.Dirs, "test", func(s *state.State) error {
+		s.RestoreEpoch = &state.RestoreEpoch{Bank: e.f.Bank, Epoch: 1, ReconciledAt: reconciledAt}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
