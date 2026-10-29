@@ -103,13 +103,21 @@ func (j *Journal) file(t time.Time) string {
 }
 
 // Append writes e as one line, after setting its schema, its seq, its ts
-// (now, unless set) and the common fields it leaves empty. Callers fail
-// open on its error: a lost event never fails a hook or a recall.
+// (now, unless set) and the common fields it leaves empty. An event the
+// ledger folds as it comes (forget, retire, hide, unhide) is stamped
+// after the ledger's watermark: Settle folds only what is newer, a
+// rebuild folds everything, and they must agree. Callers fail open on its
+// error: a lost event never fails a hook or a recall.
 func (j *Journal) Append(e Event) error {
 	now := j.now()
 	e.Schema, e.Seq = Schema, seq.Add(1)
 	if e.TS.IsZero() {
 		e.TS = now.UTC()
+	}
+	if folded(e.Kind) {
+		if l, err := LoadLedger(j.dir); err == nil && !e.TS.After(l.Watermark) {
+			e.TS = l.Watermark.Add(time.Nanosecond)
+		}
 	}
 	fill := func(field *string, v string) {
 		if *field == "" {

@@ -386,3 +386,26 @@ func TestCurrentAppliesRetirementsSinceTheWatermark(t *testing.T) {
 		t.Error("Current wrote the ledger")
 	}
 }
+
+// A retirement journaled at the very instant of the last settle folds at
+// the next one, as a rebuild folds it.
+func TestAnEventAtTheWatermarkFolds(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	writeJournal(t, dir, Event{Kind: KindRetire, TS: at(120), IDs: []string{"m1"}, Verdict: "wrong", Note: "n1"})
+	if _, err := Settle(dir, testParams, at(140)); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := LoadLedger(dir)
+	rebuilt, err := Rebuild(dir, testParams, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+	if live.Memories["m1"].Wrong != 1 {
+		t.Errorf("m1: %+v", live.Memories["m1"])
+	}
+}

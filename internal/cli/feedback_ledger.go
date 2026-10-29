@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
@@ -91,10 +92,14 @@ const (
 
 // checkHidden lifts the hidings the server made moot: an observation with
 // a change in its history after it was hidden is journaled unhide
-// rewritten, one the server no longer holds unhide gone. The longest
-// hidden are read first; any other answer leaves the hiding as it is.
-// Best effort: it returns how many it lifted.
-func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, now time.Time) (lifted int) {
+// rewritten, one the server no longer holds (its history and the memory
+// itself both not found) unhide gone. Any other answer leaves the hiding
+// as it is. The hidings, longest hidden first, are read hiddenChecks at a
+// time from a place that moves on by hiddenChecks every tick period of
+// at (the tick's time, which stamps the events), so each is read within
+// ceil(n/hiddenChecks) ticks. The loop stops once hiddenCheckTimeout has
+// passed on the clock. Best effort: it returns how many it lifted.
+func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, at time.Time) (lifted int) {
 	l, err := feedback.Current(dir)
 	if err != nil {
 		return 0
@@ -109,24 +114,33 @@ func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, no
 			hidden = append(hidden, hiding{id, m.Hidden.Since})
 		}
 	}
+	if len(hidden) == 0 {
+		return 0
+	}
 	slices.SortFunc(hidden, func(a, b hiding) int {
 		if c := a.since.Compare(b.since); c != 0 {
 			return c
 		}
 		return strings.Compare(a.id, b.id)
 	})
+	n := len(hidden)
+	first := int(at.Unix()/int64(livecheck.TickEvery/time.Second)%int64(n)) * hiddenChecks % n
+	deadline := now().Add(hiddenCheckTimeout)
 	ctx, cancel := context.WithTimeout(ctx, hiddenCheckTimeout)
 	defer cancel()
 	j := feedback.NewJournal(dir, feedback.Common{Binary: buildinfo.Version})
-	for _, h := range hidden[:min(len(hidden), hiddenChecks)] {
-		if ctx.Err() != nil {
+	for k := range min(n, hiddenChecks) {
+		if !now().Before(deadline) || ctx.Err() != nil {
 			break
 		}
-		changes, err := cl.History(ctx, bank, h.id)
-		var apiErr *hindsight.APIError
+		h := hidden[(first+k)%n]
 		outcome := ""
+		changes, err := cl.History(ctx, bank, h.id)
 		switch {
-		case errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound:
+		case notFound(err):
+			if _, err := cl.GetMemory(ctx, bank, h.id); !notFound(err) {
+				continue // the memory answers, or the server fails: not known gone
+			}
 			outcome = "gone"
 		case err != nil:
 			continue
@@ -135,9 +149,15 @@ func checkHidden(ctx context.Context, cl *hindsight.Client, bank, dir string, no
 		default:
 			continue
 		}
-		if j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: now.UTC(), IDs: []string{h.id}, Outcome: outcome}) == nil {
+		if j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: at.UTC(), IDs: []string{h.id}, Outcome: outcome}) == nil {
 			lifted++
 		}
 	}
 	return lifted
+}
+
+// notFound: err is the server saying the memory does not exist.
+func notFound(err error) bool {
+	var apiErr *hindsight.APIError
+	return errors.As(err, &apiErr) && apiErr.Kind == hindsight.NotFound
 }

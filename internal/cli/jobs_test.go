@@ -497,6 +497,13 @@ func hideAll(t *testing.T, dir string, at time.Time, ids ...string) {
 	}
 }
 
+// sorted is a sorted copy of s.
+func sorted(s []string) []string {
+	s = slices.Clone(s)
+	slices.Sort(s)
+	return s
+}
+
 // historyCalls counts the history reads the fake server answered.
 func historyCalls() int {
 	n := 0
@@ -509,9 +516,11 @@ func historyCalls() int {
 }
 
 // The tick lifts a hiding the server made moot: an observation rewritten
-// after it was hidden, or gone from the server. One changed only before,
-// or whose history the server fails to give, stays hidden; once lifted, a
-// hiding is not journaled again. With feedback off, nothing is read.
+// after it was hidden, or gone from the server (no history, and no memory
+// either). One changed only before, whose history the server fails to
+// give, or without history but still readable or not readable, stays
+// hidden; once lifted, a hiding is not journaled again. With feedback
+// off, nothing is read.
 func TestHiddenObservationIsLiftedWhenRewritten(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
@@ -524,7 +533,10 @@ func TestHiddenObservationIsLiftedWhenRewritten(t *testing.T) {
 	memoryHistory["o-before"] = change(hidAt.Add(-time.Minute))
 	memoryHistory["o-error"] = change(hidAt.Add(time.Hour))
 	memoryStatus["GET o-error/history"] = http.StatusInternalServerError
-	hideAll(t, dir, hidAt, "o-after", "o-before", "o-gone", "o-error")
+	// No history, yet the memory is there, or its read fails: not gone.
+	memories["o-present"] = `{"id":"o-present","text":"obs","type":"observation","tags":["project:billing"]}`
+	memoryStatus["GET o-flaky"] = http.StatusInternalServerError
+	hideAll(t, dir, hidAt, "o-after", "o-before", "o-gone", "o-error", "o-present", "o-flaky")
 
 	tick := func() tickResult {
 		t.Helper()
@@ -537,18 +549,18 @@ func TestHiddenObservationIsLiftedWhenRewritten(t *testing.T) {
 		}
 		return env.Data
 	}
-	if res := tick(); res.Unhidden != 2 || historyCalls() != 4 {
-		t.Errorf("unhidden %d, %d history reads, want 2 of 4", res.Unhidden, historyCalls())
+	if res := tick(); res.Unhidden != 2 || historyCalls() != 6 {
+		t.Errorf("unhidden %d, %d history reads, want 2 of 6", res.Unhidden, historyCalls())
 	}
-	if want := "rewritten:o-after gone:o-gone"; strings.Join(unhiddenIDs(t, home), " ") != want {
-		t.Errorf("unhide events %q, want %q", unhiddenIDs(t, home), want)
+	if got, want := unhiddenIDs(t, home), "gone:o-gone rewritten:o-after"; strings.Join(sorted(got), " ") != want { // in the order the tick's time reads them
+		t.Errorf("unhide events %q, want %q", got, want)
 	}
 	bankCalls = nil
-	if res := tick(); res.Unhidden != 0 || historyCalls() != 2 || len(unhiddenIDs(t, home)) != 2 {
+	if res := tick(); res.Unhidden != 0 || historyCalls() != 4 || len(unhiddenIDs(t, home)) != 2 {
 		t.Errorf("second tick: unhidden %d, %d history reads, unhides %q", res.Unhidden, historyCalls(), unhiddenIDs(t, home))
 	}
 	l, _ := feedback.LoadLedger(dir)
-	for id, hidden := range map[string]bool{"o-after": false, "o-gone": false, "o-before": true, "o-error": true} {
+	for id, hidden := range map[string]bool{"o-after": false, "o-gone": false, "o-before": true, "o-error": true, "o-present": true, "o-flaky": true} {
 		if (l.Memories[id].Hidden != nil) != hidden {
 			t.Errorf("%s: hidden %+v, want %v", id, l.Memories[id].Hidden, hidden)
 		}
@@ -563,37 +575,52 @@ func TestHiddenObservationIsLiftedWhenRewritten(t *testing.T) {
 	}
 }
 
-// One tick reads at most 20 histories, the longest hidden first, and none
-// once its time is up.
+// One tick reads at most 20 histories, from a place that moves on by 20
+// each tick period: 25 hidings are all read over two ticks. A tick stops
+// reading once its 10 s have passed on the clock.
 func TestHiddenChecksAreCapped(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feedback")
 	start := time.Now().Add(-48 * time.Hour)
 	for i := range 25 {
 		hideAll(t, dir, start.Add(time.Duration(i)*time.Minute), "o"+strconv.Itoa(i))
 	}
+	tick := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
 	var mu sync.Mutex
+	clock, perRead := tick, time.Duration(0)
+	old := now
+	now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	t.Cleanup(func() { now = old })
 	var read []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		read = append(read, strings.TrimSuffix(r.URL.Path[strings.Index(r.URL.Path, "/memories/")+len("/memories/"):], "/history"))
+		clock = clock.Add(perRead)
 		mu.Unlock()
 		_, _ = w.Write([]byte(`[]`))
 	}))
 	t.Cleanup(srv.Close)
 	cl, _ := hindsight.New(srv.URL, "k", 5*time.Second)
-	if n := checkHidden(context.Background(), cl, "b", dir, time.Now()); n != 0 || len(read) != 20 {
-		t.Fatalf("lifted %d, %d reads, want 0 and 20", n, len(read))
+	if n := checkHidden(context.Background(), cl, "b", dir, tick); n != 0 || len(read) != 20 {
+		t.Fatalf("first tick: lifted %d, %d reads, want 0 and 20", n, len(read))
 	}
-	slices.Sort(read)
-	for i := range 20 {
-		if !slices.Contains(read, "o"+strconv.Itoa(i)) {
-			t.Errorf("o%d, among the 20 longest hidden, not read: %v", i, read)
-		}
+	seen := map[string]bool{}
+	for _, id := range read {
+		seen[id] = true
 	}
 	read = nil
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if n := checkHidden(ctx, cl, "b", dir, time.Now()); n != 0 || len(read) != 0 {
-		t.Errorf("out of time: lifted %d, %d reads", n, len(read))
+	if n := checkHidden(context.Background(), cl, "b", dir, tick.Add(15*time.Minute)); n != 0 || len(read) != 20 {
+		t.Fatalf("next tick: lifted %d, %d reads, want 0 and 20", n, len(read))
+	}
+	for _, id := range read {
+		seen[id] = true
+	}
+	if len(seen) != 25 {
+		t.Errorf("two ticks read %d of the 25 hidings", len(seen))
+	}
+
+	// Each read takes 4 s on the clock: the third one ends past 10 s.
+	read, perRead = nil, 4*time.Second
+	if n := checkHidden(context.Background(), cl, "b", dir, tick); n != 0 || len(read) != 3 {
+		t.Errorf("out of time: lifted %d, %d reads, want 0 and 3", n, len(read))
 	}
 }
