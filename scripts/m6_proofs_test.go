@@ -1540,3 +1540,30 @@ func TestM6EpochIsThePCsOwn(t *testing.T) {
 		t.Errorf("no state.json: exit %d, stdout %q, stderr:\n%s", code, stdout, stderr)
 	}
 }
+
+// m6_split_list lists the sessions doctor's split-session check names on
+// a PC, one a line, and nothing when the check is not info: the restore
+// check allows those (and only those) to be re-sent with rs-<who>.
+func TestM6SplitListNamesOnlyDoctorsSplitSessions(t *testing.T) {
+	for _, c := range []struct{ name, check, want string }{
+		{"two", `{"id":"split-session","status":"info","detail":"sp1, sp2"}`, "sp1\nsp2\n"},
+		{"one", `{"id":"split-session","status":"info","detail":"sp1"}`, "sp1\n"},
+		{"ok", `{"id":"split-session","status":"ok","detail":"sp1"}`, ""},
+		{"absent", `{"id":"server-id","status":"ok"}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fake := "#!/bin/sh\nprintf '%s\\n' '{\"ok\":true,\"data\":{\"checks\":[" + c.check + "]}}'\n"
+			if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "bin", "backsight"), []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out, errOut, code := m6Lib(t, dir, m6TestDriver, `m6_split_list b`)
+			if code != 0 || out != c.want {
+				t.Fatalf("exit %d, out %q, want %q (stderr %q)", code, out, c.want, errOut)
+			}
+		})
+	}
+}

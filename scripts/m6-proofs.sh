@@ -549,6 +549,14 @@ m6_split_names() {
     fail "$1's doctor split-session is $c, want info naming $2"
 }
 
+# m6_split_list <who>: the sessions doctor's split-session check names
+# there, one a line; nothing when it is not info.
+m6_split_list() {
+  local out
+  out=$(m6_doctor "$1") || exit 1
+  jq -r '[.data.checks[]? | select(.id == "split-session" and .status == "info")][0].detail // "" | split(", ")[] | select(. != "")' <<<"$out"
+}
+
 # ---- The install chain: A installs the server over real ssh (VM bench).
 
 # m6_install_args [plan]: A's install command, I, in M6_I; with plan, I
@@ -1157,11 +1165,20 @@ m6_tombstoned() {
 # sent a session (rs-a, rs-b): both PCs see the new restore epoch (doctor
 # warns), each one's next tick reconciles and re-sends its own lost
 # session once, and nothing the archive holds (tc-a, tc-b) goes again.
+# A session continued on both PCs (doctor's split-session, left by
+# dedup-split when it ran before) may go again too: its document has no
+# position in the transcript of the PC that did not write last, and
+# dropSession (internal/retain/epoch.go) takes that PC's records there
+# as lost, stored twice rather than lost (decision 0073). Those, and
+# only those, are allowed besides rs-<who>.
 m6_check_restore_across_clients() {
-  local p=bs-m6-restore out rc=0 archive since who sid tick ep new lines n by_a by_b by old_a old_b old meta cur sent
+  local p=bs-m6-restore out rc=0 archive since who sid tick ep new lines n by_a by_b by old_a old_b old meta cur sent splits want
   # Each tick below is counted (one session re-sent, then none): nothing
   # an earlier check left may go out with them.
   m6_settle a b
+  for who in a b; do
+    m6_split_list "$who" > "$M6_WORK/restore-splits-$who" || exit 1
+  done
   # Before the archive: tc-a and tc-b (two-clients) as the server holds
   # them and as each PC's cursor says.
   for who in a b; do
@@ -1237,7 +1254,11 @@ m6_check_restore_across_clients() {
       by=timer sent=$(m6_ticks "$who" "$(cat "$M6_WORK/restore-since-$who")" |
         jq -sc '[.[] | select((.details.epoch // "") | startswith("restore epoch "))][0].details.sessions // {}')
     fi
-    [ "$(jq -r '.sent // 0' <<<"$sent")" = 1 ] || fail "the $by tick that reconciled $who sent $sent, want rs-$who alone"
+    # rs-<who>, and at most the split sessions doctor named before.
+    splits=$(grep -c . "$M6_WORK/restore-splits-$who" || true)
+    want=$(jq -r '.sent // 0' <<<"$sent")
+    [ "$want" -ge 1 ] && [ "$want" -le $((1 + splits)) ] ||
+      fail "the $by tick that reconciled $who sent $sent, want rs-$who and at most the $splits split session(s) ($(paste -sd ' ' "$M6_WORK/restore-splits-$who"))"
     if [ "$who" = a ]; then by_a=$by; else by_b=$by; fi
     # Every tick since the restore, this one too (positive control of the
     # telemetry): one reconciled, and only rs-<who> resumed.
@@ -1247,8 +1268,8 @@ m6_check_restore_across_clients() {
     [ "$n" = 1 ] || fail "$n tick(s) of $who reconciled since the restore, want one: $(paste -sd '|' <<<"$lines")"
     ep=$(grep '^restore epoch ' <<<"$lines")
     case $ep in
-      "restore epoch $old -> $new: 1 session(s) resume from the server"*) ;;
-      *) fail "$who's reconcile: '$ep', want restore epoch $old -> $new: 1 session(s) resume from the server" ;;
+      "restore epoch $old -> $new: $want session(s) resume from the server"*) ;;
+      *) fail "$who's reconcile: '$ep', want restore epoch $old -> $new: $want session(s) resume from the server (what its tick sent)" ;;
     esac
     printf '%s\n' "$ep" > "$M6_WORK/restore-epoch-$who"
   done
