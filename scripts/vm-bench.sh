@@ -602,11 +602,11 @@ m6_on() {
       for a in "$@"; do
         case $a in --ssh | --ssh=*) fail "client B never runs server install --ssh: OpenSSH would use the user's ~/.ssh" ;; esac
       done
+      # Any word "server", wherever it stands: a global flag taking a value
+      # may come before the command.
       for a in "$@"; do
         case $a in
-          -*) ;;
           server) fail "client B never runs a server command (backsight server …): this host's Docker runs the user's own server" ;;
-          *) break ;;
         esac
       done
       vb_b "$VB_DIR/bin/backsight" "$@"

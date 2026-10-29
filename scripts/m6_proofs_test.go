@@ -513,7 +513,7 @@ func TestVMBenchClientBIsIsolated(t *testing.T) {
 	var stderr string
 	var code int
 	for _, words := range []string{"server install --ssh bs@10.0.0.9 --json", "server install --ssh=bs@10.0.0.9 --json", "--json server install --ssh bs@10.0.0.9",
-		"server install --provider mock --json", "server start", "--json server start", "connect --ssh=bs@10.0.0.9", "version --ssh"} {
+		"server install --provider mock --json", "server start", "--json server start", "--config-dir x server start", "connect --ssh=bs@10.0.0.9", "version --ssh"} {
 		_, stderr, code = vmBench(t, fakes, t.TempDir(), bench, `. "`+lib+`"; m6_on b `+words,
 			"CLAUDE_CONFIG_DIR=/home/u/.claude", "XDG_CONFIG_HOME=/home/u/.config", "SSH_AUTH_SOCK=/run/agent")
 		if code == 0 || !strings.Contains(stderr, "client B never runs") {
