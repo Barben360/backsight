@@ -166,8 +166,8 @@ It lists the memories worth a look, from this machine's record of what was shown
 | Section | Lists | Command |
 |---|---|---|
 | Shown often, never used | Memories shown at least 10 times (`feedback.stale_shows`) that Claude never reported using. | `backsight forget <id>` retires one. |
-| Hidden, not rewritten for 7 days | Observations hidden after a report, which the server has not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget <id>` retires one through its facts. |
-| Reported wrong or outdated | Raw facts Claude reported, already invalidated. | `backsight forget <id> --purge` lists what deleting one for good takes; add `--yes` to delete. |
+| Hidden, not rewritten for 7 days | Observations hidden after a report, because the server could not list the facts they are drawn from, and not rewritten since. One hidden for less is not listed: the server may still rewrite it. | `backsight forget --restore <id>` shows one again. Until the server rewrites them they stay hidden from recall; `backsight forget <id>` retires one for good once the server lists its source facts. |
+| Reported wrong or outdated | Raw facts Claude reported, already invalidated. | `backsight forget <id> --purge` alone only lists what deleting one for good would remove; adding `--yes` deletes it. |
 
 `backsight forget --restore <id>` undoes a retirement. The command reads local files only and changes nothing in the memory; `--json` gives the same lists.
 

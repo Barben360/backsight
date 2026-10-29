@@ -88,7 +88,9 @@ func staleOf(l feedback.Ledger, shows int, at time.Time) staleResult {
 		s := staleMemory{ID: id, Shown: m.Shown, LastShown: m.LastShown, Wrong: m.Wrong, Command: "backsight forget " + id}
 		switch {
 		case m.Hidden != nil && at.Sub(m.Hidden.Since) >= staleHidden:
-			s.HiddenSince = m.Hidden.Since
+			// Hidden because the server could not list its source facts:
+			// a forget fails on it until it can, a restore always works.
+			s.HiddenSince, s.Command = m.Hidden.Since, "backsight forget --restore "+id
 			res.Hidden = append(res.Hidden, s)
 		case m.Hidden != nil:
 		case m.Wrong > 0:
@@ -118,9 +120,13 @@ func staleText(r staleResult, at time.Time) string {
 	}
 	var b strings.Builder
 	for _, sec := range []struct {
-		title string
-		ms    []staleMemory
-	}{{"Shown often, never used", r.NeverUsed}, {"Hidden, not rewritten for 7 days", r.Hidden}, {"Reported wrong or outdated", r.Reported}} {
+		title, footer string
+		ms            []staleMemory
+	}{
+		{"Shown often, never used", "", r.NeverUsed},
+		{"Hidden, not rewritten for 7 days", "Hidden from recall until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.", r.Hidden},
+		{"Reported wrong or outdated", "", r.Reported},
+	} {
 		if len(sec.ms) == 0 {
 			continue
 		}
@@ -135,7 +141,14 @@ func staleText(r staleResult, at time.Time) string {
 			}
 			fmt.Fprintf(&b, "%s  shown %d  %s  %s\n", shortID(m.ID), m.Shown, age, m.Command)
 		}
+		if sec.footer != "" {
+			b.WriteString(sec.footer + "\n")
+		}
 	}
-	b.WriteString("\nbacksight forget --restore <id> undoes a retirement.\n")
+	b.WriteString("\nbacksight forget --restore <id> undoes a retirement")
+	if len(r.Reported) > 0 {
+		b.WriteString("; --purge alone only lists what deleting for good would remove, and adding --yes deletes it")
+	}
+	b.WriteString(".\n")
 	return b.String()
 }

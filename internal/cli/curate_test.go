@@ -609,12 +609,13 @@ func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
 		"22222222  shown 15  1d ago  backsight forget " + staleID(2) + "\n" +
 		"11111111  shown 12  3d ago  backsight forget " + staleID(1) + "\n" +
 		"\nHidden, not rewritten for 7 days\n" +
-		"55555555  shown 3  2w ago  backsight forget " + staleID(5) + "\n" +
-		"99999999  shown 1  -  backsight forget " + staleID(9) + "\n" +
+		"55555555  shown 3  2w ago  backsight forget --restore " + staleID(5) + "\n" +
+		"99999999  shown 1  -  backsight forget --restore " + staleID(9) + "\n" +
+		"Hidden from recall until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
 		"\nReported wrong or outdated\n" +
 		"77777777  shown 11  5d ago  backsight forget " + staleID(7) + " --purge\n" +
 		"88888888  shown 2  4d ago  backsight forget " + staleID(8) + " --purge\n" +
-		"\nbacksight forget --restore <id> undoes a retirement.\n"
+		"\nbacksight forget --restore <id> undoes a retirement; --purge alone only lists what deleting for good would remove, and adding --yes deletes it.\n"
 	if code != output.OK || out != want {
 		t.Fatalf("exit %d\n%s%s\nwant\n%s", code, out, errOut, want)
 	}
@@ -627,7 +628,7 @@ func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
 	if got, want := staleIDs(s.Data.NeverUsed), "22222222|backsight forget "+staleID(2)+" 11111111|backsight forget "+staleID(1); got != want {
 		t.Errorf("never_used %q, want %q", got, want)
 	}
-	if got, want := staleIDs(s.Data.Hidden), "55555555|backsight forget "+staleID(5)+" 99999999|backsight forget "+staleID(9); got != want {
+	if got, want := staleIDs(s.Data.Hidden), "55555555|backsight forget --restore "+staleID(5)+" 99999999|backsight forget --restore "+staleID(9); got != want {
 		t.Errorf("hidden %q, want %q", got, want)
 	}
 	if got, want := staleIDs(s.Data.Reported), "77777777|backsight forget "+staleID(7)+" --purge 88888888|backsight forget "+staleID(8)+" --purge"; got != want {
@@ -653,6 +654,13 @@ func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
 	}
 	if _, out, _ := run(t, "memory", "stale"); strings.Contains(out, staleID(7)+" --purge") || !strings.Contains(out, "77777777  shown 11  5d ago  backsight forget "+staleID(7)+"\n") {
 		t.Errorf("a restored fact is still listed as reported:\n%s", out)
+	}
+	// a hidden memory restored as its line says leaves the list
+	if code, out, errOut := run(t, "forget", "--restore", staleID(5)); code != output.OK {
+		t.Fatalf("restore of a hidden memory: exit %d\n%s%s", code, out, errOut)
+	}
+	if _, out, _ := run(t, "memory", "stale"); strings.Contains(out, "55555555") {
+		t.Errorf("a restored hidden memory is still listed:\n%s", out)
 	}
 
 	// nothing to review: one line
@@ -697,5 +705,49 @@ func TestMemoryStaleIsReadOnlyButJournals(t *testing.T) {
 	}
 	if n := len(eventsOf(journalEvents(t, home), "stale")); n != 1 {
 		t.Errorf("%d stale events, the journal was not read-only", n)
+	}
+}
+
+// A hiding is listed from exactly 7 days on; within a section, memories
+// shown as often are in id order; with no reported fact, the footer says
+// nothing of --purge.
+func TestMemoryStaleBoundaryAndOrder(t *testing.T) {
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	l := feedback.Ledger{Memories: map[string]feedback.Entry{
+		"h-exact": {Shown: 1, Hidden: &feedback.Hidden{Since: at.Add(-staleHidden)}},
+		"h-short": {Shown: 1, Hidden: &feedback.Hidden{Since: at.Add(-staleHidden + time.Second)}},
+		"n-b":     {Shown: 10},
+		"n-a":     {Shown: 10},
+		"n-c":     {Shown: 11},
+	}}
+	r := staleOf(l, 10, at)
+	if got := strings.Join(r.ids(), " "); got != "n-c n-a n-b h-exact" {
+		t.Errorf("listed %q, want %q", got, "n-c n-a n-b h-exact")
+	}
+	if text := staleText(r, at); !strings.HasSuffix(text, "\nbacksight forget --restore <id> undoes a retirement.\n") {
+		t.Errorf("footer without a reported fact:\n%s", text)
+	}
+}
+
+// Nothing listed, or feedback off: no stale event, and the list is still
+// shown with feedback off.
+func TestMemoryStaleJournalsNothingWhenEmptyOrOff(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	if code, out, _ := run(t, "memory", "stale"); code != output.OK || !strings.HasPrefix(out, "Nothing needs review") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "stale")); n != 0 {
+		t.Errorf("%d stale events for an empty list", n)
+	}
+	writeStaleLedger(t, home)
+	cfgPath := pathsOf(home).ConfigFile()
+	raw, _ := os.ReadFile(cfgPath)
+	_ = os.WriteFile(cfgPath, append(raw, []byte("\n[feedback]\nenabled = false\n")...), 0o600)
+	if code, out, _ := run(t, "memory", "stale"); code != output.OK || !strings.Contains(out, "22222222  shown 15") {
+		t.Fatalf("feedback off: exit %d\n%s", code, out)
+	}
+	if n := len(eventsOf(journalEvents(t, home), "stale")); n != 0 {
+		t.Errorf("%d stale events with feedback off", n)
 	}
 }
