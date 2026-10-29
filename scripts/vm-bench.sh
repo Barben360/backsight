@@ -9,6 +9,8 @@
 #   scripts/vm-bench.sh reset           both VMs back to bs-m6-clean
 #   scripts/vm-bench.sh down [--purge]  every bs-m6-* domain, snapshot and volume, and VB_DIR
 #                                       but results/ and cache/ (--purge: cache/ too)
+#   scripts/vm-bench.sh run [check…]    reset, the install chain and two-clients, then the
+#                                       checks named (default: all); results/<UTC stamp>.md
 #
 # Run by hand only, when the user asks: never on CI, from a timer or a hook
 # (it refuses when CI or GITHUB_ACTIONS is set). Every libvirt resource it
@@ -525,8 +527,171 @@ vb_status() {
   vb_is_up
 }
 
+# ---- run: the M6 proofs (scripts/m6-proofs.sh) on the bench.
+#
+# The driver: A is bs on bs-m6-client, srv bs on bs-m6-server (tcsh), both
+# through the bench's ssh; B is a client on this host in VB_DIR/client-b,
+# with its own HOME, BACKSIGHT_HOME and Claude Code (cache/), no
+# CLAUDE_CONFIG_DIR, XDG_* or ssh agent, and never server install --ssh
+# (OpenSSH would read the user's ~/.ssh whatever HOME says).
+
+# The checks, in the order of decision 0073 block 4's table.
+VB_CHECKS=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key login-shells two-clients timers)
+
+# vb_remote <sh script>: one word any login shell (tcsh, fish…) hands to
+# sh unchanged: the script travels base64-encoded.
+vb_remote() {
+  printf "sh -c 'eval \"\$(printf %%s %s | base64 -d)\"'" "$(printf '%s' "$1" | base64 -w0)"
+}
+
+vb_b_home() { echo "$VB_DIR/client-b"; }
+vb_b_claude_dir() { echo "$VB_DIR/cache/claude-code-$VB_CLAUDE"; }
+
+# vb_b <cmd…>: cmd as client B, in its home.
+vb_b() {
+  (cd "$(vb_b_home)" && env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+    -u SSH_AUTH_SOCK -u BACKSIGHT_STATE_DIR HOME="$(vb_b_home)" BACKSIGHT_HOME="$(vb_b_home)/backsight" DISABLE_AUTOUPDATER=1 \
+    PATH="$(vb_b_claude_dir)/bin:/usr/local/bin:/usr/bin:/bin" "$@")
+}
+
+# vb_b_claude: B's own Claude Code, CI's pin, installed once under cache/
+# (npm's HOME in work/): connect's client steps run claude.
+vb_b_claude() {
+  local dir
+  dir=$(vb_b_claude_dir)
+  if [ ! -x "$dir/bin/claude" ]; then
+    vb_say "installing Claude Code $VB_CLAUDE for client B in $dir"
+    vb_mkdir "$VB_DIR/work/npm-home" "$VB_DIR/logs"
+    env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME HOME="$VB_DIR/work/npm-home" \
+      npm install -g --prefix "$dir" --allow-scripts=@anthropic-ai/claude-code "@anthropic-ai/claude-code@$VB_CLAUDE" >> "$VB_DIR/logs/run.log" 2>&1 ||
+      vb_fail "npm install of Claude Code for client B failed (see $VB_DIR/logs/run.log)"
+  fi
+  case $(vb_b claude --version 2>> "$VB_DIR/logs/run.log") in
+    "$VB_CLAUDE "*) ;;
+    *) vb_fail "client B's claude is not $VB_CLAUDE ($dir)" ;;
+  esac
+}
+
+m6_home() {
+  case $1 in
+    a | srv) echo /home/bs ;;
+    b) vb_b_home ;;
+    *) fail "no machine $1 (a, b or srv)" ;;
+  esac
+}
+
+m6_sh() {
+  case $1 in
+    a) vb_ssh bs-m6-client-bs "$(vb_remote ". ~/.bs-m6-env 2> /dev/null; $2")" ;;
+    srv) vb_ssh bs-m6-server-bs "$(vb_remote "$2")" ;;
+    b) vb_b sh -c "$2" ;;
+    *) fail "no machine $1 (a, b or srv)" ;;
+  esac
+}
+
+m6_on() {
+  local who=$1 a
+  shift
+  case $who in
+    a) m6_sh a "exec \"\$HOME/backsight\" $(m6_q "$@")" ;;
+    srv) m6_sh srv "exec \"\$HOME/.local/share/backsight/bin/current\" $(m6_q "$@")" ;;
+    b)
+      for a in "$@"; do
+        [ "$a" != --ssh ] || fail "client B never runs server install --ssh: OpenSSH would use the user's ~/.ssh"
+      done
+      vb_b "$VB_DIR/bin/backsight" "$@"
+      ;;
+    *) fail "no machine $who (a, b or srv)" ;;
+  esac
+}
+
+m6_put() { m6_sh "$1" "umask 077 && cat > $(m6_q "$2") && chmod 600 $(m6_q "$2")"; }
+m6_get() { m6_sh "$1" "cat $(m6_q "$2")"; }
+
+m6_link() {
+  [ "$1" = a ] || fail "m6_link: only A's link is cut"
+  vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" "$2" > /dev/null || fail "cannot set A's link $2"
+}
+
+# m6_host_key <new|old>: new gives the server a fresh ed25519 host key,
+# which the bench's known_hosts then trusts besides its own; old puts the
+# bench's key back and drops that trust.
+m6_host_key() {
+  local key
+  case $1 in
+    new)
+      key=$VB_DIR/work/hostkey-new/ssh_host_ed25519_key
+      rm -rf "${key%/*}"
+      vb_mkdir "${key%/*}"
+      ssh-keygen -q -t ed25519 -N '' -C bs-m6-server-new -f "$key"
+      printf 'bs-m6-server %s\n' "$(cut -d' ' -f1,2 < "$key.pub")" >> "$VB_DIR/known_hosts"
+      ;;
+    old) key=$VB_DIR/hostkeys/server/ssh_host_ed25519_key ;;
+    *) fail "m6_host_key new or old" ;;
+  esac
+  vb_ssh bs-m6-server 'sudo install -m 600 /dev/stdin /etc/ssh/ssh_host_ed25519_key' < "$key" &&
+    vb_ssh bs-m6-server 'sudo install -m 644 /dev/stdin /etc/ssh/ssh_host_ed25519_key.pub && sudo systemctl restart ssh' < "$key.pub" ||
+    fail "cannot install the $1 host key on bs-m6-server"
+  if [ "$1" = old ]; then vb_untrust_new_key; fi
+  vb_wait_ssh bs-m6-server-bs
+}
+
+# vb_untrust_new_key: the bench's known_hosts back to the keys it generated.
+vb_untrust_new_key() {
+  local pub=$VB_DIR/work/hostkey-new/ssh_host_ed25519_key.pub
+  [ -s "$pub" ] && [ -s "$VB_DIR/known_hosts" ] || return 0
+  grep -vF "$(cut -d' ' -f1,2 < "$pub")" "$VB_DIR/known_hosts" > "$VB_DIR/known_hosts.tmp" || true
+  mv "$VB_DIR/known_hosts.tmp" "$VB_DIR/known_hosts"
+}
+
+# vb_results_table <jsonl>: one markdown row a check.
+vb_results_table() {
+  printf '| Check | Status | Detail |\n|---|---|---|\n'
+  jq -r '"| \(.check) | \(.status) | \(.detail | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"' "$1"
+}
+
+# vb_run [check…]: reset, then the install chain and two-clients always,
+# then the checks named (all by default) in the table's order, timers
+# last; the first FAIL marks the rest NOT RUN. The table goes to stdout
+# and results/<stamp>.md, the records to results/<stamp>.jsonl.
+vb_run() {
+  local want=("$@") c n stamp failed
+  local order=(ssh-unknown-host-key ssh-dropped-mid-install ssh-install ssh-changed-host-key two-clients)
+  vb_check_dir
+  for n in "${want[@]}"; do
+    [[ " ${VB_CHECKS[*]} " == *" $n "* ]] || vb_refuse "no check $n (${VB_CHECKS[*]})"
+  done
+  [ ${#want[@]} -gt 0 ] || want=("${VB_CHECKS[@]}")
+  for c in "${VB_CHECKS[@]}"; do
+    case $c in ssh-* | two-clients | timers) continue ;; esac
+    [[ " ${want[*]} " != *" $c "* ]] || order+=("$c")
+  done
+  [[ " ${want[*]} " != *" timers "* ]] || order+=(timers)
+  vb_is_up || vb_refuse "the bench is not up (scripts/vm-bench.sh status; up first)"
+  vb_reset
+  vb_mkdir "$VB_DIR/results" "$VB_DIR/work/run" "$VB_DIR/logs"
+  vb_b_claude
+  # shellcheck source=scripts/m6-proofs.sh
+  . "$VB_ROOT/scripts/m6-proofs.sh"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  M6_RESULTS=$VB_DIR/results/$stamp.jsonl M6_WORK=$VB_DIR/work/run M6_ROOT=$VB_ROOT M6_VERSION=$VB_VERSION
+  M6_COMMIT=$(git -C "$VB_ROOT" rev-parse --short HEAD 2> /dev/null || echo unknown)
+  M6_SERVER_IP=$(awk '$1 == "HostName" { print $2; exit }' "$VB_DIR/ssh_config")
+  : > "$M6_RESULTS"
+  # However the run ends, A's link is up and the bench trusts only its keys.
+  trap 'vb_virsh domif-setlink bs-m6-client "$VB_CLIENT_MAC" up > /dev/null 2>&1 || true; vb_untrust_new_key' EXIT
+  for c in "${order[@]}"; do
+    m6_check "$c" "m6_check_${c//-/_}" < /dev/null
+  done
+  vb_results_table "$M6_RESULTS" | tee "$VB_DIR/results/$stamp.md"
+  failed=$(jq -s '[.[] | select(.status == "FAIL")] | length' "$M6_RESULTS")
+  [ "$failed" = 0 ]
+}
+
+fail() { vb_fail "$@"; }
+
 vb_usage() {
-  sed -n '6,11p' "${BASH_SOURCE[0]}" | sed 's/^# //' >&2
+  sed -n '6,13p' "${BASH_SOURCE[0]}" | sed 's/^# //' >&2
   exit 2
 }
 
@@ -543,6 +708,10 @@ vb_main() {
       ;;
     reset) vb_reset ;;
     status) vb_status ;;
+    run)
+      shift
+      vb_run "$@"
+      ;;
     ssh)
       case ${2:-} in
         server | client | server-bs | client-bs) ;;
