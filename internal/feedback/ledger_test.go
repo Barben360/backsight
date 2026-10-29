@@ -27,7 +27,7 @@ func assertSameEntries(t *testing.T, a, b Ledger, tol float64) {
 		case !ok:
 			t.Errorf("%s missing", id)
 		case x.Shown != y.Shown || !x.CreditsAt.Equal(y.CreditsAt) || !x.MissesAt.Equal(y.MissesAt) ||
-			!x.LastShown.Equal(y.LastShown) || !x.LastCredited.Equal(y.LastCredited):
+			!x.LastShown.Equal(y.LastShown) || !x.LastCredited.Equal(y.LastCredited) || !x.UnhiddenAt.Equal(y.UnhiddenAt):
 			t.Errorf("%s: %+v vs %+v", id, x, y)
 		case math.Abs(x.Credits-y.Credits) > tol || math.Abs(x.Misses-y.Misses) > tol:
 			t.Errorf("%s: credits %v vs %v, misses %v vs %v", id, x.Credits, y.Credits, x.Misses, y.Misses)
@@ -360,6 +360,58 @@ func TestLedgerFoldsRetirements(t *testing.T) {
 	raw, _ = os.ReadFile(filepath.Join(dir, "ledger.json"))
 	if strings.Contains(string(raw), `"wrong"`) || strings.Contains(string(raw), `"hidden"`) {
 		t.Errorf("cleared fields still written: %s", raw)
+	}
+}
+
+// An unhide records its time on each entry it clears, whatever its
+// outcome, for a restore here to beat an older hiding elsewhere: Current
+// shows it before a settle, and the rebuilt ledger equals the live one.
+func TestUnhideSetsUnhiddenAt(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, append(sampleSession(),
+		Event{Kind: KindHide, TS: at(20), IDs: []string{"o1", "o2"}, Verdict: "wrong", Note: "n1"},
+		Event{Kind: KindRetire, TS: at(21), IDs: []string{"m1"}, Verdict: "wrong", Note: "n2"},
+	)...)
+	if _, err := Settle(dir, testParams, at(120)); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); strings.Contains(string(raw), "unhidden_at") {
+		t.Errorf("never unhidden, yet: %s", raw)
+	}
+	writeJournal(t, dir,
+		Event{Kind: KindUnhide, TS: at(130), IDs: []string{"o1"}, Outcome: "restored"},
+		Event{Kind: KindUnhide, TS: at(131), IDs: []string{"o2"}, Outcome: "gone"},
+		Event{Kind: KindUnhide, TS: at(132), IDs: []string{"m1"}, Outcome: "rewritten"},
+	)
+	want := map[string]time.Time{"o1": at(130), "o2": at(131), "m1": at(132), "m2": {}}
+	check := func(what string, l Ledger) {
+		t.Helper()
+		for id, ts := range want {
+			if m := l.Memories[id]; !m.UnhiddenAt.Equal(ts) || m.Hidden != nil || m.Wrong != 0 {
+				t.Errorf("%s: %s %+v, want unhidden at %v", what, id, m, ts)
+			}
+		}
+	}
+	cur, err := Current(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("current", cur)
+	if _, err := Settle(dir, testParams, at(140)); err != nil {
+		t.Fatal(err)
+	}
+	live, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("live", live)
+	rebuilt, err := Rebuild(dir, testParams, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, live, rebuilt, 0)
+	if raw, _ := os.ReadFile(filepath.Join(dir, "ledger.json")); !strings.Contains(string(raw), `"unhidden_at":"2026-09-01T11:10:00Z"`) {
+		t.Errorf("ledger.json: %s", raw)
 	}
 }
 
