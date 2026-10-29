@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16">
 <title>How a memory's rank moves</title>
-<desc>Line chart of the boost recall adds to a memory's score against the times it was shown, from 0 to 50, before decay, one uncredited show in three counting as a miss. Never credited: it sinks, toward the lower bound. Credited one time in twenty: it sinks slowly. Credited one time in ten: it stays at zero, neutral. Credited one time in four: it rises slowly. Always credited: it rises fastest, toward the upper bound.</desc>
+<desc>Line chart of the boost recall adds to a memory's score against the times it was shown, from 0 to 50 shows, before decay, one uncredited show in 3 counting as a miss. One line per share of shows credited, with its value at 50 shows: never: it sinks to −0.01; 5 %: it sinks to −0.01; 10 % (neutral): it stays at 0; 25 %: it rises to +0.02; always: it rises to +0.06.</desc>
 <rect width="720" height="400" fill="#0d1117"/>
 <path d="M72 44V336H568" fill="none" stroke="#9198a1" stroke-width="1.5"/>
 <line x1="67" y1="321.4" x2="72" y2="321.4" stroke="#9198a1" stroke-width="1.5"/>

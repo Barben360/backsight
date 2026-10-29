@@ -92,9 +92,7 @@ func CurveSVG(p Params, theme string) []byte {
 	fmt.Fprintf(&s, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" font-family="%s" font-size="%d">`+"\n",
 		curveWidth, curveHeight, curveWidth, curveHeight, curveFont, curveFontSize)
 	s.WriteString("<title>How a memory's rank moves</title>\n")
-	s.WriteString("<desc>Line chart of the boost recall adds to a memory's score against the times it was shown, from 0 to 50, before decay, " +
-		"one uncredited show in three counting as a miss. Never credited: it sinks, toward the lower bound. Credited one time in twenty: it sinks slowly. " +
-		"Credited one time in ten: it stays at zero, neutral. Credited one time in four: it rises slowly. Always credited: it rises fastest, toward the upper bound.</desc>\n")
+	fmt.Fprintf(&s, "<desc>%s</desc>\n", curveDesc(p))
 	fmt.Fprintf(&s, `<rect width="%d" height="%d" fill="%s"/>`+"\n", curveWidth, curveHeight, c.bg)
 
 	// Axes, ticks and their labels.
@@ -106,7 +104,7 @@ func CurveSVG(p Params, theme string) []byte {
 		fmt.Fprintf(&s, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" stroke-width="1.5"/>`+"\n",
 			num(curveLeft-5), num(ty), num(curveLeft), num(ty), c.axis)
 		fmt.Fprintf(&s, `<text x="%s" y="%s" fill="%s" text-anchor="end">%s</text>`+"\n",
-			num(curveLeft-9), num(ty+5.5), c.text, tick(i))
+			num(curveLeft-9), num(ty+5.5), c.text, signed(v))
 	}
 	for n := 0; n <= curveMaxShown; n += 10 {
 		fmt.Fprintf(&s, `<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" stroke-width="1.5"/>`+"\n",
@@ -160,13 +158,33 @@ func spread(ys []float64, gap, bottom float64) []float64 {
 	return out
 }
 
-// tick is the y label of i × 0.02: a real minus sign, a plus sign above 0.
-func tick(i int) string {
-	switch {
-	case i < 0:
-		return fmt.Sprintf("−%.2f", float64(-i)*0.02)
-	case i > 0:
-		return fmt.Sprintf("+%.2f", float64(i)*0.02)
+// curveDesc is the chart in words, from its data: the axes, the miss
+// share, and each line's way and value at curveMaxShown.
+func curveDesc(p Params) string {
+	ends := make([]string, len(curveLines))
+	for i, line := range curveLines {
+		switch b := curveBoost(p, line.rate, curveMaxShown); {
+		case math.Abs(b) <= 1e-12:
+			ends[i] = line.label + ": it stays at 0"
+		case b > 0:
+			ends[i] = line.label + ": it rises to " + signed(b)
+		default:
+			ends[i] = line.label + ": it sinks to " + signed(b)
+		}
+	}
+	return fmt.Sprintf("Line chart of the boost recall adds to a memory's score against the times it was shown, from 0 to %d shows, before decay, "+
+		"one uncredited show in %d counting as a miss. One line per share of shows credited, with its value at %d shows: %s.",
+		curveMaxShown, curveMissEvery, curveMaxShown, strings.Join(ends, "; "))
+}
+
+// signed is v with 2 decimals: a real minus sign, a plus sign above 0,
+// and 0 for what rounds to it.
+func signed(v float64) string {
+	switch r := math.Round(v*100) / 100; {
+	case r < 0:
+		return fmt.Sprintf("−%.2f", -r)
+	case r > 0:
+		return fmt.Sprintf("+%.2f", r)
 	}
 	return "0"
 }

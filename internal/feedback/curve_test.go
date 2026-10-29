@@ -224,18 +224,43 @@ func TestCurveIsStable(t *testing.T) {
 	}
 }
 
-// The README and how-it-works.md show the chart as the logo is shown: one
-// image per GitHub theme.
+// The README shows the chart as the logo is shown, one image per GitHub
+// theme, under the heading how-it-works.md links to (embedded for the
+// guide, it holds no image).
 func TestReadmeUsesThemeFragments(t *testing.T) {
-	for file, prefix := range map[string]string{"../../README.md": "docs/assets/", "../../docs/how-it-works.md": "assets/"} {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"docs/assets/feedback-curve-light.svg#gh-light-mode-only", "docs/assets/feedback-curve-dark.svg#gh-dark-mode-only", "\n## How memory learns what helps\n"} {
+		if !bytes.Contains(readme, []byte(s)) {
+			t.Errorf("README.md: no %q", s)
 		}
-		for _, s := range []string{prefix + "feedback-curve-light.svg#gh-light-mode-only", prefix + "feedback-curve-dark.svg#gh-dark-mode-only"} {
-			if !bytes.Contains(raw, []byte(s)) {
-				t.Errorf("%s: no %q", file, s)
-			}
+	}
+	doc, err := os.ReadFile("../../docs/how-it-works.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url := "https://github.com/Barben360/backsight#how-memory-learns-what-helps"; !bytes.Contains(doc, []byte(url)) {
+		t.Errorf("docs/how-it-works.md: no link %s", url)
+	}
+}
+
+// The description says, line by line, what the data draws: each label
+// with the way its line goes and where it ends.
+func TestCurveDescribesItsData(t *testing.T) {
+	p := defaultCurveParams()
+	svg := string(CurveSVG(p, "light"))
+	m := regexp.MustCompile(`<desc>([^<]+)</desc>`).FindStringSubmatch(svg)
+	if m == nil {
+		t.Fatal("no desc")
+	}
+	desc := m[1]
+	for _, s := range []string{"from 0 to 50 shows", "one uncredited show in 3",
+		"never: it sinks to −0.01", "5 %: it sinks to −0.01", "10 % (neutral): it stays at 0",
+		"25 %: it rises to +0.02", "always: it rises to +0.06"} {
+		if !strings.Contains(desc, s) {
+			t.Errorf("desc %q: no %q", desc, s)
 		}
 	}
 }
