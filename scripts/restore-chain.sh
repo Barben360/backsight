@@ -19,6 +19,11 @@ rc_key() { rc_toml api_key "$BACKSIGHT_HOME/config/secrets.toml"; }
 # (it turns xtrace off for good in the shell it runs in).
 rc_auth() { { set +x; } 2>/dev/null; printf 'header = "Authorization: Bearer %s"\n' "$(rc_key)"; }
 
+# rc_cursor <sid>: that session's cursor, what was sent of it, without
+# its pending first-segment checks (replaces): a tick drops those on a
+# restore epoch change, which sends nothing.
+rc_cursor() { jq -cS 'del(.replaces)' "$BACKSIGHT_HOME/state/cursors/$1.json"; }
+
 # rc_session <sid> [project]: a settled three-record session (two hours
 # old, so the tick's 30-minute wait is over) in the scratch profile's
 # transcripts, in directory ~/work/<project> (default restore-proof).
@@ -158,7 +163,7 @@ rc_restore_resends() {
   [[ $before =~ ^[0-9]+\ [0-9]+\ $lost-r3$ ]] || fail "session $lost on the server before the restore: '$before', want its 3 records up to $lost-r3"
   if [ -n "$kept" ]; then
     kept_meta=$(rc_meta "$kept")
-    kept_cursor=$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$kept.json")
+    kept_cursor=$(rc_cursor "$kept")
     [[ $kept_meta =~ ^[0-9]+\ [0-9]+\ $kept-r3$ ]] || fail "session $kept on the server before the restore: '$kept_meta'"
   fi
   if [ -n "$live" ]; then
@@ -167,7 +172,7 @@ rc_restore_resends() {
     [[ $live_before =~ ^2\ [0-9]+\ $live-r[0-9]+$ ]] || fail "live session $live on the server before the restore: '$live_before', want segment 2"
     resend=2
   fi
-  lost_cursor=$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$lost.json")
+  lost_cursor=$(rc_cursor "$lost")
   rc_epoch_before=$(jq -r '.restore_epoch.epoch // 0' "$BACKSIGHT_HOME/state/state.json")
 
   # shellcheck disable=SC2086 # RESTORE_ARGS is a word list
@@ -194,9 +199,9 @@ rc_restore_resends() {
   jq -e --argjson from "$rc_epoch_before" --argjson to "$rc_epoch_after" --argjson n "$resend" \
     '.ok and .data.status == "done" and (.data.epoch | startswith("restore epoch \($from) -> \($to): \($n) session")) and .data.sessions.sent == 1' "$work/tick-$tag.json" >/dev/null ||
     { cat "$work/tick-$tag.json" >&2; fail "jobs tick did not reconcile $resend session(s) and re-send exactly one"; }
-  [ "$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$lost.json")" != "$lost_cursor" ] || fail "session $lost's cursor did not move: not re-sent"
+  [ "$(rc_cursor "$lost")" != "$lost_cursor" ] || fail "session $lost's cursor did not move: not re-sent"
   if [ -n "$kept" ]; then
-    [ "$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$kept.json")" = "$kept_cursor" ] || fail "session $kept, held by the backup, was sent again"
+    [ "$(rc_cursor "$kept")" = "$kept_cursor" ] || fail "session $kept, held by the backup, was sent again"
     m=$(rc_meta "$kept")
     [ "$m" = "$kept_meta" ] || fail "session $kept changed on the server: $m, was $kept_meta"
   fi
@@ -219,12 +224,12 @@ rc_restore_resends() {
 
   # Once: the next tick sends nothing more. It must have run the sessions
   # (a skipped tick would send nothing either).
-  lost_cursor=$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$lost.json")
+  lost_cursor=$(rc_cursor "$lost")
   "$bin" jobs tick --json > "$work/tick-again-$tag.json" || { cat "$work/tick-again-$tag.json" >&2; fail "the second jobs tick failed"; }
   jq -e '.ok and .data.status == "done" and (.data.sessions | type == "object" and (to_entries | map(.value) | add) >= 1) and
     (.data.sessions.sent // 0) == 0 and ((.data.epoch // "") == "")' "$work/tick-again-$tag.json" >/dev/null ||
     { cat "$work/tick-again-$tag.json" >&2; fail "the second jobs tick sent again or did not run"; }
-  [ "$(jq -cS . "$BACKSIGHT_HOME/state/cursors/$lost.json")" = "$lost_cursor" ] || fail "session $lost's cursor moved on the second tick"
+  [ "$(rc_cursor "$lost")" = "$lost_cursor" ] || fail "session $lost's cursor moved on the second tick"
   rc_queue_wait
   m=$(rc_meta "$lost")
   [ "$m" = "$before" ] || fail "session $lost changed after the second tick: $m"

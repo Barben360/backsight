@@ -206,3 +206,31 @@ func TestFreshInstallKeepsTheKeyOffCurlsArgv(t *testing.T) {
 		t.Errorf("%d curl calls take the key from -K, want 4 (llm_calls, the tombstones read, banks_status_raw, the stats read)", k)
 	}
 }
+
+// The restore chain compares what was sent of a session (its cursor), not
+// the pending first-segment checks a tick drops on a restore epoch change
+// without sending anything (fresh-install failed on that since e32b2fc).
+func TestRestoreChainCursorIgnoresPendingChecks(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "state", "cursors")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"marked":  `{"offset":120,"last_uuid":"r3","replaces":{"":{"document":"conversation:s1","epoch":0}}}`,
+		"dropped": `{"last_uuid":"r3","offset":120}`,
+		"moved":   `{"last_uuid":"r4","offset":180}`,
+	} {
+		writeLines(t, filepath.Join(dir, name+".json"), body)
+	}
+	cmd := exec.Command("bash", "-c", `set -euo pipefail; . "$1"; rc_cursor marked; rc_cursor dropped; rc_cursor moved`, "x", mustAbs(t, "restore-chain.sh"))
+	cmd.Env = append(os.Environ(), "BACKSIGHT_HOME="+home)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(l) != 3 || l[0] != l[1] || l[1] == l[2] {
+		t.Errorf("cursors %q: want marked = dropped (the check is not a send), moved apart", l)
+	}
+}
