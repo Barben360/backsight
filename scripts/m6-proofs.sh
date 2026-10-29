@@ -352,9 +352,12 @@ m6_flush() {
 # m6_cursor <who> <sid>: the session's cursor there (JSON), empty when it
 # has none.
 m6_cursor() {
-  local c
+  local c out
   c=$(m6_paths "$1" | jq -r .state)/cursors/$2.json
-  m6_sh "$1" "if [ -e $(m6_q "$c") ]; then cat $(m6_q "$c"); fi" || fail "cannot read $1's cursor of $2"
+  out=$(m6_sh "$1" "if [ -e $(m6_q "$c") ]; then cat $(m6_q "$c"); fi") || fail "cannot read $1's cursor of $2"
+  # Without its pending first-segment checks: a restore's reconcile drops
+  # them without sending anything (as restore-chain.sh's rc_cursor).
+  [ -z "$out" ] || jq -cS 'del(.replaces)' <<<"$out"
 }
 
 # m6_flush_sent <who> <sid> <uuid>: flushes the session there until its
@@ -521,11 +524,17 @@ m6_banks_code() {
   printf '%s\n' "$code"
 }
 
-# m6_cursors <who>: "<sha256>  ./<sid>.json" for every cursor there, sorted.
+# m6_cursors <who>: "<sha256>  ./<sid>.json" for every cursor there,
+# sorted, each hashed as m6_cursor reads it (without its pending
+# first-segment checks, which a tick confirms without sending).
 m6_cursors() {
-  local c
+  local c names f
   c=$(m6_paths "$1" | jq -r .state)/cursors
-  m6_sh "$1" "cd $(m6_q "$c") && find . -maxdepth 1 -type f -name '*.json' | sort | xargs -r sha256sum" || fail "cannot read $1's cursors"
+  names=$(m6_sh "$1" "cd $(m6_q "$c") && find . -maxdepth 1 -type f -name '*.json' | sort") || fail "cannot read $1's cursors"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s  %s\n' "$(m6_cursor "$1" "$(basename "$f" .json)" | sha256sum | cut -d' ' -f1)" "$f"
+  done <<<"$names"
 }
 
 # m6_outbox <who>: how many notes wait in that PC's outbox.

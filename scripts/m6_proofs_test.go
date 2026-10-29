@@ -1567,3 +1567,76 @@ func TestM6SplitListNamesOnlyDoctorsSplitSessions(t *testing.T) {
 		})
 	}
 }
+
+// m6_cursor is a session's cursor without its pending first-segment
+// checks (replaces): a restore's reconcile drops those without sending,
+// and a check comparing cursors must not read that as a send. A missing
+// cursor stays empty.
+func TestM6CursorLeavesOutPendingReplaces(t *testing.T) {
+	dir := t.TempDir()
+	fake := "#!/bin/sh\nprintf '%s\\n' '{\"ok\":true,\"data\":{\"state\":\"'\"$HOME\"'/state\"}}'\n"
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "backsight"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cursors := filepath.Join(dir, "a", "state", "cursors")
+	if err := os.MkdirAll(cursors, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	with := `{"last_uuid":"x3","segment":1,"replaces":{"conversation:s1":{"sent_at":"2026-10-29T09:00:00Z"}}}`
+	without := `{"last_uuid":"x3","segment":1}`
+	if err := os.WriteFile(filepath.Join(cursors, "s1.json"), []byte(with), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cursors, "s2.json"), []byte(without), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := m6Lib(t, dir, m6TestDriver, `[ "$(m6_cursor a s1)" = "$(m6_cursor a s2)" ] || { echo "differ: $(m6_cursor a s1) / $(m6_cursor a s2)"; exit 1; }
+[ "$(m6_cursor a s1 | jq -r .last_uuid)" = x3 ] || { echo "no last_uuid"; exit 1; }
+[ -z "$(m6_cursor a none)" ] || { echo "a missing cursor is not empty"; exit 1; }`)
+	if code != 0 {
+		t.Fatalf("exit %d: %s %s", code, out, errOut)
+	}
+}
+
+// m6_cursors hashes each cursor as m6_cursor reads it: a pending
+// first-segment check confirmed by a tick changes no hash, a sent record
+// does.
+func TestM6CursorsHashWithoutPendingReplaces(t *testing.T) {
+	dir := t.TempDir()
+	fake := "#!/bin/sh\nprintf '%s\\n' '{\"ok\":true,\"data\":{\"state\":\"'\"$HOME\"'/state\"}}'\n"
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "backsight"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cursors := filepath.Join(dir, "a", "state", "cursors")
+	if err := os.MkdirAll(cursors, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(body string) {
+		if err := os.WriteFile(filepath.Join(cursors, "s1.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hash := func() string {
+		out, errOut, code := m6Lib(t, dir, m6TestDriver, `m6_cursors a`)
+		if code != 0 || !strings.HasSuffix(strings.TrimSpace(out), "  ./s1.json") {
+			t.Fatalf("exit %d: %q %s", code, out, errOut)
+		}
+		return out
+	}
+	write(`{"last_uuid":"x3","replaces":{"conversation:s1":{"sent_at":"2026-10-29T09:00:00Z"}}}`)
+	pending := hash()
+	write(`{"last_uuid":"x3"}`)
+	if confirmed := hash(); confirmed != pending {
+		t.Fatalf("a confirmed check changed the hash: %q, was %q", confirmed, pending)
+	}
+	write(`{"last_uuid":"x4"}`)
+	if sent := hash(); sent == pending {
+		t.Fatalf("a sent record left the hash unchanged: %q", sent)
+	}
+}
