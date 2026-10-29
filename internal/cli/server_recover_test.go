@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -366,6 +367,103 @@ func TestLateServerStartBacksOffAndResets(t *testing.T) {
 	}
 }
 
+// A successful server start (the one spawned, or the user's) ends the
+// streak: after a 6 h wait, the server comes up and later goes down again
+// (a reboot with the address late), and the next look starts it at once.
+func TestServerStartEndsTheBackoff(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for {
+		withClock(t, at)
+		startLateServer(context.Background(), d, cfg)
+		b, _ := readStartBackoff(t, d)
+		if b.NextAt.Sub(at) == 6*time.Hour {
+			break
+		}
+		at = b.NextAt
+	}
+	streak := len(fx.spawns)
+	deployFile(t, fx.home, server.HindsightImage) // on this binary's pin
+	withCompose(t)
+	if code, out, errOut := run(t, "server", "start"); code != output.OK {
+		t.Fatalf("server start: exit %d\n%s%s", code, out, errOut)
+	}
+	if _, ok := readStartBackoff(t, d); ok {
+		t.Fatal("the backoff survived a successful server start")
+	}
+	composeRunner = fx.ps // down again
+	withClock(t, at.Add(5*time.Hour))
+	if startLateServer(context.Background(), d, cfg); len(fx.spawns) != streak+1 {
+		t.Errorf("down again within the old wait: %d spawn(s), want 1", len(fx.spawns)-streak)
+	}
+}
+
+// If the backoff cannot be recorded, the server is started all the same
+// (a bookkeeping failure never keeps it down), and the log says so.
+func TestLateServerStartsWhenItsBackoffCannotBeRecorded(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory where the file goes: unwritable, unreadable.
+	if err := os.MkdirAll(filepath.Join(d.State, "server-start-backoff.json", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withClock(t, time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC))
+	got := startLateServer(context.Background(), d, cfg)
+	if len(fx.spawns) != 1 || !strings.Contains(got, "server start spawned") || !strings.Contains(got, "backoff") {
+		t.Fatalf("spawns %q, result %q", fx.spawns, got)
+	}
+	raw, _ := os.ReadFile(filepath.Join(d.State, "logs", "server-start.log"))
+	if !strings.Contains(string(raw), "backoff") {
+		t.Errorf("server-start.log does not say the backoff was not recorded:\n%s", raw)
+	}
+}
+
+// An unreadable backoff file starts the count over: the start is made and
+// the file holds the first attempt.
+func TestUnreadableStartBackoffStartsOver(t *testing.T) {
+	fx := recoverHost(t)
+	d := pathsOf(fx.home)
+	cfg, err := config.Load(d.ConfigFile(), d, fx.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	_ = os.MkdirAll(d.State, 0o700)
+	if err := os.WriteFile(filepath.Join(d.State, "server-start-backoff.json"), []byte(`{"attempts":4,"next_at":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startLateServer(context.Background(), d, cfg)
+	if b, _ := readStartBackoff(t, d); len(fx.spawns) != 1 || b.Attempts != 1 || !b.NextAt.Equal(at.Add(15*time.Minute)) {
+		t.Errorf("spawns %q, backoff %+v", fx.spawns, b)
+	}
+}
+
+// jobs tick goes through the backoff: a start at t0, none at t0+10 min,
+// the next at t0+15 min.
+func TestTickBacksOffALateServerStart(t *testing.T) {
+	fx := recoverHost(t)
+	t0 := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	for _, s := range []struct {
+		after time.Duration
+		want  int
+	}{{0, 1}, {10 * time.Minute, 1}, {15 * time.Minute, 2}} {
+		withClock(t, t0.Add(s.after))
+		if _, out, errOut := run(t, "jobs", "tick"); len(fx.spawns) != s.want {
+			t.Fatalf("t0+%s: %d spawn(s) in all, want %d\n%s%s", s.after, len(fx.spawns), s.want, out, errOut)
+		}
+	}
+}
+
 // server-start.log over 1 MiB moves to server-start.log.1 (replacing an
 // earlier one) before the next start writes to it; at 1 MiB it stays.
 func TestServerStartLogRotates(t *testing.T) {
@@ -409,5 +507,26 @@ func TestServerStartLogRotates(t *testing.T) {
 	}
 	if n := lines(log); n != 1 {
 		t.Errorf("new server-start.log holds %d lines, want 1", n)
+	}
+
+	// The rename fails (server-start.log.1 a non-empty directory): the
+	// start is still made, its line appended; the next start rotates.
+	_ = os.Remove(log + ".1")
+	_ = os.MkdirAll(filepath.Join(log+".1", "x"), 0o700)
+	if err := os.WriteFile(log, []byte(full+"y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := spawnServerStart(d); err != nil {
+		t.Fatalf("a failed rotation stopped the start: %v", err)
+	}
+	if fi, err := os.Stat(log); err != nil || fi.Size() <= 1<<20+1 {
+		t.Fatalf("not appended to the unrotated log: %v %v", fi, err)
+	}
+	_ = os.RemoveAll(log + ".1")
+	if err := spawnServerStart(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log + ".1"); err != nil || lines(log) != 1 {
+		t.Errorf("the next start did not rotate: %v, %d lines", err, lines(log))
 	}
 }

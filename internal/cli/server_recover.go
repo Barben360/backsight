@@ -137,8 +137,9 @@ func addressHere(ip net.IP) (bool, error) {
 // appended to the logs directory's server-start.log (moved to
 // server-start.log.1 first once over serverStartLogMax); it never waits.
 // server start takes the server lock and refuses during maintenance or a
-// pending restore: a start then simply exits.
-func spawnServerStart(d paths.Dirs) error {
+// pending restore: a start then simply exits. Each note is a line of the
+// log after the start's own.
+func spawnServerStart(d paths.Dirs, notes ...string) error {
 	dir := filepath.Join(d.State, "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -155,6 +156,9 @@ func spawnServerStart(d paths.Dirs) error {
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = fmt.Fprintf(f, "%s: starting the server, its private address is on this machine\n", now().UTC().Format(time.RFC3339))
+	for _, n := range notes {
+		_, _ = fmt.Fprintf(f, "%s: %s\n", now().UTC().Format(time.RFC3339), n)
+	}
 	return spawnLogged(f, "server", "start")
 }
 
@@ -188,18 +192,24 @@ func startLateServer(ctx context.Context, d paths.Dirs, cfg config.Config) strin
 	if !start {
 		return ""
 	}
-	// Recorded before the spawn: a start that cannot be counted is not
-	// made, or a failing one would be repeated at every look.
+	// Recorded before the spawn. A start that cannot be counted is made
+	// all the same, and said: a bookkeeping failure never keeps the
+	// server down (the stamp and the tick's period still bound the looks).
 	b.Attempts++
 	b.NextAt = now().UTC().Add(startWait(b.Attempts))
 	raw, _ := json.Marshal(b)
+	var notes []string
 	if err := fsutil.WriteAtomic(path, raw, 0o600); err != nil {
-		return "server start not spawned, its backoff cannot be recorded: " + err.Error()
+		notes = append(notes, "its backoff cannot be recorded, the next look starts it again: "+err.Error())
 	}
-	if err := spawnServerStart(d); err != nil {
+	if err := spawnServerStart(d, notes...); err != nil {
 		return "server start failed to spawn: " + err.Error()
 	}
-	return "server start spawned (" + why + ")"
+	got := "server start spawned (" + why + ")"
+	for _, n := range notes {
+		got += "; " + n
+	}
+	return got
 }
 
 // startLateServer, in SessionStart: at most every serverCheckEvery per

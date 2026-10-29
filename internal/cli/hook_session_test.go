@@ -342,13 +342,17 @@ func TestNoBriefingPageIsCreatedOnAnotherServer(t *testing.T) {
 }
 
 // briefingAcrossConnect fires SessionStart for billing, which has memories
-// and no page, with the sends seam set: raise makes it raise the sends
-// generation once the hook loaded its config, as a whole connect then
-// would. It returns the hook's output and whether the seam ran.
-func briefingAcrossConnect(t *testing.T, raise bool) (hookOut, bool) {
+// and, when page is not "", that briefing page, with the sends seam set:
+// raise makes it raise the sends generation once the hook loaded its
+// config, as a whole connect then would. It returns the hook's output and
+// whether the seam ran.
+func briefingAcrossConnect(t *testing.T, raise bool, page string) (hookOut, bool) {
 	t.Helper()
 	home := hookHome(t)
 	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
+	if page != "" {
+		mentalModels[briefingModelID("billing")] = pageJSON(briefingModelID("billing"), page)
+	}
 	ran := false
 	old := sendsConfigLoaded
 	sendsConfigLoaded = func() {
@@ -379,15 +383,24 @@ func mentalPosts() int {
 // briefing (a read), but creates no page: that write would go to the old
 // server.
 func TestBriefingPageWaitsAcrossConnect(t *testing.T) {
-	h, ran := briefingAcrossConnect(t, true)
+	h, ran := briefingAcrossConnect(t, true, "")
 	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 0 {
+		t.Errorf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+}
+
+// Reading the page stays ungated: across a connect, an existing page is
+// still the briefing (a read from the old server does no harm).
+func TestBriefingPageStillReadAcrossConnect(t *testing.T) {
+	h, ran := briefingAcrossConnect(t, true, "## In force\n- Billing exports run on Fridays.")
+	if !ran || !strings.Contains(h.Specific.Context, "Billing exports run on Fridays.") || strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 0 {
 		t.Errorf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
 	}
 }
 
 // The control: nothing moved, the page is created once.
 func TestBriefingPageCreatedWhenNothingMoved(t *testing.T) {
-	h, ran := briefingAcrossConnect(t, false)
+	h, ran := briefingAcrossConnect(t, false, "")
 	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 1 {
 		t.Errorf("seam ran %v, page creations %d (want 1), context %q", ran, mentalPosts(), h.Specific.Context)
 	}

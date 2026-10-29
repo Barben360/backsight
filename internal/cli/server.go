@@ -561,6 +561,10 @@ func newServerStartCmd(e *env) *cobra.Command {
 			if err := rt.Start(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
+			// The server is up (compose waited for it): a late-address
+			// start that fails again later is tried at once, not after
+			// the wait a streak of failed starts left (startLateServer).
+			_ = os.Remove(filepath.Join(d.State, serverStartBackoff))
 			if keyStep {
 				if _, err := waitHealthy(cmd.Context(), rt, cfg, sec); err != nil {
 					return redacted(fmt.Errorf("started, but not healthy on its API key (%w): the "+m.Command+" stays unfinished (%s)", err, d.RestoreMarker()), sec)
