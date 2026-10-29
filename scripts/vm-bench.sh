@@ -43,7 +43,9 @@ vb_refuse() { printf 'bs-m6: %s\n' "$*" >&2; exit 2; }
 # vb_owned <name>: 0 iff the name is the bench's. The one gate of down.
 vb_owned() { [[ $1 =~ ^bs-m6-[a-z0-9.-]+$ ]]; }
 
-vb_virsh() { LC_ALL=C virsh -c "$VB_URI" "$@"; }
+# Its stdin is /dev/null: no virsh call reads one, and a loop reading names
+# from its own stdin must keep them.
+vb_virsh() { LC_ALL=C virsh -c "$VB_URI" "$@" < /dev/null; }
 
 # vb_vm <server|client|bs-m6-…>: the VM's short name.
 vb_vm() {
@@ -94,10 +96,12 @@ vb_volumes() {
   printf '%s\n' "$out" | awk 'NR > 2 && NF { print $1 }'
 }
 
-# The bench directory must be named bs-m6: down empties it, so a
-# BS_M6_DIR pointed elsewhere by mistake must lose nothing.
+# The bench directory must be named bs-m6 and not be a symlink: down
+# empties it, so a BS_M6_DIR pointed elsewhere by mistake, or a bs-m6 link
+# to another directory, must lose nothing.
 vb_check_dir() {
   [ "${VB_DIR##*/}" = bs-m6 ] || vb_refuse "the bench directory must be named bs-m6, not $VB_DIR (BS_M6_DIR)"
+  [ ! -L "$VB_DIR" ] || vb_refuse "the bench directory $VB_DIR is a symlink: it must be a directory of its own"
 }
 
 vb_mkdir() { (umask 077 && mkdir -p "$@"); }
@@ -233,14 +237,14 @@ vb_preflight() {
   grep -Eq '^Active: +yes$' <<<"$(vb_virsh net-info "$VB_NET")" || vb_refuse "the libvirt network $VB_NET is not active ($VB_URI)"
   grep -Eq '^State: +running$' <<<"$(vb_virsh pool-info --bytes "$VB_POOL")" || vb_refuse "the libvirt pool $VB_POOL is not active ($VB_URI)"
   names=$(vb_domains) || exit
-  for n in $names; do
+  while IFS= read -r n; do
     if vb_owned "$n"; then owned+=("$n"); fi
-  done
+  done <<<"$names"
   [ ${#owned[@]} -eq 0 ] || vb_refuse "a bench exists (${owned[*]}): run reset or down"
   names=$(vb_volumes) || exit
-  for n in $names; do
+  while IFS= read -r n; do
     if vb_owned "$n"; then owned+=("$n"); fi
-  done
+  done <<<"$names"
   [ ${#owned[@]} -eq 0 ] || vb_refuse "leftover bench volumes in $VB_POOL (${owned[*]}): run down"
   mem=$(awk '/^MemAvailable:/ { print $2 }' "${VB_MEMINFO:-/proc/meminfo}")
   [ "${mem:-0}" -ge $((16 * 1024 * 1024)) ] || vb_refuse "MemAvailable is $((${mem:-0} / 1024)) MiB, the bench needs 16 GiB"
@@ -329,6 +333,7 @@ vb_wait_ip() {
 # vb_wait_ssh <host>: the bench's ssh answers (5 min).
 vb_wait_ssh() {
   local deadline=$((SECONDS + 300))
+  vb_mkdir "$VB_DIR/logs" # ssh's stderr goes there: a failed redirection is a failed try
   until vb_ssh "$1" true < /dev/null 2>> "$VB_DIR/logs/ssh.log"; do
     [ $SECONDS -lt $deadline ] || vb_fail "no ssh to $1 after 5 min (see $VB_DIR/logs/ssh.log)"
     sleep 5
@@ -439,7 +444,7 @@ vb_down() {
   esac
   vb_check_dir
   names=$(vb_domains) || exit
-  for n in $names; do
+  while IFS= read -r n; do
     vb_owned "$n" || continue
     # destroy fails on a domain that is not running: then it must be off.
     if ! vb_virsh destroy "$n" > /dev/null 2>&1; then
@@ -447,13 +452,13 @@ vb_down() {
     fi
     vb_virsh undefine "$n" --nvram --snapshots-metadata > /dev/null || vb_fail "cannot undefine $n"
     echo "bs-m6: removed domain $n"
-  done
+  done <<<"$names"
   names=$(vb_volumes) || exit
-  for n in $names; do
+  while IFS= read -r n; do
     vb_owned "$n" || continue
     vb_virsh vol-delete --pool "$VB_POOL" "$n" > /dev/null || vb_fail "cannot delete the volume $n"
     echo "bs-m6: removed volume $n"
-  done
+  done <<<"$names"
   [ -d "$VB_DIR" ] || return 0
   for f in "$VB_DIR"/* "$VB_DIR"/.[!.]*; do
     [ -e "$f" ] || continue
@@ -481,7 +486,7 @@ vb_is_up() {
 # leases renewed (a reverted VM resumes at the snapshot's time, with the
 # snapshot's address), client-b/ and work/ emptied.
 vb_reset() {
-  local vm
+  local vm sip cip
   vb_check_dir
   vb_is_up || vb_refuse "the bench is not up (scripts/vm-bench.sh status; down, then up)"
   for vm in server client; do
@@ -492,6 +497,13 @@ vb_reset() {
     vb_ssh "bs-m6-$vm" "sudo date -u -s @$(date +%s) > /dev/null && for i in /sys/class/net/en*; do sudo networkctl renew \${i##*/}; done" < /dev/null ||
       vb_fail "cannot set the clock or renew the lease of bs-m6-$vm"
   done
+  # A renewed lease may carry another address: the config follows it.
+  if sip=$(vb_wait_ip server) && cip=$(vb_wait_ip client) &&
+    [ "$sip $cip" != "$(awk '$1 == "HostName" { printf "%s%s", sep, $2; sep = " " }' "$VB_DIR/ssh_config")" ]; then
+    vb_write_ssh_config "$sip" "$cip"
+    vb_say "new addresses: server $sip, client $cip"
+    for vm in server client; do vb_wait_ssh "bs-m6-$vm"; done
+  fi
   rm -rf "$VB_DIR/client-b" "$VB_DIR/work"
   vb_mkdir "$VB_DIR/client-b" "$VB_DIR/work"
   echo "bs-m6: reset to bs-m6-clean"

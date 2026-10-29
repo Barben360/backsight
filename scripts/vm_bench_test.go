@@ -15,8 +15,10 @@ import (
 // The fakes of scripts/vm-bench.sh's tests: each logs its argv, one line a
 // call, to <fakes>/<name>.calls. virsh answers `list --all --name` from
 // <fakes>/domains and `vol-list` from <fakes>/vols (one name a line),
-// net-dhcp-leases from <fakes>/leases (table rows), net-info, pool-info and
-// domstate as a healthy default network and pool and a running domain
+// net-dhcp-leases --mac from the rows of <fakes>/leases with that MAC,
+// pool-info's Available from <fakes>/pool-avail (default 1.1 TB), net-info,
+// domstate, snapshot-list and domblklist as a healthy network and pool
+// and a running domain with its bs-m6-clean snapshot and a seed cdrom
 // would; every other verb succeeds silently.
 var benchFakes = map[string]string{
 	"virsh": `#!/bin/sh
@@ -31,12 +33,20 @@ case "$1" in
     if [ -e "$d/vols" ]; then while read -r v; do echo " $v   /var/lib/libvirt/images/$v"; done < "$d/vols"; fi
     echo ;;
   net-info) printf 'Name:           default\nActive:         yes\n' ;;
-  pool-info) printf 'Name:           default\nState:          running\nAvailable:      1196613906432\n' ;;
+  pool-info)
+    avail=1196613906432
+    [ ! -e "$d/pool-avail" ] || avail=$(cat "$d/pool-avail")
+    printf 'Name:           default\nState:          running\nAvailable:      %s\n' "$avail" ;;
+  snapshot-list) printf 'bs-m6-clean\n\n' ;;
+  domblklist)
+    printf ' Type   Device   Target   Source\n------------------------------------\n'
+    printf ' file   disk     vda      /var/lib/libvirt/images/%s.qcow2\n' "$2"
+    printf ' file   cdrom    sda      /var/lib/libvirt/images/%s-seed.iso\n\n' "$2" ;;
   domstate) printf 'running\n\n' ;;
   net-dhcp-leases)
     echo ' Expiry Time           MAC address         Protocol   IP address           Hostname       Client ID or DUID'
     echo '------------------------------------------------------------------------------------------------------------'
-    [ ! -e "$d/leases" ] || cat "$d/leases"
+    [ ! -e "$d/leases" ] || grep -F -- " $4 " "$d/leases"
     echo ;;
 esac
 exit 0
@@ -523,5 +533,139 @@ func TestVMBenchIPIsTheNewestLeaseOfThisBoot(t *testing.T) {
 				t.Errorf("virsh %s", c)
 			}
 		}
+	}
+}
+
+// A bs-m6 symlink to another directory is not the bench's: down empties
+// nothing through it.
+func TestVMBenchDownRefusesASymlinkedBenchDir(t *testing.T) {
+	fakes := newBenchFakes(t)
+	real := t.TempDir()
+	writeLines(t, filepath.Join(real, "precious"), "x")
+	link := filepath.Join(t.TempDir(), "bs-m6")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := vmBench(t, fakes, t.TempDir(), link, "vb_down")
+	if code != 2 || !strings.Contains(stderr, "symlink") {
+		t.Errorf("down through a symlink: exit %d, stderr:\n%s", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(real, "precious")); err != nil {
+		t.Errorf("the linked directory lost its file: %v", err)
+	}
+	if calls := benchCalls(t, fakes, "virsh"); calls != nil {
+		t.Errorf("virsh was called: %q", calls)
+	}
+	// Positive control: the same down on a real bs-m6 directory runs.
+	dir := filepath.Join(t.TempDir(), "bs-m6")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := vmBench(t, fakes, t.TempDir(), dir, "vb_down"); code != 0 {
+		t.Errorf("down on a directory: exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+// up refuses a pool with less than 80 GiB free, before making anything.
+func TestVMBenchUpRefusesAPoolTooSmall(t *testing.T) {
+	meminfo := filepath.Join(t.TempDir(), "meminfo")
+	writeLines(t, meminfo, "MemTotal:       40000000 kB", "MemAvailable:   32000000 kB")
+	for _, tc := range []struct {
+		avail string
+		ok    bool
+	}{{"75161927680", false}, {"85899345920", true}} { // 70 GiB, 80 GiB
+		fakes := newBenchFakes(t)
+		writeLines(t, filepath.Join(fakes, "pool-avail"), tc.avail)
+		// Past the preflight, up builds, and stops there: the fake
+		// minisign makes no key.
+		_, stderr, code := vmBench(t, fakes, t.TempDir(), filepath.Join(t.TempDir(), "bs-m6"), "vb_main up", "VB_MEMINFO="+meminfo)
+		refused := code == 2 && strings.Contains(stderr, "the pool default has 70 GiB free")
+		if refused == tc.ok {
+			t.Errorf("pool with %s bytes free: exit %d, stderr:\n%s", tc.avail, code, stderr)
+		}
+		if tc.ok && !strings.Contains(stderr, "bs-m6: building backsight") {
+			t.Errorf("80 GiB free: up did not go past the preflight:\n%s", stderr)
+		}
+		for _, c := range benchCalls(t, fakes, "virt-install") {
+			if c != "--osinfo list" {
+				t.Errorf("pool with %s bytes free: virt-install %s", tc.avail, c)
+			}
+		}
+		for _, v := range virshVerbs(t, benchCalls(t, fakes, "virsh")) {
+			switch strings.Fields(v)[0] {
+			case "list", "vol-list", "net-info", "pool-info":
+			default:
+				t.Errorf("pool with %s bytes free: virsh %s", tc.avail, v)
+			}
+		}
+	}
+}
+
+// reset reverts both VMs to bs-m6-clean and follows a renewed lease that
+// carries another address into the ssh config; an unchanged lease leaves
+// the config as it was.
+func TestVMBenchResetFollowsANewAddress(t *testing.T) {
+	const (
+		srv = " 2026-10-29 03:14:23   52:54:00:b6:06:01   ipv4       %s/24   bs-m6-server   ff:00:01"
+		cli = " 2026-10-29 03:14:27   52:54:00:b6:06:02   ipv4       192.168.122.11/24   bs-m6-client   ff:00:02"
+	)
+	for _, serverIP := range []string{"192.168.122.20", "192.168.122.10"} {
+		fakes := newBenchFakes(t)
+		writeLines(t, filepath.Join(fakes, "leases"), strings.Replace(srv, "%s", serverIP, 1), cli)
+		bench := filepath.Join(t.TempDir(), "bs-m6")
+		stdout, stderr, code := vmBench(t, fakes, t.TempDir(), bench,
+			`vb_write_ssh_config 192.168.122.10 192.168.122.11; cp "$BS_M6_DIR/ssh_config" "$BS_M6_DIR.before"; vb_reset`)
+		if code != 0 || !strings.Contains(stdout, "reset to bs-m6-clean") {
+			t.Fatalf("reset: exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+		b, err := os.ReadFile(filepath.Join(bench, "ssh_config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conf := string(b)
+		if !strings.Contains(conf, "  HostName "+serverIP+"\n") || !strings.Contains(conf, "  HostName 192.168.122.11\n") {
+			t.Errorf("server at %s: ssh_config:\n%s", serverIP, conf)
+		}
+		before, err := os.ReadFile(bench + ".before")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed := conf != string(before); changed != (serverIP != "192.168.122.10") {
+			t.Errorf("server at %s: config rewritten = %v", serverIP, changed)
+		}
+		var reverts []string
+		for _, v := range virshVerbs(t, benchCalls(t, fakes, "virsh")) {
+			if strings.HasPrefix(v, "snapshot-revert ") {
+				reverts = append(reverts, v)
+			}
+		}
+		if strings.Join(reverts, "\n") != "snapshot-revert bs-m6-server bs-m6-clean --running\nsnapshot-revert bs-m6-client bs-m6-clean --running" {
+			t.Errorf("reverts: %q", reverts)
+		}
+	}
+}
+
+// The seed ISO holds the VM's private host key: it is ejected before the
+// snapshot every run starts from is taken.
+func TestVMBenchSnapshotEjectsTheSeedFirst(t *testing.T) {
+	fakes := newBenchFakes(t)
+	bench := filepath.Join(t.TempDir(), "bs-m6")
+	_, stderr, code := vmBench(t, fakes, t.TempDir(), bench, `mkdir -p "$BS_M6_DIR/logs"; vb_snapshot server`)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	eject, snap := -1, -1
+	for i, v := range virshVerbs(t, benchCalls(t, fakes, "virsh")) {
+		switch {
+		case v == "change-media bs-m6-server sda --eject --live --config --force":
+			eject = i
+		case v == "snapshot-create-as bs-m6-server bs-m6-clean":
+			snap = i
+		case strings.HasPrefix(v, "change-media") || strings.HasPrefix(v, "snapshot"):
+			t.Errorf("unexpected virsh %s", v)
+		}
+	}
+	if eject < 0 || snap < 0 || eject > snap {
+		t.Errorf("eject at call %d, snapshot at call %d: want both, eject first\n%s", eject, snap, strings.Join(benchCalls(t, fakes, "virsh"), "\n"))
 	}
 }
