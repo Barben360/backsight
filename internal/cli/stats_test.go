@@ -401,3 +401,109 @@ func TestStatsLedgerSplitsImported(t *testing.T) {
 		t.Errorf("json:\n%s", raw)
 	}
 }
+
+// statsAt fixes the clock and points this PC, a client of a shared server
+// at 127.0.0.1, at a port where nothing answers.
+func statsAt(t *testing.T, at time.Time) string {
+	t.Helper()
+	home := devInstall(t, true)
+	withClock(t, at)
+	cfg := pathsOf(home).ConfigFile()
+	if err := os.WriteFile(cfg, []byte("[server]\nmode = \"remote\"\nurl = \"http://127.0.0.1:1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// stateFile writes one of <state>'s JSON files.
+func stateFile(t *testing.T, home, name, body string) {
+	t.Helper()
+	_ = os.MkdirAll(pathsOf(home).State, 0o700)
+	if err := os.WriteFile(filepath.Join(pathsOf(home).State, name), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// serverLine is stats' Server line.
+func serverLine(t *testing.T, out string) string {
+	t.Helper()
+	for l := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(l, "Server ") {
+			return l
+		}
+	}
+	t.Fatalf("no Server line:\n%s", out)
+	return ""
+}
+
+// A client whose server is silent says so from what this PC recorded, with
+// no call of its own: since when, the breaker, what waits here, and the
+// server's host (never its key).
+func TestStatsShowsAnUnreachableServer(t *testing.T) {
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	home := statsAt(t, at)
+	stateFile(t, home, "reach.json", `{"last_ok":"2026-10-28T09:30:00Z","failing_since":"2026-10-28T10:00:00Z","sessions_waiting":3}`)
+	stateFile(t, home, "breaker.json", `{"failures":3,"open_until":"2026-10-28T12:03:00Z"}`)
+	ob := filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl")
+	_ = os.MkdirAll(filepath.Dir(ob), 0o700)
+	if err := os.WriteFile(ob, []byte(`{"operation_id":"a","content":"x"}`+"\n"+`{"operation_id":"b","content":"y"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "stats")
+	want := "Server       127.0.0.1 silent since 2026-10-28T10:00:00Z (2h): recall paused until 2026-10-28T12:03:00Z; 2 notes queued, 3 sessions not sent yet"
+	if l := serverLine(t, out); code != output.OK || l != want {
+		t.Errorf("exit %d\n got %q\nwant %q", code, l, want)
+	}
+	if strings.Contains(out, "fakevalue") || strings.Contains(out, "127.0.0.1:1 ") {
+		t.Errorf("the line names more than the host:\n%s", out)
+	}
+	code, out, _ = run(t, "stats", "--json")
+	var env struct {
+		Data struct {
+			Server map[string]any `json:"server"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); code != output.OK || err != nil {
+		t.Fatalf("exit %d, %v\n%s", code, err, out)
+	}
+	s := env.Data.Server
+	if s["failing_since"] != "2026-10-28T10:00:00Z" || s["last_ok"] != "2026-10-28T09:30:00Z" || s["breaker_open_until"] != "2026-10-28T12:03:00Z" ||
+		s["notes_queued"] != 2.0 || s["sessions_waiting"] != 3.0 || s["host"] != "127.0.0.1" {
+		t.Errorf("json server: %v", s)
+	}
+	// the breaker closed again: recall goes on while the server is silent
+	stateFile(t, home, "breaker.json", `{"failures":0,"open_until":"2026-10-28T11:00:00Z"}`)
+	if _, out, _ := run(t, "stats"); !strings.Contains(serverLine(t, out), "(2h): recall on; 2 notes queued") {
+		t.Errorf("breaker closed:\n%s", out)
+	}
+	if _, out, _ := run(t, "stats", "--json"); strings.Contains(out, "breaker_open_until") {
+		t.Errorf("a closed breaker shows a time:\n%s", out)
+	}
+}
+
+// A server that answers: when it last did, and no failure time.
+func TestStatsShowsAnAnsweringServer(t *testing.T) {
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	home := statsAt(t, at)
+	pointAt(t, home, 1) // a PC with its own server: no host named
+	stateFile(t, home, "reach.json", `{"last_ok":"2026-10-28T11:59:00Z","sessions_waiting":0}`)
+	_, out, _ := run(t, "stats")
+	if l := serverLine(t, out); l != "Server       answering (last answer 1m ago)" {
+		t.Errorf("%q", l)
+	}
+	if _, out, _ := run(t, "stats", "--json"); strings.Contains(out, "failing_since") || !strings.Contains(out, `"last_ok": "2026-10-28T11:59:00Z"`) {
+		t.Errorf("json:\n%s", out)
+	}
+}
+
+// Nothing recorded yet (a fresh install): stats says so.
+func TestStatsWithoutReachRecord(t *testing.T) {
+	statsAt(t, time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC))
+	_, out, _ := run(t, "stats")
+	if l := serverLine(t, out); l != "Server       127.0.0.1 not recorded yet" {
+		t.Errorf("%q", l)
+	}
+	if _, out, _ := run(t, "stats", "--json"); strings.Contains(out, "last_ok") || !strings.Contains(out, `"server": {`) {
+		t.Errorf("json:\n%s", out)
+	}
+}

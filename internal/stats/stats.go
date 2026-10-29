@@ -54,6 +54,7 @@ type Event struct {
 	Types        map[string]int
 	Details      map[string]any
 	Hook         string // hook_failure
+	Document     string // replace_unconfirmed
 	Error        string // the *_error and *_failed events
 	// feedback: credit_check, credit, retire, feedback_settle
 	Outcome    string

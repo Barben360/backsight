@@ -19,6 +19,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/Barben360/backsight/internal/backup"
+	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
 	"github.com/Barben360/backsight/internal/retain"
@@ -654,6 +655,86 @@ func TestSplitSessionIsInfo(t *testing.T) {
 	if c.Status != Info || c.Summary != "2 session(s) continued on two PCs: their shared part may be stored twice" ||
 		c.Detail != "s1, s2" || c.Fix != "" {
 		t.Errorf("two: %+v", c)
+	}
+}
+
+// unconfirmedEvent is a replace_unconfirmed telemetry line, as the flush
+// writes it, at "at".
+func unconfirmedEvent(at time.Time, session, document string) string {
+	return `{"ts":"` + at.UTC().Format("2006-01-02T15:04:05.000Z") + `","event":"replace_unconfirmed","session":"` + session +
+		`","document":"` + document + `","reason":"never readable","binary_version":"dev"}` + "\n"
+}
+
+// A session part given up unconfirmed in the last 30 days warns, naming it
+// (its session's first 8 characters and its document): some of this PC's
+// turns may be missing on the server. An older one is no longer reported.
+func TestDoctorReplaceUnconfirmedWarns(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	dir := f.env.Dirs.TelemetryDir()
+	old := now.Add(-40 * 24 * time.Hour) // September's file
+	put(t, filepath.Join(dir, "events-"+old.Format("2006-01")+".jsonl"), unconfirmedEvent(old, "oldsession99", "conversation:oldsession99"), 0o600)
+	if c := check(t, f.run(), "replace-unconfirmed"); c.Status != OK || c.Detail != "" {
+		t.Errorf("only an old event: %+v", c)
+	}
+	recent := now.Add(-3 * 24 * time.Hour)
+	put(t, filepath.Join(dir, "events-"+recent.Format("2006-01")+".jsonl"),
+		`{"ts":"2026-10-25T11:00:00.000Z","event":"prompt","session":"s1"}`+"\n"+unconfirmedEvent(recent, "0123456789abcdef", "conversation:0123456789abcdef@beta"), 0o600)
+	c := check(t, f.run(), "replace-unconfirmed")
+	const ref = "troubleshooting#doctor-a-session-part-was-never-confirmed"
+	if c.Status != Warn || c.Detail != "1 session part(s) never confirmed on the server since 2026-10-25: 01234567/conversation:0123456789abcdef@beta" ||
+		c.Fix != "backsight guide "+ref {
+		t.Errorf("recent: %+v", c)
+	}
+	corpus, err := guide.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tp := range corpus.Topics {
+		for _, s := range tp.Sections {
+			found = found || s.Ref() == ref
+		}
+	}
+	if !found {
+		t.Errorf("the docs have no section %s", ref)
+	}
+}
+
+// At most 5 parts are named, the newest first; the count is all of them.
+func TestDoctorReplaceUnconfirmedNamesFive(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	var b strings.Builder
+	for i := 1; i <= 6; i++ {
+		b.WriteString(unconfirmedEvent(now.Add(-time.Duration(i)*time.Hour), "session"+strconv.Itoa(i)+"xyz", "conversation:s"+strconv.Itoa(i)))
+	}
+	put(t, filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), b.String(), 0o600)
+	c := check(t, f.run(), "replace-unconfirmed")
+	want := "6 session part(s) never confirmed on the server since 2026-10-28: session1/conversation:s1, session2/conversation:s2, session3/conversation:s3, session4/conversation:s4, session5/conversation:s5, …"
+	if c.Status != Warn || c.Detail != want {
+		t.Errorf("got %q\nwant %q", c.Detail, want)
+	}
+}
+
+// A server-only host runs no flush: the check is not a client's there.
+func TestDoctorReplaceUnconfirmedNotAClientOnServerOnlyHost(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.env.Now = func() time.Time { return now }
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
+	put(t, filepath.Join(f.env.Dirs.TelemetryDir(), "events-2026-10.jsonl"), unconfirmedEvent(now.Add(-time.Hour), "s1", "conversation:s1"), 0o600)
+	r := f.run()
+	n := 0
+	for _, c := range r.Checks {
+		if c.ID == "replace-unconfirmed" {
+			n++
+		}
+	}
+	if c := check(t, r, "replace-unconfirmed"); n != 1 || c.Status != Info || c.Summary != "not a client: server-only host" {
+		t.Errorf("%d check(s), %+v", n, c)
 	}
 }
 

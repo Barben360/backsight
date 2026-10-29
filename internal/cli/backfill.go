@@ -16,14 +16,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
-	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // Pacing seams (decision 0051); tests shorten them.
@@ -403,7 +401,7 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			return pause("budget", fmt.Sprintf("budget reached (%.4f %s, %d tokens); rerun with a higher --max-cost or --max-tokens", b.SpentCost, b.Currency, b.SpentTokens))
 		}
 		r := f.FlushFile(ctx, path, retain.Options{Force: true, IgnoreSince: true})
-		reportUnconfirmed(telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version}), os.Stderr, r)
+		reportUnconfirmed(d.State, os.Stderr, r)
 		res.Results = append(res.Results, r)
 		switch r.Status {
 		case retain.Sent, retain.Nothing, retain.OptedOut, retain.Quarantined, retain.Held:

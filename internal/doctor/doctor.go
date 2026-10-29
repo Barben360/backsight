@@ -31,6 +31,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/stats"
 	"github.com/Barben360/backsight/internal/target"
 )
 
@@ -108,7 +109,7 @@ const (
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
 var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "noise-headless", "noise-subagent",
-	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
+	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "replace-unconfirmed", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
 	"transverse-keyword", "usage", "version-skew", "writes"}
 
 // Run performs every check in a fixed order.
@@ -184,7 +185,12 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkWrites(env))
 	add(checkReach(env, tg, srv))
 	add(checkBackfill(env.Dirs))
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
 	add(checkSplit(env.Dirs))
+	add(checkReplaceUnconfirmed(env.Dirs.TelemetryDir(), now()))
 	add(checkDisk(env))
 	add(checkReference(ref, refErr))
 	add(checkRetention(loc, env.ManagedDir))
@@ -192,10 +198,6 @@ func Run(ctx context.Context, env Env) Report {
 		add(checkClient(env, loc))
 	}
 	add(checkGPU(env.GPUs()))
-	now := time.Now
-	if env.Now != nil {
-		now = env.Now
-	}
 	writeOff := cfgErr == nil && !cfg.Components.Write
 	add(checkUsage(env.Dirs.TelemetryDir(), now(), writeOff)...)
 	add(checkBackup(env, now()))
@@ -841,6 +843,51 @@ func checkSplit(d paths.Dirs) Check {
 		c.Status, c.Summary = Info, fmt.Sprintf("%d session(s) continued on two PCs: their shared part may be stored twice", len(splits))
 		c.Detail = strings.Join(slices.Sorted(maps.Keys(splits)), ", ")
 	}
+	return c
+}
+
+// unconfirmedListed: the session parts checkReplaceUnconfirmed names.
+const unconfirmedListed = 5
+
+// checkReplaceUnconfirmed reports the session parts this PC gave up
+// unconfirmed in the last 30 days (replace_unconfirmed telemetry events): a
+// part replacing a document was never confirmed on the server within 24 h
+// of its send, so some of this PC's turns may be missing there. It warns,
+// naming the newest few: nothing re-sends such a part.
+func checkReplaceUnconfirmed(dir string, now time.Time) Check {
+	c := Check{ID: "replace-unconfirmed", Status: OK, Summary: "no session part given up unconfirmed in the last 30 days"}
+	ev, err := stats.Load(dir, now.Add(-30*24*time.Hour), now)
+	if err != nil {
+		c.Status, c.Summary, c.Detail = Warn, "telemetry unreadable", err.Error()
+		return c
+	}
+	var parts []stats.Event
+	for _, e := range ev {
+		if e.Event == "replace_unconfirmed" {
+			parts = append(parts, e)
+		}
+	}
+	if len(parts) == 0 {
+		return c
+	}
+	slices.SortStableFunc(parts, func(a, b stats.Event) int { return b.TS.Compare(a.TS) })
+	names := make([]string, 0, unconfirmedListed+1)
+	for i, e := range parts {
+		if i == unconfirmedListed {
+			names = append(names, "…")
+			break
+		}
+		session := e.Session
+		if len(session) > 8 {
+			session = session[:8]
+		}
+		names = append(names, session+"/"+e.Document)
+	}
+	c.Status = Warn
+	c.Summary = fmt.Sprintf("%d session part(s) given up unconfirmed in the last 30 days: some of this PC's turns may be missing on the server", len(parts))
+	c.Detail = fmt.Sprintf("%d session part(s) never confirmed on the server since %s: %s",
+		len(parts), parts[len(parts)-1].TS.UTC().Format("2006-01-02"), strings.Join(names, ", "))
+	c.Fix = "backsight guide troubleshooting#doctor-a-session-part-was-never-confirmed"
 	return c
 }
 
