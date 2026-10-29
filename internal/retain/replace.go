@@ -25,7 +25,8 @@ import (
 // Its records there: confirmed. Some missing: they go again as the next
 // segment, numbered after the server's, and the split is recorded
 // (decision 0073, "never lose" over "never store twice"). A mark never
-// holds the session's sends, and ends PendingLimit after its send.
+// holds the session's sends, and ends PendingLimit after its send (or
+// after the first run that found a restore since).
 
 // PendingReplace is a part this PC sent that replaces its document (its
 // segment 1), not confirmed on the server yet.
@@ -41,6 +42,11 @@ type PendingReplace struct {
 	// sent after the backup, and a race before it is in the backup.
 	Epoch  int       `json:"epoch"`
 	SentAt time.Time `json:"sent_at"`
+	// RestoredAt: when a run first found a restore since the send (the
+	// epoch changed). The mark's PendingLimit runs from it then, not from
+	// SentAt: right after a restore the queue is at its busiest, and a
+	// mark past its limit would get a single look.
+	RestoredAt time.Time `json:"restored_at,omitempty"`
 	// LastAt: when the last part was sent. A record whose time is after it
 	// (or missing) was given the send's time (clampTime), which a later
 	// read cannot give again: it is matched without its time.
@@ -177,7 +183,7 @@ const (
 //   - anything else (no look possible, absent, nothing to compare): left
 //     pending; the session's flush goes on as usual.
 //
-// PendingLimit after its send, a part ends at its next look whatever it
+// PendingLimit after its send (or its restore), a part ends at its next look whatever it
 // gives: found, it is confirmed, missing, sent again, else given up and
 // reported in res.Unconfirmed (never quarantined: the session's sends go
 // on). A part this run has no read left for is not looked at, so it stays
@@ -211,7 +217,6 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 	slices.Sort(projects)
 	for _, p := range projects {
 		pr := cur.Replaces[p]
-		expired := now.Sub(pr.SentAt) >= PendingLimit
 		switch {
 		case slices.ContainsFunc(tombs, func(t state.Tombstone) bool { return t.Document == pr.Document }):
 			drop(p)
@@ -221,11 +226,16 @@ func (f *Flusher) checkReplaces(ctx context.Context, res Result, sid, path strin
 			// reconcile's to judge (dropSession removes it, the mark with
 			// it); this one predates the backup, which may hold the other
 			// PC's segment 1 alone. Looked at again, twice, against the
-			// restored document.
-			pr.Epoch, pr.SeenAt = epoch, time.Time{}
+			// restored document, with a full PendingLimit from now.
+			pr.Epoch, pr.SeenAt, pr.RestoredAt = epoch, time.Time{}, now
 			cur.Replaces[p] = pr
 			changed = true
 		}
+		window := pr.SentAt
+		if pr.RestoredAt.After(window) {
+			window = pr.RestoredAt
+		}
+		expired := now.Sub(window) >= PendingLimit
 		if !expired && now.Sub(pr.SentAt) < replaceCheckAfter {
 			continue
 		}

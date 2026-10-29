@@ -305,6 +305,34 @@ func TestARaceBeforeARestoredBackupIsRepairedAfterTheRestore(t *testing.T) {
 	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
 }
 
+// The race of the test above with A offline 30 h: its mark is past the
+// 24 h limit at the restore. The restore gives it a full window again, so
+// a queue still busy at the first looks after it (every client is
+// re-sending what the backup lacked) keeps the mark, and a later look
+// with the queue clear re-sends a2 a3.
+func TestARestoreGivesAnExpiredMarkAFullWindow(t *testing.T) {
+	a, _ := betaReplacedByB(t)
+	snap := a.hs.backup()
+	restoredAt := a.clock.Add(30 * time.Hour)
+	a.hs.restore(snap, 1, a.clock.Add(29*time.Hour), restoredAt)
+	a.clock = restoredAt
+	if rec, err := a.f.Reconcile(context.Background()); err != nil || len(rec.Resend) != 0 {
+		t.Fatalf("reconcile: %+v %v", rec, err)
+	}
+	a.hs.queued = 1
+	for range 2 {
+		if r := a.tick(); len(r.Unconfirmed) != 0 {
+			t.Fatalf("given up at a busy look: %+v", r.Unconfirmed)
+		}
+	}
+	if _, ok := a.replaces()["beta"]; !ok {
+		t.Fatalf("mark dropped: %+v", a.replaces())
+	}
+	a.hs.queued = 0
+	expect(t, a.tick(), Sent, 2, 2)
+	a.hs.expectEachOnce(t, betaDoc, "a2", "a3", "b2")
+}
+
 // The same race, with A's send after the backup (12:00, the backup at
 // 11:30): the reconcile judges A's cursor and drops it with its mark; the
 // resync sends what the server lacks once, and the mark sends nothing

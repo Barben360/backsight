@@ -332,6 +332,20 @@ func TestASplitSessionIsNeverResentFromHere(t *testing.T) {
 	}
 }
 
+// An unreadable split-sessions.json: every session is left alone (any may
+// be split), under a reason that names the file and its error, not
+// "another machine".
+func TestAnUnreadableSplitFileHoldsSessionsSayingWhy(t *testing.T) {
+	e := mixedSession(t)
+	if err := os.WriteFile(SplitSessionsFile(e.f.Dirs.State), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := e.plan()
+	if len(p.Resends) != 0 || len(p.Held) != 1 || !strings.Contains(p.Held[0].Reason, "split-sessions.json") || p.Held[0].Reason == HeldElsewhere {
+		t.Fatalf("plan %+v", p)
+	}
+}
+
 // Quarantined, backfill-queued and pending sessions are left alone, and
 // so is one whose directories are gone (today's names would be guesses).
 func TestUnsettledOrUnknowableSessionsAreLeftAlone(t *testing.T) {
