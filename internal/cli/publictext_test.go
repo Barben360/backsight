@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -277,14 +278,20 @@ func TestStringLiteralsNameNoPrivateReference(t *testing.T) {
 	}
 }
 
-// What a release publishes for its readers: the release notes and the
-// documents they point to for versions and support.
+// What a release publishes for its readers: the release notes, the
+// documents they point to for versions and support, the README and every
+// docs page (CONTRIBUTING.md is for contributors and stays out).
 func TestReleaseDocumentsNameNoPrivateReference(t *testing.T) {
 	notes, err := filepath.Glob(filepath.Join("..", "..", "docs", "releases", "*.md"))
 	if err != nil || len(notes) == 0 {
 		t.Fatalf("no release notes in docs/releases: %v", err)
 	}
-	for _, f := range append(notes, securityDoc, compatibilityDoc) {
+	pages, err := filepath.Glob(filepath.Join("..", "..", "docs", "*.md"))
+	if err != nil || len(pages) == 0 {
+		t.Fatalf("no pages in docs: %v", err)
+	}
+	files := slices.Concat(notes, pages, []string{securityDoc, compatibilityDoc, filepath.Join("..", "..", "README.md")})
+	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

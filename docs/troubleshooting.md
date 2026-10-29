@@ -30,7 +30,7 @@ Setup's check or its server step says `permission denied` about `/var/run/docker
 sudo usermod -aG docker $USER
 ```
 
-Log out and back in (a new terminal is not enough), check that `docker info` works without `sudo`, then `backsight setup --resume`. Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) is the alternative. If Docker is not running: `sudo systemctl enable --now docker`. If `docker compose` is unknown, install the Compose v2 plugin ([docs.docker.com/compose/install](https://docs.docker.com/compose/install/)).
+Log out and back in (a new terminal is not enough), check that `docker info` works without `sudo`, then `backsight setup --resume`. Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) is the alternative. If Docker is not running: `sudo systemctl enable --now docker`. If `docker compose` is unknown (setup's `compose` check says `Docker Compose v2 is missing`), install the Compose v2 plugin ([docs.docker.com/compose/install](https://docs.docker.com/compose/install/)).
 
 ### A port is taken
 
@@ -48,6 +48,8 @@ backsight secret set llm_api_key
 backsight setup --resume
 ```
 
+With the `claude-code` provider on a server-only host (no Claude Code there), run `claude setup-token` on a machine that has Claude Code, and set its token on the host with `backsight secret set llm_api_key`.
+
 The resume takes the running server for its own and checks the key again. Other provider answers name the provider's reason, with other fixes: a balance to top up (DeepSeek answers 402), a model name the provider does not know, or a wrong base URL. `backsight server llm check` tests the provider again, storing nothing.
 
 ### Setup seems stuck
@@ -64,7 +66,7 @@ Setup pulls each image up to 3 times before it stops, and says what Docker's las
 
 ### Claude Code is missing or too old
 
-Setup needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup).
+Setup needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup). A host that only serves the memory for your other PCs needs no Claude Code: run `backsight setup --role server` there, and setup does not look for `claude`.
 
 ## The server is down
 
@@ -265,6 +267,19 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 
 | doctor check | What to do |
 |---|---|
+| `platform` (setup's check): `<os>/<arch> has no server image` | The server runs on linux, macOS or Windows, on amd64 or arm64. On another system, run the server on a machine that is one of those and connect this client to it (`backsight connect`). |
+| `compose` (setup's check): Docker Compose v2 is missing | backsight runs the server as a compose project: install the Docker Compose v2 plugin, then `backsight setup --resume`. See [Docker refuses your user](#docker-refuses-your-user). |
+| `reference` (setup's check, information): pieces of an older Hindsight install are wired into Claude Code | Setup asks what to do with them (`retire` unwires them, `keep` leaves them); `backsight setup --undo` puts the old wiring back. See [install.md](install.md#replacing-an-existing-hindsight-install). |
+| `transcripts` (information, in setup's checks): how many Claude Code transcripts this PC holds, their size and the oldest's date | Information, not a fault: that is what a backfill can read. See `retention` below for how long Claude Code keeps them. |
+| `transcripts` (doctor): unknown transcript records this week | Claude Code wrote record types backsight does not know. A warning when a type is new this week, or when there are at least twice as many as last week and at least 5. Claude Code's transcript format may have changed: check that the types doctor names carry no conversation, then report it (below). |
+| `backfill`: paused, or in progress | Information while `jobs tick` sends it (progress as done/total). A warning when it is paused: on its budget, `backsight retain backfill --plan`, then `backsight retain backfill --max-cost <higher>`; for another reason doctor gives, `backsight retain backfill` carries on. It also warns when the backfill state cannot be read. |
+| `recall` (warning): over 5 % of the recall calls failed in 7 days (checked from 20 calls) | The server did not answer, or failed, some of the recall calls prompts make. `backsight server status` on its host; `backsight stats 7` shows when. See [The server is down](#the-server-is-down). |
+| `latency` (warning): the prompt hook's 95th percentile is over 2500 ms in 7 days (checked from 20 recalls) | Recall is slow. See [Slow recall and GPU acceleration](#slow-recall-and-gpu-acceleration). |
+| `learning` (warning): memory not learning | In the last 24 hours, sends were tried and the server accepted none. `backsight retain flush` shows why, then `backsight server status`. Information instead when sessions have run but none has ended or settled yet. See [Sessions are not saved](#sessions-are-not-saved). |
+| `searches` (warning): searches after an injection fell by half | Over the week against the week before, at least 10 injections in each: Claude searches less after recall injects memories, which means the instructions stopped working or recall turned noisy. `backsight stats 14` and `backsight why` show what recall injects. |
+| `update` (information): a release is available, or the last update check failed | A failed check (offline, rate limited) is no fault of the install. `backsight update check` looks again; with a release available, `backsight changelog` shows its notes and `backsight update apply` installs it. See [update.md](update.md). |
+| `mcp` (`backsight verify`): no MCP handshake, or a memory tool missing | `backsight mcp` did not answer the MCP handshake or did not list every memory tool (the message names the tool). Check doctor's `client` check, run `backsight client install` if it warns, then `backsight verify` again. |
+| `round_trip` (`backsight verify`): the store-and-recall round trip failed | The scratch bank could not be made, or nothing was extracted or recalled within the wait: the message says which step. `backsight server llm check` tests the extraction model; `backsight verify --no-round-trip` skips this step. |
 | `retention`: Claude Code keeps transcripts 30 days | `backsight client retention` keeps them 3650 days, so backfill and rebuilds can read them. |
 | `server-reach`: the server has not answered for over an hour (and the session banner "⚠️ memory server silent since …") | This PC records when its server last answered: at each recall and at each `backsight jobs tick`. The check says when that was, whether recall is paused (the breaker), how many notes are queued and how many sessions are not sent yet (counted by the last tick). Once the server answers doctor again, the check says so and stops warning. `backsight stats` shows the same record on its `Server` line, without asking the server. Check the server on its host (`backsight server status` there) and the network between the two machines (for a tailnet, `tailscale status`). Nothing is lost meanwhile: sessions stay in Claude Code's transcripts and notes in this PC's queue, and the next tick after the server answers sends them. |
 | A prompt takes about 3 s while the server is away (a laptop off the home network, a server address that silently drops packets) | backsight gives a server 3 s to accept the connection, then counts the call as failed; after 3 failed prompts the breaker pauses recall and prompts are no longer delayed. Nothing to fix unless the server should be reachable: see `server-reach` above. |
