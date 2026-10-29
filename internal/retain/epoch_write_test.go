@@ -108,6 +108,15 @@ func (h *banksHS) client(t *testing.T) *hindsight.Client {
 			}
 			raw, _ := json.Marshal(map[string]any{"items": items, "total": len(items)})
 			_, _ = w.Write(raw)
+		case r.Method == http.MethodDelete && strings.HasPrefix(sub, "documents/"):
+			id, _ := url.PathUnescape(strings.TrimPrefix(sub, "documents/"))
+			if _, ok := docs[id]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"Document not found"}`))
+				return
+			}
+			delete(docs, id)
+			_, _ = w.Write([]byte(`{"success":true}`))
 		case r.Method == http.MethodGet && strings.HasPrefix(sub, "documents/"):
 			id, _ := url.PathUnescape(strings.TrimPrefix(sub, "documents/"))
 			meta, ok := docs[id]

@@ -113,10 +113,14 @@ func history(t *testing.T, home string) {
 }
 
 // fakeMemoryServer answers GET .../memories/<id> with status[id], 200
-// for any other id.
+// for any other id, and its health.
 func fakeMemoryServer(t *testing.T, home string, status map[string]int) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"healthy"}`))
+			return
+		}
 		id := path.Base(r.URL.Path)
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/memories/") {
 			http.Error(w, "unexpected", http.StatusTeapot)
@@ -394,7 +398,8 @@ func tickOf(t *testing.T) tickResult {
 // After the upgrade, the tick imports earlier history, marks it complete,
 // and leaves it alone from then on.
 func TestTickImportsEarlierHistoryOnce(t *testing.T) {
-	home := devInstall(t, true) // the server down: ids kept, unchecked
+	home := devInstall(t, true)
+	fakeMemoryServer(t, home, nil)
 	history(t, home)
 	if r := tickOf(t); r.History != "earlier history imported: 5 shows and 1 credits" {
 		t.Errorf("first tick: %q", r.History)
@@ -416,6 +421,7 @@ func TestTickImportsEarlierHistoryOnce(t *testing.T) {
 // no mark; the next tick imports the rest and marks it complete.
 func TestTickImportCutByItsBudgetGoesOn(t *testing.T) {
 	home := devInstall(t, true)
+	fakeMemoryServer(t, home, nil)
 	history(t, home)
 	oldBudget := importTickBudget
 	importTickBudget = 300 * time.Millisecond
@@ -466,6 +472,7 @@ func TestImportNeedsFeedbackOn(t *testing.T) {
 // and each key is journaled once.
 func TestOneImportRunsAtATime(t *testing.T) {
 	home := devInstall(t, true)
+	fakeMemoryServer(t, home, nil)
 	history(t, home)
 	d := pathsOf(home)
 	lock, err := state.TryAcquire(filepath.Join(d.LocksDir(), "feedback-import.lock"), "jobs tick")
@@ -524,6 +531,7 @@ func TestOneImportRunsAtATime(t *testing.T) {
 // mark, says so, and the next tick imports what it left.
 func TestImportSinceLeavesTheRestToTheTick(t *testing.T) {
 	home := devInstall(t, true)
+	fakeMemoryServer(t, home, nil)
 	history(t, home)
 	next := histStart.Add(24 * time.Hour).Format("2006-01-02")
 	if env := runImport(t, "--since", next); env.Data.Complete || importMarks(t, home) != 0 {
@@ -548,5 +556,55 @@ func TestLiveCutoffCoversTheTelemetryMillisecond(t *testing.T) {
 	}
 	if k.live(feedback.ImportShow{Session: "s", At: ms.Add(-time.Millisecond)}) {
 		t.Error("a show the millisecond before the journal began counts as live")
+	}
+}
+
+// The server down for the whole import: the shows are journaled, their ids
+// kept unchecked, but the import is not marked complete and says so, run
+// after run, as when another server answers at the joined address. The
+// first run that reaches the server marks it, with nothing left to import.
+func TestImportNotCompleteWhileServerDown(t *testing.T) {
+	home := devInstall(t, true) // the server down
+	history(t, home)
+	env := runImport(t)
+	if env.Data.Complete || env.Data.Events == 0 || env.Data.Unchecked != 4 || importMarks(t, home) != 0 {
+		t.Errorf("server down: %+v, %d marks", env.Data, importMarks(t, home))
+	}
+	if _, out, _ := run(t, "feedback", "import"); !strings.Contains(out, "not marked complete until a run reaches the server") || importMarks(t, home) != 0 {
+		t.Errorf("second run, server down: %d marks\n%s", importMarks(t, home), out)
+	}
+	if r := tickOf(t); r.History != "earlier history: 0 shows and 0 credits imported; marked complete once the server answers" || importMarks(t, home) != 0 {
+		t.Errorf("tick, server down: %q, %d marks", r.History, importMarks(t, home))
+	}
+	fakeMemoryServer(t, home, nil)
+	recordMismatch(t, home)
+	if env := runImport(t); env.Data.Complete || importMarks(t, home) != 0 {
+		t.Errorf("another server: %+v, %d marks", env.Data, importMarks(t, home))
+	}
+	setMismatch(t, home, "")
+	if env := runImport(t); !env.Data.Complete || env.Data.Events != 0 || importMarks(t, home) != 1 {
+		t.Errorf("the server back: %+v, %d marks", env.Data, importMarks(t, home))
+	}
+	if l, err := feedback.Current(pathsOf(home).FeedbackDir()); err != nil || l.HistoryImported.IsZero() {
+		t.Errorf("not imported in the ledger: %v %+v", err, l.HistoryImported)
+	}
+}
+
+// An import that finds the mark of a complete one in the journal, read
+// under the import lock (a tick that lost the race to a finishing manual
+// import), writes no second mark; nor does a manual run after it.
+func TestImportWritesOneCompleteMark(t *testing.T) {
+	home := devInstall(t, true)
+	fakeMemoryServer(t, home, nil)
+	history(t, home)
+	if env := runImport(t); !env.Data.Complete || importMarks(t, home) != 1 {
+		t.Fatalf("first run: %+v, %d marks", env.Data, importMarks(t, home))
+	}
+	res, err := importHistory(context.Background(), pathsOf(home), home, time.Time{}, false, "jobs tick")
+	if err != nil || !res.Complete || importMarks(t, home) != 1 {
+		t.Errorf("the tick after it: %v %+v, %d marks", err, res, importMarks(t, home))
+	}
+	if env := runImport(t); !env.Data.Complete || importMarks(t, home) != 1 {
+		t.Errorf("a manual run after it: %+v, %d marks", env.Data, importMarks(t, home))
 	}
 }

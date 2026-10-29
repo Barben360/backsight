@@ -486,6 +486,26 @@ func TestTickSettlesWhileTheServerIsDown(t *testing.T) {
 	}
 }
 
+// A ledger.json that does not parse: the tick keeps it aside, rebuilds
+// it from the journal, and its line says so.
+func TestTickRebuildsACorruptLedger(t *testing.T) {
+	home := devInstall(t, true) // closed port: the rebuild is local
+	dir := feedbackJournal(t, home)
+	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errOut := run(t, "jobs", "tick")
+	if !strings.Contains(out, ", feedback ledger unreadable: kept as ledger.json.corrupt-") || !strings.Contains(out, "rebuilt from the journal") {
+		t.Errorf("tick line:\n%s%s", out, errOut)
+	}
+	if l, err := feedback.LoadLedger(dir); err != nil || l.Counted() != 2 {
+		t.Errorf("ledger %+v %v", l, err)
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, "ledger.json.corrupt-*")); len(files) != 1 {
+		t.Errorf("corrupt files %v", files)
+	}
+}
+
 // hideAll journals a hide of each id at at, as the memory_credit tool does.
 func hideAll(t *testing.T, dir string, at time.Time, ids ...string) {
 	t.Helper()

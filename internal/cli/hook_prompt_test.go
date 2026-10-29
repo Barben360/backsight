@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/recall"
@@ -736,6 +737,67 @@ func TestPromptShowsJournalTheBoost(t *testing.T) {
 	}
 	if m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 || m1.ScoreWithoutBoost == nil || *m1.ScoreWithoutBoost != 0.87 {
 		t.Errorf("m1 %+v", m1)
+	}
+	if len(shows[0].Flags) != 0 {
+		t.Errorf("the same set in another order flagged %v", shows[0].Flags)
+	}
+}
+
+// A prompt's shows say when the boost changed which memories it injected:
+// m4, used often, rises into the top 3 (recall.prompt_hits) and pushes m3
+// out. Without the boost reaching past the top 3 (TestPromptShowsJournalTheBoost:
+// an order changed alone), no flag.
+func TestPromptShowsFlagTheSetTheBoostChanged(t *testing.T) {
+	home := hookHome(t)
+	recallAnswer = hits(0.84, 0.83, 0.82, 0.80)
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m4":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
+	h := prompt(t, home, "s1", longPrompt)
+	if !strings.Contains(h.Specific.Context, "memory m4") || strings.Contains(h.Specific.Context, "memory m3") {
+		t.Fatalf("m4 not injected over m3:\n%s", h.Specific.Context)
+	}
+	shows := eventsOf(journalEvents(t, home), "shows")
+	if len(shows) != 1 || strings.Join(shows[0].Flags, ",") != feedback.FlagSetChanged {
+		t.Errorf("shows %+v", shows)
+	}
+	// m3 seen already: without the boost, m1, m2 and m4 would be injected
+	// too, the same set in another order.
+	home = hookHome(t)
+	recallAnswer = hits(0.84, 0.83, 0.82, 0.80)
+	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m4":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
+	_ = sessions(home).Update("s1", func(st *session.State) error { st.Seen = []string{"m3"}; return nil })
+	prompt(t, home, "s1", longPrompt)
+	if shows := eventsOf(journalEvents(t, home), "shows"); len(shows) != 1 || len(shows[0].Flags) != 0 {
+		t.Errorf("seen m3: shows %+v", shows)
+	}
+}
+
+// What the hits alone say of the set: a hit only the boost let in, or a
+// rank without the boost missing before the last pick (a hit the boost
+// pushed out of the list), changes it; no ledger, or the same hits in
+// another order, does not.
+func TestBoostChangedSetFromTheHits(t *testing.T) {
+	rc := config.Default(pathsOf(isolate(t)), "").Recall // 3 hits
+	hit := func(id string, plain int, boost float64) recall.Hit {
+		return recall.Hit{ID: id, Text: "memory " + id, Project: "billing", RankWithoutBoost: plain, Boost: boost}
+	}
+	none := func(recall.Hit) bool { return false }
+	for _, c := range []struct {
+		name string
+		hits []recall.Hit
+		want bool
+	}{
+		{"no ledger", []recall.Hit{hit("m1", 0, 0), hit("m2", 0, 0), hit("m3", 0, 0), hit("m4", 0, 0)}, false},
+		{"another order", []recall.Hit{hit("m2", 2, 0.03), hit("m1", 1, 0), hit("m3", 3, 0), hit("m4", 4, 0)}, false},
+		{"lifted in", []recall.Hit{hit("m1", 1, 0), hit("m4", 4, 0.03), hit("m2", 2, 0), hit("m3", 3, 0)}, true},
+		{"only the boost let it in", []recall.Hit{hit("m1", 1, 0), hit("m9", 0, 0.03), hit("m2", 2, 0)}, true},
+		{"pushed out of the list", []recall.Hit{hit("m1", 1, 0), hit("m3", 3, 0), hit("m4", 4, 0)}, true},
+		{"pushed out after the picks", []recall.Hit{hit("m1", 1, 0), hit("m2", 2, 0), hit("m3", 3, 0), hit("m5", 5, 0)}, false},
+	} {
+		_, chosen := selectHits(c.hits, rc, none)
+		if got := boostChangedSet(c.hits, chosen, rc, none); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

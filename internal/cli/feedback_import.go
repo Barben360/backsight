@@ -64,8 +64,13 @@ type importResult struct {
 	Why       string `json:"unchecked_reason,omitempty"`
 	Events    int    `json:"events"` // import events journaled
 	// Complete: the run went through every source and journaled the mark
-	// that ends the import (never with --plan or --since).
+	// that ends the import (never with --plan or --since), or found it
+	// journaled already.
 	Complete bool `json:"complete"`
+	// Waiting: the run went through every source but did not reach the
+	// server for every id (down, or another server at the address): no
+	// mark, a later run that reaches it writes it.
+	Waiting bool `json:"waiting_for_server,omitempty"`
 }
 
 // totals is the shows and credits of every source.
@@ -123,7 +128,9 @@ var afterImportUnit func()
 // them (unless plan) as import events by source and session: telemetry
 // first, then each transcript, so that a run ctx cuts short has kept
 // what it did and the next one goes on (keys make it idempotent). A run
-// that goes through every source journals the mark of a complete import.
+// that goes through every source and that the server answered (every id
+// asked about, its health when none was) journals the mark of a complete
+// import, unless the journal holds one already.
 // Refused while feedback is off. One run at a time, as command, under
 // the import lock: beside a run that holds it, importRunning and nothing
 // done (a plan, which writes nothing, takes no lock).
@@ -207,6 +214,21 @@ func importHistory(ctx context.Context, d paths.Dirs, home string, from time.Tim
 	// Only a run over all history completes it: one from --since leaves
 	// the older shows to the tick, which stops at the mark.
 	if plan || !from.IsZero() {
+		return res, nil
+	}
+	// Read under the import lock: a run that finished since this one was
+	// decided on (a tick beside a manual import) wrote it.
+	mark := func(e feedback.Event) bool {
+		return e.Kind == feedback.KindImport && e.Outcome == feedback.ImportComplete
+	}
+	if slices.ContainsFunc(journal, mark) {
+		res.Complete = true
+		return res, nil
+	}
+	// Ids the server was not asked about stay in the counts for good: the
+	// next run skips their shows. Only a run that reached it marks the end.
+	if !ck.answered(checkCtx) {
+		res.Waiting, res.Unchecked, res.Why = true, ck.unchecked, ck.why
 		return res, nil
 	}
 	var held *state.HeldError
@@ -466,14 +488,31 @@ const (
 )
 
 // memoryCheck asks the server for ids, reading only, importChecks at a
-// time: status holds what it answered, each id asked once. An id it fails
-// on, or not asked about before ctx is done, is kept: counted unchecked,
-// with the first reason. Without a client, every id is unchecked for why.
+// time: status holds what it answered, each id asked once, answers how
+// many it answered. An id it fails on, or not asked about before ctx is
+// done, is kept: counted unchecked, with the first reason. Without a
+// client, every id is unchecked for why.
 type memoryCheck struct {
-	cl        *hindsight.Client
-	bank, why string
-	status    map[string]string
-	unchecked int
+	cl                 *hindsight.Client
+	bank, why          string
+	status             map[string]string
+	unchecked, answers int
+}
+
+// answered: the server answered every id it was asked about, at least
+// one, or its health when none was asked; never without a client.
+func (c *memoryCheck) answered(ctx context.Context) bool {
+	if c.cl == nil || c.unchecked > 0 {
+		return false
+	}
+	if c.answers > 0 {
+		return true
+	}
+	_, err := c.cl.Health(ctx)
+	if err != nil && c.why == "" {
+		c.why = err.Error()
+	}
+	return err == nil
 }
 
 func (c *memoryCheck) run(ctx context.Context, ids []string) {
@@ -499,9 +538,9 @@ func (c *memoryCheck) run(ctx context.Context, ids []string) {
 				mu.Lock()
 				switch {
 				case err == nil:
-					c.status[id] = checkKnown
+					c.status[id], c.answers = checkKnown, c.answers+1
 				case notFound(err):
-					c.status[id] = checkGone
+					c.status[id], c.answers = checkGone, c.answers+1
 				default:
 					c.status[id], c.unchecked = "unchecked", c.unchecked+1
 					if c.why == "" {
@@ -546,6 +585,8 @@ func importText(r importResult) string {
 		fmt.Fprintf(&b, "imported %d shows and %d credits (never a miss)\n", shows, credits)
 	case r.Since != "":
 		fmt.Fprintf(&b, "imported %d shows and %d credits from %s on (never a miss); a run without --since imports the earlier ones\n", shows, credits, r.Since)
+	case r.Waiting:
+		fmt.Fprintf(&b, "imported %d shows and %d credits (never a miss); not marked complete until a run reaches the server: the jobs tick runs it again\n", shows, credits)
 	default:
 		fmt.Fprintf(&b, "imported %d shows and %d credits so far (never a miss); stopped before the end: run it again\n", shows, credits)
 	}

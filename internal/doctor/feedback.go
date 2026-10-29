@@ -86,6 +86,9 @@ func checkFeedbackLedger(d paths.Dirs, enabled bool) Check {
 	if err != nil {
 		c.Status, c.Summary = Error, "ledger unreadable: "+err.Error()
 		c.Detail = "the tick settles nothing while it cannot be read (it is never guessed)"
+		if errors.Is(err, feedback.ErrCorruptLedger) {
+			c.Detail = "the next tick keeps it aside and rebuilds it from the journal; recall gives no boost until then"
+		}
 		c.Fix = "backsight feedback rebuild recomputes it from the journal"
 		return c
 	}

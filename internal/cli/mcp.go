@@ -482,7 +482,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		return "", capRefusal(limit, done, acted)
 	}
 	sec, _ := key.get()
-	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence})
+	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence, checked: true})
 	if err != nil {
 		return "", err
 	}
@@ -490,10 +490,11 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 }
 
 // retirementsInSession is how many memories session sess retired, from
-// the journal's last 62 days; an unreadable journal counts what it could
-// read (a journal failure never fails a tool call).
+// the journal since the month it began (sessionJournal); an unreadable
+// journal counts what it could read (a journal failure never fails a tool
+// call).
 func retirementsInSession(d paths.Dirs, sess string) int {
-	events, _, _ := feedback.Read(d.FeedbackDir(), now().AddDate(0, 0, -62))
+	events, _ := sessionJournal(d, sess)
 	return feedback.Retirements(events, sess)
 }
 

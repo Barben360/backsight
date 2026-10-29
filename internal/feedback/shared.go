@@ -223,6 +223,19 @@ type Remote map[string]SharedEntry
 // older than sharedMaxAge nor dated or holding a time more than
 // sharedMaxSkew ahead of now.
 func CombineRemote(docs []SharedDoc, self string, now time.Time, p Params) Remote {
+	newest := newestCurrent(docs, self, now)
+	r := Remote{}
+	for _, m := range slices.Sorted(maps.Keys(newest)) {
+		for id, e := range newest[m].Entries {
+			r[id] = r[id].plus(e, now, p)
+		}
+	}
+	return r
+}
+
+// newestCurrent is the newest document of each machine but self in docs,
+// among those current at now: those CombineRemote sums.
+func newestCurrent(docs []SharedDoc, self string, now time.Time) map[string]SharedDoc {
 	newest := map[string]SharedDoc{}
 	for _, d := range docs {
 		if d.Machine == self || !d.current(now) {
@@ -232,13 +245,7 @@ func CombineRemote(docs []SharedDoc, self string, now time.Time, p Params) Remot
 			newest[d.Machine] = d
 		}
 	}
-	r := Remote{}
-	for _, m := range slices.Sorted(maps.Keys(newest)) {
-		for id, e := range newest[m].Entries {
-			r[id] = r[id].plus(e, now, p)
-		}
-	}
-	return r
+	return newest
 }
 
 // Expired: d's at is more than sharedMaxAge before now, a machine no

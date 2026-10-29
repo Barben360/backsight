@@ -144,14 +144,14 @@ func compareReplays(events []feedback.Event, before, after feedback.Ledger, p, q
 	}
 	res.Memories = len(ids)
 	for _, id := range slices.Sorted(maps.Keys(ids)) {
-		b, a := round4(before.Boost(id, p, t)), round4(after.Boost(id, q, t))
-		switch {
-		case b > 0 && a < 0:
+		bx, ax := before.Boost(id, p, t), after.Boost(id, q, t)
+		switch sb, sa := boostSign(bx), boostSign(ax); {
+		case sb > 0 && sa < 0:
 			res.TurnedNegative = append(res.TurnedNegative, id)
-		case b < 0 && a > 0:
+		case sb < 0 && sa > 0:
 			res.TurnedPositive = append(res.TurnedPositive, id)
 		}
-		if a != b {
+		if b, a := round4(bx), round4(ax); a != b {
 			res.Movers = append(res.Movers, replayMover{ID: id, Before: b, After: a})
 		}
 	}
@@ -209,6 +209,20 @@ func boostedOrder(items []feedback.Item, l feedback.Ledger, p feedback.Params, t
 	}
 	return ids
 }
+
+// boostSign is the sign of a boost as computed, not as printed: -1, +1,
+// or 0 within signEpsilon of zero (what float sums leave of a 0).
+func boostSign(v float64) int {
+	switch {
+	case v > signEpsilon:
+		return 1
+	case v < -signEpsilon:
+		return -1
+	}
+	return 0
+}
+
+const signEpsilon = 1e-9
 
 // round4 rounds v to 4 decimals; + 0 turns a negative zero into 0.
 func round4(v float64) float64 { return math.Round(v*10000)/10000 + 0 }

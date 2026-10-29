@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"strings"
 	"time"
@@ -178,7 +179,32 @@ func refreshShared(ctx context.Context, cl *hindsight.Client, d paths.Dirs, bank
 func combineShared(dir string, c feedback.SharedCache, machine string, now time.Time, p feedback.Params) error {
 	docs, _ := c.Parsed()
 	at := now.Truncate(time.Second)
-	return feedback.SaveSharedCombined(dir, at, feedback.CombineRemote(docs, machine, at, p))
+	return feedback.SaveSharedCombined(dir, at, feedback.CombineRemote(docs, machine, at, p), feedback.BasisOf(docs, machine, at, p))
+}
+
+// recombineShared is the tick's local look at the combined view, with
+// feedback and share_ledger on: combined again from shared.json, never
+// the server, when SharedCombinedOutdated says so (a half-life changed,
+// a machine it counts turned 30 days old, or an older binary wrote it),
+// so that either counts within one tick, not at the next refresh. Without
+// a readable shared.json it leaves the view as it is. The caller holds
+// the tick's lock, which the refresh writes under too.
+func recombineShared(d paths.Dirs, cfg config.Config, machine string, now time.Time) error {
+	if !cfg.Feedback.Enabled || !cfg.Feedback.ShareLedger {
+		return nil
+	}
+	dir, p := d.FeedbackDir(), feedbackParams(cfg)
+	if !feedback.SharedCombinedOutdated(dir, now, p) {
+		return nil
+	}
+	cache, err := feedback.LoadSharedCache(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return combineShared(dir, cache, machine, now, p)
 }
 
 func sha256Hex(s string) string {

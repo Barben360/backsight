@@ -249,6 +249,21 @@ type Report struct {
 		// with this one's, from the shared cache, not from telemetry
 		// (the caller sets it). Every other count is this machine's.
 		SharedMachines int `json:"shared_machines,omitempty"`
+		// From the feedback journal, not from telemetry (the caller sets
+		// them). Boost: the prompt recalls and searches of the window,
+		// and those whose shown set the boost changed. Imported: the shows
+		// of earlier history an import journaled in the window, and their
+		// credits (the settled ones above are live).
+		Boost struct {
+			Prompts            int `json:"prompts"`
+			PromptsSetChanged  int `json:"prompts_set_changed"`
+			Searches           int `json:"searches"`
+			SearchesSetChanged int `json:"searches_set_changed"`
+		} `json:"boost"`
+		Imported struct {
+			Shows   int `json:"shows"`
+			Credits int `json:"credits"`
+		} `json:"imported"`
 	} `json:"feedback"`
 }
 

@@ -24,7 +24,7 @@ func feedbackDirs(t *testing.T, last, watermark time.Time) paths.Dirs {
 		t.Fatal(err)
 	}
 	if !watermark.IsZero() {
-		if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, watermark); err != nil {
+		if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return watermark }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -97,8 +97,14 @@ func TestDoctorFeedbackChecks(t *testing.T) {
 	// A ledger of another schema: an error naming the rebuild.
 	unknown := feedbackDirs(t, recent, usageNow)
 	_ = os.WriteFile(filepath.Join(unknown.FeedbackDir(), "ledger.json"), []byte(`{"schema":9,"memories":{}}`), 0o600)
-	if c := checkFeedbackLedger(unknown, true); c.Status != Error || !strings.Contains(c.Fix, "backsight feedback rebuild") {
+	if c := checkFeedbackLedger(unknown, true); c.Status != Error || !strings.Contains(c.Fix, "backsight feedback rebuild") || !strings.Contains(c.Detail, "settles nothing") {
 		t.Errorf("unknown schema: %+v", c)
+	}
+	// One that does not parse: the next tick rebuilds it.
+	corrupt := feedbackDirs(t, recent, usageNow)
+	_ = os.WriteFile(filepath.Join(corrupt.FeedbackDir(), "ledger.json"), []byte(`{"schema":1,`), 0o600)
+	if c := checkFeedbackLedger(corrupt, true); c.Status != Error || !strings.Contains(c.Detail, "the next tick keeps it aside and rebuilds it") {
+		t.Errorf("corrupt: %+v", c)
 	}
 
 	// [feedback] enabled = false: both inform, whatever the files say.
@@ -228,7 +234,7 @@ func TestDoctorDoesNotCountARestoreAsAMemory(t *testing.T) {
 	if err := j.Append(feedback.Event{Kind: feedback.KindUnhide, TS: usageNow.Add(-15 * time.Minute), IDs: []string{"never-shown"}, Outcome: "restored"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, usageNow.Add(-10*time.Minute)); err != nil {
+	if _, err := feedback.Settle(d.FeedbackDir(), feedback.Params{ConfidentRank: 2, TurnTimeout: feedback.TurnTimeout}, func() time.Time { return usageNow.Add(-10 * time.Minute) }); err != nil {
 		t.Fatal(err)
 	}
 	if l, _ := feedback.LoadLedger(d.FeedbackDir()); len(l.Memories) != 1 {

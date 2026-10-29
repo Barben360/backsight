@@ -264,3 +264,72 @@ func TestCurveDescribesItsData(t *testing.T) {
 		}
 	}
 }
+
+// The README's paragraph under the chart says the numbers the defaults
+// and the chart give: the boost's bounds, both half-lives, the share of
+// uncredited shows the chart counts as misses and the neutral credit
+// rate. Changing a default or the chart without the prose fails here.
+func TestReadmeCurveNumbersMatchDefaults(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(readme), "\n## How memory learns what helps\n")
+	if !ok {
+		t.Fatal("README.md: no section How memory learns what helps")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	f := config.Default(paths.Dirs{}, "").Feedback
+	k, a, b := f.BoostWeight, f.PriorCredits, f.PriorMisses
+	prior := a / (a + b) // the credit share of a memory without counts
+	// With one uncredited show in m a miss, credit rate r gives the credit
+	// share r / (r + (1-r)/m): the prior's at r = prior / (m(1-prior) + prior).
+	neutral := prior / (curveMissEvery*(1-prior) + prior)
+	words := map[string]int{"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "twenty": 20}
+	number := func(s string) float64 {
+		if n, ok := words[s]; ok {
+			return float64(n)
+		}
+		v, err := strconv.ParseFloat(strings.ReplaceAll(s, "−", "-"), 64)
+		if err != nil {
+			t.Fatalf("README.md: %q is not a number", s)
+		}
+		return v
+	}
+	days := func(s string) float64 {
+		if s == "a year" {
+			return 365
+		}
+		return number(strings.TrimSuffix(s, " days"))
+	}
+	for _, c := range []struct {
+		what string
+		re   string
+		read func(string) float64
+		want float64
+	}{
+		{"lowest boost", `boost stays between (−[0-9.]+) and`, number, -k * prior},
+		{"highest boost", `boost stays between −[0-9.]+ and \+([0-9.]+)`, number, k * (1 - prior)},
+		{"miss half-life", `Misses lose half their weight in ([0-9]+ days|a year)`, days, float64(f.MissHalfLifeDays)},
+		{"credit half-life", `Misses lose half their weight in (?:[0-9]+ days|a year) and credits in ([0-9]+ days|a year)`, days, float64(f.CreditHalfLifeDays)},
+		{"uncredited shows counted as a miss", `one uncredited show in ([a-z0-9]+) counted as a miss`, number, curveMissEvery},
+		{"neutral credit rate", `a memory credited one time in ([a-z0-9]+) stays where`, func(s string) float64 { return 1 / number(s) }, neutral},
+	} {
+		m := regexp.MustCompile(c.re).FindStringSubmatch(section)
+		if m == nil {
+			t.Errorf("README.md: the %s is not where the test reads it (%s)", c.what, c.re)
+			continue
+		}
+		if got := c.read(m[1]); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("README.md: %s %q, the defaults give %v", c.what, m[1], c.want)
+		}
+	}
+	// The neutral rate is the chart's neutral line.
+	drawn := false
+	for _, l := range curveLines {
+		drawn = drawn || strings.Contains(l.label, "neutral") && math.Abs(l.rate-neutral) < 1e-9
+	}
+	if !drawn {
+		t.Errorf("the chart's neutral line is not at the neutral rate %v", neutral)
+	}
+}
