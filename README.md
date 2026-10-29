@@ -39,7 +39,7 @@ This memory layer is what I'm sharing here. First so you can benefit from it, bu
 
 - **Remembers your sessions.** When a session ends, its text is redacted and sent to your server, which extracts durable facts: decisions, fixes, conventions, pitfalls.
 - **Recalls at the right moment.** Each session starts with a briefing on the current project. Each prompt brings the few most relevant memories into Claude's context, and Claude searches the memory before answering factual questions. Every search runs on your machine, with no LLM call.
-- **Stays yours.** The server runs on your machine, on `127.0.0.1`, or on one of your machines that your other PCs share. You choose which LLM extracts the memories, and can pause or exclude anything.
+- **Stays yours.** The server runs on your machine, on `127.0.0.1`, or on another of your machines that your other PCs also use. You choose which LLM extracts the memories, and can pause or exclude anything.
 - **Looks after itself.** Daily encrypted backups, signed updates that roll back on failure, and `backsight doctor` to say what is wrong and how to fix it.
 
 New words (bank, observation, transverse…) are in the [glossary](docs/glossary.md).
@@ -72,7 +72,7 @@ Each hook's time limit and exact behaviour: [how-it-works.md](docs/how-it-works.
 
 ## How it works
 
-A session and the memory, step by step. The green part runs on your machines and costs nothing; only the orange part, in the background, calls your LLM provider. The server runs on this PC, or on one of your machines that your other PCs share ([install.md](docs/install.md#a-server-only-host)).
+A session and the memory, step by step. The green part runs on your machines and costs nothing; only the orange part, in the background, calls your LLM provider. The server runs on this PC, or on another of your machines that your other PCs also use ([install.md](docs/install.md#a-server-only-host)).
 
 ```mermaid
 sequenceDiagram
@@ -124,7 +124,7 @@ Background jobs keep it running (systemd user timers):
 
 ```mermaid
 flowchart LR
-    tick(["jobs tick<br/>every 15 min"]) --> t1["settle which memories<br/>helped (local)"] --> t2["send idle sessions<br/>and queued notes"] --> t3["pace the import<br/>of past sessions"] --> t4["purge again a document<br/>an older client rewrote"] --> t5["share what helped<br/>with your other PCs"]
+    tick(["jobs tick<br/>every 15 min"]) --> t1["settle which memories<br/>helped (local)"] --> t2["start the server if down,<br/>send idle sessions and queued notes"] --> t3["pace the import<br/>of past sessions"] --> t4["purge again a document<br/>an older client rewrote"] --> t5["share what helped<br/>with your other PCs"]
     maintain(["jobs maintain<br/>daily, 04:00 to 04:30"]) --> m1["encrypted backup<br/>(on the server's host)"] --> m2["move memories<br/>to their project"] --> m3["check purged<br/>documents"] --> m4["check for<br/>a new release"] --> m5["doctor snapshot"]
 ```
 
