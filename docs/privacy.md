@@ -89,7 +89,7 @@ A client that does not know about tombstones (an older backsight on another mach
 
 ## Secrets on disk
 
-Keys live only in `secrets.toml` (backsight's config directory) and the server's rendered `.env`, both readable by your user only (mode 0600). They never appear in command lines or answers: you type them at a prompt with `backsight secret set <name>`. Claude is told never to ask for a key in the conversation.
+Keys live only in `secrets.toml` (backsight's config directory) and the server's rendered `.env`, both readable by your user only (mode 0600), and in a connection token file until you delete it ([Several PCs](#several-pcs)). They never appear in command lines or answers: you type them at a prompt with `backsight secret set <name>`. Claude is told never to ask for a key in the conversation.
 
 ## Several PCs
 

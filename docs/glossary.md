@@ -88,7 +88,7 @@ A PC that uses the memory server of another machine, the host, since `backsight 
 
 ## Connection token
 
-What a PC joins a host with, as a file that `backsight server expose` or `backsight server token` writes on the host: the server's private address, its bank, its API key, its id and Hindsight version, and the host's LLM provider, model and prices, never the LLM key. It holds the API key: carry it yourself, never through a chat.
+What a PC joins a host with, as a file that `backsight server expose` or `backsight server token` writes on the host: the server's private address and its web UI's, its bank, its API key, its id and Hindsight version, and the host's LLM provider, model and prices, never the LLM key. It holds the API key: carry it yourself, never through a chat.
 
 ## Server id
 

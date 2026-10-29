@@ -83,12 +83,12 @@ To finish the import now, with the user's go-ahead, run `backsight retain backfi
 
 The user's PCs can share one memory, held by the server on one machine, the host: [several-pcs.md](several-pcs.md). The other PCs join it with a connection token, which holds the server's API key.
 
-**Never read, print, copy or pass a token's value or a key**, never ask the user to paste one into the conversation, and never open the token file. If a token reached the conversation anyway, tell the user to give the server a new key on the host: `backsight server token --rotate --out <file>`, in a terminal of their own.
+**Never read, print, copy or pass a token's value or a key**, never ask the user to paste one into the conversation, and never open the token file. If a token reached the conversation anyway, tell the user to give the server a new key on the host, in a terminal of their own: `backsight server token --rotate --out <file>`; every other PC is then refused until it joins again with `backsight connect --token-file <file>`.
 
 ### Joining the host from this PC
 
 1. Ask the user to make a token on the host, in a terminal of their own: `backsight server token --out <file>` (the server must be exposed first: `backsight server expose --private <ip> --out <file>` writes one too). They carry the file to this PC themselves (`scp`, a USB stick), never through a chat, and give you its path only.
-2. If `backsight version` fails, install the binary (step 1). A PC that joins needs Claude Code, not Docker.
+2. If `backsight version` fails, install the binary ([step 1](#1-install-the-binary)). A PC that joins needs Claude Code, not Docker.
 3. Show the plan:
 
    ```sh
@@ -103,27 +103,21 @@ The user's PCs can share one memory, held by the server on one machine, the host
    ```
 
    Add `--answer ack_subscription=yes` once the user accepted those terms. connect then runs setup's client steps: exit 10 and 20 mean what they mean for setup (ask each of `error.questions` with `"asked": true`, then run `error.resume`; or show the failed checks and their fix). Each refusal before the change leaves the PC as it was.
-5. On exit 0, relay `data.next_steps`: the user deletes the token file on both machines, and restarts Claude Code (or runs `/reload-plugins`).
+5. On exit 0, relay `data.next_steps` (delete the token file here) and `data.setup.next_steps` (the background import, how to undo); when `data.restart_required` is true, tell the user to restart Claude Code (or run `/reload-plugins`). The host's copy of the token file goes too: the user deletes it there.
 
 ### Installing the server on another machine over ssh
 
-For a Linux machine without Claude Code that the user reaches with `ssh user@host` (their keys, their `known_hosts`: an unknown host key is refused, so they connect once themselves and check the fingerprint first):
+For a Linux machine without Claude Code that the user reaches with `ssh user@host` (their keys, their `known_hosts`: an unknown host key is refused, so they connect once themselves and check the fingerprint first). The install sends the host's LLM key, which never passes through you: you only show the plan, and the user runs the install itself in a terminal of their own.
 
-1. Show the plan, which reads the host and changes nothing:
+1. Show the plan, which reads the host, reads no key and changes nothing:
 
    ```sh
    backsight server install --ssh user@host --plan --json
    ```
 
-   Pass the host's setup answers the user chose, as in step 2 (`--answer provider=<p>`, `--answer model=<m>`…). An exit 10 names what is missing: the address the other PCs will use (`--private <ip>`, a tailnet or LAN address of the host; a LAN one also needs `--answer cleartext_lan=yes`, the user's call, since the API key then travels in clear on that network), or a signature checker on the host. A plan step `ack_subscription` means the host would extract with a Claude subscription: show its caveat, and add `--answer ack_subscription=yes` only once the user accepted it.
-2. The run sends the host's LLM key to it, and the key must never reach you. Recommended: the user runs the command in a terminal of their own, with the flags and answers you agreed, without `--plan` nor `--json`; it asks the key at a hidden prompt and their consent there. If they want you to run it, they first write the key to a file only they can read, in their own terminal (for example `(umask 077; pass show <entry> > <file>)`), and you run, without opening that file:
-
-   ```sh
-   backsight server install --ssh user@host --non-interactive --json --answer consent=yes --llm-key-from-file <file>
-   ```
-
-   and once it exits 0, ask them to delete it (a resumed run reads it again). Never use `--llm-key-from-env`: the key would sit in your environment. The key step is skipped when the host already has one, or when its provider needs none.
-3. Progress lines arrive on stderr (`host:<step>` for the host's own). It then joins the server from this PC as connect does: relay `data.connect` and `data.next_steps`. After a failure (exit 40 when the ssh connection ended part way), fix what the message says, then run `error.resume`, the same command, which goes on from where it stopped; the host is never rolled back (`backsight setup --undo` there undoes it).
+   Pass the host's setup answers the user chose, as in step 2 (`--answer provider=<p>`, `--answer model=<m>`…). An exit 10 names what is missing: the address the other PCs will use (`--private <ip>`, a tailnet or LAN address of the host; a LAN one also needs `--answer cleartext_lan=yes`, the user's call, since the API key then travels in clear on that network), or a signature checker on the host. A plan step `ack_subscription` means the host would extract with a Claude subscription: show its caveat; only the user accepts it.
+2. Once the user agrees, give them the command to run in a terminal of their own: `backsight server install --ssh user@host` with the flags and answers you agreed, without `--plan` nor `--json`. It asks the LLM key at a hidden prompt, then the consent and connect's own questions there, and joins the server from this PC. Never run it yourself, and never pass `--llm-key-from-file` or `--llm-key-from-env`.
+3. The user reads the outcome in their terminal. After a failure (exit 40 when the ssh connection ended part way), they fix what the message says and run the same command again there: it goes on from where it stopped. The host is never rolled back; `backsight setup --undo` there undoes its setup. Never run its resume command yourself: it can carry a key flag.
 
 No ssh access to the host: `backsight server install --print-commands --json` lists the commands to run, each with where (the host or this PC) and why. Show them to the user, who runs them: the host's key at its own hidden prompt, and the token file carried by hand.
 
