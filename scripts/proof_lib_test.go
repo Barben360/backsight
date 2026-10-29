@@ -1,0 +1,115 @@
+package scripts
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// proofLib runs a script after sourcing proof-lib.sh, under bash with the
+// given flags; it returns stderr and the exit code.
+func proofLib(t *testing.T, flags, script string) (stderr string, code int) {
+	t.Helper()
+	root, _ := filepath.Abs("..")
+	args := []string{"-c", `. "$1/scripts/proof-lib.sh"; ` + script, "pl", root}
+	if flags != "" {
+		args = append([]string{flags}, args...)
+	}
+	cmd := exec.Command("bash", args...)
+	cmd.Dir = t.TempDir()
+	var e bytes.Buffer
+	cmd.Stderr = &e
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return e.String(), ee.ExitCode()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e.String(), 0
+}
+
+func TestProofLibSecretIsNeverTracedAndTraceResumes(t *testing.T) {
+	// The secret comes out of a function, not the argv (a command line is
+	// traced before it runs), and is checked untraced for the same reason.
+	const script = `emit() { printf s3cr3t; }; check() { [ "$k" = s3cr3t ]; }; pl_secret k emit; echo after; pl_untraced check`
+	stderr, code := proofLib(t, "-x", script)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	if strings.Contains(stderr, "s3cr3t") {
+		t.Errorf("the secret was traced:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "+ echo after") {
+		t.Errorf("trace did not resume after pl_secret:\n%s", stderr)
+	}
+	stderr, code = proofLib(t, "", script)
+	if code != 0 || strings.Contains(stderr, "+ echo after") {
+		t.Errorf("untraced caller: exit %d, stderr %q (want 0, no trace turned on)", code, stderr)
+	}
+}
+
+func TestProofLibSecretKeepsTheStatus(t *testing.T) {
+	stderr, code := proofLib(t, "-x", `set -e; pl_secret k false || echo "rc=$?"; echo after`)
+	if code != 0 || !strings.Contains(stderr, "+ echo rc=1") || !strings.Contains(stderr, "+ echo after") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+func TestProofLibUntracedKeepsTheStatus(t *testing.T) {
+	stderr, code := proofLib(t, "-x", `pl_untraced false; rc=$?; echo "rc=$rc"; exit "$rc"`)
+	if code != 1 {
+		t.Errorf("exit %d, want 1 (pl_untraced false); stderr:\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "+ echo rc=1") {
+		t.Errorf("trace did not resume after pl_untraced:\n%s", stderr)
+	}
+}
+
+func TestProofLibUntracedHidesWhatItRuns(t *testing.T) {
+	stderr, code := proofLib(t, "-x", `inner() { echo hidden-step >/dev/null; }; pl_untraced inner; echo after`)
+	if code != 0 || strings.Contains(stderr, "hidden-step") || !strings.Contains(stderr, "+ echo after") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+}
+
+func TestProofLibHashNamesTheMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "present"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `fail() { echo "FAIL: $*" >&2; }; cd ` + dir + `; set -e; pl_hash present missing`
+	stderr, code := proofLib(t, "", script)
+	if code != 1 {
+		t.Errorf("exit %d, want 1; stderr:\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "FAIL: cannot hash missing") || strings.Contains(stderr, "sha256sum:") {
+		t.Errorf("stderr:\n%s", stderr)
+	}
+}
+
+func TestProofLibHashPrintsEachFile(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("bash", "-c", `. "$1/scripts/proof-lib.sh"; fail() { echo "FAIL: $*" >&2; exit 9; }; cd "$2"; echo a > a; echo b > b; pl_hash a b`, "pl", mustAbs(t, ".."), dir)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(out), "\n"); got != 2 || !strings.Contains(string(out), "  a\n") || !strings.Contains(string(out), "  b\n") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+func mustAbs(t *testing.T, p string) string {
+	t.Helper()
+	a, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}

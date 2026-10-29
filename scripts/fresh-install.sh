@@ -18,6 +18,8 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck source=scripts/ports.sh
 . "$root/scripts/ports.sh"
+# shellcheck source=scripts/proof-lib.sh
+. "$root/scripts/proof-lib.sh"
 port=$(slot_port 28400 "${1:-}")
 project=${PROJECT:-bs-fresh}
 [ "$project" != backsight ] || { echo "PROJECT=backsight would be the machine's own install" >&2; exit 2; }
@@ -226,9 +228,10 @@ if [ -z "$priv_ip" ]; then
   echo "fresh-install: skipping the exposure leg: no private IPv4 on the default route" >&2
 else
   health() { curl -fsS --max-time 10 "http://$1:$port/health" >/dev/null; } # health <ip>
-  banks_status() { # banks_status <key>: the HTTP status of the banks list with that key
-    curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" "http://127.0.0.1:$port/v1/default/banks"
-  }
+  # banks_status <key variable>: the HTTP status of the banks list with the
+  # key that variable holds (its name, not its value, is what a trace shows).
+  banks_status_raw() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer ${!1}" "http://127.0.0.1:$port/v1/default/banks"; }
+  banks_status() { pl_untraced banks_status_raw "$1"; }
   # The commands' JSON never carries the key; a failure shows it anyway
   # with any api_key value masked.
   show() { sed 's/"api_key": *"[^"]*"/"api_key":"..."/g' "$1" >&2; }
@@ -247,37 +250,35 @@ else
     { show "$work/token2.json"; fail "token2.json: want ok, the private url, a bank, the file written and no key"; }
   [ -s "$work/token2" ] && [ -s "$work/token2b" ] || fail "server token wrote no token file"
   # The key stays in these variables: never echoed, never traced.
-  { set +x; } 2>/dev/null
-  old_key=$(rc_key)
+  pl_secret old_key rc_key
   [ -n "$old_key" ] || fail "no api_key in the isolated secrets.toml"
-  [ "$(banks_status "$old_key")" = 200 ] || fail "the banks list refuses the current key before the rotation"
+  [ "$(banks_status old_key)" = 200 ] || fail "the banks list refuses the current key before the rotation"
   "$sv" server token --rotate --json --out "$work/token3" > "$work/token3.json" || { show "$work/token3.json"; fail "server token --rotate failed"; }
   [ -s "$work/token3" ] || fail "server token --rotate wrote no token file"
-  new_key=$(rc_key)
+  pl_secret new_key rc_key
   [ -n "$new_key" ] && [ "$new_key" != "$old_key" ] || fail "the rotation left the same api_key in secrets.toml"
-  [ "$(banks_status "$old_key")" = 401 ] || fail "the old key still works after the rotation (want 401)"
-  [ "$(banks_status "$new_key")" = 200 ] || fail "the new key is refused after the rotation (want 200)"
+  [ "$(banks_status old_key)" = 401 ] || fail "the old key still works after the rotation (want 401)"
+  [ "$(banks_status new_key)" = 200 ] || fail "the new key is refused after the rotation (want 200)"
   [ "$(jq -r '.data.server_id' "$work/token3.json")" = "$sid" ] || fail "the rotation changed the server id"
   unset old_key new_key
   # 9a'. The client side (M6 block 2): a second PC, with its own HOME,
   # BACKSIGHT_HOME and Claude Code profile, joins this server with the
   # rotated token. scheduler=off: no entry named like the user's own install.
   # Its key stays in its secrets.toml, never printed.
-  bank_docs() { # the host bank's document count; the key stays inside
-    local k
-    { set +x; } 2>/dev/null
-    k=$(rc_key)
-    curl -fsS --max-time 10 -H "Authorization: Bearer $k" "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/stats" | jq -er '.total_documents'
+  bank_docs_raw() { # the key is read here, inside the untraced call
+    curl -fsS --max-time 10 -H "Authorization: Bearer $(rc_key)" "http://127.0.0.1:$port/v1/default/banks/$(rc_bank)/stats" | jq -er '.total_documents'
   }
+  bank_docs() { pl_untraced bank_docs_raw; } # the host bank's document count
   c2() { HOME=$work/home2 BACKSIGHT_HOME=$work/backsight2 "$@"; }
   mkdir -p "$work/home2"
   # The host's own files: the second client must leave them alone.
-  host_files() { sha256sum "$BACKSIGHT_HOME/config/secrets.toml" "$BACKSIGHT_HOME/config/config.toml"; }
+  host_files() { pl_hash "$BACKSIGHT_HOME/config/secrets.toml" "$BACKSIGHT_HOME/config/config.toml"; }
   host_before=$(host_files)
   docs_before=$(bank_docs) || fail "cannot read the host bank's document count"
   c2 "$sv" connect --token-file "$work/token3" --answer consent=yes --answer backfill=no --answer retention=keep --answer scheduler=off \
     --non-interactive --json > "$work/connect.json" 2> "$work/connect.err" || { show "$work/connect.json"; show "$work/connect.err"; fail "connect with the rotated token failed"; }
   jq -e '.ok' "$work/connect.json" >/dev/null || { show "$work/connect.json"; fail "connect.json: want ok"; }
+  # doctor exits non-zero on a warning; jq judges
   c2 "$sv" doctor --json > "$work/doctor2.json" || true
   jq -e '(.data.checks | map(select(.id == "server-id"))[0].status == "ok") and (.data.checks | map(select(.status == "error")) | length == 0)' "$work/doctor2.json" >/dev/null ||
     { jq -c '.data.checks[]? | select(.status == "error" or .id == "server-id")' "$work/doctor2.json" >&2; fail "the client's doctor: want server-id ok and no error"; }
@@ -289,6 +290,10 @@ else
     [ "$docs_after" -gt "$docs_before" ] && break
     sleep 2
   done
+  # The first read above the old count may still miss a second document:
+  # the strict check reads again on a drained queue.
+  rc_queue_wait
+  docs_after=$(bank_docs) || fail "cannot read the host bank's document count"
   [ "$docs_after" -eq $((docs_before + 1)) ] || fail "the host bank holds $docs_after documents, want $((docs_before + 1)) (before the client's note: $docs_before)"
   # The pre-rotation token's key is dead: connect refuses it and changes nothing.
   [ -s "$work/token2" ] || fail "harness: the pre-rotation token file is missing or empty"
@@ -302,6 +307,7 @@ else
   jq -e '.ok == false and (.error.message | contains("the server rejected this token'"'"'s key"))' "$work/connect-old.json" >/dev/null ||
     { show "$work/connect-old.json"; fail "connect with the pre-rotation token: want ok false and the rejected-key message"; }
   cmp -s "$work/secrets2.before" "$work/backsight2/config/secrets.toml" || fail "the refused connect changed the client's secrets.toml"
+  rm -f "$work/secrets2.before" # it holds the client's key and KEEP=1 keeps $work
   [ "$(host_files)" = "$host_before" ] || fail "the second client changed the first client's secrets.toml or config.toml"
   "$sv" server expose --loopback --json > "$work/expose-loopback.json" || { show "$work/expose-loopback.json"; fail "server expose --loopback failed"; }
   health 127.0.0.1 || fail "/health does not answer on 127.0.0.1 after expose --loopback"
