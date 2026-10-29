@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,7 +110,14 @@ func TestUninstallSurvivesAnUnreachableServer(t *testing.T) {
 	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	t.Cleanup(hang.Close)
 	hangPort, _ := strconv.Atoi(hang.URL[strings.LastIndex(hang.URL, ":")+1:])
-	for name, port := range map[string]int{"down": closedPort(t), "hanging": hangPort} {
+	// A server that refuses with a body of several lines.
+	refuse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Internal error\n  at line two\r\n\tand three"))
+	}))
+	t.Cleanup(refuse.Close)
+	refusePort, _ := strconv.Atoi(refuse.URL[strings.LastIndex(refuse.URL, ":")+1:])
+	for name, port := range map[string]int{"down": closedPort(t), "hanging": hangPort, "500": refusePort} {
 		m, _, _ := sharedInstall(t)
 		pointAt(t, m.home, port)
 		start := time.Now()
@@ -120,8 +129,11 @@ func TestUninstallSurvivesAnUnreachableServer(t *testing.T) {
 			t.Errorf("%s: took %s", name, took)
 		}
 		s := stepNamed(env.Data, "shared counts")
-		if s == nil || s.Status != "kept" || !strings.Contains(s.Detail, "30 days") || strings.Contains(s.Detail, "\n") {
+		if s == nil || s.Status != "kept" || !strings.Contains(s.Detail, "30 days") || strings.ContainsAny(s.Detail, "\n\r\t") {
 			t.Errorf("%s: %+v", name, s)
+		}
+		if name == "500" && !strings.Contains(s.Detail, "Internal error at line two and three") {
+			t.Errorf("500: the server's answer is not on the line: %q", s.Detail)
 		}
 		if onDisk(pathsOf(m.home).StateFile()) {
 			t.Errorf("%s: the uninstall stopped short", name)
@@ -146,6 +158,37 @@ func TestUninstallLeavesAnotherServerAlone(t *testing.T) {
 	for _, c := range curation {
 		if strings.HasPrefix(c, "DELETE") {
 			t.Errorf("a delete reached another server: %s", c)
+		}
+	}
+}
+
+// A machine that never sent its counts (no record of a send) or has no
+// machine id: nothing to delete, the server is not asked.
+func TestUninstallSkipsAMachineThatNeverShared(t *testing.T) {
+	for name, spoil := range map[string]func(installed) error{
+		"no send recorded": func(m installed) error {
+			return os.Remove(feedback.SharedUploadFile(pathsOf(m.home).FeedbackDir()))
+		},
+		"no machine id": func(m installed) error { return os.Remove(filepath.Join(pathsOf(m.home).State, "machine_id")) },
+	} {
+		m, _, cl := sharedInstall(t)
+		if err := spoil(m); err != nil {
+			t.Fatal(err)
+		}
+		code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
+		if code != output.OK {
+			t.Fatalf("%s: exit %d\n%s", name, code, out)
+		}
+		if s := stepNamed(env.Data, "shared counts"); s == nil || s.Status != "skipped" {
+			t.Errorf("%s: step %+v", name, s)
+		}
+		if got := sharedDocs(t, cl); len(got) != 2 {
+			t.Errorf("%s: deleted, %v left", name, got)
+		}
+		for _, c := range curation {
+			if strings.HasPrefix(c, "DELETE") {
+				t.Errorf("%s: a delete was sent: %s", name, c)
+			}
 		}
 	}
 }

@@ -831,8 +831,8 @@ func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
 // machine id it is named after: the other machines would weigh it for 30
 // more days. Skipped when this machine never sent one, or another server
 // answers at the joined address. A server that fails or does not answer
-// within uninstallShareBudget keeps it (status kept): the uninstall goes
-// on.
+// within uninstallShareBudget keeps it (status kept, one line: the
+// server's answer folded onto it): the uninstall goes on.
 func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config, sec config.Secrets, plan bool) undoAction {
 	a := undoAction{Name: "shared counts"}
 	machine := retain.ReadMachineID(d.State)
@@ -856,7 +856,7 @@ func uninstallSharedCounts(ctx context.Context, d paths.Dirs, cfg config.Config,
 		err = retain.DeleteControlDocument(ctx, cl, cfg.Server.Bank, id)
 	}
 	if err != nil {
-		a.Status, a.Detail = "kept", "this machine's counts ("+id+") stay on the server, "+errMessage(err)+": the other machines ignore them after 30 days"
+		a.Status, a.Detail = "kept", "this machine's counts ("+id+") stay on the server, "+strings.Join(strings.Fields(errMessage(err)), " ")+": the other machines ignore them after 30 days"
 		return a
 	}
 	a.Status, a.Detail = "done", "this machine's counts ("+id+") deleted from the server"
