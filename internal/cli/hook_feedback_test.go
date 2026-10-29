@@ -75,10 +75,18 @@ func TestShownInSessionReadsFromSessionStart(t *testing.T) {
 		t.Errorf("began last month, resumed: %v", got)
 	}
 
-	// No pointer: the last 62 days, and the seen ids when they cannot be read.
+	// No pointer, or one an older binary wrote without Since: the last 62
+	// days, and the seen ids when they cannot be read.
 	show("s3", "m-unknown", time.Time{})
 	if got := showIDs(shownInSession(d, "s3")); !slices.Contains(got, "seen-only") {
 		t.Errorf("start unknown: %v", got)
+	}
+	if err := feedback.SetTurn(dir, "s4", feedback.Turn{ID: "p-1", N: 1}); err != nil {
+		t.Fatal(err)
+	}
+	show("s4", "m-old-pointer", time.Time{})
+	if got := showIDs(shownInSession(d, "s4")); !slices.Contains(got, "seen-only") {
+		t.Errorf("pointer without Since: %v", got)
 	}
 }
 

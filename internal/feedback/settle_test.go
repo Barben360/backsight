@@ -650,3 +650,49 @@ func TestSettleReadsTheClockUnderTheLock(t *testing.T) {
 		t.Errorf("%+v %v, clock read %d time(s)", res, err, reads)
 	}
 }
+
+// A corrupt ledger met again within the same second: the copy kept
+// before stays as it was, the new one takes a suffixed name.
+func TestSettleKeepsEveryCorruptLedgerCopy(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	corrupt := "ledger.json.corrupt-" + strconv.FormatInt(at(200).Unix(), 10)
+	if err := os.WriteFile(filepath.Join(dir, corrupt), []byte("earlier"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ledger.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Settle(dir, testParams, fixedClock(at(200)))
+	if err != nil || res.Rebuilt != corrupt+"-2" {
+		t.Fatalf("%+v %v, want the copy kept as %s-2", res, err, corrupt)
+	}
+	for name, want := range map[string]string{corrupt: "earlier", corrupt + "-2": "{not json"} {
+		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != want {
+			t.Errorf("%s: %q %v, want %q", name, got, err, want)
+		}
+	}
+	if l, err := LoadLedger(dir); err != nil || l.Memories["m1"].Shown != 1 {
+		t.Errorf("ledger %+v %v", l.Memories, err)
+	}
+}
+
+// A hook wrote into the next month's file before the settle took the
+// journal's end: recall still sees a retirement journaled after the
+// settle into the month of its watermark.
+func TestSettleOffsetAcrossAMonthChange(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feedback")
+	writeJournal(t, dir, sampleSession()...)
+	writeJournal(t, dir, evTurn("s2", "q1", 40*24*60)) // the next month's file
+	if _, err := Settle(dir, testParams, fixedClock(at(120))); err != nil {
+		t.Fatal(err)
+	}
+	j := NewJournal(dir, Common{Session: "s1"})
+	j.now = func() time.Time { return at(119) } // stamped just after the watermark: this month
+	if err := j.AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}, Verdict: "wrong"}); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := Current(dir); err != nil || l.Memories["m1"].Wrong != 1 {
+		t.Errorf("current m1 %+v %v, want the retirement", l.Memories["m1"], err)
+	}
+}

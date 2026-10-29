@@ -127,9 +127,10 @@ func NewJournal(dir string, c Common) *Journal {
 	return &Journal{dir: dir, common: c, now: time.Now}
 }
 
-func (j *Journal) file(t time.Time) string {
-	return filepath.Join(j.dir, "journal-"+t.UTC().Format("2006-01")+".jsonl")
-}
+func (j *Journal) file(t time.Time) string { return filepath.Join(j.dir, monthFile(t)) }
+
+// monthFile is the base name of the journal file of t's UTC month.
+func monthFile(t time.Time) string { return "journal-" + t.UTC().Format("2006-01") + ".jsonl" }
 
 // Append writes e as one line of its ts's month file, after setting its
 // schema, its seq, its ts (now, unless set) and the common fields it
@@ -199,7 +200,7 @@ func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
 		return nil, 0, err
 	}
 	slices.Sort(files) // journal-YYYY-MM sorts by month
-	first := "journal-" + from.UTC().Format("2006-01") + ".jsonl"
+	first := monthFile(from)
 	for _, f := range files {
 		if filepath.Base(f) < first {
 			continue
