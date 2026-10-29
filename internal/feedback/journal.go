@@ -25,13 +25,17 @@ const Schema = 1
 // written before the field). Boost is what the ledger added to its score,
 // RankWithoutBoost its place in the same list without it (both empty when
 // recall had no ledger, and on lines written before the fields).
+// ScoreWithoutBoost is its score before the boost: the server's score
+// with the current-project boost (empty on lines written before the
+// field), what feedback replay orders a list by again.
 type Item struct {
-	ID               string  `json:"id"`
-	Rank             int     `json:"rank,omitempty"`
-	Reranker         float64 `json:"reranker,omitempty"`
-	Project          string  `json:"project,omitempty"`
-	Boost            float64 `json:"boost,omitempty"`
-	RankWithoutBoost int     `json:"rank_without_boost,omitempty"`
+	ID                string  `json:"id"`
+	Rank              int     `json:"rank,omitempty"`
+	Reranker          float64 `json:"reranker,omitempty"`
+	Project           string  `json:"project,omitempty"`
+	Boost             float64 `json:"boost,omitempty"`
+	RankWithoutBoost  int     `json:"rank_without_boost,omitempty"`
+	ScoreWithoutBoost float64 `json:"score_without_boost,omitempty"`
 }
 
 // Settled is the outcome a settle gave one show: credit, confident_miss,

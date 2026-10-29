@@ -1352,7 +1352,7 @@ func TestSearchJournalsARecallAuditEvent(t *testing.T) {
 	ev := recallEvents(t, home)[1]
 	m2, m1 := ev.Items[0], ev.Items[1]
 	if strings.Join(ev.Flags, ",") != feedback.FlagOrderChanged || m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost <= 0 ||
-		m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 {
+		m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 || m2.ScoreWithoutBoost != 0.75 || m1.ScoreWithoutBoost != 0.77 {
 		t.Errorf("boosted: %+v", ev)
 	}
 	// One hit returned: m2 ranked past it without the boost.

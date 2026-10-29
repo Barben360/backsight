@@ -714,8 +714,9 @@ func TestFeedbackOffJournalsNothing(t *testing.T) {
 }
 
 // The prompt recall follows the ledger, and its shows say how: m2, used
-// often, is injected over m1, 0.02 above it, each item with its boost and
-// its rank without it.
+// often, is injected over m1, 0.02 above it, each item with its boost,
+// its score and its rank without it (the score with the current-project
+// boost, for feedback replay to order the hits again).
 func TestPromptShowsJournalTheBoost(t *testing.T) {
 	home := hookHome(t)
 	recallAnswer = hits(0.82, 0.80)
@@ -730,10 +731,10 @@ func TestPromptShowsJournalTheBoost(t *testing.T) {
 		t.Fatalf("shows %+v", shows)
 	}
 	m2, m1 := shows[0].Items[0], shows[0].Items[1]
-	if m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost < 0.034 || m2.Boost > 0.035 || m2.Reranker != 0.8 {
+	if m2.ID != "m2" || m2.Rank != 1 || m2.RankWithoutBoost != 2 || m2.Boost < 0.034 || m2.Boost > 0.035 || m2.Reranker != 0.8 || m2.ScoreWithoutBoost != 0.85 {
 		t.Errorf("m2 %+v", m2)
 	}
-	if m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 {
+	if m1.ID != "m1" || m1.Rank != 2 || m1.RankWithoutBoost != 1 || m1.Boost != 0 || m1.ScoreWithoutBoost != 0.87 {
 		t.Errorf("m1 %+v", m1)
 	}
 }

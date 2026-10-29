@@ -181,6 +181,22 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 	return settled, late
 }
 
+// Replay is the ledger events would give had every show been decided
+// under p: the settle events they hold left out, every show decided
+// again at now by Decide (a sources show never), and the outcomes
+// folded at now with the import, forget, retire, hide and unhide events,
+// as Fold does. Events after now are not seen. Pure: it writes nothing.
+func Replay(events []Event, p Params, now time.Time) Ledger {
+	var kept []Event
+	for _, e := range events {
+		if e.Kind != "settle" && !e.TS.After(now) {
+			kept = append(kept, e)
+		}
+	}
+	settled, _ := Decide(kept, p, now)
+	return Fold(append(kept, Event{Kind: "settle", TS: now.UTC(), Settled: settled}), p)
+}
+
 // attach credits the latest of shows neither credited nor settled; false
 // when there is none.
 func attach(shows []*pendingShow) bool {

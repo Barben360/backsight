@@ -27,23 +27,30 @@ func newFeedbackCmd(e *env) *cobra.Command {
 		Use:   "feedback",
 		Short: "Read which memories were shown to Claude and which it used, and recompute their counts",
 	}
-	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e))
+	cmd.AddCommand(newFeedbackLogCmd(e), newFeedbackRebuildCmd(e), newFeedbackImportCmd(e), newFeedbackReplayCmd(e))
 	return cmd
 }
 
 // feedbackSetup is the feedback directory and the ledger's parameters; a
-// machine without config.toml uses the defaults (both commands only read
+// machine without config.toml uses the defaults (these commands only read
 // local files).
 func feedbackSetup() (string, feedback.Params, error) {
+	dir, cfg, err := feedbackConfig()
+	return dir, feedbackParams(cfg), err
+}
+
+// feedbackConfig is the feedback directory and this machine's
+// configuration, the defaults without config.toml.
+func feedbackConfig() (string, config.Config, error) {
 	d, home, err := machine()
 	if err != nil {
-		return "", feedback.Params{}, err
+		return "", config.Config{}, err
 	}
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", feedback.Params{}, blocked(err)
+		return "", config.Config{}, blocked(err)
 	}
-	return d.FeedbackDir(), feedbackParams(cfg), nil
+	return d.FeedbackDir(), cfg, nil
 }
 
 // logEvent is one line of a timeline: a journal event narrowed to the

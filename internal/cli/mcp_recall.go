@@ -10,13 +10,13 @@ import (
 )
 
 // journalRecall records what a memory_search returned, as a recall audit
-// event: each hit's id, rank, rank without the boost, server's score and
-// boost, and whether the boost changed which hits were returned
-// (set_changed: one ranked past them without it, or only the boost let
-// it in) or their order. Only
-// for the session this server belongs to (a current record), unpaused,
-// under its current turn, when feedback is on; ids and numbers only. A
-// failure is logged, never fails the search.
+// event: each hit's id, rank, rank without the boost, server's score,
+// score without the boost and boost, and whether the boost changed which
+// hits were returned (set_changed: one ranked past them without it, or
+// only the boost let it in) or their order. Only for the session this
+// server belongs to (a current record), unpaused, under its current
+// turn, when feedback is on; ids and numbers only. A failure is logged,
+// never fails the search.
 func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Result) {
 	if !d.cfg.Feedback.Enabled || found != "record" || len(res.Hits) == 0 {
 		return
@@ -27,7 +27,8 @@ func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Resul
 	e := feedback.Event{Kind: feedback.KindRecall, Path: "search", Items: make([]feedback.Item, 0, len(res.Hits))}
 	setChanged, orderChanged := false, false
 	for i, h := range res.Hits {
-		e.Items = append(e.Items, feedback.Item{ID: h.ID, Rank: i + 1, RankWithoutBoost: h.RankWithoutBoost, Reranker: h.Reranker, Boost: h.Boost})
+		e.Items = append(e.Items, feedback.Item{ID: h.ID, Rank: i + 1, RankWithoutBoost: h.RankWithoutBoost, Reranker: h.Reranker, Boost: h.Boost,
+			ScoreWithoutBoost: scoreWithoutBoost(h)})
 		switch {
 		case h.RankWithoutBoost != 0:
 			setChanged = setChanged || h.RankWithoutBoost > len(res.Hits)
