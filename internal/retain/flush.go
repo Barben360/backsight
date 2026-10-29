@@ -176,7 +176,14 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	// Under the session's lock, whatever the flush did: the path rule's
 	// shadow answers are local and never wait for the server.
 	defer func() { res.Turns = f.recordTurns(sid, path, opt.Force) }()
+	return f.flushLocked(ctx, res, sid, path, opt, false)
+}
 
+// flushLocked is FlushFile under the session's lock. resyncFirst: rebuild
+// the cursor from the server whatever it says, as when another PC moved a
+// document since this cursor (movedElsewhere).
+func (f *Flusher) flushLocked(ctx context.Context, res Result, sid, path string, opt Options, resyncFirst bool) Result {
+	fail := func(status, detail string) Result { res.Status, res.Detail = status, detail; return res }
 	cursorDir := f.Dirs.CursorsDir()
 	cur, haveCursor, err := LoadCursor(cursorDir, sid)
 	if err != nil {
@@ -194,7 +201,7 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 	}
 	// A cursor without Segments predates per-project documents: its
 	// Segment counts every project's runs, all sent to conversation:<sid>.
-	resync := !haveCursor || !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
+	resync := resyncFirst || !haveCursor || !state.SameBank(cur.Bank, f.Bank) || cur.Backfill || cur.Segments == nil || fi.Size() < cur.Offset
 	if haveCursor {
 		fp, err := Fingerprint(path, cur.Offset)
 		if err != nil {
@@ -285,7 +292,69 @@ func (f *Flusher) FlushFile(ctx context.Context, path string, opt Options) (res 
 		}
 		send = recs[:n]
 	}
+	if !resync {
+		// A valid cursor numbers the next segments, unless another PC moved
+		// a document since (decision 0073): then the server numbers them.
+		moved, err := f.movedElsewhere(ctx, cur, sid, send, attrs, tombs)
+		switch {
+		case err != nil:
+			res.Stop, res.NeedsFix = true, needsFix(err)
+			return fail(Retry, errSummary(err))
+		case moved:
+			return f.flushLocked(ctx, Result{Session: sid, Transcript: path}, sid, path, opt, true)
+		}
+	}
 	return f.sendRuns(ctx, res, cur, sid, send, attrs, tombs, now)
+}
+
+// movedElsewhere reads, before an append, each document send would write
+// to, and reports whether one is no longer where cur left it: another PC
+// continued the session (a later segment, or the same number ending at
+// another record), started a document this cursor never wrote to, or the
+// segment is invalid. The resync then numbers this PC's segment after the
+// server's and records the split. A document still where cur left it, or
+// at an earlier segment of this PC's own (an append of its own not
+// applied yet), or not readable yet after this PC's sends, is unchanged:
+// the append goes out as before. A read that fails is an error: nothing
+// is sent. One read per document, only when there is something to send.
+func (f *Flusher) movedElsewhere(ctx context.Context, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone) (bool, error) {
+	seen := map[string]bool{}
+	for _, r := range send {
+		k := f.runKeyOf(sid, r, attrs)
+		if k.held || k.optOut || seen[k.project] {
+			continue
+		}
+		seen[k.project] = true
+		d, err := f.readDocument(ctx, LiveDocumentID(sid, cur.Home, k.project, tombs))
+		if err != nil {
+			return false, err
+		}
+		if !f.unchangedSince(cur, sid, k.project, d) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// unchangedSince says whether d, project p's document, is still where cur
+// left it (movedElsewhere).
+func (f *Flusher) unchangedSince(cur Cursor, sid, p string, d serverDoc) bool {
+	mine, last := cur.Segments[p], cur.LastUUIDs[p]
+	switch {
+	case mine == 0:
+		return !d.found // never written here: nor by another PC
+	case !d.found:
+		return true // this PC's first segment not readable yet (issue 101)
+	}
+	own := ownKey(f.Index, f.Bank, sid, d.lastUUID) != ""
+	seg, err := strconv.Atoi(d.segment)
+	switch {
+	case err != nil || seg < 1 || seg > mine:
+		return false
+	case seg == mine:
+		return d.lastUUID == last || (last == "" && own)
+	}
+	return own // an earlier segment: this PC's, its later ones still pending
 }
 
 // resync rebuilds the cursor from the server's documents (decision 0038):
@@ -485,18 +554,7 @@ type runKey struct {
 // and opted-out ones (attribute). It stops at the first failure, with the
 // cursor after the last run done; the cursor is saved after every segment.
 func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid string, send []transcript.Record, attrs map[int64]attr, tombs []state.Tombstone, now time.Time) Result {
-	key := func(r transcript.Record) runKey {
-		a := attrs[r.End]
-		switch {
-		case ownKey(f.Index, f.Bank, sid, r.UUID) != "":
-			return runKey{held: true}
-		case a.out:
-			return runKey{optOut: true, reason: a.why}
-		case f.headless(r.Entrypoint):
-			return runKey{optOut: true, reason: "headless session (entrypoint " + r.Entrypoint + "): privacy.skip_entrypoints"}
-		}
-		return runKey{project: a.project}
-	}
+	key := func(r transcript.Record) runKey { return f.runKeyOf(sid, r, attrs) }
 	status, detail := Nothing, ""
 	for len(send) > 0 {
 		k := key(send[0])
@@ -535,6 +593,21 @@ func (f *Flusher) sendRuns(ctx context.Context, res Result, cur Cursor, sid stri
 		}
 	}
 	return f.save(res, cur, status, detail)
+}
+
+// runKeyOf is r's run: held (sent already by this session), opted out
+// (with why), or sent to its project's document.
+func (f *Flusher) runKeyOf(sid string, r transcript.Record, attrs map[int64]attr) runKey {
+	a := attrs[r.End]
+	switch {
+	case ownKey(f.Index, f.Bank, sid, r.UUID) != "":
+		return runKey{held: true}
+	case a.out:
+		return runKey{optOut: true, reason: a.why}
+	case f.headless(r.Entrypoint):
+		return runKey{optOut: true, reason: "headless session (entrypoint " + r.Entrypoint + "): privacy.skip_entrypoints"}
+	}
+	return runKey{project: a.project}
 }
 
 func (f *Flusher) headless(entrypoint string) bool {

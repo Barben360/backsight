@@ -829,7 +829,8 @@ func TestSplitSideDocument(t *testing.T) {
 }
 
 // A cursor written before per-project documents (no home) resyncs once from
-// the server, appends to the home document, then flushes as usual.
+// the server, appends to the home document, then flushes as usual (one
+// read of the document it appends to, movedElsewhere).
 func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	e := newEnv(t)
 	e.record("s1", "u1", "user", 0, "first")
@@ -854,8 +855,8 @@ func TestCursorWithoutHomeResyncsOnce(t *testing.T) {
 	e.record("s1", "u3", "user", 120, "third")
 	gets = e.hs.gets
 	expect(t, e.flush("s1", Options{}), Sent, 1, 3)
-	if e.hs.gets != gets {
-		t.Errorf("resynced again: %d reads", e.hs.gets-gets)
+	if e.hs.gets != gets+1 {
+		t.Errorf("%d document reads, want the append's one check (movedElsewhere)", e.hs.gets-gets)
 	}
 }
 
