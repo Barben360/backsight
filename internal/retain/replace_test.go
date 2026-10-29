@@ -718,6 +718,27 @@ func TestAMarkEndsAfterPendingLimit(t *testing.T) {
 		}
 		expectUnconfirmed(t, r, "queue")
 	})
+	// The limit is 24 hours, not a symbol the test reads: a minute short of
+	// it, a mark the busy queue keeps from looking at stays, unreported;
+	// at 24 hours it is given up.
+	t.Run("queue busy at 23 h 59 min, then 24 h", func(t *testing.T) {
+		a, _ := betaReplacedByB(t)
+		a.hs.queued = 1
+		sent := a.replaces()["beta"].SentAt
+		a.clock = sent.Add(24*time.Hour - time.Minute - 15*time.Minute) // tick adds 15 min
+		if r := a.tick(); len(r.Unconfirmed) != 0 {
+			t.Errorf("given up at 23 h 59 min: %+v", r.Unconfirmed)
+		}
+		if p, ok := a.replaces()["beta"]; !ok || !p.SentAt.Equal(sent) {
+			t.Fatalf("mark at 23 h 59 min: %+v, want kept", a.replaces())
+		}
+		a.clock = sent.Add(24*time.Hour - 15*time.Minute)
+		r := a.tick()
+		if _, ok := a.replaces()["beta"]; ok {
+			t.Errorf("mark kept at 24 h: %+v", a.replaces())
+		}
+		expectUnconfirmed(t, r, "queue")
+	})
 	t.Run("read failing", func(t *testing.T) {
 		a, _ := betaReplacedByB(t)
 		a.hs.failGet = map[string]bool{betaDoc: true}
@@ -769,6 +790,30 @@ func TestConsecutiveSegmentsAreOnePart(t *testing.T) {
 	expect(t, e.flush("sp1", Options{}), Sent, 1, 4)
 	if p := e.replaces()["billing"]; !reflect.DeepEqual(p.Parts, []RecordRange{{First: "r1", Last: "r6"}}) {
 		t.Errorf("parts %+v", p.Parts)
+	}
+}
+
+// The second look confirms only replaceConfirmGap (5 min) after the
+// first: a run a minute later (a detached flush after a hook, then a tick)
+// leaves the mark as the first look left it; the run 5 min after confirms.
+func TestTheSecondLookWaitsFiveMinutes(t *testing.T) {
+	e := newEnv(t)
+	e.turns(0, "r1")
+	expect(t, e.flush("sp1", Options{}), Sent, 1, 1)
+	e.tick()
+	seen := e.replaces()["billing"].SeenAt
+	if seen.IsZero() {
+		t.Fatalf("first look not recorded: %+v", e.replaces())
+	}
+	e.clock = seen.Add(4*time.Minute + 59*time.Second - 15*time.Minute) // tick adds 15 min
+	e.tick()
+	if p, ok := e.replaces()["billing"]; !ok || !p.SeenAt.Equal(seen) {
+		t.Fatalf("a look 4 min 59 s after the first: %+v, want the mark kept, seen at %s", e.replaces(), seen)
+	}
+	e.clock = seen.Add(5*time.Minute - 15*time.Minute)
+	e.tick()
+	if p, ok := e.replaces()["billing"]; ok {
+		t.Errorf("a look 5 min after the first did not confirm: %+v", p)
 	}
 }
 

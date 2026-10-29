@@ -381,11 +381,21 @@ func mentalPosts() int {
 
 // A SessionStart whose config predates a whole connect still gives its
 // briefing (a read), but creates no page: that write would go to the old
-// server.
+// server. The next SessionStart, a process that read the raised
+// generation, creates it once: the gate holds back a stale process only,
+// never every PC that ever connected.
 func TestBriefingPageWaitsAcrossConnect(t *testing.T) {
 	h, ran := briefingAcrossConnect(t, true, "")
 	if !ran || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") || mentalPosts() != 0 {
-		t.Errorf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
+		t.Fatalf("seam ran %v, page creations %d (want 0), context %q", ran, mentalPosts(), h.Specific.Context)
+	}
+	home := os.Getenv("HOME")
+	if g := sendsGeneration(pathsOf(home)); g == 0 {
+		t.Fatalf("sends generation %d: the connect did not raise it, the second start proves nothing", g)
+	}
+	fire(t, "session-start", map[string]any{"session_id": "s2", "source": "startup", "cwd": filepath.Join(home, "billing")})
+	if n := mentalPosts(); n != 1 {
+		t.Errorf("after the connect, a new session created the page %d times, want 1", n)
 	}
 }
 

@@ -1640,3 +1640,54 @@ func TestM6CursorsHashWithoutPendingReplaces(t *testing.T) {
 		t.Fatalf("a sent record left the hash unchanged: %q", sent)
 	}
 }
+
+// dedup-concurrent passes only when at least one pair raced (both PCs'
+// flushes sent): five pairs run one after the other prove only what
+// dedup-copied does. The steps around the flushes are stubs; each flush's
+// status is the fake backsight's answer for that PC and session.
+func TestM6DedupConcurrentNeedsARace(t *testing.T) {
+	const stubs = `
+m6_session() { :; }; m6_copy() { :; }; m6_flush_sent() { :; }; m6_queue_wait() { :; }
+m6_wait_doc() { echo '{"document_metadata":{"records":3}}'; }
+m6_uuid_counts() { printf '%s 1\n' "$1-r1" "$1-r2" "$1-r3"; }
+m6_facts() { echo 2; }
+m6_check dedup-concurrent m6_check_dedup_concurrent`
+	for _, tc := range []struct {
+		name  string
+		raced []string // the sessions B sends too (else B finds them sent)
+		want  string
+		both  float64
+	}{
+		{"no race", nil, "bs-m6 dedup-concurrent: FAIL no pair raced: in each of cc1-cc5 one PC sent and the other found it sent (cc1 a sent, cc1 b nothing, cc2 a sent", 0},
+		{"one race", []string{"cc3"}, "bs-m6 dedup-concurrent: PASS cc1-cc5 flushed on A and B at once, both exit 0: each on the server once, 3 records, facts 2 2 2 2 2 (one PC's: 2); both sent 1 of 5", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			m6Lib(t, dir, m6TestDriver, "true")
+			writeExec(t, filepath.Join(dir, "bin", "backsight"), `#!/bin/sh
+sid=$5
+st=nothing
+if [ "$WHO" = a ] || [ -e "$T/raced-$sid" ]; then st=sent; fi
+printf '{"ok":true,"data":{"results":[{"session":"%s","status":"%s"}]}}\n' "$sid" "$st"
+`)
+			for _, s := range tc.raced {
+				writeLines(t, filepath.Join(dir, "raced-"+s), "x")
+			}
+			stdout, stderr, _ := m6Lib(t, dir, m6TestDriver, stubs)
+			if !strings.HasPrefix(stdout, tc.want) {
+				t.Fatalf("stdout %q\nwant prefix %q\nstderr:\n%s", stdout, tc.want, stderr)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, "results.jsonl"))
+			var rec struct {
+				Status string         `json:"status"`
+				Values map[string]any `json:"values"`
+			}
+			if err != nil || json.Unmarshal(raw, &rec) != nil {
+				t.Fatalf("results.jsonl: %v %q", err, raw)
+			}
+			if rec.Status == "PASS" && rec.Values["both_sent"] != tc.both {
+				t.Errorf("both_sent %v, want %v", rec.Values["both_sent"], tc.both)
+			}
+		})
+	}
+}

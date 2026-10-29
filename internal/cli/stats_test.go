@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -483,6 +484,32 @@ func TestStatsShowsAnUnreachableServer(t *testing.T) {
 	}
 	if _, out, _ := run(t, "stats", "--json"); strings.Contains(out, "breaker_open_until") {
 		t.Errorf("a closed breaker shows a time:\n%s", out)
+	}
+}
+
+// The whole chain, nothing written by hand: a client's ticks against a
+// server that does not answer record it, and stats says it is silent,
+// since the first failed tick, with the sessions those ticks could not
+// send.
+func TestStatsShowsADeadServerFromItsTicks(t *testing.T) {
+	home := devInstall(t, true)
+	url := "http://127.0.0.1:" + strconv.Itoa(closedPort(t))
+	if err := os.WriteFile(pathsOf(home).ConfigFile(), []byte("[server]\nmode = \"remote\"\nurl = \""+url+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withClock(t, time.Date(2026, 10, 24, 8, 0, 0, 0, time.UTC))
+	run(t, "jobs", "tick")
+	for _, sid := range []string{"s1", "s2"} {
+		writeTranscript(t, home, sid, time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	}
+	withClock(t, time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC))
+	if code, out, errOut := run(t, "jobs", "tick"); code != output.Partial {
+		t.Fatalf("tick: exit %d\n%s%s", code, out, errOut)
+	}
+	code, out, errOut := run(t, "stats")
+	want := "Server       127.0.0.1 silent since 2026-10-24T08:00:00Z (2h): recall on; 0 notes queued, 2 sessions not sent yet"
+	if l := serverLine(t, out); code != output.OK || l != want {
+		t.Errorf("exit %d\n got %q\nwant %q\n%s", code, l, want, errOut)
 	}
 }
 

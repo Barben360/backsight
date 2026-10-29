@@ -24,7 +24,7 @@ It goes on from the step that failed, with your earlier answers. `backsight setu
 
 ### Docker refuses your user
 
-Setup's check or its server step says `permission denied` about `/var/run/docker.sock`: your user cannot use Docker without `sudo`.
+Setup's `docker` check or its server step says `permission denied` about `/var/run/docker.sock`: your user cannot use Docker without `sudo`.
 
 ```sh
 sudo usermod -aG docker $USER
@@ -66,7 +66,7 @@ Setup pulls each image up to 3 times before it stops, and says what Docker's las
 
 ### Claude Code is missing or too old
 
-Setup needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup). A host that only serves the memory for your other PCs needs no Claude Code: run `backsight setup --role server` there, and setup does not look for `claude`.
+Setup's `claude` check needs Claude Code 2.1.309 or newer, with `claude` on your PATH: `claude update`, or [install Claude Code](https://code.claude.com/docs/en/setup). A host that only serves the memory for your other PCs needs no Claude Code: run `backsight setup --role server` there, and setup does not look for `claude`.
 
 ## The server is down
 

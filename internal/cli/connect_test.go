@@ -971,9 +971,16 @@ func TestConnectRollbackStopsAReaderOfTheNewServer(t *testing.T) {
 			home, _ := setupMachine(t)
 			d := pathsOf(home)
 			args := joinFrom(t, home, row.from)
+			if row.from == joinUndo { // sends to the shared server, which the rollback must put back
+				_ = os.MkdirAll(d.CursorsDir(), 0o700)
+				_ = os.WriteFile(filepath.Join(d.CursorsDir(), "s2.json"), []byte(`{"offset":7}`), 0o600)
+				_ = os.MkdirAll(d.SentIndexDir(), 0o700)
+				_ = os.WriteFile(filepath.Join(d.SentIndexDir(), "index.bin"), []byte("87654321"), 0o600)
+			}
 			before := serverSetupOf(t, home)
 			files := contentsOf(t, []string{d.ConfigFile(), d.SecretsFile()})
 			gen := sendsGeneration(d) // a store process starting now
+			tree := treeOf(t, home)
 			var held serverSetup
 			old := connectFault
 			connectFault = func(step string) error {
@@ -994,6 +1001,9 @@ func TestConnectRollbackStopsAReaderOfTheNewServer(t *testing.T) {
 			sameContents(t, files)
 			if err := sendsGate(d, gen)(); !errors.Is(err, retain.ErrStartedOver) {
 				t.Errorf("the reader's gate at generation %d: %v, want ErrStartedOver", gen, err)
+			}
+			if row.from == joinUndo { // the shared server's sends and state fields too
+				sameTreeButGeneration(t, home, tree, gen)
 			}
 		})
 	}
@@ -1425,6 +1435,109 @@ func TestConnectUndo(t *testing.T) {
 	if code, out, errOut := run(t, "connect", "--undo"); code != output.Usage {
 		t.Errorf("again: exit %d\n%s%s", code, out, errOut)
 	}
+}
+
+// noKeyIn fails when out names the host's key or this PC's own server's
+// (own: secrets.toml as it was before connect).
+func noKeyIn(t *testing.T, out, own string) {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "secrets.toml")
+	if err := os.WriteFile(f, []byte(own), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := config.LoadSecrets(f)
+	if err != nil || sec.APIKey == "" {
+		t.Fatalf("this PC's own key: %v", err)
+	}
+	for _, k := range []string{hostKey, sec.APIKey} {
+		if strings.Contains(out, k) {
+			t.Errorf("a key reached the output:\n%s", out)
+		}
+	}
+}
+
+// connect --undo stopped after it wrote config.toml, and its rollback
+// cannot put the shared server's sends back: exit 20, naming the cause and
+// what is left where; config.toml and the key are the shared server's
+// again, and no key is printed.
+func TestConnectUndoSaysWhatIsLeftWhenItsRollbackFails(t *testing.T) {
+	home, f := setupMachine(t)
+	d := pathsOf(home)
+	own, _ := connectedFromOwnServer(t, home)
+	shared := serverSetupOf(t, home)
+	f.calls = nil
+	withConnectFault(t, "undo-secrets", "undo")
+	code, out, errOut := run(t, "connect", "--undo", "--json")
+	env := parseConnect(t, out)
+	kept, _ := filepath.Glob(filepath.Join(d.ConnectDir(), "*-shared"))
+	if code != output.Blocked || env.Error == nil || len(kept) != 1 {
+		t.Fatalf("exit %d, kept %v\n%s%s", code, kept, out, errOut)
+	}
+	if want := "connect --undo stopped (injected undo-secrets failure), and putting the shared server's setup back failed: the sends kept in " + kept[0] + " (injected undo failure)"; env.Error.Message != want {
+		t.Errorf("message\n got %q\nwant %q", env.Error.Message, want)
+	}
+	if now := serverSetupOf(t, home); now != shared {
+		t.Errorf("config.toml and the key: %s, shared key %v; want the shared server's, as the message says", now.url, now.key == shared.key)
+	}
+	noKeyIn(t, out+errOut, own[d.SecretsFile()])
+	if slices.Contains(f.commands(), "server start") {
+		t.Errorf("the own server started: %v", f.commands())
+	}
+}
+
+// connect --undo put config.toml and secrets.toml back, then could not put
+// this PC's own sends back: exit 20, saying the files are back but the
+// sends are not, and where they are with the state they went with.
+func TestConnectUndoSaysItsOwnSendsAreNotBack(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	own, _ := connectedFromOwnServer(t, home)
+	pre, _ := filepath.Glob(filepath.Join(d.ConnectDir(), "*", "meta.json"))
+	if len(pre) != 1 {
+		t.Fatalf("connect's kept sends: %v", pre)
+	}
+	withConnectFault(t, "undo")
+	code, out, errOut := run(t, "connect", "--undo", "--json")
+	env := parseConnect(t, out)
+	if code != output.Blocked || env.Error == nil {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	want := "config.toml and secrets.toml are back as they were before connect, but this PC's sends to its own server are not (injected undo failure): they are in " +
+		filepath.Dir(pre[0]) + ", whose meta.json records the state they went with"
+	if env.Error.Message != want {
+		t.Errorf("message\n got %q\nwant %q", env.Error.Message, want)
+	}
+	sameContents(t, map[string]string{d.ConfigFile(): own[d.ConfigFile()], d.SecretsFile(): own[d.SecretsFile()]})
+	if _, err := os.Stat(pre[0]); err != nil {
+		t.Errorf("the sends' meta.json is gone: %v", err)
+	}
+	noKeyIn(t, out+errOut, own[d.SecretsFile()])
+}
+
+// connect --undo is back on the own server's files and sends, but cannot
+// forget the shared server's id: exit 20, with the stale-sender warning
+// (a process started during connect --undo may still send to the shared
+// server), the counterpart of connect's.
+func TestConnectUndoNamesTheStaleSenderWhenItCannotForgetTheBinding(t *testing.T) {
+	home, _ := setupMachine(t)
+	d := pathsOf(home)
+	own, _ := connectedFromOwnServer(t, home)
+	withConnectFault(t, "undo-binding")
+	code, out, errOut := run(t, "connect", "--undo", "--json")
+	env := parseConnect(t, out)
+	if code != output.Blocked || env.Error == nil {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	want := "this PC is back on its own server, but forgetting the shared server's id in " + d.StateFile() +
+		" failed (injected undo-binding failure): the sends stop until it is removed; a process started during connect --undo may still send to the shared server"
+	if env.Error.Message != want {
+		t.Errorf("message\n got %q\nwant %q", env.Error.Message, want)
+	}
+	sameContents(t, map[string]string{d.ConfigFile(): own[d.ConfigFile()], d.SecretsFile(): own[d.SecretsFile()]})
+	if st, _ := state.Load(d.StateFile()); st.RemoteServer == nil {
+		t.Error("the binding is gone, though the message says it stays")
+	}
+	noKeyIn(t, out+errOut, own[d.SecretsFile()])
 }
 
 // A server start that fails after the switch exits 40 with the command

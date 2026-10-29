@@ -16,6 +16,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/token"
 )
 
@@ -376,6 +377,67 @@ func TestExposeFlags(t *testing.T) {
 	}
 	if len(fx.dk.ups) != 0 {
 		t.Errorf("%d starts", len(fx.dk.ups))
+	}
+}
+
+// readOnlyAtFirstUp makes dir read-only (no file can be written into it)
+// once the command starts the server the first time, then runs inner.
+type readOnlyAtFirstUp struct {
+	inner server.Runner
+	dir   string
+	done  bool
+}
+
+func (r *readOnlyAtFirstUp) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if !r.done && strings.HasSuffix(strings.Join(args, " "), "up -d --wait") {
+		r.done = true
+		if err := os.Chmod(r.dir, 0o500); err != nil {
+			return nil, err
+		}
+	}
+	return r.inner.Run(ctx, args...)
+}
+
+// configLockedAtFirstUp: the config directory of home, where config.toml
+// and secrets.toml are, cannot be written once the server first starts.
+func configLockedAtFirstUp(t *testing.T, home string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+	dir := filepath.Join(home, "backsight", "config")
+	old := composeRunner
+	composeRunner = &readOnlyAtFirstUp{inner: old, dir: dir}
+	t.Cleanup(func() { composeRunner = old; _ = os.Chmod(dir, 0o700) })
+}
+
+// The new exposure does not run, and config.toml cannot be put back:
+// exit 20, saying it still sets the new exposure (which it does), and to
+// expose again; the server is not started on a config it does not hold,
+// and no key is printed.
+func TestExposeSaysWhenConfigCannotBePutBack(t *testing.T) {
+	fx := exposeHost(t)
+	fx.dk.failOn = "100.101.1.2"
+	configLockedAtFirstUp(t, fx.home)
+	f := filepath.Join(t.TempDir(), "join.token")
+	code, out, errOut := run(t, "server", "expose", "--private", "100.101.1.2", "--out", f)
+	if code != output.Blocked || !strings.Contains(errOut, "the server did not run on 100.101.1.2 (") ||
+		!strings.Contains(errOut, "and putting "+fx.cfgPath+" back failed (") ||
+		!strings.Contains(errOut, `it still sets network.exposure = "private", network.bind_ip = "100.101.1.2"; run backsight server expose again with the exposure you had, then backsight server status`) ||
+		strings.Contains(errOut, "is back as it was") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if cfg := string(fx.config(t)); !strings.Contains(cfg, `bind_ip = "100.101.1.2"`) {
+		t.Errorf("config.toml does not set what the message says:\n%s", cfg)
+	}
+	if len(fx.dk.ups) != 1 {
+		t.Errorf("%d starts, want the exposed one only", len(fx.dk.ups))
+	}
+	if strings.Contains(out+errOut, fx.apiKey(t)) {
+		t.Error("the key reached the output")
+	}
+	if _, err := os.Stat(f); err == nil {
+		t.Error("a token was written")
 	}
 }
 

@@ -598,11 +598,14 @@ func applyUndo(ctx context.Context, d paths.Dirs, pre string, at time.Time) erro
 	// A process that read its config while the files were being put back
 	// holds the generation resetRetain raised, with the shared server's
 	// config or key: raised again, it sends nothing.
-	if err := state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
-		s.RemoteServer = nil
-		s.SendsGeneration++
-		return nil
-	}); err != nil {
+	if err = connectFault("undo-binding"); err == nil {
+		err = state.UpdateWithin(d, "connect", 5*time.Second, func(s *state.State) error {
+			s.RemoteServer = nil
+			s.SendsGeneration++
+			return nil
+		})
+	}
+	if err != nil {
 		return &output.Error{Code: output.Blocked, Message: "this PC is back on its own server, but forgetting the shared server's id in " + d.StateFile() + " failed (" + err.Error() +
 			"): the sends stop until it is removed; a process started during connect --undo may still send to the shared server"}
 	}

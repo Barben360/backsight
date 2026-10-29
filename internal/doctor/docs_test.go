@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,15 +110,60 @@ func TestTroubleshootingNamesEveryDoctorCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := string(raw)
+	named := checksNamed(string(raw))
 	var missing []string
 	for id, f := range ids {
-		if !strings.Contains(doc, "`"+id+"`") {
+		if !named[id] {
 			missing = append(missing, id+" ("+filepath.Base(f)+")")
 		}
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Errorf("docs/troubleshooting.md does not name these checks in backticks: %s", strings.Join(missing, ", "))
+		t.Errorf("docs/troubleshooting.md names these checks in no heading, table row or sentence calling it a check: %s", strings.Join(missing, ", "))
+	}
+}
+
+// checksNamed is what doc names as a check: a backticked word in a
+// heading or in the first cell of a table row, or one a sentence calls a
+// check or a warning ("doctor's `jobs` check", "a `client` warning"). A
+// mention as anything else (a command word, a config key, a group) is no
+// entry a user can find.
+func checksNamed(doc string) map[string]bool {
+	named := map[string]bool{}
+	tick := regexp.MustCompile("`([^`]+)`")
+	asCheck := regexp.MustCompile("`([^`]+)` (?:check|warning)")
+	for line := range strings.SplitSeq(doc, "\n") {
+		re := tick
+		switch {
+		case strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, "|"):
+			line = strings.SplitN(line, "|", 3)[1]
+		default:
+			re = asCheck
+		}
+		for _, m := range re.FindAllStringSubmatch(line, -1) {
+			named[m[1]] = true
+		}
+	}
+	return named
+}
+
+// A check id counts as named in a heading, a table row's first cell, or
+// a sentence calling it a check or a warning; never as a command word, a
+// config key or a row's second cell.
+func TestChecksNamedOnlyAsChecks(t *testing.T) {
+	doc := "# Troubleshooting\n\nRun `update` to fetch it; set `mcp` in config; add you to the `docker` group.\n" +
+		"doctor's `jobs` check warns; a `client` warning means drift.\n\n## doctor: `server-id` differs\n\n" +
+		"| doctor check | What to do |\n|---|---|\n| `split-session` (info): x | run `recall` again, see the `gpu` check |\n"
+	got := checksNamed(doc)
+	for _, id := range []string{"server-id", "split-session", "jobs", "client"} {
+		if !got[id] {
+			t.Errorf("%s not found", id)
+		}
+	}
+	for _, id := range []string{"update", "mcp", "docker", "recall", "gpu"} {
+		if got[id] {
+			t.Errorf("%s found, though only mentioned", id)
+		}
 	}
 }
