@@ -107,7 +107,7 @@ const (
 // ClientChecks look at Claude Code's side of this machine: its wiring,
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
-var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "latency", "learning", "noise-headless", "noise-subagent",
+var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "noise-headless", "noise-subagent",
 	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
 	"transverse-keyword", "usage", "version-skew", "writes"}
 
@@ -201,7 +201,8 @@ func Run(ctx context.Context, env Env) Report {
 	add(checkBackup(env, now()))
 	add(checkJobs(env.Dirs, now(), env.Linger))
 	feedbackOn := cfgErr != nil || cfg.Feedback.Enabled // no config.toml: the default, on
-	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn))
+	shareOn := cfgErr != nil || cfg.Feedback.ShareLedger
+	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn), checkFeedbackShared(env.Dirs, feedbackOn, shareOn, now()))
 	if env.Scheduler != nil {
 		if c, ok := checkScheduler(env.Scheduler, schedulerModeOf(env.Dirs)); ok {
 			add(c)

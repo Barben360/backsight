@@ -214,6 +214,9 @@ type Feedback struct {
 	BoostWeight  float64 `toml:"boost_weight" json:"boost_weight"`
 	PriorCredits float64 `toml:"prior_credits" json:"prior_credits"`
 	PriorMisses  float64 `toml:"prior_misses" json:"prior_misses"`
+	// ShareLedger: this machine's counts go to the user's server for the
+	// other machines, and theirs come back; false: neither.
+	ShareLedger bool `toml:"share_ledger" json:"share_ledger"`
 }
 
 // DefaultBank is the memory bank setup and server install write into a new
@@ -245,7 +248,7 @@ func Default(d paths.Dirs, home string) Config {
 		Hooks:      Hooks{SubagentSkip: []string{"Explore", "statusline-setup", "claude-code-guide"}, OutboxWarnMB: 50, OutboxMaxMB: 500},
 		Backup:     Backup{Enabled: true, Dir: filepath.Join(d.Data, "backups"), KeepDaily: 7, KeepWeekly: 4},
 		Feedback: Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
-			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9},
+			BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true},
 	}
 }
 

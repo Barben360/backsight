@@ -502,7 +502,7 @@ func TestOwnOwnersAreRead(t *testing.T) {
 func TestFeedbackDefaultsAndValidation(t *testing.T) {
 	got := Default(dirs, "/home/u").Feedback
 	if want := (Feedback{Enabled: true, ConfidentRank: 2, MissHalfLifeDays: 90, CreditHalfLifeDays: 365, StopCheck: "always", MaxRetirements: 3, StaleShows: 10,
-		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9}); got != want {
+		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true}); got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 	cfg, err := Load(write(t, "[feedback]\nenabled = false\nconfident_rank = 1\nmiss_half_life_days = 0\ncredit_half_life_days = 30\nstop_check = \"cited\"\n"), dirs, "/home/u")
@@ -510,7 +510,7 @@ func TestFeedbackDefaultsAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := (Feedback{ConfidentRank: 1, CreditHalfLifeDays: 30, StopCheck: "cited", MaxRetirements: 3, StaleShows: 10,
-		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9}); cfg.Feedback != want {
+		BoostWeight: 0.1, PriorCredits: 3, PriorMisses: 9, ShareLedger: true}); cfg.Feedback != want {
 		t.Errorf("read %+v, want %+v", cfg.Feedback, want)
 	}
 	for body, key := range map[string]string{
@@ -528,6 +528,21 @@ func TestFeedbackDefaultsAndValidation(t *testing.T) {
 		if _, err := Load(write(t, "[feedback]\nstop_check = \""+s+"\"\n"), dirs, "/home/u"); err != nil {
 			t.Errorf("stop_check %q refused: %v", s, err)
 		}
+	}
+}
+
+// share_ledger: on by default; false is read as false, and a value that
+// is not a boolean is refused with its key.
+func TestShareLedgerKey(t *testing.T) {
+	if !Default(dirs, "/home/u").Feedback.ShareLedger {
+		t.Error("share_ledger off by default")
+	}
+	cfg, err := Load(write(t, "[feedback]\nshare_ledger = false\n"), dirs, "/home/u")
+	if err != nil || cfg.Feedback.ShareLedger || !cfg.Feedback.Enabled {
+		t.Errorf("false: %v %+v", err, cfg.Feedback)
+	}
+	if _, err := Load(write(t, "[feedback]\nshare_ledger = \"no\"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), "share_ledger") {
+		t.Errorf("a string: %v", err)
 	}
 }
 

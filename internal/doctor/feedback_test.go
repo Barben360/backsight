@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 // feedbackDirs is a machine whose journal holds one shows event at last,
@@ -123,10 +125,73 @@ func TestRunIncludesTheFeedbackChecks(t *testing.T) {
 	r := f.run()
 	expect(t, check(t, r, "feedback-journal"), OK, "no journal yet")
 	expect(t, check(t, r, "feedback-ledger"), OK, "")
+	expect(t, check(t, r, "feedback-shared"), OK, "not fetched yet")
 	srv := fakeServer(t)
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n[feedback]\nenabled = false\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	r = f.run()
 	expect(t, check(t, r, "feedback-journal"), Info, "enabled = false")
 	expect(t, check(t, r, "feedback-ledger"), Info, "enabled = false")
+	expect(t, check(t, r, "feedback-shared"), Info, "enabled = false")
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n[feedback]\nshare_ledger = false\n", 0o600)
+	expect(t, check(t, f.run(), "feedback-shared"), Info, "share_ledger = false")
+}
+
+// The shared cache: how many other machines and how old. It warns only
+// when sharing is on, the server answered within the last day and the
+// last fetch is more than 24 h old.
+func TestDoctorWarnsOnAStaleSharedCache(t *testing.T) {
+	const m1 = "11111111-1111-4111-8111-111111111111"
+	dirs := func(answered, fetched time.Time) paths.Dirs {
+		t.Helper()
+		d := paths.Dirs{State: t.TempDir()}
+		if !answered.IsZero() {
+			state.RecordReach(d, true, answered)
+		}
+		if !fetched.IsZero() {
+			meta, err := feedback.SharedDoc{V: feedback.SharedVersion, Machine: "pc-b", At: fetched, Entries: map[string]feedback.SharedEntry{m1: {Credits: 1, CreditsAt: fetched}}}.MarshalMeta()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := feedback.SaveSharedCache(d.FeedbackDir(), feedback.SharedCache{FetchedAt: fetched, Docs: []json.RawMessage{json.RawMessage(meta)}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return d
+	}
+	answered := usageNow.Add(-time.Hour)
+
+	fresh := checkFeedbackShared(dirs(answered, usageNow.Add(-23*time.Hour)), true, true, usageNow)
+	if fresh.Status != OK || !strings.Contains(fresh.Summary, "1 other machine") || !strings.Contains(fresh.Summary, "23h") {
+		t.Errorf("23 h old: %+v", fresh)
+	}
+	stale := checkFeedbackShared(dirs(answered, usageNow.Add(-25*time.Hour)), true, true, usageNow)
+	if stale.Status != Warn || !strings.Contains(stale.Summary, "25h") || !strings.Contains(stale.Fix, "backsight jobs tick") {
+		t.Errorf("25 h old, server answering: %+v", stale)
+	}
+	// The server silent for two days: the age is not the tick's fault.
+	if c := checkFeedbackShared(dirs(usageNow.Add(-48*time.Hour), usageNow.Add(-25*time.Hour)), true, true, usageNow); c.Status != OK {
+		t.Errorf("25 h old, server silent: %+v", c)
+	}
+	if c := checkFeedbackShared(dirs(time.Time{}, usageNow.Add(-25*time.Hour)), true, true, usageNow); c.Status != OK {
+		t.Errorf("25 h old, server never reached: %+v", c)
+	}
+	// Not fetched yet.
+	if c := checkFeedbackShared(dirs(answered, time.Time{}), true, true, usageNow); c.Status != OK || !strings.Contains(c.Summary, "not fetched yet") {
+		t.Errorf("no cache: %+v", c)
+	}
+	// An unreadable cache, the server answering: a warning.
+	broken := dirs(answered, time.Time{})
+	_ = os.MkdirAll(broken.FeedbackDir(), 0o700)
+	_ = os.WriteFile(feedback.SharedCacheFile(broken.FeedbackDir()), []byte("{"), 0o600)
+	if c := checkFeedbackShared(broken, true, true, usageNow); c.Status != Warn || !strings.Contains(c.Fix, "backsight jobs tick") {
+		t.Errorf("unreadable: %+v", c)
+	}
+	// Sharing off, or feedback off: information, whatever the cache says.
+	if c := checkFeedbackShared(dirs(answered, usageNow.Add(-25*time.Hour)), true, false, usageNow); c.Status != Info || !strings.Contains(c.Summary, "share_ledger = false") {
+		t.Errorf("sharing off: %+v", c)
+	}
+	if c := checkFeedbackShared(dirs(answered, usageNow.Add(-25*time.Hour)), false, true, usageNow); c.Status != Info || !strings.Contains(c.Summary, "enabled = false") {
+		t.Errorf("feedback off: %+v", c)
+	}
 }
