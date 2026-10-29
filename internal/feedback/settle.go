@@ -3,6 +3,7 @@ package feedback
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
@@ -240,6 +241,7 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	if err != nil {
 		return res, err
 	}
+	at := journalEnd(dir)
 	events, _, err := Read(dir, now.Add(-settleWindow))
 	if err != nil {
 		return res, err
@@ -269,6 +271,13 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		l.Apply(e, p)
 	}
 	l.Watermark = now.UTC()
+	// Current reads on from where this read began, unless a folded event
+	// before it is newer than the watermark: left for Current to apply,
+	// it needs the read from the watermark.
+	l.JournalAt = at
+	if slices.ContainsFunc(events, func(e Event) bool { return folded(e.Kind) && e.TS.After(now) }) {
+		l.JournalAt = JournalPos{}
+	}
 	if err := saveLedger(dir, l); err != nil {
 		return res, err
 	}

@@ -75,7 +75,8 @@ type Hit struct {
 	Score    float64 `json:"score"`    // reranker + current-project boost + Boost
 	Reranker float64 `json:"reranker"` // the server's score
 	// Boost: what Engine.Adjust added to Score. RankWithoutBoost: the
-	// hit's place without it, from 1; only when the engine has an Adjust.
+	// hit's place without it, from 1, 0 when only the boost let it in;
+	// only when the engine has an Adjust.
 	Boost            float64   `json:"boost,omitempty"`
 	RankWithoutBoost int       `json:"rank_without_boost,omitempty"`
 	Date             time.Time `json:"date"`
@@ -208,13 +209,18 @@ func (e *Engine) Search(ctx context.Context, q Query) Result {
 
 // adjust applies Engine.Adjust to the merged hits, after the floors on
 // the server's score: hidden ones are dropped, each boost is added to its
-// score, which MinScore then sees. The hits come best first, each with its
-// RankWithoutBoost when the engine has an Adjust.
+// score, which MinScore then sees. The hits come best first. With an
+// Adjust, each carries its RankWithoutBoost: its place in the list
+// returned without any boost (MinScore on the unboosted score), 0 for a
+// hit the boost lifted over MinScore.
 func (e *Engine) adjust(best map[string]Hit, minScore float64) []Hit {
-	var hits []Hit
-	base := map[string]float64{} // the score without the boost
+	type scored struct {
+		hit  Hit
+		base float64 // the score without the boost
+	}
+	var all []scored
 	for _, h := range best {
-		base[h.ID] = h.Score
+		base := h.Score
 		if e.Adjust != nil {
 			b, hidden := e.Adjust(h.ID)
 			if hidden {
@@ -224,25 +230,33 @@ func (e *Engine) adjust(best map[string]Hit, minScore float64) []Hit {
 				h.Boost, h.Score = b, round4(h.Score+b)
 			}
 		}
-		if h.Score >= minScore {
-			hits = append(hits, h)
-		}
+		all = append(all, scored{h, base})
 	}
-	byScore := func(score func(Hit) float64) func(a, b Hit) int {
-		return func(a, b Hit) int {
+	byScore := func(score func(scored) float64) func(a, b scored) int {
+		return func(a, b scored) int {
 			if c := cmp.Compare(score(b), score(a)); c != 0 {
 				return c
 			}
-			return strings.Compare(a.ID, b.ID)
+			return strings.Compare(a.hit.ID, b.hit.ID)
 		}
 	}
 	if e.Adjust != nil {
-		slices.SortFunc(hits, byScore(func(h Hit) float64 { return base[h.ID] }))
-		for i := range hits {
-			hits[i].RankWithoutBoost = i + 1
+		slices.SortFunc(all, byScore(func(s scored) float64 { return s.base }))
+		n := 0
+		for i := range all {
+			if all[i].base >= minScore {
+				n++
+				all[i].hit.RankWithoutBoost = n
+			}
 		}
 	}
-	slices.SortFunc(hits, byScore(func(h Hit) float64 { return h.Score }))
+	slices.SortFunc(all, byScore(func(s scored) float64 { return s.hit.Score }))
+	var hits []Hit
+	for _, s := range all {
+		if s.hit.Score >= minScore {
+			hits = append(hits, s.hit)
+		}
+	}
 	return hits
 }
 

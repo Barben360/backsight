@@ -498,3 +498,29 @@ func TestNoAdjustLeavesHitsAsBefore(t *testing.T) {
 		t.Errorf("hits %s", raw)
 	}
 }
+
+// MinScore sees the boosted score: a boost may lift a hit over it, which
+// would not have been returned without the boost (no rank without it),
+// while a hit under the server's floor stays out whatever its boost.
+func TestBoostCanLiftAHitOverMinScoreNotMinReranker(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"ok", "over both", "infra", 0.65}, {"lifted", "under MinScore", "infra", 0.57}, {"refused", "under MinReranker", "infra", 0.45}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(map[string]float64{"lifted": 0.05, "refused": 0.5})
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.6, MinReranker: 0.5})
+	if hitIDs(res.Hits) != "ok,lifted" || res.Hits[0].RankWithoutBoost != 1 || res.Hits[1].RankWithoutBoost != 0 || res.Hits[1].Score != 0.62 {
+		t.Errorf("hits %+v", res.Hits)
+	}
+}
+
+// The rank without the boost is the place in the list recall would have
+// returned without it, MinScore applied to the unboosted score: a hit a
+// negative boost sinks under MinScore still holds its place there.
+func TestRankWithoutBoostCountsAHitTheBoostSank(t *testing.T) {
+	f := &fakeBank{scopes: map[string][]hit{"": {{"sunk", "first by the server", "infra", 0.72}, {"b", "second", "infra", 0.70}, {"c", "third", "infra", 0.65}}}}
+	e := engine(t, f)
+	e.Adjust = adjust(map[string]float64{"sunk": -0.05})
+	res := e.Search(context.Background(), Query{Queries: []string{"q"}, Current: "billing", MinScore: 0.68})
+	if hitIDs(res.Hits) != "b" || res.Hits[0].RankWithoutBoost != 2 {
+		t.Errorf("hits %+v", res.Hits)
+	}
+}

@@ -226,6 +226,11 @@ func TestFeedbackRebuildWritesTheFold(t *testing.T) {
 	}
 	events, _, _ := feedback.Read(dir, time.Time{})
 	want := feedback.Fold(events, feedbackParams(config.Default(pathsOf(home), home)))
+	// It records where the journal ended, for Current to read on from there.
+	if fi, err := os.Stat(filepath.Join(dir, got.JournalAt.File)); err != nil || got.JournalAt.File == "" || fi.Size() != got.JournalAt.Offset {
+		t.Errorf("journal_at %+v: %v", got.JournalAt, err)
+	}
+	want.JournalAt = got.JournalAt
 	if !reflect.DeepEqual(got, want) || len(got.Memories) != 2 {
 		t.Errorf("rebuilt %+v\nwant     %+v", got, want)
 	}

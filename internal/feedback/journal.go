@@ -203,6 +203,9 @@ func Read(dir string, from time.Time) (events []Event, skipped int, err error) {
 	return events, skipped, nil
 }
 
+// decodedLine, when set (tests), runs for each line ReadFrom decodes.
+var decodedLine func()
+
 // ReadFrom returns the events of file from byte offset on; a missing file is
 // no events.
 func ReadFrom(file string, offset int64) (events []Event, skipped int, err error) {
@@ -221,6 +224,9 @@ func ReadFrom(file string, offset int64) (events []Event, skipped int, err error
 	for {
 		line, rerr := r.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
+			if decodedLine != nil {
+				decodedLine()
+			}
 			var e Event
 			if json.Unmarshal(line, &e) != nil || e.Schema != Schema {
 				skipped++

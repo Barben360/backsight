@@ -1366,6 +1366,15 @@ func TestSearchJournalsARecallAuditEvent(t *testing.T) {
 	if ev := recallEvents(t, home)[3]; len(ev.Flags) != 0 || ev.Items[0].ID != "m1" || ev.Items[0].RankWithoutBoost != 1 || ev.Items[0].Boost <= 0 {
 		t.Errorf("same order: %+v", ev)
 	}
+	// A hit only the boost lifted over min_score: set_changed, no rank
+	// without the boost.
+	recallAnswer = `[{"id":"m1","text":"Proj keeps PostgreSQL 16.","type":"observation","tags":["project:proj"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.72}},
+		{"id":"m2","text":"Proj moved to Postgres 16.","type":"observation","tags":["project:proj"],"mentioned_at":"2026-10-20T09:00:00Z","scores":{"reranker":0.38}}]`
+	writeLedger(t, home, `{"schema":1,"watermark":"`+at+`","memories":{"m2":{"shown":10,"credits":10,"credits_at":"`+at+`"}}}`)
+	call(t, cs, "memory_search", map[string]any{"queries": []string{"postgres"}, "min_score": 0.45})
+	if ev := recallEvents(t, home)[4]; strings.Join(ev.Flags, ",") != feedback.FlagSetChanged || len(ev.Items) != 2 || ev.Items[1].ID != "m2" || ev.Items[1].RankWithoutBoost != 0 || ev.Items[1].Boost <= 0 {
+		t.Errorf("lifted: %+v", ev)
+	}
 	if raw, _ := os.ReadFile(filepath.Join(pathsOf(home).FeedbackDir(), "journal-"+time.Now().UTC().Format("2006-01")+".jsonl")); strings.Contains(string(raw), "Postgres") {
 		t.Errorf("text in the journal:\n%s", raw)
 	}

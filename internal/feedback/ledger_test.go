@@ -499,7 +499,127 @@ func TestBoostFormula(t *testing.T) {
 	if b, want := l.Boost("missed", p, at.Add(90*24*time.Hour)), 0.1*(3.0/13-0.25); math.Abs(b-want) > 1e-12 {
 		t.Errorf("misses decayed: %v, want %v", b, want)
 	}
+	// One credit half-life later the three credits weigh 1.5.
+	if b, want := l.Boost("used", p, at.Add(365*24*time.Hour)), 0.1*(4.5/13.5-0.25); math.Abs(b-want) > 1e-12 {
+		t.Errorf("credits decayed: %v, want %v", b, want)
+	}
 	if b := l.Boost("used", Params{PriorCredits: 3, PriorMisses: 9}, at); b != 0 {
 		t.Errorf("k = 0: %v", b)
+	}
+}
+
+// Current reads the journal from where the last settle stopped reading,
+// not from the start of the month: the ledger it returns is the one a
+// full read gives, and only the tail is decoded.
+func TestCurrentReadsOnlyTheJournalsTail(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	j := NewJournal(dir, Common{Session: "s"})
+	j.now = func() time.Time { return base }
+	for i := range 500 {
+		at := base.Add(time.Duration(i) * time.Second)
+		if err := j.Append(Event{Kind: "shows", TS: at, Turn: "t", Path: "search", Items: []Item{{ID: fmt.Sprintf("m%d", i%7), Rank: 1}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := j.AppendFolded(Event{Kind: KindRetire, TS: base.Add(time.Hour), IDs: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	p := Params{ConfidentRank: 2, TurnTimeout: TurnTimeout, MissHalfLife: 90 * 24 * time.Hour, CreditHalfLife: 365 * 24 * time.Hour}
+	settleAt := base.Add(3 * time.Hour)
+	if _, err := Settle(dir, p, settleAt); err != nil {
+		t.Fatal(err)
+	}
+	j.now = func() time.Time { return settleAt.Add(time.Minute) }
+	for _, e := range []Event{{Kind: KindRetire, IDs: []string{"m2"}}, {Kind: KindHide, IDs: []string{"m3"}, Verdict: "wrong"}, {Kind: "forget", IDs: []string{"m4"}}} {
+		if err := j.AppendFolded(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What a read of the whole month gives.
+	want, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _, _ := Read(dir, want.Watermark)
+	for _, e := range sortedByTime(all) {
+		if folded(e.Kind) && e.TS.After(want.Watermark) {
+			want.Apply(e, Params{})
+		}
+	}
+	n := 0
+	decodedLine = func() { n++ }
+	t.Cleanup(func() { decodedLine = nil })
+	got, err := Current(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameEntries(t, got, want, 1e-12)
+	if got.Memories["m2"].Wrong != 1 || got.Memories["m3"].Hidden == nil || got.Memories["m1"].Wrong != 1 {
+		t.Errorf("tail not applied: %+v", got.Memories)
+	}
+	if _, ok := got.Memories["m4"]; ok {
+		t.Error("m4 forgotten after the settle is still there")
+	}
+	if n != 4 { // the settle event and the three folded ones
+		t.Errorf("decoded %d lines, want the 4 after the settle's read", n)
+	}
+
+	// A journal file shorter than where the ledger stopped (rewritten,
+	// truncated): Current reads the month again, as before.
+	file := filepath.Join(dir, got.JournalAt.File)
+	raw, _ := os.ReadFile(file)
+	tail := raw[got.JournalAt.Offset:]
+	if err := os.WriteFile(file, tail, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n = 0
+	if again, err := Current(dir); err != nil || n != 4 || again.Memories["m2"].Wrong != 1 || again.Memories["m3"].Hidden == nil {
+		t.Errorf("truncated journal: %v, %d lines, %+v", err, n, again.Memories)
+	}
+}
+
+// Rebuild records where it read too: what it folded is not applied a
+// second time by Current.
+func TestCurrentAfterARebuildAppliesNothingTwice(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	j := NewJournal(dir, Common{Session: "s"})
+	j.now = func() time.Time { return at }
+	if err := j.Append(Event{Kind: "settle", Settled: []Settled{{Key: "k", ID: "m1", At: at, Outcome: OutcomeCredit}}}); err != nil {
+		t.Fatal(err)
+	}
+	j.now = func() time.Time { return at.Add(time.Minute) }
+	if err := j.AppendFolded(Event{Kind: KindRetire, IDs: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Rebuild(dir, Params{}, true); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	decodedLine = func() { n++ }
+	t.Cleanup(func() { decodedLine = nil })
+	l, err := Current(dir)
+	if err != nil || l.Memories["m1"].Wrong != 1 || n != 0 {
+		t.Errorf("after rebuild: %v, wrong %d, %d lines decoded", err, l.Memories["m1"].Wrong, n)
+	}
+}
+
+// A folded event read by a settle but stamped after it is left for
+// Current, which must then read from the watermark to find it.
+func TestCurrentFindsAFoldedEventNewerThanTheSettleItPreceded(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	j := NewJournal(dir, Common{Session: "s"})
+	j.now = func() time.Time { return at }
+	if err := j.AppendFolded(Event{Kind: KindHide, TS: at.Add(time.Hour), IDs: []string{"m1"}, Verdict: "wrong"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle(dir, Params{TurnTimeout: TurnTimeout}, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Current(dir)
+	if err != nil || l.Memories["m1"].Hidden == nil {
+		t.Errorf("hide stamped after the settle lost: %v %+v", err, l.Memories)
 	}
 }

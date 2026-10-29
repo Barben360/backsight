@@ -12,7 +12,8 @@ import (
 // journalRecall records what a memory_search returned, as a recall audit
 // event: each hit's id, rank, rank without the boost, server's score and
 // boost, and whether the boost changed which hits were returned
-// (set_changed: one ranked past them without it) or their order. Only
+// (set_changed: one ranked past them without it, or only the boost let
+// it in) or their order. Only
 // for the session this server belongs to (a current record), unpaused,
 // under its current turn, when feedback is on; ids and numbers only. A
 // failure is logged, never fails the search.
@@ -27,9 +28,12 @@ func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Resul
 	setChanged, orderChanged := false, false
 	for i, h := range res.Hits {
 		e.Items = append(e.Items, feedback.Item{ID: h.ID, Rank: i + 1, RankWithoutBoost: h.RankWithoutBoost, Reranker: h.Reranker, Boost: h.Boost})
-		if h.RankWithoutBoost != 0 {
+		switch {
+		case h.RankWithoutBoost != 0:
 			setChanged = setChanged || h.RankWithoutBoost > len(res.Hits)
 			orderChanged = orderChanged || h.RankWithoutBoost != i+1
+		case h.Boost != 0: // only the boost let it in
+			setChanged = true
 		}
 	}
 	if setChanged {

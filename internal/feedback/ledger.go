@@ -43,11 +43,37 @@ type Hidden struct {
 }
 
 // Ledger is a cache of the journal's settle, forget, retire, hide and
-// unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran.
+// unhide events, by memory id: Rebuild recomputes it. Watermark is when settling last ran,
+// JournalAt where the journal ended when it was read for this ledger.
 type Ledger struct {
 	Schema    int              `json:"schema"`
 	Watermark time.Time        `json:"watermark,omitzero"`
+	JournalAt JournalPos       `json:"journal_at,omitzero"`
 	Memories  map[string]Entry `json:"memories"`
+}
+
+// JournalPos is a place in dir's journal: a month file's base name and a
+// byte offset in it.
+type JournalPos struct {
+	File   string `json:"file"`
+	Offset int64  `json:"offset"`
+}
+
+// journalEnd is where dir's journal ends: its last month file and that
+// file's size; zero without a journal. Taken under the ledger lock before
+// a read, so that no folded event lands between it and the read.
+func journalEnd(dir string) JournalPos {
+	files, err := filepath.Glob(filepath.Join(dir, "journal-*.jsonl"))
+	if err != nil || len(files) == 0 {
+		return JournalPos{}
+	}
+	slices.Sort(files)
+	last := files[len(files)-1]
+	fi, err := os.Stat(last)
+	if err != nil {
+		return JournalPos{}
+	}
+	return JournalPos{File: filepath.Base(last), Offset: fi.Size()}
 }
 
 func newLedger() Ledger { return Ledger{Schema: LedgerSchema, Memories: map[string]Entry{}} }
@@ -266,11 +292,13 @@ func Rebuild(dir string, p Params, write bool) (Ledger, error) {
 		return Ledger{}, err
 	}
 	defer release()
+	at := journalEnd(dir)
 	events, _, err := Read(dir, time.Time{})
 	if err != nil {
 		return Ledger{}, err
 	}
 	l := Fold(events, p)
+	l.JournalAt = at // Fold applied every folded event before it
 	if write {
 		if err := saveLedger(dir, l); err != nil {
 			return l, err
@@ -281,13 +309,16 @@ func Rebuild(dir string, p Params, write bool) (Ledger, error) {
 
 // Current is dir's ledger with the forget, retire, hide and unhide events
 // journaled since its watermark applied, in time order, written nowhere:
-// what a command reads between two settles.
+// what a command reads between two settles. It reads the journal from the
+// ledger's JournalAt on (recall reads it at every prompt), or the whole
+// months since the watermark when the ledger has no JournalAt or its file
+// is gone or shorter (rewritten, truncated).
 func Current(dir string) (Ledger, error) {
 	l, err := LoadLedger(dir)
 	if err != nil {
 		return l, err
 	}
-	events, _, err := Read(dir, l.Watermark)
+	events, err := journalSince(dir, l)
 	if err != nil {
 		return l, err
 	}
@@ -297,4 +328,19 @@ func Current(dir string) (Ledger, error) {
 		}
 	}
 	return l, nil
+}
+
+// journalSince is what dir's journal holds after l was written: from
+// l.JournalAt when it still names a file at least that long, else the
+// months since l's watermark.
+func journalSince(dir string, l Ledger) ([]Event, error) {
+	if at := l.JournalAt; at.File != "" && filepath.Base(at.File) == at.File {
+		file := filepath.Join(dir, at.File)
+		if fi, err := os.Stat(file); err == nil && fi.Size() >= at.Offset {
+			events, _, err := ReadSince(file, at.Offset)
+			return events, err
+		}
+	}
+	events, _, err := Read(dir, l.Watermark)
+	return events, err
 }
