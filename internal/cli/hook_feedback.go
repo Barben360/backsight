@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -162,13 +163,37 @@ func (h *hookEnv) journalShows(path string, items []feedback.Item) {
 	h.feedbackError(h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items}))
 }
 
-// itemsFromHits ranks hits from 1 in the order shown.
+// itemsFromHits ranks hits from 1 in the order shown, each with its boost,
+// its score and its rank among them without it.
 func itemsFromHits(hits []recall.Hit) []feedback.Item {
 	items := make([]feedback.Item, 0, len(hits))
 	for i, hit := range hits {
-		items = append(items, feedback.Item{ID: hit.ID, Rank: i + 1, Reranker: hit.Reranker, Project: hit.Project})
+		items = append(items, feedback.Item{ID: hit.ID, Rank: i + 1, Reranker: hit.Reranker, Project: hit.Project,
+			Boost: hit.Boost, RankWithoutBoost: rankWithoutBoost(hits, hit), ScoreWithoutBoost: scoreWithoutBoost(hit)})
 	}
 	return items
+}
+
+// scoreWithoutBoost is hit's score before the ledger's boost, to 4
+// decimals as recall rounds it.
+func scoreWithoutBoost(hit recall.Hit) *float64 {
+	score := math.Round((hit.Score-hit.Boost)*10000) / 10000
+	return &score
+}
+
+// rankWithoutBoost is hit's place among the hits shown had recall not
+// boosted them, from 1; 0 when recall had no ledger.
+func rankWithoutBoost(hits []recall.Hit, hit recall.Hit) int {
+	if hit.RankWithoutBoost == 0 {
+		return 0
+	}
+	n := 1
+	for _, o := range hits {
+		if o.RankWithoutBoost != 0 && o.RankWithoutBoost < hit.RankWithoutBoost {
+			n++
+		}
+	}
+	return n
 }
 
 // hitTexts is the hits' texts by id, for the session's ShownTexts.

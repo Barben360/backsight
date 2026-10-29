@@ -611,7 +611,7 @@ func TestMemoryStaleListsTheThreeKinds(t *testing.T) {
 		"\nHidden, not rewritten for 7 days\n" +
 		"55555555  shown 3  2w ago  backsight forget --restore " + staleID(5) + "\n" +
 		"99999999  shown 1  -  backsight forget --restore " + staleID(9) + "\n" +
-		"Marked hidden on this machine until the server rewrites them (recall does not skip them yet); `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
+		"Hidden on this machine, so recall here skips them, until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.\n" +
 		"\nReported wrong or outdated\n" +
 		"77777777  shown 11  5d ago  backsight forget " + staleID(7) + " --purge\n" +
 		"88888888  shown 2  4d ago  backsight forget " + staleID(8) + " --purge\n" +
@@ -749,5 +749,25 @@ func TestMemoryStaleJournalsNothingWhenEmptyOrOff(t *testing.T) {
 	}
 	if n := len(eventsOf(journalEvents(t, home), "stale")); n != 0 {
 		t.Errorf("%d stale events with feedback off", n)
+	}
+}
+
+// "Shown often, never used" counts the shows recorded live: an import
+// never counts a miss, so imported shows alone say nothing of use.
+func TestNeverUsedCountsLiveShowsOnly(t *testing.T) {
+	now := time.Now().UTC()
+	l := feedback.Ledger{Schema: feedback.LedgerSchema, Memories: map[string]feedback.Entry{
+		staleID(1): {Shown: 20, LastShown: now, Imported: feedback.Imported{Shown: 20}}, // imported only
+		staleID(2): {Shown: 20, LastShown: now},                                         // live only
+		staleID(3): {Shown: 25, LastShown: now, Imported: feedback.Imported{Shown: 20}}, // 5 live
+		staleID(4): {Shown: 30, LastShown: now, Imported: feedback.Imported{Shown: 15}}, // 15 live
+	}}
+	res := staleOf(l, 10, now)
+	var got []string
+	for _, m := range res.NeverUsed {
+		got = append(got, m.ID[:8])
+	}
+	if strings.Join(got, " ") != "44444444 22222222" {
+		t.Errorf("never used %v, want the memories with 10 live shows or more: 44444444 22222222", got)
 	}
 }

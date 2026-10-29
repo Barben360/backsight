@@ -47,8 +47,11 @@ func newEngine(cfg config.Config, sec config.Secrets) (*recall.Engine, error) {
 // searchMemory is memory_search's engine, shared by the CLI and MCP: the
 // project scope adds what cwd's .backsight.toml relates, the related scope
 // asked-for projects and those whose names the queries mention (entity
-// index).
+// index). The ledger is read at each search, not with the engine: the MCP
+// server's engine lives as long as its session.
 func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Config, eng *recall.Engine, current, cwd string, queries, projects []string, all bool, limit int, minScore float64) recall.Result {
+	adjusted := *eng
+	adjusted.Adjust = ledgerAdjust(d, cfg, now())
 	for i, q := range queries {
 		queries[i], _ = redact.Text(q) // a key pasted into a query never leaves the machine
 	}
@@ -57,7 +60,7 @@ func searchMemory(ctx context.Context, d paths.Dirs, home string, cfg config.Con
 		related = idx.Projects(strings.Join(queries, " "), current, cfg.Projects.Transverse)
 	}
 	linked := linkedProjects(d, cfg, project.New(home, cfg.Projects.Transverse), cwd, current)
-	return eng.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore, Kinds: true})
+	return adjusted.Search(ctx, recall.Query{Queries: queries, Current: current, Linked: linked, Projects: projects, Related: related, All: all, Limit: limit, MinScore: minScore, Kinds: true})
 }
 
 func newSearchCmd(e *env) *cobra.Command {
@@ -94,7 +97,7 @@ func newSearchCmd(e *env) *cobra.Command {
 	cmd.Flags().StringSliceVar(&projects, "project", nil, "also search these projects")
 	cmd.Flags().BoolVar(&all, "all", false, "search the whole bank only, without project scopes")
 	cmd.Flags().IntVar(&limit, "limit", searchLimit, "most hits shown")
-	cmd.Flags().Float64Var(&minScore, "min-score", searchMinScore, "score floor (reranker + current-project boost)")
+	cmd.Flags().Float64Var(&minScore, "min-score", searchMinScore, "score floor (reranker + current-project boost + the boost from what Claude used)")
 	return cmd
 }
 

@@ -3,6 +3,7 @@ package feedback
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
@@ -32,12 +33,14 @@ const (
 	settleWindow = 62 * 24 * time.Hour
 )
 
-// Params are the values settling and folding use; a half-life of 0 means
-// no decay.
+// Params are the values settling, folding and the boost use; a half-life
+// of 0 means no decay. Weight (k) and the priors PriorCredits (α) and
+// PriorMisses (β) shape Ledger.Boost.
 type Params struct {
-	ConfidentRank                int
-	MissHalfLife, CreditHalfLife time.Duration
-	TurnTimeout                  time.Duration
+	ConfidentRank                     int
+	MissHalfLife, CreditHalfLife      time.Duration
+	TurnTimeout                       time.Duration
+	Weight, PriorCredits, PriorMisses float64
 }
 
 // Keys of the half-lives in a settle event's params.
@@ -178,6 +181,22 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 	return settled, late
 }
 
+// Replay is the ledger events would give had every show been decided
+// under p: the settle events they hold left out, every show decided
+// again at now by Decide (a sources show never), and the outcomes
+// folded at now with the import, forget, retire, hide and unhide events,
+// as Fold does. Events after now are not seen. Pure: it writes nothing.
+func Replay(events []Event, p Params, now time.Time) Ledger {
+	var kept []Event
+	for _, e := range events {
+		if e.Kind != "settle" && !e.TS.After(now) {
+			kept = append(kept, e)
+		}
+	}
+	settled, _ := Decide(kept, p, now)
+	return Fold(append(kept, Event{Kind: "settle", TS: now.UTC(), Settled: settled}), p)
+}
+
 // attach credits the latest of shows neither credited nor settled; false
 // when there is none.
 func attach(shows []*pendingShow) bool {
@@ -238,6 +257,7 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 	if err != nil {
 		return res, err
 	}
+	at := journalEnd(dir)
 	events, _, err := Read(dir, now.Add(-settleWindow))
 	if err != nil {
 		return res, err
@@ -267,6 +287,13 @@ func Settle(dir string, p Params, now time.Time) (SettleResult, error) {
 		l.Apply(e, p)
 	}
 	l.Watermark = now.UTC()
+	// Current reads on from where this read began, unless a folded event
+	// before it is newer than the watermark: left for Current to apply,
+	// it needs the read from the watermark.
+	l.JournalAt = at
+	if slices.ContainsFunc(events, func(e Event) bool { return folded(e.Kind) && e.TS.After(now) }) {
+		l.JournalAt = JournalPos{}
+	}
 	if err := saveLedger(dir, l); err != nil {
 		return res, err
 	}

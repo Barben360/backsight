@@ -121,6 +121,13 @@ flowchart LR
 
 Every hook, threshold and time limit: [how-it-works.md](docs/how-it-works.md).
 
+## How memory learns what helps
+
+<img alt="How a memory's rank moves: over 50 shows, a memory never credited sinks, one credited one time in ten stays at zero, one always credited rises." src="docs/assets/feedback-curve-light.svg#gh-light-mode-only">
+<img alt="How a memory's rank moves: over 50 shows, a memory never credited sinks, one credited one time in ten stays at zero, one always credited rises." src="docs/assets/feedback-curve-dark.svg#gh-dark-mode-only">
+
+backsight counts, by id, the memories Claude was shown and the ones it reports using. A memory shown near the top and left unused is a confident miss: with one uncredited show in three counted as a miss, as drawn here, a memory credited one time in ten stays where the reranker put it, one credited more often rises and one credited less often sinks. Misses lose half their weight in 90 days and credits in a year, and the boost stays between −0.025 and +0.075 by default.
+
 ## What it costs
 
 backsight is free, and so is searching the memory: recall at each prompt, `memory_search` and `backsight search` run on your machine, with the server's local search models, and send nothing out. The server's LLM is not free: it reads each session to extract memories, and you pay its provider for the tokens.

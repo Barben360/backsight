@@ -79,7 +79,7 @@ func newMemoryStaleCmd(e *env) *cobra.Command {
 
 // staleOf sorts l's memories into what needs review, each once: hidden
 // for staleHidden without a rewrite, else reported wrong or outdated,
-// else shown at least shows times and never used. A memory hidden for
+// else shown live at least shows times and never used. A memory hidden for
 // less is left out: the server may still rewrite it. Each list is most
 // shown first.
 func staleOf(l feedback.Ledger, shows int, at time.Time) staleResult {
@@ -99,7 +99,9 @@ func staleOf(l feedback.Ledger, shows int, at time.Time) staleResult {
 			// deletes only with --yes.
 			s.Command += " --purge"
 			res.Reported = append(res.Reported, s)
-		case m.Shown >= shows && m.Credits == 0:
+		case m.Shown-m.Imported.Shown >= shows && m.Credits == 0:
+			// Live shows only: an import never counts a miss, so its
+			// shows alone say nothing of use.
 			res.NeverUsed = append(res.NeverUsed, s)
 		}
 	}
@@ -124,7 +126,7 @@ func staleText(r staleResult, at time.Time) string {
 		ms            []staleMemory
 	}{
 		{"Shown often, never used", "", r.NeverUsed},
-		{"Hidden, not rewritten for 7 days", "Marked hidden on this machine until the server rewrites them (recall does not skip them yet); `backsight forget <id>` retires one for good once the server lists its source facts.", r.Hidden},
+		{"Hidden, not rewritten for 7 days", "Hidden on this machine, so recall here skips them, until the server rewrites them; `backsight forget <id>` retires one for good once the server lists its source facts.", r.Hidden},
 		{"Reported wrong or outdated", "", r.Reported},
 	} {
 		if len(sec.ms) == 0 {

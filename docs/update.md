@@ -45,6 +45,8 @@ backsight update apply
 
 Then restart Claude Code (or run `/reload-plugins`) to load the new plugin.
 
+After the upgrade that brings it, the maintenance run every 15 minutes (`jobs tick`) also adds earlier history to the per-memory counts: the memories shown and the clear credits that this machine's telemetry and the Claude Code transcripts still on disk recorded. It spends at most a minute per run and goes on at the next one until it is done; `backsight feedback import` does it at once.
+
 `--version <v>` installs a given version instead of the newest. `--source <dir>` reads releases from a local directory instead of GitHub.
 
 ## Server upgrades

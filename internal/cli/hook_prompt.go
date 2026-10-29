@@ -372,7 +372,8 @@ func (h *hookEnv) searchPrompt(prompt string) (string, recall.Result) {
 	if idx, err := recall.LoadIndex(h.dirs.EntitiesFile()); err == nil {
 		related = idx.Projects(q, h.project, h.cfg.Projects.Transverse)
 	}
-	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost}
+	eng := &recall.Engine{Client: h.client, Bank: h.cfg.Server.Bank, Transverse: h.cfg.Projects.Transverse, Timeout: recallBudget, Now: now, Boost: h.cfg.Recall.ProjectBoost,
+		Adjust: ledgerAdjust(h.dirs, h.cfg, now())}
 	return q, eng.Search(h.ctx, recall.Query{Queries: []string{q}, Current: h.project, Linked: h.linked, Related: related, MinReranker: rc.MinScore, GlobalMinReranker: rc.GlobalMinScore, Limit: 20})
 }
 
