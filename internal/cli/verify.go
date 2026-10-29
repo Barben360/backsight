@@ -26,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -353,6 +354,7 @@ func runVerifyLive(ctx context.Context, configDir string) (livecheck.Result, err
 		files, _ = filepath.Glob(filepath.Join(loc.Projects, "*", "*.jsonl"))
 	}
 	in := livecheck.Input{Server: srv, Bank: cfg.Server.Bank, Transcripts: files, CursorsDir: d.CursorsDir(), Now: now()}
+	in.MachineID, _ = retain.MachineID(d.State) // an error leaves it empty: no segment counts as another PC's
 	if st, err := state.Load(d.StateFile()); err == nil && st.RetainSince != nil {
 		in.RetainSince = *st.RetainSince
 	}

@@ -396,6 +396,41 @@ func TestVerifyLivePassPendingAndFail(t *testing.T) {
 	}
 }
 
+// verify --live gives the check this PC's machine id: a later segment
+// another PC sent passes, the same written with this PC's id fails.
+func TestVerifyLiveSendsThisPCsMachineID(t *testing.T) {
+	home := devInstall(t, true)
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withClock(t, at)
+	f := &liveFake{docs: map[string]hindsight.Document{}}
+	withLiveServer(t, f)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.State, 0o700)
+	mine, err := retain.MachineID(d.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := liveSession(t, home, "s1", at.Add(-2*time.Hour))
+	fi, _ := os.Stat(p)
+	_ = retain.SaveCursor(d.CursorsDir(), "s1", retain.Cursor{Transcript: p, Offset: fi.Size(), LastUUID: "u9", Segment: 2,
+		Document: "conversation:s1", Bank: "claude-memory", SentAt: at.Add(-90 * time.Minute)})
+	f.docs["conversation:s1"] = hindsight.Document{Metadata: map[string]string{"segment": "3", "last_uuid": "x5", "machine_id": "9b2f6c1e-0000-4000-8000-000000000000"}}
+	f.memories = []hindsight.Memory{
+		{ID: "f1", FactType: "world", DocumentID: "conversation:s1", ConsolidatedAt: "2026-10-25T10:40:00+00:00"},
+		{ID: "o1", FactType: "observation", SourceMemoryIDs: []string{"f1"}},
+	}
+	code, out, errOut := run(t, "verify", "--live", "--json")
+	res, _ := parseLive(t, out)
+	if code != output.OK || res.Status != livecheck.Pass || len(res.ContinuedElsewhere) != 1 || res.ContinuedElsewhere[0] != "conversation:s1" {
+		t.Fatalf("another PC's segment: exit %d\n%s%s", code, out, errOut)
+	}
+	f.docs["conversation:s1"].Metadata["machine_id"] = mine
+	code, out, _ = run(t, "verify", "--live", "--json")
+	if res, _ = parseLive(t, out); code != output.Blocked || res.Status != livecheck.Fail || !strings.Contains(res.Summary, "segment 3") {
+		t.Errorf("this PC's segment: exit %d\n%s", code, out)
+	}
+}
+
 func TestVerifyLiveRefusesNoRoundTrip(t *testing.T) {
 	devInstall(t, true)
 	withLiveServer(t, &liveFake{})
