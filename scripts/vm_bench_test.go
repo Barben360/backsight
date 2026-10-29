@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -641,6 +642,12 @@ func TestVMBenchResetFollowsANewAddress(t *testing.T) {
 		}
 		if strings.Join(reverts, "\n") != "snapshot-revert bs-m6-server bs-m6-clean --running\nsnapshot-revert bs-m6-client bs-m6-clean --running" {
 			t.Errorf("reverts: %q", reverts)
+		}
+		// A link a stopped run left down comes back with the revert.
+		verbs := virshVerbs(t, benchCalls(t, fakes, "virsh"))
+		up, rev := slices.Index(verbs, "domif-setlink bs-m6-client 52:54:00:b6:06:02 up"), slices.Index(verbs, "snapshot-revert bs-m6-client bs-m6-clean --running")
+		if up < 0 || up < rev {
+			t.Errorf("A's link is not brought up after its revert: %q", verbs)
 		}
 	}
 }
