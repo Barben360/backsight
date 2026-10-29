@@ -118,6 +118,7 @@ type loginShellSSH struct{ shell, env []string }
 
 func (l loginShellSSH) Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, l.shell[0], append(append([]string{}, l.shell[1:]...), "-c", args[len(args)-1])...)
+	cmd.WaitDelay = 5 * time.Second // a stray background child cannot hold the pipes open
 	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = l.env, stdin, stdout, stderr
 	err := cmd.Run()
 	var ee *exec.ExitError
@@ -150,10 +151,8 @@ func TestRemoteStepsUnderEveryLoginShell(t *testing.T) {
 				}
 				t.Skipf("no %s", shell)
 			}
-			if !hasVerifier() {
-				t.Skip("neither minisign nor OpenSSL 3 is installed")
-			}
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
 			home, tmp := t.TempDir(), t.TempDir()
 			var env []string
 			for _, e := range os.Environ() {
@@ -175,24 +174,6 @@ func TestRemoteStepsUnderEveryLoginShell(t *testing.T) {
 			wantShim := filepath.Join(home, ".local/share/backsight/bin/current")
 			if f.Addr != "100.101.1.2" || f.OS != "Linux" || f.Shim != wantShim {
 				t.Errorf("probe = %+v; want Addr 100.101.1.2, OS Linux, Shim %s", f, wantShim)
-			}
-
-			src := t.TempDir()
-			signedRelease(t, src, "9.9.9", trustTestKey(t), relOpts{platform: "linux_" + runtime.GOARCH})
-			work := t.TempDir()
-			archive, _, err := stageRelease(ctx, release.Dir{Path: src}, "9.9.9", runtime.GOARCH, work)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := installOnHost(ctx, "u@h", work, archive); err != nil {
-				t.Fatalf("install: %v", err)
-			}
-			want := filepath.Join(home, ".local/share/backsight/bin/9.9.9/backsight")
-			if got, err := os.Readlink(wantShim); err != nil || got != want {
-				t.Errorf("shim -> %q (%v), want %s", got, err, want)
-			}
-			if ents, _ := os.ReadDir(tmp); len(ents) != 0 {
-				t.Errorf("TMPDIR keeps %d entries after the install", len(ents))
 			}
 
 			file := filepath.Join(home, "handback-token")
@@ -218,7 +199,7 @@ func TestRemoteStepsUnderEveryLoginShell(t *testing.T) {
 			if err := os.WriteFile(echo, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			words := []string{"setup", "--answer", "provider=mock", "--json"}
+			words := []string{"setup", "--answer", "provider=mock", "--json", "a b$HOME"}
 			remote, err = remoteShim(echo, words...)
 			if err != nil {
 				t.Fatal(err)
@@ -228,7 +209,31 @@ func TestRemoteStepsUnderEveryLoginShell(t *testing.T) {
 				t.Fatalf("shim: %v", err)
 			}
 			if got := out.String(); got != strings.Join(words, "\n")+"\n" {
-				t.Errorf("the shim received %q, want the four words verbatim", got)
+				t.Errorf("the shim received %q, want the words verbatim", got)
+			}
+
+			if !hasVerifier() {
+				if required[shell] {
+					t.Fatal("neither minisign nor OpenSSL 3 is installed, and BACKSIGHT_REQUIRE_SHELLS names this shell: the install step would check nothing")
+				}
+				t.Skip("neither minisign nor OpenSSL 3 is installed")
+			}
+			src := t.TempDir()
+			signedRelease(t, src, "9.9.9", trustTestKey(t), relOpts{platform: "linux_" + runtime.GOARCH})
+			work := t.TempDir()
+			archive, _, err := stageRelease(ctx, release.Dir{Path: src}, "9.9.9", runtime.GOARCH, work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := installOnHost(ctx, "u@h", work, archive); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			want := filepath.Join(home, ".local/share/backsight/bin/9.9.9/backsight")
+			if got, err := os.Readlink(wantShim); err != nil || got != want {
+				t.Errorf("shim -> %q (%v), want %s", got, err, want)
+			}
+			if ents, _ := os.ReadDir(tmp); len(ents) != 0 {
+				t.Errorf("TMPDIR keeps %d entries after the install", len(ents))
 			}
 		})
 	}
