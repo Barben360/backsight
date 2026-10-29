@@ -6,7 +6,9 @@
 # the same runner connect to it there with a token, each with its own
 # HOME, BACKSIGHT_HOME and Claude Code profile. The checks reach the three
 # homes through the driver below; no VM, no systemd timer: a client's
-# `jobs tick` is run directly where the bench waits for its timer.
+# `jobs tick` is run directly where the bench waits for its timer. The
+# clients run with scheduler=off, so CI does not cover a timer's tick
+# interleaving with a manual one: the VM bench's `timers` check does.
 #
 # Usage: scripts/m6-chain.sh [api port] (default 28600 +
 # BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; the UI takes port + 1111).
