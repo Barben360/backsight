@@ -315,11 +315,10 @@ func (f *Flusher) reconcile(ctx context.Context) (Reconciled, error) {
 // than the one this client recorded for bank, whatever its number: a host
 // restored on a fresh machine from an older archive counts from what that
 // machine holds, and may write the number this client holds, or a lower
-// one (M6 review). Its restored_at tells. A record without one (written
-// before it was kept) reconciled before ep's restore, within the clock
-// skew, saw another: a reconcile taken for nothing costs reads, one
-// missed loses what the client sent since. Epoch 0 (no restore) is never
-// another.
+// one. Its restored_at tells. A record without one (written before it
+// was kept) reconciled before ep's restore, within the clock skew, saw
+// another: a reconcile taken for nothing costs reads, one missed loses
+// what the client sent since. Epoch 0 (no restore) is never another.
 func anotherRestore(st state.State, bank string, ep Epoch) bool {
 	re := st.RestoreEpoch
 	if ep.RestoredAt.IsZero() || re == nil || !state.SameBank(re.Bank, bank) {
