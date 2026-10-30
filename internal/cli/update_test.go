@@ -296,7 +296,7 @@ func TestSessionStartBannerShowsANewerRelease(t *testing.T) {
 	home := hookHome(t)
 	record := func(latest string) {
 		_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
-			s.UpdateCheck = &state.UpdateCheck{CheckedAt: time.Now(), Installed: "0.1.0", Latest: latest, Summary: "✨ Add update check (+3 more)"}
+			s.UpdateCheck = &state.UpdateCheck{CheckedAt: time.Now(), Installed: "0.1.0", Latest: latest, Newer: 3, Summary: "✨ Add update check (+3 more)"}
 			return nil
 		})
 	}
@@ -308,10 +308,17 @@ func TestSessionStartBannerShowsANewerRelease(t *testing.T) {
 		t.Errorf("no check recorded: %q", msg)
 	}
 	record("0.2.0")
-	// The version only: release notes are unsigned and never reach a
+	// The versions only: release notes are unsigned and never reach a
 	// Claude session.
-	if msg := start(); !strings.Contains(msg, "⬆️ backsight update 0.2.0 available · see `backsight changelog`") || strings.Contains(msg, "Add update check") {
+	want := "⬆️ backsight 0.1.0 → 0.2.0 (3 newer) · update here: `/backsight:update` · or in a terminal: `backsight update apply`"
+	if msg := start(); !strings.Contains(msg, want) || strings.Contains(msg, "Add update check") {
 		t.Errorf("banner %q", msg)
+	}
+	// The count is the checking binary's: past a newer running binary it
+	// would be wrong, so it is left out.
+	setBuild(t, "0.1.5", "abc1235")
+	if msg := start(); !strings.Contains(msg, "⬆️ backsight 0.1.5 → 0.2.0 · update here:") {
+		t.Errorf("banner after a partial update %q", msg)
 	}
 	setBuild(t, "0.2.0", "def5678") // updated since the check
 	if msg := start(); strings.Contains(msg, "update") {

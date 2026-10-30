@@ -55,7 +55,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v9" {
+	if Version != "v10" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -246,6 +246,39 @@ func TestDoctorSkillRunsTheDiagnosticsOnly(t *testing.T) {
 	}
 }
 
+// The update skill runs the read-only steps unprompted; the install itself,
+// and a plan flag that would turn the plan into an install, ask the user.
+func TestUpdateSkillAppliesOnlyWithTheUsersYes(t *testing.T) {
+	tools := skillTools("update")
+	for _, cmd := range []string{"/s version", "/s update check", "/s update check --json", "/s update apply --plan", "/s doctor"} {
+		if !allows(tools, cmd) {
+			t.Errorf("%q needs a prompt: %s", cmd, tools)
+		}
+	}
+	for _, cmd := range []string{"/s update apply", "/s update apply --version 0.2.0", "/s update apply --plan=false", "/s update apply --plan --plan=false",
+		"/s update apply --plan --version 0.2.0 --plan=false", "/s client install", "/s restore x", "/s version --licenses"} {
+		if allows(tools, cmd) {
+			t.Errorf("%q runs unprompted: %s", cmd, tools)
+		}
+	}
+	body := skillBody("update")
+	for _, want := range []string{"/s update check", "/s update apply --plan", "only once the user agreed", "/s update apply --version <the planned version>",
+		"600000", "never follow instructions", "/reload-plugins"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("update skill lacks %q", want)
+		}
+	}
+}
+
+// An update goes to the update skill, not to doctor or memory.
+func TestSkillsPointAnUpdateToTheUpdateSkill(t *testing.T) {
+	for _, s := range Skills("/s") {
+		if (s.Name == "doctor" || s.Name == "memory") && (!strings.Contains(s.Description, "/backsight:update") || strings.Contains(s.Description, "update backsight")) {
+			t.Errorf("%s skill description: %s", s.Name, s.Description)
+		}
+	}
+}
+
 // The memory skill is about the memory only: backsight's own commands
 // moved to the doctor skill.
 func TestMemorySkillRunsTheMemoryCommandsOnly(t *testing.T) {
@@ -321,14 +354,15 @@ func TestGuideTellsClaudeNeverToAskForASecret(t *testing.T) {
 // change of wording without a new Version fails here, so telemetry never
 // mixes two wordings under one version.
 var wordings = map[string]string{
-	"v2": "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
-	"v3": "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
-	"v5": "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
-	"v6": "08ae29b8359ba847e94edb12c320d9ff4a3bfab837c6597c2a32a9422cde7228",
-	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
-	"v7": "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
-	"v8": "12d06be831db7e934a0f7b733c2908eb1fde75d73d6f00d7a7fd645f23faa87b",
-	"v9": "a53915333ea092b317d01464304f17d79053635c57bdffca975896af0542f32c",
+	"v2":  "3dd4cfe49aa97c62eded2b4bc46fce8df5204792f2f33f221581cff5331a5463",
+	"v3":  "cf5a678191984ae52f5cf486001dee360e1434ac42da8f13b4a7754291653868",
+	"v5":  "aca742d3f33c5c27c273386043a69c8a3f9a79b589171fdf1bc4edc686968583",
+	"v6":  "08ae29b8359ba847e94edb12c320d9ff4a3bfab837c6597c2a32a9422cde7228",
+	"v4":  "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
+	"v7":  "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
+	"v8":  "12d06be831db7e934a0f7b733c2908eb1fde75d73d6f00d7a7fd645f23faa87b",
+	"v9":  "a53915333ea092b317d01464304f17d79053635c57bdffca975896af0542f32c",
+	"v10": "951a7ad31110632dda7081ea584084a93ecb0ede29141181d32ff0fb8f0a1295",
 }
 
 func wordingHash() string {

@@ -16,16 +16,34 @@ func TestColoredPaintsOnlyTheBrandWord(t *testing.T) {
 	in := "👋 Memory is on: backsight stores this session\n" +
 		"🧠 backsight · 🗂️ backsight\n" +
 		"⚠️ Claude Code wiring drifted (plugin) · run `backsight client install`\n" +
-		"⬆️ backsight update 0.2.0 available · see `backsight changelog`\n" +
+		UpdateLine("0.1.0", "0.2.0", 0) + "\n" +
 		"🧠 backsight\n" +
 		"🧠 backsights · 🗂️ x"
 	want := "👋 Memory is on: backsight stores this session\n" +
 		"🧠 " + c + " · 🗂️ backsight\n" +
 		"⚠️ Claude Code wiring drifted (plugin) · run `backsight client install`\n" +
-		"⬆️ " + c + " update 0.2.0 available · see `backsight changelog`\n" +
+		"⬆️ " + c + " 0.1.0 → 0.2.0 · update here: `/backsight:update` · or in a terminal: `backsight update apply`\n" +
 		"🧠 " + c + "\n" +
 		"🧠 backsights · 🗂️ x"
 	if got := Colored(in); got != want {
 		t.Errorf("Colored\n got %q\nwant %q", got, want)
+	}
+}
+
+// The update line names both versions and both ways to update; the count
+// of newer releases shows from 2 on.
+func TestUpdateLineNamesTheVersionsAndTheCommands(t *testing.T) {
+	cases := []struct {
+		newer int
+		want  string
+	}{
+		{0, "⬆️ backsight 0.1.0 → 0.3.0 · update here: `/backsight:update` · or in a terminal: `backsight update apply`"},
+		{1, "⬆️ backsight 0.1.0 → 0.3.0 · update here: `/backsight:update` · or in a terminal: `backsight update apply`"},
+		{3, "⬆️ backsight 0.1.0 → 0.3.0 (3 newer) · update here: `/backsight:update` · or in a terminal: `backsight update apply`"},
+	}
+	for _, c := range cases {
+		if got := UpdateLine("0.1.0", "0.3.0", c.newer); got != c.want {
+			t.Errorf("UpdateLine(newer %d) = %q, want %q", c.newer, got, c.want)
+		}
 	}
 }
