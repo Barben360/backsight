@@ -646,6 +646,36 @@ func TestNativeStatusMapsUnitStates(t *testing.T) {
 	}
 }
 
+// UnitStates is systemd's ActiveState of each unit, not-installed for a
+// unit without its file (doctor's native-unit check).
+func TestNativeUnitStatesReadsActiveState(t *testing.T) {
+	ctx := context.Background()
+	n, sys, _ := nativeFixture(t, secrets)
+	got, err := n.UnitStates(ctx)
+	want := map[string]string{"backsight-db.service": NotInstalled, "backsight-server.service": NotInstalled}
+	if err != nil || !reflect.DeepEqual(got, want) || len(sys.Calls) != 0 {
+		t.Errorf("never installed: %v %v (ran %v), want %v", got, err, sys.lines(), want)
+	}
+	installed(t, n, secrets)
+	sys.Out = func([]string) ([]byte, error) {
+		return []byte("ActiveState=active\nSubState=running\n\nActiveState=failed\nSubState=failed\n"), nil
+	}
+	got, err = n.UnitStates(ctx)
+	want = map[string]string{"backsight-db.service": "active", "backsight-server.service": "failed"}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("installed: %v %v, want %v", got, err, want)
+	}
+	if err := os.Remove(filepath.Join(n.UnitDir, n.ServerUnit())); err != nil {
+		t.Fatal(err)
+	}
+	sys.Out = func([]string) ([]byte, error) { return []byte("ActiveState=inactive\nSubState=dead\n"), nil }
+	got, err = n.UnitStates(ctx)
+	want = map[string]string{"backsight-db.service": "inactive", "backsight-server.service": NotInstalled}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("server unit removed: %v %v, want %v", got, err, want)
+	}
+}
+
 func TestNativeLogsReadTheJournal(t *testing.T) {
 	n, sys, _ := nativeFixture(t, secrets)
 	if _, err := n.Logs(context.Background(), "db", 40); err != nil {

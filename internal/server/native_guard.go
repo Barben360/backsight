@@ -402,23 +402,11 @@ func (n Native) ownsPidFile(strays []Stray) error {
 
 // CheckFsync is requirement 1: the running database's fsync must read on.
 func (n Native) CheckFsync(ctx context.Context) error {
-	if n.Err != nil {
-		return n.Err
-	}
-	pw, err := n.dbPassword()
+	v, err := n.Fsync(ctx)
 	if err != nil {
 		return err
 	}
-	port, err := n.envPort()
-	if err != nil {
-		return err
-	}
-	out, err := n.Tools.Run(ctx, n.pgEnv(pw), nil, filepath.Join(n.installation(), "bin", "psql"), "-h", "127.0.0.1", "-p", strconv.Itoa(port),
-		"-U", "hindsight", "-d", "hindsight", "-At", "-v", "ON_ERROR_STOP=1", "-c", "SHOW fsync")
-	if err != nil {
-		return n.redact(fmt.Errorf("checking fsync on the native database (%s): %w", n.DBUnit(), err))
-	}
-	switch v := strings.TrimSpace(string(out)); v {
+	switch v {
 	case "on":
 		return nil
 	case "off":
@@ -426,6 +414,27 @@ func (n Native) CheckFsync(ctx context.Context) error {
 	default:
 		return fmt.Errorf("fsync reads %q on the native database, not on: refusing to run it (an OS crash could corrupt it); check %s's settings", v, n.DBUnit())
 	}
+}
+
+// Fsync is the running database's SHOW fsync (doctor shows it).
+func (n Native) Fsync(ctx context.Context) (string, error) {
+	if n.Err != nil {
+		return "", n.Err
+	}
+	pw, err := n.dbPassword()
+	if err != nil {
+		return "", err
+	}
+	port, err := n.envPort()
+	if err != nil {
+		return "", err
+	}
+	out, err := n.Tools.Run(ctx, n.pgEnv(pw), nil, filepath.Join(n.installation(), "bin", "psql"), "-h", "127.0.0.1", "-p", strconv.Itoa(port),
+		"-U", "hindsight", "-d", "hindsight", "-At", "-v", "ON_ERROR_STOP=1", "-c", "SHOW fsync")
+	if err != nil {
+		return "", n.redact(fmt.Errorf("checking fsync on the native database (%s): %w", n.DBUnit(), err))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // fsyncOrStop checks fsync after a start; anything but on stops and

@@ -766,24 +766,60 @@ func (n Native) Status(ctx context.Context) ([]Container, error) {
 	if n.Err != nil {
 		return nil, n.Err
 	}
-	var names, services []string
-	for _, u := range n.units() {
-		if pathExists(filepath.Join(n.UnitDir, u[0])) {
-			names, services = append(names, u[0]), append(services, u[1])
-		}
-	}
-	if len(names) == 0 {
-		return nil, nil
-	}
-	out, err := n.systemctl(ctx, append([]string{"show", "-p", "ActiveState,SubState"}, names...)...)
+	installed, states, err := n.showStates(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var list []Container
+	for i, u := range installed {
+		list = append(list, Container{Service: u[1], State: unitState(states[i][0], states[i][1])})
+	}
+	return list, nil
+}
+
+// NotInstalled is UnitStates' state of a unit whose file does not exist.
+const NotInstalled = "not-installed"
+
+// UnitStates maps both units to systemd's ActiveState (doctor's check),
+// NotInstalled for a unit without its file.
+func (n Native) UnitStates(ctx context.Context) (map[string]string, error) {
+	if n.Err != nil {
+		return nil, n.Err
+	}
+	installed, states, err := n.showStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, u := range n.units() {
+		out[u[0]] = NotInstalled
+	}
+	for i, u := range installed {
+		out[u[0]] = states[i][0]
+	}
+	return out, nil
+}
+
+// showStates asks systemd for the installed units' ActiveState and
+// SubState, in units() order.
+func (n Native) showStates(ctx context.Context) (installed [][2]string, states [][2]string, err error) {
+	var names []string
+	for _, u := range n.units() {
+		if pathExists(filepath.Join(n.UnitDir, u[0])) {
+			installed, names = append(installed, u), append(names, u[0])
+		}
+	}
+	if len(names) == 0 {
+		return nil, nil, nil
+	}
+	out, err := n.systemctl(ctx, append([]string{"show", "-p", "ActiveState,SubState"}, names...)...)
+	if err != nil {
+		return nil, nil, err
+	}
 	var active, sub string
 	flush := func() {
-		if active != "" && len(list) < len(services) {
-			list = append(list, Container{Service: services[len(list)], State: unitState(active, sub)})
+		if active != "" && len(states) < len(names) {
+			states = append(states, [2]string{active, sub})
 		}
 		active, sub = "", ""
 	}
@@ -799,10 +835,10 @@ func (n Native) Status(ctx context.Context) ([]Container, error) {
 		}
 	}
 	flush()
-	if len(list) != len(services) {
-		return nil, fmt.Errorf("systemctl --user show: %d states for %d units: %q", len(list), len(services), out)
+	if len(states) != len(names) {
+		return nil, nil, fmt.Errorf("systemctl --user show: %d states for %d units: %q", len(states), len(names), out)
 	}
-	return list, nil
+	return installed, states, nil
 }
 
 // unitState names a unit's state as Docker names a container's.

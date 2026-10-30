@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/selfcheck"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -84,12 +86,123 @@ func realProbes(e *doctor.Env) {
 // hindsightTimeout bounds each Hindsight call of doctor and report.
 const hindsightTimeout = 10 * time.Second
 
-// doctorEnv is doctor's view of this machine.
+// doctorEnv is doctor's view of this machine. The runtime probes go
+// through the server runtime's own runners (tests fake those), the machine
+// probes after them (tests replace those whole).
 func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: hindsightTimeout}
 	denv.Cwd, _ = os.Getwd()
+	runtimeProbes(&denv)
 	probes(&denv)
 	return denv
+}
+
+// nativeProbeWait bounds the native runtime's probes (systemctl, psql,
+// pg_controldata, loginctl); switchProbeWait the other runtime's size.
+var (
+	nativeProbeWait = 20 * time.Second
+	switchProbeWait = 15 * time.Second
+)
+
+// runtimeProbes read the server runtime's side of doctor (decision 0078):
+// the native runtime's guards and the last runtime switch. Read-only:
+// systemctl show, loginctl show-user, psql's SHOW fsync, pg_controldata,
+// /proc, and the other runtime's files and sizes.
+func runtimeProbes(e *doctor.Env) {
+	e.Native = func(ctx context.Context) (doctor.NativeFacts, error) { return nativeFacts(ctx, e.Dirs, e.Home) }
+	e.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(e.Dirs, e.Home) }
+}
+
+// nativeFacts reads the native install's guards; a fact it cannot read is
+// in Unread under its check's id.
+func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeFacts, error) {
+	var f doctor.NativeFacts
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		return f, err
+	}
+	n, ok := runtimeFor(cfg).(server.Native)
+	if !ok {
+		return f, errors.New("config.toml does not name the native runtime")
+	}
+	if n.Err != nil {
+		return f, n.Err
+	}
+	ctx, cancel := context.WithTimeout(ctx, nativeProbeWait)
+	defer cancel()
+	f.Unread = map[string]error{}
+	unread := func(id string, err error) {
+		if err != nil {
+			f.Unread[id] = err
+		}
+	}
+	f.Units, err = n.UnitStates(ctx)
+	unread("native-unit", err)
+	f.Fsync, err = n.Fsync(ctx)
+	unread("native-fsync", err)
+	f.Identity = n.CheckInstance(ctx)
+	strays, err := n.Strays()
+	unread("native-stray", err)
+	for _, s := range strays {
+		f.Strays = append(f.Strays, s.PID)
+	}
+	f.Linger, err = linger()
+	unread("native-linger", err)
+	f.Home = n.Home()
+	fi, err := os.Stat(f.Home)
+	unread("native-home", err)
+	if err == nil {
+		f.HomeMode = fi.Mode()
+	}
+	v, err := n.Deployed()
+	if v == "" {
+		v = n.Version()
+	}
+	f.Venv, f.Pin = n.VenvDir(v), n.VenvDir(n.Version())
+	if err == nil {
+		f.VenvDiff, err = doctor.NativeVenvDiff(f.Venv)
+	}
+	unread("native-venv", err)
+	refused, _ := filepath.Glob(n.InstanceDir() + ".refused-*")
+	for _, p := range refused {
+		if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+			f.Refused = append(f.Refused, p)
+		}
+	}
+	return f, nil
+}
+
+// lastSwitch is state.json's last runtime switch and, once it ended, the
+// other runtime's data kept since: what server runtime clean deletes, with
+// that size (ruling R43), "" when nothing of it is here or it cannot be
+// told.
+func lastSwitch(d paths.Dirs, home string) (*state.RuntimeSwitch, string) {
+	st, err := state.Load(d.StateFile())
+	if err != nil || st.RuntimeSwitch == nil {
+		return nil, ""
+	}
+	rs := st.RuntimeSwitch
+	if rs.Step == "running" {
+		return rs, ""
+	}
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil || cfg.Server.Mode != "local" {
+		return rs, ""
+	}
+	c, ok := runtimeFor(configOfKind(cfg, otherRuntime(cfg.RuntimeKind()))).(server.Cleaner)
+	if !ok {
+		return rs, ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), switchProbeWait)
+	defer cancel()
+	if left, err := c.Leftover(ctx); err != nil || !left {
+		return rs, ""
+	}
+	size := "size unknown"
+	if n, err := c.CleanSize(ctx); err == nil {
+		size = sizeText(n)
+	}
+	return rs, c.CleanWhat() + " (" + size + ")"
 }
 
 func newDoctorCmd(e *env) *cobra.Command {
