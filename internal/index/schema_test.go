@@ -190,9 +190,14 @@ func TestNullTimeRefused(t *testing.T) {
 		case "ledger", "local_status", "cursors", "ingest_errors", "meta":
 			continue
 		}
-		q := fmt.Sprintf(`INSERT INTO %s(source_file, "offset", %s) VALUES ('f', 0, NULL)`, tc.name, col)
-		if _, err := ix.sh.w.Exec(q); err == nil {
-			t.Errorf("accepted: %s", q)
+		cols, vals := `source_file, "offset", `+col, `'f', 0, NULL`
+		if tc.name == "tel_ids" { // memory_id is NOT NULL too: supply it so only the time can fail
+			cols, vals = cols+", memory_id", vals+", 'm'"
+		}
+		q := fmt.Sprintf(`INSERT INTO %s(%s) VALUES (%s)`, tc.name, cols, vals)
+		_, err := ix.sh.w.Exec(q)
+		if want := "NOT NULL constraint failed: " + tc.name + "." + col; err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v, want %q", q, err, want)
 		}
 	}
 }
