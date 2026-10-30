@@ -96,6 +96,7 @@ var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 			// A user manager that never answers must not hang the command.
 			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
 			n.UnitDir, n.Env = unitDirAndEnv(ctx, home)
+			n.UserHome = home
 			cancel()
 		}
 		if t, ok := nativeTools.(interface{ InOwnGroup() server.ToolRunner }); ok && ownGroup {

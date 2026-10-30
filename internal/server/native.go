@@ -39,6 +39,10 @@ type Native struct {
 	// neither it nor its identity exists (ruling R35): only an install or
 	// a switch to native sets it; elsewhere nothing there is "missing".
 	MayCreate bool
+	// UserHome is the user's HOME, which the db unit's native-check finds
+	// backsight's directories from when Env sets none: the unit's own
+	// HOME is home/, pg0's.
+	UserHome string
 	// StrayWait bounds how long StopStrays waits for a stray to be gone
 	// (0: 30 s).
 	StrayWait time.Duration

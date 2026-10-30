@@ -304,7 +304,11 @@ func (n Native) dbUnit(pg int) []byte {
 	}) {
 		b.WriteString("Environment=" + scheduler.SystemdQuote(k+"="+env[k]) + "\n")
 	}
-	b.WriteString("ExecStartPre=" + execPath(n.shim()) + " server native-check\n")
+	pre := execPath(n.shim())
+	if n.UserHome != "" {
+		pre = "/usr/bin/env " + execArg("HOME="+n.UserHome) + " " + execArg(n.shim())
+	}
+	b.WriteString("ExecStartPre=" + pre + " server native-check\n")
 	start := []string{execPath(filepath.Join(inst, "bin", "postgres")), "-D", execArg(n.DataDir()), "-p", port,
 		"-c", "fsync=on", "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="}
 	for _, s := range pgSettings {
