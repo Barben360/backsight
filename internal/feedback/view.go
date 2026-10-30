@@ -26,7 +26,7 @@ func Shows(events []Event, session string) []Show {
 	var out []Show
 	for _, e := range events {
 		if e.Kind == "shows" && e.Session == session {
-			out = append(out, showsOf(e)...)
+			out = append(out, ShowsOf(e)...)
 		}
 	}
 	return out
@@ -44,8 +44,8 @@ func Retirements(events []Event, session string) int {
 	return n
 }
 
-// showsOf is the shows of one shows event.
-func showsOf(e Event) []Show {
+// ShowsOf is the shows of one shows event.
+func ShowsOf(e Event) []Show {
 	at := strconv.FormatInt(e.TS.UnixNano(), 10)
 	out := make([]Show, 0, len(e.Items))
 	for _, it := range e.Items {

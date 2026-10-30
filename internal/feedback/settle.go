@@ -128,7 +128,7 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 			if e.Path == PathSources {
 				continue // only lets the next verdict name a listed fact: never settled
 			}
-			for _, s := range showsOf(e) {
+			for _, s := range ShowsOf(e) {
 				if byKey[s.Key] != nil {
 					continue
 				}

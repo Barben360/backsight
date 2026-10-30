@@ -51,6 +51,7 @@ type sourceKind struct {
 
 var sourceKinds = []sourceKind{
 	{kind: kindTelemetry, prefix: "events-", dir: paths.Dirs.TelemetryDir, rows: telemetryRows},
+	{kind: kindJournal, prefix: "journal-", dir: paths.Dirs.FeedbackDir, rows: journalRows},
 }
 
 func kindOf(kind string) (sourceKind, bool) {
