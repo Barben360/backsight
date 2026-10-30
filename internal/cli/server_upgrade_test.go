@@ -445,12 +445,10 @@ func nativeUpgradeSetup(t *testing.T) nativeUpgradeHost {
 		}
 	}
 	for _, v := range []string{nativeOld, nativeOlder} {
-		if err := os.MkdirAll(filepath.Join(n.VenvDir(v), "bin"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(n.VenvDir(v), ".backsight-complete"), []byte("x\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		completeVenv(t, n, v)
+	}
+	if err := os.RemoveAll(n.VenvDir(n.Version())); err != nil { // the pin's: the upgrade fetches it
+		t.Fatal(err)
 	}
 	sec, err := config.LoadSecrets(d.SecretsFile())
 	if err != nil {

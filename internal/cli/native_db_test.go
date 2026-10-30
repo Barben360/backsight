@@ -241,7 +241,20 @@ func nativeHost(t *testing.T) (home string, n server.Native, tools *nativeDBTool
 		t.Fatalf("server render: exit %d\n%s%s", code, out, errOut)
 	}
 	withInstance(t, n, "111", "111")
+	completeVenv(t, n, n.Version()) // as Fetch leaves it: Start runs it
 	return home, n, tools, sys, port
+}
+
+// completeVenv is version v's venv as Fetch leaves it, marked complete
+// (rulings R2, R40).
+func completeVenv(t *testing.T, n server.Native, v string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(n.VenvDir(v), "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(n.VenvDir(v), ".backsight-complete"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // nativeArchive is a backup of the native install's 10 rows taken at

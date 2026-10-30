@@ -113,6 +113,8 @@ On the native runtime (`server.runtime = "native"`), the database's unit, `backs
 
 `fsync is off on the native database`: the database answered with `fsync` off, so an OS crash could corrupt it, and `backsight server start` stopped and disabled both units. The unit runs it with `fsync=on`; look for a drop-in that changes it (`systemctl --user cat backsight-db.service`), remove it, then `backsight server render` and `backsight server start`.
 
+`the native server's venv … is incomplete`: the virtual environment the server unit runs lacks its `.backsight-complete` mark (an install or upgrade was interrupted while building it, or it was removed by hand), so `backsight server start` started nothing. Run `backsight server install`: it builds this backsight's version again in place and points the unit at it.
+
 ### After a reboot the server was down for a while (private exposure)
 
 A server opened to other PCs (`backsight server expose --private <ip>`) listens on that address and on `127.0.0.1` from one container. When Docker starts at boot before the address exists (Tailscale or DHCP still coming up, or a new DHCP lease), the container cannot listen on it and does not start, and Docker does not try again: this machine's own memory is down too.

@@ -571,6 +571,9 @@ func (n Native) Start(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
 	}
+	if err := n.checkVenv(); err != nil {
+		return err
+	}
 	if err := n.guardStart(ctx); err != nil {
 		return err
 	}
@@ -599,6 +602,24 @@ func (n Native) Start(ctx context.Context) error {
 	}
 	if err := os.Remove(n.pendingFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	return nil
+}
+
+// checkVenv refuses a server unit whose venv is not marked complete
+// (rulings R2, R40): an interrupted install, or one removed by hand,
+// never runs.
+func (n Native) checkVenv() error {
+	v, err := n.Deployed()
+	if err != nil {
+		return err
+	}
+	if v == "" {
+		v = n.Version()
+	}
+	if !n.venvInstalled(v) {
+		return fmt.Errorf("the native server's venv %s is incomplete (no %s): nothing was started; run backsight server install to re-fetch it",
+			n.VenvDir(v), venvComplete)
 	}
 	return nil
 }

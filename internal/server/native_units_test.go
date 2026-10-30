@@ -78,6 +78,7 @@ func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeToo
 	withFreePort(t, 8889)
 	withAPIHealth(t, func(context.Context, string) (string, error) { return "connected", nil })
 	tools.Out = dbToolsOut("on")
+	completeVenv(t, n, n.Version()) // as Fetch leaves it: Start runs it
 	return n, sys, tools
 }
 
@@ -1013,5 +1014,47 @@ func TestNativeCreateInstanceRemovesItOnFailure(t *testing.T) {
 	c := tools.Calls[len(tools.Calls)-1]
 	if !strings.HasPrefix(string(c.Stdin), "SET log_min_error_statement = panic;\n") {
 		t.Errorf("stdin %q does not silence the statement log first", c.Stdin)
+	}
+}
+
+// Ruling R40: Start refuses a server unit whose venv is not marked
+// complete (an interrupted install, a venv removed by hand), naming it and
+// the fix, before it creates, enables or starts anything; StartDatabase
+// (a restore into the database alone) is not concerned.
+func TestNativeStartRefusesAnIncompleteVenv(t *testing.T) {
+	ctx := context.Background()
+	for name, c := range map[string]struct {
+		venv  string // the unit's version ("": the pin)
+		setup func(t *testing.T, n Native, venv string)
+	}{
+		"marker missing": {"", func(t *testing.T, n Native, venv string) {
+			if err := os.Remove(filepath.Join(n.VenvDir(venv), venvComplete)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		"the unit's venv removed": {"1.1.0-aaaaaaaaaaaa", func(*testing.T, Native, string) {}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			n, sys, tools := nativeFixture(t, secrets)
+			rt := n.WithVersion(c.venv).(Native)
+			rendered(t, rt, secrets)
+			recordInstance(t, n, "7702339718603615110")
+			venv := rt.VenvDir(rt.Version())
+			c.setup(t, rt, rt.Version())
+			sys.Calls, tools.Calls = nil, nil
+			err := n.Start(ctx) // the pinned runtime: the unit decides
+			if err == nil || !strings.Contains(err.Error(), venv) || !strings.Contains(err.Error(), "run backsight server install") {
+				t.Fatalf("Start: %v, want a refusal naming %s and backsight server install", err, venv)
+			}
+			if got := sys.lines(); len(got) != 0 {
+				t.Errorf("Start ran %q", got)
+			}
+			if len(tools.Calls) != 0 {
+				t.Errorf("Start ran tools: %v", tools.Calls)
+			}
+			if err := n.StartDatabase(ctx); err != nil {
+				t.Errorf("StartDatabase: %v", err)
+			}
+		})
 	}
 }
