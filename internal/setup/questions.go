@@ -124,11 +124,6 @@ type Inputs struct {
 // so a Docker install's answers and config stay what they always were.
 var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth, "runtime": "docker"}
 
-// NativeServerOnly refuses the native runtime on a server-only host: such a
-// host serves other PCs, and the native runtime is loopback only in this
-// release (0078's non-goal: no private exposure on native).
-const NativeServerOnly = "a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there"
-
 // known lists every answer id setup accepts.
 var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
 
@@ -187,7 +182,7 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		return nil, nil, &UsageError{"api_port and ui_port must differ"}
 	}
 	if extra["runtime"] == "native" && extra["role"] == config.RoleServer {
-		return nil, nil, &UsageError{NativeServerOnly}
+		return nil, nil, &UsageError{config.NativeServerOnly}
 	}
 	if extra["runtime"] == "docker" {
 		delete(extra, "runtime")

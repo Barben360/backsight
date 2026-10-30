@@ -321,6 +321,11 @@ func (c Config) Validate() error { return c.ValidateOn(runtime.GOOS, runtime.GOA
 // linux-amd64.
 const NativeRefusal = "the native runtime runs on Linux x86_64 (linux-amd64) only in this release"
 
+// NativeServerOnly refuses the native runtime on a server-only host: such a
+// host serves other PCs, and the native runtime is loopback only in this
+// release (decision 0078's non-goal: no private exposure on native).
+const NativeServerOnly = "a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there"
+
 // ValidateOn is Validate for a machine of goos and goarch.
 func (c Config) ValidateOn(goos, goarch string) error {
 	var errs []error
@@ -377,6 +382,9 @@ func (c Config) ValidateOn(goos, goarch string) error {
 		}
 		if c.Network.Exposure == "private" {
 			errs = append(errs, errors.New(`server.runtime = "native" serves this PC only (loopback) in this release: private exposure needs the docker runtime`))
+		}
+		if c.Server.Role == RoleServer {
+			bad("server.role", NativeServerOnly)
 		}
 	}
 	switch c.Server.Bank {

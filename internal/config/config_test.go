@@ -644,6 +644,30 @@ func TestRuntimeConfigKey(t *testing.T) {
 	}
 }
 
+// A server-only host serves other PCs, which native cannot (loopback
+// only): the pair is refused with setup's message (ruling R38); native
+// with the default role still validates.
+func TestNativeServerOnlyConfigIsRefused(t *testing.T) {
+	cfg := Default(dirs, "/home/u")
+	cfg.Server.Runtime = "native"
+	if err := cfg.ValidateOn("linux", "amd64"); err != nil {
+		t.Fatalf("native, role %q: %v", cfg.Server.Role, err)
+	}
+	cfg.Server.Role = RoleServer
+	err := cfg.ValidateOn("linux", "amd64")
+	want := "server.role: a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("native server-only: %v\nwant %q", err, want)
+	}
+	if _, err := Parse([]byte("[server]\nruntime = \"native\"\nrole = \"server\"\n"), "config.toml", dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), NativeServerOnly) {
+		t.Errorf("parsed: %v", err)
+	}
+	cfg.Server.Runtime = "docker"
+	if err := cfg.ValidateOn("linux", "amd64"); err != nil {
+		t.Errorf("docker server-only: %v", err)
+	}
+}
+
 // SetRuntime writes native, and docker by removing the key: a Docker
 // install's config.toml never holds one.
 func TestSetRuntime(t *testing.T) {
