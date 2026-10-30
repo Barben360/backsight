@@ -37,6 +37,7 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.17-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | the switch to native works on an install that never ran native (pg0's PostgreSQL unpacked at the download step); instruction set v10; Linux amd64 tested ([notes](releases/v0.1.17-m7.md)) |
 | v0.1.16-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | a native runtime for the memory server on Linux (`setup --runtime native`, pg0's PostgreSQL 18.1 under systemd user units, guards against an empty or foreign database), `server runtime switch` between Docker and native gated on the data, `server runtime clean`; instruction set v10; Linux amd64 tested ([notes](releases/v0.1.16-m7.md)) |
 | v0.1.15-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | update from a Claude Code session: the session line names the running and new versions and `/backsight:update`, a new skill that plans the update and installs it once you approve; instruction set v10; Linux amd64 tested ([notes](releases/v0.1.15-m6.md)) |
 | v0.1.14-m6 | 1.1.0 (`sha256:50311d02…`) | 2.1.309 | one format for every line about the memory: 🧠 and one emoji per action (💾 saved, 🔄 updated, ❌ ⌛ retired, 🙈 hidden, ⚠️ not retired, 🔍 nothing, 📚 retro), handed back by `memory_store` and `memory_credit`; instruction set v9; Linux amd64 tested ([notes](releases/v0.1.14-m6.md)) |
