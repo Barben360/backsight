@@ -42,15 +42,27 @@ var errCatchUpAborted = errors.New("the catch-up of the metrics index did not fi
 // or less: no time for lines): the month files until the budget runs out
 // (a run resumes where the last one stopped), then the ledger table and
 // the local_status row. It is single-flight per file in the process: a
-// caller arriving during a run waits for it and returns its result (or
-// its own context's error).
+// caller arriving during a run waits for it and returns its result,
+// computed under the running caller's budget (it may be Partial although
+// the waiter's budget would have been enough). A run that ended on its own
+// caller's context (cancelled, past its deadline) is not handed on: a
+// waiter whose context is alive runs again. A waiter whose context ends
+// returns that context's error at once.
 func (ix *Index) CatchUp(ctx context.Context, budget time.Duration) (Freshness, error) {
 	sh := ix.sh
-	sh.fmu.Lock()
-	if f := sh.flight; f != nil {
+	for {
+		sh.fmu.Lock()
+		f := sh.flight
+		if f == nil {
+			break // still locked: this caller runs
+		}
 		sh.fmu.Unlock()
+		onWait()
 		select {
 		case <-f.done:
+			if ctxErr(f.err) && ctx.Err() == nil {
+				continue // the run stopped on its caller's context, not ours
+			}
 			return f.fr, f.err
 		case <-ctx.Done():
 			return Freshness{}, ctx.Err()
@@ -67,6 +79,13 @@ func (ix *Index) CatchUp(ctx context.Context, budget time.Duration) (Freshness, 
 	}()
 	f.fr, f.err = ix.catchUp(ctx, budget)
 	return f.fr, f.err
+}
+
+// onWait runs when a caller starts waiting for another's run (tests).
+var onWait = func() {}
+
+func ctxErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (ix *Index) catchUp(ctx context.Context, budget time.Duration) (Freshness, error) {
@@ -141,6 +160,9 @@ func (ix *Index) cursorRows(ctx context.Context) (map[string]cursorRow, error) {
 // disk with a complete line past its cursor (or without a cursor) is
 // behind. Behind, LagSeconds is now − the newest last_ts of the cursors,
 // never below 0, and Partial is more (the deadline stopped the ingest).
+// Behind with no last_ts at all (nothing with a time ingested yet), the
+// lag cannot be measured: Partial is set whatever more says, so that the
+// index never reads as fresh with lines left.
 func (ix *Index) freshness(ctx context.Context, more bool) (Freshness, error) {
 	var fr Freshness
 	srcs, err := ix.sources()
@@ -172,10 +194,12 @@ func (ix *Index) freshness(ctx context.Context, more bool) (Freshness, error) {
 	if !behind {
 		return fr, nil
 	}
-	fr.Partial = more
-	if newest.Valid {
-		fr.LagSeconds = max(ix.opts.Now().UnixMilli()-newest.Int64, 0) / 1000
+	if !newest.Valid {
+		fr.Partial = true
+		return fr, nil
 	}
+	fr.Partial = more
+	fr.LagSeconds = max(ix.opts.Now().UnixMilli()-newest.Int64, 0) / 1000
 	return fr, nil
 }
 

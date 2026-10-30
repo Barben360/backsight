@@ -379,11 +379,13 @@ func TestJournalGuards(t *testing.T) {
 func TestJournalTextNeverStored(t *testing.T) {
 	e := newEnv(t)
 	e.appendJ(feedback.Event{TS: jT0, Kind: "hide", IDs: []string{"m1"}, Verdict: "wrong", Note: "the user said X"})
-	canaries := []string{"T1", "T2", "T3", "T4", "T5"}
-	raw := `{"schema":1,"ts":"2026-10-30T12:00:01Z","kind":"shows","session":"s","turn":"t","path":"prompt","text":"T2","prompt":"T3","error":"T4",` +
-		`"items":[{"id":"m1","rank":1,"text":"T1","memory":"T5"}]}` + "\n" +
-		`{"schema":1,"ts":"2026-10-30T12:00:02Z","kind":"settle","settled":[{"key":"k","id":"m1","outcome":"credit","text":"T1"}],"params":{"T5":1}}` + "\n" +
-		`{"schema":1,"ts":"2026-10-30T12:00:03Z","kind":"credit","ids":["m1"],"verdict":"used","reply":"T2","config":"T3"}` + "\n"
+	// Canaries long enough never to occur by chance in the file's bytes
+	// (a WAL's salts and checksums are random: two bytes would).
+	canaries := []string{"canary-T1", "canary-T2", "canary-T3", "canary-T4", "canary-T5"}
+	raw := `{"schema":1,"ts":"2026-10-30T12:00:01Z","kind":"shows","session":"s","turn":"t","path":"prompt","text":"canary-T2","prompt":"canary-T3","error":"canary-T4",` +
+		`"items":[{"id":"m1","rank":1,"text":"canary-T1","memory":"canary-T5"}]}` + "\n" +
+		`{"schema":1,"ts":"2026-10-30T12:00:02Z","kind":"settle","settled":[{"key":"k","id":"m1","outcome":"credit","text":"canary-T1"}],"params":{"canary-T5":1}}` + "\n" +
+		`{"schema":1,"ts":"2026-10-30T12:00:03Z","kind":"credit","ids":["m1"],"verdict":"used","reply":"canary-T2","config":"canary-T3"}` + "\n"
 	f, err := os.OpenFile(e.jpath("2026-10"), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)

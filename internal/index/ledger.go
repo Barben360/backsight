@@ -26,6 +26,11 @@ const metaLedgerSHA = "ledger_sha256"
 // the table is emptied and refilled in one transaction. A reader error
 // keeps the table and is recorded once (ledger_unreadable) until a good
 // read clears it. Only the index's own errors come back.
+//
+// The ledger is read before the write transaction (the reader may be
+// slow; the write lock is not held meanwhile): of two processes catching
+// up at once, the one that read first may commit last and store the
+// older read for a moment. The next catch-up reads it again and heals it.
 func (ix *Index) refreshLedger(ctx context.Context) error {
 	l, err := ix.opts.Ledger.All()
 	var raw []byte

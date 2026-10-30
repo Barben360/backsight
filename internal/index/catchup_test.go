@@ -302,6 +302,21 @@ func TestLinesAfterTheIngestAreNotPartial(t *testing.T) {
 	}
 }
 
+// Behind with nothing timed ingested (every line so far an error), the
+// lag cannot be measured: partial, never fresh.
+func TestBehindWithoutATimeIsPartial(t *testing.T) {
+	e := newEnv(t)
+	e.write("2026-10", "not json\n")
+	setAfterBatch(t, func() { e.append("2026-10", lagLine(clock)) })
+	if fr := e.catchUp(time.Minute); !fr.Partial {
+		t.Errorf("%+v, want partial", fr)
+	}
+	afterBatch = func() {}
+	if fr := e.catchUp(time.Minute); fr.Partial || fr.LagSeconds != 0 {
+		t.Errorf("caught up: %+v", fr)
+	}
+}
+
 // A last line without its newline is not a line left: no lag, not partial.
 func TestLagIgnoresAPartialLastLine(t *testing.T) {
 	e := newEnv(t)
@@ -426,6 +441,54 @@ func TestCatchUpWaiterHonoursItsContext(t *testing.T) {
 	close(release)
 	if err := <-leader; err != nil {
 		t.Errorf("the run waited on: %v", err)
+	}
+}
+
+// A run that stopped on its own caller's context is not handed to a
+// waiter whose context is alive: the waiter runs again and gets a result.
+func TestCatchUpWaiterRunsAgainAfterTheLeadersContext(t *testing.T) {
+	e := newEnv(t)
+	var b strings.Builder
+	for i := 1; i <= 10_000; i++ { // two batches: the leader stops between them
+		b.WriteString(promptLine(i, 1))
+	}
+	e.write("2026-10", b.String())
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	setAfterBatch(t, func() { once.Do(func() { close(entered); <-release }) })
+	waiting := make(chan struct{}, 8)
+	prev := onWait
+	onWait = func() { waiting <- struct{}{} }
+	t.Cleanup(func() { onWait = prev })
+
+	lctx, cancel := context.WithCancel(context.Background())
+	leader := make(chan error, 1)
+	go func() {
+		_, err := e.ix.CatchUp(lctx, time.Minute)
+		leader <- err
+	}()
+	<-entered
+	type result struct {
+		fr  Freshness
+		err error
+	}
+	waiter := make(chan result, 1)
+	go func() {
+		fr, err := e.ix.CatchUp(context.Background(), time.Minute)
+		waiter <- result{fr, err}
+	}()
+	<-waiting // the waiter waits for the leader's run
+	cancel()
+	close(release)
+	if err := <-leader; !errors.Is(err, context.Canceled) {
+		t.Errorf("leader: %v, want its context's error", err)
+	}
+	res := <-waiter
+	if res.err != nil || res.fr.Partial || res.fr.LagSeconds != 0 {
+		t.Errorf("waiter: %+v, %v; want a complete catch-up", res.fr, res.err)
+	}
+	if n := e.count("tel_prompt"); n != 10_000 {
+		t.Errorf("%d rows, want 10000", n)
 	}
 }
 
@@ -598,15 +661,32 @@ func TestCheckpointTruncatesTheWAL(t *testing.T) {
 	}
 }
 
+// In DELETE mode Checkpoint changes nothing: no error, the journal mode
+// stays delete, no -wal appears, the file's bytes stay as they were.
+// (wal_checkpoint is itself a no-op there: this guards against a
+// checkpoint that fails or switches the journal mode, not the early
+// return.)
 func TestCheckpointInDeleteModeDoesNothing(t *testing.T) {
 	old := detectFS
 	detectFS = func(string, string, func(string) string) FSInfo { return FSInfo{FSNetwork, "nfs"} }
 	t.Cleanup(func() { detectFS = old })
 	e := newEnv(t)
+	e.write("2026-10", promptLine(1, 1))
+	e.catchUp(time.Minute)
+	before, err := os.ReadFile(e.ix.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := e.ix.Checkpoint(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if got := pragma(t, e.ix.sh.w, "journal_mode"); got != "delete" {
+		t.Errorf("journal_mode %s", got)
+	}
 	if _, err := os.Stat(e.ix.Path() + "-wal"); err == nil {
 		t.Error("a wal file in DELETE mode")
+	}
+	if after, err := os.ReadFile(e.ix.Path()); err != nil || !bytes.Equal(before, after) {
+		t.Errorf("the file changed (%v)", err)
 	}
 }
