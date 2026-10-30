@@ -71,7 +71,7 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 func newNative(t *testing.T, tools ToolRunner) Native {
 	t.Helper()
 	cfg := config.Default(paths.Dirs{Data: t.TempDir()}, "/home/u")
-	return Native{Cfg: cfg, Tools: tools}
+	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}}
 }
 
 func touch(t *testing.T, path string, mode fs.FileMode) {
@@ -84,8 +84,8 @@ func touch(t *testing.T, path string, mode fs.FileMode) {
 	}
 }
 
-// realEffects does to the disk what uv and hf do: Python's binary, the
-// venv's interpreter and hf, a model file.
+// realEffects does to the disk what uv, hf and pg0 do: Python's binary,
+// the venv's interpreter and hf, a model file, pg0's Postgres.
 func realEffects(t *testing.T, n Native) func(toolCall) {
 	return func(c toolCall) {
 		switch {
@@ -100,6 +100,8 @@ func realEffects(t *testing.T, n Native) func(toolCall) {
 			touch(t, filepath.Join(filepath.Dir(filepath.Dir(py)), "lib", "python3.11", "site-packages", "x.py"), 0o644)
 		case len(c.Args) > 1 && c.Args[0] == "download":
 			touch(t, filepath.Join(n.HF(), "hub", "models--"+strings.ReplaceAll(c.Args[1], "/", "--"), "blobs", "x"), 0o644)
+		case isUnpack(c):
+			pg0Effects(c)
 		}
 	}
 }
@@ -299,8 +301,8 @@ func TestNativeFetchInstallsTheLockedVenv(t *testing.T) {
 	if err := n.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Calls) != 5 {
-		t.Fatalf("%d calls, want 5 (python, venv, pip, two models): %+v", len(tools.Calls), tools.Calls)
+	if len(tools.Calls) != 6 {
+		t.Fatalf("%d calls, want 6 (python, venv, pip, pg0's unpack, two models): %+v", len(tools.Calls), tools.Calls)
 	}
 	c := tools.Calls
 	if c[0].Path != n.UV() || !slices.Equal(c[0].Args, []string{"python", "install", "--no-bin", nativelock.Python()}) {
@@ -324,7 +326,7 @@ func TestNativeFetchInstallsTheLockedVenv(t *testing.T) {
 		{"cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", "1427fd652930e4ba29e8149678df786c240d8825"},
 		{"intfloat/multilingual-e5-small", "614241f622f53c4eeff9890bdc4f31cfecc418b3"},
 	} {
-		call := c[3+i]
+		call := c[4+i]
 		want := []string{"download", m[0], "--revision", m[1], "--include", "config.json", "--include", "onnx/model.onnx",
 			"--include", "sentencepiece.bpe.model", "--include", "special_tokens_map.json", "--include", "tokenizer_config.json",
 			"--include", "tokenizer.json"}
@@ -340,7 +342,10 @@ func TestNativeFetchInstallsTheLockedVenv(t *testing.T) {
 			t.Errorf("%s = %q, %v; want %s", ref, b, err, m[1])
 		}
 	}
-	for _, call := range c {
+	if !isUnpack(c[3]) {
+		t.Errorf("call 4: %s %q, want pg0's unpack (TestNativeFetchUnpacksPostgres pins it)", c[3].Path, c[3].Args)
+	}
+	for _, call := range slices.Delete(slices.Clone(c), 3, 4) {
 		if !filepath.IsAbs(call.Path) || !under(n.Root(), call.Path) {
 			t.Errorf("%s is not under %s", call.Path, n.Root())
 		}
@@ -521,6 +526,11 @@ python) mkdir -p %[1]q && : > %[1]q/python3.11 ;;
 venv) for a; do v=$a; done; mkdir -p "$v/bin" && : > "$v/bin/python" && printf '#!/bin/sh\nexit 0\n' > "$v/bin/hf" && chmod 755 "$v/bin/hf" ;;
 esac
 `, filepath.Dir(n.PythonBin()))
+	// pg0's Postgres is there: the unpack (a real systemd-run here) does
+	// not run; TestNativeFetchUnpacksPostgres covers its environment.
+	for _, f := range pgRequired {
+		touch(t, filepath.Join(n.installation(), filepath.FromSlash(f)), 0o755)
+	}
 	touch(t, n.UV(), 0o755)
 	if err := os.WriteFile(n.UV(), []byte(uvFake), 0o755); err != nil {
 		t.Fatal(err)
@@ -589,10 +599,12 @@ func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
 	}
 	want := []string{"uv 0.13.1", "Python " + nativelock.Python(),
 		fmt.Sprintf("hindsight-api-slim %s (%d packages)", nativelock.Hindsight(), len(nativelock.Versions())),
+		"pg0's PostgreSQL 18.1, pgvector 0.8.5 (unpacked from the venv)",
 		"embedding and reranker models"}
-	if !slices.Equal(items, want) || !slices.Equal(want, []string{NativeUV, NativePython, NativeWheels, NativeModels}) {
+	if !slices.Equal(items, want) || !slices.Equal(want, []string{NativeUV, NativePython, NativeWheels, NativeUnpack, NativeModels}) {
 		t.Errorf("Downloads = %q, want %q", items, want)
 	}
+
 	if mb := DownloadMB(items, models); mb != 20+100+1100+ModelsMB {
 		t.Errorf("DownloadMB = %d, want %d", mb, 20+100+1100+ModelsMB)
 	}
@@ -616,8 +628,9 @@ func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
 	if err := n.Download(context.Background(), items, &progress); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(progress.String(), NativeWheels) || !strings.Contains(progress.String(), NativeModels) {
-		t.Errorf("Download's progress %q names neither step", progress.String())
+	if !strings.Contains(progress.String(), NativeWheels) || !strings.Contains(progress.String(), NativeModels) ||
+		!strings.Contains(progress.String(), "Unpacking pg0's PostgreSQL") {
+		t.Errorf("Download's progress %q does not name every step", progress.String())
 	}
 	if items, models, err := n.Downloads(context.Background()); len(items) != 0 || models || err != nil {
 		t.Errorf("all present: %q, %v, %v; want none", items, models, err)

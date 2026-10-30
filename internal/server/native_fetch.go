@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,9 @@ var (
 	NativeUV     = "uv " + nativelock.UVVersion
 	NativePython = "Python " + nativelock.Python()
 	NativeWheels = fmt.Sprintf("hindsight-api-slim %s (%d packages)", nativelock.Hindsight(), len(nativelock.Versions()))
+	// NativeUnpack is pg0's Postgres, unpacked from the venv's pg0: no
+	// download of its own.
+	NativeUnpack = "pg0's " + nativelock.Postgres + " (unpacked from the venv)"
 )
 
 const (
@@ -102,11 +106,12 @@ func (n Native) uvEnv() []string {
 }
 
 // Fetch installs what Version runs without changing what runs: the pinned
-// uv, Python, Version's venv and the models, each skipped when present and
-// intact.
+// uv, Python, Version's venv, the Postgres pg0 unpacks from it and the
+// models, each skipped when present and intact.
 func (n Native) Fetch(ctx context.Context) error { return n.fetch(ctx, io.Discard) }
 
-// FetchAll is Fetch: the database (pg0) comes with the venv.
+// FetchAll is Fetch: the database (pg0) comes with the venv, and Fetch
+// unpacks its Postgres.
 func (n Native) FetchAll(ctx context.Context) error { return n.Fetch(ctx) }
 
 var _ Downloader = Native{}
@@ -127,6 +132,9 @@ func (n Native) Downloads(context.Context) ([]string, bool, error) {
 	}
 	if !n.venvInstalled(n.Version()) {
 		items = append(items, NativeWheels)
+	}
+	if n.pgMissing() != "" {
+		items = append(items, NativeUnpack)
 	}
 	if !n.modelsInstalled() {
 		items = append(items, NativeModels)
@@ -160,6 +168,9 @@ func (n Native) fetch(ctx context.Context, w io.Writer) error {
 		return err
 	}
 	if err := n.fetchVenv(ctx, w, v); err != nil {
+		return err
+	}
+	if err := n.unpackPostgres(ctx, w, v); err != nil {
 		return err
 	}
 	return n.fetchModels(ctx, w, v)
@@ -377,4 +388,114 @@ func (n Native) fetchModels(ctx context.Context, w io.Writer, v string) error {
 		}
 	}
 	return fsutil.WriteAtomic(filepath.Join(n.HF(), modelsDone), []byte(nativelock.Hash12()+"\n"), 0o644)
+}
+
+// pgUnpackInstance is the throwaway pg0 instance unpackPostgres starts and
+// drops: never pgInstance, the server's database.
+const pgUnpackInstance = "backsight-unpack"
+
+// pgUnpacked, in the installation, says unpackPostgres found it complete
+// (or completed it); without every pgRequired file it counts for nothing.
+const pgUnpacked = ".backsight-unpacked"
+
+// pgRequired are the installation's files the native runtime runs: the db
+// unit (postgres, pgvector), the identity check (pg_controldata),
+// VerifyDump (initdb, postgres), the database tools (psql, pg_dump,
+// pg_restore) and pg0's own pg_ctl.
+var pgRequired = []string{"bin/initdb", "bin/postgres", "bin/pg_ctl", "bin/pg_controldata", "bin/psql", "bin/pg_dump",
+	"bin/pg_restore", "share/extension/vector.control"}
+
+// pgMissing is the first of pgRequired missing from the installation, ""
+// when all are there.
+func (n Native) pgMissing() string {
+	for _, f := range pgRequired {
+		if p := filepath.Join(n.installation(), filepath.FromSlash(f)); !isRegular(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// unpackMaxSec bounds the unpack unit: a killed backsight leaves nothing
+// running beyond it.
+const unpackMaxSec = 600
+
+func (n Native) unpackUnit() string { return n.project() + "-pg-unpack.service" }
+
+// stopUnpack stops the unpack unit and clears its failed state, on a
+// context of its own (a cancelled one would run nothing). A unit that is
+// not there is no error worth reporting.
+func (n Native) stopUnpack(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	_, _ = n.systemctl(cctx, "stop", n.unpackUnit())
+	_, _ = n.systemctl(cctx, "reset-failed", n.unpackUnit())
+}
+
+// unpackPostgres has pg0 extract its Postgres into installation(), which
+// pg0 does at its first start only, while a switch to native runs those
+// binaries (VerifyDump) before the server's database ever starts. pg0 has
+// no install-only command: it starts a throwaway instance of its own on a
+// free loopback port and drops it, in a transient unit (as createInstance
+// runs pg0: HOME=home/, a private TMPDIR under it removed after, ruling
+// R21), so that no instance, no postgres and no temporary file is left.
+// The server's instance is never named.
+//
+// An installation with every pgRequired file is complete: marked if it
+// is not (createInstance's first start extracted it), and nothing runs.
+// A partial one (a cut extraction) is removed first: pg0 extracts only
+// where there is none. The unit is stopped before its files are removed,
+// whatever happens: a cancel kills systemd-run's client, not the unit.
+func (n Native) unpackPostgres(ctx context.Context, w io.Writer, v string) (err error) {
+	marker := filepath.Join(n.installation(), pgUnpacked)
+	if n.pgMissing() == "" {
+		if isRegular(marker) {
+			return nil
+		}
+		return fsutil.WriteAtomic(marker, []byte(nativelock.PG0+"\n"), 0o644)
+	}
+	fmt.Fprintf(w, "Unpacking %s\n", NativeUnpack)
+	if err := n.ensureHome(); err != nil {
+		return err
+	}
+	port, err := n.verifyPort()
+	if err != nil {
+		return err
+	}
+	n.stopUnpack(ctx) // a cancelled run's, still running
+	tmp := filepath.Join(n.Home(), "tmp-unpack")
+	throwaway := filepath.Join(n.Home(), ".pg0", "instances", pgUnpackInstance)
+	for _, d := range []string{tmp, throwaway, n.installation()} { // a killed run's, a partial extraction
+		if err := os.RemoveAll(d); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		return err
+	}
+	defer func() {
+		n.stopUnpack(ctx)
+		for _, d := range []string{tmp, throwaway} {
+			if rmErr := os.RemoveAll(d); rmErr != nil {
+				err = errors.Join(err, rmErr)
+			}
+		}
+	}()
+	pg0 := shellWord(filepath.Join(n.VenvDir(v), "lib", "python3.11", "site-packages", "pg0", "bin", "pg0"))
+	script := pg0 + " start --name " + pgUnpackInstance + " --port " + strconv.Itoa(port) +
+		" -c listen_addresses=127.0.0.1 </dev/null >/dev/null && " +
+		pg0 + " drop --force --name " + pgUnpackInstance + " </dev/null >/dev/null"
+	// $ doubled: the service manager expands variables in a transient
+	// unit's command line (as in VerifyDump).
+	args := []string{"--user", "--wait", "--collect", "--pipe", "--quiet", "--unit", n.unpackUnit(),
+		"-p", "KillMode=control-group", "-p", "RuntimeMaxSec=" + strconv.Itoa(unpackMaxSec),
+		"-p", "UnsetEnvironment=" + unsetKeys, "-E", "HOME=" + n.Home(), "-E", "TMPDIR=" + tmp, "-E", "PATH=/usr/bin:/bin", "-E", "LANG=C.UTF-8",
+		"/bin/sh", "-c", strings.ReplaceAll(script, "$", "$$")}
+	if _, err := n.Tools.Run(ctx, systemdRunEnv(), nil, "systemd-run", args...); err != nil {
+		return fmt.Errorf("unpacking %s with pg0 into %s: %w", NativePostgres, n.installation(), err)
+	}
+	if m := n.pgMissing(); m != "" {
+		return fmt.Errorf("pg0 ran, but the %s it unpacks is incomplete: %s is missing", NativePostgres, m)
+	}
+	return fsutil.WriteAtomic(marker, []byte(nativelock.PG0+"\n"), 0o644)
 }

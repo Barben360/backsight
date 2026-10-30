@@ -1306,3 +1306,42 @@ func TestSwitchLeavesOneRuntimeToStartAtBootArgv(t *testing.T) {
 		})
 	}
 }
+
+// pg0's Postgres is unpacked, not downloaded: the plan lists it among what
+// the switch still fetches (no megabytes of its own), and the download
+// step says it was unpacked.
+func TestSwitchToNativeSaysPostgresIsUnpacked(t *testing.T) {
+	_, w := switchSetup(t, "docker")
+	w.rts["native"].missing = []string{server.NativeWheels, server.NativeUnpack}
+	code, env, all := runSwitchCmd(t, context.Background(), "switch", "native", "--plan", "--json")
+	if code != output.OK {
+		t.Fatalf("plan: exit %d\n%s", code, all)
+	}
+	pre := stepOf(env.Data.Steps, "preflight")
+	if want := "to download: " + server.NativeWheels + ", " + server.NativeUnpack + " (about 1100 MB)"; !strings.Contains(pre, want) {
+		t.Errorf("preflight %q lacks %q", pre, want)
+	}
+	code, env, all = runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, all)
+	}
+	if dl := stepOf(env.Data.Steps, "download"); !strings.Contains(dl, "pg0's PostgreSQL unpacked") {
+		t.Errorf("download step %q does not say pg0's PostgreSQL was unpacked", dl)
+	}
+
+	// Nothing to unpack: not said.
+	switchSetup(t, "docker")
+	if _, env, _ = runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...); strings.Contains(stepOf(env.Data.Steps, "download"), "unpacked") {
+		t.Errorf("download step %q names an unpack that did not run", stepOf(env.Data.Steps, "download"))
+	}
+}
+
+// stepOf is the detail of the step named name, "" when there is none.
+func stepOf(steps []step, name string) string {
+	for _, s := range steps {
+		if s.Name == name {
+			return s.Detail
+		}
+	}
+	return ""
+}

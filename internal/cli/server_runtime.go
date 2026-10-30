@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -325,14 +326,14 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	}
 
 	// Pre-flight, read only: what the target needs and what it downloads.
-	var images []string
-	installShimAt := "" // the native db unit's guard, missing: installed after the consent
+	var toFetch []string // what the preflight found to fetch
+	installShimAt := ""  // the native db unit's guard, missing: installed after the consent
 	if to != res.From {
 		detail, missing, shim, warnings, err := switchPreflight(ctx, dst, to, d, f.command("switch", to))
 		if err != nil {
 			return res, err
 		}
-		images, installShimAt = missing, shim
+		toFetch, installShimAt = missing, shim
 		res.Warnings = append(res.Warnings, warnings...)
 		add("preflight", status, detail)
 	}
@@ -369,7 +370,7 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 
 	// The downloads, before anything stops: a failure changes nothing.
 	if to != res.From {
-		what, err := switchFetch(ctx, e, dst, images)
+		what, err := switchFetch(ctx, e, dst, toFetch)
 		if err != nil {
 			add("download", "failed", server.Redact(err.Error(), sec))
 			return res, nothingChanged("%s", server.Redact("cannot download what "+to+" runs ("+err.Error()+")", sec))
@@ -669,9 +670,10 @@ func switchPlan(from, to string, recoverOnly bool, shim string) [][2]string {
 
 // switchPreflight checks the target, read only: Docker and Compose, or
 // the user session, lingering, the disk and the shim the db unit runs for
-// native; what it still has to download (images: Docker's images to
-// pull); the shim to install (missing or dangling), "" when it runs.
-func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths.Dirs, resume string) (detail string, images []string, shim string, warnings []string, err error) {
+// native; what it still has to download (missing: Docker's images to
+// pull, native's Downloads items); the shim to install (missing or
+// dangling), "" when it runs.
+func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths.Dirs, resume string) (detail string, missing []string, shim string, warnings []string, err error) {
 	if to == "docker" {
 		eng, err := dst.Engine(ctx)
 		if err != nil {
@@ -729,7 +731,6 @@ func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths
 			detail += ", the shim"
 		}
 	}
-	var missing []string
 	if dl, ok := dst.(server.Downloader); ok {
 		var models bool
 		if missing, models, err = dl.Downloads(ctx); err != nil {
@@ -744,23 +745,26 @@ func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths
 	} else {
 		detail += "; nothing to download"
 	}
-	if to == "docker" {
-		images = missing
-	}
-	return detail, images, shim, warnings, nil
+	return detail, missing, shim, warnings, nil
 }
 
 // switchFetch downloads what the target runs without changing what runs:
 // Docker pulls the images it lacks (by reference: no compose.yaml needed
 // on an install that never ran Docker), native installs uv, Python, the
-// venv and the models.
-func switchFetch(ctx context.Context, e *env, dst server.Runtime, images []string) (string, error) {
+// venv, pg0's PostgreSQL (unpacked when missing lists it) and the models.
+// missing is what the preflight found to fetch.
+func switchFetch(ctx context.Context, e *env, dst server.Runtime, missing []string) (string, error) {
 	if dst.Kind() != "docker" {
 		if err := dst.Fetch(ctx); err != nil {
 			return "", err
 		}
-		return "uv, Python, the venv " + dst.Version() + " and the models in place", nil
+		what := "uv, Python, the venv " + dst.Version()
+		if slices.Contains(missing, server.NativeUnpack) {
+			what += ", pg0's PostgreSQL unpacked"
+		}
+		return what + " and the models in place", nil
 	}
+	images := missing
 	if len(images) == 0 {
 		return "the images are here", nil
 	}

@@ -191,6 +191,7 @@ func DownloadMB(images []string, models bool) int {
 			mb += NativeWheelsMB
 		case NativeModels:
 			mb += ModelsMB
+		case NativeUnpack: // from the venv: nothing to download
 		default:
 			mb += HindsightImageMB
 		}
