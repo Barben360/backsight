@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -115,7 +116,7 @@ func TestSessionStartBannerExtraLines(t *testing.T) {
 		!strings.HasSuffix(lines[1], ")) · run `backsight client install`") {
 		t.Errorf("drift line %q", lines[1])
 	}
-	if lines[2] != "⬆️ backsight update 0.2.0 available · see `backsight changelog`" {
+	if lines[2] != "⬆️ backsight "+buildinfo.Version+" → 0.2.0 · update here: `/backsight:update` · or in a terminal: `backsight update apply`" {
 		t.Errorf("update line %q", lines[2])
 	}
 	if lines[3] != "⚠️ 1 session quarantined (not sent to memory) · run `backsight doctor`" {

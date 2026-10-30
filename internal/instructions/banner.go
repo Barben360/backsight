@@ -77,9 +77,16 @@ func MemoryMaintenance(project string) string {
 	return statusLine(EmojiMaintenance, project, "memory unavailable (maintenance in progress), back when it ends")
 }
 
-// UpdateLine names the version only: release notes are not signed.
-func UpdateLine(version string) string {
-	return EmojiUpdate + " backsight update " + version + " available · see `backsight changelog`"
+// UpdateLine names the versions only: release notes are not signed. newer
+// counts the releases past running; under 2 it is left out. It names the
+// two ways to update: the /backsight:update skill in this session, or a
+// terminal.
+func UpdateLine(running, latest string, newer int) string {
+	text := " backsight " + running + " → " + latest
+	if newer > 1 {
+		text += " (" + strconv.Itoa(newer) + " newer)"
+	}
+	return EmojiUpdate + text + " · update here: `/backsight:update` · or in a terminal: `backsight update apply`"
 }
 
 // DriftLine: the plugin, the permission rule or the shim changed.
