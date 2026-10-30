@@ -23,9 +23,11 @@
 # The units are the user's (the manager reads them from its own unit
 # directory, which the isolated HOME's ~/.config/systemd/user links to):
 # <PROJECT>-db.service, <PROJECT>-server.service. The trap disables and
-# stops every <PROJECT>-* unit, removes their files, runs compose down -v
-# for the project, stops any postgres left on the run's data and removes
-# the run's directory.
+# stops the units the install makes, each named exactly (nc_own_unit:
+# another bs-… project sharing the prefix is never touched), removes their
+# files, runs compose down -v for the project, stops any postgres left on
+# the run's data and removes the run's directory; it never changes the
+# run's exit status.
 #
 # Usage: scripts/native-chain.sh [api port] (default 28700 +
 # BACKSIGHT_CI_SLOT x 10, scripts/ports.sh; Docker's UI takes port + 1111,
@@ -323,15 +325,14 @@ nc_leg_refusals() {
   # start stops it (the db unit's native-check) and runs its own.
   pgport=$(sed -n 's/^BACKSIGHT_PG_PORT=//p' "$native/server.env")
   [ -n "$pgport" ] || fail "server.env names no BACKSIGHT_PG_PORT"
-  mkdir -p "$native/home/.pg0/run"
   (exec env -i PATH=/usr/bin:/bin LANG=C.UTF-8 HOME="$native/home" LD_LIBRARY_PATH="$pg/lib" \
-    "$pg/bin/postgres" -D "$data" -p "$pgport" -c listen_addresses=127.0.0.1 -k "$native/home/.pg0/run" > "$work/stray.log" 2>&1 < /dev/null) &
+    "$pg/bin/postgres" -D "$data" -p "$pgport" -c listen_addresses=127.0.0.1 -c unix_socket_directories= > "$work/stray.log" 2>&1 < /dev/null) &
   stray=$!
   for _ in $(seq 1 60); do
-    env -i LD_LIBRARY_PATH="$pg/lib" "$pg/bin/pg_isready" -q -h "$native/home/.pg0/run" -p "$pgport" && break
+    env -i LD_LIBRARY_PATH="$pg/lib" "$pg/bin/pg_isready" -q -h 127.0.0.1 -p "$pgport" && break
     sleep 0.5
   done
-  env -i LD_LIBRARY_PATH="$pg/lib" "$pg/bin/pg_isready" -q -h "$native/home/.pg0/run" -p "$pgport" || { nc_show "$work/stray.log"; fail "the stray postgres never answered"; }
+  env -i LD_LIBRARY_PATH="$pg/lib" "$pg/bin/pg_isready" -q -h 127.0.0.1 -p "$pgport" || { nc_show "$work/stray.log"; fail "the stray postgres never answered"; }
   [ "$(head -n 1 "$data/postmaster.pid")" = "$stray" ] || fail "postmaster.pid does not name the stray $stray"
   since=$(date +%s)
   sleep 1
@@ -445,8 +446,23 @@ nc_leg_lock() {
 
 # ---- the run ----------------------------------------------------------
 
+# nc_own_unit <unit>: one of the units this run's install makes, named
+# exactly (another bs-… project sharing the prefix is never matched): the
+# two native units, the database's first-start and verify transients,
+# and the job units, should the scheduler be on.
+nc_own_unit() {
+  case $1 in
+    "$project-db.service" | "$project-server.service" | "$project-db-init.service") return 0 ;;
+    "$project-tick.service" | "$project-tick.timer" | "$project-maintain.service" | "$project-maintain.timer") return 0 ;;
+  esac
+  [[ $1 =~ ^${project}-verify-[0-9a-f]{12}\.service$ ]] # VerifyDump's: 6 random bytes in hex
+}
+
+# nc_cleanup: the trap. Nothing in it fails the cleanup or changes the
+# run's exit status.
 nc_cleanup() {
-  local status=$? u pid
+  local status=$? u pid units=()
+  set +e +o pipefail
   if [ $status -ne 0 ] && [ -n "${project:-}" ] && [ -n "${work:-}" ]; then
     for u in "$project-db.service" "$project-server.service"; do
       echo "--- journal of $u" >&2
@@ -456,7 +472,10 @@ nc_cleanup() {
   fi
   if [ "${KEEP:-}" != 1 ] && [ -n "${project:-}" ] && nc_project_ok "$project" 2> /dev/null; then
     for u in $( (systemctl --user list-units --all --plain --no-legend "$project-*" 2> /dev/null; systemctl --user list-unit-files --plain --no-legend "$project-*" 2> /dev/null) | awk '{print $1}' | sort -u); do
-      case $u in "$project"-*) systemctl --user disable --now "$u" > /dev/null 2>&1 || systemctl --user stop "$u" > /dev/null 2>&1 || true ;; esac
+      nc_own_unit "$u" && units+=("$u")
+    done
+    for u in "${units[@]}"; do
+      systemctl --user disable --now "$u" > /dev/null 2>&1 || systemctl --user stop "$u" > /dev/null 2>&1 || true
     done
     if [ -n "${work:-}" ]; then
       for pid in $(pgrep -u "$(id -u)" -x postgres 2> /dev/null); do
@@ -464,9 +483,11 @@ nc_cleanup() {
       done
     fi
     if [ -n "${unitdir:-}" ] && [ -d "$unitdir" ]; then
-      rm -rf "${unitdir:?}/$project"-*
+      for u in db.service server.service tick.service tick.timer maintain.service maintain.timer; do
+        rm -rf "${unitdir:?}/$project-$u" "$unitdir/$project-$u.d" "$unitdir/default.target.wants/$project-$u" "$unitdir/timers.target.wants/$project-$u" || true
+      done
       systemctl --user daemon-reload 2> /dev/null || true
-      systemctl --user reset-failed "$project-*" 2> /dev/null || true
+      [ ${#units[@]} = 0 ] || systemctl --user reset-failed "${units[@]}" 2> /dev/null || true
     fi
     if [ -n "${BACKSIGHT_HOME:-}" ] && [ -f "$BACKSIGHT_HOME/data/server/compose.yaml" ]; then
       compose down -v > /dev/null 2>&1 || true
@@ -519,10 +540,7 @@ nc_main() {
   # shellcheck source=scripts/hf-cache.sh
   . "$root/scripts/hf-cache.sh"
   mkdir -p "$unitdir"
-  # A short BACKSIGHT_HOME: postgres's socket path,
-  # <data>/server/native/home/.pg0/run/.s.PGSQL.<port>, must stay under
-  # 108 bytes.
-  export HOME=$work/home BACKSIGHT_HOME=$work/bs DISABLE_AUTOUPDATER=1
+  export HOME=$work/home BACKSIGHT_HOME=$work/backsight DISABLE_AUTOUPDATER=1
   export XDG_CONFIG_HOME=$HOME/.config XDG_DATA_HOME=$HOME/.local/share XDG_STATE_HOME=$HOME/.local/state XDG_CACHE_HOME=$HOME/.cache
   unset CLAUDE_CONFIG_DIR BACKSIGHT_STATE_DIR SSH_AUTH_SOCK
   mkdir -p "$XDG_CONFIG_HOME/systemd" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"

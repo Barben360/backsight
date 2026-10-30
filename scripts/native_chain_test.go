@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,27 +71,60 @@ func TestNativeChainRunsOnEveryPullRequest(t *testing.T) {
 }
 
 // fakeTools is a PATH directory whose systemctl, docker, loginctl,
-// journalctl, make and go record their argv in calls and succeed.
-func fakeTools(t *testing.T) (dir, calls string) {
+// journalctl, make and go record their argv in calls and succeed;
+// systemctl --user show-environment names xdg as the manager's
+// XDG_CONFIG_HOME, so a unit directory the script derives is a temporary
+// one.
+func fakeTools(t *testing.T, xdg string) (dir, calls string) {
 	t.Helper()
 	dir = t.TempDir()
 	calls = filepath.Join(dir, "calls")
 	for _, name := range []string{"systemctl", "docker", "loginctl", "journalctl", "make", "go"} {
-		writeExec(t, filepath.Join(dir, name), "#!/bin/sh\necho \""+name+" $*\" >> "+calls+"\n")
+		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + calls + "\n"
+		if name == "systemctl" {
+			body += "case \"$*\" in *show-environment*) echo XDG_CONFIG_HOME=" + xdg + " ;; esac\n"
+		}
+		writeExec(t, filepath.Join(dir, name), body)
 	}
 	return dir, calls
+}
+
+// chainEnv is the script's environment in these tests: the fakes first
+// on PATH, and HOME, XDG_CONFIG_HOME and XDG_RUNTIME_DIR temporary, so
+// that even a regressed refusal, and its trap, reach no real unit
+// directory.
+func chainEnv(t *testing.T, bin, xdg string, extra ...string) []string {
+	t.Helper()
+	return append(append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+xdg,
+		"XDG_RUNTIME_DIR="+t.TempDir(), "WORK="+t.TempDir(), "CI="), extra...)
+}
+
+// realUnitDir is the developer's own systemd user unit directory, which
+// no test run may name.
+func realUnitDir(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(home, ".config", "systemd", "user")
 }
 
 // The live install's units are backsight-*.service and its Compose
 // project is backsight: the chain refuses that project and any project
 // its trap's $PROJECT-* would match them with, before it runs anything.
 func TestNativeChainNeverTouchesTheLiveInstall(t *testing.T) {
+	real := realUnitDir(t)
 	for _, project := range []string{"backsight", "backsight-dev", "backsightx"} {
 		t.Run(project, func(t *testing.T) {
-			bin, calls := fakeTools(t)
+			xdg := t.TempDir()
+			bin, calls := fakeTools(t, xdg)
 			cmd := exec.Command("bash", mustAbs(t, "native-chain.sh"))
-			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "PROJECT="+project, "WORK="+t.TempDir(), "NATIVE_DRY=", "CI=")
+			cmd.Env = chainEnv(t, bin, xdg, "PROJECT="+project, "NATIVE_DRY=")
 			out, err := cmd.CombinedOutput()
+			if b, _ := os.ReadFile(calls); strings.Contains(string(b)+string(out), real) {
+				t.Errorf("PROJECT=%s named the real unit directory %s:\n%s%s", project, real, b, out)
+			}
 			if err == nil {
 				t.Fatalf("PROJECT=%s accepted:\n%s", project, out)
 			}
@@ -104,23 +138,27 @@ func TestNativeChainNeverTouchesTheLiveInstall(t *testing.T) {
 	}
 	// Positive control: the fakes do record, and a bs- project gets past
 	// the refusal (NATIVE_DRY stops it before any command).
-	bin, calls := fakeTools(t)
-	if out, err := exec.Command(filepath.Join(bin, "systemctl"), "--user", "probe").CombinedOutput(); err != nil {
+	xdg := t.TempDir()
+	bin, calls := fakeTools(t, xdg)
+	out, err := exec.Command(filepath.Join(bin, "systemctl"), "--user", "show-environment").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "XDG_CONFIG_HOME="+xdg) {
 		t.Fatalf("fake systemctl: %v %s", err, out)
 	}
-	if b, _ := os.ReadFile(calls); !strings.Contains(string(b), "systemctl --user probe") {
+	if b, _ := os.ReadFile(calls); !strings.Contains(string(b), "systemctl --user show-environment") {
 		t.Fatalf("the fake systemctl records nothing (%q): the refusal test would prove nothing", b)
 	}
 	cmd := exec.Command("bash", mustAbs(t, "native-chain.sh"))
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "PROJECT=bs-native-test", "NATIVE_DRY=1", "CI=")
-	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(string(out), "never the live install") {
-		t.Errorf("PROJECT=bs-native-test refused: %v\n%s", err, out)
+	cmd.Env = chainEnv(t, bin, xdg, "PROJECT=bs-native-test", "NATIVE_DRY=1")
+	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(string(out), "never the live install") || strings.Contains(string(out), real) {
+		t.Errorf("PROJECT=bs-native-test refused, or named %s: %v\n%s", real, err, out)
 	}
 }
 
 func TestNativeChainListsItsLegs(t *testing.T) {
+	xdg := t.TempDir()
+	bin, _ := fakeTools(t, xdg)
 	cmd := exec.Command("bash", mustAbs(t, "native-chain.sh"))
-	cmd.Env = append(os.Environ(), "NATIVE_DRY=1", "CI=")
+	cmd.Env = chainEnv(t, bin, xdg, "NATIVE_DRY=1", "PROJECT=")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("NATIVE_DRY=1: %v", err)
@@ -128,5 +166,79 @@ func TestNativeChainListsItsLegs(t *testing.T) {
 	want := "fresh store to-docker to-native refusals upgrade-rollback switch-rollback lock"
 	if got := strings.Join(strings.Fields(string(out)), " "); got != want {
 		t.Errorf("legs listed: %q, want %q", got, want)
+	}
+}
+
+// The trap stops and removes the units this run's install makes, named
+// exactly: another project sharing the prefix (bs-x-db's units are
+// bs-x-db-db.service, …) is never matched.
+func TestNativeChainTrapMatchesItsOwnUnitsOnly(t *testing.T) {
+	src := `. "$1"; project=bs-x; shift; for u; do if nc_own_unit "$u"; then echo "own $u"; else echo "other $u"; fi; done`
+	own := []string{"bs-x-db.service", "bs-x-server.service", "bs-x-db-init.service", "bs-x-verify-0123456789ab.service",
+		"bs-x-tick.service", "bs-x-tick.timer", "bs-x-maintain.service", "bs-x-maintain.timer"}
+	other := []string{"bs-x-db-db.service", "bs-x-db-server.service", "bs-x-verify-db.service", "bs-x-verify-0a-db.service",
+		"bs-x-other.service", "bs-xy-db.service", "backsight-db.service", "backsight-tick.timer", "bs-x-db.service.d"}
+	out, err := exec.Command("bash", append([]string{"-c", src, "x", mustAbs(t, "native-chain.sh")}, append(own, other...)...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, u := range own {
+		if !strings.Contains(string(out), "own "+u+"\n") {
+			t.Errorf("the trap would leave %s running", u)
+		}
+	}
+	for _, u := range other {
+		if !strings.Contains(string(out), "other "+u+"\n") {
+			t.Errorf("the trap would stop %s, not this run's", u)
+		}
+	}
+}
+
+// A run's exit status survives its cleanup, even when every cleanup step
+// fails (here systemctl, docker and journalctl all exit 1).
+func TestNativeChainTrapKeepsTheRunsStatus(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"systemctl", "docker", "journalctl", "pgrep"} {
+		writeExec(t, filepath.Join(bin, name), "#!/bin/sh\necho \"$0 $*\" >&2\nexit 1\n")
+	}
+	units := t.TempDir()
+	work := t.TempDir()
+	for _, f := range []string{"bs-x-db.service", "bs-x-server.service", "bs-other-db.service"} {
+		if err := os.WriteFile(filepath.Join(units, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := `set -euo pipefail; . "$1"; project=bs-x; work=$2; unitdir=$3; BACKSIGHT_HOME=$2/b; trap nc_cleanup EXIT; exit 7`
+	cmd := exec.Command("bash", "-c", src, "x", mustAbs(t, "native-chain.sh"), work, units)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KEEP=")
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
+		t.Fatalf("exit %v, want the run's 7:\n%s", err, out)
+	}
+	if _, err := os.Stat(work); !os.IsNotExist(err) {
+		t.Errorf("the run's directory is still there: %v", err)
+	}
+	for f, want := range map[string]bool{"bs-x-db.service": false, "bs-x-server.service": false, "bs-other-db.service": true} {
+		if _, err := os.Stat(filepath.Join(units, f)); (err == nil) != want {
+			t.Errorf("%s present %v after the trap, want %v", f, err == nil, want)
+		}
+	}
+}
+
+// The same when removing the files fails too (a fake rm exiting 1): the
+// run still exits with its own status.
+func TestNativeChainTrapKeepsTheRunsStatusWhenRemovingFails(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"systemctl", "docker", "journalctl", "pgrep", "rm", "chmod"} {
+		writeExec(t, filepath.Join(bin, name), "#!/bin/sh\nexit 1\n")
+	}
+	src := `set -euo pipefail; . "$1"; project=bs-x; work=$2; unitdir=$3; trap nc_cleanup EXIT; exit 7`
+	cmd := exec.Command("bash", "-c", src, "x", mustAbs(t, "native-chain.sh"), t.TempDir(), t.TempDir())
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KEEP=")
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
+		t.Fatalf("exit %v, want the run's 7:\n%s", err, out)
 	}
 }
