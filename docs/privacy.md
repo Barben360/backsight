@@ -10,6 +10,14 @@ What backsight stores, where it goes, and how to keep things out of memory. Word
 
 The server turns this text into memories: short facts tagged with their project, kept with the documents they came from.
 
+## The metrics index
+
+`backsight stats` and the dashboard read a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it). backsight builds it here, from its own usage events, the feedback journal and the local status files.
+
+- It holds ids, numbers, fixed words and timestamps only: never the text of a memory, a prompt, an error or the configuration. A value that is not a known word or a plain name is stored as `other`, or not at all.
+- Project names and session ids in it are local names (from your folders and Claude Code's session ids). They never leave this machine, `backsight report` included.
+- `backsight stats index rebuild` recreates it from the files on disk. `backsight uninstall --purge-local` deletes it.
+
 ## What leaves the machine
 
 | To | What | When |
