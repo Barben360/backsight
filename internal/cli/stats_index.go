@@ -208,6 +208,15 @@ func migrateText(r index.MigrateResult) string {
 	return "metrics index: up to date\n"
 }
 
+// indexError's fixed sentences, which update apply maps to its reasons.
+const (
+	indexUpdatingSentence   = "an update is being applied, try again in a minute"
+	indexUnreadableSentence = "the metrics index is unreadable and rebuilding it failed today: run backsight stats index rebuild"
+)
+
+// indexClassMessage is the sentence of an index error of class.
+func indexClassMessage(class string) string { return "the metrics index: " + class }
+
 // indexError is an index error as a command reports it: a sentence or a
 // class, never the error's own text, which may hold a path.
 func indexError(err error) error {
@@ -216,14 +225,14 @@ func indexError(err error) error {
 	case errors.As(err, &oe):
 		return err
 	case errors.Is(err, index.ErrUpdateInProgress):
-		return &output.Error{Code: output.Blocked, Message: "an update is being applied, try again in a minute"}
+		return &output.Error{Code: output.Blocked, Message: indexUpdatingSentence}
 	case errors.Is(err, index.ErrInUse):
 		return &output.Error{Code: output.Blocked, Message: index.ErrInUse.Error()}
 	case errors.Is(err, index.ErrNeedsYes):
 		return &output.Error{Code: output.NeedsUser, Message: "rebuilding drops the months listed, whose files are gone: confirm with backsight stats index rebuild --yes",
 			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight stats index rebuild --yes", Why: "rebuild without those months"}}}
 	case errors.Is(err, index.ErrUnreadable):
-		return &output.Error{Code: output.Blocked, Message: "the metrics index is unreadable and rebuilding it failed today: run backsight stats index rebuild"}
+		return &output.Error{Code: output.Blocked, Message: indexUnreadableSentence}
 	}
-	return &output.Error{Code: output.Blocked, Message: "the metrics index: " + index.Class(err)}
+	return &output.Error{Code: output.Blocked, Message: indexClassMessage(index.Class(err))}
 }
