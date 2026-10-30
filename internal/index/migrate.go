@@ -150,6 +150,7 @@ func Migrate(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 	if err != nil {
 		return res, err
 	}
+	countOpen(o)
 	res.Applied = append(res.Applied, applied...)
 	if !t.known {
 		res.Pending = append(res.Pending, applied...)
@@ -187,11 +188,7 @@ func (t target) pending() []Migration {
 // resolve reads the registry and picks the file: metrics.db, or the side
 // file of this binary's head when metrics.db is newer. It creates nothing.
 func resolve(ctx context.Context, o Options) (target, error) {
-	fsys := o.Migrations
-	if fsys == nil {
-		fsys = Embedded
-	}
-	reg, err := LoadRegistry(fsys)
+	reg, err := registry(o)
 	if err != nil {
 		return target{}, err
 	}
@@ -204,6 +201,15 @@ func resolve(ctx context.Context, o Options) (target, error) {
 		return sideTarget(ctx, t)
 	}
 	return t, nil
+}
+
+// registry is o's migrations (nil: Embedded).
+func registry(o Options) ([]Migration, error) {
+	fsys := o.Migrations
+	if fsys == nil {
+		fsys = Embedded
+	}
+	return LoadRegistry(fsys)
 }
 
 // sideTarget is t moved to the side file of its head.
@@ -224,7 +230,7 @@ func (t *target) probe(ctx context.Context) error {
 	t.version, t.built, t.known, t.probeErr = v, built, err == nil, err
 	if err != nil {
 		if _, serr := os.Stat(t.path + "-wal"); serr != nil {
-			return err
+			return asCorrupt(t.path, err)
 		}
 		t.version = 0
 	}

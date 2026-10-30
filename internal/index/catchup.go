@@ -47,7 +47,9 @@ var errCatchUpAborted = errors.New("the catch-up of the metrics index did not fi
 // the waiter's budget would have been enough). A run that ended on its own
 // caller's context (cancelled, past its deadline) is not handed on: a
 // waiter whose context is alive runs again. A waiter whose context ends
-// returns that context's error at once.
+// returns that context's error at once. A full disk is ErrDiskFull (the
+// transaction rolled back, the index as it was); a corruption makes the
+// next Open's quick_check due, which sets the file aside.
 func (ix *Index) CatchUp(ctx context.Context, budget time.Duration) (Freshness, error) {
 	sh := ix.sh
 	for {
@@ -78,6 +80,7 @@ func (ix *Index) CatchUp(ctx context.Context, budget time.Duration) (Freshness, 
 		close(f.done)
 	}()
 	f.fr, f.err = ix.catchUp(ctx, budget)
+	f.err = ix.statementError(f.err)
 	return f.fr, f.err
 }
 
@@ -90,28 +93,35 @@ func ctxErr(err error) bool {
 
 func (ix *Index) catchUp(ctx context.Context, budget time.Duration) (Freshness, error) {
 	start := ix.opts.Now()
+	fr, _, err := ix.refresh(ctx, start, start.Add(max(budget, 0)))
+	return fr, err
+}
+
+// refresh is a catch-up started at start: the month files until deadline
+// (zero: none), the ledger, the local status.
+func (ix *Index) refresh(ctx context.Context, start, deadline time.Time) (Freshness, ingestStats, error) {
 	p, err := ix.newProgress(ctx, start)
 	if err != nil {
-		return Freshness{}, err
+		return Freshness{}, ingestStats{}, err
 	}
-	st, err := ix.ingest(ctx, start.Add(max(budget, 0)), p.batch)
+	st, err := ix.ingest(ctx, deadline, p.batch)
 	if err != nil {
-		return Freshness{}, err
+		return Freshness{}, st, err
 	}
 	if err := ix.refreshLedger(ctx); err != nil {
-		return Freshness{}, fmt.Errorf("ledger: %w", err)
+		return Freshness{}, st, fmt.Errorf("ledger: %w", err)
 	}
 	if err := ix.refreshLocal(ctx); err != nil {
-		return Freshness{}, fmt.Errorf("local status: %w", err)
+		return Freshness{}, st, fmt.Errorf("local status: %w", err)
 	}
 	fr, err := ix.freshness(ctx, st.More)
 	if err != nil {
-		return Freshness{}, err
+		return Freshness{}, st, err
 	}
 	if !fr.Partial {
 		p.ready(st.Lines)
 	}
-	return fr, nil
+	return fr, st, nil
 }
 
 // Checkpoint copies the WAL into the file and truncates it

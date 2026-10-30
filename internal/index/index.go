@@ -93,85 +93,135 @@ func OpensOf(stateDir string) int64 {
 // and metrics.db never written; (4) a migration (building a missing file
 // included) waits for an uncommitted update; (5) the file is opened, its
 // version read again under the write lock (above the head: back to 3,
-// once), and each pending migration applied in its own transaction.
+// once), and each pending migration applied in its own transaction; (6) a
+// file replaced while it connected is opened again, once; (7) the daily
+// quick_check. A corrupt file is set aside and a fresh one opened, once a
+// day at most (recover.go).
 func Open(ctx context.Context, o Options) (*Index, error) {
-	ix, _, err := open(ctx, o.withDefaults())
+	ix, _, err := openRecovering(ctx, o.withDefaults())
 	return ix, err
 }
 
-// open is Open, with the migrations this call applied.
+// open is Open without the recovery, with the migrations this call
+// applied: the file resolved and opened, then its daily quick_check (a
+// failure is the file's corruption).
 func open(ctx context.Context, o Options) (*Index, []string, error) {
 	t, err := resolve(ctx, o)
 	if err != nil {
 		return nil, nil, err
 	}
-	return openTarget(ctx, o, t)
+	ix, applied, err := openTarget(ctx, o, t)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ix.dailyCheck(ctx); err != nil {
+		_ = ix.Close()
+		return nil, nil, asCorrupt(ix.path, err)
+	}
+	countOpen(o)
+	return ix, applied, nil
+}
+
+// countOpen counts a successful open for OpensOf.
+func countOpen(o Options) {
+	mu.Lock()
+	opens[o.Dirs.State]++
+	mu.Unlock()
 }
 
 // openTarget opens t. A newer binary may have migrated metrics.db after
 // the probe: the writer then finds it above the head and lets it go, and
 // the second and last pass opens the side file.
 func openTarget(ctx context.Context, o Options, t target) (*Index, []string, error) {
-	ix, applied, err := openOnce(ctx, o, t)
+	ix, applied, err := openFollow(ctx, o, t)
 	if !errors.Is(err, errNewer) || t.side {
 		return ix, applied, err
 	}
 	if t, err = sideTarget(ctx, t); err != nil {
 		return nil, nil, err
 	}
-	return openOnce(ctx, o, t)
+	return openFollow(ctx, o, t)
 }
 
-func openOnce(ctx context.Context, o Options, t target) (*Index, []string, error) {
+// errReplaced: the file at the path is no longer the one connected to (a
+// rebuild renamed a new file over it meanwhile).
+var errReplaced = errors.New("the metrics index was replaced while it was opened")
+
+// openFollow is openOnce, opened again once when the file was replaced
+// while it connected: its version is probed again first.
+func openFollow(ctx context.Context, o Options, t target) (*Index, []string, error) {
+	ix, applied, err := openOnce(ctx, o, t, true)
+	if !errors.Is(err, errReplaced) {
+		return ix, applied, err
+	}
+	if err := t.probe(ctx); err != nil {
+		return nil, nil, err
+	}
+	return openOnce(ctx, o, t, false)
+}
+
+// openOnce opens t.path and migrates it. With check, a first connect is
+// checked against a replacement: the file at the path before connecting
+// must be the one there after (afterConnect runs in between), else
+// errReplaced, the handle closed, nothing written. Corruption comes back
+// as the file's (asCorrupt).
+func openOnce(ctx context.Context, o Options, t target, check bool) (*Index, []string, error) {
 	if t.known && len(t.pending()) > 0 { // before the file is created
 		if err := updateGate(o.Dirs); err != nil {
 			return nil, nil, err
 		}
 	}
-	sh, err := acquire(ctx, t.path, o)
+	before, berr := os.Stat(t.path)
+	sh, fresh, err := acquire(ctx, t.path, o)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, asCorrupt(t.path, err)
 	}
 	ix := &Index{sh: sh, path: t.path, opts: o, side: t.side}
+	if check && fresh {
+		if afterConnect != nil {
+			afterConnect(t.path)
+		}
+		if after, aerr := os.Stat(t.path); berr == nil && (aerr != nil || !os.SameFile(before, after)) {
+			_ = ix.Close()
+			return nil, nil, errReplaced
+		}
+	}
 	applied, err := ix.migrate(ctx, t)
 	if err != nil {
 		_ = ix.Close()
-		return nil, nil, err
+		return nil, nil, asCorrupt(t.path, err)
 	}
-	mu.Lock()
-	opens[o.Dirs.State]++
-	mu.Unlock()
 	return ix, applied, nil
 }
 
 // acquire takes a reference on path's shared handles, opening them
-// (creating the file) for the first one. It holds the package mutex
-// throughout, openWriter's retry included: other opens in this process
-// wait up to busyWait.
-func acquire(ctx context.Context, path string, o Options) (*shared, error) {
+// (creating the file) for the first one: fresh. It holds the package
+// mutex throughout, openWriter's retry included: other opens in this
+// process wait up to busyWait.
+func acquire(ctx context.Context, path string, o Options) (sh *shared, fresh bool, err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if sh, ok := files[path]; ok {
 		sh.refs++
-		return sh, nil
+		return sh, false, nil
 	}
 	fs := detectFS(dir, o.Home, o.Getenv)
 	w, err := openWriter(ctx, path, fs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	r, err := sql.Open(driverName, dsn(path, fs, true))
 	if err != nil {
 		_ = w.Close()
-		return nil, err
+		return nil, false, err
 	}
-	sh := &shared{w: w, r: r, fs: fs, refs: 1}
+	sh = &shared{w: w, r: r, fs: fs, refs: 1}
 	files[path] = sh
-	return sh, nil
+	return sh, true, nil
 }
 
 // openWriter opens path's writer and its connection, creating the file.
