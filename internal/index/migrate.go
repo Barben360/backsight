@@ -32,7 +32,9 @@ type Migration struct {
 }
 
 // Embedded is the registry built into the binary (Options.Migrations nil).
-// Empty until the first schema ships.
+// Empty until the first schema ships. Its root must hold the .sql files
+// themselves, as LoadRegistry reads them: an embedded migrations/
+// directory is passed as fs.Sub(embedded, "migrations").
 var Embedded fs.FS = embed.FS{}
 
 // ErrUpdateInProgress: the index needs a migration while `update apply`
@@ -42,8 +44,11 @@ var ErrUpdateInProgress = errors.New("an update is being applied, try again in a
 
 var migrationName = regexp.MustCompile(`^([0-9]{4})-[a-z0-9]+(-[a-z0-9]+)*\.sql$`)
 
-// LoadRegistry reads the migrations at the root of fsys: every entry must
-// be a NNNN-slug.sql file, numbered from 0001 with no gap.
+// LoadRegistry reads the migrations at the root of fsys, which holds the
+// .sql files themselves (for an embedded directory, pass fs.Sub of it):
+// every entry must be a NNNN-slug.sql file, numbered from 1 with no gap,
+// that leaves its transaction to the runner (no BEGIN, COMMIT, END,
+// ROLLBACK, SAVEPOINT or RELEASE statement).
 func LoadRegistry(fsys fs.FS) ([]Migration, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
@@ -63,6 +68,9 @@ func LoadRegistry(fsys fs.FS) ([]Migration, error) {
 		raw, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			return nil, fmt.Errorf("index migration %s: %w", name, err)
+		}
+		if kw, ok := txControl(string(raw)); ok {
+			return nil, fmt.Errorf("index migration %s: a %s statement: each migration runs in the transaction the runner opens", name, kw)
 		}
 		sum := sha256.Sum256(raw)
 		reg = append(reg, Migration{
@@ -134,28 +142,43 @@ func Migrate(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 	if !t.built || t.side {
 		return res, nil
 	}
-	for _, m := range t.pending() {
-		res.Pending = append(res.Pending, m.ID)
+	if !t.known && plan { // only the writer could read it
+		return res, t.probeErr
 	}
-	if plan || len(res.Pending) == 0 {
-		return res, nil
+	if t.known {
+		for _, m := range t.pending() {
+			res.Pending = append(res.Pending, m.ID)
+		}
+		if plan || len(res.Pending) == 0 {
+			return res, nil
+		}
 	}
-	ix, applied, err := open(ctx, o)
+	ix, applied, err := openTarget(ctx, o, t)
 	if err != nil {
 		return res, err
 	}
 	res.Applied = append(res.Applied, applied...)
+	if !t.known {
+		res.Pending = append(res.Pending, applied...)
+	}
+	res.Newer, res.File = ix.Side(), ix.Path() // a newer binary may have migrated it meanwhile
 	return res, ix.Close()
 }
 
+// errNewer: the writer found metrics.db above this binary's head, migrated
+// by a newer binary after the probe read it.
+var errNewer = errors.New("the index was just migrated by a newer backsight: run the command again")
+
 // target is the file an open works on.
 type target struct {
-	reg     []Migration
-	head    int
-	built   bool   // metrics.db exists
-	path    string // metrics.db, or the side file beside a newer one
-	side    bool
-	version int // path's user_version, 0 when absent
+	reg      []Migration
+	head     int
+	built    bool   // metrics.db exists
+	path     string // metrics.db, or the side file beside a newer one
+	side     bool
+	known    bool  // version was read; false: the probe failed, the writer reads it
+	version  int   // path's user_version, 0 when absent
+	probeErr error // why it is not known
 }
 
 func (t target) pending() []Migration {
@@ -180,18 +203,43 @@ func resolve(ctx context.Context, o Options) (target, error) {
 		return target{}, err
 	}
 	t := target{reg: reg, head: Head(reg), path: filepath.Join(o.Dirs.IndexDir(), FileName)}
-	if t.version, t.built, err = fileVersion(ctx, t.path); err != nil {
+	if err := t.probe(ctx); err != nil {
 		return target{}, err
 	}
-	if t.version > t.head {
-		t.side = true
-		t.path = filepath.Join(o.Dirs.IndexDir(), SideFileName(t.head))
-		if t.version, _, err = fileVersion(ctx, t.path); err != nil {
-			return target{}, err
-		}
+	t.built = t.built || !t.known
+	if t.known && t.version > t.head {
+		return sideTarget(ctx, t)
 	}
 	return t, nil
 }
+
+// sideTarget is t moved to the side file of its head.
+func sideTarget(ctx context.Context, t target) (target, error) {
+	t.side = true
+	t.path = filepath.Join(filepath.Dir(t.path), SideFileName(t.head))
+	built := t.built
+	err := t.probe(ctx)
+	t.built = built // of metrics.db
+	return t, err
+}
+
+// probe reads t.path's version. A read that fails while a -wal exists
+// (one a killed process left, say) leaves it unknown instead: the writer,
+// which recovers the WAL, reads it under its lock.
+func (t *target) probe(ctx context.Context) error {
+	v, built, err := probeVersion(ctx, t.path)
+	t.version, t.built, t.known, t.probeErr = v, built, err == nil, err
+	if err != nil {
+		if _, serr := os.Stat(t.path + "-wal"); serr != nil {
+			return err
+		}
+		t.version = 0
+	}
+	return nil
+}
+
+// probeVersion is fileVersion; tests make it fail.
+var probeVersion = fileVersion
 
 // fileVersion is path's user_version through a read-only connection that
 // changes nothing (0, false: no file).
@@ -241,12 +289,55 @@ func updateGate(d paths.Dirs) error {
 	return nil
 }
 
+// migrate brings the file ix holds to t's head. The version the writer
+// reads under the write lock is the authority (the probe's may be stale,
+// or missing): above the head on metrics.db, nothing is written and
+// errNewer sends the open to the side file.
+func (ix *Index) migrate(ctx context.Context, t target) ([]string, error) {
+	v, err := writerVersion(ctx, ix.sh.w)
+	if err != nil {
+		return nil, err
+	}
+	if v > t.head && !t.side {
+		return nil, errNewer
+	}
+	t.version, t.known = v, true
+	pending := t.pending()
+	if len(pending) > 0 {
+		if err := updateGate(ix.opts.Dirs); err != nil {
+			return nil, err
+		}
+	}
+	applied, err := applyPending(ctx, ix.sh.w, pending, t.head, ix.opts)
+	if err != nil {
+		return nil, err
+	}
+	return applied, ix.sh.w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&ix.schema)
+}
+
+// writerVersion reads user_version inside BEGIN IMMEDIATE (the writer
+// DSN's _txlock), so no other writer is half way through a migration.
+func writerVersion(ctx context.Context, w *sql.DB) (int, error) {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var v int
+	err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v)
+	return v, err
+}
+
 // applyPending applies each migration in its own transaction and returns
-// the ones this call applied.
-func applyPending(ctx context.Context, w *sql.DB, pending []Migration, o Options) ([]string, error) {
+// the ones this call applied. A file found above head is left alone
+// (errNewer).
+func applyPending(ctx context.Context, w *sql.DB, pending []Migration, head int, o Options) ([]string, error) {
 	applied := []string{}
 	for _, m := range pending {
-		done, err := applyOne(ctx, w, m, o)
+		done, err := applyOne(ctx, w, m, head, o)
+		if errors.Is(err, errNewer) {
+			return applied, err
+		}
 		if err != nil {
 			return applied, fmt.Errorf("index migration %s: %w", m.ID, err)
 		}
@@ -257,7 +348,7 @@ func applyPending(ctx context.Context, w *sql.DB, pending []Migration, o Options
 	return applied, nil
 }
 
-func applyOne(ctx context.Context, w *sql.DB, m Migration, o Options) (bool, error) {
+func applyOne(ctx context.Context, w *sql.DB, m Migration, head int, o Options) (bool, error) {
 	tx, err := w.BeginTx(ctx, nil) // BEGIN IMMEDIATE: the writer DSN's _txlock
 	if err != nil {
 		return false, err
@@ -266,6 +357,9 @@ func applyOne(ctx context.Context, w *sql.DB, m Migration, o Options) (bool, err
 	var v int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
 		return false, err
+	}
+	if v > head { // a newer binary migrated it while this one waited
+		return false, errNewer
 	}
 	if v >= m.Num { // applied while this process waited for the lock
 		return false, nil

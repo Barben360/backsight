@@ -75,8 +75,9 @@ func OpensOf(stateDir string) int64 {
 // (1) the registry and its head; (2) metrics.db's user_version, read only;
 // (3) above the head, the side file of this binary's head is used instead
 // and metrics.db never written; (4) a migration (building a missing file
-// included) waits for an uncommitted update; (5) the file is opened and
-// each pending migration applied in its own transaction.
+// included) waits for an uncommitted update; (5) the file is opened, its
+// version read again under the write lock (above the head: back to 3,
+// once), and each pending migration applied in its own transaction.
 func Open(ctx context.Context, o Options) (*Index, error) {
 	ix, _, err := open(ctx, o.withDefaults())
 	return ix, err
@@ -88,8 +89,25 @@ func open(ctx context.Context, o Options) (*Index, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	pending := t.pending()
-	if len(pending) > 0 {
+	return openTarget(ctx, o, t)
+}
+
+// openTarget opens t. A newer binary may have migrated metrics.db after
+// the probe: the writer then finds it above the head and lets it go, and
+// the second and last pass opens the side file.
+func openTarget(ctx context.Context, o Options, t target) (*Index, []string, error) {
+	ix, applied, err := openOnce(ctx, o, t)
+	if !errors.Is(err, errNewer) || t.side {
+		return ix, applied, err
+	}
+	if t, err = sideTarget(ctx, t); err != nil {
+		return nil, nil, err
+	}
+	return openOnce(ctx, o, t)
+}
+
+func openOnce(ctx context.Context, o Options, t target) (*Index, []string, error) {
+	if t.known && len(t.pending()) > 0 { // before the file is created
 		if err := updateGate(o.Dirs); err != nil {
 			return nil, nil, err
 		}
@@ -99,10 +117,7 @@ func open(ctx context.Context, o Options) (*Index, []string, error) {
 		return nil, nil, err
 	}
 	ix := &Index{sh: sh, path: t.path, opts: o, side: t.side}
-	applied, err := applyPending(ctx, sh.w, pending, o)
-	if err == nil {
-		err = sh.w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&ix.schema)
-	}
+	applied, err := ix.migrate(ctx, t)
 	if err != nil {
 		_ = ix.Close()
 		return nil, nil, err
@@ -114,7 +129,9 @@ func open(ctx context.Context, o Options) (*Index, []string, error) {
 }
 
 // acquire takes a reference on path's shared handles, opening them
-// (creating the file) for the first one.
+// (creating the file) for the first one. It holds the package mutex
+// throughout, openWriter's retry included: other opens in this process
+// wait up to busyWait.
 func acquire(ctx context.Context, path string, o Options) (*shared, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

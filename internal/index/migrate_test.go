@@ -525,43 +525,46 @@ func TestOpenRefusesABadRegistry(t *testing.T) {
 // Processes setting up and migrating one new file at once: each gets its
 // writer (one told SQLITE_BUSY while another sets the journal mode tries
 // again), and the one that waited re-reads user_version inside its
-// transaction and applies nothing twice.
+// transaction and applies nothing twice. The race is won by chance, so
+// each run plays many rounds on fresh files.
 func TestConcurrentMigratorsApplyEachOnce(t *testing.T) {
 	reg, err := LoadRegistry(regB())
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), FileName)
 	o := opts(t, tempDirs(t), regB())
-	var (
-		wg      sync.WaitGroup
-		lock    sync.Mutex
-		applied []string
-		errs    []error
-	)
-	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var got []string
-			w, err := openWriter(context.Background(), path, FSInfo{Kind: FSLocal})
-			if err == nil {
-				got, err = applyPending(context.Background(), w, reg, o)
-				err = errors.Join(err, w.Close())
-			}
-			lock.Lock()
-			defer lock.Unlock()
-			applied = append(applied, got...)
-			errs = append(errs, err)
-		}()
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		t.Fatal(err)
-	}
-	slices.Sort(applied)
-	if !slices.Equal(applied, []string{"0001-a", "0002-b"}) {
-		t.Errorf("applied %v", applied)
+	for round := range 20 {
+		path := filepath.Join(t.TempDir(), FileName)
+		var (
+			wg      sync.WaitGroup
+			lock    sync.Mutex
+			applied []string
+			errs    []error
+		)
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var got []string
+				w, err := openWriter(context.Background(), path, FSInfo{Kind: FSLocal})
+				if err == nil {
+					got, err = applyPending(context.Background(), w, reg, Head(reg), o)
+					err = errors.Join(err, w.Close())
+				}
+				lock.Lock()
+				defer lock.Unlock()
+				applied = append(applied, got...)
+				errs = append(errs, err)
+			}()
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		slices.Sort(applied)
+		if !slices.Equal(applied, []string{"0001-a", "0002-b"}) {
+			t.Fatalf("round %d: applied %v", round, applied)
+		}
 	}
 }
 
@@ -643,4 +646,191 @@ func TestNetworkFolderMigratesAndSidesWithoutWAL(t *testing.T) {
 	absent(t, mainFile(d)+"-wal")
 	absent(t, mainFile(d)+"-shm")
 	absent(t, mainFile(d)+"-journal")
+}
+
+// A newer binary migrates metrics.db between the probe and the open: the
+// writer reads the version again under its lock, writes nothing, and the
+// open moves to the side file.
+func TestNewerBetweenProbeAndOpen(t *testing.T) {
+	ctx := context.Background()
+	regOld, err := LoadRegistry(regA())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []int{1, 0} { // at the head; below it (a pending migration)
+		d := tempDirs(t)
+		build(t, opts(t, d, regB()))
+		main := mainFile(d)
+		sum, mtime := fileSum(t, main)
+		probed := target{reg: regOld, head: 1, built: true, known: true, version: stale, path: main}
+		ix, _, err := openTarget(ctx, opts(t, d, regA()).withDefaults(), probed)
+		if err != nil {
+			t.Fatalf("stale %d: %v", stale, err)
+		}
+		if !ix.Side() || ix.Schema() != 1 || filepath.Base(ix.Path()) != "metrics-v1.db" {
+			t.Errorf("stale %d: side %v, schema %d, path %s", stale, ix.Side(), ix.Schema(), ix.Path())
+		}
+		mustClose(t, ix)
+		if s, m := fileSum(t, main); s != sum || !m.Equal(mtime) {
+			t.Errorf("stale %d: metrics.db changed", stale)
+		}
+		if v := headerVersion(t, main); v != 2 {
+			t.Errorf("stale %d: user_version %d", stale, v)
+		}
+		absent(t, main+"-wal")
+	}
+}
+
+// A migration that finds the file above its head (a newer binary got the
+// lock first) stops there and writes nothing.
+func TestApplyStopsOnANewerFile(t *testing.T) {
+	ctx := context.Background()
+	d := tempDirs(t)
+	build(t, opts(t, d, regB()))
+	sum, _ := fileSum(t, mainFile(d))
+	reg, err := LoadRegistry(regA())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := openWriter(ctx, mainFile(d), FSInfo{Kind: FSLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := applyPending(ctx, w, reg, 1, opts(t, d, regA()).withDefaults())
+	if cerr := w.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if !errors.Is(err, errNewer) || len(applied) != 0 {
+		t.Errorf("applied %v, err %v", applied, err)
+	}
+	if s, _ := fileSum(t, mainFile(d)); s != sum {
+		t.Error("metrics.db changed")
+	}
+}
+
+// failProbe makes the read-only probe fail whenever a -wal exists, as it
+// may on the files a killed process left.
+func failProbe(t *testing.T) {
+	t.Helper()
+	old := probeVersion
+	probeVersion = func(ctx context.Context, path string) (int, bool, error) {
+		if _, err := os.Stat(path + "-wal"); err == nil {
+			return 0, true, errors.New("injected probe failure")
+		}
+		return old(ctx, path)
+	}
+	t.Cleanup(func() { probeVersion = old })
+}
+
+// A failed probe beside a -wal is not fatal: the writer reads the
+// version, under the same update gate and newer-schema rule.
+func TestUnreadableProbeFallsBackToTheWriter(t *testing.T) {
+	ctx := context.Background()
+	failProbe(t)
+	t.Run("at head", func(t *testing.T) {
+		d := tempDirs(t)
+		held := mustOpen(t, opts(t, d, regB())) // keeps the -wal
+		defer mustClose(t, held)
+		ix := mustOpen(t, opts(t, d, regB()))
+		defer mustClose(t, ix)
+		if ix.Schema() != 2 || ix.Side() {
+			t.Errorf("schema %d, side %v", ix.Schema(), ix.Side())
+		}
+		if _, err := Migrate(ctx, opts(t, d, regB()), true); err == nil {
+			t.Error("a plan cannot read the version: it must say so")
+		}
+	})
+	t.Run("below head, update uncommitted", func(t *testing.T) {
+		d := tempDirs(t)
+		held := mustOpen(t, opts(t, d, regA()))
+		if err := state.WriteUpdateMarker(d, state.UpdateMarker{From: "v1", To: "v2"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Open(ctx, opts(t, d, regB()))
+		if !errors.Is(err, ErrUpdateInProgress) {
+			t.Errorf("want ErrUpdateInProgress, got %v", err)
+		}
+		_, err = Migrate(ctx, opts(t, d, regB()), false)
+		if !errors.Is(err, ErrUpdateInProgress) {
+			t.Errorf("migrate: want ErrUpdateInProgress, got %v", err)
+		}
+		mustClose(t, held)
+		if v := headerVersion(t, mainFile(d)); v != 1 {
+			t.Errorf("user_version %d", v)
+		}
+	})
+	t.Run("below head", func(t *testing.T) {
+		d := tempDirs(t)
+		held := mustOpen(t, opts(t, d, regA()))
+		defer mustClose(t, held)
+		res, err := Migrate(ctx, opts(t, d, regB()), false)
+		if err != nil || !slices.Equal(res.Applied, []string{"0002-b"}) || !slices.Equal(res.Pending, []string{"0002-b"}) {
+			t.Errorf("migrate %+v, %v", res, err)
+		}
+	})
+	t.Run("newer", func(t *testing.T) {
+		d := tempDirs(t)
+		held := mustOpen(t, opts(t, d, regB()))
+		ix := mustOpen(t, opts(t, d, regA()))
+		if !ix.Side() || ix.Schema() != 1 {
+			t.Errorf("schema %d, side %v", ix.Schema(), ix.Side())
+		}
+		mustClose(t, ix)
+		mustClose(t, held)
+		if v := headerVersion(t, mainFile(d)); v != 2 {
+			t.Errorf("metrics.db user_version %d", v)
+		}
+	})
+	t.Run("no wal: still an error", func(t *testing.T) {
+		d := tempDirs(t)
+		build(t, opts(t, d, regA()))
+		old := probeVersion
+		probeVersion = func(context.Context, string) (int, bool, error) { return 0, true, errors.New("injected") }
+		defer func() { probeVersion = old }()
+		if _, err := Open(ctx, opts(t, d, regA())); err == nil {
+			t.Error("a failed probe without a -wal must fail the open")
+		}
+	})
+}
+
+// The files a killed process leaves (a copy of a live -wal and -shm)
+// open: the version and rows in the -wal are seen, and an older binary
+// still goes to its side file.
+func TestOpensTheFilesAKilledProcessLeft(t *testing.T) {
+	src := tempDirs(t)
+	held := mustOpen(t, opts(t, src, regB()))
+	crash := func(t *testing.T) paths.Dirs {
+		t.Helper()
+		d := tempDirs(t)
+		if err := os.MkdirAll(d.IndexDir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for _, ext := range []string{"", "-wal", "-shm"} {
+			raw, err := os.ReadFile(mainFile(src) + ext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(mainFile(d)+ext, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return d
+	}
+	same, older := crash(t), crash(t)
+	mustClose(t, held)
+	if v := headerVersion(t, mainFile(same)); v >= 2 {
+		t.Fatalf("precondition: the bump is already in the main file (%d)", v)
+	}
+
+	ix := mustOpen(t, opts(t, same, regB()))
+	if ix.Schema() != 2 || ix.Side() || len(migrationRows(t, ix)) != 2 {
+		t.Errorf("schema %d, side %v", ix.Schema(), ix.Side())
+	}
+	mustClose(t, ix)
+
+	ix = mustOpen(t, opts(t, older, regA()))
+	defer mustClose(t, ix)
+	if !ix.Side() || ix.Schema() != 1 {
+		t.Errorf("schema %d, side %v", ix.Schema(), ix.Side())
+	}
 }
