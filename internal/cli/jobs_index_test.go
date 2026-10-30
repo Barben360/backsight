@@ -135,6 +135,25 @@ func TestTickIngestsOnEveryExitPath(t *testing.T) {
 	}
 }
 
+// A tick whose client cannot be set up says why in a fixed reason, in
+// its result and its job event (the errors report and doctor show it),
+// never the error's text.
+func TestTickClientSetupFailureNamesItsReason(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	if err := os.MkdirAll(filepath.Join(d.SentIndexDir(), "index.bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, res := tickJSON(t)
+	if code != output.Blocked || res.Status != "failed" || res.Reason != clientSetupFailed {
+		t.Fatalf("exit %d status %q reason %q", code, res.Status, res.Reason)
+	}
+	raw, _ := os.ReadFile(filepath.Join(d.TelemetryDir(), "events-"+monthOf(time.Now())+".jsonl"))
+	if !strings.Contains(string(raw), `"reason":"the client could not be set up"`) || strings.Contains(string(raw), "index.bin") {
+		t.Errorf("job event: %s", raw)
+	}
+}
+
 // The text line names the index step on a skipped tick too.
 func TestTickTextNamesTheIndex(t *testing.T) {
 	home := devInstall(t, true)
@@ -358,6 +377,9 @@ func TestMaintainIndexText(t *testing.T) {
 		{index.MaintainResult{TempSkipped: true}, nil, "pruned 0 row(s) and 0 ingest error(s), rebuild temp files left: a rebuild is running"},
 		{index.MaintainResult{SideRemoved: []string{"metrics-v1.db"}}, index.ErrUpdateInProgress, "skipped: an update is being applied, removed metrics-v1.db"},
 		{index.MaintainResult{}, index.ErrDiskFull, "failed: full"},
+		// a failed pruning still names the files the side-file step handled
+		{index.MaintainResult{SideRemoved: []string{"metrics-v1.db"}, SideKept: []string{"metrics-v2.db"}, TempSkipped: true}, index.ErrUnreadable,
+			"failed: corrupt, removed metrics-v1.db, kept metrics-v2.db (in use), rebuild temp files left: a rebuild is running"},
 		{index.MaintainResult{}, &fs.PathError{Op: "open", Path: "/home/someone/secret", Err: fs.ErrPermission}, "failed: io"},
 		{index.MaintainResult{}, context.DeadlineExceeded, "failed: timeout"},
 	} {

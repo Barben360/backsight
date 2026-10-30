@@ -73,6 +73,11 @@ type tickResult struct {
 	MS           int    `json:"ms"`
 }
 
+// clientSetupFailed is the tick's reason when its client cannot be set up
+// (the sent index or the machine id unreadable, state.json not
+// writable): a fixed text, the error goes to stderr or the envelope.
+const clientSetupFailed = "the client could not be set up"
+
 // reachCheckTimeout bounds the tick's one health call.
 const reachCheckTimeout = 5 * time.Second
 
@@ -139,7 +144,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 
 			f, err := newFlusher(d, home, cfg, sec, generation, true)
 			if err != nil {
-				res.Status = "failed"
+				res.Status, res.Reason = "failed", clientSetupFailed
 				return finish(err)
 			}
 			// One look whether the server answers, for doctor's server-reach

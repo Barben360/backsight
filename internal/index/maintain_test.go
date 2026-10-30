@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -389,4 +391,95 @@ func TestMaintainSweepsStaleRebuildTemps(t *testing.T) {
 		t.Errorf("fresh temp %q", got)
 	}
 	absent(t, filepath.Join(d.IndexDir(), rebuildLockName))
+}
+
+// setPruneBatch makes the pruning's batches n rows for the test.
+func setPruneBatch(t *testing.T, n int) {
+	t.Helper()
+	prev := pruneBatch
+	pruneBatch = n
+	t.Cleanup(func() { pruneBatch = prev })
+}
+
+// A pruning larger than one batch removes every row, a short transaction
+// per batch, so that the write lock is never held for a whole table; the
+// old ingest errors go the same way.
+func TestMaintainPrunesInBatches(t *testing.T) {
+	e := newEnv(t)
+	e.clock.t = maintainClock
+	var b strings.Builder
+	for i := 0; i < 7; i++ {
+		b.WriteString(tline("prompt", "2024-09-01T00:00:00Z", map[string]any{"n": i, "decision": "skip"}))
+	}
+	e.write("2024-09", b.String())
+	e.write("2026-10", tline("prompt", "2026-10-01T00:00:00Z", map[string]any{"n": 100, "decision": "skip"}))
+	e.ingest()
+	for i := 0; i < 5; i++ {
+		e.addError("telemetry/events-2026-10.jsonl", int64(1000+i), errUnparsable, maintainClock.Add(-40*24*time.Hour))
+	}
+	setPruneBatch(t, 3)
+	commits := countBatches(t)
+	res := e.maintain()
+	if res.RowsPruned != 7 || res.ErrorsPruned != 5 {
+		t.Errorf("%+v", res)
+	}
+	if n := e.count("tel_prompt"); n != 1 {
+		t.Errorf("%d prompt row(s) left, want 1", n)
+	}
+	if n := e.count("ingest_errors"); n != 0 {
+		t.Errorf("%d ingest error(s) left", n)
+	}
+	if *commits != 5 { // rows 3+3+1, errors 3+2
+		t.Errorf("%d commits, want 5 (one per batch)", *commits)
+	}
+}
+
+// A pruning stops between batches when its context ends.
+func TestMaintainPruneStopsOnItsContext(t *testing.T) {
+	e := newEnv(t)
+	e.clock.t = maintainClock
+	var b strings.Builder
+	for i := 0; i < 7; i++ {
+		b.WriteString(tline("prompt", "2024-09-01T00:00:00Z", map[string]any{"n": i, "decision": "skip"}))
+	}
+	e.write("2024-09", b.String())
+	e.ingest()
+	setPruneBatch(t, 3)
+	ctx, cancel := context.WithCancel(context.Background())
+	setAfterBatch(t, cancel) // the first batch's commit ends the context
+	o := opts(t, e.d, nil)
+	o.Now = e.clock.Now
+	res, err := Maintain(ctx, o)
+	if !errors.Is(err, context.Canceled) || res.RowsPruned != 3 {
+		t.Errorf("%+v %v", res, err)
+	}
+	if n := e.count("tel_prompt"); n != 4 {
+		t.Errorf("%d row(s) left, want 4 (one batch committed)", n)
+	}
+}
+
+// With an index directory but no index and no temp file, Maintain writes
+// nothing there, not even rebuild.lock: a directory it cannot write is
+// no error.
+func TestMaintainWritesNothingWithoutAnIndex(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory mode does not stop writes on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+	d := tempDirs(t)
+	if err := os.MkdirAll(d.IndexDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(d.IndexDir(), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(d.IndexDir(), 0o700) })
+	if res, err := Maintain(context.Background(), opts(t, d, nil)); err != nil || res.TempSkipped {
+		t.Errorf("%+v %v", res, err)
+	}
+	if ents, _ := os.ReadDir(d.IndexDir()); len(ents) != 0 {
+		t.Errorf("files created: %v", ents)
+	}
 }

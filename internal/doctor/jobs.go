@@ -56,9 +56,10 @@ func schedulerModeOf(d paths.Dirs) schedulerMode {
 const byHand = "run backsight jobs tick every 15 min and backsight jobs maintain daily (it makes the backup), by hand or from a scheduler of your own"
 
 // checkJobs: each scheduled job ran within twice its cadence (SPEC §15),
-// read from the job events of the telemetry. Without scheduler entries
-// there is nothing to judge. linger reports whether systemd keeps the
-// user's manager running when they are logged out (nil: unknown).
+// and its newest job event is not a failure, read from the job events of
+// the telemetry. Without scheduler entries there is nothing to judge.
+// linger reports whether systemd keeps the user's manager running when
+// they are logged out (nil: unknown).
 func checkJobs(d paths.Dirs, now time.Time, linger func() (bool, error)) Check {
 	c := Check{ID: "jobs", Status: OK}
 	st, err := state.Load(d.StateFile())
@@ -92,12 +93,20 @@ func checkJobs(d paths.Dirs, now time.Time, linger func() (bool, error)) Check {
 		return c
 	}
 	last := map[string]time.Time{}
+	newest := map[string]stats.Event{} // a "started" one: a run in progress, not judged yet
 	for _, e := range ev {
-		if e.Event == "job" && e.TS.After(last[e.Name]) {
+		if e.Event != "job" {
+			continue
+		}
+		if e.TS.After(last[e.Name]) {
 			last[e.Name] = e.TS
 		}
+		if f, ok := newest[e.Name]; !ok || !e.TS.Before(f.TS) {
+			newest[e.Name] = e
+		}
 	}
-	var late []string
+	var late, failing []string
+	firstFailing := ""
 	for _, j := range scheduler.Jobs {
 		limit := 2 * time.Duration(j.Minutes) * time.Minute
 		if now.Sub(st.Scheduler.InstalledAt) < limit {
@@ -109,12 +118,34 @@ func checkJobs(d paths.Dirs, now time.Time, linger func() (bool, error)) Check {
 				when = now.Sub(t).Round(time.Minute).String() + " ago"
 			}
 			late = append(late, fmt.Sprintf("%s last ran %s (every %s)", j.Name, when, time.Duration(j.Minutes)*time.Minute))
+			continue
+		}
+		// It runs, but its last run failed: running on time is not working.
+		if f, ok := newest[j.Name]; ok && f.Status == "failed" {
+			item := fmt.Sprintf("%s failed %s ago", j.Name, now.Sub(f.TS).Round(time.Minute))
+			if reason, _ := f.Details["reason"].(string); reason != "" {
+				item += " (" + reason + ")"
+			}
+			failing = append(failing, item)
+			if firstFailing == "" {
+				firstFailing = j.Name
+			}
 		}
 	}
-	if len(late) > 0 {
-		c.Status, c.Summary = Warn, fmt.Sprintf("scheduled job late: %v", late)
-		c.Fix = map[string]string{"systemd": "systemctl --user list-timers 'backsight-*'", "launchd": "launchctl list | grep backsight",
-			"schtasks": `schtasks /Query /TN backsight\tick`}[st.Scheduler.Kind]
+	if len(late) > 0 || len(failing) > 0 {
+		var parts []string
+		if len(late) > 0 {
+			parts = append(parts, fmt.Sprintf("scheduled job late: %v", late))
+			c.Fix = map[string]string{"systemd": "systemctl --user list-timers 'backsight-*'", "launchd": "launchctl list | grep backsight",
+				"schtasks": `schtasks /Query /TN backsight\tick`}[st.Scheduler.Kind]
+		}
+		if len(failing) > 0 {
+			parts = append(parts, fmt.Sprintf("scheduled job failing: %v", failing))
+			if c.Fix == "" {
+				c.Fix = "backsight jobs " + firstFailing // run by hand, it says why
+			}
+		}
+		c.Status, c.Summary = Warn, strings.Join(parts, "; ")
 		return c
 	}
 	c.Summary = fmt.Sprintf("%s entries installed; jobs on time", st.Scheduler.Kind)
