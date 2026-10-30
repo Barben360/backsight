@@ -5,9 +5,11 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -179,5 +181,65 @@ func TestNativeDataSize(t *testing.T) {
 	}
 	if got, err := n.DataSize(context.Background()); err != nil || got != 1023 {
 		t.Errorf("size %d %v, want 1023 (the venv is not data)", got, err)
+	}
+}
+
+// clean shows everything Delete removes (ruling R43): on native all of
+// Root(), the venvs and models included, and Root() alone (a failed
+// switch's downloads) is something to clean.
+func TestNativeCleanShowsWhatDeleteRemoves(t *testing.T) {
+	n := newNative(t, nil)
+	ctx := context.Background()
+	if left, err := n.Leftover(ctx); err != nil || left {
+		t.Fatalf("nothing there: %v %v", left, err)
+	}
+	venvFile := filepath.Join(n.VenvDir("1.1.0-0123456789ab"), "lib", "x.so")
+	if err := os.MkdirAll(filepath.Dir(venvFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(venvFile, make([]byte, 5000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := n.Leftover(ctx); err != nil || !left {
+		t.Errorf("a venv alone: leftover %v %v", left, err)
+	}
+	model := filepath.Join(n.HF(), "hub", "m.onnx")
+	_ = os.MkdirAll(filepath.Dir(model), 0o700)
+	_ = os.WriteFile(model, make([]byte, 700), 0o600)
+	if got, err := n.CleanSize(ctx); err != nil || got != 5700 {
+		t.Errorf("size %d %v, want 5700 (venv and models counted)", got, err)
+	}
+	if w := n.CleanWhat(); !strings.Contains(w, n.Root()) || !strings.Contains(w, "the database, the Python environments and the models") {
+		t.Errorf("what %q", w)
+	}
+}
+
+type volRunner struct {
+	out string
+	err error
+}
+
+func (v volRunner) Run(context.Context, ...string) ([]byte, error) { return []byte(v.out), v.err }
+
+func TestDockerCleanShowsWhatDeleteRemoves(t *testing.T) {
+	dir := t.TempDir()
+	d := Docker{Compose: Compose{Dir: dir, Project: "bs-x", Runner: volRunner{out: "Error: no such volume", err: errors.New("exit status 1")}}}
+	ctx := context.Background()
+	w := d.CleanWhat()
+	for _, want := range []string{"the database volume bs-x_pg_data", "the model cache bs-x_hf_cache", "the containers", "compose.yaml and .env in " + dir} {
+		if !strings.Contains(w, want) {
+			t.Errorf("no %q in %q", want, w)
+		}
+	}
+	if left, err := d.Leftover(ctx); err != nil || left {
+		t.Errorf("no file, no volume: %v %v", left, err)
+	}
+	d.Compose.Runner = volRunner{err: &exec.Error{Name: "docker", Err: exec.ErrNotFound}}
+	if left, err := d.Leftover(ctx); err != nil || left {
+		t.Errorf("no Docker: %v %v", left, err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services: {}\n"), 0o600)
+	if left, err := d.Leftover(ctx); err != nil || !left {
+		t.Errorf("compose.yaml: %v %v", left, err)
 	}
 }

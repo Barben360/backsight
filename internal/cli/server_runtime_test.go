@@ -159,7 +159,10 @@ type switchRT struct {
 	db        *switchDB
 	exists    bool
 	deployed  string
-	size      int64
+	size      int64 // DataSize: the database only
+	cleanSize int64 // CleanSize: everything Delete removes
+	sizeErr   error // CleanSize cannot tell
+	leftover  bool  // Leftover: something of it here without its data (a failed switch's downloads)
 	fail      map[string]error
 	hook      map[string]func(ctx context.Context) error
 	apiKeys   []string // the API key each Render was given
@@ -256,6 +259,12 @@ func (r *switchRT) DataExists(context.Context) (bool, error) {
 func (r *switchRT) DataName() string                        { return "the " + r.kind + " data" }
 func (r *switchRT) Database() server.Database               { return r.db }
 func (r *switchRT) DataSize(context.Context) (int64, error) { r.read("DataSize"); return r.size, nil }
+func (r *switchRT) Leftover(context.Context) (bool, error)  { return r.leftover || r.exists, nil }
+func (r *switchRT) CleanWhat() string                       { return "everything of " + r.kind }
+func (r *switchRT) CleanSize(context.Context) (int64, error) {
+	r.read("CleanSize")
+	return r.cleanSize, r.sizeErr
+}
 func (r *switchRT) VerifyDump(ctx context.Context, dump string, tables []string) (map[string]int64, error) {
 	if err := r.call(ctx, "VerifyDump"); err != nil {
 		return nil, err
@@ -449,7 +458,7 @@ func TestSwitchDockerToNative(t *testing.T) {
 	if _, err := os.Stat(env.Data.Backup); err != nil || len(env.Data.Gate) != 0 {
 		t.Errorf("backup %q: %v; gate %q", env.Data.Backup, err, env.Data.Gate)
 	}
-	if !strings.Contains(env.Data.SourceKept, "the docker data") {
+	if !strings.Contains(env.Data.SourceKept, "the docker data") { // DataName: the database the switch left behind
 		t.Errorf("source kept %q", env.Data.SourceKept)
 	}
 	raw, err := os.ReadFile(filepath.Join(d.State, "logs", "runtime-switch.jsonl"))
@@ -748,12 +757,13 @@ func TestSwitchRefusals(t *testing.T) {
 
 type cleanEnvelope struct {
 	Data struct {
-		Runtime  string `json:"runtime"`
-		What     string `json:"what"`
-		Bytes    int64  `json:"bytes"`
-		Plan     bool   `json:"plan"`
-		Declined bool   `json:"declined"`
-		Deleted  bool   `json:"deleted"`
+		Runtime     string `json:"runtime"`
+		What        string `json:"what"`
+		Bytes       int64  `json:"bytes"`
+		SizeUnknown bool   `json:"size_unknown"`
+		Plan        bool   `json:"plan"`
+		Declined    bool   `json:"declined"`
+		Deleted     bool   `json:"deleted"`
 	} `json:"data"`
 	Error *output.Error `json:"error"`
 }
@@ -771,12 +781,25 @@ func cleanCmd(t *testing.T, args ...string) (int, cleanEnvelope, string) {
 func TestRuntimeCleanDeletesOnlyTheOtherRuntime(t *testing.T) {
 	home, w := switchSetup(t, "native") // on native after a switch
 	dk := w.rts["docker"]
-	dk.exists, dk.size, dk.deployed = true, 123456789, dk.Version()
+	dk.exists, dk.size, dk.cleanSize, dk.deployed = true, 1000, 123456789, dk.Version()
 
+	// It shows everything Delete removes and what all of it weighs
+	// (ruling R43), not the database alone.
 	code, env, all := cleanCmd(t, "--plan", "--json")
-	if code != output.OK || !env.Data.Plan || env.Data.Runtime != "docker" || env.Data.What != "the docker data" || env.Data.Bytes != 123456789 || env.Data.Deleted {
+	if code != output.OK || !env.Data.Plan || env.Data.Runtime != "docker" || env.Data.What != "everything of docker" || env.Data.Bytes != 123456789 || env.Data.Deleted {
 		t.Fatalf("plan: exit %d %+v\n%s", code, env.Data, all)
 	}
+	if code, out, _ := run(t, "server", "runtime", "clean", "--plan"); code != output.OK || !strings.Contains(out, "would delete everything of docker (117.7 MB)") {
+		t.Errorf("plan text: exit %d\n%s", code, out)
+	}
+	dk.sizeErr = fmt.Errorf("docker system df: timeout")
+	if code, out, _ := run(t, "server", "runtime", "clean", "--plan"); code != output.OK || !strings.Contains(out, "(size unknown)") || strings.Contains(out, "0 bytes") {
+		t.Errorf("unknown size: exit %d\n%s", code, out)
+	}
+	if _, env, _ := cleanCmd(t, "--plan", "--json"); !env.Data.SizeUnknown {
+		t.Errorf("unknown size: %+v", env.Data)
+	}
+	dk.sizeErr = nil
 	if code, _, all := cleanCmd(t, "--non-interactive", "--json"); code != output.NeedsUser || !strings.Contains(all, "consent=yes") {
 		t.Fatalf("no consent: exit %d\n%s", code, all)
 	}
@@ -799,6 +822,12 @@ func TestRuntimeCleanDeletesOnlyTheOtherRuntime(t *testing.T) {
 	}
 	if len(w.calls) != 0 {
 		t.Errorf("calls %q", w.calls)
+	}
+	// Leftovers without data (a failed switch's downloads) are something
+	// to clean.
+	dk.leftover = true
+	if code, out, _ := run(t, "server", "runtime", "clean", "--plan"); code != output.OK || !strings.Contains(out, "would delete everything of docker") {
+		t.Errorf("leftovers: exit %d\n%s", code, out)
 	}
 
 	// Never while a switch runs or was cut off.
@@ -853,5 +882,73 @@ func TestSwitchFailureBeforeTheTargetLeavesItAlone(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(pathsOf(home).ConfigFile()); !bytes.Equal(after, before) {
 		t.Errorf("config.toml changed:\n%s", after)
+	}
+}
+
+// RF 3: killed after config.toml named the target, the switch had passed:
+// its rerun says so and stops or starts nothing.
+func TestSwitchRerunAfterAKillPastTheCommit(t *testing.T) {
+	home, w := switchSetup(t, "native")
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Skip(err)
+	}
+	_ = state.Update(pathsOf(home), "test", func(s *state.State) error {
+		s.RuntimeSwitch = &state.RuntimeSwitch{From: "docker", To: "native", Step: "running", PID: cmd.Process.Pid, Since: time.Now().Add(-time.Hour)}
+		return nil
+	})
+	code, _, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+	if code != output.OK || !strings.Contains(all, "already on native") {
+		t.Fatalf("exit %d\n%s", code, all)
+	}
+	if len(w.calls) != 0 {
+		t.Errorf("calls %q", w.calls)
+	}
+	if rs := switchState(t, home); rs == nil || rs.Step != "done" {
+		t.Errorf("runtime_switch %+v", rs)
+	}
+}
+
+// A rollback that cannot start the source again says how to get back, and
+// leaves runtime_switch running for doctor.
+func TestSwitchFailedRollbackKeepsTheRecord(t *testing.T) {
+	home, w := switchSetup(t, "docker")
+	w.rts["native"].db.afterRestore = func(d *dbData) { d.Keys["documents"] = d.Keys["documents"][:1] }
+	w.rts["docker"].hook["Start"] = func(context.Context) error { return fmt.Errorf("port 8888 is taken") }
+	code, env, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+	if code != output.Blocked || env.Error == nil {
+		t.Fatalf("exit %d\n%s", code, all)
+	}
+	msg := env.Error.Message
+	for _, want := range []string{"failed at gate", "putting docker back failed", "port 8888 is taken", "stop native", "backsight server start", env.Data.Backup} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("no %q in %q", want, msg)
+		}
+	}
+	if rs := switchState(t, home); rs == nil || rs.Step != "running" {
+		t.Errorf("runtime_switch %+v", rs)
+	}
+	if after, _ := os.ReadFile(pathsOf(home).ConfigFile()); strings.Contains(string(after), "native") {
+		t.Errorf("config.toml changed:\n%s", after)
+	}
+}
+
+// A switch carries the memory, never a Hindsight upgrade past server
+// upgrade: another release on the source is refused before anything.
+func TestSwitchRefusesAnotherHindsightRelease(t *testing.T) {
+	home, w := switchSetup(t, "docker")
+	w.rts["docker"].deployed = "ghcr.io/vectorize-io/hindsight:1.0.9"
+	tree := treeOf(t, filepath.Join(home, "backsight"))
+	code, _, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+	if code != output.Blocked || !strings.Contains(all, "Hindsight 1.0.9") || !strings.Contains(all, "backsight server upgrade") {
+		t.Fatalf("exit %d\n%s", code, all)
+	}
+	if len(w.calls) != 0 || !maps.Equal(treeOf(t, filepath.Join(home, "backsight")), tree) {
+		t.Errorf("changed something: %q", w.calls)
+	}
+	// The same release with another lock or digest is the same release.
+	w.rts["docker"].deployed = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:" + strings.Repeat("a", 64)
+	if code, _, all := runSwitchCmd(t, context.Background(), "switch", "native", "--plan", "--json"); code != output.OK {
+		t.Errorf("same release: exit %d\n%s", code, all)
 	}
 }

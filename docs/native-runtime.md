@@ -73,7 +73,7 @@ backsight server runtime switch docker
 
 The switch moves the memory of this install to the other runtime, either way, with nothing for your clients to do: the server keeps its URL, its API key and its server id, and no restore epoch is written (the target holds exactly what the source held).
 
-What it checks first, before anything stops: for native, the platform, the systemd user session, lingering and 3.5 GB of disk; for Docker, Docker and Compose. Then it downloads what the target runs (uv, Python, the virtual environment and the models; or the images). A refusal or a failed download changes nothing. `--plan` stops there and lists the steps.
+What it checks first, before anything stops: that the source runs the Hindsight release this backsight installs on the target (otherwise `backsight server upgrade` comes first: a switch never upgrades); for native, the platform, the systemd user session, lingering and 3.5 GB of disk; for Docker, Docker and Compose. Then it downloads what the target runs (uv, Python, the virtual environment and the models; or the images). A refusal or a failed download changes nothing. `--plan` stops there and lists the steps.
 
 Then, under the maintenance lock (hooks queue their sends, jobs wait):
 
@@ -100,7 +100,7 @@ backsight server runtime clean --plan
 backsight server runtime clean
 ```
 
-It shows what it deletes and its size, asks, then deletes the other runtime's server and data. The runtime in use and the backups are never touched.
+It shows everything it deletes and its size, asks, then deletes the other runtime's server and data: on Docker the database volume, the model cache, the containers and backsight's `compose.yaml` and `.env`; on native all of `server/native`, the database, the Python environments and the models (also what a failed switch to native downloaded there). The runtime in use and the backups are never touched.
 
 ## Licences
 

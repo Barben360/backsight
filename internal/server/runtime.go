@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -136,6 +137,18 @@ type Pruner interface {
 // Sizer is a runtime that can tell how much disk its server's data takes.
 type Sizer interface {
 	DataSize(ctx context.Context) (int64, error)
+}
+
+// Cleaner is what server runtime clean shows of a runtime switched from
+// (decision 0078, ruling R43): everything its Delete removes, and how
+// much disk that is.
+type Cleaner interface {
+	// Leftover reports whether anything of the runtime is on this machine.
+	Leftover(ctx context.Context) (bool, error)
+	// CleanWhat names everything Delete removes.
+	CleanWhat() string
+	// CleanSize is the disk all of it takes.
+	CleanSize(ctx context.Context) (int64, error)
 }
 
 // Creator is a runtime that creates its database at its first start only
@@ -529,6 +542,32 @@ func (d Docker) RenameBank(ctx context.Context, from, to string, dryRun bool) ([
 
 // SecretFiles is the project's .env.
 func (d Docker) SecretFiles() []string { return []string{filepath.Join(d.Compose.Dir, ".env")} }
+
+var _ Cleaner = Docker{}
+
+// Leftover: compose.yaml, or the database volume. A machine without
+// Docker has none of it.
+func (d Docker) Leftover(ctx context.Context) (bool, error) {
+	if fileExists(filepath.Join(d.Compose.Dir, "compose.yaml")) {
+		return true, nil
+	}
+	ok, err := d.DataExists(ctx)
+	if errors.Is(err, exec.ErrNotFound) {
+		return false, nil
+	}
+	return ok, err
+}
+
+// CleanWhat names what Delete removes: both volumes, the containers and
+// backsight's compose files (a user's override stays).
+func (d Docker) CleanWhat() string {
+	p := d.Compose.project()
+	return "the Docker server of project " + p + ": the database volume " + p + "_" + dataVolume + ", the model cache " + p + "_" + modelsVolume +
+		", the containers, and compose.yaml and .env in " + d.Compose.Dir
+}
+
+// CleanSize is both volumes' size.
+func (d Docker) CleanSize(ctx context.Context) (int64, error) { return d.DataSize(ctx) }
 
 var _ Sizer = Docker{}
 

@@ -75,12 +75,14 @@ type switchFlags struct {
 }
 
 type cleanResult struct {
-	Runtime  string `json:"runtime"` // the one deleted
-	What     string `json:"what"`    // DataName()
-	Bytes    int64  `json:"bytes"`
-	Plan     bool   `json:"plan"`
-	Declined bool   `json:"declined,omitempty"`
-	Deleted  bool   `json:"deleted"`
+	Runtime string `json:"runtime"` // the one deleted
+	What    string `json:"what"`    // everything Delete removes (server.Cleaner)
+	Bytes   int64  `json:"bytes"`
+	// SizeUnknown: the runtime could not tell its size (Bytes is 0).
+	SizeUnknown bool `json:"size_unknown,omitempty"`
+	Plan        bool `json:"plan"`
+	Declined    bool `json:"declined,omitempty"`
+	Deleted     bool `json:"deleted"`
 }
 
 // recallWarnBelow: an overlap@10 below it is said (decision 0078: reported,
@@ -252,6 +254,24 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	src, dst := runtimeOfKind(cfg, res.From), runtimeOfKind(cfg, to)
 	if c, ok := dst.(server.Creator); ok { // a first native database is the switch's to create (ruling R35)
 		dst = c.AllowCreate()
+	}
+	// A switch moves the memory, never the Hindsight release: an upgrade
+	// goes through server upgrade's ordering, safety backup and rollback.
+	if to != res.From {
+		deployed, err := src.Deployed()
+		if err != nil {
+			return res, blocked(err)
+		}
+		if deployed == "" {
+			return res, nothingChanged("no server is installed on %s here: there is nothing to switch (backsight server install)", res.From)
+		}
+		switch have, want := server.HindsightVersionOf(deployed), dst.HindsightVersion(); {
+		case have == "" || want == "":
+			res.Warnings = append(res.Warnings, fmt.Sprintf("cannot tell whether %s (%s) and %s (%s) run the same Hindsight release", res.From, deployed, to, dst.Version()))
+		case have != want:
+			return res, nothingChanged("%s runs Hindsight %s and this backsight installs %s on %s: a switch never changes the Hindsight release; "+
+				"run backsight server upgrade first (or backsight update apply when %s is the newer), then switch", res.From, have, want, to, have)
+		}
 	}
 	status := "done"
 	if f.plan {
@@ -700,13 +720,15 @@ func rollbackSwitch(ctx context.Context, d paths.Dirs, res *switchResult, cfg co
 		add("rollback", "failed", server.Redact(errors.Join(stopErr, startErr).Error(), sec))
 		what := ""
 		if stopErr != nil {
-			what = fmt.Sprintf("%s could not be stopped (%v): stop it with %s; ", res.To, stopErr, dst.StopCmd())
+			what = fmt.Sprintf("%s could not be stopped (%v); ", res.To, stopErr)
 		}
 		if startErr != nil {
-			what += fmt.Sprintf("%s did not start again (%v): ", res.From, startErr)
+			what += fmt.Sprintf("%s did not start again (%v); ", res.From, startErr)
 		}
-		return redacted(&output.Error{Code: output.Blocked, Message: fmt.Sprintf("the switch to %s failed at %s (%v), and putting %s back failed: %srun backsight server start, then backsight server status%s",
-			res.To, at, cause, res.From, what, kept)}, sec)
+		// runtime_switch stays running: doctor names the way back.
+		return redacted(&output.Error{Code: output.Blocked, Message: fmt.Sprintf("the switch to %s failed at %s (%v), and putting %s back failed: %s"+
+			"make sure %s is stopped (%s), then run backsight server start, then backsight server status%s",
+			res.To, at, cause, res.From, what, res.To, dst.StopCmd(), kept)}, sec)
 	}
 	add("rollback", "done", res.To+" stopped, "+res.From+" runs again")
 	rs.Step, rs.At = "rolled-back", time.Now().UTC()
@@ -888,23 +910,35 @@ func runClean(ctx context.Context, e *env, f switchFlags) (cleanResult, error) {
 	}
 	res.Runtime = otherRuntime(cfg.RuntimeKind())
 	rt := runtimeOfKind(cfg, res.Runtime)
-	exists, err := rt.DataExists(ctx)
+	// What clean shows is everything Delete removes (ruling R43).
+	exists, what, size := false, rt.DataName(), func(context.Context) (int64, error) { return 0, errors.New("unknown") }
+	if c, ok := rt.(server.Cleaner); ok {
+		exists, err = c.Leftover(ctx)
+		what, size = c.CleanWhat(), c.CleanSize
+	} else {
+		exists, err = rt.DataExists(ctx)
+		if s, ok := rt.(server.Sizer); ok {
+			size = s.DataSize
+		}
+	}
 	if errors.Is(err, exec.ErrNotFound) { // no Docker on this machine: nothing of it here
 		exists, err = false, nil
 	}
 	if err != nil {
 		return res, blocked(err)
 	}
-	deployed, err := rt.Deployed()
-	if err != nil {
-		return res, blocked(err)
+	if !exists {
+		deployed, err := rt.Deployed()
+		if err != nil {
+			return res, blocked(err)
+		}
+		if deployed == "" {
+			return res, nil
+		}
 	}
-	if !exists && deployed == "" {
-		return res, nil
-	}
-	res.What = rt.DataName()
-	if s, ok := rt.(server.Sizer); ok {
-		res.Bytes, _ = s.DataSize(ctx) // unknown: 0, the plan says so
+	res.What = what
+	if res.Bytes, err = size(ctx); err != nil {
+		res.Bytes, res.SizeUnknown = 0, true
 	}
 	if f.plan {
 		return res, nil
@@ -913,11 +947,11 @@ func runClean(ctx context.Context, e *env, f switchFlags) (cleanResult, error) {
 		interactive := !e.json && !f.nonInteractive && stdinIsTerminal() && stdoutIsTerminal()
 		if !interactive {
 			return res, &output.Error{Code: output.NeedsUser, Resume: f.command("clean", "") + " --answer consent=yes",
-				Questions: []setup.Question{{ID: "consent", Required: true, Prompt: "Delete " + res.What + " (" + sizeText(res.Bytes) + ")? Backups are kept",
+				Questions: []setup.Question{{ID: "consent", Required: true, Prompt: "Delete " + res.What + " (" + res.size() + ")? Backups are kept",
 					Options: []setup.Option{{Value: "yes", Label: "delete " + res.Runtime + "'s server and data"}}}},
 				Message: "deleting " + res.What + " needs your go: rerun with --answer consent=yes: nothing was deleted"}
 		}
-		if !confirm(e, "Delete "+res.What+" ("+sizeText(res.Bytes)+")? Backups are kept. [y/N] ") {
+		if !confirm(e, "Delete "+res.What+" ("+res.size()+")? Backups are kept. [y/N] ") {
 			res.Declined = true
 			return res, nil
 		}
@@ -934,16 +968,25 @@ func runClean(ctx context.Context, e *env, f switchFlags) (cleanResult, error) {
 	return res, nil
 }
 
+// size is the size clean shows: "size unknown" when the runtime could
+// not tell, never "0 bytes".
+func (r cleanResult) size() string {
+	if r.SizeUnknown {
+		return "size unknown"
+	}
+	return sizeText(r.Bytes)
+}
+
 func cleanText(r cleanResult) string {
 	switch {
 	case r.What == "":
 		return "nothing to clean: the " + r.Runtime + " runtime has no server or data here\n"
 	case r.Plan:
-		return "would delete " + r.What + " (" + sizeText(r.Bytes) + "), the " + r.Runtime + " runtime's, kept since the switch; backups are kept\n"
+		return "would delete " + r.What + " (" + r.size() + "), the " + r.Runtime + " runtime's, kept since the switch; backups are kept\n"
 	case r.Declined:
 		return "nothing was deleted\n"
 	case r.Deleted:
-		return "deleted " + r.What + " (" + sizeText(r.Bytes) + "); backups are kept\n"
+		return "deleted " + r.What + " (" + r.size() + "); backups are kept\n"
 	}
 	return ""
 }

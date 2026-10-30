@@ -914,8 +914,41 @@ func (n Native) DataSize(context.Context) (int64, error) {
 	if n.Err != nil {
 		return 0, n.Err
 	}
+	return dirSize(filepath.Dir(n.InstanceDir()))
+}
+
+var _ Cleaner = Native{}
+
+// Leftover: Root() exists (a database, or only the downloads a failed
+// switch left).
+func (n Native) Leftover(context.Context) (bool, error) {
+	if n.Err != nil {
+		return false, n.Err
+	}
+	_, err := os.Lstat(n.Root())
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// CleanWhat names what Delete removes: all of Root().
+func (n Native) CleanWhat() string {
+	return "the native server in " + n.Root() + ": the database, the Python environments and the models"
+}
+
+// CleanSize is Root()'s size.
+func (n Native) CleanSize(context.Context) (int64, error) {
+	if n.Err != nil {
+		return 0, n.Err
+	}
+	return dirSize(n.Root())
+}
+
+// dirSize adds up the regular files under dir; none there is 0.
+func dirSize(dir string) (int64, error) {
 	var total int64
-	err := filepath.WalkDir(filepath.Dir(n.InstanceDir()), func(_ string, de fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(_ string, de fs.DirEntry, err error) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
