@@ -138,6 +138,12 @@ type Sizer interface {
 	DataSize(ctx context.Context) (int64, error)
 }
 
+// Creator is a runtime that creates its database at its first start only
+// when told (native, ruling R35): an install or a switch to it.
+type Creator interface {
+	AllowCreate() Runtime
+}
+
 // Downloader is a runtime that can say what its first start still has
 // to download and show the download as it goes (setup's server step).
 type Downloader interface {

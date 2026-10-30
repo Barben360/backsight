@@ -113,6 +113,18 @@ func TestRecentAsksForTheLatestByEventTime(t *testing.T) {
 	if _, ok := q["type"]; ok || strings.Join(fields, ",") != "mentioned_at,updated_at" || len(got) != 1 {
 		t.Errorf("fallback: fields %v, query %v", fields, q)
 	}
+	// No tag: the bank's latest across projects, no tag filter sent (an
+	// empty one matches nothing: ruling R14).
+	fields, withEventTime = nil, true
+	if got, _ = c.Recent(context.Background(), "b", "", "", 20); len(got) != 1 {
+		t.Fatalf("no tag: %+v", got)
+	}
+	if _, ok := q["tags"]; ok {
+		t.Errorf("no tag, yet tags sent: %v", q)
+	}
+	if _, ok := q["tags_match"]; ok || q.Get("limit") != "20" {
+		t.Errorf("no tag: query %v", q)
+	}
 	if (Memory{UpdatedAt: time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)}).When().Day() != 24 {
 		t.Error("no event time: When is updated_at")
 	}

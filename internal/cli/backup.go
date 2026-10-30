@@ -136,6 +136,30 @@ func acquireMaintenance(d paths.Dirs, command string) (*state.Lock, string, erro
 type safetyCopy struct {
 	dump  string
 	image string // the image the server runs, when it is not the pinned one (server upgrade)
+	// bankConfig, when set, is the bank config read before the API stopped
+	// (the runtime switch, ruling R3): it is not read again.
+	bankConfig *bankConfigRead
+}
+
+// bankConfigRead is the bank config as the archive stores it, or why it
+// could not be read.
+type bankConfigRead struct {
+	raw     []byte
+	warning string
+}
+
+// readBankConfig reads the bank config through the API, for the archive.
+func readBankConfig(ctx context.Context, cfg config.Config, sec config.Secrets) bankConfigRead {
+	var r bankConfigRead
+	if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second); err == nil {
+		bc, err := cl.BankConfig(ctx, cfg.Server.Bank)
+		if err == nil {
+			r.raw, _ = json.MarshalIndent(bc, "", "  ")
+		} else {
+			r.warning = "bank config not saved: " + err.Error()
+		}
+	}
+	return r
 }
 
 // createBackup holds the maintenance lock for the database work only (hooks
@@ -157,14 +181,15 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	}
 	// The bank config is read before the lock: a slow server must not
 	// stretch the window where hooks only queue.
-	var bankConfig []byte
-	if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second); err == nil {
-		bc, err := cl.BankConfig(ctx, cfg.Server.Bank)
-		if err == nil {
-			bankConfig, _ = json.MarshalIndent(bc, "", "  ")
-		} else {
-			res.Warnings = append(res.Warnings, "bank config not saved: "+err.Error())
-		}
+	var bc bankConfigRead
+	if safety != nil && safety.bankConfig != nil {
+		bc = *safety.bankConfig
+	} else {
+		bc = readBankConfig(ctx, cfg, sec)
+	}
+	bankConfig := bc.raw
+	if bc.warning != "" {
+		res.Warnings = append(res.Warnings, bc.warning)
 	}
 	afterDump := func(dump string) error { return os.Link(dump, safety.dump) }
 	if safety == nil {

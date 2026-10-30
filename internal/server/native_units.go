@@ -906,6 +906,40 @@ func (n Native) DataExists(context.Context) (bool, error) {
 
 func (n Native) DataName() string { return "the native database in " + n.Home() }
 
+var _ Sizer = Native{}
+
+// DataSize adds up the files of pg0's instances (ruling R10): the
+// database, and any instance restore moved aside.
+func (n Native) DataSize(context.Context) (int64, error) {
+	if n.Err != nil {
+		return 0, n.Err
+	}
+	var total int64
+	err := filepath.WalkDir(filepath.Dir(n.InstanceDir()), func(_ string, de fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if de.Type().IsRegular() {
+			fi, err := de.Info()
+			if err != nil {
+				return err
+			}
+			total += fi.Size()
+		}
+		return nil
+	})
+	return total, err
+}
+
+var _ Creator = Native{}
+
+// AllowCreate is n creating its first database when there is none
+// (MayCreate, ruling R35): a switch to native.
+func (n Native) AllowCreate() Runtime { n.MayCreate = true; return n }
+
 func (n Native) DataRemoveCmd() string { return n.StopCmd() + " && rm -rf " + shellWord(n.Home()) }
 
 // ImagesRemoveCmd frees what the server ran: Python, the venvs, the models
