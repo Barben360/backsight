@@ -122,6 +122,15 @@ func open(ctx context.Context, o Options) (*Index, []string, error) {
 	return ix, applied, nil
 }
 
+// openError is a connect's or a migration's error: a full disk is
+// ErrDiskFull, a corruption path's.
+func openError(path string, err error) error {
+	if classify(err) == "full" {
+		return ErrDiskFull
+	}
+	return asCorrupt(path, err)
+}
+
 // countOpen counts a successful open for OpensOf.
 func countOpen(o Options) {
 	mu.Lock()
@@ -164,7 +173,8 @@ func openFollow(ctx context.Context, o Options, t target) (*Index, []string, err
 // checked against a replacement: the file at the path before connecting
 // must be the one there after (afterConnect runs in between), else
 // errReplaced, the handle closed, nothing written. Corruption comes back
-// as the file's (asCorrupt).
+// as the file's (asCorrupt), a full disk as ErrDiskFull (the migration's
+// transaction rolled back: the file is as it was).
 func openOnce(ctx context.Context, o Options, t target, check bool) (*Index, []string, error) {
 	if t.known && len(t.pending()) > 0 { // before the file is created
 		if err := updateGate(o.Dirs); err != nil {
@@ -174,7 +184,7 @@ func openOnce(ctx context.Context, o Options, t target, check bool) (*Index, []s
 	before, berr := os.Stat(t.path)
 	sh, fresh, err := acquire(ctx, t.path, o)
 	if err != nil {
-		return nil, nil, asCorrupt(t.path, err)
+		return nil, nil, openError(t.path, err)
 	}
 	ix := &Index{sh: sh, path: t.path, opts: o, side: t.side}
 	if check && fresh {
@@ -189,7 +199,7 @@ func openOnce(ctx context.Context, o Options, t target, check bool) (*Index, []s
 	applied, err := ix.migrate(ctx, t)
 	if err != nil {
 		_ = ix.Close()
-		return nil, nil, asCorrupt(t.path, err)
+		return nil, nil, openError(t.path, err)
 	}
 	return ix, applied, nil
 }

@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
@@ -562,4 +565,88 @@ func TestClassify(t *testing.T) {
 			t.Errorf("classify(%v) = %q, want %q", c.err, got, c.want)
 		}
 	}
+}
+
+// A rebuild in progress (its lock held by a live process) keeps the
+// automatic set-aside off the file.
+func TestSetAsideWaitsForARebuild(t *testing.T) {
+	r := newRecEnv(t)
+	writeFile(t, r.main(), "not a database")
+	writeFile(t, filepath.Join(r.d.IndexDir(), "rebuild.lock"), `{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"metrics index rebuild"}`)
+	_, err := Open(context.Background(), r.opts())
+	if c := classify(err); c != "notadb" {
+		t.Fatalf("open: %v (%s)", err, c)
+	}
+	if got := readFile(t, r.main()); got != "not a database" {
+		t.Errorf("the file moved: %q", got)
+	}
+	absent(t, r.main()+".corrupt")
+	if st := r.status(); !st.RebuiltAt.IsZero() {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// Two writers of status.json (two processes) are serialised by its lock:
+// a CheckedAt update waiting for the lock reads the RebuiltAt another
+// writer stored meanwhile, and keeps it.
+func TestStatusUpdatesKeepAnotherWritersStamp(t *testing.T) {
+	d := tempDirs(t)
+	other, err := state.TryAcquire(filepath.Join(d.IndexDir(), "status.lock"), "another process")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	var once sync.Once
+	prev := onStatusWait
+	onStatusWait = func() { once.Do(func() { close(waiting) }) }
+	t.Cleanup(func() { onStatusWait = prev })
+	done := make(chan error, 1)
+	go func() {
+		done <- updateStatus(d, func(st *recoveryState) bool { st.CheckedAt = clock; return true })
+	}()
+	select {
+	case <-waiting:
+	case err := <-done:
+		t.Fatalf("the update did not wait for the other writer's lock (%v)", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the update never waited")
+	}
+	if err := writeStatus(d, recoveryState{RebuiltAt: clock.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	st, err := readStatus(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.CheckedAt.Equal(clock) || !st.RebuiltAt.Equal(clock.Add(-time.Hour)) {
+		t.Errorf("status %+v", st)
+	}
+	absent(t, filepath.Join(d.IndexDir(), "status.lock"))
+}
+
+// A full disk during a migration at open is ErrDiskFull, the file left
+// at its version.
+func TestFullDiskDuringAMigrationLeavesTheFile(t *testing.T) {
+	d := tempDirs(t)
+	build(t, opts(t, d, regA()))
+	sum, _ := fileSum(t, mainFile(d))
+	reg := regA()
+	reg["0002-big.sql"] = &fstest.MapFile{Data: []byte("PRAGMA max_page_count = 1; CREATE TABLE big(x); INSERT INTO big VALUES (randomblob(100000));")}
+	_, err := Open(context.Background(), opts(t, d, reg))
+	if !errors.Is(err, ErrDiskFull) {
+		t.Fatalf("want ErrDiskFull, got %v", err)
+	}
+	if v := headerVersion(t, mainFile(d)); v != 1 {
+		t.Errorf("user_version %d", v)
+	}
+	if s, _ := fileSum(t, mainFile(d)); s != sum {
+		t.Error("metrics.db changed")
+	}
+	absent(t, mainFile(d)+".corrupt")
 }

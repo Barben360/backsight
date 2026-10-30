@@ -2,7 +2,9 @@ package index
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,7 +12,11 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
+
+	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/state"
 )
 
 var (
@@ -41,6 +47,9 @@ type RebuildResult struct {
 	NeedsYes    bool         `json:"needs_yes"`
 	Lines       int64        `json:"lines"`
 	MS          int64        `json:"ms"`
+	// StopNotCleared: the new index is in place, but status.json could
+	// not be written, so an automatic recovery's stop may still show.
+	StopNotCleared bool `json:"stop_not_cleared,omitempty"`
 }
 
 // Rebuild builds the index again from its sources, beside the old one,
@@ -49,11 +58,14 @@ type RebuildResult struct {
 // binary, on the side file. The rows of the files that are gone (Lost),
 // or whatever an unreadable old index held (LostUnknown), cannot come
 // back: the rebuild needs Yes then, and changes nothing without it. Plan
-// reports and changes nothing. The new file is <file>.tmp (a stale one
-// removed first), migrated and filled with no deadline, then renamed over
-// the old file under its exclusive lock: another connection, or a failed
-// rename, is ErrInUse, the old file kept. A rebuild lifts the stop of the
-// automatic recovery.
+// reports and changes nothing. A rebuild holds rebuild.lock for its run
+// (another one running: ErrInUse). The new file is this run's own
+// <file>.tmp-<pid>-<random> (old temp files of crashed runs swept first),
+// migrated and filled with no deadline, then renamed over the old file
+// under its exclusive lock: another connection, or a failed rename, is
+// ErrInUse, the old file kept, this run's temp file removed. A rebuild
+// lifts the stop of the automatic recovery (StopNotCleared when
+// status.json cannot be written).
 func Rebuild(ctx context.Context, o Options, ro RebuildOptions) (RebuildResult, error) {
 	o = o.withDefaults()
 	start := o.Now()
@@ -83,7 +95,16 @@ func Rebuild(ctx context.Context, o Options, ro RebuildOptions) (RebuildResult, 
 	if res.NeedsYes && !ro.Yes {
 		return res, ErrNeedsYes
 	}
-	tmp := res.File + ".tmp"
+	lock, err := rebuildLock(o.Dirs)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = lock.Release() }()
+	sweepTmp(res.File, time.Now())
+	tmp, err := tmpName(res.File)
+	if err != nil {
+		return res, err
+	}
 	lines, err := buildTmp(ctx, o, target{reg: reg, head: head, path: tmp, side: side, known: true})
 	if err == nil {
 		err = swapIn(ctx, tmp, res.File)
@@ -93,13 +114,85 @@ func Rebuild(ctx context.Context, o Options, ro RebuildOptions) (RebuildResult, 
 		return res, err
 	}
 	res.Lines, res.MS = lines, o.Now().Sub(start).Milliseconds()
-	return res, updateStatus(o.Dirs, func(st *recoveryState) bool {
+	// The new index is in place: a status that cannot be written does not
+	// undo that, the result says so.
+	res.StopNotCleared = updateStatus(o.Dirs, func(st *recoveryState) bool {
 		if st.StoppedAt.IsZero() {
 			return false
 		}
 		st.StoppedAt = time.Time{}
 		return true
-	})
+	}) != nil
+	return res, nil
+}
+
+// rebuildLockName is the lock a rebuild and an automatic set-aside hold
+// for their whole run, so that one never removes or renames the other's
+// files.
+const rebuildLockName = "rebuild.lock"
+
+// rebuildLock takes <state>/index/rebuild.lock: held by a live process,
+// ErrInUse; a lock whose owner is gone (a crash, a kill) is taken over.
+// Only the owner's death makes a lock stale, never its age: a long
+// rebuild that is still running keeps its lock.
+func rebuildLock(d paths.Dirs) (*state.Lock, error) {
+	l, _, err := state.Acquire(filepath.Join(d.IndexDir(), rebuildLockName), "metrics index rebuild")
+	var held *state.HeldError
+	if errors.As(err, &held) {
+		return nil, ErrInUse
+	}
+	return l, err
+}
+
+// tmpStale is how long a rebuild's temp file must have been left
+// unwritten before another rebuild removes it (a live one writes its own
+// at every batch).
+const tmpStale = time.Hour
+
+// tmpName is this run's own temp file beside file:
+// <file>.tmp-<pid>-<random>.
+func tmpName(file string) (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s.tmp-%d-%s", file, os.Getpid(), hex.EncodeToString(b[:])), nil
+}
+
+// sweepTmp removes the temp files beside file (<file>.tmp…, with their
+// -wal, -shm, -journal) that nobody wrote for tmpStale: a crashed
+// rebuild's. A fresh one may be a live rebuild's (one whose lock was
+// taken over) and is kept.
+func sweepTmp(file string, now time.Time) {
+	dir, prefix := filepath.Dir(file), filepath.Base(file)+".tmp"
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	newest := map[string]time.Time{} // main temp name → its group's latest write
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		main := name
+		for _, sfx := range []string{"-wal", "-shm", "-journal"} {
+			main = strings.TrimSuffix(main, sfx)
+		}
+		info, err := e.Info()
+		if err != nil {
+			newest[main] = now // unknown: kept
+			continue
+		}
+		if t := info.ModTime(); t.After(newest[main]) {
+			newest[main] = t
+		}
+	}
+	for main, t := range newest {
+		if now.Sub(t) >= tmpStale {
+			_ = removeTmp(filepath.Join(dir, main))
+		}
+	}
 }
 
 var lostMonthRE = regexp.MustCompile(`(\d{4}-(?:0[1-9]|1[0-2]))\.jsonl$`)
@@ -200,7 +293,7 @@ func tableNames(ctx context.Context, db *sql.DB, q string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// buildTmp builds t.path from nothing: migrations, every line with no
+// buildTmp builds t.path, this run's own, from nothing: migrations, every line with no
 // deadline, the ledger, the local status; then out of WAL mode, so that
 // it is one file to rename, and closed. It returns the lines read.
 func buildTmp(ctx context.Context, o Options, t target) (int64, error) {

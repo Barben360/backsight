@@ -5,9 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -309,5 +314,148 @@ func TestRebuildRefusesUnderAnIdleHandleOnANetworkFolder(t *testing.T) {
 	absent(t, r.main()+".tmp")
 	if got := dump(t, held); got != want {
 		t.Error("the held index changed")
+	}
+}
+
+// deadPID is the PID of a process that has exited.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func (r *recEnv) tmpFiles() []string {
+	r.t.Helper()
+	ents, err := os.ReadDir(r.d.IndexDir())
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	var out []string
+	for _, e := range ents {
+		if strings.Contains(e.Name(), ".tmp") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// Two rebuilds at once: the second is refused while the first builds,
+// and the index is the first one's complete build.
+func TestConcurrentRebuildsDoNotMix(t *testing.T) {
+	r := newRecEnv(t)
+	r.build()
+	r.writeTel("2026-10", 4, 8)
+	building, second := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool // only the first batch of all waits: a second build, if any, goes through
+	setAfterBatch(t, func() {
+		if first.CompareAndSwap(false, true) {
+			close(building)
+			<-second
+		}
+	})
+	errc := make(chan error, 1)
+	go func() {
+		_, err := r.rebuild(RebuildOptions{Yes: true})
+		errc <- err
+	}()
+	<-building
+	_, err := r.rebuild(RebuildOptions{Yes: true})
+	close(second)
+	if !errors.Is(err, ErrInUse) {
+		t.Errorf("second rebuild: want ErrInUse, got %v", err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("first rebuild: %v", err)
+	}
+	if got := r.tmpFiles(); len(got) != 0 {
+		t.Errorf("temp files left: %v", got)
+	}
+	absent(t, filepath.Join(r.d.IndexDir(), "rebuild.lock"))
+	ix := mustOpen(t, r.opts())
+	defer mustClose(t, ix)
+	if got, want := dump(t, ix), r.fresh(); got != want {
+		t.Error("rebuilt index differs from a fresh build")
+	}
+}
+
+// A rebuild removes only the temp files no live rebuild can own (old
+// ones), never a fresh one, and its own when it fails.
+func TestRebuildKeepsAFreshForeignTempAndSweepsAStaleOne(t *testing.T) {
+	r := newRecEnv(t)
+	r.build()
+	fresh := r.main() + ".tmp-99999-abcd"
+	stale := r.main() + ".tmp-88888-dcba"
+	writeFile(t, fresh, "another rebuild's file")
+	writeFile(t, stale, "a crashed rebuild's file")
+	writeFile(t, stale+"-wal", "its write-ahead log")
+	writeFile(t, r.main()+".tmp", "the first form's leftover")
+	old := time.Now().Add(-2 * time.Hour)
+	for _, p := range []string{stale, stale + "-wal", r.main() + ".tmp"} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := renameFile
+	renameFile = func(string, string) error { return errors.New("injected rename failure") }
+	_, err := r.rebuild(RebuildOptions{Yes: true})
+	renameFile = prev
+	if !errors.Is(err, ErrInUse) {
+		t.Fatalf("want ErrInUse, got %v", err)
+	}
+	if got := r.tmpFiles(); !slices.Equal(got, []string{filepath.Base(fresh)}) {
+		t.Errorf("temp files %v, want only the fresh foreign one", got)
+	}
+	if _, err := r.rebuild(RebuildOptions{Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, fresh); got != "another rebuild's file" {
+		t.Errorf("the fresh foreign temp file changed: %q", got)
+	}
+}
+
+func TestRebuildTakesOverAStaleLock(t *testing.T) {
+	r := newRecEnv(t)
+	r.build()
+	lock := filepath.Join(r.d.IndexDir(), "rebuild.lock")
+	writeFile(t, lock, `{"pid":`+strconv.Itoa(deadPID(t))+`,"command":"metrics index rebuild","since":"2026-10-30T08:00:00Z"}`)
+	if _, err := r.rebuild(RebuildOptions{Yes: true}); err != nil {
+		t.Fatalf("a dead owner's lock: %v", err)
+	}
+	absent(t, lock)
+
+	writeFile(t, lock, `{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"metrics index rebuild"}`)
+	if _, err := r.rebuild(RebuildOptions{Yes: true}); !errors.Is(err, ErrInUse) {
+		t.Errorf("a live owner's lock: want ErrInUse, got %v", err)
+	}
+	if got := r.tmpFiles(); len(got) != 0 {
+		t.Errorf("temp files %v", got)
+	}
+}
+
+// Once the new file is in place, a status that cannot be written does
+// not fail the rebuild: the result says the stop could not be lifted.
+func TestRebuildSucceedsWhenItsStatusCannotBeWritten(t *testing.T) {
+	r := newRecEnv(t)
+	r.build()
+	if err := os.Remove(statusPath(r.d)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statusPath(r.d), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.writeTel("2026-10", 4, 8)
+	res, err := r.rebuild(RebuildOptions{Yes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.StopNotCleared || res.Lines != 8 {
+		t.Errorf("result %+v", res)
+	}
+	res, err = Rebuild(context.Background(), r.opts(), RebuildOptions{Plan: true})
+	if err != nil || res.StopNotCleared {
+		t.Errorf("plan %+v %v", res, err)
 	}
 }

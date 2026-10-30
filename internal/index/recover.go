@@ -147,8 +147,9 @@ func openRecovering(ctx context.Context, o Options) (*Index, []string, error) {
 //     migration), nothing moved;
 //   - the last automatic rebuild is less than rebuildEvery old: StoppedAt
 //     stamped, the file left in place, ErrUnreadable;
-//   - this process holds the file, or another connection does: ce comes
-//     back, nothing moved or stamped (the quick_check stays due).
+//   - this process holds the file, another connection does, or a rebuild
+//     runs (rebuild.lock): ce comes back, nothing moved or stamped (the
+//     quick_check stays due).
 //
 // RebuiltAt is stamped before anything moves, so that a status that
 // cannot be written stops the recovery instead of letting it loop.
@@ -161,6 +162,14 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 	if _, held := files[ce.path]; held {
 		return ce
 	}
+	lock, err := rebuildLock(o.Dirs) // no rebuild runs meanwhile
+	if errors.Is(err, ErrInUse) {
+		return ce
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUnreadable, err)
+	}
+	defer func() { _ = lock.Release() }()
 	now := o.Now()
 	stop := false
 	if err := updateStatus(o.Dirs, func(st *recoveryState) bool {
@@ -300,6 +309,8 @@ func (ix *Index) dailyCheck(ctx context.Context) error {
 	if err == nil && !st.CheckedAt.IsZero() && !now.Before(st.CheckedAt) && now.Sub(st.CheckedAt) < checkEvery {
 		return nil
 	}
+	// A status that cannot be written leaves CheckedAt as it was: the
+	// check then runs at every open (a cost, never a wrong verdict).
 	onQuickCheck()
 	if err := quickCheck(ctx, ix.sh.r); err != nil {
 		if isCorrupt(err) {
