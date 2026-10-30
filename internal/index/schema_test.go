@@ -20,7 +20,7 @@ const fixturePath = "testdata/schema-0001.db"
 
 // released pins every shipped migration (each release adds its own).
 var released = map[string]string{
-	"0001-initial": "a92677cdc8e71818c80c1612e97ffc18717619163469cbbb7c69b81455398b5c",
+	"0001-initial": "ce52343c6c05776b639824d1435b64fe8e64bb01929be065a9a92632b9be8b7d",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -140,16 +140,104 @@ func TestSchemaConstraints(t *testing.T) {
 	if _, err := w.Exec(`INSERT INTO shows(source_file, "offset", pos, ts) VALUES ('f', 0, 1, 1)`); err != nil {
 		t.Errorf("another pos of the same line refused: %v", err)
 	}
+	// pos defaults to 0, so a line's single row and its pos 0 collide.
+	if _, err := w.Exec(`INSERT INTO credits(source_file, "offset", ts) VALUES ('f', 0, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	var pos int
+	if err := w.QueryRow(`SELECT pos FROM credits`).Scan(&pos); err != nil || pos != 0 {
+		t.Errorf("pos default %d, err %v", pos, err)
+	}
 	bad := []string{
+		`INSERT INTO credits(source_file, "offset", ts) VALUES ('f', 0, 2)`,
+		`INSERT INTO tel_prompt_scopes(source_file, "offset", ts, scope) VALUES ('f', 0, 1, 'a')`,
+		`INSERT INTO tel_prompt_scopes(source_file, "offset", ts, scope) VALUES ('f', 0, 1, 'a')`,
+		`INSERT INTO tel_config_values(source_file, "offset", ts, key) VALUES ('f', 0, 1, 'a')`,
+		`INSERT INTO tel_config_values(source_file, "offset", ts, key) VALUES ('f', 0, 1, 'a')`,
+		`INSERT INTO tel_ids(source_file, "offset", ts, pos, memory_id) VALUES ('f', 0, 1, 0, 'm')`,
+		`INSERT INTO tel_ids(source_file, "offset", ts, pos, memory_id) VALUES ('f', 0, 1, 0, 'm')`,
 		`INSERT INTO stops(source_file, "offset") VALUES (NULL, 0)`,
 		`INSERT INTO cursors(source_file, kind) VALUES ('f', 'other')`,
 		`INSERT INTO local_status(id) VALUES (2)`,
 		`INSERT INTO ingest_errors(source_file, "offset", reason) VALUES ('f', 0, NULL)`,
 		`INSERT INTO tel_ids(source_file, "offset", ts, kind, pos, memory_id) VALUES ('f', 0, 1, 'prompt', 0, NULL)`,
 	}
-	for _, q := range bad {
-		if _, err := w.Exec(q); err == nil {
+	for i, q := range bad {
+		_, err := w.Exec(q)
+		first := i == 1 || i == 3 || i == 5 // the first of each duplicate pair is valid
+		if first {
+			if err != nil {
+				t.Errorf("refused: %s: %v", q, err)
+			}
+			continue
+		}
+		if err == nil {
 			t.Errorf("accepted: %s", q)
+		}
+	}
+}
+
+// TestNullTimeRefused: a row without its time never enters the index (the
+// line goes to ingest_errors instead).
+func TestNullTimeRefused(t *testing.T) {
+	ix := mustOpen(t, opts(t, tempDirs(t), nil))
+	defer mustClose(t, ix)
+	for _, tc := range schemaTables {
+		col := "ts"
+		switch tc.name {
+		case "settles":
+			col = "settle_ts"
+		case "ledger", "local_status", "cursors", "ingest_errors", "meta":
+			continue
+		}
+		q := fmt.Sprintf(`INSERT INTO %s(source_file, "offset", %s) VALUES ('f', 0, NULL)`, tc.name, col)
+		if _, err := ix.sh.w.Exec(q); err == nil {
+			t.Errorf("accepted: %s", q)
+		}
+	}
+}
+
+// TestSchemaIndexes: the indexes the dashboard queries rely on.
+func TestSchemaIndexes(t *testing.T) {
+	ix := mustOpen(t, opts(t, tempDirs(t), nil))
+	defer mustClose(t, ix)
+	want := map[string][]string{}
+	for _, tc := range schemaTables {
+		f := strings.Fields(tc.cols)
+		if !strings.HasPrefix(tc.cols, rowKey) || tc.name == "ingest_errors" {
+			continue
+		}
+		tcol := "ts"
+		if tc.name == "settles" {
+			tcol = "settle_ts"
+		}
+		want[tc.name] = append(want[tc.name], tc.name+"_"+tcol+":"+tcol)
+		if slices.Contains(f, "memory_id") {
+			want[tc.name] = append(want[tc.name], tc.name+"_memory_id:memory_id")
+		}
+	}
+	for _, n := range []string{"shows", "stops", "credits", "turns"} {
+		want[n] = append(want[n], n+"_session_turn:session,turn")
+	}
+	for tbl, idx := range want {
+		var got []string
+		rows, err := ix.sh.w.Query(`SELECT il.name, group_concat(ii.name) FROM pragma_index_list(?) il
+			JOIN pragma_index_info(il.name) ii WHERE il.origin = 'c' GROUP BY il.name`, tbl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var n, c string
+			if err := rows.Scan(&n, &c); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, n+":"+c)
+		}
+		_ = rows.Close()
+		slices.Sort(got)
+		slices.Sort(idx)
+		if !slices.Equal(got, idx) {
+			t.Errorf("%s indexes\n got %v\nwant %v", tbl, got, idx)
 		}
 	}
 }

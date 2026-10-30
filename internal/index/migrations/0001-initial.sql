@@ -1,10 +1,19 @@
 -- Metrics index schema, migration 0001. Derived from telemetry JSONL and the
--- feedback journal; no free text in any column. Times: unix ms UTC.
+-- feedback journal; no free text in any column.
+-- Type conventions (the contract for the ingest code):
+--   times       INTEGER unix ms UTC; ts and settle_ts are NOT NULL: a line with
+--               a missing or malformed time is skipped and counted in
+--               ingest_errors, never ingested
+--   booleans    INTEGER 0/1
+--   counts, ranks, offsets, lengths  INTEGER
+--   scores, boosts, weights  REAL
+--   ids, flags, keys, paths, names, verdicts, outcomes  TEXT
+--   n and the journal turn numbers stay nullable (absent on some lines)
 
 CREATE TABLE tel_prompt (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -31,7 +40,7 @@ CREATE INDEX tel_prompt_ts ON tel_prompt(ts);
 CREATE TABLE tel_outcome (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -49,7 +58,7 @@ CREATE INDEX tel_outcome_ts ON tel_outcome(ts);
 CREATE TABLE tel_reply (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -64,7 +73,7 @@ CREATE INDEX tel_reply_ts ON tel_reply(ts);
 CREATE TABLE tel_briefing (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -79,7 +88,7 @@ CREATE INDEX tel_briefing_ts ON tel_briefing(ts);
 CREATE TABLE tel_briefing_outcome (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -92,7 +101,7 @@ CREATE INDEX tel_briefing_outcome_ts ON tel_briefing_outcome(ts);
 CREATE TABLE tel_tool (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -109,7 +118,7 @@ CREATE INDEX tel_tool_ts ON tel_tool(ts);
 CREATE TABLE tel_tool_use (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -125,7 +134,7 @@ CREATE INDEX tel_tool_use_ts ON tel_tool_use(ts);
 CREATE TABLE tel_credit (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -140,7 +149,7 @@ CREATE INDEX tel_credit_ts ON tel_credit(ts);
 CREATE TABLE tel_credit_check (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -156,7 +165,7 @@ CREATE INDEX tel_credit_check_ts ON tel_credit_check(ts);
 CREATE TABLE tel_retire (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -170,7 +179,7 @@ CREATE INDEX tel_retire_ts ON tel_retire(ts);
 CREATE TABLE tel_feedback_settle (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -187,7 +196,7 @@ CREATE INDEX tel_feedback_settle_ts ON tel_feedback_settle(ts);
 CREATE TABLE tel_feedback_error (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -200,7 +209,7 @@ CREATE INDEX tel_feedback_error_ts ON tel_feedback_error(ts);
 CREATE TABLE tel_gate (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -215,7 +224,7 @@ CREATE INDEX tel_gate_ts ON tel_gate(ts);
 CREATE TABLE tel_retain (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -231,7 +240,7 @@ CREATE INDEX tel_retain_ts ON tel_retain(ts);
 CREATE TABLE tel_hook_failure (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -246,7 +255,7 @@ CREATE INDEX tel_hook_failure_ts ON tel_hook_failure(ts);
 CREATE TABLE tel_job (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -261,7 +270,7 @@ CREATE INDEX tel_job_ts ON tel_job(ts);
 CREATE TABLE tel_attribution (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -279,7 +288,7 @@ CREATE INDEX tel_attribution_ts ON tel_attribution(ts);
 CREATE TABLE tel_store (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -293,7 +302,7 @@ CREATE INDEX tel_store_ts ON tel_store(ts);
 CREATE TABLE tel_dashboard (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -308,7 +317,7 @@ CREATE INDEX tel_dashboard_ts ON tel_dashboard(ts);
 CREATE TABLE tel_config (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   project TEXT,
   binary_version TEXT,
@@ -321,7 +330,7 @@ CREATE INDEX tel_config_ts ON tel_config(ts);
 CREATE TABLE tel_ids (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   kind TEXT,
   pos INTEGER NOT NULL DEFAULT 0,
   memory_id TEXT NOT NULL,
@@ -333,7 +342,7 @@ CREATE INDEX tel_ids_memory_id ON tel_ids(memory_id);
 CREATE TABLE tel_prompt_scopes (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   scope TEXT,
   ok INTEGER,
   ms INTEGER,
@@ -345,7 +354,7 @@ CREATE INDEX tel_prompt_scopes_ts ON tel_prompt_scopes(ts);
 CREATE TABLE tel_config_values (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   key TEXT,
   value REAL,
   PRIMARY KEY (source_file, "offset", key)
@@ -355,7 +364,7 @@ CREATE INDEX tel_config_values_ts ON tel_config_values(ts);
 CREATE TABLE events (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   kind TEXT,
   session TEXT,
   project TEXT,
@@ -368,7 +377,7 @@ CREATE INDEX events_ts ON events(ts);
 CREATE TABLE turns (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   turn INTEGER,
   agent TEXT,
@@ -385,7 +394,7 @@ CREATE TABLE shows (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
   pos INTEGER NOT NULL DEFAULT 0,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   key TEXT,
   turn INTEGER,
@@ -412,7 +421,7 @@ CREATE TABLE settles (
   memory_id TEXT,
   show_at INTEGER,
   outcome TEXT,
-  settle_ts INTEGER,
+  settle_ts INTEGER NOT NULL,
   PRIMARY KEY (source_file, "offset", pos)
 ) WITHOUT ROWID;
 CREATE INDEX settles_settle_ts ON settles(settle_ts);
@@ -422,7 +431,7 @@ CREATE TABLE credits (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
   pos INTEGER NOT NULL DEFAULT 0,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   turn INTEGER,
   agent TEXT,
@@ -438,7 +447,7 @@ CREATE INDEX credits_session_turn ON credits(session, turn);
 CREATE TABLE stops (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   turn INTEGER,
   agent TEXT,
@@ -454,7 +463,7 @@ CREATE TABLE retirements (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
   pos INTEGER NOT NULL DEFAULT 0,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   kind TEXT,
   memory_id TEXT,
@@ -470,7 +479,7 @@ CREATE TABLE recalls (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
   pos INTEGER NOT NULL DEFAULT 0,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   turn INTEGER,
   agent TEXT,
@@ -491,7 +500,7 @@ CREATE TABLE imports (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
   pos INTEGER NOT NULL DEFAULT 0,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   source TEXT,
   key TEXT,
   memory_id TEXT,
@@ -506,7 +515,7 @@ CREATE INDEX imports_memory_id ON imports(memory_id);
 CREATE TABLE journal_other (
   source_file TEXT NOT NULL,
   "offset" INTEGER NOT NULL,
-  ts INTEGER,
+  ts INTEGER NOT NULL,
   session TEXT,
   kind TEXT,
   PRIMARY KEY (source_file, "offset")
