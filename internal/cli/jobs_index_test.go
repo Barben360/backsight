@@ -365,6 +365,53 @@ func TestMaintainRunsTheIndexStep(t *testing.T) {
 	}
 }
 
+// TestRotatedTelemetryMonthKeepsItsIndexRows: the month file maintain's
+// rotation removes keeps its rows in the index, its cursor is marked
+// missing at the next tick, and the current month goes on ingesting.
+func TestRotatedTelemetryMonthKeepsItsIndexRows(t *testing.T) {
+	home := devInstall(t, true)
+	pointAt(t, home, fakeHindsight(t))
+	configure(t, home, "[backup]\nenabled = false")
+	d := pathsOf(home)
+	cur := time.Now().UTC()
+	old := time.Date(cur.Year(), cur.Month(), 1, 12, 0, 0, 0, time.UTC).AddDate(0, -14, 0) // past the 13 months kept
+	oldFile := "events-" + monthOf(old) + ".jsonl"
+	writeIndexLines(t, d, monthOf(old), 2, old)
+	writeIndexLines(t, d, monthOf(cur), 1, cur)
+	tickJSON(t)
+	count := func(file string) int {
+		t.Helper()
+		return indexCount(t, home, `SELECT count(*) FROM tel_prompt WHERE session = ? AND source_file = ?`, indexCanary, "telemetry/"+file)
+	}
+	if n := count(oldFile); n != 2 {
+		t.Fatalf("setup: %d row(s) of the old month", n)
+	}
+
+	code, out, _ := run(t, "jobs", "maintain", "--json")
+	var env maintainEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil || code != output.OK {
+		t.Fatalf("exit %d: %v\n%s", code, err, out)
+	}
+	if got := env.Data.Rotated; len(got) != 1 || got[0] != oldFile {
+		t.Fatalf("rotated %v, want [%s]", got, oldFile)
+	}
+	if _, err := os.Stat(filepath.Join(d.TelemetryDir(), oldFile)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the rotated file is still there: %v", err)
+	}
+
+	writeIndexLines(t, d, monthOf(cur), 1, cur)
+	tickJSON(t)
+	if n := count(oldFile); n != 2 {
+		t.Errorf("%d row(s) of the rotated month kept, want 2", n)
+	}
+	if n := indexCount(t, home, `SELECT count(*) FROM cursors WHERE source_file = ? AND missing = 1`, "telemetry/"+oldFile); n != 1 {
+		t.Errorf("the rotated month's cursor is not marked missing (%d)", n)
+	}
+	if n := count("events-" + monthOf(cur) + ".jsonl"); n != 2 {
+		t.Errorf("%d row(s) of the current month, want 2", n)
+	}
+}
+
 func TestMaintainIndexText(t *testing.T) {
 	for _, c := range []struct {
 		r    index.MaintainResult
