@@ -107,6 +107,8 @@ On the native runtime (`server.runtime = "native"`), the database's unit, `backs
 | *not the one backsight recorded* | Another database sits there: its identifier (`pg_controldata`'s "Database system identifier") is not the one in `identity`, for example a copy from another PC. | Put the right one back, or `backsight restore <archive>`. |
 | *has no recorded identity* | A database is there but `identity` is missing, so backsight cannot tell it is yours. | `backsight restore <archive>`: it restores into a fresh database and records its identity. Do not write `identity` by hand to get past the check. |
 
+On an install on Docker (`server.runtime` unset or `"docker"`), the same refusals end otherwise: the native database is what a runtime switch left behind (a switch to native that failed or was rolled back), and `backsight restore` acts on Docker's server, not on it. The message then names `backsight server runtime clean`: it deletes the native server and its data (backups are kept), after which `backsight server runtime switch native` starts over on a new native database.
+
 `backsight restore <archive>` works on each of these: it moves the refused database aside, never deleting it, to `hindsight.refused-<Unix time>` beside it, creates a new database, restores the archive into it and records its identity ([after a refused native start](backups-and-restore.md#after-a-refused-native-start)). Delete a `.refused-` directory yourself once you no longer need it.
 
 `a postgres (pid N) runs on … outside backsight-db.service: stopping it, never adopting it`, in the journal: a postgres started outside the unit (by hand, or left by an interrupted command) held the database. The check stops it with the bundled `pg_ctl` (a fast shutdown) and the unit then starts its own. If it is still running 30 seconds later, the start fails and names its pid: stop it (`kill -INT <pid>`), then `backsight server start`. `pg_ctl` stops the process the data directory's `postmaster.pid` names, so when that file names another pid (or is missing) the check stops nothing and the start fails naming both: stop the stray yourself the same way.
@@ -114,6 +116,15 @@ On the native runtime (`server.runtime = "native"`), the database's unit, `backs
 `fsync is off on the native database`: the database answered with `fsync` off, so an OS crash could corrupt it, and `backsight server start` stopped and disabled both units. The unit runs it with `fsync=on`; look for a drop-in that changes it (`systemctl --user cat backsight-db.service`), remove it, then `backsight server render` and `backsight server start`.
 
 `the native server's venv … is incomplete`: the virtual environment the server unit runs lacks its `.backsight-complete` mark (an install or upgrade was interrupted while building it, or it was removed by hand), so `backsight server start` started nothing. Run `backsight server install`: it builds this backsight's version again in place and points the unit at it.
+
+### Every command says a server-only host cannot run the native runtime
+
+`config.toml: server.role: a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there`: `config.toml` holds both `runtime = "native"` and `role = "server"` under `[server]`. Setup and the switch never write that pair, so it comes from a hand edit; the native server listens on this PC only in this release, so it cannot serve your other PCs, and every command that reads the config stops on it (doctor's `config` check says the same). Edit `config.toml` back to what runs:
+
+- the server runs on Docker (`docker compose ls` lists its project, `backsight` or your `server.project`): remove the `runtime = "native"` line;
+- the server runs natively (`systemctl --user status backsight-server.service`) on a PC that also runs Claude Code: remove the `role = "server"` line.
+
+Then `backsight doctor`. A native install cannot serve other PCs in this release: to make it a server for them, switch it to Docker first (`backsight server runtime switch docker`).
 
 ### After a reboot the server was down for a while (private exposure)
 

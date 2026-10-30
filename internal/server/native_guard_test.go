@@ -555,3 +555,66 @@ func TestNativeFailedIdentityRemovesTheNewInstance(t *testing.T) {
 		t.Errorf("second Start: identity %q, created %d times", raw, systemdRuns(tools))
 	}
 }
+
+// Final review 7: on an install whose config.toml names docker (Cfg's
+// runtime, or NotInUse for a switch's target built before config.toml
+// names native), a refused native database is what a switch left: the
+// way out is server runtime clean, never restore, which acts on Docker's.
+func TestNativeRefusalOnADockerInstallPointsAtClean(t *testing.T) {
+	setups := map[string]func(t *testing.T, n Native){
+		"missing": func(t *testing.T, n Native) {
+			if err := os.WriteFile(n.IdentityFile(), []byte("111\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"empty": func(t *testing.T, n Native) {
+			if err := os.MkdirAll(n.DataDir(), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"identity": func(t *testing.T, n Native) {
+			recordInstance(t, n, "111")
+			if err := os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("222\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unrecorded": func(t *testing.T, n Native) {
+			recordInstance(t, n, "111")
+			if err := os.Remove(n.IdentityFile()); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for _, how := range []string{"config names docker", "a switch's target"} {
+		for reason, setup := range setups {
+			t.Run(how+"/"+reason, func(t *testing.T) {
+				n, _, _ := nativeFixture(t, secrets)
+				rendered(t, n, secrets)
+				setup(t, n)
+				if how == "config names docker" {
+					n.Cfg.Server.Runtime = ""
+				} else {
+					n.NotInUse = true
+				}
+				for _, err := range []error{n.CheckInstance(context.Background()), n.StartDatabase(context.Background())} {
+					var ge *GuardError
+					if !errors.As(err, &ge) || ge.Reason != reason || !ge.Leftover {
+						t.Fatalf("%v: want a %s refusal of leftover data", err, reason)
+					}
+					msg := err.Error()
+					if !strings.Contains(msg, "native data a runtime switch left behind") || !strings.Contains(msg, "backsight server runtime clean") ||
+						strings.Contains(msg, "backsight restore") {
+						t.Errorf("message %q", msg)
+					}
+				}
+			})
+		}
+	}
+	// On native, restore stays the way out.
+	n, _, _ := nativeFixture(t, secrets)
+	rendered(t, n, secrets)
+	setups["identity"](t, n)
+	if err := n.CheckInstance(context.Background()); err == nil || !strings.Contains(err.Error(), "backsight restore <archive>") || strings.Contains(err.Error(), "runtime clean") {
+		t.Errorf("on native: %v", err)
+	}
+}

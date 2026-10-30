@@ -44,7 +44,15 @@ type Native struct {
 	StrayWait time.Duration
 	Venv      string // "" = the pinned version; WithVersion sets another
 	Err       error  // a construction error every method returns
+	// NotInUse: config.toml names the docker runtime, so the native data
+	// here is what a switch left (the target of a switch, built before
+	// config.toml names it, sets it). A refused database then points at
+	// server runtime clean: restore acts on Docker's.
+	NotInUse bool
 }
+
+// notInUse: config.toml does not name the native runtime.
+func (n Native) notInUse() bool { return n.NotInUse || n.Cfg.RuntimeKind() != "native" }
 
 // SysRunner runs the system's service tools.
 type SysRunner interface {

@@ -201,7 +201,12 @@ func runtimeOfKind(cfg config.Config, kind string) server.Runtime {
 	if kind == "native" {
 		c.Server.Runtime = kind
 	}
-	return ownGroupRuntime(c)
+	rt := ownGroupRuntime(c)
+	if n, ok := rt.(server.Native); ok && cfg.RuntimeKind() != "native" {
+		n.NotInUse = true // config.toml names docker: a refusal points at clean
+		rt = n
+	}
+	return rt
 }
 
 func configOfKind(cfg config.Config, kind string) config.Config {

@@ -434,24 +434,38 @@ func (d Docker) StopCmd() string {
 // without the named volumes, removes each volume backsight's compose.yaml
 // declares (the database, the model cache), then compose.yaml and .env.
 // A volume only the user's compose.override.yaml declares stays, and so
-// does the override (decision 0067 block 3 review).
+// does the override (decision 0067 block 3 review). Without compose.yaml
+// (a switch's leftover volumes, which Leftover reports), Compose cannot
+// run: the project's containers go by their compose label, and the
+// volumes backsight's compose.yaml declares by their names.
 func (d Docker) Delete(ctx context.Context) error {
 	raw, err := os.ReadFile(filepath.Join(d.Compose.Dir, "compose.yaml"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	noFile := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !noFile {
 		return err
 	}
 	// The data goes whatever the file says.
 	volumes := []string{dataVolume}
-	for _, v := range DeclaredVolumes(raw) {
+	declared := DeclaredVolumes(raw)
+	if noFile {
+		declared = []string{modelsVolume}
+	}
+	for _, v := range declared {
 		if !slices.Contains(volumes, v) {
 			volumes = append(volumes, v)
 		}
 	}
-	if _, err := d.Compose.run(ctx, "rm", "--stop", "--force", "-v"); err != nil {
-		return err
-	}
-	if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
-		return err
+	if noFile {
+		if err := d.removeContainers(ctx); err != nil {
+			return err
+		}
+	} else {
+		if _, err := d.Compose.run(ctx, "rm", "--stop", "--force", "-v"); err != nil {
+			return err
+		}
+		if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
+			return err
+		}
 	}
 	for _, v := range volumes {
 		if err := d.Compose.RemoveVolume(ctx, v); err != nil {
@@ -462,6 +476,31 @@ func (d Docker) Delete(ctx context.Context) error {
 		if err := os.Remove(filepath.Join(d.Compose.Dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+	}
+	return nil
+}
+
+// removeContainers removes the project's containers, found by the label
+// Compose gives them, with their anonymous volumes: Delete's way without
+// compose.yaml.
+func (d Docker) removeContainers(ctx context.Context) error {
+	args := []string{"ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=" + d.Compose.project()}
+	var out []byte
+	var err error
+	if r, ok := d.Compose.Runner.(StdoutRunner); ok { // a warning on stderr is no container id
+		out, err = r.RunStdout(ctx, args...)
+	} else {
+		out, err = d.Compose.Runner.Run(ctx, args...)
+	}
+	if err != nil {
+		return fmt.Errorf("docker ps: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return nil
+	}
+	if out, err := d.Compose.Runner.Run(ctx, append([]string{"rm", "--force", "--volumes"}, ids...)...); err != nil {
+		return fmt.Errorf("docker rm: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

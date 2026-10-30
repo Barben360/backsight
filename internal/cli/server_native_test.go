@@ -318,3 +318,35 @@ func TestNativeHealthTimeoutNamesTheJournal(t *testing.T) {
 		t.Errorf("err %v", err)
 	}
 }
+
+// Final review 7: the db unit's guard on an install back on Docker (a
+// switch to native that failed, its data left) names server runtime
+// clean, and so does the switch's own target, built before config.toml
+// names native.
+func TestNativeRefusalOnADockerInstallNamesClean(t *testing.T) {
+	n, _ := nativeCheckHost(t)
+	withInstance(t, n, "222", "111")
+	if err := os.WriteFile(n.Dirs.ConfigFile(), []byte("[server]\n"), 0o600); err != nil { // back on docker
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "server", "native-check")
+	if code != output.Blocked || !strings.Contains(errOut, "delete it with backsight server runtime clean") || strings.Contains(errOut, "backsight restore") {
+		t.Errorf("native-check: exit %d\n%s%s", code, out, errOut)
+	}
+	d := n.Dirs
+	cfg, err := config.Load(d.ConfigFile(), d, os.Getenv("HOME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := runtimeOfKind(cfg, "native").(server.Native)
+	if !ok || !target.NotInUse {
+		t.Fatalf("the switch's native target %+v does not know config.toml names docker", target)
+	}
+	if err := target.CheckInstance(context.Background()); err == nil || !strings.Contains(err.Error(), "backsight server runtime clean") {
+		t.Errorf("the switch's target: %v", err)
+	}
+	native := configOfKind(cfg, "native")
+	if n, ok := runtimeOfKind(native, "native").(server.Native); !ok || n.NotInUse {
+		t.Errorf("on native, the native runtime is in use: %+v", n)
+	}
+}

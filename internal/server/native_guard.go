@@ -50,19 +50,29 @@ type GuardError struct {
 	Instance  string // InstanceDir()
 	Want, Got string // the recorded identifier, the instance's
 	File      string // IdentityFile()
+	// Leftover: config.toml names the docker runtime (Native.NotInUse):
+	// the way out is server runtime clean, not restore.
+	Leftover bool
 }
 
 func (e *GuardError) Error() string {
+	var what, way string
 	switch e.Reason {
 	case "identity":
-		return "the native database " + e.Instance + " is not the one backsight recorded (identifier " + e.Got + ", recorded " + e.Want +
-			"): refusing to start it. Put the right one back, or restore a backup: backsight restore <archive>"
+		what = "is not the one backsight recorded (identifier " + e.Got + ", recorded " + e.Want + "): refusing to start it"
+		way = "Put the right one back, or restore a backup: backsight restore <archive>"
 	case "unrecorded":
-		return "the native database " + e.Instance + " has no recorded identity (" + e.File +
-			" is missing): refusing to start it. Restore a backup to adopt one: backsight restore <archive>"
+		what = "has no recorded identity (" + e.File + " is missing): refusing to start it"
+		way = "Restore a backup to adopt one: backsight restore <archive>"
+	default:
+		what = "is " + e.Reason + ": refusing to start an empty memory in its place"
+		way = "Put it back, or restore a backup: backsight restore <archive>"
 	}
-	return "the native database " + e.Instance + " is " + e.Reason +
-		": refusing to start an empty memory in its place. Put it back, or restore a backup: backsight restore <archive>"
+	if e.Leftover {
+		way = "This install runs on Docker (config.toml), so this is native data a runtime switch left behind, which restore does not touch: " +
+			"delete it with backsight server runtime clean (backups are kept), then switch again"
+	}
+	return "the native database " + e.Instance + " " + what + ". " + way
 }
 
 // toolEnv is a bundled Postgres tool's whole environment, no password.
@@ -131,7 +141,7 @@ func (n Native) CheckInstance(ctx context.Context) error {
 		return err
 	}
 	refuse := func(reason, got string) error {
-		return &GuardError{Reason: reason, Instance: n.InstanceDir(), Want: want, Got: got, File: n.IdentityFile()}
+		return &GuardError{Reason: reason, Instance: n.InstanceDir(), Want: want, Got: got, File: n.IdentityFile(), Leftover: n.notInUse()}
 	}
 	if _, err := os.Lstat(n.InstanceDir()); errors.Is(err, fs.ErrNotExist) {
 		if !recorded {
@@ -187,7 +197,7 @@ func (n Native) ensureInstance(ctx context.Context) error {
 		return nil
 	}
 	if !n.MayCreate {
-		return &GuardError{Reason: "missing", Instance: n.InstanceDir(), File: n.IdentityFile()}
+		return &GuardError{Reason: "missing", Instance: n.InstanceDir(), File: n.IdentityFile(), Leftover: n.notInUse()}
 	}
 	if err := n.createInstance(ctx); err != nil {
 		return err
