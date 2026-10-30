@@ -26,28 +26,31 @@ type SourceLag struct {
 
 // Status is what Inspect found, for `stats index`.
 type Status struct {
-	File            string         `json:"file"`
-	Using           string         `json:"using"` // metrics.db or metrics-v<head>.db
-	Exists          bool           `json:"exists"`
-	Readable        bool           `json:"readable"`
-	Size            int64          `json:"size"` // with -wal
-	Schema          int            `json:"schema"`
-	Head            int            `json:"head"`
-	Pending         int            `json:"pending"`
-	Newer           bool           `json:"newer"`
-	JournalMode     string         `json:"journal_mode"`
-	Filesystem      FSInfo         `json:"filesystem"`
-	IngestedAt      time.Time      `json:"ingested_at,omitzero"`
-	LagSeconds      int64          `json:"lag_seconds"`
-	Sources         []SourceLag    `json:"sources"`
-	Errors30d       int            `json:"ingest_errors_30d"`
-	Errors24h       int            `json:"ingest_errors_24h"`
-	ErrorsByReason  map[string]int `json:"ingest_errors_by_reason,omitempty"`
-	SideFiles       []string       `json:"side_files,omitempty"`
-	AsideFiles      []string       `json:"aside_files,omitempty"` // metrics.db.corrupt
-	RebuiltAt       time.Time      `json:"rebuilt_at,omitzero"`
-	StoppedAt       time.Time      `json:"stopped_at,omitzero"`
-	MigrateFailedAt time.Time      `json:"migrate_failed_at,omitzero"`
+	File        string      `json:"file"`
+	Using       string      `json:"using"` // metrics.db or metrics-v<head>.db
+	Exists      bool        `json:"exists"`
+	Readable    bool        `json:"readable"`
+	Size        int64       `json:"size"` // with -wal
+	Schema      int         `json:"schema"`
+	Head        int         `json:"head"`
+	Pending     int         `json:"pending"`
+	Newer       bool        `json:"newer"`
+	JournalMode string      `json:"journal_mode"`
+	Filesystem  FSInfo      `json:"filesystem"`
+	IngestedAt  time.Time   `json:"ingested_at,omitzero"`
+	LagSeconds  int64       `json:"lag_seconds"`
+	Sources     []SourceLag `json:"sources"`
+	Errors30d   int         `json:"ingest_errors_30d"`
+	Errors24h   int         `json:"ingest_errors_24h"`
+	// Errors24hByReason is the 24 h count split by reason (for doctor;
+	// not part of the JSON, whose ingest_errors_by_reason is the 30 d one).
+	Errors24hByReason map[string]int `json:"-"`
+	ErrorsByReason    map[string]int `json:"ingest_errors_by_reason,omitempty"`
+	SideFiles         []string       `json:"side_files,omitempty"`
+	AsideFiles        []string       `json:"aside_files,omitempty"` // metrics.db.corrupt
+	RebuiltAt         time.Time      `json:"rebuilt_at,omitzero"`
+	StoppedAt         time.Time      `json:"stopped_at,omitzero"`
+	MigrateFailedAt   time.Time      `json:"migrate_failed_at,omitzero"`
 }
 
 var sideNameRE = regexp.MustCompile(`^metrics-v[0-9]+\.db$`)
@@ -286,6 +289,23 @@ func inspectRows(ctx context.Context, o Options, st *Status) error {
 	if len(by) > 0 {
 		st.ErrorsByReason = by
 	}
-	return db.QueryRowContext(ctx, `SELECT count(*) FROM ingest_errors WHERE at >= ?`,
-		now.Add(-24*time.Hour).UnixMilli()).Scan(&st.Errors24h)
+	rows, err = db.QueryContext(ctx, `SELECT reason, count(*) FROM ingest_errors WHERE at >= ? GROUP BY reason`,
+		now.Add(-24*time.Hour).UnixMilli())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var reason string
+		var n int
+		if err := rows.Scan(&reason, &n); err != nil {
+			return err
+		}
+		if st.Errors24hByReason == nil {
+			st.Errors24hByReason = map[string]int{}
+		}
+		st.Errors24hByReason[reason] = n
+		st.Errors24h += n
+	}
+	return rows.Err()
 }
