@@ -280,8 +280,8 @@ CREATE TABLE tel_attribution (
   v TEXT,
   turn TEXT,
   subagent INTEGER,
-  base INTEGER,
-  applied INTEGER,
+  base TEXT,
+  applied TEXT,
   path_rule TEXT,
   source TEXT,
   PRIMARY KEY (source_file, "offset")

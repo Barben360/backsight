@@ -94,13 +94,28 @@ var typedCases = []typedCase{
 		"tel_attribution", map[string]any{"turn": "0123", "subagent": false, "base": "proj", "applied": "proj", "path_rule": "other-proj", "source": "cwd"}},
 	{"attribution", map[string]any{"turn": "agent:a1", "subagent": true, "base": "proj", "applied": "other-proj", "path_rule": "other-proj", "source": "evidence+mention"},
 		"tel_attribution", map[string]any{"turn": "agent:a1", "subagent": true, "base": "proj", "applied": "other-proj", "path_rule": "other-proj", "source": "evidence+mention"}},
+	// base and applied are project names: "007" stays text.
+	{"attribution", map[string]any{"turn": "t2", "base": "007", "applied": "0042", "source": "none"},
+		"tel_attribution", map[string]any{"turn": "t2", "subagent": nil, "base": "007", "applied": "0042", "path_rule": nil, "source": "none"}},
 	{"store", map[string]any{"result": "saved", "kind": "decision"},
 		"tel_store", map[string]any{"result": "saved", "kind": "decision"}},
 	{"dashboard", map[string]any{"action": "start", "ms": 10, "pages": 3},
 		"tel_dashboard", map[string]any{"action": "start", "ms": 10, "pages": 3}},
-	{"config", map[string]any{"sha256": "ab12", "recall.min_score": 0.4, "model": "x"},
-		"tel_config", map[string]any{"sha256": "ab12"}},
+	// sha256 keeps a lower-case hex SHA-256 only: prose, a short or an
+	// upper-case value is NULL.
+	{"config", map[string]any{"sha256": "CANARY prose in the hash field"},
+		"tel_config", map[string]any{"sha256": nil}},
+	{"config", map[string]any{"sha256": "ab12"},
+		"tel_config", map[string]any{"sha256": nil}},
+	{"config", map[string]any{"sha256": strings.ToUpper(sha256Hex)},
+		"tel_config", map[string]any{"sha256": nil}},
+	// last: the config values test reads its offset
+	{"config", map[string]any{"sha256": sha256Hex, "recall.min_score": 0.4, "model": "x"},
+		"tel_config", map[string]any{"sha256": sha256Hex}},
 }
+
+// sha256Hex is a SHA-256 in lower-case hex.
+const sha256Hex = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
 // TestTelemetryTypedRows: each typed kind lands in its table, column by
 // column; ids, scopes and config values in their side tables.
@@ -225,7 +240,7 @@ func TestFreeTextNeverStored(t *testing.T) {
 		tline("prompt", ts0, withCommon(map[string]any{"n": 3, "decision": "recall",
 			"ids":    []string{"ok1", "bad\nid", "ok2"},
 			"scopes": map[string]any{"user": map[string]any{"ok": true}, "bad\nscope": map[string]any{"ok": true}}})),
-		tline("config", ts0, withCommon(map[string]any{"sha256": "ab", "Model Name": 3, "recall.gap": 2, "path": "/home/someone/x"})),
+		tline("config", ts0, withCommon(map[string]any{"sha256": "CANARY-sha256-prose words", "Model Name": 3, "recall.gap": 2, "path": "/home/someone/x"})),
 		tline("attribution", ts0, withCommon(map[string]any{"turn": "t1", "base": "proj", "applied": "x\ty", "path_rule": "line one\nline two", "source": "my own words"})),
 	}
 	e.write("2026-10", strings.Join(lines, ""))
@@ -288,6 +303,7 @@ func TestFreeTextNeverStored(t *testing.T) {
 	noBytes(t, e.ix, "boom")
 	noBytes(t, e.ix, "segfault")
 	noBytes(t, e.ix, "canary-a\ncanary-b")
+	noBytes(t, e.ix, "CANARY-sha256-prose")
 }
 
 // TestUnknownKindsKeepNoPayload: other kinds keep their common columns

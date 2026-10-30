@@ -20,7 +20,7 @@ const fixturePath = "testdata/schema-0001.db"
 
 // released pins every shipped migration (each release adds its own).
 var released = map[string]string{
-	"0001-initial": "6978cfd15642f469ee8504b294b4ebf4a04dd1bbfcf220a1f578b9aac6eb8f58",
+	"0001-initial": "37f78317d2a3e98e9bf642e31337171222f525d2ecb7c6bf1b1d115097a9d331",
 }
 
 // rowKey starts every row table: the line it came from.
@@ -103,6 +103,79 @@ func TestSchemaColumns(t *testing.T) {
 	}
 	if tables != len(schemaTables) {
 		t.Errorf("%d tables, the test lists %d: a table is missing from schemaTables", tables, len(schemaTables))
+	}
+}
+
+// columnTypes is every column's declared type, by name; typeOf names the
+// columns whose type differs by table. A name or an enum is TEXT (an
+// INTEGER affinity would turn the project "007" into 7), a time, count or
+// flag INTEGER, a score REAL.
+var (
+	columnTypes = map[string]string{
+		"source_file": "TEXT", "session": "TEXT", "project": "TEXT", "binary_version": "TEXT", "v": "TEXT",
+		"decision": "TEXT", "reason": "TEXT", "lang": "TEXT", "detector": "TEXT", "empty": "TEXT",
+		"credited": "TEXT", "credit_source": "TEXT", "credit": "TEXT", "source": "TEXT", "name": "TEXT",
+		"live": "TEXT", "verdict": "TEXT", "outcome": "TEXT", "flags": "TEXT", "action": "TEXT",
+		"document": "TEXT", "status": "TEXT", "hook": "TEXT", "kind": "TEXT", "turn": "TEXT", "base": "TEXT",
+		"applied": "TEXT", "path_rule": "TEXT", "result": "TEXT", "sha256": "TEXT", "memory_id": "TEXT",
+		"scope": "TEXT", "key": "TEXT", "fields": "TEXT", "agent": "TEXT", "path": "TEXT", "stop_check": "TEXT",
+		"note_id": "TEXT", "head_sha256": "TEXT",
+
+		"offset": "INTEGER", "ts": "INTEGER", "n": "INTEGER", "plen": "INTEGER", "above": "INTEGER",
+		"injected": "INTEGER", "ids_n": "INTEGER", "ms": "INTEGER", "nudged": "INTEGER", "hinted": "INTEGER",
+		"chars": "INTEGER", "searched": "INTEGER", "contradicted": "INTEGER", "used_n": "INTEGER",
+		"hits": "INTEGER", "ok": "INTEGER", "subagent": "INTEGER", "shown": "INTEGER", "after_block": "INTEGER",
+		"shows": "INTEGER", "credits": "INTEGER", "misses": "INTEGER", "unknown": "INTEGER", "late": "INTEGER",
+		"items": "INTEGER", "pages": "INTEGER", "pos": "INTEGER", "raw": "INTEGER", "machine": "INTEGER",
+		"rank": "INTEGER", "rank_without_boost": "INTEGER", "show_at": "INTEGER", "settle_ts": "INTEGER",
+		"at": "INTEGER", "credits_at": "INTEGER", "misses_at": "INTEGER", "last_shown": "INTEGER",
+		"last_credited": "INTEGER", "wrong": "INTEGER", "hidden_since": "INTEGER", "unhidden_at": "INTEGER",
+		"imported_shown": "INTEGER", "id": "INTEGER", "ingested_at": "INTEGER", "notes_queued": "INTEGER",
+		"notes_oldest_at": "INTEGER", "quarantined": "INTEGER", "quarantine_oldest_at": "INTEGER",
+		"sessions_waiting": "INTEGER", "reach_last_ok": "INTEGER", "reach_failing_since": "INTEGER",
+		"breaker_failures": "INTEGER", "breaker_open_until": "INTEGER", "backup_created_at": "INTEGER",
+		"backup_verified_at": "INTEGER", "backup_ok": "INTEGER", "update_checked_at": "INTEGER",
+		"update_newer": "INTEGER", "update_check_failed": "INTEGER", "backfill_sessions": "INTEGER",
+		"backfill_paused": "INTEGER", "size": "INTEGER", "head_len": "INTEGER", "last_ts": "INTEGER",
+		"missing": "INTEGER",
+
+		"top": "REAL", "reranker": "REAL", "boost": "REAL", "score_without_boost": "REAL",
+		"imported_credits": "REAL",
+	}
+	typeOf = map[string]string{
+		"ledger.credits": "REAL", "ledger.misses": "REAL", // decayed weights
+		"tel_config_values.value": "REAL", "meta.value": "TEXT",
+	}
+)
+
+// TestSchemaColumnTypes: every column has the declared type its contract
+// says (columnTypes); a new column must be added there.
+func TestSchemaColumnTypes(t *testing.T) {
+	ix := mustOpen(t, opts(t, tempDirs(t), nil))
+	defer mustClose(t, ix)
+	for _, tc := range schemaTables {
+		rows, err := ix.sh.w.Query(`SELECT name, type FROM pragma_table_info(?) ORDER BY cid`, tc.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var name, typ string
+			if err := rows.Scan(&name, &typ); err != nil {
+				t.Fatal(err)
+			}
+			want, ok := typeOf[tc.name+"."+name]
+			if !ok {
+				want, ok = columnTypes[name]
+			}
+			if !ok {
+				t.Errorf("%s.%s (%s): not in columnTypes", tc.name, name, typ)
+				continue
+			}
+			if typ != want {
+				t.Errorf("%s.%s is %s, want %s", tc.name, name, typ, want)
+			}
+		}
+		_ = rows.Close()
 	}
 }
 

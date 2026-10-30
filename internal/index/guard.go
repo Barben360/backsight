@@ -28,6 +28,17 @@ const nameMax = 256
 
 var shapeRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,47}$`)
 
+// sha256RE is a SHA-256 in lower-case hex.
+var sha256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// sha256Value is s when it is a SHA-256 in lower-case hex, nil otherwise.
+func sha256Value(s string) any {
+	if !sha256RE.MatchString(s) {
+		return nil
+	}
+	return s
+}
+
 // configKeyRE is a config value's key, dotted ("recall.min_score").
 var configKeyRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}(\.[a-z][a-z0-9_]{0,47}){0,3}$`)
 

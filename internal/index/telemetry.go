@@ -47,6 +47,7 @@ const (
 	fClosed              // a string, closed set
 	fIDs                 // an array of ids: its length, and one tel_ids row each
 	fFlags               // an array of shape strings, sorted and comma-joined
+	fSHA256              // a string, a lower-case hex SHA-256, else NULL
 )
 
 type fspec struct {
@@ -180,7 +181,7 @@ var telKinds = map[string]telKind{
 		{key: "pages", kind: fInt},
 	}},
 	"config": {table: "tel_config", fields: []fspec{
-		{key: "sha256", kind: fName},
+		{key: "sha256", kind: fSHA256},
 	}, extra: configValues},
 }
 
@@ -250,7 +251,7 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			v = d.real(f.key)
 		case fBool:
 			v = d.boolean(f.key)
-		case fName, fShape, fClosed:
+		case fName, fShape, fClosed, fSHA256:
 			s, _ := d.str(f.key)
 			if f.req && s == "" && d.err == "" {
 				return nil, 0, errMissingField
@@ -260,6 +261,8 @@ func telemetryRows(rel string, off int64, line []byte) ([]row, int64, string) {
 				v = nameValue(s)
 			case fShape:
 				v = shapeValue(s)
+			case fSHA256:
+				v = sha256Value(s)
 			default:
 				v = closedValue(s, f.set)
 				if v == nil && f.dflt != nil {
