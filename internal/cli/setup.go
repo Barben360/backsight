@@ -48,6 +48,7 @@ type setupFlags struct {
 	reconfigure                  bool
 	configDir                    string
 	role                         string // --role: the answer role
+	runtime                      string // --runtime: the answer runtime
 }
 
 // subResult is a backsight command's envelope.
@@ -103,7 +104,7 @@ func newSetupCmd(e *env) *cobra.Command {
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if f.undo {
-				if len(f.answers) > 0 || f.answersFile != "" || f.resume || f.questions || f.role != "" {
+				if len(f.answers) > 0 || f.answersFile != "" || f.resume || f.questions || f.role != "" || f.runtime != "" {
 					return &output.Error{Code: output.Usage, Message: "--undo takes only --plan and --force"}
 				}
 				res, err := runSetupUndo(cmd.Context(), f, f.force)
@@ -127,6 +128,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without Claude Code that only holds the memory for your other PCs (default both)")
+	cmd.Flags().StringVar(&f.runtime, "runtime", "", "native: run the server from PyPI under two systemd user units instead of Docker (Linux x86_64, this PC only; default docker)")
 	return cmd
 }
 
@@ -237,6 +239,12 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		}
 		s.answer["role"] = f.role
 	}
+	if f.runtime != "" { // --runtime is the answer runtime
+		if a, ok := s.answer["runtime"]; ok && a != f.runtime {
+			return res, &output.Error{Code: output.Usage, Message: fmt.Sprintf("--runtime %s and the answer runtime=%s differ: give one", f.runtime, a)}
+		}
+		s.answer["runtime"] = f.runtime
+	}
 	getenv := os.Getenv
 	if f.configDir != "" {
 		getenv = func(k string) string {
@@ -293,10 +301,16 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	if schedulerGOOS == "linux" && !s.schedulerSettled(extra) {
 		probes.UserScheduler = userSession
 	}
+	if probes.Runtime = extra["runtime"]; probes.Runtime == "native" {
+		probes.UserManager = userSession // the server's units need it, whatever the scheduler answer
+	}
 	res.Preflight = setup.Preflight(ctx, probes)
 	for _, c := range res.Preflight {
 		if c.ID == "scheduler" && c.Action != nil {
 			c.Action.Cmd = s.rerunWith("scheduler=off")
+		}
+		if c.ID == "systemd" && c.Action != nil { // the same run, from a login session
+			c.Action.Cmd = s.rerunWith("")
 		}
 	}
 	class, failed := setup.Verdict(res.Preflight)
@@ -379,7 +393,7 @@ func (s *setupEnv) schedulerSettled(extra map[string]string) bool {
 	return s.f.resume && s.saved != nil && s.saved.Done("scheduler") && s.saved.Answers["scheduler"] == extra["scheduler"]
 }
 
-// rerunWith is the command this run was, with one more answer.
+// rerunWith is the command this run was, with one more answer ("": none).
 func (s *setupEnv) rerunWith(answer string) string {
 	key, _, _ := strings.Cut(answer, "=")
 	parts := []string{"backsight", "setup"}
@@ -400,11 +414,17 @@ func (s *setupEnv) rerunWith(answer string) string {
 	if s.f.role != "" {
 		parts = append(parts, "--role", shellWord(s.f.role))
 	}
+	if s.f.runtime != "" {
+		parts = append(parts, "--runtime", shellWord(s.f.runtime))
+	}
 	if s.f.nonInteractive {
 		parts = append(parts, "--non-interactive")
 	}
 	if s.e.json {
 		parts = append(parts, "--json")
+	}
+	if answer == "" {
+		return strings.Join(parts, " ")
 	}
 	return strings.Join(append(parts, "--answer", answer), " ")
 }
@@ -684,6 +704,7 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		}
 		return strings.Fields(string(out) + " ?")[0], nil
 	}
+	p.Linger = linger
 	p.Reference = s.refs
 	var de doctor.Env
 	probes(&de)
@@ -694,6 +715,24 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		p.Transcript = fmt.Sprintf("%d transcripts, %.1f MB, oldest %s", t.Count, float64(t.Bytes)/(1<<20), t.Oldest.UTC().Format("2006-01-02"))
 	}
 	return p
+}
+
+// lingerWait bounds loginctl's answer.
+var lingerWait = 5 * time.Second
+
+// linger reads whether systemd keeps this user's units running after
+// logout (loginctl's Linger property: yes or no).
+func linger() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), lingerWait)
+	defer cancel()
+	out, err := nativeSys.Run(ctx, "loginctl", "show-user", strconv.Itoa(os.Getuid()), "-p", "Linger", "--value")
+	if err != nil {
+		if msg, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n"); msg != "" {
+			return "", errors.New(msg)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // serverRuns reports whether backsight's server has its hindsight service
@@ -861,7 +900,11 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			var ir installResult
 			_ = json.Unmarshal(out.Data, &ir)
-			return setup.Step{Name: "server", Status: "done", Detail: fmt.Sprintf("Hindsight %s at %s (UI %s)", ir.Version, ir.URL, ir.UI)}, nil
+			ui := "UI " + ir.UI
+			if cfg.RuntimeKind() == "native" {
+				ui = noUI
+			}
+			return setup.Step{Name: "server", Status: "done", Detail: fmt.Sprintf("Hindsight %s at %s (%s)", ir.Version, ir.URL, ui)}, nil
 		}},
 		// After the bank step (server install's): the docs bank for guide
 		// search (decision 0069). Its failure never stops setup: guide
@@ -1090,7 +1133,10 @@ func (s *setupEnv) download(ctx context.Context, rt server.Runtime) (models bool
 		return false, nil // server install says what is wrong with Docker
 	}
 	what := "the embedding models at the server's first start"
-	if len(images) > 0 {
+	switch {
+	case len(images) > 0 && rt.Kind() == "native": // uv, Python, the wheels, the models
+		what = strings.Join(images, ", ")
+	case len(images) > 0:
 		what = fmt.Sprintf("%d server image(s)", len(images))
 		if models {
 			what += ", then the embedding models at its first start"
@@ -1216,6 +1262,9 @@ func setupConfig(a map[string]string) []byte {
 	raw = strings.Replace(raw, "# Written by backsight server install.", "# Written by backsight setup.", 1)
 	if a["role"] == config.RoleServer {
 		raw = strings.Replace(raw, "[server]\n", "[server]\nrole = \"server\"\n", 1)
+	}
+	if a["runtime"] == "native" { // Docker's config never holds the key
+		raw = strings.Replace(raw, "[server]\n", "[server]\nruntime = \"native\"\n", 1)
 	}
 	if a["backups"] == "off" {
 		raw += "\n[backup]\nenabled = false\n"
@@ -1490,6 +1539,11 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		backfill = "queue past sessions for jobs tick"
 	}
 	serverStep := setup.Step{Name: "server", Status: "planned", Detail: fmt.Sprintf("backsight server install: %s/%s, API on 127.0.0.1:%s, UI on %s", a["provider"], a["model"], a["api_port"], a["ui_port"])}
+	if a["runtime"] == "native" {
+		project := a["project"]
+		serverStep.Detail = fmt.Sprintf("backsight server install on the native runtime (Hindsight from PyPI under the systemd user units %s-db.service and %s-server.service): %s/%s, API on 127.0.0.1:%s, %s",
+			project, project, a["provider"], a["model"], a["api_port"], noUI)
+	}
 	docsStep := setup.Step{Name: "docs", Status: "planned", Detail: "backsight guide index: the documentation into the server's docs bank, for backsight guide search (0 LLM calls)"}
 	if remote { // the server and its docs bank are its host's
 		serverStep = setup.Step{Name: "server", Status: "skipped", Detail: "remote server " + s.cfg.Server.URL + ": install it on its host"}

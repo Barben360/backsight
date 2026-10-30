@@ -139,13 +139,21 @@ func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec 
 			for _, ct := range list {
 				if ct.Service == "hindsight" && (ct.State == "exited" || ct.State == "restarting" || ct.State == "dead") {
 					logs, _ := rt.Logs(ctx, "hindsight", 20)
-					return hindsight.Version{}, fmt.Errorf("the hindsight container is %s; last log lines:\n%s", ct.State, strings.TrimSpace(logs))
+					what := "the hindsight container"
+					if n, ok := rt.(server.Native); ok {
+						what = "the server unit " + n.ServerUnit()
+					}
+					return hindsight.Version{}, fmt.Errorf("%s is %s; last log lines:\n%s", what, ct.State, strings.TrimSpace(logs))
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return hindsight.Version{}, fmt.Errorf("the server did not report health at %s within %s: check backsight server status and docker compose logs", cfg.Server.URL, healthTimeout)
+			logs := "docker compose logs"
+			if n, ok := rt.(server.Native); ok {
+				logs = "journalctl --user -u " + n.ServerUnit()
+			}
+			return hindsight.Version{}, fmt.Errorf("the server did not report health at %s within %s: check backsight server status and %s", cfg.Server.URL, healthTimeout, logs)
 		case <-time.After(healthPoll):
 		}
 	}
@@ -163,7 +171,11 @@ type installResult struct {
 	URL      string   `json:"url,omitempty"`
 	UI       string   `json:"ui,omitempty"`
 	Version  string   `json:"version,omitempty"`
+	native   bool     // the native runtime: no web UI
 }
+
+// noUI is how a native install's summaries name the UI it has not.
+const noUI = "no web UI on the native runtime"
 
 func stepLine(s step) string {
 	line := fmt.Sprintf("%-8s %s", s.Status, s.Name)
@@ -179,8 +191,12 @@ func installSummary(r installResult) string {
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
+	ui := "UI " + r.UI
+	if r.native {
+		ui = noUI
+	}
 	if r.Version != "" {
-		fmt.Fprintf(&b, "\nHindsight %s healthy at %s (UI %s)\n", r.Version, r.URL, r.UI)
+		fmt.Fprintf(&b, "\nHindsight %s healthy at %s (%s)\n", r.Version, r.URL, ui)
 	}
 	return b.String()
 }
@@ -344,6 +360,12 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 			rt := runtimeFor(cfg)
+			if n, ok := rt.(server.Native); ok {
+				// An install is where the native database is created (ruling
+				// R35): server start, backup and the rest refuse a missing one.
+				n.MayCreate = true
+				rt, res.native = n, true
+			}
 			if err := pinGuard(cfg, rt); err != nil {
 				return err
 			}
@@ -451,7 +473,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(redacted(err, sec))
 			}
 			detail := "project " + cfg.Server.Project
-			if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
+			if n, ok := rt.(server.Native); ok {
+				detail = "units " + n.DBUnit() + " and " + n.ServerUnit()
+			} else if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
 				detail += ", with your compose.override.yaml"
 			}
 			add("start", "done", detail)
@@ -479,7 +503,10 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(err)
 			}
 			add("provider", "done", fmt.Sprintf("%s/%s extracted %d English fact(s)", cfg.LLM.Provider, cfg.LLM.Model, pr.Facts))
-			res.URL, res.UI, res.Version = cfg.Server.URL, uiURL(cfg), v.APIVersion
+			res.URL, res.Version = cfg.Server.URL, v.APIVersion
+			if !res.native {
+				res.UI = uiURL(cfg)
+			}
 			return e.emit("server install", res, func() string { return installSummary(res) })
 		},
 	}
@@ -593,6 +620,9 @@ func newServerStartCmd(e *env) *cobra.Command {
 				}
 				return e.emit("server start", map[string]any{"project": cfg.Server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
 					func() string {
+						if n, ok := rt.(server.Native); ok {
+							return renderText(nativeRender(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}, n)) + "would start " + n.DBUnit() + " and " + n.ServerUnit() + "\n"
+						}
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
 			}
@@ -865,6 +895,16 @@ type renderResult struct {
 	Dir string `json:"dir"`
 	server.Changes
 	Plan bool `json:"plan"`
+	// the native runtime's files, for the text: server.env and the units
+	envFile string
+	units   []string
+}
+
+// nativeRender is r naming the native runtime's files.
+func nativeRender(r renderResult, n server.Native) renderResult {
+	r.envFile = n.EnvFile()
+	r.units = []string{filepath.Join(n.UnitDir, n.DBUnit()), filepath.Join(n.UnitDir, n.ServerUnit())}
+	return r
 }
 
 func newServerRenderCmd(e *env) *cobra.Command {
@@ -890,6 +930,9 @@ func newServerRenderCmd(e *env) *cobra.Command {
 				return err
 			}
 			res := renderResult{Dir: cfg.Server.ComposeDir, Plan: plan}
+			if n, ok := rt.(server.Native); ok {
+				res = nativeRender(res, n)
+			}
 			if plan {
 				res.Changes, err = rt.Diff(f)
 			} else {
@@ -918,6 +961,10 @@ func renderText(r renderResult) string {
 	verb := map[bool]string{true: "written", false: "unchanged"}
 	if r.Plan {
 		verb = map[bool]string{true: "would be written", false: "unchanged"}
+	}
+	if r.envFile != "" {
+		// Changes says whether any unit changed, not which.
+		return fmt.Sprintf("%s: %s\n%s: %s\n", r.envFile, verb[r.Env], strings.Join(r.units, " and "), verb[r.Units])
 	}
 	return fmt.Sprintf("%s: %s\n%s: %s\n",
 		filepath.Join(r.Dir, "compose.yaml"), verb[r.Compose], filepath.Join(r.Dir, ".env"), verb[r.Env])

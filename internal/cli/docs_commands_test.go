@@ -22,7 +22,9 @@ import (
 // docsPending are commands the docs already name that another block-4
 // issue builds. Each is accepted only while it is missing; once built, it
 // is checked like any other and the test asks for its entry to be removed.
-var docsPending []string
+// server runtime: the switch between runtimes (M7 block 1, Task 9), which
+// native-runtime.md names.
+var docsPending = []string{"server runtime"}
 
 // docFiles lists the documents checked, relative to the repository root.
 func docFiles(t *testing.T) []string {

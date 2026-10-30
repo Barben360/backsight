@@ -32,6 +32,19 @@ sudo usermod -aG docker $USER
 
 Log out and back in (a new terminal is not enough), check that `docker info` works without `sudo`, then `backsight setup --resume`. Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) is the alternative. If Docker is not running: `sudo systemctl enable --now docker`. If `docker compose` is unknown (setup's `compose` check says `Docker Compose v2 is missing`), install the Compose v2 plugin ([docs.docker.com/compose/install](https://docs.docker.com/compose/install/)).
 
+### Setup on the native runtime stops at its pre-flight
+
+`backsight setup --runtime native` ([the native runtime](native-runtime.md)) checks what the native server needs instead of Docker; nothing is written until they pass.
+
+| Check | Setup says | What to do |
+|---|---|---|
+| `platform` | `the native runtime runs on Linux x86_64 (linux-amd64) only in this release` | Native runs on Linux x86_64 only. Run setup without `--runtime native` (Docker), or install the server on a Linux x86_64 machine and connect this PC to it ([several PCs](several-pcs.md)). |
+| `linger` | `lingering is off for your user` | Without lingering, your user's units, the server's included, stop when you log out. Run `loginctl enable-linger` once, then `backsight setup --resume`. |
+| `systemd` | `no systemd user session here`: `no systemd user session is reachable from this shell` | The native server runs as your user's systemd units, so setup must reach your user manager. Run setup from a login session of your user (an ssh login, not `su` or `sudo`). A machine without one, such as a container, cannot run the native server: use Docker there. Unlike the timers, `--answer scheduler=off` does not get past it. |
+| `disk` | `only N GB free, the native server needs 3.5 GB` | Free some space, or set `BACKSIGHT_HOME` to a larger disk. |
+
+`--runtime native` is also refused, exit 2, with `--role server` (a server-only host exists to serve other PCs, and native serves this PC only) and over an install already on Docker (its memory is in Docker's database: `backsight server runtime switch native` moves it).
+
 ### A port is taken
 
 Setup says `port 8888 is taken by another program` (or `9999`, the web UI's).
@@ -166,8 +179,9 @@ Once the backup verified, connect stops the server under the maintenance lock, t
 
 ## Another PC cannot reach the server
 
-`backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:
+`backsight server expose --private <ip>` opens the server on one address of its host. Three refusals stop it before anything changes:
 
+- **"the native runtime serves this PC only (loopback) in this release"**: the host runs the [native runtime](native-runtime.md), which listens on `127.0.0.1` only. A memory shared by several PCs needs the docker runtime on its host: `backsight server runtime switch docker` moves it there.
 - **"is not an address of this machine"**: the address belongs to no network interface of the host, so the server could not listen on it. Pick one of the private addresses the message lists; for a tailnet, check that Tailscale is up (`tailscale ip -4`).
 - **"the API key travels unencrypted on this network"**: the address is on a LAN, not a tailnet, and every request carries the API key in clear to anyone on that network. Prefer the host's tailnet address (Tailscale: `100.x`). On a network you trust, rerun the same command with `--answer cleartext_lan=yes`.
 

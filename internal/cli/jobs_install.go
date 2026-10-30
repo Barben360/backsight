@@ -362,8 +362,7 @@ func noBusActions(d paths.Dirs) []output.Action {
 }
 
 // noBusHint says where systemd's user manager can be reached.
-const noBusHint = "no systemd user session is reachable from this shell: run it from a login session of this user (an ssh login, not su or sudo); " +
-	"on a machine without one (a container), setup takes --answer scheduler=off"
+const noBusHint = setup.NoUserBus + "; on a machine without one (a container), setup takes --answer scheduler=off"
 
 // noUserBus: systemctl --user found no user manager to talk to (a
 // container without systemd, a shell started by su or sudo).

@@ -41,6 +41,8 @@ The server keeps running with your memory; uninstall prints the command to stop 
 | `--stop` | Also stops the server. Its containers and data are kept. |
 | `--delete-data` | Also deletes the server and **every memory in its bank**. You must type the bank id to confirm. |
 
+On the [native runtime](native-runtime.md), the database's unit runs a check that is part of backsight before every start, so it cannot start once backsight is gone: uninstall therefore stops and disables both units even without `--stop` (its plan says `stopped and disabled`), and keeps their data in `server/native/home`. A later install starts them again. `--delete-data` stops and disables both units before it removes anything, then removes the units and `server/native` (the database, Python, the virtual environments and the models); the password of a kept native server lives in `server/native/server.env`.
+
 `--delete-data` removes the containers, their anonymous volumes and the Docker volumes backsight's own `compose.yaml` declares (the database and the model cache). Volumes declared only in your `compose.override.yaml`, the Docker images and your backups stay. The images take about 3 GB; uninstall prints the command that removes them, of the form `docker image rm ghcr.io/vectorize-io/hindsight@sha256:… pgvector/pgvector@sha256:…` (they are pulled by digest, so `docker image ls` shows them as `<none>`).
 
 ## Removing local files

@@ -107,7 +107,8 @@ func setupMachine(t *testing.T) (string, *fakeSteps) {
 			Compose:   func(context.Context) (string, error) { return "2.39.1", nil },
 			PortFree:  func(int) bool { return true },
 			FreeBytes: func() (uint64, error) { return 50 << 30, nil },
-			Claude:    func(context.Context) (string, error) { return "2.1.400", nil }}
+			Claude:    func(context.Context) (string, error) { return "2.1.400", nil },
+			Linger:    func() (string, error) { return "yes", nil }} // read on native only
 	}
 	t.Cleanup(func() { subcommand, preflightProbes, serverAnswers = oldSub, oldProbes, oldUp })
 	return home, f

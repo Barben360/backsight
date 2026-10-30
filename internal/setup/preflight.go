@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 )
 
@@ -72,7 +73,24 @@ type Probes struct {
 	// ServerOnly: a host without Claude Code (setup --role server); the
 	// Claude Code checks and lines are skipped.
 	ServerOnly bool
+	// Runtime is the server's runtime: "" or "docker", or "native"
+	// (decision 0078), whose checks replace Docker's: Linux x86_64, the
+	// user manager (UserManager) and lingering (Linger: loginctl's
+	// Linger property, "yes" or "no").
+	Runtime     string
+	Linger      func() (string, error)
+	UserManager func(ctx context.Context) error
 }
+
+// NativeDiskMB: Python, the venv, the models and the first months of
+// data on the native runtime.
+const NativeDiskMB = 3500
+
+// NoUserBus says where systemd's user manager can be reached.
+const NoUserBus = "no systemd user session is reachable from this shell: run it from a login session of this user (an ssh login, not su or sudo)"
+
+// nativePlatformFix is the native runtime's way out on another platform.
+const nativePlatformFix = "use the docker runtime (setup without --runtime native), or run the server on a Linux x86_64 machine and connect this PC to it"
 
 // Preflight runs every check in order.
 func Preflight(ctx context.Context, p Probes) []Check {
@@ -87,9 +105,22 @@ func Preflight(ctx context.Context, p Probes) []Check {
 			Fix: "run the server on a linux, macOS or Windows machine (amd64 or arm64) and connect this client to it"})
 	}
 
-	if p.Remote {
+	native := p.Runtime == "native" && !p.Remote
+	if native {
+		out[0] = nativePlatform(p)
+	}
+
+	switch {
+	case p.Remote:
 		add(Check{ID: "docker", Status: Info, Summary: "remote server: Docker is checked on its host"})
-	} else {
+	case native:
+		add(Check{ID: "docker", Status: Info, Summary: "not used by the native runtime"})
+		add(Check{ID: "compose", Status: Info, Summary: "not used by the native runtime"})
+		add(userManagerCheck(ctx, p))
+		add(lingerCheck(p))
+		add(portCheck(p, "api_port", p.APIPort))
+		add(diskCheck(p))
+	default:
 		add(dockerCheck(ctx, p))
 		add(composeCheck(ctx, p))
 		for _, port := range []struct {
@@ -103,7 +134,8 @@ func Preflight(ctx context.Context, p Probes) []Check {
 	if !p.ServerOnly {
 		add(claudeCheck(ctx, p))
 	}
-	if p.UserScheduler != nil && !p.SchedulerOff {
+	// On native, the systemd check above reaches the same user manager.
+	if p.UserScheduler != nil && !p.SchedulerOff && !native {
 		add(schedulerCheck(ctx, p))
 	}
 	if !p.ServerOnly {
@@ -186,16 +218,20 @@ func diskCheck(p Probes) Check {
 	c := Check{ID: "disk"}
 	free, err := p.FreeBytes()
 	gb := float64(free) / (1 << 30)
+	floor, need := uint64(MinFreeBytes), "the server needs 6 GB"
+	if p.Runtime == "native" {
+		floor, need = NativeDiskMB<<20, fmt.Sprintf("the native server needs %.1f GB", float64(NativeDiskMB)/1000)
+	}
 	switch {
 	case err != nil:
 		c.Status, c.Summary = Warn, "free space unknown: "+err.Error()
-	case free >= MinFreeBytes:
+	case free >= floor:
 		c.Status, c.Summary = OK, fmt.Sprintf("%.1f GB free", gb)
 	case p.ServerInstalled:
 		c.Status, c.Summary = Warn, fmt.Sprintf("only %.1f GB free", gb)
 		c.Fix = "free some space: the memory grows and backups need room"
 	default:
-		c.Status, c.Class, c.Summary = Fail, "blocked", fmt.Sprintf("only %.1f GB free, the server needs 6 GB", gb)
+		c.Status, c.Class, c.Summary = Fail, "blocked", fmt.Sprintf("only %.1f GB free, %s", gb, need)
 		c.Fix = "free some space, or set BACKSIGHT_HOME to a larger disk"
 	}
 	return c
@@ -216,6 +252,67 @@ func claudeCheck(ctx context.Context, p Probes) Check {
 	default:
 		c.Status, c.Summary = OK, "Claude Code "+v
 	}
+	return c
+}
+
+// nativePlatform: the native runtime runs on Linux x86_64 only in this
+// release (decision 0078).
+func nativePlatform(p Probes) Check {
+	if p.GOOS == "linux" && p.GOARCH == "amd64" {
+		return Check{ID: "platform", Status: OK, Summary: "linux/amd64"}
+	}
+	return Check{ID: "platform", Status: Fail, Class: "blocked", Summary: p.GOOS + "/" + p.GOARCH + ": " + config.NativeRefusal, Fix: nativePlatformFix}
+}
+
+// userManagerCheck: the native server runs as two systemd user units, so
+// without a reachable user manager there is nothing to run it, and no
+// answer changes that (scheduler=off only skips the timers).
+func userManagerCheck(ctx context.Context, p Probes) Check {
+	c := Check{ID: "systemd"}
+	var err error
+	if p.UserManager == nil {
+		err = errors.New("not probed")
+	} else {
+		err = p.UserManager(ctx)
+	}
+	switch {
+	case errors.Is(err, ErrSessionSlow):
+		c.Status, c.Class = Fail, "blocked"
+		c.Summary = err.Error() + ": setup cannot tell whether it can run the native server's units"
+		c.Fix = "retry, from a login session of this user (an ssh login, not su or sudo)"
+	case err != nil:
+		c.Status, c.Class = Fail, "needs_user"
+		c.Summary = "no systemd user session here (" + err.Error() + "): the native runtime runs the server as systemd user units"
+		c.Fix = NoUserBus + "; on a machine without one (a container), use the docker runtime"
+		c.Action = &output.Action{Kind: "relogin", Cmd: "backsight setup --runtime native",
+			Why: "the native server's units load into this user's systemd user manager, reachable from a login session of this user"}
+	default:
+		c.Status, c.Summary = OK, "systemd user session reachable"
+	}
+	return c
+}
+
+// lingerCheck: without lingering, the user's units stop at logout and the
+// server with them (decision 0078, requirement 7).
+func lingerCheck(p Probes) Check {
+	c := Check{ID: "linger"}
+	v, err := "", errors.New("not probed")
+	if p.Linger != nil {
+		v, err = p.Linger()
+	}
+	v = strings.TrimSpace(v)
+	if err == nil && v == "yes" {
+		c.Status, c.Summary = OK, "lingering on: the server runs while you are logged out"
+		return c
+	}
+	c.Status, c.Class = Fail, "needs_user"
+	c.Summary = "lingering is off for your user"
+	if err != nil {
+		c.Summary = "cannot tell whether lingering is on for your user (" + err.Error() + ")"
+	}
+	c.Fix = "loginctl enable-linger"
+	c.Action = &output.Action{Kind: "run_as_user", Cmd: "loginctl enable-linger",
+		Why: "the native server runs as your systemd user units, which stop at logout without lingering"}
 	return c
 }
 

@@ -15,6 +15,7 @@ How to install backsight and set it up for Claude Code. The short path is in the
   - or [Ollama](https://ollama.com/download) on this machine, with no key (on Linux it must listen on an address the server container reaches: see [Local models with Ollama](#local-models-with-ollama));
   - or your Claude subscription, which Anthropic's terms are against: see [the subscription lane](privacy.md#the-claude-subscription-lane).
 - About **6 GB of free disk** for the server image and its models.
+- Without Docker, on Linux x86_64, the server can run as two systemd user units instead, for this PC only and without the web UI: `backsight setup --runtime native` ([the native runtime](native-runtime.md)).
 - `curl`, `tar`, and `minisign` or OpenSSL 3 to check the release signature.
 
 The exact versions each release pins are in [compatibility.md](compatibility.md).

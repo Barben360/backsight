@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -281,5 +282,39 @@ func TestNativeCheckStopsNothingWhenThePidFileNamesAnother(t *testing.T) {
 	}
 	if pgCtlRuns(tools) != 0 {
 		t.Errorf("pg_ctl ran: %v", tools.calls)
+	}
+}
+
+// server render's text on native names the files it writes: server.env
+// and the two units, never compose.yaml.
+func TestNativeRenderNamesItsFiles(t *testing.T) {
+	home, n, _, _, _ := nativeHost(t)
+	code, out, errOut := run(t, "server", "render")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	for _, line := range []string{n.EnvFile() + ": unchanged\n", unitPath(home, n.DBUnit()) + " and " + unitPath(home, n.ServerUnit()) + ": unchanged\n"} {
+		if !strings.Contains(out, line) {
+			t.Errorf("text lacks %q:\n%s", line, out)
+		}
+	}
+	if strings.Contains(out, "compose.yaml") || strings.Contains(out, filepath.Join(n.Cfg.Server.ComposeDir, ".env")) {
+		t.Errorf("text names Docker's files:\n%s", out)
+	}
+}
+
+// A native server that never reports health points at its journal, not
+// at docker compose.
+func TestNativeHealthTimeoutNamesTheJournal(t *testing.T) {
+	_, n, _, _, _ := nativeHost(t)
+	oldT := healthTimeout
+	healthTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { healthTimeout = oldT })
+	cfg := n.Cfg
+	cfg.Server.URL = "http://127.0.0.1:" + strconv.Itoa(closedPort(t))
+	n.Cfg = cfg
+	_, err := waitHealthy(context.Background(), runtimeFor(cfg), cfg, config.Secrets{})
+	if err == nil || !strings.Contains(err.Error(), "journalctl --user -u "+n.ServerUnit()) || strings.Contains(err.Error(), "docker compose") {
+		t.Errorf("err %v", err)
 	}
 }
