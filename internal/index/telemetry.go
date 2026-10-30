@@ -18,6 +18,9 @@ const (
 	errBadType      = "bad_type"      // a mapped field of the wrong JSON type
 	errTooLong      = "too_long"      // a line over maxLineBytes
 	errUnreadable   = "unreadable"    // the file itself (unreadableOffset)
+	// The ledger reader or the local status failed (offset 0).
+	errLedgerUnreadable      = "ledger_unreadable"
+	errLocalStatusUnreadable = "local_status_unreadable"
 )
 
 // row is one row to insert.

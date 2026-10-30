@@ -376,6 +376,19 @@ func (o Outbox) Pending() (int, error) {
 	return len(notes), err
 }
 
+// Oldest is the earliest created_at of the queued notes; zero when there
+// are none.
+func (o Outbox) Oldest() (time.Time, error) {
+	notes, err := o.read()
+	var oldest time.Time
+	for _, n := range notes {
+		if oldest.IsZero() || n.CreatedAt.Before(oldest) {
+			oldest = n.CreatedAt
+		}
+	}
+	return oldest, err
+}
+
 func appendJSON(path string, v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -27,6 +29,14 @@ type Options struct {
 	Now           func() time.Time    // nil: time.Now
 	BinaryVersion string              // "": buildinfo.Version
 	Migrations    fs.FS               // nil: Embedded
+	// Ledger is how the ledger table is filled; nil:
+	// feedback.CurrentReader over Dirs.FeedbackDir().
+	Ledger feedback.LedgerReader
+	// LocalStatus reads the local_status row; nil: not refreshed.
+	LocalStatus func() (LocalStatus, error)
+	// Progress receives a long catch-up's progress (CLI callers pass
+	// stderr); nil: silent.
+	Progress io.Writer
 }
 
 func (o Options) withDefaults() Options {
@@ -39,14 +49,20 @@ func (o Options) withDefaults() Options {
 	if o.BinaryVersion == "" {
 		o.BinaryVersion = buildinfo.Version
 	}
+	if o.Ledger == nil {
+		o.Ledger = feedback.CurrentReader{Dir: o.Dirs.FeedbackDir()}
+	}
 	return o
 }
 
-// shared is the one pair of handles per file per process.
+// shared is the one pair of handles per file per process, with its
+// catch-up in progress (fmu guards it).
 type shared struct {
-	w, r *sql.DB
-	fs   FSInfo
-	refs int
+	w, r   *sql.DB
+	fs     FSInfo
+	refs   int
+	fmu    sync.Mutex
+	flight *flight
 }
 
 var (

@@ -392,3 +392,26 @@ func TestOutboxGateShutDuringASendKeepsTheNote(t *testing.T) {
 		t.Errorf("kept: %+v, want both notes as they were", notes)
 	}
 }
+
+func TestOutboxOldest(t *testing.T) {
+	o := outbox(t)
+	if got, err := o.Oldest(); err != nil || !got.IsZero() {
+		t.Errorf("no outbox: %v, %v; want zero", got, err)
+	}
+	later := NewNote("b", "decision", "p", "later", at.Add(time.Hour))
+	earlier := NewNote("b", "decision", "p", "earlier", at)
+	for _, n := range []Note{later, earlier} { // the earlier one second
+		if _, err := o.Append(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := o.Oldest(); err != nil || !got.Equal(at) {
+		t.Errorf("oldest %v, %v; want %v", got, err, at)
+	}
+	if err := os.WriteFile(o.Path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := o.Oldest(); err != nil || !got.IsZero() {
+		t.Errorf("empty outbox: %v, %v; want zero", got, err)
+	}
+}

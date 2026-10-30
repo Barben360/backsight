@@ -152,6 +152,12 @@ const unreadableOffset = -1
 // batch of at most maxBatchLines lines. A zero deadline is none; past it
 // (by Options.Now), the ingest stops between batches with More.
 func (ix *Index) ingestSources(ctx context.Context, deadline time.Time) (ingestStats, error) {
+	return ix.ingest(ctx, deadline, nil)
+}
+
+// ingest is ingestSources, calling onBatch (when not nil) with the bytes
+// each committed batch read.
+func (ix *Index) ingest(ctx context.Context, deadline time.Time, onBatch func(read int64)) (ingestStats, error) {
 	var st ingestStats
 	srcs, err := ix.sources()
 	if err != nil {
@@ -183,6 +189,9 @@ func (ix *Index) ingestSources(ctx context.Context, deadline time.Time) (ingestS
 			}
 			st.Lines += b.lines
 			st.Errors += b.errors
+			if onBatch != nil && b.read > 0 {
+				onBatch(b.read)
+			}
 			if !b.full {
 				break
 			}
@@ -223,13 +232,18 @@ func (ix *Index) vanished(ctx context.Context, listed []source) ([]source, error
 // recordUnreadable adds rel's unreadable row unless it is there already:
 // a file that stays unreadable writes nothing on later runs.
 func (ix *Index) recordUnreadable(ctx context.Context, rel string) error {
+	return ix.recordOnce(ctx, rel, unreadableOffset, errUnreadable)
+}
+
+// recordOnce adds the ingest_errors row (rel, off) unless there is one.
+func (ix *Index) recordOnce(ctx context.Context, rel string, off int64, reason string) error {
 	tx, err := ix.sh.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `INSERT INTO ingest_errors(source_file, "offset", reason, at) VALUES (?, ?, ?, ?)
-		ON CONFLICT(source_file, "offset") DO NOTHING`, rel, unreadableOffset, errUnreadable, ix.opts.Now().UnixMilli())
+		ON CONFLICT(source_file, "offset") DO NOTHING`, rel, off, reason, ix.opts.Now().UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -264,10 +278,11 @@ func readCursor(ctx context.Context, tx *sql.Tx, rel string) (cursor, bool, erro
 	return c, true, nil
 }
 
-// batch is what one transaction did.
+// batch is what one transaction did: its lines, those skipped as
+// errors, and the bytes read.
 type batch struct {
-	lines, errors int64
-	full          bool // maxBatchLines read: there may be more
+	lines, errors, read int64
+	full                bool // maxBatchLines read: there may be more
 }
 
 // ingestBatch is one transaction on one file: the cursor read under the
@@ -363,7 +378,7 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	if err != nil {
 		return b, err // a fileError from a read, else the index's
 	}
-	b.lines, b.full = int64(lines), lines == maxBatchLines
+	b.lines, b.read, b.full = int64(lines), end-cur.offset, lines == maxBatchLines
 	cleared := false // the file was unreadable until now
 	if !reset {
 		res, err := tx.ExecContext(ctx, `DELETE FROM ingest_errors WHERE source_file = ? AND "offset" = ?`, s.Rel, unreadableOffset)
