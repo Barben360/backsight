@@ -7,6 +7,12 @@
 # goreleaser and golangci-lint versions in the workflows, and the pinned
 # Claude Code and Node versions; govulncheck's weekly run flags a Go
 # release that fixes a reachable vulnerability.
+#
+# The native runtime's lock (internal/server/nativelock) is generated from
+# the pinned Hindsight image's site-packages and must match it (0078): a
+# bumped package there breaks that parity, so Dependabot ignores every
+# package in it, security updates included. It moves only with the image
+# pin, through scripts/native-lock.sh.
 version: 2
 updates:
   - package-ecosystem: "gomod"
@@ -31,3 +37,9 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "⬆️"
+  - package-ecosystem: "pip"
+    directory: "/internal/server/nativelock"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "*"
