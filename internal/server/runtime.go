@@ -156,13 +156,23 @@ const (
 	ModelsMB         = 1200
 )
 
-// DownloadMB is about how much images and models download.
+// DownloadMB is about how much images (a native runtime's items) and
+// models download.
 func DownloadMB(images []string, models bool) int {
 	mb := 0
 	for _, im := range images {
-		if im == PostgresImage {
+		switch im {
+		case PostgresImage:
 			mb += PostgresImageMB
-		} else {
+		case NativeUV:
+			mb += NativeUVMB
+		case NativePython:
+			mb += NativePythonMB
+		case NativeWheels:
+			mb += NativeWheelsMB
+		case NativeModels:
+			mb += ModelsMB
+		default:
 			mb += HindsightImageMB
 		}
 	}
