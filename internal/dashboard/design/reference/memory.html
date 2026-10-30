@@ -1,0 +1,258 @@
+<!doctype html>
+<!--
+  backsight dashboard: static reference of a Memory page (block 3 draft, issue #115).
+  Memory 7f3a9c21 (sample id); no memory text is ever in this page: "Show text" goes to
+  /memories/<id>/text, which reads it live from the server. No script.
+  Charts are inline SVG as Go would draw them: every mark carries a <title> (hover) and
+  tabindex + aria-label (focus); each chart has a table view in a <details>.
+  Template notes for block 5:
+  - Copy buttons: render every .copy with the hidden attribute; the one small copy script removes it.
+    With scripts off the command stays selectable text and no dead button shows.
+  - Logos: ../../../../docs/assets/ only makes this file open from disk; block 5 serves them at
+    /assets/<hashed>.svg (embedded, no session needed).
+  - Footer version (v0.1.17-m7 here) is a sample: it comes from the build (internal/buildinfo).
+  - No inline style attribute anywhere (the CSP is style-src 'self'): see the README.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Memory 7f3a9c21 · backsight</title>
+<link rel="stylesheet" href="../tokens.css">
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<div class="page">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="/" title="Overview">
+      <img class="logo-l" src="../../../../docs/assets/logo-light.svg" alt="backsight">
+      <img class="logo-d" src="../../../../docs/assets/logo-dark.svg" alt="backsight">
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="/">Overview</a>
+      <a href="/quality">Quality</a>
+      <a href="/cost">Cost</a>
+      <a href="/bank">Bank</a>
+      <a href="/pipeline">Pipeline</a>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <details class="menu is-current">
+        <summary>Browse <span class="caret">▾</span></summary>
+        <div class="menu-pop">
+          <a href="/projects">Projects</a>
+          <a href="/sessions">Sessions</a>
+          <a href="/memories" aria-current="page">Memories</a>
+        </div>
+      </details>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <a href="/system">System</a>
+    </nav>
+    <div class="tools">
+      <nav class="seg" aria-label="Window">
+        <a href="?days=1">24 h</a><a href="?days=7">7 d</a><a href="?days=30">30 d</a><a href="?days=90" aria-current="true">90 d</a>
+      </nav>
+      <details class="menu proj">
+        <summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short">All projects</span><span class="caret">▾</span></summary>
+        <div class="menu-pop right wide">
+          <span class="grp">Project</span>
+          <a href="?" aria-current="true"><span class="check">✓</span>All projects</a>
+          <a href="?project=backsight"><span class="check"></span>backsight</a>
+          <a href="?project=project-a"><span class="check"></span>project-a</a>
+        </div>
+      </details>
+      <a class="btn btn-quiet refresh-t" href=""><span class="i i-refresh"></span>Refresh</a>
+      <details class="menu">
+        <summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
+        <div class="menu-pop right wide">
+          <span class="grp">Theme</span>
+          <a href="/prefs?theme=system&amp;back=/memories/7f3a9c21" aria-current="true"><span class="check">✓</span>System</a>
+          <a href="/prefs?theme=light&amp;back=/memories/7f3a9c21"><span class="check"></span>Light</a>
+          <a href="/prefs?theme=dark&amp;back=/memories/7f3a9c21"><span class="check"></span>Dark</a>
+          <hr>
+          <span class="grp">Developer mode</span>
+          <a href="/prefs?dev=0&amp;back=/memories/7f3a9c21" aria-current="true"><span class="check">✓</span>Off</a>
+          <a href="/prefs?dev=1&amp;back=/memories/7f3a9c21"><span class="check"></span>On</a>
+          <hr>
+          <span class="grp">Auto-refresh</span>
+          <a href="/prefs?refresh=0&amp;back=/memories/7f3a9c21" aria-current="true"><span class="check">✓</span>Off</a>
+          <a href="/prefs?refresh=60&amp;back=/memories/7f3a9c21"><span class="check"></span>Every minute</a>
+        </div>
+      </details>
+      <details class="menu navmenu">
+        <summary class="btn"><span class="i i-menu"></span>Menu</summary>
+        <div class="menu-pop right wider">
+          <span class="grp">Window</span>
+          <nav class="seg" aria-label="Window"><a href="?days=1">24 h</a><a href="?days=7">7 d</a><a href="?days=30">30 d</a><a href="?days=90" aria-current="true">90 d</a></nav>
+          <hr>
+          <a href="/">Overview</a><a href="/quality">Quality</a><a href="/cost">Cost</a><a href="/bank">Bank</a><a href="/pipeline">Pipeline</a>
+          <span class="grp">Browse</span>
+          <a href="/projects">Projects</a><a href="/sessions">Sessions</a><a href="/memories" aria-current="page">Memories</a>
+          <hr>
+          <a href="/system">System</a>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+<div class="scopebar">
+  <div class="wrap scope">
+    <span>Activity on <b>this PC</b></span>
+    <span class="dot">memory on <b>127.0.0.1:18888</b></span>
+    <span class="dot">updated <time datetime="2026-10-30T15:42:00+01:00" title="2026-10-30 15:42">2 min ago</time></span>
+  </div>
+</div>
+
+<main id="main" class="wrap main">
+  <nav class="small muted" aria-label="Breadcrumb"><a href="/memories">Memories</a> / 7f3a9c21</nav>
+  <div class="page-head">
+    <h1>How has memory <span class="mono" title="7f3a9c21e04b4d0e9a1f6c55b2d18e07">7f3a9c21</span> been used?</h1>
+    <span class="muted"><a href="/projects/backsight">backsight</a> · <i class="sw f-about"></i> fact about you and your work · created <time datetime="2026-09-14T10:31" title="2026-09-14 10:31">Sep 14</time></span>
+    <span class="pill st st-ok">active</span>
+  </div>
+
+  <div class="grid-main">
+    <div class="figs">
+      <div class="fig"><span class="lab">Shown</span><span class="v">23</span><span class="s">17.4 recent-weighted</span></div>
+      <div class="fig"><span class="lab"><i class="sw f-used"></i>Used by Claude</span><span class="v">9</span><span class="s">last <time datetime="2026-10-30T14:52" title="2026-10-30 14:52">today 14:52</time></span></div>
+      <div class="fig"><span class="lab"><i class="sw f-ignored"></i>Shown, then ignored</span><span class="v">6</span></div>
+      <div class="fig"><span class="lab">Used when judged</span><span class="v">60 %</span><span class="s">9 of 15</span></div>
+      <div class="fig"><span class="lab">Learned ranking now</span><span class="v v-word">raised</span><span class="s">shown a little higher</span></div>
+    </div>
+    <section class="card">
+      <div class="card-head"><h2>What does it say?</h2><span class="chip"><span class="i i-sm i-server"></span>server</span></div>
+      <p class="small sub">The text is read live from the memory server when you ask, and never kept by the dashboard.</p>
+      <div class="row"><a class="btn" href="/memories/7f3a9c21/text"><span class="i i-doc"></span>Show text</a></div>
+      <div class="state st-watch"><span class="i i-watch"></span><span>Reported wrong once: <time datetime="2026-10-30T15:11" title="2026-10-30 15:11">today 15:11</time>, session <a class="idc" href="/sessions/a41c09e2#turn-4">a41c09e2</a> turn 4.</span></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>When and where was it shown?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About this timeline"><span class="i i-info"></span></summary><div class="pop"><b>Strip timeline</b><p>One mark per time this memory was shown, on the row of where it was shown. Shape and colour say what Claude did with it. Hover or focus a mark for the turn, its rank, and its rank without the learned ranking.</p><span class="term">ledger shows · path · outcome · rank · boost</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <figure class="chart">
+      <div class="legend">
+        <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-used" d="M0,-5 A5,5 0 1,1 0,5 A5,5 0 1,1 0,-5Z"/></svg>used by Claude</span>
+        <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-ignored" d="M0,-6 L6,0 L0,6 L-6,0Z"/></svg>shown, then ignored</span>
+        <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-undeclared" d="M-4.5,-4.5 H4.5 V4.5 H-4.5Z"/></svg>not declared</span>
+        <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-shown" d="M0,-3 A3,3 0 1,1 0,3 A3,3 0 1,1 0,-3Z"/></svg>shown only</span>
+        <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="mk-pend" d="M0,-4.5 A4.5,4.5 0 1,1 0,4.5 A4.5,4.5 0 1,1 0,-4.5Z"/></svg>pending</span>
+        <span><i class="sw sw-dash"></i>hidden, then restored</span>
+      </div>
+      <svg viewBox="0 0 1000 236" role="img" aria-label="Every time memory 7f3a9c21 was shown, by where, since it was created on Sep 14">
+      <line class="gl" x1="170" x2="992" y1="26" y2="26"/><text class="ta-e lbl" x="160" y="30">added to the prompt</text>
+      <line class="gl" x1="170" x2="992" y1="64" y2="64"/><text class="ta-e lbl" x="160" y="68">before a question</text>
+      <line class="gl" x1="170" x2="992" y1="102" y2="102"/><text class="ta-e lbl" x="160" y="106">at session start</text>
+      <line class="gl" x1="170" x2="992" y1="140" y2="140"/><text class="ta-e lbl" x="160" y="144">Claude’s search</text>
+      <line class="gl" x1="170" x2="992" y1="178" y2="178"/><text class="ta-e lbl" x="160" y="182">opened by Claude</text>
+      <line class="thr-w" x1="616.2" x2="616.2" y1="8" y2="196"/><line class="thr-w" x1="651.4" x2="651.4" y1="8" y2="196"/>
+      <text class="lbl" x="612.2" y="208">hidden Oct 9 · restored Oct 11</text>
+      <line class="mk" x1="176.0" x2="176.0" y1="8" y2="196"/><text class="lbl" x="180.0" y="208">created</text>
+      <path class="mkp f-used" tabindex="0" aria-label="Sep 15 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session a41c09e2" d="M193.6,20 A6,6 0 1,1 193.6,32 A6,6 0 1,1 193.6,20Z"><title>Sep 15 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session a41c09e2</title></path>
+      <path class="mkp f-ignored" tabindex="0" aria-label="Sep 17 · added to the prompt · shown, then ignored · rank 3 (without the learned ranking: 3) · session 5be2d7f0" d="M228.8,19 L235.8,26 L228.8,33 L221.8,26Z"><title>Sep 17 · added to the prompt · shown, then ignored · rank 3 (without the learned ranking: 3) · session 5be2d7f0</title></path>
+      <path class="mkp f-shown" tabindex="0" aria-label="Sep 18 · at session start · shown only · session 93c1a4e8" d="M246.4,98.5 A3.5,3.5 0 1,1 246.4,105.5 A3.5,3.5 0 1,1 246.4,98.5Z"><title>Sep 18 · at session start · shown only · session 93c1a4e8</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Sep 20 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session d0f63b15" d="M281.7,20 A6,6 0 1,1 281.7,32 A6,6 0 1,1 281.7,20Z"><title>Sep 20 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session d0f63b15</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Sep 23 · before a question · used by Claude · rank 2 (without the learned ranking: 2) · session 2e8a91c7" d="M334.5,58 A6,6 0 1,1 334.5,70 A6,6 0 1,1 334.5,58Z"><title>Sep 23 · before a question · used by Claude · rank 2 (without the learned ranking: 2) · session 2e8a91c7</title></path>
+      <path class="mkp f-ignored" tabindex="0" aria-label="Sep 25 · added to the prompt · shown, then ignored · rank 4 (without the learned ranking: 4) · session c7d24e60" d="M369.7,19 L376.7,26 L369.7,33 L362.7,26Z"><title>Sep 25 · added to the prompt · shown, then ignored · rank 4 (without the learned ranking: 4) · session c7d24e60</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Sep 27 · Claude’s search · used by Claude · rank 1 (without the learned ranking: 2) · session a41c09e2" d="M404.9,134 A6,6 0 1,1 404.9,146 A6,6 0 1,1 404.9,134Z"><title>Sep 27 · Claude’s search · used by Claude · rank 1 (without the learned ranking: 2) · session a41c09e2</title></path>
+      <path class="mkp f-shown" tabindex="0" aria-label="Sep 29 · at session start · shown only · session 5be2d7f0" d="M440.1,98.5 A3.5,3.5 0 1,1 440.1,105.5 A3.5,3.5 0 1,1 440.1,98.5Z"><title>Sep 29 · at session start · shown only · session 5be2d7f0</title></path>
+      <path class="mkp f-undeclared" tabindex="0" aria-label="Oct 1 · added to the prompt · not declared · rank 2 (without the learned ranking: 2) · session 93c1a4e8" d="M470.3,21 H480.3 V31 H470.3Z"><title>Oct 1 · added to the prompt · not declared · rank 2 (without the learned ranking: 2) · session 93c1a4e8</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Oct 3 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session d0f63b15" d="M510.6,20 A6,6 0 1,1 510.6,32 A6,6 0 1,1 510.6,20Z"><title>Oct 3 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 2) · session d0f63b15</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Oct 5 · opened by Claude · used by Claude · session 2e8a91c7" d="M545.8,172 A6,6 0 1,1 545.8,184 A6,6 0 1,1 545.8,172Z"><title>Oct 5 · opened by Claude · used by Claude · session 2e8a91c7</title></path>
+      <path class="mkp f-ignored" tabindex="0" aria-label="Oct 10 · before a question · shown, then ignored · rank 2 (without the learned ranking: 2) · session c7d24e60" d="M633.8,57 L640.8,64 L633.8,71 L626.8,64Z"><title>Oct 10 · before a question · shown, then ignored · rank 2 (without the learned ranking: 2) · session c7d24e60</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Oct 12 · added to the prompt · used by Claude · rank 2 (without the learned ranking: 3) · session a41c09e2" d="M669.0,20 A6,6 0 1,1 669.0,32 A6,6 0 1,1 669.0,20Z"><title>Oct 12 · added to the prompt · used by Claude · rank 2 (without the learned ranking: 3) · session a41c09e2</title></path>
+      <path class="mkp f-shown" tabindex="0" aria-label="Oct 13 · at session start · shown only · session 5be2d7f0" d="M686.7,98.5 A3.5,3.5 0 1,1 686.7,105.5 A3.5,3.5 0 1,1 686.7,98.5Z"><title>Oct 13 · at session start · shown only · session 5be2d7f0</title></path>
+      <path class="mkp f-ignored" tabindex="0" aria-label="Oct 14 · added to the prompt · shown, then ignored · rank 5 (without the learned ranking: 5) · session 93c1a4e8" d="M704.3,19 L711.3,26 L704.3,33 L697.3,26Z"><title>Oct 14 · added to the prompt · shown, then ignored · rank 5 (without the learned ranking: 5) · session 93c1a4e8</title></path>
+      <path class="mkp f-undeclared" tabindex="0" aria-label="Oct 17 · Claude’s search · not declared · rank 3 (without the learned ranking: 4) · session d0f63b15" d="M752.1,135 H762.1 V145 H752.1Z"><title>Oct 17 · Claude’s search · not declared · rank 3 (without the learned ranking: 4) · session d0f63b15</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Oct 19 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 1) · session 2e8a91c7" d="M792.3,20 A6,6 0 1,1 792.3,32 A6,6 0 1,1 792.3,20Z"><title>Oct 19 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 1) · session 2e8a91c7</title></path>
+      <path class="mkp f-ignored" tabindex="0" aria-label="Oct 21 · before a question · shown, then ignored · rank 3 (without the learned ranking: 3) · session c7d24e60" d="M827.5,57 L834.5,64 L827.5,71 L820.5,64Z"><title>Oct 21 · before a question · shown, then ignored · rank 3 (without the learned ranking: 3) · session c7d24e60</title></path>
+      <path class="mkp f-shown" tabindex="0" aria-label="Oct 23 · at session start · shown only · session a41c09e2" d="M862.7,98.5 A3.5,3.5 0 1,1 862.7,105.5 A3.5,3.5 0 1,1 862.7,98.5Z"><title>Oct 23 · at session start · shown only · session a41c09e2</title></path>
+      <path class="mkp f-used" tabindex="0" aria-label="Oct 25 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 1) · session 5be2d7f0" d="M898.0,20 A6,6 0 1,1 898.0,32 A6,6 0 1,1 898.0,20Z"><title>Oct 25 · added to the prompt · used by Claude · rank 1 (without the learned ranking: 1) · session 5be2d7f0</title></path>
+      <path class="mkp f-ignored" tabindex="0" aria-label="Oct 26 · added to the prompt · shown, then ignored · rank 2 (without the learned ranking: 2) · session 93c1a4e8" d="M915.6,19 L922.6,26 L915.6,33 L908.6,26Z"><title>Oct 26 · added to the prompt · shown, then ignored · rank 2 (without the learned ranking: 2) · session 93c1a4e8</title></path>
+      <path class="mkp mk-pend" tabindex="0" aria-label="Oct 29 · added to the prompt · pending · rank 1 (without the learned ranking: 2) · session d0f63b15" d="M968.4,21 A5,5 0 1,1 968.4,31 A5,5 0 1,1 968.4,21Z"><title>Oct 29 · added to the prompt · pending · rank 1 (without the learned ranking: 2) · session d0f63b15</title></path>
+      <path class="mkp mk-pend" tabindex="0" aria-label="Oct 30 · before a question · pending · rank 2 (without the learned ranking: 2) · session 2e8a91c7" d="M986.0,59 A5,5 0 1,1 986.0,69 A5,5 0 1,1 986.0,59Z"><title>Oct 30 · before a question · pending · rank 2 (without the learned ranking: 2) · session 2e8a91c7</title></path>
+      <line class="bl" x1="170" x2="992" y1="196" y2="196"/>
+      <text class="ta-m" x="176.0" y="228">Sep 14</text>
+      <text class="ta-m" x="352.1" y="228">Sep 24</text>
+      <text class="ta-m" x="475.3" y="228">Oct 1</text>
+      <text class="ta-m" x="598.6" y="228">Oct 8</text>
+      <text class="ta-m" x="721.9" y="228">Oct 15</text>
+      <text class="ta-m" x="845.1" y="228">Oct 22</text>
+      <text class="ta-m" x="986.0" y="228">Oct 30</text>
+      </svg>
+      <details class="tblfb">
+        <summary>Show as a table</summary>
+        <table class="tbl">
+          <thead><tr><th>When</th><th>Where shown</th><th>What Claude did</th><th class="r">Rank</th><th>Turn</th></tr></thead>
+          <tbody>
+          <tr><td>Oct 30</td><td>before a question</td><td>pending</td><td class="r">2</td><td><a class="idc" href="/sessions/2e8a91c7">2e8a91c7</a> turn 2</td></tr>
+          <tr><td>Oct 29</td><td>added to the prompt</td><td>pending</td><td class="r">1</td><td><a class="idc" href="/sessions/d0f63b15">d0f63b15</a> turn 3</td></tr>
+          <tr><td>Oct 26</td><td>added to the prompt</td><td>shown, then ignored</td><td class="r">2</td><td><a class="idc" href="/sessions/93c1a4e8">93c1a4e8</a> turn 4</td></tr>
+          <tr><td>Oct 25</td><td>added to the prompt</td><td>used by Claude</td><td class="r">1</td><td><a class="idc" href="/sessions/5be2d7f0">5be2d7f0</a> turn 5</td></tr>
+          <tr><td>Oct 23</td><td>at session start</td><td>shown only</td><td class="r">—</td><td><a class="idc" href="/sessions/a41c09e2">a41c09e2</a> turn 6</td></tr>
+          <tr><td>Oct 21</td><td>before a question</td><td>shown, then ignored</td><td class="r">3</td><td><a class="idc" href="/sessions/c7d24e60">c7d24e60</a> turn 2</td></tr>
+          <tr><td>Oct 19</td><td>added to the prompt</td><td>used by Claude</td><td class="r">1</td><td><a class="idc" href="/sessions/2e8a91c7">2e8a91c7</a> turn 3</td></tr>
+          <tr><td>Oct 17</td><td>Claude’s search</td><td>not declared</td><td class="r">3</td><td><a class="idc" href="/sessions/d0f63b15">d0f63b15</a> turn 4</td></tr>
+          </tbody>
+        </table>
+      </details>
+    </figure>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>How high was it ranked when shown?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      </div>
+      <figure class="chart">
+        <svg viewBox="0 0 680 230" role="img" aria-label="Position of this memory when it was shown, 23 shows">
+      <line class="gl" x1="44" x2="672" y1="200.0" y2="200.0"/><text class="ta-e" x="38" y="204.0">0</text>
+      <line class="gl" x1="44" x2="672" y1="156.0" y2="156.0"/><text class="ta-e" x="38" y="160.0">3</text>
+      <line class="gl" x1="44" x2="672" y1="112.0" y2="112.0"/><text class="ta-e" x="38" y="116.0">6</text>
+      <line class="gl" x1="44" x2="672" y1="68.0" y2="68.0"/><text class="ta-e" x="38" y="72.0">9</text>
+      <line class="gl" x1="44" x2="672" y1="24.0" y2="24.0"/><text class="ta-e" x="38" y="28.0">12</text>
+      <rect class="f-used" x="46.0" y="68.0" width="85.7" height="132.0" rx="2"><title>Rank 1: 9 times shown</title></rect>
+      <text class="ta-m" x="88.9" y="218">1</text>
+      <rect class="f-used" x="135.7" y="112.0" width="85.7" height="88.0" rx="2"><title>Rank 2: 6 times shown</title></rect>
+      <text class="ta-m" x="178.6" y="218">2</text>
+      <rect class="f-used" x="225.4" y="141.3" width="85.7" height="58.7" rx="2"><title>Rank 3: 4 times shown</title></rect>
+      <text class="ta-m" x="268.3" y="218">3</text>
+      <rect class="f-used" x="315.1" y="170.7" width="85.7" height="29.3" rx="2"><title>Rank 4: 2 times shown</title></rect>
+      <text class="ta-m" x="358.0" y="218">4</text>
+      <rect class="f-used" x="404.9" y="185.3" width="85.7" height="14.7" rx="2"><title>Rank 5: 1 times shown</title></rect>
+      <text class="ta-m" x="447.7" y="218">5</text>
+      <rect class="f-used" x="494.6" y="185.3" width="85.7" height="14.7" rx="2"><title>Rank 6+: 1 times shown</title></rect>
+      <text class="ta-m" x="537.4" y="218">6+</text>
+      <text class="ta-m" x="627.1" y="218">unranked</text>
+      <line class="bl" x1="44" x2="672" y1="200" y2="200"/>
+        </svg>
+        <p class="xs muted">Rank 1 is the first memory added. Unranked: opened by Claude or shown at session start.</p>
+        <details class="tblfb"><summary>Show as a table</summary><table class="tbl"><thead><tr><th>Rank when shown</th><th class="r">Times shown</th></tr></thead><tbody><tr><td>1</td><td class="r">9</td></tr><tr><td>2</td><td class="r">6</td></tr><tr><td>3</td><td class="r">4</td></tr><tr><td>4</td><td class="r">2</td></tr><tr><td>5</td><td class="r">1</td></tr><tr><td>6+</td><td class="r">1</td></tr><tr><td>unranked</td><td class="r">0</td></tr></tbody></table></details>
+      </figure>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>What can I do with it?</h2></div>
+      <dl class="dl dl-center">
+        <dt>Read it in the terminal</dt><dd><div class="cmd"><code>backsight read 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
+        <dt>Hide it from recall</dt><dd><div class="cmd"><code>backsight forget 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
+        <dt>Bring it back</dt><dd><div class="cmd"><code>backsight forget --restore 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
+      </dl>
+      <p class="xs muted">The dashboard never changes memory: it shows the command, you run it.</p>
+    </section>
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap"><span>backsight v0.1.17-m7</span><a href="/help">Help: backsight guide dashboard</a><a href="/defs">Definitions</a></div>
+</footer>
+</div>
+</body>
+</html>
