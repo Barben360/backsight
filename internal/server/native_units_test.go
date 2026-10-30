@@ -77,6 +77,7 @@ func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeToo
 		Sys: sys, Tools: tools, Proc: "/proc"}
 	withFreePort(t, 8889)
 	withAPIHealth(t, func(context.Context, string) (string, error) { return "connected", nil })
+	tools.Out = dbToolsOut("on")
 	return n, sys, tools
 }
 
@@ -93,8 +94,17 @@ func withAPIHealth(t *testing.T, check func(ctx context.Context, url string) (st
 	return &urls
 }
 
-// installed renders and writes n's files.
+// installed renders and writes n's files, beside a database whose
+// identity is recorded (an install past its first start).
 func installed(t *testing.T, n Native, sec config.Secrets) Files {
+	t.Helper()
+	f := rendered(t, n, sec)
+	recordInstance(t, n, "7702339718603615110")
+	return f
+}
+
+// rendered renders and writes n's files, no database yet.
+func rendered(t *testing.T, n Native, sec config.Secrets) Files {
 	t.Helper()
 	f, err := n.Render(sec, "box")
 	if err != nil {
@@ -480,7 +490,7 @@ func TestNativeStartEnablesStopDisables(t *testing.T) {
 	if got := sys.lines(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Start ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if len(tools.Calls) == 0 || filepath.Base(tools.Calls[0].Path) != "psql" || !slices.Contains(tools.Calls[0].Args, "select 1") {
+	if !slices.ContainsFunc(tools.Calls, func(c toolCall) bool { return filepath.Base(c.Path) == "psql" && slices.Contains(c.Args, "select 1") }) {
 		t.Errorf("Start did not wait for the database to answer: %v", tools.Calls)
 	}
 
@@ -583,7 +593,12 @@ func TestNativeStartWaitsForTheDatabase(t *testing.T) {
 	oldWait, oldPoll := dbWait, dbPoll
 	dbWait, dbPoll = 20*time.Millisecond, time.Millisecond
 	t.Cleanup(func() { dbWait, dbPoll = oldWait, oldPoll })
-	tools.Fail = func(toolCall) error { return errors.New("connection refused") }
+	tools.Fail = func(c toolCall) error {
+		if filepath.Base(c.Path) == "psql" {
+			return errors.New("connection refused")
+		}
+		return nil
+	}
 	err := n.Start(ctx)
 	if err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("Start: %v", err)

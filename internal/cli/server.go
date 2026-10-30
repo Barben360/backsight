@@ -91,7 +91,7 @@ func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path 
 var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	if cfg.RuntimeKind() == "native" {
 		d, home, err := machine()
-		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: "/proc", Err: err}
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, Err: err}
 		if err == nil {
 			// A user manager that never answers must not hang the command.
 			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
@@ -762,7 +762,7 @@ func statusText(r statusResult) string {
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e), newServerNativeCheckCmd(e))
 	return cmd
 }
 

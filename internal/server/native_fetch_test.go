@@ -37,11 +37,12 @@ type toolCall struct {
 }
 
 // fakeTools records each call; Fail makes a call fail, Effect does what the
-// real tool would to the disk.
+// real tool would to the disk, Out is what it prints.
 type fakeTools struct {
 	Calls  []toolCall
 	Fail   func(c toolCall) error
 	Effect func(c toolCall)
+	Out    func(c toolCall) []byte
 }
 
 func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path string, args ...string) ([]byte, error) {
@@ -60,6 +61,9 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 	}
 	if f.Effect != nil {
 		f.Effect(c)
+	}
+	if f.Out != nil {
+		return f.Out(c), nil
 	}
 	return nil, nil
 }

@@ -98,9 +98,7 @@ func (n Native) installation() string {
 }
 
 // DataDir is the database's data directory (pg0's instance).
-func (n Native) DataDir() string {
-	return filepath.Join(n.Home(), ".pg0", "instances", pgInstance, "data")
-}
+func (n Native) DataDir() string { return filepath.Join(n.InstanceDir(), "data") }
 
 // socketDir is postgres's Unix socket directory, which must exist before
 // it starts (Task 1).
@@ -530,8 +528,7 @@ func (n Native) dbPassword() (string, error) {
 // pgEnv is a bundled Postgres client's whole environment: the password in
 // PGPASSWORD, never on its argv.
 func (n Native) pgEnv(password string) []string {
-	return []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + n.Home(),
-		"LD_LIBRARY_PATH=" + filepath.Join(n.installation(), "lib"), "PGPASSWORD=" + password}
+	return append(n.toolEnv(), "PGPASSWORD="+password)
 }
 
 // waitDB waits until the database answers a query as hindsight, dbWait at
@@ -563,13 +560,19 @@ func (n Native) waitDB(ctx context.Context) error {
 	}
 }
 
-// Start enables both units (with linger they start at boot), waits for the
-// database to answer, then for the API to answer with its database
-// connected. What restart-pending lists is restarted, and the marker
-// removed only once the API answered (rulings R1, R30).
+// Start creates the database on a first install and refuses a missing,
+// empty or foreign one (requirement 2), enables both units (with linger
+// they start at boot), waits for the database to answer and checks its
+// fsync (requirement 1: off stops and disables both), then waits for the
+// API to answer with its database connected. What restart-pending lists
+// is restarted, and the marker removed only once the API answered
+// (rulings R1, R30).
 func (n Native) Start(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
+	}
+	if err := n.guardStart(ctx); err != nil {
+		return err
 	}
 	if _, err := n.systemctl(ctx, "daemon-reload"); err != nil {
 		return err
@@ -583,6 +586,9 @@ func (n Native) Start(ctx context.Context) error {
 		return err
 	}
 	if err := n.waitDB(ctx); err != nil {
+		return err
+	}
+	if err := n.fsyncOrStop(ctx); err != nil {
 		return err
 	}
 	if err := n.enableAndStart(ctx, srv, pending[db] || pending[srv]); err != nil {
@@ -640,11 +646,14 @@ func (n Native) enableAndStart(ctx context.Context, unit string, restart bool) e
 	return err
 }
 
-// StartDatabase starts the database unit alone, enabling nothing, and
-// waits until it answers.
+// StartDatabase starts the database unit alone, enabling nothing, behind
+// the same guards as Start, and waits until it answers with fsync on.
 func (n Native) StartDatabase(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
+	}
+	if err := n.guardStart(ctx); err != nil {
+		return err
 	}
 	if _, err := n.systemctl(ctx, "daemon-reload"); err != nil {
 		return err
@@ -652,7 +661,10 @@ func (n Native) StartDatabase(ctx context.Context) error {
 	if _, err := n.systemctl(ctx, "start", n.DBUnit()); err != nil {
 		return err
 	}
-	return n.waitDB(ctx)
+	if err := n.waitDB(ctx); err != nil {
+		return err
+	}
+	return n.fsyncOrStop(ctx)
 }
 
 // installedUnits are the units whose files exist, the server first.
@@ -969,8 +981,8 @@ func (nativeDB) PendingOperations(context.Context, []string) (int, error) {
 // ruling R21): pg0 starts it with its own default password in a transient
 // unit, psql then sets the real one for hindsight and postgres from stdin,
 // and pg0 stops it. No password is on any argv; pg0's temporary files go
-// to a private TMPDIR under home/, removed after. Task 5's guard calls it
-// on an install without an instance.
+// to a private TMPDIR under home/, removed after. ensureInstance calls it
+// on a first install.
 func (n Native) createInstance(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err

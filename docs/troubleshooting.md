@@ -83,6 +83,21 @@ If the server rejects the API key, the key in `secrets.toml` and the server's `.
 
 On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host: carry the file to each PC and run `backsight connect --token-file <file>` there, then delete the file.
 
+### The native server does not start
+
+On the native runtime (`server.runtime = "native"`), the database's unit, `backsight-db.service` (`<server.project>-db.service`), checks the database before every start: from `backsight server start`, at boot, and when systemd restarts it. When the check refuses, neither unit starts, `backsight server start` prints the reason, and `journalctl --user -u backsight-db.service` shows it after a boot. The database lives in `home/.pg0/instances/hindsight` under the native directory (`<server.compose_dir>/native`), and the identifier of the one backsight created or restored is kept beside it, in `identity`.
+
+| The message says the native database is | What happened | What to do |
+|---|---|---|
+| *missing* | The database's directory is gone, while backsight recorded one. backsight does not create an empty one in its place: your sessions would start over on an empty memory. | Put the directory back if you moved or lost it (from your own copy of the disk), then `backsight server start`. Otherwise restore your last backup: `backsight restore <archive>`. |
+| *empty* | The directory is there but holds no database (no `data/PG_VERSION`). | The same: put it back, or `backsight restore <archive>`. |
+| *not the one backsight recorded* | Another database sits there: its identifier (`pg_controldata`'s "Database system identifier") is not the one in `identity`, for example a copy from another PC. | Put the right one back, or `backsight restore <archive>`. |
+| *has no recorded identity* | A database is there but `identity` is missing, so backsight cannot tell it is yours. | `backsight restore <archive>`: it restores into a fresh database and records its identity. Do not write `identity` by hand to get past the check. |
+
+`a postgres (pid N) runs on … outside backsight-db.service: stopping it, never adopting it`, in the journal: a postgres started outside the unit (by hand, or left by an interrupted command) held the database. The check stops it with the bundled `pg_ctl` (a fast shutdown) and the unit then starts its own. If it is still running 30 seconds later, the start fails and names its pid: stop it (`kill -INT <pid>`), then `backsight server start`.
+
+`fsync is off on the native database`: the database answered with `fsync` off, so an OS crash could corrupt it, and `backsight server start` stopped and disabled both units. The unit runs it with `fsync=on`; look for a drop-in that changes it (`systemctl --user cat backsight-db.service`), remove it, then `backsight server render` and `backsight server start`.
+
 ### After a reboot the server was down for a while (private exposure)
 
 A server opened to other PCs (`backsight server expose --private <ip>`) listens on that address and on `127.0.0.1` from one container. When Docker starts at boot before the address exists (Tailscale or DHCP still coming up, or a new DHCP lease), the container cannot listen on it and does not start, and Docker does not try again: this machine's own memory is down too.
