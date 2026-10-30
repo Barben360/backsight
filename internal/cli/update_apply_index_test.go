@@ -426,6 +426,16 @@ func TestIndexMigrateReason(t *testing.T) {
 		{&childError{code: output.Blocked, env: &output.Error{Code: output.Blocked, Message: "CANARY sentence"}, msg: "CANARY sentence"}, "failed"},
 		{errors.New("CANARY exec failure"), "failed"},
 	}
+	for class, want := range map[string]string{
+		"busy": "the index is in use", "full": "the disk is full", "corrupt": "the index is unreadable",
+		"notadb": "the index is unreadable", "readonly": "the index is read-only", "io": "a disk error",
+	} {
+		m := indexClassMessage(class)
+		cases = append(cases, struct {
+			err  error
+			want string
+		}{&childError{code: output.Blocked, env: &output.Error{Code: output.Blocked, Message: m}, msg: m}, want})
+	}
 	for _, c := range cases {
 		if got := indexMigrateReason(bg, bg, c.err); got != c.want {
 			t.Errorf("%v: %q, want %q", c.err, got, c.want)
