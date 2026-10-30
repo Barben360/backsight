@@ -8,8 +8,11 @@
 #
 #   fresh             setup --runtime native --non-interactive; doctor has no error
 #   store             memories stored and recalled; backup create; backup verify
-#   to-docker         server runtime switch docker: no gate difference, overlap@10 recorded
-#   to-native         and back: the fingerprint equals the one after store
+#   to-docker         server runtime switch docker: no gate difference, overlap@10 recorded;
+#                     then server runtime clean removes server/native whole
+#   to-native         and back, from an install that never had native (uv, Python, the
+#                     venv and pg0's Postgres fetched again before the verify): the
+#                     fingerprint equals the one after store
 #   refusals          the db unit, started by systemctl, refuses a missing, an empty
 #                     and a foreign instance (its journal says which); a postgres
 #                     started from the shell on the data is stopped by server start;
@@ -253,11 +256,20 @@ nc_leg_to_docker() {
   [ -n "$(nc_docker_running)" ] || fail "no container of $project runs after the switch to docker"
   nc_units is-active no || fail "a native unit still runs on docker"
   nc_units is-enabled no || fail "a native unit is still enabled on docker: two runtimes would start at boot"
-  echo "overlap@10 $(jq -r '.data.probes.overlap_at_10' "$work/to-docker.json") ($(jq -r '.data.probes.queries' "$work/to-docker.json") probes, $(jq -r '.data.probes.own_at_rank_1' "$work/to-docker.json") own first)"
+  # to-native then starts from an install that never had native (the
+  # v0.1.16-m7 round trip: pg0's Postgres missing at the switch's verify).
+  "$bin" server runtime clean --answer consent=yes --non-interactive --json < /dev/null > "$work/clean-native.json" 2> "$work/clean-native.err" ||
+    { nc_show "$work/clean-native.json" "$work/clean-native.err"; fail "server runtime clean failed"; }
+  jq -e '.ok and .data.deleted and .data.runtime == "native"' "$work/clean-native.json" > /dev/null || { nc_show "$work/clean-native.json"; fail "server runtime clean deleted no native runtime"; }
+  [ ! -e "$native" ] || fail "$native is still there after server runtime clean"
+  echo "overlap@10 $(jq -r '.data.probes.overlap_at_10' "$work/to-docker.json") ($(jq -r '.data.probes.queries' "$work/to-docker.json") probes, $(jq -r '.data.probes.own_at_rank_1' "$work/to-docker.json") own first); native cleaned"
 }
 
 nc_leg_to_native() {
+  [ ! -e "$native" ] || fail "$native exists before the switch to native: to-native would not start from an install that never had native"
+  nhf_seed # the models only: uv, Python, the venv and pg0's Postgres are fetched again
   nc_switch native to-native
+  compgen -G "$native/home/.pg0/installation/*/bin/initdb" > /dev/null || fail "no pg0 Postgres in $native/home/.pg0 after the switch to native"
   [ -z "$(nc_docker_running)" ] || fail "Docker's containers still run after the switch to native"
   nc_units is-enabled yes || fail "the native units are not both enabled after the switch to native"
   nc_fingerprint "$work/fp-native.json"
@@ -456,11 +468,11 @@ nc_leg_lock() {
 
 # nc_own_unit <unit>: one of the units this run's install makes, named
 # exactly (another bs-… project sharing the prefix is never matched): the
-# two native units, the database's first-start and verify transients,
+# two native units, the database's first-start, unpack and verify transients,
 # and the job units, should the scheduler be on.
 nc_own_unit() {
   case $1 in
-    "$project-db.service" | "$project-server.service" | "$project-db-init.service") return 0 ;;
+    "$project-db.service" | "$project-server.service" | "$project-db-init.service" | "$project-pg-unpack.service") return 0 ;;
     "$project-tick.service" | "$project-tick.timer" | "$project-maintain.service" | "$project-maintain.timer") return 0 ;;
   esac
   [[ $1 =~ ^${project}-verify-[0-9a-f]{12}\.service$ ]] # VerifyDump's: 6 random bytes in hex

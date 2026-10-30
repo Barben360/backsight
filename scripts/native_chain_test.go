@@ -174,10 +174,10 @@ func TestNativeChainListsItsLegs(t *testing.T) {
 // bs-x-db-db.service, …) is never matched.
 func TestNativeChainTrapMatchesItsOwnUnitsOnly(t *testing.T) {
 	src := `. "$1"; project=bs-x; shift; for u; do if nc_own_unit "$u"; then echo "own $u"; else echo "other $u"; fi; done`
-	own := []string{"bs-x-db.service", "bs-x-server.service", "bs-x-db-init.service", "bs-x-verify-0123456789ab.service",
+	own := []string{"bs-x-db.service", "bs-x-server.service", "bs-x-db-init.service", "bs-x-pg-unpack.service", "bs-x-verify-0123456789ab.service",
 		"bs-x-tick.service", "bs-x-tick.timer", "bs-x-maintain.service", "bs-x-maintain.timer"}
 	other := []string{"bs-x-db-db.service", "bs-x-db-server.service", "bs-x-verify-db.service", "bs-x-verify-0a-db.service",
-		"bs-x-other.service", "bs-xy-db.service", "backsight-db.service", "backsight-tick.timer", "bs-x-db.service.d"}
+		"bs-x-other.service", "bs-xy-db.service", "backsight-db.service", "backsight-tick.timer", "bs-x-db.service.d", "bs-x-pg-unpack-db.service"}
 	out, err := exec.Command("bash", append([]string{"-c", src, "x", mustAbs(t, "native-chain.sh")}, append(own, other...)...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -240,5 +240,45 @@ func TestNativeChainTrapKeepsTheRunsStatusWhenRemovingFails(t *testing.T) {
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
 		t.Fatalf("exit %v, want the run's 7:\n%s", err, out)
+	}
+}
+
+// The round trip's way back starts from an install that never had native
+// (the v0.1.16-m7 bug: pg0's Postgres missing at the switch's verify):
+// to-docker ends with server runtime clean, which removes server/native
+// whole, and to-native refuses to start while it is there.
+func TestNativeChainToNativeStartsFromNoNative(t *testing.T) {
+	dir := t.TempDir()
+	native, calls := filepath.Join(dir, "native"), filepath.Join(dir, "calls")
+	if err := os.MkdirAll(filepath.Join(native, "home", ".pg0", "installation"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// backsight: records its argv; clean removes server/native.
+	writeExec(t, filepath.Join(dir, "backsight"), `#!/bin/sh
+echo "$*" >> `+calls+`
+case "$*" in "server runtime clean"*) rm -rf `+native+`; echo '{"ok":true,"data":{"runtime":"native","deleted":true}}' ;; esac
+`)
+	if err := os.WriteFile(filepath.Join(dir, "to-docker.json"), []byte(`{"data":{"probes":{"overlap_at_10":1,"queries":20,"own_at_rank_1":20}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `set -euo pipefail; . "$1"; bin=$2/backsight work=$2 native=$3 project=bs-x
+nc_switch() { echo "switch $1" >> "$work/calls"; }
+hfc_seed() { :; }; hfc_save() { :; }; nc_units() { [ "$2" = no ]; }; nc_docker_running() { echo c1; }
+nc_leg_to_docker
+[ ! -e "$native" ] || { echo "native still there" >&2; exit 4; }
+mkdir -p "$native"
+if (nc_leg_to_native) 2> "$work/to-native.err"; then echo "to-native ran with native there" >&2; exit 5; fi
+grep -q "never had native" "$work/to-native.err" || { cat "$work/to-native.err" >&2; exit 6; }`
+	out, err := exec.Command("bash", "-c", src, "x", mustAbs(t, "native-chain.sh"), dir, native).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	raw, _ := os.ReadFile(calls)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if want := []string{"switch docker", "server runtime clean --answer consent=yes --non-interactive --json"}; !slices.Equal(lines, want) {
+		t.Errorf("to-docker ran %q, want %q", lines, want)
+	}
+	if !strings.Contains(string(out), "native cleaned") {
+		t.Errorf("to-docker's line does not say native was cleaned:\n%s", out)
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -30,7 +31,8 @@ import (
 // rows in each counted table: dumps carry their row count ("PGDMP
 // n=<rows>"), the throwaway database of a verify (any password but the
 // server's) is apart, systemd-run's db-init creates an instance whose
-// identifier is nextID.
+// identifier is nextID, and it or the download's unpack extracts pg0's
+// Postgres.
 type nativeDBTools struct {
 	mu         sync.Mutex
 	n          server.Native
@@ -61,6 +63,15 @@ func (f *nativeDBTools) Run(_ context.Context, env []string, _ io.Reader, path s
 	last := args[len(args)-1]
 	switch filepath.Base(path) {
 	case "systemd-run":
+		// pg0's first start, the database's creation or the download's
+		// unpack, extracts its Postgres under HOME.
+		if u := argAfter(args, "--unit"); strings.HasSuffix(u, "-db-init") || strings.HasSuffix(u, "-pg-unpack") {
+			for _, b := range []string{"initdb", "postgres", "pg_ctl", "pg_controldata", "psql", "pg_dump", "pg_restore"} {
+				p := filepath.Join(f.n.Home(), ".pg0", "installation", nativelock.PGInstallation, "bin", b)
+				_ = os.MkdirAll(filepath.Dir(p), 0o755)
+				_ = os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755)
+			}
+		}
 		if strings.HasSuffix(argAfter(args, "--unit"), "-db-init") {
 			if err := os.MkdirAll(f.n.DataDir(), 0o700); err != nil {
 				return nil, err
