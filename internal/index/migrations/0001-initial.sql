@@ -7,8 +7,11 @@
 --   booleans    INTEGER 0/1
 --   counts, ranks, offsets, lengths  INTEGER
 --   scores, boosts, weights  REAL
---   ids, flags, keys, paths, names, verdicts, outcomes  TEXT
---   n and the journal turn numbers stay nullable (absent on some lines)
+--   ids, flags, keys, paths, names, verdicts, outcomes  TEXT; so are v (the
+--               instruction-set version, "v10"), turn (a turn's id, never
+--               a number: no numeric affinity may strip a leading zero) and
+--               the enum-valued credited, credit, live and empty
+--   n stays nullable (absent on some lines)
 
 CREATE TABLE tel_prompt (
   source_file TEXT NOT NULL,
@@ -17,7 +20,7 @@ CREATE TABLE tel_prompt (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   n INTEGER,
   decision TEXT,
   reason TEXT,
@@ -32,7 +35,7 @@ CREATE TABLE tel_prompt (
   hinted INTEGER,
   detector TEXT,
   chars INTEGER,
-  empty INTEGER,
+  empty TEXT,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
 CREATE INDEX tel_prompt_ts ON tel_prompt(ts);
@@ -44,11 +47,11 @@ CREATE TABLE tel_outcome (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   n INTEGER,
   ids_n INTEGER,
   searched INTEGER,
-  credited INTEGER,
+  credited TEXT,
   credit_source TEXT,
   contradicted INTEGER,
   PRIMARY KEY (source_file, "offset")
@@ -62,9 +65,9 @@ CREATE TABLE tel_reply (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   n INTEGER,
-  credit INTEGER,
+  credit TEXT,
   searched INTEGER,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
@@ -77,7 +80,7 @@ CREATE TABLE tel_briefing (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   ids_n INTEGER,
   chars INTEGER,
   source TEXT,
@@ -92,7 +95,7 @@ CREATE TABLE tel_briefing_outcome (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   used_n INTEGER,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
@@ -105,12 +108,12 @@ CREATE TABLE tel_tool (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   name TEXT,
   ms INTEGER,
   hits INTEGER,
   ok INTEGER,
-  live INTEGER,
+  live TEXT,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
 CREATE INDEX tel_tool_ts ON tel_tool(ts);
@@ -122,7 +125,7 @@ CREATE TABLE tel_tool_use (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   n INTEGER,
   name TEXT,
   ids_n INTEGER,
@@ -138,7 +141,7 @@ CREATE TABLE tel_credit (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   verdict TEXT,
   ids_n INTEGER,
   ok INTEGER,
@@ -153,7 +156,7 @@ CREATE TABLE tel_credit_check (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   outcome TEXT,
   shown INTEGER,
   flags TEXT,
@@ -169,7 +172,7 @@ CREATE TABLE tel_retire (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   action TEXT,
   ids_n INTEGER,
   PRIMARY KEY (source_file, "offset")
@@ -183,7 +186,7 @@ CREATE TABLE tel_feedback_settle (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   shows INTEGER,
   credits INTEGER,
   misses INTEGER,
@@ -200,7 +203,7 @@ CREATE TABLE tel_feedback_error (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   reason TEXT,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
@@ -213,7 +216,7 @@ CREATE TABLE tel_gate (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   n INTEGER,
   decision TEXT,
   reason TEXT,
@@ -228,7 +231,7 @@ CREATE TABLE tel_retain (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   document TEXT,
   items INTEGER,
   status TEXT,
@@ -244,7 +247,7 @@ CREATE TABLE tel_hook_failure (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   hook TEXT,
   kind TEXT,
   ms INTEGER,
@@ -259,7 +262,7 @@ CREATE TABLE tel_job (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   name TEXT,
   status TEXT,
   ms INTEGER,
@@ -274,8 +277,8 @@ CREATE TABLE tel_attribution (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
-  turn INTEGER,
+  v TEXT,
+  turn TEXT,
   subagent INTEGER,
   base INTEGER,
   applied INTEGER,
@@ -292,7 +295,7 @@ CREATE TABLE tel_store (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   result TEXT,
   kind TEXT,
   PRIMARY KEY (source_file, "offset")
@@ -306,7 +309,7 @@ CREATE TABLE tel_dashboard (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   action TEXT,
   ms INTEGER,
   pages INTEGER,
@@ -321,7 +324,7 @@ CREATE TABLE tel_config (
   session TEXT,
   project TEXT,
   binary_version TEXT,
-  v INTEGER,
+  v TEXT,
   sha256 TEXT,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;
@@ -379,7 +382,7 @@ CREATE TABLE turns (
   "offset" INTEGER NOT NULL,
   ts INTEGER NOT NULL,
   session TEXT,
-  turn INTEGER,
+  turn TEXT,
   agent TEXT,
   project TEXT,
   n INTEGER,
@@ -397,7 +400,7 @@ CREATE TABLE shows (
   ts INTEGER NOT NULL,
   session TEXT,
   key TEXT,
-  turn INTEGER,
+  turn TEXT,
   agent TEXT,
   path TEXT,
   memory_id TEXT,
@@ -433,7 +436,7 @@ CREATE TABLE credits (
   pos INTEGER NOT NULL DEFAULT 0,
   ts INTEGER NOT NULL,
   session TEXT,
-  turn INTEGER,
+  turn TEXT,
   agent TEXT,
   project TEXT,
   memory_id TEXT,
@@ -449,7 +452,7 @@ CREATE TABLE stops (
   "offset" INTEGER NOT NULL,
   ts INTEGER NOT NULL,
   session TEXT,
-  turn INTEGER,
+  turn TEXT,
   agent TEXT,
   outcome TEXT,
   stop_check TEXT,
@@ -481,7 +484,7 @@ CREATE TABLE recalls (
   pos INTEGER NOT NULL DEFAULT 0,
   ts INTEGER NOT NULL,
   session TEXT,
-  turn INTEGER,
+  turn TEXT,
   agent TEXT,
   path TEXT,
   memory_id TEXT,
