@@ -162,12 +162,13 @@ func tmpName(file string) (string, error) {
 // sweepTmp removes the temp files beside file (<file>.tmp…, with their
 // -wal, -shm, -journal) that nobody wrote for tmpStale: a crashed
 // rebuild's. A fresh one may be a live rebuild's (one whose lock was
-// taken over) and is kept.
-func sweepTmp(file string, now time.Time) {
+// taken over) and is kept. It returns the names of the temp files it
+// removed (each with its companions).
+func sweepTmp(file string, now time.Time) []string {
 	dir, prefix := filepath.Dir(file), filepath.Base(file)+".tmp"
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return nil
 	}
 	newest := map[string]time.Time{} // main temp name → its group's latest write
 	for _, e := range ents {
@@ -188,11 +189,13 @@ func sweepTmp(file string, now time.Time) {
 			newest[main] = t
 		}
 	}
+	var removed []string
 	for main, t := range newest {
-		if now.Sub(t) >= tmpStale {
-			_ = removeTmp(filepath.Join(dir, main))
+		if now.Sub(t) >= tmpStale && removeTmp(filepath.Join(dir, main)) == nil {
+			removed = append(removed, main)
 		}
 	}
+	return removed
 }
 
 var lostMonthRE = regexp.MustCompile(`(\d{4}-(?:0[1-9]|1[0-2]))\.jsonl$`)

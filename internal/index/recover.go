@@ -54,6 +54,10 @@ var renameFile = os.Rename
 // opens the file in between makes the rename fail instead.
 var holdWhileRenaming = runtime.GOOS != "windows"
 
+// Class is err's class (classify): the only form in which callers show
+// an index error.
+func Class(err error) string { return classify(err) }
+
 // classify is err's class, the only form an index error is stored or
 // shown in: corrupt | notadb | full | busy | readonly | io | other ("" for
 // nil).

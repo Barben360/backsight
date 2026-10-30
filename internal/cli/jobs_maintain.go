@@ -45,7 +45,9 @@ type maintainResult struct {
 	// Rename: the legacy bank's move to the new names, after the backup,
 	// when an update could not finish it (pending operations).
 	Rename string `json:"rename,omitempty"`
-	MS     int    `json:"ms"`
+	// MetricsIndex: the pruning of the metrics index (maintainIndex).
+	MetricsIndex string `json:"metrics_index,omitempty"`
+	MS           int    `json:"ms"`
 }
 
 // newJobsMaintainCmd is the daily job (decision 0025): telemetry rotation,
@@ -94,6 +96,7 @@ func newJobsMaintainCmd(e *env) *cobra.Command {
 				return finish()
 			}
 			res.Rotated = rotateTelemetry(d.TelemetryDir(), now(), telemetryMonths)
+			res.MetricsIndex = maintainIndex(cmd.Context(), d, home)
 			archive, noBackup := "", "backup.enabled is off, and the moves wait for a backup"
 			if cfg, _, err := loadServerConfig(); err == nil && cfg.Backup.Enabled {
 				// The maintenance lock above is checked, not held: backup
@@ -226,7 +229,11 @@ func maintainText(r maintainResult) string {
 	if r.Rename != "" {
 		purges += ", bank rename " + r.Rename
 	}
-	return fmt.Sprintf("%s: %d telemetry file(s) rotated, backup %s, re-attribution %s%s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated),
+	metrics := ""
+	if r.MetricsIndex != "" {
+		metrics = ", metrics index " + r.MetricsIndex
+	}
+	return fmt.Sprintf("%s: %d telemetry file(s) rotated%s, backup %s, re-attribution %s%s, update %s, doctor %s (%d ms)\n", r.Status, len(r.Rotated), metrics,
 		map[bool]string{true: "off", false: r.Backup}[r.Backup == ""], r.Reattribute, purges, r.Update, r.Doctor, r.MS)
 }
 

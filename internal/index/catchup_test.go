@@ -3,6 +3,7 @@ package index
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -256,10 +257,16 @@ func TestCatchUpIsBounded(t *testing.T) {
 	if fr.LagSeconds != 3600 { // the clock moved an hour past the lines
 		t.Errorf("lag %d, want 3600", fr.LagSeconds)
 	}
+	if fr.Lines != 5000 {
+		t.Errorf("lines %d, want 5000", fr.Lines)
+	}
 	afterBatch = func() {}
 	fr = e.catchUp(time.Minute)
-	if fr.Partial || fr.LagSeconds != 0 {
+	if fr.Partial || fr.LagSeconds != 0 || fr.Lines != 7000 {
 		t.Errorf("second run %+v", fr)
+	}
+	if raw, _ := json.Marshal(fr); strings.Contains(string(raw), "7000") {
+		t.Errorf("the line count is in the views' JSON: %s", raw)
 	}
 	if n := e.count("tel_prompt"); n != 12_000 {
 		t.Errorf("%d rows, want 12000", n)

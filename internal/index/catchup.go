@@ -19,11 +19,13 @@ const (
 
 // Freshness is how current the index is after a catch-up: when a file was
 // last ingested, how far behind its files it is, and whether the budget
-// ran out with lines left.
+// ran out with lines left. Lines is how many complete lines the catch-up
+// read (not part of the views' JSON).
 type Freshness struct {
 	IngestedAt time.Time `json:"ingested_at"`
 	LagSeconds int64     `json:"lag_seconds"`
 	Partial    bool      `json:"partial"`
+	Lines      int64     `json:"-"`
 }
 
 // progressMin is the unread size from which a catch-up reports progress.
@@ -118,6 +120,7 @@ func (ix *Index) refresh(ctx context.Context, start, deadline time.Time) (Freshn
 	if err != nil {
 		return Freshness{}, st, err
 	}
+	fr.Lines = st.Lines
 	if !fr.Partial {
 		p.ready(st.Lines)
 	}
