@@ -82,10 +82,13 @@ Then, under the maintenance lock (hooks queue their sends, jobs wait):
 3. It stops the source. Its data stays where it is.
 4. It writes the target's files with the same secrets and API port, starts the target's database alone and restores the archive into it (on native, it records the database's identity).
 5. **The gate**: it compares the target's data with the source's, exactly: each table's rows and a hash of its keys, the bank list and the control documents (the server id, the restore epoch, the feedback ledgers). Any difference fails the switch.
-6. It starts the target, waits for health and recalls the same memories again: it reports the overlap of the top 10 (`overlap@10`) and how many found their own memory first.
+6. It starts the target, waits for health and recalls the same memories again: it reports the overlap of the top 10 (`overlap@10`) beyond near-ties, the raw one and how many near-tie swaps it counted, for instance `20 probes: overlap@10 1.00 beyond near-ties (raw 0.79, 31 near-tie swaps)`.
 7. Only then it writes `server.runtime` to `config.toml`.
 
-**Recall may differ slightly**, and that is a warning, never a failure. Docker's reranker runs on PyTorch and native's on ONNX: on identical data (the gate proved it), near-ties can come out in another order. Below 0.9 overlap the switch says so.
+**Recall may differ slightly**, and that is a warning, never a failure. Both runtimes run the same models, but Docker's reranker runs on PyTorch and native's on ONNX: on identical data (the gate proved it), their scores differ by about 0.001, and memories whose scores nearly tie at the 10th place can swap across it. The two numbers:
+
+- **raw**: the share of each memory's top 10 before the switch that is in its top 10 after, averaged over the memories. Near-tie swaps lower it on a healthy switch.
+- **beyond near-ties**: the same, but a memory the target ranks just past the 10th place also counts as found when its score is within 0.01 of the target's 10th score. This one is the switch's verdict: below 0.9 the switch warns. `backsight stats` and doctor show it; `logs/runtime-switch.jsonl` keeps both.
 
 **A failure, or Ctrl-C**, anywhere from step 2 to step 7 stops the target (native: its units disabled) and starts the source as it was; `config.toml` is unchanged and the backup is kept; the command exits 20 naming the step. If the switch is killed outright (a crash, a power cut), doctor reports it, and running the same `backsight server runtime switch <runtime>` again first puts the source back, then switches. Either way, one runtime only is left to start at boot. A rollback that itself fails says what to run (`backsight server start`, and how to stop the target).
 

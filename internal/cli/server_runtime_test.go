@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -146,8 +147,10 @@ type switchWorld struct {
 	reads   []string // read-only calls
 	rts     map[string]*switchRT
 	running string // the runtime whose API answers
-	// rank is the top 10 a recall of query answers on runtime kind.
+	// rank is the hits a recall of query answers on runtime kind, best
+	// first; final their final scores (nil: 0.05 apart from 0.9).
 	rank        map[string]func(query string) []string
+	final       map[string]func(query string) []float64
 	memories    int // the bank's memories (the probes' listing)
 	listTags    []string
 	epochWrites int
@@ -286,7 +289,7 @@ func (r *switchRT) VerifyDump(ctx context.Context, dump string, tables []string)
 func switchSetup(t *testing.T, from string) (home string, w *switchWorld) {
 	t.Helper()
 	home = devInstall(t, true)
-	w = &switchWorld{rts: map[string]*switchRT{}, running: from, memories: 25, rank: map[string]func(string) []string{}}
+	w = &switchWorld{rts: map[string]*switchRT{}, running: from, memories: 25, rank: map[string]func(string) []string{}, final: map[string]func(string) []float64{}}
 	for _, k := range []string{"docker", "native"} {
 		rt := &switchRT{w: w, kind: k, fail: map[string]error{}, hook: map[string]func(context.Context) error{}}
 		rt.db = &switchDB{rt: rt, data: dbData{Keys: map[string][]string{}}}
@@ -336,8 +339,16 @@ func switchSetup(t *testing.T, from string) (home string, w *switchWorld) {
 			var req struct{ Query string }
 			_ = json.Unmarshal(body, &req)
 			var hits []string
-			for _, id := range w.rank[w.running](req.Query) {
-				hits = append(hits, `{"id":"`+id+`","text":"x","type":"world"}`)
+			var final []float64
+			if f := w.final[w.running]; f != nil {
+				final = f(req.Query)
+			}
+			for i, id := range w.rank[w.running](req.Query) {
+				score := 0.9 - 0.05*float64(i)
+				if i < len(final) {
+					score = final[i]
+				}
+				hits = append(hits, fmt.Sprintf(`{"id":%q,"text":"x","type":"world","scores":{"final":%g}}`, id, score))
 			}
 			_, _ = rw.Write([]byte(`{"results":[` + strings.Join(hits, ",") + `]}`))
 			return true
@@ -408,6 +419,8 @@ type switchEnvelope struct {
 			Queries    int     `json:"queries"`
 			Overlap    float64 `json:"overlap_at_10"`
 			OwnAtRank1 int     `json:"own_at_rank_1"`
+			BeyondTies float64 `json:"overlap_beyond_near_ties"`
+			NearTies   int     `json:"near_tie_swaps"`
 		} `json:"probes"`
 	} `json:"data"`
 	Error *output.Error `json:"error"`
@@ -682,11 +695,78 @@ func TestSwitchRecallWarningIsNotAFailure(t *testing.T) {
 	if p := env.Data.Probes; p == nil || p.Overlap < 0.799 || p.Overlap > 0.801 {
 		t.Errorf("probes %+v", p)
 	}
-	if w := strings.Join(env.Data.Warnings, "\n"); !strings.Contains(w, "recall differs after the switch (overlap@10 0.80)") || !strings.Contains(w, "the gate passed") {
+	if w := strings.Join(env.Data.Warnings, "\n"); !strings.Contains(w, "recall differs after the switch (overlap@10 0.80 beyond near-ties, raw 0.80)") || !strings.Contains(w, "the gate passed") {
 		t.Errorf("warnings %q", env.Data.Warnings)
 	}
 	if rs := switchState(t, home); rs == nil || rs.Step != "done" {
 		t.Errorf("runtime_switch %+v", rs)
+	}
+}
+
+// Near-ties swap across rank 10 between the runtimes' rerankers (torch
+// and onnx, ~1e-3 apart): a source hit the target ranks just past 10
+// within nearTie of its 10th score is found; the warning follows that
+// number, the raw one is still reported (issue #123).
+func TestSwitchRecallBeyondNearTies(t *testing.T) {
+	// The target puts x1 and x2 in its top 10 (scores 0.9 down to 0.45),
+	// then the source's 9th and 10th at the scores given.
+	for _, c := range []struct {
+		name    string
+		s8, s9  float64
+		beyond  float64
+		swaps   int
+		line    string
+		warning string
+	}{
+		{name: "near-tie swaps are found", s8: 0.449, s9: 0.441, beyond: 1, swaps: 40,
+			line: "20 probes: overlap@10 1.00 beyond near-ties (raw 0.80, 40 near-tie swaps)"},
+		{name: "one within the tie, one dropped beyond it", s8: 0.445, s9: 0.43, beyond: 0.9, swaps: 20,
+			line: "20 probes: overlap@10 0.90 beyond near-ties (raw 0.80, 20 near-tie swaps)"},
+		{name: "a score drop beyond the tie is lost", s8: 0.43, s9: 0.2, beyond: 0.8, swaps: 0,
+			line:    "20 probes: overlap@10 0.80 beyond near-ties (raw 0.80, 0 near-tie swaps)",
+			warning: "recall differs after the switch (overlap@10 0.80 beyond near-ties, raw 0.80)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, w := switchSetup(t, "docker")
+			w.rank["native"] = func(q string) []string {
+				top := sourceRanking(q)
+				return append(append(top[:8:8], "x1", "x2", top[8], "x3", "x4", "x5"), top[9])
+			}
+			w.final["native"] = func(string) []float64 {
+				mid := (c.s8 + c.s9) / 2 // x3 to x5
+				return []float64{0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, c.s8, mid, mid, mid, c.s9}
+			}
+			code, env, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+			if code != output.OK {
+				t.Fatalf("exit %d\n%s", code, all)
+			}
+			p := env.Data.Probes
+			if p == nil || math.Abs(p.Overlap-0.8) > 1e-9 || math.Abs(p.BeyondTies-c.beyond) > 1e-9 || p.NearTies != c.swaps || p.OwnAtRank1 != 20 {
+				t.Fatalf("probes %+v", p)
+			}
+			if got := stepOf(env.Data.Steps, "recall"); got != c.line {
+				t.Errorf("recall line %q, want %q", got, c.line)
+			}
+			if w := strings.Join(env.Data.Warnings, "\n"); c.warning == "" && strings.Contains(w, "recall differs") || c.warning != "" && !strings.Contains(w, c.warning) {
+				t.Errorf("warnings %q, want %q", env.Data.Warnings, c.warning)
+			}
+			if rs := switchState(t, home); rs == nil || math.Abs(rs.Overlap-0.8) > 1e-9 || math.Abs(rs.OverlapBeyondTies-c.beyond) > 1e-9 {
+				t.Errorf("runtime_switch %+v", rs)
+			}
+			// The log keeps both; stats shows the one beyond near-ties.
+			raw, _ := os.ReadFile(filepath.Join(pathsOf(home).State, "logs", "runtime-switch.jsonl"))
+			var line struct {
+				Overlap    float64 `json:"overlap"`
+				BeyondTies float64 `json:"overlap_beyond_near_ties"`
+			}
+			if err := json.Unmarshal(raw, &line); err != nil || math.Abs(line.Overlap-0.8) > 1e-9 || math.Abs(line.BeyondTies-c.beyond) > 1e-9 {
+				t.Errorf("runtime-switch.jsonl: %v\n%s", err, raw)
+			}
+			want := fmt.Sprintf("recall overlap@10 %.2f beyond near-ties)", c.beyond)
+			if code, out, _ := run(t, "stats"); code != output.OK || !strings.Contains(out, want) {
+				t.Errorf("stats text: exit %d, want %q\n%s", code, want, out)
+			}
+		})
 	}
 }
 

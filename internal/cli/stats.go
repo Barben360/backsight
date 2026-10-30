@@ -74,8 +74,11 @@ type statsSwitch struct {
 	From    string    `json:"from"`
 	To      string    `json:"to"`
 	At      time.Time `json:"at"`
-	Overlap float64   `json:"overlap"`
-	Step    string    `json:"step"` // running | done | rolled-back
+	Overlap float64   `json:"overlap"` // raw
+	Step    string    `json:"step"`    // running | done | rolled-back
+	// OverlapBeyondTies: the one shown (issue #123); absent from a switch
+	// recorded before it.
+	OverlapBeyondTies float64 `json:"overlap_beyond_near_ties,omitempty"`
 }
 
 // runtimeOf is the local server's runtime and its last switch; "" and
@@ -90,7 +93,7 @@ func runtimeOf(d paths.Dirs, home string) (string, *statsSwitch) {
 		return cfg.RuntimeKind(), nil
 	}
 	rs := st.RuntimeSwitch
-	return cfg.RuntimeKind(), &statsSwitch{From: rs.From, To: rs.To, At: rs.At.UTC(), Overlap: rs.Overlap, Step: rs.Step}
+	return cfg.RuntimeKind(), &statsSwitch{From: rs.From, To: rs.To, At: rs.At.UTC(), Overlap: rs.Overlap, Step: rs.Step, OverlapBeyondTies: rs.OverlapBeyondTies}
 }
 
 // runtimeText is the Runtime line's text after its label.
@@ -101,6 +104,9 @@ func runtimeText(kind string, s *statsSwitch) string {
 	day := s.At.Format("2006-01-02")
 	switch s.Step {
 	case "done":
+		if s.OverlapBeyondTies > 0 {
+			return fmt.Sprintf("%s (switched from %s on %s, recall overlap@10 %.2f beyond near-ties)", kind, s.From, day, s.OverlapBeyondTies)
+		}
 		return fmt.Sprintf("%s (switched from %s on %s, recall overlap@10 %.2f)", kind, s.From, day, s.Overlap)
 	case "rolled-back":
 		return fmt.Sprintf("%s (the switch to %s on %s was rolled back)", kind, s.To, day)

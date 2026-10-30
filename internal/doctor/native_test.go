@@ -251,6 +251,25 @@ func TestDoctorReportsKeptSourceData(t *testing.T) {
 	expect(t, check(t, f.run(), "runtime-switch"), Info, "rolled back")
 }
 
+// doctor shows the switch's recall overlap beyond near-ties, never the raw
+// one (issue #123); a switch recorded before it shows none.
+func TestDoctorShowsTheSwitchOverlapBeyondNearTies(t *testing.T) {
+	f := newFixture(t)
+	at := time.Date(2026, 10, 29, 9, 30, 0, 0, time.UTC)
+	f.env.Switch = func() (*state.RuntimeSwitch, string) {
+		return &state.RuntimeSwitch{From: "docker", To: "native", Step: "done", At: at, Overlap: 0.79, OverlapBeyondTies: 0.97}, ""
+	}
+	if c := check(t, f.run(), "runtime-switch"); !strings.HasSuffix(c.Summary, ", recall overlap@10 0.97 beyond near-ties") || strings.Contains(c.Summary, "0.79") {
+		t.Errorf("%+v", c)
+	}
+	f.env.Switch = func() (*state.RuntimeSwitch, string) {
+		return &state.RuntimeSwitch{From: "docker", To: "native", Step: "done", At: at, Overlap: 0.79}, ""
+	}
+	if c := check(t, f.run(), "runtime-switch"); strings.Contains(c.Summary, "overlap") {
+		t.Errorf("a switch recorded before #123: %+v", c)
+	}
+}
+
 // venvWith is a venv whose site-packages hold dist-info dirs for pkgs
 // (name → version, the name as the wheel spells it).
 func venvWith(t *testing.T, pkgs map[string]string) string {

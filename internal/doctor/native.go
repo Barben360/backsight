@@ -216,7 +216,9 @@ func checkNativeVenv(f NativeFacts) Check {
 }
 
 // checkRuntimeSwitch reports the last runtime switch: a cut-off one as an
-// error, else when it ended and the other runtime's data kept since.
+// error, else when it ended, its recall overlap beyond near-ties (issue
+// #123; none for a switch recorded before it) and the other runtime's data
+// kept since.
 func checkRuntimeSwitch(rs *state.RuntimeSwitch, kept string) Check {
 	c := Check{ID: "runtime-switch", Status: Info}
 	when := rs.At.Local().Format("2006-01-02 15:04")
@@ -233,6 +235,9 @@ func checkRuntimeSwitch(rs *state.RuntimeSwitch, kept string) Check {
 		c.Summary = "the switch from " + rs.From + " to " + rs.To + " was rolled back on " + when + ": the memory stays on " + rs.From
 	default:
 		c.Summary = "switched from " + rs.From + " to " + rs.To + " on " + when
+		if rs.OverlapBeyondTies > 0 {
+			c.Summary += fmt.Sprintf(", recall overlap@10 %.2f beyond near-ties", rs.OverlapBeyondTies)
+		}
 	}
 	if kept != "" {
 		c.Detail = kept + " kept from before the switch: backsight server runtime clean deletes it"
