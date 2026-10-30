@@ -145,6 +145,9 @@ func TestIndexHoldsNoCanary(t *testing.T) {
 	if _, err := pre.CatchUp(context.Background(), time.Minute); err != nil {
 		t.Fatal(err)
 	}
+	if st, err := os.Stat(pre.Path() + "-wal"); err != nil || st.Size() == 0 {
+		t.Fatalf("the -wal holds nothing before the checkpoint: %v", err)
+	}
 	noCanary(t, "before the checkpoint", home)
 	if err := pre.Close(); err != nil {
 		t.Fatal(err)
