@@ -70,9 +70,9 @@ func Open(ctx context.Context, o Options) (*Index, error) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	opens[o.Dirs.State]++
 	if sh, ok := files[path]; ok {
 		sh.refs++
+		opens[o.Dirs.State]++
 		return &Index{sh: sh, path: path, opts: o}, nil
 	}
 	fs := detectFS(dir, o.Home, o.Getenv)
@@ -92,6 +92,7 @@ func Open(ctx context.Context, o Options) (*Index, error) {
 	}
 	sh := &shared{w: w, r: r, fs: fs, refs: 1}
 	files[path] = sh
+	opens[o.Dirs.State]++
 	return &Index{sh: sh, path: path, opts: o}, nil
 }
 

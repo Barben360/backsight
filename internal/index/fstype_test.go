@@ -1,6 +1,9 @@
 package index
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClassifyFilesystems(t *testing.T) {
 	home := "/home/u"
@@ -40,11 +43,45 @@ func TestClassifyFilesystems(t *testing.T) {
 		{"cloudstorage dropbox", classifyPath("darwin", "/Users/u", "/Users/u/Library/CloudStorage/Dropbox/x", env(nil)), FSInfo{FSSynced, "dropbox"}},
 		{"plain state", classifyPath("linux", home, home+"/.local/state/backsight", env(nil)), loc},
 		{"onedrive env unset", classifyPath("windows", `C:\Users\u`, `D:\OD\x`, env(nil)), loc},
+		{"home empty dropbox", classifyPath("linux", "", "/Dropbox/x", env(nil)), loc},
+		{"home empty icloud win", classifyPath("windows", "", `\iCloudDrive\x`, env(nil)), loc},
+		{"home empty darwin", classifyPath("darwin", "", "/Library/Mobile Documents/x", env(nil)), loc},
+		{"home empty cloudstorage", classifyPath("darwin", "", "/Library/CloudStorage/Dropbox/x", env(nil)), loc},
+		{"empty OneDrive env", classifyPath("windows", `C:\Users\u`, `\x`, env(map[string]string{"OneDrive": ""})), loc},
+		{"extended unc", classifyPath("windows", `C:\Users\u`, `\\?\UNC\srv\share\x`, env(nil)), net("unc")},
+		{"extended drive", classifyPath("windows", `C:\Users\u`, `\\?\C:\Users\u\x`, env(nil)), loc},
 		{"sibling prefix", classifyPath("linux", home, home+"/Dropbox2/x", env(nil)), loc},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
 			t.Errorf("%s: got %+v, want %+v", c.name, c.got, c.want)
 		}
+	}
+}
+
+func TestParseMountInfo(t *testing.T) {
+	const info = `22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
+30 22 0:40 / /mnt/share rw,relatime shared:5 master:2 - fuse.sshfs u@h:/ rw
+31 30 0:41 / /mnt/share/inner rw - ext4 /dev/sdb rw
+32 22 0:42 / /mnt/my\040share rw - cifs //h/s rw
+33 22 0:43 / /mnt/share2 rw - ext4 /dev/sdc rw
+garbage line without separator
+`
+	for dir, want := range map[string]string{
+		"/home/u":             "ext4",
+		"/":                   "ext4",
+		"/mnt/share/a/b":      "fuse.sshfs",
+		"/mnt/share":          "fuse.sshfs",
+		"/mnt/share/inner/x":  "ext4",
+		"/mnt/my share/state": "cifs",
+		"/mnt/share2/x":       "ext4",
+		"/mnt/sharex":         "ext4",
+	} {
+		if got := parseMountInfo(strings.NewReader(info), dir); got != want {
+			t.Errorf("%s: got %q, want %q", dir, got, want)
+		}
+	}
+	if got := parseMountInfo(strings.NewReader(""), "/x"); got != "" {
+		t.Errorf("empty input: %q", got)
 	}
 }

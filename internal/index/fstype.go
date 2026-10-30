@@ -80,23 +80,32 @@ func classifyPath(goos, home, dir string, getenv func(string) string) FSInfo {
 		}
 		return strings.Join(parts, "/")
 	}
-	if goos == "windows" && (strings.HasPrefix(dir, `\\`) || strings.HasPrefix(dir, "//")) && !strings.HasPrefix(dir, `\\?\`) {
-		return FSInfo{FSNetwork, "unc"}
+	if goos == "windows" {
+		d := strings.ReplaceAll(dir, "/", `\`)
+		if strings.HasPrefix(strings.ToLower(d), `\\?\unc\`) {
+			return FSInfo{FSNetwork, "unc"}
+		}
+		if strings.HasPrefix(d, `\\`) && !strings.HasPrefix(d, `\\?\`) && !strings.HasPrefix(d, `\\.\`) {
+			return FSInfo{FSNetwork, "unc"}
+		}
 	}
-	if under(goos, dir, join(home, "Dropbox")) {
+	if home != "" && under(goos, dir, join(home, "Dropbox")) {
 		return FSInfo{FSSynced, "dropbox"}
 	}
 	switch goos {
 	case "windows":
 		for _, v := range []string{"OneDrive", "OneDriveConsumer", "OneDriveCommercial"} {
-			if under(goos, dir, getenv(v)) {
+			if p := getenv(v); p != "" && under(goos, dir, p) {
 				return FSInfo{FSSynced, "onedrive"}
 			}
 		}
-		if under(goos, dir, join(home, "iCloudDrive")) {
+		if home != "" && under(goos, dir, join(home, "iCloudDrive")) {
 			return FSInfo{FSSynced, "icloud"}
 		}
 	case "darwin":
+		if home == "" {
+			break
+		}
 		if under(goos, dir, join(home, "Library", "Mobile Documents")) {
 			return FSInfo{FSSynced, "icloud"}
 		}

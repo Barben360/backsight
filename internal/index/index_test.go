@@ -140,8 +140,25 @@ func TestNetworkFolderOpensWithoutWAL(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(d.IndexDir(), FileName+"-wal")); err == nil {
 		t.Error("a wal file exists on a network folder")
 	}
+	if got := pragma(t, ix.sh.r, "journal_mode"); got != "delete" {
+		t.Errorf("reader journal_mode %s", got)
+	}
 	if fs := ix.FS(); fs.Kind != FSNetwork || fs.Name != "nfs" {
 		t.Errorf("fs %+v", fs)
+	}
+}
+
+func TestFailedOpenIsNotCounted(t *testing.T) {
+	d := paths.Dirs{State: filepath.Join(t.TempDir(), "state")}
+	// A directory where the database file should be makes the first ping fail.
+	if err := os.MkdirAll(filepath.Join(d.IndexDir(), FileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(context.Background(), Options{Dirs: d, Getenv: func(string) string { return "" }}); err == nil {
+		t.Fatal("open should fail")
+	}
+	if n := OpensOf(d.State); n != 0 {
+		t.Errorf("failed open counted: %d", n)
 	}
 }
 
