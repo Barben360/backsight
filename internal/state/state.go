@@ -146,6 +146,11 @@ type RuntimeSwitch struct {
 	At      time.Time `json:"at"` // the step's time
 	Backup  string    `json:"backup,omitempty"`
 	Overlap float64   `json:"overlap,omitempty"` // the recall probes' overlap@10, once done
+	// KeptBytes is the size of what server runtime clean deletes of the
+	// runtime switched from, measured at KeptAt (once done): doctor shows
+	// it without sizing it again (docker system df, du) at every run.
+	KeptBytes int64     `json:"kept_bytes,omitempty"`
+	KeptAt    time.Time `json:"kept_at,omitzero"`
 }
 
 // Running reports a switch whose process still runs: another one waits.

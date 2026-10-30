@@ -584,6 +584,15 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	}
 	add("commit", "done", "config.toml: server.runtime = "+to)
 	rs.Step, rs.At, rs.Overlap = "done", time.Now().UTC(), report.Overlap
+	// What clean would delete of the source, measured once here for
+	// doctor (ruling R43's size, without sizing it at every doctor run).
+	if c, ok := src.(server.Cleaner); ok {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), switchProbeWait)
+		if n, err := c.CleanSize(sctx); err == nil {
+			rs.KeptBytes, rs.KeptAt = n, time.Now().UTC()
+		}
+		cancel()
+	}
 	if err := state.Update(d, "server runtime switch", func(s *state.State) error { s.RuntimeSwitch = &rs; return nil }); err != nil {
 		res.Warnings = append(res.Warnings, "the switch passed, but state.json does not say so ("+err.Error()+")")
 	}

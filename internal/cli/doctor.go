@@ -110,7 +110,7 @@ var (
 // /proc, and the other runtime's files and sizes.
 func runtimeProbes(e *doctor.Env) {
 	e.Native = func(ctx context.Context) (doctor.NativeFacts, error) { return nativeFacts(ctx, e.Dirs, e.Home) }
-	e.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(e.Dirs, e.Home) }
+	e.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(e.Dirs, e.Home, false) }
 }
 
 // nativeFacts reads the native install's guards; a fact it cannot read is
@@ -172,11 +172,17 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 	return f, nil
 }
 
+// keptSizeFresh is how long the size a switch measured of what it kept
+// stands for it in doctor.
+const keptSizeFresh = 24 * time.Hour
+
 // lastSwitch is state.json's last runtime switch and, once it ended, the
-// other runtime's data kept since: what server runtime clean deletes, with
-// that size (ruling R43), "" when nothing of it is here or it cannot be
-// told.
-func lastSwitch(d paths.Dirs, home string) (*state.RuntimeSwitch, string) {
+// other runtime's data kept since: what server runtime clean deletes
+// (ruling R43), "" when nothing of it is here or it cannot be told. Its
+// size is the one the switch measured, for a day; after that, only when
+// live (doctor --json): docker system df or a du of the native directory
+// can take seconds, too long for every doctor, report and maintain run.
+func lastSwitch(d paths.Dirs, home string, live bool) (*state.RuntimeSwitch, string) {
 	st, err := state.Load(d.StateFile())
 	if err != nil || st.RuntimeSwitch == nil {
 		return nil, ""
@@ -198,11 +204,17 @@ func lastSwitch(d paths.Dirs, home string) (*state.RuntimeSwitch, string) {
 	if left, err := c.Leftover(ctx); err != nil || !left {
 		return rs, ""
 	}
-	size := "size unknown"
-	if n, err := c.CleanSize(ctx); err == nil {
-		size = sizeText(n)
+	switch {
+	case !rs.KeptAt.IsZero() && time.Since(rs.KeptAt) < keptSizeFresh:
+		return rs, c.CleanWhat() + " (" + sizeText(rs.KeptBytes) + ")"
+	case live:
+		size := "size unknown"
+		if n, err := c.CleanSize(ctx); err == nil {
+			size = sizeText(n)
+		}
+		return rs, c.CleanWhat() + " (" + size + ")"
 	}
-	return rs, c.CleanWhat() + " (" + size + ")"
+	return rs, c.CleanWhat()
 }
 
 func newDoctorCmd(e *env) *cobra.Command {
@@ -215,7 +227,7 @@ func newDoctorCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rep := runDoctor(cmd, d, home)
+			rep := runDoctorSized(cmd, d, home, e.json)
 			var failed error
 			if rep.Errors > 0 {
 				failed = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}}
@@ -245,7 +257,17 @@ func doctorText(r doctor.Report) string {
 
 // runDoctor runs every check (doctor and the jobs maintain snapshot).
 func runDoctor(cmd *cobra.Command, d paths.Dirs, home string) doctor.Report {
-	return doctor.Run(cmd.Context(), doctorEnv(d, home))
+	return runDoctorSized(cmd, d, home, false)
+}
+
+// runDoctorSized is runDoctor; sized also measures what a runtime switch
+// kept when the switch's own measure is older than a day (doctor --json).
+func runDoctorSized(cmd *cobra.Command, d paths.Dirs, home string, sized bool) doctor.Report {
+	denv := doctorEnv(d, home)
+	if sized {
+		denv.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(d, home, true) }
+	}
+	return doctor.Run(cmd.Context(), denv)
 }
 
 // referenceServer asks the reference server's /health, then, for a

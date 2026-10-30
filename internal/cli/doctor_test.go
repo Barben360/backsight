@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -459,4 +461,73 @@ func put0(t *testing.T, p string, size int) {
 	if err := os.WriteFile(p, make([]byte, size), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Final review 4: the size of what a switch kept is the one the switch
+// measured, for a day. A plain doctor never sizes it again (docker system
+// df takes up to 15 s on every doctor, report and maintain run); after a
+// day it names what is kept without a size, and doctor --json measures it.
+func TestDoctorUsesTheSwitchsKeptSize(t *testing.T) {
+	t.Run("docker kept", func(t *testing.T) {
+		home := devInstall(t, true)
+		d := pathsOf(home)
+		raw, _ := os.ReadFile(d.ConfigFile())
+		if err := os.WriteFile(d.ConfigFile(), bytes.Replace(raw, []byte("[server]\n"), []byte("[server]\nruntime = \"native\"\n"), 1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		put0(t, filepath.Join(composeDir(home), "compose.yaml"), 10) // Docker's leftover
+		dk := &composeRecorder{}
+		old := composeRunner
+		composeRunner = dk
+		t.Cleanup(func() { composeRunner = old })
+		sized := func() bool {
+			dk.mu.Lock()
+			defer dk.mu.Unlock()
+			return slices.ContainsFunc(dk.argv, func(a []string) bool { return slices.Contains(a, "system") && slices.Contains(a, "df") })
+		}
+		at := func(when time.Time) {
+			if err := state.Update(d, "test", func(s *state.State) error {
+				s.RuntimeSwitch = &state.RuntimeSwitch{From: "docker", To: "native", Step: "done", At: when, KeptBytes: 123456789, KeptAt: when}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		what := "the Docker server of project backsight"
+		at(time.Now().Add(-time.Hour))
+		if _, out, _ := run(t, "doctor"); !strings.Contains(out, "(117.7 MB) kept from before the switch") || sized() {
+			t.Errorf("fresh, plain: sized %v\n%s", sized(), out)
+		}
+		if _, c := doctorChecks(t); !strings.Contains(c["runtime-switch"].Detail, "(117.7 MB) kept") || sized() {
+			t.Errorf("fresh, --json: sized %v: %+v", sized(), c["runtime-switch"])
+		}
+		at(time.Now().Add(-48 * time.Hour))
+		_, out, _ := run(t, "doctor")
+		if sized() || !strings.Contains(out, what) || strings.Contains(out, "117.7 MB") || !strings.Contains(out, "kept from before the switch: backsight server runtime clean deletes it") {
+			t.Errorf("stale, plain: sized %v\n%s", sized(), out)
+		}
+		if _, c := doctorChecks(t); !sized() || !strings.Contains(c["runtime-switch"].Detail, what) {
+			t.Errorf("stale, --json: sized %v: %+v", sized(), c["runtime-switch"])
+		}
+	})
+	t.Run("native kept", func(t *testing.T) {
+		home := devInstall(t, true)
+		withSys(t, "linux")
+		d := pathsOf(home)
+		cfg, err := config.Load(d.ConfigFile(), d, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := server.Native{Cfg: cfg, Dirs: d}
+		put0(t, filepath.Join(n.DataDir(), "base"), 3000) // 2.9 kB measured; the switch measured 1.0 kB
+		if err := state.Update(d, "test", func(s *state.State) error {
+			s.RuntimeSwitch = &state.RuntimeSwitch{From: "native", To: "docker", Step: "done", At: time.Now(), KeptBytes: 1024, KeptAt: time.Now()}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, out, _ := run(t, "doctor"); !strings.Contains(out, "the models (1.0 kB) kept from before the switch") {
+			t.Errorf("not the switch's size:\n%s", out)
+		}
+	})
 }
