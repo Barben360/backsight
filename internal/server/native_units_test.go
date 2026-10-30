@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -159,6 +160,21 @@ func unitLine(unit []byte, key string) string {
 	return ""
 }
 
+// PYTHON_DOTENV_DISABLED is honoured from python-dotenv 1.2.2, the
+// version verified (its load_dotenv returns early on it): a lock with an
+// older one would let a .env above the server's directory override
+// server.env again.
+func TestNativeLockHonoursPythonDotenvDisabled(t *testing.T) {
+	v := nativelock.Versions()["python-dotenv"]
+	var maj, min, patch int
+	if _, err := fmt.Sscanf(v, "%d.%d.%d", &maj, &min, &patch); err != nil {
+		t.Fatalf("the lock's python-dotenv %q: %v", v, err)
+	}
+	if maj < 1 || maj == 1 && (min < 2 || min == 2 && patch < 2) {
+		t.Errorf("the lock pins python-dotenv %s, older than 1.2.2: PYTHON_DOTENV_DISABLED may not be honoured", v)
+	}
+}
+
 // The golden files pin what a native install runs, and the assertions
 // name each E29 requirement they carry.
 func TestNativeRenderMeetsTheRequirements(t *testing.T) {
@@ -200,6 +216,12 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 		"HOME":              root + "/home", // req 6
 		"HF_HOME":           root + "/hf",
 		"BACKSIGHT_PG_PORT": "8889",
+		// Hindsight's entry points load the first .env up from their working
+		// directory over their environment (find_dotenv(usecwd=True),
+		// override=True): after a switch from Docker that is Docker's
+		// <compose_dir>/.env (db:5432, the torch reranker), found by the
+		// native chain's first real run. python-dotenv skips it with this.
+		"PYTHON_DOTENV_DISABLED": "1",
 	} {
 		if got := envValue(env, k); got != want {
 			t.Errorf("server.env %s = %q, want %q", k, got, want)

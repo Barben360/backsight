@@ -55,7 +55,7 @@ journalctl --user -u backsight-server.service
 journalctl --user -u backsight-db.service
 ```
 
-`backsight server start` and `backsight server stop` start, and stop and disable, both units. The units carry none of your shell's Python, uv, Hugging Face or PostgreSQL client variables: what you set for your own projects does not reach the server.
+`backsight server start` and `backsight server stop` start, and stop and disable, both units. The units carry none of your shell's Python, uv, Hugging Face or PostgreSQL client variables, and the server reads no `.env` file: what you set for your own projects does not reach the server.
 
 ## The guards
 

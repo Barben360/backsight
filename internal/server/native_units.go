@@ -150,6 +150,11 @@ func (n Native) Render(sec config.Secrets, host string) (Files, error) {
 	env.quoted("HOME", n.Home())
 	env.quoted("HF_HOME", n.HF())
 	env.plain(pgPortKey, strconv.Itoa(pg))
+	// Hindsight's entry points load the first .env found up from their
+	// working directory over this environment; Docker's <compose_dir>/.env
+	// is one of them after a switch. python-dotenv skips any with this.
+	env.comment("No .env file from the server's directory or above overrides this file.")
+	env.plain("PYTHON_DOTENV_DISABLED", "1")
 	if env.err != nil {
 		return Files{}, env.err
 	}
