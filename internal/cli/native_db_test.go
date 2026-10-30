@@ -43,6 +43,7 @@ type nativeDBTools struct {
 	nextID     string
 	restores   []int // rows of each dump restored into the server's database
 	lose       int   // the next restores into the server's database lose one row each
+	failLoad   int   // the next pg_restore into the server's database fail (after dropdb)
 }
 
 func (f *nativeDBTools) Run(_ context.Context, env []string, _ io.Reader, path string, args ...string) ([]byte, error) {
@@ -118,6 +119,10 @@ func (f *nativeDBTools) Run(_ context.Context, env []string, _ io.Reader, path s
 		case live:
 			if !f.up {
 				return nil, errors.New("pg_restore: connection refused")
+			}
+			if f.failLoad > 0 {
+				f.failLoad--
+				return nil, errors.New("pg_restore: error: could not execute query")
 			}
 			f.rows = dumpRows(last)
 			f.restores = append(f.restores, f.rows)
@@ -515,6 +520,142 @@ func TestRestoreAfterARefusedStartRemovesTheNewDatabaseOnFailure(t *testing.T) {
 	}
 	if m, _ := state.ReadRestoreMarker(pathsOf(home)); m != nil {
 		t.Errorf("the marker stays: %+v", m)
+	}
+}
+
+// callIndex is the first call of calls containing sub (-1: none).
+func callIndex(calls []string, sub string) int {
+	return slices.IndexFunc(calls, func(c string) bool { return strings.Contains(c, sub) })
+}
+
+// agedIdentity makes the identity file look written long ago: a later
+// write (RecordIdentity) shows in its time.
+func agedIdentity(t *testing.T, n server.Native) time.Time {
+	t.Helper()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(n.IdentityFile(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	return old
+}
+
+func identityTime(t *testing.T, n server.Native) time.Time {
+	t.Helper()
+	fi, err := os.Stat(n.IdentityFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.ModTime()
+}
+
+// A native restore, as on Docker: the safety backup through the native
+// dump, only the API stopped, the archive restored into the database, its
+// identity recorded again, a new epoch.
+func TestRestoreOnNativeReplacesTheDatabase(t *testing.T) {
+	home, n, tools, sys, port := nativeHost(t)
+	archive := nativeArchive(t, home)
+	tools.rows, tools.calls, sys.calls = 25, nil, nil
+	old := agedIdentity(t, n)
+	code, out, errOut := run(t, "restore", archive, "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	var env struct {
+		Data struct {
+			Safety     string `json:"safety_archive"`
+			MovedAside string `json:"moved_aside"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatal(err)
+	}
+	// The safety archive: the native dump of the 25 rows, a native manifest.
+	if env.Data.Safety == "" || env.Data.MovedAside != "" {
+		t.Fatalf("safety %q, moved aside %q", env.Data.Safety, env.Data.MovedAside)
+	}
+	if m, _ := sidecar(t, env.Data.Safety); m.Runtime != "native" || m.Counts["memory_units"] != 25 {
+		t.Errorf("safety manifest %+v", m)
+	}
+	dump := callIndex(tools.calls, "/pg_dump -d hindsight -Fc")
+	stop := slices.Index(sys.calls, "systemctl --user stop backsight-server.service")
+	drop, load := callIndex(tools.calls, "/dropdb "), callIndex(tools.calls, "/pg_restore -d hindsight")
+	if dump < 0 || stop < 0 || drop < dump || load < drop {
+		t.Errorf("pg_dump at %d, dropdb at %d, pg_restore at %d, API stop at %d", dump, drop, load, stop)
+	}
+	for _, c := range sys.calls {
+		if strings.Contains(c, "backsight-db.service") && (strings.Contains(c, " stop ") || strings.Contains(c, "disable")) {
+			t.Errorf("the database was stopped: %q", c)
+		}
+	}
+	if !slices.Equal(tools.restores, []int{10}) || tools.rows != 10 {
+		t.Errorf("restores %v, rows %d", tools.restores, tools.rows)
+	}
+	if identityTime(t, n).Equal(old) || readFile0(n.IdentityFile()) != "111\n" {
+		t.Errorf("identity %q not recorded again after the restore", readFile0(n.IdentityFile()))
+	}
+	if e := epochOf(t, port); e.Epoch != 1 || !e.BackupCreatedAt.Equal(time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)) {
+		t.Errorf("epoch %+v", e)
+	}
+	if got := backupsIn(home); len(got) != 2 {
+		t.Errorf("backups %v", got)
+	}
+	if m, _ := state.ReadRestoreMarker(pathsOf(home)); m != nil {
+		t.Errorf("the marker stays: %+v", m)
+	}
+}
+
+// A native restore that fails once the database was dropped puts the
+// safety dump back (exit 30, as on Docker): the database as it was, its
+// identity unchanged and accepted.
+func TestRestoreOnNativeRollsBackFromTheSafetyDump(t *testing.T) {
+	home, n, tools, _, port := nativeHost(t)
+	archive := nativeArchive(t, home)
+	tools.rows, tools.failLoad = 25, 1
+	code, out, errOut := run(t, "restore", archive)
+	if code != output.RolledBack || !strings.Contains(errOut, "rolled back") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	// The archive's load failed after dropdb; the safety dump went in.
+	if !slices.Equal(tools.restores, []int{25}) || tools.rows != 25 {
+		t.Errorf("restores %v, rows %d", tools.restores, tools.rows)
+	}
+	if readFile0(n.IdentityFile()) != "111\n" {
+		t.Errorf("identity %q", readFile0(n.IdentityFile()))
+	}
+	if err := n.CheckInstance(context.Background()); err != nil {
+		t.Errorf("the database is refused after the rollback: %v", err)
+	}
+	if e := epochOf(t, port); e.Epoch != 1 || !e.BackupCreatedAt.Equal(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("rollback epoch %+v", e)
+	}
+	if got := backupsIn(home); len(got) != 2 {
+		t.Errorf("the safety archive is not kept: %v", got)
+	}
+}
+
+// restore on native stops a stray postgres on the database's data first
+// (requirement 3), before anything touches the database, and says so.
+func TestRestoreOnNativeStopsAStrayFirst(t *testing.T) {
+	home, n, tools, _, _ := nativeHost(t)
+	archive := nativeArchive(t, home)
+	pg := filepath.Join(n.Home(), ".pg0", "installation", "18.1.0", "bin", "postgres")
+	writeProc(t, "4242", []string{pg, "-D", n.DataDir()}, "foo.scope", n.DataDir())
+	writePidFile(t, n, "4242")
+	tools.calls = nil
+	code, out, errOut := run(t, "restore", archive)
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out+errOut, "a postgres (pid 4242) ran on "+n.DataDir()+" outside backsight-db.service: stopped, never adopted") {
+		t.Errorf("the stray is not reported:\n%s%s", out, errOut)
+	}
+	stop := callIndex(tools.calls, "/pg_ctl stop -D "+n.DataDir())
+	dump, drop, create := callIndex(tools.calls, "/pg_dump "), callIndex(tools.calls, "/dropdb "), callIndex(tools.calls, "/createdb ")
+	if stop < 0 || drop < 0 || create < 0 || stop > dump || stop > drop || stop > create {
+		t.Errorf("pg_ctl at %d, pg_dump at %d, dropdb at %d, createdb at %d", stop, dump, drop, create)
+	}
+	if exists(filepath.Join(nativeProc, "4242")) {
+		t.Error("the stray still runs")
 	}
 }
 
