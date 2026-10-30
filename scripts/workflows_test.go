@@ -346,7 +346,7 @@ func TestGovulncheckGuardsTheCode(t *testing.T) {
 
 // Dependabot keeps the modules and the actions' SHA pins current, weekly,
 // one grouped pull request per ecosystem (security review M2).
-func TestDependabotTracksModulesAndActions(t *testing.T) {
+func TestDependabotTracksModulesAndActionsNotTheNativeLock(t *testing.T) {
 	raw, err := os.ReadFile("../.github/dependabot.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -356,13 +356,19 @@ func TestDependabotTracksModulesAndActions(t *testing.T) {
 	for _, u := range updates {
 		eco := strings.Trim(strings.TrimSpace(strings.SplitN(strings.SplitN(u, ":", 2)[1], "\n", 2)[0]), `"'`)
 		seen[eco] = true
-		for _, want := range []string{`(?m)^      interval: "?weekly"?\s*$`, `(?m)^    groups:\s*$`, `(?m)^    directory: "?/"?\s*$`} {
+		wants := []string{`(?m)^      interval: "?weekly"?\s*$`, `(?m)^    groups:\s*$`, `(?m)^    directory: "?/"?\s*$`}
+		if eco == "pip" {
+			// The native lock must match the pinned image (0078): every
+			// package in it is ignored, security updates included.
+			wants = []string{`(?m)^    directory: "?/internal/server/nativelock"?\s*$`, `(?m)^      - dependency-name: "\*"\s*$`}
+		}
+		for _, want := range wants {
 			if !regexp.MustCompile(want).MatchString(u) {
 				t.Errorf("dependabot %s: no %s", eco, want)
 			}
 		}
 	}
-	for _, eco := range []string{"gomod", "github-actions"} {
+	for _, eco := range []string{"gomod", "github-actions", "pip"} {
 		if !seen[eco] {
 			t.Errorf("dependabot.yml does not track %s (found %v)", eco, seen)
 		}
