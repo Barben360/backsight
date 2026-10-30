@@ -53,6 +53,9 @@ var (
 	creditSources   = []string{"tool", "citation"}
 	briefingSources = []string{"observations", "raw", "empty"}
 	liveKinds       = []string{"record", "stale", "none"}
+	// attribution.Source* and retain.SourceExcluded: evidence+mention
+	// does not have the shape, so the set is closed.
+	attributionSources = []string{"evidence", "mention", "evidence+mention", "continuity", "cwd", "none", "excluded"}
 )
 
 // payloadAllow lists, per kind without a table of its own, the fields its

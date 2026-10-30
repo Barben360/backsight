@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -628,5 +629,94 @@ func TestRowTablesAreEveryLineTable(t *testing.T) {
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("rowTables\n got %v\nwant %v", got, want)
+	}
+}
+
+// unreadable is the source files with an unreadable row.
+func (e *ingestEnv) unreadable() []string {
+	e.t.Helper()
+	var out []string
+	for _, r := range e.rowsOf(`SELECT source_file FROM ingest_errors WHERE reason = 'unreadable' AND "offset" = -1 ORDER BY source_file`) {
+		out = append(out, r["source_file"].(string))
+	}
+	return out
+}
+
+// TestUnreadableFileDoesNotBlockOthers: a file that cannot be read is
+// recorded once and skipped; the other files are ingested.
+func TestUnreadableFileDoesNotBlockOthers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode 000 does not stop reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file of mode 000")
+	}
+	e := newEnv(t)
+	e.write("2026-10", promptLine(10, 1)) // newest: read first
+	e.write("2026-09", promptLine(9, 1))
+	if err := os.Chmod(e.telPath("2026-10"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(e.telPath("2026-10"), 0o600) })
+	st := e.ingest()
+	if st.Unreadable != 1 || st.Lines != 1 {
+		t.Errorf("stats %+v", st)
+	}
+	if got := e.ns(); !slices.Equal(got, []int64{9}) {
+		t.Errorf("prompts %v", got)
+	}
+	want := []string{"telemetry/events-2026-10.jsonl"}
+	if got := e.unreadable(); !slices.Equal(got, want) {
+		t.Errorf("unreadable %v", got)
+	}
+	n := countBatches(t)
+	if st := e.ingest(); st.Unreadable != 1 {
+		t.Errorf("rerun %+v", st)
+	}
+	if *n != 0 {
+		t.Errorf("%d commits on a rerun", *n)
+	}
+	if got := e.unreadable(); !slices.Equal(got, want) || e.count("ingest_errors") != 1 {
+		t.Errorf("unreadable %v, %d errors", got, e.count("ingest_errors"))
+	}
+
+	if err := os.Chmod(e.telPath("2026-10"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.ingest(); st.Unreadable != 0 || st.Lines != 1 {
+		t.Errorf("after the fix %+v", st)
+	}
+	if got := e.ns(); !slices.Equal(got, []int64{9, 10}) {
+		t.Errorf("prompts %v", got)
+	}
+	if got := e.unreadable(); len(got) != 0 {
+		t.Errorf("unreadable kept: %v", got)
+	}
+}
+
+// TestUnknownKindIsUnreadable: a cursor of a kind this binary does not
+// read is skipped like an unreadable file, its rows kept.
+func TestUnknownKindIsUnreadable(t *testing.T) {
+	e := newEnv(t)
+	e.write("2026-10", promptLine(1, 1))
+	e.ingest()
+	prev := sourceKinds
+	sourceKinds = nil
+	t.Cleanup(func() { sourceKinds = prev })
+	if st := e.ingest(); st.Unreadable != 1 {
+		t.Errorf("stats %+v", st)
+	}
+	if got := e.unreadable(); !slices.Equal(got, []string{"telemetry/events-2026-10.jsonl"}) {
+		t.Errorf("unreadable %v", got)
+	}
+	sourceKinds = prev
+	if st := e.ingest(); st.Unreadable != 0 || st.Lines != 0 {
+		t.Errorf("stats %+v", st)
+	}
+	if got := e.unreadable(); len(got) != 0 {
+		t.Errorf("unreadable kept: %v", got)
+	}
+	if got := e.ns(); !slices.Equal(got, []int64{1}) {
+		t.Errorf("prompts %v", got)
 	}
 }

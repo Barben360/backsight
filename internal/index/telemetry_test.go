@@ -92,6 +92,8 @@ var typedCases = []typedCase{
 	// turn is an id: "0123" stays text, its leading zero kept.
 	{"attribution", map[string]any{"turn": "0123", "subagent": false, "base": "proj", "applied": "proj", "path_rule": "other-proj", "source": "cwd"},
 		"tel_attribution", map[string]any{"turn": "0123", "subagent": false, "base": "proj", "applied": "proj", "path_rule": "other-proj", "source": "cwd"}},
+	{"attribution", map[string]any{"turn": "agent:a1", "subagent": true, "base": "proj", "applied": "other-proj", "path_rule": "other-proj", "source": "evidence+mention"},
+		"tel_attribution", map[string]any{"turn": "agent:a1", "subagent": true, "base": "proj", "applied": "other-proj", "path_rule": "other-proj", "source": "evidence+mention"}},
 	{"store", map[string]any{"result": "saved", "kind": "decision"},
 		"tel_store", map[string]any{"result": "saved", "kind": "decision"}},
 	{"dashboard", map[string]any{"action": "start", "ms": 10, "pages": 3},
@@ -224,6 +226,7 @@ func TestFreeTextNeverStored(t *testing.T) {
 			"ids":    []string{"ok1", "bad\nid", "ok2"},
 			"scopes": map[string]any{"user": map[string]any{"ok": true}, "bad\nscope": map[string]any{"ok": true}}})),
 		tline("config", ts0, withCommon(map[string]any{"sha256": "ab", "Model Name": 3, "recall.gap": 2, "path": "/home/someone/x"})),
+		tline("attribution", ts0, withCommon(map[string]any{"turn": "t1", "base": "proj", "applied": "x\ty", "path_rule": "line one\nline two", "source": "my own words"})),
 	}
 	e.write("2026-10", strings.Join(lines, ""))
 	if st := e.ingest(); st.Errors != 0 {
@@ -274,7 +277,10 @@ func TestFreeTextNeverStored(t *testing.T) {
 	if r := one(`SELECT key, value FROM tel_config_values`); r["key"] != "recall.gap" || r["value"] != 2.0 {
 		t.Errorf("config values %v", r)
 	}
-	for _, s := range []string{"boom", "budget exceeded", "segfault", "Français", "Not A Flag", "maybe later", long, "bad\n", "Model Name", "/home/someone"} {
+	if r := one(`SELECT base, applied, path_rule, source FROM tel_attribution`); r["base"] != "proj" || r["applied"] != nil || r["path_rule"] != nil || r["source"] != "other" {
+		t.Errorf("attribution %v", r)
+	}
+	for _, s := range []string{"line one", "my own words", "boom", "budget exceeded", "segfault", "Français", "Not A Flag", "maybe later", long, "bad\n", "Model Name", "/home/someone"} {
 		if hits := textAnywhere(t, e.ix, s); len(hits) > 0 {
 			t.Errorf("%q stored: %v", s, hits)
 		}

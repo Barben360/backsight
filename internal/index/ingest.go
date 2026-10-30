@@ -126,12 +126,26 @@ func (ix *Index) sources() ([]source, error) {
 	return out, nil
 }
 
-// ingestStats: complete lines read, those skipped as errors, and More
-// when the deadline stopped the ingest before every file was caught up.
+// ingestStats: complete lines read, those skipped as errors, the files
+// that could not be read, and More when the deadline stopped the ingest
+// before every file was caught up.
 type ingestStats struct {
-	Lines, Errors int64
-	More          bool
+	Lines, Errors, Unreadable int64
+	More                      bool
 }
+
+// fileError is a failure to read one source file (permissions, I/O, a
+// kind this binary does not know): that file is skipped, the others go
+// on. Errors of the index itself are not fileErrors.
+type fileError struct{ err error }
+
+func (e *fileError) Error() string { return e.err.Error() }
+func (e *fileError) Unwrap() error { return e.err }
+
+// unreadableOffset is the "offset" of a file's own ingest_errors row (no
+// line has a negative offset): one per file while it cannot be read,
+// removed by its next successful read or a reset.
+const unreadableOffset = -1
 
 // ingestSources brings every source up to date, one transaction per
 // batch of at most maxBatchLines lines. A zero deadline is none; past it
@@ -156,6 +170,13 @@ func (ix *Index) ingestSources(ctx context.Context, deadline time.Time) (ingestS
 				return st, nil
 			}
 			b, err := ix.ingestBatch(ctx, s)
+			if fe := (*fileError)(nil); errors.As(err, &fe) {
+				st.Unreadable++
+				if err := ix.recordUnreadable(ctx, s.Rel); err != nil {
+					return st, fmt.Errorf("ingest %s: %w", s.Rel, err)
+				}
+				break
+			}
 			if err != nil {
 				return st, fmt.Errorf("ingest %s: %w", s.Rel, err)
 			}
@@ -198,6 +219,25 @@ func (ix *Index) vanished(ctx context.Context, listed []source) ([]source, error
 	return out, err
 }
 
+// recordUnreadable adds rel's unreadable row unless it is there already:
+// a file that stays unreadable writes nothing on later runs.
+func (ix *Index) recordUnreadable(ctx context.Context, rel string) error {
+	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `INSERT INTO ingest_errors(source_file, "offset", reason, at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(source_file, "offset") DO NOTHING`, rel, unreadableOffset, errUnreadable, ix.opts.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	return ix.commit(tx)
+}
+
 // cursor is a file's row in cursors.
 type cursor struct {
 	size, offset, headLen int64
@@ -238,7 +278,7 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	var b batch
 	k, ok := kindOf(s.Kind)
 	if !ok {
-		return b, fmt.Errorf("unknown source kind %q", s.Kind)
+		return b, &fileError{fmt.Errorf("unknown source kind %q", s.Kind)}
 	}
 	tx, err := ix.sh.w.BeginTx(ctx, nil) // BEGIN IMMEDIATE: the DSN's _txlock
 	if err != nil {
@@ -263,12 +303,12 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 		return gone()
 	}
 	if err != nil {
-		return b, err
+		return b, &fileError{err}
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return b, err
+		return b, &fileError{err}
 	}
 	if !info.Mode().IsRegular() { // a directory now holds its name
 		return gone()
@@ -277,7 +317,7 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	head := make([]byte, min(headMax, size))
 	n, err := f.ReadAt(head, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return b, err
+		return b, &fileError{err}
 	}
 	if n < len(head) { // cut while we looked
 		head, size = head[:n], int64(n)
@@ -320,12 +360,24 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 			return nil
 		})
 	if err != nil {
-		return b, err
+		return b, err // a fileError from a read, else the index's
 	}
 	b.lines, b.full = int64(lines), lines == maxBatchLines
+	cleared := false // the file was unreadable until now
+	if !reset {
+		res, err := tx.ExecContext(ctx, `DELETE FROM ingest_errors WHERE source_file = ? AND "offset" = ?`, s.Rel, unreadableOffset)
+		if err != nil {
+			return b, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return b, err
+		}
+		cleared = n > 0
+	}
 
 	headLen := int64(len(head))
-	if known && !reset && lines == 0 && !cur.missing && cur.size == size && cur.headLen == headLen {
+	if known && !reset && !cleared && lines == 0 && !cur.missing && cur.size == size && cur.headLen == headLen {
 		return b, nil // nothing new: no write
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO cursors(source_file, kind, size, "offset", head_len, head_sha256, ingested_at, last_ts, missing)
@@ -357,7 +409,7 @@ func hexSHA(b []byte) string {
 // most limit of them; base is r's offset in the file. A line over
 // maxLineBytes comes with tooLong and no bytes. A last line without its
 // newline is left for later. end is the offset after the last complete
-// line.
+// line. A read error is a fileError; fn's errors come back as they are.
 func readLines(r io.Reader, base int64, limit int, fn func(off int64, line []byte, tooLong bool) error) (end int64, n int, err error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 	pos, start := base, base
@@ -390,7 +442,7 @@ func readLines(r io.Reader, base int64, limit int, fn func(off int64, line []byt
 		case errors.Is(rerr, io.EOF):
 			return end, n, nil
 		default:
-			return end, n, rerr
+			return end, n, &fileError{rerr}
 		}
 	}
 	return end, n, nil

@@ -17,6 +17,7 @@ const (
 	errMissingField = "missing_field" // event, or a required field of a known kind
 	errBadType      = "bad_type"      // a mapped field of the wrong JSON type
 	errTooLong      = "too_long"      // a line over maxLineBytes
+	errUnreadable   = "unreadable"    // the file itself (unreadableOffset)
 )
 
 // row is one row to insert.
@@ -164,7 +165,7 @@ var telKinds = map[string]telKind{
 		{key: "base", kind: fName},
 		{key: "applied", kind: fName},
 		{key: "path_rule", kind: fName},
-		{key: "source", kind: fShape},
+		{key: "source", kind: fClosed, set: attributionSources},
 	}},
 	"store": {table: "tel_store", fields: []fspec{
 		{key: "result", kind: fClosed, set: storeResults, req: true},
