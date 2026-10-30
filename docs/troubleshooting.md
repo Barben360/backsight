@@ -303,6 +303,16 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 - `backsight stats` shows the extraction tokens and cost of the last days.
 - A backfill paused on its budget: `backsight retain backfill --plan`, then `backsight retain backfill --max-cost <higher>`.
 
+## The metrics index
+
+The metrics index is a local SQLite file (`index/metrics.db` in the state directory) that backsight derives from the telemetry and feedback journal files; it holds counts and times, never text, and can always be built again. `backsight stats index` shows its state without changing anything.
+
+- **Rebuilding it.** `backsight stats index rebuild --plan` first: it lists the months whose files are gone (their rows would be lost) and writes nothing. Then `backsight stats index rebuild`, with `--yes` when months would be lost. Exit 20 with `the metrics index is in use`: close the dashboard (or wait for the running `jobs tick`) and run it again; the old index is kept.
+- **`an update is being applied, try again in a minute`.** An update that has not reached its commit point is running, and the index is not migrated or rebuilt until it has. Wait for it, or rerun `backsight update apply` if it was cut off.
+- **A network or synced folder.** `stats index` names the folder (`Folder` line) when the state directory is on a network share or a sync client's folder (OneDrive, iCloud, Dropbox, NFS, SMB). The index then runs without its write-ahead log, which is slower and less safe under two writers: keep the state directory on a local disk.
+- **Unreadable twice in a day.** A corrupt index is set aside (`metrics.db.corrupt`) and built again on its own, once a day at most. A second failure within the day stops this: `stats index` shows a `Stopped` line. Run `backsight stats index rebuild` to lift the stop.
+- **A newer index.** After a downgrade, `stats index` shows `Newer`: the index a newer backsight migrated is left alone, and this one works on a side file (`metrics-v<N>.db`) of its own.
+
 ## A lock or an unfinished operation
 
 | doctor check | Meaning | What to do |

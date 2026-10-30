@@ -183,6 +183,7 @@ func newStatsCmd(e *env) *cobra.Command {
 	cmd.Flags().StringVar(&until, "until", "", "end of the window (default now), with --since")
 	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the baseline measured on the Hindsight integration backsight replaced")
 	_ = cmd.Flags().MarkHidden("parity")
+	cmd.AddCommand(newStatsIndexCmd(e))
 	return cmd
 }
 

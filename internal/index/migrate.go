@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
@@ -124,9 +125,31 @@ type MigrateResult struct {
 
 // Migrate applies the pending migrations of an existing index and ingests
 // nothing: a missing index stays missing (the first open builds it), and
-// one newer than this binary is left alone. plan only lists them.
+// one newer than this binary is left alone. plan only lists them. A
+// failure (the wait for an update aside) is recorded in status.json as a
+// time and a class, and cleared by the next run that succeeds; a plan
+// records and clears nothing.
 func Migrate(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 	o = o.withDefaults()
+	res, err := migrateIndex(ctx, o, plan)
+	if plan || errors.Is(err, ErrUpdateInProgress) {
+		return res, err
+	}
+	_ = updateStatus(o.Dirs, func(st *recoveryState) bool {
+		switch {
+		case err != nil:
+			st.MigrateFailedAt, st.MigrateReason = o.Now(), classify(err)
+		case st.MigrateFailedAt.IsZero() && st.MigrateReason == "":
+			return false
+		default:
+			st.MigrateFailedAt, st.MigrateReason = time.Time{}, ""
+		}
+		return true
+	})
+	return res, err
+}
+
+func migrateIndex(ctx context.Context, o Options, plan bool) (MigrateResult, error) {
 	t, err := resolve(ctx, o)
 	if err != nil {
 		return MigrateResult{}, err

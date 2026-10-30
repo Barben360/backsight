@@ -834,3 +834,79 @@ func TestOpensTheFilesAKilledProcessLeft(t *testing.T) {
 		t.Errorf("schema %d, side %v", ix.Schema(), ix.Side())
 	}
 }
+
+func regBad() fstest.MapFS {
+	r := regA()
+	r["0002-bad.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE broken(")}
+	return r
+}
+
+func statusOf(t *testing.T, d paths.Dirs) recoveryState {
+	t.Helper()
+	st, err := readStatus(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// A migration that fails is recorded in status.json as a class and a
+// time, never as text; a later success clears it.
+func TestMigrateRecordsItsFailureAndClearsItOnSuccess(t *testing.T) {
+	d := tempDirs(t)
+	build(t, opts(t, d, regA()))
+	o := opts(t, d, regBad())
+	if _, err := Migrate(context.Background(), o, false); err == nil {
+		t.Fatal("a broken migration succeeded")
+	}
+	st := statusOf(t, d)
+	if !st.MigrateFailedAt.Equal(clock) || st.MigrateReason != "other" {
+		t.Errorf("%+v", st)
+	}
+	raw, _ := os.ReadFile(statusPath(d))
+	if strings.Contains(string(raw), "broken") || strings.Contains(string(raw), "syntax") {
+		t.Errorf("status.json holds error text: %s", raw)
+	}
+	// planning neither records nor clears
+	if _, err := Migrate(context.Background(), opts(t, d, regB()), true); err != nil {
+		t.Fatal(err)
+	}
+	if statusOf(t, d).MigrateFailedAt.IsZero() {
+		t.Error("a plan cleared the failure")
+	}
+	res, err := Migrate(context.Background(), opts(t, d, regB()), false)
+	if err != nil || !slices.Equal(res.Applied, []string{"0002-b"}) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if st := statusOf(t, d); !st.MigrateFailedAt.IsZero() || st.MigrateReason != "" {
+		t.Errorf("not cleared: %+v", st)
+	}
+}
+
+// Waiting for an update is no failure of the migration.
+func TestMigrateDoesNotRecordTheUpdateGate(t *testing.T) {
+	d := tempDirs(t)
+	build(t, opts(t, d, regA()))
+	if err := state.WriteUpdateMarker(d, state.UpdateMarker{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Migrate(context.Background(), opts(t, d, regB()), false); !errors.Is(err, ErrUpdateInProgress) {
+		t.Fatalf("%v", err)
+	}
+	if !statusOf(t, d).MigrateFailedAt.IsZero() {
+		t.Error("the update gate was recorded as a failure")
+	}
+}
+
+// A success changes nothing on disk when no failure is recorded.
+func TestMigrateSuccessWritesNoStatus(t *testing.T) {
+	d := tempDirs(t)
+	build(t, opts(t, d, regA()))
+	before := readFile(t, statusPath(d))
+	if _, err := Migrate(context.Background(), opts(t, d, regA()), false); err != nil {
+		t.Fatal(err)
+	}
+	if readFile(t, statusPath(d)) != before {
+		t.Error("status.json was rewritten")
+	}
+}

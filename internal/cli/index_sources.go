@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"io/fs"
 
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/paths"
@@ -9,11 +10,15 @@ import (
 	"github.com/Barben360/backsight/internal/state"
 )
 
+// indexRegistry is the migrations every cli caller passes to the index;
+// tests swap it for a registry of another head.
+var indexRegistry = func() fs.FS { return index.Embedded }
+
 // indexOptions are the metrics index's options for every cli caller:
 // the ledger through its default reader, the local status from this PC's
 // state files, progress to progress (nil: silent).
 func indexOptions(d paths.Dirs, home string, progress io.Writer) index.Options {
-	return index.Options{Dirs: d, Home: home, LocalStatus: localStatusOf(d), Progress: progress}
+	return index.Options{Dirs: d, Home: home, Migrations: indexRegistry(), LocalStatus: localStatusOf(d), Progress: progress}
 }
 
 // localStatusOf reads the local_status row's sources: reach.json and

@@ -16,8 +16,8 @@ const (
 // FSInfo says where the index lives. Name is nfs, cifs, smb, smb2, 9p,
 // sshfs, unc, onedrive, icloud, dropbox, or empty.
 type FSInfo struct {
-	Kind FSKind
-	Name string
+	Kind FSKind `json:"kind"`
+	Name string `json:"name"`
 }
 
 // detectFS is the seam: the real one asks the OS for the filesystem type,
