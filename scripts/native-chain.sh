@@ -148,7 +148,10 @@ nc_runtime() {
 compose() {
   local f=$BACKSIGHT_HOME/data/server/compose.yaml p
   p=$(sed -n 's/^name: *//p' "$f" | head -n 1)
-  [ -n "$p" ] && [ "$p" = "$project" ] || { echo "refusing compose project '$p'" >&2; return 1; }
+  if [ -z "$p" ] || [ "$p" != "$project" ]; then
+    echo "refusing compose project '$p'" >&2
+    return 1
+  fi
   docker compose -p "$p" -f "$f" --env-file "$BACKSIGHT_HOME/data/server/.env" "$@"
 }
 
@@ -192,7 +195,7 @@ nc_leg_fresh() {
     < /dev/null > "$work/setup.json" 2> "$work/setup.err" || { nc_show "$work/setup.json" "$work/setup.err"; fail "setup --runtime native failed"; }
   nhf_save
   [ "$(nc_runtime)" = native ] || fail "config.toml says runtime $(nc_runtime) after setup --runtime native"
-  [ -f "$unitdir/$(nc_db)" ] && [ -f "$unitdir/$(nc_srv)" ] || fail "no $(nc_db) and $(nc_srv) in $unitdir"
+  if [ ! -f "$unitdir/$(nc_db)" ] || [ ! -f "$unitdir/$(nc_srv)" ]; then fail "no $(nc_db) and $(nc_srv) in $unitdir"; fi
   nc_units is-active yes || fail "the units are not both active after setup"
   nc_healthy || { nc_show "$work/status.json"; fail "the server is not healthy after setup"; }
   "$bin" doctor --json > "$work/doctor.json" 2> /dev/null || true
@@ -203,7 +206,7 @@ nc_leg_fresh() {
 }
 
 nc_leg_store() {
-  local i found= archive
+  local i found='' archive
   for i in 1 2 3; do
     "$bin" store --json --kind decision "Native chain note $i: the billing service keeps PostgreSQL 1$i with partial indexes." > "$work/store-$i.json" ||
       { nc_show "$work/store-$i.json"; fail "store $i failed"; }
@@ -220,7 +223,10 @@ nc_leg_store() {
   [ -n "$found" ] || { nc_show "$work/search.json"; fail "search never found the stored notes"; }
   "$bin" backup create --json > "$work/backup.json" || { nc_show "$work/backup.json"; fail "backup create failed"; }
   archive=$(jq -r 'select(.ok and (.data.skipped // "") == "") | .data.path // empty' "$work/backup.json")
-  [ -n "$archive" ] && [ -s "$archive" ] || { nc_show "$work/backup.json"; fail "backup create wrote no archive"; }
+  if [ -z "$archive" ] || [ ! -s "$archive" ]; then
+    nc_show "$work/backup.json"
+    fail "backup create wrote no archive"
+  fi
   "$bin" backup verify --json "$archive" > "$work/backup-verify.json" || { nc_show "$work/backup-verify.json"; fail "backup verify failed"; }
   jq -e '.ok and .data.ok and ([.data.restored[]] | add > 0)' "$work/backup-verify.json" > /dev/null ||
     { nc_show "$work/backup-verify.json"; fail "the backup restored no rows"; }
@@ -258,8 +264,8 @@ nc_leg_to_native() {
   # Equal to store's but for Hindsight's operational history (NC_HISTORY),
   # which every recall of the switches' probes appends to; no key of
   # store's is gone from any table, that history included.
-  jq "del(.tables.$(echo "$NC_HISTORY" | sed 's/ /, .tables./g'))" "$work/fp-store.json" > "$work/fp-store-data.json"
-  jq "del(.tables.$(echo "$NC_HISTORY" | sed 's/ /, .tables./g'))" "$work/fp-native.json" > "$work/fp-native-data.json"
+  jq "del(.tables.${NC_HISTORY// /, .tables.})" "$work/fp-store.json" > "$work/fp-store-data.json"
+  jq "del(.tables.${NC_HISTORY// /, .tables.})" "$work/fp-native.json" > "$work/fp-native-data.json"
   nc_fp_diff "$work/fp-store-data.json" "$work/fp-native-data.json" > "$work/fp-diff.txt"
   [ ! -s "$work/fp-diff.txt" ] || { cat "$work/fp-diff.txt" >&2; fail "the fingerprint after the round trip differs from the one after store"; }
   "$bin" server runtime fingerprint --compare "$work/keys-store.json" --json > "$work/keys-compare.json" 2>&1 ||
@@ -343,7 +349,7 @@ nc_leg_refusals() {
   grep -q "a postgres (pid $stray) runs on .* outside $(nc_db): stopping it" "$work/journal-stray.txt" ||
     { nc_show "$work/journal-stray.txt"; fail "the db unit's journal does not report the stray $stray"; }
   main=$(systemctl --user show -p MainPID --value "$(nc_db)")
-  [ -n "$main" ] && [ "$main" != 0 ] && [ "$(head -n 1 "$data/postmaster.pid")" = "$main" ] || fail "the postmaster is not the db unit's ($main)"
+  if [ -z "$main" ] || [ "$main" = 0 ] || [ "$(head -n 1 "$data/postmaster.pid")" != "$main" ]; then fail "the postmaster is not the db unit's ($main)"; fi
   cg=$(sed -n 's/^0:://p' "/proc/$main/cgroup")
   case $cg in */"$(nc_db)") ;; *) fail "the postmaster $main runs in $cg, not $(nc_db)'s cgroup" ;; esac
   nc_healthy || { nc_show "$work/status.json"; fail "the server is not healthy after stopping the stray"; }
@@ -393,8 +399,10 @@ nc_leg_upgrade_rollback() {
   [ "$code" = 30 ] || { nc_show "$work/upgrade.json" "$work/upgrade.err"; fail "a failing smoke: exit $code, want 30"; }
   jq -e '.data.rolled_back and (.error.message | test("BACKSIGHT_TEST_FAIL_SMOKE"))' "$work/upgrade.json" > /dev/null ||
     { nc_show "$work/upgrade.json"; fail "the failed upgrade does not say it rolled back"; }
-  [ "$(jq -r .data.current "$work/upgrade.json")" = "$venv" ] && [ "$(jq -r .data.target "$work/upgrade.json")" != "$venv" ] ||
-    { nc_show "$work/upgrade.json"; fail "the upgrade did not go from $venv to the second lock's venv"; }
+  if [ "$(jq -r .data.current "$work/upgrade.json")" != "$venv" ] || [ "$(jq -r .data.target "$work/upgrade.json")" = "$venv" ]; then
+    nc_show "$work/upgrade.json"
+    fail "the upgrade did not go from $venv to the second lock's venv"
+  fi
   [ -f "$native/venv/$(jq -r .data.target "$work/upgrade.json")/bin/hindsight-api" ] || fail "the second venv was never installed"
   [ "$(nc_venv)" = "$venv" ] || fail "the server unit runs $(nc_venv) after the rollback, want $venv"
   nc_healthy || { nc_show "$work/status.json"; fail "the server is not healthy after the rollback"; }
@@ -437,7 +445,7 @@ nc_leg_lock() {
   ver=$(sed -n 's/^[[:space:]]*UVVersion *= *"\(.*\)"$/\1/p' "$root/internal/server/nativelock/uv.go")
   asset=$(sed -n 's/^[[:space:]]*UVAsset *= *"\(.*\)"$/\1/p' "$root/internal/server/nativelock/uv.go")
   want=$(sed -n 's/^[[:space:]]*UVSHA256 *= *"\(.*\)"$/\1/p' "$root/internal/server/nativelock/uv.go")
-  [ -n "$ver" ] && [ -n "$asset" ] && [ ${#want} = 64 ] || fail "cannot read uv's pin from internal/server/nativelock/uv.go"
+  if [ -z "$ver" ] || [ -z "$asset" ] || [ ${#want} != 64 ]; then fail "cannot read uv's pin from internal/server/nativelock/uv.go"; fi
   curl -fsSL --retry 3 -o "$work/$asset" "https://github.com/astral-sh/uv/releases/download/$ver/$asset" || fail "cannot download uv $ver's $asset"
   got=$(sha256sum "$work/$asset" | cut -d' ' -f1)
   [ "$got" = "$want" ] || fail "uv $ver's $asset has sha256 $got, the binary pins $want"
@@ -468,7 +476,9 @@ nc_cleanup() {
       echo "--- journal of $u" >&2
       journalctl --user -u "$u" -n 40 --no-pager -o cat 2> /dev/null | nc_mask >&2 || true
     done
-    [ -f "${BACKSIGHT_HOME:-/nonexistent}/data/server/compose.yaml" ] && compose logs --tail 40 hindsight 2>&1 | nc_mask >&2 || true
+    if [ -f "${BACKSIGHT_HOME:-/nonexistent}/data/server/compose.yaml" ]; then
+      compose logs --tail 40 hindsight 2>&1 | nc_mask >&2 || true
+    fi
   fi
   if [ "${KEEP:-}" != 1 ] && [ -n "${project:-}" ] && nc_project_ok "$project" 2> /dev/null; then
     for u in $( (systemctl --user list-units --all --plain --no-legend "$project-*" 2> /dev/null; systemctl --user list-unit-files --plain --no-legend "$project-*" 2> /dev/null) | awk '{print $1}' | sort -u); do
@@ -479,7 +489,9 @@ nc_cleanup() {
     done
     if [ -n "${work:-}" ]; then
       for pid in $(pgrep -u "$(id -u)" -x postgres 2> /dev/null); do
-        tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null | grep -qF -- "$work/" && kill -INT "$pid" 2> /dev/null || true
+        if tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null | grep -qF -- "$work/"; then
+          kill -INT "$pid" 2> /dev/null || true
+        fi
       done
     fi
     if [ -n "${unitdir:-}" ] && [ -d "$unitdir" ]; then
@@ -503,7 +515,7 @@ nc_cleanup() {
 }
 
 nc_main() {
-  local leg t0 t1 rc failed= detail
+  local leg t0 t1 rc failed='' detail
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   project=${PROJECT:-bs-native-chain}
   nc_project_ok "$project" || exit 2
@@ -515,7 +527,8 @@ nc_main() {
     exit 0
   fi
   [ "$(uname -s)/$(uname -m)" = Linux/x86_64 ] || fail "the native runtime runs on Linux x86_64 only"
-  export XDG_RUNTIME_DIR=/run/user/$(id -u)
+  XDG_RUNTIME_DIR=/run/user/$(id -u)
+  export XDG_RUNTIME_DIR
   systemctl --user show-environment > /dev/null || fail "no systemd user manager answers (XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR)"
   # The manager's unit directory: its own XDG_CONFIG_HOME, else ~/.config
   # (jobs_install.go's rule), read before HOME moves.
