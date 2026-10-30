@@ -484,6 +484,11 @@ func TestNativeFetchIgnoresTheUsersPythonEnvironment(t *testing.T) {
 		"UV_PYTHON_PREFERENCE":    "system",
 		"PATH":                    fakeDir + ":" + os.Getenv("PATH"),
 		"HTTPS_PROXY":             "http://proxy.example:3128",
+		"https_proxy":             "http://lower.example:3128",
+		"http_proxy":              "http://lower.example:3129",
+		"no_proxy":                "localhost,.internal.example",
+		"ALL_PROXY":               "socks5://all.example:1080",
+		"all_proxy":               "socks5://lower-all.example:1080",
 		"SSL_CERT_FILE":           "/etc/ssl/certs/ca.pem",
 		"REQUESTS_CA_BUNDLE":      "/evil/ca.pem",
 		"UV_EXTRA_INDEX_URL":      "https://evil.invalid/extra",
@@ -518,7 +523,10 @@ esac
 	if len(tools.Calls) != 5 {
 		t.Fatalf("%d calls, want 5: %+v", len(tools.Calls), tools.Calls)
 	}
+	// Ruling R27: the lowercase and ALL_PROXY forms reach the tools too.
+	proxies := []string{"HTTPS_PROXY", "https_proxy", "http_proxy", "no_proxy", "ALL_PROXY", "all_proxy"}
 	allowed := map[string]bool{"PATH": true, "LANG": true, "HTTPS_PROXY": true, "HTTP_PROXY": true, "NO_PROXY": true,
+		"https_proxy": true, "http_proxy": true, "no_proxy": true, "ALL_PROXY": true, "all_proxy": true,
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "UV_NO_CONFIG": true, "UV_PYTHON_PREFERENCE": true,
 		"UV_PYTHON_INSTALL_DIR": true, "UV_CACHE_DIR": true, "HOME": true, "HF_HOME": true}
 	for _, c := range tools.Calls {
@@ -539,8 +547,10 @@ esac
 		if env["PATH"] != "/usr/bin:/bin" || env["LANG"] != "C.UTF-8" {
 			t.Errorf("%s: PATH %q LANG %q", c.Path, env["PATH"], env["LANG"])
 		}
-		if env["HTTPS_PROXY"] != user["HTTPS_PROXY"] || env["SSL_CERT_FILE"] != user["SSL_CERT_FILE"] {
-			t.Errorf("%s: the proxy and CA settings were not carried: %q", c.Path, c.Env)
+		for _, k := range append(proxies, "SSL_CERT_FILE") {
+			if env[k] != user[k] {
+				t.Errorf("%s %s: %s = %q, want the user's %q", c.Path, c.Args[0], k, env[k], user[k])
+			}
 		}
 		if env["HOME"] != n.Home() {
 			t.Errorf("%s: HOME %q, want %s", c.Path, env["HOME"], n.Home())

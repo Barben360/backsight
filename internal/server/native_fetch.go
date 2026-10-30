@@ -74,8 +74,10 @@ const (
 )
 
 // passedThrough are the only settings of the user's environment a tool
-// gets: what it needs to reach the network through a proxy.
-var passedThrough = []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+// gets: what it needs to reach the network through a proxy, in both the
+// upper and the lower case Linux users set (ruling R27).
+var passedThrough = []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ALL_PROXY",
+	"https_proxy", "http_proxy", "no_proxy", "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"}
 
 // toolEnv is a tool's whole environment: set, a fixed PATH and LANG, and
 // the proxy settings when the user has them. Nothing else is inherited:
