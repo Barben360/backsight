@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"time"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
@@ -30,8 +31,15 @@ type Native struct {
 	Sys     SysRunner         // systemctl, loginctl, systemd-run, journalctl
 	Tools   ToolRunner        // uv, pg0, Postgres tools, hindsight-admin, hf
 	Proc    string            // "/proc"; tests: a fake tree
-	Venv    string            // "" = the pinned version; WithVersion sets another
-	Err     error             // a construction error every method returns
+	// MayCreate lets Start and StartDatabase create the database when
+	// neither it nor its identity exists (ruling R35): only an install or
+	// a switch to native sets it; elsewhere nothing there is "missing".
+	MayCreate bool
+	// StrayWait bounds how long StopStrays waits for a stray to be gone
+	// (0: 30 s).
+	StrayWait time.Duration
+	Venv      string // "" = the pinned version; WithVersion sets another
+	Err       error  // a construction error every method returns
 }
 
 // SysRunner runs the system's service tools.

@@ -23,12 +23,19 @@ import (
 // postgres on the instance's data outside the db unit, never adopting it;
 // the fsync check refuses to run the database with fsync off.
 
-// strayWait bounds how long StopStrays waits for the strays to be gone;
+// strayWait is StopStrays' default bound (Native.StrayWait overrides it);
 // strayPoll is how often it looks. Tests shorten both.
 var (
 	strayWait = 30 * time.Second
 	strayPoll = 200 * time.Millisecond
 )
+
+func (n Native) strayWait() time.Duration {
+	if n.StrayWait > 0 {
+		return n.StrayWait
+	}
+	return strayWait
+}
 
 // InstanceDir is pg0's instance: <home>/.pg0/instances/hindsight.
 func (n Native) InstanceDir() string {
@@ -152,13 +159,35 @@ func (n Native) CheckInstance(ctx context.Context) error {
 	return nil
 }
 
+// absent: path does not exist (ENOENT); any other error is returned.
+func absent(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return true, nil
+	}
+	return false, err
+}
+
 // ensureInstance creates the database on a first install (no instance
-// and no identity file: ruling R29) and records its identity before the
-// db unit ever starts on it (Task 1's C2). Any other case is CheckInstance's
-// to judge: a lost instance is never replaced by an empty one.
+// and no identity file: ruling R29), only where creating is allowed
+// (MayCreate, ruling R35), and records its identity before the db unit
+// ever starts on it (Task 1's C2). Without MayCreate, nothing there is the
+// missing refusal. Any other case is CheckInstance's to judge: a lost
+// instance is never replaced by an empty one.
 func (n Native) ensureInstance(ctx context.Context) error {
-	if pathExists(n.InstanceDir()) || pathExists(n.IdentityFile()) {
+	noInstance, err := absent(n.InstanceDir())
+	if err != nil {
+		return err
+	}
+	noIdentity, err := absent(n.IdentityFile())
+	if err != nil {
+		return err
+	}
+	if !noInstance || !noIdentity {
 		return nil
+	}
+	if !n.MayCreate {
+		return &GuardError{Reason: "missing", Instance: n.InstanceDir(), File: n.IdentityFile()}
 	}
 	if err := n.createInstance(ctx); err != nil {
 		return err
@@ -308,8 +337,12 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 	if n.Err != nil {
 		return n.Err
 	}
-	deadline := time.Now().Add(strayWait)
-	secs := max(1, int(strayWait/time.Second))
+	if err := n.ownsPidFile(strays); err != nil {
+		return err
+	}
+	wait := n.strayWait()
+	deadline := time.Now().Add(wait)
+	secs := max(1, int(wait/time.Second))
 	_, runErr := n.Tools.Run(ctx, n.toolEnv(), nil, filepath.Join(n.installation(), "bin", "pg_ctl"),
 		"stop", "-D", n.DataDir(), "-m", "fast", "-w", "-t", strconv.Itoa(secs))
 	data := n.dataDirs()
@@ -325,7 +358,7 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
 			err := fmt.Errorf("a postgres still runs on %s outside %s after %s (pid %s): stop it (kill -INT %s), then start again",
-				n.DataDir(), n.DBUnit(), strayWait, strings.Join(alive, ", "), strings.Join(alive, " "))
+				n.DataDir(), n.DBUnit(), wait, strings.Join(alive, ", "), strings.Join(alive, " "))
 			if runErr != nil {
 				err = fmt.Errorf("%w; pg_ctl stop: %w", err, runErr)
 			}
@@ -336,6 +369,35 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 		case <-time.After(strayPoll):
 		}
 	}
+}
+
+// ownsPidFile: pg_ctl stop -D stops the pid DataDir's postmaster.pid
+// names, so it may run only when that is the stray's own (ruling R36):
+// otherwise it could stop the db unit's postgres. Anything else refuses,
+// stopping nothing.
+func (n Native) ownsPidFile(strays []Stray) error {
+	pidFile := filepath.Join(n.DataDir(), "postmaster.pid")
+	raw, err := os.ReadFile(pidFile)
+	owner := ""
+	if err == nil {
+		first, _, _ := strings.Cut(string(raw), "\n")
+		owner = strings.TrimSpace(first)
+	}
+	var others []string
+	for _, s := range strays {
+		if strconv.Itoa(s.PID) != owner {
+			others = append(others, strconv.Itoa(s.PID))
+		}
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	names := "pid " + owner
+	if owner == "" {
+		names = "no pid"
+	}
+	return fmt.Errorf("a postgres (pid %s) runs on %s outside %s, but %s names %s: refusing to stop anything with pg_ctl, which stops the pid that file names. Stop pid %s yourself (kill -INT %s), then start again",
+		strings.Join(others, ", "), n.DataDir(), n.DBUnit(), pidFile, names, strings.Join(others, ", "), strings.Join(others, " "))
 }
 
 // CheckFsync is requirement 1: the running database's fsync must read on.

@@ -89,6 +89,20 @@ func TestNativeCheckInstance(t *testing.T) {
 		}, reason: "identity", msg: func(n Native) string {
 			return "the native database " + n.InstanceDir() + " is not the one backsight recorded (identifier 222, recorded 111): refusing to start it. Put the right one back, or restore a backup: backsight restore <archive>"
 		}},
+		{name: "an empty identity file, no instance", setup: func(t *testing.T, n Native) {
+			if err := os.WriteFile(n.IdentityFile(), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, reason: "missing", msg: func(n Native) string {
+			return "the native database " + n.InstanceDir() + " is missing: refusing to start an empty memory in its place. Put it back, or restore a backup: backsight restore <archive>"
+		}},
+		{name: "empty wins over unrecorded", setup: func(t *testing.T, n Native) {
+			if err := os.MkdirAll(n.DataDir(), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, reason: "empty", msg: func(n Native) string {
+			return "the native database " + n.InstanceDir() + " is empty: refusing to start an empty memory in its place. Put it back, or restore a backup: backsight restore <archive>"
+		}},
 		{name: "unrecorded", setup: func(t *testing.T, n Native) {
 			recordInstance(t, n, "111")
 			if err := os.Remove(n.IdentityFile()); err != nil {
@@ -244,9 +258,32 @@ func TestNativeStopStraysStopsThemWithPgCtl(t *testing.T) {
 		t.Errorf("StopStrays(nil) = %v, ran %v", err, tools.Calls)
 	}
 
-	oldWait, oldPoll := strayWait, strayPoll
-	strayWait, strayPoll = 30*time.Millisecond, time.Millisecond
-	t.Cleanup(func() { strayWait, strayPoll = oldWait, oldPoll })
+	// Ruling R36: pg_ctl stops postmaster.pid's pid, so it runs only when
+	// that is the stray's; else nothing is stopped.
+	pidFile := filepath.Join(data, "postmaster.pid")
+	err = n.StopStrays(ctx, strays)
+	if err == nil || !strings.Contains(err.Error(), "4242") || !strings.Contains(err.Error(), "names no pid") {
+		t.Errorf("no postmaster.pid: %v", err)
+	}
+	touch(t, filepath.Join(data, "PG_VERSION"), 0o600)
+	if err := os.WriteFile(pidFile, []byte("4243\n"+data+"\n1730000000\n5432\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = n.StopStrays(ctx, strays)
+	if err == nil || !strings.Contains(err.Error(), "pid 4242") || !strings.Contains(err.Error(), "names pid 4243") {
+		t.Errorf("postmaster.pid naming another pid: %v, want both pids named", err)
+	}
+	if len(tools.Calls) != 0 {
+		t.Errorf("pg_ctl ran on another pid's postmaster.pid: %+v", tools.Calls)
+	}
+	if err := os.WriteFile(pidFile, []byte("4242\n"+data+"\n1730000000\n5432\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldPoll := strayPoll
+	strayPoll = time.Millisecond
+	t.Cleanup(func() { strayPoll = oldPoll })
+	n.StrayWait = 30 * time.Millisecond
 	err = n.StopStrays(ctx, strays)
 	if err == nil || !strings.Contains(err.Error(), "4242") || !strings.Contains(err.Error(), data) {
 		t.Errorf("a stray still alive: %v, want an error naming pid 4242 and %s", err, data)
@@ -315,6 +352,7 @@ func TestNativeStartRefusesFsyncOff(t *testing.T) {
 func TestNativeFirstStartRecordsTheIdentity(t *testing.T) {
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
+	n.MayCreate = true
 	rendered(t, n, secrets)
 	created := 0
 	tools.Effect = func(c toolCall) {
@@ -370,6 +408,7 @@ func TestNativeStartNeverRecreatesALostInstance(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, sys, tools := nativeFixture(t, secrets)
+			n.MayCreate = true // allowed to create, still never over a lost one
 			installed(t, n, secrets)
 			if err := tc.lose(n); err != nil {
 				t.Fatal(err)
@@ -392,5 +431,127 @@ func TestNativeStartNeverRecreatesALostInstance(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// systemdRuns counts the instance creations among the tool calls.
+func systemdRuns(tools *fakeTools) int {
+	k := 0
+	for _, c := range tools.Calls {
+		if c.Path == "systemd-run" {
+			k++
+		}
+	}
+	return k
+}
+
+// Ruling R35: without MayCreate, nothing there (a wiped native directory,
+// another compose_dir) is the missing refusal, never a new empty memory;
+// with it, the first start creates the database and records it.
+func TestNativeStartCreatesOnlyWhereAllowed(t *testing.T) {
+	ctx := context.Background()
+	n, sys, tools := nativeFixture(t, secrets)
+	rendered(t, n, secrets)
+	for _, start := range []func(context.Context) error{n.Start, n.StartDatabase} {
+		err := start(ctx)
+		var ge *GuardError
+		if !errors.As(err, &ge) || ge.Reason != "missing" {
+			t.Errorf("start without MayCreate = %v, want the missing refusal", err)
+		}
+	}
+	if k := systemdRuns(tools); k != 0 {
+		t.Errorf("created %d times without MayCreate", k)
+	}
+	for _, l := range sys.lines() {
+		if strings.Contains(l, "enable") || strings.Contains(l, "start") {
+			t.Errorf("a unit was started: %s", l)
+		}
+	}
+	if exists(n.InstanceDir()) || exists(n.IdentityFile()) {
+		t.Error("something was created without MayCreate")
+	}
+
+	n.MayCreate = true
+	tools.Effect = func(c toolCall) {
+		if c.Path == "systemd-run" {
+			touch(t, filepath.Join(n.DataDir(), "PG_VERSION"), 0o600)
+			_ = os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("42\n"), 0o600)
+		}
+	}
+	if err := n.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(n.IdentityFile()); string(raw) != "42\n" || systemdRuns(tools) != 1 {
+		t.Errorf("with MayCreate: identity %q, created %d times", raw, systemdRuns(tools))
+	}
+}
+
+// The creation needs both the instance and the identity to be absent
+// (ENOENT): an empty identity file, or an instance path that cannot be
+// read, never creates.
+func TestNativeCreationNeedsBothAbsent(t *testing.T) {
+	ctx := context.Background()
+	t.Run("an empty identity file", func(t *testing.T) {
+		n, _, tools := nativeFixture(t, secrets)
+		n.MayCreate = true
+		rendered(t, n, secrets)
+		if err := os.WriteFile(n.IdentityFile(), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := n.Start(ctx)
+		var ge *GuardError
+		if !errors.As(err, &ge) || ge.Reason != "missing" || systemdRuns(tools) != 0 {
+			t.Errorf("Start = %v, created %d times; want the missing refusal and no creation", err, systemdRuns(tools))
+		}
+	})
+	t.Run("an instance path that is not a directory's", func(t *testing.T) {
+		n, sys, tools := nativeFixture(t, secrets)
+		n.MayCreate = true
+		rendered(t, n, secrets)
+		touch(t, filepath.Dir(n.InstanceDir()), 0o600) // .pg0/instances is a file: ENOTDIR, not ENOENT
+		err := n.Start(ctx)
+		var ge *GuardError
+		if err == nil || errors.As(err, &ge) || systemdRuns(tools) != 0 {
+			t.Errorf("Start = %v, created %d times; want the stat error and no creation", err, systemdRuns(tools))
+		}
+		if len(sys.Calls) != 0 {
+			t.Errorf("ran %v", sys.lines())
+		}
+	})
+}
+
+// A new instance whose identity cannot be recorded is removed, so the
+// next start creates it again instead of refusing it as unrecorded.
+func TestNativeFailedIdentityRemovesTheNewInstance(t *testing.T) {
+	ctx := context.Background()
+	n, sys, tools := nativeFixture(t, secrets)
+	n.MayCreate = true
+	rendered(t, n, secrets)
+	tools.Effect = func(c toolCall) {
+		if c.Path == "systemd-run" {
+			touch(t, filepath.Join(n.DataDir(), "PG_VERSION"), 0o600) // no fake-sysid: pg_controldata prints no identifier
+		}
+	}
+	err := n.Start(ctx)
+	if err == nil || !strings.Contains(err.Error(), "recording the new native database's identity") {
+		t.Fatalf("Start = %v", err)
+	}
+	if exists(n.InstanceDir()) || exists(n.IdentityFile()) {
+		t.Errorf("left instance %v, identity %v", exists(n.InstanceDir()), exists(n.IdentityFile()))
+	}
+	if len(sys.Calls) != 0 {
+		t.Errorf("units touched after the failed creation: %v", sys.lines())
+	}
+	tools.Effect = func(c toolCall) {
+		if c.Path == "systemd-run" {
+			touch(t, filepath.Join(n.DataDir(), "PG_VERSION"), 0o600)
+			_ = os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("43\n"), 0o600)
+		}
+	}
+	if err := n.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(n.IdentityFile()); string(raw) != "43\n" || systemdRuns(tools) != 2 {
+		t.Errorf("second Start: identity %q, created %d times", raw, systemdRuns(tools))
 	}
 }

@@ -3,14 +3,19 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/server"
 )
 
-// nativeProc is the /proc the native guard reads; tests replace it.
-var nativeProc = "/proc"
+// nativeProc is the /proc the native guard reads; nativeStrayWait bounds
+// its wait for a stray to stop (0: the runtime's 30 s). Tests replace both.
+var (
+	nativeProc      = "/proc"
+	nativeStrayWait time.Duration
+)
 
 type nativeCheckResult struct {
 	Instance string `json:"instance"`
@@ -42,7 +47,7 @@ func newServerNativeCheckCmd(e *env) *cobra.Command {
 			}
 			// Built whatever server.runtime says: a switch to native starts
 			// the units before config.toml names native.
-			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc}
+			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, StrayWait: nativeStrayWait}
 			ctx := cmd.Context()
 			res := nativeCheckResult{Instance: n.InstanceDir(), Status: "recorded"}
 			if err := n.CheckInstance(ctx); err != nil {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
@@ -180,6 +181,7 @@ func TestNativeCheckStopsAStrayPostgres(t *testing.T) {
 	}
 
 	writeProc(t, "4242", []string{pg, "-D", n.DataDir(), "-p", "5432"}, "foo.scope", n.DataDir())
+	writePidFile(t, n, "4242")
 	tools.effect = func(path string, _ []string) {
 		if filepath.Base(path) == "pg_ctl" {
 			_ = os.RemoveAll(filepath.Join(nativeProc, "4242"))
@@ -210,5 +212,74 @@ func TestNativeCheckStopsAStrayPostgres(t *testing.T) {
 		if filepath.Base(strings.Fields(c)[0]) == "pg0" {
 			t.Errorf("a stray stopped with pg0 (ruling R22): %s", c)
 		}
+	}
+}
+
+// writePidFile writes the data directory's postmaster.pid naming pid.
+func writePidFile(t *testing.T, n server.Native, pid string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(n.DataDir(), "postmaster.pid"), []byte(pid+"\n"+n.DataDir()+"\n1730000000\n5432\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// strayHost is a recorded instance with a stray, pid 4242, on its data.
+func strayHost(t *testing.T) (server.Native, *checkTools) {
+	t.Helper()
+	n, tools := nativeCheckHost(t)
+	withInstance(t, n, "111", "111")
+	writeProc(t, "4242", []string{"postgres", "-D", n.DataDir()}, "foo.scope", n.DataDir())
+	return n, tools
+}
+
+// pgCtlRuns counts pg_ctl among the tool calls.
+func pgCtlRuns(tools *checkTools) int {
+	k := 0
+	for _, c := range tools.calls {
+		if filepath.Base(strings.Fields(c)[0]) == "pg_ctl" {
+			k++
+		}
+	}
+	return k
+}
+
+// A /proc that cannot be read is a refusal: the guard cannot tell.
+func TestNativeCheckRefusesWhenItCannotLookForStrays(t *testing.T) {
+	n, _ := nativeCheckHost(t)
+	withInstance(t, n, "111", "111")
+	nativeProc = filepath.Join(t.TempDir(), "no-proc")
+	code, out, errOut := run(t, "server", "native-check")
+	if code != output.Blocked || !strings.Contains(errOut, "looking for a postgres on "+n.DataDir()) {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+}
+
+// A stray still running after the wait is a refusal naming its pid.
+func TestNativeCheckRefusesAStrayThatDoesNotStop(t *testing.T) {
+	n, tools := strayHost(t)
+	writePidFile(t, n, "4242")
+	old := nativeStrayWait
+	nativeStrayWait = 50 * time.Millisecond
+	t.Cleanup(func() { nativeStrayWait = old })
+	code, out, errOut := run(t, "server", "native-check")
+	if code != output.Blocked || !strings.Contains(errOut, "a postgres still runs on "+n.DataDir()) || !strings.Contains(errOut, "(pid 4242)") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if pgCtlRuns(tools) != 1 {
+		t.Errorf("pg_ctl ran %d times: %v", pgCtlRuns(tools), tools.calls)
+	}
+}
+
+// Ruling R36: pg_ctl stops postmaster.pid's pid, so another pid there is a
+// refusal naming both, and nothing is stopped.
+func TestNativeCheckStopsNothingWhenThePidFileNamesAnother(t *testing.T) {
+	n, tools := strayHost(t)
+	writePidFile(t, n, "4243")
+	code, out, errOut := run(t, "server", "native-check")
+	if code != output.Blocked || !strings.Contains(errOut, "a postgres (pid 4242) runs on "+n.DataDir()) || !strings.Contains(errOut, "names pid 4243") {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if pgCtlRuns(tools) != 0 {
+		t.Errorf("pg_ctl ran: %v", tools.calls)
 	}
 }
