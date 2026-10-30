@@ -300,12 +300,17 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			if err != nil {
 				fmt.Fprintf(&b, "%s\n", err)
 			}
-			if len(similar.Hits) > 0 {
-				b.WriteString("Most similar memories (does this fact update or repeat one?):\n")
-				for _, h := range similar.Hits {
-					fmt.Fprintf(&b, "- [%s] %s (%s ago, %s)\n", h.Project, h.Text, h.Age, h.ID)
-				}
+			saved := instructions.SavedLine(safeProject(res.Project), res.Kind)
+			if len(similar.Hits) == 0 {
+				b.WriteString("Print this line in your final message:\n" + saved + "\n")
+				return textResult(b.String()), nil, nil
 			}
+			b.WriteString("Most similar memories (does this fact update or repeat one?):\n")
+			for _, h := range similar.Hits {
+				fmt.Fprintf(&b, "- [%s] %s (%s ago, %s)\n", h.Project, h.Text, h.Age, h.ID)
+			}
+			b.WriteString("Print one line in your final message: this one for a new fact,\n" + saved +
+				"\nor this one when it updates one of the memories above:\n" + instructions.UpdatedLine(safeProject(res.Project), res.Kind) + "\n")
 			return textResult(b.String()), nil, nil
 		})
 	if deps.cfg.Feedback.Enabled {
@@ -413,11 +418,7 @@ func (d mcpDeps) credit(ctx context.Context, key *mcpKey, verdict string, a cred
 	for _, p := range order {
 		lines = append(lines, instructions.CreditLine(p, groups[p]))
 	}
-	what := "this line"
-	if len(lines) > 1 {
-		what = "these lines"
-	}
-	return creditUsedPrefix + " Print " + what + " in your final message:\n" + strings.Join(lines, "\n"), nil
+	return creditUsedPrefix + " " + printLines(lines) + "\n" + strings.Join(lines, "\n"), nil
 }
 
 // shownProjects is the project of each memory shown: the one its latest
@@ -464,12 +465,11 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		p := owner(id)
 		pool = pool && isPool(cfg, p)
 		if p != live.Project && !isPool(cfg, p) && !slices.Contains(linked, p) {
-			problems = append(problems, fmt.Sprintf("%s: a memory of project %s, outside this session's project and the projects it links: nothing stored; the user can retire it from a terminal: backsight forget %s",
-				shortID(id), safeProject(p), id))
+			problems = append(problems, instructions.NotRetiredLine(safeProject(p), id, "a memory of project "+safeProject(p)+", outside this session's project and the projects it links", true))
 		}
 	}
 	if len(problems) > 0 {
-		return "", errors.New(strings.Join(problems, "\n"))
+		return "", errors.New("nothing stored: the user can retire these memories from a terminal; " + printLines(problems) + "\n" + strings.Join(problems, "\n"))
 	}
 	// The note goes to the session's project, or to the pool when every
 	// memory it replaces is transverse.
@@ -501,7 +501,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	// refused before the server is asked anything.
 	done, limit := retirementsInSession(d.dirs, live.SessionID), cfg.Feedback.MaxRetirements
 	if done >= limit {
-		return "", capRefusal(limit, done, ids)
+		return "", capRefusal(limit, done, ids, owner)
 	}
 	plan := d.classify(ctx, key, ids, owner)
 	if len(plan.listed) > 0 {
@@ -509,14 +509,14 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 		return sourcesText(plan), nil
 	}
 	if acted := plan.acted(); done+len(acted) > limit {
-		return "", capRefusal(limit, done, acted)
+		return "", capRefusal(limit, done, acted, owner)
 	}
 	sec, _ := key.get()
 	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence, checked: true})
 	if err != nil {
 		return "", err
 	}
-	return d.retire(ctx, key, live, verdict, res.Document, invalidationReason(verdict, evidence, correction, res.Document), ids, plan)
+	return d.retire(ctx, key, live, verdict, res.Document, invalidationReason(verdict, evidence, correction, res.Document), ids, plan, owner)
 }
 
 // retirementsInSession is how many memories session sess retired, from

@@ -55,7 +55,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v8" {
+	if Version != "v9" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -114,7 +114,7 @@ func TestTextsFollowFeedback(t *testing.T) {
 }
 
 func TestGuideCoversTheSpecPoints(t *testing.T) {
-	for _, want := range []string{"memory_search", "1-4 short keyword queries", "verify", "nothing in memory", "memory_store",
+	for _, want := range []string{"memory_search", "1-4 short keyword queries", "verify", NothingLine, "memory_store",
 		"transverse", "override", "user's language", "test"} {
 		if !strings.Contains(Guide, want) {
 			t.Errorf("guide lacks %q", want)
@@ -328,6 +328,7 @@ var wordings = map[string]string{
 	"v4": "e0deb3e5f29980dd77f9708223772239120aeef3552324ad769d7affde8250cb",
 	"v7": "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
 	"v8": "12d06be831db7e934a0f7b733c2908eb1fde75d73d6f00d7a7fd645f23faa87b",
+	"v9": "a53915333ea092b317d01464304f17d79053635c57bdffca975896af0542f32c",
 }
 
 func wordingHash() string {
@@ -335,7 +336,10 @@ func wordingHash() string {
 	texts := []string{Credit, Guide, ShortGuide, Reminder, Nudge(nil), Nudge([]string{"a", "b"}), DetectorRule, DetectorApproval, GateReason,
 		RecallHeader, HintsLine, BriefingHeader("p"), BriefingModelHeader("p", "1d"), BriefingModelEnd, BriefingQuery, BriefingEmpty, BriefingRaw,
 		FirstSessionNotice("s", "p"), SubagentGuide, SearchDescription, StoreDescription, ReadDescription, FailureHeader,
-		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk}
+		CreditAsk, CreditDescription, CreditLine("p", []string{"a", "b"}), StopCheckHeader, StopCheckAsk,
+		SavedLine("p", "k"), UpdatedLine("p", "k"), RetiredLine("wrong", "p", "i"), RetiredLine("outdated", "p", "i"),
+		HiddenLine("wrong", "p", "i", true), HiddenLine("outdated", "p", "i", false), NotRetiredLine("p", "i", "r", true), NotRetiredLine("p", "i", "r", false),
+		NothingLine, RetroLine}
 	for _, feedback := range []bool{true, false} {
 		x := For(feedback)
 		texts = append(texts, x.Guide, x.ShortGuide, x.Reminder, x.RecallEnd, x.SearchEnd)
