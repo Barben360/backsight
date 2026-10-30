@@ -32,9 +32,17 @@ const Format = 1
 
 // Manifest describes one backup.
 type Manifest struct {
-	Format         int              `json:"format"`
-	CreatedAt      time.Time        `json:"created_at"`
-	BinaryVersion  string           `json:"binary_version"`
+	Format        int       `json:"format"`
+	CreatedAt     time.Time `json:"created_at"`
+	BinaryVersion string    `json:"binary_version"`
+	// Runtime is the runtime the server ran on ("docker", "native"; absent
+	// in older archives: docker), HindsightVersion its Hindsight release
+	// ("1.1.0"): restore compares archives across runtimes by it (decision
+	// 0078).
+	Runtime          string `json:"runtime,omitempty"`
+	HindsightVersion string `json:"hindsight_version,omitempty"`
+	// HindsightImage is the Docker image the server ran ("" on native);
+	// PostgresImage the database's image, or on native pg0's Postgres.
 	HindsightImage string           `json:"hindsight_image"`
 	PostgresImage  string           `json:"postgres_image"`
 	Alembic        string           `json:"alembic_revision"`

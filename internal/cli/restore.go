@@ -40,10 +40,14 @@ const epochTimeout = time.Minute
 var rollbackStepTimeout = 20 * time.Minute
 
 type restoreResult struct {
-	Archive    string           `json:"archive"`
-	Plan       bool             `json:"plan"`
-	Manifest   backup.Manifest  `json:"manifest"`
-	Safety     string           `json:"safety_archive"` // the server as it was, kept like any backup
+	Archive  string          `json:"archive"`
+	Plan     bool            `json:"plan"`
+	Manifest backup.Manifest `json:"manifest"`
+	Safety   string          `json:"safety_archive"` // the server as it was, kept like any backup
+	// MovedAside: on native, the refused database, moved aside and kept
+	// in place of a safety archive (ruling R6).
+	MovedAside string           `json:"moved_aside,omitempty"`
+	adopted    bool             // into a new native database (ruling R6)
 	Steps      []step           `json:"steps"`
 	Restored   map[string]int64 `json:"restored_counts,omitempty"`
 	Epoch      *retain.Epoch    `json:"epoch,omitempty"`
@@ -190,6 +194,14 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if err := restorable(m, cfg, runtimeFor(cfg)); err != nil {
 		return err
 	}
+	// On native, a database whose start is refused (missing, empty,
+	// another one, unrecorded) cannot be read nor backed up: restore
+	// moves it aside, kept, and adopts the archive into a new one, which
+	// is what every refusal tells the user to run (ruling R6).
+	refused, err := nativeRefusal(ctx, runtimeFor(cfg))
+	if err != nil {
+		return &output.Error{Code: output.Blocked, Message: server.Redact("cannot check the native database ("+err.Error()+"): nothing was changed", sec)}
+	}
 	// A live maintenance refuses, the plan too. A restore that did not
 	// finish does not: restoring again (its safety archive, or the
 	// archive) is the way back, and this run replaces its marker.
@@ -226,7 +238,15 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	if !res.Plan {
 		listDB = ownGroupRuntime(cfg).Database()
 	}
-	others, how, err := otherBanks(ctx, cl, listDB, cfg.Server.Bank)
+	var others []otherBank
+	how := ""
+	if refused != nil {
+		// Nothing to read the refused database's banks from: the
+		// archive's other banks are listed from it once restored.
+		res.Warnings = append(res.Warnings, refusedWarning(refused))
+	} else {
+		others, how, err = otherBanks(ctx, cl, listDB, cfg.Server.Bank)
+	}
 	switch {
 	case err != nil && res.Plan:
 		res.Warnings = append(res.Warnings, "cannot list the server's banks ("+err.Error()+"): the other banks, which the archive reverts too, are not listed")
@@ -274,7 +294,14 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			epoch = fmt.Sprintf("restore epoch %d or later (the server is at %d)", before.Epoch+1, before.Epoch)
 		}
 		safety := "would write " + res.Safety
-		if fl.noSafety {
+		switch {
+		case refused != nil:
+			res.Safety = ""
+			safety = "none: there is no database to keep (" + refused.Reason + ")"
+			if _, err := os.Lstat(refused.Instance); err == nil {
+				safety = "none: the refused database (" + refused.Reason + ") would be moved aside, kept, to " + refusedName(refused.Instance, now())
+			}
+		case fl.noSafety:
 			safety = "none (--no-safety)"
 		}
 		tombs, err := retain.ReadTombstones(ctx, cl, cfg.Server.Bank)
@@ -299,7 +326,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 			epoch += " in bank " + cfg.Server.Bank + ", and a new epoch in bank(s) " + strings.Join(res.OtherBanks, ", ")
 		}
 		for _, s := range [][2]string{
-			{"check", fmt.Sprintf("archive of %s, Hindsight %s, bank %s, counts %v", m.CreatedAt.Format(time.RFC3339), m.HindsightImage, m.Bank, m.Counts)},
+			{"check", fmt.Sprintf("archive of %s, Hindsight %s, bank %s, counts %v", m.CreatedAt.Format(time.RFC3339), archiveServer(m), m.Bank, m.Counts)},
 			{"lock", "would take the maintenance lock and server.lock until the end (hooks queue, jobs skip)"},
 			{"safety backup", safety},
 			{"stop", "would mark a restore in progress (every client holds its sends) and stop hindsight (the database keeps running)"},
@@ -327,7 +354,7 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		}
 		return nil
 	}
-	add("check", "done", fmt.Sprintf("archive of %s, Hindsight %s, counts %v", m.CreatedAt.Format(time.RFC3339), m.HindsightImage, m.Counts))
+	add("check", "done", fmt.Sprintf("archive of %s, Hindsight %s, counts %v", m.CreatedAt.Format(time.RFC3339), archiveServer(m), m.Counts))
 
 	// 2. Locks, held to the end: hooks only queue, jobs skip, and no other
 	// command starts or rewrites the server.
@@ -349,16 +376,28 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	rt := ownGroupRuntime(cfg)
 	db := rt.Database()
 	_ = db.RemoveStaleDumps(ctx) // a killed backup's or restore's clear dump
+	// On native, a postgres on the database's data outside its unit is
+	// stopped first, never adopted (requirement 3).
+	strays, err := stopNativeStrays(ctx, rt)
+	if err != nil {
+		return &output.Error{Code: output.Blocked, Message: server.Redact(err.Error()+": nothing was restored", sec)}
+	}
+	res.Warnings = append(res.Warnings, strays...)
 
 	// The epochs known now: the server's (through the API, else read only
 	// from its database) and this client's. The next one is above both and
-	// above the archive's; without the server's, nothing is changed.
-	before, how, err := epochBefore(ctx, cl, db, cfg.Server.Bank)
-	if err != nil {
-		return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the server's restore epoch ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
-	}
-	if how != "" {
-		res.Warnings = append(res.Warnings, how)
+	// above the archive's; without the server's, nothing is changed. A
+	// refused native database is not read: the next epoch is above this
+	// client's and the archive's (ruling R6).
+	var before retain.Epoch
+	if refused == nil {
+		before, how, err = epochBefore(ctx, cl, db, cfg.Server.Bank)
+		if err != nil {
+			return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the server's restore epoch ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
+		}
+		if how != "" {
+			res.Warnings = append(res.Warnings, how)
+		}
 	}
 	st, err := state.Load(d.StateFile())
 	if err != nil {
@@ -366,13 +405,17 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	}
 	// The purges known now go on after the restore: the archive's control
 	// bank lacks those made since, and a client that reads it would send
-	// their records again (M5 review rules).
-	tombs, how, err := tombstonesBefore(ctx, cl, db, cfg.Server.Bank)
-	if err != nil {
-		return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the server's purge tombstones ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
-	}
-	if how != "" {
-		res.Warnings = append(res.Warnings, how)
+	// their records again (M5 review rules). A refused database's are
+	// not read: this client's go on, with the archive's own.
+	var tombs []state.Tombstone
+	if refused == nil {
+		tombs, how, err = tombstonesBefore(ctx, cl, db, cfg.Server.Bank)
+		if err != nil {
+			return &output.Error{Code: output.Blocked, Message: server.Redact("cannot read the server's purge tombstones ("+err.Error()+"): nothing was changed; check backsight server status", sec)}
+		}
+		if how != "" {
+			res.Warnings = append(res.Warnings, how)
+		}
 	}
 	tombs = mergeTombstones(tombs, st.TombstonesOf(cfg.Server.Bank))
 	all := slices.Clone(tombs)
@@ -388,9 +431,12 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 
 	// 3. The safety archive, its clear dump kept to roll back to.
 	marker := state.RestoreMarker{Command: "restore", Safety: res.Archive, Archive: res.Archive, StartedAt: now().UTC().Truncate(time.Second)}
-	if fl.noSafety {
+	switch {
+	case refused != nil:
+		add("safety backup", "skipped", "the native database is refused ("+refused.Reason+"): it is moved aside and kept instead")
+	case fl.noSafety:
 		add("safety backup", "skipped", "--no-safety: the way back is this archive")
-	} else {
+	default:
 		rb.dump = filepath.Join(work, "safety.dump")
 		sb, err := createBackup(ctx, &safetyCopy{dump: rb.dump})
 		if err != nil {
@@ -410,7 +456,28 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		add(step, "failed", server.Redact(err.Error(), sec))
 		return rb.run(ctx, err)
 	}
-	if err := rt.StopAPI(ctx); err != nil {
+	if refused != nil {
+		// The refused database aside, kept, then a new one, empty, for
+		// the archive: a failure from here removes the new one, so that
+		// nothing ever serves it, and restore adopts the archive again.
+		moved, err := moveAsideRefused(ctx, rt, now())
+		if err != nil {
+			add("stop", "failed", server.Redact(err.Error(), sec))
+			_ = state.ClearRestoreMarker(d)
+			return &output.Error{Code: output.Blocked, Message: server.Redact("the refused native database could not be moved aside, nothing was restored: "+err.Error(), sec)}
+		}
+		res.MovedAside, rb.movedAside, res.adopted = moved, moved, true
+		rb.adopted = func(ctx context.Context) error { return removeFreshDatabase(ctx, rt) }
+		detail := "the native server stopped; no database to keep"
+		if moved != "" {
+			detail = "the native server stopped; the refused database moved aside, kept: " + moved
+		}
+		add("stop", "done", detail)
+		if err := startFreshDatabase(ctx, rt, sec); err != nil {
+			return failed("restore", err)
+		}
+		add("database", "done", "a new native database, its identity recorded")
+	} else if err := rt.StopAPI(ctx); err != nil {
 		// The database is untouched: whatever did stop starts again.
 		add("stop", "failed", server.Redact(err.Error(), sec))
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackStepTimeout)
@@ -418,11 +485,16 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		cancel()
 		_ = state.ClearRestoreMarker(d)
 		return &output.Error{Code: output.Blocked, Message: server.Redact("the server could not be stopped, nothing was restored: "+err.Error(), sec)}
+	} else {
+		add("stop", "done", "hindsight stopped, the database kept running")
 	}
-	add("stop", "done", "hindsight stopped, the database kept running")
 	dropped, err := db.Restore(ctx, filepath.Join(work, "db.dump"))
 	rb.dropped = dropped
 	if err != nil {
+		return failed("restore", err)
+	}
+	// The database the archive went into is the one recorded (native).
+	if err := recordNativeIdentity(ctx, rt); err != nil {
 		return failed("restore", err)
 	}
 	add("restore", "done", "database replaced")
@@ -452,6 +524,27 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	add("recall", "done", "answered")
 	rb.tempKey = tmp
 
+	// A refused database's banks and purges could not be read before: the
+	// archive's are read now, with this client's (ruling R6). Only the
+	// other banks proven backsight's get an epoch: nothing was asked.
+	if refused != nil {
+		ts, err := retain.ReadTombstones(ctx, tcl, cfg.Server.Bank)
+		if err != nil {
+			return failed("purges", err)
+		}
+		tombs = mergeTombstones(ts, st.TombstonesOf(cfg.Server.Bank))
+		all = slices.Clone(tombs)
+		if others, err = adoptedOthers(ctx, tcl, st, cfg.Server.Bank, func(w string) { res.Warnings = append(res.Warnings, w) }); err != nil {
+			return failed("epoch", err)
+		}
+		rb.others = others
+		for _, o := range others {
+			res.OtherBanks = append(res.OtherBanks, o.bank)
+			all = append(all, o.tombs...)
+		}
+		res.Purged = purgedAfter(all, m.CreatedAt)
+	}
+
 	// 6. The purges, before the epoch tells the clients to re-read: the
 	// restored control banks lack those made since the archive.
 	if len(all) > 0 {
@@ -480,8 +573,12 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 	rb.highest = max(rb.highest, restored.Epoch)
 	// The history goes on from the server's as it was: the restored
 	// document is the archive's, older than the restores since.
+	history := before.History
+	if refused != nil {
+		history = restored.History // the refused server's is unknown
+	}
 	next := retain.Epoch{Epoch: rb.highest + 1, RestoredAt: now().UTC().Truncate(time.Second), BackupCreatedAt: m.CreatedAt.UTC().Truncate(time.Second),
-		History: before.History}
+		History: history}
 	rb.highest = next.Epoch // attempted: the rollback's goes above it
 	if err := writeEpochOn(ctx, cfg, tmp, cfg.Server.Bank, next, false); err != nil {
 		return failed("epoch", err)
@@ -1032,18 +1129,44 @@ func writeEpochOn(ctx context.Context, cfg config.Config, key, bank string, e re
 // restorable refuses, before anything stops, an archive this install
 // cannot run: one from a newer Hindsight than the pinned one (its schema is
 // ahead), one it cannot place, one of another bank, or one whose vectors
-// come from other embedding models.
+// come from other embedding models. An archive of the same Docker runtime
+// is placed by its image, as always; across runtimes, or on native, by its
+// Hindsight release (decision 0078, ruling R4).
 func restorable(m backup.Manifest, cfg config.Config, rt server.Runtime) error {
 	pinned := rt.Version()
-	cmp, ok := rt.ComparePins(m.HindsightImage, pinned)
 	embeddings := cfg.Embeddings.Preset + ": " + server.EmbeddingModels
+	from := m.Runtime
+	if from == "" {
+		from = "docker" // archives from before the runtime was recorded
+	}
+	if from == "docker" && rt.Kind() == "docker" {
+		cmp, ok := rt.ComparePins(m.HindsightImage, pinned)
+		switch {
+		case !ok:
+			_, digest, _ := strings.Cut(m.HindsightImage, "@")
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("cannot tell whether the archive's Hindsight %q is older than this install's %q: "+
+				"restore it with its own image (server.digest = %q in config.toml, then backsight server start)", m.HindsightImage, pinned, digest)}
+		case cmp > 0:
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive was taken with Hindsight %s, newer than this install's %s: update backsight first", m.HindsightImage, pinned)}
+		}
+	} else {
+		theirs, ours := archiveVersion(m), rt.HindsightVersion()
+		cmp, ok := server.CompareHindsight(theirs, ours)
+		switch {
+		case theirs == "" || !ok && ours != "":
+			image := m.HindsightImage
+			if image == "" {
+				image = "none recorded"
+			}
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("cannot tell the archive's Hindsight version (%s): restore it on the %s runtime it was taken on, "+
+				"at the version it ran", image, from)}
+		case !ok:
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("cannot tell this install's Hindsight version (%s): the archive's is %s", pinned, theirs)}
+		case cmp > 0:
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive was taken with Hindsight %s on %s, newer than this install's %s: update backsight first", theirs, from, ours)}
+		}
+	}
 	switch {
-	case !ok:
-		_, digest, _ := strings.Cut(m.HindsightImage, "@")
-		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("cannot tell whether the archive's Hindsight %q is older than this install's %q: "+
-			"restore it with its own image (server.digest = %q in config.toml, then backsight server start)", m.HindsightImage, pinned, digest)}
-	case cmp > 0:
-		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive was taken with Hindsight %s, newer than this install's %s: update backsight first", m.HindsightImage, pinned)}
 	case m.Bank == config.LegacyBank && cfg.Server.Bank == config.DefaultBank:
 		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive was taken before the bank rename (bank %q, this install uses %q): "+
 			"set server.bank = %q in config.toml, restore it, then run backsight bank rename", m.Bank, cfg.Server.Bank, m.Bank)}
@@ -1053,6 +1176,24 @@ func restorable(m backup.Manifest, cfg config.Config, rt server.Runtime) error {
 		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("the archive's vectors come from the embedding models %q, this install uses %q: its recall would not match", m.Embeddings, embeddings)}
 	}
 	return nil
+}
+
+// archiveVersion is the archive's Hindsight release: its manifest's, else
+// its image's tag ("" when neither names one).
+func archiveVersion(m backup.Manifest) string {
+	if m.HindsightVersion != "" {
+		return m.HindsightVersion
+	}
+	return server.HindsightVersionOf(m.HindsightImage)
+}
+
+// archiveServer names the server an archive was taken from: its image, or
+// on native its Hindsight release.
+func archiveServer(m backup.Manifest) string {
+	if m.HindsightImage != "" {
+		return m.HindsightImage
+	}
+	return archiveVersion(m) + " (" + m.Runtime + ")"
 }
 
 // rollback is what a failed restore needs to put the server back.
@@ -1075,6 +1216,11 @@ type rollback struct {
 	// others: the server's other memory banks, which the restore reverted
 	// too: each gets an epoch above its highest.
 	others []otherBank
+	// adopted, on native after a refused start (ruling R6), removes the
+	// new database the archive was going into: there is no safety
+	// archive, the refused one is kept in movedAside.
+	adopted    func(ctx context.Context) error
+	movedAside string
 }
 
 func (r *rollback) what() string {
@@ -1098,6 +1244,9 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 		sctx, cancel := context.WithTimeout(base, rollbackStepTimeout)
 		defer cancel()
 		return fn(sctx)
+	}
+	if r.adopted != nil {
+		return r.unadopt(step, cause)
 	}
 	err := step(func(ctx context.Context) error { return r.rt.StopAPI(ctx) })
 	if err == nil && r.dropped {
@@ -1171,6 +1320,53 @@ func (r *rollback) run(ctx context.Context, cause error) error {
 	return &output.Error{Code: output.RolledBack, Message: fmt.Sprintf("%s failed and was rolled back to the safety archive %s: %v", r.what(), r.res.Safety, cause)}
 }
 
+// unadopt is the rollback of a restore after a refused native start
+// (ruling R6): the new database is removed, never served half restored,
+// and the marker stays, every client held, until a restore succeeds.
+// Exit 20.
+func (r *rollback) unadopt(step func(fn func(ctx context.Context) error) error, cause error) error {
+	kept := ""
+	if r.movedAside != "" {
+		kept = "; the refused database is kept in " + r.movedAside
+	}
+	if err := step(r.adopted); err != nil {
+		r.add("rollback", "failed", server.Redact(err.Error(), r.sec))
+		return &output.Error{Code: output.Blocked, Message: server.Redact(fmt.Sprintf("%s failed (%v) and the new native database could not be removed (%v)%s: "+
+			"every client holds its sends; stop the server (%s), remove %s, then run backsight restore %s again", r.what(), cause, err, kept,
+			r.rt.StopCmd(), r.rt.(server.Native).InstanceDir(), r.res.Archive), r.sec)}
+	}
+	r.add("rollback", "done", "the new native database removed"+kept)
+	return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("%s failed (%v): the new native database was removed%s; every client holds its sends until a restore succeeds: run backsight restore %s again",
+		r.what(), cause, kept, r.res.Archive)}
+}
+
+// adoptedOthers are, after a restore that adopted the archive (ruling R6),
+// the archive's other memory banks proven backsight's, each with this
+// client's epoch and the archive's purges with this client's; a bank not
+// proven backsight's gets no epoch, and warn says so.
+func adoptedOthers(ctx context.Context, cl *hindsight.Client, st state.State, own string, warn func(string)) ([]otherBank, error) {
+	all, _, err := otherBanks(ctx, cl, nil, own)
+	if err != nil {
+		return nil, err
+	}
+	var out []otherBank
+	for _, o := range all {
+		if !o.epoch || o.foreign || !o.control {
+			if o.epoch && !o.foreign {
+				warn("bank " + o.bank + ": not proven backsight's (no backsight control bank), so no restore epoch is written there")
+			}
+			continue
+		}
+		ts, err := retain.ReadTombstones(ctx, cl, o.bank)
+		if err != nil {
+			return nil, fmt.Errorf("bank %s: %w", o.bank, err)
+		}
+		o.highest, o.tombs = st.EpochOf(o.bank), mergeTombstones(ts, st.TombstonesOf(o.bank))
+		out = append(out, o)
+	}
+	return out, nil
+}
+
 // sameCounts compares the rows of the tables a backup counts.
 func sameCounts(a, b map[string]int64) bool {
 	for _, t := range backup.Tables {
@@ -1189,6 +1385,12 @@ func restoreSummary(r restoreResult) string {
 	switch {
 	case r.Plan:
 		fmt.Fprintf(&b, "\nplan only: nothing was changed. The safety archive would be %s\n", r.Safety)
+	case r.Epoch != nil && !r.RolledBack && r.adopted:
+		fmt.Fprintf(&b, "\nrestored %s (%v) into a new native database; restore epoch %d: clients re-read the server.", r.Archive, r.Restored, r.Epoch.Epoch)
+		if r.MovedAside != "" {
+			fmt.Fprintf(&b, " The refused database is kept in %s", r.MovedAside)
+		}
+		b.WriteString("\n")
 	case r.Epoch != nil && !r.RolledBack:
 		fmt.Fprintf(&b, "\nrestored %s (%v); restore epoch %d: clients re-read the server. The server as it was is in %s\n",
 			r.Archive, r.Restored, r.Epoch.Epoch, r.Safety)

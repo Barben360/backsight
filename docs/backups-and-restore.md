@@ -18,7 +18,7 @@ The 24-hour rule covers a second backup the same day: one you made by hand befor
 
 Only archives backsight wrote (with their `.json` sidecar) are pruned. Other files in the folder, and archives copied in from elsewhere, are never touched.
 
-Each archive is a dump of the server's database with a manifest (backsight version, server image, embedding models, bank), backsight's config, the server's Compose override and secrets. It is always encrypted.
+Each archive is a dump of the server's database with a manifest (backsight version, the runtime the server ran on and its Hindsight version, server image, embedding models, bank), backsight's config, the server's Compose override (Docker only) and secrets. It is always encrypted.
 
 The archives are yours to copy anywhere: another disk, a NAS, a cloud drive. `backsight doctor` warns when the last backup this machine can decrypt is more than 2 days old.
 
@@ -49,9 +49,11 @@ To encrypt to a key you already keep elsewhere, set `backup.recipient` in `confi
 |---|---|
 | `backsight backup create` | Makes a backup now, then prunes older ones with the retention (never one less than 24 hours old). |
 | `backsight backup list` | Lists backups, newest first. |
-| `backsight backup verify <file>` | Decrypts the archive, restores it into a throwaway database, runs a recall and compares row counts. Your server is not touched. |
+| `backsight backup verify <file>` | Decrypts the archive, restores it into a throwaway database of the runtime this install runs (the one a restore would use) and compares row counts. Your server is not touched. |
 
 While a backup runs (a few seconds), hooks and jobs queue their writes; nothing is lost.
+
+On the native runtime the throwaway database is a new Postgres cluster of pg0's own binaries under backsight's state directory, on a free loopback port with a password of its own, run in a transient systemd user unit (`<project>-verify-<id>.service`) that systemd stops after an hour at most. It is stopped and deleted after the check, also when the check fails or is interrupted. Before verifying, a postgres found running on the native database's files outside its unit is stopped, never adopted, and reported.
 
 ## Restoring a backup
 
@@ -91,7 +93,24 @@ backsight restore <file> --answer other_banks=revert
 
 `restore --plan` names them and says it will ask. Someone else's control bank gets no epoch; a bank whose control bank turns out to be someone else's gets a warning instead.
 
-Restore applies the archive's database only, never its config or secrets. It refuses an archive from another bank, with other embedding models, or made by a newer Hindsight than the one this binary pins (update backsight first). It also refuses, before anything stops, when the server's `<bank>-control` bank (where the restore epoch is written) is not backsight's: another bank name than backsight's, or documents that are not its own. An archive from an older Hindsight is migrated when the server starts.
+Restore applies the archive's database only, never its config or secrets. It refuses an archive from another bank, with other embedding models, or made by a newer Hindsight than the one this install runs (update backsight first). It also refuses, before anything stops, when the server's `<bank>-control` bank (where the restore epoch is written) is not backsight's: another bank name than backsight's, or documents that are not its own. An archive from an older Hindsight is migrated when the server starts.
+
+### Archives cross runtimes
+
+An archive restores into either runtime, Docker or native, when its Hindsight version is not newer than the one this install runs: the dump is the same format on both. Restore compares the Hindsight version the manifest records (or, for an archive made before it did, the version in its image tag); an archive whose version it cannot tell is refused, to restore on the runtime it was taken on. Between two Docker installs nothing changed: the archive's image is compared as before.
+
+Going from Docker to native moves the database from PostgreSQL 18.6 with pgvector 0.8.7 to PostgreSQL 18.1 with pgvector 0.8.5, an older minor release. That is why `backsight backup verify` runs in the runtime that will restore the archive, the one this install is configured for: verify a Docker archive on the native install before relying on it there.
+
+### After a refused native start
+
+On the native runtime, the database refuses to start when it is missing, empty, another database than the one backsight recorded, or has no recorded identity (see [troubleshooting](troubleshooting.md#the-native-server-does-not-start)). Every such refusal names `backsight restore <archive>`, and restore then works without the database it cannot read:
+
+- it moves the refused database aside, never deleting it, to `<instance>.refused-<Unix time>` beside it (and its identity file to `identity.refused-<Unix time>`), and names it in place of a safety backup, which cannot be taken from a database that does not start;
+- it does not read the old database's restore epoch or purges: the new epoch is above both this machine's last one and the archive's, and this machine's purges are kept;
+- it creates a new database as a first install does, restores the archive into it and records its identity;
+- the archive's other banks that are proven backsight's get an epoch too; the others get a warning.
+
+If it fails after the move, it removes the new database (so that no start serves an empty or half-restored memory), keeps the refused one where it moved it, and exits 20: run the same `backsight restore <file>` again. Every client holds its sends until a restore succeeds.
 
 ## When a restore fails
 
@@ -100,6 +119,7 @@ Restore applies the archive's database only, never its config or secrets. It ref
 - **Exit 30**: something failed after the server stopped. Restore put the safety backup back, so the server is as it was. The output says what failed.
 - **Exit 20 before anything changed**: a check failed (a lock held, Docker not running, a refused archive, a `<bank>-control` bank that is not backsight's). Fix the cause and rerun.
 - **Exit 20, "the server did not start again on its API key"**: the restore (or its rollback, a server upgrade's included) is done and its epoch written, but the last start failed. Every client holds its sends until `backsight server start` succeeds: it starts the server on its key, on the Hindsight version its data is for (after a server upgrade's rollback, the version before), and finishes the restore. `backsight doctor` says so too, and names the safety archive as the fallback (`backsight restore <safety archive> --no-safety`).
+- **Exit 20, "the new native database was removed"**: a restore after a refused native start failed; the refused database is kept where the message says. Rerun `backsight restore <file>`.
 - **Exit 20 after a failed rollback**: the server may be stopped or partly restored. `backsight doctor` shows a `restore` error naming the safety archive. Run what it says: `backsight restore <safety archive> --no-safety` puts the server back as it was, or rerun the restore you wanted.
 
 `--no-safety` skips the safety backup: use it only to restore a safety archive by hand.

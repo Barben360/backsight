@@ -947,36 +947,6 @@ func (n Native) RenameBank(ctx context.Context, from, to string, dryRun bool) ([
 // SecretFiles is server.env.
 func (n Native) SecretFiles() []string { return []string{n.EnvFile()} }
 
-// errNativeDatabase: the database tools of the native runtime are not in
-// this build yet (M7 block 1 Task 6).
-var errNativeDatabase = errors.New("the native runtime's database tools (backup, restore, verify) are not in this build yet")
-
-func (n Native) Database() Database { return nativeDB{} }
-
-func (n Native) VerifyDump(context.Context, string, []string) (map[string]int64, error) {
-	return nil, errNativeDatabase
-}
-
-// nativeDB refuses every call until Task 6 builds it.
-type nativeDB struct{}
-
-func (nativeDB) Query(context.Context, string) (string, error) { return "", errNativeDatabase }
-func (nativeDB) Dump(context.Context, string, []string) (map[string]int64, error) {
-	return nil, errNativeDatabase
-}
-func (nativeDB) Restore(context.Context, string) (bool, error) { return false, errNativeDatabase }
-func (nativeDB) Counts(context.Context, []string) (map[string]int64, error) {
-	return nil, errNativeDatabase
-}
-func (nativeDB) RemoveStaleDumps(context.Context) error { return errNativeDatabase }
-func (nativeDB) DocumentMetadata(context.Context, string, string) (map[string]string, error) {
-	return nil, errNativeDatabase
-}
-func (nativeDB) BankIDs(context.Context) ([]string, error) { return nil, errNativeDatabase }
-func (nativeDB) PendingOperations(context.Context, []string) (int, error) {
-	return 0, errNativeDatabase
-}
-
 // createInstance has pg0 create the database once (Task 1's C2 and C4,
 // ruling R21): pg0 starts it with its own default password in a transient
 // unit, psql then sets the real one for hindsight and postgres from stdin,
@@ -1017,14 +987,7 @@ func (n Native) createInstance(ctx context.Context) error {
 		"/bin/sh", "-c", strings.ReplaceAll(script, "$", "$$")}
 	// A failing statement is never logged: it would hold the password.
 	stdin := "SET log_min_error_statement = panic;\nALTER ROLE hindsight PASSWORD '" + pw + "';\nALTER ROLE postgres PASSWORD '" + pw + "';\n"
-	// systemd-run reaches the user manager through the session's bus.
-	env := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
-	for _, k := range []string{"XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
-		if v := os.Getenv(k); v != "" {
-			env = append(env, k+"="+v)
-		}
-	}
-	if _, err := n.Tools.Run(ctx, env, strings.NewReader(stdin), "systemd-run", args...); err != nil {
+	if _, err := n.Tools.Run(ctx, systemdRunEnv(), strings.NewReader(stdin), "systemd-run", args...); err != nil {
 		// The transient unit is gone with its processes (--wait,
 		// KillMode=control-group): an instance left on pg0's default
 		// password is removed, never kept.

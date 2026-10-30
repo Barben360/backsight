@@ -436,6 +436,25 @@ func HindsightVersionOf(ref string) string {
 	return ""
 }
 
+// CompareHindsight orders two Hindsight releases ("1.1.0"), what restore
+// compares across runtimes; comparable is false when either is none.
+func CompareHindsight(a, b string) (cmp int, comparable bool) {
+	va, okA := imageVersion(":" + a)
+	vb, okB := imageVersion(":" + b)
+	if !okA || !okB || a == "" || b == "" {
+		return 0, false
+	}
+	for i := range va {
+		if va[i] != vb[i] {
+			if va[i] < vb[i] {
+				return -1, true
+			}
+			return 1, true
+		}
+	}
+	return 0, true
+}
+
 // imageVersion reads the x.y.z tag of an image reference.
 func imageVersion(ref string) ([3]int, bool) {
 	var v [3]int

@@ -94,9 +94,11 @@ data.manifest.embeddings_preset
 data.manifest.files
 data.manifest.format
 data.manifest.hindsight_image
+data.manifest.hindsight_version
 data.manifest.pgvector
 data.manifest.postgres_image
 data.manifest.recipients
+data.manifest.runtime
 data.ms
 data.plan
 data.restored_counts
