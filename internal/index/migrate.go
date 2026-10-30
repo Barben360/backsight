@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,12 +29,6 @@ type Migration struct {
 	SQL    string
 	SHA256 string // hex, of the file's bytes
 }
-
-// Embedded is the registry built into the binary (Options.Migrations nil).
-// Empty until the first schema ships. Its root must hold the .sql files
-// themselves, as LoadRegistry reads them: an embedded migrations/
-// directory is passed as fs.Sub(embedded, "migrations").
-var Embedded fs.FS = embed.FS{}
 
 // ErrUpdateInProgress: the index needs a migration while `update apply`
 // has not reached its commit point (a rollback must never meet a migrated
