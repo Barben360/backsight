@@ -742,3 +742,76 @@ func testUnitFile(unit string) string {
 	}
 	return ""
 }
+
+// Final review 3: the refusal restore acts on is judged again under the
+// lock. A command that puts the right database back meanwhile (here
+// between the check and the lock) must not see it moved aside: restore
+// stops with nothing changed, and its rerun takes the normal path.
+func TestRestoreRechecksTheNativeRefusalUnderTheLock(t *testing.T) {
+	home, n, tools, sys, _ := nativeHost(t)
+	archive := nativeArchive(t, home)
+	if err := os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("222\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.CheckInstance(context.Background()); err == nil {
+		t.Fatal("the instance is not refused: the test proves nothing")
+	}
+	tools.up = false
+	sys.apiDown.Store(true)
+	tools.calls = nil
+	// Restore's first request to the server comes after its refusal check
+	// and before its lock: the right database is put back then.
+	var once sync.Once
+	down := fakeHook
+	fakeHook = func(r *http.Request) {
+		once.Do(func() {
+			if err := os.WriteFile(filepath.Join(n.DataDir(), "fake-sysid"), []byte("111\n"), 0o600); err != nil {
+				t.Error(err)
+			}
+		})
+		down(r)
+	}
+	code, out, errOut := run(t, "restore", archive)
+	if code != output.Blocked || !strings.Contains(errOut, "the native database changed while restore waited for the lock (it is no longer refused, it was identity)") ||
+		!strings.Contains(errOut, "nothing was changed") || !strings.Contains(errOut, "run backsight restore "+archive+" again") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if moved, _ := filepath.Glob(n.InstanceDir() + ".refused-*"); len(moved) != 0 {
+		t.Errorf("the database that starts now was moved aside: %v", moved)
+	}
+	if readFile0(filepath.Join(n.DataDir(), "fake-sysid")) != "111\n" || readFile0(n.IdentityFile()) != "111\n" {
+		t.Error("the database or its identity changed")
+	}
+	if m, _ := state.ReadRestoreMarker(pathsOf(home)); m != nil {
+		t.Errorf("a restore marker: %+v", m)
+	}
+	if callIndex(tools.calls, "pg_restore -d") >= 0 || callIndex(tools.calls, "-db-init") >= 0 {
+		t.Errorf("restored or created: %q", tools.calls)
+	}
+	if err := n.CheckInstance(context.Background()); err != nil {
+		t.Errorf("the database is refused now: %v", err)
+	}
+}
+
+// refusalChanged: none or the same refusal both times is no change; any
+// other pair is, and says which way.
+func TestRefusalChanged(t *testing.T) {
+	id := func(got string) *server.GuardError {
+		return &server.GuardError{Reason: "identity", Instance: "/i", Want: "111", Got: got}
+	}
+	for _, c := range []struct {
+		before, now *server.GuardError
+		want        string
+	}{
+		{nil, nil, ""},
+		{id("222"), id("222"), ""},
+		{nil, id("222"), "it is refused now: identity"},
+		{id("222"), nil, "it is no longer refused, it was identity"},
+		{id("222"), id("333"), "it was refused as identity, now as identity"},
+		{id("222"), &server.GuardError{Reason: "empty", Instance: "/i"}, "it was refused as identity, now as empty"},
+	} {
+		if got := refusalChanged(c.before, c.now); got != c.want {
+			t.Errorf("refusalChanged(%+v, %+v) = %q, want %q", c.before, c.now, got, c.want)
+		}
+	}
+}

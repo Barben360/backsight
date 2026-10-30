@@ -65,6 +65,23 @@ func nativeRefusal(ctx context.Context, rt server.Runtime) (*server.GuardError, 
 	return nil, nil
 }
 
+// refusalChanged says how the native refusal changed between before and
+// now, "" when it is the same (none both times, or the same reason on the
+// same database).
+func refusalChanged(before, now *server.GuardError) string {
+	switch {
+	case before == nil && now == nil:
+		return ""
+	case before == nil:
+		return "it is refused now: " + now.Reason
+	case now == nil:
+		return "it is no longer refused, it was " + before.Reason
+	case before.Reason != now.Reason || before.Instance != now.Instance || before.Want != now.Want || before.Got != now.Got:
+		return "it was refused as " + before.Reason + ", now as " + now.Reason
+	}
+	return ""
+}
+
 // refusedWarning says why the native database is refused and what restore
 // does about it.
 func refusedWarning(g *server.GuardError) string {

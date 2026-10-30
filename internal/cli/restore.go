@@ -371,6 +371,16 @@ func runRestore(ctx context.Context, e *env, res *restoreResult, fl restoreFlags
 		return &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	defer func() { _ = sl.Release() }()
+	// The native refusal was judged before the locks: a command that ran
+	// meanwhile may have put the database back, or broken it, and restore
+	// would move aside a database that now starts. Judged again under
+	// them: anything but what the run was planned on stops here.
+	if again, err := nativeRefusal(ctx, runtimeFor(cfg)); err != nil {
+		return &output.Error{Code: output.Blocked, Message: server.Redact("cannot check the native database again ("+err.Error()+"): nothing was changed", sec)}
+	} else if why := refusalChanged(refused, again); why != "" {
+		return &output.Error{Code: output.Blocked, Message: "the native database changed while restore waited for the lock (" + why + "): nothing was changed; " +
+			"run backsight restore " + res.Archive + " again"}
+	}
 	add("lock", "done", d.MaintenanceLock()+", server.lock")
 
 	rt := ownGroupRuntime(cfg)
