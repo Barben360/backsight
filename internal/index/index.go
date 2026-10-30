@@ -4,10 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/paths"
@@ -22,6 +26,20 @@ type Options struct {
 	Getenv        func(string) string // nil: os.Getenv
 	Now           func() time.Time    // nil: time.Now
 	BinaryVersion string              // "": buildinfo.Version
+	Migrations    fs.FS               // nil: Embedded
+}
+
+func (o Options) withDefaults() Options {
+	if o.Getenv == nil {
+		o.Getenv = os.Getenv
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.BinaryVersion == "" {
+		o.BinaryVersion = buildinfo.Version
+	}
+	return o
 }
 
 // shared is the one pair of handles per file per process.
@@ -41,6 +59,8 @@ type Index struct {
 	sh     *shared
 	path   string
 	opts   Options
+	side   bool
+	schema int
 	closed bool
 }
 
@@ -51,38 +71,64 @@ func OpensOf(stateDir string) int64 {
 	return opens[stateDir]
 }
 
-// Open opens (creating it if needed) the index file under o.Dirs.
+// Open opens the index under o.Dirs, building or migrating it first:
+// (1) the registry and its head; (2) metrics.db's user_version, read only;
+// (3) above the head, the side file of this binary's head is used instead
+// and metrics.db never written; (4) a migration (building a missing file
+// included) waits for an uncommitted update; (5) the file is opened and
+// each pending migration applied in its own transaction.
 func Open(ctx context.Context, o Options) (*Index, error) {
-	if o.Getenv == nil {
-		o.Getenv = os.Getenv
+	ix, _, err := open(ctx, o.withDefaults())
+	return ix, err
+}
+
+// open is Open, with the migrations this call applied.
+func open(ctx context.Context, o Options) (*Index, []string, error) {
+	t, err := resolve(ctx, o)
+	if err != nil {
+		return nil, nil, err
 	}
-	if o.Now == nil {
-		o.Now = time.Now
+	pending := t.pending()
+	if len(pending) > 0 {
+		if err := updateGate(o.Dirs); err != nil {
+			return nil, nil, err
+		}
 	}
-	if o.BinaryVersion == "" {
-		o.BinaryVersion = buildinfo.Version
+	sh, err := acquire(ctx, t.path, o)
+	if err != nil {
+		return nil, nil, err
 	}
-	dir := o.Dirs.IndexDir()
+	ix := &Index{sh: sh, path: t.path, opts: o, side: t.side}
+	applied, err := applyPending(ctx, sh.w, pending, o)
+	if err == nil {
+		err = sh.w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&ix.schema)
+	}
+	if err != nil {
+		_ = ix.Close()
+		return nil, nil, err
+	}
+	mu.Lock()
+	opens[o.Dirs.State]++
+	mu.Unlock()
+	return ix, applied, nil
+}
+
+// acquire takes a reference on path's shared handles, opening them
+// (creating the file) for the first one.
+func acquire(ctx context.Context, path string, o Options) (*shared, error) {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, FileName)
-
 	mu.Lock()
 	defer mu.Unlock()
 	if sh, ok := files[path]; ok {
 		sh.refs++
-		opens[o.Dirs.State]++
-		return &Index{sh: sh, path: path, opts: o}, nil
+		return sh, nil
 	}
 	fs := detectFS(dir, o.Home, o.Getenv)
-	w, err := sql.Open(driverName, dsn(path, fs, false))
+	w, err := openWriter(ctx, path, fs)
 	if err != nil {
-		return nil, err
-	}
-	w.SetMaxOpenConns(1)
-	if err := w.PingContext(ctx); err != nil { // creates the file
-		_ = w.Close()
 		return nil, err
 	}
 	r, err := sql.Open(driverName, dsn(path, fs, true))
@@ -92,8 +138,45 @@ func Open(ctx context.Context, o Options) (*Index, error) {
 	}
 	sh := &shared{w: w, r: r, fs: fs, refs: 1}
 	files[path] = sh
-	opens[o.Dirs.State]++
-	return &Index{sh: sh, path: path, opts: o}, nil
+	return sh, nil
+}
+
+// openWriter opens path's writer and its connection, creating the file.
+// Two processes setting up a new file at once both hold a read lock and
+// want the write lock to set its journal mode: SQLite answers one of them
+// SQLITE_BUSY at once, the busy timeout aside (waiting would deadlock), so
+// that one tries again.
+func openWriter(ctx context.Context, path string, fs FSInfo) (*sql.DB, error) {
+	w, err := sql.Open(driverName, dsn(path, fs, false))
+	if err != nil {
+		return nil, err
+	}
+	w.SetMaxOpenConns(1)
+	deadline := time.Now().Add(busyWait)
+	for {
+		err := w.PingContext(ctx)
+		if err == nil {
+			return w, nil
+		}
+		if !isBusy(err) || time.Now().After(deadline) {
+			_ = w.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			_ = w.Close()
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// busyWait is the busy timeout of the DSN.
+const busyWait = 5 * time.Second
+
+func isBusy(err error) bool {
+	var e *sqlite.Error
+	return errors.As(err, &e) && e.Code()&0xff == sqlite3.SQLITE_BUSY
 }
 
 // Close drops this handle's reference; the files close with the last one.
@@ -114,6 +197,13 @@ func (ix *Index) Close() error {
 
 func (ix *Index) Path() string { return ix.path }
 func (ix *Index) FS() FSInfo   { return ix.sh.fs }
+
+// Schema is the user_version of the file in use, as Open left it.
+func (ix *Index) Schema() int { return ix.schema }
+
+// Side reports that the side file is in use: metrics.db is newer than
+// this binary.
+func (ix *Index) Side() bool { return ix.side }
 
 // ReadTx runs fn in a read-only transaction on the reader pool.
 func (ix *Index) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {

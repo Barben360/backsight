@@ -27,3 +27,16 @@ func dsn(path string, fs FSInfo, readOnly bool) string {
 	}
 	return "file:" + uriEscaper.Replace(filepath.ToSlash(path)) + "?" + q
 }
+
+// probeDSN reads a file without changing it: read only, and no pragma
+// that could write (a journal mode). A read-only connection to a WAL file
+// creates the -wal and -shm it lacks and cannot remove them, so an idle
+// WAL file (no -wal: its main file holds every commit) opens immutable:
+// no lock, no journal file.
+func probeDSN(path string, immutable bool) string {
+	q := "?mode=ro&_pragma=busy_timeout(5000)"
+	if immutable {
+		q += "&immutable=1"
+	}
+	return "file:" + uriEscaper.Replace(filepath.ToSlash(path)) + q
+}
