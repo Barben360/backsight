@@ -155,10 +155,10 @@ func TestInspectLagOfUnknownAndCaughtUpFiles(t *testing.T) {
 	for _, s := range st.Sources {
 		by[s.File] = s
 	}
-	if s := by["telemetry/events-2026-09.jsonl"]; s.LagSeconds != 0 || s.Offset != s.Size {
+	if s := by["telemetry/events-2026-09.jsonl"]; s.LagSeconds != 0 || s.Offset != s.Size || s.Behind {
 		t.Errorf("caught up %+v", s)
 	}
-	if s := by["telemetry/events-2026-10.jsonl"]; s.LagSeconds != 7200 || s.Offset != 0 || s.Size == 0 {
+	if s := by["telemetry/events-2026-10.jsonl"]; s.LagSeconds != 7200 || !s.Behind || s.Offset != 0 || s.Size == 0 {
 		t.Errorf("unknown %+v", s)
 	}
 }
@@ -292,5 +292,17 @@ func TestInspectSizeCountsTheWAL(t *testing.T) {
 	st := inspect(t, opts(t, d, nil))
 	if st.Size != main.Size()+wal.Size() {
 		t.Errorf("size %d, want %d+%d", st.Size, main.Size(), wal.Size())
+	}
+}
+
+func TestInspectPartialTailIsNotBehind(t *testing.T) {
+	e := newEnv(t)
+	e.write("2026-09", promptLine(1, 0))
+	e.ingest()
+	e.append("2026-09", `{"event":"prompt"`) // no newline yet
+	st := inspect(t, opts(t, e.d, nil))
+	s := st.Sources[0]
+	if s.Behind || s.LagSeconds != 0 || s.Offset >= s.Size {
+		t.Errorf("%+v", s)
 	}
 }

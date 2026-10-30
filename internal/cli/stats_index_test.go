@@ -693,3 +693,14 @@ func TestStatsDaysStillWorks(t *testing.T) {
 		t.Errorf("stats index extra: exit %d", code)
 	}
 }
+
+// A last line without its newline is still being written: not behind.
+func TestIndexStatusTextCountsOnlyCompleteLinesAsBehind(t *testing.T) {
+	st := index.Status{Using: "metrics.db", Exists: true, Readable: true, Schema: 1, Head: 1, Sources: []index.SourceLag{
+		{File: "a", Size: 100, Offset: 90},                              // partial tail
+		{File: "b", Size: 100, Offset: 10, LagSeconds: 5, Behind: true}, // lines left
+	}}
+	if out := indexStatusText(st); !strings.Contains(out, "Sources      2 file(s), 1 behind, 0 gone") {
+		t.Errorf("%s", out)
+	}
+}

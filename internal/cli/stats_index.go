@@ -77,7 +77,7 @@ func indexStatusText(s index.Status) string {
 			switch {
 			case src.Missing:
 				gone++
-			case src.Offset != src.Size:
+			case src.Behind:
 				behind++
 			}
 		}

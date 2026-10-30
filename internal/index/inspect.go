@@ -21,6 +21,7 @@ type SourceLag struct {
 	Offset     int64  `json:"offset"`
 	LagSeconds int64  `json:"lag_seconds"` // 0 at the end; else now − last_ts (the file's mtime when nothing was read yet)
 	Missing    bool   `json:"missing,omitempty"`
+	Behind     bool   `json:"behind,omitempty"` // a complete line is left to read (a partial tail is not)
 }
 
 // Status is what Inspect found, for `stats index`.
@@ -55,7 +56,10 @@ var sideNameRE = regexp.MustCompile(`^metrics-v[0-9]+\.db$`)
 // the file or its directory, migrates, ingests or sets a file aside, takes
 // no lock, and works during an update, on an index newer than this binary
 // and on a corrupt one (Readable false). The file is read through a
-// read-only connection, as the version probe does. Only a registry that
+// read-only connection, as the version probe does. With a leftover -wal
+// (the probe is then not immutable) that connection may create a -shm,
+// SQLite's shared-memory index, which holds no data; nothing else is
+// written. Only a registry that
 // cannot be loaded, or a source directory that cannot be listed, is an
 // error.
 func Inspect(ctx context.Context, o Options) (Status, error) {
@@ -237,6 +241,7 @@ func inspectRows(ctx context.Context, o Options, st *Status) error {
 		c, known := cursors[s.Rel]
 		sl := SourceLag{File: s.Rel, Size: info.Size(), Offset: c.offset}
 		if linesLeft(s.Path, c.offset) {
+			sl.Behind = true
 			from := info.ModTime().UnixMilli()
 			if known && c.lastTS.Valid {
 				from = c.lastTS.Int64
