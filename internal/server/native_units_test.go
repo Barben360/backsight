@@ -76,7 +76,21 @@ func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeToo
 		Env: map[string]string{"BACKSIGHT_HOME": base, "XDG_STATE_HOME": filepath.Join(base, "xs")},
 		Sys: sys, Tools: tools, Proc: "/proc"}
 	withFreePort(t, 8889)
+	withAPIHealth(t, func(context.Context, string) (string, error) { return "connected", nil })
 	return n, sys, tools
+}
+
+// withAPIHealth makes apiHealth answer with check, recording each URL.
+func withAPIHealth(t *testing.T, check func(ctx context.Context, url string) (string, error)) *[]string {
+	t.Helper()
+	old := apiHealth
+	var urls []string
+	apiHealth = func(ctx context.Context, url string) (string, error) {
+		urls = append(urls, url)
+		return check(ctx, url)
+	}
+	t.Cleanup(func() { apiHealth = old })
+	return &urls
 }
 
 // installed renders and writes n's files.
@@ -209,6 +223,9 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 	}
 	if unitLine(db, "KillMode") != "mixed" || unitLine(db, "KillSignal") != "SIGINT" || unitLine(db, "Type") != "simple" {
 		t.Errorf("db unit KillMode=%q KillSignal=%q Type=%q", unitLine(db, "KillMode"), unitLine(db, "KillSignal"), unitLine(db, "Type"))
+	}
+	if got := unitLine(db, "TimeoutStartSec"); got != "300" {
+		t.Errorf("db TimeoutStartSec=%q, want 300 (native-check, crash recovery and readiness)", got)
 	}
 	if unitLine(db, "ExecStop") != "" {
 		t.Error("the db unit has an ExecStop: postgres is stopped by its signal")
@@ -391,6 +408,23 @@ func TestNativeUnitsCarryOnlyTheirOwnEnvironment(t *testing.T) {
 	}
 	if got := unitEnvironmentKeys(f.Units["backsight-server.service"]); len(got) != 0 {
 		t.Errorf("server unit Environment= keys %v, want none (its environment is server.env)", got)
+	}
+	// Ruling R31: what the user manager imported (systemctl --user
+	// import-environment) is unset in both units; the server, which sets
+	// no loader path of its own, also drops LD_LIBRARY_PATH.
+	for name, u := range f.Units {
+		unset := strings.Fields(unitLine(u, "UnsetEnvironment"))
+		for _, k := range []string{"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "PYTHONNOUSERSITE", "VIRTUAL_ENV",
+			"CONDA_PREFIX", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_REQUIRE_VIRTUALENV", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL",
+			"HF_HUB_OFFLINE", "HF_ENDPOINT", "HF_HUB_CACHE", "TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME", "PGHOST", "PGPORT",
+			"PGUSER", "PGDATABASE", "PGPASSFILE", "PGSERVICEFILE", "LD_PRELOAD"} {
+			if !slices.Contains(unset, k) {
+				t.Errorf("%s does not unset %s: UnsetEnvironment=%v", name, k, unset)
+			}
+		}
+		if got := slices.Contains(unset, "LD_LIBRARY_PATH"); got != (name == "backsight-server.service") {
+			t.Errorf("%s unsets LD_LIBRARY_PATH: %v (only the server unit, which sets none)", name, got)
+		}
 	}
 	for _, u := range f.Units {
 		for _, v := range []string{"/evil/", "evil.example"} {
@@ -817,7 +851,7 @@ func TestNativeCreatesTheInstanceWithThePasswordOnStdin(t *testing.T) {
 	if strings.Contains(argv, "dbpw-XYZ") {
 		t.Error("the password is on systemd-run's argv")
 	}
-	if want := "ALTER ROLE hindsight PASSWORD 'dbpw-XYZ';\nALTER ROLE postgres PASSWORD 'dbpw-XYZ';\n"; string(c.Stdin) != want {
+	if want := "SET log_min_error_statement = panic;\nALTER ROLE hindsight PASSWORD 'dbpw-XYZ';\nALTER ROLE postgres PASSWORD 'dbpw-XYZ';\n"; string(c.Stdin) != want {
 		t.Errorf("stdin %q, want %q", c.Stdin, want)
 	}
 	if tmpMode != 0o700 {
@@ -860,5 +894,109 @@ func TestKeptSecretsFromTheNativeEnvironment(t *testing.T) {
 	got, err := KeptSecretsIn(n.SecretFiles()[0])
 	if want := map[string]string{"db_password": sec.DBPassword, "api_key": sec.APIKey}; err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("%v %v, want %v", got, err, want)
+	}
+}
+
+// Ruling R30: Start returns a running server, as Docker's compose up
+// --wait does: the API answers /health with its database connected.
+func TestNativeStartWaitsForTheAPI(t *testing.T) {
+	ctx := context.Background()
+	n, sys, _ := nativeFixture(t, secrets)
+	installed(t, n, secrets)
+	oldWait, oldPoll := apiWait, apiPoll
+	apiWait, apiPoll = 30*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { apiWait, apiPoll = oldWait, oldPoll })
+
+	answers := []string{"", "disconnected", "connected"}
+	urls := withAPIHealth(t, func(context.Context, string) (string, error) {
+		a := answers[0]
+		if len(answers) > 1 {
+			answers = answers[1:]
+		}
+		if a == "" {
+			return "", errors.New("connection refused")
+		}
+		return a, nil
+	})
+	if err := n.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(*urls) != 3 || (*urls)[0] != "http://127.0.0.1:8888" {
+		t.Errorf("health asked %v, want three times on 127.0.0.1's API port", *urls)
+	}
+
+	// The API never connects: an error naming the journal, the marker kept.
+	n.Cfg.LLM.Model = "deepseek-other"
+	f, _ := n.Render(secrets, "box")
+	if _, err := n.Write(f); err != nil {
+		t.Fatal(err)
+	}
+	withAPIHealth(t, func(context.Context, string) (string, error) { return "disconnected", nil })
+	sys.Calls = nil
+	err := n.Start(ctx)
+	if err == nil || !strings.Contains(err.Error(), "journalctl --user -u backsight-server.service") {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(sys.lines(), "systemctl --user restart backsight-server.service") {
+		t.Errorf("Start did not restart: %v", sys.lines())
+	}
+	if !exists(filepath.Join(n.Root(), "restart-pending")) {
+		t.Error("restart-pending removed though the API never answered")
+	}
+	withAPIHealth(t, func(context.Context, string) (string, error) { return "connected", nil })
+	if err := n.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(n.Root(), "restart-pending")) {
+		t.Error("restart-pending stays once the API answered")
+	}
+}
+
+// Ruling R32: Ollama on host.docker.internal is this PC on native.
+func TestNativeRendersDockersHostAsLoopback(t *testing.T) {
+	cfg := dockerGoldenConfigs()["private-ollama"]
+	n, _, _ := nativeFixture(t, secrets)
+	n.Cfg.LLM = cfg.LLM
+	f, err := n.Render(secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envValue(f.Env, "HINDSIGHT_API_LLM_BASE_URL"); got != "http://127.0.0.1:11434" {
+		t.Errorf("base URL %q, want http://127.0.0.1:11434", got)
+	}
+	if strings.Contains(string(f.Env), "host.docker.internal") {
+		t.Error("server.env names host.docker.internal")
+	}
+	n.Cfg.LLM.BaseURL = "https://ollama.example:11434/v1"
+	withFreePort(t, 8889)
+	if f, err := n.Render(secrets, "box"); err != nil || envValue(f.Env, "HINDSIGHT_API_LLM_BASE_URL") != "https://ollama.example:11434/v1" {
+		t.Errorf("another host was rewritten: %v", err)
+	}
+}
+
+// Security: a failed password change leaves no instance on pg0's default
+// password, and postgres never logs the failed statement.
+func TestNativeCreateInstanceRemovesItOnFailure(t *testing.T) {
+	sec := config.Secrets{DBPassword: "dbpw-XYZ", APIKey: "a", UIKey: "u", LLMAPIKey: "l"}
+	n, _, tools := nativeFixture(t, sec)
+	installed(t, n, sec)
+	inst := filepath.Dir(n.DataDir())
+	tools.Fail = func(toolCall) error {
+		touch(t, filepath.Join(n.DataDir(), "PG_VERSION"), 0o600) // pg0 created it, then ALTER failed
+		return errors.New("exit status 3: ERROR: syntax error")
+	}
+	err := n.createInstance(context.Background())
+	if err == nil {
+		t.Fatal("createInstance succeeded")
+	}
+	if exists(inst) {
+		t.Errorf("%s stays on pg0's default password", inst)
+	}
+	if !exists(n.Home()) {
+		t.Error("home/ removed with the instance")
+	}
+	c := tools.Calls[len(tools.Calls)-1]
+	if !strings.HasPrefix(string(c.Stdin), "SET log_min_error_statement = panic;\n") {
+		t.Errorf("stdin %q does not silence the statement log first", c.Stdin)
 	}
 }

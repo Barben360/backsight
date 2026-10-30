@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/scheduler"
 	"github.com/Barben360/backsight/internal/server/nativelock"
@@ -45,6 +46,22 @@ var freePort = func(from int, skip ...int) (int, error) {
 	}
 	return 0, fmt.Errorf("no free port on 127.0.0.1 from %d", from)
 }
+
+// apiHealth asks the API's /health and returns its database field; tests
+// replace it. apiWait bounds how long Start waits for "connected" (the
+// health wait of a Docker start), apiPoll is how often it asks.
+var (
+	apiHealth = func(ctx context.Context, base string) (string, error) {
+		cl, err := hindsight.New(base, "", 5*time.Second)
+		if err != nil {
+			return "", err
+		}
+		h, err := cl.Health(ctx)
+		return h.Database, err
+	}
+	apiWait = 10 * time.Minute
+	apiPoll = 2 * time.Second
+)
 
 // dbWait bounds how long a start waits for the database to answer; dbPoll
 // is how often it asks.
@@ -127,6 +144,7 @@ func (n Native) Render(sec config.Secrets, host string) (Files, error) {
 	env.comment(envHeader)
 	dsn := url.URL{Scheme: "postgresql", User: url.UserPassword("hindsight", sec.DBPassword),
 		Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(pg)), Path: "/hindsight"}
+	cfg.LLM.BaseURL = onThisHost(cfg.LLM.BaseURL)
 	hindsightEnv(env, cfg, sec, host, dsn.String(), false)
 	env.comment("Native runtime: the API on this PC only, the models in HF_HOME, the database's port kept across renders.")
 	env.plain("HINDSIGHT_API_HOST", "127.0.0.1")
@@ -141,6 +159,22 @@ func (n Native) Render(sec config.Secrets, host string) (Files, error) {
 		n.DBUnit():     n.dbUnit(pg),
 		n.ServerUnit(): n.serverUnit(n.VenvDir(n.Version())),
 	}}, nil
+}
+
+// onThisHost is an LLM base URL as the native server reaches it:
+// Docker's name for the host, host.docker.internal, is 127.0.0.1 there
+// (ruling R32).
+func onThisHost(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() != "host.docker.internal" {
+		return base
+	}
+	port := u.Port()
+	u.Host = "127.0.0.1"
+	if port != "" {
+		u.Host = net.JoinHostPort("127.0.0.1", port)
+	}
+	return u.String()
 }
 
 // checkRenderable refuses what neither runtime can render: another
@@ -230,6 +264,14 @@ func shellWord(s string) string {
 
 var safeShellWord = regexp.MustCompile(`^[A-Za-z0-9_./:=@+-]+$`)
 
+// unsetKeys are what the user manager may have imported (systemctl --user
+// import-environment) that would change Python, Hugging Face, uv, pip, a
+// Postgres client or the loader (ruling R31): both units unset them, then
+// set their own HOME, HF_HOME and LD_LIBRARY_PATH.
+const unsetKeys = "PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONNOUSERSITE VIRTUAL_ENV CONDA_PREFIX " +
+	"PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_REQUIRE_VIRTUALENV UV_INDEX_URL UV_EXTRA_INDEX_URL HF_HUB_OFFLINE HF_ENDPOINT " +
+	"HF_HUB_CACHE TRANSFORMERS_CACHE SENTENCE_TRANSFORMERS_HOME PGHOST PGPORT PGUSER PGDATABASE PGPASSFILE PGSERVICEFILE LD_PRELOAD"
+
 // pgSettings are pg0's own settings, which a postgres started directly
 // would otherwise not get (ruling R23).
 var pgSettings = []string{"shared_buffers=256MB", "work_mem=64MB", "maintenance_work_mem=512MB", "effective_cache_size=1GB",
@@ -246,6 +288,7 @@ func (n Native) dbUnit(pg int) []byte {
 	var b strings.Builder
 	b.WriteString(unitHeader)
 	b.WriteString("[Unit]\nDescription=backsight memory database (pg0 " + nativelock.PG0 + ")\n\n[Service]\nType=simple\n")
+	b.WriteString("UnsetEnvironment=" + unsetKeys + "\n")
 	env := map[string]string{}
 	for k, v := range n.Env {
 		env[k] = v
@@ -271,7 +314,9 @@ func (n Native) dbUnit(pg int) []byte {
 	ready := "while kill -0 $MAINPID 2>/dev/null; do " + shellWord(filepath.Join(inst, "bin", "pg_isready")) +
 		" -q -h " + shellWord(n.socketDir()) + " -p " + port + " && exit 0; sleep 0.1; done; exit 1"
 	b.WriteString("ExecStartPost=/bin/sh -c " + execArg(ready) + "\n")
-	b.WriteString("KillMode=mixed\nKillSignal=SIGINT\nRestart=on-failure\nTimeoutStopSec=60\n\n[Install]\nWantedBy=default.target\n")
+	// native-check, a crash recovery and readiness, never cut short into a
+	// restart loop (Task 1 measured with 120 s).
+	b.WriteString("TimeoutStartSec=300\nKillMode=mixed\nKillSignal=SIGINT\nRestart=on-failure\nTimeoutStopSec=60\n\n[Install]\nWantedBy=default.target\n")
 	return []byte(b.String())
 }
 
@@ -282,6 +327,7 @@ func (n Native) serverUnit(venv string) []byte {
 	db := n.DBUnit()
 	return []byte(unitHeader + "[Unit]\nDescription=backsight memory server (Hindsight " + HindsightVersionOf(filepath.Base(venv)) + ")\n" +
 		"Requires=" + db + "\nAfter=" + db + "\n\n[Service]\nType=simple\n" +
+		"UnsetEnvironment=" + unsetKeys + " LD_LIBRARY_PATH\n" +
 		"EnvironmentFile=" + pathSetting(n.EnvFile()) + "\nWorkingDirectory=" + pathSetting(n.Root()) + "\n" +
 		"ExecStart=" + execPath(filepath.Join(venv, "bin", "hindsight-api")) + "\n" +
 		"KillMode=control-group\nRestart=on-failure\nTimeoutStopSec=60\n\n[Install]\nWantedBy=default.target\n")
@@ -518,8 +564,9 @@ func (n Native) waitDB(ctx context.Context) error {
 }
 
 // Start enables both units (with linger they start at boot), waits for the
-// database to answer, then the server. What restart-pending lists is
-// restarted, and the marker removed only once that worked (ruling R1).
+// database to answer, then for the API to answer with its database
+// connected. What restart-pending lists is restarted, and the marker
+// removed only once the API answered (rulings R1, R30).
 func (n Native) Start(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
@@ -541,10 +588,42 @@ func (n Native) Start(ctx context.Context) error {
 	if err := n.enableAndStart(ctx, srv, pending[db] || pending[srv]); err != nil {
 		return err
 	}
+	if err := n.waitAPI(ctx); err != nil {
+		return err
+	}
 	if err := os.Remove(n.pendingFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+// waitAPI waits until the API on 127.0.0.1 answers /health with its
+// database connected, apiWait at most (ruling R30): Start's callers
+// expect a running server, as Docker's compose up --wait gives them.
+func (n Native) waitAPI(ctx context.Context) error {
+	api, err := n.Cfg.APIPort()
+	if err != nil {
+		return err
+	}
+	base := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(api))
+	deadline := time.Now().Add(apiWait)
+	for {
+		db, err := apiHealth(ctx, base)
+		if err == nil && db == "connected" {
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf("its database is %q", db)
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return n.redact(fmt.Errorf("the server (%s) did not answer %s/health with its database connected within %s (%w): see journalctl --user -u %s",
+				n.ServerUnit(), base, apiWait, err, n.ServerUnit()))
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(apiPoll):
+		}
+	}
 }
 
 // enableAndStart enables unit and starts it, or restarts it when it may
@@ -924,7 +1003,8 @@ func (n Native) createInstance(ctx context.Context) error {
 	args := []string{"--user", "--wait", "--collect", "--pipe", "--quiet", "--unit", n.project() + "-db-init", "-p", "KillMode=control-group",
 		"-E", "HOME=" + n.Home(), "-E", "PGPASSWORD=postgres", "-E", "TMPDIR=" + tmp,
 		"/bin/sh", "-c", strings.ReplaceAll(script, "$", "$$")}
-	stdin := "ALTER ROLE hindsight PASSWORD '" + pw + "';\nALTER ROLE postgres PASSWORD '" + pw + "';\n"
+	// A failing statement is never logged: it would hold the password.
+	stdin := "SET log_min_error_statement = panic;\nALTER ROLE hindsight PASSWORD '" + pw + "';\nALTER ROLE postgres PASSWORD '" + pw + "';\n"
 	// systemd-run reaches the user manager through the session's bus.
 	env := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
 	for _, k := range []string{"XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
@@ -933,6 +1013,12 @@ func (n Native) createInstance(ctx context.Context) error {
 		}
 	}
 	if _, err := n.Tools.Run(ctx, env, strings.NewReader(stdin), "systemd-run", args...); err != nil {
+		// The transient unit is gone with its processes (--wait,
+		// KillMode=control-group): an instance left on pg0's default
+		// password is removed, never kept.
+		if rmErr := os.RemoveAll(filepath.Dir(n.DataDir())); rmErr != nil {
+			err = errors.Join(err, rmErr)
+		}
 		return n.redact(fmt.Errorf("creating the native database (%s): %w", n.DataDir(), err))
 	}
 	return nil

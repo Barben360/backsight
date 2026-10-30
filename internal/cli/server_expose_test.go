@@ -482,3 +482,24 @@ func TestExposeRefusesASymlinkOut(t *testing.T) {
 		t.Errorf("changed: config %v, %d starts", !bytes.Equal(fx.config(t), before), len(fx.dk.ups))
 	}
 }
+
+// The native runtime serves this PC only: expose --private refuses it and
+// changes nothing.
+func TestExposeRefusesPrivateOnNative(t *testing.T) {
+	fx := exposeHost(t)
+	raw := "# my server\n[server]\nruntime = \"native\"\nurl = \"http://127.0.0.1:" + strconv.Itoa(fx.port) + "\"\nui_port = 19999\nbank = \"" + config.DefaultBank + "\"\n"
+	if err := os.WriteFile(fx.cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "server", "expose", "--private", "100.101.1.2", "--out", filepath.Join(t.TempDir(), "join.token"))
+	if code != output.Usage || !strings.Contains(out+errOut, `server.runtime = \"native\" serves this PC only (loopback) in this release: private exposure needs the docker runtime`) &&
+		!strings.Contains(out+errOut, `server.runtime = "native" serves this PC only (loopback) in this release: private exposure needs the docker runtime`) {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	if got := string(fx.config(t)); got != raw {
+		t.Errorf("config.toml changed:\n%s", got)
+	}
+	if len(fx.dk.ups) != 0 || len(fx.dialed) != 0 {
+		t.Errorf("acted: ups %d dialed %v", len(fx.dk.ups), fx.dialed)
+	}
+}
