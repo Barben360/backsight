@@ -2,8 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
@@ -100,6 +104,38 @@ var _ Runtime = Native{}
 
 // WithVersion is the same runtime deploying version v ("": the pin).
 func (n Native) WithVersion(v string) Runtime { n.Venv = v; return n }
+
+var _ Pruner = Native{}
+
+// PruneVersions removes every venv but keep's, incomplete ones and an
+// older build's *.partial included, once an upgrade passed (decision 0078:
+// the new venv and the previous one stay). The venv the server unit runs
+// is never removed, whatever keep says.
+func (n Native) PruneVersions(keep ...string) error {
+	if n.Err != nil {
+		return n.Err
+	}
+	running, err := n.Deployed()
+	if err != nil {
+		return err
+	}
+	keep = append(keep, running)
+	dir := filepath.Join(n.Root(), "venv")
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range ents {
+		if !slices.Contains(keep, e.Name()) {
+			errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
+		}
+	}
+	return errors.Join(errs...)
+}
 
 // HindsightVersion is the Hindsight release of Version ("1.1.0").
 func (n Native) HindsightVersion() string { return HindsightVersionOf(n.Version()) }

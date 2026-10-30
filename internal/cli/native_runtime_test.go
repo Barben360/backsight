@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,5 +100,60 @@ func TestRuntimeForNativeDoesNotHangOnTheUserManager(t *testing.T) {
 	n := runtimeFor(cfg).(server.Native)
 	if want := filepath.Join(home, ".config", "systemd", "user"); n.UnitDir != want {
 		t.Errorf("UnitDir %s, want %s", n.UnitDir, want)
+	}
+}
+
+// groupSys is a user manager fake that says whether it runs its children
+// in their own process group.
+type groupSys struct {
+	refuseSys
+	own bool
+}
+
+func (s groupSys) InOwnGroup() server.SysRunner { s.own = true; return s }
+
+// A Ctrl-C at the terminal must not kill a rollback's systemctl: the
+// own-group runtime runs the user manager's tools in their own process
+// group, as it does Docker's and the native tools.
+func TestOwnGroupRuntimeRunsSystemctlInItsOwnGroup(t *testing.T) {
+	home := isolate(t)
+	withSys(t, "linux")
+	old := nativeSys
+	nativeSys = groupSys{}
+	t.Cleanup(func() { nativeSys = old })
+	cfg := config.Default(pathsOf(home), home)
+	cfg.Server.Runtime = "native"
+	if s := runtimeWith(cfg, true).(server.Native).Sys; s != (groupSys{own: true}) {
+		t.Errorf("own-group runtime's Sys %#v, want its own group", s)
+	}
+	if s := runtimeWith(cfg, false).(server.Native).Sys; s != (groupSys{}) {
+		t.Errorf("runtime's Sys %#v, want the terminal's group", s)
+	}
+	// execSys's own group, as the kernel sees it.
+	if runtime.GOOS != "linux" {
+		return
+	}
+	pgrp := func(r server.SysRunner) (pid, group string) {
+		out, err := r.Run(context.Background(), "/bin/sh", "-c", "cat /proc/$$/stat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := strings.Fields(string(out))
+		return f[0], f[4]
+	}
+	s, ok := any(execSys{}).(interface{ InOwnGroup() server.SysRunner })
+	if !ok {
+		t.Fatal("execSys cannot run in its own group")
+	}
+	if pid, group := pgrp(s.InOwnGroup()); pid != group {
+		t.Errorf("own group: pid %s in group %s", pid, group)
+	}
+	self, err := os.ReadFile("/proc/" + strconv.Itoa(os.Getpid()) + "/stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours := strings.Fields(string(self[bytes.LastIndexByte(self, ')')+1:]))[2] // the fields after comm: state, ppid, pgrp
+	if _, group := pgrp(execSys{}); group != ours {
+		t.Errorf("default: group %s, want this process's %s", group, ours)
 	}
 }

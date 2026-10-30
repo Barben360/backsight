@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/backup"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -353,5 +357,269 @@ func TestServerUpgradeNeverDowngrades(t *testing.T) {
 	}
 	if deployedImage(t, home) != newImage {
 		t.Error("downgraded")
+	}
+}
+
+// The native versions these tests deploy: the server runs nativeOld, this
+// binary pins its lock's version (the same Hindsight release, another
+// lock: --allow-unordered), and an older venv lies beside them.
+const (
+	nativeOld   = "1.1.0-aaaaaaaaaaaa"
+	nativeOlder = "1.0.9-cccccccccccc"
+)
+
+// venvTools is the native tools with uv building a venv, recording which
+// version the server unit ran meanwhile; failPip fails the locked install.
+type venvTools struct {
+	*nativeDBTools
+	n         server.Native // with its UnitDir
+	failPip   bool
+	builtWhen []string // "<venv> while <deployed>", one per uv venv
+}
+
+func (v *venvTools) Run(ctx context.Context, env []string, stdin io.Reader, path string, args ...string) ([]byte, error) {
+	if filepath.Base(path) != "uv" || len(args) == 0 {
+		return v.nativeDBTools.Run(ctx, env, stdin, path, args...)
+	}
+	switch args[0] {
+	case "venv":
+		dir := args[len(args)-1]
+		deployed, _ := v.n.Deployed()
+		v.builtWhen = append(v.builtWhen, filepath.Base(dir)+" while "+deployed)
+		return nil, os.MkdirAll(filepath.Join(dir, "bin"), 0o755)
+	case "pip":
+		if v.failPip {
+			return nil, errors.New("uv pip install: hash mismatch")
+		}
+	}
+	return nil, nil
+}
+
+// restartWatch is the user manager recording, at each restart of the
+// server unit, which venv the unit named.
+type restartWatch struct {
+	*nativeSysFake
+	n        server.Native
+	restarts []string
+}
+
+func (s *restartWatch) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && slices.Contains(args, "restart") && slices.Contains(args, s.n.ServerUnit()) {
+		deployed, _ := s.n.Deployed()
+		s.restarts = append(s.restarts, deployed)
+	}
+	return s.nativeSysFake.Run(ctx, name, args...)
+}
+
+type nativeUpgradeHost struct {
+	home  string
+	n     server.Native // the runtime as the commands build it
+	tools *venvTools
+	sys   *restartWatch
+}
+
+// nativeUpgradeSetup is a native install running nativeOld, its venv and
+// nativeOlder's installed, uv and Python installed: an upgrade fetches the
+// pinned venv only.
+func nativeUpgradeSetup(t *testing.T) nativeUpgradeHost {
+	t.Helper()
+	home, _, db, sys, _ := nativeHost(t)
+	d := pathsOf(home)
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := runtimeFor(cfg).(server.Native)
+	h := nativeUpgradeHost{home: home, n: n, tools: &venvTools{nativeDBTools: db, n: n}, sys: &restartWatch{nativeSysFake: sys, n: n}}
+	oldSys, oldTools := nativeSys, nativeTools
+	nativeSys, nativeTools = h.sys, h.tools
+	t.Cleanup(func() { nativeSys, nativeTools = oldSys, oldTools })
+	n.Sys, n.Tools = h.sys, h.tools
+	h.n = n
+	for _, p := range []string{n.UV(), n.PythonBin()} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, v := range []string{nativeOld, nativeOlder} {
+		if err := os.MkdirAll(filepath.Join(n.VenvDir(v), "bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(n.VenvDir(v), ".backsight-complete"), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sec, err := config.LoadSecrets(d.SecretsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := n.WithVersion(nativeOld)
+	files, err := renderOn(rt, sec, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Write(files); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := n.Deployed(); err != nil || got != nativeOld {
+		t.Fatalf("deployed %q %v", got, err)
+	}
+	if n.Version() == nativeOld || n.Version() == nativeOlder {
+		t.Fatalf("the pin %s is one of the test's versions", n.Version())
+	}
+	h.sys.calls, h.sys.restarts, h.tools.calls = nil, nil, nil
+	return h
+}
+
+func (h nativeUpgradeHost) deployed(t *testing.T) string {
+	t.Helper()
+	v, err := h.n.Deployed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func (h nativeUpgradeHost) venvs(t *testing.T) []string {
+	t.Helper()
+	ents, err := os.ReadDir(filepath.Join(h.n.Root(), "venv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range ents {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+// The new venv is installed beside the running one while the unit still
+// names the old, then the unit is pointed at it and the server restarted;
+// venvs older than the previous one are removed.
+func TestNativeUpgradeInstallsBesideAndSwitches(t *testing.T) {
+	h := nativeUpgradeSetup(t)
+	pin := h.n.Version()
+	code, out, errOut := run(t, "server", "upgrade", "--allow-unordered", "--json")
+	env := decodeUpgrade(t, out)
+	if code != output.OK || !env.OK || env.Data.Runtime != "native" || env.Data.Current != nativeOld || env.Data.Target != pin {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if want := []string{pin + " while " + nativeOld}; !slices.Equal(h.tools.builtWhen, want) {
+		t.Errorf("venvs built %q, want %q (beside the running one)", h.tools.builtWhen, want)
+	}
+	if got := h.deployed(t); got != pin {
+		t.Errorf("the unit runs %s, want %s", got, pin)
+	}
+	if !slices.Equal(h.sys.restarts, []string{pin}) {
+		t.Errorf("server restarts on %q, want one on %s", h.sys.restarts, pin)
+	}
+	if want := sorted([]string{nativeOld, pin}); !slices.Equal(h.venvs(t), want) {
+		t.Errorf("venvs %q, want %q (%s pruned)", h.venvs(t), want, nativeOlder)
+	}
+	// The step names what native does; its safety archive is native's.
+	i := slices.IndexFunc(env.Data.Steps, func(s step) bool { return s.Name == "install" })
+	if i < 0 || env.Data.Steps[i].Status != "done" || slices.ContainsFunc(env.Data.Steps, func(s step) bool { return s.Name == "pull" }) {
+		t.Errorf("steps %+v", env.Data.Steps)
+	}
+	if m, _ := sidecar(t, env.Data.Safety); m.Runtime != "native" || m.HindsightVersion != "1.1.0" || m.Counts["memory_units"] != 10 {
+		t.Errorf("safety manifest %+v", m)
+	}
+	if state.RestoreIncomplete(pathsOf(h.home)) {
+		t.Error("marker left")
+	}
+}
+
+// A new version whose smoke fails: the unit is pointed back at the old
+// venv and the server restarted on it, the safety dump restored (a new
+// epoch, exit 30 as on Docker); the new venv and the safety archive stay,
+// nothing is pruned.
+func TestNativeUpgradeRollsBackToTheOldVenv(t *testing.T) {
+	h := nativeUpgradeSetup(t)
+	pin := h.n.Version()
+	recallStatus.Store(500)
+	t.Cleanup(func() { recallStatus.Store(0) })
+	before := backupsIn(h.home)
+	code, out, errOut := run(t, "server", "upgrade", "--allow-unordered", "--json")
+	env := decodeUpgrade(t, out)
+	if code != output.RolledBack || !env.Data.RolledBack || env.Error == nil || !strings.Contains(env.Error.Message, "smoke") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if got := h.deployed(t); got != nativeOld {
+		t.Errorf("the unit runs %s, want %s again", got, nativeOld)
+	}
+	if n := len(h.sys.restarts); n < 2 || h.sys.restarts[0] != pin || h.sys.restarts[n-1] != nativeOld {
+		t.Errorf("server restarts on %q: want %s, then %s last", h.sys.restarts, pin, nativeOld)
+	}
+	if want := sorted([]string{nativeOlder, nativeOld, pin}); !slices.Equal(h.venvs(t), want) {
+		t.Errorf("venvs %q, want %q (nothing pruned)", h.venvs(t), want)
+	}
+	if !slices.Equal(h.tools.restores, []int{10}) {
+		t.Errorf("restores %v: the safety dump goes back", h.tools.restores)
+	}
+	if env.Data.Epoch == nil || env.Data.Epoch.Epoch != 1 {
+		t.Errorf("rollback epoch %+v", env.Data.Epoch)
+	}
+	if _, err := os.Stat(env.Data.Safety); err != nil || len(backupsIn(h.home)) != len(before)+1 {
+		t.Errorf("safety archive %s: %v; backups %v", env.Data.Safety, err, backupsIn(h.home))
+	}
+	if state.RestoreIncomplete(pathsOf(h.home)) {
+		t.Error("marker left after a finished rollback")
+	}
+}
+
+// A venv that does not install changes nothing: no backup, nothing
+// stopped, the unit and the venvs as they were.
+func TestNativeUpgradeFetchFailureChangesNothing(t *testing.T) {
+	h := nativeUpgradeSetup(t)
+	h.tools.failPip = true
+	unitPath := filepath.Join(h.n.UnitDir, h.n.ServerUnit())
+	unit := readFile0(unitPath)
+	venvs := h.venvs(t)
+	before := backupsIn(h.home)
+	code, out, errOut := run(t, "server", "upgrade", "--allow-unordered", "--json")
+	env := decodeUpgrade(t, out)
+	if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, "nothing was changed") ||
+		!strings.Contains(env.Error.Message, "cannot install the venv "+h.n.Version()) {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if readFile0(unitPath) != unit || !slices.Equal(h.venvs(t), venvs) {
+		t.Errorf("changed: venvs %q (were %q), unit\n%s", h.venvs(t), venvs, readFile0(unitPath))
+	}
+	for _, c := range h.sys.calls {
+		if strings.Contains(c, " stop ") || strings.Contains(c, "restart") || strings.Contains(c, "disable") {
+			t.Errorf("stopped: %q", c)
+		}
+	}
+	if len(backupsIn(h.home)) != len(before) || state.RestoreIncomplete(pathsOf(h.home)) {
+		t.Errorf("backups %v, marker %v", backupsIn(h.home), state.RestoreIncomplete(pathsOf(h.home)))
+	}
+}
+
+// The plan names what native does, and a native host without its server
+// unit is told so, not about compose.yaml (ruling R26).
+func TestNativeUpgradePlanAndNoServer(t *testing.T) {
+	h := nativeUpgradeSetup(t)
+	pin := h.n.Version()
+	code, out, _ := run(t, "server", "upgrade", "--allow-unordered", "--plan", "--json")
+	env := decodeUpgrade(t, out)
+	want := "would install the venv " + pin + " beside " + nativeOld + " (a failure changes nothing)"
+	if code != output.OK || !slices.ContainsFunc(env.Data.Steps, func(s step) bool { return s.Name == "install" && s.Detail == want }) ||
+		strings.Contains(out, "download") || len(h.tools.builtWhen) != 0 || h.deployed(t) != nativeOld {
+		t.Fatalf("exit %d, want %q\n%s", code, want, out)
+	}
+	if err := os.Remove(filepath.Join(h.n.UnitDir, h.n.ServerUnit())); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = run(t, "server", "upgrade", "--json")
+	env = decodeUpgrade(t, out)
+	if code != output.Blocked || env.Error == nil || strings.Contains(env.Error.Message, "compose") ||
+		!strings.Contains(env.Error.Message, "no "+h.n.ServerUnit()+" in "+h.n.UnitDir) {
+		t.Errorf("exit %d\n%s", code, out)
 	}
 }

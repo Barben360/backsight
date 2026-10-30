@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -29,10 +30,20 @@ type sysCLI interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-type execSys struct{}
+// execSys runs the system's service tools; ownGroup puts each in its own
+// process group (the native runtime's rollback: a Ctrl-C at the terminal
+// must not kill its systemctl).
+type execSys struct{ ownGroup bool }
 
-func (execSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+// InOwnGroup is s with its children in their own process group.
+func (s execSys) InOwnGroup() server.SysRunner { s.ownGroup = true; return s }
+
+func (s execSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if s.ownGroup {
+		server.OwnGroup(cmd)
+	}
+	return cmd.CombinedOutput()
 }
 
 var sysRunner sysCLI = execSys{}

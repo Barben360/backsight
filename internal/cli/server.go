@@ -101,6 +101,9 @@ var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 		if t, ok := nativeTools.(interface{ InOwnGroup() server.ToolRunner }); ok && ownGroup {
 			n.Tools = t.InOwnGroup()
 		}
+		if s, ok := nativeSys.(interface{ InOwnGroup() server.SysRunner }); ok && ownGroup {
+			n.Sys = s.InOwnGroup()
+		}
 		return n
 	}
 	c := composeFor(cfg)

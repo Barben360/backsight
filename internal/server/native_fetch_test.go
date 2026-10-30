@@ -633,3 +633,54 @@ func TestDownloadMBDocker(t *testing.T) {
 		t.Errorf("DownloadMB = %d", mb)
 	}
 }
+
+// completeVenv is version v's venv as Fetch leaves it: marked complete.
+func completeVenv(t *testing.T, n Native, v string) {
+	t.Helper()
+	touch(t, filepath.Join(n.VenvDir(v), venvComplete), 0o644)
+}
+
+// After an upgrade passed, PruneVersions removes every venv but those it
+// keeps (the new one and the previous one), incomplete ones and leftovers
+// of an older build (*.partial) included; never the one the server unit
+// runs, whatever keep says.
+func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
+	n := newNative(t, &fakeTools{})
+	n.UnitDir = t.TempDir()
+	// Nothing installed yet: nothing to do.
+	if err := n.PruneVersions("1.1.0-aaaaaaaaaaaa"); err != nil {
+		t.Fatalf("no venv directory: %v", err)
+	}
+	for _, v := range []string{"1.1.0-aaaaaaaaaaaa", "1.1.0-bbbbbbbbbbbb", "1.0.9-cccccccccccc", "1.0.8-eeeeeeeeeeee"} {
+		completeVenv(t, n, v)
+	}
+	touch(t, filepath.Join(n.VenvDir("1.0.7-dddddddddddd"), "bin", "python"), 0o755) // incomplete
+	touch(t, filepath.Join(n.VenvDir("1.1.0-ffffffffffff.partial"), "bin", "python"), 0o755)
+	// The unit runs eeee (a hand edit, a rollback): kept though not named.
+	unit := "[Service]\nExecStart=" + filepath.Join(n.VenvDir("1.0.8-eeeeeeeeeeee"), "bin", "hindsight-api") + "\n"
+	if err := os.WriteFile(filepath.Join(n.UnitDir, n.ServerUnit()), []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.PruneVersions("1.1.0-bbbbbbbbbbbb", "1.1.0-aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	ents, err := os.ReadDir(filepath.Join(n.Root(), "venv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, e := range ents {
+		left = append(left, e.Name())
+	}
+	if want := []string{"1.0.8-eeeeeeeeeeee", "1.1.0-aaaaaaaaaaaa", "1.1.0-bbbbbbbbbbbb"}; !slices.Equal(left, want) {
+		t.Errorf("venvs left %q, want %q", left, want)
+	}
+	if !exists(filepath.Join(n.VenvDir("1.1.0-aaaaaaaaaaaa"), venvComplete)) {
+		t.Error("a kept venv was touched")
+	}
+	// A construction error: nothing removed.
+	n.Err = errors.New("boom")
+	if err := n.PruneVersions(); err == nil || !exists(n.VenvDir("1.1.0-aaaaaaaaaaaa")) {
+		t.Errorf("with Err: %v", err)
+	}
+}
