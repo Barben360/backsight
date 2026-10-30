@@ -193,11 +193,12 @@ func genEnd() time.Time { return genNow.Add(-20 * time.Minute) }
 var genNow = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 
 // appendRecent appends nTel telemetry and nJ journal lines timed within
-// the last 15 minutes before genNow, to the newest month files.
-func appendRecent(t testing.TB, stateDir string, g genSpec, nTel, nJ int) {
+// the last 15 minutes before genNow, to the newest month files; round
+// varies the lines of successive calls.
+func appendRecent(t testing.TB, stateDir string, g genSpec, nTel, nJ, round int) {
 	t.Helper()
 	d := paths.Dirs{State: stateDir}
-	x := &gen{rng: rand.New(rand.NewPCG(g.Seed+1, g.Seed)), g: g}
+	x := &gen{rng: rand.New(rand.NewPCG(g.Seed+1+uint64(round), g.Seed)), g: g}
 	month := genNow.Format("2006-01")
 	for _, f := range []struct {
 		path string
@@ -205,7 +206,7 @@ func appendRecent(t testing.TB, stateDir string, g genSpec, nTel, nJ int) {
 		line func(ts time.Time, i int) map[string]any
 	}{
 		{filepath.Join(d.TelemetryDir(), "events-"+month+".jsonl"), nTel, func(ts time.Time, _ int) map[string]any { return x.telLine(ts) }},
-		{filepath.Join(d.FeedbackDir(), "journal-"+month+".jsonl"), nJ, func(ts time.Time, i int) map[string]any { return x.journalLine(ts, 1_000_000+i) }},
+		{filepath.Join(d.FeedbackDir(), "journal-"+month+".jsonl"), nJ, func(ts time.Time, i int) map[string]any { return x.journalLine(ts, 1_000_000+round*1000+i) }},
 	} {
 		fh, err := os.OpenFile(f.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 		if err != nil {

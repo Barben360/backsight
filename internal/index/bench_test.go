@@ -47,9 +47,9 @@ func firstBuild(t testing.TB, stateDir string) (*Index, time.Duration) {
 
 // catchUp15 appends 15 minutes of lines (60 telemetry, 10 journal) and
 // times one catch-up within ViewBudget; the ledger is unchanged.
-func catchUp15(t testing.TB, ix *Index, stateDir string) time.Duration {
+func catchUp15(t testing.TB, ix *Index, stateDir string, round int) time.Duration {
 	t.Helper()
-	appendRecent(t, stateDir, budgetSpec, 60, 10)
+	appendRecent(t, stateDir, budgetSpec, 60, 10, round)
 	start := time.Now()
 	fr, err := ix.CatchUp(context.Background(), ViewBudget)
 	d := time.Since(start)
@@ -70,7 +70,7 @@ func TestIndexBudgets(t *testing.T) {
 	genState(t, state, budgetSpec)
 	ix, build := firstBuild(t, state)
 	defer func() { _ = ix.Close() }()
-	catch := catchUp15(t, ix, state)
+	catch := catchUp15(t, ix, state, 0)
 	// the measure is of real work: every kind landed and no line failed
 	var errs, prompts, tools, shows, ledger int
 	if err := ix.ReadTx(context.Background(), func(tx *sql.Tx) error {
@@ -117,7 +117,7 @@ func BenchmarkCatchUp15Minutes(b *testing.B) {
 	defer func() { _ = ix.Close() }()
 	var total time.Duration
 	for i := 0; i < b.N; i++ {
-		total += catchUp15(b, ix, state)
+		total += catchUp15(b, ix, state, i)
 	}
 	b.ReportMetric(float64(total.Nanoseconds())/float64(b.N), "ns/catchup")
 }
