@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
@@ -40,8 +42,44 @@ var switchProbes = struct {
 	userManager  func(context.Context) error
 	linger       func() (string, error)
 	freeBytes    func(dir string) (uint64, error)
+	shimRuns     func(ctx context.Context, shim string) error
 	goos, goarch string
-}{userSession, linger, doctor.FreeBytes, runtime.GOOS, runtime.GOARCH}
+}{userSession, linger, doctor.FreeBytes, shimKnowsNativeCheck, runtime.GOOS, runtime.GOARCH}
+
+// nativeShim is the shim the native db unit's ExecStartPre runs (server
+// native-check): its guard at every start.
+func nativeShim(d paths.Dirs) string {
+	return filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
+}
+
+// shimMissing: no executable file behind the shim (none, a dangling link,
+// or not executable), which systemd would fail with 203/EXEC; server
+// install and the switch install it again.
+func shimMissing(shim string) bool {
+	fi, err := os.Stat(shim)
+	return err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0
+}
+
+// shimProbeWait bounds the shim's --help.
+const shimProbeWait = 15 * time.Second
+
+// shimKnowsNativeCheck runs the shim's server native-check --help, with a
+// clean environment: a backsight older than the native runtime prints
+// server's own help instead (cobra), which does not name the command.
+func shimKnowsNativeCheck(ctx context.Context, shim string) error {
+	ctx, cancel := context.WithTimeout(ctx, shimProbeWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shim, "server", "native-check", "--help")
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("it does not run (%w)", err)
+	}
+	if !strings.Contains(string(out), "server native-check") {
+		return errors.New("the backsight it runs has no server native-check (an older release)")
+	}
+	return nil
+}
 
 // recallProbe is one of the user's recent memories, recalled by its own text:
 // the ids of its top 10 before the switch.
@@ -283,17 +321,18 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 
 	// Pre-flight, read only: what the target needs and what it downloads.
 	var images []string
+	installShimAt := "" // the native db unit's guard, missing: installed after the consent
 	if to != res.From {
-		detail, missing, warnings, err := switchPreflight(ctx, dst, to, d, f.command("switch", to))
+		detail, missing, shim, warnings, err := switchPreflight(ctx, dst, to, d, f.command("switch", to))
 		if err != nil {
 			return res, err
 		}
-		images = missing
+		images, installShimAt = missing, shim
 		res.Warnings = append(res.Warnings, warnings...)
 		add("preflight", status, detail)
 	}
 	if f.plan || !agreed {
-		plan := switchPlan(res.From, to, cut != nil && to == res.From)
+		plan := switchPlan(res.From, to, cut != nil && to == res.From, installShimAt)
 		if f.plan {
 			for _, s := range plan {
 				add(s[0], "planned", s[1])
@@ -332,6 +371,17 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 		}
 		add("download", "done", what)
 	}
+	if installShimAt != "" {
+		target, err := shimTarget(d.Data)
+		if err == nil {
+			err = installShim(target, installShimAt)
+		}
+		if err != nil {
+			add("shim", "failed", err.Error())
+			return res, nothingChanged("cannot install the shim the native database unit runs (%s): %v", installShimAt, err)
+		}
+		add("shim", "done", installShimAt+" → "+target)
+	}
 
 	// 2. Under the maintenance lock and server.lock to the end: hooks
 	// queue, jobs skip.
@@ -342,6 +392,13 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	defer unlock()
 	if note != "" {
 		res.Warnings = append(res.Warnings, note)
+	}
+	// The pre-flight and the consent were about the config.toml and the
+	// secrets read before the downloads, which take minutes: an edit since
+	// would fail the commit and roll the whole move back. Refused here,
+	// before anything stops.
+	if err := switchInputsUnchanged(d, sha, cfg, sec, to); err != nil {
+		return res, err
 	}
 	add("lock", "done", d.MaintenanceLock()+", server.lock")
 	if cut != nil {
@@ -542,14 +599,41 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	return res, nil
 }
 
+// switchInputsUnchanged refuses, with nothing changed, a switch whose
+// config.toml (its bytes, sha being the hash read before the downloads)
+// or secrets changed since the pre-flight read them.
+func switchInputsUnchanged(d paths.Dirs, sha string, cfg config.Config, sec config.Secrets, to string) error {
+	_, now, err := fsutil.ReadHashed(d.ConfigFile())
+	if err != nil {
+		return blocked(err)
+	}
+	cfgNow, secNow, err := loadServerConfig()
+	if err != nil {
+		return err
+	}
+	rerun := "rerun backsight server runtime switch " + to + " to check it again"
+	if now != sha || !reflect.DeepEqual(cfgNow, cfg) {
+		return nothingChanged("%s changed while the switch downloaded what %s runs: %s", d.ConfigFile(), to, rerun)
+	}
+	if secNow != sec {
+		return nothingChanged("%s changed while the switch downloaded what %s runs: %s", d.SecretsFile(), to, rerun)
+	}
+	return nil
+}
+
 // switchPlan is the switch's steps, as --plan and the prompt list them.
-func switchPlan(from, to string, recoverOnly bool) [][2]string {
+func switchPlan(from, to string, recoverOnly bool, shim string) [][2]string {
 	if recoverOnly {
 		return [][2]string{{"lock", "would take the maintenance lock and server.lock (hooks queue, jobs skip)"},
 			{"recover", "would stop the target of the switch cut off and start " + from + " again"}}
 	}
 	steps := [][2]string{
 		{"download", "would download what " + to + " runs, before anything stops (a failure changes nothing)"},
+	}
+	if shim != "" {
+		steps = append(steps, [2]string{"shim", "would install the shim " + shim + ", which the native database unit runs before every start (server native-check)"})
+	}
+	steps = append(steps, [][2]string{
 		{"lock", "would take the maintenance lock and server.lock until the end (hooks queue, jobs skip)"},
 		{"probes", "would recall up to 20 recent memories of the bank by their own text"},
 		{"stop-api", "would stop " + from + "'s API, its database running: nothing is written after the backup"},
@@ -558,7 +642,7 @@ func switchPlan(from, to string, recoverOnly bool) [][2]string {
 		{"stop-source", "would stop " + from + " (its data is kept until backsight server runtime clean)"},
 		{"target", "would write " + to + "'s files (same secrets, same API port) and start its database alone"},
 		{"restore", "would restore the archive into " + to},
-	}
+	}...)
 	if to == "native" {
 		steps = append(steps, [2]string{"identity", "would record the native database's identity"})
 	}
@@ -570,25 +654,26 @@ func switchPlan(from, to string, recoverOnly bool) [][2]string {
 }
 
 // switchPreflight checks the target, read only: Docker and Compose, or
-// the user session, lingering and the disk for native; what it still has
-// to download (images: Docker's images to pull).
-func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths.Dirs, resume string) (detail string, images []string, warnings []string, err error) {
+// the user session, lingering, the disk and the shim the db unit runs for
+// native; what it still has to download (images: Docker's images to
+// pull); the shim to install (missing or dangling), "" when it runs.
+func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths.Dirs, resume string) (detail string, images []string, shim string, warnings []string, err error) {
 	if to == "docker" {
 		eng, err := dst.Engine(ctx)
 		if err != nil {
-			return "", nil, nil, nothingChanged("Docker is not usable here (%v): start Docker, or stay on the native runtime", err)
+			return "", nil, "", nil, nothingChanged("Docker is not usable here (%v): start Docker, or stay on the native runtime", err)
 		}
 		comp, err := dst.Orchestrator(ctx)
 		if err != nil {
-			return "", nil, nil, nothingChanged("Docker Compose is not usable here (%v)", err)
+			return "", nil, "", nil, nothingChanged("Docker Compose is not usable here (%v)", err)
 		}
 		detail = "Docker " + eng.Version + ", Compose " + comp
 	} else {
 		if err := switchProbes.userManager(ctx); err != nil {
 			if errors.Is(err, setup.ErrSessionSlow) {
-				return "", nil, nil, nothingChanged("%v: cannot tell whether the native server's units can run", err)
+				return "", nil, "", nil, nothingChanged("%v: cannot tell whether the native server's units can run", err)
 			}
-			return "", nil, nil, &output.Error{Code: output.NeedsUser, Message: setup.NoUserBus + " (" + err.Error() + "): the native server runs as systemd user units: nothing was changed",
+			return "", nil, "", nil, &output.Error{Code: output.NeedsUser, Message: setup.NoUserBus + " (" + err.Error() + "): the native server runs as systemd user units: nothing was changed",
 				Actions: []output.Action{{Kind: "relogin", Cmd: resume, Why: "the native server's units load into this user's systemd user manager"}}}
 		}
 		v, err := switchProbes.linger()
@@ -597,7 +682,7 @@ func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths
 			if err != nil {
 				why = "cannot tell whether lingering is on for your user (" + err.Error() + ")"
 			}
-			return "", nil, nil, &output.Error{Code: output.NeedsUser, Resume: resume,
+			return "", nil, "", nil, &output.Error{Code: output.NeedsUser, Resume: resume,
 				Message: why + ": the native server's units would stop at logout and not start at boot: run loginctl enable-linger, then rerun: nothing was changed",
 				Actions: []output.Action{{Kind: "run_as_user", Cmd: "loginctl enable-linger", Why: "the native server runs as your systemd user units, which stop at logout without lingering"}}}
 		}
@@ -613,15 +698,28 @@ func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths
 		case err != nil:
 			warnings = append(warnings, "free disk space unknown: "+err.Error())
 		case free < setup.NativeDiskMB<<20:
-			return "", nil, nil, nothingChanged("only %.1f GB free under %s, the native server needs %.1f GB: free some space", float64(free)/(1<<30), dir, float64(setup.NativeDiskMB)/1000)
+			return "", nil, "", nil, nothingChanged("only %.1f GB free under %s, the native server needs %.1f GB: free some space", float64(free)/(1<<30), dir, float64(setup.NativeDiskMB)/1000)
 		}
 		detail = "user session, lingering on, disk"
+		// The db unit's ExecStartPre is the shim: one missing or dangling
+		// is installed after the consent, as server install does; one that
+		// runs a backsight without native-check would fail every start.
+		if shim = nativeShim(d); shimMissing(shim) {
+			detail += "; the shim " + shim + " to install"
+		} else if err := switchProbes.shimRuns(ctx, shim); err != nil {
+			exe, _ := selfExe()
+			return "", nil, "", nil, nothingChanged("the native database unit runs %s server native-check before every start, and %v: "+
+				"point the shim at this backsight first (%s client install), then switch", shim, err, exe)
+		} else {
+			shim = ""
+			detail += ", the shim"
+		}
 	}
 	var missing []string
 	if dl, ok := dst.(server.Downloader); ok {
 		var models bool
 		if missing, models, err = dl.Downloads(ctx); err != nil {
-			return "", nil, nil, nothingChanged("cannot tell what %s still has to download (%v)", to, err)
+			return "", nil, "", nil, nothingChanged("cannot tell what %s still has to download (%v)", to, err)
 		}
 		if models { // Docker: inside the server, at its first start
 			warnings = append(warnings, fmt.Sprintf("the models (about %d MB) download at the %s server's first start", server.ModelsMB, to))
@@ -635,7 +733,7 @@ func switchPreflight(ctx context.Context, dst server.Runtime, to string, d paths
 	if to == "docker" {
 		images = missing
 	}
-	return detail, images, warnings, nil
+	return detail, images, shim, warnings, nil
 }
 
 // switchFetch downloads what the target runs without changing what runs:

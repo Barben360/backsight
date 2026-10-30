@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -344,7 +345,31 @@ func switchSetup(t *testing.T, from string) (home string, w *switchWorld) {
 		return false
 	})
 	writeRuntimeConfig(t, home, from, port)
+	writeShim(t, home, shimNow)
 	return home, w
+}
+
+// The shims the native db unit's guard may find: this release's knows
+// server native-check (its --help names it), an older one prints server's
+// own help, a broken one fails.
+const (
+	shimNow    = "#!/bin/sh\necho 'Usage:'\necho '  backsight server native-check [flags]'\n"
+	shimOld    = "#!/bin/sh\necho 'Usage:'\necho '  backsight server [command]'\n"
+	shimBroken = "#!/bin/sh\necho 'cannot execute binary file' >&2\nexit 126\n"
+)
+
+// writeShim makes <data>/bin/current an executable script.
+func writeShim(t *testing.T, home, script string) string {
+	t.Helper()
+	shim := filepath.Join(pathsOf(home).Data, "bin", "current")
+	if err := os.MkdirAll(filepath.Dir(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(shim)
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return shim
 }
 
 // sourceRanking: memory text NN finds mNN first, then the nine after it.
@@ -950,5 +975,331 @@ func TestSwitchRefusesAnotherHindsightRelease(t *testing.T) {
 	w.rts["docker"].deployed = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:" + strings.Repeat("a", 64)
 	if code, _, all := runSwitchCmd(t, context.Background(), "switch", "native", "--plan", "--json"); code != output.OK {
 		t.Errorf("same release: exit %d\n%s", code, all)
+	}
+}
+
+// Final review 1: config.toml or the secrets edited while the switch
+// downloads (minutes) are refused under the lock, before anything stops:
+// the consent and the pre-flight were about what was read before, and the
+// commit would otherwise fail and roll the whole move back.
+func TestSwitchRefusesInputsEditedDuringTheDownloads(t *testing.T) {
+	for _, c := range []struct {
+		name, file string
+		edit       func(t *testing.T, home string)
+	}{
+		{"config.toml", "config.toml", func(t *testing.T, home string) {
+			cfg := pathsOf(home).ConfigFile()
+			raw, _ := os.ReadFile(cfg)
+			if err := os.WriteFile(cfg, bytes.Replace(raw, []byte("ui_port = 19999"), []byte("ui_port = 19998"), 1), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"secrets.toml", "secrets.toml", func(t *testing.T, home string) {
+			if err := config.UpdateSecrets(pathsOf(home).SecretsFile(), func(s *config.Secrets) error { return s.Set("api_key", "rotated-meanwhile") }); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, w := switchSetup(t, "docker")
+			w.rts["native"].hook["Fetch"] = func(context.Context) error { c.edit(t, home); return nil }
+			code, env, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+			if code != output.Blocked || env.Error == nil || !strings.Contains(env.Error.Message, c.file+" changed while the switch downloaded") ||
+				!strings.Contains(env.Error.Message, "nothing was changed") {
+				t.Fatalf("exit %d\n%s", code, all)
+			}
+			if !slices.Equal(w.calls, []string{"native Fetch"}) {
+				t.Errorf("acted after the edit: %q", w.calls)
+			}
+			if rs := switchState(t, home); rs != nil {
+				t.Errorf("runtime_switch recorded: %+v", rs)
+			}
+			if raw, _ := os.ReadFile(pathsOf(home).ConfigFile()); strings.Contains(string(raw), "native") {
+				t.Errorf("config.toml names native:\n%s", raw)
+			}
+		})
+	}
+}
+
+// Final review 2: the native db unit's ExecStartPre is the shim (server
+// native-check). A missing or dangling one is installed after the consent,
+// before anything stops (as server install does); one that runs a
+// backsight without native-check, or does not run, is refused before
+// anything changes: the units would fail every start.
+func TestSwitchChecksTheShimTheNativeDBUnitRuns(t *testing.T) {
+	thisBuild := func(t *testing.T) {
+		exe := filepath.Join(t.TempDir(), "backsight")
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\n# this build\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		old := selfExe
+		selfExe = func() (string, error) { return exe, nil }
+		t.Cleanup(func() { selfExe = old })
+	}
+	for _, c := range []struct{ name, script string }{{"missing", ""}, {"dangling", ""}} {
+		t.Run(c.name, func(t *testing.T) {
+			home, w := switchSetup(t, "docker")
+			thisBuild(t)
+			shim := filepath.Join(pathsOf(home).Data, "bin", "current")
+			_ = os.Remove(shim)
+			if c.name == "dangling" { // its binary removed by hand: 203/EXEC
+				if err := os.Symlink(filepath.Join(pathsOf(home).Data, "bin", "0.0.1-gone", "backsight"), shim); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The plan says so and installs nothing.
+			code, env, all := runSwitchCmd(t, context.Background(), "switch", "native", "--plan", "--json")
+			if code != output.OK || !slices.ContainsFunc(env.Data.Steps, func(s step) bool { return s.Name == "shim" && s.Status == "planned" }) {
+				t.Fatalf("plan: exit %d\n%s", code, all)
+			}
+			if !shimMissing(shim) {
+				t.Fatal("the plan installed the shim")
+			}
+			code, env, all = runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
+			if code != output.OK {
+				t.Fatalf("exit %d\n%s", code, all)
+			}
+			got, err := filepath.EvalSymlinks(shim)
+			if err != nil || shimMissing(shim) || readFile0(got) != "#!/bin/sh\n# this build\n" {
+				t.Fatalf("the shim %s runs %q (%v), not this build", shim, got, err)
+			}
+			// Installed before anything stopped.
+			names := []string{}
+			for _, s := range env.Data.Steps {
+				names = append(names, s.Name)
+			}
+			if i, j := slices.Index(names, "shim"), slices.Index(names, "stop-api"); i < 0 || j < 0 || i > j {
+				t.Errorf("steps %q", names)
+			}
+			if !slices.Contains(w.calls, "native Start") {
+				t.Errorf("calls %q", w.calls)
+			}
+		})
+	}
+	for _, c := range []struct{ name, script, says string }{
+		{"too old", shimOld, "has no server native-check"},
+		{"broken", shimBroken, "does not run"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, w := switchSetup(t, "docker")
+			thisBuild(t)
+			shim := writeShim(t, home, c.script)
+			tree := treeOf(t, filepath.Join(home, "backsight"))
+			for _, args := range [][]string{{"switch", "native", "--plan", "--json"}, append([]string{"switch", "native"}, consent...)} {
+				code, _, all := runSwitchCmd(t, context.Background(), args...)
+				if code != output.Blocked || !strings.Contains(all, c.says) || !strings.Contains(all, "client install") || !strings.Contains(all, "nothing was changed") {
+					t.Errorf("%v: exit %d\n%s", args, code, all)
+				}
+			}
+			if len(w.calls) != 0 || !maps.Equal(treeOf(t, filepath.Join(home, "backsight")), tree) || readFile0(shim) != c.script {
+				t.Errorf("changed something: %q", w.calls)
+			}
+		})
+	}
+	// Back to Docker, no shim is needed.
+	t.Run("to docker", func(t *testing.T) {
+		home, _ := switchSetup(t, "native")
+		_ = os.Remove(filepath.Join(pathsOf(home).Data, "bin", "current"))
+		if code, _, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "docker"}, consent...)...); code != output.OK {
+			t.Fatalf("exit %d\n%s", code, all)
+		}
+		if _, err := os.Lstat(filepath.Join(pathsOf(home).Data, "bin", "current")); err == nil {
+			t.Error("a switch to docker installed the shim")
+		}
+	})
+}
+
+// productionRuntimeWith is the real runtimeWith, before any test replaces
+// it.
+var productionRuntimeWith = runtimeWith
+
+// argvRT is the switch world's fake runtime for the data, the downloads and
+// the probes, and the real runtime, on recording runners, for its files
+// and its lifecycle: what decides what starts at boot is the real argv.
+type argvRT struct {
+	server.Runtime
+	real server.Runtime
+}
+
+func (a argvRT) Render(sec config.Secrets, host string) (server.Files, error) {
+	if _, err := a.Runtime.Render(sec, host); err != nil {
+		return server.Files{}, err
+	}
+	return a.real.Render(sec, host)
+}
+
+func (a argvRT) Write(f server.Files) (server.Changes, error) {
+	if _, err := a.Runtime.Write(f); err != nil {
+		return server.Changes{}, err
+	}
+	return a.real.Write(f)
+}
+
+func (a argvRT) Start(ctx context.Context) error {
+	if err := a.real.Start(ctx); err != nil {
+		return err
+	}
+	return a.Runtime.Start(ctx)
+}
+
+func (a argvRT) StartDatabase(ctx context.Context) error {
+	if err := a.real.StartDatabase(ctx); err != nil {
+		return err
+	}
+	return a.Runtime.StartDatabase(ctx)
+}
+
+func (a argvRT) StopAPI(ctx context.Context) error {
+	if err := a.real.StopAPI(ctx); err != nil {
+		return err
+	}
+	return a.Runtime.StopAPI(ctx)
+}
+
+func (a argvRT) Stop(ctx context.Context) error {
+	if err := a.real.Stop(ctx); err != nil {
+		return err
+	}
+	return a.Runtime.Stop(ctx)
+}
+
+type argvNative struct{ argvRT }
+
+func (a argvNative) RecordIdentity(ctx context.Context) error {
+	return a.Runtime.(nativeRT).RecordIdentity(ctx)
+}
+
+func (a argvNative) AllowCreate() server.Runtime {
+	a.Runtime, a.real = a.Runtime.(nativeRT).AllowCreate(), a.real.(server.Creator).AllowCreate()
+	return a
+}
+
+// composeRecorder is a Docker that does what it is asked and records each
+// argv.
+type composeRecorder struct {
+	mu   sync.Mutex
+	argv [][]string
+}
+
+func (r *composeRecorder) Run(_ context.Context, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.argv = append(r.argv, slices.Clone(args))
+	return nil, nil
+}
+
+// lastComposeVerb is the last compose subcommand that starts or stops
+// something, with its arguments ("stop": every service).
+func (r *composeRecorder) lastComposeVerb() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last := ""
+	for _, a := range r.argv {
+		if len(a) == 0 || a[0] != "compose" {
+			continue
+		}
+		i := 1
+		for i < len(a) && strings.HasPrefix(a[i], "-") { // -p, --project-directory, -f and their values
+			i += 2
+		}
+		if i < len(a) && slices.Contains([]string{"up", "stop", "start", "restart", "down", "rm"}, a[i]) {
+			last = strings.Join(a[i:], " ")
+		}
+	}
+	return last
+}
+
+// lastSystemctlVerb is the last systemctl verb on the native units that
+// starts, stops, enables or disables them, with its --now.
+func lastSystemctlVerb(calls []string) string {
+	last := ""
+	for _, c := range calls {
+		f := strings.Fields(c)
+		if len(f) < 3 || f[0] != "systemctl" || f[1] != "--user" {
+			continue
+		}
+		switch f[2] {
+		case "enable", "disable":
+			last = f[2]
+			if len(f) > 3 && f[3] == "--now" {
+				last += " --now"
+			}
+		case "start", "stop", "restart":
+			last = f[2]
+		}
+	}
+	return last
+}
+
+// Final review 5: RF 2 at the runners. After a switch, passed or rolled
+// back, the real argv leave one runtime to start at boot: the native
+// units enabled (enable --now) or disabled (disable --now), Docker's
+// containers up (up) or stopped (stop, every service: with restart:
+// unless-stopped they then stay down).
+func TestSwitchLeavesOneRuntimeToStartAtBootArgv(t *testing.T) {
+	for _, c := range []struct {
+		name, from, to string
+		fail           bool
+		native, docker string
+	}{
+		{"docker to native, passed", "docker", "native", false, "enable --now", "stop"},
+		{"docker to native, rolled back after native started", "docker", "native", true, "disable --now", "up -d --wait"},
+		{"native to docker, passed", "native", "docker", false, "disable --now", "up -d --wait"},
+		{"native to docker, rolled back after docker started", "native", "docker", true, "enable --now", "stop"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, w := switchSetup(t, c.from)
+			withSys(t, "linux")
+			writeShim(t, home, shimNow) // withSys's stand-in prints nothing
+			d := pathsOf(home)
+			cfg, err := config.Load(d.ConfigFile(), d, home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sec, _ := config.LoadSecrets(d.SecretsFile())
+			// The real runtimes, on recording runners.
+			dk := &composeRecorder{}
+			n := server.Native{Cfg: configOfKind(cfg, "native"), Dirs: d}
+			tools := &nativeDBTools{n: n, pw: sec.DBPassword, up: true, rows: 10, nextID: "333"}
+			sys := &nativeSysFake{db: tools, apiDown: &atomic.Bool{}}
+			oldC, oldSys, oldTools, oldProc := composeRunner, nativeSys, nativeTools, nativeProc
+			composeRunner, nativeSys, nativeTools, nativeProc = dk, sys, tools, t.TempDir()
+			fake := runtimeWith
+			runtimeWith = func(cfg config.Config, own bool) server.Runtime {
+				a := argvRT{fake(cfg, own), productionRuntimeWith(cfg, own)}
+				if cfg.RuntimeKind() == "native" {
+					return argvNative{a}
+				}
+				return a
+			}
+			t.Cleanup(func() {
+				composeRunner, nativeSys, nativeTools, nativeProc, runtimeWith = oldC, oldSys, oldTools, oldProc, fake
+			})
+			withInstance(t, n, "111", "111")
+			real := productionRuntimeWith(configOfKind(cfg, "native"), false).(server.Native)
+			completeVenv(t, real, real.Version())
+			if c.from == "native" { // the source's units are there, enabled
+				files, err := real.Render(sec, "test")
+				if err == nil {
+					_, err = real.Write(files)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.fail { // the target started, then the switch fails: it rolls back
+				w.rts[c.to].fail["Start"] = fmt.Errorf("the target failed after its start")
+			}
+			code, _, all := runSwitchCmd(t, context.Background(), append([]string{"switch", c.to}, consent...)...)
+			if want := map[bool]int{false: output.OK, true: output.Blocked}[c.fail]; code != want {
+				t.Fatalf("exit %d, want %d\n%s", code, want, all)
+			}
+			if got := lastSystemctlVerb(sys.calls); got != c.native {
+				t.Errorf("the native units' last verb %q, want %q: %q", got, c.native, sys.calls)
+			}
+			if got := dk.lastComposeVerb(); got != c.docker {
+				t.Errorf("Docker's last compose verb %q, want %q: %q", got, c.docker, dk.argv)
+			}
+		})
 	}
 }

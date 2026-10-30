@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +24,6 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
-	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
@@ -480,8 +478,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				// after this one: without it the unit cannot start
 				// (systemd's 203/EXEC). One that runs is the client's; one
 				// missing or dangling is installed again.
-				shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
-				if fi, err := os.Stat(shim); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+				if shim := nativeShim(d); shimMissing(shim) {
 					target, err := shimTarget(d.Data)
 					if err == nil {
 						err = installShim(target, shim)
