@@ -1,0 +1,398 @@
+<!doctype html>
+<!--
+  backsight dashboard: static reference of the Overview (block 3 draft, issue #115).
+  Scenario: "Healthy" (author's stats, 2026-10-23 → 2026-10-30). No script: menus, ⓘ and CLI are <details>.
+  For block 5: every literal below is a template value; repeated blocks (axes, tiles, attention items,
+  Lately rows) are one {{range}} each. The server sets data-theme="light"|"dark" on <html> from the
+  preference cookie, and omits it for "system".
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Overview · backsight</title>
+<link rel="stylesheet" href="../tokens.css">
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<div class="page">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="/" title="Overview">
+      <img class="logo-l" src="../../../../docs/assets/logo-light.svg" alt="backsight">
+      <img class="logo-d" src="../../../../docs/assets/logo-dark.svg" alt="backsight">
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="/" aria-current="page">Overview</a>
+      <a href="/quality">Quality</a>
+      <a href="/cost">Cost</a>
+      <a href="/bank">Bank</a>
+      <a href="/pipeline">Pipeline</a>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <details class="menu">
+        <summary>Browse <span class="caret">▾</span></summary>
+        <div class="menu-pop">
+          <a href="/projects">Projects</a>
+          <a href="/sessions">Sessions</a>
+          <a href="/memories">Memories</a>
+        </div>
+      </details>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <a href="/system">System</a>
+      <!-- developer mode only: <span class="nav-sep"></span><details class="menu"><summary>Developer ▾</summary> Releases, Definitions </details> -->
+    </nav>
+    <div class="tools">
+      <nav class="seg" aria-label="Window">
+        <a href="/?days=1">24 h</a><a href="/?days=7" aria-current="true">7 d</a><a href="/?days=30">30 d</a><a href="/?days=90">90 d</a>
+      </nav>
+      <details class="menu proj">
+        <summary class="btn"><span class="i i-filter"></span><span class="trunc" style="max-width: 16ch">All projects</span><span class="caret">▾</span></summary>
+        <div class="menu-pop right" style="min-width: 260px">
+          <span class="grp">Project</span>
+          <a href="/" aria-current="true"><span class="check">✓</span>All projects</a>
+          <a href="/?project=backsight"><span class="check"></span>backsight</a>
+          <a href="/?project=hindsight-stack"><span class="check"></span>hindsight-stack</a>
+          <a href="/?project=infirlib"><span class="check"></span>infirlib</a>
+          <a href="/?project=claude-code-plugins-marketplace-mirror" title="claude-code-plugins-marketplace-mirror"><span class="check"></span><span class="trunc">claude-code-plugins-mark…</span></a>
+        </div>
+      </details>
+      <a class="btn btn-quiet refresh-t" href="/"><span class="i i-refresh"></span>Refresh</a>
+      <details class="menu">
+        <summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
+        <div class="menu-pop right" style="min-width: 240px">
+          <span class="grp">Theme</span>
+          <a href="/prefs?theme=system&amp;back=/" aria-current="true"><span class="check">✓</span>System</a>
+          <a href="/prefs?theme=light&amp;back=/"><span class="check"></span>Light</a>
+          <a href="/prefs?theme=dark&amp;back=/"><span class="check"></span>Dark</a>
+          <hr>
+          <span class="grp">Developer mode</span>
+          <a href="/prefs?dev=0&amp;back=/" aria-current="true"><span class="check">✓</span>Off</a>
+          <a href="/prefs?dev=1&amp;back=/"><span class="check"></span>On</a>
+          <span class="hint">Adds ranking, learned ranking and release detail.</span>
+          <hr>
+          <span class="grp">Auto-refresh</span>
+          <a href="/prefs?refresh=0&amp;back=/" aria-current="true"><span class="check">✓</span>Off</a>
+          <a href="/prefs?refresh=60&amp;back=/"><span class="check"></span>Every minute</a>
+        </div>
+      </details>
+      <details class="menu navmenu">
+        <summary class="btn"><span class="i i-menu"></span>Menu</summary>
+        <div class="menu-pop right" style="min-width: 300px">
+          <span class="grp">Window</span>
+          <nav class="seg" aria-label="Window" style="margin: 2px 10px 6px"><a href="/?days=1">24 h</a><a href="/?days=7" aria-current="true">7 d</a><a href="/?days=30">30 d</a><a href="/?days=90">90 d</a></nav>
+          <span class="grp">Project</span>
+          <a href="/projects"><span class="i i-filter"></span>All projects</a>
+          <hr>
+          <a href="/" aria-current="page">Overview</a><a href="/quality">Quality</a><a href="/cost">Cost</a><a href="/bank">Bank</a><a href="/pipeline">Pipeline</a>
+          <span class="grp">Browse</span>
+          <a href="/projects">Projects</a><a href="/sessions">Sessions</a><a href="/memories">Memories</a>
+          <hr>
+          <a href="/system">System</a>
+          <hr>
+          <a href="/"><span class="i i-refresh"></span>Refresh</a>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+<div class="scopebar">
+  <div class="wrap scope">
+    <span>Activity on <b>this PC</b></span>
+    <span class="dot">memory on <b>127.0.0.1:18888</b></span>
+    <span class="dot">updated <time datetime="2026-10-30T15:42:00+01:00" title="2026-10-30 15:42">2 min ago</time></span>
+  </div>
+</div>
+
+<main id="main" class="wrap main">
+  <div class="page-head">
+    <h1>Is my memory working?</h1>
+    <span class="muted">Overview · window: last 7 days</span>
+  </div>
+
+  <!-- 1. Verdict: always the last 7 days -->
+  <section class="verdict v-ok" aria-label="Verdict, last 7 days">
+    <div class="v-head">
+      <span class="v-ico st-ok" aria-hidden="true"></span>
+      <h2 class="v-title" style="flex: 1; min-width: 0">Memory is working.<span class="v-when">(last 7 days)</span></h2>
+      <details class="info">
+        <summary aria-label="How the verdict is judged"><span class="i i-info"></span></summary>
+        <div class="pop">
+          <b>How the verdict is judged</b>
+          <p>Always the last 7 days against the 7 before, whatever window is selected. Per axis, the first rule that applies wins: learning, not enough yet, can't judge, attention, ok.</p>
+          <a href="/defs">All definitions</a>
+        </div>
+      </details>
+      <details class="cli">
+        <summary>CLI</summary>
+        <div class="cmd pop" style="width: 380px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats overview --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+      </details>
+    </div>
+    <ul class="axes">
+      <li class="axis"><span class="axis-name">Found</span><span class="st st-ok">ok</span><span class="axis-note">28 % of prompts got memory</span></li>
+      <li class="axis"><span class="axis-name">Right</span><span class="st st-ok">ok</span><span class="axis-note">Judged on the last 28 days: too few turns in 7.</span></li>
+      <li class="axis"><span class="axis-name">Cost</span><span class="st st-ok">ok</span><span class="axis-note">slowest prompts 1.6 s, context in budget</span></li>
+      <li class="axis"><span class="axis-name">Flowing</span><span class="st st-ok">ok</span><span class="axis-note">239 of 239 sessions sent</span></li>
+    </ul>
+    <!-- with reasons: <ul class="reasons"><li class="reason"><span class="pill st st-watch">watch</span><p>…</p><div class="cmd">…</div></li></ul> -->
+  </section>
+
+  <!-- 2. Summary line -->
+  <p class="summary">In the last 7 days: <b>46</b> prompts got memory, Claude used it in <b>10</b> turns, about <b>17 k</b> tokens added; extraction cost <b>$43.62</b> <span class="muted">(server, all PCs).</span></p>
+
+  <!-- 3. Six tiles, grouped by axis -->
+  <div class="tgroups" aria-label="Key numbers">
+    <section class="tgroup">
+      <h2 class="tgroup-h">Found</h2>
+      <div class="tgroup-tiles">
+        <article class="tile" aria-label="Found">
+          <div class="tile-top">
+            <h3 class="tile-name">Found</h3>
+            <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+            <span class="spacer"></span>
+            <details class="info">
+              <summary aria-label="About Found"><span class="i i-info"></span></summary>
+              <div class="pop">
+                <b>Found: How often does a prompt get memory?</b>
+                <dl>
+                  <dt>What</dt><dd>Prompts where memory was added to the prompt, out of the prompts that asked for it.</dd>
+                  <dt>Limits</dt><dd>Watch when it stays under its usual level two weeks running, or when even the upper bound is under 10 %.</dd>
+                  <dt>Based on</dt><dd>167 prompts</dd>
+                  <dt>Smallest change it can see</dt><dd>about 9 pts</dd>
+                </dl>
+                <span class="term">recall.hit_rate</span>
+                <a href="/defs#recall.hit_rate">Definition</a>
+              </div>
+            </details>
+          </div>
+          <p class="tile-q">How often does a prompt get memory?</p>
+          <div class="tile-v"><span class="big num">28</span><span class="unit">%</span><span class="ci">(21–35 %)</span></div>
+          <p class="tile-sub">46 of 167 prompts</p>
+          <div class="tile-st"><span class="st st-ok">ok</span><span class="delta better"><span class="arr">▲</span> +2 pts, better</span></div>
+          <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Found per day, last 7 days: 24, 31, 27, 22, 30, 29, 28 %">
+            <line class="sb" x1="0" y1="31" x2="188" y2="31"/>
+            <path class="sa" d="M4.0,31 L4.0,22.7 L34.0,4.0 L64.0,14.7 L94.0,28.0 L124.0,6.7 L154.0,9.3 L184.0,12.0 L184.0,31 Z"/>
+            <polyline class="sl" points="4.0,22.7 34.0,4.0 64.0,14.7 94.0,28.0 124.0,6.7 154.0,9.3 184.0,12.0"/>
+            <circle class="se" cx="184" cy="12" r="3"/>
+          </svg>
+          <div class="tile-foot">
+            <a href="/sessions?has=memory&amp;days=7">167 prompts →</a>
+            <span class="spacer"></span>
+            <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats quality --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="tgroup">
+      <h2 class="tgroup-h">Right</h2>
+      <div class="tgroup-tiles">
+        <article class="tile" aria-label="Used">
+          <div class="tile-top">
+            <h3 class="tile-name">Used</h3>
+            <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+            <span class="spacer"></span>
+            <details class="info"><summary aria-label="About Used"><span class="i i-info"></span></summary><div class="pop"><b>Used: Does Claude use the memory it is shown?</b><dl><dt>What</dt><dd>Turns where Claude said it used a memory shown, out of the turns where it said what it used.</dd><dt>Limits</dt><dd>Watch under its usual level two weeks running. Unreliable while Claude says what it used on under 80 % of turns.</dd><dt>Based on</dt><dd>38 of 61 turns, last 28 days</dd><dt>Smallest change it can see</dt><dd>about 22 pts</dd></dl><span class="term">used.turn_rate</span><a href="/defs#used.turn_rate">Definition</a></div></details>
+          </div>
+          <p class="tile-q">Does Claude use the memory it is shown?</p>
+          <div class="tile-v"><span class="big num">62</span><span class="unit">%</span><span class="ci">(50–73 %)</span></div>
+          <p class="tile-sub">Said what it used on 100 % of turns.</p>
+          <div class="tile-st"><span class="st st-ok">ok</span><span class="delta better"><span class="arr">▲</span> +4 pts, better</span></div>
+          <p class="tile-note">Judged on the last 28 days: too few turns in 7.</p>
+          <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Used per day, last 7 days">
+            <line class="sb" x1="0" y1="31" x2="188" y2="31"/>
+            <path class="sa" d="M4.0,31 L4.0,22.0 L34.0,10.0 L64.0,28.0 L94.0,4.0 L124.0,19.0 L154.0,16.0 L184.0,13.0 L184.0,31 Z"/>
+            <polyline class="sl" points="4.0,22.0 34.0,10.0 64.0,28.0 94.0,4.0 124.0,19.0 154.0,16.0 184.0,13.0"/>
+            <circle class="se" cx="184" cy="13" r="3"/>
+          </svg>
+          <div class="tile-foot"><a href="/sessions?has=used">61 turns →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats sessions --has used</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+        </article>
+
+        <article class="tile is-few" aria-label="Reported wrong">
+          <div class="tile-top">
+            <h3 class="tile-name">Reported wrong</h3>
+            <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+            <span class="spacer"></span>
+            <details class="info"><summary aria-label="About Reported wrong"><span class="i i-info"></span></summary><div class="pop"><b>Reported wrong: Is the memory right?</b><dl><dt>What</dt><dd>Memories Claude reported wrong or out of date, out of all the memories it judged.</dd><dt>Limits</dt><dd>Watch when the lower bound is over 5 %, attention over 15 %.</dd><dt>Based on</dt><dd>14 verdicts (20 needed)</dd><dt>Smallest change it can see</dt><dd>not yet measurable</dd></dl><span class="term">verdict.wrong_rate</span><a href="/defs#verdict.wrong_rate">Definition</a></div></details>
+          </div>
+          <p class="tile-q">Is the memory right? Lower is better.</p>
+          <div class="tile-v"><span class="big num">1 of 14</span></div>
+          <p class="tile-sub">1 reported wrong of 14 verdicts</p>
+          <div class="tile-st"><span class="st st-few">too few</span></div>
+          <p class="tile-note">1 of 14: too few to judge.</p>
+          <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Reports per day, last 7 days">
+            <line class="sb" x1="0" y1="31" x2="188" y2="31"/>
+            <path class="sa" d="M4.0,31 L4.0,28.0 L34.0,28.0 L64.0,4.0 L94.0,28.0 L124.0,28.0 L154.0,28.0 L184.0,28.0 L184.0,31 Z"/>
+            <polyline class="sl" points="4.0,28.0 34.0,28.0 64.0,4.0 94.0,28.0 124.0,28.0 154.0,28.0 184.0,28.0"/>
+            <circle class="se" cx="184" cy="28" r="3"/>
+          </svg>
+          <div class="tile-foot"><a href="/sessions?has=wrong">14 verdicts →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats sessions --has wrong</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="tgroup">
+      <h2 class="tgroup-h">Cost</h2>
+      <div class="tgroup-tiles">
+        <article class="tile" aria-label="Context">
+          <div class="tile-top">
+            <h3 class="tile-name">Context</h3>
+            <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+            <span class="spacer"></span>
+            <details class="info"><summary aria-label="About Context"><span class="i i-info"></span></summary><div class="pop"><b>Context: How much context does memory add per session?</b><dl><dt>What</dt><dd>Characters backsight added to Claude's context per session, at session start and before prompts. Tokens are about characters / 4.</dd><dt>Limits</dt><dd>Watch when the high value is over 9,000 characters (1.5 × the 6,000-character session budget).</dd><dt>Based on</dt><dd>34 sessions</dd><dt>Smallest change it can see</dt><dd>about 700 chars</dd></dl><span class="term">context.per_session p95</span><a href="/defs#context.per_session">Definition</a></div></details>
+          </div>
+          <p class="tile-q">How much context does memory add per session?</p>
+          <div class="tile-v"><span class="big num">3,600</span><span class="unit">chars</span><span class="ci">≈ 900 tokens</span></div>
+          <p class="tile-sub">high · typical 2,100 chars</p>
+          <div class="tile-st"><span class="st st-ok">ok</span><span class="delta better"><span class="arr">▼</span> −200 chars, better</span></div>
+          <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Context per day, last 7 days">
+            <line class="sb" x1="0" y1="31" x2="188" y2="31"/>
+            <path class="sa" d="M4.0,31 L4.0,24.0 L34.0,12.0 L64.0,20.0 L94.0,4.0 L124.0,16.0 L154.0,28.0 L184.0,16.0 L184.0,31 Z"/>
+            <polyline class="sl" points="4.0,24.0 34.0,12.0 64.0,20.0 94.0,4.0 124.0,16.0 154.0,28.0 184.0,16.0"/>
+            <circle class="se" cx="184" cy="16" r="3"/>
+          </svg>
+          <div class="tile-foot"><a href="/sessions?days=7">34 sessions →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats cost --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+        </article>
+
+        <article class="tile" aria-label="Speed">
+          <div class="tile-top">
+            <h3 class="tile-name">Speed</h3>
+            <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+            <span class="spacer"></span>
+            <details class="info"><summary aria-label="About Speed"><span class="i i-info"></span></summary><div class="pop"><b>Speed: How long does memory make a prompt wait?</b><dl><dt>What</dt><dd>Time memory adds before Claude sees a prompt. Shown: the slowest 1 in 20 prompts.</dd><dt>Limits</dt><dd>Watch over 2.0 s, attention over 2.5 s.</dd><dt>Based on</dt><dd>167 prompts</dd><dt>Smallest change it can see</dt><dd>about 0.3 s</dd></dl><span class="term">recall.latency p95</span><a href="/defs#recall.latency">Definition</a></div></details>
+          </div>
+          <p class="tile-q">How long does memory make a prompt wait?</p>
+          <div class="tile-v"><span class="big num">1.6</span><span class="unit">s</span></div>
+          <p class="tile-sub">slowest 1 in 20 · typical 840 ms</p>
+          <div class="tile-st"><span class="st st-ok">ok</span><span class="delta worse"><span class="arr">▲</span> +0.1 s, worse</span></div>
+          <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Speed per day, last 7 days">
+            <line class="sb" x1="0" y1="31" x2="188" y2="31"/>
+            <path class="sa" d="M4.0,31 L4.0,28.0 L34.0,20.0 L64.0,4.0 L94.0,20.0 L124.0,12.0 L154.0,12.0 L184.0,12.0 L184.0,31 Z"/>
+            <polyline class="sl" points="4.0,28.0 34.0,20.0 64.0,4.0 94.0,20.0 124.0,12.0 154.0,12.0 184.0,12.0"/>
+            <circle class="se" cx="184" cy="12" r="3"/>
+          </svg>
+          <div class="tile-foot"><a href="/cost">167 prompts →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats cost --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="tgroup">
+      <h2 class="tgroup-h">Flowing</h2>
+      <div class="tgroup-tiles">
+        <article class="tile" aria-label="Flowing">
+          <div class="tile-top">
+            <h3 class="tile-name">Flowing</h3>
+            <span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>
+            <span class="spacer"></span>
+            <details class="info"><summary aria-label="About Flowing"><span class="i i-info"></span></summary><div class="pop"><b>Flowing: Do sessions reach the memory server?</b><dl><dt>What</dt><dd>Sessions whose last send was ok, out of the sessions sent in the window.</dd><dt>Limits</dt><dd>Watch on any failed or set-aside session; attention when one waits over 24 h.</dd><dt>Based on</dt><dd>239 sessions</dd></dl><span class="term">pipeline.flow</span><a href="/defs#pipeline.flow">Definition</a></div></details>
+          </div>
+          <p class="tile-q">Do sessions reach the memory server?</p>
+          <div class="tile-v"><span class="big num">100</span><span class="unit">%</span></div>
+          <p class="tile-sub">239 of 239 sessions sent</p>
+          <div class="tile-st"><span class="st st-ok">ok</span><span class="delta"><span class="arr">=</span> no change</span></div>
+          <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Sessions sent per day, last 7 days: all sent">
+            <line class="sb" x1="0" y1="31" x2="188" y2="31"/>
+            <path class="sa" d="M4.0,31 L4.0,16.0 L184.0,16.0 L184.0,31 Z"/>
+            <polyline class="sl" points="4.0,16.0 34.0,16.0 64.0,16.0 94.0,16.0 124.0,16.0 154.0,16.0 184.0,16.0"/>
+            <circle class="se" cx="184" cy="16" r="3"/>
+          </svg>
+          <div class="tile-foot"><a href="/pipeline">239 sessions →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats pipeline --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid-main">
+    <!-- 4. Needs attention (watch and bad only, at most 5) -->
+    <section class="card" aria-labelledby="att-h">
+      <div class="card-head">
+        <h2 id="att-h">What should I do?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      </div>
+      <div class="empty"><span class="row"><span class="st st-ok">Nothing needs attention.</span></span><span class="small">Everything is within its usual range. Nothing to do.</span></div>
+      <!-- with items:
+      <ul class="att">
+        <li class="att-item">
+          <span class="pill st st-watch">watch</span>
+          <div class="body">
+            <p>Memory adds 2.3 s to the slowest prompts (limit 2.5 s).</p>
+            <div class="cmd"><code>backsight doctor</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+            <details class="why"><summary>Why this matters</summary><div>…</div></details>
+          </div>
+        </li>
+      </ul>
+      <div class="card-foot"><a href="/system">2 more on System →</a></div> -->
+    </section>
+
+    <!-- 5. Lately: the last 5 sessions, those with a wrong report first -->
+    <section class="card" aria-labelledby="late-h">
+      <div class="card-head">
+        <h2 id="late-h">What happened lately?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 320px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats sessions --limit 5</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
+          <tbody>
+            <tr><td><a class="idc" href="/sessions/a41c09e2" title="a41c09e24e1b0c9d2f7a63e85b1d0c4a">a41c09e2</a></td><td><a href="/projects/backsight" class="trunc">backsight</a></td><td><time datetime="2026-10-30T15:19" title="2026-10-30 15:19">25 min ago</time></td><td class="r">10</td><td class="r">2</td><td class="r"><span class="st st-watch">1</span></td></tr>
+            <tr><td><a class="idc" href="/sessions/5be2d7f0" title="5be2d7f04e1b0c9d2f7a63e85b1d0c4a">5be2d7f0</a></td><td><a href="/projects/hindsight-stack" class="trunc">hindsight-stack</a></td><td><time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time></td><td class="r">4</td><td class="r">1</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="/sessions/93c1a4e8" title="93c1a4e84e1b0c9d2f7a63e85b1d0c4a">93c1a4e8</a></td><td><a href="/projects/backsight" class="trunc">backsight</a></td><td><time datetime="2026-10-30T10:41" title="2026-10-30 10:41">5 h ago</time></td><td class="r">9</td><td class="r">3</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="/sessions/d0f63b15" title="d0f63b154e1b0c9d2f7a63e85b1d0c4a">d0f63b15</a></td><td><a href="/projects/infirlib" class="trunc">infirlib</a></td><td><time datetime="2026-10-29T18:40" title="2026-10-29 18:40">yesterday</time></td><td class="r">3</td><td class="r">0</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="/sessions/2e8a91c7" title="2e8a91c74e1b0c9d2f7a63e85b1d0c4a">2e8a91c7</a></td><td><a href="/projects/claude-code-plugins-marketplace-mirror" class="trunc" title="claude-code-plugins-marketplace-mirror">claude-code-plugins-mark…</a></td><td><time datetime="2026-10-28T11:02" title="2026-10-28 11:02">2 d ago</time></td><td class="r">5</td><td class="r">1</td><td class="r">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-foot"><a href="/sessions">All sessions →</a></div>
+    </section>
+  </div>
+
+  <!-- 6. Memory at a glance (server) -->
+  <section class="card" aria-labelledby="glance-h">
+    <div class="card-head">
+      <h2 id="glance-h">How big is the memory?</h2>
+      <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+      <!-- with a project filter: <span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span> -->
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About memory at a glance"><span class="i i-info"></span></summary><div class="pop"><b>Memory at a glance</b><p>Memories on the server, by kind, and how many were added in the window. The badges count memories worth a look; they never change the verdict.</p><span class="term">bank.size · bank.growth · stale.*</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 300px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats bank</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="row" style="gap: 32px; align-items: flex-start">
+      <div style="display: flex; flex-direction: column; gap: 2px; min-width: 180px">
+        <span class="muted small">Memories</span>
+        <span class="num" style="font-size: 32px; font-weight: 600; line-height: 1.1">1,284</span>
+        <span class="small sub">+46 in the last 7 days · 286 documents</span>
+      </div>
+      <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 10px">
+        <svg class="kbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="Memories by kind: 212 summaries, 431 facts about you and your work, 641 facts from a session">
+          <rect class="f-summary" x="0" y="0" width="16.5" height="10"/>
+          <rect class="f-about" x="17" y="0" width="33.1" height="10"/>
+          <rect class="f-session" x="50.6" y="0" width="49.4" height="10"/>
+        </svg>
+        <div class="legend">
+          <span><i class="sw f-summary"></i>summary <b class="num">212</b></span>
+          <span><i class="sw f-about"></i>fact about you and your work <b class="num">431</b></span>
+          <span><i class="sw f-session"></i>fact from a session <b class="num">641</b></span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <span class="muted small">Worth a look</span>
+        <div class="badges">
+          <a class="badge" href="/memories?state=never_used"><span class="i i-info"></span><b>7</b> often shown, never used</a>
+          <a class="badge" href="/memories?state=hidden"><span class="i i-info"></span><b>3</b> hidden</a>
+          <a class="badge" href="/memories?state=wrong"><span class="i i-info"></span><b>2</b> reported wrong</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap"><span>backsight v0.1.17-m7</span><a href="/help">Help: backsight guide dashboard</a><a href="/defs">Definitions</a><span>Rendered at <time datetime="2026-10-30T15:44">15:44</time> in 84 ms</span></div>
+</footer>
+</div>
+</body>
+</html>
