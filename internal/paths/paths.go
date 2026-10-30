@@ -48,6 +48,13 @@ func (d Dirs) ConnectDir() string { return filepath.Join(d.State, "connect") }
 // FeedbackDir holds the feedback journal and the turn pointers.
 func (d Dirs) FeedbackDir() string { return filepath.Join(d.State, "feedback") }
 
+// IndexDir holds the local metrics index, derived from telemetry and the
+// feedback journal. MetricsDir and DashboardDir are named here for the
+// uninstall; their owners create them.
+func (d Dirs) IndexDir() string     { return filepath.Join(d.State, "index") }
+func (d Dirs) MetricsDir() string   { return filepath.Join(d.State, "metrics") }
+func (d Dirs) DashboardDir() string { return filepath.Join(d.State, "dashboard") }
+
 // BankTemplateFile records the bank template last applied, so doctor can
 // tell an older backsight template from a change made on the server.
 func (d Dirs) BankTemplateFile() string { return filepath.Join(d.State, "bank-template.json") }
