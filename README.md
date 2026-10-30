@@ -11,9 +11,9 @@
 [![Status: preview, Linux](https://img.shields.io/badge/preview-Linux%20%28macOS%20and%20Windows%20later%29-orange)](docs/compatibility.md)
 [![Hindsight 1.1.0](https://img.shields.io/badge/Hindsight-1.1.0-blue)](docs/compatibility.md)
 
-Long-term memory for Claude Code, on a [Hindsight](https://github.com/vectorize-io/hindsight) server you run yourself.
+Long-term memory for [Claude Code](https://code.claude.com/docs/en/overview), on a [Hindsight](https://github.com/vectorize-io/hindsight) server you run yourself.
 
-- **What**: one Go binary that installs a memory server in Docker on your machine, wires it into Claude Code, and keeps it running.
+- **What**: one Go binary that installs a memory server in [Docker](https://www.docker.com/) on your machine, wires it into Claude Code, and keeps it running.
 - **Why**: Claude Code forgets everything between sessions. With backsight, Claude remembers what you decided, fixed and learned, across all your projects, and recalls it when it matters.
 - **Cost**: searching the memory is local and free. Only turning sessions into memories uses an LLM: a few cents per session, paid to the provider you choose ([below](#what-it-costs)).
 
@@ -25,11 +25,11 @@ backsight is an independent project, not affiliated with or endorsed by Anthropi
 
 I have used Claude Code for a long time, and what always wore on me was having to repeat myself: giving the same information again, correcting answers that left out part of the context. My only workaround was to spot what kept coming back and pin it down somewhere: the project's CLAUDE.md, my global CLAUDE.md, skills or plugins built for one project or for me. What I really needed was a memory: something that keeps what has already been said, doesn't fall into the same traps twice, and works the way I work.
 
-I discovered agent memory with OpenClaw, but without the power of Claude Code. I found it again with LifeOS (formerly PAI), this time built into Claude Code. Not having to repeat things is a real comfort. But LifeOS installed a host of very invasive skills and principles, which changed completely from one update to the next, not always for the better, and rather opaquely. My setup no longer belonged to me.
+I discovered agent memory with [OpenClaw](https://github.com/openclaw/openclaw), but without the power of Claude Code. I found it again with [LifeOS](https://github.com/danielmiessler/LifeOS) (formerly PAI), this time built into Claude Code. Not having to repeat things is a real comfort. But LifeOS installed a host of very invasive skills and principles, which changed completely from one update to the next, not always for the better, and rather opaquely. My setup no longer belonged to me.
 
-I wanted a memory I would never have to act on again, and one that uses one of the real strengths of LLMs: semantic search. LifeOS and claude-mem both read a memory laid out in files, with slightly improved greps. With that, if I search for "authentication", the memory about an "expired token" doesn't come up, even though it was exactly the one I needed.
+I wanted a memory I would never have to act on again, and one that uses one of the real strengths of LLMs: semantic search. LifeOS and [claude-mem](https://github.com/thedotmack/claude-mem) both read a memory laid out in files, with slightly improved greps. With that, if I search for "authentication", the memory about an "expired token" doesn't come up, even though it was exactly the one I needed.
 
-Looking for a system built on embeddings, with proven capabilities, auditable and easy to explore, I came across Hindsight. I liked its philosophy right away. I plugged it into Claude Code following its recommendations, imported months of memories into it, and was soon disappointed. The memories it injected, at session start as well as along the way, were not always relevant. Above all, each project had its own isolated bank: I felt like I was talking to a different person in each one.
+Looking for a system built on embeddings, with proven capabilities, auditable and easy to explore, I came across [Hindsight](https://github.com/vectorize-io/hindsight). I liked its philosophy right away. I plugged it into Claude Code following its recommendations, imported months of memories into it, and was soon disappointed. The memories it injected, at session start as well as along the way, were not always relevant. Above all, each project had its own isolated bank: I felt like I was talking to a different person in each one.
 
 So I experimented. Week after week, I measured the relevance of what was recalled, then adjusted accordingly: Hindsight's configuration, hooks to decide when Claude fetches information, skills to tell it how to search for it and bring it back into context. I kept what improved the measurements and threw out the rest. backsight grew out of these successive trials. Today I use it every day, both for my personal projects and at work, as two independent setups. For that use it beats everything I have tried, and I keep improving it on demanding ground: a large multi-project stack. Whether I start Claude in a project or in my home directory, I talk to the same person, who remembers what we are talking about, the decisions we made and the pitfalls already avoided. And I keep a clean Claude Code, with only the skills I need.
 
@@ -66,6 +66,7 @@ Setup installs a Claude Code plugin, `backsight`, generated by the binary. Every
 | Skill | `/backsight:memory-retro` | End-of-project retrospective: decisions, pitfalls, lessons into memory, corrections for stale ones. |
 | Skill | `/backsight:memory` | The memory from the command line, when the MCP tools are missing or failing. |
 | Skill | `/backsight:doctor` | Diagnose and fix backsight, and draft a bug report you confirm. |
+| Skill | `/backsight:update` | Install a newer release from the session, once you approve its plan. |
 | Permission | the four memory tools | Claude calls them without asking you each time. |
 
 Each hook's time limit and exact behaviour: [how-it-works.md](docs/how-it-works.md#hooks).
@@ -146,7 +147,7 @@ backsight is free, and so is searching the memory: recall at each prompt, `memor
 | DeepSeek V4.1 Flash (default) | $0.05, $0.10 at peak hours | $5, up to $11 |
 | Claude Haiku 5.5 | $0.04 | $4 |
 | GPT-6 Luna | $0.04 | $4 |
-| Ollama on your machine | free, but slow on a CPU and lower quality | free |
+| [Ollama](https://ollama.com/) on your machine | free, but slow on a CPU and lower quality | free |
 | Your Claude subscription | counts against your plan; [not recommended](docs/privacy.md#the-claude-subscription-lane) | |
 
 How these figures are made, so you can redo them for your use:
@@ -254,7 +255,7 @@ backsight adds the memory to your prompt, and Claude answers with it:
 
 - The server runs locally, on loopback, with its API and web UI behind keys, unless you open it to your other PCs on a private address (`backsight server expose --private`; a tailnet address keeps the API key encrypted, a LAN carries it in clear). Recall and searches never leave your machines. Whoever runs the host reads every PC's memories: see [several PCs](docs/several-pcs.md) and [privacy.md](docs/privacy.md#several-pcs).
 - Session text goes to the LLM provider you chose, under that provider's terms. With Ollama, it stays on the machine.
-- The server downloads its two search models from Hugging Face on its first start, and Docker pulls its images; no memory text goes with them.
+- The server downloads its two search models from [Hugging Face](https://huggingface.co/) on its first start, and Docker pulls its images; no memory text goes with them.
 - Secrets are redacted before anything is stored, facts that look like secrets are refused, and Claude is told never to ask you for a key in the conversation.
 - `/backsight:pause` stops recording a session; `backsight pause --project` or a `.backsight.toml` with `retain = false` excludes a project.
 - Backups are always encrypted.

@@ -6,10 +6,10 @@ How backsight finds, checks and installs new releases.
 
 The daily job checks backsight's GitHub releases. When a newer one exists:
 
-- the next Claude Code session shows one line, "⬆️ backsight update X available · see `backsight changelog`", with the version only;
+- the next Claude Code session shows one line with the installed and new versions only, and the two ways to update: "⬆️ backsight 0.1.14-m6 → 0.1.15-m6 · update here: `/backsight:update` · or in a terminal: `backsight update apply`" (with "(3 newer)" after the new version when several releases are newer);
 - `backsight doctor` shows it in its `update` check.
 
-`backsight update check` asks now and lists the newer releases with their notes. `backsight changelog` prints the notes of every release (`--since <version>` for the newer ones only). Release notes are not signed, so they are never shown inside a Claude session.
+`backsight update check` asks now and lists the newer releases with their notes. `backsight changelog` prints the notes of every release (`--since <version>` for the newer ones only). Release notes are not signed, so no session line shows them; `/backsight:update` summarises them only when you ask for an update.
 
 The checks carry no memory or usage data. GitHub limits anonymous requests; if you hit the limit, set `GH_TOKEN` (or `GITHUB_TOKEN`) in the environment.
 
@@ -25,6 +25,19 @@ prereleases = true
 A stable install is never moved to a pre-release otherwise.
 
 ## Installing an update
+
+### From a Claude Code session
+
+Type `/backsight:update` (or ask Claude to update backsight). Claude:
+
+1. runs `backsight version` and `backsight update check`, and tells you the installed version, the new one and what changes;
+2. runs `backsight update apply --plan` and reports the target version, the client migrations and the server step;
+3. once you agree, runs `backsight update apply --version <that version>`, which Claude Code asks you to approve: it is never pre-approved;
+4. relays the outcome, then asks you to type `/reload-plugins` (Claude cannot run it).
+
+Without the skill, `! backsight update apply` typed in the prompt runs the update in the session's shell.
+
+### From a terminal
 
 ```sh
 backsight update apply --plan

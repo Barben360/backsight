@@ -183,6 +183,23 @@ func TestMCPStoreShowsSimilarMemoriesAndStores(t *testing.T) {
 	if !strings.Contains(strings.Join(retainedTags, "|"), "kind:correction") {
 		t.Errorf("tags %v", retainedTags)
 	}
+	// the lines to print: Updated, since a similar memory is listed, or Saved
+	for _, want := range []string{"in your final message", "\n> 🧠💾 **Saved (billing · correction)** — <the fact, in a few words>\n",
+		"\n> 🧠🔄 **Updated (billing · correction · replaces <id8 of the memory it updates>)** — <the fact, in a few words>\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("store answer lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// No similar memory: only the Saved line, in the project the fact went to.
+func TestMCPStoreWithoutSimilarMemoriesHandsBackTheSavedLine(t *testing.T) {
+	cs := mcpSession(t)
+	recallAnswer = `[]`
+	out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "convention", "text": "Commits are squash-merged.", "project": "transverse"})
+	if isErr || !strings.Contains(out, "> 🧠💾 **Saved (") || !strings.Contains(out, " · convention)** — ") || strings.Contains(out, "Updated") || strings.Contains(out, "(billing · ") {
+		t.Errorf("%v\n%s", isErr, out)
+	}
 }
 
 // A memory server started before connect holds the old server's config:
@@ -820,7 +837,8 @@ func TestVerdictRefusesUnshownAndForeignMemories(t *testing.T) {
 	}
 	// all or nothing: a foreign id refuses the call, the allowed one with it
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "cccccccc"))
-	if !isErr || !strings.Contains(out, "cccccccc") || !strings.Contains(out, "other") || !strings.Contains(out, "backsight forget "+foreign) {
+	if !isErr || !strings.Contains(out, "> 🧠⚠️ **Not retired (other · cccccccc)** — ") || !strings.Contains(out, "retire it: `backsight forget "+foreign+"`") ||
+		strings.Contains(out, "(proj · aaaaaaaa)") {
 		t.Errorf("foreign: %v %s", isErr, out)
 	}
 	if !nothingStored(t, home, before) {
@@ -855,7 +873,9 @@ func TestRetirementsAreCappedPerSession(t *testing.T) {
 	retireIn(t, home, "S", feedback.KindHide, "55555555-0000-4000-8000-000000000005")
 	before := retained.Load()
 	// 2 earlier + 2 asked > 3: refused, whatever another session retired
-	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb")); !isErr || !strings.Contains(out, "backsight forget") || !strings.Contains(out, "at most 3 per session (feedback.max_retirements)") {
+	if out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa", "bbbbbbbb")); !isErr || !strings.Contains(out, "at most 3 per session (feedback.max_retirements)") ||
+		!strings.Contains(out, "\n> 🧠⚠️ **Not retired (proj · aaaaaaaa)** — ") || !strings.Contains(out, "\n> 🧠⚠️ **Not retired (proj · bbbbbbbb)** — ") ||
+		!strings.Contains(out, "retire it: `backsight forget "+creditB+"`") {
 		t.Errorf("over the cap: %v %s", isErr, out)
 	}
 	if !nothingStored(t, home, before) {
@@ -1047,7 +1067,7 @@ func retireEvents(t *testing.T, home, kind string) []feedback.Event {
 }
 
 const (
-	wantRestore = "Tell the user which memory you retired, why, and that `backsight forget --restore <id>` undoes it."
+	wantRestore = " in your final message:\n> 🧠"
 	creditC     = "cccccccc-0000-4000-8000-000000000003"
 	obsO        = "0f0f0f0f-0000-4000-8000-00000000000f"
 	srcOne      = "51515151-0000-4000-8000-000000000051"
@@ -1069,6 +1089,9 @@ func TestWrongRawFactIsInvalidated(t *testing.T) {
 	note := noteIDRE.FindString(out)
 	if isErr || !strings.HasPrefix(out, "Retired.") || !strings.Contains(out, wantRestore) || !strings.Contains(out, creditA) || note == "" {
 		t.Fatalf("%v %s", isErr, out)
+	}
+	if want := "\n> 🧠❌ **Wrong, retired (proj · aaaaaaaa)** — <what was wrong, and what shows it> · undo: `backsight forget --restore " + creditA + "`"; !strings.HasSuffix(out, want) {
+		t.Errorf("the line to print, %q, does not end\n%s", want, out)
 	}
 	p := patches()
 	if len(p) != 1 || !strings.Contains(p[0], "/memories/"+creditA+" ") {
@@ -1227,10 +1250,19 @@ func TestObservationWithoutSourcesIsHidden(t *testing.T) {
 	// one with no sources has nothing to retire on the server
 	for _, l := range strings.Split(out, "\n") {
 		switch {
+		case strings.HasPrefix(l, "> "):
 		case strings.Contains(l, obsO) && (!strings.HasPrefix(l, "Hidden") || !strings.Contains(l, "backsight forget "+obsO) || strings.Contains(l, empty)):
 			t.Errorf("unread line %q", l)
 		case strings.Contains(l, empty) && (!strings.HasPrefix(l, "Hidden") || strings.Contains(l, "backsight forget")):
 			t.Errorf("no-sources line %q", l)
+		}
+	}
+	for _, want := range []string{
+		"\n> 🧠🙈 **Hidden on this PC (proj · 0f0f0f0f)** — <what changed, and what shows it> · retire it on the server: `backsight forget " + obsO + "` · undo: `backsight forget --restore " + obsO + "`\n",
+		"\n> 🧠🙈 **Hidden on this PC (proj · 0e0e0e0e)** — <what changed, and what shows it> · undo: `backsight forget --restore " + empty + "`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
 		}
 	}
 	h := retireEvents(t, home, feedback.KindHide)
@@ -1258,9 +1290,12 @@ func TestRetiredAndHiddenAnswerSaysWhich(t *testing.T) {
 	}
 	var hiddenLine string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.Contains(l, obsO) {
+		if strings.Contains(l, obsO) && !strings.HasPrefix(l, "> ") {
 			hiddenLine = l
 		}
+	}
+	if !strings.Contains(out, "\n> 🧠❌ **Wrong, retired (proj · aaaaaaaa)** — ") || !strings.Contains(out, "\n> 🧠🙈 **Hidden on this PC (proj · 0f0f0f0f)** — ") {
+		t.Errorf("lines to print:\n%s", out)
 	}
 	if !strings.HasPrefix(hiddenLine, "Hidden") || strings.Contains(hiddenLine, creditA) {
 		t.Errorf("hidden line %q in\n%s", hiddenLine, out)
@@ -1295,6 +1330,13 @@ func TestPartialRetirementSaysWhatHappened(t *testing.T) {
 	if !strings.Contains(retiredLine, creditA) || strings.Contains(retiredLine, creditB) || !strings.Contains(notLine, creditB) || !strings.Contains(notLine, creditC) || strings.Contains(notLine, creditA) {
 		t.Errorf("retired %q, not retired %q in\n%s", retiredLine, notLine, out)
 	}
+	for _, want := range []string{"\n> 🧠❌ **Wrong, retired (proj · aaaaaaaa)** — ",
+		"\n> 🧠⚠️ **Not retired (proj · bbbbbbbb)** — the server refused a retirement · retire it: `backsight forget " + creditB + "`",
+		"\n> 🧠⚠️ **Not retired (proj · cccccccc)** — the server refused a retirement · retire it: `backsight forget " + creditC + "`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
 	if p := patches(); len(p) != 1 || !strings.Contains(p[0], creditA) {
 		t.Errorf("patches %q", p)
 	}
@@ -1318,7 +1360,7 @@ func TestFailedRetirementRetiresNothingSilently(t *testing.T) {
 	memoryStatus["PATCH "+creditA] = 500
 	showIn(t, home, "S", creditA)
 	out, isErr := call(t, cs, "memory_credit", verdict("wrong", "aaaaaaaa"))
-	if !isErr || !strings.Contains(out, "nothing retired") || !strings.Contains(out, "backsight forget "+creditA) || noteIDRE.FindString(out) == "" ||
+	if !isErr || !strings.Contains(out, "nothing retired") || !strings.Contains(out, "\n> 🧠⚠️ **Not retired (proj · aaaaaaaa)** — the server refused it · retire it: `backsight forget "+creditA+"`") || noteIDRE.FindString(out) == "" ||
 		!strings.Contains(out, "do not call memory_credit again for these memories") || strings.Contains(out, "store it again") {
 		t.Errorf("%v %s", isErr, out)
 	}
@@ -1337,7 +1379,8 @@ func TestOutdatedFactIsListedStaleUntilRestored(t *testing.T) {
 	cs, home := creditSession(t)
 	rawFact(creditA)
 	showIn(t, home, "S", creditA)
-	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); isErr || !strings.HasPrefix(out, "Retired.") {
+	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); isErr || !strings.HasPrefix(out, "Retired.") ||
+		!strings.Contains(out, "\n> 🧠⌛ **Outdated, retired (proj · aaaaaaaa)** — <what changed, and what shows it> · undo: `backsight forget --restore "+creditA+"`") {
 		t.Fatalf("%v %s", isErr, out)
 	}
 	if p := patches(); len(p) != 1 || !strings.Contains(p[0], "/memories/"+creditA+" ") || !strings.Contains(p[0], `"state":"invalidated"`) {

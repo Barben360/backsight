@@ -201,14 +201,19 @@ func recordUpdateCheck(d paths.Dirs, res updateCheckResult, checkErr error) {
 }
 
 // updateBanner is the SessionStart line for a recorded release newer than
-// the running binary (SPEC §11.7), or "". It names the version only: the
+// the running binary (SPEC §11.7), or "". It names the versions only: the
 // release notes are not signed, and the banner goes into every Claude
-// session's context.
+// session. The count of newer releases is the checking binary's, so it is
+// shown only when that binary is the running one.
 func updateBanner(uc *state.UpdateCheck, running string) string {
 	if uc == nil || !release.NewerThan(uc.Latest, running) {
 		return ""
 	}
-	return instructions.UpdateLine(uc.Latest)
+	newer := 0
+	if uc.Installed == running {
+		newer = uc.Newer
+	}
+	return instructions.UpdateLine(running, uc.Latest, newer)
 }
 
 func updateCheckText(res updateCheckResult, err error) string {

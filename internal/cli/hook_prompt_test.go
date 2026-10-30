@@ -641,7 +641,7 @@ func TestVerdictCreditIsJournaled(t *testing.T) {
 			"tool_input":    map[string]any{"ids": []string{"0b4c2a52"}, "verdict": verdict, "correction": "Billing runs PostgreSQL 16.", "evidence": "psql printed 16.4"},
 			"tool_response": []map[string]string{{"type": "text", "text": response}}})
 	}
-	tail := "\nTell the user which memory you retired, why, and that `backsight forget --restore <id>` undoes it."
+	tail := "\nPrint this line in your final message:\n> 🧠⌛ **Outdated, retired (billing · 0b4c2a52)** — <what changed, and what shows it> · undo: `backsight forget --restore " + full + "`"
 	credit("outdated", "Sources: these observations are drawn from the facts below; only facts are retired.\nCall memory_credit again with the verdict, naming the source facts that are wrong (or all of them).")
 	credit("wrong", "retirements: at most 3 per session (feedback.max_retirements), 3 already: nothing stored")
 	if n := len(eventsOf(journalEvents(t, home), "credit")); n != 0 {
