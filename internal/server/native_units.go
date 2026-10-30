@@ -393,7 +393,7 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 	if !apply {
 		return c, nil
 	}
-	if err := os.MkdirAll(n.Root(), 0o755); err != nil {
+	if err := n.ensureRoot(); err != nil {
 		return c, err
 	}
 	if err := n.ensureHome(); err != nil {
@@ -1102,6 +1102,8 @@ func (n Native) createInstance(ctx context.Context) error {
 		"LD_LIBRARY_PATH=" + shellWord(filepath.Join(inst, "lib")) + " " + shellWord(filepath.Join(inst, "bin", "psql")) +
 		" -h 127.0.0.1 -p " + p + " -U postgres -d postgres -v ON_ERROR_STOP=1 -q -f - && " +
 		pg0 + " stop --name " + pgInstance + " >/dev/null"
+	// $ doubled: the service manager expands variables in a transient
+	// unit's command line and turns $$ into $ (as in VerifyDump).
 	args := []string{"--user", "--wait", "--collect", "--pipe", "--quiet", "--unit", n.project() + "-db-init", "-p", "KillMode=control-group",
 		"-E", "HOME=" + n.Home(), "-E", "PGPASSWORD=postgres", "-E", "TMPDIR=" + tmp,
 		"/bin/sh", "-c", strings.ReplaceAll(script, "$", "$$")}

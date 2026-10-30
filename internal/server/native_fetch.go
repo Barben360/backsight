@@ -191,7 +191,7 @@ func (n Native) fetchUV(ctx context.Context, w io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(w, "Downloading %s (about %d MB)\n", NativeUV, NativeUVMB)
-	if err := os.MkdirAll(n.Root(), 0o755); err != nil {
+	if err := n.ensureRoot(); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(n.Root(), ".uv-download-*")
@@ -267,6 +267,15 @@ func extractUV(archive io.Reader, dst string) error {
 
 // ensureHome creates the units' HOME, private: the tools run with it, and
 // pg0 keeps its instance there.
+// ensureRoot makes Root() this user's alone (0700), as home/ is: it holds
+// server.env, the database and its identity.
+func (n Native) ensureRoot() error {
+	if err := os.MkdirAll(n.Root(), 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(n.Root(), 0o700)
+}
+
 func (n Native) ensureHome() error {
 	if err := os.MkdirAll(n.Home(), 0o700); err != nil {
 		return err

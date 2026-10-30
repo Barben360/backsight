@@ -274,6 +274,10 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 		if st.Mode().Perm() != 0o755 {
 			t.Errorf("uv mode %v, want 0755", st.Mode().Perm())
 		}
+		// Final review 8: the native root is the user's alone, as home/.
+		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
+			t.Errorf("the native root %s: %v %v, want 0700", n.Root(), st.Mode(), err)
+		}
 		if b, _ := os.ReadFile(n.UV()); !bytes.Equal(b, uvBin) {
 			t.Errorf("uv holds %q, want the archive's uv", b)
 		}

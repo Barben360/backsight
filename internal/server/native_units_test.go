@@ -1115,3 +1115,45 @@ func TestNativeStartRefusesAnIncompleteVenv(t *testing.T) {
 		})
 	}
 }
+
+// Final review 8: Write makes the native root the user's alone (0700), as
+// home/: it holds server.env, the database and its identity. A root an
+// earlier build made 0755 is tightened.
+func TestNativeWriteMakesTheRootPrivate(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		n, _, _ := nativeFixture(t, secrets)
+		if err := os.RemoveAll(n.Root()); err != nil {
+			t.Fatal(err)
+		}
+		if existing {
+			if err := os.MkdirAll(n.Root(), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(n.Root(), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rendered(t, n, secrets)
+		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
+			t.Errorf("existing %v: the native root %v %v, want 0700", existing, st.Mode(), err)
+		}
+	}
+}
+
+// Final review 10: the service manager expands $VAR and turns $$ into $
+// in a transient unit's command line (systemd 262: `systemd-run ... sh -c
+// 'echo "[$$X]"'` printed "[]"), so the db-init script's every $ is
+// doubled: a $ in the native root's path reaches sh as written.
+func TestNativeDoublesTheDollarsOfItsTransientScripts(t *testing.T) {
+	n, _, tools := nativeFixture(t, secrets)
+	n.Cfg.Server.ComposeDir = filepath.Join(t.TempDir(), "a$HOME-dir")
+	installed(t, n, secrets)
+	if err := n.createInstance(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c := tools.Calls[len(tools.Calls)-1]
+	script := c.Args[len(c.Args)-1]
+	if c.Path != "systemd-run" || !strings.Contains(script, "a$$HOME-dir") || strings.Contains(strings.ReplaceAll(script, "$$", ""), "$") {
+		t.Errorf("the script's $ are not all doubled: %s", script)
+	}
+}

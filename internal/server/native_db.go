@@ -238,6 +238,11 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 		" --pwfile=" + shellWord(pwFile) + " -A scram-sha-256 -E UTF8 --no-locale >/dev/null && rm -f " + shellWord(pwFile) +
 		" && exec " + shellWord(filepath.Join(inst, "bin", "postgres")) + " -D " + shellWord(data) + " -p " + strconv.Itoa(port) +
 		" -c listen_addresses=127.0.0.1 -c unix_socket_directories="
+	// The service manager expands ${VAR} and $VAR in a transient unit's
+	// command line, as in ExecStart=, and turns $$ into $ (systemd-run(1),
+	// --expand-environment, on by default): every $ is doubled so the
+	// script reaches sh as written. It uses no variable today; a $ in a
+	// path would otherwise be expanded away.
 	args := []string{"--user", "--collect", "--quiet", "--unit", unit, "-p", "KillMode=control-group",
 		"-p", "RuntimeMaxSec=" + strconv.Itoa(verifyMaxSec), "-p", "UnsetEnvironment=" + unsetKeys,
 		"-E", "HOME=" + home, "-E", "LD_LIBRARY_PATH=" + filepath.Join(inst, "lib"), "-E", "PATH=/usr/bin:/bin", "-E", "LANG=C.UTF-8",
