@@ -482,3 +482,44 @@ func TestExposeRefusesASymlinkOut(t *testing.T) {
 		t.Errorf("changed: config %v, %d starts", !bytes.Equal(fx.config(t), before), len(fx.dk.ups))
 	}
 }
+
+// The native runtime serves this PC only (loopback, 0078's non-goal):
+// expose --private refuses before anything is written, naming the way
+// to private exposure; config.toml, server.env and both units stay
+// byte-identical and the units are left alone.
+func TestServerExposeRefusedOnNative(t *testing.T) {
+	home, n, _, sys, _ := nativeHost(t)
+	files := []string{pathsOf(home).ConfigFile(), n.EnvFile(), unitPath(home, n.DBUnit()), unitPath(home, n.ServerUnit())}
+	before := map[string]string{}
+	for _, p := range files {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[p] = string(raw)
+	}
+	old := interfaceAddrs
+	interfaceAddrs = func() ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("100.101.1.2"), Mask: net.CIDRMask(32, 32)}}, nil
+	}
+	t.Cleanup(func() { interfaceAddrs = old })
+	sys.calls = nil
+	token := filepath.Join(t.TempDir(), "join.token")
+	code, out, errOut := run(t, "server", "expose", "--private", "100.101.1.2", "--out", token)
+	want := "the native runtime serves this PC only (loopback) in this release: private exposure needs the docker runtime (backsight server runtime switch docker)"
+	if code != output.Blocked || !strings.Contains(errOut, want) {
+		t.Errorf("exit %d\n%s%s", code, out, errOut)
+	}
+	for _, p := range files {
+		if raw, _ := os.ReadFile(p); string(raw) != before[p] {
+			t.Errorf("%s changed:\n%s", p, raw)
+		}
+	}
+	if len(sys.calls) != 0 || onDisk(token) {
+		t.Errorf("acted: %q, token written %v", sys.calls, onDisk(token))
+	}
+	// --loopback stays open on native: it is what native serves.
+	if code, out, errOut := run(t, "server", "expose", "--loopback", "--plan"); code != output.OK {
+		t.Errorf("--loopback on native: exit %d\n%s%s", code, out, errOut)
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -29,10 +30,20 @@ type sysCLI interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-type execSys struct{}
+// execSys runs the system's service tools; ownGroup puts each in its own
+// process group (the native runtime's rollback: a Ctrl-C at the terminal
+// must not kill its systemctl).
+type execSys struct{ ownGroup bool }
 
-func (execSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+// InOwnGroup is s with its children in their own process group.
+func (s execSys) InOwnGroup() server.SysRunner { s.ownGroup = true; return s }
+
+func (s execSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if s.ownGroup {
+		server.OwnGroup(cmd)
+	}
+	return cmd.CombinedOutput()
 }
 
 var sysRunner sysCLI = execSys{}
@@ -62,23 +73,12 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 		return scheduler.Plan{}, &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	o := scheduler.Options{Shim: filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS)), Home: home, UID: os.Getuid(),
-		LogDir: filepath.Join(d.State, "logs"), Env: map[string]string{}, Name: cfg.Server.Project}
-	for _, k := range []string{"BACKSIGHT_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "PATH"} {
-		if v := os.Getenv(k); v != "" {
-			o.Env[k] = v
-		}
+		LogDir: filepath.Join(d.State, "logs"), Env: directoryEnv(), Name: cfg.Server.Project}
+	if v := os.Getenv("PATH"); v != "" {
+		o.Env["PATH"] = v
 	}
 	if schedulerGOOS == "linux" {
-		// The user manager reads units from its own XDG_CONFIG_HOME, which
-		// a shell setting does not change.
-		o.UnitDir = filepath.Join(home, ".config", "systemd", "user")
-		if out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment"); err == nil {
-			for _, l := range strings.Split(string(out), "\n") {
-				if v, ok := strings.CutPrefix(strings.TrimSpace(l), "XDG_CONFIG_HOME="); ok && v != "" {
-					o.UnitDir = filepath.Join(v, "systemd", "user")
-				}
-			}
-		}
+		o.UnitDir = userUnitDir(ctx, home)
 	}
 	for _, f := range tweak {
 		f(&o)
@@ -88,6 +88,39 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 		return p, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	return p, nil
+}
+
+// directoryEnv are the directories the install resolved (BACKSIGHT_HOME,
+// XDG_*_HOME), carried into what the user manager runs so that it finds
+// the same config and state as the shell.
+func directoryEnv() map[string]string {
+	env := map[string]string{}
+	for _, k := range []string{"BACKSIGHT_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"} {
+		if v := os.Getenv(k); v != "" {
+			env[k] = v
+		}
+	}
+	return env
+}
+
+// userUnitDir is where the systemd user manager reads units: its own
+// XDG_CONFIG_HOME, which a shell setting does not change, else ~/.config.
+func userUnitDir(ctx context.Context, home string) string {
+	dir := filepath.Join(home, ".config", "systemd", "user")
+	if out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment"); err == nil {
+		for _, l := range strings.Split(string(out), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(l), "XDG_CONFIG_HOME="); ok && v != "" {
+				dir = filepath.Join(v, "systemd", "user")
+			}
+		}
+	}
+	return dir
+}
+
+// unitDirAndEnv are the scheduler's unit directory and directories, which
+// the native runtime's units share.
+func unitDirAndEnv(ctx context.Context, home string) (string, map[string]string) {
+	return userUnitDir(ctx, home), directoryEnv()
 }
 
 func cmdLine(c []string) string { return strings.Join(c, " ") }
@@ -340,8 +373,7 @@ func noBusActions(d paths.Dirs) []output.Action {
 }
 
 // noBusHint says where systemd's user manager can be reached.
-const noBusHint = "no systemd user session is reachable from this shell: run it from a login session of this user (an ssh login, not su or sudo); " +
-	"on a machine without one (a container), setup takes --answer scheduler=off"
+const noBusHint = setup.NoUserBus + "; on a machine without one (a container), setup takes --answer scheduler=off"
 
 // noUserBus: systemctl --user found no user manager to talk to (a
 // container without systemd, a shell started by su or sudo).

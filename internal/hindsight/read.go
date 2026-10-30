@@ -183,13 +183,19 @@ func (c *Client) Entities(ctx context.Context, bank, tag string, limit int) ([]E
 // Recent lists up to limit memories tagged tag, latest first by event time
 // (mentioned_at): after a backfill, updated_at is when the server
 // consolidated, all on one day. Memories with no event time are listed by
-// updated_at when none has one. factType "" lists every type.
+// updated_at when none has one. factType "" lists every type; tag "" every
+// memory of the bank, whatever its tags (an empty tag filter would match
+// none: ruling R14).
 func (c *Client) Recent(ctx context.Context, bank, tag, factType string, limit int) ([]Memory, error) {
 	list := func(field string) ([]Memory, error) {
 		var out struct {
 			Items []Memory `json:"items"`
 		}
-		q := url.Values{"tags": {tag}, "tags_match": {"any_strict"}, "time_field": {field}, "limit": {strconv.Itoa(limit)}}
+		q := url.Values{"time_field": {field}, "limit": {strconv.Itoa(limit)}}
+		if tag != "" {
+			q.Set("tags", tag)
+			q.Set("tags_match", "any_strict")
+		}
 		if factType != "" {
 			q.Set("type", factType)
 		}

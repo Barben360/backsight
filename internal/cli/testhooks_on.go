@@ -16,3 +16,12 @@ func smokeHook() error {
 	}
 	return nil
 }
+
+// switchFailHook fails the runtime switch at step when
+// BACKSIGHT_TEST_FAIL_SWITCH names it: CI's proof of a rolled-back switch.
+func switchFailHook(step string) error {
+	if os.Getenv("BACKSIGHT_TEST_FAIL_SWITCH") == step {
+		return errors.New("test hook: BACKSIGHT_TEST_FAIL_SWITCH=" + step)
+	}
+	return nil
+}

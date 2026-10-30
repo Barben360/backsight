@@ -4,14 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,10 +23,11 @@ import (
 )
 
 // Runtime runs the local Hindsight server (decision 0070). Docker Compose
-// is the only implementation; a native one (Hindsight from PyPI on an
-// embedded Postgres, under the OS's service manager, M7) comes behind the
-// same interface. Every command that installs, starts, stops, inspects or
-// deletes the server goes through it.
+// is one implementation; the native one (Hindsight from PyPI on pg0's
+// Postgres, under systemd user units, decision 0078) comes behind the same
+// interface. Every command that installs, starts, stops, inspects or
+// deletes the server, or reaches its database or its files, goes through
+// it.
 type Runtime interface {
 	// Kind names the runtime ("docker").
 	Kind() string
@@ -30,6 +35,10 @@ type Runtime interface {
 	// Hindsight image reference (the binary's pin, or config's digest),
 	// unless WithVersion set another.
 	Version() string
+	// HindsightVersion is the Hindsight release Version runs ("1.1.0"),
+	// what runtimes compare across; "" when Version names none (an image
+	// by digest alone).
+	HindsightVersion() string
 	// WithVersion is the same runtime deploying version v ("": the pin).
 	WithVersion(v string) Runtime
 	// Deployed is the version the server's files run now, "" when there
@@ -51,6 +60,9 @@ type Runtime interface {
 	FetchAll(ctx context.Context) error
 	// Start starts the server as written and waits until it runs.
 	Start(ctx context.Context) error
+	// StartDatabase starts the database alone and waits until it runs, the
+	// API not started (a restore into a server switched to).
+	StartDatabase(ctx context.Context) error
 	// StopAPI stops the API server only; the database keeps running.
 	StopAPI(ctx context.Context) error
 	// Stop stops the whole server and keeps its data.
@@ -87,6 +99,12 @@ type Runtime interface {
 	Orchestrator(ctx context.Context) (string, error)
 	// Database is the server's Postgres.
 	Database() Database
+	// RenameBank runs Hindsight's own rename (hindsight-admin rename-bank)
+	// with the server's own installation; dryRun rolls it back.
+	RenameBank(ctx context.Context, from, to string, dryRun bool) ([]byte, error)
+	// SecretFiles are the files Write installs that hold the server's keys:
+	// what report and redaction scrub.
+	SecretFiles() []string
 	// VerifyDump restores a dump into a throwaway database and counts the
 	// rows of tables (backup verify, the upgrade's safety backup).
 	VerifyDump(ctx context.Context, dump string, tables []string) (map[string]int64, error)
@@ -104,6 +122,39 @@ type Database interface {
 	RemoveStaleDumps(ctx context.Context) error
 	DocumentMetadata(ctx context.Context, bank, id string) (map[string]string, error)
 	BankIDs(ctx context.Context) ([]string, error)
+	// PendingOperations counts the operations of banks the server has not
+	// finished: a bank rename waits for them.
+	PendingOperations(ctx context.Context, banks []string) (int, error)
+}
+
+// Pruner is a runtime that keeps several versions installed side by side
+// (native: one virtual environment per version) and can remove all but
+// keep.
+type Pruner interface {
+	PruneVersions(keep ...string) error
+}
+
+// Sizer is a runtime that can tell how much disk its server's data takes.
+type Sizer interface {
+	DataSize(ctx context.Context) (int64, error)
+}
+
+// Cleaner is what server runtime clean shows of a runtime switched from
+// (decision 0078, ruling R43): everything its Delete removes, and how
+// much disk that is.
+type Cleaner interface {
+	// Leftover reports whether anything of the runtime is on this machine.
+	Leftover(ctx context.Context) (bool, error)
+	// CleanWhat names everything Delete removes.
+	CleanWhat() string
+	// CleanSize is the disk all of it takes.
+	CleanSize(ctx context.Context) (int64, error)
+}
+
+// Creator is a runtime that creates its database at its first start only
+// when told (native, ruling R35): an install or a switch to it.
+type Creator interface {
+	AllowCreate() Runtime
 }
 
 // Downloader is a runtime that can say what its first start still has
@@ -124,13 +175,23 @@ const (
 	ModelsMB         = 1200
 )
 
-// DownloadMB is about how much images and models download.
+// DownloadMB is about how much images (a native runtime's items) and
+// models download.
 func DownloadMB(images []string, models bool) int {
 	mb := 0
 	for _, im := range images {
-		if im == PostgresImage {
+		switch im {
+		case PostgresImage:
 			mb += PostgresImageMB
-		} else {
+		case NativeUV:
+			mb += NativeUVMB
+		case NativePython:
+			mb += NativePythonMB
+		case NativeWheels:
+			mb += NativeWheelsMB
+		case NativeModels:
+			mb += ModelsMB
+		default:
 			mb += HindsightImageMB
 		}
 	}
@@ -298,6 +359,9 @@ func (d Docker) Version() string {
 
 func (d Docker) WithVersion(v string) Runtime { d.Image = v; return d }
 
+// HindsightVersion is the tag of the image Version names.
+func (d Docker) HindsightVersion() string { return HindsightVersionOf(d.Version()) }
+
 // Deployed reads the hindsight service's image from compose.yaml.
 func (d Docker) Deployed() (string, error) {
 	raw, err := os.ReadFile(filepath.Join(d.Compose.Dir, "compose.yaml"))
@@ -347,6 +411,9 @@ func (d Docker) FetchAll(ctx context.Context) error { return d.Compose.Pull(ctx)
 
 func (d Docker) Start(ctx context.Context) error { return d.Compose.Up(ctx) }
 
+// StartDatabase is compose up of the db service alone.
+func (d Docker) StartDatabase(ctx context.Context) error { return d.Compose.Up(ctx, "db") }
+
 func (d Docker) StopAPI(ctx context.Context) error { return d.Compose.Stop(ctx, "hindsight") }
 
 func (d Docker) Stop(ctx context.Context) error { return d.Compose.Stop(ctx) }
@@ -367,24 +434,38 @@ func (d Docker) StopCmd() string {
 // without the named volumes, removes each volume backsight's compose.yaml
 // declares (the database, the model cache), then compose.yaml and .env.
 // A volume only the user's compose.override.yaml declares stays, and so
-// does the override (decision 0067 block 3 review).
+// does the override (decision 0067 block 3 review). Without compose.yaml
+// (a switch's leftover volumes, which Leftover reports), Compose cannot
+// run: the project's containers go by their compose label, and the
+// volumes backsight's compose.yaml declares by their names.
 func (d Docker) Delete(ctx context.Context) error {
 	raw, err := os.ReadFile(filepath.Join(d.Compose.Dir, "compose.yaml"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	noFile := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !noFile {
 		return err
 	}
 	// The data goes whatever the file says.
 	volumes := []string{dataVolume}
-	for _, v := range DeclaredVolumes(raw) {
+	declared := DeclaredVolumes(raw)
+	if noFile {
+		declared = []string{modelsVolume}
+	}
+	for _, v := range declared {
 		if !slices.Contains(volumes, v) {
 			volumes = append(volumes, v)
 		}
 	}
-	if _, err := d.Compose.run(ctx, "rm", "--stop", "--force", "-v"); err != nil {
-		return err
-	}
-	if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
-		return err
+	if noFile {
+		if err := d.removeContainers(ctx); err != nil {
+			return err
+		}
+	} else {
+		if _, err := d.Compose.run(ctx, "rm", "--stop", "--force", "-v"); err != nil {
+			return err
+		}
+		if _, err := d.Compose.run(ctx, "down", "--remove-orphans"); err != nil {
+			return err
+		}
 	}
 	for _, v := range volumes {
 		if err := d.Compose.RemoveVolume(ctx, v); err != nil {
@@ -395,6 +476,31 @@ func (d Docker) Delete(ctx context.Context) error {
 		if err := os.Remove(filepath.Join(d.Compose.Dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+	}
+	return nil
+}
+
+// removeContainers removes the project's containers, found by the label
+// Compose gives them, with their anonymous volumes: Delete's way without
+// compose.yaml.
+func (d Docker) removeContainers(ctx context.Context) error {
+	args := []string{"ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=" + d.Compose.project()}
+	var out []byte
+	var err error
+	if r, ok := d.Compose.Runner.(StdoutRunner); ok { // a warning on stderr is no container id
+		out, err = r.RunStdout(ctx, args...)
+	} else {
+		out, err = d.Compose.Runner.Run(ctx, args...)
+	}
+	if err != nil {
+		return fmt.Errorf("docker ps: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return nil
+	}
+	if out, err := d.Compose.Runner.Run(ctx, append([]string{"rm", "--force", "--volumes"}, ids...)...); err != nil {
+		return fmt.Errorf("docker rm: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -467,6 +573,97 @@ func (d Docker) Orchestrator(ctx context.Context) (string, error) {
 }
 
 func (d Docker) Database() Database { return DB{Compose: d.Compose} }
+
+// RenameBank runs the rename in the hindsight container.
+func (d Docker) RenameBank(ctx context.Context, from, to string, dryRun bool) ([]byte, error) {
+	return d.Compose.RenameBank(ctx, from, to, dryRun)
+}
+
+// SecretFiles is the project's .env.
+func (d Docker) SecretFiles() []string { return []string{filepath.Join(d.Compose.Dir, ".env")} }
+
+var _ Cleaner = Docker{}
+
+// Leftover: compose.yaml, or the database volume. A machine without
+// Docker has none of it.
+func (d Docker) Leftover(ctx context.Context) (bool, error) {
+	if fileExists(filepath.Join(d.Compose.Dir, "compose.yaml")) {
+		return true, nil
+	}
+	ok, err := d.DataExists(ctx)
+	if errors.Is(err, exec.ErrNotFound) {
+		return false, nil
+	}
+	return ok, err
+}
+
+// CleanWhat names what Delete removes: both volumes, the containers and
+// backsight's compose files (a user's override stays).
+func (d Docker) CleanWhat() string {
+	p := d.Compose.project()
+	return "the Docker server of project " + p + ": the database volume " + p + "_" + dataVolume + ", the model cache " + p + "_" + modelsVolume +
+		", the containers, and compose.yaml and .env in " + d.Compose.Dir
+}
+
+// CleanSize is both volumes' size.
+func (d Docker) CleanSize(ctx context.Context) (int64, error) { return d.DataSize(ctx) }
+
+var _ Sizer = Docker{}
+
+// DataSize adds up the sizes docker system df reports for the project's
+// two volumes (the database, the embedding models); a volume not created
+// yet holds nothing.
+func (d Docker) DataSize(ctx context.Context) (int64, error) {
+	args := []string{"system", "df", "-v", "--format", "{{json .Volumes}}"}
+	var out []byte
+	var err error
+	if r, ok := d.Compose.Runner.(StdoutRunner); ok { // a warning on stderr is no JSON
+		out, err = r.RunStdout(ctx, args...)
+	} else {
+		out, err = d.Compose.Runner.Run(ctx, args...)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("docker system df: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	var vols []struct{ Name, Size string }
+	if err := json.Unmarshal(bytes.TrimSpace(out), &vols); err != nil {
+		return 0, fmt.Errorf("docker system df: %w: %q", err, out)
+	}
+	ours := []string{d.Compose.project() + "_" + dataVolume, d.Compose.project() + "_" + modelsVolume}
+	var total int64
+	for _, v := range vols {
+		if !slices.Contains(ours, v.Name) {
+			continue
+		}
+		n, ok := decimalSize(v.Size)
+		if !ok {
+			return 0, fmt.Errorf("docker cannot tell the size of volume %s (%q)", v.Name, v.Size)
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// dockerSize is a size as Docker prints it: decimal units, 4 significant
+// digits ("48.25MB", "3.057GB", "0B").
+var dockerSize = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*([kKMGTPE]?)B$`)
+
+// decimalSize reads a size Docker printed, in bytes.
+func decimalSize(s string) (int64, bool) {
+	m := dockerSize.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	exp := 0 // bytes
+	if m[2] != "" {
+		exp = strings.Index("kMGTPE", strings.ReplaceAll(m[2], "K", "k")) + 1
+	}
+	return int64(math.Round(f * math.Pow(1000, float64(exp)))), true
+}
 
 func (d Docker) VerifyDump(ctx context.Context, dump string, tables []string) (map[string]int64, error) {
 	return RestoreCounts(ctx, d.Compose.Runner, dump, tables)

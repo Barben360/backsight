@@ -37,6 +37,7 @@ Defaults below are written in TOML. `<data>` stands for backsight's data directo
 | `server.compose_dir` | `"<data>/server"` | Where the server's `compose.yaml`, `.env` and your own `compose.override.yaml` live. An absolute path. |
 | `server.project` | `"backsight"` | The Docker Compose project name, and the prefix of the server's volumes. Another name runs a second install beside the first (lowercase letters, digits, `-` and `_`). |
 | `server.digest` | `""` | Empty: the Hindsight image this release pins ([compatibility.md](compatibility.md)). A `sha256:…` digest holds another image of `ghcr.io/vectorize-io/hindsight`; you then own that choice. |
+| `server.runtime` | `""` | What runs the server when `server.mode = "local"`. Empty (or `"docker"`): Docker Compose, the default. `"native"`: Hindsight from PyPI on pg0's Postgres, under two systemd user units (`<project>-db.service` and `<project>-server.service`), everything else under `<server.compose_dir>/native`. Native runs on Linux x86_64 (linux-amd64) only, and serves this PC only (loopback: `network.exposure = "private"` and `server.role = "server"` are refused with it). Setup sets it, or switching the runtime of an existing install, which moves the memory across; never set it by hand. |
 
 ## `[client]`: Claude Code's own settings
 

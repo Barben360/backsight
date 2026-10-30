@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/backup"
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
@@ -44,8 +45,9 @@ func newServerUpgradeCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Move the local server to the version this binary pins, after a verified safety backup; roll back on any failure",
-		Long: "Upgrade compares the server version deployed (the Hindsight image in compose.yaml) with this binary's pin. When they differ it takes " +
-			"the maintenance lock and server.lock, pulls the new image (a failure changes nothing), makes a safety backup and verifies it in a " +
+		Long: "Upgrade compares the server version deployed (the Hindsight image in compose.yaml; on native, the venv the server unit runs) with this " +
+			"binary's pin. When they differ it takes the maintenance lock and server.lock, pulls the new image (on native, installs the new venv " +
+			"beside the running one; a failure changes nothing), makes a safety backup and verifies it in a " +
 			"throwaway database, marks an upgrade in progress (every client holds its sends), deploys and starts the new version, waits for " +
 			"health and runs a recall. Any failure from the deploy on restores the safety dump into the previous version through restore's " +
 			"rollback (a new restore epoch, exit 30); a rollback that fails exits 20 and doctor names the way back. It never downgrades, and " +
@@ -82,7 +84,7 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 		return blocked(err)
 	}
 	if res.Current == "" {
-		return &output.Error{Code: output.Blocked, Message: "no server is installed here (no compose.yaml in " + cfg.Server.ComposeDir + "): run backsight server install"}
+		return &output.Error{Code: output.Blocked, Message: "no server is installed here (" + noServerFiles(rt, cfg) + "): run backsight server install"}
 	}
 	cmp, comparable := rt.ComparePins(res.Current, res.Target)
 	if comparable && cmp == 0 {
@@ -103,11 +105,18 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	if held := state.Inspect(d.MaintenanceLock()); held != nil && !held.Stale && !heldByUpdate(held) {
 		return nothingChanged("maintenance in progress: %s", held.Error())
 	}
+	// Native installs the new venv beside the running one (decision 0078);
+	// Docker pulls the image.
+	fetchStep, fetchPlan, fetchWhat, fetched := "pull", "would download "+res.Target, "download "+res.Target, res.Target
+	if n, ok := rt.(server.Native); ok {
+		fetchStep, fetchPlan = "install", "would install the venv "+res.Target+" beside "+res.Current
+		fetchWhat, fetched = "install the venv "+res.Target, n.VenvDir(res.Target)+", beside "+res.Current
+	}
 	add("check", map[bool]string{true: "planned", false: "done"}[plan], res.Current+" → "+res.Target)
 	if plan {
 		for _, s := range [][2]string{
 			{"lock", "would take the maintenance lock and server.lock until the end (hooks queue, jobs skip)"},
-			{"pull", "would download " + res.Target + " (a failure changes nothing)"},
+			{fetchStep, fetchPlan + " (a failure changes nothing)"},
 			{"safety backup", "would back the server up and verify the archive in a throwaway database"},
 			{"deploy", "would mark an upgrade in progress (clients hold their sends) and deploy " + res.Target},
 			{"start", "would start it (Hindsight migrates its database on start)"},
@@ -166,11 +175,13 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	}
 
 	// 1. The new version on disk first: a bad pin fails here, unchanged.
+	// On native, the new venv goes beside the running one (ruling R2: built
+	// where it runs from, marked complete last), which keeps running.
 	if err := rt.Fetch(ctx); err != nil {
-		add("pull", "failed", server.Redact(err.Error(), sec))
-		return nothingChanged("%s", server.Redact("cannot download "+res.Target+" ("+err.Error()+")", sec))
+		add(fetchStep, "failed", server.Redact(err.Error(), sec))
+		return nothingChanged("%s", server.Redact("cannot "+fetchWhat+" ("+err.Error()+")", sec))
 	}
-	add("pull", "done", res.Target)
+	add(fetchStep, "done", fetched)
 
 	// 2. The safety backup, its clear dump verified and kept to roll back to.
 	work, done, err := backup.VerifyDir(filepath.Join(d.State, "staging"))
@@ -254,7 +265,23 @@ func runServerUpgrade(ctx context.Context, res *serverUpgradeResult, plan, allow
 	if err != nil {
 		res.Warnings = append(res.Warnings, "pruning the backups: "+err.Error())
 	}
+	// Native: the venvs older than the previous one go (decision 0078); the
+	// previous one stays for a rollback by hand.
+	if p, ok := rt.(server.Pruner); ok {
+		if err := p.PruneVersions(res.Target, res.Current); err != nil {
+			res.Warnings = append(res.Warnings, "removing the server versions older than "+res.Current+": "+err.Error())
+		}
+	}
 	return nil
+}
+
+// noServerFiles names what a server install would have written: the
+// server unit on native, compose.yaml on Docker (ruling R26).
+func noServerFiles(rt server.Runtime, cfg config.Config) string {
+	if n, ok := rt.(server.Native); ok {
+		return "no " + n.ServerUnit() + " in " + n.UnitDir
+	}
+	return "no compose.yaml in " + cfg.Server.ComposeDir
 }
 
 func serverUpgradeText(r serverUpgradeResult) string {

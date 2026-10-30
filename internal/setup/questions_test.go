@@ -368,3 +368,57 @@ func TestSubscriptionQuestionIsTheBuildersOne(t *testing.T) {
 		t.Errorf("local wording names a host: %s", local.Prompt)
 	}
 }
+
+// runtime is a hidden answer like role (ruling R13): native when answered
+// or saved, Docker otherwise, and Docker leaves no trace in the answers
+// (its config and answers stay what they were before the native runtime).
+func TestRuntimeAnswer(t *testing.T) {
+	base := map[string]string{"provider": "deepseek"}
+	with := func(k, v string) map[string]string {
+		m := map[string]string{k: v}
+		for bk, bv := range base {
+			m[bk] = bv
+		}
+		return m
+	}
+	if _, extra, err := Resolve(Inputs{Answers: base}); err != nil || extra["runtime"] != "" {
+		t.Errorf("default: %q %v", extra["runtime"], err)
+	}
+	if _, extra, err := Resolve(Inputs{Answers: with("runtime", "docker")}); err != nil || extra["runtime"] != "" {
+		t.Errorf("docker answered: %q %v", extra["runtime"], err)
+	}
+	if _, extra, err := Resolve(Inputs{Answers: with("runtime", "native")}); err != nil || extra["runtime"] != "native" {
+		t.Errorf("native answered: %q %v", extra["runtime"], err)
+	}
+	if _, extra, err := Resolve(Inputs{Answers: base, Saved: map[string]string{"runtime": "native"}}); err != nil || extra["runtime"] != "native" {
+		t.Errorf("native saved: %q %v", extra["runtime"], err)
+	}
+	var ue *UsageError
+	if _, _, err := Resolve(Inputs{Answers: with("runtime", "podman")}); !errors.As(err, &ue) || !strings.Contains(ue.Msg, "runtime=podman: docker or native") {
+		t.Errorf("podman: %v", err)
+	}
+	both := with("runtime", "native")
+	both["role"] = config.RoleServer
+	if _, _, err := Resolve(Inputs{Answers: both}); !errors.As(err, &ue) ||
+		ue.Msg != "a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there" {
+		t.Errorf("native server-only host: %v", err)
+	}
+}
+
+// An installed server's runtime is config.toml's: another answer is
+// refused with the command that moves the memory.
+func TestRuntimeAnswerAgainstAConfig(t *testing.T) {
+	d := paths.Dirs{Config: "/c", Data: "/d", State: "/s"}
+	cfg := config.Default(d, "/h")
+	var ue *UsageError
+	if _, _, err := Resolve(Inputs{Config: &cfg, Answers: map[string]string{"runtime": "native"}}); !errors.As(err, &ue) || !strings.Contains(ue.Msg, "backsight server runtime switch native") {
+		t.Errorf("native over docker: %v", err)
+	}
+	cfg.Server.Runtime = "native"
+	if _, extra, err := Resolve(Inputs{Config: &cfg, Answers: map[string]string{}}); err != nil || extra["runtime"] != "native" {
+		t.Errorf("a native config: %q %v", extra["runtime"], err)
+	}
+	if _, _, err := Resolve(Inputs{Config: &cfg, Answers: map[string]string{"runtime": "docker"}}); !errors.As(err, &ue) || !strings.Contains(ue.Msg, "backsight server runtime switch docker") {
+		t.Errorf("docker over native: %v", err)
+	}
+}

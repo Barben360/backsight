@@ -99,6 +99,12 @@ type Env struct {
 	// private address does not answer, and its fix when not the usual one
 	// ("": nothing to add; nil: not asked).
 	ExposureDetail func() (detail, fix string)
+	// Native reads the native runtime's guards (nil: not asked); doctor
+	// asks only an install whose config.toml names the native runtime.
+	Native func(ctx context.Context) (NativeFacts, error)
+	// Switch is the last runtime switch, nil for none, and the other
+	// runtime's data kept since with its size ("" none); nil: not asked.
+	Switch func() (*state.RuntimeSwitch, string)
 	InstallProbes
 }
 
@@ -142,7 +148,20 @@ func Run(ctx context.Context, env Env) Report {
 	if env.SelfCheck != nil {
 		add(checkBinary(env.SelfCheck()))
 	}
-	add(checkDocker(ctx, env))
+	native := cfgErr == nil && cfg.Server.Mode == "local" && cfg.RuntimeKind() == "native"
+	if native {
+		add(Check{ID: "docker", Status: Info, Summary: "not used by the native runtime"})
+		if env.Native != nil {
+			add(nativeChecks(ctx, env.Native)...)
+		}
+	} else {
+		add(checkDocker(ctx, env))
+	}
+	if env.Switch != nil {
+		if rs, kept := env.Switch(); rs != nil {
+			add(checkRuntimeSwitch(rs, kept))
+		}
+	}
 
 	loc := claudecode.Locate(env.Home, env.Getenv)
 	ref, refErr := reference.Discover(env.Home, loc)

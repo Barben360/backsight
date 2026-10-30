@@ -172,7 +172,7 @@ func reportScrubber(d paths.Dirs, home string) *report.Scrubber {
 			sc.Root(r.dir, r.with)
 		}
 	}
-	for _, v := range secretValues(d.SecretsFile(), filepath.Join(cfg.Server.ComposeDir, ".env"), true) {
+	for _, v := range secretValues(d.SecretsFile(), runtimeFor(cfg).SecretFiles(), true) {
 		sc.Secret(v)
 	}
 	if h, err := hostname(); err == nil {
@@ -367,18 +367,18 @@ func localSecretValues() []string {
 		return nil
 	}
 	cfg, _ := config.Load(d.ConfigFile(), d, home) // on error: the defaults
-	return secretValues(d.SecretsFile(), filepath.Join(cfg.Server.ComposeDir, ".env"), false)
+	return secretValues(d.SecretsFile(), runtimeFor(cfg).SecretFiles(), false)
 }
 
 // envSecretKey names the .env entries that hold a secret even unquoted.
 var envSecretKey = regexp.MustCompile(`(?i)(key|pass|secret|token)`)
 
 // secretValues reads every value of secrets.toml (whatever its mode or
-// keys: reading is not showing) and the secrets of the server's .env
-// (secret-named keys, and with quoted every single-quoted value, as the
-// report wants), so they can be scrubbed. A file that does not parse is
-// read line by line.
-func secretValues(secretsFile, envFile string, quoted bool) []string {
+// keys: reading is not showing) and the secrets of each of envFiles, the
+// server's files holding its keys (secret-named keys, and with quoted
+// every single-quoted value, as the report wants), so they can be
+// scrubbed. A file that does not parse is read line by line.
+func secretValues(secretsFile string, envFiles []string, quoted bool) []string {
 	var out []string
 	if raw, err := os.ReadFile(secretsFile); err == nil {
 		var tree map[string]any
@@ -392,7 +392,11 @@ func secretValues(secretsFile, envFile string, quoted bool) []string {
 			}
 		}
 	}
-	if raw, err := os.ReadFile(envFile); err == nil {
+	for _, envFile := range envFiles {
+		raw, err := os.ReadFile(envFile)
+		if err != nil {
+			continue
+		}
 		for _, l := range strings.Split(string(raw), "\n") {
 			k, v, ok := strings.Cut(strings.TrimSpace(l), "=")
 			if !ok || strings.HasPrefix(k, "#") {

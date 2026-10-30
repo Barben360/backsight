@@ -45,6 +45,8 @@ Each question has `id`, `prompt`, `options[{value, label, cost, caveat}]`, `defa
 
 Hidden answers, for unusual machines only: `api_port`, `ui_port` (defaults 8888 and 9999), `project` (another Compose project name, to run beside another install; that install also needs its own HOME or Claude Code profile, since two installs cannot share a profile), `scheduler=off` (a machine without a systemd user session, such as a container: setup's pre-flight stops with exit 10 and asks for it; it also removes the entries an earlier run wrote, and `backsight setup --resume --answer scheduler=off` goes on from the earlier run without asking for consent again).
 
+The native runtime, only when the user asks for it (no Docker, Linux x86_64, this PC only, no web UI): add `--runtime native` to every setup command (the same as the hidden answer `runtime=native`; see [the native runtime](native-runtime.md)). Its pre-flight exits 10 when lingering is off, with the action `loginctl enable-linger` for the user to run, or when no systemd user session is reachable (an ssh login as that user is the way; `scheduler=off` does not help there).
+
 A machine without Claude Code that only holds the memory for the user's other PCs: add `--role server` to every setup command (the same as the hidden answer `role=server`). It skips the Claude Code questions and steps; then the user opens the server with `backsight server expose --private <address>` in a terminal of their own, since the connection token it hands out holds the API key.
 
 ## 3. Show the plan, then run setup

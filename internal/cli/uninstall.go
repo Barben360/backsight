@@ -24,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -189,6 +190,9 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			return res, blocked(err)
 		}
 	}
+	// On native even a kept server is stopped (nativeKept): it needs the
+	// server lock as a stop does.
+	stops := res.Server != "keep" || (cfg.Server.Mode == "local" && cfg.RuntimeKind() == "native")
 	profiles := wiredProfiles(home, st, rec)
 	offer := retentionOfferFor(home, st, rec, cfg)
 	retired := 0
@@ -316,7 +320,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 			cleanLocks(d, local)
 			return res, err
 		}
-		if res.Server != "keep" && deployed != "" {
+		if stops && deployed != "" {
 			unlock, err := serverLock(d, "uninstall")
 			if err != nil {
 				releaseLocks()
@@ -441,7 +445,8 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// stay for a later install; how to remove them is said, read before
 	// the server's files go.
 	imagesCmd := ""
-	if res.Server == "delete-data" && cfg.Server.Mode == "local" && deployed != "" {
+	// Native's Delete removes its Python, venvs and models with the data.
+	if res.Server == "delete-data" && cfg.Server.Mode == "local" && deployed != "" && cfg.RuntimeKind() != "native" {
 		imagesCmd = runtimeFor(cfg).ImagesRemoveCmd()
 	}
 	if a, err := uninstallServer(ctx, cfg, res.Server, f.plan); err != nil {
@@ -510,7 +515,7 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		res.Warnings = append(res.Warnings, "setup retired an older Hindsight install's pieces (hooks, MCP servers or timers): uninstall does not bring them back; run backsight setup --undo first to put them back")
 	}
 	if f.purgeLocal && res.Server != "delete-data" && deployed != "" {
-		res.Warnings = append(res.Warnings, "the kept server's database password now lives only in "+filepath.Join(cfg.Server.ComposeDir, ".env")+": keep that file to reach its data again")
+		res.Warnings = append(res.Warnings, "the kept server's database password now lives only in "+keptEnv(runtimeFor(cfg))+": keep that file to reach its data again")
 	}
 	if !f.plan {
 		releaseLocks()
@@ -885,6 +890,9 @@ func uninstallServer(ctx context.Context, cfg config.Config, mode string, plan b
 		a.Status, a.Detail = "skipped", "no server installed here"
 		return a, nil
 	}
+	if n, ok := rt.(server.Native); ok && mode == "keep" {
+		return nativeKept(ctx, n, plan)
+	}
 	if mode == "keep" {
 		a.Status, a.Detail = "kept", "it keeps its memories; stop it by hand with: "+rt.StopCmd()
 		return a, nil
@@ -907,6 +915,25 @@ func uninstallServer(ctx context.Context, cfg config.Config, mode string, plan b
 	}
 	removeIfEmpty(cfg.Server.ComposeDir)
 	a.Status, a.Detail = "done", "deleted with every memory in bank "+cfg.Server.Bank+"; backups kept"
+	return a, nil
+}
+
+// nativeKept is uninstall's default on the native runtime (Review Focus
+// 5): the db unit's ExecStartPre is backsight's guard (server
+// native-check), which this uninstall removes with the shim, so a unit
+// left enabled would fail at its next start (boot, Restart=). Both units
+// are stopped and disabled instead; the data stays.
+func nativeKept(ctx context.Context, n server.Native, plan bool) (undoAction, error) {
+	a := undoAction{Name: "server", Status: "planned",
+		Detail: "stopped and disabled: its guard is backsight, which this uninstall removes; its data is kept in " + n.Home()}
+	if plan {
+		return a, nil
+	}
+	// The caller holds the server lock.
+	if err := n.Stop(ctx); err != nil {
+		return a, err
+	}
+	a.Status = "done"
 	return a, nil
 }
 

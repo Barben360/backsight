@@ -136,6 +136,30 @@ func acquireMaintenance(d paths.Dirs, command string) (*state.Lock, string, erro
 type safetyCopy struct {
 	dump  string
 	image string // the image the server runs, when it is not the pinned one (server upgrade)
+	// bankConfig, when set, is the bank config read before the API stopped
+	// (the runtime switch, ruling R3): it is not read again.
+	bankConfig *bankConfigRead
+}
+
+// bankConfigRead is the bank config as the archive stores it, or why it
+// could not be read.
+type bankConfigRead struct {
+	raw     []byte
+	warning string
+}
+
+// readBankConfig reads the bank config through the API, for the archive.
+func readBankConfig(ctx context.Context, cfg config.Config, sec config.Secrets) bankConfigRead {
+	var r bankConfigRead
+	if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second); err == nil {
+		bc, err := cl.BankConfig(ctx, cfg.Server.Bank)
+		if err == nil {
+			r.raw, _ = json.MarshalIndent(bc, "", "  ")
+		} else {
+			r.warning = "bank config not saved: " + err.Error()
+		}
+	}
+	return r
 }
 
 // createBackup holds the maintenance lock for the database work only (hooks
@@ -157,14 +181,15 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	}
 	// The bank config is read before the lock: a slow server must not
 	// stretch the window where hooks only queue.
-	var bankConfig []byte
-	if cl, err := hindsight.New(cfg.Server.URL, sec.APIKey, 30*time.Second); err == nil {
-		bc, err := cl.BankConfig(ctx, cfg.Server.Bank)
-		if err == nil {
-			bankConfig, _ = json.MarshalIndent(bc, "", "  ")
-		} else {
-			res.Warnings = append(res.Warnings, "bank config not saved: "+err.Error())
-		}
+	var bc bankConfigRead
+	if safety != nil && safety.bankConfig != nil {
+		bc = *safety.bankConfig
+	} else {
+		bc = readBankConfig(ctx, cfg, sec)
+	}
+	bankConfig := bc.raw
+	if bc.warning != "" {
+		res.Warnings = append(res.Warnings, bc.warning)
 	}
 	afterDump := func(dump string) error { return os.Link(dump, safety.dump) }
 	if safety == nil {
@@ -191,14 +216,18 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	}
 	// Under the maintenance lock: a dump left in the container by a killed
 	// backup or restore holds the memory in clear.
-	db := runtimeFor(cfg).Database()
+	rt := runtimeFor(cfg)
+	db := rt.Database()
 	_ = db.RemoveStaleDumps(ctx)
 	extras := map[string][]byte{}
 	if bankConfig != nil {
 		extras["bank-config.json"] = bankConfig
 	}
-	for name, p := range map[string]string{"config.toml": d.ConfigFile(), "secrets.toml": d.SecretsFile(), "state.json": d.StateFile(),
-		"compose.override.yaml": filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")} {
+	files := map[string]string{"config.toml": d.ConfigFile(), "secrets.toml": d.SecretsFile(), "state.json": d.StateFile()}
+	if rt.Kind() == "docker" { // the native server has no compose file (ruling R26)
+		files["compose.override.yaml"] = filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")
+	}
+	for name, p := range files {
 		if raw, err := os.ReadFile(p); err == nil {
 			extras[name] = raw
 		} else if !errors.Is(err, fs.ErrNotExist) {
@@ -209,12 +238,18 @@ func createBackup(ctx context.Context, safety *safetyCopy) (backupCreateResult, 
 	if dir == "" {
 		dir = filepath.Join(d.Data, "backups")
 	}
-	image := server.ImageFor(cfg)
+	image := rt.Version()
 	if safety != nil && safety.image != "" {
 		image = safety.image
 	}
-	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, HindsightImage: image, PostgresImage: server.PostgresImage,
+	// The runtime and its Hindsight release: restore compares archives
+	// across runtimes by it (decision 0078, ruling R4).
+	m := backup.Manifest{CreatedAt: now().UTC(), BinaryVersion: buildinfo.Version, Runtime: rt.Kind(), HindsightVersion: server.HindsightVersionOf(image),
+		HindsightImage: image, PostgresImage: server.PostgresImage,
 		Embeddings: cfg.Embeddings.Preset + ": " + server.EmbeddingModels, Bank: cfg.Server.Bank, Recipients: lines}
+	if rt.Kind() == "native" {
+		m.HindsightImage, m.PostgresImage = "", server.NativePostgres
+	}
 	path, m, err := backup.Create(ctx, db, dir, filepath.Join(d.State, "staging"), m, extras, recipients, afterDump)
 	if err != nil {
 		return res, blocked(err)
@@ -271,6 +306,8 @@ type backupVerifyResult struct {
 	Expected map[string]int64 `json:"expected"`
 	Restored map[string]int64 `json:"restored"`
 	OK       bool             `json:"ok"`
+	// Strays: the postgres stopped first, native only (requirement 3).
+	Strays []string `json:"stopped_strays,omitempty"`
 }
 
 func newBackupVerifyCmd(e *env) *cobra.Command {
@@ -301,7 +338,11 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 				return failed
 			}
 			return e.report("backup verify", res, func() string {
-				return fmt.Sprintf("%s: restored %v, manifest %v: %s\n", res.Path, res.Restored, res.Expected, map[bool]string{true: "ok", false: "MISMATCH"}[res.OK])
+				s := ""
+				for _, w := range res.Strays {
+					s += "warning: " + w + "\n"
+				}
+				return s + fmt.Sprintf("%s: restored %v, manifest %v: %s\n", res.Path, res.Restored, res.Expected, map[bool]string{true: "ok", false: "MISMATCH"}[res.OK])
 			}, failed)
 		},
 	}
@@ -315,6 +356,14 @@ func newBackupVerifyCmd(e *env) *cobra.Command {
 // nothing was verified (err says why); otherwise err is a mismatch or a
 // result that could not be recorded.
 func verifyArchive(ctx context.Context, d paths.Dirs, cfg config.Config, ids []agelib.Identity, archive string) (backupVerifyResult, error) {
+	// The runtime configured is the one that restores, so the one that
+	// verifies (decision 0078): on native, a postgres on the database's
+	// data outside its unit is stopped first, never adopted.
+	rt := runtimeFor(cfg)
+	stopped, err := stopNativeStrays(ctx, rt)
+	if err != nil {
+		return backupVerifyResult{}, blocked(err)
+	}
 	// Under the state directory (0700), not $TMPDIR; only the manifest and
 	// the dump are written: the archive's secrets and config are not
 	// needed to verify.
@@ -327,11 +376,11 @@ func verifyArchive(ctx context.Context, d paths.Dirs, cfg config.Config, ids []a
 	if err != nil {
 		return backupVerifyResult{}, blocked(err)
 	}
-	counts, err := runtimeFor(cfg).VerifyDump(ctx, filepath.Join(work, "db.dump"), backup.Tables)
+	counts, err := rt.VerifyDump(ctx, filepath.Join(work, "db.dump"), backup.Tables)
 	if err != nil {
 		return backupVerifyResult{}, blocked(err)
 	}
-	res := backupVerifyResult{Path: archive, Expected: m.Counts, Restored: counts, OK: true}
+	res := backupVerifyResult{Path: archive, Expected: m.Counts, Restored: counts, OK: true, Strays: stopped}
 	for _, t := range backup.Tables {
 		if counts[t] != m.Counts[t] {
 			res.OK = false

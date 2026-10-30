@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,6 +56,17 @@ type Server struct {
 	// another name lets a second install run beside the first (tests).
 	Project string `toml:"project" json:"project"`
 	Digest  string `toml:"digest" json:"digest"` // empty: the binary's pin
+	// Runtime runs the server: "" (docker, so a Docker install's file
+	// never holds the key) or "native" (decision 0078).
+	Runtime string `toml:"runtime" json:"runtime"`
+}
+
+// RuntimeKind is the server's runtime: "docker" or "native".
+func (c Config) RuntimeKind() string {
+	if c.Server.Runtime == "" {
+		return "docker"
+	}
+	return c.Server.Runtime
 }
 
 // Values of server.role.
@@ -301,8 +313,21 @@ func Parse(raw []byte, path string, d paths.Dirs, home string) (Config, error) {
 	return cfg, nil
 }
 
-// Validate reports every invalid value, each with its key path.
-func (c Config) Validate() error {
+// Validate reports every invalid value, each with its key path, for this
+// machine.
+func (c Config) Validate() error { return c.ValidateOn(runtime.GOOS, runtime.GOARCH) }
+
+// NativeRefusal is why the native runtime refuses a platform other than
+// linux-amd64.
+const NativeRefusal = "the native runtime runs on Linux x86_64 (linux-amd64) only in this release"
+
+// NativeServerOnly refuses the native runtime on a server-only host: such a
+// host serves other PCs, and the native runtime is loopback only in this
+// release (decision 0078's non-goal: no private exposure on native).
+const NativeServerOnly = "a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there"
+
+// ValidateOn is Validate for a machine of goos and goarch.
+func (c Config) ValidateOn(goos, goarch string) error {
 	var errs []error
 	bad := func(key, format string, args ...any) {
 		errs = append(errs, fmt.Errorf("%s: "+format, append([]any{key}, args...)...))
@@ -349,6 +374,18 @@ func (c Config) Validate() error {
 	}
 	if d := c.Server.Digest; d != "" && !digestRE.MatchString(d) {
 		bad("server.digest", "%q is not empty or sha256:<64 hex>", d)
+	}
+	oneOf("server.runtime", c.Server.Runtime, "", "docker", "native")
+	if c.Server.Runtime == "native" {
+		if goos != "linux" || goarch != "amd64" {
+			bad("server.runtime", NativeRefusal)
+		}
+		if c.Network.Exposure == "private" {
+			errs = append(errs, errors.New(`server.runtime = "native" serves this PC only (loopback) in this release: private exposure needs the docker runtime`))
+		}
+		if c.Server.Role == RoleServer {
+			bad("server.role", NativeServerOnly)
+		}
 	}
 	switch c.Server.Bank {
 	case "":

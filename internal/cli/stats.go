@@ -59,10 +59,53 @@ type statsResult struct {
 	// last Days days.
 	Window bool `json:"window,omitempty"`
 	stats.Report
-	Server     serverReach        `json:"server"`
-	Extraction extraction         `json:"extraction"`
-	Parity     []stats.ParityLine `json:"parity,omitempty"`
-	now        time.Time
+	Server serverReach `json:"server"`
+	// Runtime is a local server's runtime (decision 0078), "" on a client;
+	// RuntimeSwitch its last switch.
+	Runtime       string             `json:"runtime,omitempty"`
+	RuntimeSwitch *statsSwitch       `json:"runtime_switch,omitempty"`
+	Extraction    extraction         `json:"extraction"`
+	Parity        []stats.ParityLine `json:"parity,omitempty"`
+	now           time.Time
+}
+
+// statsSwitch is the last server runtime switch, from state.json.
+type statsSwitch struct {
+	From    string    `json:"from"`
+	To      string    `json:"to"`
+	At      time.Time `json:"at"`
+	Overlap float64   `json:"overlap"`
+	Step    string    `json:"step"` // running | done | rolled-back
+}
+
+// runtimeOf is the local server's runtime and its last switch; "" and
+// nil on a client.
+func runtimeOf(d paths.Dirs, home string) (string, *statsSwitch) {
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil || cfg.Server.Mode != "local" {
+		return "", nil
+	}
+	st, err := state.Load(d.StateFile())
+	if err != nil || st.RuntimeSwitch == nil {
+		return cfg.RuntimeKind(), nil
+	}
+	rs := st.RuntimeSwitch
+	return cfg.RuntimeKind(), &statsSwitch{From: rs.From, To: rs.To, At: rs.At.UTC(), Overlap: rs.Overlap, Step: rs.Step}
+}
+
+// runtimeText is the Runtime line's text after its label.
+func runtimeText(kind string, s *statsSwitch) string {
+	if s == nil {
+		return kind
+	}
+	day := s.At.Format("2006-01-02")
+	switch s.Step {
+	case "done":
+		return fmt.Sprintf("%s (switched from %s on %s, recall overlap@10 %.2f)", kind, s.From, day, s.Overlap)
+	case "rolled-back":
+		return fmt.Sprintf("%s (the switch to %s on %s was rolled back)", kind, s.To, day)
+	}
+	return fmt.Sprintf("%s (a switch to %s runs or was cut off on %s: see backsight doctor)", kind, s.To, day)
 }
 
 // newStatsCmd is `stats [days]` (SPEC §15): the C12 report from local
@@ -120,6 +163,7 @@ func newStatsCmd(e *env) *cobra.Command {
 			}
 			res := statsResult{Days: days, Window: since != "", Report: stats.Compute(ev, from, to), now: now()}
 			res.Server = reachOf(d, home, res.now)
+			res.Runtime, res.RuntimeSwitch = runtimeOf(d, home)
 			res.Feedback.SharedMachines = sharedMachines(d)
 			journalCounts(d, &res.Report)
 			res.Extraction = extractionOver(cmd, from, to)
@@ -340,6 +384,9 @@ func statsText(r statsResult) string {
 		fmt.Fprintf(&b, "Memory over the last %d day(s), %s (UTC)\n\n", r.Days, span)
 	}
 	fmt.Fprintf(&b, "Server       %s\n", reachText(r.Server, r.now))
+	if r.Runtime != "" {
+		fmt.Fprintf(&b, "Runtime      %s\n", runtimeText(r.Runtime, r.RuntimeSwitch))
+	}
 	fmt.Fprintf(&b, "Prompts      %d typed, %d machine messages; recalls %d (%s injected something); skipped: %s\n",
 		p.Human, p.Machine, p.Recalls, pct(p.WithHits, p.Recalls), counts(p.Skips))
 	fmt.Fprintf(&b, "Recall       p50 %d ms, p95 %d ms; scope calls failed %d / %d\n", p.P50MS, p.P95MS, p.ScopeFailures, p.ScopeCalls)

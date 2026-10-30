@@ -66,11 +66,11 @@ After the upgrade that brings it, the maintenance run every 15 minutes (`jobs ti
 
 When a release pins a newer Hindsight server, `update apply` runs `backsight server upgrade` as the new binary. It:
 
-1. pulls the new image (a failure changes nothing);
+1. pulls the new image, or on the [native runtime](native-runtime.md) installs the new version's virtual environment beside the running one, which keeps serving (a failure changes nothing);
 2. makes a safety backup and verifies it in a throwaway database;
-3. deploys and starts the new version, waits for health and runs a recall.
+3. deploys and starts the new version (on native: points the server unit at the new environment and restarts it), waits for health and runs a recall.
 
-Any failure from the deploy on puts the safety backup back into the previous version. A server upgrade never downgrades. The pinned versions are listed in [compatibility.md](compatibility.md).
+Any failure from the deploy on puts the safety backup back into the previous version (on native, the server unit runs the previous environment again; the new one stays on disk) and exits 30. On native, a passed upgrade removes the environments older than the previous one. A server upgrade never downgrades. The pinned versions are listed in [compatibility.md](compatibility.md).
 
 ## When an update fails
 

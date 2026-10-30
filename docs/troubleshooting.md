@@ -32,6 +32,19 @@ sudo usermod -aG docker $USER
 
 Log out and back in (a new terminal is not enough), check that `docker info` works without `sudo`, then `backsight setup --resume`. Members of the `docker` group have root-level access to the machine; [rootless Docker](https://docs.docker.com/engine/security/rootless/) is the alternative. If Docker is not running: `sudo systemctl enable --now docker`. If `docker compose` is unknown (setup's `compose` check says `Docker Compose v2 is missing`), install the Compose v2 plugin ([docs.docker.com/compose/install](https://docs.docker.com/compose/install/)).
 
+### Setup on the native runtime stops at its pre-flight
+
+`backsight setup --runtime native` ([the native runtime](native-runtime.md)) checks what the native server needs instead of Docker; nothing is written until they pass.
+
+| Check | Setup says | What to do |
+|---|---|---|
+| `platform` | `the native runtime runs on Linux x86_64 (linux-amd64) only in this release` | Native runs on Linux x86_64 only. Run setup without `--runtime native` (Docker), or install the server on a Linux x86_64 machine and connect this PC to it ([several PCs](several-pcs.md)). |
+| `linger` | `lingering is off for your user` | Without lingering, your user's units, the server's included, stop when you log out. Run `loginctl enable-linger` once, then `backsight setup --resume`. |
+| `systemd` | `no systemd user session here`: `no systemd user session is reachable from this shell` | The native server runs as your user's systemd units, so setup must reach your user manager. Run setup from a login session of your user (an ssh login, not `su` or `sudo`). A machine without one, such as a container, cannot run the native server: use Docker there. Unlike the timers, `--answer scheduler=off` does not get past it. |
+| `disk` | `only N GB free, the native server needs 3.5 GB` | Free some space, or set `BACKSIGHT_HOME` to a larger disk. |
+
+`--runtime native` is also refused, exit 2, with `--role server` (a server-only host exists to serve other PCs, and native serves this PC only) and over an install already on Docker (its memory is in Docker's database: `backsight server runtime switch native` moves it).
+
 ### A port is taken
 
 Setup says `port 8888 is taken by another program` (or `9999`, the web UI's).
@@ -82,6 +95,36 @@ While the server is down, nothing is lost: sessions stay in Claude Code's transc
 If the server rejects the API key, the key in `secrets.toml` and the server's `.env` differ: `backsight server render` writes the `.env` from your secrets again, then `backsight server start`.
 
 On another PC, after `backsight server token --rotate` on the server's host: the server now runs on a new API key and the old token no longer works. Every other PC joins again with the new token, which `backsight server token --out <file>` writes on the host: carry the file to each PC and run `backsight connect --token-file <file>` there, then delete the file.
+
+### The native server does not start
+
+On the native runtime (`server.runtime = "native"`), the database's unit, `backsight-db.service` (`<server.project>-db.service`), checks the database before every start: from `backsight server start`, at boot, and when systemd restarts it. When the check refuses, neither unit starts, `backsight server start` prints the reason, and `journalctl --user -u backsight-db.service` shows it after a boot. The database lives in `home/.pg0/instances/hindsight` under the native directory (`<server.compose_dir>/native`), and the identifier of the one backsight created or restored is kept beside it, in `identity`.
+
+| The message says the native database is | What happened | What to do |
+|---|---|---|
+| *missing* | The database's directory is gone (or the native directory was emptied, or `server.compose_dir` now points elsewhere). backsight creates a database only when it installs the native server, never at a plain start, so it does not create an empty one in its place: your sessions would start over on an empty memory. | Put the directory back if you moved or lost it (from your own copy of the disk), then `backsight server start`. Otherwise restore your last backup: `backsight restore <archive>`. |
+| *empty* | The directory is there but holds no database (no `data/PG_VERSION`). | The same: put it back, or `backsight restore <archive>`. |
+| *not the one backsight recorded* | Another database sits there: its identifier (`pg_controldata`'s "Database system identifier") is not the one in `identity`, for example a copy from another PC. | Put the right one back, or `backsight restore <archive>`. |
+| *has no recorded identity* | A database is there but `identity` is missing, so backsight cannot tell it is yours. | `backsight restore <archive>`: it restores into a fresh database and records its identity. Do not write `identity` by hand to get past the check. |
+
+On an install on Docker (`server.runtime` unset or `"docker"`), the same refusals end otherwise: the native database is what a runtime switch left behind (a switch to native that failed or was rolled back), and `backsight restore` acts on Docker's server, not on it. The message then names `backsight server runtime clean`: it deletes the native server and its data (backups are kept), after which `backsight server runtime switch native` starts over on a new native database.
+
+`backsight restore <archive>` works on each of these: it moves the refused database aside, never deleting it, to `hindsight.refused-<Unix time>` beside it, creates a new database, restores the archive into it and records its identity ([after a refused native start](backups-and-restore.md#after-a-refused-native-start)). Delete a `.refused-` directory yourself once you no longer need it.
+
+`a postgres (pid N) runs on … outside backsight-db.service: stopping it, never adopting it`, in the journal: a postgres started outside the unit (by hand, or left by an interrupted command) held the database. The check stops it with the bundled `pg_ctl` (a fast shutdown) and the unit then starts its own. If it is still running 30 seconds later, the start fails and names its pid: stop it (`kill -INT <pid>`), then `backsight server start`. `pg_ctl` stops the process the data directory's `postmaster.pid` names, so when that file names another pid (or is missing) the check stops nothing and the start fails naming both: stop the stray yourself the same way.
+
+`fsync is off on the native database`: the database answered with `fsync` off, so an OS crash could corrupt it, and `backsight server start` stopped and disabled both units. The unit runs it with `fsync=on`; look for a drop-in that changes it (`systemctl --user cat backsight-db.service`), remove it, then `backsight server render` and `backsight server start`.
+
+`the native server's venv … is incomplete`: the virtual environment the server unit runs lacks its `.backsight-complete` mark (an install or upgrade was interrupted while building it, or it was removed by hand), so `backsight server start` started nothing. Run `backsight server install`: it builds this backsight's version again in place and points the unit at it.
+
+### Every command says a server-only host cannot run the native runtime
+
+`config.toml: server.role: a server-only host serves other PCs, which the native runtime cannot yet (loopback only): use the docker runtime there`: `config.toml` holds both `runtime = "native"` and `role = "server"` under `[server]`. Setup and the switch never write that pair, so it comes from a hand edit; the native server listens on this PC only in this release, so it cannot serve your other PCs, and every command that reads the config stops on it (doctor's `config` check says the same). Edit `config.toml` back to what runs:
+
+- the server runs on Docker (`docker compose ls` lists its project, `backsight` or your `server.project`): remove the `runtime = "native"` line;
+- the server runs natively (`systemctl --user status backsight-server.service`) on a PC that also runs Claude Code: remove the `role = "server"` line.
+
+Then `backsight doctor`. A native install cannot serve other PCs in this release: to make it a server for them, switch it to Docker first (`backsight server runtime switch docker`).
 
 ### After a reboot the server was down for a while (private exposure)
 
@@ -149,8 +192,9 @@ Once the backup verified, connect stops the server under the maintenance lock, t
 
 ## Another PC cannot reach the server
 
-`backsight server expose --private <ip>` opens the server on one address of its host. Two refusals stop it before anything changes:
+`backsight server expose --private <ip>` opens the server on one address of its host. Three refusals stop it before anything changes:
 
+- **"the native runtime serves this PC only (loopback) in this release"**: the host runs the [native runtime](native-runtime.md), which listens on `127.0.0.1` only. A memory shared by several PCs needs the docker runtime on its host: `backsight server runtime switch docker` moves it there.
 - **"is not an address of this machine"**: the address belongs to no network interface of the host, so the server could not listen on it. Pick one of the private addresses the message lists; for a tailnet, check that Tailscale is up (`tailscale ip -4`).
 - **"the API key travels unencrypted on this network"**: the address is on a LAN, not a tailnet, and every request carries the API key in clear to anyone on that network. Prefer the host's tailnet address (Tailscale: `100.x`). On a network you trust, rerun the same command with `--answer cleartext_lan=yes`.
 
@@ -325,6 +369,18 @@ doctor's `jobs` check warns when a scheduled job is late. On Linux, `systemctl -
 | `feedback-ledger`: ledger unreadable (damaged, or written by another version) | A damaged one is kept aside as `ledger.json.corrupt-<time>` and rebuilt from the journal by the next `jobs tick`. One written by another version stays as it is: `backsight feedback rebuild` recomputes it from the journal, and until then the tick settles nothing. |
 | `feedback-shared`: the other machines' counts not fetched for more than a day | The 15-minute `jobs tick` fetches them every 6 hours while the server answers. Run `backsight jobs tick`: its output says why if it cannot; the `jobs` check says whether the scheduler runs it. Until then recall uses the counts fetched last. `share_ledger = false` in `[feedback]` stops sharing. |
 | `reference-server` (info): the old Hindsight server can be stopped | Shown once `backsight backup verify` passed on backsight's newest backup within the last 7 days. Run the stop command doctor gives: the old server's data is kept, and its start command brings it back. See [install.md](install.md#replacing-an-existing-hindsight-install). |
+| `docker` (info): not used by the native runtime | On the [native runtime](native-runtime.md) doctor does not ask Docker: the server runs as your user's systemd units. |
+| `web-ui` (info): none on the native runtime | The native runtime runs Hindsight's API without its web UI: doctor and the `backsight` commands cover what you need. `backsight server runtime switch docker` brings the web UI back. |
+| `native-unit`: a native unit is not active, or not installed | `backsight-db.service` or `backsight-server.service` (`<server.project>-…`) is stopped, failed or restarting. `backsight server start`; if it fails, `journalctl --user -u backsight-db.service -u backsight-server.service` says why, and [The native server does not start](#the-native-server-does-not-start) covers the database's refusals. A unit whose file is gone: `backsight server install` writes it again. |
+| `native-fsync`: fsync is not on, or could not be read | The database must run with `fsync` on, or an OS crash could corrupt it. Off: `backsight server stop`, remove the drop-in that changes it (`systemctl --user cat backsight-db.service` shows it), then `backsight server render` and `backsight server start`, which checks it again. Could not be read: the database does not answer; see `native-unit`. |
+| `native-identity`: the native database is missing, empty, another one, or unrecorded | The next start would be refused: see [The native server does not start](#the-native-server-does-not-start) for each case. `backsight restore <archive>` puts your memory back without deleting what is there. |
+| `native-stray`: a postgres runs on the native database outside its unit | A postgres started by hand, or left by an interrupted command, holds the database. `backsight server start` runs the unit's check, which stops it (never adopting it) and starts the unit's own; if the start fails, stop the pid doctor names (`kill -INT <pid>`). |
+| `native-linger`: linger is off | Without lingering, systemd stops your units at logout and starts none at boot, so the memory server is down whenever you are logged out. `loginctl enable-linger` (some systems need `sudo loginctl enable-linger $USER`). A warning when doctor could not read it. |
+| `native-home`: the native `home/` is not 0700 | It holds the database: other users of the machine could read your memory. `chmod 700` on the directory doctor names. |
+| `native-venv`: the venv differs from the lock | The server's Python environment does not hold the packages, at the versions, this backsight's lock names (doctor reads their `.dist-info` names). When the server runs another venv than this backsight's: `backsight server upgrade --allow-unordered` deploys this backsight's. When it is this backsight's own venv, changed since it was built (a package installed into it by hand): `backsight server stop`, remove its `.backsight-complete` mark, then `backsight server install` builds it again from the lock. |
+| `native-refused` (info): a database a restore refused is kept | `backsight restore` moved the database a start refused aside, to `hindsight.refused-<Unix time>`, and never deletes it. doctor lists each one (one line per directory) with the command that deletes it in its detail, never as its fix: run it yourself once you no longer need that database. |
+| `runtime-switch`: a runtime switch was cut off | `backsight server runtime switch <runtime>` was killed part way (a crash, a power cut). Run the same command doctor names: it first puts the runtime switched from back, then switches. See [the native runtime](native-runtime.md). |
+| `runtime-switch` (info): the last switch, and the other runtime's server kept since | After a switch, the runtime switched from keeps its server and data until you delete them; doctor names what `backsight server runtime clean` would delete (the whole of it: on native the database, the Python environments and the models) and, for a day, the size the switch measured; after that `backsight doctor --json` measures it again (it can take seconds) and the plain `doctor` leaves the size out (`backsight server runtime clean --plan` shows it). Run it once the memory works on the new runtime; backups are kept. |
 
 ## Reporting a problem
 

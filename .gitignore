@@ -4,3 +4,5 @@
 coverage.out
 .env
 *.key
+# The Docker goldens (render of 0014c66) are .env files by design.
+!/internal/server/testdata/docker-golden/*/.env

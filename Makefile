@@ -14,6 +14,9 @@ TAGS     := $(if $(TAGLIST),-tags $(subst $(eval) ,$(comma),$(TAGLIST)))
 # TEST_IMAGE (with TEST_HOOKS) pins another Hindsight image: the update
 # proof's server upgrade. Ignored without the tag.
 LDFLAGS  += $(if $(TEST_IMAGE),-X $(PKG)/internal/server.TestImage=$(TEST_IMAGE))
+# TEST_LOCK (with TEST_HOOKS) loads another native lock file in place of
+# the embedded one: the native proof's upgrade to a second version.
+LDFLAGS  += $(if $(TEST_LOCK),-X $(PKG)/internal/server/nativelock.TestLock=$(TEST_LOCK))
 DIST     ?= dist
 OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
@@ -48,7 +51,7 @@ test:
 # migration and server smoke of CI's update proof, the hook chaos switch),
 # built and tested with it. A release never has the tag (verify-keys).
 test-hooks:
-	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/cli/
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/server/nativelock/ ./internal/cli/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
 # instead of failing on its lock.

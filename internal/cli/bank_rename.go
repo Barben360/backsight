@@ -32,25 +32,27 @@ type renameOps interface {
 	Alias(ctx context.Context, bank, alias string) error
 }
 
-type dockerRename struct {
-	compose server.Compose
-	cl      *hindsight.Client
+// runtimeRename renames through the server's runtime (its database, its
+// own hindsight-admin) and aliases through the API.
+type runtimeRename struct {
+	rt server.Runtime
+	cl *hindsight.Client
 }
 
-func (r dockerRename) Banks(ctx context.Context) ([]string, error) {
-	return server.DB{Compose: r.compose}.BankIDs(ctx)
+func (r runtimeRename) Banks(ctx context.Context) ([]string, error) {
+	return r.rt.Database().BankIDs(ctx)
 }
 
-func (r dockerRename) Pending(ctx context.Context, banks []string) (int, error) {
-	return server.DB{Compose: r.compose}.PendingOperations(ctx, banks)
+func (r runtimeRename) Pending(ctx context.Context, banks []string) (int, error) {
+	return r.rt.Database().PendingOperations(ctx, banks)
 }
 
-func (r dockerRename) Rename(ctx context.Context, from, to string, dryRun bool) error {
-	_, err := r.compose.RenameBank(ctx, from, to, dryRun)
+func (r runtimeRename) Rename(ctx context.Context, from, to string, dryRun bool) error {
+	_, err := r.rt.RenameBank(ctx, from, to, dryRun)
 	return err
 }
 
-func (r dockerRename) Alias(ctx context.Context, bank, alias string) error {
+func (r runtimeRename) Alias(ctx context.Context, bank, alias string) error {
 	return r.cl.CreateBankAlias(ctx, bank, alias)
 }
 
@@ -59,7 +61,7 @@ var renameOpsFor = func(cfg config.Config, sec config.Secrets) (renameOps, error
 	if err != nil {
 		return nil, err
 	}
-	return dockerRename{compose: composeFor(cfg), cl: cl}, nil
+	return runtimeRename{rt: runtimeFor(cfg), cl: cl}, nil
 }
 
 // How long a rename waits for the server's pending operations

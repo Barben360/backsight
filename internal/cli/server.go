@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,10 +41,80 @@ func composeFor(cfg config.Config) server.Compose {
 	return server.Compose{Dir: cfg.Server.ComposeDir, Runner: composeRunner, Project: cfg.Server.Project}
 }
 
-// runtimeFor is the server runtime of cfg (decision 0070): Docker Compose.
-func runtimeFor(cfg config.Config) server.Runtime {
-	return server.Docker{Compose: composeFor(cfg), Cfg: cfg}
+// nativeSys runs the native runtime's systemctl, journalctl and
+// systemd-run; nativeTools its own programs. Tests replace both.
+var (
+	nativeSys   server.SysRunner  = execSys{}
+	nativeTools server.ToolRunner = execTools{}
+)
+
+// execTools runs a native tool with exactly the environment it is given
+// (nothing inherited) and, when ownGroup, in its own process group.
+type execTools struct{ ownGroup bool }
+
+// InOwnGroup is t with its children in their own process group.
+func (t execTools) InOwnGroup() server.ToolRunner { t.ownGroup = true; return t }
+
+// unitDirTimeout bounds the user manager's answer when a native runtime
+// is built; tests shorten it.
+var unitDirTimeout = 5 * time.Second
+
+// toolStderr is how much of a failed tool's stderr its error keeps.
+const toolStderr = 4096
+
+func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = append([]string{}, env...) // never nil: nil inherits ours
+	cmd.Stdin = stdin
+	if t.ownGroup {
+		server.OwnGroup(cmd)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		tail := stderr.Bytes()
+		if len(tail) > toolStderr {
+			tail = tail[len(tail)-toolStderr:]
+		}
+		if t := strings.TrimSpace(string(tail)); t != "" {
+			err = fmt.Errorf("%w: %s", err, t)
+		}
+	}
+	return out, err
 }
+
+// runtimeWith is the server runtime of cfg (decisions 0070, 0078): Docker
+// Compose, or the native runtime's two systemd user units. ownGroup runs
+// its children in their own process group: a Ctrl-C at the terminal must
+// not kill a rollback's docker or tool. Tests replace it.
+var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
+	if cfg.RuntimeKind() == "native" {
+		d, home, err := machine()
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, Err: err}
+		if err == nil {
+			// A user manager that never answers must not hang the command.
+			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
+			n.UnitDir, n.Env = unitDirAndEnv(ctx, home)
+			cancel()
+		}
+		if t, ok := nativeTools.(interface{ InOwnGroup() server.ToolRunner }); ok && ownGroup {
+			n.Tools = t.InOwnGroup()
+		}
+		if s, ok := nativeSys.(interface{ InOwnGroup() server.SysRunner }); ok && ownGroup {
+			n.Sys = s.InOwnGroup()
+		}
+		return n
+	}
+	c := composeFor(cfg)
+	if r, ok := c.Runner.(interface{ InOwnGroup() server.Runner }); ok && ownGroup {
+		c.Runner = r.InOwnGroup()
+	}
+	return server.Docker{Compose: c, Cfg: cfg}
+}
+
+// runtimeFor is the server runtime of cfg.
+func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }
 
 func blocked(err error) error {
 	var oe *output.Error
@@ -69,13 +142,21 @@ func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec 
 			for _, ct := range list {
 				if ct.Service == "hindsight" && (ct.State == "exited" || ct.State == "restarting" || ct.State == "dead") {
 					logs, _ := rt.Logs(ctx, "hindsight", 20)
-					return hindsight.Version{}, fmt.Errorf("the hindsight container is %s; last log lines:\n%s", ct.State, strings.TrimSpace(logs))
+					what := "the hindsight container"
+					if n, ok := rt.(server.Native); ok {
+						what = "the server unit " + n.ServerUnit()
+					}
+					return hindsight.Version{}, fmt.Errorf("%s is %s; last log lines:\n%s", what, ct.State, strings.TrimSpace(logs))
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return hindsight.Version{}, fmt.Errorf("the server did not report health at %s within %s: check backsight server status and docker compose logs", cfg.Server.URL, healthTimeout)
+			logs := "docker compose logs"
+			if n, ok := rt.(server.Native); ok {
+				logs = "journalctl --user -u " + n.ServerUnit()
+			}
+			return hindsight.Version{}, fmt.Errorf("the server did not report health at %s within %s: check backsight server status and %s", cfg.Server.URL, healthTimeout, logs)
 		case <-time.After(healthPoll):
 		}
 	}
@@ -93,7 +174,11 @@ type installResult struct {
 	URL      string   `json:"url,omitempty"`
 	UI       string   `json:"ui,omitempty"`
 	Version  string   `json:"version,omitempty"`
+	native   bool     // the native runtime: no web UI
 }
+
+// noUI is how a native install's summaries name the UI it has not.
+const noUI = "no web UI on the native runtime"
 
 func stepLine(s step) string {
 	line := fmt.Sprintf("%-8s %s", s.Status, s.Name)
@@ -109,8 +194,12 @@ func installSummary(r installResult) string {
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "warning  %s\n", w)
 	}
+	ui := "UI " + r.UI
+	if r.native {
+		ui = noUI
+	}
 	if r.Version != "" {
-		fmt.Fprintf(&b, "\nHindsight %s healthy at %s (UI %s)\n", r.Version, r.URL, r.UI)
+		fmt.Fprintf(&b, "\nHindsight %s healthy at %s (%s)\n", r.Version, r.URL, ui)
 	}
 	return b.String()
 }
@@ -274,11 +363,17 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 			rt := runtimeFor(cfg)
+			if n, ok := rt.(server.Native); ok {
+				// An install is where the native database is created (ruling
+				// R35): server start, backup and the rest refuse a missing one.
+				n.MayCreate = true
+				rt, res.native = n, true
+			}
 			if err := pinGuard(cfg, rt); err != nil {
 				return err
 			}
 
-			kept, err := server.KeptSecrets(cfg.Server.ComposeDir)
+			kept, err := server.KeptSecretsIn(keptEnv(rt))
 			if err != nil {
 				return blocked(err)
 			}
@@ -291,7 +386,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				gen := config.GenerateMissing(&prev)
 				var plans []string
 				if len(adopted) > 0 {
-					plans = append(plans, "would adopt "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(cfg))
+					plans = append(plans, "would adopt "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(rt))
 				}
 				if len(gen) > 0 {
 					plans = append(plans, "would generate "+strings.Join(gen, ", "))
@@ -326,7 +421,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				}
 				if exists {
 					return &output.Error{Code: output.Blocked, Message: rt.DataName() +
-						" exists but neither secrets.toml nor " + keptEnv(cfg) + " holds its db_password: restore the secrets.toml it was created with, " +
+						" exists but neither secrets.toml nor " + keptEnv(rt) + " holds its db_password: restore the secrets.toml it was created with, " +
 						"or set the password it was created with (backsight secret set db_password); last, if its memories may go, delete it (" +
 						rt.DataRemoveCmd() + ") before installing again"}
 				}
@@ -341,7 +436,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 			var did []string
 			if len(adopted) > 0 {
-				did = append(did, "adopted "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(cfg))
+				did = append(did, "adopted "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(rt))
 			}
 			if len(made) > 0 {
 				did = append(did, "generated "+strings.Join(made, ", "))
@@ -377,11 +472,30 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(redacted(err, sec))
 			}
 			add("pull", "done", "")
+			if res.native {
+				// The db unit's ExecStartPre is the shim (server
+				// native-check), which setup's client step installs only
+				// after this one: without it the unit cannot start
+				// (systemd's 203/EXEC). One that runs is the client's; one
+				// missing or dangling is installed again.
+				if shim := nativeShim(d); shimMissing(shim) {
+					target, err := shimTarget(d.Data)
+					if err == nil {
+						err = installShim(target, shim)
+					}
+					if err != nil {
+						return fail(blocked(fmt.Errorf("installing the shim the database unit runs (%s): %w", shim, err)))
+					}
+					add("shim", "done", shim+" → "+target)
+				}
+			}
 			if err := rt.Start(ctx); err != nil {
 				return fail(redacted(err, sec))
 			}
 			detail := "project " + cfg.Server.Project
-			if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
+			if n, ok := rt.(server.Native); ok {
+				detail = "units " + n.DBUnit() + " and " + n.ServerUnit()
+			} else if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
 				detail += ", with your compose.override.yaml"
 			}
 			add("start", "done", detail)
@@ -409,7 +523,10 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return fail(err)
 			}
 			add("provider", "done", fmt.Sprintf("%s/%s extracted %d English fact(s)", cfg.LLM.Provider, cfg.LLM.Model, pr.Facts))
-			res.URL, res.UI, res.Version = cfg.Server.URL, uiURL(cfg), v.APIVersion
+			res.URL, res.Version = cfg.Server.URL, v.APIVersion
+			if !res.native {
+				res.UI = uiURL(cfg)
+			}
 			return e.emit("server install", res, func() string { return installSummary(res) })
 		},
 	}
@@ -450,8 +567,9 @@ func ensureServerID(ctx context.Context, cfg config.Config, sec config.Secrets) 
 	return "warning", redacted(err, sec).Error()
 }
 
-// keptEnv is the server's .env, as messages name it.
-func keptEnv(cfg config.Config) string { return filepath.Join(cfg.Server.ComposeDir, ".env") }
+// keptEnv is the file the runtime keeps the server's keys in (Docker's
+// .env, the native server.env), as messages name it.
+func keptEnv(rt server.Runtime) string { return rt.SecretFiles()[0] }
 
 // adoptable: kept holds a value for name that secrets.toml would take.
 func adoptable(kept map[string]string, name string) bool {
@@ -522,6 +640,9 @@ func newServerStartCmd(e *env) *cobra.Command {
 				}
 				return e.emit("server start", map[string]any{"project": cfg.Server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
 					func() string {
+						if n, ok := rt.(server.Native); ok {
+							return renderText(nativeRender(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}, n)) + "would start " + n.DBUnit() + " and " + n.ServerUnit() + "\n"
+						}
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
 			}
@@ -691,7 +812,7 @@ func statusText(r statusResult) string {
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e), newServerNativeCheckCmd(e), newServerRuntimeCmd(e))
 	return cmd
 }
 
@@ -794,6 +915,16 @@ type renderResult struct {
 	Dir string `json:"dir"`
 	server.Changes
 	Plan bool `json:"plan"`
+	// the native runtime's files, for the text: server.env and the units
+	envFile string
+	units   []string
+}
+
+// nativeRender is r naming the native runtime's files.
+func nativeRender(r renderResult, n server.Native) renderResult {
+	r.envFile = n.EnvFile()
+	r.units = []string{filepath.Join(n.UnitDir, n.DBUnit()), filepath.Join(n.UnitDir, n.ServerUnit())}
+	return r
 }
 
 func newServerRenderCmd(e *env) *cobra.Command {
@@ -819,6 +950,9 @@ func newServerRenderCmd(e *env) *cobra.Command {
 				return err
 			}
 			res := renderResult{Dir: cfg.Server.ComposeDir, Plan: plan}
+			if n, ok := rt.(server.Native); ok {
+				res = nativeRender(res, n)
+			}
 			if plan {
 				res.Changes, err = rt.Diff(f)
 			} else {
@@ -847,6 +981,10 @@ func renderText(r renderResult) string {
 	verb := map[bool]string{true: "written", false: "unchanged"}
 	if r.Plan {
 		verb = map[bool]string{true: "would be written", false: "unchanged"}
+	}
+	if r.envFile != "" {
+		// Changes says whether any unit changed, not which.
+		return fmt.Sprintf("%s: %s\n%s: %s\n", r.envFile, verb[r.Env], strings.Join(r.units, " and "), verb[r.Units])
 	}
 	return fmt.Sprintf("%s: %s\n%s: %s\n",
 		filepath.Join(r.Dir, "compose.yaml"), verb[r.Compose], filepath.Join(r.Dir, ".env"), verb[r.Env])

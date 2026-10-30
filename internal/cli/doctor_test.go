@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,14 +9,19 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -286,4 +292,242 @@ func TestConfigEditsProbePlansBacksightsOwnEdits(t *testing.T) {
 	if b, _ := os.ReadFile(settings); string(b) != `{"cleanupPeriodDays": 3650}` {
 		t.Errorf("the probe wrote %s", b)
 	}
+}
+
+// doctorSys answers the user manager's read-only questions doctor asks on
+// native (units' states, linger) and records every call.
+type doctorSys struct {
+	calls  []string
+	states string // systemctl show's answer
+	linger string
+}
+
+func (s *doctorSys) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	line := name + " " + strings.Join(args, " ")
+	s.calls = append(s.calls, line)
+	switch {
+	case strings.HasPrefix(line, "systemctl --user show -p ActiveState,SubState "):
+		return []byte(s.states), nil
+	case strings.HasPrefix(line, "loginctl show-user "):
+		return []byte(s.linger + "\n"), nil
+	}
+	return nil, nil
+}
+
+// lockedVenv fills v's site-packages with the lock's distributions, as
+// uv leaves them, but fastmcp at fastmcp.
+func lockedVenv(t *testing.T, n server.Native, v, fastmcp string) {
+	t.Helper()
+	sp := filepath.Join(n.VenvDir(v), "lib", "python3.11", "site-packages")
+	_ = os.RemoveAll(sp)
+	for name, ver := range nativelock.Versions() {
+		if name == "fastmcp" {
+			ver = fastmcp
+		}
+		if err := os.MkdirAll(filepath.Join(sp, strings.ReplaceAll(name, "-", "_")+"-"+ver+".dist-info"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func doctorChecks(t *testing.T) (int, map[string]doctor.Check) {
+	t.Helper()
+	code, out, _ := run(t, "doctor", "--json")
+	var env struct {
+		Data doctor.Report `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	byID := map[string]doctor.Check{}
+	for _, c := range env.Data.Checks {
+		if _, dup := byID[c.ID]; !dup {
+			byID[c.ID] = c
+		}
+	}
+	return code, byID
+}
+
+// doctor on a native install reads its guards through the runtime, and
+// only reads: no unit started or stopped, no stray stopped, nothing
+// written under the native directory.
+func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
+	_, n, tools, _, _ := nativeHost(t)
+	sys := &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
+	nativeSys = sys
+	lockedVenv(t, n, n.Version(), "3.2.0")
+	if err := os.Chmod(n.Home(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tools.calls = nil
+	_, c := doctorChecks(t)
+	for _, id := range []string{"native-unit", "native-fsync", "native-identity", "native-stray", "native-linger", "native-home", "native-venv"} {
+		if c[id].Status != doctor.OK {
+			t.Errorf("%s: %+v, want ok", id, c[id])
+		}
+	}
+	if c["docker"].Status != doctor.Info || c["web-ui"].Status != doctor.Info {
+		t.Errorf("docker %+v, web-ui %+v", c["docker"], c["web-ui"])
+	}
+	all := strings.Join(append(append([]string{}, sys.calls...), tools.calls...), "\n")
+	for _, want := range []string{"systemctl --user show -p ActiveState,SubState", "loginctl show-user", "SHOW fsync", "pg_controldata -D"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("doctor never asked %q:\n%s", want, all)
+		}
+	}
+	for _, call := range append(append([]string{}, sys.calls...), tools.calls...) {
+		if !strings.Contains(call, " show") && !strings.HasSuffix(call, "SHOW fsync") && !strings.Contains(call, "pg_controldata -D") &&
+			!strings.HasPrefix(call, "systemctl --user show-environment") {
+			t.Errorf("doctor ran %q", call)
+		}
+	}
+
+	// Each guard broken: its check fails with its fix.
+	sys.states = "ActiveState=active\nSubState=running\n\nActiveState=failed\nSubState=failed\n"
+	sys.linger = "no"
+	lockedVenv(t, n, n.Version(), "4.1.4")
+	_ = os.Chmod(n.Home(), 0o755)
+	if err := os.WriteFile(n.IdentityFile(), []byte("999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refused := n.InstanceDir() + ".refused-1761700000"
+	if err := os.MkdirAll(refused, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(nativeProc, "4242")
+	_ = os.MkdirAll(stray, 0o700)
+	_ = os.WriteFile(filepath.Join(stray, "cmdline"), []byte("/x/bin/postgres\x00-D\x00"+n.DataDir()+"\x00"), 0o600)
+	_ = os.WriteFile(filepath.Join(stray, "cgroup"), []byte("0::/user.slice/user-1000.slice/session-2.scope\n"), 0o600)
+	code, c := doctorChecks(t)
+	for id, want := range map[string]string{
+		"native-unit":     n.ServerUnit() + " is failed",
+		"native-linger":   "linger is off",
+		"native-venv":     "fastmcp==3.2.0",
+		"native-home":     "has mode 0755, not 0700",
+		"native-identity": "identifier 111, recorded 999",
+		"native-stray":    "pid 4242",
+	} {
+		if c[id].Status != doctor.Error || !strings.Contains(c[id].Summary, want) {
+			t.Errorf("%s: %+v, want error with %q", id, c[id], want)
+		}
+	}
+	if c["native-refused"].Status != doctor.Info || c["native-refused"].Fix != "" || !strings.HasSuffix(c["native-refused"].Detail, "rm -rf '"+refused+"'") {
+		t.Errorf("native-refused: %+v", c["native-refused"])
+	}
+	if code != output.Blocked {
+		t.Errorf("exit %d, want %d", code, output.Blocked)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("doctor stopped the stray: %v", err)
+	}
+	if fi, _ := os.Stat(n.Home()); fi.Mode().Perm() != 0o755 {
+		t.Errorf("doctor changed home's mode: %v", fi.Mode())
+	}
+}
+
+// After a switch, doctor shows what server runtime clean would delete and
+// its size, as clean names them (ruling R43): the whole native directory,
+// not only the database.
+func TestDoctorShowsTheKeptRuntimeWithCleansSize(t *testing.T) {
+	home := devInstall(t, true)
+	withSys(t, "linux")
+	d := pathsOf(home)
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := server.Native{Cfg: cfg, Dirs: d}
+	for p, size := range map[string]int{filepath.Join(n.DataDir(), "base"): 300, filepath.Join(n.VenvDir("v"), "lib"): 2000, filepath.Join(n.HF(), "m"): 1000} {
+		put0(t, p, size)
+	}
+	if err := state.Update(d, "test", func(s *state.State) error {
+		s.RuntimeSwitch = &state.RuntimeSwitch{From: "native", To: "docker", Step: "done", At: time.Now()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, c := doctorChecks(t)
+	want := "the native server in " + n.Root() + ": the database, the Python environments and the models (3.2 kB) kept from before the switch: backsight server runtime clean deletes it"
+	if rs := c["runtime-switch"]; rs.Status != doctor.Info || !strings.Contains(rs.Summary, "switched from native to docker") || rs.Detail != want {
+		t.Errorf("runtime-switch %+v\nwant detail %q", rs, want)
+	}
+}
+
+func put0(t *testing.T, p string, size int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, make([]byte, size), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Final review 4: the size of what a switch kept is the one the switch
+// measured, for a day. A plain doctor never sizes it again (docker system
+// df takes up to 15 s on every doctor, report and maintain run); after a
+// day it names what is kept without a size, and doctor --json measures it.
+func TestDoctorUsesTheSwitchsKeptSize(t *testing.T) {
+	t.Run("docker kept", func(t *testing.T) {
+		home := devInstall(t, true)
+		d := pathsOf(home)
+		raw, _ := os.ReadFile(d.ConfigFile())
+		if err := os.WriteFile(d.ConfigFile(), bytes.Replace(raw, []byte("[server]\n"), []byte("[server]\nruntime = \"native\"\n"), 1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		put0(t, filepath.Join(composeDir(home), "compose.yaml"), 10) // Docker's leftover
+		dk := &composeRecorder{}
+		old := composeRunner
+		composeRunner = dk
+		t.Cleanup(func() { composeRunner = old })
+		sized := func() bool {
+			dk.mu.Lock()
+			defer dk.mu.Unlock()
+			return slices.ContainsFunc(dk.argv, func(a []string) bool { return slices.Contains(a, "system") && slices.Contains(a, "df") })
+		}
+		at := func(when time.Time) {
+			if err := state.Update(d, "test", func(s *state.State) error {
+				s.RuntimeSwitch = &state.RuntimeSwitch{From: "docker", To: "native", Step: "done", At: when, KeptBytes: 123456789, KeptAt: when}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		what := "the Docker server of project backsight"
+		at(time.Now().Add(-time.Hour))
+		if _, out, _ := run(t, "doctor"); !strings.Contains(out, "(117.7 MB) kept from before the switch") || sized() {
+			t.Errorf("fresh, plain: sized %v\n%s", sized(), out)
+		}
+		if _, c := doctorChecks(t); !strings.Contains(c["runtime-switch"].Detail, "(117.7 MB) kept") || sized() {
+			t.Errorf("fresh, --json: sized %v: %+v", sized(), c["runtime-switch"])
+		}
+		at(time.Now().Add(-48 * time.Hour))
+		_, out, _ := run(t, "doctor")
+		if sized() || !strings.Contains(out, what) || strings.Contains(out, "117.7 MB") || !strings.Contains(out, "kept from before the switch: backsight server runtime clean deletes it") {
+			t.Errorf("stale, plain: sized %v\n%s", sized(), out)
+		}
+		if _, c := doctorChecks(t); !sized() || !strings.Contains(c["runtime-switch"].Detail, what) {
+			t.Errorf("stale, --json: sized %v: %+v", sized(), c["runtime-switch"])
+		}
+	})
+	t.Run("native kept", func(t *testing.T) {
+		home := devInstall(t, true)
+		withSys(t, "linux")
+		d := pathsOf(home)
+		cfg, err := config.Load(d.ConfigFile(), d, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := server.Native{Cfg: cfg, Dirs: d}
+		put0(t, filepath.Join(n.DataDir(), "base"), 3000) // 2.9 kB measured; the switch measured 1.0 kB
+		if err := state.Update(d, "test", func(s *state.State) error {
+			s.RuntimeSwitch = &state.RuntimeSwitch{From: "native", To: "docker", Step: "done", At: time.Now(), KeptBytes: 1024, KeptAt: time.Now()}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, out, _ := run(t, "doctor"); !strings.Contains(out, "the models (1.0 kB) kept from before the switch") {
+			t.Errorf("not the switch's size:\n%s", out)
+		}
+	})
 }

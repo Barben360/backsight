@@ -414,3 +414,41 @@ func causeOf(e *PullError) string {
 	}
 	return e.Cause()
 }
+
+// Final review 9: Leftover reports Docker's volumes alone (a switch's
+// leftovers whose compose.yaml is gone), so Delete removes them without
+// it: Compose cannot run without its file, so the project's containers go
+// by their compose label, then the volumes backsight's compose.yaml
+// declares, by name.
+func TestDockerDeleteWithoutComposeYAML(t *testing.T) {
+	dir := t.TempDir()
+	r := &scriptedRunner{answers: map[string]struct {
+		out string
+		err error
+	}{"ps --all --quiet": {"c1\nc2\n", nil}}}
+	dk := Docker{Compose: Compose{Dir: dir, Runner: r, Project: "p1"}}
+	if err := dk.Delete(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=p1"}, {"rm", "--force", "--volumes", "c1", "c2"},
+		{"volume", "rm", "p1_pg_data"}, {"volume", "rm", "p1_hf_cache"}}
+	if !reflect.DeepEqual(r.calls, want) {
+		t.Errorf("docker ran\n%q\nwant\n%q", r.calls, want)
+	}
+	// No container left: nothing to remove but the volumes.
+	r = &scriptedRunner{}
+	if err := (Docker{Compose: Compose{Dir: dir, Runner: r, Project: "p1"}}).Delete(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != 3 || r.calls[1][0] != "volume" || r.calls[2][0] != "volume" {
+		t.Errorf("docker ran %q", r.calls)
+	}
+	// A Docker that does not answer removes nothing.
+	r = &scriptedRunner{answers: map[string]struct {
+		out string
+		err error
+	}{"ps": {"Cannot connect to the Docker daemon", errors.New("exit status 1")}}}
+	if err := (Docker{Compose: Compose{Dir: dir, Runner: r, Project: "p1"}}).Delete(context.Background()); err == nil || !strings.Contains(err.Error(), "Cannot connect") || len(r.calls) != 1 {
+		t.Errorf("err %v, calls %q", err, r.calls)
+	}
+}

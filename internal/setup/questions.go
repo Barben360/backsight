@@ -119,10 +119,13 @@ type Inputs struct {
 
 // Hidden answers have defaults and are never asked.
 // role: "server" for a host that only serves the memory (setup --role).
-var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth}
+// runtime: "native" for the native runtime (setup --runtime, decision
+// 0078); Docker, the default, never appears among the resolved answers,
+// so a Docker install's answers and config stay what they always were.
+var hidden = map[string]string{"api_port": "8888", "ui_port": "9999", "project": "backsight", "scheduler": "on", "role": config.RoleBoth, "runtime": "docker"}
 
 // known lists every answer id setup accepts.
-var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler", "role"}
+var known = []string{"provider", "model", "base_url", "ack_subscription", "retention", "backups", "reference", "backfill", "consent", "api_port", "ui_port", "project", "scheduler", "role", "runtime"}
 
 // UsageError is an answer setup cannot take; the command exits 2.
 type UsageError struct{ Msg string }
@@ -143,6 +146,9 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 		v := def
 		if c, ok := fromConfig[k]; ok {
 			if a, given := in.Answers[k]; given && a != c {
+				if k == "runtime" { // the memory moves with the runtime: never by an edit
+					return nil, nil, &UsageError{fmt.Sprintf("this install's server runs on the %s runtime (answer runtime=%s): backsight server runtime switch %s moves it, its memory with it; or drop the answer", c, a, a)}
+				}
 				return nil, nil, &UsageError{fmt.Sprintf("config.toml already sets %s to %q (answer %q): edit %s in config.toml, or drop the answer", k, c, a, configKey[k])}
 			}
 			v = c
@@ -159,6 +165,10 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 			if v != config.RoleBoth && v != config.RoleServer {
 				return nil, nil, &UsageError{fmt.Sprintf("role=%s: %s or %s", v, config.RoleBoth, config.RoleServer)}
 			}
+		} else if k == "runtime" {
+			if v != "docker" && v != "native" {
+				return nil, nil, &UsageError{fmt.Sprintf("runtime=%s: docker or native", v)}
+			}
 		} else if k == "project" {
 			if !projectRE.MatchString(v) {
 				return nil, nil, &UsageError{fmt.Sprintf("project=%s: lowercase letters, digits, - and _", v)}
@@ -170,6 +180,12 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	}
 	if extra["api_port"] == extra["ui_port"] {
 		return nil, nil, &UsageError{"api_port and ui_port must differ"}
+	}
+	if extra["runtime"] == "native" && extra["role"] == config.RoleServer {
+		return nil, nil, &UsageError{config.NativeServerOnly}
+	}
+	if extra["runtime"] == "docker" {
+		delete(extra, "runtime")
 	}
 	// A server-only host runs no Claude Code: nothing of it to ask about.
 	serverOnly := extra["role"] == config.RoleServer
@@ -364,7 +380,7 @@ func orDefault(v, def string) string {
 
 // configKey names the config.toml key behind an answer.
 var configKey = map[string]string{"provider": "llm.provider", "model": "llm.model", "base_url": "llm.base_url",
-	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role"}
+	"retention": "client.retention_days", "backups": "backup.enabled", "api_port": "server.url", "ui_port": "server.ui_port", "project": "server.project", "role": "server.role", "runtime": "server.runtime"}
 
 // configAnswers are the answers an existing config already gives.
 func configAnswers(c *config.Config) map[string]string {
@@ -386,6 +402,7 @@ func configAnswers(c *config.Config) map[string]string {
 	out["ui_port"] = strconv.Itoa(c.Server.UIPort)
 	out["project"] = c.Server.Project
 	out["role"] = c.Server.Role
+	out["runtime"] = c.RuntimeKind()
 	for k, v := range out {
 		if v == "" && k != "base_url" {
 			delete(out, k)

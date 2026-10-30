@@ -1,0 +1,11 @@
+# Written by backsight setup.
+schema_version = 1
+
+[server]
+url = "http://127.0.0.1:8888"
+ui_port = 9999
+bank = "backsight"
+
+[llm]
+provider = "deepseek"
+model = "deepseek-flash"

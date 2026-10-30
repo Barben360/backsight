@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/selfcheck"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -84,12 +86,135 @@ func realProbes(e *doctor.Env) {
 // hindsightTimeout bounds each Hindsight call of doctor and report.
 const hindsightTimeout = 10 * time.Second
 
-// doctorEnv is doctor's view of this machine.
+// doctorEnv is doctor's view of this machine. The runtime probes go
+// through the server runtime's own runners (tests fake those), the machine
+// probes after them (tests replace those whole).
 func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: hindsightTimeout}
 	denv.Cwd, _ = os.Getwd()
+	runtimeProbes(&denv)
 	probes(&denv)
 	return denv
+}
+
+// nativeProbeWait bounds the native runtime's probes (systemctl, psql,
+// pg_controldata, loginctl); switchProbeWait the other runtime's size.
+var (
+	nativeProbeWait = 20 * time.Second
+	switchProbeWait = 15 * time.Second
+)
+
+// runtimeProbes read the server runtime's side of doctor (decision 0078):
+// the native runtime's guards and the last runtime switch. Read-only:
+// systemctl show, loginctl show-user, psql's SHOW fsync, pg_controldata,
+// /proc, and the other runtime's files and sizes.
+func runtimeProbes(e *doctor.Env) {
+	e.Native = func(ctx context.Context) (doctor.NativeFacts, error) { return nativeFacts(ctx, e.Dirs, e.Home) }
+	e.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(e.Dirs, e.Home, false) }
+}
+
+// nativeFacts reads the native install's guards; a fact it cannot read is
+// in Unread under its check's id.
+func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeFacts, error) {
+	var f doctor.NativeFacts
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		return f, err
+	}
+	n, ok := runtimeFor(cfg).(server.Native)
+	if !ok {
+		return f, errors.New("config.toml does not name the native runtime")
+	}
+	if n.Err != nil {
+		return f, n.Err
+	}
+	ctx, cancel := context.WithTimeout(ctx, nativeProbeWait)
+	defer cancel()
+	f.Unread = map[string]error{}
+	unread := func(id string, err error) {
+		if err != nil {
+			f.Unread[id] = err
+		}
+	}
+	f.Units, err = n.UnitStates(ctx)
+	unread("native-unit", err)
+	f.Fsync, err = n.Fsync(ctx)
+	unread("native-fsync", err)
+	f.Identity = n.CheckInstance(ctx)
+	strays, err := n.Strays()
+	unread("native-stray", err)
+	for _, s := range strays {
+		f.Strays = append(f.Strays, s.PID)
+	}
+	f.Linger, err = linger()
+	unread("native-linger", err)
+	f.Home = n.Home()
+	fi, err := os.Stat(f.Home)
+	unread("native-home", err)
+	if err == nil {
+		f.HomeMode = fi.Mode()
+	}
+	v, err := n.Deployed()
+	if v == "" {
+		v = n.Version()
+	}
+	f.Venv, f.Pin = n.VenvDir(v), n.VenvDir(n.Version())
+	if err == nil {
+		f.VenvDiff, err = doctor.NativeVenvDiff(f.Venv)
+	}
+	unread("native-venv", err)
+	refused, _ := filepath.Glob(n.InstanceDir() + ".refused-*")
+	for _, p := range refused {
+		if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+			f.Refused = append(f.Refused, p)
+		}
+	}
+	return f, nil
+}
+
+// keptSizeFresh is how long the size a switch measured of what it kept
+// stands for it in doctor.
+const keptSizeFresh = 24 * time.Hour
+
+// lastSwitch is state.json's last runtime switch and, once it ended, the
+// other runtime's data kept since: what server runtime clean deletes
+// (ruling R43), "" when nothing of it is here or it cannot be told. Its
+// size is the one the switch measured, for a day; after that, only when
+// live (doctor --json): docker system df or a du of the native directory
+// can take seconds, too long for every doctor, report and maintain run.
+func lastSwitch(d paths.Dirs, home string, live bool) (*state.RuntimeSwitch, string) {
+	st, err := state.Load(d.StateFile())
+	if err != nil || st.RuntimeSwitch == nil {
+		return nil, ""
+	}
+	rs := st.RuntimeSwitch
+	if rs.Step == "running" {
+		return rs, ""
+	}
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil || cfg.Server.Mode != "local" {
+		return rs, ""
+	}
+	c, ok := runtimeFor(configOfKind(cfg, otherRuntime(cfg.RuntimeKind()))).(server.Cleaner)
+	if !ok {
+		return rs, ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), switchProbeWait)
+	defer cancel()
+	if left, err := c.Leftover(ctx); err != nil || !left {
+		return rs, ""
+	}
+	switch {
+	case !rs.KeptAt.IsZero() && time.Since(rs.KeptAt) < keptSizeFresh:
+		return rs, c.CleanWhat() + " (" + sizeText(rs.KeptBytes) + ")"
+	case live:
+		size := "size unknown"
+		if n, err := c.CleanSize(ctx); err == nil {
+			size = sizeText(n)
+		}
+		return rs, c.CleanWhat() + " (" + size + ")"
+	}
+	return rs, c.CleanWhat()
 }
 
 func newDoctorCmd(e *env) *cobra.Command {
@@ -102,7 +227,7 @@ func newDoctorCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rep := runDoctor(cmd, d, home)
+			rep := runDoctorSized(cmd, d, home, e.json)
 			var failed error
 			if rep.Errors > 0 {
 				failed = shownError{&output.Error{Code: output.Blocked, Message: fmt.Sprintf("%d check(s) failed", rep.Errors)}}
@@ -132,7 +257,17 @@ func doctorText(r doctor.Report) string {
 
 // runDoctor runs every check (doctor and the jobs maintain snapshot).
 func runDoctor(cmd *cobra.Command, d paths.Dirs, home string) doctor.Report {
-	return doctor.Run(cmd.Context(), doctorEnv(d, home))
+	return runDoctorSized(cmd, d, home, false)
+}
+
+// runDoctorSized is runDoctor; sized also measures what a runtime switch
+// kept when the switch's own measure is older than a day (doctor --json).
+func runDoctorSized(cmd *cobra.Command, d paths.Dirs, home string, sized bool) doctor.Report {
+	denv := doctorEnv(d, home)
+	if sized {
+		denv.Switch = func() (*state.RuntimeSwitch, string) { return lastSwitch(d, home, true) }
+	}
+	return doctor.Run(cmd.Context(), denv)
 }
 
 // referenceServer asks the reference server's /health, then, for a

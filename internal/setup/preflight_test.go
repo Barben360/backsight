@@ -221,3 +221,97 @@ func TestPreflightServerOnlySkipsClaudeCode(t *testing.T) {
 		}
 	}
 }
+
+// nativeHealthy is a machine where the native runtime's checks pass.
+func nativeHealthy() Probes {
+	p := healthy()
+	p.Runtime = "native"
+	p.Linger = func() (string, error) { return "yes", nil }
+	p.UserManager = func(context.Context) error { return nil }
+	return p
+}
+
+// The native runtime checks its own needs: Linux x86_64, the user
+// manager and lingering, the API port and 3.5 GB; Docker and the UI port
+// are not its.
+func TestPreflightOnNative(t *testing.T) {
+	p := nativeHealthy()
+	p.Docker = func(context.Context) (string, error) { return "", fmt.Errorf("docker: %w", exec.ErrNotFound) }
+	p.Compose = func(context.Context) (string, error) { return "", errors.New("no compose") }
+	p.PortFree = func(port int) bool { return port != p.UIPort }
+	p.FreeBytes = func() (uint64, error) { return NativeDiskMB << 20, nil }
+	cs := Preflight(context.Background(), p)
+	if class, failed := Verdict(cs); class != "" {
+		t.Fatalf("class %q, failed %+v", class, failed)
+	}
+	m := byID(cs)
+	for _, id := range []string{"docker", "compose"} {
+		if m[id].Status != Info || m[id].Summary != "not used by the native runtime" {
+			t.Errorf("%s: %+v", id, m[id])
+		}
+	}
+	if _, ok := m["ui_port"]; ok {
+		t.Error("the UI port is checked on native")
+	}
+	if _, ok := m["scheduler"]; ok {
+		t.Error("the scheduler check runs beside the systemd one")
+	}
+	for _, id := range []string{"platform", "systemd", "linger", "api_port", "disk"} {
+		if m[id].Status != OK {
+			t.Errorf("%s: %+v", id, m[id])
+		}
+	}
+	// One MB under the floor fails, as on Docker's 6 GB.
+	p.FreeBytes = func() (uint64, error) { return NativeDiskMB<<20 - 1<<20, nil }
+	if d := byID(Preflight(context.Background(), p))["disk"]; d.Status != Fail || d.Class != "blocked" || !strings.Contains(d.Summary, "3.5 GB") {
+		t.Errorf("disk %+v", d)
+	}
+}
+
+func TestPreflightOnNativeRefusals(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		mutate func(*Probes)
+		id     string
+		class  string
+		want   string // in the summary or fix
+		action string // the action's command
+	}{
+		{"arm64", func(p *Probes) { p.GOARCH = "arm64" }, "platform", "blocked", "linux-amd64", ""},
+		{"darwin", func(p *Probes) { p.GOOS = "darwin" }, "platform", "blocked", "linux-amd64", ""},
+		{"linger off", func(p *Probes) { p.Linger = func() (string, error) { return "no", nil } }, "linger", "needs_user", "loginctl enable-linger", "loginctl enable-linger"},
+		{"linger unknown", func(p *Probes) { p.Linger = func() (string, error) { return "", errors.New("loginctl: not found") } }, "linger", "needs_user", "loginctl enable-linger", "loginctl enable-linger"},
+		{"no user manager", func(p *Probes) {
+			p.UserManager = func(context.Context) error { return errors.New("Failed to connect to bus") }
+		}, "systemd", "needs_user", NoUserBus, ""},
+		{"slow user manager", func(p *Probes) { p.UserManager = func(context.Context) error { return ErrSessionSlow } }, "systemd", "blocked", "retry", ""},
+		{"api port taken", func(p *Probes) { p.PortFree = func(int) bool { return false } }, "api_port", "blocked", "8888", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := nativeHealthy()
+			c.mutate(&p)
+			got := byID(Preflight(context.Background(), p))[c.id]
+			if got.Status != Fail || got.Class != c.class || !strings.Contains(got.Summary+" "+got.Fix, c.want) {
+				t.Errorf("%+v", got)
+			}
+			if c.action != "" && (got.Action == nil || got.Action.Cmd != c.action || got.Action.Kind != "run_as_user") {
+				t.Errorf("action %+v", got.Action)
+			}
+		})
+	}
+}
+
+// A Docker machine's pre-flight is the one it always had: no systemd or
+// linger check, even with the native probes set.
+func TestPreflightOnDockerIgnoresTheNativeProbes(t *testing.T) {
+	p := healthy()
+	p.Linger = func() (string, error) { return "no", nil }
+	p.UserManager = func(context.Context) error { return errors.New("no bus") }
+	m := byID(Preflight(context.Background(), p))
+	if _, ok := m["linger"]; ok {
+		t.Error("linger checked on Docker")
+	}
+	if _, ok := m["systemd"]; ok {
+		t.Error("systemd checked on Docker")
+	}
+}

@@ -104,6 +104,9 @@ func newServerExposeCmd(e *env) *cobra.Command {
 	return cmd
 }
 
+// nativeLoopbackOnly refuses a private exposure on the native runtime.
+const nativeLoopbackOnly = "the native runtime serves this PC only (loopback) in this release: private exposure needs the docker runtime (backsight server runtime switch docker)"
+
 func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 	f.json = e.json
 	if (f.private == "") == !f.loopback {
@@ -136,6 +139,9 @@ func runExpose(ctx context.Context, e *env, f exposeFlags) error {
 	}
 	if err := requireLocal(cfg, "server expose"); err != nil {
 		return err
+	}
+	if f.private != "" && cfg.RuntimeKind() == "native" { // 0078's non-goal: loopback only
+		return &output.Error{Code: output.Blocked, Message: nativeLoopbackOnly}
 	}
 	d, home, err := machine()
 	if err != nil {

@@ -73,6 +73,10 @@ type State struct {
 	// that read it before its config sends nothing once it changed
 	// (retain.Flusher.SendsGeneration).
 	SendsGeneration int `json:"sends_generation,omitempty"`
+	// RuntimeSwitch: the last `server runtime switch` (decision 0078). A
+	// running one whose owner is gone was cut off: doctor names it, and its
+	// rerun first puts the source back.
+	RuntimeSwitch *RuntimeSwitch `json:"runtime_switch,omitempty"`
 
 	// extra holds fields this binary does not know (written by a newer
 	// minor version), saved back unchanged.
@@ -127,6 +131,32 @@ func knownKeys() []string {
 		}
 	}
 	return keys
+}
+
+// RuntimeSwitch is a switch of the server between runtimes (decision
+// 0078), from its first change on.
+type RuntimeSwitch struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Step string `json:"step"` // running | done | rolled-back
+	// PID and Since are the switch's process and its start, as a lock's
+	// owner: a reused PID is not this run.
+	PID     int       `json:"pid"`
+	Since   time.Time `json:"since"`
+	At      time.Time `json:"at"` // the step's time
+	Backup  string    `json:"backup,omitempty"`
+	Overlap float64   `json:"overlap,omitempty"` // the recall probes' overlap@10, once done
+	// KeptBytes is the size of what server runtime clean deletes of the
+	// runtime switched from, measured at KeptAt (once done): doctor shows
+	// it without sizing it again (docker system df, du) at every run.
+	KeptBytes int64     `json:"kept_bytes,omitempty"`
+	KeptAt    time.Time `json:"kept_at,omitzero"`
+}
+
+// Running reports a switch whose process still runs: another one waits.
+// A running record whose process is gone was cut off.
+func (r RuntimeSwitch) Running() bool {
+	return r.Step == "running" && r.PID > 0 && ownerAlive(Owner{PID: r.PID, Since: r.Since})
 }
 
 // Scheduler is what `jobs install` set up: the scheduler kind and the files
