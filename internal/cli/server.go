@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,11 +41,68 @@ func composeFor(cfg config.Config) server.Compose {
 	return server.Compose{Dir: cfg.Server.ComposeDir, Runner: composeRunner, Project: cfg.Server.Project}
 }
 
-// runtimeWith is the server runtime of cfg (decisions 0070, 0078):
-// Docker Compose. ownGroup runs its children in their own process group: a
-// Ctrl-C at the terminal must not kill a rollback's docker. Tests replace
-// it.
+// nativeSys runs the native runtime's systemctl, journalctl and
+// systemd-run; nativeTools its own programs. Tests replace both.
+var (
+	nativeSys   server.SysRunner  = execSys{}
+	nativeTools server.ToolRunner = execTools{}
+)
+
+// execTools runs a native tool with exactly the environment it is given
+// (nothing inherited) and, when ownGroup, in its own process group.
+type execTools struct{ ownGroup bool }
+
+// InOwnGroup is t with its children in their own process group.
+func (t execTools) InOwnGroup() server.ToolRunner { t.ownGroup = true; return t }
+
+// unitDirTimeout bounds the user manager's answer when a native runtime
+// is built; tests shorten it.
+var unitDirTimeout = 5 * time.Second
+
+// toolStderr is how much of a failed tool's stderr its error keeps.
+const toolStderr = 4096
+
+func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = append([]string{}, env...) // never nil: nil inherits ours
+	cmd.Stdin = stdin
+	if t.ownGroup {
+		server.OwnGroup(cmd)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		tail := stderr.Bytes()
+		if len(tail) > toolStderr {
+			tail = tail[len(tail)-toolStderr:]
+		}
+		if t := strings.TrimSpace(string(tail)); t != "" {
+			err = fmt.Errorf("%w: %s", err, t)
+		}
+	}
+	return out, err
+}
+
+// runtimeWith is the server runtime of cfg (decisions 0070, 0078): Docker
+// Compose, or the native runtime's two systemd user units. ownGroup runs
+// its children in their own process group: a Ctrl-C at the terminal must
+// not kill a rollback's docker or tool. Tests replace it.
 var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
+	if cfg.RuntimeKind() == "native" {
+		d, home, err := machine()
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: "/proc", Err: err}
+		if err == nil {
+			// A user manager that never answers must not hang the command.
+			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
+			n.UnitDir, n.Env = unitDirAndEnv(ctx, home)
+			cancel()
+		}
+		if t, ok := nativeTools.(interface{ InOwnGroup() server.ToolRunner }); ok && ownGroup {
+			n.Tools = t.InOwnGroup()
+		}
+		return n
+	}
 	c := composeFor(cfg)
 	if r, ok := c.Runner.(interface{ InOwnGroup() server.Runner }); ok && ownGroup {
 		c.Runner = r.InOwnGroup()
@@ -288,7 +348,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				return err
 			}
 
-			kept, err := server.KeptSecrets(cfg.Server.ComposeDir)
+			kept, err := server.KeptSecretsIn(keptEnv(rt))
 			if err != nil {
 				return blocked(err)
 			}
@@ -301,7 +361,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				gen := config.GenerateMissing(&prev)
 				var plans []string
 				if len(adopted) > 0 {
-					plans = append(plans, "would adopt "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(cfg))
+					plans = append(plans, "would adopt "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(rt))
 				}
 				if len(gen) > 0 {
 					plans = append(plans, "would generate "+strings.Join(gen, ", "))
@@ -336,7 +396,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				}
 				if exists {
 					return &output.Error{Code: output.Blocked, Message: rt.DataName() +
-						" exists but neither secrets.toml nor " + keptEnv(cfg) + " holds its db_password: restore the secrets.toml it was created with, " +
+						" exists but neither secrets.toml nor " + keptEnv(rt) + " holds its db_password: restore the secrets.toml it was created with, " +
 						"or set the password it was created with (backsight secret set db_password); last, if its memories may go, delete it (" +
 						rt.DataRemoveCmd() + ") before installing again"}
 				}
@@ -351,7 +411,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 			var did []string
 			if len(adopted) > 0 {
-				did = append(did, "adopted "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(cfg))
+				did = append(did, "adopted "+strings.Join(adopted, ", ")+" from the kept "+keptEnv(rt))
 			}
 			if len(made) > 0 {
 				did = append(did, "generated "+strings.Join(made, ", "))
@@ -460,8 +520,9 @@ func ensureServerID(ctx context.Context, cfg config.Config, sec config.Secrets) 
 	return "warning", redacted(err, sec).Error()
 }
 
-// keptEnv is the server's .env, as messages name it.
-func keptEnv(cfg config.Config) string { return filepath.Join(cfg.Server.ComposeDir, ".env") }
+// keptEnv is the file the runtime keeps the server's keys in (Docker's
+// .env, the native server.env), as messages name it.
+func keptEnv(rt server.Runtime) string { return rt.SecretFiles()[0] }
 
 // adoptable: kept holds a value for name that secrets.toml would take.
 func adoptable(kept map[string]string, name string) bool {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -594,5 +596,67 @@ func TestBoostKeysValidate(t *testing.T) {
 		if _, err := Load(write(t, "[feedback]\n"+body+"\n"), dirs, "/home/u"); err == nil || !strings.Contains(err.Error(), key) {
 			t.Errorf("%s: got %v, want an error naming %s", body, err, key)
 		}
+	}
+}
+
+// server.runtime: docker (the default, "" in the file) or native, which
+// runs on linux-amd64 only and serves this PC only.
+func TestRuntimeConfigKey(t *testing.T) {
+	native := "[server]\nruntime = \"native\"\n"
+	cfg, err := Parse([]byte(native), "config.toml", dirs, "/home/u")
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		if err != nil || cfg.RuntimeKind() != "native" {
+			t.Fatalf("native on linux-amd64: %v %q", err, cfg.RuntimeKind())
+		}
+	} else if err == nil {
+		t.Fatalf("native loaded on %s-%s", runtime.GOOS, runtime.GOARCH)
+	}
+	cfg = Default(dirs, "/home/u")
+	cfg.Server.Runtime = "native"
+	if err := cfg.ValidateOn("linux", "amd64"); err != nil {
+		t.Errorf("native on linux-amd64: %v", err)
+	}
+	for _, p := range [][2]string{{"linux", "arm64"}, {"darwin", "arm64"}, {"windows", "amd64"}} {
+		err := cfg.ValidateOn(p[0], p[1])
+		if err == nil || !strings.Contains(err.Error(), "server.runtime: the native runtime runs on Linux x86_64 (linux-amd64) only in this release") {
+			t.Errorf("native on %s-%s: %v", p[0], p[1], err)
+		}
+	}
+	cfg.Network.Exposure, cfg.Network.BindIP = "private", "192.168.1.10"
+	if err := cfg.ValidateOn("linux", "amd64"); err == nil || !strings.Contains(err.Error(),
+		`server.runtime = "native" serves this PC only (loopback) in this release: private exposure needs the docker runtime`) {
+		t.Errorf("native with private exposure: %v", err)
+	}
+	cfg = Default(dirs, "/home/u")
+	cfg.Server.Runtime = "podman"
+	if err := cfg.ValidateOn("linux", "amd64"); err == nil || !strings.Contains(err.Error(), "server.runtime") {
+		t.Errorf("podman: %v", err)
+	}
+	for _, kind := range []string{"", "docker"} {
+		cfg.Server.Runtime = kind
+		if err := cfg.ValidateOn("darwin", "arm64"); err != nil || cfg.RuntimeKind() != "docker" {
+			t.Errorf("runtime %q: %v %q", kind, err, cfg.RuntimeKind())
+		}
+	}
+	raw, err := json.Marshal(Default(dirs, "/home/u"))
+	if err != nil || !strings.Contains(string(raw), `"runtime":""`) {
+		t.Errorf("defaults' JSON: %s %v", raw, err)
+	}
+}
+
+// SetRuntime writes native, and docker by removing the key: a Docker
+// install's config.toml never holds one.
+func TestSetRuntime(t *testing.T) {
+	in := "# mine\n[server]\nbank = \"b\"\n"
+	got, err := SetRuntime([]byte(in), "native")
+	if want := "# mine\n[server]\nruntime = \"native\"\nbank = \"b\"\n"; err != nil || string(got) != want {
+		t.Fatalf("native: %q %v, want %q", got, err, want)
+	}
+	back, err := SetRuntime(got, "docker")
+	if err != nil || string(back) != in {
+		t.Errorf("docker: %q %v, want %q", back, err, in)
+	}
+	if _, err := SetRuntime([]byte(in), "podman"); err == nil {
+		t.Error("podman written")
 	}
 }

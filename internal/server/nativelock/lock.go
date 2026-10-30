@@ -28,6 +28,9 @@ var Requirements []byte
 const (
 	PG0      = "0.15.2"
 	Postgres = "PostgreSQL 18.1, pgvector 0.8.5"
+	// PGInstallation is the directory pg0 extracts its Postgres to, in
+	// ~/.pg0/installation.
+	PGInstallation = "18.1.0"
 )
 
 func init() {

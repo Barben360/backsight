@@ -28,6 +28,13 @@ func (refuseSys) Run(_ context.Context, name string, args ...string) ([]byte, er
 	return nil, fmt.Errorf("test reached %s %v without a fake runner", name, args)
 }
 
+// refuseTools: no test runs a native tool (uv, pg0, psql, hindsight-admin).
+type refuseTools struct{}
+
+func (refuseTools) Run(_ context.Context, _ []string, _ io.Reader, path string, args ...string) ([]byte, error) {
+	return nil, fmt.Errorf("test reached %s %v without a fake tool runner", path, args)
+}
+
 type refuseClaude struct{}
 
 func (refuseClaude) Run(_ context.Context, _ []string, args ...string) ([]byte, error) {
@@ -93,6 +100,7 @@ func TestMain(m *testing.M) {
 		os.Exit(Execute(args, os.Stdout, os.Stderr))
 	}
 	composeRunner = refuseDocker{}
+	nativeSys, nativeTools = refuseSys{}, refuseTools{}
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub

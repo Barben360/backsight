@@ -88,9 +88,13 @@ func (n Native) Version() string {
 	return nativelock.Hindsight() + "-" + nativelock.Hash12()
 }
 
+var _ Runtime = Native{}
+
 // WithVersion is the same runtime deploying version v ("": the pin).
-// Task 4 makes Native a Runtime and this returns one.
-func (n Native) WithVersion(v string) Native { n.Venv = v; return n }
+func (n Native) WithVersion(v string) Runtime { n.Venv = v; return n }
+
+// HindsightVersion is the Hindsight release of Version ("1.1.0").
+func (n Native) HindsightVersion() string { return HindsightVersionOf(n.Version()) }
 
 // ComparePins orders two native versions by their Hindsight x.y.z; the
 // same release with another lock is not comparable (0, false).

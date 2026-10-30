@@ -62,23 +62,12 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 		return scheduler.Plan{}, &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	o := scheduler.Options{Shim: filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS)), Home: home, UID: os.Getuid(),
-		LogDir: filepath.Join(d.State, "logs"), Env: map[string]string{}, Name: cfg.Server.Project}
-	for _, k := range []string{"BACKSIGHT_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "PATH"} {
-		if v := os.Getenv(k); v != "" {
-			o.Env[k] = v
-		}
+		LogDir: filepath.Join(d.State, "logs"), Env: directoryEnv(), Name: cfg.Server.Project}
+	if v := os.Getenv("PATH"); v != "" {
+		o.Env["PATH"] = v
 	}
 	if schedulerGOOS == "linux" {
-		// The user manager reads units from its own XDG_CONFIG_HOME, which
-		// a shell setting does not change.
-		o.UnitDir = filepath.Join(home, ".config", "systemd", "user")
-		if out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment"); err == nil {
-			for _, l := range strings.Split(string(out), "\n") {
-				if v, ok := strings.CutPrefix(strings.TrimSpace(l), "XDG_CONFIG_HOME="); ok && v != "" {
-					o.UnitDir = filepath.Join(v, "systemd", "user")
-				}
-			}
-		}
+		o.UnitDir = userUnitDir(ctx, home)
 	}
 	for _, f := range tweak {
 		f(&o)
@@ -88,6 +77,39 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 		return p, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	return p, nil
+}
+
+// directoryEnv are the directories the install resolved (BACKSIGHT_HOME,
+// XDG_*_HOME), carried into what the user manager runs so that it finds
+// the same config and state as the shell.
+func directoryEnv() map[string]string {
+	env := map[string]string{}
+	for _, k := range []string{"BACKSIGHT_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"} {
+		if v := os.Getenv(k); v != "" {
+			env[k] = v
+		}
+	}
+	return env
+}
+
+// userUnitDir is where the systemd user manager reads units: its own
+// XDG_CONFIG_HOME, which a shell setting does not change, else ~/.config.
+func userUnitDir(ctx context.Context, home string) string {
+	dir := filepath.Join(home, ".config", "systemd", "user")
+	if out, err := sysRunner.Run(ctx, "systemctl", "--user", "show-environment"); err == nil {
+		for _, l := range strings.Split(string(out), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(l), "XDG_CONFIG_HOME="); ok && v != "" {
+				dir = filepath.Join(v, "systemd", "user")
+			}
+		}
+	}
+	return dir
+}
+
+// unitDirAndEnv are the scheduler's unit directory and directories, which
+// the native runtime's units share.
+func unitDirAndEnv(ctx context.Context, home string) (string, map[string]string) {
+	return userUnitDir(ctx, home), directoryEnv()
 }
 
 func cmdLine(c []string) string { return strings.Join(c, " ") }

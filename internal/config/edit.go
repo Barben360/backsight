@@ -112,6 +112,19 @@ func SetNetwork(raw []byte, exposure, bindIP string) ([]byte, error) {
 	return setKey(out, "network", "exposure", strconv.Quote(exposure))
 }
 
+// SetRuntime returns raw with [server] runtime set to kind: "native" is
+// written, "docker" removes the key (the default), so a Docker install's
+// file stays as it was.
+func SetRuntime(raw []byte, kind string) ([]byte, error) {
+	switch kind {
+	case "docker":
+		return setKey(raw, "server", "runtime", "")
+	case "native":
+		return setKey(raw, "server", "runtime", strconv.Quote(kind))
+	}
+	return nil, errors.New("server.runtime: " + strconv.Quote(kind) + " is not docker or native")
+}
+
 // valueEnd is where a one-line TOML value ends in s (strings and arrays
 // read with their quotes, so a "#" or "]" inside a string counts for
 // nothing); ok false when an array does not close on this line.
