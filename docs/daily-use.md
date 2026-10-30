@@ -35,7 +35,23 @@ Each memory shown to Claude carries its project and a short id, the first 8 char
 
 > 🧠 **From memory (my-project · 0b4c2a52)** — the API client retries 3 times, decided on 2026-10-12 because the gateway drops idle connections.
 
-The part in parentheses names the project and the short ids of the memories used; what follows the dash is Claude's own summary of what it used. When memories were shown but none helped, Claude reports that instead and prints no line. If Claude searched and found nothing, it says so. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
+The part in parentheses names the project and the short ids of the memories used; what follows the dash is Claude's own summary of what it used. When memories were shown but none helped, Claude reports that instead and prints no line. Memories are hints from past sessions: Claude is told to check them against the code before relying on them.
+
+### The lines from memory
+
+Every line about the memory has the same shape: 🧠 alone when a memory was read, 🧠 and a second emoji when the memory was written or something went wrong. The tools hand back each line with its project, ids and commands filled in; Claude writes the part after the dash.
+
+| Line | When |
+|---|---|
+| 🧠 **From memory (my-project · 0b4c2a52)** — … | A memory informed the answer. |
+| 🧠💾 **Saved (my-project · decision)** — … | Claude stored a new fact with `memory_store`. |
+| 🧠🔄 **Updated (my-project · correction · replaces 7d1e93a0)** — … | The fact stored updates a memory `memory_store` listed as similar. |
+| 🧠❌ **Wrong, retired (my-project · 7e1f9d03)** — … · undo: `backsight forget --restore <id>` | Claude reported a memory false; it is retired on the server ([below](#memories-claude-reports-wrong)). |
+| 🧠⌛ **Outdated, retired (my-project · c93a0e17)** — … · undo: `backsight forget --restore <id>` | The same for a memory that was true and no longer is. |
+| 🧠🙈 **Hidden on this PC (my-project · c93a0e17)** — … · undo: `backsight forget --restore <id>` | A reported memory that could only be hidden on this machine; when the server could not be read, the line also gives `backsight forget <id>` to retire it there. |
+| 🧠⚠️ **Not retired (my-project · 7e1f9d03)** — … · retire it: `backsight forget <id>` | A reported memory was not retired, with the reason: the retirement limit, the server's refusal, another project's memory. |
+| 🧠🔍 **Nothing in memory** — … | Claude searched and found nothing. |
+| 🧠📚 **Retro (my-project)** — 6 saved, 1 corrected, 2 to promote | The summary that ends `/backsight:memory-retro`. |
 
 ## Projects and the transverse memory
 

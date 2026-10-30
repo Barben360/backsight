@@ -35,7 +35,6 @@ const (
 	creditSourcesPrefix = "Sources:"
 	maxReason           = 300 // characters of the invalidation reason, before its note
 	sourceTextChars     = 300 // characters of a source fact's text in a Sources answer
-	restoreAsk          = "Tell the user which memory you retired, why, and that `backsight forget --restore <id>` undoes it."
 	sourcesAsk          = "Call memory_credit again with the verdict, naming the source facts that are wrong (or all of them)."
 )
 
@@ -133,19 +132,30 @@ func sourcesText(p retirePlan) string {
 
 // capRefusal is the refusal of a verdict over feedback.max_retirements,
 // with the command that retires each memory from a terminal.
-func capRefusal(limit, done int, ids []string) error {
-	lines := []string{fmt.Sprintf("retirements: at most %d per session (feedback.max_retirements), %d already: nothing stored; tell the user, who can retire them from a terminal:", limit, done)}
+func capRefusal(limit, done int, ids []string, owner func(string) string) error {
+	reason := fmt.Sprintf("at most %d retirements per session", limit)
+	var lines []string
 	for _, id := range ids {
-		lines = append(lines, "backsight forget "+id)
+		lines = append(lines, instructions.NotRetiredLine(safeProject(owner(id)), id, reason, true))
 	}
-	return errors.New(strings.Join(lines, "\n"))
+	return fmt.Errorf("retirements: at most %d per session (feedback.max_retirements), %d already: nothing stored; the user can retire them from a terminal; %s\n%s",
+		limit, done, printLines(lines), strings.Join(lines, "\n"))
+}
+
+// printLines asks the agent to print lines, the feedback lines a tool
+// hands back.
+func printLines(lines []string) string {
+	if len(lines) == 1 {
+		return "Print this line in your final message:"
+	}
+	return "Print these lines in your final message:"
 }
 
 // retire carries out plan in id order after the correction note was
 // stored: each raw fact invalidated with reason, each hidden one
 // journaled. A server error stops it: the answer names what was retired
 // and what was not, and only what was is journaled.
-func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, verdict, note, reason string, ids []string, plan retirePlan) (string, error) {
+func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, verdict, note, reason string, ids []string, plan retirePlan, owner func(string) string) (string, error) {
 	var retired, hidden, notRetired []string
 	var failure error
 	local := false // the failure is this PC's sends gate, not the server's answer
@@ -187,11 +197,12 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 		return "", fmt.Errorf("%w: nothing retired (backsight doctor). The correction is already stored as %s: do not call memory_credit again for these memories", failure, note)
 	}
 	if failure != nil && len(retired)+len(hidden) == 0 {
-		lines := []string{fmt.Sprintf("the server refused the retirement (%v): nothing retired. The correction is already stored as %s: do not call memory_credit again for these memories; tell the user, who can retire them from a terminal:", failure, note)}
+		var lines []string
 		for _, id := range notRetired {
-			lines = append(lines, "backsight forget "+id)
+			lines = append(lines, instructions.NotRetiredLine(safeProject(owner(id)), id, "the server refused it", true))
 		}
-		return "", errors.New(strings.Join(lines, "\n"))
+		return "", fmt.Errorf("the server refused the retirement (%w): nothing retired. The correction is already stored as %s: do not call memory_credit again for these memories; the user can retire them from a terminal; %s\n%s",
+			failure, note, printLines(lines), strings.Join(lines, "\n"))
 	}
 	// Counts and enums only, as the answer decided them.
 	switch {
@@ -249,7 +260,29 @@ func (d mcpDeps) retire(ctx context.Context, key *mcpKey, live session.Live, ver
 	case len(notRetired) > 0:
 		b.WriteString("Not retired (the user can retire them from a terminal: backsight forget <id>): " + strings.Join(notRetired, ", ") + "\n")
 	}
-	b.WriteString(restoreAsk)
+	// The lines to print, in id order: one per memory the call names.
+	notReason, retireCmd := "the server refused a retirement", true
+	switch {
+	case moved:
+		notReason, retireCmd = "this PC joined another server since this session started", false
+	case local:
+		notReason = "not sent from this PC (backsight doctor)"
+	}
+	var lines []string
+	for _, id := range ids {
+		p := safeProject(owner(id))
+		switch {
+		case slices.Contains(retired, id):
+			lines = append(lines, instructions.RetiredLine(verdict, p, id))
+		case slices.Contains(hidden, id):
+			lines = append(lines, instructions.HiddenLine(verdict, p, id, slices.Contains(plan.unread, id)))
+		case slices.Contains(notRetired, id):
+			lines = append(lines, instructions.NotRetiredLine(p, id, notReason, retireCmd))
+		}
+	}
+	if len(lines) > 0 {
+		b.WriteString(printLines(lines) + "\n" + strings.Join(lines, "\n"))
+	}
 	return b.String(), nil
 }
 

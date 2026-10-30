@@ -25,8 +25,10 @@ import (
 // failed tool call; v7: the agent declares the memories it used with
 // memory_credit, whose answer carries the line to print, instead of citing
 // them in a fixed format; v8: memory_credit takes the verdicts wrong and
-// outdated, with the correction and the evidence).
-const Version = "v8"
+// outdated, with the correction and the evidence; v9: one format for
+// every line printed to the user, memory_store and the verdicts hand back
+// theirs, the guide, the gate and the retro name theirs).
+const Version = "v9"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -58,7 +60,7 @@ const (
 )
 
 // Guide is the SessionStart guide (≤ 1 200 chars, E6).
-const Guide = guideHead + CreditAsk + " An empty search: one line \"nothing in memory\". " + guideTail
+const Guide = guideHead + CreditAsk + " An empty search: one line «" + NothingLine + "». " + guideTail
 
 // ShortGuide is the MCP server's instructions (≤ 1 000 chars).
 const ShortGuide = shortGuideHead + ". " + CreditAsk + " " + shortGuideTail
@@ -69,7 +71,7 @@ const Reminder = reminderHead + ". " + CreditAsk
 // The texts where memory_credit is not offered (feedback.enabled off): the
 // v6 citation instead of the credit ask.
 const (
-	GuideCite      = guideHead + "If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line \"nothing in memory\". " + guideTail
+	GuideCite      = guideHead + "If a result informs your answer, cite it exactly: «" + Credit + "»; an empty search: one line «" + NothingLine + "». " + guideTail
 	ShortGuideCite = shortGuideHead + ", cite what you use as «" + Credit + "». " + shortGuideTail
 	ReminderCite   = reminderHead + "; credit what you use exactly: «" + Credit + "»."
 	RecallCite     = "Cite what you use as «" + Credit + "»."
@@ -113,7 +115,7 @@ const (
 // GateReason denies AskUserQuestion once per prompt when no memory tool ran;
 // hits, when they arrive in time, are appended by the hook.
 const GateReason = "Before asking the user, look for the answer in their memory: call `memory_search` with short queries on the question's topic. " +
-	"If memory has no answer, ask again and say so (\"nothing in memory\")."
+	"If memory has no answer, ask again and say so: «" + NothingLine + "»."
 
 // The end-of-turn check's reason, when memories were shown in a turn and
 // it ends without a memory_credit call: the header, one line per memory,
@@ -194,7 +196,7 @@ const (
 		"Close the loop: when work ships (PR merged, issue closed or abandoned, root cause found) or a recalled memory is contradicted by the code or the user, " +
 		"store ONE dated fact that names the old claim in its own words (\"State (2026-10-27): <item> is <status>; replaces open item <old wording>\"), kind correction for a contradiction. " +
 		"State the fact itself, never \"a memory about X was stored\"; split a fact that covers two topics. " +
-		"The 3 most similar memories are returned: if one contradicts this fact, say it updates it rather than adding a parallel fact; if it repeats one, say so."
+		"The 3 most similar memories are returned: if one contradicts this fact, it updates it rather than adding a parallel fact; print the line the result gives, Updated then, Saved otherwise (if it repeats one, say so in it)."
 	ReadDescription   = "Read one memory by id: its text, dates, project and the source facts (with their kinds and documents) it was built from."
 	CreditDescription = "Name the memories shown to you in this session that informed your answer: call it once you know what you used, before your final message. " +
 		"`ids`: 1-10 memory ids, full or their first 8 characters as shown next to each memory; verdict `used` (the default) returns the line to print in your final message. " +
@@ -205,12 +207,6 @@ const (
 		"{\"ids\": [\"7e1f9d03\"], \"verdict\": \"wrong\", \"correction\": \"Billing runs PostgreSQL 16, not 15.\", \"evidence\": \"psql --version printed 16.4\"} · " +
 		"{\"ids\": [\"c93a0e17\"], \"verdict\": \"outdated\", \"correction\": \"Deploys moved from Jenkins to GitHub Actions on 2026-10-20.\", \"evidence\": \"the user: we dropped Jenkins last week\"}."
 )
-
-// CreditLine is the line memory_credit hands back for the agent to print:
-// the memories of one project it used, by short id.
-func CreditLine(project string, ids8 []string) string {
-	return "> 🧠 **From memory (" + project + " · " + strings.Join(ids8, ", ") + ")** — <the facts you used, in your words>"
-}
 
 // Skill is one plugin skill (SPEC §9.2, §17): its SKILL.md frontmatter and
 // body; shim is the absolute path of the backsight shim.
@@ -246,7 +242,7 @@ func Skills(shim string) []Skill {
 			Body: "Store the fact given here with the `memory_store` tool: $ARGUMENTS\n\n" +
 				"Pick the kind (decision, correction, convention, pitfall, state, lesson) and the project (the current one; \"transverse\" for user-wide rules). " +
 				"Write 1-3 sentences in English with the why and absolute dates, exact identifiers, no secrets. " +
-				"Then say in one line what was stored and whether it updates or repeats one of the similar memories the tool returned.\n",
+				"Then print the line the tool returns: Updated when the fact updates one of the similar memories it lists, Saved otherwise.\n",
 		},
 		{
 			Name: "pause",
@@ -283,7 +279,7 @@ func Skills(shim string) []Skill {
 				"a user-wide convention with project \"transverse\", the rest in the current project.\n" +
 				"5. Promote (report only): list the stored conventions and corrections that are user-wide or must never break, and propose moving each into " +
 				"the project's CLAUDE.md, a `.claude/rules` file or a hook. The user approves each one; never edit those files without that approval.\n" +
-				"Finish with a short list of what was stored and what you propose to promote.\n",
+				"Finish with «" + RetroLine + "», then the lines the stores returned and what you propose to promote.\n",
 		},
 		{
 			Name: "memory",
