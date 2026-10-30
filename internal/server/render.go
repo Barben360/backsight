@@ -50,10 +50,14 @@ func PinnedVersion() string {
 
 const pinnedHindsight = "ghcr.io/vectorize-io/hindsight:1.1.0@sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06"
 
-// Files are the rendered compose project.
+// Files are the rendered server: Docker's compose project, or the native
+// runtime's environment and units.
 type Files struct {
 	Compose []byte
 	Env     []byte
+	// Units maps a systemd unit file's base name to its content (native);
+	// nil on Docker.
+	Units map[string][]byte
 }
 
 // MissingSecretsError lists the secrets render needs and does not have.
@@ -281,6 +285,8 @@ func workerName(host string) string {
 type Changes struct {
 	Compose bool `json:"compose_changed"`
 	Env     bool `json:"env_changed"`
+	// Units: a unit file changed (native only, never reported on Docker).
+	Units bool `json:"units_changed,omitempty"`
 }
 
 // Diff compares f with the files in dir without writing.
@@ -371,6 +377,32 @@ func CompareImages(a, b string) (cmp int, comparable bool) {
 		}
 	}
 	return 0, false // same version, different digests: a rebuild
+}
+
+// releaseTag is a release's version; nativeTag a native install's,
+// <hindsight version>-<the lock's hash, 12 hex digits>.
+var (
+	releaseTag = regexp.MustCompile(`^v?([0-9]+\.[0-9]+\.[0-9]+)$`)
+	nativeTag  = regexp.MustCompile(`^([0-9]+\.[0-9]+\.[0-9]+)-[0-9a-f]{12}$`)
+)
+
+// HindsightVersionOf is the Hindsight release ("1.1.0") an image reference
+// tags or a native version starts with; "" when it names none (a digest
+// alone, a pre-release).
+func HindsightVersionOf(ref string) string {
+	name, _, _ := strings.Cut(ref, "@")
+	tag := name
+	if i := strings.LastIndex(name, ":"); i >= 0 && !strings.Contains(name[i:], "/") {
+		tag = name[i+1:]
+	} else if strings.Contains(name, "/") {
+		return "" // an image without a tag (a registry's port is none)
+	}
+	for _, re := range []*regexp.Regexp{releaseTag, nativeTag} {
+		if m := re.FindStringSubmatch(tag); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 // imageVersion reads the x.y.z tag of an image reference.

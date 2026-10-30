@@ -102,12 +102,31 @@ func (d DB) RemoveStaleDumps(ctx context.Context) error {
 	return err
 }
 
+// queryFunc runs one statement and returns its single value: the SQL
+// below runs over Docker's psql (DB) and the native runtime's alike.
+type queryFunc func(ctx context.Context, sql string) (string, error)
+
 // DocumentMetadata reads one document's metadata from the database, read
 // only, for when the API cannot answer (Hindsight 1.1.0 keeps it in
 // documents.retain_params.metadata). No such document is nil, nil.
 func (d DB) DocumentMetadata(ctx context.Context, bank, id string) (map[string]string, error) {
-	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
-	out, err := d.Query(ctx, "select coalesce((select (retain_params::jsonb)->'metadata' from documents where bank_id = "+q(bank)+" and id = "+q(id)+"), 'null'::jsonb)")
+	return documentMetadata(ctx, d.Query, bank, id)
+}
+
+// BankIDs lists the banks of the database, read only, for when the API
+// cannot answer.
+func (d DB) BankIDs(ctx context.Context) ([]string, error) { return bankIDs(ctx, d.Query) }
+
+// Counts returns the rows of tables in the database.
+func (d DB) Counts(ctx context.Context, tables []string) (map[string]int64, error) {
+	return counts(ctx, d.Query, tables)
+}
+
+// sqlString is s as an SQL string literal.
+func sqlString(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+func documentMetadata(ctx context.Context, query queryFunc, bank, id string) (map[string]string, error) {
+	out, err := query(ctx, "select coalesce((select (retain_params::jsonb)->'metadata' from documents where bank_id = "+sqlString(bank)+" and id = "+sqlString(id)+"), 'null'::jsonb)")
 	if err != nil {
 		return nil, err
 	}
@@ -118,10 +137,8 @@ func (d DB) DocumentMetadata(ctx context.Context, bank, id string) (map[string]s
 	return meta, nil
 }
 
-// BankIDs lists the banks of the database, read only, for when the API
-// cannot answer.
-func (d DB) BankIDs(ctx context.Context) ([]string, error) {
-	out, err := d.Query(ctx, "select coalesce(json_agg(bank_id order by bank_id), '[]'::json) from banks")
+func bankIDs(ctx context.Context, query queryFunc) ([]string, error) {
+	out, err := query(ctx, "select coalesce(json_agg(bank_id order by bank_id), '[]'::json) from banks")
 	if err != nil {
 		return nil, err
 	}
@@ -132,19 +149,18 @@ func (d DB) BankIDs(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// Counts returns the rows of tables in the database.
-func (d DB) Counts(ctx context.Context, tables []string) (map[string]int64, error) {
-	counts := map[string]int64{}
+func counts(ctx context.Context, query queryFunc, tables []string) (map[string]int64, error) {
+	rows := map[string]int64{}
 	for _, t := range tables {
-		out, err := d.Query(ctx, "select count(*) from "+t)
+		out, err := query(ctx, "select count(*) from "+t)
 		if err != nil {
 			return nil, fmt.Errorf("counting %s: %w", t, err)
 		}
-		if counts[t], err = strconv.ParseInt(out, 10, 64); err != nil {
+		if rows[t], err = strconv.ParseInt(out, 10, 64); err != nil {
 			return nil, fmt.Errorf("counting %s: %q", t, out)
 		}
 	}
-	return counts, nil
+	return rows, nil
 }
 
 func randHex() string {

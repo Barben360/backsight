@@ -866,15 +866,9 @@ func purgeBanks(banks []otherBank) []string {
 	return out
 }
 
-// ownGroupRuntime is cfg's runtime with Docker children in their own
-// process group: a Ctrl-C must not kill a rollback's docker.
-func ownGroupRuntime(cfg config.Config) server.Runtime {
-	c := composeFor(cfg)
-	if r, ok := c.Runner.(interface{ InOwnGroup() server.Runner }); ok {
-		c.Runner = r.InOwnGroup()
-	}
-	return server.Docker{Compose: c, Cfg: cfg}
-}
+// ownGroupRuntime is cfg's runtime with its children in their own process
+// group: a Ctrl-C must not kill a rollback's docker.
+func ownGroupRuntime(cfg config.Config) server.Runtime { return runtimeWith(cfg, true) }
 
 // updateLockEnv tells the binaries update apply runs which maintenance
 // lock it holds: "<pid>@<since, Unix seconds>", the lock's own record.

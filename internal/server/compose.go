@@ -137,9 +137,10 @@ func (c Compose) PullImage(ctx context.Context, image string) error {
 	return nil
 }
 
-// Up starts the project and waits until Compose sees it running and healthy.
-func (c Compose) Up(ctx context.Context) error {
-	_, err := c.run(ctx, "up", "-d", "--wait")
+// Up starts services (none: the whole project) and waits until Compose
+// sees them running and healthy.
+func (c Compose) Up(ctx context.Context, services ...string) error {
+	_, err := c.run(ctx, append([]string{"up", "-d", "--wait"}, services...)...)
 	return err
 }
 

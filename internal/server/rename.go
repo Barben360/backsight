@@ -22,11 +22,15 @@ func (c Compose) RenameBank(ctx context.Context, from, to string, dryRun bool) (
 // PendingOperations counts the operations of banks the server has not
 // finished (consolidation after a send): a rename waits for them.
 func (d DB) PendingOperations(ctx context.Context, banks []string) (int, error) {
+	return pendingOperations(ctx, d.Query, banks)
+}
+
+func pendingOperations(ctx context.Context, query queryFunc, banks []string) (int, error) {
 	q := make([]string, len(banks))
 	for i, b := range banks {
-		q[i] = "'" + strings.ReplaceAll(b, "'", "''") + "'"
+		q[i] = sqlString(b)
 	}
-	out, err := d.Query(ctx, "select count(*) from async_operations where bank_id in ("+strings.Join(q, ", ")+") and status in ('pending', 'processing')")
+	out, err := query(ctx, "select count(*) from async_operations where bank_id in ("+strings.Join(q, ", ")+") and status in ('pending', 'processing')")
 	if err != nil {
 		return 0, err
 	}

@@ -38,10 +38,20 @@ func composeFor(cfg config.Config) server.Compose {
 	return server.Compose{Dir: cfg.Server.ComposeDir, Runner: composeRunner, Project: cfg.Server.Project}
 }
 
-// runtimeFor is the server runtime of cfg (decision 0070): Docker Compose.
-func runtimeFor(cfg config.Config) server.Runtime {
-	return server.Docker{Compose: composeFor(cfg), Cfg: cfg}
+// runtimeWith is the server runtime of cfg (decisions 0070, 0078):
+// Docker Compose. ownGroup runs its children in their own process group: a
+// Ctrl-C at the terminal must not kill a rollback's docker. Tests replace
+// it.
+var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
+	c := composeFor(cfg)
+	if r, ok := c.Runner.(interface{ InOwnGroup() server.Runner }); ok && ownGroup {
+		c.Runner = r.InOwnGroup()
+	}
+	return server.Docker{Compose: c, Cfg: cfg}
 }
+
+// runtimeFor is the server runtime of cfg.
+func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }
 
 func blocked(err error) error {
 	var oe *output.Error

@@ -209,7 +209,7 @@ func serverStepSkipped(d paths.Dirs, cfg config.Config) string {
 	if cfg.Server.Mode != "local" {
 		return "the server is remote: update backsight on its host"
 	}
-	if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.yaml")); err != nil {
+	if deployed, err := runtimeFor(cfg).Deployed(); err != nil || deployed == "" {
 		return "no server deployed on this machine"
 	}
 	return ""
@@ -936,8 +936,8 @@ func upgradePassed(d paths.Dirs, cfg config.Config, sp serverPlan) bool {
 	if state.RestoreIncomplete(d) || sp.Target == sp.Current {
 		return false
 	}
-	raw, err := os.ReadFile(filepath.Join(cfg.Server.ComposeDir, "compose.yaml"))
-	return err == nil && server.ServiceImage(raw, "hindsight") == sp.Target
+	deployed, err := runtimeFor(cfg).Deployed()
+	return err == nil && deployed == sp.Target
 }
 
 // clearAutoApply forgets a failed auto-apply: update apply run by hand
