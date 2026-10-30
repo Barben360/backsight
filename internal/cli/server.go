@@ -478,9 +478,10 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				// The db unit's ExecStartPre is the shim (server
 				// native-check), which setup's client step installs only
 				// after this one: without it the unit cannot start
-				// (systemd's 203/EXEC). One already there is the client's.
+				// (systemd's 203/EXEC). One that runs is the client's; one
+				// missing or dangling is installed again.
 				shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
-				if _, err := os.Lstat(shim); errors.Is(err, fs.ErrNotExist) {
+				if fi, err := os.Stat(shim); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
 					target, err := shimTarget(d.Data)
 					if err == nil {
 						err = installShim(target, shim)

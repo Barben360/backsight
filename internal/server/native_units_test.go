@@ -269,15 +269,20 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 	inst := root + "/home/.pg0/installation/18.1.0"
 	start := unitLine(db, "ExecStart")
 	for _, want := range []string{inst + "/bin/postgres -D " + root + "/home/.pg0/instances/hindsight/data -p 8889 ",
-		"-c fsync=on", "-c listen_addresses=127.0.0.1", "-k " + root + "/home/.pg0/run", // req 1, loopback
+		"-c fsync=on", "-c listen_addresses=127.0.0.1", "-c unix_socket_directories= ", // req 1, loopback; TCP only (ruling R44)
 		"-c shared_buffers=256MB", "-c work_mem=64MB", "-c maintenance_work_mem=512MB", "-c effective_cache_size=1GB",
 		"-c max_parallel_maintenance_workers=4", "-c timezone=UTC", "-c log_timezone=UTC"} { // ruling R23
 		if !strings.Contains(start, want) {
 			t.Errorf("db ExecStart %q lacks %q", start, want)
 		}
 	}
-	if got := unitLine(db, "ExecStartPost"); !strings.Contains(got, "kill -0 $$MAINPID") || !strings.Contains(got, inst+"/bin/pg_isready -q -h "+root+"/home/.pg0/run -p 8889") {
-		t.Errorf("db ExecStartPost = %q, want the pg_isready loop on $$MAINPID", got)
+	if got := unitLine(db, "ExecStartPost"); !strings.Contains(got, "kill -0 $$MAINPID") || !strings.Contains(got, inst+"/bin/pg_isready -q -h 127.0.0.1 -p 8889 ") {
+		t.Errorf("db ExecStartPost = %q, want the pg_isready loop on $$MAINPID, over TCP", got)
+	}
+	// Ruling R44: no Unix socket, whose path (at most 107 bytes) a long
+	// data directory would overflow.
+	if strings.Contains(start, " -k ") || strings.Contains(string(db), ".pg0/run") {
+		t.Errorf("the db unit still names a socket directory:\n%s", db)
 	}
 	if !strings.Contains(string(db), "\nEnvironment=LD_LIBRARY_PATH="+inst+"/lib\n") || !strings.Contains(string(db), "\nEnvironment=HOME="+root+"/home\n") {
 		t.Error("db unit lacks HOME or LD_LIBRARY_PATH")
@@ -799,8 +804,8 @@ func TestNativeWriteOnlyWhatChanged(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if st, err := os.Stat(filepath.Join(n.Home(), ".pg0", "run")); err != nil || st.Mode().Perm() != 0o700 {
-		t.Errorf("postgres's socket directory: %v", err)
+	if exists(filepath.Join(n.Home(), ".pg0", "run")) {
+		t.Error("Write made a socket directory: the database listens on TCP only (ruling R44)")
 	}
 }
 

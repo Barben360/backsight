@@ -166,10 +166,14 @@ func TestNativeServerInstallCreatesWhatServerStartRefuses(t *testing.T) {
 // setup runs server install before the client step installs the shim, so
 // server install puts it in place when it is missing (the native chain's
 // first real run: 203/EXEC). A shim already there is the client's to
-// point, and is left alone.
+// point, and is left alone; a dangling one is installed again.
 func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
-	for _, existing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "no shim", true: "a shim already there"}[existing], func(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		existing, dangling bool
+	}{{"no shim", false, false}, {"a shim already there", true, false}, {"a dangling shim", false, true}} {
+		existing := c.existing
+		t.Run(c.name, func(t *testing.T) {
 			home := isolate(t)
 			withSys(t, "linux")
 			_, sys, port := nativeFresh(t, home)
@@ -198,6 +202,11 @@ func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if c.dangling { // its binary removed by hand: systemd's 203/EXEC again
+				if err := os.Symlink(filepath.Join(d.Data, "bin", "0.0.1-gone", "backsight"), shim); err != nil {
+					t.Fatal(err)
+				}
+			}
 			_ = os.MkdirAll(d.Config, 0o700)
 			if err := os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\nruntime = \"native\"\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -222,6 +231,42 @@ func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
 				t.Errorf("the shim points at %s, want %s", got, want)
 			}
 		})
+	}
+}
+
+// Ruling R44: the database listens on loopback TCP only, so a long data
+// directory (here a native root of 200+ characters) installs and starts:
+// with a Unix socket under it, postgres would refuse (sun_path's 107
+// bytes), as the native chain's first real run showed.
+func TestNativeServerInstallStartsUnderALongDataDirectory(t *testing.T) {
+	isolate(t)
+	home := filepath.Join(t.TempDir(), strings.Repeat("h", 150))
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
+	withSys(t, "linux")
+	n, sys, port := nativeFresh(t, home)
+	sys.socketLimit = true
+	if len(n.Root()) < 200 {
+		t.Fatalf("native root %q is %d characters, want 200 or more", n.Root(), len(n.Root()))
+	}
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.Config, 0o700)
+	if err := os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\nruntime = \"native\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "server", "install")
+	if code != output.OK {
+		t.Fatalf("server install under a %d-character native root: exit %d\n%s%s", len(n.Root()), code, out, errOut)
+	}
+	unit, err := os.ReadFile(testUnitFile(n.DBUnit()))
+	if err != nil {
+		t.Fatalf("no db unit where the fake systemd reads it: %v", err)
+	}
+	if !strings.Contains(string(unit), "-c unix_socket_directories= ") || !strings.Contains(string(unit), "pg_isready -q -h 127.0.0.1 ") {
+		t.Errorf("the db unit does not listen on TCP only:\n%s", unit)
 	}
 }
 

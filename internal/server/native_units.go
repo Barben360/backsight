@@ -100,10 +100,6 @@ func (n Native) installation() string {
 // DataDir is the database's data directory (pg0's instance).
 func (n Native) DataDir() string { return filepath.Join(n.InstanceDir(), "data") }
 
-// socketDir is postgres's Unix socket directory, which must exist before
-// it starts (Task 1).
-func (n Native) socketDir() string { return filepath.Join(n.Home(), ".pg0", "run") }
-
 func (n Native) shim() string { return filepath.Join(n.Dirs.Data, "bin", plugin.ShimName("linux")) }
 
 func (n Native) pendingFile() string { return filepath.Join(n.Root(), restartPending) }
@@ -281,7 +277,8 @@ var pgSettings = []string{"shared_buffers=256MB", "work_mem=64MB", "maintenance_
 	"max_parallel_maintenance_workers=4", "timezone=UTC", "log_timezone=UTC"}
 
 // dbUnit runs pg0's postgres in the foreground with fsync on, on loopback
-// (requirement 1; Task 1's C2). It is ready once pg_isready answers, gives
+// TCP only (requirement 1; Task 1's C2; ruling R44: no Unix socket, whose
+// path a long data directory would push past 107 bytes). It is ready once pg_isready answers, gives
 // up as soon as the postmaster is gone, and stops with SIGINT (a fast
 // shutdown) then whatever is left in its cgroup (ruling R20). native-check
 // refuses a start on a missing, empty or foreign instance (requirement 2).
@@ -309,13 +306,13 @@ func (n Native) dbUnit(pg int) []byte {
 	}
 	b.WriteString("ExecStartPre=" + execPath(n.shim()) + " server native-check\n")
 	start := []string{execPath(filepath.Join(inst, "bin", "postgres")), "-D", execArg(n.DataDir()), "-p", port,
-		"-c", "fsync=on", "-c", "listen_addresses=127.0.0.1", "-k", execArg(n.socketDir())}
+		"-c", "fsync=on", "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="}
 	for _, s := range pgSettings {
 		start = append(start, "-c", s)
 	}
 	b.WriteString("ExecStart=" + strings.Join(start, " ") + "\n")
 	ready := "while kill -0 $MAINPID 2>/dev/null; do " + shellWord(filepath.Join(inst, "bin", "pg_isready")) +
-		" -q -h " + shellWord(n.socketDir()) + " -p " + port + " && exit 0; sleep 0.1; done; exit 1"
+		" -q -h 127.0.0.1 -p " + port + " && exit 0; sleep 0.1; done; exit 1"
 	b.WriteString("ExecStartPost=/bin/sh -c " + execArg(ready) + "\n")
 	// native-check, a crash recovery and readiness, never cut short into a
 	// restart loop (Task 1 measured with 120 s).
@@ -400,12 +397,6 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 		return c, err
 	}
 	if err := n.ensureHome(); err != nil {
-		return c, err
-	}
-	if err := os.MkdirAll(n.socketDir(), 0o700); err != nil {
-		return c, err
-	}
-	if err := os.Chmod(n.socketDir(), 0o700); err != nil {
 		return c, err
 	}
 	if len(restart) > 0 {

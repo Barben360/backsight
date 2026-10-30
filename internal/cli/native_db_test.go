@@ -169,6 +169,26 @@ type nativeSysFake struct {
 	// needShim: a db unit start fails, as systemd's 203/EXEC, while its
 	// ExecStartPre (the shim) is not an executable file.
 	needShim bool
+	// socketLimit: a db unit start fails, as postgres does, when its unit
+	// file gives a Unix socket directory whose socket path passes 107
+	// bytes (the unit read where the tests' user manager has it).
+	socketLimit bool
+}
+
+// socketTooLong: the db unit file's -k directory makes a socket path
+// longer than sun_path's 107 bytes.
+func socketTooLong(unit string) bool {
+	raw, err := os.ReadFile(testUnitFile(unit))
+	if err != nil {
+		return false
+	}
+	f := strings.Fields(string(raw))
+	for i := range f[:len(f)-1] {
+		if f[i] == "-k" && len(f[i+1])+len("/.s.PGSQL.65535") > 107 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *nativeSysFake) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -190,6 +210,8 @@ func (s *nativeSysFake) Run(_ context.Context, name string, args ...string) ([]b
 		switch {
 		case (verb == "start" || verb == "restart") && strings.HasSuffix(u, "-db.service") && s.needShim && !executable(filepath.Join(s.db.n.Dirs.Data, "bin", "current")):
 			return nil, errors.New("Job for " + u + " failed because the control process exited with error code (203/EXEC)")
+		case (verb == "start" || verb == "restart") && strings.HasSuffix(u, "-db.service") && s.socketLimit && socketTooLong(u):
+			return nil, errors.New("Job for " + u + " failed: could not create any Unix-domain sockets (socket path too long)")
 		case (verb == "start" || verb == "restart") && strings.HasSuffix(u, "-db.service"):
 			s.db.mu.Lock()
 			_, err := os.Stat(filepath.Join(s.db.n.DataDir(), "PG_VERSION"))
@@ -707,4 +729,16 @@ func TestBackupVerifyOnNativeStopsAStrayFirst(t *testing.T) {
 func executable(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0
+}
+
+// testUnitFile is where a test's native unit is written: the fake user
+// manager's XDG_CONFIG_HOME ($HOME/xdg), else $HOME/.config.
+func testUnitFile(unit string) string {
+	for _, dir := range []string{"xdg", ".config"} {
+		p := filepath.Join(os.Getenv("HOME"), dir, "systemd", "user", unit)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
