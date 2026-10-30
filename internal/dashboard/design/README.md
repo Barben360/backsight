@@ -1,11 +1,21 @@
 # Dashboard design (block 3 draft)
 
-First draft of the `backsight dashboard` UI for issue #115 (decision 0079 §8–§10). Block 5 translates it into Go `html/template` once the author approves it.
+First draft of the `backsight dashboard` UI for issue #115 (decision 0079 §8–§10). Block 5 translates it into Go `html/template`. The author approved it on 2026-10-30, including departures 1 ("3,600 chars"), 2 (the 9,000-character context limit) and 4 (Found tile watch while the Found axis is ok when the server is down) listed below.
 
 - **Claude Design canvas**: https://claude.ai/artifact/FbCVvwY5S8pvPPp8nppE8E (private until shared from its Share menu)
 - `tokens.css`: colours for both themes (ink, status, the three category sets, a one-hue sequential ramp, chart chrome), type scale on the system font stack, spacing, radii, layout sizes.
 - `reference/dashboard.css`: the single stylesheet built on `tokens.css`. The canvas uses this same file, so the mockups and the references cannot drift apart.
 - `reference/overview.html`, `reference/memory.html`: static HTML, no script. Open them straight from disk; they load the logos from `docs/assets/`.
+
+## Rules for block 5 (from the review)
+
+- **No inline styles.** The dashboard's CSP is `style-src 'self'`, which blocks every `style="…"` attribute. The references have none (`grep -c 'style="' reference/*.html` is 0). A value computed per item in Go must be an SVG attribute (`x`, `y`, `width`, `height`, `d`, `points`, `viewBox`) or one class from a finite set in `dashboard.css`, never a style. The canvas artboards still use inline styles for layout, which is fine there: they are mockups, not the page.
+- **Copy buttons:** render every `.copy` with the `hidden` attribute; the one small copy script removes it. With scripts off, the command stays selectable text and no button that does nothing shows.
+- **Logos:** the references load `../../../../docs/assets/logo-*.svg` only so they open from disk. Block 5 serves them at `/assets/<hashed>.svg` (embedded, no session needed, so the 401 page shows them too).
+- **Status icons are `data:` SVG masks in `dashboard.css`.** The icon shape is a non-colour status cue, so the CSP must keep `data:` in `img-src` (decision 0079 §7 has `img-src 'self' data:`). If that changes, move the icons to `/assets/` files.
+- **Footer version** (`v0.1.17-m7` in the mockups) is a sample: the page prints the running binary's version from `internal/buildinfo`.
+- **The dark palette is written three times:** `tokens.css` under `@media (prefers-color-scheme: dark)`, `tokens.css` under `[data-theme="dark"]`, and, as a forced-colours simulation, `.fc-preview` in `dashboard.css` (mirroring its `@media (forced-colors: active)` block). Each place carries a "keep in sync" comment.
+- **Sample names:** apart from `backsight`, project names are neutral samples (`project-a`, `project-b`, `project-c`, and `project-d-shared-frontend-tools` to show the 24-character ellipsis).
 
 ## What the canvas holds
 
@@ -84,7 +94,7 @@ The one-hue sequential steps (`--seq-1..3`, used only for splits that are not ca
 7. **Forced colours:** chrome takes system colours; chart fills keep their colours as data (`forced-color-adjust: none`) with a CanvasText outline, and status icons paint in CanvasText. The preview on sheet 2 is a simulation; real Windows contrast themes still need a check in block 5.
 8. **Values on hover and focus:** the mockups use each mark's `<title>`. Go should also give marks `tabindex="0"` and an `aria-label` (done in `reference/memory.html`); the canvas cannot show focus states.
 9. **Copy deck wording** stays within the plain labels; small changes: banner titles name the axis first ("Right: can't judge yet.", "Found needs attention."), the reason underneath carries the copy-deck sentence; attention items gained a "why this matters" text each; the updated page says how to restart ("Stop this dashboard (Ctrl+C) and start it again").
-10. **Numbers the issue does not give were invented** to stay consistent with the scenarios: session lists and ids (`a41c09e2`…), memory ids (`7f3a9c21`…), project list (`backsight`, `hindsight-stack`, `hindsight-claude-spec`, `infirlib`, `claude-code-plugins-marketplace-mirror` to show truncation), bank size (1,284 memories, 286 documents), 30-day chart series, server costs over 30 days ($186.40), release rows, and the Day page. No memory text appears anywhere.
+10. **Numbers the issue does not give were invented** to stay consistent with the scenarios: session lists and ids (`a41c09e2`…), memory ids (`7f3a9c21`…), project list (`backsight`, `project-a`, `project-b`, `project-c`, `project-d-shared-frontend-tools` to show truncation), bank size (1,284 memories, 286 documents), 30-day chart series, server costs over 30 days ($186.40), release rows, and the Day page. No memory text appears anywhere.
 11. **Developer metrics on the Quality page** (used.share_confident, used.rank, used.by_path, search.rescue_rate, used.rubber_stamp, recall.by_lang) are not drawn there; developer mode is shown on the Overview (metric ids on tiles plus a "How well is memory ranked?" card), on Releases and on Definitions.
 
 ## Limits of this draft

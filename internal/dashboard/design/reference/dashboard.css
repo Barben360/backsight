@@ -100,6 +100,9 @@ details.menu { position: relative; }
   box-shadow: var(--shadow-pop); padding: 6px; display: flex; flex-direction: column;
 }
 .menu-pop.right { left: auto; right: 0; }
+.menu-pop.wide { min-width: 260px; }
+.menu-pop.wider { min-width: 300px; }
+.menu-pop .seg { margin: 2px 10px 6px; }
 .menu-pop a, .menu-pop .opt {
   display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border-radius: var(--r-md);
   color: var(--fg); text-decoration: none; font-weight: var(--fw-regular);
@@ -162,6 +165,7 @@ details.menu { position: relative; }
 /* id chips and truncation */
 .idc { display: inline-flex; align-items: center; height: 22px; padding: 0 6px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border); font-family: var(--mono); font-size: var(--fs-xs); color: var(--fg); text-decoration: none; }
 a.idc:hover { border-color: var(--border-strong); }
+.trunc-short { max-width: 16ch !important; }
 .trunc { display: inline-block; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 
 /* ⓘ popover (a <details>, works without script) */
@@ -179,6 +183,7 @@ details.info > summary:hover, details.info[open] > summary { color: var(--fg); b
 details.cli > summary { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-xs); color: var(--fg-2); cursor: pointer; font-family: var(--mono); }
 details.cli[open] > summary { background: var(--surface-2); color: var(--fg); }
 details.cli > .cmd { margin-top: 8px; }
+.cmd.cli-pop { flex-direction: row; width: min(380px, 86vw); padding: 4px 4px 4px 10px; }
 .cmd { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px 4px 4px 10px; min-width: 0; }
 .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: var(--fs-sm); color: var(--fg); padding-block: 4px; }
 .copy { flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--fg-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
@@ -214,7 +219,7 @@ details.cli > .cmd { margin-top: 8px; }
 .verdict.v-cant { background: linear-gradient(var(--neutral-bg), var(--neutral-bg)) top / 100% 4px no-repeat, var(--surface); }
 .v-head { display: flex; align-items: flex-start; gap: var(--sp-3); }
 .v-head .v-ico { margin-top: 0; }
-.v-title { font-size: var(--fs-2xl); font-weight: var(--fw-bold); line-height: var(--lh-tight); text-wrap: balance; }
+.v-title { flex: 1; min-width: 0; font-size: var(--fs-2xl); font-weight: var(--fw-bold); line-height: var(--lh-tight); text-wrap: balance; }
 .v-when { font-size: var(--fs-sm); color: var(--fg-3); font-weight: var(--fw-regular); margin-left: 6px; white-space: nowrap; }
 .axes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); }
 .axis { border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -286,6 +291,13 @@ details.why > div { font-size: var(--fs-sm); color: var(--fg-2); padding: 4px 0 
 .state.st-learn .i { color: var(--learn); }
 .state.st-few .i { color: var(--neutral); }
 
+/* memory at a glance (Overview) */
+.glance { display: flex; flex-wrap: wrap; gap: var(--sp-7); align-items: flex-start; }
+.glance-total { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+.glance-total .v { font-size: var(--fs-3xl); font-weight: var(--fw-bold); line-height: 1.1; font-variant-numeric: tabular-nums; }
+.glance-kinds { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 10px; }
+.glance-look { display: flex; flex-direction: column; gap: var(--sp-2); }
+
 /* badges (info: never in the attention list) */
 .badges { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--fg); text-decoration: none; font-size: var(--fs-sm); }
@@ -338,7 +350,7 @@ details.why > div { font-size: var(--fs-sm); color: var(--fg-2); padding: 4px 0 
 .chart .legend svg, .legend svg { width: 12px; height: 12px; flex: none; }
 .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
 .sw-line { width: 14px; height: 2px; border-radius: 1px; }
-.sw-dash { width: 14px; height: 0; border-top: 2px dashed currentColor; background: none !important; }
+.sw-dash { width: 14px; height: 0; border-top: 2px dashed currentColor; background: none !important; color: var(--fg-2); }
 .chart path.mkp { stroke: var(--surface); stroke-width: 1.5; }
 .mk-pend, .chart path.mkp.mk-pend { fill: var(--surface); stroke: var(--c-pending-ink); stroke-width: 1.5; stroke-dasharray: 2 1.6; }
 .chart path.seg { stroke: var(--surface); stroke-width: 2; stroke-linejoin: round; }
@@ -397,12 +409,14 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
 .fig .lab { font-size: var(--fs-sm); color: var(--fg-2); display: flex; align-items: center; gap: 6px; }
 .fig .v { font-size: var(--fs-xl); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
 .fig .s { font-size: var(--fs-xs); color: var(--fg-3); }
+.fig .v.v-word { font-size: var(--fs-lg); }
 .kbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; background: var(--surface); }
 .kbar span { display: block; height: 100%; }
 .kbar-svg { display: block; width: 100%; height: 12px; border-radius: 6px; overflow: hidden; }
 .dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; font-size: var(--fs-sm); }
 .dl dt { color: var(--fg-3); }
 .dl dd { margin: 0; }
+.dl.dl-center { align-items: center; }
 
 /* ---------- service pages (401, first build, updates) ---------- */
 .solo { min-height: 100%; display: grid; place-items: center; padding: var(--sp-8) var(--sp-4); }
@@ -444,6 +458,7 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
 }
 
 /* ---------- forced colors (Windows contrast themes) ----------
+ * Keep in sync with .fc-preview below (the component sheet's simulation of this block).
  * Chrome (text, borders, focus) follows the system colours. Chart fills and swatches are data,
  * like an image: they keep their category colours (forced-color-adjust: none) and gain a
  * CanvasText outline, while status keeps its word and icon shape (icons paint in CanvasText).
@@ -460,7 +475,8 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
   .tile.is-bad, .tile.is-watch { border-width: 2px; }
 }
 
-/* A simulation of a forced-colors theme for the component sheet (not used by pages). */
+/* A simulation of a forced-colors theme for the component sheet (not used by pages).
+ * Keep in sync with the @media (forced-colors: active) block above: same roles, simulated values. */
 .fc-preview {
   --bg: #000000; --surface: #000000; --surface-2: #000000; --border: #FFFFFF; --border-strong: #FFFFFF;
   --fg: #FFFFFF; --fg-2: #FFFFFF; --fg-3: #FFFFFF; --link: #FFFF00; --accent: #00FFFF; --focus: #00FFFF;

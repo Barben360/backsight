@@ -5,6 +5,13 @@
   /memories/<id>/text, which reads it live from the server. No script.
   Charts are inline SVG as Go would draw them: every mark carries a <title> (hover) and
   tabindex + aria-label (focus); each chart has a table view in a <details>.
+  Template notes for block 5:
+  - Copy buttons: render every .copy with the hidden attribute; the one small copy script removes it.
+    With scripts off the command stays selectable text and no dead button shows.
+  - Logos: ../../../../docs/assets/ only makes this file open from disk; block 5 serves them at
+    /assets/<hashed>.svg (embedded, no session needed).
+  - Footer version (v0.1.17-m7 here) is a sample: it comes from the build (internal/buildinfo).
+  - No inline style attribute anywhere (the CSP is style-src 'self'): see the README.
 -->
 <html lang="en">
 <head>
@@ -48,18 +55,18 @@
         <a href="?days=1">24 h</a><a href="?days=7">7 d</a><a href="?days=30">30 d</a><a href="?days=90" aria-current="true">90 d</a>
       </nav>
       <details class="menu proj">
-        <summary class="btn"><span class="i i-filter"></span><span class="trunc" style="max-width: 16ch">All projects</span><span class="caret">▾</span></summary>
-        <div class="menu-pop right" style="min-width: 260px">
+        <summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short">All projects</span><span class="caret">▾</span></summary>
+        <div class="menu-pop right wide">
           <span class="grp">Project</span>
           <a href="?" aria-current="true"><span class="check">✓</span>All projects</a>
           <a href="?project=backsight"><span class="check"></span>backsight</a>
-          <a href="?project=hindsight-stack"><span class="check"></span>hindsight-stack</a>
+          <a href="?project=project-a"><span class="check"></span>project-a</a>
         </div>
       </details>
       <a class="btn btn-quiet refresh-t" href=""><span class="i i-refresh"></span>Refresh</a>
       <details class="menu">
         <summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
-        <div class="menu-pop right" style="min-width: 240px">
+        <div class="menu-pop right wide">
           <span class="grp">Theme</span>
           <a href="/prefs?theme=system&amp;back=/memories/7f3a9c21" aria-current="true"><span class="check">✓</span>System</a>
           <a href="/prefs?theme=light&amp;back=/memories/7f3a9c21"><span class="check"></span>Light</a>
@@ -76,9 +83,9 @@
       </details>
       <details class="menu navmenu">
         <summary class="btn"><span class="i i-menu"></span>Menu</summary>
-        <div class="menu-pop right" style="min-width: 300px">
+        <div class="menu-pop right wider">
           <span class="grp">Window</span>
-          <nav class="seg" aria-label="Window" style="margin: 2px 10px 6px"><a href="?days=1">24 h</a><a href="?days=7">7 d</a><a href="?days=30">30 d</a><a href="?days=90" aria-current="true">90 d</a></nav>
+          <nav class="seg" aria-label="Window"><a href="?days=1">24 h</a><a href="?days=7">7 d</a><a href="?days=30">30 d</a><a href="?days=90" aria-current="true">90 d</a></nav>
           <hr>
           <a href="/">Overview</a><a href="/quality">Quality</a><a href="/cost">Cost</a><a href="/bank">Bank</a><a href="/pipeline">Pipeline</a>
           <span class="grp">Browse</span>
@@ -112,7 +119,7 @@
       <div class="fig"><span class="lab"><i class="sw f-used"></i>Used by Claude</span><span class="v">9</span><span class="s">last <time datetime="2026-10-30T14:52" title="2026-10-30 14:52">today 14:52</time></span></div>
       <div class="fig"><span class="lab"><i class="sw f-ignored"></i>Shown, then ignored</span><span class="v">6</span></div>
       <div class="fig"><span class="lab">Used when judged</span><span class="v">60 %</span><span class="s">9 of 15</span></div>
-      <div class="fig"><span class="lab">Learned ranking now</span><span class="v" style="font-size: 16px">raised</span><span class="s">shown a little higher</span></div>
+      <div class="fig"><span class="lab">Learned ranking now</span><span class="v v-word">raised</span><span class="s">shown a little higher</span></div>
     </div>
     <section class="card">
       <div class="card-head"><h2>What does it say?</h2><span class="chip"><span class="i i-sm i-server"></span>server</span></div>
@@ -128,7 +135,7 @@
       <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
       <span class="spacer"></span>
       <details class="info"><summary aria-label="About this timeline"><span class="i i-info"></span></summary><div class="pop"><b>Strip timeline</b><p>One mark per time this memory was shown, on the row of where it was shown. Shape and colour say what Claude did with it. Hover or focus a mark for the turn, its rank, and its rank without the learned ranking.</p><span class="term">ledger shows · path · outcome · rank · boost</span></div></details>
-      <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 320px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats memories 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
     </div>
     <figure class="chart">
       <div class="legend">
@@ -137,7 +144,7 @@
         <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-undeclared" d="M-4.5,-4.5 H4.5 V4.5 H-4.5Z"/></svg>not declared</span>
         <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-shown" d="M0,-3 A3,3 0 1,1 0,3 A3,3 0 1,1 0,-3Z"/></svg>shown only</span>
         <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="mk-pend" d="M0,-4.5 A4.5,4.5 0 1,1 0,4.5 A4.5,4.5 0 1,1 0,-4.5Z"/></svg>pending</span>
-        <span><i class="sw sw-dash" style="color: var(--fg-2)"></i>hidden, then restored</span>
+        <span><i class="sw sw-dash"></i>hidden, then restored</span>
       </div>
       <svg viewBox="0 0 1000 236" role="img" aria-label="Every time memory 7f3a9c21 was shown, by where, since it was created on Sep 14">
       <line class="gl" x1="170" x2="992" y1="26" y2="26"/><text class="ta-e lbl" x="160" y="30">added to the prompt</text>
@@ -233,7 +240,7 @@
     </section>
     <section class="card">
       <div class="card-head"><h2>What can I do with it?</h2></div>
-      <dl class="dl" style="align-items: center">
+      <dl class="dl dl-center">
         <dt>Read it in the terminal</dt><dd><div class="cmd"><code>backsight read 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
         <dt>Hide it from recall</dt><dd><div class="cmd"><code>backsight forget 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
         <dt>Bring it back</dt><dd><div class="cmd"><code>backsight forget --restore 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>

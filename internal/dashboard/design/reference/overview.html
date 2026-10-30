@@ -5,6 +5,13 @@
   For block 5: every literal below is a template value; repeated blocks (axes, tiles, attention items,
   Lately rows) are one {{range}} each. The server sets data-theme="light"|"dark" on <html> from the
   preference cookie, and omits it for "system".
+  Template notes for block 5:
+  - Copy buttons: render every .copy with the hidden attribute; the one small copy script removes it.
+    With scripts off the command stays selectable text and no dead button shows.
+  - Logos: ../../../../docs/assets/ only makes this file open from disk; block 5 serves them at
+    /assets/<hashed>.svg (embedded, no session needed).
+  - Footer version (v0.1.17-m7 here) is a sample: it comes from the build (internal/buildinfo).
+  - No inline style attribute anywhere (the CSP is style-src 'self'): see the README.
 -->
 <html lang="en">
 <head>
@@ -49,20 +56,20 @@
         <a href="/?days=1">24 h</a><a href="/?days=7" aria-current="true">7 d</a><a href="/?days=30">30 d</a><a href="/?days=90">90 d</a>
       </nav>
       <details class="menu proj">
-        <summary class="btn"><span class="i i-filter"></span><span class="trunc" style="max-width: 16ch">All projects</span><span class="caret">▾</span></summary>
-        <div class="menu-pop right" style="min-width: 260px">
+        <summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short">All projects</span><span class="caret">▾</span></summary>
+        <div class="menu-pop right wide">
           <span class="grp">Project</span>
           <a href="/" aria-current="true"><span class="check">✓</span>All projects</a>
           <a href="/?project=backsight"><span class="check"></span>backsight</a>
-          <a href="/?project=hindsight-stack"><span class="check"></span>hindsight-stack</a>
-          <a href="/?project=infirlib"><span class="check"></span>infirlib</a>
-          <a href="/?project=claude-code-plugins-marketplace-mirror" title="claude-code-plugins-marketplace-mirror"><span class="check"></span><span class="trunc">claude-code-plugins-mark…</span></a>
+          <a href="/?project=project-a"><span class="check"></span>project-a</a>
+          <a href="/?project=project-c"><span class="check"></span>project-c</a>
+          <a href="/?project=project-d-shared-frontend-tools" title="project-d-shared-frontend-tools"><span class="check"></span><span class="trunc">project-d-shared-fronten…</span></a>
         </div>
       </details>
       <a class="btn btn-quiet refresh-t" href="/"><span class="i i-refresh"></span>Refresh</a>
       <details class="menu">
         <summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
-        <div class="menu-pop right" style="min-width: 240px">
+        <div class="menu-pop right wide">
           <span class="grp">Theme</span>
           <a href="/prefs?theme=system&amp;back=/" aria-current="true"><span class="check">✓</span>System</a>
           <a href="/prefs?theme=light&amp;back=/"><span class="check"></span>Light</a>
@@ -80,9 +87,9 @@
       </details>
       <details class="menu navmenu">
         <summary class="btn"><span class="i i-menu"></span>Menu</summary>
-        <div class="menu-pop right" style="min-width: 300px">
+        <div class="menu-pop right wider">
           <span class="grp">Window</span>
-          <nav class="seg" aria-label="Window" style="margin: 2px 10px 6px"><a href="/?days=1">24 h</a><a href="/?days=7" aria-current="true">7 d</a><a href="/?days=30">30 d</a><a href="/?days=90">90 d</a></nav>
+          <nav class="seg" aria-label="Window"><a href="/?days=1">24 h</a><a href="/?days=7" aria-current="true">7 d</a><a href="/?days=30">30 d</a><a href="/?days=90">90 d</a></nav>
           <span class="grp">Project</span>
           <a href="/projects"><span class="i i-filter"></span>All projects</a>
           <hr>
@@ -116,7 +123,7 @@
   <section class="verdict v-ok" aria-label="Verdict, last 7 days">
     <div class="v-head">
       <span class="v-ico st-ok" aria-hidden="true"></span>
-      <h2 class="v-title" style="flex: 1; min-width: 0">Memory is working.<span class="v-when">(last 7 days)</span></h2>
+      <h2 class="v-title">Memory is working.<span class="v-when">(last 7 days)</span></h2>
       <details class="info">
         <summary aria-label="How the verdict is judged"><span class="i i-info"></span></summary>
         <div class="pop">
@@ -127,7 +134,7 @@
       </details>
       <details class="cli">
         <summary>CLI</summary>
-        <div class="cmd pop" style="width: 380px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats overview --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+        <div class="cmd pop cli-pop"><code>backsight stats overview --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
       </details>
     </div>
     <ul class="axes">
@@ -180,7 +187,7 @@
           <div class="tile-foot">
             <a href="/sessions?has=memory&amp;days=7">167 prompts →</a>
             <span class="spacer"></span>
-            <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats quality --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+            <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
           </div>
         </article>
       </div>
@@ -207,7 +214,7 @@
             <polyline class="sl" points="4.0,22.0 34.0,10.0 64.0,28.0 94.0,4.0 124.0,19.0 154.0,16.0 184.0,13.0"/>
             <circle class="se" cx="184" cy="13" r="3"/>
           </svg>
-          <div class="tile-foot"><a href="/sessions?has=used">61 turns →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats sessions --has used</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+          <div class="tile-foot"><a href="/sessions?has=used">61 turns →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --has used</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
         </article>
 
         <article class="tile is-few" aria-label="Reported wrong">
@@ -228,7 +235,7 @@
             <polyline class="sl" points="4.0,28.0 34.0,28.0 64.0,4.0 94.0,28.0 124.0,28.0 154.0,28.0 184.0,28.0"/>
             <circle class="se" cx="184" cy="28" r="3"/>
           </svg>
-          <div class="tile-foot"><a href="/sessions?has=wrong">14 verdicts →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats sessions --has wrong</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+          <div class="tile-foot"><a href="/sessions?has=wrong">14 verdicts →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --has wrong</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
         </article>
       </div>
     </section>
@@ -253,7 +260,7 @@
             <polyline class="sl" points="4.0,24.0 34.0,12.0 64.0,20.0 94.0,4.0 124.0,16.0 154.0,28.0 184.0,16.0"/>
             <circle class="se" cx="184" cy="16" r="3"/>
           </svg>
-          <div class="tile-foot"><a href="/sessions?days=7">34 sessions →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats cost --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+          <div class="tile-foot"><a href="/sessions?days=7">34 sessions →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
         </article>
 
         <article class="tile" aria-label="Speed">
@@ -273,7 +280,7 @@
             <polyline class="sl" points="4.0,28.0 34.0,20.0 64.0,4.0 94.0,20.0 124.0,12.0 154.0,12.0 184.0,12.0"/>
             <circle class="se" cx="184" cy="12" r="3"/>
           </svg>
-          <div class="tile-foot"><a href="/cost">167 prompts →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats cost --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+          <div class="tile-foot"><a href="/cost">167 prompts →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
         </article>
       </div>
     </section>
@@ -298,7 +305,7 @@
             <polyline class="sl" points="4.0,16.0 34.0,16.0 64.0,16.0 94.0,16.0 124.0,16.0 154.0,16.0 184.0,16.0"/>
             <circle class="se" cx="184" cy="16" r="3"/>
           </svg>
-          <div class="tile-foot"><a href="/pipeline">239 sessions →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 340px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats pipeline --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
+          <div class="tile-foot"><a href="/pipeline">239 sessions →</a><span class="spacer"></span><details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats pipeline --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details></div>
         </article>
       </div>
     </section>
@@ -332,17 +339,17 @@
         <h2 id="late-h">What happened lately?</h2>
         <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
         <span class="spacer"></span>
-        <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 320px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats sessions --limit 5</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --limit 5</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
       </div>
       <div class="tbl-wrap">
         <table class="tbl">
           <thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
           <tbody>
             <tr><td><a class="idc" href="/sessions/a41c09e2" title="a41c09e24e1b0c9d2f7a63e85b1d0c4a">a41c09e2</a></td><td><a href="/projects/backsight" class="trunc">backsight</a></td><td><time datetime="2026-10-30T15:19" title="2026-10-30 15:19">25 min ago</time></td><td class="r">10</td><td class="r">2</td><td class="r"><span class="st st-watch">1</span></td></tr>
-            <tr><td><a class="idc" href="/sessions/5be2d7f0" title="5be2d7f04e1b0c9d2f7a63e85b1d0c4a">5be2d7f0</a></td><td><a href="/projects/hindsight-stack" class="trunc">hindsight-stack</a></td><td><time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time></td><td class="r">4</td><td class="r">1</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="/sessions/5be2d7f0" title="5be2d7f04e1b0c9d2f7a63e85b1d0c4a">5be2d7f0</a></td><td><a href="/projects/project-a" class="trunc">project-a</a></td><td><time datetime="2026-10-30T13:40" title="2026-10-30 13:40">2 h ago</time></td><td class="r">4</td><td class="r">1</td><td class="r">0</td></tr>
             <tr><td><a class="idc" href="/sessions/93c1a4e8" title="93c1a4e84e1b0c9d2f7a63e85b1d0c4a">93c1a4e8</a></td><td><a href="/projects/backsight" class="trunc">backsight</a></td><td><time datetime="2026-10-30T10:41" title="2026-10-30 10:41">5 h ago</time></td><td class="r">9</td><td class="r">3</td><td class="r">0</td></tr>
-            <tr><td><a class="idc" href="/sessions/d0f63b15" title="d0f63b154e1b0c9d2f7a63e85b1d0c4a">d0f63b15</a></td><td><a href="/projects/infirlib" class="trunc">infirlib</a></td><td><time datetime="2026-10-29T18:40" title="2026-10-29 18:40">yesterday</time></td><td class="r">3</td><td class="r">0</td><td class="r">0</td></tr>
-            <tr><td><a class="idc" href="/sessions/2e8a91c7" title="2e8a91c74e1b0c9d2f7a63e85b1d0c4a">2e8a91c7</a></td><td><a href="/projects/claude-code-plugins-marketplace-mirror" class="trunc" title="claude-code-plugins-marketplace-mirror">claude-code-plugins-mark…</a></td><td><time datetime="2026-10-28T11:02" title="2026-10-28 11:02">2 d ago</time></td><td class="r">5</td><td class="r">1</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="/sessions/d0f63b15" title="d0f63b154e1b0c9d2f7a63e85b1d0c4a">d0f63b15</a></td><td><a href="/projects/project-c" class="trunc">project-c</a></td><td><time datetime="2026-10-29T18:40" title="2026-10-29 18:40">yesterday</time></td><td class="r">3</td><td class="r">0</td><td class="r">0</td></tr>
+            <tr><td><a class="idc" href="/sessions/2e8a91c7" title="2e8a91c74e1b0c9d2f7a63e85b1d0c4a">2e8a91c7</a></td><td><a href="/projects/project-d-shared-frontend-tools" class="trunc" title="project-d-shared-frontend-tools">project-d-shared-fronten…</a></td><td><time datetime="2026-10-28T11:02" title="2026-10-28 11:02">2 d ago</time></td><td class="r">5</td><td class="r">1</td><td class="r">0</td></tr>
           </tbody>
         </table>
       </div>
@@ -358,15 +365,15 @@
       <!-- with a project filter: <span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span> -->
       <span class="spacer"></span>
       <details class="info"><summary aria-label="About memory at a glance"><span class="i i-info"></span></summary><div class="pop"><b>Memory at a glance</b><p>Memories on the server, by kind, and how many were added in the window. The badges count memories worth a look; they never change the verdict.</p><span class="term">bank.size · bank.growth · stale.*</span></div></details>
-      <details class="cli"><summary>CLI</summary><div class="cmd pop" style="width: 300px; flex-direction: row; padding: 4px 4px 4px 10px"><code>backsight stats bank</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats bank</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
     </div>
-    <div class="row" style="gap: 32px; align-items: flex-start">
-      <div style="display: flex; flex-direction: column; gap: 2px; min-width: 180px">
+    <div class="glance">
+      <div class="glance-total">
         <span class="muted small">Memories</span>
-        <span class="num" style="font-size: 32px; font-weight: 600; line-height: 1.1">1,284</span>
+        <span class="v">1,284</span>
         <span class="small sub">+46 in the last 7 days · 286 documents</span>
       </div>
-      <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 10px">
+      <div class="glance-kinds">
         <svg class="kbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="Memories by kind: 212 summaries, 431 facts about you and your work, 641 facts from a session">
           <rect class="f-summary" x="0" y="0" width="16.5" height="10"/>
           <rect class="f-about" x="17" y="0" width="33.1" height="10"/>
@@ -378,7 +385,7 @@
           <span><i class="sw f-session"></i>fact from a session <b class="num">641</b></span>
         </div>
       </div>
-      <div style="display: flex; flex-direction: column; gap: 8px">
+      <div class="glance-look">
         <span class="muted small">Worth a look</span>
         <div class="badges">
           <a class="badge" href="/memories?state=never_used"><span class="i i-info"></span><b>7</b> often shown, never used</a>

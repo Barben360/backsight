@@ -79,6 +79,8 @@
   --logo-d: none;
 }
 
+/* Dark palette, stated twice in this file: here (OS setting) and under [data-theme="dark"] below
+   (server preference). Keep the two blocks in sync, value for value. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
@@ -124,6 +126,7 @@
   }
 }
 
+/* Same values as the prefers-color-scheme block above: keep in sync. */
 [data-theme="dark"] {
   color-scheme: dark;
   --bg: #0E1116;
