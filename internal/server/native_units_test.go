@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -175,6 +176,67 @@ func TestNativeLockHonoursPythonDotenvDisabled(t *testing.T) {
 	}
 }
 
+// On an install with no BACKSIGHT_HOME or XDG_*_HOME, the db unit's
+// native-check finds backsight's directories from HOME, which the unit
+// sets to home/ (pg0's): its ExecStartPre, run as systemd would with the
+// unit's environment, must still resolve the user's config (the live
+// switch to native failed with "no config at <native>/home/.config").
+func TestNativeCheckResolvesTheUsersDirectoriesNotTheUnitsHome(t *testing.T) {
+	withFreePort(t, 8889)
+	home := filepath.Join(t.TempDir(), "u")
+	d, err := paths.Resolve("linux", home, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default(d, home)
+	cfg.Server.Runtime = "native"
+	n := Native{Cfg: cfg, Dirs: d, UnitDir: t.TempDir(), Env: map[string]string{}, UserHome: home}.WithVersion("1.1.0-0123456789ab").(Native)
+	f, err := n.Render(secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(n.shim()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The shim prints what backsight's directories are resolved from.
+	if err := os.WriteFile(n.shim(), []byte("#!/bin/sh\nprintf '%s\\n' \"$HOME\" \"$BACKSIGHT_HOME\" \"$XDG_DATA_HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_STATE_HOME\" \"$*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := string(f.Units["backsight-db.service"])
+	env := []string{"PATH=/usr/bin:/bin"}
+	for _, l := range strings.Split(db, "\n") {
+		if v, ok := strings.CutPrefix(l, "Environment="); ok {
+			env = append(env, strings.Trim(v, `"`))
+		}
+	}
+	pre := unitLine([]byte(db), "ExecStartPre")
+	if strings.ContainsAny(pre, `"'$%`) {
+		t.Fatalf("ExecStartPre=%s: this test splits on spaces only", pre)
+	}
+	argv := strings.Fields(pre)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("ExecStartPre=%s: %v", pre, err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(got) != 6 {
+		t.Fatalf("shim output %q", out)
+	}
+	if got[5] != "server native-check" {
+		t.Errorf("the shim ran with %q, want server native-check", got[5])
+	}
+	vars := map[string]string{"BACKSIGHT_HOME": got[1], "XDG_DATA_HOME": got[2], "XDG_CONFIG_HOME": got[3], "XDG_STATE_HOME": got[4]}
+	seen, err := paths.Resolve("linux", got[0], func(k string) string { return vars[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.Config != d.Config || seen.Data != d.Data || seen.State != d.State {
+		t.Errorf("native-check resolves %+v (HOME=%s), want the user's %+v", seen, got[0], d)
+	}
+}
+
 // The golden files pin what a native install runs, and the assertions
 // name each E29 requirement they carry.
 func TestNativeRenderMeetsTheRequirements(t *testing.T) {
@@ -182,7 +244,7 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 	cfg := config.Default(paths.Dirs{Data: "/srv/bs/data"}, "/home/u")
 	cfg.Server.Runtime = "native"
 	n := Native{Cfg: cfg, Dirs: paths.Dirs{Data: "/srv/bs/data"}, UnitDir: "/srv/units",
-		Env: map[string]string{"BACKSIGHT_HOME": "/srv/bs"}}.WithVersion("1.1.0-0123456789ab").(Native)
+		Env: map[string]string{"BACKSIGHT_HOME": "/srv/bs"}, UserHome: "/home/u"}.WithVersion("1.1.0-0123456789ab").(Native)
 	f, err := n.Render(secrets, "box")
 	if err != nil {
 		t.Fatal(err)
@@ -263,8 +325,8 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 	if unitLine(db, "ExecStop") != "" {
 		t.Error("the db unit has an ExecStop: postgres is stopped by its signal")
 	}
-	if got := unitLine(db, "ExecStartPre"); got != "/srv/bs/data/bin/current server native-check" {
-		t.Errorf("db ExecStartPre = %q, want the shim's native-check", got)
+	if got := unitLine(db, "ExecStartPre"); got != "/usr/bin/env HOME=/home/u /srv/bs/data/bin/current server native-check" {
+		t.Errorf("db ExecStartPre = %q, want the shim's native-check with the user's HOME", got)
 	}
 	inst := root + "/home/.pg0/installation/18.1.0"
 	start := unitLine(db, "ExecStart")

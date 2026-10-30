@@ -270,6 +270,32 @@ func TestNativeServerInstallStartsUnderALongDataDirectory(t *testing.T) {
 	}
 }
 
+// The db unit's HOME is pg0's home/, so its native-check runs with the
+// user's HOME, which server install takes from this process: on an
+// install with no BACKSIGHT_HOME, native-check found no config.toml
+// under home/ and the live switch to native failed at its target step.
+func TestNativeServerInstallRunsNativeCheckWithTheUsersHome(t *testing.T) {
+	home := isolate(t)
+	withSys(t, "linux")
+	n, _, port := nativeFresh(t, home)
+	d := pathsOf(home)
+	_ = os.MkdirAll(d.Config, 0o700)
+	if err := os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\nruntime = \"native\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := run(t, "server", "install"); code != output.OK {
+		t.Fatalf("server install: exit %d\n%s%s", code, out, errOut)
+	}
+	unit, err := os.ReadFile(testUnitFile(n.DBUnit()))
+	if err != nil {
+		t.Fatalf("no db unit where the fake systemd reads it: %v", err)
+	}
+	want := "\nExecStartPre=/usr/bin/env HOME=" + home + " " + filepath.Join(d.Data, "bin", "current") + " server native-check\n"
+	if !strings.Contains(string(unit), want) {
+		t.Errorf("the db unit's native-check does not run with the user's HOME %s:\n%s", home, unit)
+	}
+}
+
 // Without a UI, the summary says so instead of naming one.
 func TestNativeInstallSummaryHasNoUI(t *testing.T) {
 	docker := installSummary(installResult{URL: "http://127.0.0.1:8888", UI: "http://127.0.0.1:9999", Version: "1.1.0"})
