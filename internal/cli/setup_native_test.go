@@ -162,6 +162,69 @@ func TestNativeServerInstallCreatesWhatServerStartRefuses(t *testing.T) {
 	}
 }
 
+// The db unit's ExecStartPre is the shim (server native-check): a fresh
+// setup runs server install before the client step installs the shim, so
+// server install puts it in place when it is missing (the native chain's
+// first real run: 203/EXEC). A shim already there is the client's to
+// point, and is left alone.
+func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no shim", true: "a shim already there"}[existing], func(t *testing.T) {
+			home := isolate(t)
+			withSys(t, "linux")
+			_, sys, port := nativeFresh(t, home)
+			sys.needShim = true
+			d := pathsOf(home)
+			exe := filepath.Join(t.TempDir(), "backsight")
+			if err := os.WriteFile(exe, []byte("#!/bin/sh\n# this build\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			old := selfExe
+			selfExe = func() (string, error) { return exe, nil }
+			t.Cleanup(func() { selfExe = old })
+			shim := filepath.Join(d.Data, "bin", "current")
+			other := filepath.Join(d.Data, "bin", "0.0.1-aaaaaaaaaaaa", "backsight")
+			if err := os.Remove(shim); err != nil && !errors.Is(err, os.ErrNotExist) { // isolate's stand-in
+				t.Fatal(err)
+			}
+			if existing {
+				if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(other, []byte("#!/bin/sh\n# the client's build\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(other, shim); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = os.MkdirAll(d.Config, 0o700)
+			if err := os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\nruntime = \"native\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			code, out, errOut := run(t, "server", "install")
+			if code != output.OK {
+				t.Fatalf("server install: exit %d\n%s%s", code, out, errOut)
+			}
+			got, err := filepath.EvalSymlinks(shim)
+			if err != nil || !executable(shim) {
+				t.Fatalf("no executable shim at %s after server install: %v", shim, err)
+			}
+			want := other
+			if !existing {
+				raw, _ := os.ReadFile(got)
+				if string(raw) != "#!/bin/sh\n# this build\n" {
+					t.Errorf("the shim runs %s (%q), not this build", got, raw)
+				}
+				want = got
+			}
+			if got != want {
+				t.Errorf("the shim points at %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 // Without a UI, the summary says so instead of naming one.
 func TestNativeInstallSummaryHasNoUI(t *testing.T) {
 	docker := installSummary(installResult{URL: "http://127.0.0.1:8888", UI: "http://127.0.0.1:9999", Version: "1.1.0"})

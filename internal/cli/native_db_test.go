@@ -166,6 +166,9 @@ type nativeSysFake struct {
 	calls   []string
 	db      *nativeDBTools
 	apiDown *atomic.Bool
+	// needShim: a db unit start fails, as systemd's 203/EXEC, while its
+	// ExecStartPre (the shim) is not an executable file.
+	needShim bool
 }
 
 func (s *nativeSysFake) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -185,6 +188,8 @@ func (s *nativeSysFake) Run(_ context.Context, name string, args ...string) ([]b
 	}
 	for _, u := range units {
 		switch {
+		case (verb == "start" || verb == "restart") && strings.HasSuffix(u, "-db.service") && s.needShim && !executable(filepath.Join(s.db.n.Dirs.Data, "bin", "current")):
+			return nil, errors.New("Job for " + u + " failed because the control process exited with error code (203/EXEC)")
 		case (verb == "start" || verb == "restart") && strings.HasSuffix(u, "-db.service"):
 			s.db.mu.Lock()
 			_, err := os.Stat(filepath.Join(s.db.n.DataDir(), "PG_VERSION"))
@@ -696,4 +701,10 @@ func TestBackupVerifyOnNativeStopsAStrayFirst(t *testing.T) {
 	if tools.verifyRows != 10 || !strings.Contains(out, "ok") {
 		t.Errorf("verify rows %d\n%s", tools.verifyRows, out)
 	}
+}
+
+// executable: path resolves to a regular file with an execute bit.
+func executable(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0
 }
