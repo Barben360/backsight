@@ -91,8 +91,12 @@ type recallProbe struct {
 
 type probeReport struct {
 	Queries    int     `json:"queries"`
-	Overlap    float64 `json:"overlap_at_10"`
+	Overlap    float64 `json:"overlap_at_10"` // raw: the target's top 10 only
 	OwnAtRank1 int     `json:"own_at_rank_1"`
+	// BeyondTies also counts the near-tie swaps as found (issue #123): it
+	// drives the warning. NearTies is how many hits, over all the probes.
+	BeyondTies float64 `json:"overlap_beyond_near_ties"`
+	NearTies   int     `json:"near_tie_swaps"`
 }
 
 type switchResult struct {
@@ -127,6 +131,12 @@ type cleanResult struct {
 // recallWarnBelow: an overlap@10 below it is said (decision 0078: reported,
 // never gated).
 const recallWarnBelow = 0.9
+
+// nearTie: a source top-10 hit the target ranks past 10 with a final score
+// within it of the target's 10th is a near-tie swap, found (issue #123: an
+// order above the torch/onnx score differences and the measured gaps at the
+// cutoff, ~1e-3).
+const nearTie = 0.01
 
 // probeCount is how many recent memories are probed.
 const probeCount = 20
@@ -567,10 +577,10 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 	}
 	if len(probes) > 0 {
 		res.Probes = &report
-		if report.Overlap < recallWarnBelow {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("recall differs after the switch (overlap@10 %.2f): the data is identical (the gate passed); %s's reranker ranks some near-ties differently", report.Overlap, to))
+		if report.BeyondTies < recallWarnBelow {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("recall differs after the switch (overlap@10 %.2f beyond near-ties, raw %.2f): the data is identical (the gate passed); %s's reranker ranks some memories differently", report.BeyondTies, report.Overlap, to))
 		}
-		add("recall", "done", fmt.Sprintf("%d probes: overlap@10 %.2f, %d found their own memory first", report.Queries, report.Overlap, report.OwnAtRank1))
+		add("recall", "done", fmt.Sprintf("%d probes: overlap@10 %.2f beyond near-ties (raw %.2f, %d near-tie swaps)", report.Queries, report.BeyondTies, report.Overlap, report.NearTies))
 	} else {
 		add("recall", "done", "answered")
 	}
@@ -589,7 +599,7 @@ func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchRes
 		return res, failed("commit", err)
 	}
 	add("commit", "done", "config.toml: server.runtime = "+to)
-	rs.Step, rs.At, rs.Overlap = "done", time.Now().UTC(), report.Overlap
+	rs.Step, rs.At, rs.Overlap, rs.OverlapBeyondTies = "done", time.Now().UTC(), report.Overlap, report.BeyondTies
 	// What clean would delete of the source, measured once here for
 	// doctor (ruling R43's size, without sizing it at every doctor run).
 	if c, ok := src.(server.Cleaner); ok {
@@ -881,51 +891,60 @@ func takeProbes(ctx context.Context, cl *hindsight.Client, bank string) ([]recal
 
 // recallTop is the ids of the first 10 hits of a recall of text.
 func recallTop(ctx context.Context, cl *hindsight.Client, bank, text string) ([]string, error) {
-	hits, err := cl.Recall(ctx, bank, hindsight.RecallRequest{Query: text, Budget: "mid", MaxTokens: 4096})
+	hits, err := recallHits(ctx, cl, bank, text)
 	if err != nil {
 		return nil, err
 	}
 	var top []string
-	for _, h := range hits {
-		if len(top) == 10 {
-			break
-		}
+	for _, h := range hits[:min(10, len(hits))] {
 		top = append(top, h.ID)
 	}
 	return top, nil
 }
 
+// recallHits is every hit of a probe's recall, best first.
+func recallHits(ctx context.Context, cl *hindsight.Client, bank, text string) ([]hindsight.RecallHit, error) {
+	return cl.Recall(ctx, bank, hindsight.RecallRequest{Query: text, Budget: "mid", MaxTokens: 4096})
+}
+
 // recallAgain runs the probes on the target: the mean over the probes of
-// the share of their top 10 found again, and how many find their own
-// memory first. A recall that fails is the target not serving: an error.
-// Without probes, one recall checks it answers.
+// the share of their top 10 found again in its top 10 (raw), and also
+// past it in a near-tie (BeyondTies), and how many find their own memory
+// first. A recall that fails is the target not serving: an error. Without
+// probes, one recall checks it answers.
 func recallAgain(ctx context.Context, cl *hindsight.Client, bank string, probes []recallProbe) (probeReport, error) {
 	if len(probes) == 0 {
 		_, err := cl.Recall(ctx, bank, hindsight.RecallRequest{Query: "backsight runtime switch check", Budget: "low", MaxTokens: 512})
 		return probeReport{}, err
 	}
 	r := probeReport{Queries: len(probes)}
-	sum := 0.0
+	sum, sumTies := 0.0, 0.0
 	for _, p := range probes {
-		top, err := recallTop(ctx, cl, bank, p.Text)
+		hits, err := recallHits(ctx, cl, bank, p.Text)
 		if err != nil {
 			return r, fmt.Errorf("recall: %w", err)
 		}
-		common := 0
-		for _, id := range top {
-			for _, was := range p.Top {
-				if id == was {
-					common++
-					break
-				}
+		common, ties := 0, 0
+		for _, was := range p.Top {
+			i := slices.IndexFunc(hits, func(h hindsight.RecallHit) bool { return h.ID == was })
+			switch {
+			case i < 0:
+			case i < 10:
+				common++
+			case hits[i].Scores.Final >= hits[9].Scores.Final-nearTie:
+				ties++
 			}
 		}
-		sum += float64(common) / float64(max(1, len(p.Top)))
-		if len(top) > 0 && top[0] == p.Memory {
+		n := float64(max(1, len(p.Top)))
+		sum += float64(common) / n
+		sumTies += float64(common+ties) / n
+		r.NearTies += ties
+		if len(hits) > 0 && hits[0].ID == p.Memory {
 			r.OwnAtRank1++
 		}
 	}
 	r.Overlap = sum / float64(len(probes))
+	r.BeyondTies = sumTies / float64(len(probes))
 	return r, nil
 }
 
@@ -935,7 +954,7 @@ func appendSwitchLog(stateDir string, rs state.RuntimeSwitch) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	line, err := json.Marshal(map[string]any{"from": rs.From, "to": rs.To, "at": rs.At, "backup": rs.Backup, "overlap": rs.Overlap, "gate_ok": true})
+	line, err := json.Marshal(map[string]any{"from": rs.From, "to": rs.To, "at": rs.At, "backup": rs.Backup, "overlap": rs.Overlap, "overlap_beyond_near_ties": rs.OverlapBeyondTies, "gate_ok": true})
 	if err != nil {
 		return err
 	}

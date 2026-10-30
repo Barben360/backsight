@@ -146,6 +146,10 @@ type RuntimeSwitch struct {
 	At      time.Time `json:"at"` // the step's time
 	Backup  string    `json:"backup,omitempty"`
 	Overlap float64   `json:"overlap,omitempty"` // the recall probes' overlap@10, once done
+	// OverlapBeyondTies also counts the near-tie swaps as found (issue
+	// #123): the one stats and doctor show. Absent from a switch recorded
+	// before it.
+	OverlapBeyondTies float64 `json:"overlap_beyond_near_ties,omitempty"`
 	// KeptBytes is the size of what server runtime clean deletes of the
 	// runtime switched from, measured at KeptAt (once done): doctor shows
 	// it without sizing it again (docker system df, du) at every run.
