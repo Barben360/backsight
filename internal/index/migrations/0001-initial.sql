@@ -386,7 +386,7 @@ CREATE TABLE turns (
   agent TEXT,
   project TEXT,
   n INTEGER,
-  machine TEXT,
+  machine INTEGER,
   binary_version TEXT,
   PRIMARY KEY (source_file, "offset")
 ) WITHOUT ROWID;

@@ -69,6 +69,8 @@ func (e *ingestEnv) checkRows(table, order string, want []map[string]any) {
 	}
 }
 
+func skey(id string) string { return fmt.Sprintf("s1|t1|%d|%s", jT0.UnixNano(), id) }
+
 func ms(t time.Time) int64 { return t.UnixMilli() }
 
 func ptr(f float64) *float64 { return &f }
@@ -83,13 +85,14 @@ func TestJournalRows(t *testing.T) {
 	}}
 	for _, ev := range []feedback.Event{
 		{TS: jT0, Kind: "turn", Turn: "t1", N: 3, Machine: true},
+		{TS: jT0.Add(time.Millisecond), Kind: "turn", Turn: "t0"}, // machine false: omitted by the producer
 		showEv,
 		{TS: at(1 * time.Second), Kind: "credit", Turn: "t1", Agent: "sub1", IDs: []string{"m1", "m2"}, Verdict: "used"},
 		{TS: at(2 * time.Second), Kind: "credit", Turn: "t2", Verdict: "none"},
 		{TS: at(3 * time.Second), Kind: "stop", Turn: "t1", Outcome: "declared", StopCheck: "post_turn", Flags: []string{"zeta", "alpha"}},
 		{TS: at(4 * time.Second), Kind: "settle", Settled: []feedback.Settled{
-			{Key: "s1|t1||m1", ID: "m1", At: jT1, Outcome: "credit"},
-			{Key: "s1|t1||m2", ID: "m2", Outcome: "unknown"},
+			{Key: skey("m1"), ID: "m1", At: jT1, Outcome: "credit"},
+			{Key: skey("m2"), ID: "m2", Outcome: "unknown"},
 		}},
 		{TS: at(5 * time.Second), Kind: "forget", IDs: []string{"m1"}},
 		{TS: at(6 * time.Second), Kind: "retire", IDs: []string{"m1", "m2"}, Verdict: "wrong", Outcome: "invalidated", Note: "note-1"},
@@ -99,7 +102,7 @@ func TestJournalRows(t *testing.T) {
 			{ID: "m1", Rank: 1, RankWithoutBoost: 3, Reranker: 0.25, Boost: 0.05, ScoreWithoutBoost: ptr(0)},
 		}},
 		{TS: at(10 * time.Second), Kind: "import", Source: "transcripts", Settled: []feedback.Settled{
-			{Key: "imp|1", ID: "m1", At: jT1, Outcome: "credit", Rank: 4},
+			{Key: "s1|ref|prompt|m1", ID: "m1", At: jT1, Outcome: "credit", Rank: 4},
 		}},
 		{TS: at(11 * time.Second), Kind: "import", Source: "telemetry", Outcome: feedback.ImportComplete},
 		{TS: at(12 * time.Second), Kind: "stale", IDs: []string{"m1"}},
@@ -108,11 +111,12 @@ func TestJournalRows(t *testing.T) {
 		e.appendJ(ev)
 	}
 	st := e.ingest()
-	if st.Lines != 15 || st.Errors != 0 {
+	if st.Lines != 16 || st.Errors != 0 {
 		t.Fatalf("stats %+v", st)
 	}
 	e.checkRows("turns", `"offset"`, []map[string]any{
-		{"ts": ms(jT0), "session": "s1", "turn": "t1", "agent": nil, "project": "proj", "n": 3, "machine": "true", "binary_version": "1.2.3"},
+		{"ts": ms(jT0), "session": "s1", "turn": "t1", "agent": nil, "project": "proj", "n": 3, "machine": 1, "binary_version": "1.2.3"},
+		{"ts": ms(jT0) + 1, "session": "s1", "turn": "t0", "agent": nil, "project": "proj", "n": nil, "machine": nil, "binary_version": "1.2.3"},
 	})
 	key := func(id string) string { return fmt.Sprintf("s1|t1|%d|%s", jT0.UnixNano(), id) }
 	e.checkRows("shows", `"offset", pos`, []map[string]any{
@@ -130,8 +134,8 @@ func TestJournalRows(t *testing.T) {
 		{"ts": ms(at(3 * time.Second)), "session": "s1", "turn": "t1", "agent": nil, "outcome": "declared", "stop_check": "post_turn", "flags": "alpha,zeta"},
 	})
 	e.checkRows("settles", `"offset", pos`, []map[string]any{
-		{"pos": 0, "key": "s1|t1||m1", "memory_id": "m1", "show_at": ms(jT1), "outcome": "credit", "settle_ts": ms(at(4 * time.Second))},
-		{"pos": 1, "key": "s1|t1||m2", "memory_id": "m2", "show_at": nil, "outcome": "unknown", "settle_ts": ms(at(4 * time.Second))},
+		{"pos": 0, "key": skey("m1"), "memory_id": "m1", "show_at": ms(jT1), "outcome": "credit", "settle_ts": ms(at(4 * time.Second))},
+		{"pos": 1, "key": skey("m2"), "memory_id": "m2", "show_at": nil, "outcome": "unknown", "settle_ts": ms(at(4 * time.Second))},
 	})
 	e.checkRows("retirements", `"offset", pos`, []map[string]any{
 		{"pos": 0, "ts": ms(at(5 * time.Second)), "session": "s1", "kind": "forget", "memory_id": "m1", "verdict": nil, "outcome": nil, "note_id": nil},
@@ -145,7 +149,7 @@ func TestJournalRows(t *testing.T) {
 			"rank_without_boost": 3, "reranker": 0.25, "boost": 0.05, "score_without_boost": 0.0, "flags": "set_changed"},
 	})
 	e.checkRows("imports", `"offset", pos`, []map[string]any{
-		{"pos": 0, "ts": ms(at(10 * time.Second)), "source": "transcripts", "key": "imp|1", "memory_id": "m1", "at": ms(jT1), "outcome": "credit", "rank": 4},
+		{"pos": 0, "ts": ms(at(10 * time.Second)), "source": "transcripts", "key": "s1|ref|prompt|m1", "memory_id": "m1", "at": ms(jT1), "outcome": "credit", "rank": 4},
 		{"pos": 0, "ts": ms(at(11 * time.Second)), "source": "telemetry", "key": nil, "memory_id": nil, "at": nil, "outcome": "complete", "rank": nil},
 	})
 	e.checkRows("journal_other", `"offset"`, []map[string]any{
@@ -569,4 +573,44 @@ func TestJournalIncrementalEqualsRebuild(t *testing.T) {
 	if e.count("credits") != 1 || e.count("stops") != 1 {
 		t.Errorf("rows of the moved month lost: %d credits, %d stops", e.count("credits"), e.count("stops"))
 	}
+}
+
+func TestJournalRetirementsAndKeys(t *testing.T) {
+	e := newEnv(t)
+	e.appendJ(feedback.Event{TS: jT0, Kind: "retire", Verdict: "wrong"})                                                // no id: no row
+	e.appendJ(feedback.Event{TS: jT0.Add(time.Second), Kind: "hide", IDs: []string{"bad\nid", "ok"}, Verdict: "wrong"}) // a bad id: a NULL row, the event happened
+	e.appendJ(feedback.Event{TS: jT0.Add(2 * time.Second), Kind: "credit", Verdict: "none"})                            // credits keep their single NULL row
+	e.appendJ(feedback.Event{TS: jT0.Add(3 * time.Second), Kind: "shows", Turn: "t", Path: "prompt", Items: []feedback.Item{{ID: "m"}}})
+	e.appendJ(feedback.Event{TS: jT0.Add(4 * time.Second), Kind: "settle", Settled: []feedback.Settled{
+		{Key: "s1|t|the user said hello world|m", ID: "m", Outcome: "shown"},
+		{Key: "s1|a b c|1|m", ID: "m", Outcome: "shown"},
+		{Key: "free text", ID: "m", Outcome: "shown"},
+		{Key: "s1|t|123|m", ID: "m", Outcome: "shown"},
+		{Key: "s1||123|m", ID: "m", Outcome: "shown"},
+	}})
+	e.appendJ(feedback.Event{TS: jT0.Add(5 * time.Second), Kind: "import", Source: "telemetry"}) // empty import: one bare row
+	e.ingest()
+	var got []string
+	for _, r := range e.rowsOf(`SELECT kind, ifnull(memory_id, 'NULL') AS id FROM retirements ORDER BY "offset", pos`) {
+		got = append(got, fmt.Sprint(r["kind"], "/", r["id"]))
+	}
+	if want := []string{"hide/NULL", "hide/ok"}; !slices.Equal(got, want) {
+		t.Errorf("retirements %v, want %v", got, want)
+	}
+	if n := e.count("credits"); n != 1 {
+		t.Errorf("%d credits", n)
+	}
+	var keys []string
+	for _, r := range e.rowsOf(`SELECT ifnull(key, 'NULL') AS k FROM settles ORDER BY pos`) {
+		keys = append(keys, r["k"].(string))
+	}
+	if want := []string{"NULL", "NULL", "NULL", "s1|t|123|m", "s1||123|m"}; !slices.Equal(keys, want) {
+		t.Errorf("settle keys %v, want %v", keys, want)
+	}
+	if rs := e.rowsOf(`SELECT key FROM shows`); rs[0]["key"] != fmt.Sprintf("s1|t|%d|m", jT0.Add(3*time.Second).UnixNano()) {
+		t.Errorf("show key %v", rs)
+	}
+	e.checkRows("imports", "pos", []map[string]any{
+		{"pos": 0, "ts": ms(jT0.Add(5 * time.Second)), "source": "telemetry", "key": nil, "memory_id": nil, "at": nil, "outcome": nil, "rank": nil},
+	})
 }

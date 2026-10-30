@@ -20,7 +20,7 @@ const fixturePath = "testdata/schema-0001.db"
 
 // released pins every shipped migration (each release adds its own).
 var released = map[string]string{
-	"0001-initial": "6b54b3ef2db8c2266baa01c600143f26ecb9a170c22881440f5da75f0a184a51",
+	"0001-initial": "6978cfd15642f469ee8504b294b4ebf4a04dd1bbfcf220a1f578b9aac6eb8f58",
 }
 
 // rowKey starts every row table: the line it came from.

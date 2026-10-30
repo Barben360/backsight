@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/Barben360/backsight/internal/feedback"
 )
@@ -30,14 +29,35 @@ var (
 // never read, and an id of another shape is dropped.
 var noteIDRE = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
-// keyMax bounds a show key (session|turn|ts|id: four names) in bytes.
-const keyMax = 1024
+// keyValue is a show key (session|turn|<ts ns>|id) when its parts have
+// the shape of what ShowsOf joins: session and id names, a turn that is
+// empty or a name, digits for the time. Anything else (prose in a part,
+// a different number of parts) is nil.
+func keyValue(s string) any { return keyShape(s, true) }
 
-// keyValue is a show key when it is valid UTF-8 of at most keyMax bytes
-// without a control character, nil otherwise.
-func keyValue(s string) any {
-	if s == "" || len(s) > keyMax || !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
+// importKeyValue is the same for an import's key, session|ref|path|id:
+// the middle parts are empty or names.
+func importKeyValue(s string) any { return keyShape(s, false) }
+
+// keyPartOK: a name without whitespace (an id, never prose).
+func keyPartOK(s string) bool {
+	return nameOK(s) && !strings.ContainsFunc(s, unicode.IsSpace)
+}
+
+func keyShape(s string, digits bool) any {
+	parts := strings.Split(s, "|")
+	if len(parts) != 4 || !keyPartOK(parts[0]) || !keyPartOK(parts[3]) {
 		return nil
+	}
+	for i, p := range parts[1:3] {
+		switch {
+		case digits && i == 1:
+			if p == "" || strings.Trim(p, "0123456789") != "" {
+				return nil
+			}
+		case p != "" && !keyPartOK(p):
+			return nil
+		}
 	}
 	return s
 }
@@ -114,9 +134,9 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 		r.add("agent", agent)
 		r.add("project", project)
 		r.add("n", intOrNil(e.N))
-		var machine any
+		var machine any // omitempty: a false never reaches the journal
 		if e.Machine {
-			machine = "true"
+			machine = int64(1)
 		}
 		r.add("machine", machine)
 		r.add("binary_version", nameValue(e.Binary))
@@ -181,15 +201,11 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			out = append(out, r)
 		}
 	case feedback.KindRetire, feedback.KindHide, feedback.KindUnhide, "forget":
-		ids := e.IDs
-		if len(ids) == 0 {
-			ids = []string{""}
-		}
 		var note any
 		if noteIDRE.MatchString(e.Note) {
 			note = nameValue(e.Note)
 		}
-		for i, id := range ids {
+		for i, id := range e.IDs { // none: no row, as feedback.Retirements counts
 			r := jrow("retirements", rel, off, i, true)
 			r.add("ts", ts)
 			r.add("session", session)
@@ -227,7 +243,7 @@ func journalRows(rel string, off int64, line []byte) ([]row, int64, string) {
 			r := jrow("imports", rel, off, i, true)
 			r.add("ts", ts)
 			r.add("source", source)
-			r.add("key", keyValue(s.Key))
+			r.add("key", importKeyValue(s.Key))
 			r.add("memory_id", nameValue(s.ID))
 			r.add("at", msOrNil(s.At))
 			r.add("outcome", closedValue(s.Outcome, settleOutcomes))
