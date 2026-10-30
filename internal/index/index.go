@@ -307,3 +307,34 @@ func (ix *Index) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	defer func() { _ = tx.Rollback() }()
 	return fn(tx)
 }
+
+// ErrSchemaChanged: another backsight migrated the file after this handle
+// opened it; nothing more is written through the handle, and the process
+// must open the index again.
+var ErrSchemaChanged = errors.New("the metrics index was changed by another version of backsight")
+
+// onWriteTx runs before each write transaction of a handle begins (tests
+// count them).
+var onWriteTx = func() {}
+
+// beginWrite begins a write transaction (BEGIN IMMEDIATE: the writer
+// DSN's _txlock) and reads user_version under its lock: a file another
+// binary migrated since this handle opened it (a long-lived process, the
+// dashboard) is not written, ErrSchemaChanged.
+func (ix *Index) beginWrite(ctx context.Context) (*sql.Tx, error) {
+	onWriteTx()
+	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	var v int
+	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if v != ix.schema {
+		_ = tx.Rollback()
+		return nil, ErrSchemaChanged
+	}
+	return tx, nil
+}

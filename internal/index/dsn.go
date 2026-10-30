@@ -25,7 +25,7 @@ func dsn(path string, fs FSInfo, readOnly bool) string {
 	} else {
 		q += "&_txlock=immediate"
 	}
-	return "file:" + uriEscaper.Replace(filepath.ToSlash(path)) + "?" + q
+	return fileURI(path) + "?" + q
 }
 
 // probeDSN reads a file without changing it: read only, and no pragma
@@ -38,5 +38,31 @@ func probeDSN(path string, immutable bool) string {
 	if immutable {
 		q += "&immutable=1"
 	}
-	return "file:" + uriEscaper.Replace(filepath.ToSlash(path)) + q
+	return fileURI(path) + q
+}
+
+// fileURI is path as a SQLite URI filename, without its query: the one
+// form every DSN of the index uses.
+func fileURI(path string) string { return uriPath(path, filepath.Separator == '\\') }
+
+// uriPath is fileURI for a Windows path (windows) or a POSIX one. A
+// Windows path loses its \\?\ prefix (\\?\UNC\ becomes \\) and takes
+// forward slashes; a drive path stays as it is (file:C:/x). A path that
+// starts with // (a UNC share) gets an empty authority, file:////srv/x:
+// file://srv/x would name srv as the URI's authority, which SQLite
+// refuses. %, ? and # are escaped.
+func uriPath(path string, windows bool) string {
+	if windows {
+		if rest, ok := strings.CutPrefix(path, `\\?\UNC\`); ok {
+			path = `\\` + rest
+		} else if rest, ok := strings.CutPrefix(path, `\\?\`); ok {
+			path = rest
+		}
+		path = strings.ReplaceAll(path, `\`, "/")
+	}
+	path = uriEscaper.Replace(path)
+	if strings.HasPrefix(path, "//") {
+		return "file://" + path
+	}
+	return "file:" + path
 }

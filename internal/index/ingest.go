@@ -237,7 +237,7 @@ func (ix *Index) recordUnreadable(ctx context.Context, rel string) error {
 
 // recordOnce adds the ingest_errors row (rel, off) unless there is one.
 func (ix *Index) recordOnce(ctx context.Context, rel string, off int64, reason string) error {
-	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -296,7 +296,7 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	if !ok {
 		return b, &fileError{fmt.Errorf("unknown source kind %q", s.Kind)}
 	}
-	tx, err := ix.sh.w.BeginTx(ctx, nil) // BEGIN IMMEDIATE: the DSN's _txlock
+	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return b, err
 	}
@@ -339,7 +339,10 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 		head, size = head[:n], int64(n)
 	}
 
-	reset := known && (size < cur.offset || cur.headLen > int64(len(head)) || hexSHA(head[:cur.headLen]) != cur.headSHA)
+	// No cursor is a reset too: rows of an earlier copy of the file may
+	// have outlived its cursor (its ingest errors are kept longer than
+	// the prune keeps a cursor of a file gone), and would collide.
+	reset := !known || size < cur.offset || cur.headLen > int64(len(head)) || hexSHA(head[:cur.headLen]) != cur.headSHA
 	if reset {
 		for _, t := range slices.Concat(rowTables, []string{"ingest_errors"}) {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE source_file = ?`, s.Rel); err != nil {
@@ -363,7 +366,8 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 			}
 			if reason != "" {
 				b.errors++
-				return ins.exec(ctx, `INSERT INTO ingest_errors(source_file, "offset", reason, at) VALUES (?, ?, ?, ?)`, s.Rel, off, reason, now)
+				return ins.exec(ctx, `INSERT INTO ingest_errors(source_file, "offset", reason, at) VALUES (?, ?, ?, ?)
+					ON CONFLICT(source_file, "offset") DO NOTHING`, s.Rel, off, reason, now)
 			}
 			if !lastTS.Valid || ts > lastTS.Int64 {
 				lastTS = sql.NullInt64{Int64: ts, Valid: true}

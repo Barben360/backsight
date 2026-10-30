@@ -1,0 +1,82 @@
+package index
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// TestURIPathWindowsShapes: every Windows path form becomes a URI SQLite
+// accepts: a drive path as it is, a UNC share with an empty authority
+// (file:////srv/...), the \\?\ prefixes stripped. A pure string test: it
+// runs on every OS.
+func TestURIPathWindowsShapes(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`C:\Users\me\state\index\metrics.db`, "file:C:/Users/me/state/index/metrics.db"},
+		{`\\srv\share\state\metrics.db`, "file:////srv/share/state/metrics.db"},
+		{`\\?\C:\Users\me\metrics.db`, "file:C:/Users/me/metrics.db"},
+		{`\\?\UNC\srv\share\metrics.db`, "file:////srv/share/metrics.db"},
+		{`C:\a?b#c%d\metrics.db`, "file:C:/a%3Fb%23c%25d/metrics.db"},
+	} {
+		if got := uriPath(tc.in, true); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.in, got, tc.want)
+		}
+	}
+	for _, tc := range []struct{ in, want string }{
+		{"/home/me/state/metrics.db", "file:/home/me/state/metrics.db"},
+		{"//net/share/metrics.db", "file:////net/share/metrics.db"},
+		{`/odd\name/metrics.db`, `file:/odd\name/metrics.db`}, // a backslash is a name byte here
+	} {
+		if got := uriPath(tc.in, false); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestDSNsOpenADoubleSlashPath: another spelling of a file's path opens
+// that file through every DSN builder: a path that starts with two
+// slashes (a UNC share's form), where "file://x" would read x as a URI
+// authority and fail; on Windows the \\?\ form of a drive path.
+func TestDSNsOpenADoubleSlashPath(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "m.db")
+	db, err := sql.Open(driverName, "file:"+plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE marker(x INTEGER); INSERT INTO marker VALUES (42)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	slashed := "/" + plain
+	if runtime.GOOS == "windows" {
+		slashed = `\\?\` + plain
+	}
+	if !strings.HasPrefix(slashed, "//") && !strings.HasPrefix(slashed, `\\?\`) {
+		t.Fatalf("%s is not another spelling", slashed)
+	}
+	for name, d := range map[string]string{
+		"writer": dsn(slashed, FSInfo{Kind: FSLocal}, false),
+		"reader": dsn(slashed, FSInfo{Kind: FSLocal}, true),
+		"probe":  probeDSN(slashed, false),
+		"lock":   lockDSN(slashed),
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, err := sql.Open(driverName, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			var x int
+			if err := db.QueryRow(`SELECT x FROM marker`).Scan(&x); err != nil || x != 42 {
+				t.Fatalf("%s: x=%d err=%v", d, x, err)
+			}
+		})
+	}
+	if _, err := os.Stat(plain); err != nil {
+		t.Fatal(err)
+	}
+}

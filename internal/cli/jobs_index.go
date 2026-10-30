@@ -86,6 +86,8 @@ func indexStepError(err error) string {
 	switch {
 	case errors.Is(err, index.ErrUpdateInProgress):
 		return "skipped: an update is being applied"
+	case errors.Is(err, index.ErrSchemaChanged):
+		return "skipped: backsight was updated meanwhile"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "failed: timeout"
 	}

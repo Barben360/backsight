@@ -162,7 +162,7 @@ func (ix *Index) primaryKey(ctx context.Context, table string) (string, error) {
 // execCount runs q in its own write transaction and returns the rows it
 // changed; none changed, nothing is committed.
 func (ix *Index) execCount(ctx context.Context, q string, args ...any) (int64, error) {
-	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return 0, ix.statementError(err)
 	}
@@ -213,7 +213,7 @@ func (ix *Index) pruneCursors(ctx context.Context) error {
 // dropCursorIfEmpty removes rel's cursor when no row table holds a row of
 // it; the look and the delete are one transaction.
 func (ix *Index) dropCursorIfEmpty(ctx context.Context, rel string) error {
-	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return ix.statementError(err)
 	}

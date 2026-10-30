@@ -212,6 +212,7 @@ func migrateText(r index.MigrateResult) string {
 const (
 	indexUpdatingSentence   = "an update is being applied, try again in a minute"
 	indexUnreadableSentence = "the metrics index is unreadable and rebuilding it failed today: run backsight stats index rebuild"
+	indexChangedSentence    = "backsight was updated meanwhile: run the command again"
 )
 
 // indexClassMessage is the sentence of an index error of class.
@@ -233,6 +234,8 @@ func indexError(err error) error {
 			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight stats index rebuild --yes", Why: "rebuild without those months"}}}
 	case errors.Is(err, index.ErrUnreadable):
 		return &output.Error{Code: output.Blocked, Message: indexUnreadableSentence}
+	case errors.Is(err, index.ErrSchemaChanged):
+		return &output.Error{Code: output.Blocked, Message: indexChangedSentence}
 	}
 	return &output.Error{Code: output.Blocked, Message: indexClassMessage(index.Class(err))}
 }

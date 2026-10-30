@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -429,6 +430,7 @@ func TestMaintainIndexText(t *testing.T) {
 			"failed: corrupt, removed metrics-v1.db, kept metrics-v2.db (in use), rebuild temp files left: a rebuild is running"},
 		{index.MaintainResult{}, &fs.PathError{Op: "open", Path: "/home/someone/secret", Err: fs.ErrPermission}, "failed: io"},
 		{index.MaintainResult{}, context.DeadlineExceeded, "failed: timeout"},
+		{index.MaintainResult{}, fmt.Errorf("prune: %w", index.ErrSchemaChanged), "skipped: backsight was updated meanwhile"},
 	} {
 		if got := maintainIndexText(c.r, c.err); got != c.want {
 			t.Errorf("%+v %v: %q, want %q", c.r, c.err, got, c.want)

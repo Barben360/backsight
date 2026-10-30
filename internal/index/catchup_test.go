@@ -3,8 +3,10 @@ package index
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -695,5 +697,59 @@ func TestCheckpointInDeleteModeDoesNothing(t *testing.T) {
 	}
 	if after, err := os.ReadFile(e.ix.Path()); err != nil || !bytes.Equal(before, after) {
 		t.Errorf("the file changed (%v)", err)
+	}
+}
+
+// bumpVersion sets the file's user_version from a connection of its own,
+// as a newer backsight's migration would.
+func bumpVersion(t *testing.T, path string, v int) {
+	t.Helper()
+	raw, err := sql.Open(driverName, "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.Exec(fmt.Sprintf("PRAGMA user_version = %d", v)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCatchUpStopsOnASchemaChange: a long-lived handle whose file was
+// migrated by another binary after its Open writes nothing more: every
+// write transaction reads user_version first, and CatchUp returns
+// ErrSchemaChanged (the process must open the index again).
+func TestCatchUpStopsOnASchemaChange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mod  func(e *ingestEnv, r *fakeReader)
+	}{
+		{"new lines", func(e *ingestEnv, _ *fakeReader) { e.append("2026-10", promptLine(2, 1)) }},
+		{"a new file", func(e *ingestEnv, _ *fakeReader) { e.write("2026-11", promptLine(3, 1)) }},
+		{"the ledger", func(_ *ingestEnv, r *fakeReader) {
+			r.set(ledgerOf(map[string]feedback.Entry{"m-canary-1": {Shown: 1}}), nil)
+		}},
+		{"the ledger unreadable", func(_ *ingestEnv, r *fakeReader) { r.set(feedback.Ledger{}, errors.New("CANARY-ledger-down")) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fakeReader{}
+			r.set(ledgerOf(nil), nil)
+			e := envWith(t, func(o *Options) { o.Ledger = r })
+			e.write("2026-10", promptLine(1, 1))
+			e.catchUp(time.Minute)
+			before := dump(t, e.ix)
+			ledger := e.count("ledger")
+			bumpVersion(t, e.ix.Path(), e.ix.Schema()+1)
+			tc.mod(e, r)
+			_, err := e.ix.CatchUp(context.Background(), time.Minute)
+			if !errors.Is(err, ErrSchemaChanged) {
+				t.Fatalf("CatchUp: %v, want ErrSchemaChanged", err)
+			}
+			if got := dump(t, e.ix); got != before {
+				t.Errorf("rows or cursors written after the change\n got %s\nwant %s", got, before)
+			}
+			if e.count("ledger") != ledger {
+				t.Error("the ledger table was written after the change")
+			}
+		})
 	}
 }

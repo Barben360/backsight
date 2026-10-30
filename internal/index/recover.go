@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"syscall"
@@ -222,7 +221,7 @@ func setAside(ctx context.Context, o Options, ce *corruptErr) error {
 // locking (no shared memory: the lock fails while any other connection
 // has the file open in WAL mode, even idle).
 func lockDSN(path string) string {
-	return "file:" + uriEscaper.Replace(filepath.ToSlash(path)) + "?_pragma=busy_timeout(0)&_pragma=locking_mode(EXCLUSIVE)"
+	return fileURI(path) + "?_pragma=busy_timeout(0)&_pragma=locking_mode(EXCLUSIVE)"
 }
 
 // seize takes path's exclusive lock for a replacement and returns its

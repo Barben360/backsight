@@ -28,7 +28,7 @@ func (ix *Index) refreshLocal(ctx context.Context) error {
 	if err != nil {
 		return ix.recordOnce(ctx, stateSource, 0, errLocalStatusUnreadable)
 	}
-	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return err
 	}

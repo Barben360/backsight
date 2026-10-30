@@ -41,7 +41,7 @@ func (ix *Index) refreshLedger(ctx context.Context) error {
 		return ix.recordOnce(ctx, ledgerSource, 0, errLedgerUnreadable)
 	}
 	sum := hexSHA(raw)
-	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return err
 	}

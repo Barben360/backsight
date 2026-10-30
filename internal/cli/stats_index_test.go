@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -346,6 +347,7 @@ func TestIndexErrorMapping(t *testing.T) {
 		{index.ErrNeedsYes, output.NeedsUser, "rebuilding drops the months listed, whose files are gone: confirm with backsight stats index rebuild --yes"},
 		{index.ErrUnreadable, output.Blocked, "the metrics index is unreadable and rebuilding it failed today: run backsight stats index rebuild"},
 		{index.ErrDiskFull, output.Blocked, "the metrics index: full"},
+		{fmt.Errorf("ingest x: %w", index.ErrSchemaChanged), output.Blocked, "backsight was updated meanwhile: run the command again"},
 		{errors.New("open /home/someone/secret/metrics.db: permission denied"), output.Blocked, "the metrics index: other"},
 		{&fs.PathError{Op: "open", Path: "/home/someone/metrics.db", Err: fs.ErrPermission}, output.Blocked, "the metrics index: io"},
 	}

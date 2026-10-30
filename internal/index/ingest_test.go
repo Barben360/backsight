@@ -720,3 +720,63 @@ func TestUnknownKindIsUnreadable(t *testing.T) {
 		t.Errorf("prompts %v", got)
 	}
 }
+
+// TestStaleRowsWithoutACursorAreReset: a file whose cursor is gone (the
+// daily prune drops it once the file is gone and its rows pruned) while
+// its ingest errors (kept 30 days) or rows survive is read as a new
+// file when it comes back: its old rows are deleted first, and the
+// result equals a fresh build.
+func TestStaleRowsWithoutACursorAreReset(t *testing.T) {
+	content := "CANARY-not-json-line\n" + promptLine(1, 3) + "another-bad-line\n" + promptLine(2, 3)
+	for _, tc := range []struct{ name, drop string }{
+		{"error rows left", `DELETE FROM cursors; DELETE FROM tel_prompt`},
+		{"error and line rows left", `DELETE FROM cursors`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.write("2026-10", content)
+			e.ingest()
+			if e.count("ingest_errors") != 2 {
+				t.Fatalf("%d errors recorded, want 2", e.count("ingest_errors"))
+			}
+			if _, err := e.ix.sh.w.Exec(tc.drop); err != nil {
+				t.Fatal(err)
+			}
+			st, err := e.ix.ingestSources(context.Background(), time.Time{})
+			if err != nil {
+				t.Fatalf("ingest with stale rows: %v", err)
+			}
+			if st.Lines != 4 || st.Errors != 2 {
+				t.Errorf("stats %+v, want 4 lines and 2 errors", st)
+			}
+			if got, want := dump(t, e.ix), freshDump(t, e); got != want {
+				t.Errorf("differs from a fresh build\n got %s\nwant %s", got, want)
+			}
+		})
+	}
+}
+
+// TestAStaleErrorRowAheadOfTheCursorIsKept: an ingest_errors row already
+// at the offset of a bad line being read is no conflict: the line is
+// skipped as an error and the ingest goes on.
+func TestAStaleErrorRowAheadOfTheCursorIsKept(t *testing.T) {
+	e := newEnv(t)
+	first := promptLine(1, 3)
+	e.write("2026-10", first)
+	e.ingest()
+	if _, err := e.ix.sh.w.Exec(`INSERT INTO ingest_errors(source_file, "offset", reason, at) VALUES (?, ?, 'unparsable', 0)`,
+		"telemetry/events-2026-10.jsonl", len(first)); err != nil {
+		t.Fatal(err)
+	}
+	e.append("2026-10", "CANARY-bad-line\n"+promptLine(2, 3))
+	st, err := e.ix.ingestSources(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("ingest over a stale error row: %v", err)
+	}
+	if got := e.ns(); !slices.Equal(got, []int64{1, 2}) || st.Lines != 2 {
+		t.Errorf("prompts %v, stats %+v", got, st)
+	}
+	if e.count("ingest_errors") != 1 {
+		t.Errorf("%d error rows, want 1", e.count("ingest_errors"))
+	}
+}
