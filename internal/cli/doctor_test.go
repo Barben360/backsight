@@ -409,7 +409,7 @@ func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
 			t.Errorf("%s: %+v, want error with %q", id, c[id], want)
 		}
 	}
-	if c["native-refused"].Status != doctor.Info || c["native-refused"].Fix != "rm -rf "+refused {
+	if c["native-refused"].Status != doctor.Info || c["native-refused"].Fix != "" || !strings.HasSuffix(c["native-refused"].Detail, "rm -rf '"+refused+"'") {
 		t.Errorf("native-refused: %+v", c["native-refused"])
 	}
 	if code != output.Blocked {

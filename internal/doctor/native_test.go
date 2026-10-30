@@ -113,11 +113,11 @@ func TestDoctorNativeChecks(t *testing.T) {
 		},
 			want{"native-linger", "could not read linger", "loginctl enable-linger"}, Warn},
 		{"home open to others", func(n *NativeFacts) { n.HomeMode = 0o755 },
-			want{"native-home", "/n/home has mode 0755, not 0700", "chmod 700 /n/home"}, Error},
+			want{"native-home", "/n/home has mode 0755, not 0700", "chmod 700 '/n/home'"}, Error},
 		{"venv of another lock", func(n *NativeFacts) { n.VenvDiff = []string{"fastmcp==3.2.0"} },
 			want{"native-venv", "fastmcp==3.2.0", "backsight server upgrade --allow-unordered"}, Error},
 		{"the pinned venv changed", func(n *NativeFacts) { n.Pin = n.Venv; n.VenvDiff = []string{"fastmcp==3.2.0"} },
-			want{"native-venv", "fastmcp==3.2.0", "rm /n/venv/0.6.2-abc/.backsight-complete; backsight server install"}, Error},
+			want{"native-venv", "fastmcp==3.2.0", "rm '/n/venv/0.6.2-abc/.backsight-complete'; backsight server install"}, Error},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -178,7 +178,10 @@ func TestDoctorListsRefusedInstances(t *testing.T) {
 		t.Fatalf("want one native-refused per directory, got %+v", got)
 	}
 	for i, c := range got {
-		if c.Status != Info || !strings.Contains(c.Summary, dirs[i]) || c.Fix != "rm -rf "+dirs[i] {
+		// Never a deletion as the fix (an agent may run fixes): the
+		// command is in the detail, for the user to run.
+		if c.Status != Info || !strings.Contains(c.Summary, dirs[i]) || c.Fix != "" ||
+			!strings.HasSuffix(c.Detail, "delete it yourself once you no longer need it: rm -rf '"+dirs[i]+"'") {
 			t.Errorf("%+v", c)
 		}
 	}
@@ -288,5 +291,39 @@ func TestNativeVenvDiff(t *testing.T) {
 	}
 	if _, err := NativeVenvDiff(filepath.Join(t.TempDir(), "gone")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("no venv: %v, want not exist", err)
+	}
+}
+
+// Paths spliced into printed commands are one shell word each, whatever
+// compose_dir holds: a space or a quote never turns them into another
+// command.
+func TestDoctorNativeQuotesPathsInCommands(t *testing.T) {
+	root := "/srv/my data/it's"
+	f := newFixture(t)
+	nativeInstall(f, func() NativeFacts {
+		n := goodFacts()
+		n.Home, n.HomeMode = root+"/native/home", 0o755
+		n.Venv = root + "/native/venv/v1"
+		n.Pin, n.VenvDiff = n.Venv, []string{"fastmcp==3.2.0"}
+		n.Refused = []string{root + "/native/home/.pg0/instances/hindsight.refused-1761700000"}
+		return n
+	})
+	r := f.run()
+	q := `'/srv/my data/it'\''s`
+	for id, want := range map[string]string{
+		"native-home": "chmod 700 " + q + `/native/home'`,
+		"native-venv": "backsight server stop; rm " + q + `/native/venv/v1/.backsight-complete'; backsight server install (it builds the venv again from the lock)`,
+	} {
+		if c := check(t, r, id); c.Fix != want {
+			t.Errorf("%s fix\n%s\nwant\n%s", id, c.Fix, want)
+		}
+	}
+	c := check(t, r, "native-refused")
+	if want := "rm -rf " + q + `/native/home/.pg0/instances/hindsight.refused-1761700000'`; c.Fix != "" || !strings.HasSuffix(c.Detail, want) {
+		t.Errorf("native-refused %+v, want no fix and a detail ending %q", c, want)
+	}
+	// What the shell makes of the quoted word is the path itself.
+	if out, err := exec.Command("sh", "-c", "printf %s "+shellQuote(root)).Output(); err != nil || string(out) != root {
+		t.Errorf("sh read %q (%v), want %q", out, err, root)
 	}
 }

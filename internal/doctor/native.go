@@ -57,7 +57,7 @@ func nativeChecks(ctx context.Context, probe func(context.Context) (NativeFacts,
 	}
 	for _, dir := range f.Refused {
 		out = append(out, Check{ID: "native-refused", Status: Info, Summary: "a database restore refused is kept in " + dir,
-			Detail: "restore moved it aside, never deleting it: delete it once you no longer need it", Fix: "rm -rf " + dir})
+			Detail: "restore moved it aside, never deleting it; delete it yourself once you no longer need it: rm -rf " + shellQuote(dir)})
 	}
 	return append(out, webUICheck())
 }
@@ -175,7 +175,7 @@ func checkNativeHome(f NativeFacts) Check {
 	}
 	if m := f.HomeMode.Perm(); m != 0o700 {
 		c.Status, c.Summary = Error, fmt.Sprintf("%s has mode %04o, not 0700: other users can read the database", f.Home, m)
-		c.Fix = "chmod 700 " + f.Home
+		c.Fix = "chmod 700 " + shellQuote(f.Home)
 		return c
 	}
 	c.Status, c.Summary = OK, f.Home+" is 0700"
@@ -208,7 +208,7 @@ func checkNativeVenv(f NativeFacts) Check {
 	if f.Pin != "" && f.Venv == f.Pin {
 		// This backsight's own venv changed since it was built: an upgrade
 		// to the version it runs does nothing, a rebuild from the lock does.
-		c.Fix = "backsight server stop; rm " + filepath.Join(f.Venv, ".backsight-complete") + "; backsight server install (it builds the venv again from the lock)"
+		c.Fix = "backsight server stop; rm " + shellQuote(filepath.Join(f.Venv, ".backsight-complete")) + "; backsight server install (it builds the venv again from the lock)"
 		return c
 	}
 	c.Fix = "backsight server upgrade --allow-unordered"
@@ -270,3 +270,8 @@ func NativeVenvDiff(venv string) ([]string, error) {
 	slices.Sort(diff)
 	return diff, nil
 }
+
+// shellQuote is s as one POSIX shell word, for a path spliced into a
+// command doctor prints (compose_dir may hold a space or a quote). The
+// same rule as the cli's shellQuote, which doctor cannot import.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
