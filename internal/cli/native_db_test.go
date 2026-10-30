@@ -65,9 +65,10 @@ func (f *nativeDBTools) Run(_ context.Context, env []string, _ io.Reader, path s
 	case "systemd-run":
 		// pg0's first start, the database's creation or the download's
 		// unpack, extracts its Postgres under HOME.
-		if u := argAfter(args, "--unit"); strings.HasSuffix(u, "-db-init") || strings.HasSuffix(u, "-pg-unpack") {
-			for _, b := range []string{"initdb", "postgres", "pg_ctl", "pg_controldata", "psql", "pg_dump", "pg_restore"} {
-				p := filepath.Join(f.n.Home(), ".pg0", "installation", nativelock.PGInstallation, "bin", b)
+		if u := argAfter(args, "--unit"); strings.HasSuffix(u, "-db-init") || strings.HasSuffix(u, "-pg-unpack.service") {
+			for _, b := range []string{"bin/initdb", "bin/postgres", "bin/pg_ctl", "bin/pg_controldata", "bin/psql", "bin/pg_dump",
+				"bin/pg_restore", "share/extension/vector.control"} {
+				p := filepath.Join(f.n.Home(), ".pg0", "installation", nativelock.PGInstallation, filepath.FromSlash(b))
 				_ = os.MkdirAll(filepath.Dir(p), 0o755)
 				_ = os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755)
 			}

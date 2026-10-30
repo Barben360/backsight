@@ -51,6 +51,9 @@ func pg0Effects(c toolCall) {
 		_ = os.MkdirAll(filepath.Dir(p), 0o755)
 		_ = os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755)
 	}
+	vc := filepath.Join(home, ".pg0", "installation", nativelock.PGInstallation, "share", "extension", "vector.control")
+	_ = os.MkdirAll(filepath.Dir(vc), 0o755)
+	_ = os.WriteFile(vc, []byte("default_version = '0.8.5'\n"), 0o644)
 	inst := filepath.Join(home, ".pg0", "instances", "backsight-unpack")
 	_ = os.MkdirAll(filepath.Join(inst, "data"), 0o700)
 	_ = os.WriteFile(filepath.Join(inst, "instance.json"), []byte("{}"), 0o600)
@@ -124,6 +127,9 @@ func TestNativeFetchUnpacksPostgres(t *testing.T) {
 		if p := filepath.Join(installation(n), "bin", b); !isRegular(p) {
 			t.Errorf("%s missing after Fetch", p)
 		}
+	}
+	if !isRegular(filepath.Join(installation(n), ".backsight-unpacked")) {
+		t.Error("no .backsight-unpacked marker after a successful unpack")
 	}
 	i := slices.IndexFunc(tools.Calls, isUnpack)
 	if i < 0 || len(tools.Calls) != 1 {
@@ -223,7 +229,7 @@ func TestNativeFetchUnpackFailure(t *testing.T) {
 			if err == nil {
 				t.Fatal("no error")
 			}
-			if !strings.Contains(err.Error(), filepath.Join(installation(n), "bin")) || !strings.Contains(err.Error(), "PostgreSQL") {
+			if !strings.Contains(err.Error(), installation(n)) || !strings.Contains(err.Error(), "PostgreSQL") {
 				t.Errorf("the error does not name what is missing: %v", err)
 			}
 			if name == "pg0 fails" && !strings.Contains(err.Error(), "could not bind") {
@@ -274,5 +280,166 @@ func TestNativeVerifyDumpAfterFetchOnAFreshRoot(t *testing.T) {
 	}
 	if exists(n.InstanceDir()) {
 		t.Error("the hindsight instance was created outside ensureInstance")
+	}
+}
+
+// orderSys is the user manager: it records each call, whether its context
+// was live, and, at each stop of the unpack unit, whether the unit's
+// TMPDIR and throwaway instance were still there (a stop must come before
+// their removal).
+type orderSys struct {
+	n       Native
+	calls   []string
+	live    []bool
+	stopped []bool // at each stop: TMPDIR and instance still there
+}
+
+func (s *orderSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	line := name + " " + strings.Join(args, " ")
+	s.calls = append(s.calls, line)
+	s.live = append(s.live, ctx.Err() == nil)
+	if line == "systemctl --user stop backsight-pg-unpack.service" {
+		s.stopped = append(s.stopped, exists(filepath.Join(s.n.Home(), "tmp-unpack")) &&
+			exists(filepath.Join(s.n.Home(), ".pg0", "instances", "backsight-unpack")))
+	}
+	return nil, nil
+}
+
+// A cancel (Ctrl-C, a timeout) only kills systemd-run's client: the
+// transient unit, pg0 and its postgres run on. The unit is stopped, on a
+// live context, before its TMPDIR and instance are removed; a leftover
+// unit of that name is stopped before a new unpack, which then succeeds.
+func TestNativeFetchUnpackCancelled(t *testing.T) {
+	tools := &fakeTools{}
+	n := newNative(t, tools)
+	sys := &orderSys{n: n}
+	n.Sys = sys
+	fetchedButPG(t, n)
+	withFreePort(t, 28799, 28798)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tools.Fail = func(c toolCall) error {
+		if !isUnpack(c) {
+			return nil
+		}
+		if unit := argOf(c.Args, "--unit"); unit != "backsight-pg-unpack.service" {
+			t.Errorf("the unpack unit is %q", unit)
+		}
+		// pg0 is running in the unit: its instance and temporary files.
+		_ = os.MkdirAll(filepath.Join(n.Home(), ".pg0", "instances", "backsight-unpack", "data"), 0o700)
+		_ = os.MkdirAll(filepath.Join(unitEnv(c.Args, "TMPDIR"), ".tmpXyZ"), 0o700)
+		cancel()
+		return context.Canceled
+	}
+	if err := n.Fetch(ctx); err == nil {
+		t.Fatal("a cancelled unpack reported no error")
+	}
+	stop := slices.Index(sys.calls, "systemctl --user stop backsight-pg-unpack.service")
+	last := slices.Index(sys.calls[stop+1:], "systemctl --user stop backsight-pg-unpack.service")
+	if stop < 0 || last < 0 {
+		t.Fatalf("the unit was not stopped after the cancel (want one stop before the unpack, one after): %q", sys.calls)
+	}
+	last += stop + 1
+	if !sys.live[last] {
+		t.Error("the stop ran on the cancelled context: it would not run at all")
+	}
+	if !sys.stopped[len(sys.stopped)-1] {
+		t.Error("TMPDIR or the instance was removed before the unit was stopped")
+	}
+	if !slices.Contains(sys.calls[last:], "systemctl --user reset-failed backsight-pg-unpack.service") {
+		t.Errorf("no reset-failed after the stop: %q", sys.calls[last:])
+	}
+	if exists(filepath.Join(n.Home(), "tmp-unpack")) || exists(filepath.Join(n.Home(), ".pg0", "instances", "backsight-unpack")) {
+		t.Error("TMPDIR or the throwaway instance is left after the cancel")
+	}
+
+	// A rerun: the leftover unit is stopped before the new one starts.
+	sys.calls, sys.live = nil, nil
+	var before []string
+	tools.Fail = func(c toolCall) error {
+		if isUnpack(c) {
+			before = slices.Clone(sys.calls)
+		}
+		return nil
+	}
+	tools.Effect = pg0Effects
+	if err := n.Fetch(context.Background()); err != nil {
+		t.Fatalf("Fetch after a cancelled unpack: %v", err)
+	}
+	if !slices.Contains(before, "systemctl --user stop backsight-pg-unpack.service") {
+		t.Errorf("a leftover unit was not stopped before the new unpack: %q", before)
+	}
+	if missing := n.pgMissing(); missing != "" {
+		t.Errorf("%s missing after the rerun", missing)
+	}
+}
+
+// fullInstallation is pg0's Postgres as createInstance's first start
+// leaves it: every file the runtime runs, no backsight marker.
+func fullInstallation(t *testing.T, n Native) {
+	t.Helper()
+	for _, b := range pgTools {
+		touch(t, filepath.Join(installation(n), "bin", b), 0o755)
+	}
+	touch(t, filepath.Join(installation(n), "share", "extension", "vector.control"), 0o644)
+}
+
+// An installation is complete when every file the runtime runs is there:
+// one extracted by createInstance (no marker) is accepted and marked; a
+// partial one (a cut extraction, marker or not) is removed and unpacked
+// again.
+func TestNativeFetchUnpackCompleteness(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		setup  func(t *testing.T, n Native)
+		unpack bool
+	}{
+		{"complete without marker", fullInstallation, false},
+		{"partial, no pgvector", func(t *testing.T, n Native) {
+			fullInstallation(t, n)
+			_ = os.Remove(filepath.Join(installation(n), "share", "extension", "vector.control"))
+		}, true},
+		{"partial, no pg_dump", func(t *testing.T, n Native) {
+			fullInstallation(t, n)
+			_ = os.Remove(filepath.Join(installation(n), "bin", "pg_dump"))
+		}, true},
+		{"marked but partial", func(t *testing.T, n Native) {
+			fullInstallation(t, n)
+			touch(t, filepath.Join(installation(n), ".backsight-unpacked"), 0o644)
+			_ = os.Remove(filepath.Join(installation(n), "bin", "psql"))
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := &fakeTools{Effect: pg0Effects}
+			n := newNative(t, tools)
+			fetchedButPG(t, n)
+			withFreePort(t, 28799)
+			tc.setup(t, n)
+			stray := filepath.Join(installation(n), "lib", "half-written.so")
+			touch(t, stray, 0o644)
+			// The unpack starts from no installation: pg0 extracts only
+			// where none is.
+			tools.Fail = func(c toolCall) error {
+				if isUnpack(c) && exists(installation(n)) {
+					return errors.New("pg0 found a partial installation and skipped the extraction")
+				}
+				return nil
+			}
+			if err := n.Fetch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := slices.ContainsFunc(tools.Calls, isUnpack); got != tc.unpack {
+				t.Errorf("unpacked %v, want %v", got, tc.unpack)
+			}
+			if exists(stray) == tc.unpack {
+				t.Errorf("the partial installation's stray file present %v, want %v", exists(stray), !tc.unpack)
+			}
+			if !isRegular(filepath.Join(installation(n), ".backsight-unpacked")) {
+				t.Error("the complete installation is not marked")
+			}
+			if items, _, _ := n.Downloads(context.Background()); len(items) != 0 {
+				t.Errorf("Downloads after Fetch: %q", items)
+			}
+		})
 	}
 }

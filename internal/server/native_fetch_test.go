@@ -71,7 +71,7 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 func newNative(t *testing.T, tools ToolRunner) Native {
 	t.Helper()
 	cfg := config.Default(paths.Dirs{Data: t.TempDir()}, "/home/u")
-	return Native{Cfg: cfg, Tools: tools}
+	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}}
 }
 
 func touch(t *testing.T, path string, mode fs.FileMode) {
@@ -528,8 +528,8 @@ esac
 `, filepath.Dir(n.PythonBin()))
 	// pg0's Postgres is there: the unpack (a real systemd-run here) does
 	// not run; TestNativeFetchUnpacksPostgres covers its environment.
-	for _, b := range pgBinaries {
-		touch(t, filepath.Join(n.installation(), "bin", b), 0o755)
+	for _, f := range pgRequired {
+		touch(t, filepath.Join(n.installation(), filepath.FromSlash(f)), 0o755)
 	}
 	touch(t, n.UV(), 0o755)
 	if err := os.WriteFile(n.UV(), []byte(uvFake), 0o755); err != nil {
@@ -599,10 +599,12 @@ func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
 	}
 	want := []string{"uv 0.13.1", "Python " + nativelock.Python(),
 		fmt.Sprintf("hindsight-api-slim %s (%d packages)", nativelock.Hindsight(), len(nativelock.Versions())),
+		"pg0's PostgreSQL 18.1, pgvector 0.8.5 (unpacked from the venv)",
 		"embedding and reranker models"}
-	if !slices.Equal(items, want) || !slices.Equal(want, []string{NativeUV, NativePython, NativeWheels, NativeModels}) {
+	if !slices.Equal(items, want) || !slices.Equal(want, []string{NativeUV, NativePython, NativeWheels, NativeUnpack, NativeModels}) {
 		t.Errorf("Downloads = %q, want %q", items, want)
 	}
+
 	if mb := DownloadMB(items, models); mb != 20+100+1100+ModelsMB {
 		t.Errorf("DownloadMB = %d, want %d", mb, 20+100+1100+ModelsMB)
 	}
@@ -626,8 +628,9 @@ func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
 	if err := n.Download(context.Background(), items, &progress); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(progress.String(), NativeWheels) || !strings.Contains(progress.String(), NativeModels) {
-		t.Errorf("Download's progress %q names neither step", progress.String())
+	if !strings.Contains(progress.String(), NativeWheels) || !strings.Contains(progress.String(), NativeModels) ||
+		!strings.Contains(progress.String(), "Unpacking pg0's PostgreSQL") {
+		t.Errorf("Download's progress %q does not name every step", progress.String())
 	}
 	if items, models, err := n.Downloads(context.Background()); len(items) != 0 || models || err != nil {
 		t.Errorf("all present: %q, %v, %v; want none", items, models, err)
