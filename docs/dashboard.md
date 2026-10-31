@@ -30,24 +30,26 @@ The dashboard never listens on the network. To see it from another PC, forward a
 2. On the other PC: `ssh -L 8765:127.0.0.1:8765 <user>@<host>`, and leave it open.
 3. Open the link the host printed, in the browser of the other PC. A new one: `backsight dashboard link` on the host.
 
+The cookie then lives in the browser of the other PC, and other users of that PC can reach the forwarded port. Forward only to a PC you trust.
+
 ## What the pages show
 
-Each page is one `backsight stats` view, with the same numbers.
+Each page is one `backsight stats` view: Overview, Quality, Cost, Bank, Pipeline and System are in the top bar, Projects, Sessions and Memories under Browse. Releases and Definitions appear in developer mode (the Developer preference). Days opens from the links in other pages. The questions each view answers are in the next section.
 
-| Page | Question | View behind it |
-|---|---|---|
-| Overview | Is memory working, and what needs my attention? | `backsight stats overview` |
-| Quality | Does memory show up, and is what it shows right? | `backsight stats quality` |
-| Cost | What does memory cost? | `backsight stats cost` |
-| Bank | How big is the memory? | `backsight stats bank` |
-| Pipeline | Is what I write reaching the memory? | `backsight stats pipeline` |
-| System | Are the checks, the server and the jobs healthy? | `backsight stats system` |
-| Releases (developer mode) | Did a new version change anything? | `backsight stats releases` |
-| Definitions (developer mode) | What does a number mean? | `backsight stats defs` |
-| Projects | Which projects use memory? | `backsight stats projects` |
-| Sessions | Which sessions got memory? | `backsight stats sessions` |
-| Memories | Which memories are shown, used, reported? | `backsight stats memories` |
-| Days (linked from other pages) | What happened each day? | `backsight stats days` |
+| Page | View |
+|---|---|
+| Overview | `backsight stats overview` |
+| Quality | `backsight stats quality` |
+| Cost | `backsight stats cost` |
+| Bank | `backsight stats bank` |
+| Pipeline | `backsight stats pipeline` |
+| System | `backsight stats system` |
+| Releases | `backsight stats releases` |
+| Definitions | `backsight stats defs` |
+| Projects | `backsight stats projects` |
+| Sessions | `backsight stats sessions` |
+| Memories | `backsight stats memories` |
+| Days | `backsight stats days` |
 
 Every number on a page is in `backsight stats <view> --json`: that is what scripts and agents read. The dashboard's own address `/api/v1/<view>` returns the same JSON, but only to a browser that is signed in, to feed the pages; it is not an interface for scripts.
 
@@ -55,7 +57,9 @@ A memory's text is not on the pages. Its own page has a "Show text" link; the te
 
 ## Privacy
 
-The dashboard listens on `127.0.0.1` only and sends nothing out. The sign-in cookie is sent by the browser to every other program it opens on `127.0.0.1` or `localhost`, so do not open untrusted local services in the same browser while you are signed in. [privacy.md](privacy.md#the-dashboard) has the details.
+The dashboard listens on `127.0.0.1` only. Its pages load nothing from other sites; the dashboard itself reads your memory server, as `backsight stats` does, and runs the doctor's checks. The footer's help link opens GitHub only when you click it.
+
+The sign-in cookie is sent by the browser to every program that answers on the same host name (`127.0.0.1`, or `localhost` if you signed in through it), on any port. A program that gets it can read every page, and the text of any memory, until the session ends (2 hours without use, or when the dashboard stops). Local development servers are the typical case: do not open untrusted local services in the same browser while you are signed in. [privacy.md](privacy.md#the-dashboard) has the details.
 
 ## What each view answers
 

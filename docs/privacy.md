@@ -22,13 +22,14 @@ The views (`backsight stats overview`, `quality`, `sessions`…) read this index
 
 ## The dashboard
 
-`backsight dashboard` serves the memory dashboard in a browser. It listens on `127.0.0.1` only and nothing in its pages sends a request out of the machine.
+`backsight dashboard` serves the memory dashboard in a browser. It listens on `127.0.0.1` only. Its pages make no request outside the dashboard. The dashboard itself reads the memory server you configured (a memory's text only on "Show text") and runs the doctor's checks. The footer's help link opens GitHub only when you click it.
 
 - **What the pages show**: counts, ids, and project and session names, like `backsight stats`. A memory's text shows only on its own page, after a click on "Show text"; it is read from the server at that moment and never stored.
 - **The browser** (its history, its extensions) sees what the pages show. Use a browser profile you trust.
-- **The sign-in cookie** is sent by the browser to every other program it opens on `127.0.0.1` or `localhost`, because browsers do not separate cookies by port. Do not open untrusted local services in the same browser while you are signed in. It expires after 2 hours without use.
+- **The sign-in cookie** is sent by the browser to every program that answers on the same host name (`127.0.0.1`, or `localhost` if you signed in through it), on any port: browsers do not separate cookies by port. A program that receives it can read every page and any memory's text until the session expires (2 hours without use) or the dashboard stops. Local development servers are the typical case: do not open untrusted local services in the same browser while you are signed in.
+- **Over `ssh -L`**, the cookie lives in the browser of the other PC, and other users of that PC can reach the forwarded port. Forward only to a PC you trust.
 - **`--open`** puts the one-time link on the browser's command line for a moment. The code works once and expires in 2 minutes.
-- **Files**, under `dashboard/` in the state directory: `dashboard.json` (the process id, the port and the start time) and `codes/` (the SHA-256 hashes of the one-time codes, each valid 2 minutes and removed when used, when expired, or when the dashboard stops).
+- **Files**, under `dashboard/` in the state directory: `dashboard.json` (the process id, the port and the start time), `codes/` (the SHA-256 hashes of the one-time codes, each valid 2 minutes; removed when used, when presented after they expired, and when the dashboard starts or stops) and `claim.lock` (an empty file that keeps two starts apart).
 - `backsight report` never includes `dashboard/`. `backsight uninstall --purge-local` deletes it.
 
 ## What leaves the machine

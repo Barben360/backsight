@@ -145,6 +145,7 @@ When the user asks whether memory works or is worth it, run `backsight stats ove
 
 - Rule: never put a session secret, a cookie or a login code on a command line (no `curl` with them). The pages need a signed-in browser; you do not.
 - For numbers, use `backsight stats <view> --json`: it returns what the pages show.
+- Exit 20 with `a dashboard is already running`: one runs already; `backsight dashboard link` prints a link to it.
 - To stop it, the user presses Ctrl+C in its terminal (or stop the background process you started). It stops by itself after 2 hours without use.
 
 ## More
