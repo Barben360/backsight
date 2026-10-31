@@ -2,10 +2,12 @@ package dashboard
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -515,5 +517,46 @@ func TestFirstLink(t *testing.T) {
 	}
 	if r := h.do("GET", path); r.StatusCode != http.StatusUnauthorized {
 		t.Errorf("the first link again: %d, want 401", r.StatusCode)
+	}
+}
+
+// Each clause of localBack's own rules, apart from url.Parse's.
+func TestHasControl(t *testing.T) {
+	for in, want := range map[string]bool{"/a": false, "/a b": false, "/a\tb": true, "/a\x7f": true, "/a\x00": true, "/é": false} {
+		if got := hasControl(in); got != want {
+			t.Errorf("hasControl(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestLocalURL(t *testing.T) {
+	for _, c := range []struct {
+		u    url.URL
+		want bool
+	}{
+		{url.URL{Path: "/a", RawQuery: "x=1"}, true},
+		{url.URL{Scheme: "http", Path: "/a"}, false},
+		{url.URL{Host: "evil.example", Path: "/a"}, false},
+		{url.URL{User: url.User("u"), Path: "/a"}, false},
+		{url.URL{Opaque: "x"}, false},
+	} {
+		if got := localURL(&c.u); got != c.want {
+			t.Errorf("localURL(%+v) = %v, want %v", c.u, got, c.want)
+		}
+	}
+}
+
+// The cookie must have the form of a secret this dashboard draws, even when
+// a store holds a session of another form.
+func TestSignedInNeedsASecretForm(t *testing.T) {
+	h := newHarness(t)
+	odd := strings.Repeat("Z", 64) // not lower-case hex
+	h.s.sessions.mu.Lock()
+	now := h.s.sessions.wall()
+	h.s.sessions.list = append(h.s.sessions.list, session{hash: sha256.Sum256([]byte(odd)), created: now, lastSeen: now})
+	h.s.sessions.mu.Unlock()
+	ck := &http.Cookie{Name: cookieName(h.port), Value: odd}
+	if r := h.do("GET", "/api/v1/overview", cookieHdr(ck)...); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a stored session in another form: %d, want 401", r.StatusCode)
 	}
 }

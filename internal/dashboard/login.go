@@ -56,16 +56,30 @@ func localBack(target string) (string, bool) {
 	if !strings.HasPrefix(target, "/") || strings.Contains(path, "//") || strings.ContainsRune(target, '\\') {
 		return "", false
 	}
-	for i := 0; i < len(target); i++ {
-		if c := target[i]; c < 0x20 || c == 0x7f {
-			return "", false
-		}
+	if hasControl(target) {
+		return "", false
 	}
 	u, err := url.Parse(target)
-	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
+	if err != nil || !localURL(u) {
 		return "", false
 	}
 	return target, true
+}
+
+// hasControl: s holds a control character (url.Parse refuses them too; this
+// does not rely on it).
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// localURL: u is a path and query only, no other site.
+func localURL(u *url.URL) bool {
+	return u.Scheme == "" && u.Host == "" && u.User == nil && u.Opaque == ""
 }
 
 // navigation: Sec-Fetch-Mode, when present, says the request is a

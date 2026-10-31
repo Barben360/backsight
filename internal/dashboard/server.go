@@ -69,6 +69,19 @@ func (e *StartError) Unwrap() error { return e.Err }
 
 func startFail(kind StartKind, err error) error { return &StartError{Kind: kind, Err: err} }
 
+// ServeError is a failure of the listener while serving; CleanupError is a
+// failure to undo the run at the stop (the index, the runtime file, the
+// login codes). Their texts may hold paths: callers show a sentence.
+type (
+	ServeError   struct{ Err error }
+	CleanupError struct{ Err error }
+)
+
+func (e *ServeError) Error() string   { return e.Err.Error() }
+func (e *ServeError) Unwrap() error   { return e.Err }
+func (e *CleanupError) Error() string { return e.Err.Error() }
+func (e *CleanupError) Unwrap() error { return e.Err }
+
 // StopReason says why Serve returned.
 type StopReason string
 
@@ -81,6 +94,9 @@ var shutdownGrace = 5 * time.Second
 // beforeShutdown runs once Serve's context ended, before the shutdown:
 // tests release a blocked request there.
 var beforeShutdown = func() {}
+
+// newListenConfig is listenConfig; tests replace it to make the bind fail.
+var newListenConfig = listenConfig
 
 // Server is a started dashboard: bound, claimed, not yet serving.
 type Server struct {
@@ -128,7 +144,7 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 		return nil, &RunningError{Port: r.Port}
 	}
 
-	lc := listenConfig()
+	lc := newListenConfig()
 	ln, err := lc.Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.Port)))
 	if err != nil {
 		if addrInUse(err) {
@@ -237,7 +253,12 @@ func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 			errs = append(errs, fmt.Errorf("serve the dashboard: %w", err))
 		}
 	}
-	errs = append(errs, s.data.stop(), Release(s.cfg.Dirs, s.pid), SweepCodes(s.cfg.Dirs, s.now(), true))
+	if err := errors.Join(errs...); err != nil {
+		errs = []error{&ServeError{err}}
+	}
+	if err := errors.Join(s.data.stop(), Release(s.cfg.Dirs, s.pid), SweepCodes(s.cfg.Dirs, s.now(), true)); err != nil {
+		errs = append(errs, &CleanupError{err})
+	}
 	return reason, errors.Join(errs...)
 }
 

@@ -39,6 +39,9 @@ func (s *Server) guard(mux *http.ServeMux) http.Handler {
 	port := strconv.Itoa(s.port)
 	hosts := [2]string{"127.0.0.1:" + port, "localhost:" + port}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every response this handler writes. net/http's own 400, 408 and 431
+		// (a request it rejects before any handler runs) carry none of
+		// these; their body is one fixed line and holds no data.
 		securityHeaders(w.Header(), false)
 		// A DNS-rebound name, another port (an ssh -L to a different
 		// local port) or no Host at all: not this dashboard's origin.

@@ -37,8 +37,10 @@ const helpURL = "https://github.com/Barben360/backsight/blob/main/docs/dashboard
 // The state pages' fixed sentences (the API's are in api.go).
 const (
 	firstBuildSentence = "Building the metrics index from this PC's history. This page refreshes every 2 seconds."
-	updatedPage        = "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."
-	tooSlowPage        = "The page took too long: try again."
+	// firstBuildTextSentence is the text page's: it never refreshes.
+	firstBuildTextSentence = "Building the metrics index from this PC's history. Open the text again in a few seconds."
+	updatedPage            = "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."
+	tooSlowPage            = "The page took too long: try again."
 )
 
 // declared reads the views header of a template file; ok is false when
@@ -380,7 +382,12 @@ func (s *Server) notReadyPage(w http.ResponseWriter, r *http.Request, st indexSt
 	switch st {
 	case stateBuilding:
 		w.Header().Set("Retry-After", "2")
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, firstBuildSentence, 2)
+		// The text page never refreshes itself: each reading is a click.
+		reload, msg := 2, firstBuildSentence
+		if kindOf[r.Pattern] == "text" {
+			reload, msg = 0, firstBuildTextSentence
+		}
+		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, msg, reload)
 	case stateUpdating:
 		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, sentence(views.UpdatingSentence), 0)
 	case stateUpdated:

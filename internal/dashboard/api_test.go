@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -356,9 +357,12 @@ func TestNoWorkBeforeAuthentication(t *testing.T) {
 		}
 	}
 	cu, rt, _ := h.ix.counts()
-	if cu != 0 || rt != 0 || len(h.srv.calls) != 0 || h.doctorRuns.Load() != doctors {
+	h.srv.mu.Lock()
+	early := maps.Clone(h.srv.calls)
+	h.srv.mu.Unlock()
+	if cu != 0 || rt != 0 || len(early) != 0 || h.doctorRuns.Load() != doctors {
 		t.Errorf("work before authentication: %d catch-ups, %d read transactions, server %v, doctor runs %d (was %d)",
-			cu, rt, h.srv.calls, h.doctorRuns.Load(), doctors)
+			cu, rt, early, h.doctorRuns.Load(), doctors)
 	}
 
 	ck := h.login()

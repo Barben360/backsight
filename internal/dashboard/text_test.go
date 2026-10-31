@@ -415,3 +415,20 @@ func TestAPINeverReturnsText(t *testing.T) {
 		t.Errorf("the text reached stderr: %q", stderr.String())
 	}
 }
+
+// While the first build runs, a page asks again by itself, but the text
+// page does not: each reading of the text is a click.
+func TestBuildingPageRefreshOnlyOffTheTextPage(t *testing.T) {
+	h := newDataHarness(t, withIndex(func(f *fakeIndex) { f.openGate = make(chan struct{}) }), withServer(), withNeedsBuild())
+	ck := h.login()
+	const refresh = `<meta http-equiv="refresh" content="2">`
+	for path, want := range map[string]bool{"/memories": true, "/memories/zzzzzzzz/text": false} {
+		r, b := rawGet(t, h, ck, path, "Sec-Fetch-Dest", "document")
+		if r.StatusCode != 503 || !strings.Contains(b, "Building the metrics index") {
+			t.Fatalf("GET %s: %d %q, want the building page", path, r.StatusCode, b)
+		}
+		if got := strings.Contains(b, refresh); got != want {
+			t.Errorf("GET %s while building: refresh %v, want %v", path, got, want)
+		}
+	}
+}

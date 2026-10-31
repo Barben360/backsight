@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -733,4 +734,59 @@ func TestStopCutsARequestAfterTheGrace(t *testing.T) {
 		t.Errorf("the request cut at the stop got a response %d", status)
 	}
 	noRuntimeFile(t, Config{Dirs: h.dirs})
+}
+
+// A listen failure that is not a taken port comes out of Start as a
+// StartListen error, and leaves no runtime file behind.
+func TestStartListenFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BACKSIGHT_HOME", home)
+	t.Setenv("BACKSIGHT_STATE_DIR", "")
+	dirs, err := paths.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("the bind is refused")
+	old := newListenConfig
+	t.Cleanup(func() { newListenConfig = old })
+	newListenConfig = func() net.ListenConfig {
+		return net.ListenConfig{Control: func(string, string, syscall.RawConn) error { return refused }}
+	}
+	_, err = Start(context.Background(), Config{Dirs: dirs})
+	var se *StartError
+	if !errors.As(err, &se) || se.Kind != StartListen || !errors.Is(err, refused) || errors.Is(err, ErrPortTaken) {
+		t.Fatalf("Start: %v; want a StartListen error wrapping the bind's", err)
+	}
+	if _, err := os.Stat(RuntimeFile(dirs)); !os.IsNotExist(err) {
+		t.Errorf("runtime file left: %v", err)
+	}
+}
+
+// net/http answers a request it rejects before any handler runs (a bad
+// request line, a header over MaxHeaderBytes) on its own: those responses
+// carry none of the handler's headers. The exception is accepted because
+// their body is one fixed line and holds no data; this pins both.
+func TestNetHTTPRejectionsCarryNoData(t *testing.T) {
+	h := newHarness(t)
+	for name, req := range map[string]string{
+		"bad request line": "GARBAGE\r\n\r\n",
+		"header too large": "GET / HTTP/1.1\r\nHost: " + h.host() + "\r\nX-Big: " + strings.Repeat("a", 32<<10) + "\r\n\r\n",
+	} {
+		resp := h.raw(req)
+		head, bodyText, _ := strings.Cut(resp, "\r\n\r\n")
+		if !strings.HasPrefix(head, "HTTP/1.1 400 ") && !strings.HasPrefix(head, "HTTP/1.1 431 ") {
+			t.Errorf("%s: %q, want net/http's 400 or 431", name, head)
+		}
+		if strings.Contains(strings.ToLower(head), "content-security-policy") {
+			t.Errorf("%s: the response carries the handler's headers, so it no longer comes from net/http alone: update the exception in guard", name)
+		}
+		for _, leak := range []string{strconv.Itoa(h.port), "backsight", h.dirs.State, "test"} {
+			if strings.Contains(bodyText, leak) {
+				t.Errorf("%s: the body %q holds %q", name, bodyText, leak)
+			}
+		}
+		if len(bodyText) > 100 {
+			t.Errorf("%s: a %d-byte body, want one fixed line", name, len(bodyText))
+		}
+	}
 }
