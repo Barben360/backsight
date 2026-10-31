@@ -58,8 +58,10 @@ type releaseAcc struct {
 	projects    map[string]int64
 }
 
-// NoProject is the project_shares key of prompts that have no project.
-const NoProject = "none"
+// NoProject is the project_shares key of prompts that have no project: the
+// parentheses never appear in a project tag, so it cannot collide with a
+// project that is named "none".
+const NoProject = "(none)"
 
 func releaseRows(e env, w Window) ([]ReleaseRow, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `

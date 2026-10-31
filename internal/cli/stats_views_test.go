@@ -95,7 +95,7 @@ func TestStatsViewsRun(t *testing.T) {
 			if v.code != output.OK || !v.env.OK || v.env.Command != "stats "+view {
 				t.Fatalf("exit %d command %q: %s %s", v.code, v.env.Command, v.raw, v.stderr)
 			}
-			if got := at(v.env.Data, "view"); got != view && view != "defs" {
+			if got := at(v.env.Data, "view"); got != view {
 				t.Errorf("data.view = %v", got)
 			}
 			if got := at(v.env.Data, "view_schema"); got != float64(1) {

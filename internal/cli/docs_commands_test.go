@@ -412,3 +412,43 @@ func TestReadmeHindsightBadge(t *testing.T) {
 		}
 	}
 }
+
+// TestDocsCommandsTablesKeepTheirColumns: every row of a table in
+// docs/commands.md has the header's column count. An unescaped "|" in a
+// cell (even inside backticks) splits it; write "\|".
+func TestDocsCommandsTablesKeepTheirColumns(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/commands.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := func(line string) int {
+		n := 0
+		for i := 0; i < len(line); i++ {
+			switch line[i] {
+			case '\\':
+				i++
+			case '|':
+				n++
+			}
+		}
+		return n
+	}
+	want, rows := 0, 0
+	for i, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			want = 0
+			continue
+		}
+		if want == 0 { // the header row of a table
+			want = cells(line)
+			continue
+		}
+		rows++
+		if got := cells(line); got != want {
+			t.Errorf("docs/commands.md:%d has %d column separators, the header has %d (escape a \\| in a cell): %.60s", i+1, got, want, line)
+		}
+	}
+	if rows < 20 {
+		t.Errorf("only %d table rows read", rows)
+	}
+}

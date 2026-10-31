@@ -47,7 +47,7 @@ func TestStatsViewsHoldNoCanary(t *testing.T) {
 	scan := func(what string, args ...string) string {
 		t.Helper()
 		code, out, errOut := run(t, args...)
-		if code != output.OK && code != output.Usage {
+		if code != output.OK {
 			t.Errorf("%s: exit %d: %s %s", what, code, out, errOut)
 		}
 		clean := strings.ReplaceAll(out, memText, "")

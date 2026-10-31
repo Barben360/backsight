@@ -1655,7 +1655,7 @@ func TestWorstSentNamesAnEmptyStatus(t *testing.T) {
 }
 
 // TestReleaseSharesNameTheMissingProject: prompts with no project are
-// counted under the key "none", never under an empty JSON key.
+// counted under the key "(none)", never under an empty JSON key.
 func TestReleaseSharesNameTheMissingProject(t *testing.T) {
 	x := newFx(t, fxNow)
 	x.binary = "0.1.16"
@@ -1667,6 +1667,22 @@ func TestReleaseSharesNameTheMissingProject(t *testing.T) {
 	}
 	got := r.Tables.Releases[0].ProjectShares
 	if _, bad := got[""]; bad || got[NoProject] != 0.5 || got["alpha"] != 0.5 || len(got) != 2 {
-		t.Errorf("shares = %v, want alpha and none at 0.5", got)
+		t.Errorf("shares = %v, want alpha and (none) at 0.5", got)
+	}
+}
+
+// TestReleaseSharesProjectNamedNone: a project called "none" and the
+// prompts without a project keep their own shares (1 prompt and 3 prompts
+// of 4), neither overwriting the other.
+func TestReleaseSharesProjectNamedNone(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.16"
+	x.tel(fxNow.Add(-time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "a-1", "none")
+	for i := 2; i <= 4; i++ {
+		x.tel(fxNow.Add(-time.Duration(i)*time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, fmt.Sprintf("n-%d", i), "")
+	}
+	got := x.run("releases", x.query(7)).Tables.Releases[0].ProjectShares
+	if got["none"] != 0.25 || got[NoProject] != 0.75 || len(got) != 2 {
+		t.Errorf("shares = %v, want none 0.25 and %s 0.75", got, NoProject)
 	}
 }

@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	_ "time/tzdata" // --tz names a zone whatever the host has
 
 	"github.com/spf13/cobra"
 
