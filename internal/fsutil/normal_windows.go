@@ -21,17 +21,48 @@ func samePath(a, b string) bool {
 	return a != "" && b != "" && strings.EqualFold(Normal(a), Normal(b))
 }
 
-// longName expands the 8.3 names of p's longest existing prefix; the rest
-// keeps its spelling.
+// longName is p's longest existing prefix with its 8.3 names expanded and
+// in the disk's case (the volume is case-blind: C:\code\Shop is the disk's
+// C:\code\shop); the rest keeps its spelling.
 func longName(p string) string {
 	if l, err := LongPathName(p); err == nil {
-		return l
+		return diskCase(l)
 	}
 	parent := filepath.Dir(p)
 	if parent == p {
 		return p
 	}
 	return filepath.Join(longName(parent), filepath.Base(p))
+}
+
+// diskCase is p, which exists, with each component in the case the disk
+// keeps (FindFirstFile's name), without following links; p as it is when
+// a component cannot be listed.
+func diskCase(p string) string {
+	vol := filepath.VolumeName(p)
+	out := vol + `\`
+	for _, part := range strings.Split(strings.Trim(p[len(vol):], `\`), `\`) {
+		if part == "" {
+			continue
+		}
+		next := filepath.Join(out, part)
+		name, err := windows.UTF16PtrFromString(next)
+		if err != nil {
+			return p
+		}
+		var fd windows.Win32finddata
+		h, err := windows.FindFirstFile(name, &fd)
+		if err != nil {
+			return p
+		}
+		_ = windows.FindClose(h)
+		found := windows.UTF16ToString(fd.FileName[:])
+		if !strings.EqualFold(found, part) {
+			found = part // a short name typed: GetLongPathName expanded it already
+		}
+		out = filepath.Join(out, found)
+	}
+	return out
 }
 
 // LongPathName is GetLongPathName: p with every 8.3 component expanded. p

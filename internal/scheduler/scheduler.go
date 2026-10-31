@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Job is one scheduled entry.
@@ -67,6 +68,10 @@ type Entry struct {
 	// that were: one the user disabled stays disabled.
 	Enabled []string
 	Reload  [][]string // loads the rewritten entry, when it was enabled
+	// Lock is the job's own lock file (a task): the job runs while a
+	// live process holds it. A refresh leaves that entry for later, since
+	// registering the task again could end the running instance.
+	Lock string
 }
 
 // Reloaded is what a refresh runs after the entries' own reloads, once
@@ -125,9 +130,14 @@ type Options struct {
 	Name string
 	// Env is carried into the job: the directories the install resolved
 	// (BACKSIGHT_HOME, XDG_*_HOME) and PATH, so that the job finds the same
-	// config, state and docker as the shell that installed it (not on
-	// Windows yet: see schtasks).
+	// config, state and docker as the shell that installed it (Windows:
+	// BACKSIGHT_HOME alone, as an argument; see schtasks).
 	Env map[string]string
+	// State is backsight's state directory (Windows: the tasks' XML
+	// files under tasks\, the jobs' locks under locks\).
+	State string
+	// UserSID is the tasks' principal (Windows).
+	UserSID string
 }
 
 // For builds the plan for goos.
@@ -138,7 +148,7 @@ func For(goos string, o Options) (Plan, error) {
 	case "darwin":
 		return launchd(o), nil
 	case "windows":
-		return schtasks(o), nil
+		return schtasks(o)
 	}
 	return Plan{}, fmt.Errorf("no scheduler support on %s", goos)
 }
@@ -372,29 +382,46 @@ func xmlEscape(s string) string {
 // TaskName is the Task Scheduler name of job j.
 func (o Options) TaskName(j Job) string { return o.name() + `\` + j.Name }
 
-// schtasks does not carry o.Env yet: the task runs with the user's own
-// environment, so a BACKSIGHT_HOME, XDG_*_HOME or PATH set only in the
-// installing shell is lost (systemd and launchd get them). /TR is capped
-// at 261 characters, too short for PATH inline; the fix is a generated
-// .cmd wrapper (set "K=V" lines, % doubled), deferred to M7 (Windows),
-// where it can be tried on Task Scheduler.
-func schtasks(o Options) Plan {
-	shim := o.Shim
+// Job tasks' triggers (decision 0080): tick every 15 minutes from a fixed
+// local epoch, maintain every day at 04:00. A start missed while the PC
+// slept or was off runs as soon as it can (StartWhenAvailable, in the
+// tasks' shared settings).
+const (
+	tickEpoch     = "2026-01-01T00:00:00"
+	maintainEpoch = "2026-01-01T04:00:00"
+)
+
+// schtasks registers each job as a task from XML (TaskXML, the server
+// task's principal and settings): a hidden console, no battery stop, no
+// time limit. A task cannot carry environment variables: a BACKSIGHT_HOME
+// the install resolved reaches the job as --backsight-home; the rest of
+// o.Env (XDG_*, PATH) means nothing on Windows. Whether a job runs is its
+// own lock file held, never schtasks' text (localized).
+func schtasks(o Options) (Plan, error) {
 	p := Plan{Kind: "schtasks", Start: map[string][]string{}}
 	for _, j := range Jobs {
-		run := `"` + shim + `" jobs ` + j.Name
-		sched := []string{"/SC", "MINUTE", "/MO", "15"}
+		trigger := Trigger{Kind: TriggerTime, Start: tickEpoch, Every: time.Duration(j.Minutes) * time.Minute}
 		if j.Name == "maintain" {
-			sched = []string{"/SC", "DAILY", "/ST", "04:00"}
+			trigger = Trigger{Kind: TriggerDaily, Start: maintainEpoch}
 		}
-		create := append([]string{"schtasks", "/Create", "/F", "/TN", o.TaskName(j), "/TR", run}, sched...)
+		args := []string{"jobs", j.Name}
+		if home := o.Env["BACKSIGHT_HOME"]; home != "" {
+			args = append(args, "--backsight-home", home)
+		}
+		task, err := TaskXML(TaskSpec{Description: "backsight jobs " + j.Name + " (" + o.name() + ")", UserSID: o.UserSID,
+			Triggers: []Trigger{trigger}, Program: o.Shim, Args: args})
+		if err != nil {
+			return Plan{}, fmt.Errorf("the %s task: %w", j.Name, err)
+		}
+		file := filepath.Join(o.State, "tasks", j.Name+".xml")
+		p.Files = append(p.Files, File{file, string(task)})
+		create := []string{"schtasks", "/Create", "/F", "/XML", file, "/TN", o.TaskName(j)}
 		p.Activate = append(p.Activate, create)
 		p.Start[j.Name] = []string{"schtasks", "/Run", "/TN", o.TaskName(j)}
-		// Not tried on Windows yet (M7): a refresh leaves a running task
-		// alone rather than rely on /Create /F keeping its instance.
-		p.Entries = append(p.Entries, Entry{Job: j.Name, Running: []string{"schtasks", "/Query", "/TN", o.TaskName(j), "/FO", "LIST"},
-			RunningMark: "Running", Reload: [][]string{create}})
+		// The lock jobs tick and jobs maintain take (job-<name>.lock).
+		p.Entries = append(p.Entries, Entry{Job: j.Name, Files: []string{file}, Lock: filepath.Join(o.State, "locks", "job-"+j.Name+".lock"),
+			Reload: [][]string{create}})
 		p.Remove = append(p.Remove, []string{"schtasks", "/Delete", "/F", "/TN", o.TaskName(j)})
 	}
-	return p
+	return p, nil
 }

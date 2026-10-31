@@ -147,7 +147,7 @@ func leftoverEntries(t *testing.T, d paths.Dirs, enabled bool) {
 // entries on disk whose timers were never enabled run nothing and warn,
 // with the fix that applies (removal when the answer was off).
 func TestJobsWhenTheSchedulerIsOff(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	d := jobsDirs(t, -1, nil)
 	saveAnsweredOff(t, d)
 	c := checkJobs(d, usageNow, nil)
@@ -191,7 +191,7 @@ func TestSchedulerCheckWhenOff(t *testing.T) {
 // The backup fix names the maintain job's own log, and never a journal
 // when the scheduler is off.
 func TestBackupFixFollowsTheScheduler(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	f := newFixture(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = "+testtool.TOMLStr(filepath.Join(f.home, "bk"))+"\n", 0o600)

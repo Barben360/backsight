@@ -33,7 +33,8 @@ var pathKeys = []string{"file_path", "path", "notebook_path"}
 
 var (
 	// writeCmd: a shell command that commits, publishes or edits in place.
-	writeCmd = regexp.MustCompile(`git\s+(?:-C\s+\S+\s+)?(?:commit|push|merge|rebase)\b|gh\s+pr\s+(?:create|merge)|\bsed\s+-i|>\s*[~/$]`)
+	// (Windows: a redirect to a drive path too).
+	writeCmd = regexp.MustCompile(`git\s+(?:-C\s+\S+\s+)?(?:commit|push|merge|rebase)\b|gh\s+pr\s+(?:create|merge)|\bsed\s+-i|>\s*[~/$]` + driveRedirect)
 	cdRe     = regexp.MustCompile(`(?:^|[;&|(]\s*|\s)cd\s+(['"]?)([^\s'";&|]+)`)
 	gitCRe   = regexp.MustCompile(`git\s+-C\s+(['"]?)([^\s'";&|]+)`)
 	cwdRe    = regexp.MustCompile(`--cwd[= ](['"]?)([^\s'";&|]+)`)
@@ -99,6 +100,9 @@ func CallOf(tool string, input map[string]json.RawMessage, cwd, home string) Cal
 		for _, p := range absPaths(text) {
 			if strings.HasPrefix(p, "/") && hostPath(p) == p && !userPath(p, home) {
 				continue // system paths: never a project
+			}
+			if hp := filepath.Clean(hostPath(p)); filepath.IsAbs(hp) && systemDir(hp) {
+				continue // Windows' own directories, whatever the spelling
 			}
 			add(p)
 		}

@@ -106,22 +106,16 @@ func superviseGuard(ctx context.Context, n server.Native, sc supervise.Config, l
 // newServerSuperviseCmd is the Windows task's action (decision 0080):
 // conhost.exe --headless <shim> server supervise. It runs the native
 // server from <Root>\supervise.json until a stop on its pipe; a second
-// one of the project exits 0 at once. --backsight-home carries
+// one of the project exits 0 at once. The root's --backsight-home carries
 // BACKSIGHT_HOME, which a task cannot set.
 func newServerSuperviseCmd(*env) *cobra.Command {
 	var noAPI bool
-	var home string
 	cmd := &cobra.Command{
 		Use:    "supervise",
 		Short:  "Run the native server's processes (the Windows task's action)",
 		Args:   usageArgs(cobra.NoArgs),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if home != "" {
-				if err := os.Setenv("BACKSIGHT_HOME", home); err != nil {
-					return blocked(err)
-				}
-			}
 			cfg, _, err := loadServerConfig()
 			if err != nil {
 				return err
@@ -160,6 +154,5 @@ func newServerSuperviseCmd(*env) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noAPI, "no-api", false, "start the database alone (the API on api-start)")
-	cmd.Flags().StringVar(&home, "backsight-home", "", "backsight's directory (BACKSIGHT_HOME), which a scheduled task cannot set")
 	return cmd
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func TestSystemdUnits(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
+	testtool.SkipWindows(t, "linux-only: systemd and launchd plans of POSIX paths, which a Windows host joins with backslashes (Windows: schtasks_test.go)")
 	p, err := For("linux", Options{Shim: "/home/a/.local/share/backsight/bin/current", Home: "/home/a", UnitDir: "/home/a/.config/systemd/user",
 		Env: map[string]string{"BACKSIGHT_HOME": "/srv/bs 1", "PATH": "/usr/bin:/home/a/.local/bin"}})
 	if err != nil || p.Kind != "systemd" || len(p.Files) != 4 {
@@ -59,7 +59,7 @@ func TestSystemdUnits(t *testing.T) {
 }
 
 func TestLaunchdAgents(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
+	testtool.SkipWindows(t, "linux-only: systemd and launchd plans of POSIX paths, which a Windows host joins with backslashes (Windows: schtasks_test.go)")
 	p, err := For("darwin", Options{Shim: "/Users/a/Library/Application Support/backsight/bin/current", Home: "/Users/a", UID: 501,
 		LogDir: "/Users/a/Library/Application Support/backsight/state/logs", Env: map[string]string{"PATH": "/opt/homebrew/bin:/usr/bin"}})
 	if err != nil || p.Kind != "launchd" || len(p.Files) != 2 {
@@ -89,17 +89,8 @@ func TestLaunchdAgents(t *testing.T) {
 	}
 }
 
-func TestScheduledTasks(t *testing.T) {
-	p, err := For("windows", Options{Shim: `C:\Users\a\AppData\Local\backsight\bin\current.exe`, Home: `C:\Users\a`})
-	if err != nil || p.Kind != "schtasks" || len(p.Files) != 0 {
-		t.Fatalf("%+v %v", p, err)
-	}
-	if got := strings.Join(p.Activate[0], "|"); got != `schtasks|/Create|/F|/TN|backsight\tick|/TR|"C:\Users\a\AppData\Local\backsight\bin\current.exe" jobs tick|/SC|MINUTE|/MO|15` {
-		t.Errorf("%s", got)
-	}
-	if got := strings.Join(p.Activate[1], "|"); got != `schtasks|/Create|/F|/TN|backsight\maintain|/TR|"C:\Users\a\AppData\Local\backsight\bin\current.exe" jobs maintain|/SC|DAILY|/ST|04:00` {
-		t.Errorf("maintain: %s", got)
-	}
+// A system with no scheduler is refused (Windows: schtasks_test.go).
+func TestUnknownSystemIsRefused(t *testing.T) {
 	if _, err := For("plan9", Options{Shim: "/x"}); err == nil {
 		t.Error("an unknown system is refused")
 	}
@@ -107,8 +98,8 @@ func TestScheduledTasks(t *testing.T) {
 
 // A second install (another Compose project) gets entries of its own.
 func TestEntriesAreNamedAfterTheProject(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
-	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", Name: "bs-fresh"}
+	testtool.SkipWindows(t, "linux-only: systemd and launchd plans of POSIX paths, which a Windows host joins with backslashes (Windows: schtasks_test.go)")
+	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", Name: "bs-fresh", UserSID: testSID}
 	p, _ := For("linux", o)
 	got := strings.Join(p.Paths(), " ")
 	if !strings.Contains(got, "/u/bs-fresh-tick.timer") || strings.Contains(got, "backsight-") {
@@ -169,7 +160,7 @@ func TestInstalledEnvRoundTrips(t *testing.T) {
 // Each entry names its files, how to reload them and, where reloading
 // stops a running job, how to tell that it runs.
 func TestEntries(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
+	testtool.SkipWindows(t, "linux-only: systemd and launchd plans of POSIX paths, which a Windows host joins with backslashes (Windows: schtasks_test.go)")
 	s, _ := For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u"})
 	if len(s.Entries) != 2 || len(s.Entries[0].Files) != 2 || s.Entries[0].Running != nil || len(s.Entries[0].Reload) != 0 {
 		t.Errorf("systemd entries %+v", s.Entries)
@@ -195,9 +186,8 @@ func TestEntries(t *testing.T) {
 	if strings.Join(e.Enabled, " ") != "launchctl print gui/501/tech.backsight.maintain" || l.Reloaded(l.Entries) != nil {
 		t.Errorf("launchd loaded probe %q, plan reload %q", e.Enabled, l.Reloaded(l.Entries))
 	}
-	w, _ := For("windows", Options{Shim: `C:\s.exe`, Home: `C:\h`})
-	if e := w.Entries[0]; len(e.Files) != 0 || strings.Join(e.Running, " ") != `schtasks /Query /TN backsight\tick /FO LIST` ||
-		e.RunningMark != "Running" || strings.Join(e.Reload[0], " ") != strings.Join(w.Activate[0], " ") {
+	w, _ := For("windows", Options{Shim: `C:\s.exe`, Home: `C:\h`, State: `C:\st`, UserSID: testSID})
+	if e := w.Entries[0]; len(e.Files) != 1 || e.Running != nil || e.Lock == "" || strings.Join(e.Reload[0], " ") != strings.Join(w.Activate[0], " ") {
 		t.Errorf("schtasks entry %+v", e)
 	}
 	if w.Entries[0].Enabled != nil || w.Reloaded(w.Entries) != nil {
@@ -206,7 +196,7 @@ func TestEntries(t *testing.T) {
 	if w.Digest() == "" || w.Digest() == s.Digest() {
 		t.Error("digest")
 	}
-	w2, _ := For("windows", Options{Shim: `C:\other.exe`, Home: `C:\h`})
+	w2, _ := For("windows", Options{Shim: `C:\other.exe`, Home: `C:\h`, State: `D:\st`, UserSID: testSID})
 	if w.Digest() == w2.Digest() {
 		t.Error("the digest ignores the commands")
 	}
@@ -241,7 +231,7 @@ func TestInstalledFromRecordedFiles(t *testing.T) {
 // Only a timer linked into timers.target.wants beside it is enabled;
 // services and a missing link are not.
 func TestTimersEnabled(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
+	testtool.SkipWindows(t, "linux-only: a systemd timer is enabled by a symlink, which a standard Windows user cannot make")
 	dir := t.TempDir()
 	files := []string{filepath.Join(dir, "bs-tick.service"), filepath.Join(dir, "bs-tick.timer"), filepath.Join(dir, "bs-maintain.timer")}
 	if TimersEnabled(files) {
@@ -261,7 +251,7 @@ func TestTimersEnabled(t *testing.T) {
 
 // A link that cannot be read may be there: it counts as enabled.
 func TestTimersEnabledUnreadable(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
+	testtool.SkipWindows(t, "linux-only: a systemd unit directory made unreadable by its mode bits")
 	if os.Geteuid() == 0 {
 		t.Skip("root reads every directory")
 	}
@@ -277,7 +267,7 @@ func TestTimersEnabledUnreadable(t *testing.T) {
 
 // Start runs one job now through each scheduler, without waiting for it.
 func TestStartRunsAJobNow(t *testing.T) {
-	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", UID: 1000}
+	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", UID: 1000, UserSID: testSID}
 	for goos, want := range map[string]string{
 		"linux":   "systemctl --user start --no-block backsight-tick.service",
 		"darwin":  "launchctl kickstart gui/1000/tech.backsight.tick",

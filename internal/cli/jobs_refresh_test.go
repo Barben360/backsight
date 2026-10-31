@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
-	"github.com/Barben360/backsight/internal/plugin"
-	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -49,7 +46,7 @@ func decodeRefresh(t *testing.T, out string) jobsRefreshResult {
 // environment they were installed with, and reloads them without stopping
 // a running job: daemon-reload, never a stop or restart.
 func TestJobsRefreshRewritesStaleUnits(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	home := devInstall(t, true)
 	sys := withSys(t, "linux")
 	if code, out, _ := run(t, "jobs", "install"); code != output.OK {
@@ -231,45 +228,6 @@ func TestJobsRefreshLeavesAnUnloadedLaunchdAgentUnloaded(t *testing.T) {
 	}
 }
 
-// A running task is left for the next refresh: the other one is created
-// again, and the digest stays unrecorded until both are, so that the next
-// refresh takes the one left.
-func TestJobsRefreshDefersARunningTask(t *testing.T) {
-	home := devInstall(t, true)
-	sys := withSys(t, "windows")
-	d := pathsOf(home)
-	_ = os.WriteFile(filepath.Join(d.Data, "bin", plugin.ShimName("windows")), []byte("MZ"), 0o700)
-	run(t, "jobs", "install")
-	_ = state.Update(d, "test", func(s *state.State) error { s.Scheduler.Digest = ""; return nil })
-	sys.out = map[string]string{`schtasks /Query /TN backsight\maintain /FO LIST`: "TaskName:      \\backsight\\maintain\r\nStatus:        Running\r\n"}
-	creates := func() []string {
-		var out []string
-		for _, c := range sys.calls {
-			if strings.HasPrefix(c, "schtasks /Create /F") {
-				out = append(out, c)
-			}
-		}
-		return out
-	}
-	sys.calls = nil
-	code, out, _ := run(t, "jobs", "refresh", "--json")
-	r := decodeRefresh(t, out)
-	if c := creates(); code != output.OK || r.Status != "done" || strings.Join(r.Deferred, ",") != "maintain" || len(c) != 1 || !strings.Contains(c[0], `/TN backsight\tick `) {
-		t.Fatalf("exit %d, creates %q\n%s", code, c, out)
-	}
-	if st, _ := state.Load(d.StateFile()); st.Scheduler.Digest != "" {
-		t.Error("the digest was recorded while a task was left as it was")
-	}
-	sys.out, sys.calls = nil, nil
-	code, out, _ = run(t, "jobs", "refresh", "--json")
-	if c := creates(); code != output.OK || len(decodeRefresh(t, out).Deferred) != 0 || !slices.ContainsFunc(c, func(l string) bool { return strings.Contains(l, `/TN backsight\maintain `) }) {
-		t.Errorf("next refresh: exit %d, creates %q\n%s", code, c, out)
-	}
-	if st, _ := state.Load(d.StateFile()); st.Scheduler.Digest == "" {
-		t.Error("the next refresh did not record the digest")
-	}
-}
-
 // Without entries there is nothing to refresh, and no scheduler is asked.
 func TestJobsRefreshWithoutEntries(t *testing.T) {
 	devInstall(t, true)
@@ -326,41 +284,6 @@ func TestJobsRefreshLeavesARunningLaunchdJob(t *testing.T) {
 	code, out, _ = run(t, "jobs", "refresh", "--json")
 	if r := decodeRefresh(t, out); code != output.OK || len(r.Deferred) != 0 || !strings.Contains(readFile(t, maintain), stop) {
 		t.Errorf("exit %d\n%s", code, out)
-	}
-}
-
-// Tasks have no files: the install records its commands' digest, and a
-// refresh reruns /Create for tasks whose digest is not this binary's.
-func TestJobsRefreshScheduledTasks(t *testing.T) {
-	home := devInstall(t, true)
-	sys := withSys(t, "windows")
-	d := pathsOf(home)
-	_ = os.WriteFile(filepath.Join(d.Data, "bin", plugin.ShimName("windows")), []byte("MZ"), 0o700)
-	if code, _, errOut := run(t, "jobs", "install"); code != output.OK {
-		t.Fatalf("install: exit %d %q", code, errOut)
-	}
-	if st, _ := state.Load(d.StateFile()); st.Scheduler == nil || st.Scheduler.Digest == "" {
-		t.Fatalf("no digest recorded: %+v", st.Scheduler)
-	}
-	sys.calls = nil
-	if code, out, _ := run(t, "jobs", "refresh", "--json"); decodeRefresh(t, out).Status != "unchanged" || code != output.OK {
-		t.Errorf("fresh install: exit %d\n%s", code, out)
-	}
-	// An install by a binary that recorded no digest (or another one).
-	_ = state.Update(d, "test", func(s *state.State) error { s.Scheduler.Digest = ""; return nil })
-	sys.calls = nil
-	code, out, _ := run(t, "jobs", "refresh", "--json")
-	creates := 0
-	for _, c := range sys.calls {
-		if strings.HasPrefix(c, "schtasks /Create /F") {
-			creates++
-		}
-	}
-	if r := decodeRefresh(t, out); code != output.OK || r.Status != "done" || creates != 2 {
-		t.Errorf("exit %d, calls %q\n%s", code, sys.calls, out)
-	}
-	if st, _ := state.Load(d.StateFile()); st.Scheduler.Digest == "" {
-		t.Error("the refresh did not record the digest")
 	}
 }
 

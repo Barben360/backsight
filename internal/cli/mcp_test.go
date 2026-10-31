@@ -38,6 +38,7 @@ func mcpSession(t *testing.T) *mcp.ClientSession { t.Helper(); return mcpSession
 var (
 	mcpParentPID   int
 	mcpParentStart time.Time
+	mcpSessionID   string // what Claude Code gives it as CLAUDE_CODE_SESSION_ID
 )
 
 // mcpSessionWith appends extra TOML to the config before the server starts.
@@ -66,7 +67,7 @@ func mcpConnect(t *testing.T, home string) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID, parentStart: mcpParentStart})
+	srv := newMCPServer(mcpDeps{dirs: d, home: home, cfg: cfg, sec: sec, engine: eng, current: "billing", tw: telemetry.New(d.State, telemetry.Common{}), parentPID: mcpParentPID, parentStart: mcpParentStart, sessionID: mcpSessionID})
 	ct, st := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := srv.Connect(ctx, st, nil); err != nil {

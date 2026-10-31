@@ -77,7 +77,7 @@ func input(kv ...string) map[string]json.RawMessage {
 }
 
 func TestCallOfFindsThePathsATurnNames(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: attribution sees Windows paths")
+	testtool.SkipWindows(t, "linux-only: POSIX paths in the tool calls (Windows: TestAttributionSeesWindowsPaths)")
 	home := "/home/u"
 	cases := []struct {
 		tool  string
@@ -377,7 +377,7 @@ func TestMentionsAndContinuityInTransverseSessions(t *testing.T) {
 // CallOf reads the same input the same way whatever the map order: a
 // tool call with many string inputs lists its paths in one order.
 func TestCallOfIsIndependentOfInputOrder(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: attribution sees Windows paths")
+	testtool.SkipWindows(t, "linux-only: POSIX paths in the tool calls (Windows: TestAttributionSeesWindowsPaths)")
 	kv := []string{"command", "cd /home/u/a && ls", "file_path", "/home/u/b/x.go"}
 	for i := range 20 {
 		kv = append(kv, fmt.Sprintf("note%02d", i), fmt.Sprintf("see /home/u/r%02d/file", i))

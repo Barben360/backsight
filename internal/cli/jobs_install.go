@@ -51,6 +51,10 @@ var sysRunner sysCLI = execSys{}
 // schedulerGOOS is the system the entries are built for; tests replace it.
 var schedulerGOOS = runtime.GOOS
 
+// jobsUserSID is the user's SID, the jobs' tasks' principal (Windows);
+// tests replace it.
+var jobsUserSID = setup.UserSID
+
 type jobsInstallResult struct {
 	Kind     string                 `json:"kind"`
 	Files    []claudecfg.FileResult `json:"files"`
@@ -79,6 +83,12 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 	}
 	if schedulerGOOS == "linux" {
 		o.UnitDir = userUnitDir(ctx, home)
+	}
+	if schedulerGOOS == "windows" {
+		o.State = d.State
+		if o.UserSID, err = jobsUserSID(); err != nil {
+			return scheduler.Plan{}, &output.Error{Code: output.Blocked, Message: "the jobs' tasks need your user's SID: " + err.Error()}
+		}
 	}
 	for _, f := range tweak {
 		f(&o)
@@ -274,9 +284,13 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 			files, remove := p.Paths(), p.Remove
 			if st, err := state.Load(d.StateFile()); err == nil && st.Scheduler != nil && len(st.Scheduler.Files) > 0 {
 				// Where they were written and the names they were written
-				// under, whatever the paths and the project are now.
+				// under, whatever the paths and the project are now. A
+				// task's file does not name its task: tasks are deleted by
+				// this install's names.
 				files = st.Scheduler.Files
-				remove = scheduler.InstalledFrom(files).Remove(st.Scheduler.Kind, os.Getuid())
+				if st.Scheduler.Kind != "schtasks" {
+					remove = scheduler.InstalledFrom(files).Remove(st.Scheduler.Kind, os.Getuid())
+				}
 			}
 			res := jobsInstallResult{Kind: p.Kind, Planned: plan}
 			for _, c := range remove {

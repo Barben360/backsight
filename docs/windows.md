@@ -52,6 +52,10 @@ Windows has no service manager a standard user can use, so backsight supervises 
 - With no one logged on at the PC's screen (over SSH, on a CI runner), the task cannot run. `backsight server start` then starts the supervisor itself and says so: `the server runs until you log off; it starts by itself at your next logon`.
 - A path with `%` cannot be in a task (Task Scheduler would replace `%NAME%` with a variable's value): if your profile path holds one, set `BACKSIGHT_HOME` to a directory without it.
 
+## The scheduled jobs
+
+`backsight jobs tick` (every 15 minutes) and `backsight jobs maintain` (every day at 04:00) are two more scheduled tasks of your own, `\backsight\tick` and `\backsight\maintain` (named after `server.project`), registered the same way as the server's: with your own rights, in a console without a window, on battery too, with no time limit. A run missed while the PC was off or asleep runs as soon as it can, so a 04:00 maintain missed overnight runs at your next logon. Their files are `tick.xml` and `maintain.xml` in the `tasks` directory of backsight's state directory. A task cannot carry environment variables, so a `BACKSIGHT_HOME` set when the jobs were installed is written into each task's command line. An update registers a changed task again, except while its job runs: that one waits for the next update or `backsight jobs refresh`.
+
 ## Setup
 
 `backsight setup` on Windows x86_64 runs the server natively (`--runtime native` is the default there; `--runtime docker` keeps Docker, untested on Windows) and for this PC (`--role both`). Its pre-flight checks, before anything is written:

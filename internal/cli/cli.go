@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -95,9 +96,27 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
+	root.PersistentFlags().Var(backsightHome{}, "backsight-home", "backsight's directory (BACKSIGHT_HOME), which a scheduled task cannot set")
+	_ = root.PersistentFlags().MarkHidden("backsight-home")
 	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e), newInstallShimCmd(e))
 	requireSubcommands(root)
 	return root
+}
+
+// backsightHome is the hidden --backsight-home: what a scheduled task
+// passes instead of the BACKSIGHT_HOME it cannot carry (decision 0080).
+// It sets BACKSIGHT_HOME as the flag is parsed, before any command
+// resolves a path; a relative directory is a usage error.
+type backsightHome struct{}
+
+func (backsightHome) String() string { return "" }
+func (backsightHome) Type() string   { return "dir" }
+
+func (backsightHome) Set(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("must be absolute, got %q", dir)
+	}
+	return os.Setenv("BACKSIGHT_HOME", dir)
 }
 
 // requireSubcommands makes every group a usage error (exit 2) when called

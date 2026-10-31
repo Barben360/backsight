@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -94,6 +95,9 @@ func Version(binary, shim string) string {
 	return binary + "+" + h
 }
 
+// targetOS is the system the plugin is generated for; tests replace it.
+var targetOS = runtime.GOOS
+
 // ShimName is the shim's file name: Windows exec form needs a real .exe.
 func ShimName(goos string) string {
 	if goos == "windows" {
@@ -103,6 +107,7 @@ func ShimName(goos string) string {
 }
 
 // files is the generated tree, relative to the marketplace directory.
+// Skills name the shim with forward slashes on Windows (skillShim).
 func files(shim, version string) (map[string][]byte, error) {
 	type hookCmd struct {
 		Type    string   `json:"type"`
@@ -135,7 +140,7 @@ func files(shim, version string) (map[string][]byte, error) {
 		}},
 	}
 	out := map[string][]byte{}
-	for _, sk := range instructions.Skills(shim) {
+	for _, sk := range instructions.Skills(skillShim(targetOS, shim)) {
 		out["plugins/"+Name+"/skills/"+sk.Name+"/SKILL.md"] = []byte(instructions.SkillFile(sk))
 	}
 	for p, d := range docs {
@@ -146,6 +151,17 @@ func files(shim, version string) (map[string][]byte, error) {
 		out[p] = append(raw, '\n')
 	}
 	return out, nil
+}
+
+// skillShim is the shim as the skills' commands name it: on Windows with
+// forward slashes (C:/Users/…/current.exe), which Claude Code's Bash tool
+// (Git Bash) and PowerShell both run. The hooks and the MCP server, exec
+// form, keep the native path.
+func skillShim(goos, shim string) string {
+	if goos == "windows" {
+		return strings.ReplaceAll(shim, `\`, "/")
+	}
+	return shim
 }
 
 // owned are the top-level entries of the marketplace directory the

@@ -93,14 +93,18 @@ func withSys(t *testing.T, goos string) *fakeSys {
 		_ = os.MkdirAll(filepath.Dir(shim), 0o700)
 		_ = os.WriteFile(shim, []byte("#!/bin/sh\n"), 0o700)
 	}
-	oldR, oldG := sysRunner, schedulerGOOS
+	oldR, oldG, oldSID := sysRunner, schedulerGOOS, jobsUserSID
 	sysRunner, schedulerGOOS = f, goos
-	t.Cleanup(func() { sysRunner, schedulerGOOS = oldR, oldG })
+	jobsUserSID = func() (string, error) { return fakeUserSID, nil }
+	t.Cleanup(func() { sysRunner, schedulerGOOS, jobsUserSID = oldR, oldG, oldSID })
 	return f
 }
 
+// fakeUserSID is the tasks' principal under withSys (a SID's form).
+const fakeUserSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+
 func TestJobsInstallPlanThenInstallThenUninstall(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	home := devInstall(t, true)
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
 	sys := withSys(t, "linux")
@@ -153,7 +157,6 @@ func TestJobsInstallReportsAFailingActivation(t *testing.T) {
 // jobs maintain rotates telemetry past 13 months, writes a doctor
 // snapshot and logs its run; it skips during maintenance.
 func TestJobsMaintain(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
 	home := devInstall(t, true)
 	d := pathsOf(home)
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
@@ -228,7 +231,7 @@ func TestJobsInstallNeedsTheShim(t *testing.T) {
 // entries could not be deactivated (no user session), and accepts entries
 // already gone.
 func TestJobsUninstallFailurePaths(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	home := devInstall(t, true)
 	sys := withSys(t, "linux")
 	run(t, "jobs", "install")
@@ -412,7 +415,7 @@ func TestJobsInstallWithoutASessionNamesTheWayOn(t *testing.T) {
 // A failure other than the missing session keeps the entries, though no
 // timer was enabled; the missing session alone does not.
 func TestStillLoadedKeepsOtherFailures(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	files := []string{filepath.Join(t.TempDir(), "bs-tick.timer")}
 	bus := deactivation{cmd: []string{"systemctl", "--user", "disable", "--now", "bs-tick.timer"}, out: busError, err: errors.New("exit status 1")}
 	other := deactivation{cmd: []string{"systemctl", "--user", "stop", "bs-tick.service"}, out: "Access denied", err: errors.New("exit status 4")}
@@ -435,7 +438,7 @@ func TestStillLoadedKeepsOtherFailures(t *testing.T) {
 // An enabled timer may run in a manager this shell cannot reach (su):
 // uninstall keeps its files and says where to run it.
 func TestJobsUninstallKeepsEnabledEntriesWithoutAUserSession(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
+	testtool.SkipWindows(t, "linux-only: systemd units and their timers' links (Windows tasks: jobs_tasks_test.go)")
 	home := devInstall(t, true)
 	sys := withSys(t, "linux")
 	if code, _, _ := run(t, "jobs", "install"); code != output.OK {

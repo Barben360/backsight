@@ -137,6 +137,10 @@ func refreshScheduler(ctx context.Context, plan bool) (jobsRefreshResult, error)
 	var reload [][]string
 	var enabled []scheduler.Entry
 	for _, e := range df.stale {
+		if jobRunning(e) {
+			res.Deferred = append(res.Deferred, e.Job)
+			continue
+		}
 		if e.Running != nil {
 			if out, err := sysRunner.Run(ctx, e.Running[0], e.Running[1:]...); err == nil && strings.Contains(string(out), e.RunningMark) {
 				res.Deferred = append(res.Deferred, e.Job)
@@ -202,6 +206,16 @@ func refreshScheduler(ctx context.Context, plan bool) (jobsRefreshResult, error)
 	}
 	res.Status = "done"
 	return res, nil
+}
+
+// jobRunning: the entry's job holds its own lock, from a live process (a
+// task's job; a lock left by a killed job does not count).
+func jobRunning(e scheduler.Entry) bool {
+	if e.Lock == "" {
+		return false
+	}
+	h := state.Inspect(e.Lock)
+	return h != nil && !h.Stale
 }
 
 // wasEnabled asks the scheduler whether e is enabled (or loaded). An entry

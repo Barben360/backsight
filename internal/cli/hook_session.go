@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -342,8 +344,21 @@ func (h *hookEnv) writeEnvFile() {
 	if err != nil {
 		return
 	}
-	_, _ = fmt.Fprintf(f, "export BACKSIGHT_PROJECT=%s\nexport BACKSIGHT_SESSION=%s\n", shellQuote(h.project), shellQuote(h.in.SessionID))
+	_, _ = io.WriteString(f, envFileLine(runtime.GOOS, "BACKSIGHT_PROJECT", h.project)+envFileLine(runtime.GOOS, "BACKSIGHT_SESSION", h.in.SessionID))
 	_ = f.Close()
+}
+
+// envFileLine is one CLAUDE_ENV_FILE line, export KEY='value' with POSIX
+// single-quote escaping: Claude Code's Bash tool sources the file (Git
+// Bash on Windows). On Windows a value that is a drive path is written
+// with forward slashes, which Git Bash and the programs it starts both
+// read. The file holds no secret: only names and ids go in it.
+func envFileLine(goos, key, value string) string {
+	if goos == "windows" && len(value) >= 3 && value[1] == ':' && (value[2] == '\\' || value[2] == '/') &&
+		('a' <= value[0]|0x20 && value[0]|0x20 <= 'z') {
+		value = strings.ReplaceAll(value, `\`, "/")
+	}
+	return "export " + key + "=" + shellQuote(value) + "\n"
 }
 
 // firstSession records, once, that the notice was shown; later starts only
