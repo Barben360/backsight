@@ -192,6 +192,7 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		ob.Gate = sendsGate(d, generation)
 		fr, err := ob.Flush(fctx, cl, cfg.Server.Bank, machineID)
 		cancel()
+		emitNoteEvents(d.State, fr)
 		if errors.Is(err, retain.ErrStartedOver) {
 			res.Warning = "this PC joined another server since this process started: the note goes out with the next jobs tick"
 		}

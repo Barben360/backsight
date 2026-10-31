@@ -186,8 +186,8 @@ GROUP BY r.document`)
 }
 
 // documentStatus is document_status as a map, each document's last status
-// overall ("" when it carries none), read once per transaction: every
-// window of the pipeline family needs it whole.
+// overall ("" when it carries none) as sentStatus reads it, read once per
+// transaction: every window of the pipeline family needs it whole.
 func (e env) documentStatus() (map[string]string, error) {
 	if e.memo != nil && e.memo.docStatus != nil {
 		return e.memo.docStatus, nil
@@ -199,9 +199,14 @@ func (e env) documentStatus() (map[string]string, error) {
 	return out, err
 }
 
-// readDocumentStatus is document_status as a map.
+// readDocumentStatus is document_status as a map, a queued document that
+// left the outbox read as sent (sentStatus).
 func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
-	rows, err := tx.Query(`SELECT document, status FROM document_status WHERE document IS NOT NULL`)
+	var outbox sql.NullInt64
+	if err := tx.QueryRow(`SELECT notes_oldest_at FROM local_status WHERE id = 1`).Scan(&outbox); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	rows, err := tx.Query(`SELECT document, status, ts FROM document_status WHERE document IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -210,12 +215,27 @@ func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
 	for rows.Next() {
 		var doc string
 		var st sql.NullString
-		if err := rows.Scan(&doc, &st); err != nil {
+		var ts int64
+		if err := rows.Scan(&doc, &st, &ts); err != nil {
 			return nil, err
 		}
-		out[doc] = st.String
+		out[doc] = sentStatus(st.String, ts, outbox)
 	}
 	return out, rows.Err()
+}
+
+// sentStatus is a document's last status as the metrics count it. A note
+// is logged queued when it enters the notes outbox; before the outbox's
+// flushes logged their sends, nothing followed. So a document last logged
+// queued still waits only when it was queued at or after the outbox's
+// oldest note (outbox, NULL when the outbox is empty); one queued before has
+// left the outbox and counts as sent. The outbox is the truth of what still
+// waits.
+func sentStatus(status string, ts int64, outbox sql.NullInt64) string {
+	if status == "queued" && (!outbox.Valid || ts < outbox.Int64) {
+		return "ok"
+	}
+	return status
 }
 
 // localRow is the local_status row, nil when this PC never wrote one.

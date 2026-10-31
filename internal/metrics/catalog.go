@@ -286,7 +286,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight doctor", Drill: "backsight stats pipeline",
 		Extra:      []string{"ok", "failed", "set_aside", "waiting", "backlog_oldest_ms"},
 		Question:   "Are finished sessions reaching the server?",
-		Definition: "Documents whose last status is ok, out of documents with a send in the window. The interval counts documents (a session's documents per project), not independent sends. Failed, set aside and waiting ones are given beside it. Watched when any failed or was set aside; bad when the backlog is older than 24 hours.",
+		Definition: "Documents whose last status is ok, out of documents with a send in the window. The interval counts documents (a session's documents per project), not independent sends. Failed, set aside and waiting ones are given beside it. A note logged queued with nothing after it waits only while the notes outbox still holds it (queued at or after its oldest note); one that left the outbox counts as sent. Watched when any failed or was set aside; bad when the backlog is older than 24 hours.",
 		Action:     "Sessions are not being sent. Run backsight doctor, then look at the pipeline.",
 	},
 	{
@@ -294,7 +294,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily", Command: "backsight stats pipeline",
 		Extra:      []string{"by_status", "p95_ms"},
 		Question:   "How did each day's sends end?",
-		Definition: "Per day, documents by their last status. The duration (slowest 1 in 20) counts successful sends only.",
+		Definition: "Per day, documents by their last status, a queued note that left the notes outbox counted as sent. The duration (slowest 1 in 20) counts successful sends only.",
 		Action:     "Days with many failures show when sending broke.",
 	},
 	{
@@ -302,7 +302,7 @@ var Catalog = withDrills([]Def{
 		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight jobs tick",
 		Extra:      []string{"notes_queued", "sessions_waiting", "quarantined", "oldest_ms"},
 		Question:   "Is anything stuck on this PC?",
-		Definition: "Notes queued, sessions waiting to be sent, items set aside, and the age of the oldest. Watched when the oldest is over 1 hour, bad over 24 hours.",
+		Definition: "Notes queued, sessions waiting to be sent, items set aside, and the age of the oldest (a note logged queued counts only while the notes outbox holds it). Watched when the oldest is over 1 hour, bad over 24 hours.",
 		Action:     "Work is not leaving this PC. Run backsight jobs tick.",
 	},
 	{

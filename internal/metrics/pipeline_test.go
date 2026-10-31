@@ -52,6 +52,7 @@ func wantStatus(t *testing.T, id string, m Metric, want Status) {
 // All four last events fall on 2026-10-30 (Paris), the day's point.
 func TestQueuedThenOkCountsOnce(t *testing.T) {
 	x := pipeFx(t)
+	x.local(index.LocalStatus{NotesQueued: 1, NotesOldestAt: ago(3 * time.Hour)}) // d2 is in the outbox, d1 left it
 	x.retained(ago(5*time.Hour), "d1", "queued", 0)
 	x.retained(ago(4*time.Hour), "d1", "ok", 100)
 	x.retained(ago(3*time.Hour), "d2", "queued", 0)
@@ -116,10 +117,55 @@ func TestFlowWithoutAnySend(t *testing.T) {
 	wantNoData(t, "retain.outcomes", ms["retain.outcomes"], ReasonNoEvents)
 }
 
-// TestBacklogOverADayIsBad: d2 queued 25 h ago, its only event: the
-// backlog is 25 h = 90,000,000 ms: bad.
+// TestQueuedNotesThatLeftTheOutboxCountAsSent: a note logged queued and
+// nothing after waits only while the outbox still holds it. The outbox's
+// oldest note is 2 h old: n1, n2, n3 queued 30, 20 and 10 h ago left it
+// (sent), n4 queued 1 h ago waits; c1 is a session sent ok. 5 documents, 4
+// sent, 1 waiting; the backlog is the outbox's 2 h (watch), not 30 h. With
+// the outbox empty no queued document waits: 5 of 5 sent, no backlog.
+func TestQueuedNotesThatLeftTheOutboxCountAsSent(t *testing.T) {
+	fill := func(x *fx) {
+		for i, h := range []int{30, 20, 10, 1} {
+			x.retained(ago(time.Duration(h)*time.Hour), fmt.Sprintf("subagent:s:n%d", i+1), "queued", 0)
+		}
+		x.retained(ago(3*time.Hour), "conversation:c1", "ok", 100)
+	}
+	x := pipeFx(t)
+	x.local(index.LocalStatus{NotesQueued: 1, NotesOldestAt: ago(2 * time.Hour)})
+	fill(x)
+	ms := pipeOf(x, x.query(7))
+	flow := ms["pipeline.flow"]
+	if flow.Num == nil || *flow.Num != 4 || *flow.Den != 5 || extraInt(t, flow, "waiting") != 1 || extraInt(t, flow, "ok") != 4 {
+		t.Errorf("flow %v/%v extra %v, want 4/5, ok 4, waiting 1", flow.Num, flow.Den, flow.Extra)
+	}
+	if got := extraInt(t, flow, "backlog_oldest_ms"); got != 2*3_600_000 {
+		t.Errorf("backlog_oldest_ms = %d, want the outbox's 2 h", got)
+	}
+	if got := extraInt(t, ms["local.backlog"], "oldest_ms"); got != 2*3_600_000 {
+		t.Errorf("local.backlog oldest_ms = %d, want 2 h", got)
+	}
+	wantStatus(t, "local.backlog", ms["local.backlog"], StatusWatch)
+	if by, _ := ms["retain.outcomes"].Extra["by_status"].(map[string]int64); by["ok"] != 4 || by["queued"] != 1 {
+		t.Errorf("by_status = %v, want ok 4, queued 1", by)
+	}
+
+	x = pipeFx(t)
+	x.local(index.LocalStatus{})
+	fill(x)
+	ms = pipeOf(x, x.query(7))
+	flow = ms["pipeline.flow"]
+	if *flow.Num != 5 || *flow.Den != 5 || extraInt(t, flow, "waiting") != 0 || extraInt(t, flow, "backlog_oldest_ms") != 0 {
+		t.Errorf("outbox empty: flow %d/%d extra %v, want 5/5, nothing waiting", *flow.Num, *flow.Den, flow.Extra)
+	}
+	wantStatus(t, "pipeline.flow", flow, StatusOK)
+	wantStatus(t, "local.backlog", ms["local.backlog"], StatusOK)
+}
+
+// TestBacklogOverADayIsBad: d2 queued 25 h ago, its only event, still in
+// the outbox: the backlog is 25 h = 90,000,000 ms: bad.
 func TestBacklogOverADayIsBad(t *testing.T) {
 	x := pipeFx(t)
+	x.local(index.LocalStatus{NotesQueued: 1, NotesOldestAt: ago(25 * time.Hour)})
 	x.retained(ago(25*time.Hour), "d2", "queued", 0)
 	m := pipeOf(x, x.query(7))["pipeline.flow"]
 	wantStatus(t, "pipeline.flow", m, StatusBad)

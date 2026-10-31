@@ -227,6 +227,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				ob := notesOutboxFor(d, cfg)
 				ob.Gate = f.StartedOver // queued notes go to the server this tick began with only
 				res.Notes, err = ob.Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+				emitNoteEvents(d.State, res.Notes)
 				// No note queued asks no gate: the deletes below look again.
 				if errors.Is(err, retain.ErrStartedOver) || errors.Is(f.StartedOver(), retain.ErrStartedOver) {
 					// The client is the old server's: nothing is written or

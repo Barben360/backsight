@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/telemetry"
 )
 
@@ -1557,6 +1558,7 @@ func TestSentIsOneDefinition(t *testing.T) {
 	x.prompts("alpha", "s", fxNow.Add(-2*time.Hour), 1, nil)
 	x.tel(fxNow.Add(-5*time.Hour), telemetry.Retain{Document: "conversation:s-0", Items: 1, Status: "ok", MS: 1}, "other", "alpha")
 	x.tel(fxNow.Add(-4*time.Hour), telemetry.Retain{Document: "conversation:s-0#2", Items: 1, Status: "queued", MS: 1}, "other", "alpha")
+	x.local(index.LocalStatus{NotesQueued: 1, NotesOldestAt: fxNow.Add(-4 * time.Hour)})                                // still in the outbox
 	x.tel(fxNow.Add(-3*time.Hour), telemetry.Retain{Document: "note:x", Items: 1, Status: "ok", MS: 1}, "s-0", "alpha") // the session's event, not its document
 	lately := x.run("overview", x.query(7)).Tables.Lately
 	sessions := x.run("sessions", x.query(7)).Tables.Sessions
