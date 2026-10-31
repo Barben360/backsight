@@ -37,6 +37,7 @@ One row per release, newest first, added with the release's notes in `docs/relea
 
 | Release | Hindsight server | Minimum Claude Code | Notes |
 |---|---|---|---|
+| v0.1.20-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | `backsight dashboard`: the stats views as local web pages behind a one-time link, `dashboard link`, remote viewing over `ssh -L`; instruction set v11; Linux amd64 tested ([notes](releases/v0.1.20-m7.md)) |
 | v0.1.19-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | `backsight stats <view>`: how well memory works, with a verdict, statuses and intervals, over a new local metrics index (SQLite, its own migrations); subagent reports logged when sent; instruction set v11; Linux amd64 tested ([notes](releases/v0.1.19-m7.md)) |
 | v0.1.18-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | the switch to native and `setup --runtime native` work with backsight's default directories (the database unit's check runs with the user's HOME); instruction set v10; Linux amd64 tested ([notes](releases/v0.1.18-m7.md)) |
 | v0.1.17-m7 | 1.1.0 (`sha256:50311d02…`; native: PyPI `hindsight-api-slim` 1.1.0, hash-locked) | 2.1.309 | the switch to native works on an install that never ran native (pg0's PostgreSQL unpacked at the download step); instruction set v10; Linux amd64 tested ([notes](releases/v0.1.17-m7.md)) |
