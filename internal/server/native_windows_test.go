@@ -11,6 +11,7 @@ import (
 // Windows has no execute bit: uv is there when uv.exe is a non-empty file.
 func TestUVInstalledOnWindows(t *testing.T) {
 	n := newNative(t, &fakeTools{})
+	n.GOOS = "windows"
 	if filepath.Base(n.UV()) != "uv.exe" {
 		t.Fatalf("UV() = %s, want uv.exe", n.UV())
 	}

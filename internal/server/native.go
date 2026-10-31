@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"time"
 
@@ -49,6 +48,9 @@ type Native struct {
 	StrayWait time.Duration
 	Venv      string // "" = the pinned version; WithVersion sets another
 	Err       error  // a construction error every method returns
+	// GOOS is the OS the runtime lays out and runs for ("": this one):
+	// tests set "windows" on Linux to render the Windows layout and files.
+	GOOS string
 	// NotInUse: config.toml names the docker runtime, so the native data
 	// here is what a switch left (the target of a switch, built before
 	// config.toml names it, sets it). A refused database then points at
@@ -73,16 +75,7 @@ type ToolRunner interface {
 
 // Root is <compose_dir>/native: a second install with another compose_dir
 // stays apart.
-func (n Native) Root() string { return filepath.Join(n.Cfg.Server.ComposeDir, "native") }
-
-// UV is the pinned uv (uv.exe on Windows).
-func (n Native) UV() string {
-	name := "uv"
-	if runtime.GOOS == "windows" {
-		name = "uv.exe"
-	}
-	return filepath.Join(n.Root(), "uv", nativelock.UVVersion, name)
-}
+func (n Native) Root() string { return n.join(n.Cfg.Server.ComposeDir, "native") }
 
 // Python is where uv installs Python (UV_PYTHON_INSTALL_DIR).
 func (n Native) Python() string { return filepath.Join(n.Root(), "python") }
@@ -93,11 +86,11 @@ func (n Native) PythonBin() string {
 }
 
 // VenvDir is version v's virtual environment.
-func (n Native) VenvDir(v string) string { return filepath.Join(n.Root(), "venv", v) }
+func (n Native) VenvDir(v string) string { return n.join(n.Root(), "venv", v) }
 
 // Home is the units' HOME: pg0 keeps its installation and instance in
 // ~/.pg0.
-func (n Native) Home() string { return filepath.Join(n.Root(), "home") }
+func (n Native) Home() string { return n.join(n.Root(), "home") }
 
 // HF is the models' cache (HF_HOME).
 func (n Native) HF() string { return filepath.Join(n.Root(), "hf") }

@@ -64,7 +64,8 @@ func withFreePort(t *testing.T, ports ...int) *[][]int {
 }
 
 // nativeFixture is a native runtime on temporary directories, with sec in
-// its secrets.toml and fakes for the system and the tools.
+// its secrets.toml and fakes for the system and the tools, on the systemd
+// host whatever the test host (as newNative).
 func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeTools) {
 	t.Helper()
 	base := t.TempDir()
@@ -77,7 +78,7 @@ func nativeFixture(t *testing.T, sec config.Secrets) (Native, *fakeSys, *fakeToo
 	sys, tools := &fakeSys{}, &fakeTools{}
 	n := Native{Cfg: cfg, Dirs: d, UnitDir: filepath.Join(base, "units"),
 		Env: map[string]string{"BACKSIGHT_HOME": base, "XDG_STATE_HOME": filepath.Join(base, "xs")},
-		Sys: sys, Tools: tools, Proc: "/proc"}
+		Sys: sys, Tools: tools, Proc: "/proc", GOOS: "linux"}
 	withFreePort(t, 8889)
 	withAPIHealth(t, func(context.Context, string) (string, error) { return "connected", nil })
 	tools.Out = dbToolsOut("on")
@@ -388,7 +389,7 @@ func TestNativeUnitsQuoteTheirPaths(t *testing.T) {
 	if got, want := unitLine(f.Units["backsight-db.service"], "ExecStart"), `"/srv/my data/100%% \"$x\"/native/home/.pg0/installation/18.1.0/bin/postgres" -D "/srv/my data/100%% \"$$x\"/native/home/.pg0/instances/hindsight/data" -p `; !strings.HasPrefix(got, want) {
 		t.Errorf("db ExecStart=%s, want it to start %s", got, want)
 	}
-	if v, err := (Native{Cfg: cfg, UnitDir: t.TempDir()}).deployedFrom(srv); err != nil || v != n.Version() {
+	if v, err := (systemdHost{n: Native{Cfg: cfg, UnitDir: t.TempDir()}}).deployedFrom(srv); err != nil || v != n.Version() {
 		t.Errorf("Deployed of a quoted path: %q %v", v, err)
 	}
 	if got, want := unitLine(f.Units["backsight-db.service"], "ExecStartPre"), `"/srv/my data/bin/current" server native-check`; got != want {

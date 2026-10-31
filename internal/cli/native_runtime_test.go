@@ -49,11 +49,14 @@ func TestRuntimeForPicksNative(t *testing.T) {
 	if n.Dirs != d || n.Proc != "/proc" || n.Cfg.Server.Runtime != "native" {
 		t.Errorf("Dirs %+v Proc %q", n.Dirs, n.Proc)
 	}
-	// TestMain's refusing runners: no test reaches systemd or a tool.
-	if err := n.Stop(context.Background()); err != nil {
-		t.Errorf("Stop without units: %v", err)
+	// TestMain's refusing runners: no test reaches systemd or a tool. The
+	// Windows host (Task 9) stops through its task, not the units.
+	if runtime.GOOS != "windows" {
+		if err := n.Stop(context.Background()); err != nil {
+			t.Errorf("Stop without units: %v", err)
+		}
 	}
-	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir()}).StopAPI(context.Background()); err != nil {
+	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir(), GOOS: "linux"}).StopAPI(context.Background()); err != nil {
 		t.Errorf("StopAPI without units: %v", err)
 	}
 	if _, err := n.Sys.Run(context.Background(), "systemctl", "--user", "daemon-reload"); err == nil || !strings.Contains(err.Error(), "without a fake") {

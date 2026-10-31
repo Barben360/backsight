@@ -70,10 +70,12 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 	return nil, nil
 }
 
+// newNative runs on the systemd host on any test host: the shared code's
+// tests keep running on Windows, whose own host is Task 9's.
 func newNative(t *testing.T, tools ToolRunner) Native {
 	t.Helper()
 	cfg := config.Default(paths.Dirs{Data: t.TempDir()}, "/home/u")
-	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}}
+	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}, GOOS: "linux"}
 }
 
 func touch(t *testing.T, path string, mode fs.FileMode) {

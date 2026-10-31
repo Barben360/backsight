@@ -351,7 +351,7 @@ func (n Native) fetchVenv(ctx context.Context, w io.Writer, v string) (err error
 		return fmt.Errorf("uv venv %s: %w", venv, err)
 	}
 	if _, err := n.Tools.Run(ctx, n.uvEnv(), nil, n.UV(), "pip", "install", "--require-hashes", "--no-deps",
-		"--python", filepath.Join(venv, "bin", "python"), "-r", req.Name()); err != nil {
+		"--python", n.venvBin(v, "python"), "-r", req.Name()); err != nil {
 		return fmt.Errorf("uv pip install (the locked %s): %w", NativeWheels, err)
 	}
 	return fsutil.WriteAtomic(filepath.Join(venv, venvComplete), []byte(nativelock.Hash12()+"\n"), 0o644)
@@ -368,7 +368,7 @@ func (n Native) fetchModels(ctx context.Context, w io.Writer, v string) error {
 	if err := os.MkdirAll(n.HF(), 0o755); err != nil {
 		return err
 	}
-	hf := filepath.Join(n.VenvDir(v), "bin", "hf")
+	hf := n.venvBin(v, "hf")
 	env := toolEnv("HOME="+n.Home(), "HF_HOME="+n.HF())
 	for _, m := range nativeModels {
 		args := []string{"download", m.Repo, "--revision", m.Revision}
@@ -415,20 +415,13 @@ func (n Native) pgMissing() string {
 	return ""
 }
 
-// unpackMaxSec bounds the unpack unit: a killed backsight leaves nothing
-// running beyond it.
-const unpackMaxSec = 600
-
 func (n Native) unpackUnit() string { return n.project() + "-pg-unpack.service" }
 
 // stopUnpack stops the unpack unit and clears its failed state, on a
 // context of its own (a cancelled one would run nothing). A unit that is
 // not there is no error worth reporting.
 func (n Native) stopUnpack(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-	defer cancel()
-	_, _ = n.systemctl(cctx, "stop", n.unpackUnit())
-	_, _ = n.systemctl(cctx, "reset-failed", n.unpackUnit())
+	n.stopTransient(ctx, n.unpackUnit())
 }
 
 // unpackPostgres has pg0 extract its Postgres into installation(), which
@@ -480,17 +473,13 @@ func (n Native) unpackPostgres(ctx context.Context, w io.Writer, v string) (err 
 			}
 		}
 	}()
-	pg0 := shellWord(filepath.Join(n.VenvDir(v), "lib", "python3.11", "site-packages", "pg0", "bin", "pg0"))
-	script := pg0 + " start --name " + pgUnpackInstance + " --port " + strconv.Itoa(port) +
-		" -c listen_addresses=127.0.0.1 </dev/null >/dev/null && " +
-		pg0 + " drop --force --name " + pgUnpackInstance + " </dev/null >/dev/null"
-	// $ doubled: the service manager expands variables in a transient
-	// unit's command line (as in VerifyDump).
-	args := []string{"--user", "--wait", "--collect", "--pipe", "--quiet", "--unit", n.unpackUnit(),
-		"-p", "KillMode=control-group", "-p", "RuntimeMaxSec=" + strconv.Itoa(unpackMaxSec),
-		"-p", "UnsetEnvironment=" + unsetKeys, "-E", "HOME=" + n.Home(), "-E", "TMPDIR=" + tmp, "-E", "PATH=/usr/bin:/bin", "-E", "LANG=C.UTF-8",
-		"/bin/sh", "-c", strings.ReplaceAll(script, "$", "$$")}
-	if _, err := n.Tools.Run(ctx, systemdRunEnv(), nil, "systemd-run", args...); err != nil {
+	pg0 := filepath.Join(n.sitePackages(v), "pg0", "bin", "pg0")
+	steps := [][]string{
+		{pg0, "start", "--name", pgUnpackInstance, "--port", strconv.Itoa(port), "-c", "listen_addresses=127.0.0.1", stepNoStdin, stepNoStdout},
+		{pg0, "drop", "--force", "--name", pgUnpackInstance, stepNoStdin, stepNoStdout},
+	}
+	env := []string{"HOME=" + n.Home(), "TMPDIR=" + tmp, "PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	if err := n.host().Transient(ctx, n.unpackUnit(), env, nil, steps); err != nil {
 		return fmt.Errorf("unpacking %s with pg0 into %s: %w", NativePostgres, n.installation(), err)
 	}
 	if m := n.pgMissing(); m != "" {
