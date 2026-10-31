@@ -31,7 +31,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	mode := h.cfg.Feedback.StopCheck
 	events, _, err := feedback.ReadSince(t.File, t.Offset)
 	if err != nil {
-		h.feedbackError(telemetry.FeedbackReasonJournalWrite, err)
+		h.feedbackError(telemetry.FeedbackReasonJournalRead, err)
 		h.journalStop(t.ID, agent, "check_skipped", mode, 0, nil, false)
 		return nil
 	}

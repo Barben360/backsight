@@ -42,13 +42,20 @@ type storeResult struct {
 	Warning  string `json:"warning,omitempty"`
 }
 
+// noteKind is kind when it is a real note kind, else "": telemetry never
+// holds what a caller typed.
+func noteKind(kind string) string {
+	if _, ok := retain.Kinds[kind]; !ok {
+		return ""
+	}
+	return kind
+}
+
 // storeEvent is the telemetry of one store call: refused when nothing was
 // queued or the server quarantined the note, updated when the note replaces
 // memories, else saved. The kind is kept only when it is a real note kind.
 func storeEvent(kind string, res storeResult, replaces bool) telemetry.Store {
-	if _, ok := retain.Kinds[kind]; !ok {
-		kind = ""
-	}
+	kind = noteKind(kind)
 	switch {
 	case res.Document == "" || res.Status == "rejected":
 		return telemetry.Store{Result: "refused", Kind: kind}

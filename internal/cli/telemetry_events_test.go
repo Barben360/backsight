@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -179,6 +180,9 @@ func TestFeedbackErrorsCarryAReasonOnly(t *testing.T) {
 		}
 	})
 	t.Run("mcp verdict journal", func(t *testing.T) {
+		if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+			t.Skip("read-only permissions do not stop root or Windows from appending")
+		}
 		cs, home := creditSession(t)
 		showIn(t, home, "S", creditA)
 		rawFact(creditA)
@@ -217,4 +221,15 @@ func TestFeedbackErrorsCarryAReasonOnly(t *testing.T) {
 			t.Errorf("reasons %v", got)
 		}
 	})
+}
+
+// A note the server quarantined is a refused store, not a saved one.
+func TestStoreEventOfAQuarantinedNoteIsRefused(t *testing.T) {
+	got := storeEvent("decision", storeResult{Status: "rejected", Document: "note:x"}, false)
+	if got.Result != "refused" || got.Kind != "decision" {
+		t.Errorf("%+v", got)
+	}
+	if got := storeEvent("decision", storeResult{Status: "stored", Document: "note:x"}, false); got.Result != "saved" {
+		t.Errorf("%+v", got)
+	}
 }

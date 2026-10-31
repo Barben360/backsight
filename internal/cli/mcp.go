@@ -277,7 +277,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				proj, err = noteTarget(deps.cfg, a.Project, live.Project, `project "transverse"`)
 			}
 			if err != nil {
-				deps.tw.Emit(telemetry.Store{Result: "refused", Kind: storeEvent(a.Kind, storeResult{}, false).Kind})
+				deps.tw.Emit(telemetry.Store{Result: "refused", Kind: noteKind(a.Kind)})
 				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Live: found})
 				return errorResult(err.Error()), nil, nil
 			}

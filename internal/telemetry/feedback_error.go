@@ -3,6 +3,7 @@ package telemetry
 // The reasons a feedback write failed. A closed set: the event never
 // carries an error text.
 const (
+	FeedbackReasonJournalRead   = "journal_read"
 	FeedbackReasonJournalWrite  = "journal_write"
 	FeedbackReasonTurnPointer   = "turn_pointer"
 	FeedbackReasonSettle        = "settle"
