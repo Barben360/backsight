@@ -362,13 +362,14 @@ func TestLocalBack(t *testing.T) {
 		"/projects/back%20sight": "/projects/back%20sight",
 		"/memories?q=a%2F%2Fb":   "/memories?q=a%2F%2Fb",
 		"/cost/../quality":       "/cost/../quality",
+		"/a?x=//b":               "/a?x=//b",
 	} {
 		if got, ok := localBack(in); !ok || got != want {
 			t.Errorf("localBack(%q) = %q, %v; want %q, true", in, got, ok, want)
 		}
 	}
 	for _, in := range []string{
-		"", "quality", "//evil.example/", "///evil.example", "/\\evil.example", "/a\\b", "/a//b", "/a?x=//b",
+		"", "quality", "//evil.example/", "///evil.example", "/\\evil.example", "/a\\b", "/a//b",
 		"http://evil.example/", "https:/evil.example", "/a\r\nX-Injected: 1", "/a\tb", "/a\x7fb", "/a\x00",
 		"javascript:alert(1)", "#/x",
 	} {

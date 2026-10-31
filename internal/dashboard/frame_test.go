@@ -45,3 +45,29 @@ func TestReflectedParamsAreEscaped(t *testing.T) {
 		t.Errorf("%d %s", r.StatusCode, b)
 	}
 }
+
+func TestDefaultWindowIsMarked(t *testing.T) {
+	h := dataHarness(t)
+	_, b := pageGet(t, h, h.login(), "/quality?tz=UTC&project=a&project=b")
+	for _, want := range []string{
+		`aria-current="page">7 d</a>`,
+		`<a href="/quality?days=1&tz=UTC&project=a">24 h</a>`,
+		`value="a"`,
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("missing %q in\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, `aria-current="page">30 d`) {
+		t.Error("30 d marked")
+	}
+}
+
+func TestReflectedQuoteIsEscapedInAttributes(t *testing.T) {
+	h := dataHarness(t)
+	r := h.do("GET", "/quality?project=%22%3E%3Cb%3Ex", cookieHdr(h.login())...)
+	b := body(t, r)
+	if r.StatusCode != 200 || strings.Contains(b, `"><b>x`) || strings.Contains(b, "<b>x") || !strings.Contains(b, `value="&#34;&gt;&lt;b&gt;x"`) {
+		t.Errorf("%d %s", r.StatusCode, b)
+	}
+}

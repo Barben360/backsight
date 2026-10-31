@@ -234,20 +234,26 @@ func without(path string, drop ...string) string {
 }
 
 // windowsFor are the window links of path: days replaces the window, the
-// project is kept.
+// project and the zone are kept. The default window is 7 days.
 func windowsFor(path string, q url.Values) []Choice {
 	base, pairs := splitPath(path)
 	suffix := ""
+	seen := map[string]bool{}
 	for _, p := range pairs {
-		if keyOf(p) == "project" {
-			suffix = "&" + p
+		if k := keyOf(p); (k == "project" || k == "tz") && !seen[k] {
+			seen[k] = true
+			suffix += "&" + p
 		}
+	}
+	cur := q.Get("days")
+	if cur == "" {
+		cur = "7"
 	}
 	out := make([]Choice, 0, len(windowDays))
 	for _, w := range windowDays {
 		d := strconv.Itoa(w.days)
 		out = append(out, Choice{Label: w.label, Href: base + "?days=" + d + suffix,
-			Current: q.Get("since") == "" && q.Get("until") == "" && q.Get("days") == d})
+			Current: q.Get("since") == "" && q.Get("until") == "" && cur == d})
 	}
 	return out
 }

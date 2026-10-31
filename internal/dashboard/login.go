@@ -48,11 +48,12 @@ func (s *Server) FirstLink() Link { return s.link }
 func cookieName(port int) string { return "backsight_dash_" + strconv.Itoa(port) }
 
 // localBack accepts target as a redirect on this origin: one leading
-// "/", no "//", no "\", no control character, no scheme, host or user.
-// A query is kept, a fragment dropped.
+// "/", no "//" in the path (the query may hold one), no "\", no control
+// character, no scheme, host or user. A query is kept, a fragment dropped.
 func localBack(target string) (string, bool) {
 	target, _, _ = strings.Cut(target, "#")
-	if !strings.HasPrefix(target, "/") || strings.Contains(target, "//") || strings.ContainsRune(target, '\\') {
+	path, _, _ := strings.Cut(target, "?")
+	if !strings.HasPrefix(target, "/") || strings.Contains(path, "//") || strings.ContainsRune(target, '\\') {
 		return "", false
 	}
 	for i := 0; i < len(target); i++ {

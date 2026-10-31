@@ -72,7 +72,7 @@ func TestPrefs(t *testing.T) {
 func TestPrefsBack(t *testing.T) {
 	h := dataHarness(t)
 	ck := cookieHdr(h.login())
-	for _, back := range []string{"//evil.example", "https://evil.example/", `/\evil.example`, "evil", "", `/a\b`, "/%0d%0aSet-Cookie:x"} {
+	for _, back := range []string{"//evil.example", "https://evil.example/", `/\evil.example`, "evil", "", `/a\b`, "/%0d%0aSet-Cookie:x", "/a//b"} {
 		path := "/prefs?theme=dark"
 		if back != "" {
 			path += "&back=" + strings.ReplaceAll(back, `\`, "%5C")
@@ -104,5 +104,23 @@ func TestPrefsValues(t *testing.T) {
 	}
 	if r := h.do("GET", "/prefs?theme=dark&back=/cost"); r.StatusCode != http.StatusUnauthorized {
 		t.Errorf("no session: %d", r.StatusCode)
+	}
+}
+
+func TestPrefsOnlyOnNavigation(t *testing.T) {
+	h := dataHarness(t)
+	ck := cookieHdr(h.login())
+	for name, hdr := range map[string][]string{
+		"Sec-Purpose": {"Sec-Purpose", "prefetch"}, "Purpose": {"Purpose", "prefetch"},
+		"X-Moz": {"X-Moz", "prefetch"}, "X-Purpose": {"X-Purpose", "preview"},
+	} {
+		r := h.do("GET", "/prefs?theme=dark&back=/cost", append(append([]string{}, ck...), hdr...)...)
+		if r.StatusCode == 303 || len(r.Header.Values("Set-Cookie")) != 0 {
+			t.Errorf("%s: %d %v", name, r.StatusCode, r.Header["Set-Cookie"])
+		}
+	}
+	r := h.do("HEAD", "/prefs?theme=dark&back=/cost", ck...)
+	if r.StatusCode == 303 || len(r.Header.Values("Set-Cookie")) != 0 {
+		t.Errorf("HEAD: %d %v", r.StatusCode, r.Header["Set-Cookie"])
 	}
 }
