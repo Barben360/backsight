@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
@@ -526,8 +525,9 @@ var doctorStatuses = []string{"ok", "info", "warn", "error"}
 // doctorEntries is the doctor's checks as the dashboard keeps them: one per
 // id (the first appearance's place), with the worst status among those that
 // share it and the fix of a check of that status. A fix that is not a
-// `backsight ...` command is dropped, and a check of an unknown status is
-// ignored: the doctor's message text never enters a view.
+// single `backsight ...` command (singleCommand) is dropped, and a check
+// of an unknown status is ignored: the doctor's message text never enters
+// a view.
 func doctorEntries(checks []DoctorCheck) []DoctorCheck {
 	var out []DoctorCheck
 	at := map[string]int{}
@@ -536,7 +536,7 @@ func doctorEntries(checks []DoctorCheck) []DoctorCheck {
 		if r < 0 {
 			continue
 		}
-		if !strings.HasPrefix(c.Fix, "backsight ") || strings.TrimSpace(c.Fix) == "backsight" {
+		if !singleCommand(c.Fix) {
 			c.Fix = ""
 		}
 		i, seen := at[c.ID]

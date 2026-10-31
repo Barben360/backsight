@@ -275,6 +275,8 @@ type ShowMark struct {
 	Path              string    `json:"path"`
 	Outcome           string    `json:"outcome"`
 	Turn              string    `json:"turn"`
+	Session           string    `json:"session"`
+	Prompt            *int64    `json:"prompt"` // the turn's prompt number in its session, null when unknown
 	Rank              *int64    `json:"rank"`
 	RankWithoutBoost  *int64    `json:"rank_without_boost"`
 	ScoreWithoutBoost *float64  `json:"score_without_boost"`

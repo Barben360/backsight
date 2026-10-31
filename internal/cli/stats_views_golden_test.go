@@ -329,6 +329,28 @@ func TestViewTextLines(t *testing.T) {
 			t.Errorf("text:\n%s", text)
 		}
 	})
+	t.Run("control characters never reach the terminal", func(t *testing.T) {
+		r := result("sessions", "recall.hit_rate", hit)
+		r.Scope.Project = "evil\x1b[31mred\x07"
+		r.Tables.Sessions = []metrics.SessionRow{{ID: "\x1b[2Jabcdefgh", Project: "p\x1b[31m\u009b1", Start: r.Window.Since}}
+		r.Text = &metrics.MemoryText{ID: "m1", Text: "line one\n\x1b[31mline\ttwo\x1b[0m"}
+		text := viewText(r, false)
+		if strings.ContainsAny(text, "\x1b\x07\u009b") {
+			t.Errorf("control characters printed:\n%q", text)
+		}
+		for _, want := range []string{"Project: evil[31mred\n", "[2Jabcde ", "p[31m1", "line one\n[31mline\ttwo[0m\n"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("missing %q in:\n%q", want, text)
+			}
+		}
+	})
+	t.Run("a memory's text the server did not give says why", func(t *testing.T) {
+		r := result("memories", "recall.hit_rate", hit)
+		r.Text = &metrics.MemoryText{ID: "m1", Reason: metrics.ReasonServerDown}
+		if text := viewText(r, false); !strings.Contains(text, "Memory m1: its text is not available (memory server not answering).") {
+			t.Errorf("text:\n%s", text)
+		}
+	})
 	t.Run("the server notice", func(t *testing.T) {
 		r := result("bank", "bank.size", metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonServerDown})
 		r.Server = &metrics.ServerState{OK: false, Error: "unreachable"}

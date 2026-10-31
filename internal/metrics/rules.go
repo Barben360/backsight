@@ -1,14 +1,43 @@
 package metrics
 
-import "time"
+import (
+	"regexp"
+	"strings"
+	"time"
+)
 
 // DoctorCheck is one doctor check as the dashboard reads it. Status is
-// ok|info|warn|error; Fix is set only when it is a command starting with
-// "backsight ".
+// ok|info|warn|error; Fix is kept only when it is a single backsight
+// command (singleCommand).
 type DoctorCheck struct {
 	ID     string
 	Status string
 	Fix    string
+}
+
+// commandWord is one word of a single backsight command: a subcommand or
+// value (letters, digits, . _ # = + -, never led by a dot) or a flag with
+// such a value. No separator, quote, parenthesis, placeholder or path.
+var commandWord = regexp.MustCompile(`^(--?[A-Za-z][A-Za-z0-9-]*(=[A-Za-z0-9_.#+-]+)?|[A-Za-z0-9][A-Za-z0-9_.#=+-]*)$`)
+
+// singleCommand reports whether fix is one backsight command and nothing
+// else, so that it can be shown as "Run:" and handed to an agent as the
+// item's command: "backsight" then words, none of them a second
+// "backsight"; no ;, &, |, newline, backtick, $(, prose punctuation or path.
+func singleCommand(fix string) bool {
+	if fix != strings.TrimSpace(fix) || strings.ContainsAny(fix, "\n\r\t") {
+		return false
+	}
+	words := strings.Split(fix, " ")
+	if len(words) < 2 || words[0] != "backsight" {
+		return false
+	}
+	for _, w := range words[1:] {
+		if w == "backsight" || !commandWord.MatchString(w) {
+			return false
+		}
+	}
+	return true
 }
 
 // The error-class rules: one function per metric, on the counts and ages of

@@ -106,10 +106,12 @@ func TestErrorClassDefinitionsStateTheirRule(t *testing.T) {
 }
 
 func TestCatalogRowsUseNoJargon(t *testing.T) {
-	for _, bad := range []string{"Wilson", "p50", "p95", "percentile"} {
+	for _, bad := range []string{"Wilson", "p50", "p95", "percentile", "failed_capped", "breaker"} {
 		for _, d := range Catalog {
-			if strings.Contains(d.Definition+statusRule(d), bad) {
-				t.Errorf("%s: %q in a user-visible cell", d.ID, bad)
+			for col, cell := range map[string]string{"label": d.Label, "question": d.Question, "definition": d.Definition, "status": statusRule(d)} {
+				if strings.Contains(strings.ToLower(cell), strings.ToLower(bad)) {
+					t.Errorf("%s: %q in its %s", d.ID, bad, col)
+				}
 			}
 		}
 	}

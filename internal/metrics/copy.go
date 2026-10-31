@@ -123,16 +123,18 @@ func doctorWarnSentence(id string) string {
 
 // itemText is the attention sentence of metric m judged over days days:
 // the copy deck's where it has one, else "{label}: {value}." median is the
-// baseline median of a relative metric (ok false: none).
+// baseline median of a relative metric (ok false: none). The "than usual"
+// sentences are said only when the comparison with before is what fired
+// (relativeFired); an absolute alarm reads the label sentence.
 func itemText(d Def, m Metric, days int, median float64, hasMedian bool) string {
 	v := m.Value
 	switch d.ID {
 	case "recall.hit_rate":
-		if v != nil && hasMedian {
+		if v != nil && relativeFired(m, median, hasMedian) {
 			return fmt.Sprintf("Fewer prompts get memory than usual: %s %% vs %s %% before.", percent(*v), percent(median))
 		}
 	case "used.turn_rate":
-		if v != nil && hasMedian {
+		if v != nil && relativeFired(m, median, hasMedian) {
 			return fmt.Sprintf("Claude uses the memory shown less than usual: %s %% of turns vs %s %%.", percent(*v), percent(median))
 		}
 	case "verdict.wrong_rate":
@@ -223,4 +225,11 @@ func grouped(n int64) string {
 		return "-" + string(out)
 	}
 	return string(out)
+}
+
+// relativeFired reports whether a higher-is-better metric's comparison
+// with its usual level put it at watch, as the status engine's relative
+// step decides: its upper bound under 0.7 times the baseline median.
+func relativeFired(m Metric, median float64, hasMedian bool) bool {
+	return hasMedian && median > 0 && m.CI != nil && m.CI[1] < 0.7*median
 }

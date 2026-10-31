@@ -661,6 +661,39 @@ func TestDoctorEntries(t *testing.T) {
 	}
 }
 
+// TestDoctorFixIsOneCommand: a fix enters an item's command only when it is
+// a single backsight command; chained, piped, substituted, path-led or
+// prose fixes (the doctor's real ones among them) stay out.
+func TestDoctorFixIsOneCommand(t *testing.T) {
+	for fix, want := range map[string]bool{
+		"backsight doctor":                           true,
+		"backsight stats index rebuild":              true,
+		"backsight server upgrade --allow-unordered": true,
+		"backsight server runtime switch docker":     true,
+		"backsight server stop; rm '/home/u/.venv/.backsight-complete'; backsight server install (it builds the venv again from the lock)": false,
+		"backsight server start; if it fails, journalctl --user -u x says why":                                                             false,
+		"backsight jobs uninstall, then backsight jobs install":                                                                            false,
+		"backsight jobs install (setup does it)":                                                                                           false,
+		"backsight restore <archive> (it moves this database aside, never deleting it)":                                                    false,
+		"backsight stats 14 and backsight why: check what recall injects":                                                                  false,
+		"backsight doctor && rm -rf x":                                                                                                     false,
+		"backsight doctor | sh":                                                                                                            false,
+		"backsight doctor\nrm x":                                                                                                           false,
+		"backsight `id`":                                                                                                                   false,
+		"backsight $(id)":                                                                                                                  false,
+		"backsight guide ../../etc":                                                                                                        false,
+		"backsight guide /etc/passwd":                                                                                                      false,
+		"/usr/local/bin/backsight update apply":                                                                                            false,
+		"backsight":                                                                                                                        false,
+		"backsight ":                                                                                                                       false,
+		"backsight  doctor":                                                                                                                false,
+	} {
+		if got := doctorEntries([]DoctorCheck{{ID: "c", Status: "error", Fix: fix}})[0].Fix != ""; got != want {
+			t.Errorf("%q kept = %v, want %v", fix, got, want)
+		}
+	}
+}
+
 // TestJobsLastRun: a tick 40 min ago (twice its 15 min cadence is 30) with
 // a typed prompt 10 min ago (after the run was due, 25 min ago): bad; with
 // nothing since: ok; with only a machine prompt, or a prompt before it was

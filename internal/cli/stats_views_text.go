@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/Barben360/backsight/internal/metrics"
 )
@@ -135,8 +136,14 @@ func viewText(r metrics.Result, dev bool) string {
 		}
 	}
 	tablesText(&b, r, loc)
-	if t := r.Text; t != nil {
-		fmt.Fprintf(&b, "\nMemory %s, as read from the server\n%s\n", idText(t.ID), t.Text)
+	if t := r.Text; t != nil && t.Reason != "" {
+		why := noDataWords[t.Reason]
+		if why == "" {
+			why = "the memory server did not answer"
+		}
+		fmt.Fprintf(&b, "\nMemory %s: its text is not available (%s).\n", idText(t.ID), why)
+	} else if t != nil {
+		fmt.Fprintf(&b, "\nMemory %s, as read from the server\n%s\n", idText(t.ID), plainText(t.Text, "\n\t"))
 	}
 	b.WriteString("\n" + footer(r) + "\n")
 	return b.String()
@@ -402,17 +409,30 @@ func countOf(n int64, one, many string) string {
 	return grouped(n) + " " + many
 }
 
-// clipText cuts a project name to 24 characters with an ellipsis; idText keeps 8.
+// plainText drops the control characters of s (an escape sequence in a
+// folder name or a memory would drive the terminal), keeping keep's.
+func plainText(s, keep string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && !strings.ContainsRune(keep, r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// clipText cuts a project name to 24 characters with an ellipsis, without
+// its control characters; idText keeps 8.
 func clipText(s string) string {
 	const n = 24
-	r := []rune(s)
+	r := []rune(plainText(s, ""))
 	if len(r) <= n {
-		return s
+		return string(r)
 	}
 	return string(r[:n-1]) + "…"
 }
 
 func idText(id string) string {
+	id = plainText(id, "")
 	r := []rune(id)
 	if len(r) > 8 {
 		return string(r[:8])
@@ -906,6 +926,20 @@ func sessionPageText(b *strings.Builder, s metrics.SessionPage, loc *time.Locati
 	section(b, "Turns", []string{"Prompt", "When", "What memory did", "Shown", "Searches", "Claude said it used", "End of turn"}, rows)
 }
 
+// promptText names the prompt a memory was shown at: its session (as the
+// sessions table cuts it) and the prompt's number in it ("#3"), the session
+// alone when the number is unknown; never the internal turn id.
+func promptText(s metrics.ShowMark) string {
+	sess := idText(s.Session)
+	if sess == "" {
+		sess = "—"
+	}
+	if s.Prompt == nil {
+		return sess
+	}
+	return fmt.Sprintf("%s #%d", sess, *s.Prompt)
+}
+
 func memoryRow(m metrics.MemoryRow, loc *time.Location) []string {
 	rate := "—"
 	if m.Rate != nil {
@@ -940,9 +974,9 @@ func memoriesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 		if s.Rank != nil {
 			rank = n64(*s.Rank)
 		}
-		rows = append(rows, []string{whenText(s.At, loc), word(pathWords, s.Path), word(outcomeWords, s.Outcome), idText(s.Turn), rank})
+		rows = append(rows, []string{whenText(s.At, loc), word(pathWords, s.Path), word(outcomeWords, s.Outcome), promptText(s), rank})
 	}
-	section(b, "Showings", []string{"When", "Shown", "What happened", "Prompt", "Rank"}, rows)
+	section(b, "Showings", []string{"When", "Shown", "What happened", "Session and prompt", "Rank"}, rows)
 	rows = nil
 	for _, r := range p.Retirements {
 		rows = append(rows, []string{whenText(r.At, loc), r.Kind})

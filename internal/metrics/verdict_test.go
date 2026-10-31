@@ -946,3 +946,19 @@ func TestVerdictFiguresReused(t *testing.T) {
 		}
 	}
 }
+
+// TestHitRateSentenceFollowsTheStepThatFired: "fewer than usual" only when
+// the comparison with before fired (upper bound under 0.7 × the median);
+// an absolute alarm above the usual level reads the label sentence.
+func TestHitRateSentenceFollowsTheStepThatFired(t *testing.T) {
+	d, _ := DefOf("recall.hit_rate")
+	f := func(v float64) *float64 { return &v }
+	absolute := Metric{Value: f(0.03), CI: &[2]float64{0.01, 0.08}} // under 10 %, above the 2 % usual
+	if got := itemText(d, absolute, 7, 0.02, true); got != "Prompts that got memory: 3 %." {
+		t.Errorf("absolute alarm: %q", got)
+	}
+	relative := Metric{Value: f(0.2), CI: &[2]float64{0.15, 0.25}} // 0.25 < 0.7 × 50 %
+	if got := itemText(d, relative, 7, 0.5, true); got != "Fewer prompts get memory than usual: 20 % vs 50 % before." {
+		t.Errorf("relative alarm: %q", got)
+	}
+}

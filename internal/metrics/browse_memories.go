@@ -286,13 +286,15 @@ func memoryPage(ctx context.Context, s Source, q Query, id string) (Result, erro
 			state = stateNeverUsed
 		}
 		page.Row = memoryRow(e, full, entry, memoryProject(e.tx, full), state, ledgerParams(e.src.Config))
-		if serverReason(e, key) == "" {
+		if reason := serverReason(e, key); reason == "" {
 			m := e.srv.Memory
 			page.Kind, page.ServerState = m.Type, m.State
 			page.Created = timeIn(hindsight.ServerTime(m.MentionedAt), viewLoc(e))
 			if e.q.Text {
 				r.Text = &MemoryText{ID: full, Text: m.Text}
 			}
+		} else if e.q.Text { // asked for, not read: say why, never nothing
+			r.Text = &MemoryText{ID: full, Reason: reason}
 		}
 		var total int
 		if page.Shows, total, err = memoryShows(e, full); err != nil {
@@ -320,8 +322,9 @@ func memoryShows(e env, id string) ([]ShowMark, int, error) {
 		return nil, 0, err
 	}
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT s.ts, COALESCE(s.path, ''), COALESCE(s.turn, ''), s.rank, s.rank_without_boost, s.score_without_boost,
-       (SELECT st.outcome FROM settles st WHERE st.memory_id = s.memory_id AND st.key = s.key ORDER BY st.settle_ts LIMIT 1)
+SELECT s.ts, COALESCE(s.path, ''), COALESCE(s.turn, ''), COALESCE(s.session, ''), s.rank, s.rank_without_boost, s.score_without_boost,
+       (SELECT st.outcome FROM settles st WHERE st.memory_id = s.memory_id AND st.key = s.key ORDER BY st.settle_ts LIMIT 1),
+       (SELECT t.n FROM turns t WHERE t.session = s.session AND t.turn = s.turn AND t.n IS NOT NULL ORDER BY t.ts LIMIT 1)
 FROM shows s WHERE s.memory_id = ? AND COALESCE(s.path, '') <> ?
 ORDER BY s.ts DESC, s.source_file DESC, s."offset" DESC, s.pos DESC LIMIT ? OFFSET ?`,
 		id, feedback.PathSources, e.q.EffectiveLimit(), max(e.q.Offset, 0))
@@ -337,8 +340,9 @@ ORDER BY s.ts DESC, s.source_file DESC, s."offset" DESC, s.pos DESC LIMIT ? OFFS
 			rank, rankNoBoost sql.NullInt64
 			score             sql.NullFloat64
 			outcome           sql.NullString
+			prompt            sql.NullInt64
 		)
-		if err := rows.Scan(&ts, &m.Path, &m.Turn, &rank, &rankNoBoost, &score, &outcome); err != nil {
+		if err := rows.Scan(&ts, &m.Path, &m.Turn, &m.Session, &rank, &rankNoBoost, &score, &outcome, &prompt); err != nil {
 			return nil, 0, err
 		}
 		m.At = time.UnixMilli(ts).In(viewLoc(e))
@@ -348,6 +352,9 @@ ORDER BY s.ts DESC, s.source_file DESC, s."offset" DESC, s.pos DESC LIMIT ? OFFS
 		}
 		if rank.Valid {
 			m.Rank = ptr(rank.Int64)
+		}
+		if prompt.Valid {
+			m.Prompt = ptr(prompt.Int64)
 		}
 		if rankNoBoost.Valid {
 			m.RankWithoutBoost = ptr(rankNoBoost.Int64)

@@ -764,11 +764,17 @@ func TestMemoryTextOnlyWithText(t *testing.T) {
 	if _, err := runErr(x, "memories", q); err == nil {
 		t.Error("--text without an id: no error")
 	}
+	// Asked for while the server does not answer: the reason, never nothing.
+	x.server.fail("Memory", hindsight.ErrUnreachable)
+	q.ID = "m1"
+	if r = x.run("memories", q); r.Text == nil || *r.Text != (MemoryText{ID: "m1", Reason: ReasonServerDown}) {
+		t.Errorf("server down, with Text: %+v, want {m1, reason server_down}", r.Text)
+	}
 }
 
 // TestMemoryPageServerFailure: a server that fails the memory read leaves
-// the server facts empty and the page whole; the error text of the server
-// is nowhere in the result.
+// the server facts empty and the page whole, the text asked for replaced
+// by its reason; the error text of the server is nowhere in the result.
 func TestMemoryPageServerFailure(t *testing.T) {
 	x := newFx(t, fxNow)
 	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"m1": {Shown: 1}}})
@@ -776,7 +782,7 @@ func TestMemoryPageServerFailure(t *testing.T) {
 	q := x.query(7)
 	q.ID, q.Text = "m1", true
 	r := x.run("memories", q)
-	if r.Text != nil || r.Tables.Memory.Kind != "" || r.Tables.Memory.Row.ID != "m1" || r.Server == nil || r.Server.OK || r.Server.Error != "server_error" {
+	if r.Text == nil || *r.Text != (MemoryText{ID: "m1", Reason: ReasonServerDown}) || r.Tables.Memory.Kind != "" || r.Tables.Memory.Row.ID != "m1" || r.Server == nil || r.Server.OK || r.Server.Error != "server_error" {
 		t.Errorf("text %v, kind %q, row %q, server %+v", r.Text, r.Tables.Memory.Kind, r.Tables.Memory.Row.ID, r.Server)
 	}
 	if strings.Contains(string(mustJSON(t, r)), "fake") { // the fake's body is {"detail":"fake"}

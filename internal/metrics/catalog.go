@@ -310,7 +310,7 @@ var Catalog = withDrills([]Def{
 		ErrorClass: true, CI: "none", Scope: "server", Source: "server", Family: "pipeline", Series: "none", Command: "backsight doctor",
 		Extra:      []string{"pending", "processing", "failed", "failed_total", "failed_capped"},
 		Question:   "Is the server keeping up?",
-		Definition: "Operations queued and running on the server, from its operations list. The failed count covers operations updated in the last 7 days, whatever the window; when the server holds more failed operations than are read (failed_capped), it is a lower bound. Watched when any failed.",
+		Definition: "Operations queued and running on the server, from its operations list. The failed count covers operations updated in the last 7 days, whatever the window; when the server holds more failed operations than it lists, the count is a lower bound. Watched when any failed.",
 		Action:     "Failed operations need the server looked at. Run backsight doctor.",
 	},
 	{
@@ -335,7 +335,7 @@ var Catalog = withDrills([]Def{
 		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight doctor",
 		Extra:      []string{"last_ok", "failing_since", "breaker_open_until", "skipped_prompts"},
 		Question:   "Does the memory server answer this PC?",
-		Definition: "The last answer, since when it is failing, and until when the breaker stays open, as this PC recorded them, with the prompts skipped while the breaker was open. Watched when failing or when the breaker is open; bad when a backlog older than 24 hours builds up with it.",
+		Definition: "The last answer, since when it is failing, and until when recall stays paused after repeated failures, as this PC recorded them, with the prompts skipped while it was paused. Watched when failing or while recall is paused; bad when a backlog older than 24 hours builds up with it.",
 		Action:     "The server cannot be reached, so recall is skipped. Run backsight doctor.",
 	},
 	{

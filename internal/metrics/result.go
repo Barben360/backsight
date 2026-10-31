@@ -135,6 +135,10 @@ type InfoItem struct {
 type MemoryText struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
+	// Reason is why the text could not be read (a no_data reason: the
+	// server did not answer, has no such memory, or none is set up); ""
+	// when Text holds it.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Verdict is the four-axis reading: found, right, cost, flowing.
