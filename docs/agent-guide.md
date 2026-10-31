@@ -2,7 +2,7 @@
 
 backsight gives Claude Code a long-term memory: one Go binary that runs a memory server in Docker on the user's machine and wires it into Claude Code. You are a coding agent (Claude Code or another) asked to install it. This page is all you need: do not browse the repository.
 
-Quick start: if `backsight version` fails, install the binary with `curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh`; then run `backsight setup --questions --json` and go on at step 2. Ask the user before every choice.
+Quick start: if `backsight version` fails, install the binary with `curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.sh | sh` (on Windows: `powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"`); then run `backsight setup --questions --json` and go on at step 2. Ask the user before every choice.
 
 Follow these steps in order. Everything goes through `backsight` commands with `--json`; never edit backsight's files or Claude Code's settings by hand. Once installed, this page is also `backsight guide agent-guide`.
 
@@ -34,6 +34,14 @@ curl -fsSL https://raw.githubusercontent.com/Barben360/backsight/main/scripts/in
 The script checks the release's minisign signature (with `minisign`, or `openssl` 3; on macOS, whose LibreSSL cannot, the user installs minisign first) and its checksum, then installs the binary under backsight's data directory and links `~/.local/bin/backsight` to its shim (`<data>/bin/current`, which `update apply` moves to each new version). If it prints an `export PATH=…` line, run commands with that PATH (and tell the user to add it to their shell profile).
 
 To install one given release, add `BACKSIGHT_RELEASE_URL=https://github.com/Barben360/backsight/releases/download/<tag>` before `sh`. From release files already downloaded into a directory: `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
+
+On Windows (x86_64; Claude Code's own shell there is Git Bash, and no step needs admin rights), install with:
+
+```sh
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"
+```
+
+It checks the signature and checksum as `install.sh` does (in PowerShell: nothing else to install), installs the binary under `%LOCALAPPDATA%\backsight`, the command as `%LOCALAPPDATA%\Programs\backsight\backsight.exe`, and adds that directory to the user `PATH`. A shell started before reads the old `PATH`: until the user opens a new terminal, run backsight by its full path (`"$LOCALAPPDATA/Programs/backsight/backsight.exe"` in Git Bash). It honours `BACKSIGHT_RELEASE_URL` and `BACKSIGHT_RELEASE_DIR` as environment variables (see [Windows](windows.md)).
 
 ## 2. List the questions
 

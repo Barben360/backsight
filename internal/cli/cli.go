@@ -95,7 +95,7 @@ func newRoot(e *env) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().BoolVar(&e.json, "json", false, "print one JSON envelope (schema_version 1)")
-	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e))
+	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e), newInstallShimCmd(e))
 	requireSubcommands(root)
 	return root
 }
