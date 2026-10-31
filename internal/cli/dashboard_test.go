@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +53,13 @@ var dashLine = regexp.MustCompile(`^Dashboard: http://127\.0\.0\.1:(\d+)/\?code=
 // code.
 func startDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, first string, stderr *syncBuf, stop func() int) {
 	t.Helper()
+	base, d, first, stderr, _, stop = startDashboardOut(t, args...)
+	return
+}
+
+// startDashboardOut is startDashboard that also returns the whole stdout.
+func startDashboardOut(t *testing.T, args ...string) (base string, d paths.Dirs, first string, stderr, out *syncBuf, stop func() int) {
+	t.Helper()
 	viewsFixture(t)
 	if code, _, errOut := run(t, "stats", "overview"); code != 0 { // the index, built: pages answer 200
 		t.Fatalf("stats overview: exit %d: %s", code, errOut)
@@ -69,7 +79,7 @@ func startDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, fi
 		exit <- ExecuteContext(ctx, append([]string{"dashboard"}, args...), pw, stderr)
 		_ = pw.Close()
 	}()
-	var out syncBuf
+	out = &syncBuf{}
 	ready := make(chan struct{})
 	go func() {
 		var once sync.Once
@@ -109,7 +119,7 @@ func startDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, fi
 		}
 		port = strconv.Itoa(env.Data.Port)
 	}
-	return "http://127.0.0.1:" + port, d, first, stderr, stop
+	return "http://127.0.0.1:" + port, d, first, stderr, out, stop
 }
 
 var noFollow = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -433,7 +443,7 @@ func TestNoDashboardConfigKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, errOut := run(t, "stats", "overview")
-	if code != output.Blocked || !strings.Contains(errOut, "dashboard") {
+	if code != output.Blocked || !strings.Contains(errOut, "unknown keys: dashboard") {
 		t.Errorf("exit %d, stderr %q", code, errOut)
 	}
 }
@@ -451,6 +461,125 @@ func TestDashboardLinkWhileStarting(t *testing.T) {
 	}
 	code, out, errOut := run(t, "dashboard", "link")
 	if code != output.Blocked || out != "" || !strings.Contains(errOut, "a dashboard is starting: run backsight dashboard link in a few seconds\n") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// readOnlyDir makes dir unwritable for the test, or skips where modes do
+// not bind (root, Windows).
+func readOnlyDir(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory modes do not bind here")
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+}
+
+// A failure to clean up at the stop is a sentence on stderr and exit 20,
+// never the error's text (a path), and never a second JSON document.
+func TestDashboardCleanupFailureIsASentence(t *testing.T) {
+	_, d, _, stderr, out, stop := startDashboardOut(t, "--json")
+	readOnlyDir(t, filepath.Dir(dashboard.RuntimeFile(d)))
+	if code := stop(); code != output.Blocked {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "the dashboard stopped but could not clean up its files in the state directory (permission denied)") || strings.Contains(stderr.String(), d.State) {
+		t.Errorf("stderr %q", stderr.String())
+	}
+	dec := json.NewDecoder(strings.NewReader(out.String()))
+	var env linkEnv
+	if err := dec.Decode(&env); err != nil || !env.OK || dec.More() {
+		t.Errorf("stdout is not one success envelope: %q (%v)", out.String(), err)
+	}
+}
+
+// A start that cannot write its files is not an index problem and names no
+// path.
+func TestDashboardStartFailureIsNotAnIndexProblem(t *testing.T) {
+	viewsFixture(t)
+	d, _, _ := machine()
+	dir := filepath.Dir(dashboard.RuntimeFile(d))
+	if err := os.MkdirAll(dashboard.CodesDir(d), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyDir(t, dir)
+	code, out, errOut := run(t, "dashboard")
+	if code != output.Blocked || out != "" || !strings.Contains(errOut, "could not write the dashboard's runtime file") ||
+		strings.Contains(errOut, "metrics index") || strings.Contains(errOut, d.State) {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// Each class of start failure has its own sentence, and none shows a path.
+func TestDashboardStartErrorClasses(t *testing.T) {
+	denied := &fs.PathError{Op: "open", Path: "/secret/state/x", Err: fs.ErrPermission}
+	for _, c := range []struct {
+		err  error
+		code int
+		want string
+	}{
+		{fmt.Errorf("listen on 127.0.0.1: %w", denied), output.Blocked, "could not listen on 127.0.0.1:4242 (permission denied)"},
+		{fmt.Errorf("write a login code: %w", denied), output.Blocked, "could not create a login code (permission denied)"},
+		{fmt.Errorf("create the dashboard runtime file: %w", denied), output.Blocked, "could not write the dashboard's runtime file"},
+		{fmt.Errorf("open the metrics index: %w", indexFailure{denied}), output.Blocked, "metrics index"},
+		{fmt.Errorf("port 4242: %w", dashboard.ErrPortTaken), output.Usage, "port 4242 is taken: choose another --port or leave it out for a free one"},
+	} {
+		err := dashboardStartError(4242, c.err)
+		if output.CodeOf(err) != c.code || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "/secret") {
+			t.Errorf("%v: exit %d, %q; want %d, %q", c.err, output.CodeOf(err), err, c.code, c.want)
+		}
+	}
+}
+
+// A stop that interrupts Start (before Serve) exits 0 with a plain line,
+// not an index message.
+func TestDashboardStoppedBeforeServing(t *testing.T) {
+	viewsFixture(t)
+	old := startServer
+	startServer = func(ctx context.Context, _ dashboard.Config) (*dashboard.Server, error) {
+		return nil, fmt.Errorf("open the metrics index: %w", indexFailure{ctx.Err()})
+	}
+	t.Cleanup(func() { startServer = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	code := ExecuteContext(ctx, []string{"dashboard"}, &out, &errb)
+	if code != 0 || out.Len() != 0 || strings.Contains(errb.String(), "index") || !strings.Contains(errb.String(), "stopped before it started") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A context already done still ends cleanly, with nothing left behind.
+func TestDashboardCancelledContext(t *testing.T) {
+	viewsFixture(t)
+	d, _, _ := machine()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := ExecuteContext(ctx, []string{"dashboard"}, &out, &errb); code != 0 {
+		t.Errorf("exit %d, stderr %q", code, errb.String())
+	}
+	if _, err := os.Stat(dashboard.RuntimeFile(d)); !os.IsNotExist(err) {
+		t.Errorf("runtime file left: %v", err)
+	}
+}
+
+// A runtime file whose process is gone is no running dashboard.
+func TestDashboardLinkWithStaleRuntimeFile(t *testing.T) {
+	viewsFixture(t)
+	d, _, _ := machine()
+	if err := os.MkdirAll(filepath.Dir(dashboard.RuntimeFile(d)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"pid":2147483646,"port":43210,"started_at":"2026-01-01T00:00:00Z"}`
+	if err := os.WriteFile(dashboard.RuntimeFile(d), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := run(t, "dashboard", "link")
+	if code != output.Blocked || out != "" || !strings.Contains(errOut, "no dashboard is running: start one with backsight dashboard\n") {
 		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }

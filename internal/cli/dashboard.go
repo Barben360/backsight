@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -64,8 +68,12 @@ func runDashboard(ctx context.Context, e *env, port int, open bool) error {
 	if err != nil {
 		return err
 	}
-	s, err := dashboard.Start(ctx, cfg)
+	s, err := startServer(ctx, cfg)
 	if err != nil {
+		if ctx.Err() != nil { // stopped before it served: nothing is left running
+			_, _ = fmt.Fprintln(e.stderr, "the dashboard was stopped before it started")
+			return nil
+		}
 		return dashboardStartError(port, err)
 	}
 	tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
@@ -84,8 +92,36 @@ func runDashboard(ctx context.Context, e *env, port int, open bool) error {
 	served := time.Now()
 	_, err = s.Serve(ctx)
 	tw.Emit(telemetry.Dashboard{Action: "stop", MS: time.Since(served).Milliseconds(), Pages: s.Pages()})
-	return err
+	if err != nil {
+		// The result is already on stdout: the failure goes to stderr only,
+		// as a sentence (the error's own text holds paths).
+		_, _ = fmt.Fprintf(e.stderr, "backsight: the dashboard stopped but could not clean up its files in the state directory (%s): check that directory\n", fileClass(err))
+		return reported{output.Blocked}
+	}
+	return nil
 }
+
+// fileClass names why a file operation failed, never the path.
+func fileClass(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return "permission denied"
+	case errors.Is(err, syscall.ENOSPC):
+		return "disk full"
+	case errors.Is(err, fs.ErrNotExist):
+		return "missing"
+	}
+	return "io"
+}
+
+// indexFailure marks an error of the metrics index (opened or inspected):
+// the only start failures reported as an index problem.
+type indexFailure struct{ error }
+
+func (e indexFailure) Unwrap() error { return e.error }
+
+// startServer is dashboard.Start; tests replace it.
+var startServer = dashboard.Start
 
 // canceled is a context already done: Serve then stops at once.
 func canceled() context.Context {
@@ -106,7 +142,22 @@ func dashboardStartError(port int, err error) error {
 	case errors.Is(err, dashboard.ErrPortTaken):
 		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("port %d is taken: choose another --port or leave it out for a free one", port)}
 	}
-	return indexError(err)
+	var ixf indexFailure
+	switch {
+	case errors.As(err, &ixf):
+		return indexError(err)
+	case strings.HasPrefix(err.Error(), "listen on 127.0.0.1"):
+		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not listen on 127.0.0.1:%s (%s)", strconv.Itoa(port), fileClass(err))}
+	case codeFailure(err):
+		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not create a login code (%s)", fileClass(err))}
+	}
+	return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not write the dashboard's runtime file or its directory in the state directory (%s)", fileClass(err))}
+}
+
+// codeFailure: err comes from MintCode.
+func codeFailure(err error) bool {
+	m := err.Error()
+	return strings.HasPrefix(m, "draw a login code") || strings.HasPrefix(m, "write a login code") || strings.HasPrefix(m, "create the login codes directory")
 }
 
 func runDashboardLink(e *env) error {
@@ -117,7 +168,7 @@ func runDashboardLink(e *env) error {
 	// The runtime file is judged on the real clock (process start times).
 	r, alive, err := dashboard.Running(d, time.Now())
 	if err != nil {
-		return indexError(err)
+		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not read the dashboard's runtime file (%s)", fileClass(err))}
 	}
 	switch {
 	case !alive:
@@ -128,7 +179,7 @@ func runDashboardLink(e *env) error {
 	at := now()
 	code, err := dashboard.MintCode(d, at)
 	if err != nil {
-		return indexError(err)
+		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not create a login code (%s)", fileClass(err))}
 	}
 	link := dashboard.Link{URL: dashboard.URL(r.Port, code), Port: r.Port, ExpiresAt: at.Add(dashboard.CodeTTL).UTC()}
 	return e.emit("dashboard link", link, func() string { return "Dashboard: " + link.URL + "\n" })
@@ -147,14 +198,14 @@ func dashboardConfig(_ context.Context, d paths.Dirs, home string, port int, std
 		OpenIndex: func(ctx context.Context) (dashboard.Index, error) {
 			ix, err := index.Open(ctx, indexOptionsAt(d, home, stderr))
 			if err != nil {
-				return nil, err // raw: the dashboard tells the update-in-progress error apart
+				return nil, indexFailure{err} // wrapped, not mapped: the dashboard tells the update-in-progress error apart
 			}
 			return ix, nil
 		},
 		NeedsBuild: func(ctx context.Context) (bool, error) {
 			st, err := index.Inspect(ctx, indexOptionsAt(d, home, nil))
 			if err != nil {
-				return false, err
+				return false, indexFailure{err}
 			}
 			return !st.Exists || st.IngestedAt.IsZero(), nil
 		},
