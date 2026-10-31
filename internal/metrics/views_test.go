@@ -65,7 +65,9 @@ func TestViewEnvelope(t *testing.T) {
 
 // TestScopeServerOKWithoutReads: a view that reads nothing from the server
 // (quality) says what this PC last recorded of it: an answer and no
-// failure since is ok; a failure since, or nothing recorded, is not.
+// failure since is ok; a failure since, or nothing recorded, is not; and
+// when that last answer was (server_ok_at). A view that read the server
+// carries no server_ok_at.
 func TestScopeServerOKWithoutReads(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -84,6 +86,17 @@ func TestScopeServerOKWithoutReads(t *testing.T) {
 		if r.Scope.ServerOK != c.want || r.Server != nil || len(x.server.called()) != 0 {
 			t.Errorf("%s: server_ok %v (server section %v, %d server calls), want %v, no section, no call", c.name, r.Scope.ServerOK, r.Server, len(x.server.called()), c.want)
 		}
+		switch at := r.Scope.ServerOKAt; {
+		case c.local == nil && at != nil:
+			t.Errorf("%s: server_ok_at %v, want none", c.name, at)
+		case c.local != nil && (at == nil || !at.Equal(c.local.ReachLastOK)):
+			t.Errorf("%s: server_ok_at %v, want the last answer %v", c.name, at, c.local.ReachLastOK)
+		}
+	}
+	x := newFx(t, fxNow) // a view that reads the server says nothing more
+	x.local(index.LocalStatus{ReachLastOK: ago(time.Minute)})
+	if at := x.run("overview", x.query(7)).Scope.ServerOKAt; at != nil {
+		t.Errorf("overview: server_ok_at %v, want none (it read the server)", at)
 	}
 }
 

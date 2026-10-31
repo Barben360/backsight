@@ -269,8 +269,8 @@ func TestChurnPerWeek(t *testing.T) {
 		t.Fatalf("churn = %v (%s), want 4", m.Value, m.Status)
 	}
 	wantSeries := []Point{
-		{Week: "2026-W43", Value: ptr(2.0), Parts: map[string]int64{"forget": 2}},
-		{Week: "2026-W44", Value: ptr(2.0), Parts: map[string]int64{"hide": 1, "unhide": 1}},
+		{Week: "2026-W43", Value: ptr(2.0), Parts: map[string]int64{"forget": 2}, Partial: true},
+		{Week: "2026-W44", Value: ptr(2.0), Parts: map[string]int64{"hide": 1, "unhide": 1}, Partial: true},
 	}
 	if !reflect.DeepEqual(m.Series, wantSeries) {
 		t.Errorf("series = %+v, want %+v", m.Series, wantSeries)
@@ -295,6 +295,34 @@ func TestChurnWeeksWithoutEventsAreZero(t *testing.T) {
 	}
 	if !reflect.DeepEqual(weeks, []string{"2026-W42", "2026-W43", "2026-W44"}) || !reflect.DeepEqual(vals, []float64{1, 0, 1}) {
 		t.Errorf("weeks %v values %v, want W42..W44 [1 0 1]", weeks, vals)
+	}
+}
+
+// TestChurnWeeksFlagPartial: the ISO weeks the window starts or ends inside
+// are partial (16 days from 10-14 13:00: W42 and W44, not W43); a window
+// from Monday 00:00 to Monday 00:00 has no partial week.
+func TestChurnWeeksFlagPartial(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.retire(time.Date(2026, 10, 20, 9, 0, 0, 0, fxParis), "retire")
+	partial := func(ps []Point) (out []string) {
+		for _, p := range ps {
+			if p.Partial {
+				out = append(out, p.Week)
+			}
+		}
+		return out
+	}
+	if got := partial(bankOf(x, x.query(16))["bank.churn"].Series); !reflect.DeepEqual(got, []string{"2026-W42", "2026-W44"}) {
+		t.Errorf("16 days: partial weeks %v, want W42, W44", got)
+	}
+	mon := time.Date(2026, 10, 12, 0, 0, 0, 0, fxParis)
+	w, err := NewWindow(fxNow, 0, mon, mon.AddDate(0, 0, 14), fxParis, "Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := bankOf(x, Query{Window: w, Machines: "this"})["bank.churn"]
+	if got := partial(m.Series); len(m.Series) != 2 || len(got) != 0 {
+		t.Errorf("Monday to Monday: %d weeks, partial %v; want 2, none", len(m.Series), got)
 	}
 }
 

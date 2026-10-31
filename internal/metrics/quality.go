@@ -496,3 +496,63 @@ func memoryProject(tx *sql.Tx, id string) string {
 	}
 	return p
 }
+
+// ledger is the index's ledger rows as a feedback.Ledger (what
+// feedback.Stale reads), read once per transaction.
+func (e env) ledger() (feedback.Ledger, error) {
+	if e.memo != nil && e.memo.ledger != nil {
+		return *e.memo.ledger, nil
+	}
+	l, err := readLedger(e)
+	if err == nil && e.memo != nil {
+		e.memo.ledger = &l
+	}
+	return l, err
+}
+
+func readLedger(e env) (feedback.Ledger, error) {
+	rows, err := e.tx.QueryContext(e.ctx, `SELECT memory_id, shown, credits, wrong, hidden_since, imported_shown, last_shown FROM ledger`)
+	if err != nil {
+		return feedback.Ledger{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	l := feedback.Ledger{Memories: map[string]feedback.Entry{}}
+	for rows.Next() {
+		var (
+			id                     string
+			shown, wrong, imported sql.NullInt64
+			credits                sql.NullFloat64
+			hiddenSince, lastShown sql.NullInt64
+		)
+		if err := rows.Scan(&id, &shown, &credits, &wrong, &hiddenSince, &imported, &lastShown); err != nil {
+			return feedback.Ledger{}, err
+		}
+		m := feedback.Entry{Shown: int(shown.Int64), Credits: credits.Float64, Wrong: int(wrong.Int64),
+			Imported: feedback.Imported{Shown: int(imported.Int64)}}
+		if lastShown.Valid {
+			m.LastShown = time.UnixMilli(lastShown.Int64)
+		}
+		if hiddenSince.Valid {
+			m.Hidden = &feedback.Hidden{Since: time.UnixMilli(hiddenSince.Int64)}
+		}
+		l.Memories[id] = m
+	}
+	return l, rows.Err()
+}
+
+// staleLists is feedback.Stale of the index's ledger as of now, read once
+// per transaction (the stale counts do not depend on the window).
+func (e env) staleLists() (feedback.StaleLists, error) {
+	if e.memo != nil && e.memo.stale != nil {
+		return *e.memo.stale, nil
+	}
+	l, err := e.ledger()
+	if err != nil {
+		return feedback.StaleLists{}, err
+	}
+	lists := feedback.Stale(l, e.src.Config.Feedback.StaleShows, e.now)
+	if e.memo != nil {
+		e.memo.stale = &lists
+	}
+	return lists, nil
+}

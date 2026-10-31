@@ -69,13 +69,41 @@ func TestViewBudgets(t *testing.T) {
 				t.Fatalf("%s: %v", view, err)
 			}
 		}
-		// the measure is of real work: the generated activity was read
-		if hit := r.Metrics["recall.hit_rate"]; view == "overview" && (hit.Den == nil || *hit.Den < 1000) {
-			t.Errorf("overview: recall.hit_rate den %v, want the generated week's recalls (> 1,000)", hit.Den)
+		// the measure is of real work: each view read the generated week
+		if c := realWork[view]; !c.ok(r) {
+			t.Errorf("%s: %s = %+v, want %s", view, c.id, r.Metrics[c.id], c.what)
 		}
 		t.Logf("%s: best of 3 %v (limit %v)", view, best, viewLimit)
 		if best > viewLimit {
 			t.Errorf("%s took %v, limit %v", view, best, viewLimit)
 		}
 	}
+}
+
+// realWork is, per view, a figure only the generated history can give: the
+// view's time is that of real reads, not of an empty index.
+var realWork = map[string]workCheck{
+	"overview": {"recall.hit_rate", "the week's recalls (n > 1,000)", 1000},
+	"quality":  {"declare.coverage", "the week's turns that showed memory (n > 100)", 100},
+	"cost":     {"recall.latency", "the week's recall times (n > 1,000)", 1000},
+	"bank":     {"stale.never_used", "the ledger's never-used memories (> 100)", 100},
+	"pipeline": {"pipeline.flow", "the week's sent documents (n > 100)", 100},
+	"system":   {"jobs.last_run", "the last tick's age (a value)", 0},
+}
+
+// workCheck is one view's figure: its n (den), else its value, at least min.
+type workCheck struct {
+	id, what string
+	min      float64
+}
+
+func (c workCheck) ok(r Result) bool {
+	m := r.Metrics[c.id]
+	if m.Status == StatusNoData {
+		return false
+	}
+	if m.Den != nil {
+		return float64(*m.Den) >= c.min
+	}
+	return m.Value != nil && *m.Value >= c.min
 }

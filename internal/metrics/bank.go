@@ -276,13 +276,15 @@ func bankChurn(e env, w Window, obs map[string]Observation, met map[string]Metri
 	for _, k := range churnKinds {
 		m.Extra[k] = byKind[k]
 	}
-	// Every week the window touches, Monday to Monday.
+	// Every week the window touches, Monday to Monday; a week the window
+	// starts or ends inside is partial.
 	y, mo, d := w.Since.In(w.Loc).Date()
 	start := time.Date(y, mo, d, 0, 0, 0, 0, w.Loc)
 	start = time.Date(y, mo, d-(int(start.Weekday())+6)%7, 0, 0, 0, 0, w.Loc)
 	for t := start; t.Before(w.Until); t = time.Date(t.Year(), t.Month(), t.Day()+7, 0, 0, 0, 0, w.Loc) {
 		wk := isoWeek(t)
-		p := Point{Week: wk}
+		next := time.Date(t.Year(), t.Month(), t.Day()+7, 0, 0, 0, 0, w.Loc)
+		p := Point{Week: wk, Partial: t.Before(w.Since) || next.After(w.Until)}
 		var sum int64
 		for _, n := range byWeek[wk] {
 			sum += n

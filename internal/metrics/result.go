@@ -62,7 +62,12 @@ type Scope struct {
 	Machines string `json:"machines"`
 	Server   string `json:"server"`
 	ServerOK bool   `json:"server_ok"`
-	Project  string `json:"project,omitempty"`
+	// ServerOKAt: for a view that reads nothing from the server, server_ok
+	// is what this PC last recorded, and this is when it last recorded an
+	// answer (null when it never did); left out when the view read the
+	// server, whose answer is as of generated_at.
+	ServerOKAt *time.Time `json:"server_ok_at,omitempty"`
+	Project    string     `json:"project,omitempty"`
 }
 
 // ServerState is whether the server answered; LastOK is null when unknown.
