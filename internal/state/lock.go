@@ -60,6 +60,9 @@ type Lock struct {
 	owner Owner
 }
 
+// refusedHook runs when a create was refused; tests finish a delete there.
+var refusedHook = func() {}
+
 // TryAcquire creates the lock file exclusively or returns a *HeldError.
 func TryAcquire(path, command string) (*Lock, error) {
 	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
@@ -71,7 +74,19 @@ func TryAcquire(path, command string) (*Lock, error) {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) || deletePending(path, err) {
+	// Windows refuses to create the name of a file being deleted (its
+	// releasing owner's, with a reader's handle still open): the lock is
+	// still held for a moment, or the delete finished meanwhile and the
+	// create is tried again. A refusal while the name stays gone is real.
+	for try := 0; createRefused(err) && try < 3; try++ {
+		refusedHook()
+		if _, serr := os.Lstat(path); !errors.Is(serr, fs.ErrNotExist) {
+			return nil, held(path)
+		}
+		time.Sleep(10 * time.Millisecond)
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	}
+	if errors.Is(err, fs.ErrExist) {
 		return nil, held(path)
 	}
 	if err != nil {

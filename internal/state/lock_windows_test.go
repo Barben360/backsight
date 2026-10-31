@@ -79,6 +79,43 @@ func TestALockBeingDeletedIsHeldNotAnError(t *testing.T) {
 	_ = next.Release()
 }
 
+// The delete that refused the create finishes before the name is checked:
+// the create is tried again and the lock is taken (CI's SaveWithin failed
+// with "Access is denied" here).
+func TestALockDeletedWhileRefusedIsTakenAgain(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.lock")
+	if _, err := TryAcquire(p, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	name, _ := windows.UTF16PtrFromString(p)
+	reader, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	del, err := windows.CreateFile(name, windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := byte(1)
+	err = windows.SetFileInformationByHandle(del, windows.FileDispositionInfo, &one, 1)
+	_ = windows.CloseHandle(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the last handle closes right after the refusal: the name is gone
+	old := refusedHook
+	refusedHook = func() { _ = windows.CloseHandle(reader); refusedHook = old }
+	t.Cleanup(func() { refusedHook = old })
+	l, err := TryAcquire(p, "next")
+	if err != nil {
+		t.Fatalf("the delete finished, the lock must be taken: %v", err)
+	}
+	if l.Owner().Command != "next" {
+		t.Errorf("owner %+v", l.Owner())
+	}
+	_ = l.Release()
+}
+
 // A directory nobody may create in is a genuine refusal, not a held lock.
 func TestARefusedLockIsAnError(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "locks")

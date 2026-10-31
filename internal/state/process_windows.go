@@ -4,8 +4,6 @@ package state
 
 import (
 	"errors"
-	"io/fs"
-	"os"
 
 	"golang.org/x/sys/windows"
 )
@@ -27,15 +25,7 @@ func processAlive(pid int) bool {
 	return err == nil && ev == uint32(windows.WAIT_TIMEOUT)
 }
 
-// deletePending: creating path failed because its previous lock file is
-// still being deleted. Windows keeps a deleted file's name until its last
-// handle closes (a releasing owner's, a reader's), and refuses to create
-// it meanwhile with access denied, not "exists": the lock is still held,
-// for a moment. A name that is really gone was a genuine refusal.
-func deletePending(path string, err error) bool {
-	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-		return false
-	}
-	_, serr := os.Lstat(path)
-	return !errors.Is(serr, fs.ErrNotExist)
-}
+// createRefused: an exclusive create failed with access denied, which
+// Windows answers for a name whose file is being deleted (it keeps the
+// name until the last handle closes) as for a real refusal.
+func createRefused(err error) bool { return errors.Is(err, windows.ERROR_ACCESS_DENIED) }

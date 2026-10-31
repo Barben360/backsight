@@ -12,5 +12,6 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// deletePending: Unix removes a name at once.
-func deletePending(string, error) bool { return false }
+// createRefused: Unix removes a name at once, so an exclusive create
+// never meets a file being deleted.
+func createRefused(error) bool { return false }
