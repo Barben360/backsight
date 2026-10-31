@@ -61,9 +61,9 @@ func (s *Server) guard(mux *http.ServeMux) http.Handler {
 			return
 		}
 		// Only a navigation spends a code: not a HEAD, not a prefetch, not
-		// a call to the API, /prefs or the text page.
+		// a fetch, not a call to the API, /prefs or the text page.
 		if _, pattern := mux.Handler(r); kindOf[pattern] == "page" && r.Method == http.MethodGet &&
-			r.URL.Query().Has("code") && !prefetched(r.Header) {
+			r.URL.Query().Has("code") && navigation(r.Header) && !prefetched(r.Header) {
 			s.login(w, r)
 			return
 		}

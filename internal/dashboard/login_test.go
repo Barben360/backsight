@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,6 +197,66 @@ func TestPrefetchDoesNotConsume(t *testing.T) {
 	}
 	if r := h.do("GET", "/?code="+code); r.StatusCode != http.StatusSeeOther {
 		t.Errorf("GET after the prefetches: %d, want 303", r.StatusCode)
+	}
+}
+
+// A fetch, an image or a frame is not a navigation: only Sec-Fetch-Mode
+// navigate (or none sent) spends a code.
+func TestNonNavigationCodeNotConsumed(t *testing.T) {
+	h := newHarness(t)
+	code := h.mint()
+	for _, hdr := range [][]string{
+		{"Sec-Fetch-Mode", "cors"},
+		{"Sec-Fetch-Mode", "no-cors"},
+		{"Sec-Fetch-Mode", "same-origin"},
+		{"Sec-Fetch-Mode", "nested-navigate"},
+		{"Sec-Fetch-Mode", ""},
+		{"Sec-Fetch-Mode", "navigate", "Sec-Fetch-Mode", "cors"},
+	} {
+		if r := h.do("GET", "/?code="+code, hdr...); r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%q: %d, want 401", hdr, r.StatusCode)
+		}
+		if !h.codeLeft(code) {
+			t.Fatalf("%q spent the code", hdr)
+		}
+	}
+	if r := h.do("GET", "/?code="+code, "Sec-Fetch-Mode", "navigate", "Sec-Fetch-Site", "none"); r.StatusCode != http.StatusSeeOther {
+		t.Errorf("Sec-Fetch-Mode navigate: %d, want 303", r.StatusCode)
+	}
+}
+
+// A session that cannot be drawn after the code is spent: 500, one plain
+// line, no cookie, no redirect, the code nowhere.
+func TestLoginSessionFails(t *testing.T) {
+	var broken atomic.Bool
+	t.Cleanup(func() { randRead = rand.Read })
+	randRead = func(b []byte) (int, error) {
+		if broken.Load() {
+			return 0, errors.New("no randomness")
+		}
+		return rand.Read(b)
+	}
+	h := newHarness(t)
+	code := h.mint()
+	broken.Store(true)
+	r := h.do("GET", "/quality?code="+code)
+	if r.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("GET with a code, no randomness: %d, want 500", r.StatusCode)
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type %q, want plain text", ct)
+	}
+	if b := body(t, r); strings.Contains(b, code) || strings.Count(b, "\n") != 1 {
+		t.Errorf("body %q: want one line without the code", b)
+	}
+	if sc := r.Header.Values("Set-Cookie"); len(sc) != 0 {
+		t.Errorf("Set-Cookie %q, want none", sc)
+	}
+	if loc := r.Header.Values("Location"); len(loc) != 0 {
+		t.Errorf("Location %q, want none", loc)
+	}
+	if h.codeLeft(code) {
+		t.Error("the code is still there: it should be spent before the session is drawn")
 	}
 }
 
@@ -414,7 +476,12 @@ func TestTemplatesFS(t *testing.T) {
 }
 
 func TestFirstLink(t *testing.T) {
-	h := newHarness(t)
+	// A clock in another zone: the link's expiry is still told in UTC.
+	zone := time.FixedZone("UTC+3", 3*3600)
+	h := newHarness(t, func(c *Config) {
+		now := c.Now
+		c.Now = func() time.Time { return now().In(zone) }
+	})
 	l := h.s.FirstLink()
 	if !regexp.MustCompile(`^http://127\.0\.0\.1:` + strconv.Itoa(h.port) + `/\?code=[0-9a-f]{32}$`).MatchString(l.URL) {
 		t.Errorf("FirstLink().URL %q", l.URL)
@@ -422,8 +489,8 @@ func TestFirstLink(t *testing.T) {
 	if l.Port != h.port {
 		t.Errorf("FirstLink().Port %d, want %d", l.Port, h.port)
 	}
-	if want := indexgen.Now.Add(120 * time.Second); !l.ExpiresAt.Equal(want) {
-		t.Errorf("FirstLink().ExpiresAt %v, want %v (the clock at mint + 120 s)", l.ExpiresAt, want)
+	if want := indexgen.Now.Add(120 * time.Second); !l.ExpiresAt.Equal(want) || l.ExpiresAt.Location() != time.UTC {
+		t.Errorf("FirstLink().ExpiresAt %v, want %v in UTC (the clock at mint + 120 s)", l.ExpiresAt, want.UTC())
 	}
 	raw, err := json.Marshal(l)
 	if err != nil {

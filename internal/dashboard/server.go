@@ -134,7 +134,7 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s.link = Link{URL: URL(port, code), Port: port, ExpiresAt: minted.Add(CodeTTL)}
+	s.link = Link{URL: URL(port, code), Port: port, ExpiresAt: minted.Add(CodeTTL).UTC()}
 	return s, nil
 }
 

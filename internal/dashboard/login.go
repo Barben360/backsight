@@ -39,7 +39,8 @@ type Link struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// FirstLink is the link of the code minted as Start's last step.
+// FirstLink is the link of the code minted as Start's last step; its
+// ExpiresAt is in UTC.
 func (s *Server) FirstLink() Link { return s.link }
 
 // cookieName is the session cookie's name. Browsers do not scope cookies
@@ -64,6 +65,13 @@ func localBack(target string) (string, bool) {
 		return "", false
 	}
 	return target, true
+}
+
+// navigation: Sec-Fetch-Mode, when present, says the request is a
+// navigation. Absent (older browsers), as for Sec-Fetch-Site, it passes.
+func navigation(h http.Header) bool {
+	mode, ok := h["Sec-Fetch-Mode"]
+	return !ok || len(mode) == 1 && mode[0] == "navigate"
 }
 
 // prefetched: the request is a browser's prefetch or preview, not a

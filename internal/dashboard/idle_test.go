@@ -131,20 +131,18 @@ func TestIdleStop(t *testing.T) {
 		wantIdleStop(t, h)
 	})
 
-	// The real ticker, every idleCheck: Serve stops on its own.
+	// The real ticker, every idleCheck: Serve stops on its own. The
+	// timeout only bounds a regression's wait: a working check stops it
+	// within a few ticks.
 	t.Run("ticker", func(t *testing.T) {
 		h := newHarness(t)
 		h.clock.add(2*time.Hour + time.Second)
-		ctx := context.Background()
-		if d, ok := t.Deadline(); ok {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, d)
-			defer cancel()
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		select {
 		case <-h.done:
 		case <-ctx.Done():
-			t.Fatal("Serve did not stop before the test's deadline")
+			t.Fatal("Serve did not stop within 10 s of ticks every millisecond")
 		}
 		wantIdleStop(t, h)
 	})
