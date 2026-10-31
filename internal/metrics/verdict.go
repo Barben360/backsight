@@ -530,7 +530,7 @@ func (r *judgingRun) median(d Def, w Window) (float64, bool, error) {
 	}
 	bases := make([]map[string]Observation, 0, 4)
 	for _, b := range w.Baselines() {
-		obs, _, err := r.e.run(fam, b)
+		obs, _, err := r.e.runIDs(fam, b, []string{d.ID})
 		if err != nil {
 			return 0, false, err
 		}

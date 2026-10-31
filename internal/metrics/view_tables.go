@@ -114,17 +114,6 @@ FROM a GROUP BY session`,
 	return out, rows.Err()
 }
 
-// sentStatus is the status of the session's latest send, "" when none.
-func sentStatus(e env, session string) (string, error) {
-	var st sql.NullString
-	err := e.tx.QueryRowContext(e.ctx, `SELECT status FROM tel_retain WHERE session = ?
-ORDER BY ts DESC, source_file DESC, "offset" DESC LIMIT 1`, session).Scan(&st)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return st.String, err
-}
-
 // lately is the overview's latest sessions: the latelyRows sessions with
 // the latest activity in w, those with a wrong or outdated report first
 // (the latest first within each group).
@@ -149,12 +138,8 @@ func lately(e env, w Window) ([]SessionRow, error) {
 		}
 		return 0
 	})
-	for i := range out {
-		if out[i].Sent, err = sentStatus(e, out[i].ID); err != nil {
-			return nil, err
-		}
-	}
-	return append([]SessionRow{}, out...), nil
+	out = append([]SessionRow{}, out...)
+	return out, withSent(e, out)
 }
 
 // outcomeMix is the outcome of the shows of w per day (or hour) of their
@@ -362,9 +347,7 @@ func review(e env) (Review, error) {
 		for _, id := range ids[:min(limit, len(ids))] {
 			m := l.Memories[id]
 			r := ReviewRow{ID: id, Project: memoryProject(e.tx, id), Shown: int64(m.Shown), Command: command(id)}
-			if !m.LastShown.IsZero() {
-				r.LastShown = m.LastShown.In(viewLoc(e))
-			}
+			r.LastShown = timeIn(m.LastShown, viewLoc(e))
 			out = append(out, r)
 		}
 		return out

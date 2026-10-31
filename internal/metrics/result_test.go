@@ -175,7 +175,7 @@ func TestTablesRowNames(t *testing.T) {
 	wantKeys(t, "memory row", first("memories"), "boost id ignored last_shown last_used project rate shown state used")
 	mem := sub(t, m, "memory")
 	wantKeys(t, "memory page", mem, "commands created kind rank_histogram retirements row server_state shows")
-	wantKeys(t, "show mark", mem["shows"].([]any)[0].(map[string]any), "at outcome path rank rank_without_boost score turn")
+	wantKeys(t, "show mark", mem["shows"].([]any)[0].(map[string]any), "at outcome path rank rank_without_boost score_without_boost turn")
 	wantKeys(t, "retire mark", mem["retirements"].([]any)[0].(map[string]any), "at kind")
 	wantKeys(t, "day row", first("days"), "context_chars day prompts prompts_with_memory recalls sent_failed sent_ok sessions used_turns wrong")
 	wantKeys(t, "day page", sub(t, m, "day"), "day sessions")

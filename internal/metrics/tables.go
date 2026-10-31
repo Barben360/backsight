@@ -112,11 +112,11 @@ type Review struct {
 
 // ReviewRow is one memory of the review lists.
 type ReviewRow struct {
-	ID        string    `json:"id"`
-	Project   string    `json:"project"`
-	Shown     int64     `json:"shown"`
-	LastShown time.Time `json:"last_shown"`
-	Command   string    `json:"command"`
+	ID        string     `json:"id"`
+	Project   string     `json:"project"`
+	Shown     int64      `json:"shown"`
+	LastShown *time.Time `json:"last_shown"` // null when never shown
+	Command   string     `json:"command"`
 }
 
 // OperationRow is one failed server operation (never its error message).
@@ -185,15 +185,15 @@ type IndexInfo struct {
 
 // ProjectRow is one project of the projects view.
 type ProjectRow struct {
-	Project           string    `json:"project"`
-	Sessions          int64     `json:"sessions"`
-	Prompts           int64     `json:"prompts"`
-	PromptsWithMemory int64     `json:"prompts_with_memory"`
-	UsedTurns         int64     `json:"used_turns"`
-	ReportedWrong     int64     `json:"reported_wrong"`
-	MemoriesOnServer  *int64    `json:"memories_on_server"`
-	LastActivity      time.Time `json:"last_activity"`
-	Series            []Point   `json:"series"`
+	Project           string     `json:"project"`
+	Sessions          int64      `json:"sessions"`
+	Prompts           int64      `json:"prompts"`
+	PromptsWithMemory int64      `json:"prompts_with_memory"`
+	UsedTurns         int64      `json:"used_turns"`
+	ReportedWrong     int64      `json:"reported_wrong"`
+	MemoriesOnServer  *int64     `json:"memories_on_server"`
+	LastActivity      *time.Time `json:"last_activity"` // null for the pooled row of no project
+	Series            []Point    `json:"series"`
 }
 
 // PooledRow totals all projects, with the per-column extremes.
@@ -245,16 +245,16 @@ type ShowChip struct {
 
 // MemoryRow is one memory of the feedback ledger.
 type MemoryRow struct {
-	ID        string    `json:"id"`
-	Project   string    `json:"project"`
-	Shown     int64     `json:"shown"`
-	Used      float64   `json:"used"`
-	Ignored   float64   `json:"ignored"`
-	Rate      *float64  `json:"rate"`
-	Boost     float64   `json:"boost"`
-	LastShown time.Time `json:"last_shown"`
-	LastUsed  time.Time `json:"last_used"`
-	State     string    `json:"state"` // hidden | wrong | never_used | ""
+	ID        string     `json:"id"`
+	Project   string     `json:"project"`
+	Shown     int64      `json:"shown"`
+	Used      float64    `json:"used"`
+	Ignored   float64    `json:"ignored"`
+	Rate      *float64   `json:"rate"`
+	Boost     float64    `json:"boost"`
+	LastShown *time.Time `json:"last_shown"` // null when never shown
+	LastUsed  *time.Time `json:"last_used"`  // null when never used
+	State     string     `json:"state"`      // hidden | wrong | never_used | ""
 }
 
 // MemoryPage is one memory's page.
@@ -262,7 +262,7 @@ type MemoryPage struct {
 	Row           MemoryRow        `json:"row"`
 	Kind          string           `json:"kind"`
 	ServerState   string           `json:"server_state"`
-	Created       time.Time        `json:"created"`
+	Created       *time.Time       `json:"created"` // null when the server did not answer
 	Shows         []ShowMark       `json:"shows"`
 	Retirements   []RetireMark     `json:"retirements"`
 	RankHistogram map[string]int64 `json:"rank_histogram"`
@@ -271,13 +271,13 @@ type MemoryPage struct {
 
 // ShowMark is one showing of a memory.
 type ShowMark struct {
-	At               time.Time `json:"at"`
-	Path             string    `json:"path"`
-	Outcome          string    `json:"outcome"`
-	Turn             string    `json:"turn"`
-	Rank             *int64    `json:"rank"`
-	RankWithoutBoost *int64    `json:"rank_without_boost"`
-	Score            *float64  `json:"score"`
+	At                time.Time `json:"at"`
+	Path              string    `json:"path"`
+	Outcome           string    `json:"outcome"`
+	Turn              string    `json:"turn"`
+	Rank              *int64    `json:"rank"`
+	RankWithoutBoost  *int64    `json:"rank_without_boost"`
+	ScoreWithoutBoost *float64  `json:"score_without_boost"`
 }
 
 // RetireMark is one retirement (hide or restore) of a memory.

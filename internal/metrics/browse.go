@@ -184,6 +184,29 @@ func withSent(e env, rows []SessionRow) error {
 	return nil
 }
 
+// timeIn is t in loc, nil for the zero time: a time never set marshals as
+// null, never as year 1.
+func timeIn(t time.Time, loc *time.Location) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	t = t.In(loc)
+	return &t
+}
+
+// cmpTimeDesc orders later times first and a missing time last.
+func cmpTimeDesc(a, b *time.Time) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return 1
+	case b == nil:
+		return -1
+	}
+	return b.Compare(*a)
+}
+
 // orEmpty is xs, or an empty list when xs is nil: a list never marshals as
 // null.
 func orEmpty[T any](xs []T) []T {

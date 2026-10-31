@@ -97,7 +97,7 @@ func TestPooledRow(t *testing.T) {
 	if a.MemoriesOnServer == nil || *a.MemoriesOnServer != 120 || b.MemoriesOnServer == nil || *b.MemoriesOnServer != 0 {
 		t.Errorf("memories on server: alpha %v, beta %v, want 120 and 0", a.MemoriesOnServer, b.MemoriesOnServer)
 	}
-	if want := fxNow.Add(-3 * time.Hour); !a.LastActivity.Equal(want) {
+	if want := fxNow.Add(-3 * time.Hour); a.LastActivity == nil || !a.LastActivity.Equal(want) {
 		t.Errorf("alpha last activity %v, want %v", a.LastActivity, want)
 	}
 	for _, row := range rows {
@@ -116,7 +116,7 @@ func TestPooledRow(t *testing.T) {
 	if p.Min["prompts_with_memory"] != 4 || p.Max["prompts_with_memory"] != 6 || p.Min["prompts"] != 10 || p.Max["prompts"] != 30 || p.Max["used_turns"] != 0 {
 		t.Errorf("min %v max %v, want prompts_with_memory 4..6 and prompts 10..30", p.Min, p.Max)
 	}
-	if !p.Totals.LastActivity.Equal(a.LastActivity) {
+	if p.Totals.LastActivity == nil || !p.Totals.LastActivity.Equal(*a.LastActivity) {
 		t.Errorf("pooled last activity %v, want alpha's %v", p.Totals.LastActivity, a.LastActivity)
 	}
 	if pg := r.Tables.Page; pg == nil || *pg != (Page{Limit: 50, Offset: 0, Total: 2}) {
@@ -562,13 +562,13 @@ func TestMemoriesSortAndState(t *testing.T) {
 		a.Boost != wantBoost || math.Abs(a.Boost-0.1*((4.0+3)/(4+1+12.0)-0.25)) > 1e-9 || a.Boost == 0 {
 		t.Errorf("m-a = %+v, want 20 shown, 4 used, 1 ignored, rate 0.8, boost %v", a, wantBoost)
 	}
-	if !a.LastShown.Equal(ago(time.Hour)) || !a.LastUsed.Equal(ago(2*time.Hour)) {
+	if a.LastShown == nil || !a.LastShown.Equal(ago(time.Hour)) || a.LastUsed == nil || !a.LastUsed.Equal(ago(2*time.Hour)) {
 		t.Errorf("m-a last shown %v, last used %v", a.LastShown, a.LastUsed)
 	}
 	if math.Abs(c.Used-0.5) > 1e-9 || math.Abs(c.Ignored-1.5) > 1e-9 || c.Rate == nil || math.Abs(*c.Rate-0.25) > 1e-9 {
 		t.Errorf("m-c = %+v, want used 0.5 (a year of decay), ignored 1.5 (one miss half-life), rate 0.25", c)
 	}
-	if b := rows["m-b"]; b.Rate != nil || b.State != "never_used" || !b.LastUsed.IsZero() {
+	if b := rows["m-b"]; b.Rate != nil || b.State != "never_used" || b.LastUsed != nil {
 		t.Errorf("m-b = %+v, want no rate, never_used, never used", b)
 	}
 	if _, ok := rows["m-restore"]; ok {
@@ -667,8 +667,8 @@ func TestMemoryPage(t *testing.T) {
 		t.Errorf("shows = %v, want %v", got, want)
 	}
 	s0 := m.Shows[0]
-	if s0.Rank == nil || *s0.Rank != 1 || s0.RankWithoutBoost == nil || *s0.RankWithoutBoost != 2 || s0.Score == nil || *s0.Score != 0.9 {
-		t.Errorf("first show rank/without boost/score = %v/%v/%v, want 1/2/0.9", s0.Rank, s0.RankWithoutBoost, s0.Score)
+	if s0.Rank == nil || *s0.Rank != 1 || s0.RankWithoutBoost == nil || *s0.RankWithoutBoost != 2 || s0.ScoreWithoutBoost == nil || *s0.ScoreWithoutBoost != 0.9 {
+		t.Errorf("first show rank/without boost/score = %v/%v/%v, want 1/2/0.9", s0.Rank, s0.RankWithoutBoost, s0.ScoreWithoutBoost)
 	}
 	if last := m.Shows[3]; last.Rank != nil {
 		t.Errorf("an unranked show has rank %v", *last.Rank)
@@ -1267,7 +1267,7 @@ func browseWidgets() []widget {
 	add(rows("session", "chips", "session", "tables/session/turns[]/shows[]/", "memory_id,rank,path,outcome")...)
 	add(rows("memories", "list", "memories", "tables/memories[]/", "id,project,shown,used,ignored,rate,boost,last_shown,last_used,state")...)
 	add(rows("memory", "page", "memory", "tables/memory/", "kind,server_state,created,retirements,rank_histogram,commands")...)
-	add(rows("memory", "strip", "memory", "tables/memory/shows[]/", "at,path,outcome,turn,rank,rank_without_boost,score")...)
+	add(rows("memory", "strip", "memory", "tables/memory/shows[]/", "at,path,outcome,turn,rank,rank_without_boost,score_without_boost")...)
 	add(widget{"day", "sessions", "day", "tables/day/sessions", set, ""})
 	add(rows("releases", "list", "releases", "tables/releases[]/", "version,first,last,n,flagship,project_shares,prompts_per_day,bank_size")...)
 	add(rows("releases", "settings", "releases", "tables/", "settings,note")...)
@@ -1326,7 +1326,7 @@ func TestBrowseWidgets(t *testing.T) {
 	if ts := pages["session"].Tables.Session.Turns; len(ts) != 1 || ts[0].Check != "declared" || ts[0].Searches != 1 || len(ts[0].Declared) != 1 || len(ts[0].Shows) != 2 {
 		t.Errorf("session page: %+v", ts)
 	}
-	if m := pages["memory"].Tables.Memory; len(m.Shows) != 1 || m.Shows[0].Score == nil || len(m.Retirements) != 1 || m.Kind != "world" {
+	if m := pages["memory"].Tables.Memory; len(m.Shows) != 1 || m.Shows[0].ScoreWithoutBoost == nil || len(m.Retirements) != 1 || m.Kind != "world" {
 		t.Errorf("memory page: %+v", m)
 	}
 	if len(pages["releases"].Tables.Releases) != 2 {
@@ -1485,5 +1485,153 @@ func TestTurnRailDuplicateN(t *testing.T) {
 	turns := x.run("sessions", q).Tables.Session.Turns
 	if len(turns) != 2 || len(turns[0].Shows) != 1 || turns[0].Turn != "t1" || len(turns[1].Shows) != 0 || turns[1].Turn != "" {
 		t.Errorf("turns = %+v, want the shows and the turn on the first prompt only", turns)
+	}
+}
+
+// TestNoZeroTimes: a time that was never set is null, never year 1: a memory
+// never used or shown, a page whose server answered nothing, a review row,
+// and the pooled row of no project.
+func TestNoZeroTimes(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{"m-never": {Shown: 12}, "imp": {Imported: feedback.Imported{Shown: 3}, Shown: 3}}})
+	x.server.fail("Memory", hindsight.ErrUnreachable)
+	q := x.query(7)
+	rows := map[string]MemoryRow{}
+	for _, m := range x.run("memories", q).Tables.Memories {
+		rows[m.ID] = m
+	}
+	if m := rows["m-never"]; m.LastUsed != nil || m.LastShown != nil {
+		t.Errorf("m-never = %+v, want null times", m)
+	}
+	q.ID = "m-never"
+	r := x.run("memories", q)
+	if r.Tables.Memory.Created != nil {
+		t.Errorf("created = %v with the server down, want null", r.Tables.Memory.Created)
+	}
+	rv := x.run("bank", x.query(7)).Tables.Review
+	if len(rv.NeverUsed) == 0 || rv.NeverUsed[0].LastShown != nil {
+		t.Errorf("review = %+v, want a never-used row with a null last_shown", rv.NeverUsed)
+	}
+	pooled := x.run("projects", x.query(7)).Tables.Pooled
+	if pooled.Totals.LastActivity != nil {
+		t.Errorf("pooled last activity %v with no project", pooled.Totals.LastActivity)
+	}
+	for _, v := range []Result{r, x.run("memories", x.query(7)), x.run("bank", x.query(7)), x.run("projects", x.query(7))} {
+		if strings.Contains(string(mustJSON(t, v)), "0001-01-01") {
+			t.Errorf("%s holds a zero time: %s", v.View, mustJSON(t, v))
+		}
+	}
+}
+
+// TestHiddenFromTheMomentOfHiding: a memory hidden a day ago is hidden for
+// --state, ahead of its other states; it is not yet in the review queue
+// (memory stale waits 7 days), which keeps its own counts.
+func TestHiddenFromTheMomentOfHiding(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{
+		"m-new":  {Shown: 20, Hidden: &feedback.Hidden{Since: ago(day)}}, // would also be never used
+		"m-old":  {Shown: 3, Hidden: &feedback.Hidden{Since: ago(10 * day)}},
+		"m-free": {Shown: 3},
+	}})
+	q := x.query(7)
+	q.State = "hidden"
+	r := x.run("memories", q)
+	if got := memoryIDs(r.Tables.Memories); !slices.Equal(got, []string{"m-new", "m-old"}) {
+		t.Errorf("--state hidden = %v", got)
+	}
+	if h := r.Metrics["stale.hidden"]; h.Value == nil || *h.Value != 1 || r.Metrics["stale.never_used"].Value == nil || *r.Metrics["stale.never_used"].Value != 0 {
+		t.Errorf("stale counts hidden %v never_used %v, want 1 and 0 (the queue waits 7 days)", h.Value, r.Metrics["stale.never_used"].Value)
+	}
+	q.State, q.ID = "", "m-new"
+	if st := x.run("memories", q).Tables.Memory.Row.State; st != "hidden" {
+		t.Errorf("page state %q, want hidden", st)
+	}
+}
+
+// TestSentIsOneDefinition: the overview's lately and the sessions view read
+// the same sent for the same session, from its documents.
+func TestSentIsOneDefinition(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.prompts("alpha", "s", fxNow.Add(-2*time.Hour), 1, nil)
+	x.tel(fxNow.Add(-5*time.Hour), telemetry.Retain{Document: "conversation:s-0", Items: 1, Status: "ok", MS: 1}, "other", "alpha")
+	x.tel(fxNow.Add(-4*time.Hour), telemetry.Retain{Document: "conversation:s-0#2", Items: 1, Status: "queued", MS: 1}, "other", "alpha")
+	x.tel(fxNow.Add(-3*time.Hour), telemetry.Retain{Document: "note:x", Items: 1, Status: "ok", MS: 1}, "s-0", "alpha") // the session's event, not its document
+	lately := x.run("overview", x.query(7)).Tables.Lately
+	sessions := x.run("sessions", x.query(7)).Tables.Sessions
+	if len(lately) != 1 || len(sessions) != 1 || lately[0].Sent != "queued" || sessions[0].Sent != "queued" {
+		t.Errorf("lately %+v, sessions %+v, want queued in both", lately, sessions)
+	}
+}
+
+// TestSortSessionsTies: equal activity times come ordered by id whatever the
+// input order.
+func TestSortSessionsTies(t *testing.T) {
+	same := fxNow
+	rows := []SessionRow{{ID: "c", Last: same}, {ID: "a", Last: same}, {ID: "z", Last: same.Add(time.Hour)}, {ID: "b", Last: same}}
+	sortSessions(rows)
+	if got := sessionIDs(rows); !slices.Equal(got, []string{"z", "a", "b", "c"}) {
+		t.Errorf("sorted = %v", got)
+	}
+}
+
+// TestRunKeyHoldsTheVersion: the same family and window asked under two
+// binary versions in one env are two runs, not one served twice.
+func TestRunKeyHoldsTheVersion(t *testing.T) {
+	x := releaseFx(t)
+	var a, b int64
+	err := withTx(context.Background(), x.source(), x.query(7), nil, func(e env) error {
+		fam := families.byID["recall.hit_rate"]
+		for v, into := range map[string]*int64{"0.1.16": &a, "0.1.17": &b} {
+			ve := e
+			ve.q.version = v
+			obs, _, err := ve.run(fam, e.q.Window) // the same memo
+			if err != nil {
+				return err
+			}
+			*into = obs["recall.hit_rate"].Den
+		}
+		return nil
+	})
+	if err != nil || a != 40 || b != 50 {
+		t.Errorf("dens %d %d (%v), want 40 and 50", a, b, err)
+	}
+}
+
+// TestQualityStepsServeSubsets: a quality id asked alone runs only its step;
+// a subset is served from an earlier full run (one run, not two); an id of a
+// skipped step is never invented.
+func TestQualityStepsServeSubsets(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.declaredTurn(hoursAgo(1), "s1", "declared", "used", "m1")
+	err := withTx(context.Background(), x.source(), x.query(7), nil, func(e env) error {
+		fam := families.byID["used.turn_rate"]
+		obs, _, err := e.runIDs(fam, e.q.Window, []string{"used.turn_rate"})
+		if err != nil {
+			return err
+		}
+		if _, ok := obs["used.rank"]; ok {
+			t.Error("a step nobody asked for was run")
+		}
+		if obs["used.turn_rate"].Den != 1 {
+			t.Errorf("used.turn_rate den %d", obs["used.turn_rate"].Den)
+		}
+		full, _, err := e.run(fam, e.q.Window)
+		if err != nil {
+			return err
+		}
+		if _, ok := full["used.rank"]; !ok {
+			t.Error("a full run lacks used.rank")
+		}
+		sub, _, err := e.runIDs(fam, e.q.Window, []string{"verdict.wrong_rate"})
+		if err != nil {
+			return err
+		}
+		if _, ok := sub["used.rank"]; !ok { // served from the full run
+			t.Error("the subset was recomputed instead of served from the full run")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

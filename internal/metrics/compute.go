@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/feedback"
@@ -37,17 +38,21 @@ type env struct {
 	srv    *serverData
 	server *ServerState
 	memo   *memo
+	// want, for a family that runs by steps, is the steps it is asked for.
+	// nil: every step.
+	want map[string]bool
 }
 
 // memo is what one view's transaction already computed, so that a view
 // and its verdict, which read many overlapping windows (a window, the one
 // before, the four 7-day baselines, the same again for the previous
 // window), run each family once per window: the index does not change
-// within the transaction, nor the server data or the clock. It assumes one
-// Query per env: of the query only the window may change between runs
-// (assess judges the last 7 days with the view's other fields), and the
-// key holds the window; an env must never be reused for another project,
-// path or machines, whose figures would be served from this memo.
+// within the transaction, nor the server data or the clock. The key holds
+// what a run depends on that a view varies: the family, the window, the
+// view's own window (figures as of now), the binary version (releases) and
+// the steps asked of a family that runs by steps. It assumes the rest of the
+// Query (project, path, machines) fixed for the env: an env must never be
+// reused for another of them, whose figures would be served from this memo.
 type memo struct {
 	runs      map[runKey]familyRun
 	backlog   *time.Duration
@@ -65,29 +70,100 @@ func newMemo() *memo { return &memo{runs: map[runKey]familyRun{}} }
 type runKey struct {
 	family                       string
 	since, until, qSince, qUntil int64
+	version, want                string // want: the steps asked of a family that runs by steps, "" for all
 }
 
 type familyRun struct {
-	obs map[string]Observation
-	met map[string]Metric
+	obs   map[string]Observation
+	met   map[string]Metric
+	steps map[string]bool // the steps run; nil: all
+}
+
+// stepsCover reports whether a run of have (nil: all steps) holds want.
+func stepsCover(have, want map[string]bool) bool {
+	if have == nil {
+		return true
+	}
+	for s := range want {
+		if !have[s] {
+			return false
+		}
+	}
+	return want != nil
 }
 
 // run is fam over w, computed once per transaction. Callers read the maps
 // and never write them.
 func (e env) run(fam *family, w Window) (map[string]Observation, map[string]Metric, error) {
+	return e.runIDs(fam, w, nil)
+}
+
+// runIDs is run for the ids asked of fam. A family that runs by steps
+// computes only the steps filling them (a run of a subset is served from a
+// full run already made); any other family computes all its ids. ids nil:
+// all.
+func (e env) runIDs(fam *family, w Window, ids []string) (map[string]Observation, map[string]Metric, error) {
 	if e.memo == nil {
-		return fam.f(e, w)
+		return fam.f(e.asking(fam, ids), w)
 	}
-	k := runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano()}
-	if r, ok := e.memo.runs[k]; ok {
-		return r.obs, r.met, nil
+	k := runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano(), e.q.version, ""}
+	e = e.asking(fam, ids)
+	// a run of at least the steps asked serves them: a full run any subset
+	for sk, r := range e.memo.runs {
+		if sk.family == k.family && sk.since == k.since && sk.until == k.until && sk.qSince == k.qSince && sk.qUntil == k.qUntil &&
+			sk.version == k.version && stepsCover(r.steps, e.want) {
+			return r.obs, r.met, nil
+		}
+	}
+	if e.want != nil {
+		k.want = wantKey(e.want)
 	}
 	obs, met, err := fam.f(e, w)
 	if err == nil {
-		e.memo.runs[k] = familyRun{obs, met}
+		e.memo.runs[k] = familyRun{obs, met, e.want}
 	}
 	return obs, met, err
 }
+
+// asking is e asking fam for ids: for a family that runs by steps and a
+// proper subset of its ids, e with want set; else e with none.
+func (e env) asking(fam *family, ids []string) env {
+	e.want = nil
+	if fam.steps == nil || ids == nil {
+		return e
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[fam.steps[id]] = true
+	}
+	if len(want) < len(wantAll(fam)) { // fewer steps than the family has
+		e.want = want
+	}
+	return e
+}
+
+// wantAll is the steps of a family that runs by steps.
+func wantAll(fam *family) map[string]bool {
+	all := map[string]bool{}
+	for _, s := range fam.steps {
+		all[s] = true
+	}
+	return all
+}
+
+// wantKey names a set of ids.
+func wantKey(want map[string]bool) string {
+	ids := make([]string, 0, len(want))
+	for id := range want {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return strings.Join(ids, ",")
+}
+
+// runs reports whether step is wanted: always when the family is asked for
+// every step.
+func (e env) runs(step string) bool { return e.want == nil || e.want[step] }
 
 // backlogAge is backlogAgeOf as of e.now, read once per transaction.
 func (e env) backlogAge() (time.Duration, error) {
@@ -112,9 +188,10 @@ type computeFunc func(e env, w Window) (map[string]Observation, map[string]Metri
 
 // family is one registered family: its ids and how to compute them.
 type family struct {
-	name string
-	ids  []string
-	f    computeFunc
+	name  string
+	ids   []string
+	f     computeFunc
+	steps map[string]string // an id's step, for a family whose f honours env.want
 }
 
 // registry maps each catalog id to the family that computes it.
@@ -126,6 +203,13 @@ var families = &registry{byID: map[string]*family{}}
 // register adds a family's ids to the registry; called from init() in each
 // family file. An id outside the catalog or registered twice panics.
 func register(name string, ids []string, f computeFunc) { families.register(name, ids, f) }
+
+// registerSteps is register for a family whose f computes only the steps
+// in env.want (see env.runs); stepOf names each id's step.
+func registerSteps(name string, ids []string, stepOf map[string]string, f computeFunc) {
+	families.register(name, ids, f)
+	families.byID[ids[0]].steps = stepOf
+}
 
 func (r *registry) register(name string, ids []string, f computeFunc) {
 	fam := &family{name: name, ids: slices.Clone(ids), f: f}
@@ -173,18 +257,22 @@ func (r *registry) compute(e env, w Window, ids []string) (map[string]Metric, er
 	}
 	for _, fam := range order {
 		defs := asked[fam]
-		obs, met, err := e.run(fam, w)
+		askIDs := make([]string, len(defs))
+		for i, d := range defs {
+			askIDs[i] = d.ID
+		}
+		obs, met, err := e.runIDs(fam, w, askIDs)
 		if err != nil {
 			return nil, fmt.Errorf("metrics: %s: %w", fam.name, err)
 		}
-		prevObs, prev, err := e.run(fam, w.Previous())
+		prevObs, prev, err := e.runIDs(fam, w.Previous(), askIDs)
 		if err != nil {
 			return nil, fmt.Errorf("metrics: %s, previous window: %w", fam.name, err)
 		}
 		var bases []map[string]Observation
 		if slices.ContainsFunc(defs, func(d Def) bool { return d.Relative }) {
 			for _, b := range w.Baselines() {
-				bo, _, err := e.run(fam, b)
+				bo, _, err := e.runIDs(fam, b, askIDs)
 				if err != nil {
 					return nil, fmt.Errorf("metrics: %s, baseline window: %w", fam.name, err)
 				}

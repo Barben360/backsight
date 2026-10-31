@@ -49,7 +49,7 @@ func sortProjects(rows []ProjectRow, key string) {
 				return int(b.Prompts - a.Prompts)
 			}
 		case "last_activity":
-			if c := b.LastActivity.Compare(a.LastActivity); c != 0 {
+			if c := cmpTimeDesc(a.LastActivity, b.LastActivity); c != 0 {
 				return c
 			}
 		}
@@ -83,7 +83,7 @@ func pooledRow(rows []ProjectRow) PooledRow {
 		p.Totals.PromptsWithMemory += r.PromptsWithMemory
 		p.Totals.UsedTurns += r.UsedTurns
 		p.Totals.ReportedWrong += r.ReportedWrong
-		if r.LastActivity.After(p.Totals.LastActivity) {
+		if r.LastActivity != nil && (p.Totals.LastActivity == nil || r.LastActivity.After(*p.Totals.LastActivity)) {
 			p.Totals.LastActivity = r.LastActivity
 		}
 		for i, pt := range r.Series {
@@ -143,8 +143,9 @@ func projectRows(e env, w Window) ([]ProjectRow, error) {
 		r.Prompts += s.Prompts
 		r.PromptsWithMemory += s.PromptsWithMemory
 		r.ReportedWrong += s.Wrong
-		if s.Last.After(r.LastActivity) {
-			r.LastActivity = s.Last
+		if r.LastActivity == nil || s.Last.After(*r.LastActivity) {
+			last := s.Last
+			r.LastActivity = &last
 		}
 	}
 	prompts, err := e.tx.QueryContext(e.ctx, `
@@ -290,9 +291,7 @@ func projectMemories(e env, id string) (top, never []ReviewRow, err error) {
 	row := func(mid, command string) ReviewRow {
 		m := l.Memories[mid]
 		r := ReviewRow{ID: mid, Project: id, Shown: int64(m.Shown), Command: command}
-		if !m.LastShown.IsZero() {
-			r.LastShown = m.LastShown.In(viewLoc(e))
-		}
+		r.LastShown = timeIn(m.LastShown, viewLoc(e))
 		return r
 	}
 	type used struct {

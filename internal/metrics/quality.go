@@ -24,7 +24,16 @@ var qualityIDs = []string{
 	"stale.never_used", "stale.hidden", "stale.reported",
 }
 
-func init() { register("quality", qualityIDs, quality) }
+// qualityStepOf names the step that fills each id: the family runs only the
+// steps a view asks for.
+var qualityStepOf = map[string]string{
+	"used.turn_rate": "turns", "declare.coverage": "turns", "used.rubber_stamp": "turns",
+	"used.share_confident": "shows", "used.rank": "shows", "used.by_path": "shows", "search.rescue_rate": "shows",
+	"verdict.wrong_rate": "verdicts",
+	"stale.never_used":   "stale", "stale.hidden": "stale", "stale.reported": "stale",
+}
+
+func init() { registerSteps("quality", qualityIDs, qualityStepOf, quality) }
 
 // tagUnreliable marks used.turn_rate while too few turns declare.
 const tagUnreliable = "unreliable"
@@ -77,15 +86,19 @@ func quality(e env, w Window) (map[string]Observation, map[string]Metric, error)
 		return found, err
 	}
 	for _, s := range []struct {
+		step  string
 		ids   []string
 		table string
 		fill  func(e env, w Window, obs map[string]Observation, met map[string]Metric) error
 	}{
-		{[]string{"used.turn_rate", "declare.coverage", "used.rubber_stamp"}, "shows", qualityTurns},
-		{[]string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate"}, "shows", qualityShows},
-		{[]string{"verdict.wrong_rate"}, "credits", qualityVerdicts},
-		{[]string{"stale.never_used", "stale.hidden", "stale.reported"}, "ledger", qualityStale},
+		{"turns", []string{"used.turn_rate", "declare.coverage", "used.rubber_stamp"}, "shows", qualityTurns},
+		{"shows", []string{"used.share_confident", "used.rank", "used.by_path", "search.rescue_rate"}, "shows", qualityShows},
+		{"verdicts", []string{"verdict.wrong_rate"}, "credits", qualityVerdicts},
+		{"stale", []string{"stale.never_used", "stale.hidden", "stale.reported"}, "ledger", qualityStale},
 	} {
+		if !e.runs(s.step) {
+			continue
+		}
 		found, err := hasRows(s.table)
 		if err != nil {
 			return nil, nil, err

@@ -101,7 +101,7 @@ func sortMemories(rows []MemoryRow, key string) {
 				return cmpFloatDesc(*a.Rate, *b.Rate)
 			}
 		case "last_shown":
-			if c := b.LastShown.Compare(a.LastShown); c != 0 {
+			if c := cmpTimeDesc(a.LastShown, b.LastShown); c != 0 {
 				return c
 			}
 		}
@@ -216,7 +216,7 @@ func memoryRows(e env) ([]MemoryRow, error) {
 	for _, c := range []struct {
 		ids   []string
 		state string
-	}{{lists.NeverUsed, stateNeverUsed}, {lists.Reported, stateWrong}, {lists.Hidden, stateHidden}} {
+	}{{lists.NeverUsed, stateNeverUsed}, {lists.Reported, stateWrong}} {
 		for _, id := range c.ids {
 			state[id] = c.state
 		}
@@ -227,7 +227,11 @@ func memoryRows(e env) ([]MemoryRow, error) {
 		if m.RestoreOnly() {
 			continue
 		}
-		out = append(out, memoryRow(e, id, m, "", state[id], p))
+		st := state[id]
+		if m.Hidden != nil { // hidden from the moment of hiding; the review queue's wait is its own
+			st = stateHidden
+		}
+		out = append(out, memoryRow(e, id, m, "", st, p))
 	}
 	return out, nil
 }
@@ -240,12 +244,7 @@ func memoryRow(e env, id string, m feedback.Entry, project, state string, p feed
 	if n := d.Credits + d.Misses; n > 0 {
 		r.Rate = ptr(d.Credits / n)
 	}
-	if !m.LastShown.IsZero() {
-		r.LastShown = m.LastShown.In(viewLoc(e))
-	}
-	if !m.LastCredited.IsZero() {
-		r.LastUsed = m.LastCredited.In(viewLoc(e))
-	}
+	r.LastShown, r.LastUsed = timeIn(m.LastShown, viewLoc(e)), timeIn(m.LastCredited, viewLoc(e))
 	return r
 }
 
@@ -276,26 +275,21 @@ func memoryPage(ctx context.Context, s Source, q Query, id string) (Result, erro
 		if err != nil {
 			return err
 		}
-		projects, err := e.memoryProjects()
-		if err != nil {
-			return err
-		}
+		entry := l.Memories[full]
 		state := ""
-		for _, c := range []struct {
-			ids   []string
-			state string
-		}{{lists.NeverUsed, stateNeverUsed}, {lists.Reported, stateWrong}, {lists.Hidden, stateHidden}} {
-			if slices.Contains(c.ids, full) {
-				state = c.state
-			}
+		switch {
+		case entry.Hidden != nil:
+			state = stateHidden
+		case slices.Contains(lists.Reported, full):
+			state = stateWrong
+		case slices.Contains(lists.NeverUsed, full):
+			state = stateNeverUsed
 		}
-		page.Row = memoryRow(e, full, l.Memories[full], projects[full], state, ledgerParams(e.src.Config))
+		page.Row = memoryRow(e, full, entry, memoryProject(e.tx, full), state, ledgerParams(e.src.Config))
 		if serverReason(e, key) == "" {
 			m := e.srv.Memory
 			page.Kind, page.ServerState = m.Type, m.State
-			if t := hindsight.ServerTime(m.MentionedAt); !t.IsZero() {
-				page.Created = t.In(viewLoc(e))
-			}
+			page.Created = timeIn(hindsight.ServerTime(m.MentionedAt), viewLoc(e))
 			if e.q.Text {
 				r.Text = &MemoryText{ID: full, Text: m.Text}
 			}
@@ -359,7 +353,7 @@ ORDER BY s.ts DESC, s.source_file DESC, s."offset" DESC, s.pos DESC LIMIT ? OFFS
 			m.RankWithoutBoost = ptr(rankNoBoost.Int64)
 		}
 		if score.Valid {
-			m.Score = ptr(score.Float64)
+			m.ScoreWithoutBoost = ptr(score.Float64)
 		}
 		out = append(out, m)
 	}

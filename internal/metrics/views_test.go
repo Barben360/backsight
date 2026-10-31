@@ -685,8 +685,8 @@ func TestLately(t *testing.T) {
 	x.credit(ago(5*time.Hour-time.Minute), "w", "", "alpha", "used", "m-c")
 	x.tel(ago(5*time.Hour-2*time.Minute), telemetry.Prompt{N: 1, Decision: "recall", Injected: 1, Chars: 700}, "w", "alpha")
 	x.tel(ago(5*time.Hour-3*time.Minute), telemetry.Briefing{IDs: []string{"b"}, Chars: 300}, "w", "alpha")
-	x.tel(ago(4*time.Hour), telemetry.Retain{Document: "doc-w", Status: "queued"}, "w", "alpha")
-	x.tel(ago(3*time.Hour), telemetry.Retain{Document: "doc-w", Status: "ok"}, "w", "alpha")
+	x.tel(ago(4*time.Hour), telemetry.Retain{Document: "conversation:w", Status: "queued"}, "w", "alpha")
+	x.tel(ago(3*time.Hour), telemetry.Retain{Document: "conversation:w", Status: "ok"}, "w", "alpha")
 	got := x.run("overview", x.query(7)).Tables.Lately
 	var ids []string
 	for _, s := range got {
