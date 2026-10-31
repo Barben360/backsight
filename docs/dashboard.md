@@ -60,7 +60,7 @@ The verdict has four axes, each in one of five states:
 
 Flowing is judged from day 1: a failed send is never hidden behind "too few".
 
-A document's status is the last one logged for it. A note (a subagent's report, a stored fact) is logged `queued` when it enters the notes outbox, then `ok`, `retry` or `quarantined` by the flush that sends it. Earlier versions logged nothing after `queued`, so for that history the outbox decides: a note logged `queued` with nothing after it waits only while it was queued at or after the outbox's oldest note; one queued before has left the outbox and counts as sent (in Sessions sent, Sends by result and Waiting on this PC). With the outbox empty, no such note waits.
+A document's status is the last one logged for it. A subagent's report is logged `queued` when it enters the notes outbox, then `ok`, `retry` or `quarantined` by the flush that sends it. Earlier versions logged nothing after `queued`, so for that history the outbox decides: a note logged `queued` with nothing after it waits only while it was queued at or after the outbox's oldest note; one queued before has left the outbox and counts as sent (in Sessions sent, Sends by result and Waiting on this PC). With the outbox empty, no such note waits.
 
 ### Attention and doctor
 
