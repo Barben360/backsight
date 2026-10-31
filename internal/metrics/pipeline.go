@@ -322,7 +322,7 @@ WHERE document IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause,
 		}
 		d := docs[doc]
 		if d == nil {
-			d = &docEvent{status: last}
+			d = &docEvent{status: orUnknown(last)} // a status never logged is named, never ""
 			docs[doc] = d
 		}
 		d.lastTS = max(d.lastTS, ts)

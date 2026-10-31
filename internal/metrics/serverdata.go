@@ -62,12 +62,17 @@ var errNoDoctor = errors.New("no doctor run")
 // error, read as a failed call).
 var errUnknownRead = errors.New("unknown server read")
 
+// readTimeout bounds the server read of key: ServerTimeout. Tests replace
+// it to make one read short.
+var readTimeout = func(string) time.Duration { return ServerTimeout }
+
 // fetchParallel runs every call at once, each under its own context
-// bounded by timeout, and returns the errors of those that failed, by key.
+// bounded by timeout(key), and returns the errors of those that failed, by
+// key.
 // A call still running when its context ends is abandoned with that
 // context's error (a ServerReader that ignores its context cannot hold the
 // view): its results must not be used after fetchParallel returns.
-func fetchParallel(ctx context.Context, timeout time.Duration, calls map[string]func(context.Context) error) map[string]error {
+func fetchParallel(ctx context.Context, timeout func(key string) time.Duration, calls map[string]func(context.Context) error) map[string]error {
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -77,7 +82,7 @@ func fetchParallel(ctx context.Context, timeout time.Duration, calls map[string]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cctx, cancel := context.WithTimeout(ctx, timeout)
+			cctx, cancel := context.WithTimeout(ctx, timeout(key))
 			defer cancel()
 			done := make(chan error, 1) // an abandoned call still sends, to no one
 			go func() { done <- call(cctx) }()
@@ -266,7 +271,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 			}
 		}
 	}
-	for key, err := range fetchParallel(ctx, ServerTimeout, calls) {
+	for key, err := range fetchParallel(ctx, readTimeout, calls) {
 		d.Err[key] = err
 	}
 	for key := range calls {

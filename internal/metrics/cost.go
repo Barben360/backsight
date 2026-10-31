@@ -44,11 +44,12 @@ const (
 	minForP95 = 100
 )
 
-// sessionWindow is how far extraction.per_session looks back, always.
 // tagPartial marks an extraction figure whose per-operation split lacks an
 // operation the server could not be asked for.
 const tagPartial = "partial"
 
+// sessionWindow is how far extraction.per_session looks back from now,
+// always.
 const sessionWindow = 28 * day
 
 // histStep and histTop are the context histogram's bucket width and the
@@ -334,7 +335,10 @@ func llmWidth(bs []hindsight.LLMBucket) time.Duration {
 // inWindow sums the buckets that overlap [since, until), in total and by
 // bucket of buckets (as wide as the response's trunc says), and counts the distinct local days they cover. A
 // bucket straddling the start is kept whole, as extractionOver keeps whole
-// UTC days, so the dashboard and `backsight stats` agree on one window.
+// UTC days, so the dashboard and `backsight stats` agree on one window, and
+// counts in the first local day (as bank.growth's), so the days sum to the
+// total. A bucket is placed by its start instant: west of UTC a UTC day's
+// bucket starts on the previous local day.
 func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
 	byDay = make([]tokens, len(buckets))
 	width := llmWidth(bs)
@@ -346,6 +350,9 @@ func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Locati
 		total.add(b)
 		local := b.Time.In(loc)
 		seen[local.Format("2006-01-02")] = true
+		if local.Before(since) { // a bucket straddling the start counts in the first day
+			local = since.In(loc)
+		}
 		if i := bucketIndex(buckets, local); i >= 0 {
 			byDay[i].add(b)
 		}
@@ -460,12 +467,19 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 
 func ptr[T any](v T) *T { return &v }
 
-// costPerSession fills extraction.per_session: the extraction tokens of
-// the last 28 days (the 30-day stats, whatever the view's window) over the
-// documents whose last status is ok and which were sent in those days.
+// costPerSession fills extraction.per_session, as of now: the extraction
+// tokens of the last 28 days before now (the server's 30-day stats count
+// back from now, so they serve no other span) over this PC's session
+// documents whose last status is ok and which were sent in those same days.
+// The tokens are every PC's on the server, the sessions this PC's. A
+// window that is not the view's own reads no_events (no previous value).
 func costPerSession(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	const id = "extraction.per_session"
-	since, until := w.Until.Add(-sessionWindow), w.Until
+	if !isCurrent(e, w) {
+		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, Metric{}
+		return nil
+	}
+	since, until := e.now.Add(-sessionWindow), e.now
 	bs, reason := llmRead(e, llm30dKey)
 	if reason != "" {
 		obs[id], met[id] = Observation{Absent: true, Reason: reason}, Metric{}
@@ -473,7 +487,7 @@ func costPerSession(e env, w Window, obs map[string]Observation, met map[string]
 	}
 	var sent int64
 	err := e.tx.QueryRowContext(e.ctx,
-		`SELECT COUNT(*) FROM document_status WHERE status = 'ok' AND ts >= ? AND ts < ?`,
+		`SELECT COUNT(*) FROM document_status WHERE status = 'ok' AND document LIKE 'conversation:%' AND ts >= ? AND ts < ?`,
 		since.UnixMilli(), until.UnixMilli()).Scan(&sent)
 	if err != nil && err != sql.ErrNoRows {
 		return err

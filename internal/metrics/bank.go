@@ -108,6 +108,10 @@ func bankSize(e env, _ Window, obs map[string]Observation, met map[string]Metric
 		return
 	}
 	st := e.srv.Stats
+	if !st.Present["nodes_by_fact_type"] { // no count is not 0 memories
+		obs[id], met[id] = Observation{Absent: true, Reason: ReasonServerUnsupported}, Metric{}
+		return
+	}
 	var total int64
 	for _, n := range st.NodesByFactType {
 		total += int64(n)
@@ -204,6 +208,10 @@ func bankByProject(e env, _ Window, obs map[string]Observation, met map[string]M
 func bankConsolidation(e env, w Window, obs map[string]Observation, met map[string]Metric) {
 	const id = "bank.consolidation"
 	st := e.srv.Stats
+	if !st.Present["pending_consolidation"] || !st.Present["failed_consolidation"] { // absent is not healthy
+		obs[id], met[id] = Observation{Absent: true, Reason: ReasonServerUnsupported}, Metric{}
+		return
+	}
 	extra := map[string]any{"pending": int64(st.PendingConsolidation), "failed": int64(st.FailedConsolidation),
 		"last_consolidated_at": nil}
 	if !st.LastConsolidatedAt.IsZero() {

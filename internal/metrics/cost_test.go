@@ -321,6 +321,35 @@ func TestExtractionTokensAndCost(t *testing.T) {
 	}
 }
 
+// TestExtractionSeriesSumsToTheValue: the 10-23 UTC day straddles the
+// 7-day window's start (10-23 12:00 Paris): kept whole in the value (200 +
+// 400 = 600) and counted in the first day, so the days sum to 600 too.
+func TestExtractionSeriesSumsToTheValue(t *testing.T) {
+	x := costFx(t)
+	pricesSet(x)
+	x.server.set(func(d *fakeData) {
+		d.LLM = map[string][]hindsight.LLMBucket{"": {
+			{Time: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC), Input: 200},
+			{Time: time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC), Input: 400},
+		}}
+	})
+	m := costOf(x, x.query(7))
+	for _, id := range []string{"extraction.tokens", "extraction.cost"} {
+		var sum float64
+		for _, p := range m[id].Series {
+			if p.Value != nil {
+				sum += *p.Value
+			}
+		}
+		if math.Abs(sum-val(m[id])) > 1e-9 || val(m[id]) == 0 {
+			t.Errorf("%s: series sums to %v, value %v", id, sum, val(m[id]))
+		}
+	}
+	if first := m["extraction.tokens"].Series[0]; first.Day != "2026-10-23" || first.Value == nil || *first.Value != 200 {
+		t.Errorf("first day = %+v, want 2026-10-23 with the straddling 200", first)
+	}
+}
+
 // TestExtractionPriceNotSet: no price and a model without a price: the
 // cost is null with price_set false, the tokens are still there.
 func TestExtractionPriceNotSet(t *testing.T) {
@@ -385,9 +414,12 @@ func retained(x *fx, ts time.Time, doc, status string) {
 // (input 500,000, of which cached 100,000, + output 200,000) and 10-10 500,000
 // (input 300,000, output 200,000), both in the last 28 days (since
 // 10-02T11:00Z); 10-01 300,000, day 29, out. 1,200,000 over the 4
-// documents last ok in the last 28 days = 300,000. Not counted: a failed
-// document, a document ok then failed (last status failed), a document ok
-// 40 days ago. The same under --days 7 (the 30-day read serves it).
+// session documents last ok in the last 28 days = 300,000. Not counted: a
+// failed document, a document ok then failed (last status failed), a
+// document ok 40 days ago, a note sent ok (not a session). The same under
+// --days 7 (the 30-day read serves it), and for a window ending 10 days
+// ago: tokens and sessions both span the 28 days before now, which is all
+// the server's 30-day read can serve.
 func TestExtractionPerSession(t *testing.T) {
 	x := costFx(t)
 	x.server.set(func(d *fakeData) {
@@ -398,16 +430,21 @@ func TestExtractionPerSession(t *testing.T) {
 		}}
 	})
 	for i := range 4 {
-		retained(x, ago(time.Duration(i+1)*24*time.Hour), fmt.Sprintf("ok%d", i), "ok")
+		retained(x, ago(time.Duration(i+1)*24*time.Hour), fmt.Sprintf("conversation:ok%d", i), "ok")
 	}
-	retained(x, ago(2*time.Hour), "failed", "failed")
-	retained(x, ago(10*24*time.Hour), "flip", "ok")
-	retained(x, ago(9*24*time.Hour), "flip", "failed")
-	retained(x, ago(40*24*time.Hour), "old", "ok")
-	for _, days := range []int{7, 28} {
-		m := costOf(x, x.query(days))["extraction.per_session"]
+	retained(x, ago(2*time.Hour), "conversation:failed", "failed")
+	retained(x, ago(10*24*time.Hour), "conversation:flip", "ok")
+	retained(x, ago(9*24*time.Hour), "conversation:flip", "failed")
+	retained(x, ago(40*24*time.Hour), "conversation:old", "ok")
+	retained(x, ago(3*24*time.Hour), "subagent:s:agent-1", "ok")
+	old, err := NewWindow(fxNow, 0, fxNow.Add(-17*day), fxNow.Add(-10*day), fxParis, "Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, q := range map[string]Query{"--days 7": x.query(7), "--days 28": x.query(28), "ending 10 days ago": {Window: old, Machines: "this"}} {
+		m := costOf(x, q)["extraction.per_session"]
 		if val(m) != 300_000 || m.Extra["sessions_sent"] != int64(4) || m.Extra["window_days"] != 28 {
-			t.Errorf("--days %d: value %v extra %v, want 300,000, 4 sessions, 28 days", days, val(m), m.Extra)
+			t.Errorf("%s: value %v extra %v, want 300,000, 4 sessions, 28 days", name, val(m), m.Extra)
 		}
 	}
 	if !slices.Contains(x.server.called(), "LLMStats?period=30d") {

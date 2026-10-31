@@ -365,6 +365,29 @@ func TestChurnWithoutJournalRows(t *testing.T) {
 	wantNoData(t, "bank.churn", bankOf(x, x.query(7))["bank.churn"], ReasonFeedbackOff)
 }
 
+// TestChurnProjectFound: a project whose memories were never retired
+// reads no_events, not 0, while another project's were; a project whose
+// only retirement is before the window reads 0 (it has a history).
+func TestChurnProjectFound(t *testing.T) {
+	x := newFx(t, fxNow)
+	at := time.Date(2026, 10, 27, 10, 0, 0, 0, fxParis)
+	x.turnEvent(at.Add(-time.Hour), "sa", "alpha")
+	x.turnEvent(at.Add(-20*day), "sg", "gamma")
+	x.journal(feedback.Event{TS: at, Kind: "hide", Session: "sa", IDs: []string{"ma"}})
+	x.journal(feedback.Event{TS: at.Add(-20 * day), Kind: "forget", Session: "sg", IDs: []string{"mg"}})
+	q := x.query(7)
+	q.Project = "beta"
+	wantNoData(t, "beta churn", bankOf(x, q)["bank.churn"], ReasonNoEvents)
+	q.Project = "gamma"
+	if m := bankOf(x, q)["bank.churn"]; m.Status != StatusOK || m.Value == nil || *m.Value != 0 {
+		t.Errorf("gamma churn = %s %v, want ok 0", m.Status, m.Value)
+	}
+	q.Project = "alpha"
+	if m := bankOf(x, q)["bank.churn"]; val(m) != 1 {
+		t.Errorf("alpha churn = %v, want 1", m.Value)
+	}
+}
+
 func (x *fx) store(at time.Time, result, kind, project string) {
 	x.t.Helper()
 	x.tel(at, telemetry.Store{Result: result, Kind: kind}, "s1", project)
@@ -417,7 +440,7 @@ func TestNotesStoredWithoutEvents(t *testing.T) {
 // the project tags never answer: size is computed, growth reads
 // server_unsupported, by_project server_down, and the server is OK.
 func TestOneEndpointMissingOrSlow(t *testing.T) {
-	lowerTimeouts(t, 10*time.Millisecond, time.Minute) // the fake blocks until the call's deadline
+	shortRead(t, "tags") // the fake blocks until the call's deadline
 	x := newFx(t, fxNow)
 	x.need = BankServerNeeds()
 	x.server.set(func(d *fakeData) {
@@ -531,6 +554,31 @@ func TestUnrequestedReadsAreNotZero(t *testing.T) {
 	}
 	ms = run([]string{"stats", "tags"}, "") // no series: unsupported, not no_events
 	wantNoData(t, "bank.growth", ms["bank.growth"], ReasonServerUnsupported)
+}
+
+// TestAbsentStatsFieldsAreNotZero: a /stats body without the fact-type
+// counts or the consolidation counts reads server_unsupported for
+// bank.size and bank.consolidation, never 0 memories or a healthy 0; with
+// them (zeros included) both are computed.
+func TestAbsentStatsFieldsAreNotZero(t *testing.T) {
+	run := func(body string) map[string]Metric {
+		x := newFx(t, fxNow)
+		x.server.set(func(d *fakeData) { d.StatsRaw = body })
+		return bankOf(x, x.query(7))
+	}
+	ms := run(`{"bank_id": "b", "total_nodes": 7, "nodes_by_fact_type": null}`)
+	wantNoData(t, "bank.size", ms["bank.size"], ReasonServerUnsupported)
+	wantNoData(t, "bank.consolidation", ms["bank.consolidation"], ReasonServerUnsupported)
+	ms = run(`{"nodes_by_fact_type": {"world": 3}, "pending_consolidation": 2}`)
+	if val(ms["bank.size"]) != 3 {
+		t.Errorf("bank.size = %v, want 3", ms["bank.size"].Value)
+	}
+	wantNoData(t, "bank.consolidation without failed", ms["bank.consolidation"], ReasonServerUnsupported)
+	ms = run(`{"nodes_by_fact_type": {}, "pending_consolidation": 0, "failed_consolidation": 0}`)
+	if ms["bank.size"].Status != StatusOK || val(ms["bank.size"]) != 0 || ms["bank.consolidation"].Status != StatusOK || val(ms["bank.consolidation"]) != 0 {
+		t.Errorf("zeros sent: size %s %v, consolidation %s %v, want both ok 0", ms["bank.size"].Status, ms["bank.size"].Value,
+			ms["bank.consolidation"].Status, ms["bank.consolidation"].Value)
+	}
 }
 
 // TestSnapshotMetricsSayNoHistory: the server's figures carry the snapshot

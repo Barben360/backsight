@@ -2,7 +2,9 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -255,6 +257,33 @@ func TestRetainOutcomesP95OkOnly(t *testing.T) {
 	m = pipeOf(few, few.query(7))["retain.outcomes"]
 	if _, ok := pf(t, m, "p95_ms"); ok {
 		t.Errorf("p95_ms with 99 ok sends is not null")
+	}
+}
+
+// TestOutcomesNameAMissingStatus: a send row without a status (the index
+// requires one; a row written by hand has none) counts under unknown, never
+// under an unnamed "" key, in the total and the day.
+func TestOutcomesNameAMissingStatus(t *testing.T) {
+	x := pipeFx(t)
+	x.retained(ago(time.Hour), "d1", "ok", 100)
+	x.source() // the index, built
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(x.dirs.IndexDir(), index.FileName)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`INSERT INTO tel_retain(source_file, "offset", ts, document, status) VALUES ('hand', 0, ?, 'd2', NULL)`,
+		ago(2*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	m := pipeOf(x, x.query(7))["retain.outcomes"]
+	by, _ := m.Extra["by_status"].(map[string]int64)
+	if _, blank := by[""]; blank || by["unknown"] != 1 || by["ok"] != 1 {
+		t.Errorf("by_status = %v, want ok 1, unknown 1, no blank key", by)
+	}
+	last := m.Series[len(m.Series)-1]
+	if _, blank := last.Parts[""]; blank || last.Parts["unknown"] != 1 {
+		t.Errorf("today's parts = %v, want unknown 1", last.Parts)
 	}
 }
 

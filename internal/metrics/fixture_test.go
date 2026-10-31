@@ -263,10 +263,21 @@ func lowerTimeouts(t *testing.T, server, doctor time.Duration) {
 	t.Cleanup(func() { ServerTimeout, doctorTimeout = oldS, oldD })
 }
 
+// shortRead gives the server read of key a 10 ms timeout and the others a
+// minute, for the test: only the read meant to time out does, however slow
+// the runner.
+func shortRead(t *testing.T, key string) {
+	t.Helper()
+	old := readTimeout
+	readTimeout = shortFor(key)
+	t.Cleanup(func() { readTimeout = old })
+}
+
 // fakeData is what the fake server answers, in the client's types.
 type fakeData struct {
 	Version  hindsight.Version
 	Stats    hindsight.BankStats
+	StatsRaw string // when set, the /stats body as is (Stats ignored)
 	Memories map[string]hindsight.MemoryDetail
 	Tags     []hindsight.TagCount // every tag of the bank; ProjectTags keeps "project:"
 	Series   hindsight.Timeseries
@@ -417,6 +428,10 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 	case "Version":
 		body = d.Version
 	case "BankStats":
+		if d.StatsRaw != "" {
+			_, _ = w.Write([]byte(d.StatsRaw))
+			return
+		}
 		body = d.Stats
 	case "Memory":
 		m, ok := d.Memories[strings.TrimPrefix(p, bp+"/memories/")]

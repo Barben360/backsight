@@ -230,7 +230,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "server", Source: "server", Dev: true, Family: "cost", Series: "none", Command: "backsight stats cost --dev",
 		Extra:      []string{"sessions_sent", "window_days"},
 		Question:   "How much does turning one session into memories cost?",
-		Definition: "Extraction tokens divided by the sessions sent successfully, over a window of at least 28 days.",
+		Definition: "Extraction tokens of the last 28 days divided by the sessions sent successfully in those days, as of now whatever the window. The tokens are every PC's on the server; the sessions are this PC's, so on a shared server the figure is too high.",
 		Action:     "A high value means sessions are costly to extract; look at which projects are sent.",
 	},
 	{
@@ -294,7 +294,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily", Command: "backsight stats pipeline",
 		Extra:      []string{"by_status", "p95_ms"},
 		Question:   "How did each day's sends end?",
-		Definition: "Per day, documents by their last status, a queued note that left the notes outbox counted as sent. The duration (slowest 1 in 20) counts successful sends only.",
+		Definition: "Per day, documents by their last status, a queued note that left the notes outbox counted as sent and a send logged without a status as unknown. The duration (slowest 1 in 20) counts successful sends only.",
 		Action:     "Days with many failures show when sending broke.",
 	},
 	{

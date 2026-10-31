@@ -63,7 +63,7 @@ func fixedStatsFixture(t *testing.T) {
 		telemetry.Credit{Verdict: "used", IDs: 1, OK: true},
 		telemetry.CreditCheck{Outcome: "declared"},
 		telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1},
-		telemetry.Retain{Document: "d1", Items: 2, Status: "ok", MS: 300},
+		telemetry.Retain{Document: "conversation:d1", Items: 2, Status: "ok", MS: 300},
 	} {
 		b.WriteString(telLineAt(t, at(30-i), e))
 	}

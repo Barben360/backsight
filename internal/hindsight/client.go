@@ -237,6 +237,10 @@ type BankStats struct {
 	TotalObservations  int            `json:"total_observations"`
 	OperationsByStatus map[string]int `json:"operations_by_status"`
 	LinksByLinkType    map[string]int `json:"links_by_link_type"`
+
+	// Present names the fields the response carried, not null: a field it
+	// lacks decodes to 0, which is not the server saying 0.
+	Present map[string]bool `json:"-"`
 }
 
 // UnmarshalJSON reads the two times with serverTime: the server sends them
@@ -253,6 +257,16 @@ func (s *BankStats) UnmarshalJSON(b []byte) error {
 	}
 	s.LastConsolidatedAt = serverTime(aux.LastConsolidatedAt)
 	s.LastMemoryWriteAt = serverTime(aux.LastMemoryWriteAt)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return err
+	}
+	s.Present = map[string]bool{}
+	for k, v := range fields {
+		if string(bytes.TrimSpace(v)) != "null" {
+			s.Present[k] = true
+		}
+	}
 	return nil
 }
 

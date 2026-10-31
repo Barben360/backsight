@@ -306,7 +306,7 @@ func TestFixtureMetrics(t *testing.T) {
 		t.Errorf("recall.hit_rate (no family) = %s %s, want no_data no_events", hr.Status, hr.Reason)
 	}
 
-	lowerTimeouts(t, 10*time.Millisecond, time.Minute)
+	shortRead(t, "stats")
 	x.server.block("BankStats")
 	if bs := x.metrics([]string{"bank.size"}, x.query(28))["bank.size"]; bs.Status != StatusNoData || bs.Reason != ReasonServerDown {
 		t.Errorf("stats blocked: bank.size %s %s, want no_data server_down", bs.Status, bs.Reason)

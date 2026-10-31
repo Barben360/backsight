@@ -480,7 +480,7 @@ func TestLLMReadOnceOverSevenDays(t *testing.T) {
 	}
 	x := costFx(t)
 	extractionServer(x)
-	x.retained(ago(2*day), "d1", "ok", 100)
+	x.retained(ago(2*day), "conversation:d1", "ok", 100)
 	r := x.run("cost", x.query(30))
 	if n, p := allOps(x); n != 1 || p[0] != "30d" {
 		t.Errorf("30 days: %d reads of all operations %v, want one 30d", n, p)

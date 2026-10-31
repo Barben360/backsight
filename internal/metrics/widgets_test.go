@@ -102,7 +102,7 @@ func fullFx(t *testing.T) *fx {
 		}
 		x.tel(wk.end.Add(-2*time.Hour), telemetry.Credit{Verdict: "used", IDs: 2, OK: true}, wk.tag+"-turn-0", "alpha")
 		for i := range 6 {
-			x.retained(wk.end.Add(-time.Duration(i+2)*time.Hour), fmt.Sprintf("%s-doc%d", wk.tag, i), "ok", 800+100*i)
+			x.retained(wk.end.Add(-time.Duration(i+2)*time.Hour), fmt.Sprintf("conversation:%s-doc%d", wk.tag, i), "ok", 800+100*i)
 		}
 	}
 	x.retained(ago(3*time.Hour), "c-doc-failed", "failed", 0)

@@ -741,7 +741,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats"):
-			_, _ = w.Write([]byte(`{"total_nodes":0,"pending_operations":0,"pending_consolidation":0}`))
+			_, _ = w.Write([]byte(`{"total_nodes":0,"nodes_by_fact_type":{},"pending_operations":0,"pending_consolidation":0,"failed_consolidation":0}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract") && extractFails.Load():
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte(`{"detail":"provider said: invalid api key fakellmkey"}`))

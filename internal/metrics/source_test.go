@@ -53,7 +53,7 @@ func TestFetchParallelOverlaps(t *testing.T) {
 			return ctx.Err()
 		}
 	}
-	errs := fetchParallel(guard, time.Hour, map[string]func(context.Context) error{"a": barrier, "b": barrier, "c": barrier})
+	errs := fetchParallel(guard, within(time.Hour), map[string]func(context.Context) error{"a": barrier, "b": barrier, "c": barrier})
 	if guard.Err() != nil {
 		t.Fatal("the guard context ended: the calls did not run at once")
 	}
@@ -65,7 +65,7 @@ func TestFetchParallelOverlaps(t *testing.T) {
 	// timeout; the others succeed.
 	ok := func(context.Context) error { return nil }
 	blocking := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
-	errs = fetchParallel(guard, 10*time.Millisecond, map[string]func(context.Context) error{
+	errs = fetchParallel(guard, shortFor("slow"), map[string]func(context.Context) error{
 		"a": ok, "b": ok, "c": ok, "slow": blocking})
 	if guard.Err() != nil {
 		t.Fatal("the guard context ended: the blocking call was not cut at its timeout")
@@ -78,7 +78,7 @@ func TestFetchParallelOverlaps(t *testing.T) {
 	hang := make(chan struct{})
 	defer close(hang)
 	deaf := func(context.Context) error { <-hang; return nil }
-	errs = fetchParallel(guard, 10*time.Millisecond, map[string]func(context.Context) error{"a": ok, "deaf": deaf})
+	errs = fetchParallel(guard, shortFor("deaf"), map[string]func(context.Context) error{"a": ok, "deaf": deaf})
 	if guard.Err() != nil {
 		t.Fatal("the guard context ended: a call ignoring its context held fetchParallel")
 	}
@@ -383,11 +383,29 @@ func (s deafServer) ProjectTags(context.Context) ([]hindsight.TagCount, error) {
 	return []hindsight.TagCount{{Tag: "project:alpha", Count: 1}}, nil
 }
 
+// within is a read timeout of d for every key.
+func within(d time.Duration) func(string) time.Duration {
+	return func(string) time.Duration { return d }
+}
+
+// shortFor is a read timeout of 10 ms for key, a minute for the others:
+// only the read meant to time out does, however slow the runner.
+func shortFor(key string) func(string) time.Duration {
+	return func(k string) time.Duration {
+		if k == key {
+			return 10 * time.Millisecond
+		}
+		return time.Minute
+	}
+}
+
 // TestLoadServerAbandonsADeafRead: a ServerReader that ignores its
 // context cannot hold the view: its read times out, the others are kept,
-// and its late answer is dropped.
+// and its late answer is dropped. Only the deaf read has a short timeout
+// (it blocks until the test releases it, so it ends by its timeout); the
+// tags read has a minute, however slow the runner.
 func TestLoadServerAbandonsADeafRead(t *testing.T) {
-	lowerTimeouts(t, 10*time.Millisecond, time.Minute)
+	shortRead(t, "stats")
 	x := newFx(t, fxNow)
 	src := x.source()
 	deaf := deafServer{fakeServer: x.server, hang: make(chan struct{}), returned: make(chan struct{})}
