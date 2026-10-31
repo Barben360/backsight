@@ -62,9 +62,22 @@ func startDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, fi
 func startDashboardOut(t *testing.T, args ...string) (base string, d paths.Dirs, first string, stderr, out *syncBuf, stop func() int) {
 	t.Helper()
 	viewsFixture(t)
-	if code, _, errOut := run(t, "stats", "overview"); code != 0 { // the index, built: pages answer 200
+	buildIndex(t)
+	return serveDashboard(t, args...)
+}
+
+// buildIndex builds the metrics index, so that pages answer 200 at once.
+func buildIndex(t *testing.T) {
+	t.Helper()
+	if code, _, errOut := run(t, "stats", "overview"); code != 0 {
 		t.Fatalf("stats overview: exit %d: %s", code, errOut)
 	}
+}
+
+// serveDashboard is startDashboardOut on the machine as it stands: a
+// fixture already set up, the index built or not.
+func serveDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, first string, stderr, out *syncBuf, stop func() int) {
+	t.Helper()
 	d, _, err := machine()
 	if err != nil {
 		t.Fatal(err)

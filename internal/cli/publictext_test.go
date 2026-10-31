@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/scheduler"
 	"github.com/Barben360/backsight/internal/server"
@@ -304,5 +305,30 @@ func TestReleaseDocumentsNameNoPrivateReference(t *testing.T) {
 			t.Fatal(err)
 		}
 		checkPublic(t, filepath.Base(f), string(raw))
+	}
+}
+
+// The dashboard's pages are text a user reads: every template file, and
+// every page and answer of a dashboard on the canary state, names no private
+// reference. The placeholder stylesheet is not scanned: hex colours are not
+// text.
+func TestDashboardPagesArePublicText(t *testing.T) {
+	files, err := fs.Glob(dashboard.Templates(), "*.html")
+	if err != nil || len(files) < 10 {
+		t.Fatalf("%d templates: want the dashboard's pages: %v", len(files), err)
+	}
+	for _, f := range files {
+		raw, err := fs.ReadFile(dashboard.Templates(), f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkPublic(t, "dashboard template "+f, string(raw))
+	}
+	got := canaryCrawl(t)
+	if got.asked < 80 || len(got.pages) != got.asked {
+		t.Fatalf("%d requests, %d distinct bodies: the scan misses most of the dashboard", got.asked, len(got.pages))
+	}
+	for path, body := range got.pages {
+		checkPublic(t, "the dashboard's answer to "+path, body)
 	}
 }
