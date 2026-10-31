@@ -852,10 +852,11 @@ func TestCopyFormats(t *testing.T) {
 	}
 }
 
-// TestVerdictFiguresReused: when the view's window is the last 7 days
-// (built up to a minute before now) the verdict judges that very window
-// and its figures can stand for the view's; any other window, or a
-// developer metric the verdict does not compute, cannot.
+// TestVerdictFiguresReused: when the view's query is the verdict's, its
+// window the last 7 days (built up to a minute before now), the verdict
+// judges that very window and its figures can stand for the view's; any
+// other window, another filter on the same window, or a developer metric
+// the verdict does not compute, cannot.
 func TestVerdictFiguresReused(t *testing.T) {
 	x := newFx(t, fxNow)
 	firstPrompt(x)
@@ -873,15 +874,30 @@ func TestVerdictFiguresReused(t *testing.T) {
 	if !a.Window.Since.Equal(q.Window.Since) || !a.Window.Until.Equal(q.Window.Until) {
 		t.Errorf("verdict window %v..%v, want the view's %v..%v", a.Window.Since, a.Window.Until, q.Window.Since, q.Window.Until)
 	}
-	m, ok := a.metricsFor(q.Window, ids)
+	m, ok := a.metricsFor(q, ids)
 	if !ok || len(m) != len(ids) || !reflect.DeepEqual(m["recall.hit_rate"], a.Now["recall.hit_rate"]) {
 		t.Errorf("reuse = %v (%d metrics), want the verdict's own", ok, len(m))
 	}
 	if direct := x.metrics(ids, q)["recall.hit_rate"]; !reflect.DeepEqual(direct, m["recall.hit_rate"]) {
 		t.Errorf("reused hit rate\n%+v\ncomputed for the view\n%+v", m["recall.hit_rate"], direct)
 	}
-	if _, ok := a.metricsFor(q.Window, []string{"recall.by_lang"}); ok {
+	if _, ok := a.metricsFor(q, []string{"recall.by_lang"}); ok {
 		t.Error("reused a developer metric the verdict does not compute")
+	}
+	for _, c := range []struct {
+		name string
+		edit func(*Query)
+	}{
+		{"another project", func(q *Query) { q.Project = "alpha" }},
+		{"other machines", func(q *Query) { q.Machines = "all" }},
+		{"a path", func(q *Query) { q.Path = "search" }},
+		{"developer mode", func(q *Query) { q.Dev = true }},
+	} {
+		other := q
+		c.edit(&other)
+		if _, ok := a.metricsFor(other, ids); ok {
+			t.Errorf("%s, same window: figures reused", c.name)
+		}
 	}
 	for _, c := range []struct {
 		name string
@@ -891,7 +907,7 @@ func TestVerdictFiguresReused(t *testing.T) {
 		if !a.Window.Until.Equal(fxNow) {
 			t.Errorf("%s: verdict ends at %v, want now", c.name, a.Window.Until)
 		}
-		if _, ok := a.metricsFor(c.q.Window, ids); ok {
+		if _, ok := a.metricsFor(c.q, ids); ok {
 			t.Errorf("%s: figures reused for another window", c.name)
 		}
 	}

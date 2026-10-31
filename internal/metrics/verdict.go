@@ -64,15 +64,23 @@ type assessment struct {
 	Prev    map[string]Metric
 	Right28 map[string]Metric // nil unless Right is judged on 28 days
 	Window  Window            // the verdict's last 7 days
+	Query   Query             // the query judged, its Window zeroed
 	ran28   bool              // Right's 28-day figures were computed
 }
 
-// metricsFor is the verdict's own metrics of ids when w is the verdict's
-// window (the default 7-day view, whose figures are the same), so the view
-// need not compute the families again; false for any other window or an
-// id the verdict did not compute (a developer metric).
-func (a assessment) metricsFor(w Window, ids []string) (map[string]Metric, bool) {
-	if !w.Since.Equal(a.Window.Since) || !w.Until.Equal(a.Window.Until) {
+// metricsFor is the verdict's own metrics of ids for the view's query q
+// when q asks for the verdict's very figures: its window is the verdict's
+// (the default 7-day view) and every other field (project, machines,
+// path, developer mode, paging) is the one the verdict was judged with,
+// so the view need not compute the families again. A window built up to a
+// minute before now is the verdict's own (assess takes it as it is), and
+// its figures are computed over exactly that window inside the same
+// transaction, so they are the view's. False for any other query, and for
+// an id the verdict did not compute (a developer metric).
+func (a assessment) metricsFor(q Query, ids []string) (map[string]Metric, bool) {
+	w := q.Window
+	q.Window = Window{}
+	if q != a.Query || !w.Since.Equal(a.Window.Since) || !w.Until.Equal(a.Window.Until) {
 		return nil, false
 	}
 	out := make(map[string]Metric, len(ids))
@@ -143,7 +151,9 @@ func assess(e env) (assessment, error) {
 		return assessment{}, err
 	}
 	r := &judgingRun{e: e, w: w, cur: cur, prev: prev, rightW: w, rightCur: cur, rightPrv: prev}
-	out := assessment{Now: cur, Prev: prev, Window: w}
+	judged := e.q
+	judged.Window = Window{}
+	out := assessment{Now: cur, Prev: prev, Window: w, Query: judged}
 
 	learning, learnText, err := r.learning()
 	if err != nil {
