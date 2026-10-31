@@ -30,6 +30,7 @@ type serverData struct {
 	Doctor              []DoctorCheck
 	DoctorErr           error
 	Err                 map[string]error
+	Have                map[string]bool // the keys read successfully; a key in neither Have nor Err was not asked for
 }
 
 // llm30dKey is the server read of the LLM stats over 30 days, all
@@ -136,7 +137,7 @@ func llmPeriod(span time.Duration) string {
 // order; a partial failure shows only in its metrics' reasons. A read is
 // kept only when it ends in time: a late one is dropped.
 func loadServer(ctx context.Context, src Source, w Window, need []string) (*serverData, *ServerState) {
-	d := &serverData{LLM: map[string][]hindsight.LLMBucket{}, Err: map[string]error{}}
+	d := &serverData{LLM: map[string][]hindsight.LLMBucket{}, Err: map[string]error{}, Have: map[string]bool{}}
 	keys := slices.Clone(need)
 	slices.Sort(keys)
 	keys = slices.Compact(keys)
@@ -248,6 +249,9 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	for key, err := range fetchParallel(ctx, ServerTimeout, calls) {
 		d.Err[key] = err
 	}
+	for key := range calls {
+		d.Have[key] = d.Err[key] == nil
+	}
 	kmu.Lock()
 	closed = true
 	if _, asked := calls[llm30dKey]; asked && d.Err[llm30dKey] == nil {
@@ -347,13 +351,21 @@ func serverError(err error) (enum string, reason string) {
 	return "server_error", ReasonServerDown
 }
 
-// serverReason is the no_data reason of a failed read of key, "" when it
-// succeeded (or was not asked for): without a server, every read failed.
+// serverReason is the no_data reason of a read of key: the failure's, or
+// server_unsupported when the view did not ask for it (its data would be
+// an invented zero); "" when it succeeded. Without a server, every read
+// failed.
 func serverReason(e env, key string) string {
-	err := errNoServer
-	if e.srv != nil {
-		err = e.srv.Err[key]
+	if e.srv == nil {
+		_, reason := serverError(errNoServer)
+		return reason
 	}
-	_, reason := serverError(err)
-	return reason
+	if err := e.srv.Err[key]; err != nil {
+		_, reason := serverError(err)
+		return reason
+	}
+	if !e.srv.Have[key] {
+		return ReasonServerUnsupported
+	}
+	return ""
 }

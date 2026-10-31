@@ -109,7 +109,8 @@ func TestBankGrowthPicksThePeriod(t *testing.T) {
 	// window: dropped (world 1000). 10-23 straddles the start and counts
 	// whole (world 7), in the first day. 10-24: world 14 + experience 7.
 	// 10-25: observation 7. 10-30 (00:00Z, before the end): world 7.
-	// Total 7 + 21 + 7 + 7 = 42; 42 / 7 days = 6.
+	// Total 7 + 21 + 7 + 7 = 42 over the 8 daily buckets kept (10-23 to
+	// 10-30, the zero days padded by the server): 42 / 8 = 5.25.
 	x := newFx(t, fxNow)
 	x.server.set(func(d *fakeData) {
 		d.Series.Buckets = []hindsight.SeriesBucket{
@@ -117,15 +118,19 @@ func TestBankGrowthPicksThePeriod(t *testing.T) {
 			{Time: utcDay(23), World: 7},
 			{Time: utcDay(24), World: 14, Experience: 7},
 			{Time: utcDay(25), Observation: 7},
+			{Time: utcDay(26)}, {Time: utcDay(27)}, {Time: utcDay(28)}, {Time: utcDay(29)},
 			{Time: utcDay(30), World: 7},
 		}
 	})
 	m := bankOf(x, x.query(7))["bank.growth"]
-	if val(m) != 6 || m.Status != StatusOK {
-		t.Fatalf("growth = %v (%s), want 6 ok", m.Value, m.Status)
+	if val(m) != 5.25 || m.Status != StatusOK {
+		t.Fatalf("growth = %v (%s), want 5.25 ok", m.Value, m.Status)
 	}
 	if got := calledPeriods(x); !reflect.DeepEqual(got, []string{"7d"}) {
 		t.Errorf("periods asked = %v, want [7d]", got)
+	}
+	if !slices.Contains(m.Tags, tagSnapshot) {
+		t.Errorf("growth tags = %v, want snapshot", m.Tags)
 	}
 	if _, ok := m.Extra["days_covered"]; ok {
 		t.Errorf("days_covered on a 7-day window: %v", m.Extra)
@@ -240,20 +245,20 @@ func TestConsolidationFailedWatches(t *testing.T) {
 	}
 }
 
-func (x *fx) retire(at time.Time, kind, session string) {
+func (x *fx) retire(at time.Time, kind string) {
 	x.t.Helper()
-	x.journal(feedback.Event{TS: at, Kind: kind, Session: session, IDs: []string{"m-" + at.Format("150405") + kind}})
+	x.journal(feedback.Event{TS: at, Kind: kind, Session: "s1", IDs: []string{"m-" + at.Format("150405") + kind}})
 }
 
 // TestChurnPerWeek: 2 forgets in W43, a hide and an unhide in W44 (the
 // window is the two weeks W43 and W44: 10-23 is a Friday).
 func TestChurnPerWeek(t *testing.T) {
 	x := newFx(t, fxNow)
-	x.retire(time.Date(2026, 10, 23, 14, 0, 0, 0, fxParis), "forget", "s1")  // W43
-	x.retire(time.Date(2026, 10, 25, 23, 30, 0, 0, fxParis), "forget", "s1") // W43 (Sunday night, Paris time)
-	x.retire(time.Date(2026, 10, 26, 0, 30, 0, 0, fxParis), "hide", "s1")    // W44 (Monday, 23:30Z Sunday)
-	x.retire(time.Date(2026, 10, 29, 9, 0, 0, 0, fxParis), "unhide", "s1")   // W44
-	x.retire(time.Date(2026, 10, 22, 9, 0, 0, 0, fxParis), "retire", "s1")   // before the window
+	x.retire(time.Date(2026, 10, 23, 14, 0, 0, 0, fxParis), "forget")  // W43
+	x.retire(time.Date(2026, 10, 25, 23, 30, 0, 0, fxParis), "forget") // W43 (Sunday night, Paris time)
+	x.retire(time.Date(2026, 10, 26, 0, 30, 0, 0, fxParis), "hide")    // W44 (Monday, 23:30Z Sunday)
+	x.retire(time.Date(2026, 10, 29, 9, 0, 0, 0, fxParis), "unhide")   // W44
+	x.retire(time.Date(2026, 10, 22, 9, 0, 0, 0, fxParis), "retire")   // before the window
 	m := bankOf(x, x.query(7))["bank.churn"]
 	if val(m) != 4 || m.Status != StatusOK {
 		t.Fatalf("churn = %v (%s), want 4", m.Value, m.Status)
@@ -275,9 +280,9 @@ func TestChurnPerWeek(t *testing.T) {
 // all three, the middle one at 0.
 func TestChurnWeeksWithoutEventsAreZero(t *testing.T) {
 	x := newFx(t, fxNow)
-	x.retire(time.Date(2026, 10, 15, 9, 0, 0, 0, fxParis), "retire", "s1") // W42
-	x.retire(time.Date(2026, 10, 29, 9, 0, 0, 0, fxParis), "hide", "s1")   // W44
-	m := bankOf(x, x.query(16))["bank.churn"]                              // from 10-14 13:00: W42, W43, W44
+	x.retire(time.Date(2026, 10, 15, 9, 0, 0, 0, fxParis), "retire") // W42
+	x.retire(time.Date(2026, 10, 29, 9, 0, 0, 0, fxParis), "hide")   // W44
+	m := bankOf(x, x.query(16))["bank.churn"]                        // from 10-14 13:00: W42, W43, W44
 	var weeks []string
 	var vals []float64
 	for _, p := range m.Series {
@@ -288,23 +293,32 @@ func TestChurnWeeksWithoutEventsAreZero(t *testing.T) {
 	}
 }
 
-// TestChurnUsesTheSessionsProject: under --project alpha only the retirements
-// of sessions whose turns are alpha's count.
-func TestChurnUsesTheSessionsProject(t *testing.T) {
+// TestChurnUsesTheMemorysProject: under --project alpha a retirement counts
+// by its memory's project (its latest show carrying one), whatever the
+// session's; a memory never shown falls back to its session's project.
+func TestChurnUsesTheMemorysProject(t *testing.T) {
 	x := newFx(t, fxNow)
 	at := time.Date(2026, 10, 27, 10, 0, 0, 0, fxParis)
 	x.turnEvent(at.Add(-time.Hour), "sa", "alpha")
 	x.turnEvent(at.Add(-time.Hour), "sb", "beta")
-	x.retire(at, "retire", "sa")
-	x.retire(at.Add(time.Minute), "hide", "sb")
-	x.retire(at.Add(2*time.Minute), "hide", "sb")
+	// ma was shown in beta's session but belongs to alpha; mb the reverse.
+	x.shows(at.Add(-30*time.Minute), "sb", "t1", "", "beta", "prompt", "alpha", "ma")
+	x.shows(at.Add(-30*time.Minute), "sa", "t1", "", "alpha", "prompt", "beta", "mb")
+	retire := func(at time.Time, kind, session, id string) {
+		x.journal(feedback.Event{TS: at, Kind: kind, Session: session, IDs: []string{id}})
+	}
+	retire(at, "retire", "sb", "ma")                  // memory alpha, session beta -> alpha
+	retire(at.Add(time.Minute), "hide", "sa", "mb")   // memory beta, session alpha -> beta
+	retire(at.Add(2*time.Minute), "hide", "sa", "mc") // never shown, session alpha -> alpha
+	retire(at.Add(3*time.Minute), "hide", "sb", "md") // never shown, session beta -> beta
 	q := x.query(7)
 	q.Project = "alpha"
-	if m := bankOf(x, q)["bank.churn"]; val(m) != 1 {
-		t.Errorf("alpha churn = %v, want 1", m.Value)
+	m := bankOf(x, q)["bank.churn"]
+	if val(m) != 2 || m.Extra["retire"] != int64(1) || m.Extra["hide"] != int64(1) {
+		t.Errorf("alpha churn = %v %v, want 2 (ma retired, mc hidden)", m.Value, m.Extra)
 	}
-	if m := bankOf(x, x.query(7))["bank.churn"]; val(m) != 3 {
-		t.Errorf("all-project churn = %v, want 3", m.Value)
+	if m := bankOf(x, x.query(7))["bank.churn"]; val(m) != 4 {
+		t.Errorf("all-project churn = %v, want 4", m.Value)
 	}
 }
 
@@ -447,4 +461,56 @@ func TestServerOnlyHost(t *testing.T) {
 	}
 	wantNoData(t, "notes.stored", ms["notes.stored"], ReasonServerOnlyHost)
 	wantNoData(t, "bank.churn", ms["bank.churn"], ReasonServerOnlyHost)
+}
+
+// TestUnrequestedReadsAreNotZero: a view whose need list lacks a read gets
+// server_unsupported for the metrics built on it, never an invented 0.
+func TestUnrequestedReadsAreNotZero(t *testing.T) {
+	run := func(need []string, project string) map[string]Metric {
+		x := newFx(t, fxNow)
+		x.server.set(func(d *fakeData) {
+			d.Stats = hindsight.BankStats{NodesByFactType: map[string]int{"world": 5}, FailedConsolidation: 3}
+			d.Tags = []hindsight.TagCount{{Tag: "project:alpha", Count: 2}}
+			d.Series.Buckets = []hindsight.SeriesBucket{{Time: utcDay(26), World: 1}}
+		})
+		x.need = need
+		q := x.query(7)
+		q.Project = project
+		return bankOf(x, q)
+	}
+	ms := run(nil, "")
+	for _, id := range []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation"} {
+		wantNoData(t, id, ms[id], ReasonServerUnsupported)
+	}
+	ms = run([]string{"series", "tags"}, "") // no stats
+	wantNoData(t, "bank.size", ms["bank.size"], ReasonServerUnsupported)
+	wantNoData(t, "bank.consolidation", ms["bank.consolidation"], ReasonServerUnsupported)
+	if val(ms["bank.by_project"]) != 1 || ms["bank.growth"].Status != StatusOK {
+		t.Errorf("asked reads: by_project %v growth %s", ms["bank.by_project"].Value, ms["bank.growth"].Status)
+	}
+	ms = run([]string{"stats", "series"}, "") // no tags
+	wantNoData(t, "bank.by_project", ms["bank.by_project"], ReasonServerUnsupported)
+	ms = run([]string{"stats", "series"}, "alpha") // a project's size needs the tags
+	wantNoData(t, "bank.size", ms["bank.size"], ReasonServerUnsupported)
+	ms = run([]string{"tags"}, "alpha") // and only the tags
+	if val(ms["bank.size"]) != 2 {
+		t.Errorf("project size with only tags = %v, want 2", ms["bank.size"].Value)
+	}
+	ms = run([]string{"stats", "tags"}, "") // no series: unsupported, not no_events
+	wantNoData(t, "bank.growth", ms["bank.growth"], ReasonServerUnsupported)
+}
+
+// TestSnapshotMetricsSayNoHistory: the server's figures carry the snapshot
+// tag.
+func TestSnapshotMetricsSayNoHistory(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.server.set(func(d *fakeData) {
+		d.Stats = hindsight.BankStats{NodesByFactType: map[string]int{"world": 5}}
+		d.Series.Buckets = []hindsight.SeriesBucket{{Time: utcDay(26), World: 1}}
+	})
+	for _, id := range []string{"bank.size", "bank.growth", "bank.by_project", "bank.consolidation"} {
+		if m := bankOf(x, x.query(7))[id]; !slices.Contains(m.Tags, tagSnapshot) {
+			t.Errorf("%s tags = %v, want snapshot", id, m.Tags)
+		}
+	}
 }

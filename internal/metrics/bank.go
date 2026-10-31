@@ -23,6 +23,10 @@ func BankServerNeeds() []string { return []string{"stats", "series", "tags"} }
 // projectTagPrefix starts the tag a memory carries for its project.
 const projectTagPrefix = "project:"
 
+// tagSnapshot marks a figure as of now: the server keeps no history of it,
+// so the view has no previous value to show (not "no change").
+const tagSnapshot = "snapshot"
+
 // maxSeriesDays is the longest period of the server's time series.
 const maxSeriesDays = 90
 
@@ -31,6 +35,15 @@ var churnKinds = []string{"forget", "retire", "hide", "unhide"}
 
 // The fact types of the memories time series.
 var seriesKinds = []string{"world", "experience", "observation"}
+
+// sizeKeys are the server reads of bank.size: a project's size is its tag
+// count alone.
+func sizeKeys(q Query) []string {
+	if q.Project != "" {
+		return []string{"tags"}
+	}
+	return []string{"stats"}
+}
 
 func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 	obs := make(map[string]Observation, len(bankIDs))
@@ -47,7 +60,7 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 		keys []string
 		fill func(env, Window, map[string]Observation, map[string]Metric)
 	}{
-		{"bank.size", []string{"stats"}, bankSize},
+		{"bank.size", sizeKeys(e.q), bankSize},
 		{"bank.growth", []string{"series"}, bankGrowth},
 		{"bank.by_project", []string{"tags"}, bankByProject},
 		{"bank.consolidation", []string{"stats"}, bankConsolidation},
@@ -81,10 +94,6 @@ func bank(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 func bankSize(e env, _ Window, obs map[string]Observation, met map[string]Metric) {
 	const id = "bank.size"
 	if p := e.q.Project; p != "" {
-		if reason := serverReason(e, "tags"); reason != "" {
-			obs[id], met[id] = Observation{Absent: true, Reason: reason}, Metric{}
-			return
-		}
 		var n int
 		for _, t := range e.srv.Tags {
 			if t.Tag == projectTagPrefix+p {
@@ -95,7 +104,7 @@ func bankSize(e env, _ Window, obs map[string]Observation, met map[string]Metric
 		for _, k := range bankSizeExtras {
 			extra[k] = nil
 		}
-		obs[id], met[id] = Observation{Filtered: true}, Metric{Value: ptr(float64(n)), Extra: extra}
+		obs[id], met[id] = Observation{Filtered: true}, Metric{Value: ptr(float64(n)), Extra: extra, Tags: []string{tagSnapshot}}
 		return
 	}
 	st := e.srv.Stats
@@ -107,7 +116,8 @@ func bankSize(e env, _ Window, obs map[string]Observation, met map[string]Metric
 	met[id] = Metric{Value: ptr(float64(total)), Extra: map[string]any{
 		"world": int64(st.NodesByFactType["world"]), "experience": int64(st.NodesByFactType["experience"]),
 		"observation": int64(st.NodesByFactType["observation"]),
-		"documents":   int64(st.TotalDocuments), "links": int64(st.TotalLinks)}}
+		"documents":   int64(st.TotalDocuments), "links": int64(st.TotalLinks)},
+		Tags: []string{tagSnapshot}}
 }
 
 var bankSizeExtras = []string{"world", "experience", "observation", "documents", "links"}
@@ -125,12 +135,14 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 	}
 	seen := map[string]bool{}
 	var total int64
+	var kept int
 	for _, b := range e.srv.Series.Buckets {
 		if !b.Time.Add(width).After(w.Since) || !b.Time.Before(w.Until) {
 			continue
 		}
 		local := b.Time.In(w.Loc)
 		seen[local.Format("2006-01-02")] = true
+		kept++
 		if local.Before(w.Since) { // a bucket straddling the start counts in the first day
 			local = w.Since
 		}
@@ -147,10 +159,11 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, Metric{}
 		return
 	}
-	days := w.Length().Hours() / 24
-	m := Metric{}
+	// The rate is over the time the counted buckets span (whole buckets,
+	// the first one possibly before the window), not the window's length.
+	days := float64(kept) * width.Hours() / 24
+	m := Metric{Tags: []string{tagSnapshot}}
 	if w.Length() > maxSeriesDays*day { // the series cannot reach back further
-		days = float64(covered)
 		m.Extra = map[string]any{"days_covered": covered}
 	}
 	m.Value = ptr(float64(total) / days)
@@ -177,7 +190,7 @@ func bankByProject(e env, _ Window, obs map[string]Observation, met map[string]M
 			n++
 		}
 	}
-	obs[id], met[id] = Observation{}, Metric{Value: ptr(float64(n))}
+	obs[id], met[id] = Observation{}, Metric{Value: ptr(float64(n)), Tags: []string{tagSnapshot}}
 }
 
 // bankConsolidation fills bank.consolidation: the summaries pending, and
@@ -191,11 +204,11 @@ func bankConsolidation(e env, w Window, obs map[string]Observation, met map[stri
 		extra["last_consolidated_at"] = st.LastConsolidatedAt.In(w.Loc)
 	}
 	obs[id] = Observation{Err: ruleConsolidation(int64(st.FailedConsolidation))}
-	met[id] = Metric{Value: ptr(float64(st.PendingConsolidation)), Extra: extra}
+	met[id] = Metric{Value: ptr(float64(st.PendingConsolidation)), Extra: extra, Tags: []string{tagSnapshot}}
 }
 
 // bankChurn fills bank.churn: the retire, forget, hide and unhide rows of
-// the journal in the window (one per memory), for the sessions of the
+// the journal in the window (one per memory), for the memories of the
 // project when the query names one, in ISO weeks of the window's zone.
 func bankChurn(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	const id = "bank.churn"
@@ -210,9 +223,14 @@ func bankChurn(e env, w Window, obs map[string]Observation, met map[string]Metri
 		absent(ReasonFeedbackOff)
 		return nil
 	}
-	// The retirements hold the session, not the project: it is the
-	// session's, from its turns.
-	const inProject = `(? = '' OR EXISTS (SELECT 1 FROM turns tp WHERE tp.session = r.session AND tp.project = ?))`
+	// The project is the memory's: that of its latest show carrying one (as
+	// memoryProject), else, for a memory never shown, its session's (the
+	// retirements hold no project).
+	const inProject = `(? = '' OR COALESCE(
+ (SELECT sh.project FROM shows sh WHERE sh.memory_id = r.memory_id AND sh.project IS NOT NULL
+    ORDER BY sh.ts DESC, sh.source_file DESC, sh."offset" DESC, sh.pos DESC LIMIT 1),
+ (SELECT tp.project FROM turns tp WHERE tp.session = r.session AND tp.project IS NOT NULL
+    ORDER BY tp.ts DESC, tp.source_file DESC, tp."offset" DESC LIMIT 1)) = ?)`
 	var found bool
 	if err := e.tx.QueryRowContext(e.ctx, `SELECT EXISTS (SELECT 1 FROM retirements r WHERE `+inProject+`)`,
 		e.q.Project, e.q.Project).Scan(&found); err != nil {

@@ -510,8 +510,9 @@ func qualityStale(e env, _ Window, obs map[string]Observation, met map[string]Me
 
 // memoryProject is a memory's project for the memory tables: the project
 // of its latest show that carries one (shows.project is the memory's;
-// the ledger has none), "" when none is known. Filters never use it:
-// activity filters on the session's project.
+// the ledger has none), "" when none is known. The bank metrics filter
+// retirements by it (bank.churn does the same in SQL, falling back to the
+// session's project); activity metrics filter on the session's project.
 func memoryProject(tx *sql.Tx, id string) string {
 	var p string
 	err := tx.QueryRow(`SELECT project FROM shows WHERE memory_id = ? AND project IS NOT NULL

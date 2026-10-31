@@ -350,16 +350,9 @@ func llmRead(e env, key string) ([]hindsight.LLMBucket, string) {
 		return nil, r
 	}
 	if key == llm30dKey {
-		if e.srv.LLM30 == nil { // not requested by the view
-			return nil, ReasonServerUnsupported
-		}
 		return e.srv.LLM30, ""
 	}
-	bs, ok := e.srv.LLM[key[len("llm:"):]]
-	if !ok { // not requested by the view
-		return nil, ReasonServerUnsupported
-	}
-	return bs, ""
+	return e.srv.LLM[key[len("llm:"):]], ""
 }
 
 // byOperation is {op: {input, cached, output, cost}} for the named
