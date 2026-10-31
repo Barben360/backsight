@@ -77,6 +77,12 @@ func TestQueryChecksTheDayFirst(t *testing.T) {
 	if err == nil || err.Error() != "a day is written YYYY-MM-DD" {
 		t.Errorf("error %v, want the day's message before the limit's", err)
 	}
+	if !errors.Is(err, ErrMalformedID) || codeOf(t, err) != output.Usage {
+		t.Errorf("error %v: want a malformed id, code %d", err, output.Usage)
+	}
+	if _, err := Query("overview", Params{Limit: 0}, "", now); errors.Is(err, ErrMalformedID) {
+		t.Errorf("a bad limit is no malformed id: %v", err)
+	}
 	q, err := Query("days", Params{Limit: 50}, "2026-10-08", now)
 	if err != nil || q.ID != "2026-10-08" {
 		t.Errorf("query %+v, error %v; want ID 2026-10-08", q, err)

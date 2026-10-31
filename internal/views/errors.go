@@ -24,6 +24,19 @@ func Usage(format string, args ...any) error {
 	return &output.Error{Code: output.Usage, Message: fmt.Sprintf(format, args...)}
 }
 
+// ErrMalformedID marks the usage error of an id written wrongly in the
+// request's path (a day that is not YYYY-MM-DD): the dashboard answers it
+// as a page that does not exist, 404, where a bad query parameter is 400.
+// The command line reports it as any usage error.
+var ErrMalformedID = errors.New("malformed id")
+
+// malformedID is a usage error that is an ErrMalformedID.
+type malformedID struct{ usage *output.Error }
+
+func (e malformedID) Error() string        { return e.usage.Error() }
+func (e malformedID) Unwrap() error        { return e.usage }
+func (e malformedID) Is(target error) bool { return target == ErrMalformedID }
+
 // UnknownView is the usage error for a word that is not a view; withIndex
 // adds "index", which only the command line has.
 func UnknownView(word string, withIndex bool) error {

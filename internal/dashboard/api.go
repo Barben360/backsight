@@ -92,13 +92,13 @@ func isView(name string) bool {
 }
 
 // httpStatus is the HTTP status of a view's raw error: an id or view that
-// names nothing is 404, a deadline, a blocked environment or an index error with a class 503, a usage
+// names nothing or is written wrongly in the path is 404, a deadline, a blocked environment or an index error with a class 503, a usage
 // error 400, anything else 500.
 func httpStatus(err error) int {
 	var nf metrics.NotFoundError
 	var oe *output.Error
 	switch {
-	case errors.As(err, &nf), errors.Is(err, metrics.ErrUnknownView):
+	case errors.As(err, &nf), errors.Is(err, metrics.ErrUnknownView), errors.Is(err, views.ErrMalformedID):
 		return http.StatusNotFound
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, index.ErrUpdateInProgress), errors.Is(err, index.ErrSchemaChanged):
 		return http.StatusServiceUnavailable

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/output"
 )
 
 // Params are the parameters of a view, as the command line and the
@@ -49,7 +50,7 @@ func TakesID(view string) bool {
 // by default); a date alone is midnight in that zone.
 func Query(view string, p Params, id string, now time.Time) (metrics.Query, error) {
 	if _, err := time.Parse("2006-01-02", id); view == "days" && id != "" && err != nil {
-		return metrics.Query{}, Usage("a day is written YYYY-MM-DD")
+		return metrics.Query{}, malformedID{&output.Error{Code: output.Usage, Message: "a day is written YYYY-MM-DD"}}
 	}
 	loc, name, err := zone(p.TZ)
 	if err != nil {

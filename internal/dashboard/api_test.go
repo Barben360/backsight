@@ -299,6 +299,11 @@ func TestHTTPStatus(t *testing.T) {
 		{fmt.Errorf("catch up: %w", context.DeadlineExceeded), 503},
 		{index.ErrUpdateInProgress, 503},
 		{views.Usage("bad"), 400},
+		{func() error {
+			_, err := views.Query("days", views.Params{Limit: 50}, "2026-13-01", time.Now())
+			return err
+		}(), 404},
+		{fmt.Errorf("wrapped: %w", func() error { _, err := views.Query("days", views.Params{Limit: 50}, "x", time.Now()); return err }()), 404},
 		{&output.Error{Code: output.Blocked, Message: "x"}, 503},
 		{&output.Error{Code: output.NeedsUser, Message: "x"}, 500},
 		{fmt.Errorf("catch up: %w", index.ErrInUse), 503},
