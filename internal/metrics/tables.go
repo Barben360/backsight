@@ -28,6 +28,7 @@ type Tables struct {
 	Day              *DayPage           `json:"day,omitempty"`
 	Releases         []ReleaseRow       `json:"releases,omitempty"`
 	Settings         map[string]float64 `json:"settings,omitempty"`
+	Defs             []DefRow           `json:"defs,omitempty"`
 	Note             string             `json:"note,omitempty"`
 }
 
@@ -313,4 +314,12 @@ type ReleaseRow struct {
 	ProjectShares map[string]float64 `json:"project_shares"`
 	PromptsPerDay float64            `json:"prompts_per_day"`
 	BankSize      *int64             `json:"bank_size"`
+}
+
+// DefRow is a catalog entry with the window's n and the smallest change
+// (MDC) the data can show; the definitions table of a view.
+type DefRow struct {
+	Def
+	N   int64    `json:"n"`
+	MDC *float64 `json:"mdc"`
 }
