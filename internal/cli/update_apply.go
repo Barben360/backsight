@@ -1407,6 +1407,11 @@ func (r *updateRollback) run(ctx context.Context, cause error) error {
 	}
 	if err := pointShim(r.previous, r.shim); err != nil {
 		errs = append(errs, "switching the shim back: "+err.Error())
+	} else if link, ours := olderPathLink(r.d, r.shim); runtime.GOOS == "windows" && ours {
+		// the PATH command is a copy there, not a link following the shim
+		if err := pointShim(r.shim, link); err != nil {
+			errs = append(errs, "switching the PATH command back: "+err.Error())
+		}
 	}
 	if r.pluginTouched {
 		cctx, cancel := context.WithTimeout(base, 5*time.Minute)

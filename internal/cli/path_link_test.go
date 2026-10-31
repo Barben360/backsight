@@ -162,7 +162,7 @@ func TestClientInstallLeavesOtherPathEntriesAlone(t *testing.T) {
 // current and previous targets (install.sh's binary, before a client
 // install could point its link at the shim).
 func TestPruneNeverRemovesThePathTarget(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
+	testtool.SkipWindows(t, "linux-only: the PATH command is a copy of the shim there, never a link into a versioned binary: nothing to keep")
 	data, bin := t.TempDir(), t.TempDir()
 	dir := func(name string) string { return filepath.Join(data, "bin", name) }
 	start := time.Now().Add(-time.Hour)

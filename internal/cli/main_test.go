@@ -107,7 +107,10 @@ func TestMain(m *testing.M) {
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
-	os.Exit(m.Run())
+	cleanup := isolateUserPath()                             // never the real PATH of the user running the tests
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 // The race runtime's exit sleep (1 s per process with live threads) made

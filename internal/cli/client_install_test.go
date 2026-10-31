@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -104,7 +106,6 @@ func mutating(f *fakeClaude) []string {
 }
 
 func TestClientInstallFirstTime(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	settings := filepath.Join(home, ".claude", "settings.json")
@@ -120,16 +121,16 @@ func TestClientInstallFirstTime(t *testing.T) {
 	if len(got) != 2 || got[0] != "plugin marketplace add "+mkt || got[1] != "plugin install "+plugin.PluginID()+" --scope user" {
 		t.Errorf("claude calls %q", got)
 	}
-	shim := filepath.Join(d.Data, "bin", "current")
+	shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
 	target, err := filepath.EvalSymlinks(shim)
 	if err != nil || !strings.HasPrefix(target, filepath.Join(d.Data, "bin")) {
 		t.Fatalf("shim %s -> %s %v", shim, target, err)
 	}
-	if fi, err := os.Stat(target); err != nil || fi.Mode()&0o111 == 0 {
-		t.Errorf("shim target not executable: %v", err)
+	if !fsutil.Executable(target) {
+		t.Errorf("shim target not executable: %s", target)
 	}
 	hooks, _ := os.ReadFile(filepath.Join(mkt, "plugins", "backsight", "hooks", "hooks.json"))
-	if !strings.Contains(string(hooks), `"command": "`+shim+`"`) {
+	if !strings.Contains(string(hooks), `"command": "`+testtool.JSONPath(shim)+`"`) {
 		t.Errorf("hooks do not exec the shim:\n%.300s", hooks)
 	}
 	s, _ := os.ReadFile(settings)
@@ -142,18 +143,17 @@ func TestClientInstallFirstTime(t *testing.T) {
 		t.Errorf("existing rules must stay:\n%s", s)
 	}
 	st, _ := state.Load(d.StateFile())
-	if st.PluginVersion == "" || st.ShimTarget != target {
+	if st.PluginVersion == "" || !shimRuns(target, st.ShimTarget) {
 		t.Errorf("state %+v", st)
 	}
 }
 
 func TestClientInstallAgainUpdatesInsteadOfAdding(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	run(t, "client", "install")
 	f.calls = nil
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
 	f.plugins = `[{"id":"backsight@backsight","version":"x","scope":"user","enabled":true}]`
 	if code, out, _ := run(t, "client", "install"); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -295,8 +295,17 @@ func TestClientInstallShimTargetIsAVerifiedCopy(t *testing.T) {
 	}
 }
 
+// shimRuns: the shim (resolved) is the target, or on Windows a copy of it.
+func shimRuns(shim, target string) bool {
+	if runtime.GOOS != "windows" {
+		return shim == target
+	}
+	a, err1 := os.ReadFile(shim)
+	b, err2 := os.ReadFile(target)
+	return err1 == nil && err2 == nil && bytes.Equal(a, b)
+}
+
 func TestClientInstallOnANewVersionSwitchesTheShim(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	withClaude(t)
 	setBuild(t, "1.0.0", "a")
@@ -306,9 +315,9 @@ func TestClientInstallOnANewVersionSwitchesTheShim(t *testing.T) {
 	setBuild(t, "1.1.0", "b")
 	run(t, "client", "install")
 	st, _ := state.Load(d.StateFile())
-	got, _ := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", "current"))
+	got, _ := filepath.EvalSymlinks(filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS)))
 	want, _ := filepath.EvalSymlinks(st.ShimTarget)
-	if st.ShimTarget == first.ShimTarget || got != want || !strings.HasPrefix(st.PluginVersion, "1.1.0+") ||
+	if st.ShimTarget == first.ShimTarget || !shimRuns(got, want) || !strings.HasPrefix(st.PluginVersion, "1.1.0+") ||
 		st.Client == nil || st.Client.ShimPrevious != first.ShimTarget {
 		t.Errorf("state %+v (client %+v), shim -> %s", st, st.Client, got)
 	}
@@ -330,10 +339,9 @@ func TestClientInstallMovedDataDirReaddsTheMarketplace(t *testing.T) {
 }
 
 func TestClientInstallMarketplaceKnownPluginNot(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
 	run(t, "client", "install")
 	if got := mutating(f); len(got) != 2 || got[0] != "plugin marketplace update backsight" || got[1] != "plugin install backsight@backsight --scope user" {
 		t.Errorf("calls %q", got)
@@ -341,7 +349,6 @@ func TestClientInstallMarketplaceKnownPluginNot(t *testing.T) {
 }
 
 func TestClientInstallHalfwayFailureThenRerun(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	f.failOn = "plugin install"
@@ -349,7 +356,7 @@ func TestClientInstallHalfwayFailureThenRerun(t *testing.T) {
 		t.Fatalf("exit %d, want 40", code)
 	}
 	f.failOn, f.calls = "", nil
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(filepath.Join(pathsOf(home).Data, "marketplace")) + `"}]`
 	if code, out, _ := run(t, "client", "install"); code != output.OK {
 		t.Fatalf("rerun: exit %d\n%s", code, out)
 	}
@@ -475,12 +482,11 @@ func TestDoctorAsksClaudeCodeWhetherThePluginIsEnabled(t *testing.T) {
 // Two installs cannot share a profile: a marketplace that still exists
 // elsewhere is another install's, a missing one is this install's, moved.
 func TestClientInstallRefusesAProfileWiredToAnotherInstall(t *testing.T) {
-	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	other := filepath.Join(home, "other-install", "marketplace")
 	_ = os.MkdirAll(filepath.Join(other, ".claude-plugin"), 0o700)
-	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + other + `"}]`
+	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + testtool.JSONPath(other) + `"}]`
 	code, out, _ := run(t, "client", "install", "--json")
 	if code != output.Blocked || !strings.Contains(out, "another backsight install") || len(mutating(f)) > 0 {
 		t.Fatalf("exit %d, claude %v\n%s", code, mutating(f), out)
