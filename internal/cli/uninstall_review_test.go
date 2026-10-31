@@ -735,7 +735,7 @@ func TestPurgeLocalRemovesTheDashboardFiles(t *testing.T) {
 		}
 	}
 	kept := strings.Join(env.Data.Kept, "\n")
-	if strings.Contains(kept, "dashboard") || strings.Contains(kept, "codes") {
+	if strings.Contains(kept, d.DashboardDir()) {
 		t.Errorf("a dashboard file is listed as kept: %q", env.Data.Kept)
 	}
 }

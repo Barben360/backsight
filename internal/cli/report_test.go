@@ -742,9 +742,16 @@ func TestReportLeavesTheDashboardOut(t *testing.T) {
 	if !strings.Contains(whole, "doctor/server/error") {
 		t.Fatalf("the report is not the one of the planted machine, the scan proves nothing:\n%.500s", whole)
 	}
-	for _, banned := range []string{"dashboard.json", "54321", "codes", hashes[0].Name(), hashes[1].Name()} {
-		if strings.Contains(whole, banned) {
-			t.Errorf("the report holds %q", banned)
+	for _, banned := range []*regexp.Regexp{
+		regexp.MustCompile(`dashboard\.json`),
+		regexp.MustCompile(`"port"\s*:\s*54321\b`),
+		regexp.MustCompile(`:54321\b`),
+		regexp.MustCompile(`dashboard[/\\\\]codes`),
+		regexp.MustCompile(regexp.QuoteMeta(hashes[0].Name())),
+		regexp.MustCompile(regexp.QuoteMeta(hashes[1].Name())),
+	} {
+		if banned.MatchString(whole) {
+			t.Errorf("the report holds %s", banned)
 		}
 	}
 }

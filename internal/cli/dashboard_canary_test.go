@@ -2,17 +2,22 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"html"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 var (
@@ -33,14 +38,21 @@ func visibleText(page string) string {
 	return strings.Join(out, " ")
 }
 
-// canaryMemText is the one text a page may hold: the memory's own page
-// shows it on request.
-const canaryMemText = "CANARY-MEMORY-TEXT"
+// The texts the server holds for three memories. A memory's text shows on
+// its own text page and nowhere else.
+const (
+	canaryMemText    = "CANARY-MEMORY-TEXT"
+	canaryHiddenText = "CANARY-HIDDEN-TEXT"
+	canaryThirdText  = "CANARY-THIRD-TEXT"
+)
+
+// canaryTexts are the memory ids whose text the server holds, with it.
+var canaryTexts = map[string]string{"mem-allowed-2": canaryMemText, ctlMemory: canaryHiddenText, "mem-allowed-3": canaryThirdText}
 
 // crawled is what a dashboard on the canary state answered.
 type crawled struct {
-	pages  map[string]string // every body by request path, memory text excluded
-	text   string            // the body of the memory text page
+	pages  map[string]string // every body by request, the memory text pages excluded
+	texts  map[string]string // the memory text pages' bodies by memory id
 	stderr string
 	link   string // the first link, which holds the login code
 	asked  int    // requests made: one body each
@@ -63,7 +75,9 @@ func canaryCrawl(t *testing.T) crawled {
 	if err := os.WriteFile(cfgPath, append(raw, []byte("\n[server]\nurl = \"http://127.0.0.1:"+strconv.Itoa(port)+"\"\nui_port = 19999\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	memories["mem-allowed-2"] = `{"id":"mem-allowed-2","text":"` + canaryMemText + `","type":"world","tags":["project:` + ctlProject + `"]}`
+	for id, text := range canaryTexts {
+		memories[id] = `{"id":"` + id + `","text":"` + text + `","type":"world","tags":["project:` + ctlProject + `"]}`
+	}
 	projectEntities[ctlProject] = "[]"
 	at := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
 	fakeOperations = []string{
@@ -77,13 +91,13 @@ func canaryCrawl(t *testing.T) crawled {
 	t.Cleanup(func() { doctorRun = oldDoctor })
 
 	buildIndex(t)
-	base, _, first, stderr, _, stop := serveDashboard(t)
+	day := dayWithPrompts(t)
+	base, d, first, stderr, _, stop := serveDashboard(t)
 	c := dashLogin(t, base, first)
-	got := crawled{pages: map[string]string{}, link: first}
+	got := crawled{pages: map[string]string{}, texts: map[string]string{}, link: first}
 
 	// every id form: the sessions, memories, project and day of the canary
 	// state, the metric of the definitions
-	day := time.Now().UTC().Format("2006-01-02")
 	ids := map[string][]string{
 		"sessions": {"s1"},
 		"memories": {ctlMemory, "mem-allowed-2", "mem-allowed-3"},
@@ -103,6 +117,9 @@ func canaryCrawl(t *testing.T) crawled {
 		status, body := dashGet(t, base, c, path)
 		if status != want {
 			t.Errorf("GET %s: %d, want %d: %.200s", path, status, want, body)
+		}
+		if strings.TrimSpace(body) == "" {
+			t.Errorf("GET %s: an empty body", path)
 		}
 		got.pages[path] = body
 		got.asked++
@@ -134,22 +151,98 @@ func canaryCrawl(t *testing.T) crawled {
 	get("/sessions/s?tz=UTC", http.StatusNotFound)
 	get("/memories/zzzzzzzzzz?tz=UTC", http.StatusNotFound)
 	get("/projects/nope?tz=UTC", http.StatusNotFound)
-	get("/days/2026-13-01?tz=UTC", http.StatusBadRequest)
+	get("/days/2026-13-01?tz=UTC", http.StatusNotFound)
 	get("/nope", http.StatusNotFound)
 	get("/api/v1/nope", http.StatusNotFound)
 	get("/api/v1/sessions/zzzzzzzzzz?tz=UTC", http.StatusNotFound)
 	get("/api/v1/overview?days=0", http.StatusBadRequest)
 
-	// the one place the text is shown
-	status, body := dashGet(t, base, c, "/memories/mem-allowed-2/text")
-	if status != http.StatusOK {
-		t.Errorf("the memory text page: %d: %.200s", status, body)
+	// the one place a text is shown: each memory's own page, the hidden
+	// one's and one the journal never hid included
+	for id := range canaryTexts {
+		status, body := dashGet(t, base, c, "/memories/"+id+"/text")
+		if status != http.StatusOK {
+			t.Errorf("the text page of %s: %d: %.200s", id, status, body)
+		}
+		got.texts[id] = body
 	}
-	got.text = body
+
+	// the preferences and the assets are static: they answer, and hold none
+	if status, body := dashGet(t, base, c, "/prefs?theme=dark&back=%2F"); status != http.StatusSeeOther {
+		t.Errorf("/prefs: %d, want 303: %.200s", status, body)
+	} else {
+		got.pages["/prefs"] = body + "\n"
+		got.asked++
+	}
+	_, overview := dashGet(t, base, c, "/?tz=UTC")
+	asset := regexp.MustCompile(`/assets/[A-Za-z0-9._-]+`).FindString(overview)
+	if asset == "" {
+		t.Fatal("the overview links no asset")
+	}
+	get(asset, http.StatusOK)
 
 	stop()
 	got.stderr = stderr.String()
+	crawlStatePages(t, d, &got)
 	return got
+}
+
+// crawlStatePages starts the dashboard again on the canary state with its
+// index in each state that stands for the views, and keeps the pages and
+// the API answers: an update being applied (the index needs a migration
+// while an update is uncommitted), a first build under way (held until the
+// dashboard stops), an index that a newer backsight changed, and an index
+// that cannot be opened, whose error quotes a canary and a path.
+func crawlStatePages(t *testing.T, d paths.Dirs, got *crawled) {
+	t.Helper()
+	oldStart := startServer
+	t.Cleanup(func() { startServer = oldStart })
+	for _, mode := range []struct {
+		name   string
+		status int
+		prep   func()
+		open   func(ctx context.Context) (dashboard.Index, error)
+	}{
+		{"updating", http.StatusServiceUnavailable, func() { needsMigration(t, d) }, nil},
+		{"building", http.StatusServiceUnavailable, func() {
+			if err := os.Remove(filepath.Join(d.IndexDir(), index.FileName)); err != nil {
+				t.Fatal(err)
+			}
+		}, func(ctx context.Context) (dashboard.Index, error) {
+			<-ctx.Done() // the first build is held until the dashboard stops
+			return nil, ctx.Err()
+		}},
+		{"updated", http.StatusServiceUnavailable, func() { needsMigration(t, d) },
+			func(context.Context) (dashboard.Index, error) {
+				return nil, fmt.Errorf("CANARY-ERROR %s: %w", d.IndexDir(), index.ErrSchemaChanged)
+			}},
+		{"unreadable", http.StatusServiceUnavailable, func() { needsMigration(t, d) },
+			func(context.Context) (dashboard.Index, error) {
+				return nil, fmt.Errorf("CANARY-ERROR open %s: boom", filepath.Join(d.IndexDir(), index.FileName))
+			}},
+	} {
+		mode.prep()
+		if mode.open != nil {
+			open := mode.open
+			startServer = func(ctx context.Context, cfg dashboard.Config) (*dashboard.Server, error) {
+				cfg.OpenIndex = open
+				return oldStart(ctx, cfg)
+			}
+		} else {
+			startServer = oldStart
+		}
+		base, _, first, _, _, stop := serveDashboard(t)
+		c := dashLogin(t, base, first)
+		for _, p := range []string{"/", "/sessions/s1", "/memories/mem-allowed-2/text", "/api/v1/overview"} {
+			status, body := dashGet(t, base, c, p)
+			if status != mode.status || strings.TrimSpace(body) == "" {
+				t.Errorf("%s: GET %s: %d, want %d: %.200s", mode.name, p, status, mode.status, body)
+			}
+			got.pages[mode.name+" "+p] = body
+			got.asked++
+		}
+		stop()
+	}
 }
 
 // Free text of every source stays out of every page and every API answer
@@ -162,9 +255,9 @@ func canaryCrawl(t *testing.T) crawled {
 func TestDashboardHoldsNoCanary(t *testing.T) {
 	got := canaryCrawl(t)
 	if got.asked < 80 || len(got.pages) != got.asked {
-		t.Fatalf("%d requests, %d distinct bodies: the scan misses most of the dashboard", got.asked, len(got.pages))
+		t.Fatalf("%d requests, %d recorded: the scan misses most of the dashboard", got.asked, len(got.pages))
 	}
-	all := append(append([]string{}, canaries...), "CANARY-DOCTOR", "CANARY-OPERROR", "CANARY")
+	all := append(append([]string{}, canaries...), "CANARY-DOCTOR", "CANARY-OPERROR", "CANARY-HIDDEN-TEXT", "CANARY-THIRD-TEXT", "CANARY-MEMORY-TEXT", "CANARY")
 	for path, body := range got.pages {
 		for _, c := range all {
 			if strings.Contains(body, c) {
@@ -172,13 +265,20 @@ func TestDashboardHoldsNoCanary(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(got.text, canaryMemText) {
-		t.Errorf("the memory text did not come back on its page: %.300s", got.text)
+	// the positive control: each text page holds its own memory's text and
+	// no other canary, not the hidden one's note either
+	for id, text := range canaryTexts {
+		body := got.texts[id]
+		if !strings.Contains(body, text) {
+			t.Errorf("the text of %s did not come back on its page: %.300s", id, body)
+		}
+		for _, c := range all {
+			if strings.Contains(strings.ReplaceAll(body, text, ""), c) {
+				t.Errorf("%q on the text page of %s", c, id)
+			}
+		}
 	}
 	for _, c := range all {
-		if strings.Contains(strings.ReplaceAll(got.text, canaryMemText, ""), c) {
-			t.Errorf("%q on the memory text page", c)
-		}
 		if strings.Contains(got.stderr, c) {
 			t.Errorf("%q on stderr", c)
 		}
@@ -196,4 +296,19 @@ func TestDashboardHoldsNoCanary(t *testing.T) {
 	if sys := got.pages["/api/v1/system?days=30&tz=UTC&dev=0"]; !strings.Contains(sys, `"backsight doctor"`) {
 		t.Errorf("the doctor check did not reach the system view: %.300s", sys)
 	}
+}
+
+// dayWithPrompts is a day of the canary state that holds a prompt, read from
+// the fixture's own days view, not from the clock.
+func dayWithPrompts(t *testing.T) string {
+	t.Helper()
+	v := runView(t, "stats", "days", "--tz", "UTC", "--days", "30")
+	rows, _ := at(v.env.Data, "tables", "days").([]any)
+	for _, r := range rows {
+		if n, _ := at(r, "prompts").(float64); n > 0 {
+			return at(r, "day").(string)
+		}
+	}
+	t.Fatalf("no day with a prompt: %s", v.raw)
+	return ""
 }

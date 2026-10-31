@@ -212,6 +212,11 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 	ok = append(ok,
 		success{"sessions", "", []pair{{"has", "used"}}},
 		success{"sessions", "", []pair{{"limit", "2"}, {"offset", "1"}}},
+		// the same window, one parameter apart: the dashboard's cache must
+		// tell them apart
+		success{"sessions", "", []pair{{"limit", "2"}, {"offset", "0"}}},
+		success{"sessions", "", []pair{{"limit", "1"}, {"offset", "0"}}},
+		success{"quality", "", []pair{{"path", "search"}}},
 		success{"memories", "", []pair{{"sort", "rate"}, {"state", "never_used"}}},
 		success{"quality", "", []pair{{"dev", "1"}}},
 		success{"quality", "", []pair{{"path", "prompt"}}},
@@ -267,6 +272,11 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 		}
 	}
 	differ("quality/?path=prompt", "quality/?days=30&path=search")
+	// requested in this order in one run, at the same window: a cache key
+	// that drops one of these serves the first body to the second request
+	differ("sessions/?limit=2&offset=0", "sessions/?limit=2&offset=1")
+	differ("sessions/?limit=1&offset=0", "sessions/?limit=2&offset=0")
+	differ("quality/?path=prompt", "quality/?path=search")
 	differ("overview/?days=30&project=p2", "overview/?days=30&project=p1")
 	differ("overview/?tz=America%2FLos_Angeles", "overview/?")
 	differ("days/?days=30&tz=Pacific%2FAuckland", "days/?days=30")
@@ -292,7 +302,7 @@ func TestAPIEqualsTheCLI(t *testing.T) {
 		{"ambiguous id", "sessions", "sess-lon", nil, http.StatusNotFound},
 		{"too-short id", "sessions", "sess", nil, http.StatusNotFound},
 		{"unknown memory", "memories", "mem-nothing-here", nil, http.StatusNotFound},
-		{"day not a date", "days", "2026-13-01", nil, http.StatusBadRequest},
+		{"day not a date", "days", "2026-13-01", nil, http.StatusNotFound},
 	} {
 		t.Run("error: "+e.name, func(t *testing.T) {
 			status, raw := dashGet(t, base, c, apiPath(e.view, e.id, e.q))
@@ -455,15 +465,15 @@ func TestPagesShowTheFixturesNumbers(t *testing.T) {
 func TestPageIDMessages(t *testing.T) {
 	base, c := parityDashboard(t, true)
 	// A page tells a message as a sentence: its first letter upper-cased
-	// and a full stop at the end. A malformed day is a usage error, 400 as
-	// everywhere else; an id that names nothing is a 404.
+	// and a full stop at the end. An id that names nothing, or is written
+	// wrongly in the path, is a 404.
 	for _, tc := range []struct {
 		path, want string
 		status     int
 	}{
 		{"/sessions/sess-lon", `Ambiguous session id "sess-lon": sess-long-1, sess-long-2.`, http.StatusNotFound},
 		{"/sessions/sess", "Session id: give at least 8 characters.", http.StatusNotFound},
-		{"/days/2026-13-01", "A day is written YYYY-MM-DD.", http.StatusBadRequest},
+		{"/days/2026-13-01", "A day is written YYYY-MM-DD.", http.StatusNotFound},
 		{"/projects/nope", `No project "nope" in the window.`, http.StatusNotFound},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
