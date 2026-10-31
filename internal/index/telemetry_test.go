@@ -355,7 +355,7 @@ func TestUnknownKindsKeepNoPayload(t *testing.T) {
 	noBytes(t, e.ix, canary)
 }
 
-// The four reasons the emitters write are kept; any other text is other.
+// The five reasons the emitters write are kept; any other text is other.
 func TestIndexKeepsTheFeedbackReasons(t *testing.T) {
 	for _, r := range []string{"journal_read", "journal_write", "turn_pointer", "settle", "shared_combine"} {
 		if closedValue(r, feedbackReasons) != r {
