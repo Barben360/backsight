@@ -129,6 +129,10 @@ type Outbox struct {
 	// began with: it stays queued for the next one (operation ids are
 	// per server).
 	Gate func() error
+	// LockDeadline, when set, is when a wait for the lock gives up,
+	// instead of lockWait after it began: a caller with a hard deadline
+	// of its own (the SubagentStop hook's child) passes what it can spend.
+	LockDeadline time.Time
 }
 
 // WithLimitsMB returns o with the limits of hooks.outbox_warn_mb and
@@ -155,15 +159,27 @@ func (o Outbox) Limits() (warn, max int64) {
 	return warn, max
 }
 
-// lockWait is how long an outbox operation waits for the lock. Appenders
-// queue behind each other, each holding it for one fsync'd write and the
-// lock file's create and delete: a few ms on an SSD, up to about 100 ms on
-// a slow disk (windows-latest), so the wait is a time, not a count of
-// tries. It fits the SubagentStop hook's 5 s with the attribution's 1.5 s.
+// lockWait is how long an outbox operation waits for the lock unless its
+// caller bounds the wait (LockDeadline, Flush's context). The lock is held
+// by an append (the lock file's create, the line's write and fsync, the
+// lock file's delete: about 5 ms on the Windows VM's SSD, up to about
+// 100 ms on windows-latest's OS disk) and by a flush's read and rewrite.
+// Fifty tries of 20 ms (about 1 s) let a burst of 20 appends on that disk
+// refuse 5 (CI); 3 s covers about 30 of its appends. Callers without a hard
+// deadline of their own (store, the jobs, backfill) wait that long.
 const lockWait = 3 * time.Second
 
-func (o Outbox) lock(command string) (func(), error) {
-	deadline := time.Now().Add(lockWait)
+// lock takes the outbox lock, waiting until LockDeadline (when set, else
+// lockWait from now) or ctx's deadline, whichever comes first; ctx ending
+// stops the wait.
+func (o Outbox) lock(ctx context.Context, command string) (func(), error) {
+	deadline := o.LockDeadline
+	if deadline.IsZero() {
+		deadline = time.Now().Add(lockWait)
+	}
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
 	for {
 		l, err := state.TryAcquire(o.LockPath, command)
 		if err == nil {
@@ -176,7 +192,11 @@ func (o Outbox) lock(command string) (func(), error) {
 		if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
 			continue
 		}
-		time.Sleep(20 * time.Millisecond) // short waits: notes are tiny
+		select { // short waits: notes are tiny
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(min(20*time.Millisecond, time.Until(deadline))):
+		}
 	}
 }
 
@@ -186,7 +206,7 @@ var whileAppending = func() {}
 
 // Append writes n durably. warn is true past the warning size.
 func (o Outbox) Append(n Note) (warn bool, err error) {
-	unlock, err := o.lock("store")
+	unlock, err := o.lock(context.Background(), "store")
 	if err != nil {
 		return false, err
 	}
@@ -262,7 +282,7 @@ const MaxAttempts = 50
 // so store can append meanwhile.
 func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID string) (FlushResult, error) {
 	var res FlushResult
-	unlock, err := o.lock("notes flush")
+	unlock, err := o.lock(ctx, "notes flush")
 	if err != nil {
 		return res, err
 	}
@@ -314,7 +334,9 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 		failed[n.OperationID] = n
 		break
 	}
-	unlock, err = o.lock("notes flush")
+	// What was sent is recorded whatever is left of ctx: a note left in
+	// the file would go out again.
+	unlock, err = o.lock(context.Background(), "notes flush")
 	if err != nil {
 		return res, err
 	}
@@ -372,7 +394,7 @@ func (o Outbox) rewrite(notes []Note) error {
 
 // Requeue moves quarantined notes back into the outbox.
 func (o Outbox) Requeue() (int, error) {
-	unlock, err := o.lock("retry-quarantine")
+	unlock, err := o.lock(context.Background(), "retry-quarantine")
 	if err != nil {
 		return 0, err
 	}
