@@ -48,6 +48,17 @@ var funcs = template.FuncMap{
 	"age":       views.Age,
 	"when":      when,
 	"esc":       url.PathEscape,
+	"asset":     assetOf,
+}
+
+// assetOf is the path an embedded file is served at; a name that is not
+// one fails the page, so a typo shows in tests.
+func assetOf(name string) (string, error) {
+	p, ok := assetPaths[name]
+	if !ok {
+		return "", errors.New("no asset " + strconv.Quote(name))
+	}
+	return p, nil
 }
 
 // wordsOfAxis is views.AxisStateWords keyed by plain strings.

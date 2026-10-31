@@ -12,14 +12,14 @@
 <meta name="referrer" content="no-referrer">
 {{if .Frame.Reload}}<meta http-equiv="refresh" content="{{.Frame.Reload}}">
 {{end}}<title>{{.Frame.Title}} - backsight</title>
-<link rel="stylesheet" href="{{index .Frame.Assets "dashboard.css"}}">
+<link rel="stylesheet" href="{{asset "dashboard.css"}}">
 </head>
 <body>
 {{end}}
 
 {{define "top"}}<header>
 <nav aria-label="Pages">
-<a href="/"><img src="{{index .Frame.Assets "logo-light.svg"}}" width="24" height="24" alt="backsight"></a>
+<a href="/"><img src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"></a>
 {{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
 {{end}}<details>
 <summary>Browse</summary>

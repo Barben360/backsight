@@ -392,10 +392,13 @@ func everyResponse(h *harness) []response {
 		response{"401 page", "GET", "/quality", nil, http.StatusUnauthorized, nil},
 		response{"401 page, HEAD", "HEAD", "/quality", nil, http.StatusUnauthorized, nil},
 		response{"401 envelope", "GET", "/api/v1/overview", nil, http.StatusUnauthorized, nil},
+		response{"page 400", "GET", "/quality?limit=0", ck, http.StatusBadRequest, nil},
+		response{"page 404", "GET", "/sessions/zzzzzzzz", ck, http.StatusNotFound, nil},
 		response{"api 400", "GET", "/api/v1/overview?limit=0", ck, http.StatusBadRequest, nil},
 		response{"api 404", "GET", "/api/v1/nope", ck, http.StatusNotFound, nil},
 		// Last: the index is marked as changed by a newer backsight, for good.
 		response{"api 503", "GET", "/api/v1/overview?days=3", ck, http.StatusServiceUnavailable, func() { h.ix.set(func(f *fakeIndex) { f.side = true }) }},
+		response{"page 503", "GET", "/quality?days=4", ck, http.StatusServiceUnavailable, nil},
 	)
 }
 

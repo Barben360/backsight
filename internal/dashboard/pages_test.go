@@ -3,6 +3,8 @@ package dashboard
 import (
 	"errors"
 	"html"
+	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"slices"
@@ -69,6 +71,10 @@ func TestPageHeadersDeclareViews(t *testing.T) {
 	if _, _, err := loadPages(bad); err == nil || !strings.Contains(err.Error(), "x.html") {
 		t.Errorf("a file without the header: %v", err)
 	}
+	twice := fstest.MapFS{"frame.html": frame["frame.html"], "x.html": {Data: []byte("{{/* views: overview, overview */}}\n")}}
+	if _, _, err := loadPages(twice); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("a view declared twice: %v", err)
+	}
 	unknown := fstest.MapFS{"frame.html": frame["frame.html"], "x.html": {Data: []byte("{{/* views: nonsense */}}\n")}}
 	if _, _, err := loadPages(unknown); err == nil {
 		t.Error("an unknown view is accepted")
@@ -89,9 +95,9 @@ func TestPageParams(t *testing.T) {
 		want   string
 	}{
 		{"/quality?limit=99999", 400, "--limit: a whole number from 1 to 500"},
-		{"/quality?days=1&days=2", 400, "give days once"},
-		{"/quality?has=used", 400, "unknown parameter"},
-		{"/quality?days=1;x", 400, "the query string is malformed"},
+		{"/quality?days=1&days=2", 400, "Give days once."},
+		{"/quality?has=used", 400, "Unknown parameter"},
+		{"/quality?days=1;x", 400, "The query string is malformed."},
 		{"/sessions?has=used", 200, ""},
 	} {
 		r, b := pageGet(t, h, ck, c.path)
@@ -123,16 +129,16 @@ func TestStatePages(t *testing.T) {
 		}, "/", firstBuildSentence},
 		{"updating", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, index.ErrUpdateInProgress} })
-		}, "/", views.UpdatingSentence},
+		}, "/", sentence(views.UpdatingSentence)},
 		{"updated", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.side = true })
 		}, "/", "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."},
 		{"broken", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, errors.New("boom /secret/path")} })
-		}, "/", "the metrics index could not be read"},
+		}, "/", "The metrics index could not be read"},
 		{"catch-up meets an update", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.catchUpErr = index.ErrUpdateInProgress })
-		}, "/quality", views.UpdatingSentence},
+		}, "/quality", sentence(views.UpdatingSentence)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -162,14 +168,14 @@ func TestStatePages(t *testing.T) {
 	t.Run("unclassified failure", func(t *testing.T) {
 		h := dataHarness(t, func(f *fakeIndex) { f.catchUpErr = errors.New("disk exploded at /home/x/secret.db") })
 		r, b := pageGet(t, h, h.login(), "/")
-		if r.StatusCode != 500 || !strings.Contains(b, "the view failed: run backsight doctor") || strings.Contains(b, "secret") {
+		if r.StatusCode != 500 || !strings.Contains(b, "The view failed: run backsight doctor.") || strings.Contains(b, "secret") {
 			t.Errorf("%d %q", r.StatusCode, b)
 		}
 	})
 	t.Run("not found", func(t *testing.T) {
 		h := dataHarness(t)
 		r, b := pageGet(t, h, h.login(), "/sessions/zzzzzzzz")
-		if r.StatusCode != 404 || !strings.Contains(b, `no session "zzzzzzzz" in the metrics index`) {
+		if r.StatusCode != 404 || !strings.Contains(b, `No session "zzzzzzzz" in the metrics index.`) {
 			t.Errorf("%d %q", r.StatusCode, b)
 		}
 	})
@@ -282,5 +288,37 @@ func TestWhen(t *testing.T) {
 		if got := when(c.loc, c.in); got != c.want {
 			t.Errorf("when(%v, %v) = %q, want %q", c.loc, c.in, got, c.want)
 		}
+	}
+}
+
+func TestEchoedIDsAreEscaped(t *testing.T) {
+	h := dataHarness(t)
+	r := h.do("GET", "/sessions/%3Cscript%3Ex%26%22y", cookieHdr(h.login())...)
+	raw := body(t, r)
+	if r.StatusCode != 404 || strings.Contains(raw, "<script>") || !strings.Contains(raw, "&lt;script&gt;x&amp;\\&#34;y") {
+		t.Errorf("%d, raw body %q: want the id escaped", r.StatusCode, raw)
+	}
+}
+
+func TestSentence(t *testing.T) {
+	for in, want := range map[string]string{
+		"no session": "No session.", "Done.": "Done.", "why?": "Why?", "--limit: a number": "--limit: a number.", "": "",
+	} {
+		if got := sentence(in); got != want {
+			t.Errorf("sentence(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAssetFunc(t *testing.T) {
+	if p, err := assetOf("logo-light.svg"); err != nil || p != assetPath("logo-light.svg") {
+		t.Errorf("known asset: %q, %v", p, err)
+	}
+	if _, err := assetOf("nope.css"); err == nil {
+		t.Error("an unknown asset is accepted")
+	}
+	tpl := template.Must(template.New("x").Funcs(funcs).Parse(`{{asset "logo-lite.svg"}}`))
+	if err := tpl.Execute(io.Discard, nil); err == nil {
+		t.Error("a typo in an asset name does not fail the page")
 	}
 }

@@ -103,9 +103,13 @@ func TestCodeLogin(t *testing.T) {
 		if h.codeLeft(code) {
 			t.Errorf("GET %s: the code was not spent", c.target)
 		}
-		// A project the generated index lacks is a 404: the session is what counts.
-		if r := h.do("GET", c.want, cookieHdr(ck)...); r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNotFound {
-			t.Errorf("GET %s with the new session: %d, want 200 or 404", c.want, r.StatusCode)
+		// A project the generated index lacks is a 404; every other case is a page.
+		want := http.StatusOK
+		if strings.HasPrefix(c.want, "/projects/") {
+			want = http.StatusNotFound
+		}
+		if r := h.do("GET", c.want, cookieHdr(ck)...); r.StatusCode != want {
+			t.Errorf("GET %s with the new session: %d, want %d", c.want, r.StatusCode, want)
 		}
 	}
 }

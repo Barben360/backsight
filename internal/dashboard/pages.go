@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
@@ -71,9 +72,12 @@ func loadPages(fsys fs.FS) (map[string]*template.Template, map[string]pageSpec, 
 		if !ok {
 			return nil, nil, fmt.Errorf("template %s: no views header on its first line", file)
 		}
-		for _, v := range names {
+		for i, v := range names {
 			if !slices.Contains(metrics.Views, v) {
 				return nil, nil, fmt.Errorf("template %s: %q is not a view", file, v)
+			}
+			if slices.Contains(names[:i], v) {
+				return nil, nil, fmt.Errorf("template %s: view %q is declared twice", file, v)
 			}
 		}
 		if names == nil {
@@ -225,7 +229,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p, err = views.FromValues(first, q)
 		}
 		if err != nil {
-			s.statePage(w, r, http.StatusBadRequest, title, prefs, err.Error(), 0)
+			s.statePage(w, r, http.StatusBadRequest, title, prefs, sentence(err.Error()), 0)
 			return
 		}
 		if p.DevSet { // the query beats the preference for this request
@@ -251,7 +255,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, firstBuildSentence, 2)
 				return
 			case stateUpdating:
-				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, views.UpdatingSentence, 0)
+				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, sentence(views.UpdatingSentence), 0)
 				return
 			case stateUpdated:
 				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, updatedPage, 0)
@@ -292,7 +296,21 @@ func (s *Server) failurePage(w http.ResponseWriter, r *http.Request, title strin
 		return
 	}
 	status, reported := apiFailure(err)
-	s.statePage(w, r, status, title, prefs, reported.Error(), 0)
+	s.statePage(w, r, status, title, prefs, sentence(reported.Error()), 0)
+}
+
+// sentence is a reported message as a page shows it: its first letter
+// upper-cased and a full stop at the end.
+func sentence(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	if last := r[len(r)-1]; last != '.' && last != '!' && last != '?' {
+		r = append(r, '.')
+	}
+	return string(r)
 }
 
 // statePage answers status with the state page: a sentence, and for
