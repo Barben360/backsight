@@ -299,3 +299,80 @@ func TestPathCopyIsAnExe(t *testing.T) {
 		t.Errorf("the PATH copy must follow the shim: %v", err)
 	}
 }
+
+func TestAFailedSwapKeepsTheOldShimsChecksums(t *testing.T) {
+	dir := t.TempDir()
+	v1, v2 := sleeper(t, filepath.Join(dir, "v1"), "1"), sleeper(t, filepath.Join(dir, "v2"), "2")
+	bin := filepath.Join(dir, "bin")
+	want := map[string]string{selfcheck.ChecksumsFile: "v1 sums", selfcheck.SignatureFile: "v1 sig"}
+	for n, c := range want {
+		_ = os.WriteFile(filepath.Join(dir, "v1", n), []byte(c), 0o644)
+	}
+	shim := filepath.Join(bin, "current.exe")
+	if err := pointShim(v1, shim); err != nil {
+		t.Fatal(err)
+	}
+	// v2 has different checksums; its exe is missing, then its dir
+	for n := range want {
+		_ = os.WriteFile(filepath.Join(dir, "v2", n), []byte("v2 "+n), 0o644)
+	}
+	_ = os.Remove(v2)
+	for _, target := range []string{v2, filepath.Join(dir, "nowhere", "backsight.exe")} {
+		if err := pointShim(target, shim); err == nil {
+			t.Fatalf("%s: a missing target must fail", target)
+		}
+		for n, c := range want {
+			if b, _ := os.ReadFile(filepath.Join(bin, n)); string(b) != c {
+				t.Errorf("%s after a failed swap to %s: %q, want %q", n, target, b, c)
+			}
+		}
+		if !sameBytes(t, shim, v1) {
+			t.Error("the shim changed")
+		}
+	}
+}
+
+// A test binary re-executed as backsight (update apply's runChild, the
+// hooks) must write the throwaway PATH key of its parent, never the real
+// Environment.
+func TestAReexecutedChildWritesTheThrowawayPathKey(t *testing.T) {
+	if os.Getenv("BACKSIGHT_TEST_PATH_CHILD") == "1" {
+		return // the child: TestMain already isolated it
+	}
+	if userPathKey == "Environment" {
+		t.Fatal("the parent is not isolated")
+	}
+	dir := `C:\bs-reexec-` + strings.ReplaceAll(t.Name(), "/", "_")
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "-test.run=^TestReexecChildHelper$")
+	cmd.Env = append(os.Environ(), "BACKSIGHT_TEST_PATH_CHILD=1", "BACKSIGHT_TEST_PATH_DIR="+dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	k, err := registry.OpenKey(registry.CURRENT_USER, userPathKey, registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _, _ := k.GetStringValue("Path")
+	_ = k.Close()
+	if !strings.Contains(v, dir) {
+		t.Errorf("the child did not write the parent's throwaway key: %q", v)
+	}
+	real, err := registry.OpenKey(registry.CURRENT_USER, `Environment`, registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = real.Close() }()
+	if rv, _, _ := real.GetStringValue("Path"); strings.Contains(rv, dir) {
+		t.Fatalf("the child wrote the REAL user PATH: %q", rv)
+	}
+}
+
+func TestReexecChildHelper(t *testing.T) {
+	if os.Getenv("BACKSIGHT_TEST_PATH_CHILD") != "1" {
+		t.Skip("only as the child of TestAReexecutedChildWritesTheThrowawayPathKey")
+	}
+	if _, err := ensureUserPath(os.Getenv("BACKSIGHT_TEST_PATH_DIR")); err != nil {
+		t.Fatal(err)
+	}
+}

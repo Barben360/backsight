@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/selfcheck"
 )
 
@@ -24,8 +25,19 @@ import (
 // The signed checksums beside target follow the copy, so the shim checks
 // itself like any installed binary (SPEC §11.1).
 func pointShimWindows(target, shim string) error {
-	if err := moveChecksums(filepath.Dir(target), filepath.Dir(shim)); err != nil {
+	// Read everything first: a failure here changes nothing.
+	if _, err := os.Stat(target); err != nil {
 		return err
+	}
+	sums, err := readChecksums(filepath.Dir(target))
+	if err != nil {
+		return err
+	}
+	var prev checksumSet
+	if filepath.Clean(filepath.Dir(target)) != filepath.Clean(filepath.Dir(shim)) {
+		if prev, err = readChecksums(filepath.Dir(shim)); err != nil {
+			return err
+		}
 	}
 	old := ""
 	if _, err := os.Lstat(shim); err == nil {
@@ -43,9 +55,21 @@ func pointShimWindows(target, shim string) error {
 	}
 	if err := copyFile(target, shim, 0o755); err != nil {
 		if old != "" { // never leave the shim missing
-			_ = os.Rename(old, shim)
+			if rerr := os.Rename(old, shim); rerr != nil {
+				err = errors.Join(err, fmt.Errorf("putting the previous shim back: %w", rerr))
+			}
 		}
 		return err
+	}
+	// The checksums follow the exe only once it is in place; both or none.
+	if prev != nil {
+		if err := writeChecksums(filepath.Dir(shim), sums); err != nil {
+			err = errors.Join(err, writeChecksums(filepath.Dir(shim), prev))
+			if old != "" {
+				err = errors.Join(err, os.Remove(shim), os.Rename(old, shim))
+			}
+			return err
+		}
 	}
 	cleanOld(shim)
 	return nil
@@ -82,27 +106,41 @@ func escapeGlob(p string) string {
 	return b.String()
 }
 
-// moveChecksums makes dst hold the same checksums.txt and signature as
-// src: copied when src has them, removed when it has none (a dev build
-// must not keep another version's, which the new binary would fail).
-func moveChecksums(src, dst string) error {
-	if filepath.Clean(src) == filepath.Clean(dst) {
-		return nil
-	}
+// checksumSet is the content of checksums.txt and its signature in a
+// directory; a nil entry is a file that is not there.
+type checksumSet map[string][]byte
+
+func readChecksums(dir string) (checksumSet, error) {
+	set := checksumSet{}
 	for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
-		from, to := filepath.Join(src, name), filepath.Join(dst, name)
-		if _, err := os.Stat(from); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				if err := os.Remove(to); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return fmt.Errorf("removing %s: %w", to, err)
-				}
-				continue
-			}
-			return err
-		}
-		if err := copyFile(from, to, 0o644); err != nil {
-			return err
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			set[name] = nil
+		case err != nil:
+			return nil, err
+		default:
+			set[name] = raw
 		}
 	}
-	return nil
+	return set, nil
+}
+
+// writeChecksums makes dir hold exactly set: files written atomically,
+// absent ones removed (a dev build must not keep another version's).
+func writeChecksums(dir string, set checksumSet) error {
+	var errs []error
+	for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
+		p := filepath.Join(dir, name)
+		if set[name] == nil {
+			if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := fsutil.WriteAtomic(p, set[name], 0o644); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

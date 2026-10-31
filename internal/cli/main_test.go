@@ -86,6 +86,9 @@ var goraceSet bool
 
 func TestMain(m *testing.M) {
 	testtool.Main() // started as a fake program: behave as it and exit
+	// Before any child branch: a re-executed test binary writes the same
+	// throwaway PATH key, never the real one of the user running the tests.
+	cleanup := isolateUserPath()
 	// The race runtime sleeps 1 s at exit while other threads live: twice
 	// per hook (the shim and its child) under -race, past SessionEnd's
 	// 800 ms child deadline. The children inherit this (issue #281).
@@ -100,14 +103,15 @@ func TestMain(m *testing.M) {
 		if len(args) > 0 && args[0] == "hook-child" {
 			hookChildFault(os.Getenv(testHookFault))
 		}
-		os.Exit(Execute(args, os.Stdout, os.Stderr))
+		code := Execute(args, os.Stdout, os.Stderr)
+		cleanup()
+		os.Exit(code)
 	}
 	composeRunner = refuseDocker{}
 	nativeSys, nativeTools = refuseSys{}, refuseTools{}
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
-	cleanup := isolateUserPath()                             // never the real PATH of the user running the tests
 	code := m.Run()
 	cleanup()
 	os.Exit(code)
