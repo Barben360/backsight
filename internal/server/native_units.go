@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // The native server's files, start, stop and state, through its host
@@ -214,23 +213,8 @@ func (n Native) envPort() (int, error) {
 }
 
 // parseEnvFile reads the KEY=value lines of an environment file Render
-// wrote, without the quotes quoted() adds.
-func parseEnvFile(raw []byte) []string {
-	var out []string
-	sc := bufio.NewScanner(bytes.NewReader(raw))
-	for sc.Scan() {
-		l := strings.TrimSpace(sc.Text())
-		k, v, ok := strings.Cut(l, "=")
-		if !ok || l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		if len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'' {
-			v = v[1 : len(v)-1]
-		}
-		out = append(out, k+"="+v)
-	}
-	return out
-}
+// wrote, without the quotes quoted() adds: the supervisor's reading.
+func parseEnvFile(raw []byte) []string { return supervise.ParseEnv(raw) }
 
 // shellWord is s as one word for /bin/sh.
 func shellWord(s string) string {

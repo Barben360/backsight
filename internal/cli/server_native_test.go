@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -362,5 +364,162 @@ func TestNativeRefusalOnADockerInstallNamesClean(t *testing.T) {
 	native := configOfKind(cfg, "native")
 	if n, ok := runtimeOfKind(native, "native").(server.Native); !ok || n.NotInUse {
 		t.Errorf("on native, the native runtime is in use: %+v", n)
+	}
+}
+
+// superviseHost is nativeCheckHost with project p and a supervise.json
+// under the native root whose postgres, pg_isready, pg_ctl and API are
+// fakes in dir: postgres records its argv, is ready at once and stops on
+// pg_ctl.
+func superviseHost(t *testing.T, p string) (server.Native, supervise.Config) {
+	t.Helper()
+	n, _ := nativeCheckHost(t)
+	if err := os.WriteFile(n.Dirs.ConfigFile(), []byte("[server]\nruntime = \"native\"\nproject = \""+p+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n.Cfg.Server.Project = p
+	dir := t.TempDir()
+	file := func(name string) string { return filepath.Join(dir, name) }
+	pg := testtool.Write(t, dir, "postgres", testtool.Fake{Script: "write " + file("ready") + " x\nwaitfile " + file("pg-stop")})
+	isReady := testtool.Write(t, dir, "pg_isready", testtool.Fake{Script: "nofile " + file("ready") + " 2"})
+	ctl := testtool.Write(t, dir, "pg_ctl", testtool.Fake{Script: "write " + file("pg-stop") + " x"})
+	api := testtool.Write(t, dir, "hindsight-api", testtool.Fake{Script: "waitfile " + file("never")})
+	if err := os.MkdirAll(n.Root(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(n.EnvFile(), []byte("X=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sc := supervise.Config{Project: p, DataDir: n.DataDir(), Postgres: []string{pg, "-D", n.DataDir()}, PGIsReady: []string{isReady},
+		PGCtlStop: []string{ctl, "stop"}, API: []string{api}, EnvFile: n.EnvFile(), LogDir: file("logs"), Venv: "1.1.0-abcdefabcdef"}
+	raw, err := json.Marshal(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(n.Root(), "supervise.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return n, sc
+}
+
+// runSupervise runs `server supervise args` in a goroutine; the channel
+// gets its exit code.
+func runSupervise(t *testing.T, p string, args ...string) <-chan int {
+	t.Helper()
+	done := make(chan int, 1)
+	go func() {
+		code, _, _ := run(t, append([]string{"server", "supervise"}, args...)...)
+		done <- code
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = supervise.Ask(ctx, p, "stop")
+	})
+	return done
+}
+
+func superviseStatus(t *testing.T, p, db string) supervise.Status {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		st, err := supervise.Ask(ctx, p, "status")
+		cancel()
+		if err == nil && st.DB == db {
+			return st
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("supervisor of %s: %+v %v, want db %s", p, st, err, db)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func stopSupervise(t *testing.T, p string, done <-chan int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := supervise.Ask(ctx, p, "stop"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != output.OK {
+			t.Errorf("server supervise exited %d after stop, want 0", code)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("server supervise did not exit after stop")
+	}
+}
+
+// The guard's identity refusal is final: refused, nothing started, the
+// reason in <Root>/refused and the status, until stop.
+func TestServerSuperviseRefusesAnUnrecordedInstance(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-refused"
+	n, sc := superviseHost(t, p)
+	withInstance(t, n, "111", "")
+	done := runSupervise(t, p)
+	st := superviseStatus(t, p, "refused")
+	if !strings.Contains(st.Refusal, "has no recorded identity") || st.API != "stopped" || st.Venv != sc.Venv {
+		t.Errorf("status %+v: want the unrecorded refusal", st)
+	}
+	if raw, err := os.ReadFile(filepath.Join(n.Root(), "refused")); err != nil || !strings.Contains(string(raw), "has no recorded identity") {
+		t.Errorf("refused file %q (%v)", raw, err)
+	}
+	if got := testtool.Calls(t, sc.Postgres[0]); got != nil {
+		t.Errorf("postgres ran %q on a refused instance", got)
+	}
+	stopSupervise(t, p, done)
+}
+
+func TestServerSuperviseRunsSuperviseJSON(t *testing.T) {
+	testtool.SkipWindows(t, "Task 10: the guard's stray scan on Windows")
+	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-runs"
+	_, sc := superviseHost(t, p)
+	setBuild(t, "7.7.7", "abc")
+	done := runSupervise(t, p, "--no-api")
+	st := superviseStatus(t, p, "running")
+	if st.Version != "7.7.7" || st.API != "stopped" {
+		t.Errorf("status %+v: want backsight's version and no API (--no-api)", st)
+	}
+	if got := testtool.Calls(t, sc.Postgres[0]); len(got) != 1 || !slices.Equal(got[0], sc.Postgres[1:]) {
+		t.Errorf("postgres argv %q, want %q", got, sc.Postgres[1:])
+	}
+	if got := testtool.Calls(t, sc.API[0]); got != nil {
+		t.Errorf("the API ran %q under --no-api", got)
+	}
+	stopSupervise(t, p, done)
+}
+
+// --backsight-home is BACKSIGHT_HOME for a task, which cannot set it.
+func TestServerSuperviseTakesBacksightHome(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-home"
+	n, _ := superviseHost(t, p)
+	withInstance(t, n, "111", "")
+	home := os.Getenv("BACKSIGHT_HOME")
+	t.Setenv("BACKSIGHT_HOME", filepath.Join(t.TempDir(), "elsewhere"))
+	done := runSupervise(t, p, "--backsight-home", home)
+	superviseStatus(t, p, "refused")
+	stopSupervise(t, p, done)
+}
+
+func TestServerSuperviseRefusesAnotherProjectsJSON(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-other"
+	n, sc := superviseHost(t, p)
+	sc.Project = "someone-else"
+	raw, _ := json.Marshal(sc)
+	if err := os.WriteFile(filepath.Join(n.Root(), "supervise.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := run(t, "server", "supervise")
+	if code != output.Blocked || !strings.Contains(errOut, `supervises project "someone-else", config.toml names "`+p+`"`) {
+		t.Errorf("exit %d, stderr %q: want a refusal naming both projects", code, errOut)
+	}
+	if got := testtool.Calls(t, sc.Postgres[0]); got != nil {
+		t.Errorf("postgres ran %q", got)
 	}
 }

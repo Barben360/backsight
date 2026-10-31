@@ -477,16 +477,46 @@ func localSecrets() []string {
 	return local.values
 }
 
-// Encodings are v and its URL-escaped forms: query, path, and the path
-// form of hindsight's bankPath, which escapes ':' too.
+// Encodings are v and its URL-escaped forms: query, path, the path form
+// of hindsight's bankPath, which escapes ':' too, and the password of a
+// URL's userinfo (a database URL's).
 func Encodings(v string) []string {
 	out := []string{v}
-	for _, f := range []string{url.QueryEscape(v), url.PathEscape(v), strings.ReplaceAll(url.PathEscape(v), ":", "%3A")} {
+	userinfo := strings.TrimPrefix(url.UserPassword("", v).String(), ":")
+	for _, f := range []string{url.QueryEscape(v), url.PathEscape(v), strings.ReplaceAll(url.PathEscape(v), ":", "%3A"), userinfo} {
 		if !slices.Contains(out, f) {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// MinValue is the shortest value Values replaces.
+const MinValue = 6
+
+// Values is text with every one of values (MinValue bytes or more) and its
+// URL-escaped forms replaced by [redacted]: the runtime's redaction of the
+// known secrets, for error messages quoting a tool and for the native
+// server's logs (a database URL carries the password escaped). Unlike
+// Text, it applies no rule: a value is replaced wherever it appears, and
+// nothing else is.
+func Values(text string, values []string) string {
+	var forms []string
+	for _, v := range values {
+		if len(v) < MinValue {
+			continue
+		}
+		for _, f := range Encodings(v) {
+			if !slices.Contains(forms, f) {
+				forms = append(forms, f)
+			}
+		}
+	}
+	sort.SliceStable(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
+	for _, f := range forms {
+		text = strings.ReplaceAll(text, f, "[redacted]")
+	}
+	return text
 }
 
 // Text returns s with secrets replaced by [redacted:<kind>] and the sorted

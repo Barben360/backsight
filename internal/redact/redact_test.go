@@ -379,3 +379,19 @@ func TestRedactMasksAnEncodedToken(t *testing.T) {
 		}
 	}
 }
+
+// Values replaces each known value, escaped as a URL carries it too, and
+// leaves a value shorter than MinValue and everything else alone.
+func TestValuesReplacesKnownSecretsAndTheirURLForms(t *testing.T) {
+	pw := "p@ss/w:rd 9x"
+	text := "pw " + pw + " url postgresql://hindsight:" + url.UserPassword("hindsight", pw).String()[len("hindsight:"):] + "@127.0.0.1:5432/hindsight key sk-long-key short abc"
+	got := Values(text, []string{pw, "sk-long-key", "abc", ""})
+	for _, leak := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw), "sk-long-key"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%q left in %q", leak, got)
+		}
+	}
+	if want := "pw [redacted] url postgresql://hindsight:[redacted]@127.0.0.1:5432/hindsight key [redacted] short abc"; got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}

@@ -1,0 +1,535 @@
+// Package supervise is the native server's supervisor on Windows (decision
+// 0080): `backsight server supervise`, started by the per-user task, runs
+// postgres then the API from supervise.json, restarts them with backoff,
+// and answers a per-user named pipe (status, stop, api-stop, api-start).
+// Windows has no per-user service manager: this is what systemd's two
+// units do on Linux.
+//
+// Every process it starts is in a named kill-on-close Job Object it joins
+// first, so nothing survives it (E29 requirement 3); a second supervisor
+// of the same project exits at once, holding a named mutex (E34 ruling 1).
+// No secret is on an argv or in supervise.json: the API's come from
+// server.env, read at each start into its environment; child output goes
+// to the logs through the redaction of the known secrets.
+//
+// On other OSes the transports are a unix socket and a flock, for the
+// tests only: Linux runs systemd's units, never this.
+package supervise
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/redact"
+)
+
+// Config is supervise.json, written by the native runtime's Render.
+type Config struct {
+	Project   string   `json:"project"`
+	DataDir   string   `json:"data_dir"`
+	Postgres  []string `json:"postgres"` // argv, no secret
+	PGIsReady []string `json:"pg_isready"`
+	PGCtlStop []string `json:"pg_ctl_stop"`
+	API       []string `json:"api"`
+	Env       []string `json:"env"`      // the tool environment, no secret
+	EnvFile   string   `json:"env_file"` // server.env: the API's secrets, read at each API start
+	LogDir    string   `json:"log_dir"`
+	Venv      string   `json:"venv"` // the deployed version (DeployedVenv)
+}
+
+// Options are what the command gives Run besides supervise.json.
+type Options struct {
+	// Check is server native-check's guard, run before every start of the
+	// database. An error whose Final method returns true (the identity
+	// check's *server.GuardError) is a refusal: nothing starts until stop.
+	// Any other error is retried with the restart backoff.
+	Check   func(ctx context.Context) error
+	NoAPI   bool
+	Secrets []string // redacted from child output and the supervisor's log
+	Version string
+}
+
+// The states Status reports for the database and the API.
+const (
+	stateStarting   = "starting"
+	stateRunning    = "running"
+	stateRestarting = "restarting"
+	stateStopped    = "stopped"
+	stateRefused    = "refused"
+)
+
+// refusedFile, under the root (server.env's directory), holds the reason
+// of a refusal for server status and doctor; it is removed once the guard
+// passes.
+const refusedFile = "refused"
+
+// timing holds the supervisor's numbers (0080's Global Constraints); the
+// tests shorten them and fake the restart clock.
+type timing struct {
+	backoffMin, backoffMax, resetAfter time.Duration // restart backoff
+	readyPoll, readyWait               time.Duration // pg_isready
+	apiStopWait, dbStopWait            time.Duration // CTRL_BREAK → kill; pg_ctl stop
+	requestWait                        time.Duration // a client's request and answer
+	after                              func(time.Duration) <-chan time.Time
+	now                                func() time.Time
+}
+
+var tm = timing{
+	backoffMin: time.Second, backoffMax: 5 * time.Minute, resetAfter: time.Minute,
+	readyPoll: 100 * time.Millisecond, readyWait: 300 * time.Second,
+	apiStopWait: 30 * time.Second, dbStopWait: 60 * time.Second,
+	requestWait: 5 * time.Second,
+	after:       time.After, now: time.Now,
+}
+
+// backoff is a child's restart delay: 1 s doubling to 5 min, back to 1 s
+// once the child stayed up a minute.
+type backoff struct{ cur time.Duration }
+
+func (b *backoff) next(up time.Duration) time.Duration {
+	if up >= tm.resetAfter {
+		b.cur = 0
+	}
+	if b.cur == 0 {
+		b.cur = tm.backoffMin
+	} else {
+		b.cur = min(2*b.cur, tm.backoffMax)
+	}
+	return b.cur
+}
+
+// isFinal: err is a refusal no retry can change.
+func isFinal(err error) bool {
+	var f interface{ Final() bool }
+	return errors.As(err, &f) && f.Final()
+}
+
+type supervisor struct {
+	cfg    Config
+	opts   Options
+	slog   *rotating
+	dbLog  *rotating
+	apiLog *rotating
+
+	mu sync.Mutex
+	st Status
+
+	ops chan opRequest
+}
+
+type opRequest struct {
+	op    string
+	reply chan Status
+}
+
+// Run supervises cfg's processes until a stop request (nil) or ctx's end
+// (ctx.Err()), each followed by stopping both; a second supervisor of
+// cfg.Project returns nil at once, having started nothing.
+func Run(ctx context.Context, cfg Config, opts Options) error {
+	if err := cfg.check(opts.NoAPI); err != nil {
+		return err
+	}
+	if err := fsutil.MkdirPrivate(cfg.LogDir); err != nil {
+		return err
+	}
+	s := &supervisor{cfg: cfg, opts: opts, ops: make(chan opRequest)}
+	var err error
+	if s.slog, err = openRotating(s.logPath("supervisor")); err != nil {
+		return err
+	}
+	defer func() { _ = s.slog.Close() }()
+
+	release, err := acquire(cfg.Project)
+	if errors.Is(err, errRunning) {
+		s.logf("another supervisor of %s runs: this one (pid %d) exits", cfg.Project, os.Getpid())
+		return nil
+	}
+	if err != nil {
+		return s.fail(fmt.Errorf("taking the supervisor's single-instance lock: %w", err))
+	}
+	defer release()
+	if err := joinJob(cfg.Project); err != nil {
+		return s.fail(fmt.Errorf("joining the server's job object: %w", err))
+	}
+	if s.dbLog, err = openRotating(s.logPath("db")); err != nil {
+		return s.fail(err)
+	}
+	defer func() { _ = s.dbLog.Close() }()
+	if s.apiLog, err = openRotating(s.logPath("api")); err != nil {
+		return s.fail(err)
+	}
+	defer func() { _ = s.apiLog.Close() }()
+
+	api := stateStarting
+	if opts.NoAPI {
+		api = stateStopped
+	}
+	s.st = Status{Proto: Proto, Version: opts.Version, PID: os.Getpid(), DB: stateStarting, API: api, Venv: cfg.Venv}
+	l, err := listen(cfg.Project)
+	if err != nil {
+		return s.fail(fmt.Errorf("opening the supervisor's control channel: %w", err))
+	}
+	served := serve(l, s.answer)
+	defer func() {
+		_ = l.Close()
+		<-served
+	}()
+	s.logf("supervisor of %s started (pid %d, backsight %s, server %s)", cfg.Project, os.Getpid(), opts.Version, cfg.Venv)
+	err = s.loop(ctx)
+	s.logf("supervisor of %s stopped", cfg.Project)
+	return err
+}
+
+func (c Config) check(noAPI bool) error {
+	var missing []string
+	for name, empty := range map[string]bool{"project": c.Project == "", "postgres": len(c.Postgres) == 0,
+		"pg_isready": len(c.PGIsReady) == 0, "pg_ctl_stop": len(c.PGCtlStop) == 0, "log_dir": c.LogDir == "",
+		"env_file": c.EnvFile == "", "api": len(c.API) == 0 && !noAPI} {
+		if empty {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return fmt.Errorf("supervise.json names no %s: run backsight server render", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func (s *supervisor) logPath(what string) string {
+	return filepath.Join(s.cfg.LogDir, s.cfg.Project+"-"+what+".log")
+}
+
+// root is the native runtime's root: server.env's directory.
+func (s *supervisor) root() string { return filepath.Dir(s.cfg.EnvFile) }
+
+func (s *supervisor) redact(text string) string { return redact.Values(text, s.opts.Secrets) }
+
+// logf writes a line to the supervisor's log, redacted.
+func (s *supervisor) logf(format string, args ...any) {
+	line := tm.now().UTC().Format(time.RFC3339) + " " + fmt.Sprintf(format, args...) + "\n"
+	_, _ = io.WriteString(s.slog, s.redact(line))
+}
+
+func (s *supervisor) fail(err error) error {
+	s.logf("supervisor of %s failed: %v", s.cfg.Project, err)
+	return errors.New(s.redact(err.Error()))
+}
+
+func (s *supervisor) set(f func(st *Status)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f(&s.st)
+}
+
+func (s *supervisor) status() Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st
+}
+
+// answer is the control channel's handler: status from here, the other
+// requests through the loop, which answers once it acted.
+func (s *supervisor) answer(op string, done <-chan struct{}) (Status, bool) {
+	if op == opStatus {
+		return s.status(), true
+	}
+	r := opRequest{op: op, reply: make(chan Status, 1)}
+	select {
+	case s.ops <- r:
+	case <-done:
+		return Status{}, false
+	}
+	select {
+	case st := <-r.reply:
+		return st, true
+	case <-done:
+		return Status{}, false
+	}
+}
+
+// readyResult is a pg_isready poll's end for database start gen.
+type readyResult struct {
+	gen int
+	err error
+}
+
+// run is the loop's state: what runs, what is wanted, what is pending.
+type run struct {
+	db, api          *proc
+	dbGen            int
+	dbReady          bool
+	dbUp, apiUp      time.Time
+	apiWanted        bool
+	dbBack, apiBack  backoff
+	dbTimer, apiTime <-chan time.Time
+	stopPoll         context.CancelFunc
+	ready            chan readyResult
+}
+
+func immediate() <-chan time.Time {
+	c := make(chan time.Time, 1)
+	c <- time.Time{}
+	return c
+}
+
+func (s *supervisor) loop(ctx context.Context) error {
+	r := &run{apiWanted: !s.opts.NoAPI, dbTimer: immediate(), ready: make(chan readyResult, 1), stopPoll: func() {}}
+	for {
+		var dbDone, apiDone <-chan error
+		if r.db != nil {
+			dbDone = r.db.done
+		}
+		if r.api != nil {
+			apiDone = r.api.done
+		}
+		select {
+		case <-ctx.Done():
+			s.logf("cancelled: stopping")
+			s.stopAll(context.WithoutCancel(ctx), r)
+			return ctx.Err()
+		case <-r.dbTimer:
+			r.dbTimer = nil
+			if err := s.startDB(ctx, r); err != nil {
+				return s.refused(ctx, err)
+			}
+		case <-r.apiTime:
+			r.apiTime = nil
+			s.startAPI(r)
+		case res := <-r.ready:
+			if res.gen != r.dbGen || r.db == nil {
+				continue
+			}
+			if res.err != nil {
+				s.logf("db: %v: killing it", res.err)
+				_ = kill(r.db.cmd.Process)
+				continue
+			}
+			r.dbReady = true
+			s.set(func(st *Status) { st.DB = stateRunning })
+			s.logf("db ready (pid %d)", r.db.pid)
+			if r.apiWanted && r.api == nil {
+				r.apiTime = nil
+				s.startAPI(r)
+			}
+		case err := <-dbDone:
+			up := tm.now().Sub(r.dbUp)
+			s.logf("db exited after %s: %v", up.Round(time.Millisecond), exitText(err))
+			r.db, r.dbReady = nil, false
+			r.stopPoll()
+			s.set(func(st *Status) { st.DB = stateRestarting })
+			// The API on a database that is gone: stopped first, started
+			// again once the database is ready.
+			s.stopAPI(r)
+			if r.apiWanted {
+				s.set(func(st *Status) { st.API = stateRestarting })
+			}
+			d := r.dbBack.next(up)
+			s.logf("db restarts in %s", d)
+			r.dbTimer = tm.after(d)
+		case err := <-apiDone:
+			up := tm.now().Sub(r.apiUp)
+			s.logf("api exited after %s: %v", up.Round(time.Millisecond), exitText(err))
+			r.api = nil
+			if r.apiWanted && r.dbReady {
+				d := r.apiBack.next(up)
+				s.logf("api restarts in %s", d)
+				s.set(func(st *Status) { st.API = stateRestarting })
+				r.apiTime = tm.after(d)
+			}
+		case req := <-s.ops:
+			switch req.op {
+			case opStop:
+				s.logf("stop requested")
+				req.reply <- s.status()
+				s.stopAll(ctx, r)
+				return nil
+			case opAPIStop:
+				s.logf("api-stop requested")
+				r.apiWanted = false
+				s.stopAPI(r)
+				s.set(func(st *Status) { st.API = stateStopped })
+			case opAPIStart:
+				s.logf("api-start requested")
+				r.apiWanted = true
+				if r.api == nil && r.dbReady {
+					r.apiTime = nil
+					s.startAPI(r)
+				} else if r.api == nil {
+					s.set(func(st *Status) { st.API = stateStarting })
+				}
+			}
+			req.reply <- s.status()
+		}
+	}
+}
+
+// startDB runs the guard, then postgres and its readiness poll. A final
+// refusal is returned; anything else failing schedules a retry.
+func (s *supervisor) startDB(ctx context.Context, r *run) error {
+	retry := func(what string, err error) {
+		d := r.dbBack.next(0)
+		s.logf("db: %s: %v; retrying in %s", what, err, d)
+		s.set(func(st *Status) { st.DB = stateRestarting })
+		r.dbTimer = tm.after(d)
+	}
+	if s.opts.Check != nil {
+		if err := s.opts.Check(ctx); err != nil {
+			if isFinal(err) {
+				return err
+			}
+			retry("the guard failed", err)
+			return nil
+		}
+	}
+	if err := os.Remove(filepath.Join(s.root(), refusedFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.logf("removing %s: %v", refusedFile, err)
+	}
+	p, err := startChild(s.cfg.Postgres, s.cfg.Env, newLineRedactor(s.dbLog, s.opts.Secrets), true)
+	if err != nil {
+		retry("starting postgres", err)
+		return nil
+	}
+	r.db, r.dbUp, r.dbReady = p, tm.now(), false
+	r.dbGen++
+	s.logf("db started (pid %d)", p.pid)
+	s.set(func(st *Status) {
+		if st.DB != stateRestarting {
+			st.DB = stateStarting
+		}
+	})
+	pctx, cancel := context.WithCancel(ctx)
+	r.stopPoll = cancel
+	go s.pollReady(pctx, r.dbGen, r.ready)
+	return nil
+}
+
+// pollReady runs pg_isready every readyPoll until it answers, for up to
+// readyWait.
+func (s *supervisor) pollReady(ctx context.Context, gen int, out chan<- readyResult) {
+	deadline := time.Now().Add(tm.readyWait)
+	var res readyResult
+	for {
+		if err := runTool(ctx, s.cfg.PGIsReady, s.cfg.Env, nil); err == nil {
+			res = readyResult{gen: gen}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			res = readyResult{gen: gen, err: fmt.Errorf("pg_isready did not answer within %s", tm.readyWait)}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(tm.readyPoll):
+		}
+	}
+	select {
+	case out <- res:
+	case <-ctx.Done():
+	}
+}
+
+// startAPI starts the API with the tool environment and server.env's
+// pairs, read now; a failure schedules a retry.
+func (s *supervisor) startAPI(r *run) {
+	retry := func(what string, err error) {
+		d := r.apiBack.next(0)
+		s.logf("api: %s: %v; retrying in %s", what, err, d)
+		s.set(func(st *Status) { st.API = stateRestarting })
+		r.apiTime = tm.after(d)
+	}
+	pairs, err := readEnvFile(s.cfg.EnvFile)
+	if err != nil {
+		retry("reading its environment", err)
+		return
+	}
+	p, err := startChild(s.cfg.API, append(append([]string{}, s.cfg.Env...), pairs...), newLineRedactor(s.apiLog, s.opts.Secrets), false)
+	if err != nil {
+		retry("starting it", err)
+		return
+	}
+	r.api, r.apiUp = p, tm.now()
+	s.logf("api started (pid %d)", p.pid)
+	s.set(func(st *Status) { st.API = stateRunning })
+}
+
+// stopAPI stops the API (CTRL_BREAK, then a kill after apiStopWait) and
+// cancels a pending restart.
+func (s *supervisor) stopAPI(r *run) {
+	r.apiTime = nil
+	if r.api == nil {
+		return
+	}
+	s.logf("api stopping (pid %d)", r.api.pid)
+	err := r.api.stop(tm.apiStopWait)
+	s.logf("api stopped: %v", exitText(err))
+	r.api = nil
+}
+
+// stopAll stops the API, then the database with pg_ctl stop (killed if
+// still running after dbStopWait).
+func (s *supervisor) stopAll(ctx context.Context, r *run) {
+	r.dbTimer = nil
+	s.stopAPI(r)
+	s.set(func(st *Status) { st.API = stateStopped })
+	r.stopPoll()
+	if r.db != nil {
+		s.logf("db stopping (pid %d): %s", r.db.pid, strings.Join(s.cfg.PGCtlStop, " "))
+		deadline := time.Now().Add(tm.dbStopWait)
+		sctx, cancel := context.WithDeadline(ctx, deadline)
+		if err := runTool(sctx, s.cfg.PGCtlStop, s.cfg.Env, newLineRedactor(s.dbLog, s.opts.Secrets)); err != nil {
+			s.logf("db: pg_ctl stop: %v", err)
+		}
+		cancel()
+		select {
+		case err := <-r.db.done:
+			s.logf("db stopped: %v", exitText(err))
+		case <-time.After(time.Until(deadline)):
+			s.logf("db still running after %s: killing it", tm.dbStopWait)
+			_ = kill(r.db.cmd.Process)
+			s.logf("db killed: %v", exitText(<-r.db.done))
+		}
+		r.db = nil
+	}
+	s.set(func(st *Status) { st.DB = stateStopped })
+}
+
+// refused records a final refusal (the refused file, the status, the
+// log) and starts nothing; the control channel answers until stop.
+func (s *supervisor) refused(ctx context.Context, err error) error {
+	reason := s.redact(err.Error())
+	s.logf("refused: %s", reason)
+	if werr := fsutil.WriteAtomic(filepath.Join(s.root(), refusedFile), []byte(reason+"\n"), 0o600); werr != nil {
+		s.logf("writing %s: %v", refusedFile, werr)
+	}
+	s.set(func(st *Status) { st.DB, st.API, st.Refusal = stateRefused, stateStopped, reason })
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case req := <-s.ops:
+			req.reply <- s.status()
+			if req.op == opStop {
+				s.logf("stop requested")
+				return nil
+			}
+		}
+	}
+}
+
+func exitText(err error) string {
+	if err == nil {
+		return "exit 0"
+	}
+	return err.Error()
+}

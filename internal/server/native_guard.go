@@ -55,6 +55,10 @@ type GuardError struct {
 	Leftover bool
 }
 
+// Final: the refusal stands until someone acts, so the Windows
+// supervisor (supervise.Options.Check) does not retry it.
+func (e *GuardError) Final() bool { return true }
+
 func (e *GuardError) Error() string {
 	var what, way string
 	switch e.Reason {

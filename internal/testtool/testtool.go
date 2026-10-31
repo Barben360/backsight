@@ -45,6 +45,9 @@ import (
 //	argv                     print each argument on a line of its own
 //	argline                  print the arguments joined by spaces, then a newline
 //	exit <code>              exit now with the code, skipping Stdout and Stderr
+//	waitfile <path>          wait until the file exists (a process that runs until told to stop)
+//	nofile <path> <code>     exit now with the code when the file does not exist
+//	pid <path>               append this process's PID and a newline to the file
 //
 // A step may start with a condition on an argument, `<n>=<value>` or
 // `<n>!=<value>` (n from 1; a missing argument is ""), and runs only when
@@ -282,6 +285,26 @@ func (s spec) step(step string, args []string, stdin io.Reader, stdout, stderr i
 	case "exit":
 		n, _ := strconv.Atoi(f[1])
 		return n, true
+	case "waitfile":
+		for {
+			if _, err := os.Stat(f[1]); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	case "nofile":
+		if _, err := os.Stat(f[1]); err != nil {
+			n, _ := strconv.Atoi(f[2])
+			return n, true
+		}
+	case "pid":
+		w, err := os.OpenFile(f[1], os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintln(stderr, "testtool:", err)
+			return 127, true
+		}
+		fmt.Fprintln(w, os.Getpid())
+		_ = w.Close()
 	default:
 		fmt.Fprintf(stderr, "testtool: unknown step %q\n", step)
 		return 127, true

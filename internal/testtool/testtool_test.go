@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,5 +125,54 @@ func TestCallsOfAnEmptyLogIsNil(t *testing.T) {
 	}
 	if got := Calls(t, path); got != nil {
 		t.Errorf("calls %q", got)
+	}
+}
+
+// waitfile runs until its file appears, nofile exits while its file is
+// missing, pid records the fake's process: a long-running server that
+// stops on demand, a readiness probe, a process to look at.
+func TestFakeWaitsForAFileAndRecordsItsPID(t *testing.T) {
+	dir := t.TempDir()
+	stop, pids := filepath.Join(dir, "stop"), filepath.Join(dir, "pids")
+	path := Write(t, dir, "server", Fake{Stdout: "stopped\n", Script: "pid " + pids + "\nwaitfile " + stop})
+	cmd := exec.Command(path)
+	var o bytes.Buffer
+	cmd.Stdout = &o
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		t.Fatalf("exited before its file appeared: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := os.WriteFile(stop, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil || o.String() != "stopped\n" {
+			t.Errorf("after the file: %v, stdout %q", err, o.String())
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("still running 5 s after its file appeared")
+	}
+	if raw, _ := os.ReadFile(pids); strings.TrimSpace(string(raw)) != strconv.Itoa(cmd.Process.Pid) {
+		t.Errorf("pid file %q, want %d", raw, cmd.Process.Pid)
+	}
+
+	ready := filepath.Join(dir, "ready")
+	probe := Write(t, dir, "probe", Fake{Script: "nofile " + ready + " 2"})
+	if _, _, code := runFake(t, probe, ""); code != 2 {
+		t.Errorf("probe without its file: code %d, want 2", code)
+	}
+	if err := os.WriteFile(ready, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := runFake(t, probe, ""); code != 0 {
+		t.Errorf("probe with its file: code %d, want 0", code)
 	}
 }
