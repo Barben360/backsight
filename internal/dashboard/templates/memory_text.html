@@ -1,0 +1,15 @@
+{{/* views: memories */}}
+{{template "head" .}}{{template "top" .}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: the text. Reads .V.memories.Text (ID, Text, Reason): the text, escaped, or why it could not be read. */}}
+{{with .V.memories.Text}}<section>
+<h2 title="{{.ID}}">Memory {{short .ID}}</h2>
+{{if .Reason}}<p>The text could not be read: {{nodata .Reason}}.</p>
+{{else}}<pre>{{.Text}}</pre>
+{{end}}<p><a href="/memories/{{esc .ID}}">Back to the memory</a></p>
+</section>
+{{else}}<p>The text could not be read.</p>
+{{end}}
+{{template "foot" .}}

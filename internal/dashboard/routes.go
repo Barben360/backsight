@@ -7,8 +7,8 @@ import (
 )
 
 // route is one of the dashboard's routes: a ServeMux pattern (GET also
-// matches HEAD), a sample path tests request, its kind (page, text,
-// prefs, api or asset) and, for a page, its name.
+// matches HEAD, which the text page refuses), a sample path tests request,
+// its kind (page, text, prefs, api or asset) and, for a page, its name.
 type route struct{ Pattern, Sample, Kind, Page string }
 
 // routes is every route the dashboard serves.
@@ -67,6 +67,8 @@ func (s *Server) handler(r route) http.Handler {
 		return http.HandlerFunc(s.servePrefs)
 	case "api":
 		return http.HandlerFunc(s.serveAPI)
+	case "text":
+		return http.HandlerFunc(s.serveText)
 	case "page":
 		return s.servePage(s.tpl.specs[r.Page])
 	default:

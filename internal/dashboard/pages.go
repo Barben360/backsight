@@ -285,12 +285,17 @@ func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 			keep = append(keep, [2]string{k, v})
 		}
 	}
-	return Frame{
+	f := Frame{
 		Title: title, Path: path, Version: s.cfg.Version, HelpURL: helpURL,
 		Nav: navFor(path, p.Dev), Prefs: p, Windows: windowsFor(path, q),
 		AllProjects: without(path, "project"), ProjectInput: q.Get("project"), Keep: keep,
 		PrefMenu: prefMenu(path, p),
 	}
+	// The text page takes no parameter: it offers no window or filter.
+	if kindOf[r.Pattern] == "text" {
+		f.Windows, f.Keep = nil, nil
+	}
+	return f
 }
 
 // Pages is how many page responses were served 200 under a session (the
@@ -336,16 +341,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
 				st, err = stateUpdating, nil
 			}
-			switch st {
-			case stateBuilding:
-				w.Header().Set("Retry-After", "2")
-				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, firstBuildSentence, 2)
-				return
-			case stateUpdating:
-				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, sentence(views.UpdatingSentence), 0)
-				return
-			case stateUpdated:
-				s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, updatedPage, 0)
+			if s.notReadyPage(w, r, st, prefs) {
 				return
 			}
 			if st == stateBroken && err == nil {
@@ -373,6 +369,23 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			s.served.Add(1)
 		}
 	}
+}
+
+// notReadyPage answers a building, updating or updated index with its
+// state page; false for any other state, which it leaves to the caller.
+func (s *Server) notReadyPage(w http.ResponseWriter, r *http.Request, st indexState, prefs Prefs) bool {
+	switch st {
+	case stateBuilding:
+		w.Header().Set("Retry-After", "2")
+		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, firstBuildSentence, 2)
+	case stateUpdating:
+		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, sentence(views.UpdatingSentence), 0)
+	case stateUpdated:
+		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, updatedPage, 0)
+	default:
+		return false
+	}
+	return true
 }
 
 // failurePage answers a view's failure as the API does, in a page: a

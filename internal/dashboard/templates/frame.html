@@ -2,7 +2,8 @@
 {{/*
   The frame every page shares. Fields read: .Frame (Title, Path, Version,
   HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
-  Prefs, Scope, Generated) and .Loc. Nav is sliced by position: 0-5 the
+  Prefs, Scope, Generated) and .Loc. No Windows (the text page): no window
+  links and no project filter. Nav is sliced by position: 0-5 the
   questions, 5-8 Browse, 8-9 System, 9- the developer pair.
 */}}
 {{define "head"}}<!doctype html>
@@ -34,7 +35,7 @@
 {{end}}</details>
 {{end}}</nav>
 <div>
-<nav aria-label="Window">
+{{if .Frame.Windows}}<nav aria-label="Window">
 {{range .Frame.Windows}}{{template "navlink" .}}
 {{end}}</nav>
 <form method="get" action="{{.Frame.Path | pathOnly}}">
@@ -43,7 +44,7 @@
 <button type="submit">Filter</button>
 <a href="{{.Frame.AllProjects}}">All projects</a>
 </form>
-<a href="{{.Frame.Path}}">Refresh</a>
+{{end}}<a href="{{.Frame.Path}}">Refresh</a>
 <details>
 <summary>Preferences</summary>
 {{range .Frame.PrefMenu}}<p>{{.Label}}:

@@ -371,7 +371,8 @@ func everyResponse(h *harness) []response {
 		want := http.StatusOK
 		switch {
 		case r.Kind == "api" && strings.Contains(r.Sample, "/sessions/"),
-			r.Kind == "page" && (r.Page == "project" || r.Page == "session" || r.Page == "memory"):
+			r.Kind == "page" && (r.Page == "project" || r.Page == "session" || r.Page == "memory"),
+			r.Kind == "text":
 			want = http.StatusNotFound // the sample names no project, session or memory of the generated index
 		case r.Kind == "prefs":
 			want = http.StatusBadRequest // the sample sets nothing and names no page to go back to
@@ -379,7 +380,11 @@ func everyResponse(h *harness) []response {
 			want = http.StatusNotImplemented
 		}
 		for _, m := range []string{"GET", "HEAD"} {
-			set = append(set, response{r.Pattern, m, r.Sample, ck, want, nil})
+			code := want
+			if r.Kind == "text" && m == "HEAD" {
+				code = http.StatusMethodNotAllowed // the text page is GET only
+			}
+			set = append(set, response{r.Pattern, m, r.Sample, ck, code, nil})
 		}
 	}
 	return append(set,

@@ -13,13 +13,13 @@ import (
 )
 
 // pageGoldens names, per page, the block 2 goldens its declared views are
-// executed on, in the order of the page's views header. memory_text is
-// added with its page.
+// executed on, in the order of the page's views header. memory_text runs
+// on the memory page's golden with a synthetic text (fixtureData).
 var pageGoldens = map[string][]string{
 	"overview": {"overview"}, "quality": {"quality"}, "cost": {"cost"}, "bank": {"bank"}, "pipeline": {"pipeline"},
 	"system": {"system"}, "releases": {"releases"}, "defs": {"defs"}, "projects": {"projects"}, "project": {"project-page"},
 	"sessions": {"sessions"}, "session": {"session-page"}, "memories": {"memories"}, "memory": {"memory-page"},
-	"days": {"days"}, "day": {"day-page"},
+	"days": {"days"}, "day": {"day-page"}, "memory_text": {"memory-page"},
 }
 
 // goldenPath is the file of the stats view golden called name.
@@ -88,6 +88,11 @@ func fixtureData(t *testing.T, spec pageSpec, empty bool) PageData {
 		} else {
 			d.V[v] = goldenResult(t, goldens[i])
 		}
+	}
+	// No golden holds a memory's text: the text page gets a synthetic one,
+	// and none in the empty run.
+	if spec.Name == "memory_text" && !empty {
+		d.V["memories"].Text = &metrics.MemoryText{ID: "mem-long-1", Text: "fixture <b>text</b>"}
 	}
 	head := d.V[spec.Views[0]]
 	d.Frame = Frame{
