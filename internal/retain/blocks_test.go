@@ -172,7 +172,7 @@ func TestMachineIDIsStable(t *testing.T) {
 
 // A torn trailing entry (crash mid-write) must not shift later keys.
 func TestSentIndexTornEntry(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): the sent index's size after a torn entry differs on Windows")
+	testtool.SkipWindows(t, "Task 3b: the sent index's size after a torn entry differs on Windows")
 	dir := t.TempDir()
 	idx, _ := LoadSentIndex(dir)
 	_ = idx.Add("u1")

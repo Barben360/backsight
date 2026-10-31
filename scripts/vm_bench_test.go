@@ -157,7 +157,7 @@ func virshVerbs(t *testing.T, calls []string) []string {
 // called that changes libvirt; the bench directory goes but results/ and
 // cache/ (--purge: cache/ too).
 func TestVMBenchDownRemovesOnlyItsOwn(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, purge := range []bool{false, true} {
 		fakes := newBenchFakes(t)
 		writeLines(t, filepath.Join(fakes, "domains"), "bs-m6-server", "bs-m6-client", "bs-m6x", "win11")
@@ -229,7 +229,7 @@ func TestVMBenchDownRemovesOnlyItsOwn(t *testing.T) {
 // down empties no directory that is not named bs-m6: a BS_M6_DIR pointed
 // at the wrong place loses nothing.
 func TestVMBenchDownRefusesADirectoryNotNamedForTheBench(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	dir := t.TempDir()
 	writeLines(t, filepath.Join(dir, "precious"), "x")
@@ -252,7 +252,7 @@ func TestVMBenchDownRefusesADirectoryNotNamedForTheBench(t *testing.T) {
 // every ssh goes through its own config, which trusts only the host keys
 // it generated (no first use) and offers only its own key.
 func TestVMBenchNeverTouchesTheUsersSSHOrClaude(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	home := t.TempDir()
 	user := map[string]string{
@@ -349,7 +349,7 @@ Host *
 // install must run through a non-POSIX shell) and the client's netem
 // modules; known_hosts names each VM by its alias with that host key.
 func TestVMBenchUserDataPinsKeysAndShells(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	bench := filepath.Join(t.TempDir(), "bs-m6")
 	stdout, stderr, code := vmBench(t, fakes, t.TempDir(), bench,
@@ -440,7 +440,7 @@ func TestVMBenchUserDataPinsKeysAndShells(t *testing.T) {
 // nothing of the bench runs on CI: both refuse with exit 2 before
 // creating anything.
 func TestVMBenchUpRefusesAnExistingBenchOrCI(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	changing := func(t *testing.T, fakes string) []string {
 		t.Helper()
 		var out []string
@@ -507,7 +507,7 @@ func TestVMBenchUpRefusesAnExistingBenchOrCI(t *testing.T) {
 
 // vb_owned is the one gate of down: bs-m6- and a name, lower case.
 func TestVMBenchOwnsOnlyItsNames(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	script := `for n in bs-m6-server bs-m6-client-seed.iso bs-m6-base-noble.qcow2 bs-m6- bs-m6 bs-m6x bs-m6.qcow2 BS-M6-server xbs-m6-server 'bs-m6-a b' 'bs-m6-a/b' "bs-m6-a
 b"; do if vb_owned "$n"; then printf 'own %s\n' "$n"; fi; done`
@@ -526,7 +526,7 @@ b"; do if vb_owned "$n"; then printf 'own %s\n' "$n"; fi; done`
 // last, and up ignores the client ids leased before its domains existed
 // (the second up of the bench's first real run read a stale lease).
 func TestVMBenchIPIsTheNewestLeaseOfThisBoot(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	const (
 		old = " 2026-10-29 03:12:41   52:54:00:b6:06:01   ipv4       192.168.122.189/24   -              ff:56:50:4d:98:00:02:00:00:ab:11:f5:c6"
 		cur = " 2026-10-29 03:14:23   52:54:00:b6:06:01   ipv4       192.168.122.191/24   bs-m6-server   ff:56:50:4d:98:00:02:00:00:ab:11:7a:3d"
@@ -551,7 +551,7 @@ func TestVMBenchIPIsTheNewestLeaseOfThisBoot(t *testing.T) {
 // A bs-m6 symlink to another directory is not the bench's: down empties
 // nothing through it.
 func TestVMBenchDownRefusesASymlinkedBenchDir(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	real := t.TempDir()
 	writeLines(t, filepath.Join(real, "precious"), "x")
@@ -581,7 +581,7 @@ func TestVMBenchDownRefusesASymlinkedBenchDir(t *testing.T) {
 
 // up refuses a pool with less than 80 GiB free, before making anything.
 func TestVMBenchUpRefusesAPoolTooSmall(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	meminfo := filepath.Join(t.TempDir(), "meminfo")
 	writeLines(t, meminfo, "MemTotal:       40000000 kB", "MemAvailable:   32000000 kB")
 	for _, tc := range []struct {
@@ -619,7 +619,7 @@ func TestVMBenchUpRefusesAPoolTooSmall(t *testing.T) {
 // carries another address into the ssh config; an unchanged lease leaves
 // the config as it was.
 func TestVMBenchResetFollowsANewAddress(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	const (
 		srv = " 2026-10-29 03:14:23   52:54:00:b6:06:01   ipv4       %s/24   bs-m6-server   ff:00:01"
 		cli = " 2026-10-29 03:14:27   52:54:00:b6:06:02   ipv4       192.168.122.11/24   bs-m6-client   ff:00:02"
@@ -669,7 +669,7 @@ func TestVMBenchResetFollowsANewAddress(t *testing.T) {
 // The seed ISO holds the VM's private host key: it is ejected before the
 // snapshot every run starts from is taken.
 func TestVMBenchSnapshotEjectsTheSeedFirst(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	bench := filepath.Join(t.TempDir(), "bs-m6")
 	_, stderr, code := vmBench(t, fakes, t.TempDir(), bench, `mkdir -p "$BS_M6_DIR/logs"; vb_snapshot server`)

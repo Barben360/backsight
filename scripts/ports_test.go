@@ -50,7 +50,7 @@ func slotPortEnv(t *testing.T, slot, ci string, args ...string) (string, string,
 // share its project and ports with another runner's job (decision 0067
 // block review), so slot_port refuses.
 func TestSlotPortNeedsTheSlotOnCI(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, args := range [][]string{{"28300"}, {"28300", "31000"}} {
 		if out, stderr, err := slotPortEnv(t, "", "true", args...); err == nil || !strings.Contains(stderr, "BACKSIGHT_CI_SLOT is not set") {
 			t.Errorf("%v on CI without a slot: %q, %v, %s", args, out, err, stderr)
@@ -68,7 +68,7 @@ func TestSlotPortNeedsTheSlotOnCI(t *testing.T) {
 // starts one and every slot, sit below Linux's ephemeral range, away from
 // the live installs, and are never shared.
 func TestScratchPortsAreBelowTheEphemeralRangeAndApart(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	call := regexp.MustCompile(`slot_port (\d+) "\$\{1:-\}"`)
 	owner := map[int]string{}
 	for _, script := range []string{"sandbox.sh", "fresh-install.sh", "restore-proof.sh", "agent-install.sh", "reattribute-proof.sh", "purge-guard-proof.sh", "m6-chain.sh", "native-chain.sh"} {
@@ -104,7 +104,7 @@ func TestScratchPortsAreBelowTheEphemeralRangeAndApart(t *testing.T) {
 }
 
 func TestSlotPortRefusesLivePortsAndUnknownSlots(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, c := range []struct{ slot, port string }{
 		{"", "8888"}, {"", "18888"}, {"", "7777"}, {"", "17777"}, // API, or UI = API + 1111, of a live install
 		{"4", ""}, {"x", ""}, {"", "abc"},

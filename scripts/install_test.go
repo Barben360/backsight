@@ -375,7 +375,7 @@ func TestInstallKeepsTheSignedChecksums(t *testing.T) {
 // An install.sh from before decision 0067's block review linked the PATH
 // command to a versioned binary: a new install points it at the shim.
 func TestInstallPointsAnOlderPathLinkAtTheShim(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	home := t.TempDir()

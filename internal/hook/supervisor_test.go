@@ -82,7 +82,7 @@ func TestChildOutputPassesThroughWhenValid(t *testing.T) {
 // Every failure of the child prints nothing and is reported once (SPEC
 // §6.1): the handler fails here as a bug would, in every build.
 func TestEveryChildFailurePrintsNothing(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): a killed hook child is classified \"exit\" on Windows")
+	testtool.SkipWindows(t, "Task 3b: a killed hook child is classified \"exit\" on Windows")
 	for _, c := range []struct {
 		behaviour, kind string
 		deadline        time.Duration

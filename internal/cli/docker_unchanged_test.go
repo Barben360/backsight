@@ -202,7 +202,7 @@ func dockerInstallRun(t *testing.T) (argv, keys string) {
 // Every command a Docker install runs reaches Docker with the argv it ran
 // before the native runtime, and its JSON envelope reports no units.
 func TestDockerCommandsRunTheSameArgv(t *testing.T) {
-	testtool.SkipWindows(t, "Linux golden (Docker on Windows is untested in this release, 0080)")
+	testtool.SkipWindows(t, "linux-only: Docker golden (Docker on Windows is untested in this release, 0080)")
 	argv, keys := dockerInstallRun(t)
 	cliGolden(t, "docker-argv.golden", []byte(argv))
 	cliGolden(t, "docker-json-keys.golden", []byte(keys))

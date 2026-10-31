@@ -173,7 +173,7 @@ func offlinePrompts() []string {
 // again; reach.json backdated 2 h; 200 transcripts surveyed then removed;
 // /health still failing at the end.
 func TestVMBenchOfflineScriptOnA(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	home, bin := aHome(t)
 	d := filepath.Join(home, "m6-offline")
 	prompts := offlinePrompts()
@@ -262,7 +262,7 @@ func TestVMBenchOfflineScriptOnA(t *testing.T) {
 // A hook that outlives its deadline is killed past it and recorded late
 // (its rc 124), the script going on; the bench's reader FAILs naming it.
 func TestVMBenchOfflineScriptRecordsALateHook(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	home, bin := aHome(t)
 	d := filepath.Join(home, "m6-offline")
 	_, stderr, code := runAScript(t, home, bin, "vb_offline_script", d, append([]string{"hung", "http://srv:8888", "360", "bs-m6-offline", "oh1"}, offlinePrompts()...),
@@ -300,7 +300,7 @@ func vmBenchArgs(t *testing.T, script string) (string, string, int) {
 // The watchdog: past its bound the script's whole session is stopped,
 // the bound said in error, done still written.
 func TestVMBenchOfflineScriptStopsAtItsBound(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	home, bin := aHome(t)
 	d := filepath.Join(home, "m6-offline")
 	start := time.Now()
@@ -322,7 +322,7 @@ func TestVMBenchOfflineScriptStopsAtItsBound(t *testing.T) {
 // (backsight paths fails) leaves nothing of the script's session running,
 // though the bound is far; the offline script's done is still written.
 func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, c := range []struct{ fn, dir string }{
 		{"vb_offline_script", "m6-offline"},
 		{"vb_latency_script", "m6-latency"},
@@ -362,7 +362,7 @@ func TestVMBenchAScriptsLeaveNoWatchdog(t *testing.T) {
 // times, the session's prompt events since its start and only the hook
 // timeouts since then.
 func TestVMBenchLatencyScriptOnA(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	home, bin := aHome(t)
 	tel := filepath.Join(home, "state", "telemetry", "events-"+time.Now().UTC().Format("2006-01")+".jsonl")
 	writeLines(t, tel,

@@ -69,7 +69,7 @@ func TestRuntimeForPicksNative(t *testing.T) {
 
 // execTools runs a tool with exactly the environment it is given.
 func TestExecToolsGivesExactlyItsEnvironment(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 7: native runtime")
 	t.Setenv("PYTHONPATH", "/evil")
 	out, err := execTools{}.Run(context.Background(), []string{"A=1"}, strings.NewReader("in"), "/usr/bin/env")
 	if err != nil {

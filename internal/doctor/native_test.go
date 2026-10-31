@@ -217,7 +217,7 @@ func deadPID(t *testing.T) int {
 }
 
 func TestDoctorReportsACutOffSwitch(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
+	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	f := newFixture(t)
 	rs := &state.RuntimeSwitch{From: "docker", To: "native", Step: "running", PID: deadPID(t), Since: time.Now().Add(-time.Minute)}
 	f.env.Switch = func() (*state.RuntimeSwitch, string) { return rs, "" }

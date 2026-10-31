@@ -244,7 +244,7 @@ func TestHooksUpdateStateWhileAFlushHoldsTheSession(t *testing.T) {
 }
 
 func TestParallelToolHooksKeepEveryStore(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): concurrent appends to the outbox lose notes on Windows")
+	testtool.SkipWindows(t, "Task 3b: concurrent appends to the outbox lose notes on Windows")
 	home := hookHome(t)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

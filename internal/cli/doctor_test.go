@@ -353,7 +353,7 @@ func doctorChecks(t *testing.T) (int, map[string]doctor.Check) {
 // only reads: no unit started or stopped, no stray stopped, nothing
 // written under the native directory.
 func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 11: native runtime")
 	_, n, tools, _, _ := nativeHost(t)
 	sys := &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
 	nativeSys = sys

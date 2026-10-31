@@ -143,7 +143,7 @@ func TestReleaseKeyGuardRefusesAReleaseKeyOutsideTheReleaseWorkflow(t *testing.T
 // keys: --list prints the ids it read from minisign.pub and
 // minisign.next.pub.
 func TestReleaseKeyGuardKnowsThePublishedKeys(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	out, err := guard(t, nil, "--list")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)

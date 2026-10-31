@@ -155,7 +155,7 @@ func assertScrubbed(t *testing.T, planted map[string]string, wants []string) {
 }
 
 func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): report's redaction of the home directory is POSIX-style")
+	testtool.SkipWindows(t, "Task 3b: report's redaction of the home directory is POSIX-style")
 	p := plantedMachine(t)
 	assertScrubbed(t, map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
 		"host": "annsbox", "project": "ann-secret-project"},
@@ -164,7 +164,7 @@ func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
 }
 
 func TestReportJSONLinksAndSendsNothing(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): report's redaction of the home directory is POSIX-style")
+	testtool.SkipWindows(t, "Task 3b: report's redaction of the home directory is POSIX-style")
 	p := plantedMachine(t)
 	before := tree(t, p.home)
 	code, out, _ := run(t, "report", "--json")
@@ -387,7 +387,7 @@ func TestReportHidesTheEscapedBankAndAMultiLineAnswer(t *testing.T) {
 }
 
 func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): report's redaction of the home directory is POSIX-style")
+	testtool.SkipWindows(t, "Task 3b: report's redaction of the home directory is POSIX-style")
 	home := isolate(t)
 	withClaude(t)
 	setUser(t, "annuser")

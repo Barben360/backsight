@@ -114,3 +114,15 @@ func TestFakeScriptSteps(t *testing.T) {
 func TestMainReturnsForTheTestBinary(t *testing.T) {
 	Main()
 }
+
+// A log that exists but is empty means no call, not an error.
+func TestCallsOfAnEmptyLogIsNil(t *testing.T) {
+	dir := t.TempDir()
+	path := Write(t, dir, "tool", Fake{})
+	if err := os.WriteFile(strings.TrimSuffix(path, ".exe")+".log", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := Calls(t, path); got != nil {
+		t.Errorf("calls %q", got)
+	}
+}

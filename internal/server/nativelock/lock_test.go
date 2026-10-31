@@ -107,3 +107,22 @@ func TestNativeLockIsTheGeneratedOne(t *testing.T) {
 		t.Errorf("UVAsset = %q", UVAsset)
 	}
 }
+
+// The Linux lock and the version id derived from it were recorded at
+// 884c942 (M7 block 2, Task 2): the Windows lock is another file, and
+// nothing may move the Linux one. A deliberate lock bump changes both
+// literals in the same commit.
+func TestLinuxLockUnchanged(t *testing.T) {
+	const wantSHA = "82e13826d426d3f2ed5f29466b905395dd2e6543a27891a3029f2fd9d97409f6"
+	const wantHash12 = "82e13826d426"
+	sum := sha256.Sum256(Requirements)
+	if got := hex.EncodeToString(sum[:]); got != wantSHA {
+		t.Errorf("requirements-linux-amd64.txt sha256 %s, want %s", got, wantSHA)
+	}
+	if got := Hash12(); got != wantHash12 {
+		t.Errorf("Hash12 %s, want %s", got, wantHash12)
+	}
+	if got := Hindsight() + "-" + Hash12(); got != "1.1.0-"+wantHash12 {
+		t.Errorf("native version id %s", got)
+	}
+}

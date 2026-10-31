@@ -81,7 +81,7 @@ func hasCall(calls []string, want string) bool { return slices.Contains(calls, w
 // step builds the native runtime's files, creates its database (ruling
 // R35) and starts both units.
 func TestSetupRuntimeNativeWritesTheConfig(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 10: native runtime")
 	home, f := setupMachine(t)
 	f.real["server install"] = true
 	n, sys, port := nativeFresh(t, home)
@@ -133,7 +133,7 @@ func TestSetupRuntimeNativeWritesTheConfig(t *testing.T) {
 // on a machine without one refuses and enables nothing; server install
 // creates it and starts both units.
 func TestNativeServerInstallCreatesWhatServerStartRefuses(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 10: native runtime")
 	home := isolate(t)
 	withSys(t, "linux")
 	n, sys, port := nativeFresh(t, home)
@@ -171,7 +171,7 @@ func TestNativeServerInstallCreatesWhatServerStartRefuses(t *testing.T) {
 // first real run: 203/EXEC). A shim already there is the client's to
 // point, and is left alone; a dangling one is installed again.
 func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 10: native runtime")
 	for _, c := range []struct {
 		name               string
 		existing, dangling bool
@@ -243,7 +243,7 @@ func TestNativeServerInstallInstallsTheShimItsDBUnitRuns(t *testing.T) {
 // with a Unix socket under it, postgres would refuse (sun_path's 107
 // bytes), as the native chain's first real run showed.
 func TestNativeServerInstallStartsUnderALongDataDirectory(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 10: native runtime")
 	isolate(t)
 	home := filepath.Join(t.TempDir(), strings.Repeat("h", 150))
 	if err := os.MkdirAll(home, 0o700); err != nil {
@@ -280,7 +280,7 @@ func TestNativeServerInstallStartsUnderALongDataDirectory(t *testing.T) {
 // install with no BACKSIGHT_HOME, native-check found no config.toml
 // under home/ and the live switch to native failed at its target step.
 func TestNativeServerInstallRunsNativeCheckWithTheUsersHome(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 10: native runtime")
 	home := isolate(t)
 	withSys(t, "linux")
 	n, _, port := nativeFresh(t, home)

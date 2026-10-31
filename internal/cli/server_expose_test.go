@@ -166,7 +166,7 @@ func TestExposeRefusesPublicAddress(t *testing.T) {
 }
 
 func TestExposeAsksCleartext(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): resume commands quote a Windows path POSIX-style")
+	testtool.SkipWindows(t, "Task 3b: resume commands quote a Windows path POSIX-style")
 	fx := exposeHost(t)
 	before := fx.config(t)
 	f := filepath.Join(t.TempDir(), "join.token")
@@ -491,7 +491,7 @@ func TestExposeRefusesASymlinkOut(t *testing.T) {
 // to private exposure; config.toml, server.env and both units stay
 // byte-identical and the units are left alone.
 func TestServerExposeRefusedOnNative(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7-10: native runtime")
+	testtool.SkipWindows(t, "Task 9: native runtime")
 	home, n, _, sys, _ := nativeHost(t)
 	files := []string{pathsOf(home).ConfigFile(), n.EnvFile(), unitPath(home, n.DBUnit()), unitPath(home, n.ServerUnit())}
 	before := map[string]string{}

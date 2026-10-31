@@ -414,7 +414,7 @@ func releaseNotesStep(t *testing.T) (check, goreleaser string, order []int) {
 // goreleaser's list of commit subjects, and a tag without them, or without
 // its row in docs/compatibility.md, stops before anything is built.
 func TestReleasePublishesHandWrittenNotes(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	check, goreleaser, order := releaseNotesStep(t)
 	if len(order) != 2 || order[0] > order[1] {
 		t.Errorf("release.yml: the notes check must come before goreleaser (steps %v)", order)
@@ -476,7 +476,7 @@ func TestReleasePublishesHandWrittenNotes(t *testing.T) {
 // run replaced the first's draft under its uploads), nor touch a release
 // already published.
 func TestReleaseRunsOnceATag(t *testing.T) {
-	testtool.SkipWindows(t, "POSIX script, Linux only")
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	raw, err := os.ReadFile("../.github/workflows/release.yml")
 	if err != nil {
 		t.Fatal(err)

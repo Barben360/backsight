@@ -2,7 +2,7 @@
 // "#!/bin/sh" file, which Windows cannot run, but the test binary itself
 // started again under another name.
 //
-// Write copies the running test binary to dir/name
+// Write links (Windows: copies) the running test binary to dir/name
 // (dir/name.exe on Windows) and puts the fake's behaviour in a sidecar
 // dir/name.fake.json. Main, called first in a package's TestMain, looks for
 // that sidecar next to its own executable: when it finds one, the process
@@ -84,10 +84,19 @@ func Write(t testing.TB, dir, name string, f Fake) string {
 		t.Fatal(err)
 	}
 	_ = os.Remove(path)
-	// A copy, not a link: a test that rewrites the fake's file must not
-	// write through to the test binary.
-	if err := copyFile(exe, path); err != nil {
-		t.Fatal(err)
+	// A hard link where the OS and the volume allow (no copy of a 30 MB
+	// binary per fake), else a copy. A test must not rewrite a fake in place.
+	// Windows cannot delete a link to an image that is running (the test
+	// binary itself): TempDir's cleanup fails with "Access is denied", so
+	// there it is always a copy.
+	linked := false
+	if runtime.GOOS != "windows" {
+		linked = os.Link(exe, path) == nil
+	}
+	if !linked {
+		if err := copyFile(exe, path); err != nil {
+			t.Fatal(err)
+		}
 	}
 	base := strings.TrimSuffix(path, ".exe")
 	raw, err := json.Marshal(spec{Fake: f, Log: base + ".log"})
@@ -128,6 +137,9 @@ func Calls(t testing.TB, path string) [][]string {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(raw) == 0 {
+		return nil
 	}
 	var out [][]string
 	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {

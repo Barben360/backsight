@@ -139,7 +139,7 @@ func TestOutboxSizeLimits(t *testing.T) {
 }
 
 func TestOutboxConcurrentAppends(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): concurrent appends to the outbox lose notes on Windows")
+	testtool.SkipWindows(t, "Task 3b: concurrent appends to the outbox lose notes on Windows")
 	o := outbox(t)
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {

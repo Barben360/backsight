@@ -175,7 +175,7 @@ func change(path string) claudecfg.Change {
 }
 
 func TestPendingRestoreWarnsWhenAnEditBacksightMadeNoLongerHolds(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): not understood yet on Windows")
+	testtool.SkipWindows(t, "Task 3b: not understood yet on Windows")
 	f := newFixture(t)
 	settings := filepath.Join(f.home, ".claude", "settings.json")
 	f.wired("")
@@ -209,7 +209,7 @@ func TestPendingRestoreWarnsWhenAnEditBacksightMadeNoLongerHolds(t *testing.T) {
 // --undo, uninstall) is not a lost edit, and an unwired client is not
 // judged at all.
 func TestPendingRestoreIgnoresEditsBacksightUndidOnPurpose(t *testing.T) {
-	testtool.SkipWindows(t, "no owning task (concern): not understood yet on Windows")
+	testtool.SkipWindows(t, "Task 3b: not understood yet on Windows")
 	f := newFixture(t)
 	settings := filepath.Join(f.home, ".claude", "settings.json")
 	f.wired("")

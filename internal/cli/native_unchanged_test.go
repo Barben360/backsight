@@ -2,11 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/testtool"
@@ -89,7 +92,7 @@ func nativeArgvText(home string, argv [][]string) string {
 // nativeInstallRun is a native install from scratch driven through every
 // command that reaches systemd or a native tool, in order; it returns the
 // argv they ran, each under its command.
-func nativeInstallRun(t *testing.T) string {
+func nativeInstallRun(t *testing.T) (argv, keys string) {
 	t.Helper()
 	home := isolate(t)
 	withSys(t, "linux")
@@ -108,7 +111,7 @@ func nativeInstallRun(t *testing.T) string {
 	rec := &nativeRecorder{sys: sys, tools: tools}
 	nativeSys, nativeTools = rec, nativeRecorderTools{rec}
 
-	var ab strings.Builder
+	var ab, kb strings.Builder
 	archive := filepath.Join(d.Data, "backups", "backsight-20261025T040000Z.tar.gz.age")
 	step := func(args ...string) {
 		t.Helper()
@@ -124,6 +127,18 @@ func nativeInstallRun(t *testing.T) string {
 		got := slices.Clone(rec.argv[start:])
 		rec.mu.Unlock()
 		ab.WriteString(title + nativeArgvText(home, got))
+		var env any
+		if err := json.Unmarshal([]byte(out), &env); err != nil {
+			t.Fatalf("%v: not one JSON envelope: %v\n%s", args, err, out)
+		}
+		set := map[string]bool{}
+		jsonKeys("", env, set)
+		names := make([]string, 0, len(set))
+		for k := range set {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		kb.WriteString(title + strings.Join(names, "\n") + "\n")
 	}
 	step("server", "install")
 	step("server", "start")
@@ -168,12 +183,41 @@ func nativeInstallRun(t *testing.T) string {
 	rec.mu.Unlock()
 	step("server", "upgrade", "--allow-unordered")
 	step("uninstall", "--delete-data", "--answer", "confirm_bank="+config.DefaultBank)
-	return ab.String()
+	return ab.String(), kb.String()
 }
 
 // Every command a native install runs reaches systemd and the native
 // tools with the argv it ran at 884c942.
 func TestNativeCommandsRunTheSameArgv(t *testing.T) {
 	testtool.SkipWindows(t, "Task 7: the Linux native argv is pinned on Linux; Windows runs another host")
-	cliGolden(t, "native-argv.golden", []byte(nativeInstallRun(t)))
+	argv, keys := nativeInstallRun(t)
+	cliGolden(t, "native-argv.golden", []byte(argv))
+	cliGolden(t, "native-json-keys.golden", []byte(keys))
+}
+
+// doctor's checks on a Linux native install, by id and in order: the
+// Windows checks of M7 block 2 add none to it (recorded at 884c942).
+func TestDoctorChecksOfANativeInstallAreUnchanged(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
+	_, n, _, _, _ := nativeHost(t)
+	nativeSys = &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
+	lockedVenv(t, n, n.Version(), "3.2.0")
+	if err := os.Chmod(n.Home(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := run(t, "doctor", "--json")
+	var env struct {
+		Data doctor.Report `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	ids := make([]string, len(env.Data.Checks))
+	for i, c := range env.Data.Checks {
+		ids[i] = c.ID
+	}
+	if !slices.Contains(ids, "native-unit") {
+		t.Fatalf("the native checks did not run: %v", ids)
+	}
+	cliGolden(t, "doctor-checks-native.golden", []byte(strings.Join(ids, "\n")+"\n"))
 }

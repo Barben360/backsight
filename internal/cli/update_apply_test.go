@@ -925,7 +925,7 @@ func TestExecBinaryRunsAProgram(t *testing.T) {
 // back. The child is told which maintenance lock its parent holds.
 func TestExecBinaryStopsTheChildGently(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("windows: Task 13 (the graceful stop of the child; the fake is a POSIX trap)")
+		testtool.SkipWindows(t, "Task 13: the graceful stop of the child (the fake is a POSIX trap)")
 	}
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "child")
