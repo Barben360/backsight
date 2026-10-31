@@ -22,6 +22,7 @@ Memories                                     1,241                    (ok, no hi
 Flowing
 Waiting on the server                        3                        (watch)
   waiting 2, running 1, failed in the last 7 days 500+ (a lower bound: more are not read), failed in all 731
+Background jobs                              10 min                   (ok)
 
 Lately
 none

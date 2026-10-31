@@ -111,7 +111,8 @@ func TestStatsViewsGoldenEdgeCases(t *testing.T) {
 		"extraction.cost":   {Tags: []string{"partial"}, Extra: map[string]any{"currency": "USD", "price_set": false, "failed_operations": int64(2)}},
 		"server.queue": {Value: ptr(3), Status: metrics.StatusWatch, Extra: map[string]any{"pending": int64(2), "processing": int64(1),
 			"failed": int64(500), "failed_total": int64(731), "failed_capped": true}},
-		"bank.size": {Value: ptr(1241), Status: metrics.StatusOK, Tags: []string{"snapshot"}},
+		"bank.size":     {Value: ptr(1241), Status: metrics.StatusOK, Tags: []string{"snapshot"}},
+		"jobs.last_run": {Value: ptr(645_800), Status: metrics.StatusOK}, // the last tick 10 min 45.8 s ago
 	}
 	r.Tables.OutcomeMix = []metrics.OutcomeDay{{Day: "2026-10-01", Used: 1, Partial: true}, {Day: "2026-10-02", Used: 4}}
 	cliGolden(t, "stats-view-edge-cases.golden", []byte(viewText(r, false)))

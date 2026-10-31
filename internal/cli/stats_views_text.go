@@ -233,6 +233,8 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 		value = countOf(int64(*m.Value), "prompt", "prompts")
 	case m.Status != metrics.StatusNoData && d.ID == "doctor.check" && m.Value != nil:
 		value = grouped(int64(*m.Value)) + " failed"
+	case m.Status != metrics.StatusNoData && d.ID == "jobs.last_run" && m.Value != nil:
+		value = ageText(int64(*m.Value)) // the last tick's age, as the jobs table prints it
 	}
 	var parts []string
 	if m.Den != nil {
