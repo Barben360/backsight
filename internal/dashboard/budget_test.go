@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -18,9 +20,19 @@ import (
 // The budgets are the spec's targets (300 ms a page, 4 s with the server
 // down) times three, for a shared runner.
 const (
-	pageLimit      = 900 * time.Millisecond
+	basePageLimit  = 900 * time.Millisecond
 	firstByteLimit = 12 * time.Second
 )
+
+// pageLimit is basePageLimit, doubled on GitHub's Windows runner: its
+// pages take 1.1 to 1.6 s where the Windows test VM's slowest is 709 ms,
+// so the runner, not Windows, is slow; the VM keeps the base limit.
+var pageLimit = func() time.Duration {
+	if runtime.GOOS == "windows" && os.Getenv("GITHUB_ACTIONS") == "true" {
+		return 2 * basePageLimit
+	}
+	return basePageLimit
+}()
 
 // TestPageBudgets times the pages on 13 months of generated history with
 // every cache off, then the first byte of a page with the server down.
