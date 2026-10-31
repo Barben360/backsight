@@ -378,7 +378,7 @@ func serverError(err error) (enum string, reason string) {
 	case err == nil:
 		return "", ""
 	case errors.Is(err, errNoServer):
-		return "not_configured", ReasonServerDown
+		return "not_configured", ReasonNotConfigured
 	case errors.Is(err, hindsight.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return "timeout", ReasonServerDown
 	case errors.Is(err, hindsight.ErrUnreachable):

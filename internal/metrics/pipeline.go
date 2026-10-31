@@ -80,10 +80,15 @@ func pipeline(e env, w Window) (map[string]Observation, map[string]Metric, error
 	} else {
 		pipelineLocalBacklog(local, age, obs, met)
 	}
-	if local == nil {
+	switch {
+	case e.src.Server == nil: // nothing to answer: no memory server set up
+		absent("server.reach", ReasonNotConfigured)
+	case local == nil:
 		absent("server.reach", ReasonNoEvents)
-	} else if err := pipelineReach(e, w, local, age, obs, met); err != nil {
-		return nil, nil, err
+	default:
+		if err := pipelineReach(e, w, local, age, obs, met); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := pipelineHooks(e, w, obs, met); err != nil {
 		return nil, nil, err

@@ -99,7 +99,7 @@ func TestServerErrorEnums(t *testing.T) {
 		enum, reason string
 	}{
 		{"nil", nil, "", ""},
-		{"no client", errNoServer, "not_configured", "server_down"},
+		{"no client", errNoServer, "not_configured", "not_configured"},
 		{"unreachable", fmt.Errorf("%w: GET /x: %w", hindsight.ErrUnreachable, syscall.ECONNREFUSED), "unreachable", "server_down"},
 		{"timeout", fmt.Errorf("%w: GET /x", hindsight.ErrTimeout), "timeout", "server_down"},
 		{"context deadline", fmt.Errorf("read: %w", context.DeadlineExceeded), "timeout", "server_down"},

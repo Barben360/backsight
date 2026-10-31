@@ -105,6 +105,33 @@ func TestScopeServerOKWithoutReads(t *testing.T) {
 	}
 }
 
+// TestServerSectionsWhenNotConfigured: no memory server set up (a reach
+// record left from an earlier one): each view that reads the server says
+// {ok: false, error: not_configured}, every server-scope metric and the
+// server's reach read no_data/not_configured (never server_down, never a
+// status of their own), and what this PC recorded is computed.
+func TestServerSectionsWhenNotConfigured(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.server = nil
+	x.local(index.LocalStatus{ReachLastOK: fxNow.Add(-26 * time.Hour), ReachFailingSince: fxNow.Add(-25 * time.Hour)})
+	recalls(x, "r", fxNow, 30, 10, 400, 600)
+	x.retained(ago(2*time.Hour), "d1", "ok", 0)
+	for _, v := range pageViews {
+		r := x.run(v, x.query(7))
+		if v != "quality" && (r.Server == nil || r.Server.OK || r.Server.Error != "not_configured") {
+			t.Errorf("%s: server = %s, want ok false, not_configured", v, mustJSON(t, r.Server))
+		}
+		for id, m := range r.Metrics {
+			if d, _ := DefOf(id); (d.Scope == "server" || id == "server.reach") && (m.Status != StatusNoData || m.Reason != ReasonNotConfigured) {
+				t.Errorf("%s: %s = %s/%s, want no_data/not_configured", v, id, m.Status, m.Reason)
+			}
+		}
+	}
+	if m := x.run("pipeline", x.query(7)).Metrics["pipeline.flow"]; m.Status == StatusNoData {
+		t.Errorf("pipeline.flow is no_data (%s), want computed from this PC", m.Reason)
+	}
+}
+
 // TestServerSectionsWhenDown: every server read unreachable, the last
 // answer recorded at T: each view that reads the server says {ok: false,
 // error: unreachable, last_ok: T} and server_ok false, its server-scope

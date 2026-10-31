@@ -477,7 +477,7 @@ func TestUnreachableServer(t *testing.T) {
 	}
 	x = newFx(t, fxNow)
 	x.server = nil // none configured
-	wantNoData(t, "bank.size", bankOf(x, x.query(7))["bank.size"], ReasonServerDown)
+	wantNoData(t, "bank.size", bankOf(x, x.query(7))["bank.size"], ReasonNotConfigured)
 }
 
 // TestServerOnlyHost: the server's metrics are computed, the machine's

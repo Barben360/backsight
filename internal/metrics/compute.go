@@ -18,6 +18,7 @@ const (
 	ReasonFeedbackOff       = "feedback_off"
 	ReasonServerOnlyHost    = "server_only_host"
 	ReasonServerDown        = "server_down"
+	ReasonNotConfigured     = "not_configured" // no memory server set up on this PC
 	ReasonServerUnsupported = "server_unsupported"
 )
 

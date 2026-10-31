@@ -52,13 +52,14 @@ var noDataWords = map[string]string{
 	metrics.ReasonFeedbackOff:       "memory feedback is off",
 	metrics.ReasonServerOnlyHost:    "this PC runs the server only",
 	metrics.ReasonServerDown:        "memory server not answering",
+	metrics.ReasonNotConfigured:     "no memory server set up",
 	metrics.ReasonServerUnsupported: "this memory server does not provide it",
 	"not_built":                     "not built yet",
 }
 
 // serverErrorWords say why the server did not answer.
 var serverErrorWords = map[string]string{
-	"not_configured": "no server set up", "timeout": "too slow", "unreachable": "unreachable",
+	"not_configured": "none set up", "timeout": "too slow", "unreachable": "unreachable",
 	"unauthorized": "refused the key", "not_found": "does not provide it", "bad_response": "unexpected answer",
 	"server_error": "server error",
 }
@@ -261,6 +262,9 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 func metricStatusText(d metrics.Def, m metrics.Metric) string {
 	switch m.Status {
 	case metrics.StatusNoData:
+		if m.Reason == metrics.ReasonNotConfigured { // nothing is wrong: there is no server to judge
+			return noDataWords[m.Reason]
+		}
 		if w := noDataWords[m.Reason]; w != "" {
 			return "no data: " + w
 		}

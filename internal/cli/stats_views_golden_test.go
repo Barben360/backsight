@@ -344,3 +344,47 @@ func TestViewTextIsPublic(t *testing.T) {
 		}
 	}
 }
+
+// With no memory server set up (no config file at all), the server's rows
+// read "no memory server set up" with no status of their own, never "not
+// answering", and their JSON reason is not_configured.
+func TestStatsViewsWithoutAServer(t *testing.T) {
+	viewsFixture(t)
+	fixedDoctor(t)
+	d, _, err := machine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(d.ConfigFile()); err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []string{"overview", "bank", "pipeline"} {
+		_, out, _ := run(t, "stats", view, "--tz", "Europe/Paris")
+		if strings.Contains(out, "not answering") {
+			t.Errorf("%s says the server is not answering:\n%s", view, out)
+		}
+		rows := map[string][]string{"overview": {"Memories", "Memory server answering"}, "bank": {"Memories"}, "pipeline": {"Waiting on the server", "Memory server answering"}}[view]
+		for _, label := range rows {
+			if l := lineOf(t, out, label+"  "); !strings.HasSuffix(l, "(no memory server set up)") {
+				t.Errorf("%s: %q, want only (no memory server set up)", view, l)
+			}
+		}
+		if !strings.Contains(out, "Memory server: none set up.") {
+			t.Errorf("%s: no header saying no server is set up:\n%s", view, out)
+		}
+		v := runView(t, "stats", view)
+		ms, _ := at(v.env.Data, "metrics").(map[string]any)
+		for id, m := range ms {
+			def, _ := metrics.DefOf(id)
+			if def.Scope != "server" && id != "server.reach" {
+				continue
+			}
+			if at(m, "status") != "no_data" || at(m, "reason") != "not_configured" {
+				t.Errorf("%s: %s = %v/%v, want no_data/not_configured", view, id, at(m, "status"), at(m, "reason"))
+			}
+		}
+		if at(v.env.Data, "server", "error") != "not_configured" {
+			t.Errorf("%s: server = %v", view, at(v.env.Data, "server"))
+		}
+	}
+}
