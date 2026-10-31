@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -392,11 +393,14 @@ func (h systemdHost) Transient(ctx context.Context, name string, env []string, s
 	return err
 }
 
-// transientRunning: the unit is neither failed nor inactive (gone).
-func (h systemdHost) transientRunning(ctx context.Context, name string) bool {
+// transientGone: the unit is failed or inactive (gone); its journal says
+// why.
+func (h systemdHost) transientGone(ctx context.Context, name string) error {
 	out, _ := h.systemctl(ctx, "is-active", name)
-	s := strings.TrimSpace(string(out))
-	return s != "failed" && s != "inactive"
+	if s := strings.TrimSpace(string(out)); s == "failed" || s == "inactive" {
+		return errors.New("see journalctl --user -u " + name)
+	}
+	return nil
 }
 
 // stopTransient stops the unit and, for the unpack unit, clears its

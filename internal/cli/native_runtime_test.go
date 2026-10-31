@@ -49,12 +49,15 @@ func TestRuntimeForPicksNative(t *testing.T) {
 	if n.Dirs != d || n.Proc != "/proc" || n.Cfg.Server.Runtime != "native" {
 		t.Errorf("Dirs %+v Proc %q", n.Dirs, n.Proc)
 	}
-	// TestMain's refusing runners: no test reaches systemd or a tool. The
-	// Windows host (Task 9) stops through its task, not the units.
-	if runtime.GOOS != "windows" {
-		if err := n.Stop(context.Background()); err != nil {
-			t.Errorf("Stop without units: %v", err)
-		}
+	// TestMain's refusing runners: no test reaches systemd or a tool. On
+	// Windows the placeholder host refuses until Task 9's taskHost: then
+	// Stop without a task is nil there too.
+	err := n.Stop(context.Background())
+	switch {
+	case runtime.GOOS == "windows" && (err == nil || !strings.Contains(err.Error(), "cannot run on Windows yet")):
+		t.Errorf("Stop on Windows before Task 9: %v, want the placeholder host's refusal", err)
+	case runtime.GOOS != "windows" && err != nil:
+		t.Errorf("Stop without units: %v", err)
 	}
 	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir(), GOOS: "linux"}).StopAPI(context.Background()); err != nil {
 		t.Errorf("StopAPI without units: %v", err)

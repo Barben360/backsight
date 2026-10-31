@@ -56,15 +56,9 @@ func (n Native) exe(name string) string {
 	return name
 }
 
-// UV is the pinned uv: uv.exe for the Windows layout, and on a Windows
-// host whatever the layout (a test of the systemd host there), where only
-// an .exe counts as installed (fsutil.Executable).
+// UV is the pinned uv (uv.exe on Windows).
 func (n Native) UV() string {
-	name := n.exe("uv")
-	if runtime.GOOS == "windows" {
-		name = "uv.exe"
-	}
-	return n.join(n.Root(), "uv", nativelock.UVVersion, name)
+	return n.join(n.Root(), "uv", nativelock.UVVersion, n.exe("uv"))
 }
 
 // installation is where pg0 extracted its Postgres; on Windows, the copy
@@ -102,9 +96,10 @@ func (n Native) pgBin(name string) string { return n.join(n.installation(), "bin
 var windowsToolEnv = [][]string{{"SYSTEMROOT", "SystemDrive"}, {"USERPROFILE", "LOCALAPPDATA", "APPDATA", "COMSPEC"}}
 
 // toolEnvFor is the whole environment of a tool in dir: toolEnv() on
-// Linux; on Windows the fixed list, PATH=<dir>;<SYSTEMROOT>\System32, TEMP
-// and TMP under Root(), and the proxy settings, each once (Windows' names
-// ignore case).
+// Linux; on Windows the fixed list, PATH=<dir>;<SYSTEMROOT>\System32 (
+// C:\Windows without SYSTEMROOT), TEMP and TMP under Root(), the proxy
+// settings, each once (Windows' names ignore case), and uv's settings (no
+// configuration file, managed Pythons only).
 func (n Native) toolEnvFor(dir string) []string {
 	if n.goos() != "windows" {
 		return toolEnv()
@@ -121,7 +116,11 @@ func (n Native) toolEnvFor(dir string) []string {
 	tmp := n.join(n.Root(), "tmp")
 	env = append(env, "TEMP="+tmp, "TMP="+tmp)
 	add(windowsToolEnv[1])
-	env = append(env, "PATH="+dir+";"+winJoin(os.Getenv("SYSTEMROOT"), "System32"))
+	sysRoot := os.Getenv("SYSTEMROOT")
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	env = append(env, "PATH="+dir+";"+winJoin(sysRoot, "System32"))
 	seen := map[string]bool{}
 	for _, k := range passedThrough {
 		if v := os.Getenv(k); v != "" && !seen[strings.ToUpper(k)] {
@@ -129,5 +128,5 @@ func (n Native) toolEnvFor(dir string) []string {
 			env = append(env, k+"="+v)
 		}
 	}
-	return env
+	return append(env, "UV_NO_CONFIG=1", "UV_PYTHON_PREFERENCE=only-managed")
 }

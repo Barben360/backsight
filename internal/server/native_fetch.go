@@ -96,7 +96,7 @@ func toolEnv(set ...string) []string {
 	return append(env, set...)
 }
 
-func (n Native) uvCache() string { return filepath.Join(n.Root(), "uv-cache") }
+func (n Native) uvCache() string { return n.join(n.Root(), "uv-cache") }
 
 // uvEnv is the pinned uv's environment: no configuration file, managed
 // Pythons only, its Pythons and cache under Root().

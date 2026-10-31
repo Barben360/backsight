@@ -78,11 +78,11 @@ type ToolRunner interface {
 func (n Native) Root() string { return n.join(n.Cfg.Server.ComposeDir, "native") }
 
 // Python is where uv installs Python (UV_PYTHON_INSTALL_DIR).
-func (n Native) Python() string { return filepath.Join(n.Root(), "python") }
+func (n Native) Python() string { return n.join(n.Root(), "python") }
 
 // PythonBin is the pinned Python's interpreter, as uv installs it.
 func (n Native) PythonBin() string {
-	return filepath.Join(n.Python(), "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")
+	return n.join(n.Python(), "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")
 }
 
 // VenvDir is version v's virtual environment.
@@ -93,13 +93,13 @@ func (n Native) VenvDir(v string) string { return n.join(n.Root(), "venv", v) }
 func (n Native) Home() string { return n.join(n.Root(), "home") }
 
 // HF is the models' cache (HF_HOME).
-func (n Native) HF() string { return filepath.Join(n.Root(), "hf") }
+func (n Native) HF() string { return n.join(n.Root(), "hf") }
 
 // EnvFile is the server unit's environment, secrets included (0600).
-func (n Native) EnvFile() string { return filepath.Join(n.Root(), "server.env") }
+func (n Native) EnvFile() string { return n.join(n.Root(), "server.env") }
 
 // IdentityFile holds the database's system identifier (0600).
-func (n Native) IdentityFile() string { return filepath.Join(n.Root(), "identity") }
+func (n Native) IdentityFile() string { return n.join(n.Root(), "identity") }
 
 func (Native) Kind() string { return "native" }
 

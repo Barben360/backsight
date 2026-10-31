@@ -206,10 +206,10 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 	if err != nil {
 		return nil, err
 	}
-	started := false
+	var job serverJob
 	defer func() { // registered first: a cancel must clean up too
-		if started {
-			n.stopTransient(ctx, unit)
+		if job.stop != nil {
+			job.stop()
 		}
 		_ = os.RemoveAll(home)
 		_ = l.Release()
@@ -235,12 +235,13 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 		{n.pgBin("postgres"), "-D", data, "-p", strconv.Itoa(port), "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="},
 	}
 	env := []string{"HOME=" + home, "LD_LIBRARY_PATH=" + filepath.Join(inst, "lib"), "PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
-	started = true // a failed systemd-run may still have started the unit
-	if err := n.host().Transient(ctx, unit, env, nil, steps); err != nil {
+	// stop is set even on an error: a failed systemd-run may still have
+	// started the unit.
+	if job, err = n.serverTransient(ctx, unit, env, steps); err != nil {
 		return nil, n.redact(fmt.Errorf("starting a throwaway database (%s): %w", unit, err))
 	}
 	db := NativeDB{n: n, port: port, password: pw}
-	if err := n.waitVerify(ctx, db, unit); err != nil {
+	if err := n.waitVerify(ctx, db, unit, job.gone); err != nil {
 		return nil, err
 	}
 	if _, err := db.Restore(ctx, dump); err != nil {
@@ -265,8 +266,8 @@ func (n Native) verifyPort() (int, error) {
 
 // waitVerify waits until the throwaway database answers, verifyWait at
 // most, on its postgres database (hindsight is created by the restore); a
-// unit that is gone (initdb or postgres failed) ends the wait.
-func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string) error {
+// job that is gone (initdb or postgres failed) ends the wait.
+func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string, gone func(context.Context) error) error {
 	deadline := time.Now().Add(verifyWait)
 	for {
 		_, err := db.run(ctx, "psql", "-d", "postgres", "-At", "-v", "ON_ERROR_STOP=1", "-c", "select 1")
@@ -276,8 +277,8 @@ func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string) error 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !n.transientRunning(ctx, unit) {
-			return fmt.Errorf("the throwaway database stopped (%s): see journalctl --user -u %s", unit, unit)
+		if why := gone(ctx); why != nil {
+			return n.redact(fmt.Errorf("the throwaway database stopped (%s): %w", unit, why))
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("the throwaway database (%s) did not answer within %s: %w", unit, verifyWait, err)

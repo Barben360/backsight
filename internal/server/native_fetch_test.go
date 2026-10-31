@@ -179,6 +179,7 @@ func TestNativeVersionAndOrder(t *testing.T) {
 
 func TestNativePathsAreUnderComposeDir(t *testing.T) {
 	n := newNative(t, nil)
+	n.GOOS = "" // this host's layout: uv.exe on Windows
 	root := filepath.Join(n.Cfg.Server.ComposeDir, "native")
 	for name, got := range map[string][2]string{
 		"Root":         {n.Root(), root},
@@ -591,6 +592,7 @@ esac
 }
 
 func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
+	testtool.SkipWindows(t, "Task 10: Linux's uv and unpack; Windows' Fetch (uv.exe, copyPostgres) has its own tests")
 	tools := &fakeTools{}
 	n := newNative(t, tools)
 	items, models, err := n.Downloads(context.Background())

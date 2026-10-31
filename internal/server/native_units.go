@@ -89,11 +89,11 @@ func (n Native) DBUnit() string     { return n.project() + "-db.service" }
 func (n Native) ServerUnit() string { return n.project() + "-server.service" }
 
 // DataDir is the database's data directory (pg0's instance).
-func (n Native) DataDir() string { return filepath.Join(n.InstanceDir(), "data") }
+func (n Native) DataDir() string { return n.join(n.InstanceDir(), "data") }
 
 func (n Native) shim() string { return filepath.Join(n.Dirs.Data, "bin", plugin.ShimName("linux")) }
 
-func (n Native) pendingFile() string { return filepath.Join(n.Root(), restartPending) }
+func (n Native) pendingFile() string { return n.join(n.Root(), restartPending) }
 
 // units lists the unit files and the service names Status reports them
 // under, the database first.
@@ -569,11 +569,11 @@ func (n Native) StartDatabase(ctx context.Context) error {
 		return err
 	}
 	h := n.host()
-	start := func(ctx context.Context) error { return h.StartDB(ctx, false) }
-	if s, ok := h.(dbAloneStarter); ok {
-		start = s.startDBAlone
+	s, ok := h.(dbAloneStarter)
+	if !ok {
+		return errNoDBAlone
 	}
-	if err := start(ctx); err != nil {
+	if err := s.startDBAlone(ctx); err != nil {
 		return err
 	}
 	if err := n.waitDB(ctx); err != nil {

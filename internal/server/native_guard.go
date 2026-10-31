@@ -39,7 +39,7 @@ func (n Native) strayWait() time.Duration {
 
 // InstanceDir is pg0's instance: <home>/.pg0/instances/hindsight.
 func (n Native) InstanceDir() string {
-	return filepath.Join(n.Home(), ".pg0", "instances", pgInstance)
+	return n.join(n.Home(), ".pg0", "instances", pgInstance)
 }
 
 // GuardError is the identity check's refusal: the instance is missing,
