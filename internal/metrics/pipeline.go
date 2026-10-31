@@ -313,20 +313,10 @@ SELECT COUNT(*) FROM tel_prompt WHERE decision = 'skip' AND reason = 'breaker' A
 	return nil
 }
 
-// hookKinds are the kinds of hook failure the supervisor reports; any other
-// value counts under "other", so no free text reaches a view.
-var hookKinds = []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"}
-
-// hookKind is kind when the supervisor reports it, else "other".
-func hookKind(kind string) string {
-	if slices.Contains(hookKinds, kind) {
-		return kind
-	}
-	return "other"
-}
-
 // pipelineHooks fills hooks.failures: the failures counted in the window,
-// judged on the last 24 h, whatever the window.
+// judged on the last 24 h, whatever the window. The kinds are the index's
+// closed set (an unknown kind is stored as other), so no free text reaches
+// a view.
 func pipelineHooks(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	const id = "hooks.failures"
 	reason, none, err := telemetryAbsent(e, "tel_hook_failure", "tel_prompt")
@@ -358,7 +348,6 @@ WHERE ((ts >= ? AND ts < ?) OR (ts >= ? AND ts < ?)) AND `+projectClause,
 		if err := rows.Scan(&ts, &kind); err != nil {
 			return err
 		}
-		kind = hookKind(kind)
 		t := time.UnixMilli(ts)
 		if !t.Before(w.Since) && t.Before(w.Until) {
 			total++

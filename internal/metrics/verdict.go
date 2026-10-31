@@ -63,6 +63,27 @@ type assessment struct {
 	Now     map[string]Metric
 	Prev    map[string]Metric
 	Right28 map[string]Metric // nil unless Right is judged on 28 days
+	Window  Window            // the verdict's last 7 days
+	ran28   bool              // Right's 28-day figures were computed
+}
+
+// metricsFor is the verdict's own metrics of ids when w is the verdict's
+// window (the default 7-day view, whose figures are the same), so the view
+// need not compute the families again; false for any other window or an
+// id the verdict did not compute (a developer metric).
+func (a assessment) metricsFor(w Window, ids []string) (map[string]Metric, bool) {
+	if !w.Since.Equal(a.Window.Since) || !w.Until.Equal(a.Window.Until) {
+		return nil, false
+	}
+	out := make(map[string]Metric, len(ids))
+	for _, id := range ids {
+		m, ok := a.Now[id]
+		if !ok {
+			return nil, false
+		}
+		out[id] = m
+	}
+	return out, true
 }
 
 // verdict judges e's data for the overview: the verdict, the first
@@ -94,7 +115,13 @@ func assess(e env) (assessment, error) {
 	if loc == nil {
 		loc = time.UTC
 	}
-	w := e.q.Window.span(e.now.Add(-verdictDays*day).In(loc), e.now.In(loc))
+	// The view's own window when it is the last 7 days, built a moment
+	// before now (within the minute the server reads allow): its figures
+	// are then the verdict's and can be reused.
+	w := e.q.Window
+	if w.Length() != verdictDays*day || w.Until.Sub(e.now).Abs() > time.Minute {
+		w = e.q.Window.span(e.now.Add(-verdictDays*day).In(loc), e.now.In(loc))
+	}
 	w.Loc = loc
 	e.q.Window = w // the figures as of now are this window's
 	var ids, twoWindow []string
@@ -116,17 +143,27 @@ func assess(e env) (assessment, error) {
 		return assessment{}, err
 	}
 	r := &judgingRun{e: e, w: w, cur: cur, prev: prev, rightW: w, rightCur: cur, rightPrv: prev}
-	out := assessment{Now: cur, Prev: prev}
+	out := assessment{Now: cur, Prev: prev, Window: w}
 
 	learning, learnText, err := r.learning()
 	if err != nil {
 		return assessment{}, err
 	}
-	// Right, too early on 7 days, is judged on the last 28 against the 28
-	// before, when that is not too early too.
+	// Learning needs prompts to read (R26): not on a server-only host or
+	// without any prompt, and not for Right while feedback is off.
+	learns := map[string]bool{}
+	if learning && cur["recall.hit_rate"].Status != StatusNoData {
+		learns["found"] = true
+		learns["right"] = !structuralNoData(cur, judgedMetrics["right"])
+	}
+	// Right, too early on 7 days for want of turns, is judged on the last
+	// 28 against the 28 before, when that is not too early too; with
+	// nothing to read at all (feedback off, server only) 28 days hold
+	// nothing more.
 	var right28Early *Reason
-	if !learning {
+	if !learns["right"] && hasTooFew(cur, judgedMetrics["right"]) {
 		if early, _ := tooEarly(cur, judgedMetrics["right"]); early {
+			out.ran28 = true
 			w28 := w.Last(fallbackDays * day)
 			c28, err := computeMetrics(e, w28, axisMetrics["right"])
 			if err != nil {
@@ -178,7 +215,7 @@ func assess(e env) (assessment, error) {
 			early, earlyReason = tooEarly(cur, judged)
 		}
 		switch {
-		case learning && (name == "found" || name == "right"):
+		case learns[name]:
 			ax.State = AxisLearning
 			state = &Reason{Metric: axisMetrics[name][0], Severity: SeverityInfo, Text: learnText}
 		case early:
@@ -228,16 +265,20 @@ func assess(e env) (assessment, error) {
 	return out, nil
 }
 
-// learning reports whether Found and Right are still learning: fewer than
-// 7 days since the first typed prompt (of the project when filtered), or
-// fewer than 20 typed prompts in the last 7 days; with the banner's
-// sentence. An axis whose prompts have nothing to read (a server-only
-// host, no prompt at all) is not learning: it is too early with that
-// reason.
+// structuralNoData: every metric of ids reads no_data for a reason more
+// prompts will not change (feedback off, a server-only host).
+func structuralNoData(ms map[string]Metric, ids []string) bool {
+	return !slices.ContainsFunc(ids, func(id string) bool {
+		m := ms[id]
+		return m.Status != StatusNoData || m.Reason == ReasonNoEvents
+	})
+}
+
+// learning reports whether this PC (or the project) is still learning:
+// fewer than 7 days since the first typed prompt, or fewer than 20 typed
+// prompts in the last 7 days; with the banner's sentence. Which axes it
+// holds is the caller's (Found and Right, when they have prompts to read).
 func (r *judgingRun) learning() (bool, string, error) {
-	if r.cur["recall.hit_rate"].Status == StatusNoData {
-		return false, "", nil
-	}
 	var first sql.NullInt64
 	var n int64
 	err := r.e.tx.QueryRowContext(r.e.ctx, `

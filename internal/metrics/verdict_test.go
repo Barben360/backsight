@@ -239,7 +239,7 @@ func TestFlowingIsImmediate(t *testing.T) {
 	}{
 		{"one exit failure", func(x *fx) {
 			x.tel(ago(time.Hour), telemetry.HookFailure{Hook: "prompt", Kind: "exit", MS: 5}, "s", "alpha")
-		}, attn, []Item{{Metric: "hooks.failures", Severity: SeverityWatch, Axis: "flowing", Text: "1 steps crashed in the last 24 h.",
+		}, attn, []Item{{Metric: "hooks.failures", Severity: SeverityWatch, Axis: "flowing", Text: "1 step crashed in the last 24 h.",
 			Why: mustDefAction("hooks.failures"), Command: "backsight doctor"}}},
 		{"doctor error", func(x *fx) {
 			x.doctor = []DoctorCheck{{ID: "metrics-index", Status: "error", Fix: "backsight stats index rebuild"}}
@@ -308,7 +308,7 @@ func TestRootCauseCollapse(t *testing.T) {
 		}, &Item{Severity: SeverityBad, Text: "Memory server unreachable since 2026-10-29 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost."}, nil},
 		{"breaker open, server answering", fxNow, func(x *fx) {
 			x.local(index.LocalStatus{ReachLastOK: today(8, 30), BreakerOpenUntil: fxNow.Add(10 * time.Minute), NotesQueued: 1, NotesOldestAt: fxNow.Add(-10 * time.Minute)})
-		}, &Item{Severity: SeverityWatch, Text: "Memory server unreachable since 08:30: 1 notes and 0 sessions wait on this PC, nothing is lost."}, nil},
+		}, &Item{Severity: SeverityWatch, Text: "Memory server unreachable since 08:30: 1 note and 0 sessions wait on this PC, nothing is lost."}, nil},
 		{"every read unreachable, reach not yet recorded failing", fxNow, func(x *fx) {
 			x.local(index.LocalStatus{ReachLastOK: today(11, 0)})
 			x.server.failAll(hindsight.ErrUnreachable)
@@ -323,7 +323,7 @@ func TestRootCauseCollapse(t *testing.T) {
 			x.retained(ago(2*time.Hour), "d2", "queued", 0)
 			down(x)
 		}, &Item{Severity: SeverityWatch, Text: "Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost."},
-			[]Item{{Metric: "pipeline.flow", Severity: SeverityWatch, Axis: "flowing", Text: "1 sessions could not be sent; 0 set aside after an error.",
+			[]Item{{Metric: "pipeline.flow", Severity: SeverityWatch, Axis: "flowing", Text: "1 session could not be sent; 0 set aside after an error.",
 				Why: mustDefAction("pipeline.flow"), Command: "backsight doctor"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -578,6 +578,9 @@ func TestRightFallsBackTo28Days(t *testing.T) {
 			c.fill(x)
 			a := x.assess(x.query(7))
 			wantAxes(t, c.name, a.Verdict, c.want)
+			if !a.ran28 {
+				t.Error("the 28-day figures were not computed")
+			}
 			c.check(t, a)
 		})
 	}
@@ -606,14 +609,22 @@ func TestVerdictWithoutActivity(t *testing.T) {
 			recalls(x, "p", fxNow, 300, 300, 0, 0)
 		}, axes{okay, early, okay, okay}, [3]string{"", feedOff, ""}},
 		{"fresh install", func(*fx) {}, axes{early, early, early, okay}, [3]string{nothing, nothing, nothing}},
+		{"feedback off on a young install", func(x *fx) {
+			x.cfg = func(c *config.Config) { c.Feedback.Enabled = false }
+			x.prompts("alpha", "first", fxNow.Add(-2*day), 1, nil)
+			recalls(x, "cur", fxNow, 11, 11, 0, 0)
+		}, axes{learning, early, early, okay}, [3]string{"Learning: day 3 of about 7, 12 prompts so far.", feedOff, ""}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			x := newFx(t, fxNow)
 			c.fill(x)
 			a := x.assess(x.query(7))
 			wantAxes(t, c.name, a.Verdict, c.want)
-			if a.Verdict.Learning {
-				t.Error("learning, want not")
+			if a.Verdict.Learning != (c.want[0] == learning) {
+				t.Errorf("verdict.learning = %v", a.Verdict.Learning)
+			}
+			if a.ran28 || a.Right28 != nil {
+				t.Errorf("the 28-day fallback ran (%v) with nothing to read", a.ran28)
 			}
 			for i, name := range axisOrder[:3] {
 				rs := a.Verdict.Axes[name].Reasons
@@ -786,7 +797,28 @@ func TestSummary(t *testing.T) {
 	}
 }
 
-// TestCopyFormats pins the numbers in the sentences.
+// The attention sentences of the counted metrics, for TestCopyFormats.
+func hookText(n int64) string {
+	return itemText(mustDefOf("hooks.failures"), Metric{Extra: map[string]any{"last_24h": map[string]int64{"exit": n}}}, 7, 0, false)
+}
+
+func flowText(failed, setAside int64) string {
+	return itemText(mustDefOf("pipeline.flow"), Metric{Extra: map[string]any{"failed": failed, "set_aside": setAside}}, 7, 0, false)
+}
+
+func wrongText(n int64, days int) string {
+	return itemText(mustDefOf("verdict.wrong_rate"), Metric{Num: &n}, days, 0, false)
+}
+
+func mustDefOf(id string) Def {
+	d, ok := DefOf(id)
+	if !ok {
+		panic(id)
+	}
+	return d
+}
+
+// TestCopyFormats pins the numbers and the plurals in the sentences.
 func TestCopyFormats(t *testing.T) {
 	for _, c := range []struct{ got, want string }{
 		{grouped(0), "0"}, {grouped(999), "999"}, {grouped(1000), "1,000"}, {grouped(72000), "72,000"},
@@ -799,10 +831,68 @@ func TestCopyFormats(t *testing.T) {
 		{clock(time.Date(2026, 10, 30, 0, 5, 0, 0, fxParis), fxNow, fxParis), "00:05"},
 		{clock(time.Date(2026, 10, 29, 23, 55, 0, 0, fxParis), fxNow, fxParis), "2026-10-29 23:55"},
 		{clock(time.Date(2026, 10, 29, 23, 5, 0, 0, time.UTC), fxNow, fxParis), "00:05"}, // 00:05 in Paris
-		{rootCauseSentence(time.Time{}, fxNow, fxParis, 2, 1), "Memory server unreachable: 2 notes and 1 sessions wait on this PC, nothing is lost."},
+		{count(1, "step", "steps"), "1 step"}, {count(2, "step", "steps"), "2 steps"}, {count(1000, "step", "steps"), "1,000 steps"},
+		{count(0, "note", "notes"), "0 notes"},
+		{learningSentence(2, 1), "Learning: day 2 of about 7, 1 prompt so far."},
+		{tooEarlySentence(1, countUnits["used.turn_rate"], 20), "Not enough yet: 1 declared turn, 20 needed."},
+		{tooEarlySentence(2, countUnits["context.per_session"], 100), "Not enough yet: 2 sessions, 100 needed."},
+		{hookText(1), "1 step crashed in the last 24 h."}, {hookText(2), "2 steps crashed in the last 24 h."},
+		{flowText(1, 0), "1 session could not be sent; 0 set aside after an error."},
+		{flowText(2, 1), "2 sessions could not be sent; 1 set aside after an error."},
+		{wrongText(1, 7), "1 memory reported wrong or out of date this week."},
+		{wrongText(2, 28), "2 memories reported wrong or out of date in the last 28 days."},
+		{cantJudgeSentence(0.64), "Can't judge yet: Claude said what it used on only 64 % of turns."},
+		{cantJudgeSentence(0.7966), "Can't judge yet: Claude said what it used on only 79 % of turns."},
+		{cantJudgeSentence(0.29), "Can't judge yet: Claude said what it used on only 29 % of turns."},
+		{rootCauseSentence(time.Time{}, fxNow, fxParis, 2, 1), "Memory server unreachable: 2 notes and 1 session wait on this PC, nothing is lost."},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
+		}
+	}
+}
+
+// TestVerdictFiguresReused: when the view's window is the last 7 days
+// (built up to a minute before now) the verdict judges that very window
+// and its figures can stand for the view's; any other window, or a
+// developer metric the verdict does not compute, cannot.
+func TestVerdictFiguresReused(t *testing.T) {
+	x := newFx(t, fxNow)
+	firstPrompt(x)
+	recalls(x, "cur", fxNow, 25, 25, 0, 0)
+	ids := []string{"recall.hit_rate", "pipeline.flow", "bank.size", "stale.hidden"}
+	built := func(before time.Duration, days int) Query {
+		w, err := NewWindow(fxNow.Add(-before), days, time.Time{}, time.Time{}, fxParis, "Europe/Paris")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Query{Window: w, Machines: "this"}
+	}
+	q := built(30*time.Second, 7)
+	a := x.assess(q)
+	if !a.Window.Since.Equal(q.Window.Since) || !a.Window.Until.Equal(q.Window.Until) {
+		t.Errorf("verdict window %v..%v, want the view's %v..%v", a.Window.Since, a.Window.Until, q.Window.Since, q.Window.Until)
+	}
+	m, ok := a.metricsFor(q.Window, ids)
+	if !ok || len(m) != len(ids) || !reflect.DeepEqual(m["recall.hit_rate"], a.Now["recall.hit_rate"]) {
+		t.Errorf("reuse = %v (%d metrics), want the verdict's own", ok, len(m))
+	}
+	if direct := x.metrics(ids, q)["recall.hit_rate"]; !reflect.DeepEqual(direct, m["recall.hit_rate"]) {
+		t.Errorf("reused hit rate\n%+v\ncomputed for the view\n%+v", m["recall.hit_rate"], direct)
+	}
+	if _, ok := a.metricsFor(q.Window, []string{"recall.by_lang"}); ok {
+		t.Error("reused a developer metric the verdict does not compute")
+	}
+	for _, c := range []struct {
+		name string
+		q    Query
+	}{{"30 days", built(0, 30)}, {"built 2 minutes ago", built(2*time.Minute, 7)}} {
+		a := x.assess(c.q)
+		if !a.Window.Until.Equal(fxNow) {
+			t.Errorf("%s: verdict ends at %v, want now", c.name, a.Window.Until)
+		}
+		if _, ok := a.metricsFor(c.q.Window, ids); ok {
+			t.Errorf("%s: figures reused for another window", c.name)
 		}
 	}
 }

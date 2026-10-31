@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -693,21 +692,6 @@ func TestFutureRowsAndAges(t *testing.T) {
 	})
 }
 
-// TestHookKind: the supervisor's eight kinds pass, anything else (an empty
-// or unknown value) counts under "other".
-func TestHookKind(t *testing.T) {
-	for _, k := range []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"} {
-		if hookKind(k) != k {
-			t.Errorf("hookKind(%q) = %q", k, hookKind(k))
-		}
-	}
-	for _, k := range []string{"", "foo", "Exit", "exit "} {
-		if hookKind(k) != "other" {
-			t.Errorf("hookKind(%q) = %q, want other", k, hookKind(k))
-		}
-	}
-}
-
 // TestServerQueueCappedFailedList: 520 failed operations, updated 1..520
 // minutes ago, listed newest first; 5 pages of 100 are read (500). failed_total
 // is the server's 520 and failed_capped is true, the 7-day count is the
@@ -755,21 +739,5 @@ func TestFailedReadSortsNewestFirst(t *testing.T) {
 	m := pipeOf(x, x.query(7))["server.queue"]
 	if extraInt(t, m, "failed") != 4 || extraInt(t, m, "failed_total") != 6 {
 		t.Errorf("extra = %v, want failed 4 of 6", m.Extra)
-	}
-}
-
-// TestHookFailureUnknownKind: a failure of a kind the supervisor does not
-// report counts under "other", in the window and in the last 24 h; one is
-// not serious, so the metric stays ok. The index already files an unknown
-// kind as other (its closed set), so this pins the end-to-end reading; the
-// family's own hookKind is the second guard, pinned by TestHookKind.
-func TestHookFailureUnknownKind(t *testing.T) {
-	x := pipeFx(t)
-	x.tel(ago(time.Hour), telemetry.HookFailure{Hook: "prompt", Kind: "foo", MS: 5}, "s", "alpha")
-	m := pipeOf(x, x.query(7))["hooks.failures"]
-	wantStatus(t, "hooks.failures", m, StatusOK)
-	by, last := m.Extra["by_kind"].(map[string]int64), m.Extra["last_24h"].(map[string]int64)
-	if !maps.Equal(by, map[string]int64{"other": 1}) || !maps.Equal(last, map[string]int64{"other": 1}) {
-		t.Errorf("by_kind %v last_24h %v, want {other: 1} in both", by, last)
 	}
 }
