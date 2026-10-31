@@ -39,7 +39,7 @@ func WriteUpdateMarker(d paths.Dirs, m UpdateMarker) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(d.State, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(d.State); err != nil {
 		return err
 	}
 	return fsutil.WriteAtomic(d.UpdateMarker(), append(raw, '\n'), 0o600)
@@ -97,7 +97,7 @@ func WriteUpdateSnapshot(d paths.Dirs, files map[string][]byte) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(d.State, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(d.State); err != nil {
 		return err
 	}
 	return fsutil.WriteAtomic(d.UpdateSnapshot(), raw, 0o600)

@@ -4,6 +4,7 @@ package fsutil
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -146,5 +147,45 @@ func TestMkdirPrivateCreatesPrivateAndLeavesAnExistingOneAlone(t *testing.T) {
 	}
 	if r, _ := OtherReaders(e); len(r) == 0 {
 		t.Error("an existing directory was changed")
+	}
+}
+
+// Only an entry that lets an account read counts: write-only does not.
+func TestOtherReadersIgnoresAWriteOnlyEntry(t *testing.T) {
+	root := openRoot(t)
+	f := filepath.Join(root, "drop.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MakePrivate(f); err != nil {
+		t.Fatal(err)
+	}
+	grant := func(rights string) {
+		if out, err := exec.Command("icacls", f, "/grant", "*S-1-5-32-545:"+rights).CombinedOutput(); err != nil {
+			t.Fatalf("icacls: %v\n%s", err, out)
+		}
+	}
+	grant("(WD)")
+	if r, err := OtherReaders(f); err != nil || len(r) != 0 {
+		t.Errorf("a write-only entry is reported: %v, %v", r, err)
+	}
+	grant("(RD)")
+	if r, err := OtherReaders(f); err != nil || len(r) != 1 {
+		t.Errorf("a read entry: %v, %v, want Users", r, err)
+	}
+}
+
+// The first directory a nested MkdirPrivate creates is the private one, so
+// every level below it is.
+func TestMkdirPrivateNestedIsPrivateAtEveryLevel(t *testing.T) {
+	root := openRoot(t)
+	leaf := filepath.Join(root, "state", "feedback", "x")
+	if err := MkdirPrivate(leaf); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(root, "state"), filepath.Join(root, "state", "feedback"), leaf} {
+		if r, err := OtherReaders(p); err != nil || len(r) != 0 {
+			t.Errorf("%s: readers %v, %v", p, r, err)
+		}
 	}
 }

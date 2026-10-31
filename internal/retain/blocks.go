@@ -423,7 +423,7 @@ func (s *SentIndex) Add(uuids ...string) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(s.path)); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)

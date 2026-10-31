@@ -13,7 +13,15 @@ import (
 const accessAllowedAce = 0
 
 // readMask: the rights that let a principal read file data.
-const readMask = 0x1 /* FILE_READ_DATA */ | windows.GENERIC_READ | windows.GENERIC_ALL | 0x1F01FF /* FILE_ALL_ACCESS */
+const (
+	fileReadData  = 0x1
+	fileAllAccess = 0x1F01FF
+	readMask      = fileReadData | windows.GENERIC_READ | windows.GENERIC_ALL
+)
+
+// reads: the mask grants file data to its holder; write, delete and
+// synchronize bits alone do not.
+func reads(mask uint32) bool { return mask&readMask != 0 || mask&fileAllAccess == fileAllAccess }
 
 func userSID() (*windows.SID, error) {
 	u, err := windows.GetCurrentProcessToken().GetTokenUser()
@@ -92,7 +100,7 @@ func OtherReaders(path string) ([]string, error) {
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			return nil, err
 		}
-		if ace.Header.AceType != accessAllowedAce || ace.Mask&readMask == 0 {
+		if ace.Header.AceType != accessAllowedAce || !reads(uint32(ace.Mask)) {
 			continue
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))

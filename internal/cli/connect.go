@@ -319,7 +319,7 @@ type connectMeta struct {
 // server's: resync sends each session's records the server lacks, never
 // what it holds. Tombstones stay: a purged session never goes out again.
 func resetRetain(d paths.Dirs, keep string, epoch state.RestoreEpoch, at time.Time) error {
-	if err := os.MkdirAll(filepath.Dir(keep), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(keep)); err != nil {
 		return err
 	}
 	if err := os.Mkdir(keep, 0o700); err != nil {

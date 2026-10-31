@@ -948,7 +948,7 @@ func recallAgain(ctx context.Context, cl *hindsight.Client, bank string, probes 
 // appendSwitchLog records a passed switch, one JSON line.
 func appendSwitchLog(stateDir string, rs state.RuntimeSwitch) error {
 	p := switchLog(stateDir)
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(p)); err != nil {
 		return err
 	}
 	line, err := json.Marshal(map[string]any{"from": rs.From, "to": rs.To, "at": rs.At, "backup": rs.Backup, "overlap": rs.Overlap, "overlap_beyond_near_ties": rs.OverlapBeyondTies, "gate_ok": true})

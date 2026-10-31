@@ -190,7 +190,7 @@ func (o Outbox) Append(n Note) (warn bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := os.MkdirAll(filepath.Dir(o.Path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(o.Path)); err != nil {
 		return false, err
 	}
 	f, err := os.OpenFile(o.Path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
@@ -381,7 +381,7 @@ func appendJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)

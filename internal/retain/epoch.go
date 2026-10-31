@@ -542,7 +542,7 @@ func (f *Flusher) addDropped(sid string, m dropped) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(f.Dirs.CursorsDir(), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(f.Dirs.CursorsDir()); err != nil {
 		return err
 	}
 	return fsutil.WriteAtomic(droppedPath(f.Dirs.CursorsDir(), sid), raw, 0o600)

@@ -50,3 +50,27 @@ func TestUpdateSecretsMakesThePrivateConfigDirOnWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A config directory that was there already and grants Users read: the
+// written file is private anyway, and LoadSecrets reads it back.
+func TestUpdateSecretsIntoALooseExistingDirOnWindows(t *testing.T) {
+	root, err := os.MkdirTemp(`C:\`, "bs-test-config-")
+	if err != nil {
+		t.Skipf("cannot create a directory under C:\\: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if who, _ := fsutil.OtherReaders(root); len(who) == 0 {
+		t.Fatal("the fixture directory is private already: the test proves nothing")
+	}
+	p := filepath.Join(root, "secrets.toml")
+	if err := UpdateSecrets(p, func(s *Secrets) error { return s.Set("api_key", "fakevalue9") }); err != nil {
+		t.Fatal(err)
+	}
+	if who, err := fsutil.OtherReaders(p); err != nil || len(who) != 0 {
+		t.Errorf("readers of the written file: %v, %v", who, err)
+	}
+	s, err := LoadSecrets(p)
+	if err != nil || s.APIKey != "fakevalue9" {
+		t.Errorf("LoadSecrets: %v", err)
+	}
+}

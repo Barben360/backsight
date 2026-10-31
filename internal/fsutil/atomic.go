@@ -112,7 +112,7 @@ func WriteAtomicNoFollow(path string, data []byte, perm fs.FileMode) error {
 // right before the rename and aborts it with its error.
 func write(path string, data []byte, perm fs.FileMode, check func() error) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := MkdirPrivate(dir); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")

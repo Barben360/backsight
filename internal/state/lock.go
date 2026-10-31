@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // Owner is the content of a lock file.
@@ -60,7 +62,7 @@ type Lock struct {
 
 // TryAcquire creates the lock file exclusively or returns a *HeldError.
 func TryAcquire(path, command string) (*Lock, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	owner := self(command)
@@ -77,11 +79,11 @@ func TryAcquire(path, command string) (*Lock, error) {
 	}
 	if _, err := f.Write(raw); err != nil {
 		_ = f.Close()
-		_ = os.Remove(path)
+		_ = fsutil.RemoveRetry(path)
 		return nil, err
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
+		_ = fsutil.RemoveRetry(path)
 		return nil, err
 	}
 	return &Lock{path: path, owner: owner}, nil
@@ -185,7 +187,7 @@ func BreakStale(e *HeldError) error {
 	if string(raw) != string(e.raw) {
 		return fmt.Errorf("%s changed since it was reported, refusing to break it", e.Path)
 	}
-	return os.Remove(e.Path)
+	return fsutil.RemoveRetry(e.Path)
 }
 
 // Owner is what the lock file holds.
@@ -204,5 +206,5 @@ func (l *Lock) Release() error {
 	if json.Unmarshal(raw, &cur) != nil || cur.PID != l.owner.PID || !cur.Since.Equal(l.owner.Since) {
 		return nil
 	}
-	return os.Remove(l.path)
+	return fsutil.RemoveRetry(l.path)
 }

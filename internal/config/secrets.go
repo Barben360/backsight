@@ -170,7 +170,14 @@ func UpdateSecrets(path string, fn func(*Secrets) error) error {
 	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return fsutil.ReplaceIfUnchanged(path, raw, 0o600, hash)
+	if err := fsutil.ReplaceIfUnchanged(path, raw, 0o600, hash); err != nil {
+		return err
+	}
+	// A config directory that was there already may grant others read.
+	if runtime.GOOS == "windows" {
+		return fsutil.MakePrivate(path)
+	}
+	return nil
 }
 
 // KeylessProviders run without an LLM API key.

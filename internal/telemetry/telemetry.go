@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"time"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // Common fields carried by every event.
@@ -82,7 +84,7 @@ func (w *Writer) emit(e Event) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(w.dir, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(w.dir); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(w.file(now), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)

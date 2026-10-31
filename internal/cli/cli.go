@@ -40,6 +40,9 @@ func machine() (paths.Dirs, string, error) {
 	if err != nil {
 		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
+	if err := d.EnsurePrivate(); err != nil {
+		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return d, "", &output.Error{Code: output.Blocked, Message: err.Error()}

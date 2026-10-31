@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/livecheck"
 	"github.com/Barben360/backsight/internal/output"
@@ -119,7 +120,7 @@ func runVerify(ctx context.Context, configDir string, noRoundTrip bool) (verifyR
 	work := filepath.Join(scratch, "cwd")
 	sd := d
 	sd.State = filepath.Join(scratch, "state")
-	if err := os.MkdirAll(work, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(work); err != nil {
 		return res, blocked(err)
 	}
 	var env []string
