@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -217,16 +219,143 @@ func TestRunningWithoutAFile(t *testing.T) {
 	}
 }
 
-// A file that parses but names no process ({} or pid 0) is stale: kill(2)
-// would read pid 0 as this process's group.
-func TestFileWithoutAPIDIsStale(t *testing.T) {
-	d, now := testDirs(t), testNow()
-	plant(t, d, `{}`, now)
-	if _, alive, err := Running(d, now); err != nil || alive {
-		t.Errorf("Running: alive %v, %v; want stale", alive, err)
+// A file that parses but lacks a pid, a port or a start time is judged as
+// an unparseable one: starting only while fresh. kill(2) would read pid 0
+// as this process's group; a live pid without a port is no dashboard.
+func TestIncompleteFileCountsAsStartingThenStale(t *testing.T) {
+	now := testNow()
+	pid := strconv.Itoa(os.Getpid())
+	at := now.Format(time.RFC3339)
+	for name, raw := range map[string]string{
+		"empty object":    `{}`,
+		"pid 0":           `{"pid":0,"port":4242,"started_at":"` + at + `"}`,
+		"live pid port 0": `{"pid":` + pid + `,"port":0,"started_at":"` + at + `"}`,
+		"no started_at":   `{"pid":` + pid + `,"port":4242}`,
+		"zero started_at": `{"pid":` + pid + `,"port":4242,"started_at":"0001-01-01T00:00:00Z"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testDirs(t)
+			plant(t, d, raw, now.Add(-5*time.Second))
+			if r, alive, err := Running(d, now); err != nil || !alive || r.Port != 0 {
+				t.Errorf("5 s old: %+v, %v, %v; want starting (alive, port 0)", r, alive, err)
+			}
+			wantRunning(t, Claim(d, Runtime{PID: os.Getpid(), Port: 5555, StartedAt: now}, now), 0)
+			plant(t, d, raw, now.Add(-11*time.Second))
+			if _, alive, err := Running(d, now); err != nil || alive {
+				t.Errorf("11 s old: alive %v, %v; want stale", alive, err)
+			}
+			if err := Claim(d, Runtime{PID: os.Getpid(), Port: 5555, StartedAt: now}, now); err != nil {
+				t.Fatal(err)
+			}
+			if got := readRuntime(t, d); got.Port != 5555 {
+				t.Errorf("file holds %+v, want port 5555", got)
+			}
+		})
 	}
+}
+
+// Starting means an mtime under 10 s from now, either way: a file stamped
+// by a clock that was ahead does not block every start until the clock
+// gets there.
+func TestUnwrittenGraceIsTwoSided(t *testing.T) {
+	now := testNow()
+	for _, c := range []struct {
+		offset   time.Duration
+		starting bool
+	}{
+		{-9 * time.Second, true},
+		{9 * time.Second, true},
+		{-10 * time.Second, false},
+		{10 * time.Second, false},
+		{11 * time.Second, false},
+		{time.Hour, false},
+	} {
+		d := testDirs(t)
+		plant(t, d, `{"pid":`, now.Add(c.offset))
+		if _, alive, err := Running(d, now); err != nil || alive != c.starting {
+			t.Errorf("mtime now%+v: alive %v, %v; want %v", c.offset, alive, err, c.starting)
+		}
+	}
+}
+
+func TestClaimRefusesAnIncompleteRuntime(t *testing.T) {
+	now := testNow()
+	for _, r := range []Runtime{
+		{Port: 4242, StartedAt: now},
+		{PID: os.Getpid(), StartedAt: now},
+		{PID: os.Getpid(), Port: 4242},
+	} {
+		d := testDirs(t)
+		if err := Claim(d, r, now); err == nil {
+			t.Errorf("Claim(%+v): nil, want an error", r)
+		}
+		if _, err := os.Stat(RuntimeFile(d)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Claim(%+v) wrote a file: %v", r, err)
+		}
+	}
+}
+
+// Two starters find one stale file: the second waits for the first's
+// claim and then sees its fresh file, so the stale file is replaced once
+// and only one claim lives.
+func TestClaimsAreSerialised(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	plantRuntime(t, d, Runtime{PID: deadPID(t), Port: 4242, StartedAt: now}, now)
+	defer func(w time.Duration) { claimLockWait = w }(claimLockWait)
+	claimLockWait = time.Hour
+	busy := make(chan struct{}, 1)
+	claimLockBusy = func() {
+		select {
+		case busy <- struct{}{}:
+		default:
+		}
+	}
+	defer func() { claimLockBusy = func() {} }()
+	second := make(chan error, 1)
+	var removals atomic.Int32
+	beforeStaleRemove = func() {
+		if removals.Add(1) > 1 {
+			return
+		}
+		go func() { second <- Claim(d, Runtime{PID: os.Getpid(), Port: 6666, StartedAt: now}, now) }()
+		select {
+		case <-busy: // the second starter waits on the lock
+		case err := <-second:
+			t.Errorf("the second claim ended while the first held the lock: %v", err)
+			second <- err
+		}
+	}
+	defer func() { beforeStaleRemove = func() {} }()
 	if err := Claim(d, Runtime{PID: os.Getpid(), Port: 5555, StartedAt: now}, now); err != nil {
 		t.Fatal(err)
+	}
+	wantRunning(t, <-second, 5555)
+	if n := removals.Load(); n != 1 {
+		t.Errorf("stale file judged for removal %d times, want 1", n)
+	}
+	if got := readRuntime(t, d); got.Port != 5555 {
+		t.Errorf("file holds %+v, want the first claim's port 5555", got)
+	}
+}
+
+// A starter that cannot get the lock in time is told a dashboard starts.
+func TestClaimLockTimesOut(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	plantRuntime(t, d, Runtime{PID: deadPID(t), Port: 4242, StartedAt: now}, now)
+	defer func(w time.Duration) { claimLockWait = w }(claimLockWait)
+	claimLockWait = 0
+	var second error
+	beforeStaleRemove = func() {
+		beforeStaleRemove = func() {}
+		second = Claim(d, Runtime{PID: os.Getpid(), Port: 6666, StartedAt: now}, now)
+	}
+	defer func() { beforeStaleRemove = func() {} }()
+	if err := Claim(d, Runtime{PID: os.Getpid(), Port: 5555, StartedAt: now}, now); err != nil {
+		t.Fatal(err)
+	}
+	wantRunning(t, second, 0)
+	if got := readRuntime(t, d); got.Port != 5555 {
+		t.Errorf("file holds %+v, want port 5555", got)
 	}
 }
 

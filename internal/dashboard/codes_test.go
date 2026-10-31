@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -180,6 +181,50 @@ func TestAcceptRefusesExpired(t *testing.T) {
 	}
 }
 
+// The window is closed: exactly CodeTTL away, either way, is accepted.
+func TestCodeTTLBoundary(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	if err := AcceptCode(d, mint(t, d, now.Add(-CodeTTL)), now); err != nil {
+		t.Errorf("120 s old: %v, want accepted", err)
+	}
+	if err := AcceptCode(d, mint(t, d, now.Add(CodeTTL)), now); err != nil {
+		t.Errorf("120 s ahead: %v, want accepted", err)
+	}
+}
+
+// A symlink or a directory named by a valid code's hash is not a minted
+// code: refused and left in place.
+func TestAcceptRefusesNonRegularFiles(t *testing.T) {
+	now := testNow()
+	for _, kind := range []string{"symlink", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			d := testDirs(t)
+			const code = "0123456789abcdef0123456789abcdef"
+			if err := os.MkdirAll(CodesDir(d), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(CodesDir(d), codeName(code))
+			if kind == "symlink" {
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, p); err != nil {
+					t.Skipf("no symlinks here: %v", err)
+				}
+			} else if err := os.Mkdir(p, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := AcceptCode(d, code, now); !errors.Is(err, ErrNoCode) {
+				t.Errorf("%s: %v, want ErrNoCode", kind, err)
+			}
+			if _, err := os.Lstat(p); err != nil {
+				t.Errorf("%s removed: %v", kind, err)
+			}
+		})
+	}
+}
+
 // A clock stepped back after the mint: a code from the future is as
 // suspect as an old one.
 func TestCodeFromTheFuture(t *testing.T) {
@@ -258,17 +303,24 @@ func TestSweepCodes(t *testing.T) {
 	if err := os.Chtimes(notes, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	dir := filepath.Join(CodesDir(d), codeName("0123456789abcdef0123456789abcdef"))
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dir, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if err := SweepCodes(d, now, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := codeFiles(t, d); len(got) != 2 || got[1] != "notes.txt" {
-		t.Errorf("after the expired sweep: %v, want the fresh code and notes.txt", got)
+	if got := codeFiles(t, d); len(got) != 3 || got[2] != "notes.txt" || !slices.Contains(got, codeName(fresh)) || !slices.Contains(got, filepath.Base(dir)) {
+		t.Errorf("after the expired sweep: %v, want the fresh code, the directory and notes.txt", got)
 	}
 	if err := SweepCodes(d, now, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := codeFiles(t, d); len(got) != 1 || got[0] != "notes.txt" {
-		t.Errorf("after the full sweep: %v, want notes.txt", got)
+	if got := codeFiles(t, d); len(got) != 2 || got[1] != "notes.txt" || !slices.Contains(got, filepath.Base(dir)) {
+		t.Errorf("after the full sweep: %v, want the directory and notes.txt", got)
 	}
 	if err := AcceptCode(d, fresh, now); !errors.Is(err, ErrNoCode) {
 		t.Errorf("a swept code: %v, want ErrNoCode", err)
