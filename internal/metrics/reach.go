@@ -23,11 +23,6 @@ func init() { register("reach", reachIDs, reach) }
 // them) whose use in a turn counts as Claude looking at memory.
 var memoryTools = []string{"memory_search", "memory_read", "memory_store"}
 
-// turnTail is how long after a window's end a turn's tool uses still
-// count for a prompt inside the window (a turn open longer is pending,
-// then undeclared: the same two hours as the quality views).
-const turnTail = 2 * time.Hour
-
 // unknownKey labels a reason or a language the line did not carry.
 const unknownKey = "unknown"
 
@@ -150,14 +145,13 @@ func reachPrompts(e env, w Window, obs map[string]Observation, met map[string]Me
 		cond = append(cond, fmt.Sprintf(`substr(name, -%d) = ?`, len(n)))
 		names = append(names, n)
 	}
-	args = append(args, w.Since.UnixMilli(), (w.Until.Add(turnTail)).UnixMilli())
 	args = append(args, names...)
 	args = append(args, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT p.ts, p.decision, p.reason, p.plen, p.lang, p.injected, p.empty, s.n IS NOT NULL
 FROM tel_prompt p
 LEFT JOIN (SELECT DISTINCT session, n FROM tel_tool_use
-           WHERE COALESCE(subagent, 0) = 0 AND ts >= ? AND ts < ? AND (`+strings.Join(cond, " OR ")+`)) s
+           WHERE COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)) s
        ON s.session = p.session AND s.n = p.n
 WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?)`, args...)
 	if err != nil {
@@ -250,7 +244,10 @@ WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?)`, args...)
 	}
 	met["recall.empty_reasons"] = er
 
-	// recall.by_lang: the whole window's rate judged on its own, and each
+	// recall.by_lang: the top-level status is the envelope of the overall
+	// hit rate (so the metric reads too_few or ok), not a per-language
+	// verdict; each language carries its own status below. The whole
+	// window's rate judged on its own, and each
 	// language judged with the same min_n.
 	def, _ := DefOf("recall.by_lang")
 	byLang := make(map[string]langStat, len(total.langs))

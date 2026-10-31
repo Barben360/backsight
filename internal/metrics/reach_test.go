@@ -225,13 +225,20 @@ func TestSearchRate(t *testing.T) {
 	mach := x.prompts("alpha", "mach", fxNow.Add(-6*time.Hour), 1, func(_ int, p *telemetry.Prompt) { p.Decision, p.Reason = "skip", "machine" })
 	x.toolUse(at, mach[0], "alpha", 1, "memory_search", false)
 
+	// A tool use 3 h after its prompt still belongs to the prompt's turn; one
+	// of a prompt outside the window counts for nothing.
+	late := x.prompts("alpha", "late", fxNow.Add(-10*time.Hour), 1, nil)
+	x.toolUse(fxNow.Add(-6*time.Hour), late[0], "alpha", 1, "memory_search", false)
+	old := x.prompts("alpha", "old", fxNow.Add(-20*day), 1, nil)
+	x.toolUse(fxNow.Add(-time.Hour), old[0], "alpha", 1, "memory_search", false)
+
 	m := reachOf(x, x.query(7))["search.rate"]
-	// 10 main-agent searches + 1 memory_read + 1 memory_store = 12 prompts.
-	if m.Num == nil || *m.Num != 12 || m.Den == nil || *m.Den != 25 {
-		t.Fatalf("search rate = %v/%v, want 12/25 (value %v)", m.Num, m.Den, m.Value)
+	// 10 main-agent searches + 1 memory_read + 1 memory_store = 12 prompts, plus the late one.
+	if m.Num == nil || *m.Num != 13 || m.Den == nil || *m.Den != 26 {
+		t.Fatalf("search rate = %v/%v, want 13/26 (value %v)", m.Num, m.Den, m.Value)
 	}
-	if m.Value == nil || !close4(*m.Value, 0.48) {
-		t.Errorf("value = %v, want 0.48", m.Value)
+	if m.Value == nil || !close4(*m.Value, 0.5) {
+		t.Errorf("value = %v, want 0.5", m.Value)
 	}
 }
 
@@ -350,6 +357,13 @@ func TestReachNoData(t *testing.T) {
 	}
 	if s := m["recall.hit_rate"]; s.Status == StatusNoData {
 		t.Errorf("recall.hit_rate = no_data, prompts exist")
+	}
+
+	z := newFx(t, fxNow)
+	z.prompts("alpha", "a", fxNow, 25, injecting(5))
+	z.tel(fxNow.Add(-time.Hour), telemetry.Tool{Name: "memory_read", OK: true}, "s", "alpha")
+	if s := reachOf(z, z.query(7))["search.empty_rate"]; s.Status != StatusTooFew || s.Den == nil || *s.Den != 0 {
+		t.Errorf("search.empty_rate with only memory_read rows: %s den %v, want too_few, den 0", s.Status, s.Den)
 	}
 
 	y := newFx(t, fxNow)
