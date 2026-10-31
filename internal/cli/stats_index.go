@@ -215,8 +215,17 @@ const (
 	indexChangedSentence    = "backsight was updated meanwhile: run the command again"
 )
 
-// indexClassMessage is the sentence of an index error of class.
-func indexClassMessage(class string) string { return "the metrics index: " + class }
+// indexClassMessage is the sentence of an index error of class: a full
+// disk and a busy index have their own; any other class names itself.
+func indexClassMessage(class string) string {
+	switch class {
+	case "full":
+		return index.ErrDiskFull.Error()
+	case "busy":
+		return index.ErrInUse.Error()
+	}
+	return "the metrics index could not be read (" + class + "): run backsight stats index rebuild"
+}
 
 // indexError is an index error as a command reports it: a sentence or a
 // class, never the error's own text, which may hold a path.

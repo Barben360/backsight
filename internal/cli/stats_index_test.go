@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -346,10 +347,11 @@ func TestIndexErrorMapping(t *testing.T) {
 		{index.ErrInUse, output.Blocked, index.ErrInUse.Error()},
 		{index.ErrNeedsYes, output.NeedsUser, "rebuilding drops the months listed, whose files are gone: confirm with backsight stats index rebuild --yes"},
 		{index.ErrUnreadable, output.Blocked, "the metrics index is unreadable and rebuilding it failed today: run backsight stats index rebuild"},
-		{index.ErrDiskFull, output.Blocked, "the metrics index: full"},
+		{index.ErrDiskFull, output.Blocked, "the disk is full: the metrics index was left as it was"},
+		{&fs.PathError{Op: "write", Path: "/home/someone/metrics.db", Err: syscall.ENOSPC}, output.Blocked, "the disk is full: the metrics index was left as it was"},
 		{fmt.Errorf("ingest x: %w", index.ErrSchemaChanged), output.Blocked, "backsight was updated meanwhile: run the command again"},
-		{errors.New("open /home/someone/secret/metrics.db: permission denied"), output.Blocked, "the metrics index: other"},
-		{&fs.PathError{Op: "open", Path: "/home/someone/metrics.db", Err: fs.ErrPermission}, output.Blocked, "the metrics index: io"},
+		{errors.New("open /home/someone/secret/metrics.db: permission denied"), output.Blocked, "the metrics index could not be read (other): run backsight stats index rebuild"},
+		{&fs.PathError{Op: "open", Path: "/home/someone/metrics.db", Err: fs.ErrPermission}, output.Blocked, "the metrics index could not be read (io): run backsight stats index rebuild"},
 	}
 	for _, c := range cases {
 		err := indexError(c.err)
@@ -624,7 +626,7 @@ func TestStatsIndexMigrateRecordsAFailure(t *testing.T) {
 	catchUpIndex(t, home)
 	withRegistry(t, testRegistry(t, "CREATE TABLE broken("))
 	code, out, errOut := run(t, "stats", "index", "migrate")
-	if code != output.Blocked || out != "" || !strings.Contains(errOut, "the metrics index: other") {
+	if code != output.Blocked || out != "" || !strings.Contains(errOut, "the metrics index could not be read (other): run backsight stats index rebuild") {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	if strings.Contains(errOut, "broken") || strings.Contains(errOut, home) {
@@ -676,7 +678,7 @@ func TestStatsIndexMigrateIsBounded(t *testing.T) {
 		<-ctx.Done()
 		return index.MigrateResult{}, ctx.Err()
 	}
-	if code, _, errOut := run(t, "stats", "index", "migrate"); code != output.Blocked || !strings.Contains(errOut, "the metrics index:") {
+	if code, _, errOut := run(t, "stats", "index", "migrate"); code != output.Blocked || !strings.Contains(errOut, "the metrics index could not be read (") {
 		t.Errorf("exit %d %q", code, errOut)
 	}
 }
@@ -704,5 +706,20 @@ func TestIndexStatusTextCountsOnlyCompleteLinesAsBehind(t *testing.T) {
 	}}
 	if out := indexStatusText(st); !strings.Contains(out, "Sources      2 file(s), 1 behind, 0 gone") {
 		t.Errorf("%s", out)
+	}
+}
+
+// A full disk and a busy index keep their own sentences; any other class
+// names itself in a plain sentence with the way out.
+func TestIndexClassMessage(t *testing.T) {
+	for class, want := range map[string]string{
+		"full":    "the disk is full: the metrics index was left as it was",
+		"busy":    index.ErrInUse.Error(),
+		"corrupt": "the metrics index could not be read (corrupt): run backsight stats index rebuild",
+		"io":      "the metrics index could not be read (io): run backsight stats index rebuild",
+	} {
+		if got := indexClassMessage(class); got != want {
+			t.Errorf("%s: %q, want %q", class, got, want)
+		}
 	}
 }

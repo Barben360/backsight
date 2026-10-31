@@ -22,12 +22,19 @@ import (
 )
 
 // Ingest limits: lines per transaction, bytes of a file's head checked
-// for a replacement, bytes of a line (a longer one is skipped as too_long).
+// for a replacement, bytes of a line (a longer one is skipped as too_long),
+// lines between two looks at the context.
 const (
 	maxBatchLines = 5000
 	headMax       = 4096
 	maxLineBytes  = 1 << 20
+	ctxEvery      = 64
 )
+
+// maxBatchBytes bounds the bytes one transaction reads (it ends after the
+// line that reaches it), so that a batch of long lines does not hold the
+// write lock for long; a var for the tests.
+var maxBatchBytes int64 = 64 << 20
 
 // kindTelemetry is the cursors kind of the telemetry month files.
 const kindTelemetry = "telemetry"
@@ -235,8 +242,17 @@ func (ix *Index) recordUnreadable(ctx context.Context, rel string) error {
 	return ix.recordOnce(ctx, rel, unreadableOffset, errUnreadable)
 }
 
-// recordOnce adds the ingest_errors row (rel, off) unless there is one.
+// recordOnce adds the ingest_errors row (rel, off) unless there is one;
+// one already there is seen from a read, without the write lock.
 func (ix *Index) recordOnce(ctx context.Context, rel string, off int64, reason string) error {
+	var there bool
+	if err := ix.ReadTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		there, err = hasErrorRow(ctx, tx, rel, off)
+		return err
+	}); err != nil || there {
+		return err
+	}
 	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return err
@@ -251,6 +267,16 @@ func (ix *Index) recordOnce(ctx context.Context, rel string, off int64, reason s
 		return err
 	}
 	return ix.commit(tx)
+}
+
+// hasErrorRow reports whether ingest_errors holds the row (rel, off).
+func hasErrorRow(ctx context.Context, tx *sql.Tx, rel string, off int64) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM ingest_errors WHERE source_file = ? AND "offset" = ?`, rel, off).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // cursor is a file's row in cursors.
@@ -282,7 +308,7 @@ func readCursor(ctx context.Context, tx *sql.Tx, rel string) (cursor, bool, erro
 // errors, and the bytes read.
 type batch struct {
 	lines, errors, read int64
-	full                bool // maxBatchLines read: there may be more
+	full                bool // a batch limit reached: there may be more
 }
 
 // ingestBatch is one transaction on one file: the cursor read under the
@@ -295,6 +321,18 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	k, ok := kindOf(s.Kind)
 	if !ok {
 		return b, &fileError{fmt.Errorf("unknown source kind %q", s.Kind)}
+	}
+	if same, err := ix.unchanged(ctx, s); err != nil || same {
+		return b, err
+	}
+	// Opened before the write lock: a file that cannot be read takes none.
+	f, err := os.Open(s.Path)
+	missing := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !missing {
+		return b, &fileError{err}
+	}
+	if f != nil {
+		defer func() { _ = f.Close() }()
 	}
 	tx, err := ix.beginWrite(ctx)
 	if err != nil {
@@ -314,14 +352,9 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 		}
 		return b, ix.commit(tx)
 	}
-	f, err := os.Open(s.Path)
-	if errors.Is(err, fs.ErrNotExist) {
+	if missing {
 		return gone()
 	}
-	if err != nil {
-		return b, &fileError{err}
-	}
-	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return b, &fileError{err}
@@ -356,7 +389,7 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	defer ins.close()
 	lastTS := cur.lastTS
 	now := ix.opts.Now().UnixMilli()
-	end, lines, err := readLines(io.NewSectionReader(f, cur.offset, size-cur.offset), cur.offset, maxBatchLines,
+	end, lines, more, err := readLines(ctx, io.NewSectionReader(f, cur.offset, size-cur.offset), cur.offset, maxBatchLines, maxBatchBytes,
 		func(off int64, line []byte, tooLong bool) error {
 			reason := errTooLong
 			var rows []row
@@ -382,7 +415,7 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	if err != nil {
 		return b, err // a fileError from a read, else the index's
 	}
-	b.lines, b.read, b.full = int64(lines), end-cur.offset, lines == maxBatchLines
+	b.lines, b.read, b.full = int64(lines), end-cur.offset, more
 	cleared := false // the file was unreadable until now
 	if !reset {
 		res, err := tx.ExecContext(ctx, `DELETE FROM ingest_errors WHERE source_file = ? AND "offset" = ?`, s.Rel, unreadableOffset)
@@ -412,6 +445,48 @@ func (ix *Index) ingestBatch(ctx context.Context, s source) (batch, error) {
 	return b, ix.commit(tx)
 }
 
+// unchanged reports, from a read alone, that ingestBatch has nothing to
+// write for s: the file matches its cursor (size and head), no complete
+// line lies past the offset and no unreadable row waits to be cleared;
+// or the file is gone and marked missing already (or never had a
+// cursor). A catch-up with nothing new so takes no write lock. Anything
+// else goes to the write transaction, which looks again under the lock;
+// a file that cannot be read is left to it too (its fileError).
+func (ix *Index) unchanged(ctx context.Context, s source) (bool, error) {
+	var cur cursor
+	var known, flagged bool
+	if err := ix.ReadTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if cur, known, err = readCursor(ctx, tx, s.Rel); err != nil {
+			return err
+		}
+		flagged, err = hasErrorRow(ctx, tx, s.Rel, unreadableOffset)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	info, err := os.Stat(s.Path)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && !info.Mode().IsRegular() {
+		return !known || cur.missing, nil
+	}
+	if err != nil || !known || cur.missing || flagged || info.Size() != cur.size || cur.headLen > cur.size {
+		return false, nil
+	}
+	f, err := os.Open(s.Path)
+	if err != nil {
+		return false, nil
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, cur.headLen)
+	if n, err := f.ReadAt(head, 0); n != len(head) || err != nil && !errors.Is(err, io.EOF) {
+		return false, nil
+	}
+	if hexSHA(head) != cur.headSHA {
+		return false, nil
+	}
+	return !hasLine(f, cur.offset, cur.size), nil
+}
+
 func (ix *Index) commit(tx *sql.Tx) error {
 	if err := tx.Commit(); err != nil {
 		return err
@@ -426,17 +501,28 @@ func hexSHA(b []byte) string {
 }
 
 // readLines calls fn for each complete line of r (newline excluded), at
-// most limit of them; base is r's offset in the file. A line over
-// maxLineBytes comes with tooLong and no bytes. A last line without its
-// newline is left for later. end is the offset after the last complete
-// line. A read error is a fileError; fn's errors come back as they are.
-func readLines(r io.Reader, base int64, limit int, fn func(off int64, line []byte, tooLong bool) error) (end int64, n int, err error) {
+// most limit of them, ending after the line that brings the bytes read to
+// maxBytes; base is r's offset in the file. A line over maxLineBytes
+// comes with tooLong and no bytes. A last line without its newline is
+// left for later. end is the offset after the last complete line; more,
+// that a limit stopped the read. The context is looked at every ctxEvery
+// lines. A read error is a fileError; fn's errors and the context's come
+// back as they are.
+func readLines(ctx context.Context, r io.Reader, base int64, limit int, maxBytes int64, fn func(off int64, line []byte, tooLong bool) error) (end int64, n int, more bool, err error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 	pos, start := base, base
 	end = base
 	var buf []byte
 	tooLong := false
-	for n < limit {
+	for {
+		if n == limit || end-base >= maxBytes {
+			return end, n, true, nil
+		}
+		if n%ctxEvery == 0 && n > 0 {
+			if err := ctx.Err(); err != nil {
+				return end, n, false, err
+			}
+		}
 		chunk, rerr := br.ReadSlice('\n')
 		pos += int64(len(chunk))
 		if !tooLong {
@@ -453,19 +539,18 @@ func readLines(r io.Reader, base int64, limit int, fn func(off int64, line []byt
 				line = buf[:len(buf)-1]
 			}
 			if err := fn(start, line, tooLong); err != nil {
-				return end, n, err
+				return end, n, false, err
 			}
 			n++
 			start, end = pos, pos
 			buf, tooLong = buf[:0], false
 		case errors.Is(rerr, bufio.ErrBufferFull):
 		case errors.Is(rerr, io.EOF):
-			return end, n, nil
+			return end, n, false, nil
 		default:
-			return end, n, &fileError{rerr}
+			return end, n, false, &fileError{rerr}
 		}
 	}
-	return end, n, nil
 }
 
 // inserter keeps one prepared statement per statement text for the

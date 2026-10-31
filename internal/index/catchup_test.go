@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -751,5 +752,92 @@ func TestCatchUpStopsOnASchemaChange(t *testing.T) {
 				t.Error("the ledger table was written after the change")
 			}
 		})
+	}
+}
+
+// countWriteTxs counts the write transactions begun for the test.
+func countWriteTxs(t *testing.T) *int {
+	t.Helper()
+	var mu sync.Mutex
+	n := new(int)
+	prev := onWriteTx
+	onWriteTx = func() { mu.Lock(); *n++; mu.Unlock() }
+	t.Cleanup(func() { onWriteTx = prev })
+	return n
+}
+
+// TestCatchUpWithNothingNewTakesNoWriteLock: a catch-up that finds every
+// source as it left it (a file at its cursor with a partial last line, a
+// file gone and marked missing, an unreadable file already recorded, the
+// same ledger and local status) begins no write transaction; its
+// freshness still says it caught up now. A change takes one again.
+func TestCatchUpWithNothingNewTakesNoWriteLock(t *testing.T) {
+	r := &fakeReader{}
+	r.set(ledgerOf(map[string]feedback.Entry{"m-1": {Shown: 2}}), nil)
+	ls := LocalStatus{NotesQueued: 3, ReachLastOK: clock.Add(-time.Minute), BackupOK: true}
+	e := envWith(t, func(o *Options) {
+		o.Ledger = r
+		o.LocalStatus = func() (LocalStatus, error) { return ls, nil }
+	})
+	e.write("2026-10", promptLine(1, 1)+`{"event":"prompt","ts":"`+ts0+`"`) // a partial last line
+	e.write("2026-09", promptLine(2, 1))
+	unreadable := runtime.GOOS != "windows" && os.Geteuid() != 0
+	if unreadable {
+		e.write("2026-08", promptLine(3, 1))
+		if err := os.Chmod(e.telPath("2026-08"), 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(e.telPath("2026-08"), 0o600) })
+	}
+	e.catchUp(time.Minute)
+	if err := os.Remove(e.telPath("2026-09")); err != nil {
+		t.Fatal(err)
+	}
+	e.catchUp(time.Minute) // marks 2026-09 missing
+	if c := e.cursor("2026-09"); c["missing"] != int64(1) {
+		t.Fatalf("cursor %v", c)
+	}
+
+	n := countWriteTxs(t)
+	e.clock.Add(time.Hour)
+	fr := e.catchUp(time.Minute)
+	if *n != 0 {
+		t.Errorf("%d write transactions for a catch-up with nothing new", *n)
+	}
+	if !fr.IngestedAt.Equal(clock.Add(time.Hour)) || fr.Partial {
+		t.Errorf("freshness %+v, want caught up at %v", fr, clock.Add(time.Hour))
+	}
+
+	e.append("2026-10", "\n") // the partial line completed
+	e.catchUp(time.Minute)
+	if *n == 0 {
+		t.Error("no write transaction for a new line")
+	}
+	*n = 0
+	ls.NotesQueued = 4
+	e.catchUp(time.Minute)
+	if *n != 1 {
+		t.Errorf("%d write transactions for a changed local status, want 1", *n)
+	}
+	if rs := e.rowsOf(`SELECT notes_queued FROM local_status`); len(rs) != 1 || rs[0]["notes_queued"] != int64(4) {
+		t.Errorf("local status %v", rs)
+	}
+}
+
+// The catch-up budgets are the ones the views and the tick are promised.
+func TestCatchUpBudgets(t *testing.T) {
+	if TickBudget != 5*time.Second || ViewBudget != 2*time.Second {
+		t.Errorf("tick %v, view %v; want 5 s and 2 s", TickBudget, ViewBudget)
+	}
+}
+
+// An index never caught up has no ingested_at in the views' JSON.
+func TestFreshnessLeavesOutAZeroTime(t *testing.T) {
+	raw, err := json.Marshal(Freshness{LagSeconds: 3, Partial: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw); got != `{"lag_seconds":3,"partial":true}` {
+		t.Errorf("%s", got)
 	}
 }

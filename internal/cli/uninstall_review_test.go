@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -213,6 +214,9 @@ func TestUninstallResumeKeepsEveryFlag(t *testing.T) {
 // The local files go before the binaries; a failure on the binaries is no
 // longer resumable (the state may be gone): exit 20 with what is left.
 func TestUninstallBinariesLastAndTheirFailureListsWhatIsLeft(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory mode does not stop removals on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root removes read-only directories' entries")
 	}
@@ -408,6 +412,9 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 // A backup directory reached through a symlink into the state directory
 // is kept.
 func TestUninstallPurgeLocalFollowsASymlinkedBackupDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a symlink needs a privilege or developer mode on Windows")
+	}
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	real := filepath.Join(d.State, "logs", "archives")
@@ -572,6 +579,9 @@ func TestUninstallWarnsAboutAPathEntryThatIsNotOurs(t *testing.T) {
 }
 
 func TestUninstallRemovesARelativeLinkOfOurs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a symlink needs a privilege or developer mode on Windows")
+	}
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	link := filepath.Join(d.Bin, "backsight")

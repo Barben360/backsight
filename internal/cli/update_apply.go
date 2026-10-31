@@ -962,7 +962,7 @@ func indexMigrateReason(ctx, cctx context.Context, err error) string {
 	switch ce.env.Message {
 	case indexUpdatingSentence:
 		return "an update is in progress"
-	case index.ErrInUse.Error(), indexClassMessage("busy"):
+	case indexClassMessage("busy"): // index.ErrInUse's sentence
 		return "the index is in use"
 	case indexClassMessage("full"):
 		return "the disk is full"

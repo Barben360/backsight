@@ -42,7 +42,7 @@ func TestCurrentReaderReadsWithoutTheLock(t *testing.T) {
 		if res.l.Memories["m1"].Shown != 1 {
 			t.Errorf("the settled ledger is missing: %+v", res.l.Memories)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(5 * time.Second): // a wait on the lock never ends: it is held until the test returns
 		t.Fatal("All waited for the ledger lock")
 	}
 }

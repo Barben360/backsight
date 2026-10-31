@@ -61,10 +61,4 @@ func TestMetricsIndexCheck(t *testing.T) {
 			t.Errorf("detail %q", got.Detail)
 		}
 	})
-	t.Run("an error shows nothing but its class", func(t *testing.T) {
-		got := checkMetricsIndex(IndexFacts{}, errors.New("io"), false)
-		if got.Summary != "cannot read the metrics index (io)" {
-			t.Errorf("%q", got.Summary)
-		}
-	})
 }

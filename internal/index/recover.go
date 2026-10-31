@@ -38,6 +38,13 @@ var (
 // onQuickCheck runs before each quick_check (tests count them).
 var onQuickCheck = func() {}
 
+// quickCheckTimeout bounds the daily quick_check apart from the caller's
+// context; runQuickCheck is quickCheck (tests slow it down).
+var (
+	quickCheckTimeout = 10 * time.Second
+	runQuickCheck     = quickCheck
+)
+
 // afterConnect, when set, runs between Open's connect and its identity
 // check (tests replace the file there).
 var afterConnect func(path string)
@@ -304,8 +311,11 @@ func removeCompanions(path string) error {
 
 // dailyCheck runs PRAGMA quick_check when the last one that passed is
 // checkEvery old (or unknown, or in the future), and stamps CheckedAt
-// when it passes. Only a corruption, or the context's end, is an error:
-// a check that cannot run (busy) is tried at the next open.
+// when it passes. Only a corruption is an error: a check that cannot run
+// (busy) or does not finish within quickCheckTimeout or the caller's
+// context is skipped, not stamped, and tried at the next open; the open
+// goes on (a slow check must not fail every open, or the index would
+// never catch up).
 func (ix *Index) dailyCheck(ctx context.Context) error {
 	now := ix.opts.Now()
 	st, err := readStatus(ix.opts.Dirs)
@@ -315,11 +325,13 @@ func (ix *Index) dailyCheck(ctx context.Context) error {
 	// A status that cannot be written leaves CheckedAt as it was: the
 	// check then runs at every open (a cost, never a wrong verdict).
 	onQuickCheck()
-	if err := quickCheck(ctx, ix.sh.r); err != nil {
+	cctx, cancel := context.WithTimeout(ctx, quickCheckTimeout)
+	defer cancel()
+	if err := runQuickCheck(cctx, ix.sh.r); err != nil {
 		if isCorrupt(err) {
 			return err
 		}
-		return ctx.Err()
+		return nil
 	}
 	_ = updateStatus(ix.opts.Dirs, func(st *recoveryState) bool {
 		st.CheckedAt = now

@@ -380,8 +380,8 @@ func configValues(d *lineDec, rel string, off, ts int64) []row {
 		if !ok || !isNumber(raw) {
 			continue
 		}
-		f, err := strconv.ParseFloat(string(raw), 64)
-		if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		f, err := strconv.ParseFloat(string(raw), 64) // JSON has no NaN
+		if err != nil || math.IsInf(f, 0) {
 			continue
 		}
 		r := row{table: "tel_config_values"}

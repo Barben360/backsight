@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,6 +101,8 @@ func TestIngestErrors(t *testing.T) {
 func TestBadTypes(t *testing.T) {
 	cases := []map[string]any{
 		{"decision": "skip", "n": 1.5},
+		{"decision": "skip", "n": 1e20},  // whole, but past 2^53 and int64: not an exact integer
+		{"decision": "skip", "n": 1e300}, // written with an exponent
 		{"decision": "skip", "nudged": "yes"},
 		{"decision": "skip", "ids": "m1"},
 		{"decision": "skip", "ids": []any{"m1", 2}},
@@ -778,5 +781,75 @@ func TestAStaleErrorRowAheadOfTheCursorIsKept(t *testing.T) {
 	}
 	if e.count("ingest_errors") != 1 {
 		t.Errorf("%d error rows, want 1", e.count("ingest_errors"))
+	}
+}
+
+// TestABatchEndsAtItsByteCap: a transaction stops after the line that
+// brings its bytes to maxBatchBytes; the next one goes on, and every
+// line is read once.
+func TestABatchEndsAtItsByteCap(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 10; i++ {
+		b.WriteString(fixedLine(i, 100))
+	}
+	end, n, more, err := readLines(context.Background(), strings.NewReader(b.String()), 0, maxBatchLines, 250,
+		func(int64, []byte, bool) error { return nil })
+	if err != nil || n != 3 || end != 300 || !more {
+		t.Errorf("readLines: end %d, %d lines, more %v, err %v; want 300, 3, true", end, n, more, err)
+	}
+
+	prev := maxBatchBytes
+	maxBatchBytes = 250
+	t.Cleanup(func() { maxBatchBytes = prev })
+	e := newEnv(t)
+	e.write("2026-10", b.String())
+	batches := countBatches(t)
+	if st := e.ingest(); st.Lines != 10 {
+		t.Errorf("stats %+v", st)
+	}
+	if *batches != 4 {
+		t.Errorf("%d transactions, want 4 (3+3+3+1 lines)", *batches)
+	}
+	if got := e.ns(); !slices.Equal(got, seq(10)) {
+		t.Errorf("prompts %v", got)
+	}
+}
+
+// TestReadLinesStopsOnItsContext: a cancelled context stops a batch
+// within ctxEvery lines, with its error.
+func TestReadLinesStopsOnItsContext(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 500; i++ {
+		b.WriteString(fixedLine(i, 100))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, n, _, err := readLines(ctx, strings.NewReader(b.String()), 0, maxBatchLines, maxBatchBytes,
+		func(int64, []byte, bool) error { cancel(); return nil })
+	if !errors.Is(err, context.Canceled) || n > ctxEvery {
+		t.Errorf("%d lines read after the cancel, err %v; want at most %d and context.Canceled", n, err, ctxEvery)
+	}
+}
+
+// TestShorterFileWithAPartialTailIsReset: a file replaced by a shorter
+// one, still past the cursor's offset but shorter than its recorded head
+// (the head covered a partial last line), is read again from 0.
+func TestShorterFileWithAPartialTailIsReset(t *testing.T) {
+	e := newEnv(t)
+	first := promptLine(1, 1)
+	e.write("2026-10", first+`{"event":"prompt","ts":"`+ts0+`"`)
+	e.ingest()
+	if c := e.cursor("2026-10"); c["offset"] != int64(len(first)) || c["head_len"].(int64) <= int64(len(first)+1) {
+		t.Fatalf("cursor %v", c)
+	}
+	e.write("2026-10", promptLine(9, 1)+"{") // shorter than head_len, longer than the offset
+	if st := e.ingest(); st.Lines != 1 {
+		t.Errorf("read %d lines, want 1", st.Lines)
+	}
+	if got := e.ns(); !slices.Equal(got, []int64{9}) {
+		t.Errorf("prompts %v, want [9]", got)
+	}
+	if c := e.cursor("2026-10"); c["offset"] != int64(len(first)) || c["head_len"] != int64(len(first)+1) {
+		t.Errorf("cursor %v", c)
 	}
 }

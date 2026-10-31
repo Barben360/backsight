@@ -17,12 +17,13 @@ const (
 	TickBudget = 5 * time.Second
 )
 
-// Freshness is how current the index is after a catch-up: when a file was
-// last ingested, how far behind its files it is, and whether the budget
+// Freshness is how current the index is after a catch-up: when it was
+// last caught up (this catch-up's start; partial, the last time a file
+// was ingested), how far behind its files it is, and whether the budget
 // ran out with lines left. Lines is how many complete lines the catch-up
 // read (not part of the views' JSON).
 type Freshness struct {
-	IngestedAt time.Time `json:"ingested_at"`
+	IngestedAt time.Time `json:"ingested_at,omitzero"`
 	LagSeconds int64     `json:"lag_seconds"`
 	Partial    bool      `json:"partial"`
 	Lines      int64     `json:"-"`
@@ -122,6 +123,11 @@ func (ix *Index) refresh(ctx context.Context, start, deadline time.Time) (Freshn
 	}
 	fr.Lines = st.Lines
 	if !fr.Partial {
+		// Caught up as of start, whether or not it wrote anything (a
+		// catch-up with nothing new writes no cursor).
+		if start.After(fr.IngestedAt) {
+			fr.IngestedAt = start.UTC()
+		}
 		p.ready(st.Lines)
 	}
 	return fr, st, nil
@@ -232,6 +238,14 @@ func linesLeft(path string, off int64) bool {
 	size := info.Size()
 	if size < off {
 		off = 0
+	}
+	return hasLine(f, off, size)
+}
+
+// hasLine reports whether f holds a newline between off and size.
+func hasLine(f io.ReaderAt, off, size int64) bool {
+	if size <= off {
+		return false
 	}
 	br := bufio.NewReaderSize(io.NewSectionReader(f, off, size-off), 64<<10)
 	for {

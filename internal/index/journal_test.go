@@ -589,6 +589,8 @@ func TestJournalRetirementsAndKeys(t *testing.T) {
 		{Key: "free text", ID: "m", Outcome: "shown"},
 		{Key: "s1|t|123|m", ID: "m", Outcome: "shown"},
 		{Key: "s1||123|m", ID: "m", Outcome: "shown"},
+		{Key: "the user said hi|t|123|m", ID: "m", Outcome: "shown"}, // prose in the session part
+		{Key: "s1|t|123|a memory id", ID: "m", Outcome: "shown"},     // prose in the id part
 	}})
 	e.appendJ(feedback.Event{TS: jT0.Add(5 * time.Second), Kind: "import", Source: "telemetry"}) // empty import: one bare row
 	e.ingest()
@@ -606,7 +608,7 @@ func TestJournalRetirementsAndKeys(t *testing.T) {
 	for _, r := range e.rowsOf(`SELECT ifnull(key, 'NULL') AS k FROM settles ORDER BY pos`) {
 		keys = append(keys, r["k"].(string))
 	}
-	if want := []string{"NULL", "NULL", "NULL", "s1|t|123|m", "s1||123|m"}; !slices.Equal(keys, want) {
+	if want := []string{"NULL", "NULL", "NULL", "s1|t|123|m", "s1||123|m", "NULL", "NULL"}; !slices.Equal(keys, want) {
 		t.Errorf("settle keys %v, want %v", keys, want)
 	}
 	if rs := e.rowsOf(`SELECT key FROM shows`); rs[0]["key"] != fmt.Sprintf("s1|t|%d|m", jT0.Add(3*time.Second).UnixNano()) {

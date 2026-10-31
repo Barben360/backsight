@@ -650,3 +650,34 @@ func TestFullDiskDuringAMigrationLeavesTheFile(t *testing.T) {
 	}
 	absent(t, mainFile(d)+".corrupt")
 }
+
+// TestASlowQuickCheckDoesNotFailTheOpen: a quick_check that outlasts its
+// own bound is skipped: the open succeeds within the caller's context,
+// nothing is stamped, and the next open runs it again.
+func TestASlowQuickCheckDoesNotFailTheOpen(t *testing.T) {
+	prevRun, prevTimeout := runQuickCheck, quickCheckTimeout
+	t.Cleanup(func() { runQuickCheck, quickCheckTimeout = prevRun, prevTimeout })
+	quickCheckTimeout = 50 * time.Millisecond
+	calls := 0
+	runQuickCheck = func(ctx context.Context, _ *sql.DB) error {
+		calls++
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r := newRecEnv(t)
+	for i := 1; i <= 2; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ix, err := Open(ctx, r.opts())
+		cancel()
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		mustClose(t, ix)
+		if calls != i {
+			t.Errorf("open %d: %d quick_check(s), want %d", i, calls, i)
+		}
+	}
+	if st := r.status(); !st.CheckedAt.IsZero() {
+		t.Errorf("a skipped check was stamped: %v", st.CheckedAt)
+	}
+}

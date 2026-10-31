@@ -41,6 +41,21 @@ func (ix *Index) refreshLedger(ctx context.Context) error {
 		return ix.recordOnce(ctx, ledgerSource, 0, errLedgerUnreadable)
 	}
 	sum := hexSHA(raw)
+	var seen string
+	var flagged bool
+	if err := ix.ReadTx(ctx, func(tx *sql.Tx) error { // unchanged: no write lock
+		err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, metaLedgerSHA).Scan(&seen)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		flagged, err = hasErrorRow(ctx, tx, ledgerSource, 0)
+		return err
+	}); err != nil {
+		return err
+	}
+	if seen == sum && !flagged {
+		return nil
+	}
 	tx, err := ix.beginWrite(ctx)
 	if err != nil {
 		return err

@@ -99,13 +99,26 @@ func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	return denv
 }
 
+// indexFactsTimeout bounds doctor's read of the metrics index (a lock or
+// a disk that hangs reports the class timeout); inspectIndex is
+// index.Inspect (tests slow it down).
+var (
+	indexFactsTimeout = 5 * time.Second
+	inspectIndex      = index.Inspect
+)
+
 // indexFacts reads the metrics index for doctor, read-only (Inspect creates
 // and migrates nothing). A failure comes back as its class alone: doctor
 // output goes into report bundles, which must not carry paths. An index
 // that exists but cannot be read is "corrupt", unless a stopped rebuild
 // already says so.
 func indexFacts(ctx context.Context, d paths.Dirs, home string) (doctor.IndexFacts, error) {
-	st, err := index.Inspect(ctx, indexOptions(d, home, nil))
+	ctx, cancel := context.WithTimeout(ctx, indexFactsTimeout)
+	defer cancel()
+	st, err := inspectIndex(ctx, indexOptions(d, home, nil))
+	if ctx.Err() != nil {
+		return doctor.IndexFacts{}, errors.New("timeout")
+	}
 	if err != nil {
 		return doctor.IndexFacts{}, errors.New(index.Class(err))
 	}

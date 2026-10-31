@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,5 +108,29 @@ func TestReportLeavesTheIndexOut(t *testing.T) {
 		if all := out + errOut + issueBodies(t, out); strings.Contains(all, canary) {
 			t.Errorf("%v shows the index's canary:\n%s", args, out)
 		}
+	}
+}
+
+// A read of the index that hangs is bounded: doctor reports the class
+// timeout instead of waiting.
+func TestDoctorMetricsIndexReadIsBounded(t *testing.T) {
+	prevInspect, prevTimeout := inspectIndex, indexFactsTimeout
+	t.Cleanup(func() { inspectIndex, indexFactsTimeout = prevInspect, prevTimeout })
+	indexFactsTimeout = 50 * time.Millisecond
+	inspectIndex = func(ctx context.Context, _ index.Options) (index.Status, error) {
+		select {
+		case <-ctx.Done():
+			return index.Status{}, &fs.PathError{Op: "open", Path: "/home/CANARY-index-path", Err: ctx.Err()}
+		case <-time.After(10 * time.Second):
+			return index.Status{}, nil
+		}
+	}
+	start := time.Now()
+	_, err := indexFacts(context.Background(), pathsOf(t.TempDir()), t.TempDir())
+	if err == nil || err.Error() != "timeout" {
+		t.Errorf("err %v, want the class timeout", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("waited %v", d)
 	}
 }

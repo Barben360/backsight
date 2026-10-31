@@ -232,7 +232,12 @@ func TestAppendAfterTornLine(t *testing.T) {
 // kept after the flush.
 func TestAppendDuringSlowFlush(t *testing.T) {
 	release := make(chan struct{})
+	arrived := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
 		<-release
 		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
@@ -242,7 +247,7 @@ func TestAppendDuringSlowFlush(t *testing.T) {
 	_, _ = o.Append(NewNote("b", "lesson", "p", "first", at))
 	done := make(chan FlushResult)
 	go func() { r, _ := o.Flush(context.Background(), c, "b", "m"); done <- r }()
-	time.Sleep(50 * time.Millisecond) // the flush is now waiting on the server
+	<-arrived // the flush is now waiting on the server
 	if _, err := o.Append(NewNote("b", "lesson", "p", "during", at)); err != nil {
 		t.Fatalf("append blocked by a flush in flight: %v", err)
 	}

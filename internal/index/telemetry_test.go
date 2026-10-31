@@ -232,8 +232,8 @@ func TestFreeTextNeverStored(t *testing.T) {
 	lines := []string{
 		tline("prompt", ts0, withCommon(map[string]any{"n": 1, "decision": "skip", "reason": "budget exceeded by user", "lang": "Français, mon ami"})),
 		tline("gate", ts0, withCommon(map[string]any{"n": 1, "decision": "allow", "reason": "x"})),
-		tline("hook_failure", ts0, withCommon(map[string]any{"hook": "stop", "kind": "segfault", "ms": 1})),
-		tline("job", ts0, withCommon(map[string]any{"name": "maintain", "status": "partial", "ms": 1, "details": map[string]any{"shared_error": "boom"}})),
+		tline("hook_failure", ts0, withCommon(map[string]any{"hook": "stop", "kind": "CANARY-segfault-kind", "ms": 1})),
+		tline("job", ts0, withCommon(map[string]any{"name": "maintain", "status": "partial", "ms": 1, "details": map[string]any{"shared_error": "CANARY-boom-error"}})),
 		tline("tool", ts0, map[string]any{"session": "canary-a\ncanary-b", "project": long, "binary_version": "1.2.3", "v": "v10", "name": "memory_read"}),
 		tline("credit_check", ts0, withCommon(map[string]any{"outcome": "declared", "shown": 1, "flags": []string{"ok_flag", "Not A Flag"}})),
 		tline("prompt", ts0, withCommon(map[string]any{"n": 2, "decision": "maybe later"})),
@@ -295,13 +295,13 @@ func TestFreeTextNeverStored(t *testing.T) {
 	if r := one(`SELECT base, applied, path_rule, source FROM tel_attribution`); r["base"] != "proj" || r["applied"] != nil || r["path_rule"] != nil || r["source"] != "other" {
 		t.Errorf("attribution %v", r)
 	}
-	for _, s := range []string{"line one", "my own words", "boom", "budget exceeded", "segfault", "Français", "Not A Flag", "maybe later", long, "bad\n", "Model Name", "/home/someone"} {
+	for _, s := range []string{"line one", "my own words", "CANARY-boom-error", "budget exceeded", "CANARY-segfault-kind", "Français", "Not A Flag", "maybe later", long, "bad\n", "Model Name", "/home/someone"} {
 		if hits := textAnywhere(t, e.ix, s); len(hits) > 0 {
 			t.Errorf("%q stored: %v", s, hits)
 		}
 	}
-	noBytes(t, e.ix, "boom")
-	noBytes(t, e.ix, "segfault")
+	noBytes(t, e.ix, "CANARY-boom-error")
+	noBytes(t, e.ix, "CANARY-segfault-kind")
 	noBytes(t, e.ix, "canary-a\ncanary-b")
 	noBytes(t, e.ix, "CANARY-sha256-prose")
 }

@@ -12,7 +12,7 @@ The server turns this text into memories: short facts tagged with their project,
 
 ## The metrics index
 
-`backsight stats` and the dashboard read a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it). backsight builds it here, from its own usage events, the feedback journal and the local status files.
+backsight keeps a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it). It builds it there, from its own usage events, the feedback journal and the local status files; `backsight stats index` shows its state. The statistics views and the dashboard to come will read it.
 
 - It holds ids, numbers, fixed words and timestamps only: never the text of a memory, a prompt, an error or the configuration. A value that is not a known word or a plain name is stored as `other`, or not at all.
 - Project names and session ids in it are local names (from your folders and Claude Code's session ids). They never leave this machine, `backsight report` included.
