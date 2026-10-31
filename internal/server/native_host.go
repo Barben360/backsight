@@ -24,6 +24,17 @@ type nativeHost interface {
 	Owns(pid int) bool                                                                                // pid belongs to the server (cgroup / Job Object)
 	Engine(ctx context.Context) (Engine, error)
 	StopCmd() string
+
+	// fileNames are Files' names: Delete removes the ones that exist
+	// (none: nothing installed); the first is the one DeployedVenv reads.
+	fileNames() []string
+	// markers are restart-pending's lines: the database's first (Start
+	// restarts it with StartDB), the API's second (StartAPI), then any
+	// other the host reads itself.
+	markers() []string
+	// restartsFor are the markers a change to Files' name, or to
+	// server.env (""), records when that file already existed.
+	restartsFor(name string) []string
 }
 
 // host is the service manager of n's OS.
@@ -32,7 +43,7 @@ func (n Native) host() nativeHost { return hostFor(n) }
 // hostFor picks n's host; tests replace it with a fake.
 var hostFor = func(n Native) nativeHost {
 	if n.goos() == "windows" {
-		return pendingWindowsHost{n: n}
+		return taskHost{n: n}
 	}
 	return systemdHost{n: n}
 }

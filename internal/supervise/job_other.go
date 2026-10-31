@@ -12,6 +12,9 @@ import (
 // of their own, which stop and kill reach.
 func joinJob(string) error { return nil }
 
+// InJob: no Job Object here (the Linux host asks systemd's cgroups).
+func InJob(string, int) (bool, error) { return false, nil }
+
 // tree is a child's process group (childAttr makes it its leader).
 type tree struct{}
 

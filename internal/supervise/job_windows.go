@@ -53,7 +53,11 @@ func userOnly() (*windows.SecurityAttributes, string, error) {
 var (
 	kernel32           = windows.NewLazySystemDLL("kernel32.dll")
 	procIsProcessInJob = kernel32.NewProc("IsProcessInJob")
+	procOpenJobObject  = kernel32.NewProc("OpenJobObjectW")
 )
+
+// jobObjectQuery is JOB_OBJECT_QUERY, which x/sys lacks.
+const jobObjectQuery = 0x0004
 
 // inJob is IsProcessInJob, which x/sys lacks (E34 W3's spike).
 func inJob(process, job windows.Handle) (bool, error) {
@@ -100,6 +104,35 @@ func joinJob(project string) error {
 		return fmt.Errorf("joining the job object: %w", err)
 	}
 	return nil
+}
+
+// InJob: pid is in the project's Job Object, the supervisor's or one of
+// its children's (E34 W3: found by name from any of the user's sessions).
+// No such job (no supervisor runs) is false, without an error.
+func InJob(project string, pid int) (bool, error) {
+	name, err := objectName(project)
+	if err != nil {
+		return false, err
+	}
+	p, err := windows.UTF16PtrFromString(`Global\` + name)
+	if err != nil {
+		return false, err
+	}
+	r, _, e := procOpenJobObject.Call(jobObjectQuery, 0, uintptr(unsafe.Pointer(p)))
+	if r == 0 {
+		if errors.Is(e, windows.ERROR_FILE_NOT_FOUND) {
+			return false, nil
+		}
+		return false, fmt.Errorf("opening the job object Global\\%s: %w", name, e)
+	}
+	job := windows.Handle(r)
+	defer func() { _ = windows.CloseHandle(job) }()
+	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false, fmt.Errorf("opening process %d: %w", pid, err)
+	}
+	defer func() { _ = windows.CloseHandle(proc) }()
+	return inJob(proc, job)
 }
 
 // interrupt sends CTRL_BREAK to the group p leads (childAttr gives every

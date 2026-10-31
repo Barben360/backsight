@@ -104,6 +104,22 @@ func (n Native) toolEnvFor(dir string) []string {
 	if n.goos() != "windows" {
 		return toolEnv()
 	}
+	env := n.windowsEnv(dir)
+	seen := map[string]bool{}
+	for _, k := range passedThrough {
+		if v := os.Getenv(k); v != "" && !seen[strings.ToUpper(k)] {
+			seen[strings.ToUpper(k)] = true
+			env = append(env, k+"="+v)
+		}
+	}
+	return append(env, "UV_NO_CONFIG=1", "UV_PYTHON_PREFERENCE=only-managed")
+}
+
+// windowsEnv is what every program of the native runtime gets on Windows:
+// the fixed list, TEMP and TMP under Root(), and PATH=<dir>;<SYSTEMROOT>\System32
+// (C:\Windows without SYSTEMROOT). The supervisor's children get only
+// this (supervise.json): no proxy, whose URL may carry a password.
+func (n Native) windowsEnv(dir string) []string {
 	var env []string
 	add := func(keys []string) {
 		for _, k := range keys {
@@ -120,13 +136,5 @@ func (n Native) toolEnvFor(dir string) []string {
 	if sysRoot == "" {
 		sysRoot = `C:\Windows`
 	}
-	env = append(env, "PATH="+dir+";"+winJoin(sysRoot, "System32"))
-	seen := map[string]bool{}
-	for _, k := range passedThrough {
-		if v := os.Getenv(k); v != "" && !seen[strings.ToUpper(k)] {
-			seen[strings.ToUpper(k)] = true
-			env = append(env, k+"="+v)
-		}
-	}
-	return append(env, "UV_NO_CONFIG=1", "UV_PYTHON_PREFERENCE=only-managed")
+	return append(env, "PATH="+dir+";"+winJoin(sysRoot, "System32"))
 }

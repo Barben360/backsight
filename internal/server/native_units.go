@@ -90,7 +90,7 @@ func (n Native) ServerUnit() string { return n.project() + "-server.service" }
 // DataDir is the database's data directory (pg0's instance).
 func (n Native) DataDir() string { return n.join(n.InstanceDir(), "data") }
 
-func (n Native) shim() string { return filepath.Join(n.Dirs.Data, "bin", plugin.ShimName("linux")) }
+func (n Native) shim() string { return n.join(n.Dirs.Data, "bin", plugin.ShimName(n.goos())) }
 
 func (n Native) pendingFile() string { return n.join(n.Root(), restartPending) }
 
@@ -245,8 +245,9 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 	if n.Err != nil {
 		return c, n.Err
 	}
-	dir := n.host().Dir()
-	if dir == "" {
+	h := n.host()
+	dir := h.Dir()
+	if dir == "" { // the systemd host's unit directory; the task host's is Root()
 		return c, errors.New("no systemd user unit directory for the native server")
 	}
 	var err error
@@ -255,7 +256,7 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 	}
 	var restart []string
 	if c.Env && pathExists(n.EnvFile()) {
-		restart = append(restart, n.ServerUnit())
+		restart = append(restart, h.restartsFor("")...)
 	}
 	var edits []claudecfg.Edit
 	for _, name := range slices.Sorted(func(yield func(string) bool) {
@@ -275,10 +276,7 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 		}
 		c.Units = true
 		if pathExists(path) {
-			restart = append(restart, n.ServerUnit())
-			if name == n.DBUnit() {
-				restart = append(restart, n.DBUnit())
-			}
+			restart = append(restart, h.restartsFor(name)...)
 		}
 		edits = append(edits, claudecfg.Edit{Target: path, Apply: func(doc []byte) ([]byte, []claudecfg.Change, error) {
 			var before *string
@@ -327,14 +325,15 @@ func (n Native) editor(command string) claudecfg.Runner {
 
 func pathExists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
-// markRestart adds units to restart-pending.
-func (n Native) markRestart(units []string) error {
+// markRestart adds the host's markers (systemd: units) to
+// restart-pending.
+func (n Native) markRestart(marks []string) error {
 	have := n.pending()
-	for _, u := range units {
+	for _, u := range marks {
 		have[u] = true
 	}
 	var lines []string
-	for _, u := range []string{n.DBUnit(), n.ServerUnit()} {
+	for _, u := range n.host().markers() {
 		if have[u] {
 			lines = append(lines, u)
 		}
@@ -342,21 +341,22 @@ func (n Native) markRestart(units []string) error {
 	return fsutil.WriteAtomic(n.pendingFile(), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
-// pending reads restart-pending: a marker naming no unit of ours restarts
-// the server.
+// pending reads restart-pending: a marker naming nothing of the host's
+// restarts the server (the API).
 func (n Native) pending() map[string]bool {
 	out := map[string]bool{}
 	raw, err := os.ReadFile(n.pendingFile())
 	if err != nil {
 		return out
 	}
+	marks := n.host().markers()
 	for _, l := range strings.Fields(string(raw)) {
-		if l == n.DBUnit() || l == n.ServerUnit() {
+		if slices.Contains(marks, l) {
 			out[l] = true
 		}
 	}
 	if len(out) == 0 {
-		out[n.ServerUnit()] = true
+		out[marks[1]] = true
 	}
 	return out
 }
@@ -474,7 +474,8 @@ func (n Native) Start(ctx context.Context) error {
 	if !pathExists(n.pendingFile()) {
 		pending = map[string]bool{}
 	}
-	db, srv := n.DBUnit(), n.ServerUnit()
+	marks := h.markers()
+	db, srv := marks[0], marks[1]
 	if err := h.StartDB(ctx, pending[db]); err != nil {
 		return err
 	}
@@ -566,11 +567,13 @@ func (n Native) StartDatabase(ctx context.Context) error {
 	return n.fsyncOrStop(ctx)
 }
 
-// installedUnits are the units whose files exist, the server first.
-func (n Native) installedUnits() []string {
+// installedFiles are the host's files that exist, in fileNames' order
+// (systemd: the units, the server first).
+func (n Native) installedFiles() []string {
 	var out []string
-	dir := n.host().Dir()
-	for _, u := range []string{n.ServerUnit(), n.DBUnit()} {
+	h := n.host()
+	dir := h.Dir()
+	for _, u := range h.fileNames() {
 		if pathExists(filepath.Join(dir, u)) {
 			out = append(out, u)
 		}
@@ -596,16 +599,17 @@ func (n Native) Stop(ctx context.Context) error {
 
 func (n Native) StopCmd() string { return n.host().StopCmd() }
 
-// Delete stops and disables both units before anything is removed, then
-// removes the unit files through the config editor, has the host forget
-// them, then removes Root(): the database, the environments and the
-// models.
+// Delete stops and disables both units (Windows: stops the supervisor
+// and disables its task) before anything is removed, then removes the
+// host's files through the config editor, has the host forget them
+// (unregister the task), then removes Root(): the database, the
+// environments and the models.
 func (n Native) Delete(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
 	}
 	h := n.host()
-	units := n.installedUnits()
+	units := n.installedFiles()
 	if len(units) > 0 {
 		if err := h.Stop(ctx); err != nil {
 			return err
@@ -700,14 +704,15 @@ func (n Native) Logs(ctx context.Context, service string, lines int) (string, er
 	return n.host().Logs(ctx, service, lines)
 }
 
-// Deployed is the version whose venv the server unit runs, "" without the
-// unit.
+// Deployed is the version whose venv the server unit (Windows:
+// supervise.json) runs, "" without that file.
 func (n Native) Deployed() (string, error) {
 	if n.Err != nil {
 		return "", n.Err
 	}
 	h := n.host()
-	path := filepath.Join(h.Dir(), n.ServerUnit())
+	name := h.fileNames()[0]
+	path := filepath.Join(h.Dir(), name)
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
@@ -715,7 +720,7 @@ func (n Native) Deployed() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	v, err := h.DeployedVenv(map[string][]byte{n.ServerUnit(): raw})
+	v, err := h.DeployedVenv(map[string][]byte{name: raw})
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", path, err)
 	}

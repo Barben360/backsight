@@ -42,7 +42,8 @@ jobs:
   test-windows:
     # The unit tests on Windows (M7 block 2, decision 0080): the fakes are
     # the test binary itself (internal/testtool), the POSIX scripts' tests
-    # skip. Nothing here needs admin or touches the machine.
+    # skip. Nothing here needs admin; TestTaskStartStopForReal registers a
+    # per-user scheduled task and removes it.
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

@@ -181,7 +181,7 @@ func (h systemdHost) StopAPI(ctx context.Context) error {
 
 // Stop stops and disables both units: nothing starts at boot (RF 2).
 func (h systemdHost) Stop(ctx context.Context) error {
-	units := h.n.installedUnits()
+	units := h.n.installedFiles()
 	if len(units) == 0 {
 		return nil
 	}
@@ -197,6 +197,22 @@ func (h systemdHost) Remove(ctx context.Context) error {
 	}
 	_, err := h.systemctl(ctx, "daemon-reload")
 	return err
+}
+
+// fileNames are the two units, the server's first.
+func (h systemdHost) fileNames() []string { return []string{h.n.ServerUnit(), h.n.DBUnit()} }
+
+// markers are the units' names: restart-pending lists the units to
+// restart.
+func (h systemdHost) markers() []string { return []string{h.n.DBUnit(), h.n.ServerUnit()} }
+
+// restartsFor: any change restarts the server unit; the database unit's
+// restarts the database too.
+func (h systemdHost) restartsFor(name string) []string {
+	if name == h.n.DBUnit() {
+		return []string{h.n.ServerUnit(), h.n.DBUnit()}
+	}
+	return []string{h.n.ServerUnit()}
 }
 
 func (h systemdHost) StopCmd() string {

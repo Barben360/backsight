@@ -91,7 +91,7 @@ func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path 
 var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	if cfg.RuntimeKind() == "native" {
 		d, home, err := machine()
-		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, Err: err}
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, Err: err, Note: printNote}
 		if err == nil {
 			// A user manager that never answers must not hang the command.
 			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
@@ -113,6 +113,10 @@ var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	}
 	return server.Docker{Compose: c, Cfg: cfg}
 }
+
+// printNote prints what the runtime tells the user beside a command's
+// result (server.NoLogonNote) on stderr: JSON output stays on stdout.
+var printNote = func(s string) { fmt.Fprintln(os.Stderr, "note: "+s) }
 
 // runtimeFor is the server runtime of cfg.
 func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }

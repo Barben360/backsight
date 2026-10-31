@@ -12,11 +12,37 @@ import (
 	"time"
 )
 
+// stubHost is a host whose every method fails: fakeHost overrides what a
+// test needs.
+type stubHost struct{ n Native }
+
+var errStubHost = errors.New("stub host")
+
+func (h stubHost) Dir() string                                     { return h.n.Root() }
+func (stubHost) StopCmd() string                                   { return "stop" }
+func (stubHost) Files(int, string) (map[string][]byte, error)      { return nil, errStubHost }
+func (stubHost) StartDB(context.Context, bool) error               { return errStubHost }
+func (stubHost) StartAPI(context.Context, bool) error              { return errStubHost }
+func (stubHost) StopAPI(context.Context) error                     { return errStubHost }
+func (stubHost) Stop(context.Context) error                        { return errStubHost }
+func (stubHost) Remove(context.Context) error                      { return errStubHost }
+func (stubHost) States(context.Context) (map[string]string, error) { return nil, errStubHost }
+func (stubHost) Logs(context.Context, string, int) (string, error) { return "", errStubHost }
+func (stubHost) DeployedVenv(map[string][]byte) (string, error)    { return "", errStubHost }
+func (stubHost) Owns(int) bool                                     { return false }
+func (stubHost) Engine(context.Context) (Engine, error)            { return Engine{}, errStubHost }
+func (stubHost) fileNames() []string                               { return []string{"stub.conf"} }
+func (stubHost) markers() []string                                 { return []string{"db", "api"} }
+func (stubHost) restartsFor(string) []string                       { return []string{"api"} }
+func (stubHost) Transient(context.Context, string, []string, io.Reader, [][]string) error {
+	return errStubHost
+}
+
 // fakeHost is a host with neither systemd extra (no dbAloneStarter, no
 // transientWatcher): a Transient that keeps every process to its call,
 // as the interface says.
 type fakeHost struct {
-	pendingWindowsHost
+	stubHost
 	transient func(ctx context.Context) error
 	startDB   int
 }

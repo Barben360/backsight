@@ -51,6 +51,9 @@ type Native struct {
 	// GOOS is the OS the runtime lays out and runs for ("": this one):
 	// tests set "windows" on Linux to render the Windows layout and files.
 	GOOS string
+	// Note, when set, tells the user what a command's result does not
+	// say: on Windows, NoLogonNote.
+	Note func(string)
 	// NotInUse: config.toml names the docker runtime, so the native data
 	// here is what a switch left (the target of a switch, built before
 	// config.toml names it, sets it). A refused database then points at

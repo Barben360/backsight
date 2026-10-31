@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -92,9 +91,13 @@ func nativeGuard(ctx context.Context, n server.Native, stderr io.Writer) (native
 	return res, n.StopStrays(ctx, strays)
 }
 
-// superviseFile is the supervisor's configuration under the native root,
-// which the runtime's Render writes (Windows' unit file).
-const superviseFile = "supervise.json"
+// superviseGuard is the supervisor's guard before every start of the
+// database: native-check's. A testhooks build on Windows replaces it
+// until Task 10 (supervise_guard_testhooks_windows.go).
+var superviseGuard = func(ctx context.Context, n server.Native, stderr io.Writer) error {
+	_, err := nativeGuard(ctx, n, stderr)
+	return err
+}
 
 // newServerSuperviseCmd is the Windows task's action (decision 0080):
 // conhost.exe --headless <shim> server supervise. It runs the native
@@ -124,7 +127,7 @@ func newServerSuperviseCmd(e *env) *cobra.Command {
 				return err
 			}
 			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, StrayWait: nativeStrayWait}
-			path := filepath.Join(n.Root(), superviseFile)
+			path := n.SuperviseFile()
 			raw, err := os.ReadFile(path)
 			if err != nil {
 				return blocked(fmt.Errorf("the supervisor's configuration: %w (run backsight server render)", err))
@@ -141,10 +144,7 @@ func newServerSuperviseCmd(e *env) *cobra.Command {
 				return blocked(fmt.Errorf("%s supervises project %q, config.toml names %q: run backsight server render", path, sc.Project, want))
 			}
 			opts := supervise.Options{
-				Check: func(ctx context.Context) error {
-					_, err := nativeGuard(ctx, n, e.stderr)
-					return err
-				},
+				Check:   func(ctx context.Context) error { return superviseGuard(ctx, n, e.stderr) },
 				NoAPI:   noAPI,
 				Secrets: localSecretValues(),
 				Version: buildinfo.Version,

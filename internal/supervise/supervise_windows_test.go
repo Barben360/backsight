@@ -359,3 +359,26 @@ func TestUnresumableChildIsKilledAndRetried(t *testing.T) {
 		t.Errorf("the frozen postgres ran %q", got)
 	}
 }
+
+// InJob finds the supervisor's children in its named job from outside it
+// (Owns, the stray check), and nothing else.
+func TestInJobFindsTheSupervisorsChildren(t *testing.T) {
+	fast(t)
+	x := newFx(t, "injob", fakes{})
+	if in, err := InJob(x.cfg.Project, os.Getpid()); err != nil || in {
+		t.Errorf("before any supervisor: %v %v, want false without an error", in, err)
+	}
+	x.start(Options{})
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	waitFor(t, "postgres' pid", func() bool { return len(pids(t, x.file("pg.pids"))) == 1 })
+	pg := pids(t, x.file("pg.pids"))[0]
+	if in, err := InJob(x.cfg.Project, pg); err != nil || !in {
+		t.Errorf("postgres (pid %d): %v %v, want in the job", pg, in, err)
+	}
+	if in, err := InJob(x.cfg.Project, testtool.OtherPID()); err != nil || in {
+		t.Errorf("another process: %v %v, want false", in, err)
+	}
+	if in, err := InJob(project("injob-other"), pg); err != nil || in {
+		t.Errorf("another project's job: %v %v, want false", in, err)
+	}
+}

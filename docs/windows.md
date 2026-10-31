@@ -42,3 +42,12 @@ The script refuses, and installs nothing, when:
 - the machine is not Windows x86_64: on Windows on Arm, there is no backsight yet; on Linux and macOS, use `install.sh`.
 
 Any of these with a release from GitHub: download nothing more, and report it.
+
+## The memory server
+
+Windows has no service manager a standard user can use, so backsight supervises the server itself. A scheduled task of your own, `\backsight\server` (named after `server.project`), starts `backsight server supervise` at your logon and checks every 5 minutes that it still runs. That supervisor runs the database, then the memory server, restarts either if it stops, and stops both with it: if the supervisor dies, Windows ends both programs. Its files are `supervise.json` and `task.xml` in the server's directory (`server\native` under backsight's data directory); no secret is in either. The task runs with your own rights, in a console without a window.
+
+- `backsight server stop` disables the task first (its 5-minute check would start the server again), then stops the server. `backsight server start` enables it again.
+- The logs are `<project>-supervisor.log` (what the supervisor did), `<project>-db.log` and `<project>-api.log` in the `logs` directory of backsight's state directory, each kept to 10 MiB, the previous one as `.1`. A server that fails to start shows the last lines of the API's.
+- With no one logged on at the PC's screen (over SSH, on a CI runner), the task cannot run. `backsight server start` then starts the supervisor itself and says so: `the server runs until you log off; it starts by itself at your next logon`.
+- A path with `%` cannot be in a task (Task Scheduler would replace `%NAME%` with a variable's value): if your profile path holds one, set `BACKSIGHT_HOME` to a directory without it.
