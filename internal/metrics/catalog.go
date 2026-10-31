@@ -214,7 +214,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
 		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered", "failed_operations"},
 		Question:   "How many tokens does the server's model use to build memory?",
-		Definition: "Tokens (input, of which cached, and output; the total is input plus output) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+		Definition: "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
 		Action:     "Use it to see which operation costs the most before changing the model or the projects sent.",
 	},
 	{

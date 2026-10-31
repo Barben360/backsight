@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/Barben360/backsight/internal/metrics"
 )
 
 // Size limits from SPEC §6.2 and §8: hook outputs must stay far below
@@ -220,7 +223,7 @@ func skillTools(name string) string {
 // changes the install, a verify that calls the LLM, and gh ask the user.
 func TestDoctorSkillRunsTheDiagnosticsOnly(t *testing.T) {
 	tools := skillTools("doctor")
-	for _, cmd := range []string{"/s doctor", "/s doctor --json", "/s verify --live", "/s verify --no-round-trip", "/s stats 30", "/s why",
+	for _, cmd := range []string{"/s doctor", "/s doctor --json", "/s verify --live", "/s verify --no-round-trip", "/s stats overview --json", "/s why",
 		"/s version", "/s update check", "/s report", "/s guide", `/s guide search "comment restaurer ?"`, "/s guide install#requirements",
 		"/s guide troubleshooting#slow-recall-and-gpu-acceleration", "/s guide commands --json"} {
 		if !allows(tools, cmd) {
@@ -228,7 +231,7 @@ func TestDoctorSkillRunsTheDiagnosticsOnly(t *testing.T) {
 		}
 	}
 	for _, cmd := range []string{"/s guide index", "/s guide index --plan", "/s verify", "/s update apply", "/s setup --resume", "/s client install",
-		"/s forget 1", "/s search x", "gh issue create -R Barben360/backsight", "/s version --licenses"} {
+		"/s forget 1", "/s search x", "/s stats 30", "/s stats --since 2026-10-01", "gh issue create -R Barben360/backsight", "/s version --licenses"} {
 		if allows(tools, cmd) {
 			t.Errorf("%q runs unprompted: %s", cmd, tools)
 		}
@@ -288,7 +291,7 @@ func TestMemorySkillRunsTheMemoryCommandsOnly(t *testing.T) {
 			t.Errorf("%q needs a prompt: %s", cmd, tools)
 		}
 	}
-	for _, cmd := range []string{"/s doctor", "/s guide", "/s stats", "/s forget 1"} {
+	for _, cmd := range []string{"/s doctor", "/s guide", "/s forget 1"} {
 		if allows(tools, cmd) {
 			t.Errorf("%q runs unprompted: %s", cmd, tools)
 		}
@@ -362,7 +365,7 @@ var wordings = map[string]string{
 	"v7":  "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
 	"v8":  "12d06be831db7e934a0f7b733c2908eb1fde75d73d6f00d7a7fd645f23faa87b",
 	"v9":  "a53915333ea092b317d01464304f17d79053635c57bdffca975896af0542f32c",
-	"v10": "951a7ad31110632dda7081ea584084a93ecb0ede29141181d32ff0fb8f0a1295",
+	"v10": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
 }
 
 func wordingHash() string {
@@ -393,5 +396,55 @@ func TestVersionMatchesTheWording(t *testing.T) {
 	want, ok := wordings[Version]
 	if got := wordingHash(); !ok || got != want {
 		t.Errorf("instruction texts hash to %s, recorded for %s: %q (ok %v); a wording change needs a new Version and its hash in wordings", got, Version, want, ok)
+	}
+}
+
+// The stats views are read only; the index's rebuild and migrate are not,
+// and no pattern may start `stats` with a flag and a wildcard: cobra strips
+// the flags before it finds the subcommand.
+func TestSkillsAllowOnlyReadOnlyStats(t *testing.T) {
+	for _, skill := range []string{"memory", "doctor"} {
+		tools := skillTools(skill)
+		for _, cmd := range []string{"/s stats overview --json", "/s stats sessions --has used", "/s stats", "/s stats --json", "/s stats index --json", "/s stats index",
+			"/s stats defs recall.hit_rate", "/s stats memories --state wrong"} {
+			if !allows(tools, cmd) {
+				t.Errorf("%s: %q needs a prompt: %s", skill, cmd, tools)
+			}
+		}
+		for _, cmd := range []string{"/s stats index rebuild", "/s stats index rebuild --yes", "/s stats --days 3 index rebuild --yes", "/s stats --json index rebuild",
+			"/s stats index migrate", "/s stats index --yes rebuild"} {
+			if allows(tools, cmd) {
+				t.Errorf("%s: %q runs unprompted: %s", skill, cmd, tools)
+			}
+		}
+	}
+}
+
+func TestStatsViewsAreTheMetricsViews(t *testing.T) {
+	if !slices.Equal(statsViews, metrics.Views) {
+		t.Errorf("statsViews %v differ from the views %v: the skills would miss one", statsViews, metrics.Views)
+	}
+}
+
+func TestDoctorSkillPointsToTheOverview(t *testing.T) {
+	for _, s := range Skills("/s") {
+		if s.Name != "doctor" {
+			continue
+		}
+		for _, want := range []string{"stats overview --json", "verdict", "attention"} {
+			if !strings.Contains(s.Body, want) {
+				t.Errorf("doctor skill lacks %q", want)
+			}
+		}
+		return
+	}
+	t.Fatal("no doctor skill")
+}
+
+func TestMemorySkillListsTheOverview(t *testing.T) {
+	for _, s := range Skills("/s") {
+		if s.Name == "memory" && !strings.Contains(s.Body, "/s stats overview") {
+			t.Errorf("memory skill lacks stats overview: %s", s.Body)
+		}
 	}
 }

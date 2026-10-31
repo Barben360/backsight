@@ -625,7 +625,7 @@
           "id": "extraction.tokens",
           "label": "What the server's model spent",
           "question": "How many tokens does the server's model use to build memory?",
-          "definition": "Tokens (input, of which cached, and output; the total is input plus output) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+          "definition": "Tokens (input, of which cached, and output; the total is input plus output plus thoughts, which count with the output, so it is a little above the server's own total) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
           "unit": "tokens",
           "aggregation": "raw",
           "direction": "none",
