@@ -2,11 +2,9 @@ package dashboard
 
 import (
 	"errors"
-	"fmt"
 	"html/template"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
@@ -21,7 +19,15 @@ type MetricView struct {
 	Def    metrics.Def
 	M      metrics.Metric
 	Found  bool
-	ShowID bool
+	ShowID bool           // the reader asked for developer detail
+	Loc    *time.Location // the zone the metric's times are shown in
+}
+
+// Tabled is a result's tables with the zone their times are shown in, the
+// dot of the shared table partials.
+type Tabled struct {
+	T   metrics.Tables
+	Loc *time.Location
 }
 
 // dash stands for a value that is not there.
@@ -30,12 +36,25 @@ const dash = "—"
 // funcs are the template functions. Their results are strings unless said;
 // none changes its arguments, which belong to the shared caches.
 var funcs = template.FuncMap{
-	"metric":    metricOf,
-	"value":     func(v MetricView) string { return foundOr(v, dash, views.FormatValue) },
-	"status":    func(v MetricView) string { return foundOr(v, "no data", views.StatusText) },
-	"delta":     func(v MetricView) string { return foundOr(v, "", views.DeltaText) },
-	"interval":  func(v MetricView) string { return foundOr(v, "", views.IntervalText) },
-	"withid":    func(v MetricView, on bool) MetricView { v.ShowID = on; return v },
+	"metric":   metricOf,
+	"value":    valueOf,
+	"status":   func(v MetricView) string { return foundOr(v, "no data", views.StatusText) },
+	"delta":    func(v MetricView) string { return foundOr(v, "", views.DeltaText) },
+	"interval": func(v MetricView) string { return foundOr(v, "", views.IntervalText) },
+	"framed":   func(v MetricView, dev bool, loc *time.Location) MetricView { v.ShowID, v.Loc = dev, loc; return v },
+	"tabled": func(r *metrics.Result, loc *time.Location) Tabled {
+		if r == nil {
+			return Tabled{Loc: loc}
+		}
+		return Tabled{T: r.Tables, Loc: loc}
+	},
+	"since":     since,
+	"details":   detailsOf,
+	"extras":    func(v MetricView) []string { return foundLines(v, views.ExtraLines) },
+	"job":       func(s string) string { return views.Word(views.JobWords, s) },
+	"jobstatus": func(s string) string { return views.Word(views.JobStatusWords, s) },
+	"dstatus":   func(s string) string { return views.Word(views.DoctorStatusWords, s) },
+	"operation": func(s string) string { return views.Word(views.OperationWords, s) },
 	"sysrows":   systemRows,
 	"axes":      func() []struct{ Key, Name string } { return views.AxisNames },
 	"n":         views.Grouped,
@@ -131,13 +150,52 @@ func systemRows(s *metrics.SystemInfo, loc *time.Location) []views.SystemRow {
 	if s == nil {
 		return nil
 	}
-	return views.SystemRows(*s, func(t time.Time) string { return when(loc, t) })
+	plain := *s // a copy: the cached result keeps its raw words
+	plain.Runtime, plain.Mode = views.Word(views.RuntimeWords, s.Runtime), views.Word(views.ModeWords, s.Mode)
+	return views.SystemRows(plain, func(t time.Time) string { return when(loc, t) })
 }
 
-// money is a price with its currency; "price not set" for none.
+// money is a price in the currency; "price not set" for none.
 func money(v *float64, currency string) string {
 	if v == nil {
 		return "price not set"
 	}
-	return strings.TrimSpace(fmt.Sprintf("%.2f %s", *v, currency))
+	return views.ValueIn("money", *v, metrics.Metric{Extra: map[string]any{"currency": currency}})
+}
+
+// valueOf is the metric's value in its unit; the last run of the jobs is
+// shown as how long ago it was.
+func valueOf(v MetricView) string {
+	if v.ID == "jobs.last_run" && v.Found && v.M.Value != nil {
+		return views.Age(int64(*v.M.Value)) + " ago"
+	}
+	return foundOr(v, dash, views.FormatValue)
+}
+
+// foundLines is f of the metric's definition and metric; nil when the
+// result lacks it or it has no data.
+func foundLines(v MetricView, f func(metrics.Def, metrics.Metric) []string) []string {
+	if !v.Found || v.M.Status == metrics.StatusNoData {
+		return nil
+	}
+	return f(v.Def, v.M)
+}
+
+// detailsOf are the lines under a metric that its number does not say.
+func detailsOf(v MetricView) []string {
+	return foundLines(v, func(d metrics.Def, m metrics.Metric) []string {
+		loc := v.Loc
+		if loc == nil {
+			loc = time.UTC
+		}
+		return views.MetricDetails(d, m, loc)
+	})
+}
+
+// since is how long before now at was, in words; "" for no time.
+func since(now time.Time, at *time.Time) string {
+	if at == nil || at.IsZero() {
+		return ""
+	}
+	return views.Age(max(0, now.Sub(*at).Milliseconds()))
 }

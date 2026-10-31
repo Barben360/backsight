@@ -5,14 +5,8 @@
 {{template "scope" .}}
 
 {{/* widget: health checks. Reads .V.system.Tables.Doctor (ID, Status, Fix) and the metric doctor.check. */}}
-<section>
-<h2>Health checks</h2>
-<table>
-<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
-{{range $r.Tables.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{.Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
-{{end}}</table>
-</section>
-{{template "metric" withid (metric $r "doctor.check") $d}}
+{{template "doctor" tabled $r $.Loc}}
+{{template "metric" framed (metric $r "doctor.check") $d $.Loc}}
 
 {{/* widget: system. Reads .V.system.Tables.System through the sysrows func (Label, Text). */}}
 <section>
@@ -23,14 +17,8 @@
 </section>
 
 {{/* widget: reach, backlog and jobs. Reads the metrics server.reach, local.backlog, jobs.last_run and .V.system.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
-{{template "metric" withid (metric $r "server.reach") $d}}
-{{template "metric" withid (metric $r "local.backlog") $d}}
-{{template "metric" withid (metric $r "jobs.last_run") $d}}
-<section>
-<h2>Background jobs</h2>
-<table>
-<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
-{{range $r.Tables.Jobs}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
-{{end}}</table>
-</section>
+{{template "metric" framed (metric $r "server.reach") $d $.Loc}}
+{{template "metric" framed (metric $r "local.backlog") $d $.Loc}}
+{{template "metric" framed (metric $r "jobs.last_run") $d $.Loc}}
+{{template "jobs" tabled $r $.Loc}}
 {{template "foot" .}}

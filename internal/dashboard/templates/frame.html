@@ -57,7 +57,11 @@
 
 {{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
 
-{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if .Server}}memory on {{.Server}}{{if not .ServerOK}} (memory server not answering){{end}}{{else}}no memory server set up{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
+{{/*
+  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt), .Frame.ServerRead
+  (OK, set when the page's own view read the server), .Frame.Generated, .Loc.
+*/}}
+{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if not .Server}}no memory server set up{{else}}memory on {{.Server}}{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}} (memory server not answering){{end}}{{else if .ServerOKAt}} (memory server {{if .ServerOK}}last answered{{else}}did not answer{{end}} {{since $.Frame.Generated .ServerOKAt}} ago){{end}}{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
 {{end}}{{end}}
 
 {{define "foot"}}</main>
@@ -70,15 +74,43 @@
 
 {{/*
   metric: dot is a MetricView. Reads .Def (Question, Scope, Series), .M (Den,
-  CI, Reason, Tags, Series, Drill), .Found, .ShowID, .ID, and the funcs value,
-  status, interval, delta, nodata.
+  CI, Tags, Series, Drill), .Found, .ShowID, .ID, and the funcs value, status
+  (which says why there is no number), interval, delta, details and extras
+  (the metric's Extra breakdowns: why prompts found nothing, split by kind,
+  result, path, language and rank, typical and high values, what waits on
+  this PC).
 */}}
 {{define "metric"}}<section>
 <h3>{{.Def.Question}}</h3>
 <p>{{value .}}{{with .M.Den}} · n = {{.}}{{end}} · {{status .}}{{with interval .}} · interval {{.}}{{end}}{{with delta .}} · {{.}}{{end}}</p>
 <p>{{if eq .Def.Scope "machine"}}this PC{{else}}server{{end}}{{range .M.Tags}}{{if eq . "not_filtered"}} · not filtered{{end}}{{end}}{{if .M.Series}} · {{len .M.Series}} {{if eq .Def.Series "weekly"}}weeks{{else}}days{{end}}{{end}}</p>
-{{if .M.Reason}}<p>{{nodata .M.Reason}}</p>
+{{with details .}}<ul>
+{{range .}}<li>{{.}}</li>
+{{end}}</ul>
+{{end}}{{with extras .}}<ul>
+{{range .}}<li>{{.}}</li>
+{{end}}</ul>
 {{end}}{{if .M.Drill}}<details><summary>CLI</summary><code>{{.M.Drill}}</code></details>
 {{end}}{{if .ShowID}}<p><code>{{.ID}}</code></p>
 {{end}}</section>
+{{end}}
+
+{{/* jobs: dot is a Tabled. Reads .T.Jobs (Name, Status, LastAt, MS, AgeMS) and .Loc. */}}
+{{define "jobs"}}<section>
+<h2>Background jobs</h2>
+<table>
+<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
+{{range .T.Jobs}}<tr><td>{{job .Name}}</td><td>{{jobstatus .Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
+{{end}}</table>
+</section>
+{{end}}
+
+{{/* doctor: dot is a Tabled. Reads .T.Doctor (ID, Status, Fix). */}}
+{{define "doctor"}}<section>
+<h2>Health checks</h2>
+<table>
+<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
+{{range .T.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{dstatus .Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
+{{end}}</table>
+</section>
 {{end}}

@@ -39,7 +39,6 @@ var (
 	metricStatusText = views.StatusText
 	deltaText        = views.DeltaText
 	formatValue      = views.FormatValue
-	valueIn          = views.ValueIn
 	percentOf        = views.Percent
 	thousands        = views.Thousands
 	grouped          = views.Grouped
@@ -48,6 +47,8 @@ var (
 	idText           = views.ShortID
 	ageText          = views.Age
 	word             = views.Word
+	metricDetails    = views.MetricDetails
+	pricesHint       = views.PricesHint
 )
 
 // viewText is the text of a view's result; dev adds the developer metrics.
@@ -182,9 +183,6 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 	}
 }
 
-// pricesHint says how to get a cost: it needs the model's prices.
-const pricesHint = "costs need prices, set price_input, price_cached and price_output under [llm] in the config file"
-
 // handful is the sample size under which a rate is shown as its counts.
 const handful = 10
 
@@ -233,171 +231,6 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 
 // countOf is n with its noun, singular for 1.
 func countOf(n int64, one, many string) string { return views.CountOf(n, one, many) }
-
-// Reading the extras, whose types are those of the computing code.
-
-func extraInt(m metrics.Metric, key string) (int64, bool) {
-	switch v := m.Extra[key].(type) {
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	}
-	return 0, false
-}
-
-func extraFloat(m metrics.Metric, key string) (float64, bool) {
-	switch v := m.Extra[key].(type) {
-	case float64:
-		return v, true
-	case *float64:
-		if v != nil {
-			return *v, true
-		}
-	case int64:
-		return float64(v), true
-	}
-	return 0, false
-}
-
-func extraTime(m metrics.Metric, key string, loc *time.Location) (string, bool) {
-	var t time.Time
-	switch v := m.Extra[key].(type) {
-	case time.Time:
-		t = v
-	case *time.Time:
-		if v == nil {
-			return "", false
-		}
-		t = *v
-	default:
-		return "", false
-	}
-	if t.IsZero() {
-		return "", false
-	}
-	if loc == nil {
-		loc = time.UTC
-	}
-	return t.In(loc).Format("2006-01-02 15:04"), true
-}
-
-// extraCounts reads a map of counts, sorted by key.
-func extraCounts(m metrics.Metric, key string) []string {
-	var out []string
-	switch v := m.Extra[key].(type) {
-	case map[string]int64:
-		for k, n := range v {
-			if n > 0 {
-				out = append(out, k+" "+grouped(n))
-			}
-		}
-	case map[string]any:
-		for k, x := range v {
-			if n, ok := x.(int64); ok && n > 0 {
-				out = append(out, k+" "+grouped(n))
-			}
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// metricDetails are the indented lines under a metric: what the number does
-// not say by itself (a lower bound, a partial total, a split).
-func metricDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string {
-	var out []string
-	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
-	switch d.ID {
-	case "recall.empty_reasons":
-		if e := extraCounts(m, "empty"); len(e) > 0 {
-			add("why: %s", emptyWords.Replace(strings.Join(e, ", ")))
-		}
-		if s := extraCounts(m, "skips"); len(s) > 0 {
-			add("prompts skipped: %s", strings.Join(s, ", "))
-		}
-	case "used.turn_rate":
-		if w, ok := extraFloat(m, "worst_case"); ok {
-			add("worst case, if every turn where Claude did not say counts as unused: %s %%", percentOf(w))
-		}
-		if p, _ := extraInt(m, "pending"); p > 0 {
-			add("%s still open", countOf(p, "turn", "turns"))
-		}
-	case "context.per_session", "context.per_prompt", "recall.latency", "search.latency":
-		p50, ok50 := extraFloat(m, "p50")
-		p95, ok95 := extraFloat(m, "p95")
-		if ok50 && ok95 {
-			add("typical %s, %s %s", valueIn(d.Unit, p50, m), map[bool]string{true: "slowest 1 in 20", false: "high"}[d.Unit == "ms"], valueIn(d.Unit, p95, m))
-		}
-	case "extraction.tokens", "extraction.cost":
-		if d.ID == "extraction.cost" && m.Value == nil {
-			add("%s", pricesHint)
-		}
-		if n, _ := extraInt(m, "failed_operations"); n > 0 {
-			add("partial: %s could not be read, so this is a lower bound", countOf(n, "server task", "server tasks"))
-		}
-	case "bank.size":
-		var kinds []string
-		for _, k := range []string{"world", "experience", "observation"} {
-			if n, ok := extraInt(m, k); ok {
-				kinds = append(kinds, fmt.Sprintf("%s %s", grouped(n), kindWords[k]))
-			}
-		}
-		if len(kinds) > 0 {
-			add("%s", strings.Join(kinds, ", "))
-		}
-	case "bank.consolidation":
-		if f, _ := extraInt(m, "failed"); f > 0 {
-			add("%s failed", countOf(f, "summary", "summaries"))
-		}
-	case "pipeline.flow":
-		ok, _ := extraInt(m, "ok")
-		failed, _ := extraInt(m, "failed")
-		aside, _ := extraInt(m, "set_aside")
-		wait, _ := extraInt(m, "waiting")
-		add("sent %s, failed %s, set aside after an error %s, waiting %s", grouped(ok), grouped(failed), grouped(aside), grouped(wait))
-	case "local.backlog":
-		notes, _ := extraInt(m, "notes_queued")
-		sess, _ := extraInt(m, "sessions_waiting")
-		aside, _ := extraInt(m, "quarantined")
-		if notes+sess+aside > 0 {
-			ms, _ := extraInt(m, "oldest_ms")
-			add("%s and %s wait on this PC, %s set aside after an error; the oldest %s", countOf(notes, "note", "notes"), countOf(sess, "session", "sessions"), grouped(aside), ageText(ms))
-		}
-	case "server.queue":
-		pending, _ := extraInt(m, "pending")
-		proc, _ := extraInt(m, "processing")
-		failed, _ := extraInt(m, "failed")
-		total, _ := extraInt(m, "failed_total")
-		capped, _ := m.Extra["failed_capped"].(bool)
-		f := grouped(failed)
-		if capped {
-			f = grouped(failed) + "+ (a lower bound: more are not read)"
-		}
-		add("waiting %s, running %s, failed in the last 7 days %s, failed in all %s", grouped(pending), grouped(proc), f, grouped(total))
-	case "hooks.failures":
-		if l := extraCounts(m, "last_24h"); len(l) > 0 {
-			add("in the last 24 h: %s", strings.Join(l, ", "))
-		}
-	case "server.reach":
-		if t, ok := extraTime(m, "failing_since", loc); ok {
-			add("not answering since %s", t)
-		}
-		if n, _ := extraInt(m, "skipped_prompts"); n > 0 {
-			add("%s skipped while it was down", countOf(n, "prompt", "prompts"))
-		}
-	case "doctor.check":
-		e, _ := extraInt(m, "error")
-		w, _ := extraInt(m, "warn")
-		add("%s failed, %s with a warning", grouped(e), grouped(w))
-	}
-	if slices.Contains(m.Tags, "partial") && d.ID != "extraction.tokens" && d.ID != "extraction.cost" {
-		add("partial: some of it could not be read")
-	}
-	return out
-}
 
 // table writes aligned columns.
 func table(b *strings.Builder, head []string, rows [][]string) {

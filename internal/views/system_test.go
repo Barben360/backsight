@@ -15,7 +15,7 @@ func TestIntervalText(t *testing.T) {
 		want string
 	}{
 		{ratio, metrics.Metric{}, ""},
-		{ratio, metrics.Metric{CI: &[2]float64{0.123, 0.5}}, "12–50 %"},
+		{ratio, metrics.Metric{CI: &[2]float64{0.123, 0.5}}, ""}, // the value shows it
 		{ms, metrics.Metric{CI: &[2]float64{120, 2500}}, "120 ms – 2.5 s"},
 	} {
 		if got := IntervalText(c.d, c.m); got != c.want {

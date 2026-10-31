@@ -146,7 +146,8 @@ type Frame struct {
 	Keep                                   [][2]string // query pairs the project form carries along
 	PrefMenu                               []PrefGroup
 	Prefs                                  Prefs
-	Scope                                  *metrics.Scope // the first declared view's; nil on state pages
+	Scope                                  *metrics.Scope       // the first declared view's; nil on state pages
+	ServerRead                             *metrics.ServerState // the server's answer when that view read it, else nil
 	Generated                              time.Time
 	Reload                                 int // seconds until the browser asks again; 0: never (the first build's page)
 }
@@ -358,7 +359,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		}
 		head := data.V[first]
 		data.Frame = s.frame(r, title, prefs)
-		data.Frame.Scope = &head.Scope
+		data.Frame.Scope, data.Frame.ServerRead = &head.Scope, head.Server
 		data.Frame.Generated = head.GeneratedAt
 		data.Loc = head.Window.Loc
 		var buf bytes.Buffer

@@ -70,14 +70,11 @@ func SystemRows(s metrics.SystemInfo, at func(time.Time) string) []SystemRow {
 	}
 }
 
-// IntervalText is the interval of a metric that has one, in its unit; ""
-// otherwise.
+// IntervalText is the interval of a metric that has one beyond its
+// value; "" otherwise (a ratio's value already carries its interval).
 func IntervalText(d metrics.Def, m metrics.Metric) string {
-	if m.CI == nil {
+	if m.CI == nil || d.Unit == "ratio" {
 		return ""
-	}
-	if d.Unit == "ratio" {
-		return Percent(m.CI[0]) + "–" + Percent(m.CI[1]) + " %"
 	}
 	return ValueIn(d.Unit, m.CI[0], m) + " – " + ValueIn(d.Unit, m.CI[1], m)
 }

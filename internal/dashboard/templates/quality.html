@@ -5,8 +5,8 @@
 {{template "scope" .}}
 
 {{/* widget: used and declared. Reads the metrics used.turn_rate, declare.coverage. */}}
-{{template "metric" withid (metric $r "used.turn_rate") $d}}
-{{template "metric" withid (metric $r "declare.coverage") $d}}
+{{template "metric" framed (metric $r "used.turn_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "declare.coverage") $d $.Loc}}
 
 {{/* widget: outcome mix. Reads .V.quality.Tables.OutcomeMix (Day, Used, Ignored, NotDeclared, ShownOnly, Pending). */}}
 <section>
@@ -27,20 +27,20 @@
 </section>
 
 {{/* widget: found and searched. Reads the metrics recall.hit_rate, recall.empty_reasons, search.rate, search.empty_rate. */}}
-{{template "metric" withid (metric $r "recall.hit_rate") $d}}
-{{template "metric" withid (metric $r "recall.empty_reasons") $d}}
-{{template "metric" withid (metric $r "search.rate") $d}}
-{{template "metric" withid (metric $r "search.empty_rate") $d}}
+{{template "metric" framed (metric $r "recall.hit_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "recall.empty_reasons") $d $.Loc}}
+{{template "metric" framed (metric $r "search.rate") $d $.Loc}}
+{{template "metric" framed (metric $r "search.empty_rate") $d $.Loc}}
 
 {{/* widget: developer detail. Reads the metrics used.share_confident, used.rank, used.by_path, search.rescue_rate, used.rubber_stamp, recall.by_lang. */}}
 {{if $d}}<section>
 <h2>Developer detail</h2>
-{{template "metric" withid (metric $r "used.share_confident") $d}}
-{{template "metric" withid (metric $r "used.rank") $d}}
-{{template "metric" withid (metric $r "used.by_path") $d}}
-{{template "metric" withid (metric $r "search.rescue_rate") $d}}
-{{template "metric" withid (metric $r "used.rubber_stamp") $d}}
-{{template "metric" withid (metric $r "recall.by_lang") $d}}
+{{template "metric" framed (metric $r "used.share_confident") $d $.Loc}}
+{{template "metric" framed (metric $r "used.rank") $d $.Loc}}
+{{template "metric" framed (metric $r "used.by_path") $d $.Loc}}
+{{template "metric" framed (metric $r "search.rescue_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "used.rubber_stamp") $d $.Loc}}
+{{template "metric" framed (metric $r "recall.by_lang") $d $.Loc}}
 </section>
 {{end}}
 {{template "foot" .}}

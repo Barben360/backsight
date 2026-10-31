@@ -5,19 +5,19 @@
 {{template "scope" .}}
 
 {{/* widget: size and growth. Reads the metrics bank.size, bank.growth. */}}
-{{template "metric" withid (metric $r "bank.size") $d}}
-{{template "metric" withid (metric $r "bank.growth") $d}}
+{{template "metric" framed (metric $r "bank.size") $d $.Loc}}
+{{template "metric" framed (metric $r "bank.growth") $d $.Loc}}
 
 {{/* widget: by project. Reads the metric bank.by_project and .V.bank.Tables.ByProject (Project, Memories). */}}
-{{template "metric" withid (metric $r "bank.by_project") $d}}
+{{template "metric" framed (metric $r "bank.by_project") $d $.Loc}}
 <table>
 <tr><th>Project</th><th>Memories</th></tr>
 {{range $r.Tables.ByProject}}<tr><td>{{clip .Project}}</td><td>{{n .Memories}}</td></tr>
 {{end}}</table>
 
 {{/* widget: consolidation and notes. Reads the metrics bank.consolidation, notes.stored. */}}
-{{template "metric" withid (metric $r "bank.consolidation") $d}}
-{{template "metric" withid (metric $r "notes.stored") $d}}
+{{template "metric" framed (metric $r "bank.consolidation") $d $.Loc}}
+{{template "metric" framed (metric $r "notes.stored") $d $.Loc}}
 
 {{/* widget: review queue. Reads .V.bank.Tables.Review (NeverUsed, Hidden, Reported: ID, Project, Shown, LastShown, Command). */}}
 {{with $r.Tables.Review}}<section>
@@ -41,9 +41,9 @@
 {{end}}
 
 {{/* widget: churn and stale counts. Reads the metrics bank.churn, stale.never_used, stale.hidden, stale.reported. */}}
-{{template "metric" withid (metric $r "bank.churn") $d}}
-{{template "metric" withid (metric $r "stale.never_used") $d}}
-{{template "metric" withid (metric $r "stale.hidden") $d}}
-{{template "metric" withid (metric $r "stale.reported") $d}}
+{{template "metric" framed (metric $r "bank.churn") $d $.Loc}}
+{{template "metric" framed (metric $r "stale.never_used") $d $.Loc}}
+{{template "metric" framed (metric $r "stale.hidden") $d $.Loc}}
+{{template "metric" framed (metric $r "stale.reported") $d $.Loc}}
 {{template "foot" .}}
 
