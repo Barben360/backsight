@@ -145,13 +145,14 @@ func reachPrompts(e env, w Window, obs map[string]Observation, met map[string]Me
 		cond = append(cond, fmt.Sprintf(`substr(name, -%d) = ?`, len(n)))
 		names = append(names, n)
 	}
+	args = append(args, w.Since.UnixMilli())
 	args = append(args, names...)
 	args = append(args, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT p.ts, p.decision, p.reason, p.plen, p.lang, p.injected, p.empty, s.n IS NOT NULL
 FROM tel_prompt p
 LEFT JOIN (SELECT DISTINCT session, n FROM tel_tool_use
-           WHERE COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)) s
+           WHERE ts >= ? AND COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)) s
        ON s.session = p.session AND s.n = p.n
 WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?)`, args...)
 	if err != nil {

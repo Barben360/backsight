@@ -129,25 +129,35 @@ func telemetryAbsent(e env, tables ...string) (string, bool, error) {
 	return ReasonNoEvents, true, nil
 }
 
-// backlogAge is the age of the oldest thing waiting on this PC: the oldest
+// backlogAgeOf is the age of the oldest thing waiting on this PC: the oldest
 // queued note, or the oldest document whose last status is queued or retry,
 // counted from the first of the events of its current wait (the ones since
 // its last status that was neither), so that a retry every few minutes does
 // not reset it. Set-aside items are not waiting. 0 when nothing waits; never
 // negative (a clock ahead of now reads 0).
-func backlogAge(tx *sql.Tx, now time.Time) (time.Duration, error) {
+//
+// status is each document's last status (documentStatus's map), so a view
+// reads document_status once.
+func backlogAgeOf(tx *sql.Tx, now time.Time, status map[string]string) (time.Duration, error) {
 	var oldest sql.NullInt64
-	err := tx.QueryRow(`
-SELECT MIN(t) FROM (
-  SELECT notes_oldest_at AS t FROM local_status WHERE id = 1 AND notes_oldest_at IS NOT NULL
-  UNION ALL
-  SELECT (SELECT MIN(r.ts) FROM tel_retain r
-          WHERE r.document = d.document
-            AND r.ts > COALESCE((SELECT MAX(x.ts) FROM tel_retain x
-                                 WHERE x.document = d.document AND x.status NOT IN ('queued', 'retry')), -1))
-  FROM document_status d WHERE d.status IN ('queued', 'retry'))`).Scan(&oldest)
-	if err != nil {
+	if err := tx.QueryRow(`SELECT notes_oldest_at FROM local_status WHERE id = 1`).Scan(&oldest); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
+	}
+	for doc, st := range status {
+		if st != "queued" && st != "retry" {
+			continue
+		}
+		var since sql.NullInt64
+		err := tx.QueryRow(`
+SELECT MIN(r.ts) FROM tel_retain r
+WHERE r.document = ? AND r.ts > COALESCE((SELECT MAX(x.ts) FROM tel_retain x
+                                          WHERE x.document = ? AND x.status NOT IN ('queued', 'retry')), -1)`, doc, doc).Scan(&since)
+		if err != nil {
+			return 0, err
+		}
+		if since.Valid && (!oldest.Valid || since.Int64 < oldest.Int64) {
+			oldest = since
+		}
 	}
 	if !oldest.Valid {
 		return 0, nil
@@ -162,7 +172,16 @@ func (e env) documentStatus() (map[string]string, error) {
 	if e.memo != nil && e.memo.docStatus != nil {
 		return e.memo.docStatus, nil
 	}
-	rows, err := e.tx.QueryContext(e.ctx, `SELECT document, status FROM document_status WHERE document IS NOT NULL`)
+	out, err := readDocumentStatus(e.tx)
+	if err == nil && e.memo != nil {
+		e.memo.docStatus = out
+	}
+	return out, err
+}
+
+// readDocumentStatus is document_status as a map.
+func readDocumentStatus(tx *sql.Tx) (map[string]string, error) {
+	rows, err := tx.Query(`SELECT document, status FROM document_status WHERE document IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -176,13 +195,7 @@ func (e env) documentStatus() (map[string]string, error) {
 		}
 		out[doc] = st.String
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if e.memo != nil {
-		e.memo.docStatus = out
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // localRow is the local_status row, nil when this PC never wrote one.

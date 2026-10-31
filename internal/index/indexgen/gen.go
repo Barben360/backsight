@@ -66,6 +66,13 @@ type gen struct {
 	g   Spec
 }
 
+// session is the id of the n-th session of ts's UTC day: a session lives
+// within one day, as real ones do, so a (session, turn) pair never spans
+// the year (the turns are numbered per session).
+func session(ts time.Time, n int) string {
+	return fmt.Sprintf("sess-%s-%03d", ts.UTC().Format("20060102"), n)
+}
+
 func (x *gen) mem() string { return MemID(x.rng.IntN(x.g.Memories)) }
 
 func (x *gen) telLine(ts time.Time) map[string]any {
@@ -78,7 +85,7 @@ func (x *gen) telLine(ts time.Time) map[string]any {
 		}
 		n -= k.pct
 	}
-	m := map[string]any{"event": kind, "ts": ts.Format(time.RFC3339Nano), "session": fmt.Sprintf("sess-%03d", x.rng.IntN(200)), "project": fmt.Sprintf("proj-%d", x.rng.IntN(8)), "binary_version": "v0.1.17"}
+	m := map[string]any{"event": kind, "ts": ts.Format(time.RFC3339Nano), "session": session(ts, x.rng.IntN(200)), "project": fmt.Sprintf("proj-%d", x.rng.IntN(8)), "binary_version": "v0.1.17"}
 	switch kind {
 	case "prompt":
 		m["decision"] = []string{"recall", "skip"}[x.rng.IntN(2)]
@@ -117,7 +124,7 @@ func (x *gen) telLine(ts time.Time) map[string]any {
 
 func (x *gen) journalLine(ts time.Time, seq int) map[string]any {
 	m := map[string]any{"schema": 1, "seq": seq, "ts": ts.Format(time.RFC3339Nano),
-		"session": fmt.Sprintf("sess-%03d", x.rng.IntN(200)), "turn": fmt.Sprintf("turn-%d", x.rng.IntN(40)), "project": "proj-1"}
+		"session": session(ts, x.rng.IntN(200)), "turn": fmt.Sprintf("turn-%d", x.rng.IntN(40)), "project": "proj-1"}
 	switch n := x.rng.IntN(10); {
 	case n < 6:
 		m["kind"], m["path"] = "shows", "prompt"

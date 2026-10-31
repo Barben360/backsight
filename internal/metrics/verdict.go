@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"database/sql"
+	"errors"
 	"math"
 	"slices"
 	"strings"
@@ -289,12 +290,22 @@ func structuralNoData(ms map[string]Metric, ids []string) bool {
 // prompts in the last 7 days; with the banner's sentence. Which axes it
 // holds is the caller's (Found and Right, when they have prompts to read).
 func (r *judgingRun) learning() (bool, string, error) {
+	// Two reads on the time index: the first typed prompt (read in time
+	// order, it stops at the first one) and the window's count; one
+	// aggregate over both would scan every prompt ever written.
 	var first sql.NullInt64
 	var n int64
 	err := r.e.tx.QueryRowContext(r.e.ctx, `
-SELECT MIN(ts), COALESCE(SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END), 0) FROM tel_prompt
-WHERE (reason IS NULL OR reason <> 'machine') AND ts < ? AND `+projectClause,
-		r.w.Since.UnixMilli(), r.w.Until.UnixMilli(), r.e.q.Project, r.e.q.Project).Scan(&first, &n)
+SELECT ts FROM tel_prompt
+WHERE (reason IS NULL OR reason <> 'machine') AND ts < ? AND `+projectClause+` ORDER BY ts LIMIT 1`,
+		r.w.Until.UnixMilli(), r.e.q.Project, r.e.q.Project).Scan(&first)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, "", err
+	}
+	err = r.e.tx.QueryRowContext(r.e.ctx, `
+SELECT COUNT(*) FROM tel_prompt
+WHERE (reason IS NULL OR reason <> 'machine') AND ts >= ? AND ts < ? AND `+projectClause,
+		r.w.Since.UnixMilli(), r.w.Until.UnixMilli(), r.e.q.Project, r.e.q.Project).Scan(&n)
 	if err != nil {
 		return false, "", err
 	}

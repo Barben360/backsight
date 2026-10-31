@@ -43,12 +43,17 @@ type env struct {
 // and its verdict, which read many overlapping windows (a window, the one
 // before, the four 7-day baselines, the same again for the previous
 // window), run each family once per window: the index does not change
-// within the transaction, nor the server data, the clock or the query.
+// within the transaction, nor the server data or the clock. It assumes one
+// Query per env: of the query only the window may change between runs
+// (assess judges the last 7 days with the view's other fields), and the
+// key holds the window; an env must never be reused for another project,
+// path or machines, whose figures would be served from this memo.
 type memo struct {
 	runs      map[runKey]familyRun
 	backlog   *time.Duration
 	docStatus map[string]string    // document_status
 	stale     *feedback.StaleLists // feedback.Stale of the index's ledger, as of now
+	ledger    *feedback.Ledger     // the index's ledger
 }
 
 // runKey is one family run: the window read and the view's own window
@@ -80,12 +85,16 @@ func (e env) run(fam *family, w Window) (map[string]Observation, map[string]Metr
 	return obs, met, err
 }
 
-// backlogAge is backlogAge as of e.now, read once per transaction.
+// backlogAge is backlogAgeOf as of e.now, read once per transaction.
 func (e env) backlogAge() (time.Duration, error) {
 	if e.memo != nil && e.memo.backlog != nil {
 		return *e.memo.backlog, nil
 	}
-	age, err := backlogAge(e.tx, e.now)
+	status, err := e.documentStatus()
+	if err != nil {
+		return 0, err
+	}
+	age, err := backlogAgeOf(e.tx, e.now, status)
 	if err == nil && e.memo != nil {
 		e.memo.backlog = &age
 	}
