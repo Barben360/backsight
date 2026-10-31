@@ -125,3 +125,23 @@ func TestPathsReportsRoleAndMode(t *testing.T) {
 		t.Errorf("unparsable: role %q mode %q", role, mode)
 	}
 }
+
+func TestPathsPrintsTheIndexDir(t *testing.T) {
+	unsetMachineEnv(t)
+	home := t.TempDir()
+	t.Setenv("BACKSIGHT_HOME", home)
+	idx := filepath.Join(home, "state", "index")
+	_, out, _ := run(t, "paths")
+	if !strings.Contains(out, "index         "+idx+"\n") {
+		t.Errorf("text lacks the index row: %q", out)
+	}
+	_, out, _ = run(t, "paths", "--json")
+	var env struct {
+		Data struct {
+			IndexDir string `json:"index_dir"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil || env.Data.IndexDir != idx {
+		t.Errorf("json index_dir = %q (%v): %s", env.Data.IndexDir, err, out)
+	}
+}

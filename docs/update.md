@@ -54,7 +54,8 @@ backsight update apply
 4. if the new release pins another Hindsight version, upgrades the server (below);
 5. runs the new version's `bank apply`, which sends its bank template when it differs from the one the bank was given (a failure there is only a warning: run `backsight bank apply`). From v0.1.4-m5 it first renames a bank still called `claude-memory` to `backsight` (`backsight bank rename`); when the server is busy, the daily job does it after its backup;
 6. indexes the new version's docs for `backsight guide search` (a failure there is only a warning);
-7. records the update.
+7. migrates the local metrics index with the new version, only once the update is committed, so a rollback never meets a migrated index (a failure there is only a warning: the next `jobs tick` retries);
+8. records the update.
 
 Then restart Claude Code (or run `/reload-plugins`) to load the new plugin.
 

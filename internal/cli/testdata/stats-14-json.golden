@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "command": "stats",
+  "ok": true,
+  "data": {
+    "days": 14,
+    "from": "2026-09-24T12:00:00Z",
+    "to": "2026-10-08T12:00:00Z",
+    "prompts": {
+      "human": 3,
+      "machine": 0,
+      "recalls": 2,
+      "with_hits": 1,
+      "skips": {
+        "short": 1
+      },
+      "p50_ms": 800,
+      "p95_ms": 1200,
+      "scope_calls": 1,
+      "scope_failures": 0,
+      "by_lang": {
+        "en": [
+          1,
+          0
+        ],
+        "fr": [
+          1,
+          1
+        ]
+      }
+    },
+    "turns": {
+      "long": 2,
+      "searched": 0,
+      "credit": {}
+    },
+    "injections": {
+      "n": 1,
+      "searched": 0,
+      "credited": 0,
+      "contradicted": 0,
+      "searched_by_search": 0,
+      "exact": 0
+    },
+    "briefings": {
+      "n": 0,
+      "empty": 0,
+      "ids": 0,
+      "used": 0,
+      "model": 0
+    },
+    "detector": {
+      "fired": 0,
+      "saved": 0
+    },
+    "budget": {
+      "sessions": 1,
+      "p95_chars": 0
+    },
+    "gate": {},
+    "tools": {},
+    "live": {},
+    "retains": {
+      "ok": 1
+    },
+    "hook_failures": {},
+    "unknown_records": {},
+    "attribution": {
+      "main": 0,
+      "disagree": 0,
+      "subagents": 0,
+      "moved": 0
+    },
+    "feedback": {
+      "checks": {
+        "declared": 1
+      },
+      "declared_after_block": 0,
+      "verdicts": {
+        "used": 1
+      },
+      "refused": 0,
+      "late": 0,
+      "settled": {
+        "shows": 4,
+        "credits": 1,
+        "misses": 1,
+        "unknown": 0
+      },
+      "flags": {},
+      "retired": 0,
+      "hidden": 0,
+      "partly": 0,
+      "boost": {
+        "prompts": 1,
+        "prompts_set_changed": 1,
+        "searches": 1,
+        "searches_set_changed": 0
+      },
+      "imported": {
+        "shows": 0,
+        "credits": 0
+      }
+    },
+    "server": {
+      "notes_queued": 0,
+      "sessions_waiting": 0
+    },
+    "runtime": "docker",
+    "extraction": {
+      "input_tokens": 0,
+      "cached_tokens": 0,
+      "output_tokens": 0,
+      "days": 0,
+      "error": "GET /v1/default/banks/claude-memory/llm-requests/stats: HTTP 500 (server_error): "
+    }
+  }
+}

@@ -379,9 +379,25 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 	_ = os.WriteFile(d.FamiliesFile(), []byte("{}"), 0o600)
 	_ = os.MkdirAll(filepath.Join(d.FeedbackDir(), "turns"), 0o700)
 	_ = os.WriteFile(filepath.Join(d.FeedbackDir(), "journal-2026-10.jsonl"), []byte("{}\n"), 0o600)
+	for _, f := range []string{filepath.Join(d.IndexDir(), "metrics.db"), filepath.Join(d.MetricsDir(), "x.jsonl"), filepath.Join(d.DashboardDir(), "dashboard.json")} {
+		_ = os.MkdirAll(filepath.Dir(f), 0o700)
+		_ = os.WriteFile(f, []byte("{}\n"), 0o600)
+	}
+	// Plain uninstall keeps the state, those included.
+	if code, _, out := uninstall(t, "--plan"); code != output.OK || !onDisk(filepath.Join(d.IndexDir(), "metrics.db")) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
 	code, env, out := uninstall(t, "--purge-local")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, p := range []string{d.IndexDir(), d.MetricsDir(), d.DashboardDir()} {
+		if onDisk(p) {
+			t.Errorf("not purged: %s", p)
+		}
+		if strings.Contains(strings.Join(env.Data.Kept, "\n"), p) {
+			t.Errorf("reported as foreign: %s in %q", p, env.Data.Kept)
+		}
 	}
 	if readFile(t, foreign) != "mine" {
 		t.Error("a file backsight did not write was deleted")
@@ -630,5 +646,57 @@ func TestUninstallOnAnEmptyMachineLeavesNoState(t *testing.T) {
 		if onDisk(p) {
 			t.Errorf("left behind: %s %v", p, treeOf(t, p))
 		}
+	}
+}
+
+// Every file the metrics index creates under <state>/index is backsight's:
+// --purge-local --plan does not name one as foreign and the purge removes
+// each, while a file of another hand in that directory stays, named.
+func TestUninstallPurgeLocalOwnsEveryIndexFile(t *testing.T) {
+	m := installMachine(t)
+	d := pathsOf(m.home)
+	own := []string{
+		"metrics.db", "metrics.db-wal", "metrics.db-shm", "metrics.db-journal", "metrics.db.corrupt",
+		"metrics-v7.db", "metrics-v7.db-wal", "metrics-v7.db-shm", "metrics-v7.db-journal", "metrics-v7.db.corrupt",
+		"status.json", "status.lock", "rebuild.lock",
+		"metrics.db.tmp-4242-1a2b3c4d", "metrics.db.tmp-4242-1a2b3c4d-wal", "metrics-v7.db.tmp-77-ff00-journal",
+		".status.json.tmp-9-abcd",
+	}
+	_ = os.MkdirAll(d.IndexDir(), 0o700)
+	for _, n := range own {
+		if err := os.WriteFile(filepath.Join(d.IndexDir(), n), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreign := filepath.Join(d.IndexDir(), "notes-of-mine.txt")
+	_ = os.WriteFile(foreign, []byte("mine"), 0o600)
+
+	code, env, out := uninstall(t, "--plan", "--purge-local")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	kept := strings.Join(env.Data.Kept, "\n")
+	for _, n := range own {
+		if strings.Contains(kept, filepath.Join(d.IndexDir(), n)) {
+			t.Errorf("the plan names %s as foreign", n)
+		}
+		if !onDisk(filepath.Join(d.IndexDir(), n)) {
+			t.Errorf("the plan removed %s", n)
+		}
+	}
+	if !strings.Contains(kept, foreign) {
+		t.Errorf("the plan does not name the foreign file: %q", env.Data.Kept)
+	}
+
+	if code, env, out = uninstall(t, "--purge-local"); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, n := range own {
+		if onDisk(filepath.Join(d.IndexDir(), n)) {
+			t.Errorf("not purged: %s", n)
+		}
+	}
+	if readFile(t, foreign) != "mine" || !strings.Contains(strings.Join(env.Data.Kept, "\n"), foreign) {
+		t.Errorf("the foreign file was removed or not named: %q", env.Data.Kept)
 	}
 }

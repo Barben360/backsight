@@ -22,7 +22,7 @@ OUT      ?= bin/backsight
 PUBKEY   ?= minisign.pub
 export CGO_ENABLED := 0
 
-.PHONY: build check test test-hooks lint cross leaks licenses snapshot verify-dist verify-keys
+.PHONY: build check test test-hooks bench-index lint cross leaks licenses snapshot verify-dist verify-keys
 build:
 	go build -trimpath $(TAGS) -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/backsight
 
@@ -36,6 +36,7 @@ check:
 	@$(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory test
 	@$(MAKE) --no-print-directory test-hooks
+	@$(MAKE) --no-print-directory bench-index
 	scripts/third-party-licenses.sh --check
 	@$(MAKE) --no-print-directory cross >/dev/null
 	@if command -v gitleaks >/dev/null 2>&1; then gitleaks dir . --no-banner --redact; \
@@ -52,6 +53,13 @@ test:
 # built and tested with it. A release never has the tag (verify-keys).
 test-hooks:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/server/nativelock/ ./internal/cli/
+
+# The metrics index's time budgets on a year of generated history (first
+# build, 15-minute catch-up), then the same two as benchmarks. Without
+# -race, which skips the budget test.
+bench-index:
+	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
+	go test -run '^$$' -bench 'FirstBuild|CatchUp15' -benchtime 1x ./internal/index/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
 # instead of failing on its lock.

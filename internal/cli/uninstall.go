@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -770,6 +771,12 @@ func (q pendingWrites) String() string {
 	return fmt.Sprintf("%d note(s) queued, %d session(s) and %d note(s) quarantined", q.notes, q.qSessions, q.qNotes)
 }
 
+// indexFileRE are the files the metrics index keeps in <state>/index:
+// metrics.db and the metrics-v<N>.db of a newer index beside it, each with
+// its -wal, -shm and -journal, its .corrupt set-aside and its
+// .tmp-<pid>-<random> build; the recovery state and the locks.
+var indexFileRE = regexp.MustCompile(`^(metrics(-v[0-9]+)?\.db(\.corrupt|\.tmp-[0-9]+-[0-9a-f]+)?(-wal|-shm|-journal)?|status\.json|status\.lock|rebuild\.lock)$`)
+
 // ownEntry reports whether name, directly in dir, is one backsight writes.
 func ownEntry(d paths.Dirs, dir, name string) bool {
 	if strings.HasPrefix(name, ".") && strings.Contains(name, ".tmp-") {
@@ -777,6 +784,8 @@ func ownEntry(d paths.Dirs, dir, name string) bool {
 	}
 	var own []string
 	switch dir {
+	case d.IndexDir():
+		return indexFileRE.MatchString(name)
 	case d.Config:
 		own = []string{d.ConfigFile(), d.SecretsFile()}
 	case d.State:
@@ -785,7 +794,8 @@ func ownEntry(d paths.Dirs, dir, name string) bool {
 		}
 		own = []string{d.StateFile(), d.LocksDir(), d.MaintenanceLock(), d.CursorsDir(), d.SessionsDir(), d.SentIndexDir(),
 			d.OutboxDir(), d.QuarantineDir(), d.JournalFile(), d.PreImagesDir(), d.TelemetryDir(), d.EntitiesFile(), d.SetupFile(),
-			d.RestoreMarker(), d.UpdateMarker(), d.UpdateSnapshot(), d.BankTemplateFile(), d.AttributionDir(), d.FamiliesFile(), d.ConnectDir(), d.FeedbackDir()}
+			d.RestoreMarker(), d.UpdateMarker(), d.UpdateSnapshot(), d.BankTemplateFile(), d.AttributionDir(), d.FamiliesFile(), d.ConnectDir(), d.FeedbackDir(),
+			d.IndexDir(), d.MetricsDir(), d.DashboardDir()}
 		for _, n := range []string{"staging", "logs", "breaker.json", "reach.json", "split-sessions.json", "doctor-snapshot.json", "machine_id", "reattribute.jsonl", "reattribute.json", "noise-history.jsonl", serverCheckStamp} {
 			own = append(own, filepath.Join(d.State, n))
 		}
@@ -797,7 +807,7 @@ func ownEntry(d paths.Dirs, dir, name string) bool {
 // backsight did not write: --purge-local keeps them.
 func foreignEntries(d paths.Dirs) []string {
 	var out []string
-	for _, dir := range []string{d.Config, d.State} {
+	for _, dir := range []string{d.Config, d.State, d.IndexDir()} {
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			if !ownEntry(d, dir, e.Name()) {
@@ -813,7 +823,10 @@ func foreignEntries(d paths.Dirs) []string {
 // which it returns.
 func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
 	foreign := foreignEntries(d)
-	for _, dir := range []string{d.Config, d.State} {
+	// The index directory first: its own files go one by one, so that a
+	// file of another hand in it stays, and the state directory's pass
+	// leaves the directory to it.
+	for _, dir := range []string{d.IndexDir(), d.Config, d.State} {
 		ents, err := os.ReadDir(dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -822,6 +835,9 @@ func purgeLocal(d paths.Dirs, keep []string) ([]string, error) {
 			return foreign, err
 		}
 		for _, e := range ents {
+			if dir == d.State && e.Name() == filepath.Base(d.IndexDir()) {
+				continue
+			}
 			if ownEntry(d, dir, e.Name()) {
 				if err := removeAllExcept(filepath.Join(dir, e.Name()), keep...); err != nil {
 					return foreign, err

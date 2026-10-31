@@ -39,6 +39,7 @@ jobs
 feedback-journal
 feedback-ledger
 feedback-shared
+metrics-index
 update
 remotes
 pending-restore

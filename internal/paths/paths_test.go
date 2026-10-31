@@ -111,3 +111,29 @@ func TestStateDirOverrideMovesOnlyTheState(t *testing.T) {
 		t.Errorf("a relative override must be ignored: %+v", d)
 	}
 }
+
+func TestIndexDirs(t *testing.T) {
+	for _, c := range []struct {
+		goos, home string
+		env        map[string]string
+	}{
+		{"linux", "/home/u", nil},
+		{"darwin", "/Users/u", nil},
+		{"windows", `C:\Users\u`, map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}},
+		{"linux", "/home/u", map[string]string{"BACKSIGHT_HOME": "/t/bs"}},
+	} {
+		d, err := Resolve(c.goos, c.home, env(c.env))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for got, rel := range map[string]string{d.IndexDir(): "index", d.MetricsDir(): "metrics", d.DashboardDir(): "dashboard"} {
+			if want := filepath.Join(d.State, rel); got != want {
+				t.Errorf("%s: got %s, want %s", c.goos, got, want)
+			}
+		}
+	}
+	d, _ := Resolve("linux", "/home/u", env(map[string]string{"BACKSIGHT_STATE_DIR": "/x"}))
+	if d.IndexDir() != filepath.Join("/x", "index") {
+		t.Errorf("state override: %s", d.IndexDir())
+	}
+}

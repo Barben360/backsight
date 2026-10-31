@@ -243,7 +243,7 @@ func TestDocsCommandsNameEveryCommand(t *testing.T) {
 			if !sub.IsAvailableCommand() || sub.Name() == "help" || sub.Name() == "completion" {
 				continue
 			}
-			if !sub.HasSubCommands() && !strings.Contains(string(raw), "`"+sub.CommandPath()) {
+			if (!sub.HasSubCommands() || sub.Runnable()) && !strings.Contains(string(raw), "`"+sub.CommandPath()) {
 				t.Errorf("docs/commands.md does not name `%s`", sub.CommandPath())
 			}
 			walk(sub)

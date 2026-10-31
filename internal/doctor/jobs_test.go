@@ -208,3 +208,55 @@ func TestBackupFixFollowsTheScheduler(t *testing.T) {
 		t.Errorf("entries installed since are not off: %+v", c)
 	}
 }
+
+// jobLines writes job events, oldest first: name, status, reason, age.
+func jobLines(t *testing.T, d paths.Dirs, lines ...[4]string) {
+	t.Helper()
+	var b strings.Builder
+	for _, l := range lines {
+		ago, err := time.ParseDuration(l[3])
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&b, `{"ts":%q,"event":"job","name":%q,"status":%q,"details":{"reason":%q}}`+"\n",
+			usageNow.Add(-ago).Format(time.RFC3339), l[0], l[1], l[2])
+	}
+	if err := os.WriteFile(filepath.Join(d.TelemetryDir(), "events-2026-10.jsonl"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A job whose last run failed is not on time, however recent that run:
+// a tick failing every 15 minutes keeps its job events coming.
+func TestJobsLastRunFailed(t *testing.T) {
+	d := jobsDirs(t, 72*time.Hour, nil)
+	jobLines(t, d,
+		[4]string{"maintain", "done", "", "20h"},
+		[4]string{"tick", "failed", "the client could not be set up", "20m"},
+		[4]string{"tick", "failed", "the client could not be set up", "5m"})
+	c := checkJobs(d, usageNow, nil)
+	if c.Status != Warn || c.Summary != "scheduled job failing: [tick failed 5m0s ago (the client could not be set up)]" || c.Fix != "backsight jobs tick" {
+		t.Errorf("%s: %q, fix %q", c.Status, c.Summary, c.Fix)
+	}
+
+	// the next run done: on time again; a maintain started after its
+	// failure (its own doctor snapshot runs mid-job) is not judged yet
+	jobLines(t, d,
+		[4]string{"maintain", "failed", "", "21h"},
+		[4]string{"maintain", "started", "", "20h"},
+		[4]string{"tick", "failed", "the client could not be set up", "20m"},
+		[4]string{"tick", "done", "", "5m"})
+	if c := checkJobs(d, usageNow, nil); c.Status != OK {
+		t.Errorf("after a good run: %s %q", c.Status, c.Summary)
+	}
+
+	// late wins over failing for the same job; another one failing is named too
+	jobLines(t, d,
+		[4]string{"maintain", "failed", "", "20h"},
+		[4]string{"tick", "failed", "", "50m"})
+	c = checkJobs(d, usageNow, nil)
+	if c.Status != Warn || !strings.Contains(c.Summary, "scheduled job late: [tick last ran 50m0s ago (every 15m0s)]") ||
+		!strings.Contains(c.Summary, "scheduled job failing: [maintain failed 20h0m0s ago]") {
+		t.Errorf("%s: %q", c.Status, c.Summary)
+	}
+}
