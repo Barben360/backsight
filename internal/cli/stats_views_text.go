@@ -151,7 +151,7 @@ func footer(r metrics.Result) string {
 }
 
 func summaryText(s metrics.Summary, days int) string {
-	cost := "price not set"
+	cost := "extraction cost unknown: " + pricesHint
 	if s.ExtractionCost != nil {
 		cost = "extraction cost " + fmt.Sprintf("%.2f", *s.ExtractionCost) + " " + s.Currency
 	} else if s.PriceSet {
@@ -174,6 +174,8 @@ func headingOf(d metrics.Def) string {
 // labelOf is the metric's label; the two that share one say which they are.
 func labelOf(d metrics.Def) string {
 	switch d.ID {
+	case "recall.empty_reasons":
+		return "Prompts that found nothing"
 	case "extraction.tokens":
 		return d.Label + " (tokens)"
 	case "extraction.cost":
@@ -191,7 +193,7 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 			if !ok || headingOf(d) != fh.family || (d.Dev && !dev) {
 				continue
 			}
-			lines = append(lines, metricLine(d, m))
+			lines = append(lines, metricLine(d, m, r.Scope.ServerOK))
 			if m.Status == metrics.StatusNoData {
 				continue
 			}
@@ -205,11 +207,14 @@ func metricsText(b *strings.Builder, r metrics.Result, dev bool) {
 	}
 }
 
+// pricesHint says how to get a cost: it needs the model's prices.
+const pricesHint = "costs need prices, set price_input, price_cached and price_output under [llm] in the config file"
+
 // handful is the sample size under which a rate is shown as its counts.
 const handful = 10
 
 // metricLine is `label  value  (n=…, status, delta vs previous)`.
-func metricLine(d metrics.Def, m metrics.Metric) string {
+func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 	value := formatValue(d, m)
 	if m.Status == metrics.StatusNoData {
 		value = "—"
@@ -223,7 +228,9 @@ func metricLine(d metrics.Def, m metrics.Metric) string {
 	case m.Status != metrics.StatusNoData && d.Unit == "ratio" && m.Num != nil && m.Den != nil && *m.Den < handful:
 		value = fmt.Sprintf("%s of %s", grouped(*m.Num), grouped(*m.Den)) // a percentage over so few would be a guess
 	case m.Status != metrics.StatusNoData && d.ID == "server.reach" && m.Value != nil:
-		value = map[bool]string{true: "yes", false: "no"}[m.Status == metrics.StatusOK]
+		value = map[bool]string{true: "yes", false: "no"}[serverUp] // what the view's header says, not the skipped-prompt count
+	case m.Status != metrics.StatusNoData && d.ID == "recall.empty_reasons" && m.Value != nil:
+		value = countOf(int64(*m.Value), "prompt", "prompts")
 	case m.Status != metrics.StatusNoData && d.ID == "doctor.check" && m.Value != nil:
 		value = grouped(int64(*m.Value)) + " failed"
 	}
@@ -489,7 +496,7 @@ func extraCounts(m metrics.Metric, key string) []string {
 }
 
 // emptyWords and kindWords name reasons and kinds in plain words.
-var emptyWords = strings.NewReplacer("no_candidates", "no candidates", "below_floor", "below the cut-off", "all_seen", "all already seen")
+var emptyWords = strings.NewReplacer("no_candidates", "no candidates", "below_floor", "below the cut-off", "all_seen", "all already seen", "capped", "cut short by the size limit", "unknown", "reason not recorded")
 
 var kindWords = map[string]string{"world": "facts about you and your work", "experience": "facts from sessions", "observation": "summaries"}
 
@@ -501,14 +508,14 @@ func metricDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string
 	switch d.ID {
 	case "recall.empty_reasons":
 		if e := extraCounts(m, "empty"); len(e) > 0 {
-			add("nothing added: %s", emptyWords.Replace(strings.Join(e, ", ")))
+			add("why: %s", emptyWords.Replace(strings.Join(e, ", ")))
 		}
 		if s := extraCounts(m, "skips"); len(s) > 0 {
 			add("prompts skipped: %s", strings.Join(s, ", "))
 		}
 	case "used.turn_rate":
 		if w, ok := extraFloat(m, "worst_case"); ok {
-			add("worst case, counting turns that did not say as unused: %s %%", percentOf(w))
+			add("worst case, if every turn where Claude did not say counts as unused: %s %%", percentOf(w))
 		}
 		if p, _ := extraInt(m, "pending"); p > 0 {
 			add("%s still open", countOf(p, "turn", "turns"))
@@ -520,6 +527,9 @@ func metricDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string
 			add("typical %s, %s %s", valueIn(d.Unit, p50, m), map[bool]string{true: "slowest 1 in 20", false: "high"}[d.Unit == "ms"], valueIn(d.Unit, p95, m))
 		}
 	case "extraction.tokens", "extraction.cost":
+		if d.ID == "extraction.cost" && m.Value == nil {
+			add("%s", pricesHint)
+		}
 		if n, _ := extraInt(m, "failed_operations"); n > 0 {
 			add("partial: %s could not be read, so this is a lower bound", countOf(n, "server task", "server tasks"))
 		}
@@ -697,7 +707,7 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 	if t.Extraction != nil {
 		var rows [][]string
 		for _, x := range t.Extraction {
-			cost := "price not set"
+			cost := "—"
 			if x.Cost != nil {
 				cost = fmt.Sprintf("%.2f", *x.Cost)
 			}
@@ -737,7 +747,7 @@ func tablesText(b *strings.Builder, r metrics.Result, loc *time.Location) {
 	if t.Doctor != nil {
 		var rows [][]string
 		for _, c := range t.Doctor {
-			rows = append(rows, []string{c.ID, c.Status, c.Fix})
+			rows = append(rows, []string{metrics.DoctorName(c.ID), c.Status, c.Fix})
 		}
 		section(b, "Health checks", []string{"Check", "Status", "Fix"}, rows)
 	}

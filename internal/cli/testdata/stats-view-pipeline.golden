@@ -21,10 +21,10 @@ Background jobs
 none
 
 Health checks
-Check   Status  Fix
-config  ok
-server  ok
-backup  warn    backsight backup create
-bank    error   backsight doctor
+Check          Status  Fix
+settings       ok
+memory server  ok
+backup         warn    backsight backup create
+memory         error   backsight doctor
 
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

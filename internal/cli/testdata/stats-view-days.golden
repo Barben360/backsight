@@ -1,0 +1,14 @@
+How did each day go? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Days
+Day         Prompts  Recalls  With memory  Used turns  Wrong  Context chars  Sessions  Sent  Send failed
+2026-10-08  3        3        3            0           0      0              4         0     0
+2026-10-07  3        2        1            0           0      0              1         1     0
+2026-10-06  0        0        0            0           0      0              0         0     0
+2026-10-05  0        0        0            0           0      0              0         0     0
+2026-10-04  0        0        0            0           0      0              0         0     0
+2026-10-03  0        0        0            0           0      0              0         0     0
+2026-10-02  0        0        0            0           0      0              0         0     0
+2026-10-01  0        0        0            0           0      0              0         0     0
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

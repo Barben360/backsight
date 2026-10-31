@@ -243,15 +243,15 @@ func TestFlowingIsImmediate(t *testing.T) {
 			Why: mustDefAction("hooks.failures"), Command: "backsight doctor"}}},
 		{"doctor error", func(x *fx) {
 			x.doctor = []DoctorCheck{{ID: "metrics-index", Status: "error", Fix: "backsight stats index rebuild"}}
-		}, attn, []Item{{Metric: "doctor.check", Severity: SeverityWatch, Axis: "flowing", Text: "Health check metrics-index failed.",
+		}, attn, []Item{{Metric: "doctor.check", Severity: SeverityWatch, Axis: "flowing", Text: "Health check «activity index» failed.",
 			Why: mustDefAction("doctor.check"), Command: "backsight stats index rebuild"}}},
 		{"doctor error on the server alone", func(x *fx) {
 			x.doctor = []DoctorCheck{{ID: "server", Status: "error"}}
-		}, attn, []Item{{Metric: "doctor.check", Severity: SeverityWatch, Axis: "flowing", Text: "Health check server failed.",
+		}, attn, []Item{{Metric: "doctor.check", Severity: SeverityWatch, Axis: "flowing", Text: "Health check «memory server» failed.",
 			Why: mustDefAction("doctor.check"), Command: "backsight doctor"}}},
 		{"doctor warning", func(x *fx) {
 			x.doctor = []DoctorCheck{{ID: "latency", Status: "warn"}, {ID: "server", Status: "ok"}}
-		}, okay, []Item{{Metric: "doctor.check", Severity: SeverityWatch, Axis: "flowing", Text: "Health check latency reports a warning.",
+		}, okay, []Item{{Metric: "doctor.check", Severity: SeverityWatch, Axis: "flowing", Text: "Health check «speed» reports a warning.",
 			Why: mustDefAction("doctor.check"), Command: "backsight doctor"}}},
 		{"update available", func(x *fx) {
 			x.doctor = []DoctorCheck{{ID: "update", Status: "warn"}}

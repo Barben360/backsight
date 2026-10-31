@@ -1,0 +1,34 @@
+Is my memory working? (2026-10-01 12:00 → 2026-10-08 12:00, UTC)
+
+Found
+Prompts that got memory                      9 % (5–16 %)             (n=100, watch — close to the line, -4 pts vs previous)
+
+Right
+Turns where Claude used memory               50 % (28–72 %)           (n=16, ok, unreliable, judged on the last 28 days, +10 pts vs previous 28 days)
+  worst case, if every turn where Claude did not say counts as unused: 40 %
+  1 turn still open
+Turns where Claude said what it used         80 % (63–91 %)           (n=30, ok — close to the line)
+
+Cost
+What the server's model spent (tokens)       52.0 k tokens            (ok)
+  partial: 2 server tasks could not be read, so this is a lower bound
+What the server's model spent (cost)         price not set            (ok)
+  costs need prices, set price_input, price_cached and price_output under [llm] in the config file
+  partial: 2 server tasks could not be read, so this is a lower bound
+
+Memory
+Memories                                     1,241                    (ok, no history)
+
+Flowing
+Waiting on the server                        3                        (watch)
+  waiting 2, running 1, failed in the last 7 days 500+ (a lower bound: more are not read), failed in all 731
+
+Lately
+none
+
+Memories shown, by what happened
+Day         Used by Claude  Shown, then ignored  Not declared  Shown only  Pending  Note
+2026-10-01  1               0                    0             0           0        partial day
+2026-10-02  4               0                    0             0           0
+
+Activity on this PC · memory on srv:1 · --json for every field

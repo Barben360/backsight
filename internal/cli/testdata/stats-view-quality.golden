@@ -2,8 +2,8 @@ Is it right? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
 
 Found
 Prompts that got memory                      4 of 5                   (n=5, too few, 15 more needed)
-Why prompts got nothing                      1                        (ok, +1 vs previous)
-  nothing added: unknown 1
+Prompts that found nothing                   1 prompt                 (ok, +1 vs previous)
+  why: reason not recorded 1
   prompts skipped: other 1
 Prompts where Claude searched memory         0 of 5                   (n=5, too few, 15 more needed)
 Searches that found nothing                  —                        (no data: nothing recorded yet)

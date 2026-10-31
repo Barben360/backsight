@@ -52,13 +52,13 @@
             {
               "metric": "doctor.check",
               "severity": "watch",
-              "text": "Health check backup reports a warning.",
+              "text": "Health check «backup» reports a warning.",
               "command": "backsight backup create"
             },
             {
               "metric": "doctor.check",
               "severity": "watch",
-              "text": "Health check bank failed.",
+              "text": "Health check «memory» failed.",
               "command": "backsight doctor"
             }
           ]
@@ -951,7 +951,7 @@
         "metric": "doctor.check",
         "severity": "watch",
         "axis": "flowing",
-        "text": "Health check backup reports a warning.",
+        "text": "Health check «backup» reports a warning.",
         "why": "Fix the failing check; backsight doctor says how.",
         "command": "backsight backup create"
       },
@@ -959,7 +959,7 @@
         "metric": "doctor.check",
         "severity": "watch",
         "axis": "flowing",
-        "text": "Health check bank failed.",
+        "text": "Health check «memory» failed.",
         "why": "Fix the failing check; backsight doctor says how.",
         "command": "backsight doctor"
       }

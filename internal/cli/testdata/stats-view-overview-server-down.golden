@@ -1,18 +1,18 @@
 Is my memory working? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
-Memory server: unreachable. The numbers that come from it are missing.
+Memory server: unreachable. The numbers that come from it are missing. Last answer 2026-10-08 11:00.
 
 Verdict (last 7 days)
 Found    learning — Learning: day 2 of about 7, 6 prompts so far.
 Right    learning — Learning: day 2 of about 7, 6 prompts so far.
 Cost     too early — Not enough yet: 5 prompts, 100 needed.
-Flowing  attention — Memory server unreachable: 0 notes and 0 sessions wait on this PC, nothing is lost.
+Flowing  attention — Memory server unreachable since 12:00: 0 notes and 0 sessions wait on this PC, nothing is lost.
 
-In this window (7 days): 4 prompts got memory, Claude used it in 0 turns, about 0 tokens added; price not set (server, all PCs).
+In this window (7 days): 4 prompts got memory, Claude used it in 0 turns, about 0 tokens added; extraction cost unknown: costs need prices, set price_input, price_cached and price_output under [llm] in the config file (server, all PCs).
 
 Found
 Prompts that got memory                      4 of 5                   (n=5, too few, 15 more needed)
-Why prompts got nothing                      1                        (ok, +1 vs previous)
-  nothing added: unknown 1
+Prompts that found nothing                   1 prompt                 (ok, +1 vs previous)
+  why: reason not recorded 1
   prompts skipped: other 1
 
 Right
@@ -35,7 +35,8 @@ Sessions sent                                1 of 1                   (n=1, ok)
 Waiting on this PC                           0                        (ok)
 Waiting on the server                        —                        (no data: memory server not answering)
 Steps that crashed                           0                        (ok, no change vs previous)
-Memory server answering                      yes                      (ok, no change vs previous)
+Memory server answering                      no                       (watch, no change vs previous)
+  not answering since 2026-10-08 12:00
 Health checks                                1 failed                 (watch)
   1 failed, 1 with a warning
 Background jobs                              —                        (no data: nothing recorded yet)
@@ -46,11 +47,11 @@ Hidden                                       —                        (no data
 Reported wrong                               —                        (no data: nothing recorded yet)
 
 Needs attention
-1. Health check backup reports a warning.
+1. Health check «backup» reports a warning.
    Run: backsight backup create
-2. Health check bank failed.
+2. Health check «memory» failed.
    Run: backsight doctor
-3. Memory server unreachable: 0 notes and 0 sessions wait on this PC, nothing is lost.
+3. Memory server unreachable since 12:00: 0 notes and 0 sessions wait on this PC, nothing is lost.
    Run: backsight doctor
 
 Activity

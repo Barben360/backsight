@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -80,10 +81,44 @@ func clock(t, now time.Time, loc *time.Location) string {
 	return t.Format("2006-01-02 15:04")
 }
 
-func doctorErrorSentence(id string) string { return fmt.Sprintf("Health check %s failed.", id) }
+// doctorNames are the plain names of the doctor's checks, in the sentences
+// and tables a user reads; an id that is not here reads as itself with its
+// dashes as spaces (DoctorName).
+var doctorNames = map[string]string{
+	"attribution": "project tags", "backfill": "past-session import", "backsight-toml": "project settings file",
+	"backup": "backup", "bank": "memory", "bank-config": "memory settings", "binary": "backsight program",
+	"client": "Claude Code setup", "config": "settings", "disk": "disk space", "docker": "Docker",
+	"feedback-journal": "feedback log", "feedback-ledger": "feedback counts", "feedback-shared": "shared feedback",
+	"gpu": "graphics card", "jobs": "background jobs", "latency": "speed", "learning": "learned ranking",
+	"locks": "locks", "maintenance": "maintenance", "metrics-index": "activity index", "native-fsync": "native disk safety",
+	"native-home": "native install folder", "native-identity": "native install identity", "native-linger": "native service lingering",
+	"native-refused": "native install refusal", "native-stray": "stray native files", "native-unit": "native service",
+	"native-venv": "native Python environment", "noise-headless": "background sessions", "noise-subagent": "helper agents",
+	"noise-transverse": "shared notes", "notes": "notes", "own-owners": "file owners", "pending-restore": "pending restore",
+	"purged-documents": "removed sessions",
+	"reattribution":    "project re-tagging", "recall": "recall", "reference": "older server copy", "reference-server": "older server copy check",
+	"remotes": "other PCs", "replace-unconfirmed": "unconfirmed replacement", "restore": "restore", "restore-epoch": "restore state",
+	"retention": "transcript keeping", "runtime-switch": "runtime switch", "scheduler": "scheduler", "searches": "searches",
+	"server": "memory server", "server-id": "memory server identity", "server-reach": "memory server reach",
+	"split-session": "split sessions", "transcripts": "transcripts", "transverse-keyword": "shared keyword",
+	"untagged": "untagged memories", "update": "update", "update-incomplete": "unfinished update", "usage": "usage",
+	"version-skew": "version mismatch", "web-ui": "server web page", "writes": "writes",
+}
+
+// DoctorName is the plain name of a doctor check.
+func DoctorName(id string) string {
+	if n, ok := doctorNames[id]; ok {
+		return n
+	}
+	return strings.ReplaceAll(id, "-", " ")
+}
+
+func doctorErrorSentence(id string) string {
+	return fmt.Sprintf("Health check «%s» failed.", DoctorName(id))
+}
 
 func doctorWarnSentence(id string) string {
-	return fmt.Sprintf("Health check %s reports a warning.", id)
+	return fmt.Sprintf("Health check «%s» reports a warning.", DoctorName(id))
 }
 
 // itemText is the attention sentence of metric m judged over days days:

@@ -11,11 +11,11 @@ Background jobs
 none
 
 Health checks
-Check   Status  Fix
-config  ok
-server  ok
-backup  warn    backsight backup create
-bank    error   backsight doctor
+Check          Status  Fix
+settings       ok
+memory server  ok
+backup         warn    backsight backup create
+memory         error   backsight doctor
 
 System
 Memory server   version 1.1.0, running in docker, mode local

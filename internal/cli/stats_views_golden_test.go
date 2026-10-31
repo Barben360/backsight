@@ -14,7 +14,7 @@ import (
 )
 
 // goldenViews are the views whose text and JSON are pinned.
-var goldenViews = []string{"overview", "quality", "cost", "bank", "pipeline", "system", "sessions", "defs"}
+var goldenViews = []string{"overview", "quality", "cost", "bank", "pipeline", "system", "sessions", "days", "defs"}
 
 // fixedDoctor makes the health checks deterministic (the real ones quote the
 // temporary directory of the run).
@@ -68,8 +68,53 @@ func TestStatsViewsGoldenServerDown(t *testing.T) {
 	fixedDoctor(t)
 	home, _ := os.UserHomeDir()
 	pointAt(t, home, closedPort(t))
+	stateFile(t, home, "reach.json", `{"last_ok":"2026-10-08T09:00:00Z","failing_since":"2026-10-08T10:00:00Z","sessions_waiting":0}`)
 	viewGolden(t, "stats-view-overview-server-down.golden", "stats", "overview", "--tz", "Europe/Paris")
 	viewGolden(t, "stats-view-bank-server-down.golden", "stats", "bank", "--tz", "Europe/Paris")
+}
+
+// The header and the "answering" line come from one source: they never
+// disagree, with the server up or down.
+func TestServerLinesAgree(t *testing.T) {
+	viewsFixture(t)
+	fixedDoctor(t)
+	answering := func() (string, string) {
+		_, out, _ := run(t, "stats", "overview", "--tz", "Europe/Paris")
+		return out, lineOf(t, out, "Memory server answering")
+	}
+	out, line := answering()
+	if !strings.Contains(line, " yes ") || strings.Contains(out, "Memory server: ") {
+		t.Errorf("server up:\n%s", out)
+	}
+	home, _ := os.UserHomeDir()
+	pointAt(t, home, closedPort(t))
+	stateFile(t, home, "reach.json", `{"last_ok":"2026-10-08T09:00:00Z","failing_since":"2026-10-08T10:00:00Z","sessions_waiting":0}`)
+	out, line = answering()
+	if !strings.Contains(line, " no ") || !strings.Contains(out, "Memory server: unreachable") {
+		t.Errorf("server down:\n%s", out)
+	}
+}
+
+// The cases the fixture has no data for, built by hand: a borderline
+// status, a metric judged on 28 days, a capped failure count, a partial
+// cost, a snapshot and a partial day.
+func TestStatsViewsGoldenEdgeCases(t *testing.T) {
+	ptr := func(v float64) *float64 { return &v }
+	i64 := func(v int64) *int64 { return &v }
+	r := result("overview", "recall.hit_rate", metrics.Metric{})
+	r.Metrics = map[string]metrics.Metric{
+		"recall.hit_rate":  {Value: ptr(0.09), Num: i64(9), Den: i64(100), Unit: "ratio", Status: metrics.StatusWatch, Borderline: true, CI: &[2]float64{0.05, 0.16}, Delta: ptr(-0.04)},
+		"declare.coverage": {Value: ptr(0.8), Num: i64(24), Den: i64(30), Unit: "ratio", Status: metrics.StatusOK, Borderline: true, CI: &[2]float64{0.63, 0.91}},
+		"used.turn_rate": {Value: ptr(0.5), Num: i64(8), Den: i64(16), Unit: "ratio", Status: metrics.StatusOK, CI: &[2]float64{0.28, 0.72}, Delta: ptr(0.1),
+			Tags: []string{"judged_28d", "unreliable"}, Extra: map[string]any{"worst_case": ptr(0.4), "pending": int64(1)}},
+		"extraction.tokens": {Value: ptr(52000), Tags: []string{"partial"}, Extra: map[string]any{"failed_operations": int64(2)}},
+		"extraction.cost":   {Tags: []string{"partial"}, Extra: map[string]any{"currency": "USD", "price_set": false, "failed_operations": int64(2)}},
+		"server.queue": {Value: ptr(3), Status: metrics.StatusWatch, Extra: map[string]any{"pending": int64(2), "processing": int64(1),
+			"failed": int64(500), "failed_total": int64(731), "failed_capped": true}},
+		"bank.size": {Value: ptr(1241), Status: metrics.StatusOK, Tags: []string{"snapshot"}},
+	}
+	r.Tables.OutcomeMix = []metrics.OutcomeDay{{Day: "2026-10-01", Used: 1, Partial: true}, {Day: "2026-10-02", Used: 4}}
+	cliGolden(t, "stats-view-edge-cases.golden", []byte(viewText(r, false)))
 }
 
 func TestFormatValue(t *testing.T) {
@@ -281,7 +326,7 @@ func TestViewTextLines(t *testing.T) {
 }
 
 // No line of any view carries a decision, block or spec number, nor the old
-// word for the memory (a health check named bank excepted: that is its id).
+// word for the memory.
 func TestViewTextIsPublic(t *testing.T) {
 	viewsFixture(t)
 	fixedDoctor(t)
@@ -289,9 +334,8 @@ func TestViewTextIsPublic(t *testing.T) {
 	for _, view := range goldenViews {
 		_, out, _ := run(t, "stats", view, "--dev", "--tz", "Europe/Paris")
 		for _, l := range strings.Split(out, "\n") {
-			// the catalog's own words and the commands (`stats bank`) are not prose
-			if strings.Contains(l, "backsight ") || view == "defs" || strings.HasSuffix(l, "Health check bank failed.") {
-				continue
+			if view == "defs" { // the first column holds the metric ids, the argument of `stats defs <id>`
+				l = strings.TrimSpace(strings.TrimPrefix(l, strings.Fields(l + " x")[0]))
 			}
 			if banned.MatchString(l) {
 				t.Errorf("%s: %q", view, l)
