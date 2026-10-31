@@ -2,7 +2,7 @@ Which projects use memory? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
 Project: p1
 
 Found
-Prompts that got memory                      6 of 7                   (n=7, too few, 13 more needed)
+Prompts that got memory                      5 of 6                   (n=6, too few, 14 more needed)
 
 Right
 Turns where Claude used memory               1 of 1                   (n=1, too few, 19 more needed)
@@ -10,8 +10,8 @@ Turns where Claude used memory               1 of 1                   (n=1, too 
 Memories reported wrong or out of date       0 of 1                   (n=1, too few, 19 more needed)
 
 Cost
-Context added per session                    —                        (n=6, too few, 94 more needed)
-Time memory adds to a prompt                 —                        (n=7, too few, 93 more needed)
+Context added per session                    —                        (n=5, too few, 95 more needed)
+Time memory adds to a prompt                 —                        (n=6, too few, 94 more needed)
 
 Flowing
 Sessions sent                                1 of 1                   (n=1, ok)
@@ -34,6 +34,5 @@ rel-v0.1  p1       2026-10-08 04:00  1        1            0      0     0      0
 s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
 sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              —
 s1        p1       2026-10-07 08:00  3        1            0      0     0      0              —
-rel-v0.1  p1       2026-10-06 12:00  1        1            0      0     0      0              —
 
 Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

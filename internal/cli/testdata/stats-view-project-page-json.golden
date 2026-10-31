@@ -35,7 +35,7 @@
       "context.per_session": {
         "value": null,
         "num": null,
-        "den": 6,
+        "den": 5,
         "unit": "chars",
         "aggregation": "raw",
         "status": "too_few",
@@ -96,7 +96,7 @@
           {
             "day": "2026-10-06",
             "value": null,
-            "n": 1,
+            "n": 0,
             "parts": {
               "briefing": 0,
               "prompts": 0
@@ -127,7 +127,7 @@
             {
               "lo": 0,
               "hi": 1000,
-              "n": 6
+              "n": 5
             },
             {
               "lo": 1000,
@@ -314,17 +314,17 @@
         }
       },
       "recall.hit_rate": {
-        "value": 0.8571428571428571,
-        "num": 6,
-        "den": 7,
+        "value": 0.8333333333333334,
+        "num": 5,
+        "den": 6,
         "unit": "ratio",
         "aggregation": "raw",
         "status": "too_few",
         "borderline": false,
         "tags": [],
         "ci": [
-          0.48686549668097007,
-          0.9743210440510253
+          0.43649056343635395,
+          0.9699474141282697
         ],
         "mdc": null,
         "previous": null,
@@ -364,9 +364,9 @@
           },
           {
             "day": "2026-10-06",
-            "value": 1,
-            "num": 1,
-            "den": 1
+            "value": null,
+            "num": 0,
+            "den": 0
           },
           {
             "day": "2026-10-07",
@@ -386,7 +386,7 @@
       "recall.latency": {
         "value": null,
         "num": null,
-        "den": 7,
+        "den": 6,
         "unit": "ms",
         "aggregation": "raw",
         "status": "too_few",
@@ -427,9 +427,7 @@
           {
             "day": "2026-10-06",
             "value": null,
-            "n": 1,
-            "p50": 300,
-            "p95": 300
+            "n": 0
           },
           {
             "day": "2026-10-07",
@@ -608,7 +606,7 @@
       "page": {
         "limit": 50,
         "offset": 0,
-        "total": 6
+        "total": 5
       },
       "project": {
         "project": "p1",
@@ -681,19 +679,6 @@
             "start": "2026-10-07T08:00:00+02:00",
             "last": "2026-10-07T10:00:00+02:00",
             "prompts": 3,
-            "prompts_with_memory": 1,
-            "shown": 0,
-            "used": 0,
-            "wrong": 0,
-            "context_chars": 0,
-            "sent": ""
-          },
-          {
-            "id": "rel-v0.1.17",
-            "project": "p1",
-            "start": "2026-10-06T12:00:00+02:00",
-            "last": "2026-10-06T12:00:00+02:00",
-            "prompts": 1,
             "prompts_with_memory": 1,
             "shown": 0,
             "used": 0,

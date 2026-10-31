@@ -66,7 +66,8 @@ func TestStatsViewsGolden(t *testing.T) {
 
 // The browse views and the id pages, as text and as JSON, on the same
 // fixture plus one declared turn of sess-long-1 that showed mem-long-1 at
-// its third prompt (credited used): the projects list and p1's page, the
+// its third prompt (credited used), two releases (the older one in p2) and
+// a ledger: the projects list and p1's page, the
 // sessions page with its turn rail, the memories list and mem-long-1's
 // page (its showings by session and prompt), a day's page and the
 // releases.
@@ -80,8 +81,8 @@ func TestStatsBrowseViewsGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, v := range []string{"v0.1.17", "v0.1.18"} {
-		line := telLineFor(t, goldenNow.Add(-time.Duration(50-i*40)*time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 90, MS: 300, Injected: 1}, "rel-"+v, "p1")
+	for i, v := range []string{"v0.1.17", "v0.1.18"} { // the older one ran in another project, p2
+		line := telLineFor(t, goldenNow.Add(-time.Duration(50-i*40)*time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 90, MS: 300, Injected: 1}, "rel-"+v, []string{"p2", "p1"}[i])
 		line = strings.Replace(line, `{`, `{"binary_version":"`+v+`",`, 1)
 		if _, err := f.WriteString(line); err != nil {
 			t.Fatal(err)

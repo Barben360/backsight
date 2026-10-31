@@ -1145,7 +1145,7 @@
             }
           },
           "project_shares": {
-            "p1": 1
+            "p2": 1
           },
           "prompts_per_day": 1,
           "bank_size": 0

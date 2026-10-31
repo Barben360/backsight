@@ -660,7 +660,7 @@ func TestAttentionOrderAndCap(t *testing.T) {
 	var more int
 	err := withTx(context.Background(), x.source(), x.query(7), x.need, func(e env) error {
 		var err error
-		v, items, more, _, err = verdict(e)
+		v, items, more, err = verdict(e)
 		return err
 	})
 	if err != nil {
@@ -706,7 +706,7 @@ func TestDoctorErrorLeadsFlowing(t *testing.T) {
 	var items []Item
 	err := withTx(context.Background(), x.source(), x.query(7), x.need, func(e env) error {
 		var err error
-		v, items, _, _, err = verdict(e)
+		v, items, _, err = verdict(e)
 		return err
 	})
 	if err != nil {

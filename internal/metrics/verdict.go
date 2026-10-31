@@ -96,18 +96,18 @@ func (a assessment) metricsFor(q Query, ids []string) (map[string]Metric, bool) 
 }
 
 // verdict judges e's data for the overview: the verdict, the first
-// attentionShown attention items, how many more there are, and the info
-// items. It reads inside e's transaction and ignores e.q.Window.
-func verdict(e env) (Verdict, []Item, int, []InfoItem, error) {
+// attentionShown attention items and how many more there are. It reads
+// inside e's transaction and ignores e.q.Window.
+func verdict(e env) (Verdict, []Item, int, error) {
 	a, err := assess(e)
 	if err != nil {
-		return Verdict{}, nil, 0, nil, err
+		return Verdict{}, nil, 0, err
 	}
 	items, more := a.Items, 0
 	if len(items) > attentionShown {
 		items, more = items[:attentionShown], len(items)-attentionShown
 	}
-	return a.Verdict, items, more, a.Info, nil
+	return a.Verdict, items, more, nil
 }
 
 // judgingRun holds one assessment's inputs while its rules run.
