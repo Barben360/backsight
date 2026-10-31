@@ -13,8 +13,9 @@ import (
 // releaseNote is what the releases view says of its own numbers.
 const releaseNote = "observational: weeks, projects and memory differ"
 
-// releaseFlagship are the metrics judged per version.
-var releaseFlagship = []string{"recall.hit_rate", "used.turn_rate", "declare.coverage", "verdict.wrong_rate", "context.per_session", "recall.latency"}
+// ReleaseFlagship are the metrics judged per version, in the order the
+// releases table shows them.
+var ReleaseFlagship = []string{"recall.hit_rate", "used.turn_rate", "declare.coverage", "verdict.wrong_rate", "context.per_session", "recall.latency"}
 
 // Releases is the developer view of the binary versions in the window: per
 // version, attributed per event (each prompt by its own row's version; a
@@ -130,8 +131,8 @@ func flagship(e env, w Window, version string) (map[string]Metric, error) {
 	ve := e
 	ve.q.version = version
 	ve.memo = newMemo()
-	out := make(map[string]Metric, len(releaseFlagship))
-	for _, id := range releaseFlagship {
+	out := make(map[string]Metric, len(ReleaseFlagship))
+	for _, id := range ReleaseFlagship {
 		d, _ := DefOf(id)
 		fam := families.byID[id]
 		obs, met, err := ve.run(fam, w)

@@ -1,0 +1,28 @@
+{{/* views: projects */}}
+{{template "head" .}}{{template "top" .}}
+{{$r := .V.projects}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: projects. Reads .V.projects.Tables.Projects (Project, Sessions, Prompts, PromptsWithMemory, UsedTurns, ReportedWrong, MemoriesOnServer, LastActivity, Series). */}}
+<section>
+<h2>Projects</h2>
+<table>
+<tr><th>Project</th><th>Sessions</th><th>Prompts</th><th>Prompts with memory</th><th>Turns that used memory</th><th>Reported wrong</th><th>Memories on the server</th><th>Last activity</th><th>Days active</th></tr>
+{{range $r.Tables.Projects}}<tr><td>{{if .Project}}<a href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{else}}no project{{end}}</td><td>{{n .Sessions}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .UsedTurns}}</td><td>{{n .ReportedWrong}}</td><td>{{opt .MemoriesOnServer}}</td><td>{{when $.Loc .LastActivity}}</td><td>{{len .Series}}</td></tr>
+{{end}}</table>
+{{template "paging" pager $.Frame.Path $r.Tables.Page}}
+</section>
+
+{{/* widget: all projects pooled. Reads .V.projects.Tables.Pooled (Label, Totals: Sessions, Prompts, PromptsWithMemory, UsedTurns, ReportedWrong, MemoriesOnServer, LastActivity, Series; Min, Max). */}}
+{{with $r.Tables.Pooled}}<section>
+<h2>{{.Label}}</h2>
+<table>
+<tr><th></th><th>Sessions</th><th>Prompts</th><th>Prompts with memory</th><th>Turns that used memory</th><th>Reported wrong</th><th>Memories on the server</th><th>Last activity</th><th>Days active</th></tr>
+<tr><td>Total</td><td>{{n .Totals.Sessions}}</td><td>{{n .Totals.Prompts}}</td><td>{{n .Totals.PromptsWithMemory}}</td><td>{{n .Totals.UsedTurns}}</td><td>{{n .Totals.ReportedWrong}}</td><td>{{opt .Totals.MemoriesOnServer}}</td><td>{{when $.Loc .Totals.LastActivity}}</td><td>{{len .Totals.Series}}</td></tr>
+<tr><td>Min</td><td>{{count (index .Min "sessions")}}</td><td>{{count (index .Min "prompts")}}</td><td>{{count (index .Min "prompts_with_memory")}}</td><td>{{count (index .Min "used_turns")}}</td><td>{{count (index .Min "reported_wrong")}}</td><td></td><td></td><td></td></tr>
+<tr><td>Max</td><td>{{count (index .Max "sessions")}}</td><td>{{count (index .Max "prompts")}}</td><td>{{count (index .Max "prompts_with_memory")}}</td><td>{{count (index .Max "used_turns")}}</td><td>{{count (index .Max "reported_wrong")}}</td><td></td><td></td><td></td></tr>
+</table>
+</section>
+{{end}}
+{{template "foot" .}}

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -718,5 +719,39 @@ func TestReportAsksTheBankProjectsOfATailnetServer(t *testing.T) {
 	doc.Checks[0].Status = doctor.Error
 	if got := bankProjects(context.Background(), doc); len(got) != 0 {
 		t.Errorf("asked an unreached server: %v", got)
+	}
+}
+
+// The report leaves the dashboard out (acceptance): with the dashboard's
+// own files in the state directory, the runtime file on port 54321 and two
+// login codes, the report holds neither the file's name, nor the port, nor
+// the codes directory, nor the hash that names either code.
+func TestReportLeavesTheDashboardOut(t *testing.T) {
+	p := plantedMachine(t)
+	d := pathsOf(p.home)
+	dashboardFiles(t, d)
+	hashes, err := os.ReadDir(dashboard.CodesDir(d))
+	if err != nil || len(hashes) != 2 {
+		t.Fatalf("%d code files (%v): want 2", len(hashes), err)
+	}
+	code, out, errOut := run(t, "report", "--json")
+	if code != output.OK {
+		t.Fatalf("exit %d: %s %s", code, out, errOut)
+	}
+	whole := out + "\n" + issueBodies(t, out)
+	if !strings.Contains(whole, "doctor/server/error") {
+		t.Fatalf("the report is not the one of the planted machine, the scan proves nothing:\n%.500s", whole)
+	}
+	for _, banned := range []*regexp.Regexp{
+		regexp.MustCompile(`dashboard\.json`),
+		regexp.MustCompile(`"port"\s*:\s*54321\b`),
+		regexp.MustCompile(`:54321\b`),
+		regexp.MustCompile(`dashboard[/\\\\]codes`),
+		regexp.MustCompile(regexp.QuoteMeta(hashes[0].Name())),
+		regexp.MustCompile(regexp.QuoteMeta(hashes[1].Name())),
+	} {
+		if banned.MatchString(whole) {
+			t.Errorf("the report holds %s", banned)
+		}
 	}
 }

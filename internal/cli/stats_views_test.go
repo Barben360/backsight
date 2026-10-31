@@ -4,19 +4,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // viewsFixture is fixedStatsFixture (session s1, memory m1, the fake server
@@ -505,5 +511,45 @@ func TestViewQueryDefaultsToTheLocalZone(t *testing.T) {
 	}
 	if q.Window.TZ != metrics.ZoneName(time.Local, os.Getenv, os.Readlink) || q.Window.Loc != time.Local {
 		t.Errorf("window %+v", q.Window)
+	}
+}
+
+// Every flag of a view is a parameter the dashboard knows, and the other way
+// round: the two fronts cannot drift apart.
+func TestParamsCoverEveryViewFlag(t *testing.T) {
+	var stats *cobra.Command
+	root := newRoot(&env{stdout: io.Discard, stderr: io.Discard})
+	for _, c := range root.Commands() {
+		if c.Name() == "stats" {
+			stats = c
+		}
+	}
+	if stats == nil {
+		t.Fatal("no stats command")
+	}
+	for _, view := range metrics.Views {
+		cmd, _, err := stats.Find([]string{view})
+		if err != nil || cmd.Name() != view {
+			t.Fatalf("no stats %s command: %v", view, err)
+		}
+		want := append(slices.Clone(views.CommonParams), views.ViewParams[view]...)
+		have := map[string]bool{}
+		for _, fs := range []*pflag.FlagSet{cmd.LocalFlags(), cmd.InheritedFlags()} {
+			fs.VisitAll(func(f *pflag.Flag) {
+				if f.Name != "json" && f.Name != "help" && f.Name != "text" {
+					have[f.Name] = true
+				}
+			})
+		}
+		for n := range have {
+			if !slices.Contains(want, n) {
+				t.Errorf("stats %s: flag --%s is not a view parameter", view, n)
+			}
+		}
+		for _, n := range want {
+			if !have[n] {
+				t.Errorf("stats %s: parameter %s is not a flag", view, n)
+			}
+		}
 	}
 }

@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -886,5 +887,24 @@ func TestMemoryProjectIsItsLatestShow(t *testing.T) {
 	}
 	if got != "delta" || none != "" {
 		t.Errorf("memoryProject = %q and %q, want delta and empty", got, none)
+	}
+}
+
+// The dashboard words read these shapes by their json names.
+func TestBreakdownStatsKeepTheirJSONNames(t *testing.T) {
+	for name, v := range map[string]any{"pathStat": pathStat{}, "langStat": langStat{}} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"num", "den", "value"} {
+			if _, ok := got[k]; !ok {
+				t.Errorf("%s has no %q in its json: %s", name, k, raw)
+			}
+		}
 	}
 }

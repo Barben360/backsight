@@ -7,8 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"net/url"
-	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // firstBuildBudget bounds the catch-up of a view that finds the index never
@@ -43,9 +42,9 @@ type viewFlags struct {
 
 // Allowed values of the view flags.
 var (
-	hasValues   = []string{"used", "wrong", "undeclared", "memory"}
-	sortValues  = []string{"shown", "used", "rate", "last_shown"}
-	stateValues = []string{"hidden", "wrong", "never_used"}
+	hasValues   = views.HasValues()
+	sortValues  = views.SortValues()
+	stateValues = views.StateValues()
 )
 
 // viewFlagNames are the flags that only a view takes, which the legacy
@@ -79,13 +78,9 @@ func refuseViewFlags(cmd *cobra.Command, names ...string) error {
 
 // unknownView is the usage error for a word that is neither a number nor
 // a view.
-func unknownView(word string) error {
-	return &output.Error{Code: output.Usage, Message: fmt.Sprintf("unknown view %q: one of %s", word, strings.Join(append(slices.Clone(metrics.Views), "index"), ", "))}
-}
+func unknownView(word string) error { return views.UnknownView(word, true) }
 
-func usage(format string, args ...any) error {
-	return &output.Error{Code: output.Usage, Message: fmt.Sprintf(format, args...)}
-}
+func usage(format string, args ...any) error { return views.Usage(format, args...) }
 
 // newStatsViewCmd is `stats <view>`: the view as JSON, or as plain text.
 func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
@@ -126,10 +121,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 				id = args[0]
 			}
 			f.daysSet = cmd.Flags().Changed("days")
-			if _, err := time.Parse("2006-01-02", id); view == "days" && id != "" && err != nil {
-				return usage("a day is written YYYY-MM-DD")
-			}
-			q, err := viewQuery(*f, id, now())
+			q, err := views.Query(view, f.params(), id, now())
 			if err != nil {
 				return err
 			}
@@ -160,121 +152,24 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 	return cmd
 }
 
-// viewQuery maps the flags and the id of a view to its Query. The window
-// is --days (default 7) or --since/--until read in the zone of --tz (this
-// machine's by default); a date alone is midnight in that zone.
+// params are the flags as the views' parameters.
+func (f viewFlags) params() views.Params {
+	return views.Params{Days: f.days, DaysSet: f.daysSet, Since: f.since, Until: f.until, TZ: f.tz,
+		Project: f.project, Path: f.path, Dev: f.dev, Limit: f.limit, Offset: f.offset,
+		Has: f.has, Sort: f.sort, State: f.state, Text: f.text}
+}
+
+// viewQuery maps the flags and the id of a view to its Query.
 func viewQuery(f viewFlags, id string, now time.Time) (metrics.Query, error) {
-	loc, name, err := viewZone(f.tz)
-	if err != nil {
-		return metrics.Query{}, err
-	}
-	var w metrics.Window
-	switch {
-	case (f.daysSet || f.days != 0) && (f.since != "" || f.until != ""):
-		return metrics.Query{}, usage("give either --days or --since/--until")
-	case f.until != "" && f.since == "":
-		return metrics.Query{}, usage("--until needs --since")
-	case f.since != "":
-		since, err := parseViewTime(f.since, loc)
-		if err != nil {
-			return metrics.Query{}, usage("--since: %v", err)
-		}
-		var until time.Time
-		if f.until != "" {
-			if until, err = parseViewTime(f.until, loc); err != nil {
-				return metrics.Query{}, usage("--until: %v", err)
-			}
-		}
-		if w, err = metrics.NewWindow(now, 0, since, until, loc, name); err != nil {
-			return metrics.Query{}, usage("--since must be before --until (or now)")
-		}
-	default:
-		days := 7
-		if f.daysSet || f.days != 0 {
-			days = f.days
-		}
-		if days < 1 || days > 365 {
-			return metrics.Query{}, usage("--days: a whole number from 1 to 365")
-		}
-		if w, err = metrics.NewWindow(now, days, time.Time{}, time.Time{}, loc, name); err != nil {
-			return metrics.Query{}, usage("%v", err)
-		}
-	}
-	if f.limit < 1 || f.limit > metrics.MaxLimit {
-		return metrics.Query{}, usage("--limit: a whole number from 1 to %d", metrics.MaxLimit)
-	}
-	if f.offset < 0 {
-		return metrics.Query{}, usage("--offset: a whole number, 0 or more")
-	}
-	for _, c := range []struct {
-		flag, value string
-		allowed     []string
-	}{{"has", f.has, hasValues}, {"sort", f.sort, sortValues}, {"state", f.state, stateValues}} {
-		if c.value != "" && !slices.Contains(c.allowed, c.value) {
-			return metrics.Query{}, usage("--%s: one of %s", c.flag, strings.Join(c.allowed, ", "))
-		}
-	}
-	if f.text && id == "" {
-		return metrics.Query{}, usage("--text needs a memory id")
-	}
-	return metrics.Query{Window: w, Project: f.project, Path: f.path, ID: id, Limit: f.limit, Offset: f.offset,
-		Has: f.has, Sort: f.sort, State: f.state, Dev: f.dev, Text: f.text}, nil
+	return views.Query("", f.params(), id, now)
 }
 
-// viewZone is the zone of --tz, this machine's when empty, and its name.
-func viewZone(tz string) (*time.Location, string, error) {
-	loc := time.Local
-	if tz != "" {
-		var err error
-		if loc, err = time.LoadLocation(tz); err != nil {
-			return nil, "", usage("--tz: unknown zone %q (a name such as Europe/Paris or UTC)", tz)
-		}
-	}
-	return loc, metrics.ZoneName(loc, os.Getenv, os.Readlink), nil
-}
+// viewError maps a metrics error to the command's.
+func viewError(err error) error { return views.Error(err) }
 
-// parseViewTime reads a window bound: RFC 3339 or YYYY-MM-DDTHH:MM with a
-// zone, or a date alone, which is midnight in loc.
-func parseViewTime(s string, loc *time.Location) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04Z07:00"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	if t, err := time.ParseInLocation("2006-01-02", s, loc); err == nil {
-		return t, nil
-	}
-	return time.Time{}, fmt.Errorf("%q is not a time (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD)", s)
-}
-
-// viewError maps a metrics error to the command's: an id that names
-// nothing is a usage error, anything else an index error.
-func viewError(err error) error {
-	var nf metrics.NotFoundError
-	if !errors.As(err, &nf) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return &output.Error{Code: output.Blocked, Message: "the view was interrupted or ran out of time"}
-		}
-		return indexError(err)
-	}
-	switch {
-	case nf.Kind == "metric":
-		return usage("no metric %q: backsight stats defs lists them", nf.ID)
-	case nf.Kind == "project":
-		return usage("no project %q in the window", nf.ID)
-	case nf.TooShort:
-		return usage("%s id: give at least 8 characters", nf.Kind)
-	case len(nf.Matches) > 1:
-		return usage("ambiguous %s id %q: %s", nf.Kind, nf.ID, strings.Join(nf.Matches[:min(5, len(nf.Matches))], ", "))
-	}
-	return usage("no %s %q in the metrics index", nf.Kind, nf.ID)
-}
-
-// viewSource builds what a view reads: the metrics index caught up (the
-// first build within firstBuildBudget with progress on stderr, else within
-// the view budget), the configuration, the server through a GET-only client
-// and the doctor. The returned func closes the index.
-func viewSource(ctx context.Context, d paths.Dirs, home string, stderr io.Writer) (metrics.Source, func(), error) {
+// viewServer is what a view reads besides the index: the configuration, the
+// server through a GET-only client and the doctor.
+func viewServer(d paths.Dirs, home string) (metrics.Source, error) {
 	src := metrics.Source{Now: now}
 	cfg, err := config.Load(d.ConfigFile(), d, home)
 	switch {
@@ -283,13 +178,13 @@ func viewSource(ctx context.Context, d paths.Dirs, home string, stderr io.Writer
 	case errors.Is(err, fs.ErrNotExist):
 		// no config: defaults, no server
 	default:
-		return src, nil, &output.Error{Code: output.Blocked, Message: err.Error()}
+		return src, &output.Error{Code: output.Blocked, Message: err.Error()}
 	}
 	src.Config = cfg
 	if src.Configured && cfg.Server.URL != "" {
 		sec, err := config.LoadSecrets(d.SecretsFile())
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return src, nil, &output.Error{Code: output.Blocked, Message: err.Error()}
+			return src, &output.Error{Code: output.Blocked, Message: err.Error()}
 		}
 		if ro, err := hindsight.NewReadOnly(cfg.Server.URL, sec.APIKey, cfg.Server.Bank, metrics.ServerTimeout); err == nil {
 			src.Server = ro
@@ -299,7 +194,17 @@ func viewSource(ctx context.Context, d paths.Dirs, home string, stderr io.Writer
 		}
 	}
 	src.Doctor = func(ctx context.Context) ([]metrics.DoctorCheck, error) { return runDoctorChecks(ctx, d, home) }
+	return src, nil
+}
 
+// viewSource builds what a view reads: viewServer's source and the metrics
+// index caught up (the first build within firstBuildBudget with progress on
+// stderr, else within the view budget). The returned func closes the index.
+func viewSource(ctx context.Context, d paths.Dirs, home string, stderr io.Writer) (metrics.Source, func(), error) {
+	src, err := viewServer(d, home)
+	if err != nil {
+		return src, nil, err
+	}
 	st, err := index.Inspect(ctx, indexOptionsAt(d, home, nil))
 	if err != nil {
 		return src, nil, indexError(err)

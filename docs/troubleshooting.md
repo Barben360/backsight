@@ -315,6 +315,20 @@ The metrics index is a local SQLite file (`index/metrics.db` in the state direct
 - **Two `ingested_at` dates.** In a view (`stats <view> --json`, field `index.ingested_at`) it is when the index was last caught up with the files; in `stats index --json` it is the last time lines were written into the index. A view can read newer than `stats index` when nothing new arrived.
 - **A newer index.** After a downgrade, `stats index` shows `Newer`: the index a newer backsight migrated is left alone, and this one works on a side file (`metrics-v<N>.db`) of its own.
 
+## The dashboard shows an error page
+
+| What you see | Why | What to do |
+|---|---|---|
+| `misdirected request` (421) | The page was opened under another address than `127.0.0.1:<port>` or `localhost:<port>`: another host name, another port, or an ssh forward to a different local port. | Open the address `backsight dashboard` printed. Over ssh, use the same port on both ends (see [the dashboard guide](dashboard.md#from-another-pc)). |
+| `this page opens only from its own links or the address bar` (403) | The browser says the request comes from another site: a link on another web page (webmail included), or on a page served by another local port. A desktop mail app usually works. | Paste the link in the address bar of a tab, or open it from the terminal. |
+| `only GET and HEAD` (405) | A program sent a request that changes something (POST and the like). The dashboard only reads. | Use the pages with a browser; scripts use `backsight stats <view> --json`. |
+| "This dashboard needs a fresh link" (401) | You are not signed in: the link expired (2 minutes), was already used, the session ended (2 hours without use, or the dashboard was restarted), or you signed in on `127.0.0.1` and then opened `localhost:<port>` (the cookie belongs to one host name). | Run `backsight dashboard link` and open the link it prints, as printed (`127.0.0.1`). |
+
+- `no dashboard is running`: start one with `backsight dashboard`.
+- `a dashboard is already running at http://127.0.0.1:<port>/` (exit 20): one runs already; `backsight dashboard link` gives a link to it. A `dashboard.json` left by a dashboard that crashed is replaced on its own at the next start on Linux. On macOS and Windows it can look alive when its process id was reused by another program: if no dashboard is really running (no browser tab answers at that address, no backsight process), delete `dashboard/dashboard.json` in the state directory (`backsight paths` shows it).
+- `the memory text shows only in a page you open, from its link or the address bar` (403), or `the memory text opens only with GET` (405): the text page was reached from another page's script or image, or by a program. Open the memory's page and click "Show text".
+- `a dashboard is starting`: wait a few seconds, then `backsight dashboard link`.
+
 ## A lock or an unfinished operation
 
 | doctor check | Meaning | What to do |

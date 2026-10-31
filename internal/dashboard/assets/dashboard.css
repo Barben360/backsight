@@ -1,0 +1,5 @@
+/* A placeholder stylesheet: the design's replaces it. */
+body { margin: 0 auto; max-width: 72rem; padding: 1rem; font-family: system-ui, sans-serif; line-height: 1.5; }
+table { border-collapse: collapse; }
+th, td { padding: 0.25rem 0.5rem; text-align: left; }
+code { font-family: ui-monospace, monospace; }

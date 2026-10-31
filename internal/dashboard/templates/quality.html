@@ -1,0 +1,46 @@
+{{/* views: quality */}}
+{{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.quality}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: used and declared. Reads the metrics used.turn_rate, declare.coverage. */}}
+{{template "metric" framed (metric $r "used.turn_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "declare.coverage") $d $.Loc}}
+
+{{/* widget: outcome mix. Reads .V.quality.Tables.OutcomeMix (Day, Used, Ignored, NotDeclared, ShownOnly, Pending). */}}
+<section>
+<h2>What became of the memories shown</h2>
+<table>
+<tr><th>Day</th><th>Used</th><th>Ignored</th><th>Not declared</th><th>Shown only</th><th>Pending</th></tr>
+{{range $r.Tables.OutcomeMix}}<tr><td>{{.Day}}</td><td>{{n .Used}}</td><td>{{n .Ignored}}</td><td>{{n .NotDeclared}}</td><td>{{n .ShownOnly}}</td><td>{{n .Pending}}</td></tr>
+{{end}}</table>
+</section>
+
+{{/* widget: reported wrong. Reads .V.quality.Tables.Reported (MemoryID, Session, Verdict, At). */}}
+<section>
+<h2>Reported wrong or out of date</h2>
+<table>
+<tr><th>Memory</th><th>Session</th><th>Reported</th><th>Day</th></tr>
+{{range $r.Tables.Reported}}<tr><td><a href="/memories/{{esc .MemoryID}}">{{short .MemoryID}}</a></td><td><a href="/sessions/{{esc .Session}}">{{short .Session}}</a></td><td>{{verdict .Verdict}}</td><td>{{when $.Loc .At}}</td></tr>
+{{end}}</table>
+</section>
+
+{{/* widget: found and searched. Reads the metrics recall.hit_rate, recall.empty_reasons, search.rate, search.empty_rate. */}}
+{{template "metric" framed (metric $r "recall.hit_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "recall.empty_reasons") $d $.Loc}}
+{{template "metric" framed (metric $r "search.rate") $d $.Loc}}
+{{template "metric" framed (metric $r "search.empty_rate") $d $.Loc}}
+
+{{/* widget: developer detail. Reads the metrics used.share_confident, used.rank, used.by_path, search.rescue_rate, used.rubber_stamp, recall.by_lang. */}}
+{{if $d}}<section>
+<h2>Developer detail</h2>
+{{template "metric" framed (metric $r "used.share_confident") $d $.Loc}}
+{{template "metric" framed (metric $r "used.rank") $d $.Loc}}
+{{template "metric" framed (metric $r "used.by_path") $d $.Loc}}
+{{template "metric" framed (metric $r "search.rescue_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "used.rubber_stamp") $d $.Loc}}
+{{template "metric" framed (metric $r "recall.by_lang") $d $.Loc}}
+</section>
+{{end}}
+{{template "foot" .}}

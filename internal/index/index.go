@@ -309,6 +309,17 @@ func (ix *Index) Schema() int { return ix.schema }
 // this binary.
 func (ix *Index) Side() bool { return ix.side }
 
+// FileVersion is the user_version of the file in use, read now through the
+// reader pool: above Schema, another backsight migrated the file since this
+// handle opened it (a long-lived process checks it on each request).
+func (ix *Index) FileVersion(ctx context.Context) (int, error) {
+	var v int
+	if err := ix.sh.r.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
+		return 0, fmt.Errorf("read the version of the metrics index: %w", err)
+	}
+	return v, nil
+}
+
 // ReadTx runs fn in a read-only transaction on the reader pool.
 func (ix *Index) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := ix.sh.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})

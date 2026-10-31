@@ -21,4 +21,7 @@ func TestGeneratorPromptReasons(t *testing.T) {
 	if !slices.Equal(indexgen.PromptReasons, promptReasons) {
 		t.Errorf("indexgen.PromptReasons = %v, the index's closed set is %v", indexgen.PromptReasons, promptReasons)
 	}
+	if !slices.Equal(indexgen.FailureKinds, failureKinds) {
+		t.Errorf("indexgen.FailureKinds = %v, the index's closed set is %v", indexgen.FailureKinds, failureKinds)
+	}
 }

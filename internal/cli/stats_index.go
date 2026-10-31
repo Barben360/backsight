@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Barben360/backsight/internal/index"
-	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // indexMigrateBudget bounds `stats index migrate`, which `update apply`
@@ -214,41 +214,13 @@ func migrateText(r index.MigrateResult) string {
 
 // indexError's fixed sentences, which update apply maps to its reasons.
 const (
-	indexUpdatingSentence   = "an update is being applied, try again in a minute"
-	indexUnreadableSentence = "the metrics index is unreadable and rebuilding it failed today: run backsight stats index rebuild"
-	indexChangedSentence    = "backsight was updated meanwhile: run the command again"
+	indexUpdatingSentence   = views.UpdatingSentence
+	indexUnreadableSentence = views.UnreadableSentence
+	indexChangedSentence    = views.ChangedSentence
 )
 
-// indexClassMessage is the sentence of an index error of class: a full
-// disk and a busy index have their own; any other class names itself.
-func indexClassMessage(class string) string {
-	switch class {
-	case "full":
-		return index.ErrDiskFull.Error()
-	case "busy":
-		return index.ErrInUse.Error()
-	}
-	return "the metrics index could not be read (" + class + "): run backsight stats index rebuild"
-}
+// indexClassMessage is the sentence of an index error of class.
+func indexClassMessage(class string) string { return views.IndexClassMessage(class) }
 
-// indexError is an index error as a command reports it: a sentence or a
-// class, never the error's own text, which may hold a path.
-func indexError(err error) error {
-	var oe *output.Error
-	switch {
-	case errors.As(err, &oe):
-		return err
-	case errors.Is(err, index.ErrUpdateInProgress):
-		return &output.Error{Code: output.Blocked, Message: indexUpdatingSentence}
-	case errors.Is(err, index.ErrInUse):
-		return &output.Error{Code: output.Blocked, Message: index.ErrInUse.Error()}
-	case errors.Is(err, index.ErrNeedsYes):
-		return &output.Error{Code: output.NeedsUser, Message: "rebuilding drops the months listed, whose files are gone: confirm with backsight stats index rebuild --yes",
-			Actions: []output.Action{{Kind: "run_as_user", Cmd: "backsight stats index rebuild --yes", Why: "rebuild without those months"}}}
-	case errors.Is(err, index.ErrUnreadable):
-		return &output.Error{Code: output.Blocked, Message: indexUnreadableSentence}
-	case errors.Is(err, index.ErrSchemaChanged):
-		return &output.Error{Code: output.Blocked, Message: indexChangedSentence}
-	}
-	return &output.Error{Code: output.Blocked, Message: indexClassMessage(index.Class(err))}
-}
+// indexError is an index error as a command reports it.
+func indexError(err error) error { return views.IndexError(err) }
