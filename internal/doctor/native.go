@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // NativeFacts are the native runtime's guards as doctor reads them
@@ -38,6 +40,33 @@ type NativeFacts struct {
 	Refused     []string // *.refused-* instance dirs kept by restore
 	// Unread: check id → why its fact could not be read.
 	Unread map[string]error
+
+	// Windows (decision 0080): the scheduled task and its supervisor
+	// replace the units and linger, and the VC++ runtime DLLs' copies,
+	// the DACLs of what holds the secrets and the path bound are checked.
+	Windows        bool
+	Project        string // server.project: the logs' prefix
+	TaskName       string // \<project>\server
+	Task           string // server.TaskEnabled, server.TaskDisabled or server.NotInstalled
+	StartOnSession bool   // server.start_on_session: Task Scheduler refused the task at setup
+	// Supervisor is its answer to status, nil when none answers.
+	Supervisor  *supervise.Status
+	LogDir      string // the supervisor's logs
+	DLLManifest string // dlls.json
+	DLLProblems []string
+	DLLCopies   int
+	// Private are the data root, the config directory, secrets.toml and
+	// server.env, with the accounts other than the user, SYSTEM and
+	// Administrators that can read each.
+	Private []PrivatePath
+}
+
+// PrivatePath is one path native-private reads, and who else can read it
+// (Err: its DACL could not be read).
+type PrivatePath struct {
+	Path    string
+	Readers []string
+	Err     error
 }
 
 // nativeIDs are the native checks, in their order.
@@ -50,8 +79,12 @@ var nativeIDs = []string{"native-unit", "native-fsync", "native-identity", "nati
 func nativeChecks(ctx context.Context, probe func(context.Context) (NativeFacts, error)) []Check {
 	f, err := probe(ctx)
 	if err != nil {
-		out := []Check{{ID: "native-unit", Status: Error, Summary: "could not read the native runtime", Detail: err.Error(), Fix: "backsight server status"}}
-		for _, id := range nativeIDs[1:] {
+		list := nativeIDs
+		if f.Windows {
+			list = nativeWinIDs
+		}
+		out := []Check{{ID: list[0], Status: Error, Summary: "could not read the native runtime", Detail: err.Error(), Fix: "backsight server status"}}
+		for _, id := range list[1:] {
 			out = append(out, Check{ID: id, Status: Info, Summary: "skipped: the native runtime could not be read"})
 		}
 		return append(out, webUICheck())
@@ -59,6 +92,12 @@ func nativeChecks(ctx context.Context, probe func(context.Context) (NativeFacts,
 	out := []Check{
 		checkNativeUnits(f), checkNativeFsync(f), checkNativeIdentity(f), checkNativeStrays(f),
 		checkNativeLinger(f), checkNativeHome(f), checkNativeVenv(f),
+	}
+	if f.Windows {
+		out = []Check{
+			checkNativeTask(f), checkSupervisor(f), checkNativeFsync(f), checkNativeIdentity(f), checkNativeStrays(f),
+			checkNativeHome(f), checkNativeVenv(f), checkNativeDLLs(f), checkNativePrivate(f), checkPathLength(f),
+		}
 	}
 	for _, dir := range f.Refused {
 		out = append(out, Check{ID: "native-refused", Status: Info, Summary: "a database restore refused is kept in " + dir,
@@ -108,6 +147,10 @@ func checkNativeFsync(f NativeFacts) Check {
 	case "on":
 		c.Status, c.Summary = OK, "fsync is on"
 	case "":
+		if f.Windows && f.Task == server.TaskDisabled && f.Supervisor == nil {
+			c.Status, c.Summary = Info, "not read: the native server is stopped (backsight server stop)"
+			return c
+		}
 		c.Status, c.Summary, c.Fix = Error, "could not read fsync: the native database does not answer", "backsight server start"
 		if err := f.Unread[c.ID]; err != nil {
 			c.Detail = err.Error()
@@ -121,6 +164,9 @@ func checkNativeFsync(f NativeFacts) Check {
 		}
 		c.Status, c.Summary = Error, "fsync is "+f.Fsync+" on the native database, not on: an OS crash could corrupt it"
 		c.Fix = "backsight server stop, remove the drop-in that sets it (systemctl --user cat " + db + "), then backsight server render and backsight server start"
+		if f.Windows {
+			c.Fix = "backsight server stop, then backsight server render (supervise.json gets -c fsync=on back) and backsight server start"
+		}
 	}
 	return c
 }
@@ -138,12 +184,19 @@ func checkNativeIdentity(f NativeFacts) Check {
 
 func checkNativeStrays(f NativeFacts) Check {
 	c := Check{ID: "native-stray"}
+	holder := "its unit"
+	if f.Windows {
+		holder = "its supervisor"
+	}
 	if err := f.Unread[c.ID]; err != nil {
 		c.Status, c.Summary, c.Detail = Warn, "could not look for a postgres outside the db unit", err.Error()
+		if f.Windows {
+			c.Summary = "could not look for a postgres outside the supervisor"
+		}
 		return c
 	}
 	if len(f.Strays) == 0 {
-		c.Status, c.Summary = OK, "no postgres on the native database outside its unit"
+		c.Status, c.Summary = OK, "no postgres on the native database outside "+holder
 		return c
 	}
 	pids := make([]string, len(f.Strays))
@@ -151,7 +204,7 @@ func checkNativeStrays(f NativeFacts) Check {
 		pids[i] = strconv.Itoa(p)
 	}
 	c.Status = Error
-	c.Summary = "a postgres runs on the native database outside its unit (pid " + strings.Join(pids, ", ") + ")"
+	c.Summary = "a postgres runs on the native database outside " + holder + " (pid " + strings.Join(pids, ", ") + ")"
 	c.Fix = "backsight server start (its native-check stops it, never adopting it)"
 	return c
 }
@@ -267,7 +320,7 @@ func checkRuntimeSwitch(rs *state.RuntimeSwitch, kept string) Check {
 // name==version, sorted. Packages the lock does not name are no
 // difference.
 func NativeVenvDiff(venv string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(venv, "lib", "python3.11", "site-packages"))
+	entries, err := os.ReadDir(sitePackages(venv))
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +342,15 @@ func NativeVenvDiff(venv string) ([]string, error) {
 	}
 	slices.Sort(diff)
 	return diff, nil
+}
+
+// sitePackages is venv's site-packages: lib/python3.11/site-packages,
+// Lib\site-packages on Windows.
+func sitePackages(venv string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(venv, "Lib", "site-packages")
+	}
+	return filepath.Join(venv, "lib", "python3.11", "site-packages")
 }
 
 // shellQuote is s as one POSIX shell word, for a path spliced into a

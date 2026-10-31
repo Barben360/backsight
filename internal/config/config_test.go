@@ -612,13 +612,13 @@ func TestBoostKeysValidate(t *testing.T) {
 }
 
 // server.runtime: docker (the default, "" in the file) or native, which
-// runs on linux-amd64 only and serves this PC only.
+// runs on linux-amd64 and windows-amd64 only and serves this PC only.
 func TestRuntimeConfigKey(t *testing.T) {
 	native := "[server]\nruntime = \"native\"\n"
 	cfg, err := Parse([]byte(native), "config.toml", dirs, "/home/u")
-	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+	if NativeOn(runtime.GOOS, runtime.GOARCH) {
 		if err != nil || cfg.RuntimeKind() != "native" {
-			t.Fatalf("native on linux-amd64: %v %q", err, cfg.RuntimeKind())
+			t.Fatalf("native on %s-%s: %v %q", runtime.GOOS, runtime.GOARCH, err, cfg.RuntimeKind())
 		}
 	} else if err == nil {
 		t.Fatalf("native loaded on %s-%s", runtime.GOOS, runtime.GOARCH)
@@ -628,9 +628,9 @@ func TestRuntimeConfigKey(t *testing.T) {
 	if err := cfg.ValidateOn("linux", "amd64"); err != nil {
 		t.Errorf("native on linux-amd64: %v", err)
 	}
-	for _, p := range [][2]string{{"linux", "arm64"}, {"darwin", "arm64"}, {"windows", "amd64"}} {
+	for _, p := range [][2]string{{"linux", "arm64"}, {"darwin", "arm64"}, {"windows", "arm64"}} {
 		err := cfg.ValidateOn(p[0], p[1])
-		if err == nil || !strings.Contains(err.Error(), "server.runtime: the native runtime runs on Linux x86_64 (linux-amd64) only in this release") {
+		if err == nil || !strings.Contains(err.Error(), "server.runtime: the native runtime runs on Linux x86_64 and Windows x86_64 only in this release") {
 			t.Errorf("native on %s-%s: %v", p[0], p[1], err)
 		}
 	}
@@ -677,6 +677,53 @@ func TestNativeServerOnlyConfigIsRefused(t *testing.T) {
 	cfg.Server.Runtime = "docker"
 	if err := cfg.ValidateOn("linux", "amd64"); err != nil {
 		t.Errorf("docker server-only: %v", err)
+	}
+}
+
+// Native runs on windows/amd64 too since decision 0080, and nowhere else
+// new: arm64 Windows and macOS stay refused.
+func TestNativeAllowedOnWindowsAmd64(t *testing.T) {
+	cfg := Default(dirs, "/home/u")
+	cfg.Server.Runtime = "native"
+	if err := cfg.ValidateOn("windows", "amd64"); err != nil {
+		t.Errorf("native on windows-amd64: %v", err)
+	}
+	for _, p := range [][2]string{{"windows", "arm64"}, {"darwin", "arm64"}, {"darwin", "amd64"}, {"windows", "386"}} {
+		if err := cfg.ValidateOn(p[0], p[1]); err == nil || !strings.Contains(err.Error(), NativeRefusal) {
+			t.Errorf("native on %s-%s: %v", p[0], p[1], err)
+		}
+	}
+	if NativeRefusal != "the native runtime runs on Linux x86_64 and Windows x86_64 only in this release" {
+		t.Errorf("refusal %q", NativeRefusal)
+	}
+	// The other native refusals still hold on Windows.
+	cfg.Server.Role = RoleServer
+	if err := cfg.ValidateOn("windows", "amd64"); err == nil || !strings.Contains(err.Error(), NativeServerOnly) {
+		t.Errorf("native server-only on windows: %v", err)
+	}
+}
+
+// start_on_session is false unless written, then read; its edit writes
+// true and removes the key for false, so a file without it stays as it was.
+func TestStartOnSession(t *testing.T) {
+	c, err := Parse([]byte("[server]\nruntime = \"native\"\n"), "config.toml", dirs, "/home/u")
+	if err != nil || c.Server.StartOnSession {
+		t.Fatalf("default: %v %v", c.Server.StartOnSession, err)
+	}
+	in := "# mine\n[server]\nbank = \"b\"\n"
+	got, err := SetStartOnSession([]byte(in), true)
+	if want := "# mine\n[server]\nstart_on_session = true\nbank = \"b\"\n"; err != nil || string(got) != want {
+		t.Fatalf("on: %q %v, want %q", got, err, want)
+	}
+	if c, err := Parse(got, "config.toml", dirs, "/home/u"); err != nil || !c.Server.StartOnSession {
+		t.Errorf("parsed on: %v %v", c.Server.StartOnSession, err)
+	}
+	if back, err := SetStartOnSession(got, false); err != nil || string(back) != in {
+		t.Errorf("off: %q %v, want %q", back, err, in)
+	}
+	raw, _ := json.Marshal(Default(dirs, "/home/u"))
+	if strings.Contains(string(raw), "start_on_session") {
+		t.Errorf("the defaults' JSON names start_on_session: %s", raw)
 	}
 }
 

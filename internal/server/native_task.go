@@ -304,16 +304,51 @@ func (h taskHost) startDBAlone(ctx context.Context) error {
 	return h.startDetached(ctx, true)
 }
 
+// launch starts the supervisor under conhost --headless, detached and
+// out of the caller's job (Native.Detach, else the real start), and does
+// not wait for it.
+func (h taskHost) launch(noAPI bool) error {
+	start := h.n.Detach
+	if start == nil {
+		start = startSupervisor
+	}
+	if err := start(h.superviseArgs(noAPI)...); err != nil {
+		return fmt.Errorf("starting the native server's supervisor: %w", err)
+	}
+	return nil
+}
+
 // startDetached starts the supervisor under conhost --headless, detached
 // and out of the caller's job, and waits for it to answer.
 func (h taskHost) startDetached(ctx context.Context, noAPI bool) error {
-	if err := startSupervisor(h.superviseArgs(noAPI)...); err != nil {
-		return fmt.Errorf("starting the native server's supervisor: %w", err)
+	if err := h.launch(noAPI); err != nil {
+		return err
 	}
 	if !h.waitAnswer(ctx, taskRunWait) {
 		return fmt.Errorf("the native server's supervisor did not answer within %s of its start: see %s", taskRunWait, h.logFile("supervisor"))
 	}
 	return nil
+}
+
+// StartIfDown starts the supervisor as StartDB's detached fallback does
+// (conhost --headless, detached, out of the caller's job: a supervisor
+// without a console could not stop the API with CTRL_BREAK) when none
+// answers within ctx, and returns at once, never waiting for it: the
+// SessionStart hook's start when Task Scheduler refused the server's
+// task (server.start_on_session, decision 0080). A supervisor that
+// answers, or a pipe that fails otherwise, starts nothing.
+func (n Native) StartIfDown(ctx context.Context) (started bool, err error) {
+	if n.Err != nil {
+		return false, n.Err
+	}
+	h := taskHost{n: n}
+	if _, err := h.ask(ctx, "status"); !errors.Is(err, supervise.ErrNotRunning) {
+		return false, err
+	}
+	if err := h.launch(false); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // StartAPI has the running supervisor start the API, after stopping it
@@ -406,9 +441,7 @@ func (h taskHost) States(ctx context.Context) (map[string]string, error) {
 	return map[string]string{"db": state(st.DB), "hindsight": state(st.API)}, nil
 }
 
-func (h taskHost) logFile(what string) string {
-	return h.n.join(h.n.LogDir(), h.n.project()+"-"+what+".log")
-}
+func (h taskHost) logFile(what string) string { return h.n.logFile(what) }
 
 // Logs are the last lines of service's log (db or hindsight), its
 // rotated .1 first.

@@ -56,3 +56,13 @@ func TestFreeBytesOnWindows(t *testing.T) {
 		t.Error("FreeBytes of a path on no volume succeeded")
 	}
 }
+
+// A Windows venv keeps its packages in Lib\site-packages: native-venv
+// reads them there (a Linux path would read nothing and report every
+// package missing).
+func TestNativeVenvDiffReadsTheWindowsLayout(t *testing.T) {
+	venv := t.TempDir()
+	if got, want := sitePackages(venv), filepath.Join(venv, "Lib", "site-packages"); got != want {
+		t.Errorf("site-packages %s, want %s", got, want)
+	}
+}

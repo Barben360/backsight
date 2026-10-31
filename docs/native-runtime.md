@@ -13,7 +13,7 @@ The units are named after `server.project` (`<project>-db.service`, `<project>-s
 
 - **No web UI.** The native runtime runs Hindsight's API, not its control plane; doctor and the `backsight` commands cover what you need.
 - **This PC only.** The server listens on `127.0.0.1`: `backsight server expose --private` is refused, and so is `setup --role server` (a server-only host exists to serve other PCs). Use the docker runtime for a [shared memory](several-pcs.md).
-- **Linux x86_64 (linux-amd64) only.** Other platforms are refused at every way in. Not tested on WSL.
+- **Linux x86_64 and Windows x86_64 only.** Other platforms are refused at every way in. Not tested on WSL. On Windows a scheduled task and backsight's own supervisor run the server instead of systemd units: [backsight on Windows](windows.md).
 - **A slightly older PostgreSQL.** pg0 ships PostgreSQL 18.1 with pgvector 0.8.5, where the Docker image runs 18.6 with 0.8.7: the dump format is the same, and backups restore across both ([backups and restore](backups-and-restore.md)).
 
 ## What it needs

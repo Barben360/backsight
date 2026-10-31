@@ -447,7 +447,7 @@ func switchState(t *testing.T, home string) *state.RuntimeSwitch {
 var consent = []string{"--answer", "consent=yes", "--non-interactive", "--json"}
 
 func TestSwitchDockerToNative(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	w.rts["docker"].cleanSize = 4242 // what clean would delete of the source
 	d := pathsOf(home)
@@ -529,7 +529,7 @@ func TestSwitchDockerToNative(t *testing.T) {
 // Switching back over the old data restores over it: the current memory
 // goes over, the old one never comes back.
 func TestSwitchNativeToDockerRestoresOverOldData(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	_, w := switchSetup(t, "native")
 	dk := w.rts["docker"]
 	dk.exists = true
@@ -577,7 +577,7 @@ func failedSwitch(t *testing.T, home string, w *switchWorld, before []byte, code
 }
 
 func TestSwitchGateFailureRollsBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	before, _ := os.ReadFile(pathsOf(home).ConfigFile())
 	w.rts["native"].db.afterRestore = func(d *dbData) { d.Keys["documents"][1] = "(d9)" } // same counts, one key other
@@ -593,7 +593,7 @@ func TestSwitchGateFailureRollsBack(t *testing.T) {
 
 // RF 3: a Ctrl-C mid-switch puts the source back as it was.
 func TestSwitchInterruptedPutsTheSourceBack(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	before, _ := os.ReadFile(pathsOf(home).ConfigFile())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -610,7 +610,7 @@ func TestSwitchInterruptedPutsTheSourceBack(t *testing.T) {
 // RF 3: a switch killed part way leaves runtime_switch running with a
 // dead owner; its rerun first puts the source back, then switches.
 func TestSwitchRerunAfterAKillStartsFromTheSource(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	cmd := exec.Command("true")
 	if err := cmd.Run(); err != nil {
@@ -653,7 +653,7 @@ func lastLifecycle(w *switchWorld, kind string) string {
 
 // RF 2: whatever happens, exactly one runtime is left to start at boot.
 func TestSwitchLeavesOneRuntimeToStartAtBoot(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	t.Run("docker to native, passed", func(t *testing.T) {
 		_, w := switchSetup(t, "docker")
 		if code, _, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...); code != output.OK {
@@ -687,7 +687,7 @@ func TestSwitchLeavesOneRuntimeToStartAtBoot(t *testing.T) {
 // Recall is reported, not gated: another reranker may order near-ties
 // otherwise on identical data.
 func TestSwitchRecallWarningIsNotAFailure(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	w.rank["native"] = func(q string) []string {
 		top := sourceRanking(q)
@@ -713,7 +713,7 @@ func TestSwitchRecallWarningIsNotAFailure(t *testing.T) {
 // within nearTie of its 10th score is found; the warning follows that
 // number, the raw one is still reported (issue #123).
 func TestSwitchRecallBeyondNearTies(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	// The target puts x1 and x2 in its top 10 (scores 0.9 down to 0.45),
 	// then the source's 9th and 10th at the scores given.
 	for _, c := range []struct {
@@ -778,7 +778,7 @@ func TestSwitchRecallBeyondNearTies(t *testing.T) {
 
 // R14: no probe on a bank that holds memories is said, never silent.
 func TestSwitchWithoutProbesWarns(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	_, w := switchSetup(t, "docker")
 	w.memories = 0
 	code, env, all := runSwitchCmd(t, context.Background(), append([]string{"switch", "native"}, consent...)...)
@@ -791,7 +791,7 @@ func TestSwitchWithoutProbesWarns(t *testing.T) {
 }
 
 func TestSwitchRefusals(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	for _, c := range []struct {
 		name  string
 		from  string
@@ -895,7 +895,7 @@ func cleanCmd(t *testing.T, args ...string) (int, cleanEnvelope, string) {
 }
 
 func TestRuntimeCleanDeletesOnlyTheOtherRuntime(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "native") // on native after a switch
 	dk := w.rts["docker"]
 	dk.exists, dk.size, dk.cleanSize, dk.deployed = true, 1000, 123456789, dk.Version()
@@ -960,7 +960,7 @@ func TestRuntimeCleanDeletesOnlyTheOtherRuntime(t *testing.T) {
 
 // Task 12's comparison: the keys of a file of keys missing now are named.
 func TestFingerprintKeysCompare(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	keys := filepath.Join(home, "keys-0")
 	code, out, errOut := run(t, "server", "runtime", "fingerprint", "--keys", keys, "--json")
@@ -987,7 +987,7 @@ func TestFingerprintKeysCompare(t *testing.T) {
 // touching the target: a Docker target without compose.yaml has nothing
 // to stop, and stopping it would fail the rollback.
 func TestSwitchFailureBeforeTheTargetLeavesItAlone(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "native")
 	before, _ := os.ReadFile(pathsOf(home).ConfigFile())
 	w.rts["docker"].fail["VerifyDump"] = fmt.Errorf("pg_restore: bad dump")
@@ -1007,7 +1007,7 @@ func TestSwitchFailureBeforeTheTargetLeavesItAlone(t *testing.T) {
 // RF 3: killed after config.toml named the target, the switch had passed:
 // its rerun says so and stops or starts nothing.
 func TestSwitchRerunAfterAKillPastTheCommit(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "native")
 	cmd := exec.Command("true")
 	if err := cmd.Run(); err != nil {
@@ -1032,7 +1032,7 @@ func TestSwitchRerunAfterAKillPastTheCommit(t *testing.T) {
 // A rollback that cannot start the source again says how to get back, and
 // leaves runtime_switch running for doctor.
 func TestSwitchFailedRollbackKeepsTheRecord(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	w.rts["native"].db.afterRestore = func(d *dbData) { d.Keys["documents"] = d.Keys["documents"][:1] }
 	w.rts["docker"].hook["Start"] = func(context.Context) error { return fmt.Errorf("port 8888 is taken") }
@@ -1057,7 +1057,7 @@ func TestSwitchFailedRollbackKeepsTheRecord(t *testing.T) {
 // A switch carries the memory, never a Hindsight upgrade past server
 // upgrade: another release on the source is refused before anything.
 func TestSwitchRefusesAnotherHindsightRelease(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	home, w := switchSetup(t, "docker")
 	w.rts["docker"].deployed = "ghcr.io/vectorize-io/hindsight:1.0.9"
 	tree := treeOf(t, filepath.Join(home, "backsight"))
@@ -1080,7 +1080,7 @@ func TestSwitchRefusesAnotherHindsightRelease(t *testing.T) {
 // the consent and the pre-flight were about what was read before, and the
 // commit would otherwise fail and roll the whole move back.
 func TestSwitchRefusesInputsEditedDuringTheDownloads(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	for _, c := range []struct {
 		name, file string
 		edit       func(t *testing.T, home string)
@@ -1125,7 +1125,7 @@ func TestSwitchRefusesInputsEditedDuringTheDownloads(t *testing.T) {
 // backsight without native-check, or does not run, is refused before
 // anything changes: the units would fail every start.
 func TestSwitchChecksTheShimTheNativeDBUnitRuns(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	thisBuild := func(t *testing.T) {
 		exe := filepath.Join(t.TempDir(), "backsight")
 		if err := os.WriteFile(exe, []byte("#!/bin/sh\n# this build\n"), 0o755); err != nil {
@@ -1341,7 +1341,7 @@ func lastSystemctlVerb(calls []string) string {
 // containers up (up) or stopped (stop, every service: with restart:
 // unless-stopped they then stay down).
 func TestSwitchLeavesOneRuntimeToStartAtBootArgv(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	for _, c := range []struct {
 		name, from, to string
 		fail           bool
@@ -1413,7 +1413,7 @@ func TestSwitchLeavesOneRuntimeToStartAtBootArgv(t *testing.T) {
 // the switch still fetches (no megabytes of its own), and the download
 // step says it was unpacked.
 func TestSwitchToNativeSaysPostgresIsUnpacked(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
+	testtool.SkipWindows(t, "linux-only: the runtime switch is refused on Windows (TestSwitchRefusedOnWindows)")
 	_, w := switchSetup(t, "docker")
 	w.rts["native"].missing = []string{server.NativeWheels, server.NativeUnpack}
 	code, env, all := runSwitchCmd(t, context.Background(), "switch", "native", "--plan", "--json")
@@ -1447,4 +1447,49 @@ func stepOf(steps []step, name string) string {
 		}
 	}
 	return ""
+}
+
+// On Windows the runtime switch is refused both ways, before anything is
+// read or changed (decision 0080: Docker on Windows is untested). It runs
+// on every OS: the platform is switchProbes'.
+func TestSwitchRefusedOnWindows(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	old, oldProbes := runtimeWith, switchProbes
+	touched := false
+	runtimeWith = func(cfg config.Config, _ bool) server.Runtime {
+		touched = true
+		return old(cfg, false)
+	}
+	switchProbes.goos, switchProbes.goarch = "windows", "amd64"
+	t.Cleanup(func() { runtimeWith, switchProbes = old, oldProbes })
+	for _, from := range []string{"docker", "native"} {
+		raw, _ := os.ReadFile(d.ConfigFile())
+		if from == "native" {
+			raw, _ = config.SetRuntime(raw, "native")
+			if err := os.WriteFile(d.ConfigFile(), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tree := treeOf(t, filepath.Join(home, "backsight"))
+		to := map[string]string{"docker": "native", "native": "docker"}[from]
+		for _, args := range [][]string{append([]string{"switch", to}, consent...), {"switch", to, "--plan", "--json"}} {
+			code, _, all := runSwitchCmd(t, context.Background(), args...)
+			if code != output.Blocked || !strings.Contains(all, "the runtime switch is not available on Windows in this release: Docker on Windows is untested") ||
+				!strings.Contains(all, "nothing was changed") {
+				t.Errorf("%s → %s %q: exit %d\n%s", from, to, args, code, all)
+			}
+		}
+		if after := treeOf(t, filepath.Join(home, "backsight")); !maps.Equal(after, tree) {
+			t.Errorf("%s: files changed", from)
+		}
+	}
+	if touched {
+		t.Error("a runtime was built: the refusal came after the switch started")
+	}
+	// Linux x86_64 is not refused by it.
+	switchProbes.goos = "linux"
+	if _, _, all := runSwitchCmd(t, context.Background(), "switch", "docker", "--plan", "--json"); strings.Contains(all, "not available on Windows") {
+		t.Errorf("linux refused as Windows:\n%s", all)
+	}
 }

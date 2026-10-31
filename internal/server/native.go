@@ -55,6 +55,10 @@ type Native struct {
 	// Ask is the supervisor's pipe client on Windows (nil:
 	// supervise.Ask); tests refuse it.
 	Ask func(ctx context.Context, project, op string) (supervise.Status, error)
+	// Detach starts conhost.exe with args on Windows, detached and out of
+	// the caller's job, without waiting (nil: the real start); tests
+	// record it.
+	Detach func(args ...string) error
 	// Note, when set, tells the user what a command's result does not
 	// say: on Windows, NoLogonNote.
 	Note func(string)

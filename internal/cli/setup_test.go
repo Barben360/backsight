@@ -98,7 +98,8 @@ func setupMachine(t *testing.T) (string, *fakeSteps) {
 	// Never the real Docker: the server step asks it what to download.
 	withEngine(t, &engineDocker{info: "28.1.1\n"})
 	f := &fakeSteps{fail: map[string]*output.Error{}, real: map[string]bool{"client retire": true}, home: home}
-	oldSub, oldProbes, oldUp := subcommand, preflightProbes, serverAnswers
+	oldSub, oldProbes, oldUp, oldOS, oldArch := subcommand, preflightProbes, serverAnswers, setupGOOS, setupGOARCH
+	setupGOOS, setupGOARCH = "linux", "amd64" // the defaults of the machine the probes describe
 	subcommand = f.run
 	serverAnswers = func(context.Context, config.Config) bool { return false } // never a real server
 	preflightProbes = func(context.Context, setupEnv, map[string]string) setup.Probes {
@@ -110,7 +111,9 @@ func setupMachine(t *testing.T) (string, *fakeSteps) {
 			Claude:    func(context.Context) (string, error) { return "2.1.400", nil },
 			Linger:    func() (string, error) { return "yes", nil }} // read on native only
 	}
-	t.Cleanup(func() { subcommand, preflightProbes, serverAnswers = oldSub, oldProbes, oldUp })
+	t.Cleanup(func() {
+		subcommand, preflightProbes, serverAnswers, setupGOOS, setupGOARCH = oldSub, oldProbes, oldUp, oldOS, oldArch
+	})
 	return home, f
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
@@ -178,8 +179,12 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 			f.Unread[id] = err
 		}
 	}
-	f.Units, err = n.UnitStates(ctx)
-	unread("native-unit", err)
+	if nativeGOOS == "windows" {
+		windowsFacts(ctx, &f, n, d, unread)
+	} else {
+		f.Units, err = n.UnitStates(ctx)
+		unread("native-unit", err)
+	}
 	f.Fsync, err = n.Fsync(ctx)
 	unread("native-fsync", err)
 	f.Identity = n.CheckInstance(ctx)
@@ -188,8 +193,10 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 	for _, s := range strays {
 		f.Strays = append(f.Strays, s.PID)
 	}
-	f.Linger, err = linger()
-	unread("native-linger", err)
+	if !f.Windows {
+		f.Linger, err = linger()
+		unread("native-linger", err)
+	}
 	unread("native-home", f.ReadHome(n.Home()))
 	v, err := n.Deployed()
 	if v == "" {
@@ -200,6 +207,11 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 		f.VenvDiff, err = doctor.NativeVenvDiff(f.Venv)
 	}
 	unread("native-venv", err)
+	if f.Windows {
+		f.DLLManifest = n.DLLManifest()
+		f.DLLProblems, f.DLLCopies, err = n.DLLProblems(v)
+		unread("native-dlls", err)
+	}
 	refused, _ := filepath.Glob(n.InstanceDir() + ".refused-*")
 	for _, p := range refused {
 		if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
@@ -208,6 +220,34 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 	}
 	return f, nil
 }
+
+// nativeGOOS is the OS the native runtime runs on, for doctor and the
+// SessionStart hook; tests replace it.
+var nativeGOOS = runtime.GOOS
+
+// windowsFacts reads what replaces the units and linger on Windows
+// (decision 0080): the scheduled task, the supervisor's answer, and the
+// DACLs of the data root, the config directory and both secret files.
+func windowsFacts(ctx context.Context, f *doctor.NativeFacts, n server.Native, d paths.Dirs, unread func(string, error)) {
+	f.Windows, f.Project, f.TaskName, f.LogDir, f.StartOnSession = true, n.Cfg.Server.Project, n.TaskName(), n.LogDir(), n.Cfg.Server.StartOnSession
+	var err error
+	f.Task, err = n.TaskState(ctx)
+	unread("native-task", err)
+	f.Supervisor, err = n.SupervisorStatus(ctx)
+	unread("supervisor", err)
+	for _, p := range []string{d.Data, d.Config, d.SecretsFile(), n.EnvFile()} {
+		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+			continue // nothing there to read
+		}
+		pp := doctor.PrivatePath{Path: p}
+		pp.Readers, pp.Err = otherReaders(p)
+		f.Private = append(f.Private, pp)
+	}
+}
+
+// otherReaders lists who but the user, SYSTEM and Administrators can read
+// p (fsutil.OtherReaders); tests replace it.
+var otherReaders = fsutil.OtherReaders
 
 // keptSizeFresh is how long the size a switch measured of what it kept
 // stands for it in doctor.

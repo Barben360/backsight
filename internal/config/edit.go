@@ -125,6 +125,15 @@ func SetRuntime(raw []byte, kind string) ([]byte, error) {
 	return nil, errors.New("server.runtime: " + strconv.Quote(kind) + " is not docker or native")
 }
 
+// SetStartOnSession returns raw with [server] start_on_session set to on:
+// true is written, false removes the key (the default).
+func SetStartOnSession(raw []byte, on bool) ([]byte, error) {
+	if on {
+		return setKey(raw, "server", "start_on_session", "true")
+	}
+	return setKey(raw, "server", "start_on_session", "")
+}
+
 // valueEnd is where a one-line TOML value ends in s (strings and arrays
 // read with their quotes, so a "#" or "]" inside a string counts for
 // nothing); ok false when an array does not close on this line.

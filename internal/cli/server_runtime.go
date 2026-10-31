@@ -232,11 +232,18 @@ func otherRuntime(kind string) string {
 	return "native"
 }
 
+// switchRefusedOnWindows: native is Windows' only runtime in this
+// release (decision 0080).
+const switchRefusedOnWindows = "the runtime switch is not available on Windows in this release: Docker on Windows is untested"
+
 func runSwitch(ctx context.Context, e *env, to string, f switchFlags) (switchResult, error) {
 	res := switchResult{To: to, Plan: f.plan, Steps: []step{}}
 	add := streamStep(e, "server runtime switch", &res.Steps)
 	if to != "docker" && to != "native" {
 		return res, &output.Error{Code: output.Usage, Message: fmt.Sprintf("server runtime switch: %q is not docker or native", to)}
+	}
+	if switchProbes.goos == "windows" {
+		return res, nothingChanged("%s", switchRefusedOnWindows)
 	}
 	agreed, err := consentAnswer(f.answers, "server runtime switch")
 	if err != nil {

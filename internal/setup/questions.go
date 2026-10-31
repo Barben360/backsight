@@ -115,6 +115,9 @@ type Inputs struct {
 	// Backfill estimates the sessions backfill would send for a model and
 	// the cost to show; 0 sessions: no backfill question.
 	Backfill func(model string) (sessions int, cost string)
+	// DefaultRuntime replaces docker as the runtime's default: "native" on
+	// Windows x86_64 (decision 0080), "" elsewhere.
+	DefaultRuntime string
 }
 
 // Hidden answers have defaults and are never asked.
@@ -143,6 +146,9 @@ func Resolve(in Inputs) ([]Question, map[string]string, error) {
 	fromConfig := configAnswers(in.Config)
 	extra := map[string]string{}
 	for k, def := range hidden {
+		if k == "runtime" && in.DefaultRuntime != "" {
+			def = in.DefaultRuntime
+		}
 		v := def
 		if c, ok := fromConfig[k]; ok {
 			if a, given := in.Answers[k]; given && a != c {

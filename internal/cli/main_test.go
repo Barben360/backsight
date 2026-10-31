@@ -44,6 +44,11 @@ func refuseAsk(_ context.Context, project, op string) (supervise.Status, error) 
 	return supervise.Status{}, fmt.Errorf("test reached the supervisor of %s (%s) without a fake runner", project, op)
 }
 
+// refuseDetach: no test starts a real supervisor.
+func refuseDetach(args ...string) error {
+	return fmt.Errorf("test reached a real supervisor start %q without a fake", args)
+}
+
 type refuseClaude struct{}
 
 func (refuseClaude) Run(_ context.Context, _ []string, args ...string) ([]byte, error) {
@@ -115,7 +120,7 @@ func TestMain(m *testing.M) {
 		os.Exit(code)
 	}
 	composeRunner = refuseDocker{}
-	nativeSys, nativeTools, nativeAsk = refuseSys{}, refuseTools{}, refuseAsk
+	nativeSys, nativeTools, nativeAsk, nativeDetach = refuseSys{}, refuseTools{}, refuseAsk, refuseDetach
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub

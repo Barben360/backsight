@@ -51,3 +51,30 @@ Windows has no service manager a standard user can use, so backsight supervises 
 - The logs are `<project>-supervisor.log` (what the supervisor did), `<project>-db.log` and `<project>-api.log` in the `logs` directory of backsight's state directory, each kept to 10 MiB, the previous one as `.1`. A server that fails to start shows the last lines of the API's.
 - With no one logged on at the PC's screen (over SSH, on a CI runner), the task cannot run. `backsight server start` then starts the supervisor itself and says so: `the server runs until you log off; it starts by itself at your next logon`.
 - A path with `%` cannot be in a task (Task Scheduler would replace `%NAME%` with a variable's value): if your profile path holds one, set `BACKSIGHT_HOME` to a directory without it.
+
+## Setup
+
+`backsight setup` on Windows x86_64 runs the server natively (`--runtime native` is the default there; `--runtime docker` keeps Docker, untested on Windows) and for this PC (`--role both`). Its pre-flight checks, before anything is written:
+
+- 3.5 GB free for the server;
+- the path length: Windows limits a path to 260 characters unless long paths are on, which needs administrator rights, and the server's Python environment has files 140 characters below its root, so that root (`server\native\venv\<version>` under the data directory) must stay within 110 characters. A long profile path: set `BACKSIGHT_HOME` to a short directory of yours, `C:\bs` say, and run setup from that shell;
+- no `%` in the data directory, the server's directory or the shim's path (above);
+- the API port can be bound on `127.0.0.1` (Hyper-V can reserve port ranges);
+- `conhost.exe --headless` runs (Windows 10 version 1809 and later);
+- Task Scheduler accepts your task: setup registers a probe task, `\<project>\probe`, which never runs, and deletes it at once.
+
+When a policy blocks your scheduled tasks, setup warns and goes on: start the server with `backsight server start`, and setup writes `server.start_on_session = true` in `config.toml`, so each Claude Code session starts the server when it is down (its SessionStart hook starts the supervisor the way `backsight server start` does without the task, and does not wait for it). The server then no longer starts at logon by itself.
+
+`backsight server runtime switch` is refused on Windows: Docker on Windows is untested in this release.
+
+## Doctor on Windows
+
+`backsight doctor` checks the native server's own pieces on Windows, in place of Linux's units and linger:
+
+- `native-task`: the scheduled task is registered and enabled (disabled after `backsight server stop` is shown as info);
+- `supervisor`: the supervisor answers; after an update that changed its protocol it asks for a restart (`backsight server stop`, then `backsight server start`), and one still running an older backsight is shown as info;
+- `native-dlls`: each copy of the VC++ runtime DLLs matches `dlls.json`;
+- `native-private`: the data directory, the config directory, `secrets.toml` and `server.env` are readable by you, SYSTEM and Administrators only;
+- `path-length`: the server's Python environment is within the path bound.
+
+[Troubleshooting](troubleshooting.md) gives the fix for each.

@@ -80,6 +80,15 @@ type Probes struct {
 	Runtime     string
 	Linger      func() (string, error)
 	UserManager func(ctx context.Context) error
+	// Native on Windows (decision 0080) checks instead: the venv root's
+	// length (VenvRoot), the paths the server's task names (NativePaths:
+	// the data root, the native root and the shim), conhost --headless
+	// (Conhost) and Task Scheduler (Task: a probe task created then
+	// deleted). A nil probe fails its check.
+	VenvRoot    string
+	NativePaths []string
+	Conhost     func(ctx context.Context) error
+	Task        func(ctx context.Context) error
 }
 
 // NativeDiskMB: Python, the venv, the models and the first months of
@@ -113,6 +122,15 @@ func Preflight(ctx context.Context, p Probes) []Check {
 	switch {
 	case p.Remote:
 		add(Check{ID: "docker", Status: Info, Summary: "remote server: Docker is checked on its host"})
+	case native && p.GOOS == "windows":
+		add(Check{ID: "docker", Status: Info, Summary: "not used by the native runtime"})
+		add(Check{ID: "compose", Status: Info, Summary: "not used by the native runtime"})
+		add(diskCheck(p))
+		add(pathLengthCheck(p.VenvRoot))
+		add(pathCharsCheck(p.NativePaths))
+		add(portCheck(p, "api_port", p.APIPort))
+		add(conhostCheck(ctx, p))
+		add(taskCheck(ctx, p))
 	case native:
 		add(Check{ID: "docker", Status: Info, Summary: "not used by the native runtime"})
 		add(Check{ID: "compose", Status: Info, Summary: "not used by the native runtime"})
@@ -255,11 +273,11 @@ func claudeCheck(ctx context.Context, p Probes) Check {
 	return c
 }
 
-// nativePlatform: the native runtime runs on Linux x86_64 only in this
-// release (decision 0078).
+// nativePlatform: the native runtime runs on Linux x86_64 and Windows
+// x86_64 only in this release (decisions 0078, 0080).
 func nativePlatform(p Probes) Check {
-	if p.GOOS == "linux" && p.GOARCH == "amd64" {
-		return Check{ID: "platform", Status: OK, Summary: "linux/amd64"}
+	if config.NativeOn(p.GOOS, p.GOARCH) {
+		return Check{ID: "platform", Status: OK, Summary: p.GOOS + "/" + p.GOARCH}
 	}
 	return Check{ID: "platform", Status: Fail, Class: "blocked", Summary: p.GOOS + "/" + p.GOARCH + ": " + config.NativeRefusal, Fix: nativePlatformFix}
 }

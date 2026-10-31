@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/config"
 )
 
 func atLeast(v, minimum string) bool { return v >= minimum } // enough for these fixed strings
@@ -277,8 +281,8 @@ func TestPreflightOnNativeRefusals(t *testing.T) {
 		want   string // in the summary or fix
 		action string // the action's command
 	}{
-		{"arm64", func(p *Probes) { p.GOARCH = "arm64" }, "platform", "blocked", "linux-amd64", ""},
-		{"darwin", func(p *Probes) { p.GOOS = "darwin" }, "platform", "blocked", "linux-amd64", ""},
+		{"arm64", func(p *Probes) { p.GOARCH = "arm64" }, "platform", "blocked", config.NativeRefusal, ""},
+		{"darwin", func(p *Probes) { p.GOOS = "darwin" }, "platform", "blocked", config.NativeRefusal, ""},
 		{"linger off", func(p *Probes) { p.Linger = func() (string, error) { return "no", nil } }, "linger", "needs_user", "loginctl enable-linger", "loginctl enable-linger"},
 		{"linger unknown", func(p *Probes) { p.Linger = func() (string, error) { return "", errors.New("loginctl: not found") } }, "linger", "needs_user", "loginctl enable-linger", "loginctl enable-linger"},
 		{"no user manager", func(p *Probes) {
@@ -313,5 +317,194 @@ func TestPreflightOnDockerIgnoresTheNativeProbes(t *testing.T) {
 	}
 	if _, ok := m["systemd"]; ok {
 		t.Error("systemd checked on Docker")
+	}
+}
+
+// windowsHealthy is a Windows x86_64 machine where the native runtime's
+// checks pass (decision 0080).
+func windowsHealthy() Probes {
+	p := healthy()
+	p.GOOS, p.Runtime = "windows", "native"
+	p.VenvRoot = `C:\Users\jo\AppData\Local\backsight\data\server\native\venv\1.1.0-14d79a0a7914`
+	p.NativePaths = []string{`C:\Users\jo\AppData\Local\backsight\data`, `C:\Users\jo\AppData\Local\backsight\data\server\native`,
+		`C:\Users\jo\AppData\Local\backsight\data\bin\current.exe`}
+	p.Conhost = func(context.Context) error { return nil }
+	p.Task = func(context.Context) error { return nil }
+	p.Docker = func(context.Context) (string, error) { return "", fmt.Errorf("docker: %w", exec.ErrNotFound) }
+	p.Compose = func(context.Context) (string, error) { return "", errors.New("no compose") }
+	return p
+}
+
+// Native on Windows checks the disk, the path bound, the % rule, the API
+// port, conhost --headless and Task Scheduler, in that order; Docker,
+// systemd and linger are not its.
+func TestPreflightOnWindowsNative(t *testing.T) {
+	p := windowsHealthy()
+	cs := Preflight(context.Background(), p)
+	if class, failed := Verdict(cs); class != "" {
+		t.Fatalf("class %q, failed %+v", class, failed)
+	}
+	var ids []string
+	for _, c := range cs {
+		ids = append(ids, c.ID)
+	}
+	want := "platform docker compose disk path-length path-chars api_port conhost task claude gpu"
+	if strings.Join(ids, " ") != want {
+		t.Errorf("checks %v\nwant %s", ids, want)
+	}
+	m := byID(cs)
+	for _, id := range []string{"platform", "disk", "path-length", "path-chars", "api_port", "conhost", "task"} {
+		if m[id].Status != OK {
+			t.Errorf("%s: %+v", id, m[id])
+		}
+	}
+	if m["platform"].Summary != "windows/amd64" {
+		t.Errorf("platform %+v", m["platform"])
+	}
+	if StartOnSession(cs) {
+		t.Error("an accepted task sets start_on_session")
+	}
+	// A refused probe fails its check.
+	p.Conhost = func(context.Context) error { return errors.New("exit status 1") }
+	if c := byID(Preflight(context.Background(), p))["conhost"]; c.Status != Fail || c.Class != "blocked" || !strings.Contains(c.Summary, "exit status 1") {
+		t.Errorf("conhost refused: %+v", c)
+	}
+	p.Conhost = nil // never probed: not taken for a pass
+	if c := byID(Preflight(context.Background(), p))["conhost"]; c.Status != Fail {
+		t.Errorf("conhost unprobed: %+v", c)
+	}
+	// windows/arm64 stays refused.
+	p = windowsHealthy()
+	p.GOARCH = "arm64"
+	if c := byID(Preflight(context.Background(), p))["platform"]; c.Status != Fail || !strings.Contains(c.Summary, config.NativeRefusal) {
+		t.Errorf("windows/arm64: %+v", c)
+	}
+}
+
+// The venv root plus the 140 characters below it must stay within 250
+// (E34 ruling 9): a root making 251 fails, naming BACKSIGHT_HOME; 250
+// passes. The length counts UTF-16 units, as Windows' limit does.
+func TestPreflightPathLength(t *testing.T) {
+	base := `C:\Users\jé\venv\` // é: one unit, two bytes
+	for _, c := range []struct {
+		total int
+		ok    bool
+	}{{250, true}, {251, false}, {200, true}, {300, false}} {
+		p := windowsHealthy()
+		p.VenvRoot = base + strings.Repeat("x", c.total-VenvDepth-len([]rune(base)))
+		if got := VenvPathLength(p.VenvRoot) + VenvDepth; got != c.total {
+			t.Fatalf("fixture: %d, want %d", got, c.total)
+		}
+		got := byID(Preflight(context.Background(), p))["path-length"]
+		if c.ok {
+			if got.Status != OK {
+				t.Errorf("%d: %+v", c.total, got)
+			}
+			continue
+		}
+		if got.Status != Fail || got.Class != "blocked" || !strings.Contains(got.Fix, "BACKSIGHT_HOME") || !strings.Contains(got.Summary, p.VenvRoot) {
+			t.Errorf("%d: %+v", c.total, got)
+		}
+	}
+	if VenvPathLength(`C:\é`) != 4 || VenvPathLength("C:\\\U0001F600") != 5 { // a surrogate pair counts 2
+		t.Errorf("UTF-16 length: %d %d", VenvPathLength(`C:\é`), VenvPathLength("C:\\\U0001F600"))
+	}
+}
+
+// A % in the data root, the native root or the shim's path is refused:
+// Task Scheduler expands %VAR% in the task's command line (E34 ruling
+// 5). &, spaces and non-ASCII are fine.
+func TestPreflightRefusesAPercentInThePath(t *testing.T) {
+	for i := range 3 {
+		p := windowsHealthy()
+		p.NativePaths[i] = strings.Replace(p.NativePaths[i], `\jo\`, `\a%USERNAME%b\`, 1)
+		got := byID(Preflight(context.Background(), p))["path-chars"]
+		if got.Status != Fail || got.Class != "blocked" || !strings.Contains(got.Summary, `a%USERNAME%b`) || !strings.Contains(got.Fix, "BACKSIGHT_HOME") {
+			t.Errorf("path %d: %+v", i, got)
+		}
+	}
+	p := windowsHealthy()
+	for i := range p.NativePaths {
+		p.NativePaths[i] = strings.Replace(p.NativePaths[i], `\jo\`, `\Jé & Co\`, 1)
+	}
+	if got := byID(Preflight(context.Background(), p))["path-chars"]; got.Status != OK {
+		t.Errorf("spaces, & and é: %+v", got)
+	}
+}
+
+// Task Scheduler refusing the probe task is a warning, not a failure:
+// setup goes on with the fallback (server start by hand, and the
+// SessionStart hook starting the server), and sets start_on_session.
+func TestPreflightTaskRefusedSetsStartOnSession(t *testing.T) {
+	p := windowsHealthy()
+	p.Task = func(context.Context) error { return errors.New("ERROR: Access is denied.") }
+	cs := Preflight(context.Background(), p)
+	got := byID(cs)["task"]
+	if got.Status != Warn || !strings.Contains(got.Summary, "Access is denied") || got.Fix != TaskFallback {
+		t.Errorf("task: %+v", got)
+	}
+	for _, s := range []string{"backsight server start", "start_on_session"} {
+		if !strings.Contains(TaskFallback, s) {
+			t.Errorf("the fallback does not name %q: %s", s, TaskFallback)
+		}
+	}
+	if class, failed := Verdict(cs); class != "" {
+		t.Errorf("a refused task stops setup: %q %+v", class, failed)
+	}
+	if !StartOnSession(cs) {
+		t.Error("a refused task does not set start_on_session")
+	}
+	// Linux never sets it, whatever its checks.
+	if StartOnSession(Preflight(context.Background(), nativeHealthy())) {
+		t.Error("linux sets start_on_session")
+	}
+}
+
+// The probe task is created from the rendered XML and always deleted:
+// after a refused /Create too (a half-created task must not stay), and
+// its XML file with it.
+func TestProbeTaskAlwaysDeletes(t *testing.T) {
+	dir := t.TempDir()
+	for _, refuse := range []bool{false, true} {
+		var calls [][]string
+		var xml []byte
+		run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string{name}, args...))
+			if args[0] == "/Create" {
+				xml, _ = os.ReadFile(args[slices.Index(args, "/XML")+1])
+				if refuse {
+					return []byte("ERROR: Access is denied."), errors.New("exit status 1")
+				}
+			}
+			return nil, nil
+		}
+		err := ProbeTask(context.Background(), run, "S-1-5-21-1-2-3-1001", "bs-test-probe", `C:\Jé & Co\bin\current.exe`, dir)
+		if refuse != (err != nil) {
+			t.Fatalf("refuse %v: %v", refuse, err)
+		}
+		if refuse && !strings.Contains(err.Error(), "Access is denied") {
+			t.Errorf("the refusal does not say why: %v", err)
+		}
+		want := [][]string{{"schtasks", "/Create", "/XML", "", "/TN", `\bs-test-probe\probe`}, {"schtasks", "/Delete", "/F", "/TN", `\bs-test-probe\probe`}}
+		if len(calls) != 2 || len(calls[0]) != 6 {
+			t.Fatalf("calls %q", calls)
+		}
+		calls[0][3] = ""
+		if fmt.Sprint(calls) != fmt.Sprint(want) {
+			t.Errorf("refuse %v: calls %q\nwant %q", refuse, calls, want)
+		}
+		if len(xml) < 2 || xml[0] != 0xFF || xml[1] != 0xFE {
+			t.Errorf("the probe's XML is not the rendered UTF-16 XML: % x", xml[:min(len(xml), 8)])
+		}
+		if left, _ := os.ReadDir(dir); len(left) != 0 {
+			t.Errorf("left in the temporary directory: %v", left)
+		}
+	}
+	// A path Task Scheduler would expand never reaches schtasks.
+	called := false
+	err := ProbeTask(context.Background(), func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil },
+		"S-1-5-21-1-2-3-1001", "bs-test-probe", `C:\a%USERNAME%b\current.exe`, dir)
+	if err == nil || called {
+		t.Errorf("a %% path: %v, schtasks called %v", err, called)
 	}
 }

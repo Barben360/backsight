@@ -198,7 +198,7 @@ func TestNativeCommandsRunTheSameArgv(t *testing.T) {
 // doctor's checks on a Linux native install, by id and in order: the
 // Windows checks of M7 block 2 add none to it (recorded at 884c942).
 func TestDoctorChecksOfANativeInstallAreUnchanged(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
+	testtool.SkipWindows(t, "linux-only: Linux's native doctor list (Windows': TestDoctorWindowsChecks, TestDoctorOnWindowsReadsTheTaskAndTheSupervisor)")
 	_, n, _, _, _ := nativeHost(t)
 	nativeSys = &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
 	lockedVenv(t, n, n.Version(), "3.2.0")

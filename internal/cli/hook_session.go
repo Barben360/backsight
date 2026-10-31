@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
@@ -54,6 +55,7 @@ func init() {
 			return nil, nil
 		}
 		h.startLateServer()
+		h.startOnSession()
 		if !h.cfg.Components.Read {
 			// Write side only: no guide or briefing, but the env file, so
 			// that pause can name this session.
@@ -70,6 +72,32 @@ func init() {
 			return nil, nil
 		}
 		return h.subagentStart(), nil
+	}
+}
+
+// startOnSessionWait bounds the supervisor's status question: a pipe
+// that hangs costs the hook no more.
+const startOnSessionWait = 500 * time.Millisecond
+
+// startOnSession starts the native server's supervisor when none answers,
+// on a Windows install where Task Scheduler refused the server's task
+// (server.start_on_session, decision 0080): through conhost --headless,
+// detached, as server start's fallback does, never waiting for it. Not
+// while a maintenance holds the server down (restore, upgrade).
+func (h *hookEnv) startOnSession() {
+	c := h.cfg
+	if !c.Server.StartOnSession || c.Server.Mode != "local" || c.RuntimeKind() != "native" || nativeGOOS != "windows" || h.maintenance() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(h.ctx, startOnSessionWait)
+	defer cancel()
+	n := server.Native{Cfg: c, Dirs: h.dirs, Env: directoryEnv(), Ask: nativeAsk, Detach: nativeDetach}
+	started, err := n.StartIfDown(ctx)
+	switch {
+	case err != nil:
+		h.tw.Emit(telemetry.Raw{Name: "server_start", Fields: map[string]any{"result": "supervisor: " + err.Error()}})
+	case started:
+		h.tw.Emit(telemetry.Raw{Name: "server_start", Fields: map[string]any{"result": "supervisor started"}})
 	}
 }
 

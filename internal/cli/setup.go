@@ -128,7 +128,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	cmd.Flags().BoolVar(&f.force, "force", false, "with --undo: put the backup copies back over files edited since")
 	cmd.Flags().StringVar(&f.configDir, "config-dir", "", "Claude Code's directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	cmd.Flags().StringVar(&f.role, "role", "", "server: a host without Claude Code that only holds the memory for your other PCs (default both)")
-	cmd.Flags().StringVar(&f.runtime, "runtime", "", "native: run the server from PyPI under two systemd user units instead of Docker (Linux x86_64, this PC only; default docker)")
+	cmd.Flags().StringVar(&f.runtime, "runtime", "", "native: run the server from PyPI instead of Docker, under two systemd user units (Linux x86_64) or a scheduled task (Windows x86_64, where it is the default); this PC only; default docker elsewhere")
 	return cmd
 }
 
@@ -189,6 +189,22 @@ type setupEnv struct {
 	// cur is the step running: its share of the progress and the time
 	// left, for the heartbeat of a long step.
 	cur stepSpan
+	// startOnSession: Task Scheduler refused the server's task (Windows'
+	// pre-flight): the config step sets server.start_on_session.
+	startOnSession bool
+}
+
+// setupGOOS and setupGOARCH are the machine setup chooses defaults for
+// (native on windows/amd64, decision 0080); tests replace them.
+var setupGOOS, setupGOARCH = runtime.GOOS, runtime.GOARCH
+
+// defaultRuntime is the runtime setup picks when nothing names one:
+// native on Windows x86_64, Docker's default ("") elsewhere.
+func defaultRuntime() string {
+	if setupGOOS == "windows" && setupGOARCH == "amd64" {
+		return "native"
+	}
+	return ""
 }
 
 // stepSpan is where a step sits in the run's progress.
@@ -305,6 +321,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 		probes.UserManager = userSession // the server's units need it, whatever the scheduler answer
 	}
 	res.Preflight = setup.Preflight(ctx, probes)
+	s.startOnSession = setup.StartOnSession(res.Preflight)
 	for _, c := range res.Preflight {
 		if c.ID == "scheduler" && c.Action != nil {
 			c.Action.Cmd = s.rerunWith("scheduler=off")
@@ -442,7 +459,7 @@ func (s *setupEnv) resolve(interactive bool) ([]setup.Question, map[string]strin
 			}
 		}
 	}
-	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, ReferencePieces: s.refs}
+	in := setup.Inputs{Config: s.cfg, Answers: s.answer, Saved: saved, Backfill: s.backfillEstimate, ReferencePieces: s.refs, DefaultRuntime: defaultRuntime()}
 	// --reconfigure: the questions the last run answered are asked again,
 	// their answers the defaults; the hidden answers (ports, project) stay.
 	prev := map[string]string{}
@@ -705,6 +722,9 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		return strings.Fields(string(out) + " ?")[0], nil
 	}
 	p.Linger = linger
+	if p.GOOS == "windows" {
+		windowsProbes(&p, s, srv, extra)
+	}
 	p.Reference = s.refs
 	var de doctor.Env
 	probes(&de)
@@ -715,6 +735,34 @@ var preflightProbes = func(ctx context.Context, s setupEnv, extra map[string]str
 		p.Transcript = fmt.Sprintf("%d transcripts, %.1f MB, oldest %s", t.Count, float64(t.Bytes)/(1<<20), t.Oldest.UTC().Format("2006-01-02"))
 	}
 	return p
+}
+
+// windowsProbes are the native runtime's probes on Windows (decision
+// 0080): the venv root and the paths the server's task will name, from
+// the installed config or the defaults with the answered project;
+// conhost; and Task Scheduler, asked with a probe task it creates and
+// deletes.
+func windowsProbes(p *setup.Probes, s setupEnv, srv *config.Config, extra map[string]string) {
+	cfg := config.Default(s.dirs, s.home)
+	if srv != nil {
+		cfg = *srv
+	}
+	if v := extra["project"]; v != "" {
+		cfg.Server.Project = v
+	}
+	cfg.Server.Runtime = "native"
+	n := server.Native{Cfg: cfg, Dirs: s.dirs}
+	shim := nativeShim(s.dirs)
+	p.VenvRoot = n.VenvDir(n.Version())
+	p.NativePaths = []string{s.dirs.Data, n.Root(), shim}
+	p.Conhost = setup.Conhost
+	p.Task = func(ctx context.Context) error {
+		sid, err := setup.UserSID()
+		if err != nil {
+			return err
+		}
+		return setup.ProbeTask(ctx, nativeSys.Run, sid, cfg.Server.Project, shim, os.TempDir())
+	}
 }
 
 // lingerWait bounds loginctl's answer.
@@ -844,6 +892,12 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		{"config", 1, func(_ context.Context, r *setup.Record) (setup.Step, error) {
 			if s.cfg != nil {
+				if s.startOnSession && !s.cfg.Server.StartOnSession {
+					if err := setStartOnSession(s.dirs.ConfigFile()); err != nil {
+						return setup.Step{}, err
+					}
+					return setup.Step{Name: "config", Status: "done", Detail: "adopted " + s.dirs.ConfigFile() + startOnSessionNote}, nil
+				}
 				return setup.Step{Name: "config", Status: "skipped", Detail: "adopted " + s.dirs.ConfigFile()}, nil
 			}
 			if err := fsutil.MkdirPrivate(s.dirs.Config); err != nil {
@@ -854,6 +908,14 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 				want = s.ownConfig
 			}
 			raw := setupConfig(answers)
+			detail := "written to " + s.dirs.ConfigFile()
+			if s.startOnSession {
+				var err error
+				if raw, err = config.SetStartOnSession(raw, true); err != nil {
+					return setup.Step{}, blocked(err)
+				}
+				detail += startOnSessionNote
+			}
 			if err := fsutil.ReplaceIfUnchanged(s.dirs.ConfigFile(), raw, 0o600, want); err != nil {
 				return setup.Step{}, blocked(fmt.Errorf("%s changed while setup wrote it: %w", s.dirs.ConfigFile(), err))
 			}
@@ -863,7 +925,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			}
 			r.Undo.CreatedConfig = true
 			r.ConfigSHA, _ = fsutil.HashFile(s.dirs.ConfigFile())
-			return setup.Step{Name: "config", Status: "done", Detail: "written to " + s.dirs.ConfigFile()}, nil
+			return setup.Step{Name: "config", Status: "done", Detail: detail}, nil
 		}},
 		{"server", serverETA, func(ctx context.Context, r *setup.Record) (setup.Step, error) {
 			cfg, err := config.Load(s.dirs.ConfigFile(), s.dirs, s.home)
@@ -1254,6 +1316,27 @@ func newRuns(before, after []string) []string {
 	return out
 }
 
+// startOnSessionNote ends the config step's detail when Task Scheduler
+// refused the server's task.
+const startOnSessionNote = ", with server.start_on_session = true: Task Scheduler refused the server's task, so each Claude Code session starts the server when it is down"
+
+// setStartOnSession sets server.start_on_session in an adopted
+// config.toml, keeping the rest of the file as its owner wrote it.
+func setStartOnSession(file string) error {
+	raw, sha, err := fsutil.ReadHashed(file)
+	if err != nil {
+		return blocked(err)
+	}
+	out, err := config.SetStartOnSession(raw, true)
+	if err != nil {
+		return blocked(err)
+	}
+	if err := fsutil.ReplaceIfUnchanged(file, out, 0o600, sha); err != nil {
+		return blocked(fmt.Errorf("%s changed while setup wrote it: %w", file, err))
+	}
+	return nil
+}
+
 // setupConfig is the config.toml setup writes from the answers.
 func setupConfig(a map[string]string) []byte {
 	api, _ := strconv.Atoi(a["api_port"])
@@ -1543,6 +1626,10 @@ func (s *setupEnv) planSteps(a map[string]string) []setup.Step {
 		project := a["project"]
 		serverStep.Detail = fmt.Sprintf("backsight server install on the native runtime (Hindsight from PyPI under the systemd user units %s-db.service and %s-server.service): %s/%s, API on 127.0.0.1:%s, %s",
 			project, project, a["provider"], a["model"], a["api_port"], noUI)
+		if setupGOOS == "windows" {
+			serverStep.Detail = fmt.Sprintf(`backsight server install on the native runtime (Hindsight from PyPI under the scheduled task \%s\server): %s/%s, API on 127.0.0.1:%s, %s`,
+				project, a["provider"], a["model"], a["api_port"], noUI)
+		}
 	}
 	docsStep := setup.Step{Name: "docs", Status: "planned", Detail: "backsight guide index: the documentation into the server's docs bank, for backsight guide search (0 LLM calls)"}
 	if remote { // the server and its docs bank are its host's

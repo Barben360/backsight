@@ -6,14 +6,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/instructions"
+	"github.com/Barben360/backsight/internal/plugin"
+	"github.com/Barben360/backsight/internal/scheduler"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -572,5 +578,104 @@ func TestBriefingShowsSurviveABusySessionState(t *testing.T) {
 	shows := eventsOf(journalEvents(t, home), "shows")
 	if len(shows) != 1 || shows[0].Path != "briefing" || itemsText(shows[0].Items) != "o1:1:0" {
 		t.Errorf("shows %+v", shows)
+	}
+}
+
+// onSessionHome is a native install whose Task Scheduler refused the
+// server's task (server.start_on_session = true), on Windows: the pipe
+// and conhost's start are recorded, no supervisor ever answers unless up.
+func onSessionHome(t *testing.T, flag bool) (home string, asks *[]string, starts *[][]string, up *bool) {
+	t.Helper()
+	home = hookHome(t)
+	d := pathsOf(home)
+	raw, _ := os.ReadFile(d.ConfigFile())
+	raw, _ = config.SetRuntime(raw, "native")
+	raw, _ = config.SetStartOnSession(raw, flag)
+	if err := os.WriteFile(d.ConfigFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	asks, starts, up = &[]string{}, &[][]string{}, new(bool)
+	oldOS, oldAsk, oldDetach := nativeGOOS, nativeAsk, nativeDetach
+	nativeGOOS = "windows"
+	nativeAsk = func(_ context.Context, project, op string) (supervise.Status, error) {
+		*asks = append(*asks, project+" "+op)
+		if *up {
+			return supervise.Status{Proto: supervise.Proto, PID: 1, DB: "running", API: "running"}, nil
+		}
+		return supervise.Status{}, supervise.ErrNotRunning
+	}
+	nativeDetach = func(args ...string) error { *starts = append(*starts, args); return nil }
+	t.Cleanup(func() { nativeGOOS, nativeAsk, nativeDetach = oldOS, oldAsk, oldDetach })
+	return home, asks, starts, up
+}
+
+// SessionStart on a native Windows install whose task was refused starts
+// the supervisor when none answers: conhost --headless runs the shim's
+// server supervise (the task's own action, as server start's fallback),
+// once, without waiting for it to answer.
+func TestSessionStartStartsTheSupervisorWhenFlagged(t *testing.T) {
+	home, asks, starts, _ := onSessionHome(t, true)
+	in := map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}
+	begin := time.Now()
+	h := fire(t, "session-start", in)
+	if took := time.Since(begin); took > 3*time.Second {
+		t.Errorf("the hook took %s", took)
+	}
+	if !strings.HasPrefix(h.Specific.Context, instructions.Guide) {
+		t.Errorf("the session start lost its guide: %q", h.Specific.Context)
+	}
+	d := pathsOf(home)
+	shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
+	want := scheduler.HeadlessArgs(shim, "server", "supervise", "--backsight-home", os.Getenv("BACKSIGHT_HOME"))
+	if len(*starts) != 1 || !slices.Equal((*starts)[0], want) {
+		t.Errorf("starts %q, want one of %q", *starts, want)
+	}
+	if !slices.Equal(*asks, []string{"backsight status"}) {
+		t.Errorf("asked %q: one status, no wait for the answer", *asks)
+	}
+}
+
+// The start-on-session fallback does nothing without its flag, off
+// Windows, on Docker, while a maintenance holds the server down, or when
+// the supervisor answers.
+func TestSessionStartLeavesTheSupervisorAlone(t *testing.T) {
+	in := func(home string) map[string]any {
+		return map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}
+	}
+	for _, c := range []struct {
+		name  string
+		flag  bool
+		setup func(t *testing.T, home string, up *bool)
+		asked bool
+	}{
+		{"no flag", false, nil, false},
+		{"linux", true, func(*testing.T, string, *bool) { nativeGOOS = "linux" }, false},
+		{"docker", true, func(t *testing.T, home string, _ *bool) {
+			raw, _ := os.ReadFile(pathsOf(home).ConfigFile())
+			raw, _ = config.SetRuntime(raw, "docker")
+			_ = os.WriteFile(pathsOf(home).ConfigFile(), raw, 0o600)
+		}, false},
+		{"maintenance", true, func(t *testing.T, home string, _ *bool) {
+			lock, err := state.TryAcquire(pathsOf(home).MaintenanceLock(), "server upgrade")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = lock.Release() })
+		}, false},
+		{"running", true, func(_ *testing.T, _ string, up *bool) { *up = true }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, asks, starts, up := onSessionHome(t, c.flag)
+			if c.setup != nil {
+				c.setup(t, home, up)
+			}
+			fire(t, "session-start", in(home))
+			if len(*starts) != 0 {
+				t.Errorf("started %q", *starts)
+			}
+			if c.asked != (len(*asks) > 0) {
+				t.Errorf("asked %q", *asks)
+			}
+		})
 	}
 }

@@ -98,7 +98,6 @@ func checkRefuses(t *testing.T, msg string) {
 }
 
 func TestNativeCheckRefusesAMissingInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "111", "111")
 	if err := os.RemoveAll(n.InstanceDir()); err != nil {
@@ -108,7 +107,6 @@ func TestNativeCheckRefusesAMissingInstance(t *testing.T) {
 }
 
 func TestNativeCheckRefusesAnEmptyInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	if err := os.MkdirAll(n.DataDir(), 0o700); err != nil {
 		t.Fatal(err)
@@ -120,21 +118,19 @@ func TestNativeCheckRefusesAnEmptyInstance(t *testing.T) {
 }
 
 func TestNativeCheckRefusesAnotherIdentity(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "222", "111")
 	checkRefuses(t, "the native database "+n.InstanceDir()+" is not the one backsight recorded (identifier 222, recorded 111): refusing to start it. Put the right one back, or restore a backup: backsight restore <archive>")
 }
 
 func TestNativeCheckRefusesAnUnrecordedInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "111", "")
 	checkRefuses(t, "the native database "+n.InstanceDir()+" has no recorded identity ("+n.IdentityFile()+" is missing): refusing to start it. Restore a backup to adopt one: backsight restore <archive>")
 }
 
 func TestNativeCheckPassesAFirstInstall(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	nativeCheckHost(t)
 	if code, out, errOut := run(t, "server", "native-check"); code != output.OK {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
@@ -142,7 +138,7 @@ func TestNativeCheckPassesAFirstInstall(t *testing.T) {
 }
 
 func TestNativeCheckPassesTheRecordedInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "7702339718603615110", "7702339718603615110")
 	if code, out, errOut := run(t, "server", "native-check"); code != output.OK {
@@ -256,7 +252,7 @@ func pgCtlRuns(tools *checkTools) int {
 
 // A /proc that cannot be read is a refusal: the guard cannot tell.
 func TestNativeCheckRefusesWhenItCannotLookForStrays(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "111", "111")
 	nativeProc = filepath.Join(t.TempDir(), "no-proc")
@@ -301,7 +297,7 @@ func TestNativeCheckStopsNothingWhenThePidFileNamesAnother(t *testing.T) {
 // server render's text on native names the files it writes: server.env
 // and the two units, never compose.yaml.
 func TestNativeRenderNamesItsFiles(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	home, n, _, _, _ := nativeHost(t)
 	code, out, errOut := run(t, "server", "render")
 	if code != output.OK {
@@ -320,7 +316,7 @@ func TestNativeRenderNamesItsFiles(t *testing.T) {
 // A native server that never reports health points at its journal, not
 // at docker compose.
 func TestNativeHealthTimeoutNamesTheJournal(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	_, n, _, _, _ := nativeHost(t)
 	oldT := healthTimeout
 	healthTimeout = 20 * time.Millisecond
@@ -339,7 +335,7 @@ func TestNativeHealthTimeoutNamesTheJournal(t *testing.T) {
 // clean, and so does the switch's own target, built before config.toml
 // names native.
 func TestNativeRefusalOnADockerInstallNamesClean(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	testtool.SkipWindows(t, "linux-only: fakes the Linux native runtime (systemd units, its layout and tools); Windows' task host has its own tests")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "222", "111")
 	if err := os.WriteFile(n.Dirs.ConfigFile(), []byte("[server]\n"), 0o600); err != nil { // back on docker
@@ -456,7 +452,6 @@ func stopSupervise(t *testing.T, p string, done <-chan int) {
 // The guard's identity refusal is final: refused, nothing started, the
 // reason in <Root>/refused and the status, until stop.
 func TestServerSuperviseRefusesAnUnrecordedInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-refused"
 	n, sc := superviseHost(t, p)
 	withInstance(t, n, "111", "")
@@ -475,7 +470,6 @@ func TestServerSuperviseRefusesAnUnrecordedInstance(t *testing.T) {
 }
 
 func TestServerSuperviseRunsSuperviseJSON(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-runs"
 	_, sc := superviseHost(t, p)
 	setBuild(t, "7.7.7", "abc")
@@ -498,7 +492,6 @@ func TestServerSuperviseRunsSuperviseJSON(t *testing.T) {
 // before anything starts; the task starts the supervisor with no backsight
 // command after it to check the running database.
 func TestServerSuperviseRefusesFsyncOff(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -569,7 +562,6 @@ func TestServerSuperviseLogsTheStraysItStops(t *testing.T) {
 
 // --backsight-home is BACKSIGHT_HOME for a task, which cannot set it.
 func TestServerSuperviseTakesBacksightHome(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-home"
 	n, _ := superviseHost(t, p)
 	withInstance(t, n, "111", "")
@@ -581,7 +573,6 @@ func TestServerSuperviseTakesBacksightHome(t *testing.T) {
 }
 
 func TestServerSuperviseRefusesAnotherProjectsJSON(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-other"
 	n, sc := superviseHost(t, p)
 	sc.Project = "someone-else"

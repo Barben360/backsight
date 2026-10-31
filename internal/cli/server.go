@@ -44,11 +44,14 @@ func composeFor(cfg config.Config) server.Compose {
 
 // nativeSys runs the native runtime's systemctl, journalctl and
 // systemd-run (Windows: schtasks); nativeTools its own programs;
-// nativeAsk asks the Windows supervisor's pipe. Tests replace them.
+// nativeAsk asks the Windows supervisor's pipe; nativeDetach starts the
+// Windows supervisor under conhost (nil: the real start). Tests replace
+// them.
 var (
-	nativeSys   server.SysRunner  = execSys{}
-	nativeTools server.ToolRunner = execTools{}
-	nativeAsk                     = supervise.Ask
+	nativeSys    server.SysRunner  = execSys{}
+	nativeTools  server.ToolRunner = execTools{}
+	nativeAsk                      = supervise.Ask
+	nativeDetach func(args ...string) error
 )
 
 // execTools runs a native tool with exactly the environment it is given
@@ -102,7 +105,7 @@ var _ server.StepRunner = execTools{}
 var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	if cfg.RuntimeKind() == "native" {
 		d, home, err := machine()
-		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, Err: err, Note: printNote}
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Detach: nativeDetach, Proc: nativeProc, Err: err, Note: printNote}
 		if err == nil {
 			// A user manager that never answers must not hang the command.
 			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
@@ -160,7 +163,7 @@ func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec 
 					logs, _ := rt.Logs(ctx, "hindsight", 20)
 					what := "the hindsight container"
 					if n, ok := rt.(server.Native); ok {
-						what = "the server unit " + n.ServerUnit()
+						what = n.ServerName()
 					}
 					return hindsight.Version{}, fmt.Errorf("%s is %s; last log lines:\n%s", what, ct.State, strings.TrimSpace(logs))
 				}
@@ -170,7 +173,7 @@ func waitHealthy(ctx context.Context, rt server.Runtime, cfg config.Config, sec 
 		case <-ctx.Done():
 			logs := "docker compose logs"
 			if n, ok := rt.(server.Native); ok {
-				logs = "journalctl --user -u " + n.ServerUnit()
+				logs = n.LogsHint()
 			}
 			return hindsight.Version{}, fmt.Errorf("the server did not report health at %s within %s: check backsight server status and %s", cfg.Server.URL, healthTimeout, logs)
 		case <-time.After(healthPoll):
@@ -513,7 +516,7 @@ func newServerInstallCmd(e *env) *cobra.Command {
 			}
 			detail := "project " + cfg.Server.Project
 			if n, ok := rt.(server.Native); ok {
-				detail = "units " + n.DBUnit() + " and " + n.ServerUnit()
+				detail = n.Started()
 			} else if _, err := os.Stat(filepath.Join(cfg.Server.ComposeDir, "compose.override.yaml")); err == nil {
 				detail += ", with your compose.override.yaml"
 			}
@@ -660,7 +663,7 @@ func newServerStartCmd(e *env) *cobra.Command {
 				return e.emit("server start", map[string]any{"project": cfg.Server.Project, "plan": true, "compose_changed": ch.Compose, "env_changed": ch.Env},
 					func() string {
 						if n, ok := rt.(server.Native); ok {
-							return renderText(nativeRender(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}, n)) + "would start " + n.DBUnit() + " and " + n.ServerUnit() + "\n"
+							return renderText(nativeRender(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}, n)) + "would start " + n.Services() + "\n"
 						}
 						return renderText(renderResult{Dir: cfg.Server.ComposeDir, Changes: ch, Plan: true}) + "would run docker compose up\n"
 					})
@@ -745,9 +748,18 @@ func newServerStopCmd(e *env) *cobra.Command {
 			if err := requireLocal(cfg, "server stop"); err != nil {
 				return err
 			}
+			rt := runtimeFor(cfg)
+			text := func(plan bool, generic string) func() string {
+				return func() string {
+					if n, ok := rt.(server.Native); ok && n.StopText(plan) != "" {
+						return n.StopText(plan)
+					}
+					return generic
+				}
+			}
 			if plan {
 				return e.emit("server stop", map[string]any{"project": cfg.Server.Project, "plan": true},
-					func() string { return "would stop the containers of project " + cfg.Server.Project + " (data kept)\n" })
+					text(true, "would stop the containers of project "+cfg.Server.Project+" (data kept)\n"))
 			}
 			d, _, err := machine()
 			if err != nil {
@@ -758,10 +770,10 @@ func newServerStopCmd(e *env) *cobra.Command {
 				return err
 			}
 			defer unlock()
-			if err := runtimeFor(cfg).Stop(cmd.Context()); err != nil {
+			if err := rt.Stop(cmd.Context()); err != nil {
 				return redacted(err, sec)
 			}
-			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, func() string { return "stopped\n" })
+			return e.emit("server stop", map[string]string{"project": cfg.Server.Project}, text(false, "stopped\n"))
 		},
 	}
 	cmd.Flags().BoolVar(&plan, "plan", false, "show what would be stopped without doing it")
@@ -942,7 +954,7 @@ type renderResult struct {
 // nativeRender is r naming the native runtime's files.
 func nativeRender(r renderResult, n server.Native) renderResult {
 	r.envFile = n.EnvFile()
-	r.units = []string{filepath.Join(n.UnitDir, n.DBUnit()), filepath.Join(n.UnitDir, n.ServerUnit())}
+	r.units = n.ServiceFiles()
 	return r
 }
 

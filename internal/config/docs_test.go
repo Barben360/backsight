@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/testtool"
+
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 // docs/configuration.md documents every config.toml key with its default:
@@ -177,7 +178,7 @@ func TestCheckReferenceReportsDrift(t *testing.T) {
 
 // Every TOML example in the reference is a valid config.toml.
 func TestConfigReferenceExamplesParse(t *testing.T) {
-	testtool.SkipWindows(t, "Task 11: docs/configuration.md examples hold POSIX paths")
+	testtool.SkipWindows(t, "linux-only: docs/configuration.md examples hold POSIX paths, not absolute on Windows")
 	raw, err := os.ReadFile(configDoc)
 	if err != nil {
 		t.Fatal(err)
