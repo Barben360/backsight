@@ -413,3 +413,15 @@ func TestGuardBoundsTheRequest(t *testing.T) {
 		t.Errorf("security headers missing on the timeout: %v", r.Header)
 	}
 }
+
+func TestAPIUnknownPathsAreEnvelopes(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	for _, p := range []string{"/api/v1/", "/api/v1/overview/", "/api/", "/api/v2/x", "/api/v1/overview/x/y"} {
+		r, m := apiGet(t, h, ck, p)
+		if r.StatusCode != 404 || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") ||
+			r.Header.Get("Content-Security-Policy") == "" || m["error"] == nil {
+			t.Errorf("%s: %d %q %v", p, r.StatusCode, r.Header.Get("Content-Type"), m)
+		}
+	}
+}

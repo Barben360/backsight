@@ -1,16 +1,18 @@
 {{/* views: none */}}
 {{/*
-  The frame every page shares. Fields read: .Frame (Title, Version, HelpURL,
-  Reload, Nav, Prefs.Dev, Assets, Scope, Generated) and .Loc. Nav is sliced by
-  position: 0-5 the questions, 5-8 Browse, 8-9 System, 9- the developer pair.
+  The frame every page shares. Fields read: .Frame (Title, Path, Version,
+  HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
+  Prefs, Scope, Generated) and .Loc. Nav is sliced by position: 0-5 the
+  questions, 5-8 Browse, 8-9 System, 9- the developer pair.
 */}}
 {{define "head"}}<!doctype html>
-<html lang="en">
+<html data-theme="{{.Frame.Prefs.Theme}}" lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 {{if .Frame.Reload}}<meta http-equiv="refresh" content="{{.Frame.Reload}}">
+{{else if .Frame.Prefs.Refresh}}<meta http-equiv="refresh" content="60">
 {{end}}<title>{{.Frame.Title}} - backsight</title>
 <link rel="stylesheet" href="{{asset "dashboard.css"}}">
 </head>
@@ -31,6 +33,24 @@
 {{range slice .Frame.Nav 9}}{{template "navlink" .}}
 {{end}}</details>
 {{end}}</nav>
+<div>
+<nav aria-label="Window">
+{{range .Frame.Windows}}{{template "navlink" .}}
+{{end}}</nav>
+<form method="get" action="{{.Frame.Path | pathOnly}}">
+{{range .Frame.Keep}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
+{{end}}<label>Project <input type="text" name="project" value="{{.Frame.ProjectInput}}"></label>
+<button type="submit">Filter</button>
+<a href="{{.Frame.AllProjects}}">All projects</a>
+</form>
+<a href="{{.Frame.Path}}">Refresh</a>
+<details>
+<summary>Preferences</summary>
+{{range .Frame.PrefMenu}}<p>{{.Label}}:
+{{range .Choices}}{{template "navlink" .}}
+{{end}}</p>
+{{end}}</details>
+</div>
 </header>
 <main>
 {{end}}

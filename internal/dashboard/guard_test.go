@@ -373,6 +373,8 @@ func everyResponse(h *harness) []response {
 		case r.Kind == "api" && strings.Contains(r.Sample, "/sessions/"),
 			r.Kind == "page" && (r.Page == "project" || r.Page == "session" || r.Page == "memory"):
 			want = http.StatusNotFound // the sample names no project, session or memory of the generated index
+		case r.Kind == "prefs":
+			want = http.StatusBadRequest // the sample sets nothing and names no page to go back to
 		case r.Kind != "page" && r.Kind != "asset" && r.Kind != "api":
 			want = http.StatusNotImplemented
 		}
@@ -396,6 +398,7 @@ func everyResponse(h *harness) []response {
 		response{"page 404", "GET", "/sessions/zzzzzzzz", ck, http.StatusNotFound, nil},
 		response{"api 400", "GET", "/api/v1/overview?limit=0", ck, http.StatusBadRequest, nil},
 		response{"api 404", "GET", "/api/v1/nope", ck, http.StatusNotFound, nil},
+		response{"api root", "GET", "/api/v1/", ck, http.StatusNotFound, nil},
 		// Last: the index is marked as changed by a newer backsight, for good.
 		response{"api 503", "GET", "/api/v1/overview?days=3", ck, http.StatusServiceUnavailable, func() { h.ix.set(func(f *fakeIndex) { f.side = true }) }},
 		response{"page 503", "GET", "/quality?days=4", ck, http.StatusServiceUnavailable, nil},

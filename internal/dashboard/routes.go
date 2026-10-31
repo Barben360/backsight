@@ -1,6 +1,10 @@
 package dashboard
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/Barben360/backsight/internal/views"
+)
 
 // route is one of the dashboard's routes: a ServeMux pattern (GET also
 // matches HEAD), a sample path tests request, its kind (page, text,
@@ -38,6 +42,10 @@ func (s *Server) routes() *http.ServeMux {
 	for _, r := range routes {
 		mux.Handle(r.Pattern, s.handler(r))
 	}
+	// Any other path under /api/ is the API's own 404, not the mux's.
+	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
+		apiError(w, "stats", http.StatusNotFound, views.Usage(noPageSentence))
+	})
 	return mux
 }
 
@@ -55,6 +63,8 @@ func (s *Server) handler(r route) http.Handler {
 	switch r.Kind {
 	case "asset":
 		return http.HandlerFunc(serveAsset)
+	case "prefs":
+		return http.HandlerFunc(s.servePrefs)
 	case "api":
 		return http.HandlerFunc(s.serveAPI)
 	case "page":

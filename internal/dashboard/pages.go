@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -141,11 +142,13 @@ type PageData struct {
 type Frame struct {
 	Title, Path, Project, Version, HelpURL string // Path: request path and query without code
 	Windows, Nav                           []Choice
+	AllProjects, ProjectInput              string      // the path without the project filter; the filter's current text
+	Keep                                   [][2]string // query pairs the project form carries along
+	PrefMenu                               []PrefGroup
 	Prefs                                  Prefs
 	Scope                                  *metrics.Scope // the first declared view's; nil on state pages
 	Generated                              time.Time
-	Assets                                 map[string]string // "dashboard.css", "logo-light.svg", "logo-dark.svg" → assetPath
-	Reload                                 int               // seconds until the browser asks again; 0: never (the first build's page)
+	Reload                                 int // seconds until the browser asks again; 0: never (the first build's page)
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -158,15 +161,6 @@ type Choice struct {
 type Prefs struct {
 	Theme        string
 	Dev, Refresh bool
-}
-
-// frameAssets are the assets a page links.
-func frameAssets() map[string]string {
-	m := map[string]string{}
-	for _, n := range []string{"dashboard.css", "logo-light.svg", "logo-dark.svg"} {
-		m[n] = assetPath(n)
-	}
-	return m
 }
 
 // navLinks are the navigation, in the order the top partial slices it:
@@ -194,15 +188,101 @@ func navFor(path string, dev bool) []Choice {
 	return out
 }
 
-// prefsOf is the reader's preferences: none are stored yet.
-func (s *Server) prefsOf(*http.Request) Prefs { return Prefs{Theme: "system"} }
+// PrefGroup is one setting of the preferences menu and its choices.
+type PrefGroup struct {
+	Label   string
+	Choices []Choice
+}
+
+// windowDays are the window choices, shortest first.
+var windowDays = []struct {
+	label string
+	days  int
+}{{"24 h", 1}, {"7 d", 7}, {"30 d", 30}, {"90 d", 90}}
+
+// splitPath cuts a path with its query into the path and the raw pairs.
+func splitPath(p string) (string, []string) {
+	path, q, _ := strings.Cut(p, "?")
+	if q == "" {
+		return path, nil
+	}
+	return path, strings.Split(q, "&")
+}
+
+// keyOf is the decoded key of a raw pair.
+func keyOf(pair string) string {
+	k, _, _ := strings.Cut(pair, "=")
+	if key, err := url.QueryUnescape(k); err == nil {
+		return key
+	}
+	return k
+}
+
+// without is path with its raw query minus the pairs whose key is in drop.
+func without(path string, drop ...string) string {
+	base, pairs := splitPath(path)
+	var kept []string
+	for _, p := range pairs {
+		if p != "" && !slices.Contains(drop, keyOf(p)) {
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) == 0 {
+		return base
+	}
+	return base + "?" + strings.Join(kept, "&")
+}
+
+// windowsFor are the window links of path: days replaces the window, the
+// project is kept.
+func windowsFor(path string, q url.Values) []Choice {
+	base, pairs := splitPath(path)
+	suffix := ""
+	for _, p := range pairs {
+		if keyOf(p) == "project" {
+			suffix = "&" + p
+		}
+	}
+	out := make([]Choice, 0, len(windowDays))
+	for _, w := range windowDays {
+		d := strconv.Itoa(w.days)
+		out = append(out, Choice{Label: w.label, Href: base + "?days=" + d + suffix,
+			Current: q.Get("since") == "" && q.Get("until") == "" && q.Get("days") == d})
+	}
+	return out
+}
+
+// prefMenu is the preferences menu: each choice a /prefs link back to path.
+func prefMenu(path string, p Prefs) []PrefGroup {
+	link := func(label, key, val string, cur bool) Choice {
+		return Choice{Label: label, Href: "/prefs?" + key + "=" + val + "&back=" + url.QueryEscape(path), Current: cur}
+	}
+	flag := func(key string, on bool) []Choice {
+		return []Choice{link("On", key, "1", on), link("Off", key, "0", !on)}
+	}
+	theme := make([]Choice, 0, len(themes))
+	for _, t := range themes {
+		theme = append(theme, link(strings.ToUpper(t[:1])+t[1:], "theme", t, p.Theme == t))
+	}
+	return []PrefGroup{{"Theme", theme}, {"Developer mode", flag("dev", p.Dev)}, {"Auto-refresh", flag("refresh", p.Refresh)}}
+}
 
 // frame is the frame of a page about r.
 func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 	path := withoutCode(r.URL)
+	q, _ := url.ParseQuery(r.URL.RawQuery) // a garbled query has no pairs to show
+	q.Del("code")
+	var keep [][2]string
+	for _, k := range []string{"days", "since", "until", "tz"} {
+		if v := q.Get(k); v != "" {
+			keep = append(keep, [2]string{k, v})
+		}
+	}
 	return Frame{
 		Title: title, Path: path, Version: s.cfg.Version, HelpURL: helpURL,
-		Nav: navFor(path, p.Dev), Prefs: p, Assets: frameAssets(),
+		Nav: navFor(path, p.Dev), Prefs: p, Windows: windowsFor(path, q),
+		AllProjects: without(path, "project"), ProjectInput: q.Get("project"), Keep: keep,
+		PrefMenu: prefMenu(path, p),
 	}
 }
 

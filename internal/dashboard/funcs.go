@@ -49,6 +49,7 @@ var funcs = template.FuncMap{
 	"when":      when,
 	"esc":       url.PathEscape,
 	"asset":     assetOf,
+	"pathOnly":  func(p string) string { base, _ := splitPath(p); return base },
 }
 
 // assetOf is the path an embedded file is served at; a name that is not

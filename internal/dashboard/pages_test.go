@@ -108,9 +108,9 @@ func TestPageParams(t *testing.T) {
 	_, plain := pageGet(t, h, ck, "/quality")
 	_, dev := pageGet(t, h, ck, "/quality?dev=1")
 	_, off := pageGet(t, h, ck, "/quality?dev=0")
-	if strings.Contains(plain, "Developer") || !strings.Contains(dev, "Developer") || strings.Contains(off, "Developer") {
+	if strings.Contains(plain, "<summary>Developer</summary>") || !strings.Contains(dev, "<summary>Developer</summary>") || strings.Contains(off, "<summary>Developer</summary>") {
 		t.Errorf("developer section: without %t, dev=1 %t, dev=0 %t; want false, true, false",
-			strings.Contains(plain, "Developer"), strings.Contains(dev, "Developer"), strings.Contains(off, "Developer"))
+			strings.Contains(plain, "<summary>Developer</summary>"), strings.Contains(dev, "<summary>Developer</summary>"), strings.Contains(off, "<summary>Developer</summary>"))
 	}
 	if !strings.Contains(dev, "Releases") || !strings.Contains(dev, "Definitions") {
 		t.Errorf("dev=1 lacks the developer pages: %q", dev)
