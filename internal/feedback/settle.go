@@ -29,9 +29,9 @@ const (
 	// TurnTimeout: a show settles no earlier than this after it was shown,
 	// so a credit a few turns later still attaches.
 	TurnTimeout = 30 * time.Minute
-	// openTurnLimit: a show whose turn never ended (no later turn, no
+	// OpenTurnLimit: a show whose turn never ended (no later turn, no
 	// stop) settles once this old.
-	openTurnLimit = 2 * time.Hour
+	OpenTurnLimit = 2 * time.Hour
 	// settleWindow is how far back Settle reads the journal.
 	settleWindow = 62 * 24 * time.Hour
 )
@@ -95,7 +95,7 @@ type pendingShow struct {
 // Decide is the outcome of every show of events (PathSources ones aside)
 // not yet in a settle event that can settle at now: at least TurnTimeout
 // old, and its turn over (a later turn of its session, or a stop of its
-// turn by its agent or the main agent) or the show openTurnLimit old. Events after now are not
+// turn by its agent or the main agent) or the show OpenTurnLimit old. Events after now are not
 // seen. Each used credit, in time order, attaches to its id's latest
 // earlier show of its session neither credited nor settled; late counts
 // the used credits since the last settle event that found none. A show
@@ -167,7 +167,7 @@ func Decide(events []Event, p Params, now time.Time) (settled []Settled, late in
 			continue
 		}
 		turn := ownTurn(s.Show, turns[s.session])
-		if age < openTurnLimit && !turnOver(s, turn, turns[s.session], stopped) {
+		if age < OpenTurnLimit && !turnOver(s, turn, turns[s.session], stopped) {
 			continue
 		}
 		forgot, wasForgotten := forgotten[s.ID]
