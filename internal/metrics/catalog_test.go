@@ -62,7 +62,7 @@ var catalogRows = []catalogRow{
 	{"server.queue", "Waiting on the server", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight doctor", "pending,processing,failed,failed_total"},
 	{"server.extraction_delay", "Time to turn a session into memories", "ms", "down", 100, 1800000, none, "p95", false, false, "none", "server", false, "pipeline", "none", "backsight doctor", "p50,p95"},
 	{"hooks.failures", "Steps that crashed", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "daily", "backsight doctor", "by_kind,last_24h"},
-	{"server.reach", "Memory server answering", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "last_ok,failing_since,breaker_open_until"},
+	{"server.reach", "Memory server answering", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "last_ok,failing_since,breaker_open_until,skipped_prompts"},
 	{"doctor.check", "Health checks", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "ok,info,warn,error"},
 	{"jobs.last_run", "Background jobs", "ms", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "tick,maintain"},
 }

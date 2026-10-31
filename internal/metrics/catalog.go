@@ -333,7 +333,7 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "server.reach", Label: "Memory server answering", Unit: "count", Direction: "none", MinN: 0,
 		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight doctor",
-		Extra:      []string{"last_ok", "failing_since", "breaker_open_until"},
+		Extra:      []string{"last_ok", "failing_since", "breaker_open_until", "skipped_prompts"},
 		Question:   "Does the memory server answer this PC?",
 		Definition: "The last answer, since when it is failing, and until when the breaker stays open, as this PC recorded them, with the prompts skipped while the breaker was open. Watched when failing or when the breaker is open; bad when a backlog older than 24 hours builds up with it.",
 		Action:     "The server cannot be reached, so recall is skipped. Run backsight doctor.",

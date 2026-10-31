@@ -154,6 +154,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	if len(keys) == 0 {
 		if doctorDone != nil {
 			<-doctorDone
+			d.Have["doctor"] = d.DoctorErr == nil
 		}
 		return d, nil
 	}
@@ -265,6 +266,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	}
 	if doctorDone != nil {
 		<-doctorDone
+		d.Have["doctor"] = d.DoctorErr == nil
 	}
 
 	st := &ServerState{OK: len(d.Err) < len(keys)}

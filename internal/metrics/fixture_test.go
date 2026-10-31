@@ -66,6 +66,7 @@ type fx struct {
 
 	ledgerSet *feedback.Ledger     // nil: the ledger the journal folds to
 	localSet  *index.LocalStatus   // nil: an empty local status
+	localFail bool                 // the local status is unreadable: the index holds no row
 	server    *fakeServer          // nil: no server configured
 	doctor    []DoctorCheck        // nil: no doctor run
 	need      []string             // the server reads of fx.metrics
@@ -188,6 +189,9 @@ func (x *fx) source() Source {
 			Dirs: x.dirs, Home: x.home, Getenv: func(string) string { return "" },
 			Now: func() time.Time { return x.now }, Ledger: fxLedger{x},
 			LocalStatus: func() (index.LocalStatus, error) {
+				if x.localFail {
+					return index.LocalStatus{}, errors.New("fake: unreadable")
+				}
 				if x.localSet != nil {
 					return *x.localSet, nil
 				}
