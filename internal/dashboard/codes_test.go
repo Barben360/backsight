@@ -327,6 +327,81 @@ func TestSweepCodes(t *testing.T) {
 	}
 }
 
+// A claim another request holds, or a crash left, refuses the code and
+// leaves its file; a sweep removes both.
+func TestAcceptRefusesAClaimedCode(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	code := mint(t, d, now)
+	if err := os.WriteFile(filepath.Join(CodesDir(d), codeName(code)+claimSuffix), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AcceptCode(d, code, now); !errors.Is(err, ErrNoCode) {
+		t.Errorf("a claimed code: %v, want ErrNoCode", err)
+	}
+	if got := codeFiles(t, d); !slices.Equal(got, []string{codeName(code), codeName(code) + claimSuffix}) {
+		t.Errorf("after the refusal: %v, want the code and its claim", got)
+	}
+	if err := SweepCodes(d, now, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := codeFiles(t, d); len(got) != 0 {
+		t.Errorf("after the full sweep: %v, want nothing", got)
+	}
+}
+
+// Accepting leaves neither the code nor its claim.
+func TestAcceptLeavesNoClaim(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	if err := AcceptCode(d, mint(t, d, now), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := AcceptCode(d, mint(t, d, now.Add(-200*time.Second)), now); !errors.Is(err, ErrCodeExpired) {
+		t.Fatalf("an expired code: %v, want ErrCodeExpired", err)
+	}
+	if got := codeFiles(t, d); len(got) != 0 {
+		t.Errorf("codes/ after a login and an expired code: %v, want nothing", got)
+	}
+}
+
+// Claims a crash left are swept like codes; names that only look like one
+// are left.
+func TestSweepClaims(t *testing.T) {
+	d, now := testDirs(t), testNow()
+	if err := os.MkdirAll(CodesDir(d), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := codeName("old") + claimSuffix
+	fresh := codeName("fresh") + claimSuffix
+	keep := []string{strings.Repeat("a", 63) + claimSuffix, codeName("x") + claimSuffix + claimSuffix, "notes" + claimSuffix}
+	for _, n := range append([]string{old, fresh}, keep...) {
+		p := filepath.Join(CodesDir(d), n)
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(filepath.Join(CodesDir(d), fresh), now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := SweepCodes(d, now, false); err != nil {
+		t.Fatal(err)
+	}
+	want := append([]string{fresh}, keep...)
+	sort.Strings(want)
+	if got := codeFiles(t, d); !slices.Equal(got, want) {
+		t.Errorf("after the expired sweep: %v, want %v", got, want)
+	}
+	if err := SweepCodes(d, now, true); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(keep)
+	if got := codeFiles(t, d); !slices.Equal(got, keep) {
+		t.Errorf("after the full sweep: %v, want %v", got, keep)
+	}
+}
+
 func TestSweepWithoutCodesDir(t *testing.T) {
 	if err := SweepCodes(testDirs(t), testNow(), true); err != nil {
 		t.Errorf("no codes/: %v", err)

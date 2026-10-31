@@ -482,7 +482,7 @@ func TestStartSweepsOldCodes(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		for _, n := range []string{strings.Repeat("a", 64), strings.Repeat("0", 64), "notes.txt"} {
+		for _, n := range []string{strings.Repeat("a", 64), strings.Repeat("0", 64), strings.Repeat("1", 64) + claimSuffix, "notes.txt"} {
 			if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
 				t.Fatal(err)
 			}

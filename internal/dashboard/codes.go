@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
@@ -68,12 +70,16 @@ func mintCode(d paths.Dirs, now time.Time) (string, error) {
 	return code, nil
 }
 
-// AcceptCode spends code: its file is removed, and of several requests
-// carrying it only the one whose removal succeeds is accepted. The code is
-// never compared: its hash names the file, so no comparison leaks it
-// through timing. A code
-// minted more than CodeTTL from now, before or after (a clock stepped
-// back), is refused and removed.
+// AcceptCode spends code. Of several requests carrying it only one is
+// accepted: the one that creates the code's claim file (an exclusive
+// create, which has a single winner on every system) and then removes the
+// code file. Removing alone would not do: concurrent removals of one name
+// can all succeed on Windows. The claim is held until the removal returns,
+// so removals never overlap, and a request that claims after the code is
+// gone finds nothing to remove. The code is never compared: its hash names
+// the file, so no comparison leaks it through timing. A code minted more
+// than CodeTTL from now, before or after (a clock stepped back), is
+// refused and removed.
 func AcceptCode(d paths.Dirs, code string, now time.Time) error {
 	if !lowerHex(code, 32) {
 		return ErrBadCode
@@ -90,24 +96,55 @@ func AcceptCode(d paths.Dirs, code string, now time.Time) error {
 		return ErrNoCode
 	}
 	if expired(fi, now) {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove an expired login code: %w", err)
-		}
-		return ErrCodeExpired
+		return spend(path, func(err error) error {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("remove an expired login code: %w", err)
+			}
+			return ErrCodeExpired
+		})
 	}
 	beforeCodeRemove()
-	err = os.Remove(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return ErrNoCode // another request spent it first
-	}
-	if err != nil {
-		return fmt.Errorf("spend a login code: %w", err)
-	}
-	return nil
+	return spend(path, func(err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ErrNoCode // another request spent it first
+		}
+		if err != nil {
+			return fmt.Errorf("spend a login code: %w", err)
+		}
+		return nil
+	})
 }
 
-// SweepCodes removes the code files of CodesDir: every one (all), or the
-// expired ones. Files not named like a code are left.
+// claimSuffix ends the name of a code's claim file: the code's file name
+// followed by it, never mistaken for a code file.
+const claimSuffix = ".claim"
+
+// spend removes the code file at path while holding its claim, and returns
+// what result makes of the removal's error. A claim another request holds
+// means that request is spending the code: ErrNoCode, and nothing is
+// removed. A claim left by a crash refuses the code until a sweep.
+func spend(path string, result func(error) error) error {
+	claim := path + claimSuffix
+	f, err := os.OpenFile(claim, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return ErrNoCode
+	}
+	if err != nil && runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) && gone(path) {
+		// Windows denies a name another request's claim still holds while
+		// it is being removed: that request has spent the code.
+		return ErrNoCode
+	}
+	if err != nil {
+		return fmt.Errorf("claim a login code: %w", err)
+	}
+	_ = f.Close()
+	err = result(os.Remove(path))
+	_ = os.Remove(claim) // one left keeps the code refused until a sweep
+	return err
+}
+
+// SweepCodes removes the code files of CodesDir and the claims a crash
+// left: every one (all), or the expired ones. Other files are left.
 func SweepCodes(d paths.Dirs, now time.Time, all bool) error {
 	dir := CodesDir(d)
 	entries, err := os.ReadDir(dir)
@@ -119,7 +156,7 @@ func SweepCodes(d paths.Dirs, now time.Time, all bool) error {
 	}
 	var errs []error
 	for _, e := range entries {
-		if !lowerHex(e.Name(), 64) || e.IsDir() {
+		if !codeOrClaim(e.Name()) || e.IsDir() {
 			continue
 		}
 		if !all {
@@ -161,6 +198,17 @@ func codeName(code string) string {
 func expired(fi fs.FileInfo, now time.Time) bool {
 	age := now.Sub(fi.ModTime())
 	return age > CodeTTL || age < -CodeTTL
+}
+
+// gone: nothing is left at path.
+func gone(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// codeOrClaim: name is a code file's or a claim's.
+func codeOrClaim(name string) bool {
+	return lowerHex(strings.TrimSuffix(name, claimSuffix), 64)
 }
 
 // lowerHex: s is n lower-case hex characters.
