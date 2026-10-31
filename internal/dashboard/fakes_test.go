@@ -40,6 +40,7 @@ type fakeIndex struct {
 	openErrs    []error
 	openGate    chan struct{}
 	opens       int
+	versionHold bool  // FileVersion waits for its context to end
 	openEnded   error // the context error an open waiting for openGate returned
 }
 
@@ -117,7 +118,14 @@ func (f *fakeIndex) Side() bool {
 	return f.side
 }
 
-func (f *fakeIndex) FileVersion(context.Context) (int, error) {
+func (f *fakeIndex) FileVersion(ctx context.Context) (int, error) {
+	f.mu.Lock()
+	hold := f.versionHold
+	f.mu.Unlock()
+	if hold {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.fileVersion, nil

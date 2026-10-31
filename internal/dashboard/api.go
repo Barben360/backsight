@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
@@ -35,15 +36,19 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		apiError(w, command, http.StatusNotFound, views.Usage(noPageSentence))
 		return
 	}
-	p, err := views.FromValues(view, r.URL.Query())
+	// A pair net/http cannot parse is refused, not dropped: a garbled
+	// filter must not read as no filter.
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		apiError(w, command, http.StatusBadRequest, views.Usage("the query string is malformed"))
+		return
+	}
+	p, err := views.FromValues(view, q)
 	if err != nil {
 		apiError(w, command, http.StatusBadRequest, err)
 		return
 	}
 	res, st, err := s.data.result(r.Context(), view, p, id)
-	if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
-		st, err = stateUpdating, nil
-	}
 	switch st {
 	case stateBuilding:
 		w.Header().Set("Retry-After", "2")
@@ -87,7 +92,7 @@ func isView(name string) bool {
 }
 
 // httpStatus is the HTTP status of a view's raw error: an id or view that
-// names nothing is 404, a deadline or a blocked environment 503, a usage
+// names nothing is 404, a deadline, a blocked environment or an index error with a class 503, a usage
 // error 400, anything else 500.
 func httpStatus(err error) int {
 	var nf metrics.NotFoundError
@@ -95,8 +100,10 @@ func httpStatus(err error) int {
 	switch {
 	case errors.As(err, &nf), errors.Is(err, metrics.ErrUnknownView):
 		return http.StatusNotFound
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, index.ErrUpdateInProgress):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, index.ErrUpdateInProgress), errors.Is(err, index.ErrSchemaChanged):
 		return http.StatusServiceUnavailable
+	case index.Class(err) != "other":
+		return http.StatusServiceUnavailable // an index error with a class of its own: busy, full, corrupt...
 	case errors.As(err, &oe) && oe.Code == output.Usage:
 		return http.StatusBadRequest
 	case errors.As(err, &oe) && oe.Code == output.Blocked:

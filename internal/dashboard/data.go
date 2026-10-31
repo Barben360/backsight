@@ -325,11 +325,13 @@ func (d *data) result(ctx context.Context, view string, p views.Params, id strin
 	if p.Text {
 		return metrics.Result{}, stateReady, views.Usage("a memory's text is read on its own page only")
 	}
-	if st, err := d.check(ctx); st != stateReady {
-		return metrics.Result{}, st, err
-	}
+	// The parameters first, as the command line does: a request that can
+	// never succeed is not told to retry.
 	if _, err := views.Query(view, p, id, d.cfg.Now()); err != nil {
 		return metrics.Result{}, stateReady, err
+	}
+	if st, err := d.check(ctx); st != stateReady {
+		return metrics.Result{}, st, err
 	}
 	res, err := d.results.get(ctx, cacheKey(view, id, p), func(ctx context.Context) (metrics.Result, error) {
 		src, err := d.source(ctx)

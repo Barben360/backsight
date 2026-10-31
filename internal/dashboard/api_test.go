@@ -7,13 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/index"
-	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/views"
@@ -67,6 +65,32 @@ func wantError(t *testing.T, r *http.Response, m map[string]any, status int, com
 	}
 }
 
+// direct is what `backsight stats <view> [<id>] --json` prints for p: the
+// view run on the dashboard's source, written by the CLI's writer.
+func direct(t *testing.T, h *harness, view string, p views.Params, id string) string {
+	t.Helper()
+	if st, err := h.s.data.check(context.Background()); st != stateReady || err != nil {
+		t.Fatalf("check: %d, %v", st, err)
+	}
+	src, err := h.s.data.source(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := views.Query(view, p, id, h.clock.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := metrics.Run(context.Background(), view, src, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := output.WriteJSON(&buf, "stats "+view, res, nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
 func TestAPIServesTheView(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
@@ -78,33 +102,9 @@ func TestAPIServesTheView(t *testing.T) {
 		t.Errorf("view %v schema %v", dig(t, got, "data.view"), dig(t, got, "data.view_schema"))
 	}
 
-	// The same view run directly, printed by the CLI's writer.
-	if st, err := h.s.data.check(context.Background()); st != stateReady || err != nil {
-		t.Fatalf("check: %d, %v", st, err)
-	}
-	q, err := views.Query("overview", views.Params{Limit: 50}, "", indexgen.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := metrics.Run(context.Background(), "overview", h.s.data.base(), q)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	if err := output.WriteJSON(&buf, "stats overview", res, nil); err != nil {
-		t.Fatal(err)
-	}
-	var want map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &want); err != nil {
-		t.Fatal(err)
-	}
-	// The freshness is what the catch-up reported, not the view's own.
-	delete(want["data"].(map[string]any), "index")
-	delete(got["data"].(map[string]any), "index")
-	if !reflect.DeepEqual(got, want) {
-		g, _ := json.Marshal(got)
-		w, _ := json.Marshal(want)
-		t.Errorf("the API differs from the view run directly:\n got %s\nwant %s", g, w)
+	// The same view run directly, printed by the CLI's writer: the same bytes.
+	if want := direct(t, h, "overview", views.Params{Limit: metrics.DefaultLimit}, ""); body(t, r) != want {
+		t.Errorf("the API differs from the view run directly:\n got %s\nwant %s", body(t, r), want)
 	}
 
 	// HEAD: the headers of the GET, no body.
@@ -128,6 +128,17 @@ func TestAPIParams(t *testing.T) {
 	r, m := apiGet(t, h, ck, "/api/v1/overview?limit=501")
 	wantError(t, r, m, 400, "stats overview", 2, "--limit: a whole number from 1 to 500")
 
+	for _, q := range []string{"?days=3;limit=0", "?days=%zz", "?project=%"} {
+		r, m := apiGet(t, h, ck, "/api/v1/overview"+q)
+		wantError(t, r, m, 400, "stats overview", 2, "the query string is malformed")
+	}
+	for _, q := range []string{"?days=3&days=4", "?limit=5&limit=6", "?project=a&project=b"} {
+		r, m := apiGet(t, h, ck, "/api/v1/overview"+q)
+		if r.StatusCode != 400 || dig(t, m, "error.code") != float64(2) || !strings.HasPrefix(fmt.Sprint(dig(t, m, "error.message")), "give ") {
+			t.Errorf("%s: %d %v, want 400 'give <key> once'", q, r.StatusCode, m["error"])
+		}
+	}
+
 	mem := "/api/v1/memories/mem-a1b2c3d4"
 	for path, param := range map[string]string{
 		"/api/v1/overview?has=used":     "has",
@@ -138,6 +149,38 @@ func TestAPIParams(t *testing.T) {
 		r, m := apiGet(t, h, ck, path)
 		if r.StatusCode != 400 || dig(t, m, "error.code") != float64(2) || !strings.Contains(fmt.Sprint(dig(t, m, "error.message")), `"`+param+`"`) {
 			t.Errorf("%s: %d %v, want 400 naming %q", path, r.StatusCode, m["error"], param)
+		}
+	}
+}
+
+// TestAPIParamsReachTheView: each parameter the API reads changes the
+// view as it does on the command line (the same bytes as the view run
+// with that parameter), and differs from the view without it.
+func TestAPIParamsReachTheView(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	def := views.Params{Limit: metrics.DefaultLimit}
+	for _, c := range []struct {
+		view, query string
+		p           func(*views.Params)
+	}{
+		{"overview", "project=proj-3", func(p *views.Params) { p.Project = "proj-3" }},
+		{"overview", "path=briefing", func(p *views.Params) { p.Path = "briefing" }},
+		{"overview", "dev=1", func(p *views.Params) { p.Dev, p.DevSet = true, true }},
+		{"sessions", "has=memory", func(p *views.Params) { p.Has = "memory" }},
+		{"sessions", "offset=2&limit=3", func(p *views.Params) { p.Offset, p.Limit = 2, 3 }},
+		{"memories", "sort=rate", func(p *views.Params) { p.Sort = "rate" }},
+		{"memories", "state=never_used", func(p *views.Params) { p.State = "never_used" }},
+	} {
+		p := def
+		c.p(&p)
+		got := body(t, h.do("GET", "/api/v1/"+c.view+"?"+c.query, cookieHdr(ck)...))
+		if want := direct(t, h, c.view, p, ""); got != want {
+			t.Errorf("%s?%s: differs from the view run with %+v", c.view, c.query, p)
+		}
+		// path and dev reach the view but the generated data has nothing they filter.
+		if got == direct(t, h, c.view, def, "") && c.p != nil && !strings.HasPrefix(c.query, "path=") && !strings.HasPrefix(c.query, "dev=") {
+			t.Errorf("%s?%s: the parameter changed nothing", c.view, c.query)
 		}
 	}
 }
@@ -203,6 +246,41 @@ func TestAPIStates(t *testing.T) {
 	}
 }
 
+// A request that can never succeed is told so, whatever the state.
+func TestAPIBadParamWhileNotReady(t *testing.T) {
+	for name, h := range map[string]*harness{
+		"building": newDataHarness(t, withIndex(func(f *fakeIndex) { f.openGate = make(chan struct{}) }), withServer(), withNeedsBuild()),
+		"updated":  dataHarness(t, func(f *fakeIndex) { f.side = true }),
+	} {
+		r, m := apiGet(t, h, h.login(), "/api/v1/overview?limit=0")
+		wantError(t, r, m, 400, "stats overview", 2, "--limit: a whole number from 1 to 500")
+		if r.Header.Get("Retry-After") != "" {
+			t.Errorf("%s: Retry-After on a request that cannot succeed", name)
+		}
+	}
+}
+
+// An index error of a class of its own is blocked (503) with the sentence
+// the command line gives, not a generic failure.
+func TestAPIIndexErrorClasses(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		msg  string
+	}{
+		{"busy", index.ErrInUse, index.ErrInUse.Error()},
+		{"unreadable", index.ErrUnreadable, views.UnreadableSentence},
+		{"full", index.ErrDiskFull, index.ErrDiskFull.Error()},
+		{"updating", index.ErrUpdateInProgress, views.UpdatingSentence},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := dataHarness(t, func(f *fakeIndex) { f.catchUpErr = c.err })
+			r, m := apiGet(t, h, h.login(), "/api/v1/overview")
+			wantError(t, r, m, 503, "stats overview", 20, c.msg)
+		})
+	}
+}
+
 func TestAPIUnclassifiedFailureIs500(t *testing.T) {
 	h := dataHarness(t, func(f *fakeIndex) { f.catchUpErr = errors.New("disk exploded at /home/x/secret.db") })
 	r, m := apiGet(t, h, h.login(), "/api/v1/overview")
@@ -223,6 +301,10 @@ func TestHTTPStatus(t *testing.T) {
 		{views.Usage("bad"), 400},
 		{&output.Error{Code: output.Blocked, Message: "x"}, 503},
 		{&output.Error{Code: output.NeedsUser, Message: "x"}, 500},
+		{fmt.Errorf("catch up: %w", index.ErrInUse), 503},
+		{fmt.Errorf("catch up: %w", index.ErrUnreadable), 503},
+		{fmt.Errorf("catch up: %w", index.ErrDiskFull), 503},
+		{index.ErrSchemaChanged, 503},
 		{errors.New("other"), 500},
 		{context.Canceled, 500},
 	} {
@@ -244,7 +326,9 @@ func TestNoWorkBeforeAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.clock.add(CodeTTL + time.Second)
+	// Past the code's life and the doctor's kept answer: a doctor run
+	// before authentication would now run again and be counted.
+	h.clock.add(doctorTTL + time.Second)
 	never := "0000000000000000000000000000000000000000000"
 	wrong := &http.Cookie{Name: cookieName(h.port), Value: "not-a-session"}
 	for _, c := range []struct {
@@ -311,4 +395,21 @@ func TestRenderTimeout(t *testing.T) {
 	h.ix.set(func(f *fakeIndex) { f.block = make(chan struct{}) }) // held until the context ends
 	r, m := apiGet(t, h, h.login(), "/api/v1/overview")
 	wantError(t, r, m, 503, "stats overview", 20, "the page took too long: try again")
+}
+
+// The guard bounds a request on its own, whatever the cache does: the
+// version check of the index is outside every cache.
+func TestGuardBoundsTheRequest(t *testing.T) {
+	old := renderTimeout
+	renderTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { renderTimeout = old })
+	h := dataHarness(t)
+	ck := h.login()
+	h.client.Timeout = 10 * time.Second                   // a fuse: without the guard's bound the request never ends
+	h.ix.set(func(f *fakeIndex) { f.versionHold = true }) // held until the request's context ends
+	r, m := apiGet(t, h, ck, "/api/v1/overview")
+	wantError(t, r, m, 503, "stats overview", 20, "the page took too long: try again")
+	if r.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("security headers missing on the timeout: %v", r.Header)
+	}
 }
