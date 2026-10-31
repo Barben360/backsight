@@ -1,6 +1,7 @@
 package index
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ func dsn(path string, fs FSInfo, readOnly bool) string {
 		"&_pragma=busy_timeout(" + busyMS() + ")" +
 		"&_pragma=foreign_keys(on)" +
 		"&_pragma=synchronous(NORMAL)" +
-		"&_pragma=journal_size_limit(67108864)"
+		"&_pragma=journal_size_limit(67108864)" + diagPragma()
 	if readOnly {
 		q += "&mode=ro&_txlock=deferred"
 	} else {
@@ -69,4 +70,12 @@ func uriPath(path string, windows bool) string {
 		return "file://" + path
 	}
 	return "file:" + path
+}
+
+func diagPragma() string { // DIAG: remove
+	v := os.Getenv("BS_DIAG_PRAGMA")
+	if v == "" {
+		return ""
+	}
+	return "&" + v
 }
