@@ -1,5 +1,27 @@
 {{/* views: cost */}}
 {{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.cost}}
 <h1>{{.Frame.Title}}</h1>
 {{template "scope" .}}
+
+{{/* widget: context and speed. Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency. */}}
+{{template "metric" withid (metric $r "context.per_session") $d}}
+{{template "metric" withid (metric $r "context.per_prompt") $d}}
+{{template "metric" withid (metric $r "recall.latency") $d}}
+{{template "metric" withid (metric $r "search.latency") $d}}
+
+{{/* widget: extraction. Reads the metrics extraction.tokens, extraction.cost (Extra currency, through the currency func) and .V.cost.Tables.Extraction (Day, Operation, Input, Cached, Output, Cost). */}}
+{{template "metric" withid (metric $r "extraction.tokens") $d}}
+{{$cost := metric $r "extraction.cost"}}{{template "metric" withid $cost $d}}
+<section>
+<h2>What the server's model spent, by day</h2>
+<table>
+<tr><th>Day</th><th>Task</th><th>Input</th><th>Cached</th><th>Output</th><th>Cost</th></tr>
+{{range $r.Tables.Extraction}}<tr><td>{{.Day}}</td><td>{{.Operation}}</td><td>{{n .Input}}</td><td>{{n .Cached}}</td><td>{{n .Output}}</td><td>{{money .Cost (currency $cost)}}</td></tr>
+{{end}}</table>
+</section>
+
+{{/* widget: developer detail. Reads the metric extraction.per_session. */}}
+{{if $d}}{{template "metric" withid (metric $r "extraction.per_session") $d}}
+{{end}}
 {{template "foot" .}}

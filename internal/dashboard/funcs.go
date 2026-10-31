@@ -2,9 +2,11 @@ package dashboard
 
 import (
 	"errors"
+	"fmt"
 	"html/template"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
@@ -12,12 +14,14 @@ import (
 )
 
 // MetricView is one metric of a result with its catalog entry, as the
-// metric partial shows it. Found: the result holds the metric.
+// metric partial shows it. Found: the result holds the metric; ShowID: the
+// reader asked for developer detail, so the partial names the metric.
 type MetricView struct {
-	ID    string
-	Def   metrics.Def
-	M     metrics.Metric
-	Found bool
+	ID     string
+	Def    metrics.Def
+	M      metrics.Metric
+	Found  bool
+	ShowID bool
 }
 
 // dash stands for a value that is not there.
@@ -30,6 +34,14 @@ var funcs = template.FuncMap{
 	"value":     func(v MetricView) string { return foundOr(v, dash, views.FormatValue) },
 	"status":    func(v MetricView) string { return foundOr(v, "no data", views.StatusText) },
 	"delta":     func(v MetricView) string { return foundOr(v, "", views.DeltaText) },
+	"interval":  func(v MetricView) string { return foundOr(v, "", views.IntervalText) },
+	"withid":    func(v MetricView, on bool) MetricView { v.ShowID = on; return v },
+	"sysrows":   systemRows,
+	"axes":      func() []struct{ Key, Name string } { return views.AxisNames },
+	"n":         views.Grouped,
+	"doctor":    metrics.DoctorName,
+	"money":     money,
+	"currency":  func(v MetricView) string { c, _ := v.M.Extra["currency"].(string); return c },
 	"axis":      func(s metrics.AxisState) string { return views.Word(wordsOfAxis, string(s)) },
 	"nodata":    func(s string) string { return views.Word(views.NoDataWords, s) },
 	"servererr": func(s string) string { return views.Word(views.ServerErrorWords, s) },
@@ -112,4 +124,20 @@ func when(loc *time.Location, t any) string {
 		loc = time.UTC
 	}
 	return at.In(loc).Format("2006-01-02 15:04 MST")
+}
+
+// systemRows are the lines of the system block, times in loc.
+func systemRows(s *metrics.SystemInfo, loc *time.Location) []views.SystemRow {
+	if s == nil {
+		return nil
+	}
+	return views.SystemRows(*s, func(t time.Time) string { return when(loc, t) })
+}
+
+// money is a price with its currency; "price not set" for none.
+func money(v *float64, currency string) string {
+	if v == nil {
+		return "price not set"
+	}
+	return strings.TrimSpace(fmt.Sprintf("%.2f %s", *v, currency))
 }

@@ -232,12 +232,7 @@ func metricLine(d metrics.Def, m metrics.Metric, serverUp bool) string {
 }
 
 // countOf is n with its noun, singular for 1.
-func countOf(n int64, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return grouped(n) + " " + many
-}
+func countOf(n int64, one, many string) string { return views.CountOf(n, one, many) }
 
 // Reading the extras, whose types are those of the computing code.
 
@@ -439,13 +434,6 @@ func whenPtr(t *time.Time, loc *time.Location) string {
 
 func n64(v int64) string { return grouped(v) }
 
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
-}
-
 func sessionRows(rows []metrics.SessionRow, loc *time.Location) [][]string {
 	var out [][]string
 	for _, s := range rows {
@@ -562,46 +550,9 @@ func reviewRows(rows []metrics.ReviewRow, loc *time.Location) [][]string {
 
 func systemText(b *strings.Builder, s metrics.SystemInfo, loc *time.Location) {
 	b.WriteString("\nSystem\n")
-	at := func(t time.Time) string {
-		if t.IsZero() {
-			return "never"
-		}
-		return whenText(t, loc)
+	for _, r := range views.SystemRows(s, func(t time.Time) string { return whenText(t, loc) }) {
+		fmt.Fprintf(b, "%-15s %s\n", r.Label, r.Text)
 	}
-	fmt.Fprintf(b, "Memory server   version %s, running in %s, mode %s\n", s.ServerVersion, s.Runtime, s.Mode)
-	reach := "no answer recorded yet"
-	if !s.Reach.LastOK.IsZero() {
-		reach = "last answer " + at(s.Reach.LastOK)
-	}
-	if !s.Reach.FailingSince.IsZero() {
-		reach = "not answering since " + at(s.Reach.FailingSince)
-	}
-	if !s.Reach.BreakerOpenUntil.IsZero() {
-		reach += fmt.Sprintf("; paused until %s after %s", at(s.Reach.BreakerOpenUntil), countOf(int64(s.Reach.BreakerFailures), "failure", "failures"))
-	}
-	fmt.Fprintf(b, "Reach           %s\n", reach)
-	backup := "none yet"
-	if !s.Backup.CreatedAt.IsZero() {
-		backup = "last " + at(s.Backup.CreatedAt) + ", checked " + at(s.Backup.VerifiedAt) + ", ok: " + yesNo(s.Backup.OK)
-	}
-	fmt.Fprintf(b, "Backup          %s\n", backup)
-	update := "none newer"
-	switch {
-	case s.Update.CheckFailed:
-		update = "the last check failed"
-	case s.Update.Newer > 0:
-		update = countOf(int64(s.Update.Newer), "newer release", "newer releases")
-	}
-	checked := "never checked"
-	if !s.Update.CheckedAt.IsZero() {
-		checked = "checked " + at(s.Update.CheckedAt)
-	}
-	fmt.Fprintf(b, "Updates         %s (%s)\n", update, checked)
-	idx := fmt.Sprintf("ingested %s, %d s behind", at(s.Index.IngestedAt), s.Index.LagSeconds)
-	if s.Index.Partial {
-		idx += ", still catching up"
-	}
-	fmt.Fprintf(b, "Activity index  %s\n", idx)
 }
 
 func projectRow(p metrics.ProjectRow, loc *time.Location) []string {

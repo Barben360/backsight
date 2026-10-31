@@ -1,5 +1,41 @@
 {{/* views: pipeline */}}
 {{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.pipeline}}
 <h1>{{.Frame.Title}}</h1>
 {{template "scope" .}}
+
+{{/* widget: flow and outcomes. Reads the metrics pipeline.flow, retain.outcomes. */}}
+{{template "metric" withid (metric $r "pipeline.flow") $d}}
+{{template "metric" withid (metric $r "retain.outcomes") $d}}
+
+{{/* widget: backlog and queue. Reads the metrics local.backlog, server.queue and .V.pipeline.Tables.FailedOperations (Type, AgeMS, Retries). */}}
+{{template "metric" withid (metric $r "local.backlog") $d}}
+{{template "metric" withid (metric $r "server.queue") $d}}
+<table>
+<tr><th>Task</th><th>Age</th><th>Retries</th></tr>
+{{range $r.Tables.FailedOperations}}<tr><td>{{.Type}}</td><td>{{age .AgeMS}}</td><td>{{n .Retries}}</td></tr>
+{{end}}</table>
+
+{{/* widget: delay and failures. Reads the metrics server.extraction_delay, hooks.failures. */}}
+{{template "metric" withid (metric $r "server.extraction_delay") $d}}
+{{template "metric" withid (metric $r "hooks.failures") $d}}
+
+{{/* widget: jobs. Reads the metric jobs.last_run and .V.pipeline.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
+{{template "metric" withid (metric $r "jobs.last_run") $d}}
+<section>
+<h2>Background jobs</h2>
+<table>
+<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
+{{range $r.Tables.Jobs}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
+{{end}}</table>
+</section>
+
+{{/* widget: health checks. Reads .V.pipeline.Tables.Doctor (ID, Status, Fix). */}}
+<section>
+<h2>Health checks</h2>
+<table>
+<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
+{{range $r.Tables.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{.Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
+{{end}}</table>
+</section>
 {{template "foot" .}}

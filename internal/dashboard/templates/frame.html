@@ -57,7 +57,7 @@
 
 {{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
 
-{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if .Server}}memory on {{.Server}}{{else}}no memory server set up{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
+{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if .Server}}memory on {{.Server}}{{if not .ServerOK}} (memory server not answering){{end}}{{else}}no memory server set up{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
 {{end}}{{end}}
 
 {{define "foot"}}</main>
@@ -68,9 +68,17 @@
 </html>
 {{end}}
 
-{{/* metric: dot is a MetricView; reads .Def.Question, .M. Task 11 completes it. */}}
+{{/*
+  metric: dot is a MetricView. Reads .Def (Question, Scope, Series), .M (Den,
+  CI, Reason, Tags, Series, Drill), .Found, .ShowID, .ID, and the funcs value,
+  status, interval, delta, nodata.
+*/}}
 {{define "metric"}}<section>
 <h3>{{.Def.Question}}</h3>
-<p>{{value .}} · {{status .}}</p>
-</section>
+<p>{{value .}}{{with .M.Den}} · n = {{.}}{{end}} · {{status .}}{{with interval .}} · interval {{.}}{{end}}{{with delta .}} · {{.}}{{end}}</p>
+<p>{{if eq .Def.Scope "machine"}}this PC{{else}}server{{end}}{{range .M.Tags}}{{if eq . "not_filtered"}} · not filtered{{end}}{{end}}{{if .M.Series}} · {{len .M.Series}} {{if eq .Def.Series "weekly"}}weeks{{else}}days{{end}}{{end}}</p>
+{{if .M.Reason}}<p>{{nodata .M.Reason}}</p>
+{{end}}{{if .M.Drill}}<details><summary>CLI</summary><code>{{.M.Drill}}</code></details>
+{{end}}{{if .ShowID}}<p><code>{{.ID}}</code></p>
+{{end}}</section>
 {{end}}

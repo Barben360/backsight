@@ -1,5 +1,36 @@
 {{/* views: system */}}
 {{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.system}}
 <h1>{{.Frame.Title}}</h1>
 {{template "scope" .}}
+
+{{/* widget: health checks. Reads .V.system.Tables.Doctor (ID, Status, Fix) and the metric doctor.check. */}}
+<section>
+<h2>Health checks</h2>
+<table>
+<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
+{{range $r.Tables.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{.Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
+{{end}}</table>
+</section>
+{{template "metric" withid (metric $r "doctor.check") $d}}
+
+{{/* widget: system. Reads .V.system.Tables.System through the sysrows func (Label, Text). */}}
+<section>
+<h2>System</h2>
+<dl>
+{{range sysrows $r.Tables.System $.Loc}}<dt>{{.Label}}</dt><dd>{{.Text}}</dd>
+{{end}}</dl>
+</section>
+
+{{/* widget: reach, backlog and jobs. Reads the metrics server.reach, local.backlog, jobs.last_run and .V.system.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
+{{template "metric" withid (metric $r "server.reach") $d}}
+{{template "metric" withid (metric $r "local.backlog") $d}}
+{{template "metric" withid (metric $r "jobs.last_run") $d}}
+<section>
+<h2>Background jobs</h2>
+<table>
+<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
+{{range $r.Tables.Jobs}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
+{{end}}</table>
+</section>
 {{template "foot" .}}
