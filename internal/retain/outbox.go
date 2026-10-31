@@ -155,21 +155,34 @@ func (o Outbox) Limits() (warn, max int64) {
 	return warn, max
 }
 
+// lockWait is how long an outbox operation waits for the lock. Appenders
+// queue behind each other, each holding it for one fsync'd write and the
+// lock file's create and delete: a few ms on an SSD, up to about 100 ms on
+// a slow disk (windows-latest), so the wait is a time, not a count of
+// tries. It fits the SubagentStop hook's 5 s with the attribution's 1.5 s.
+const lockWait = 3 * time.Second
+
 func (o Outbox) lock(command string) (func(), error) {
-	var l *state.Lock
-	var err error
-	for i := 0; i < 50; i++ { // short waits: notes are tiny
-		if l, err = state.TryAcquire(o.LockPath, command); err == nil {
+	deadline := time.Now().Add(lockWait)
+	for {
+		l, err := state.TryAcquire(o.LockPath, command)
+		if err == nil {
 			return func() { _ = l.Release() }, nil
+		}
+		if !time.Now().Before(deadline) {
+			return nil, err
 		}
 		var held *state.HeldError
 		if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
 			continue
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // short waits: notes are tiny
 	}
-	return nil, err
 }
+
+// whileAppending runs in Append with the lock held (tests make an append
+// slow).
+var whileAppending = func() {}
 
 // Append writes n durably. warn is true past the warning size.
 func (o Outbox) Append(n Note) (warn bool, err error) {
@@ -208,6 +221,7 @@ func (o Outbox) Append(n Note) (warn bool, err error) {
 		_ = f.Close()
 		return false, err
 	}
+	whileAppending()
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		return false, err

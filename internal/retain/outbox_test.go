@@ -137,19 +137,35 @@ func TestOutboxSizeLimits(t *testing.T) {
 	}
 }
 
+// Appenders queue for the lock, each holding it for one fsync'd write. A
+// queue longer than a second (eight appends of 200 ms, a slow disk's
+// fsync and file creations) loses none: each waits its turn (windows-latest
+// once kept 15 of 20, the others refused after 50 tries of the lock).
 func TestOutboxConcurrentAppends(t *testing.T) {
 	o := outbox(t)
+	old := whileAppending
+	whileAppending = func() { time.Sleep(200 * time.Millisecond) }
+	t.Cleanup(func() { whileAppending = old })
+	const n = 8
+	errs := make(chan error, n)
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, _ = o.Append(NewNote("b", "lesson", "p", strings.Repeat("y", i+1), at))
+			_, err := o.Append(NewNote("b", "lesson", "p", strings.Repeat("y", i+1), at))
+			errs <- err
 		}(i)
 	}
 	wg.Wait()
-	if n, _ := o.Pending(); n != 20 {
-		t.Errorf("%d of 20 notes", n)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("an append was refused: %v", err)
+		}
+	}
+	if got, _ := o.Pending(); got != n {
+		t.Errorf("%d of %d notes", got, n)
 	}
 }
 
