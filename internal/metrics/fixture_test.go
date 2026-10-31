@@ -362,6 +362,9 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.calls = append(s.calls, method+"?"+q.Encode())
 	err, blocked, d := s.errs[method], s.blocks[method], s.data
+	if err == nil && method == "LLMStats" { // fail("LLMStats:<operation>") fails one operation
+		err = s.errs["LLMStats:"+q.Get("operation")]
+	}
 	s.mu.Unlock()
 
 	var api *hindsight.APIError

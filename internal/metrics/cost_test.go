@@ -259,7 +259,8 @@ func extractionServer(x *fx) {
 // TestExtractionTokensAndCost. In the window (days A and B; C is out), all
 // operations: input 900,000 + 600,000 = 1,500,000, cached 400,000, output
 // 100,000 + 50,000 (thoughts, billed as output) + 200,000 = 350,000;
-// tokens = 1,500,000 + 400,000 + 350,000 = 2,250,000.
+// tokens = input + output = 1,500,000 + 350,000 = 1,850,000 (the input
+// includes the 400,000 cached, which is a subset, never added).
 // Cost, all: (1,500,000 - 400,000) × 0.27 = 0.297; 400,000 × 0.07 = 0.028;
 // 350,000 × 1.10 = 0.385; total 0.710.
 // retain_extract_facts: input 1,200,000, cached 400,000, output 250,000:
@@ -267,7 +268,8 @@ func extractionServer(x *fx) {
 // consolidation: input 200,000, output 60,000: 0.054 + 0.066 = 0.120.
 // other = all - named: input 100,000, cached 0, output 40,000: 0.027 +
 // 0.044 = 0.071 (0.519 + 0.120 + 0.071 = 0.710). reflect: zeros.
-// Series: day A 900,000 + 400,000 + 150,000 = 1,450,000, day B 800,000;
+// Series: day A 900,000 + 150,000 = 1,050,000, day B 600,000 + 200,000 =
+// 800,000;
 // cost on day B 600,000 × 0.27 + 200,000 × 1.10 = 0.162 + 0.22 = 0.382.
 func TestExtractionTokensAndCost(t *testing.T) {
 	x := costFx(t)
@@ -275,7 +277,7 @@ func TestExtractionTokensAndCost(t *testing.T) {
 	extractionServer(x)
 	m := costOf(x, x.query(7))
 	tk, cs := m["extraction.tokens"], m["extraction.cost"]
-	if val(tk) != 2_250_000 {
+	if val(tk) != 1_850_000 {
 		t.Errorf("tokens = %v, want 2,250,000 (the day outside the window dropped)", val(tk))
 	}
 	for k, want := range map[string]int64{"input": 1_500_000, "cached": 400_000, "output": 350_000} {
@@ -308,7 +310,7 @@ func TestExtractionTokensAndCost(t *testing.T) {
 	for _, p := range cs.Series {
 		costDay[p.Day] = *p.Value
 	}
-	if byDay["2026-10-28"] != 1_450_000 || byDay["2026-10-29"] != 800_000 || byDay["2026-10-27"] != 0 || len(tk.Series) != 8 {
+	if byDay["2026-10-28"] != 1_050_000 || byDay["2026-10-29"] != 800_000 || byDay["2026-10-27"] != 0 || len(tk.Series) != 8 {
 		t.Errorf("series = %v", byDay)
 	}
 	if math.Abs(costDay["2026-10-29"]-0.382) > 1e-9 {
@@ -330,7 +332,7 @@ func TestExtractionPriceNotSet(t *testing.T) {
 	if cs.Value != nil || cs.Extra["price_set"] != false {
 		t.Errorf("cost = %v price_set %v, want null, false", cs.Value, cs.Extra["price_set"])
 	}
-	if val(m["extraction.tokens"]) != 2_250_000 {
+	if val(m["extraction.tokens"]) != 1_850_000 {
 		t.Errorf("tokens = %v, want 1,850,000", val(m["extraction.tokens"]))
 	}
 	for _, p := range cs.Series {
@@ -369,7 +371,7 @@ func TestExtractionProjectFilter(t *testing.T) {
 			t.Errorf("%s tags %v, want not_filtered", id, m[id].Tags)
 		}
 	}
-	if val(m["extraction.tokens"]) != 2_250_000 {
+	if val(m["extraction.tokens"]) != 1_850_000 {
 		t.Errorf("tokens = %v: the project filter must not change a server figure", val(m["extraction.tokens"]))
 	}
 }
@@ -380,7 +382,7 @@ func retained(x *fx, ts time.Time, doc, status string) {
 }
 
 // TestExtractionPerSession: LLMStats("30d") with tokens: 10-28 700,000
-// (input 500,000 + cached 100,000 + output 100,000) and 10-10 500,000
+// (input 500,000, of which cached 100,000, + output 200,000) and 10-10 500,000
 // (input 300,000, output 200,000), both in the last 28 days (since
 // 10-02T11:00Z); 10-01 300,000, day 29, out. 1,200,000 over the 4
 // documents last ok in the last 28 days = 300,000. Not counted: a failed
@@ -390,7 +392,7 @@ func TestExtractionPerSession(t *testing.T) {
 	x := costFx(t)
 	x.server.set(func(d *fakeData) {
 		d.LLM = map[string][]hindsight.LLMBucket{"": {
-			{Time: time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC), Input: 500_000, Cached: 100_000, Output: 100_000},
+			{Time: time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC), Input: 500_000, Cached: 100_000, Output: 200_000},
 			{Time: time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC), Input: 300_000, Output: 200_000},
 			{Time: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Input: 300_000},
 		}}
@@ -458,6 +460,118 @@ func TestCostNoTelemetry(t *testing.T) {
 	for _, id := range []string{"context.per_session", "context.per_prompt", "recall.latency", "search.latency"} {
 		if m[id].Status != StatusNoData || m[id].Reason != ReasonNoEvents {
 			t.Errorf("%s: %s/%s, want no_data/no_events", id, m[id].Status, m[id].Reason)
+		}
+	}
+}
+
+// TestExtractionPerSessionNoData: a value of 0 is never made up. Documents
+// were sent but the server holds no bucket in the 28 days: no_data,
+// no_events; the view did not request the 30-day read: no_data,
+// server_unsupported.
+func TestExtractionPerSessionNoData(t *testing.T) {
+	t.Run("no bucket in 28 days", func(t *testing.T) {
+		x := costFx(t)
+		retained(x, ago(time.Hour), "d", "ok")
+		x.server.set(func(d *fakeData) {
+			d.LLM = map[string][]hindsight.LLMBucket{"": {{Time: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Input: 5}}}
+		})
+		m := costOf(x, x.query(7))["extraction.per_session"]
+		if m.Status != StatusNoData || m.Reason != ReasonNoEvents || m.Value != nil {
+			t.Errorf("%s/%s value %v, want no_data/no_events, null", m.Status, m.Reason, m.Value)
+		}
+	})
+	t.Run("empty answer", func(t *testing.T) {
+		x := costFx(t)
+		retained(x, ago(time.Hour), "d", "ok")
+		m := costOf(x, x.query(7))["extraction.per_session"]
+		if m.Status != StatusNoData || m.Reason != ReasonNoEvents {
+			t.Errorf("%s/%s, want no_data/no_events", m.Status, m.Reason)
+		}
+	})
+	t.Run("read not requested", func(t *testing.T) {
+		x := costFx(t)
+		x.need = slices.DeleteFunc(slices.Clone(x.need), func(k string) bool { return k == llm30dKey })
+		retained(x, ago(time.Hour), "d", "ok")
+		extractionServer(x)
+		m := costOf(x, x.query(7))["extraction.per_session"]
+		if m.Status != StatusNoData || m.Reason != ReasonServerUnsupported {
+			t.Errorf("%s/%s, want no_data/server_unsupported", m.Status, m.Reason)
+		}
+	})
+}
+
+// TestExtractionBucketOverlap: a bucket that starts before the window but
+// overlaps it is kept whole (as extractionOver keeps whole UTC days). The
+// window starts 10-23T11:00Z: the 10-23 day bucket (200) overlaps it, the
+// 10-22 one (100, ending 10-23T00:00Z) does not; 10-28 has 400. Tokens
+// = 200 + 400 = 600, over 2 days.
+func TestExtractionBucketOverlap(t *testing.T) {
+	x := costFx(t)
+	x.server.set(func(d *fakeData) {
+		d.LLM = map[string][]hindsight.LLMBucket{"": {
+			{Time: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC), Input: 100},
+			{Time: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC), Input: 200},
+			{Time: time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC), Input: 400},
+		}}
+	})
+	m := costOf(x, x.query(7))["extraction.tokens"]
+	if val(m) != 600 || m.Extra["days_covered"] != 2 {
+		t.Errorf("tokens %v over %v days, want 600 over 2", val(m), m.Extra["days_covered"])
+	}
+}
+
+// TestExtractionOneOperationFails: the read of consolidation fails (404):
+// the total is still shown with the operations that answered, tagged
+// partial with one failed operation, and without an "other" that would
+// hide the missing one. All three costs stay 0.710 (the total's).
+func TestExtractionOneOperationFails(t *testing.T) {
+	x := costFx(t)
+	pricesSet(x)
+	extractionServer(x)
+	x.server.fail("LLMStats:consolidation", &hindsight.APIError{Kind: hindsight.NotFound, Status: 404})
+	m := costOf(x, x.query(7))
+	for _, id := range []string{"extraction.tokens", "extraction.cost"} {
+		if !slices.Contains(m[id].Tags, tagPartial) || m[id].Extra["failed_operations"] != 1 || m[id].Status == StatusNoData {
+			t.Errorf("%s: tags %v extra %v status %s, want partial, 1 failed, not no_data", id, m[id].Tags, m[id].Extra, m[id].Status)
+		}
+	}
+	if val(m["extraction.tokens"]) != 1_850_000 || math.Abs(val(m["extraction.cost"])-0.710) > 1e-9 {
+		t.Errorf("tokens %v cost %v, want 1,850,000 and 0.710", val(m["extraction.tokens"]), val(m["extraction.cost"]))
+	}
+	ops := m["extraction.tokens"].Extra["by_operation"].(map[string]any)
+	if _, ok := ops["consolidation"]; ok {
+		t.Error("consolidation present although its read failed")
+	}
+	if _, ok := ops["other"]; ok {
+		t.Error("other present although an operation is missing")
+	}
+	if _, ok := ops["retain_extract_facts"]; !ok {
+		t.Error("an operation that answered is missing")
+	}
+	// all healthy: not partial
+	y := costFx(t)
+	extractionServer(y)
+	if m := costOf(y, y.query(7))["extraction.tokens"]; slices.Contains(m.Tags, tagPartial) || m.Extra["failed_operations"] != nil {
+		t.Errorf("healthy: tags %v extra %v, want no partial", m.Tags, m.Extra)
+	}
+}
+
+// TestContextWatchBoundary: 100 sessions, 5 of 10,000 chars and 95 of
+// 9,000 (the 95th, so p95 = 9,000 = 1.5 × the default budget of 6,000):
+// ok, the rule is strict. With 9,001 for the 95: watch.
+func TestContextWatchBoundary(t *testing.T) {
+	for chars, want := range map[int]Status{9000: StatusOK, 9001: StatusWatch} {
+		x := costFx(t)
+		for i := range 100 {
+			c := chars
+			if i < 5 {
+				c = 10000
+			}
+			x.tel(ago(time.Duration(i+1)*time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Chars: c}, fmt.Sprintf("s-%d", i), "alpha")
+		}
+		m := costOf(x, x.query(7))["context.per_session"]
+		if val(m) != float64(chars) || m.Status != want {
+			t.Errorf("p95 %v status %s, want %d %s", val(m), m.Status, chars, want)
 		}
 	}
 }

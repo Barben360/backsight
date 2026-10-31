@@ -82,7 +82,7 @@ type Metric struct {
 	Status      Status         `json:"status"`
 	Reason      string         `json:"reason,omitempty"`
 	Borderline  bool           `json:"borderline"`
-	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d
+	Tags        []string       `json:"tags"` // unreliable, not_filtered, judged_28d, partial
 	CI          *[2]float64    `json:"ci"`
 	MDC         *float64       `json:"mdc"`
 	Previous    *float64       `json:"previous"`

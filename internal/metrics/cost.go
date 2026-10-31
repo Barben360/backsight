@@ -45,6 +45,10 @@ const (
 )
 
 // sessionWindow is how far extraction.per_session looks back, always.
+// tagPartial marks an extraction figure whose per-operation split lacks an
+// operation the server could not be asked for.
+const tagPartial = "partial"
+
 const sessionWindow = 28 * day
 
 // histStep and histTop are the context histogram's bucket width and the
@@ -293,12 +297,15 @@ SELECT ts, ms FROM tel_tool
 WHERE name = 'memory_search' AND ok = 1 AND ms IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause, obs, met)
 }
 
-// tokens are the LLM tokens of a set of buckets. Output holds the thoughts
-// too: they are billed as output (internal/cli/stats.go:311-348,
-// extractionOver, L343; the cost itself is retain.Prices.Cost's).
+// tokens are the LLM tokens of a set of buckets. The one reading, here and
+// nowhere else: the server's input INCLUDES the cached tokens (as
+// retain.Prices.Cost, which prices input - cached fresh, and the stats
+// printout, "input (cached)", assume), so cached is reported as a subset
+// and the total is input + output. Output holds the thoughts too: they are
+// billed as output (internal/cli/stats.go:311-348, extractionOver, L343).
 type tokens struct{ input, cached, output int64 }
 
-func (t tokens) total() int64 { return t.input + t.cached + t.output }
+func (t tokens) total() int64 { return t.input + t.output }
 
 func (t *tokens) add(b hindsight.LLMBucket) {
 	t.input += b.Input
@@ -306,14 +313,31 @@ func (t *tokens) add(b hindsight.LLMBucket) {
 	t.output += b.Output + b.Thoughts
 }
 
-// inWindow sums the buckets starting inside [since, until), in total and
-// by bucket of buckets, and counts the distinct local days they cover.
-// The server's buckets that start outside the window are dropped.
+// bucketWidth is the width of the server's buckets: the smallest gap
+// between two of them, a day when there is one bucket or none (the server
+// answers hourly for 1d, daily otherwise).
+func bucketWidth(bs []hindsight.LLMBucket) time.Duration {
+	width := day
+	for i, a := range bs {
+		for _, b := range bs[i+1:] {
+			if g := b.Time.Sub(a.Time).Abs(); g > 0 && g < width {
+				width = g
+			}
+		}
+	}
+	return width
+}
+
+// inWindow sums the buckets that overlap [since, until), in total and by
+// bucket of buckets, and counts the distinct local days they cover. A
+// bucket straddling the start is kept whole, as extractionOver keeps whole
+// UTC days, so the dashboard and `backsight stats` agree on one window.
 func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
 	byDay = make([]tokens, len(buckets))
 	seen := map[string]bool{}
+	width := bucketWidth(bs)
 	for _, b := range bs {
-		if b.Time.Before(since) || !b.Time.Before(until) {
+		if !b.Time.Add(width).After(since) || !b.Time.Before(until) {
 			continue
 		}
 		total.add(b)
@@ -338,19 +362,21 @@ func llmRead(e env, key string) ([]hindsight.LLMBucket, string) {
 		return nil, r
 	}
 	if key == llm30dKey {
+		if e.srv.LLM30 == nil { // not requested by the view
+			return nil, ReasonServerUnsupported
+		}
 		return e.srv.LLM30, ""
 	}
 	bs, ok := e.srv.LLM[key[len("llm:"):]]
-	if !ok { // not asked for by the view
-		_, r := serverError(errNoServer)
-		return nil, r
+	if !ok { // not requested by the view
+		return nil, ReasonServerUnsupported
 	}
 	return bs, ""
 }
 
 // byOperation is {op: {input, cached, output, cost}} for the named
-// operations and "other" = total − named; cost is null when no price is set.
-func byOperation(named map[string]tokens, total tokens, p retain.Prices) map[string]any {
+// operations read and, when withOther, "other" = total − named; cost is null when no price is set.
+func byOperation(named map[string]tokens, total tokens, p retain.Prices, withOther bool) map[string]any {
 	costOf := func(t tokens) *float64 {
 		if !p.Known() {
 			return nil
@@ -369,7 +395,9 @@ func byOperation(named map[string]tokens, total tokens, p retain.Prices) map[str
 		other.cached -= t.cached
 		other.output -= t.output
 	}
-	out["other"] = entry(other)
+	if withOther { // with an operation unread, the rest is not "other"
+		out["other"] = entry(other)
+	}
 	return out
 }
 
@@ -391,12 +419,16 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		return
 	}
 	total, byDay, covered := inWindow(all, w.Since, w.Until, w.Loc, buckets)
+	// An operation that cannot be read (its name is unconfirmed) does not
+	// blank the total: the operations that answered are shown, the metric
+	// is tagged partial and the failed reads are counted.
 	named := map[string]tokens{}
+	failedOps := 0
 	for _, op := range extractionOps {
 		bs, reason := llmRead(e, "llm:"+op)
 		if reason != "" {
-			fail(reason)
-			return
+			failedOps++
+			continue
 		}
 		named[op], _, _ = inWindow(bs, w.Since, w.Until, w.Loc, buckets)
 	}
@@ -406,12 +438,16 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 	}
 	cfg := e.src.Config.LLM
 	prices := retain.PricesFor(cfg.Model, cfg.PriceInput, cfg.PriceCached, cfg.PriceOutput, cfg.Currency)
-	ops := byOperation(named, total, prices)
+	ops := byOperation(named, total, prices, failedOps == 0)
 
 	tm := Metric{Value: ptr(float64(total.total())),
 		Extra: map[string]any{"input": total.input, "cached": total.cached, "output": total.output,
 			"by_operation": ops, "days_covered": covered}}
 	cm := Metric{Extra: map[string]any{"price_set": prices.Known(), "currency": prices.Currency, "by_operation": ops}}
+	if failedOps > 0 {
+		tm.Tags, cm.Tags = []string{tagPartial}, []string{tagPartial}
+		tm.Extra["failed_operations"], cm.Extra["failed_operations"] = failedOps, failedOps
+	}
 	if prices.Known() {
 		cm.Value = ptr(prices.Cost(total.input, total.cached, total.output, 0))
 	}
@@ -449,9 +485,9 @@ func costPerSession(e env, w Window, obs map[string]Observation, met map[string]
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	total, _, _ := inWindow(bs, since, until, w.Loc, nil)
+	total, _, covered := inWindow(bs, since, until, w.Loc, nil)
 	m := Metric{Extra: map[string]any{"sessions_sent": sent, "window_days": 28}}
-	if sent == 0 {
+	if sent == 0 || covered == 0 { // no document, or nothing of the server in the 28 days: no 0
 		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, m
 		return nil
 	}

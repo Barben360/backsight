@@ -212,15 +212,15 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "extraction.tokens", Label: "What the server's model spent", Unit: "tokens", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
-		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered"},
+		Extra:      []string{"input", "cached", "output", "by_operation", "days_covered", "failed_operations"},
 		Question:   "How many tokens does the server's model use to build memory?",
-		Definition: "Tokens (input, cached, output) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
+		Definition: "Tokens (input, of which cached, and output; the total is input plus output) the server's model spent per day and per operation, for all PCs using the server. The server keeps 30 days.",
 		Action:     "Use it to see which operation costs the most before changing the model or the projects sent.",
 	},
 	{
 		ID: "extraction.cost", Label: "What the server's model spent", Unit: "money", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
-		Extra:      []string{"price_set", "currency", "by_operation"},
+		Extra:      []string{"price_set", "currency", "by_operation", "failed_operations"},
 		Question:   "How much does the server's model cost?",
 		Definition: "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server.",
 		Action:     "Set the model prices to see the cost; a high cost calls for a cheaper model or fewer projects sent.",
