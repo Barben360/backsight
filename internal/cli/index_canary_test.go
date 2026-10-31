@@ -70,9 +70,10 @@ func noCanary(t *testing.T, step, home string) {
 	}
 }
 
-// Free text of every source stays out of the index file: built through the
-// job's own path, rebuilt, vacuumed, and read back by `stats index --json`.
-func TestIndexHoldsNoCanary(t *testing.T) {
+// canaryState writes every source with its canaries on a fresh install and
+// returns its home.
+func canaryState(t *testing.T) string {
+	t.Helper()
 	home := devInstall(t, true)
 	d := pathsOf(home)
 	at := time.Now().UTC().Add(-time.Hour)
@@ -135,7 +136,14 @@ func TestIndexHoldsNoCanary(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte("[llm]\nmodel = \"CANARY-TOML\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return home
+}
 
+// Free text of every source stays out of the index file: built through the
+// job's own path, rebuilt, vacuumed, and read back by `stats index --json`.
+func TestIndexHoldsNoCanary(t *testing.T) {
+	home := canaryState(t)
+	d := pathsOf(home)
 	// Before any checkpoint: an ingest through CatchUp alone, the pages
 	// still in the -wal (the index stays open while the files are read).
 	pre, err := index.Open(context.Background(), indexOptions(d, home, nil))

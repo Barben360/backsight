@@ -701,7 +701,7 @@ func TestStatsDaysStillWorks(t *testing.T) {
 		t.Errorf("stats 14: exit %d\n%s", code, out)
 	}
 	code, out, errOut := run(t, "stats", "x")
-	if code != output.Usage || !strings.Contains(errOut+out, "days: a whole number from 1 to 365") {
+	if code != output.Usage || !strings.Contains(errOut+out, `unknown view "x": one of overview, quality, cost, bank, pipeline, system, releases, projects, sessions, memories, days, defs, index`) {
 		t.Errorf("stats x: exit %d\n%s%s", code, out, errOut)
 	}
 	if code, _, _ := run(t, "stats", "index", "extra"); code != output.Usage {

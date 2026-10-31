@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/recall"
@@ -118,21 +119,35 @@ func runtimeText(kind string, s *statsSwitch) string {
 // telemetry, and the server's extraction tokens and cost. --since/--until
 // fix the window, --parity compares it with C12 (§1.2, decision 0065).
 func newStatsCmd(e *env) *cobra.Command {
-	var since, until string
+	var f viewFlags
 	var parity bool
 	cmd := &cobra.Command{
 		Use:   "stats [days]",
-		Short: "Show how memory was used over the last days (default 7): recalls, searches, credits, detector, cost",
+		Short: "Show how memory was used over the last days (default 7): recalls, searches, credits, detector, cost; or a view of it",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			days := 7
+			since, until := f.since, f.until
 			if len(args) == 1 {
+				if _, err := strconv.Atoi(args[0]); err != nil {
+					return unknownView(args[0])
+				}
+			}
+			if err := refuseViewFlags(cmd, viewFlagNames...); err != nil {
+				return err
+			}
+			flagSet := cmd.Flags().Changed("days")
+			days := 7
+			if len(args) == 1 || flagSet {
 				if since != "" || until != "" {
 					return &output.Error{Code: output.Usage, Message: "give either [days] or --since/--until"}
 				}
-				n, err := strconv.Atoi(args[0])
-				if err != nil || n < 1 || n > 365 {
-					return &output.Error{Code: output.Usage, Message: "days: a whole number from 1 to 365"}
+				var arg string
+				if len(args) == 1 {
+					arg = args[0]
+				}
+				n, err := legacyDays(arg, len(args) == 1, f, flagSet)
+				if err != nil {
+					return err
 				}
 				days = n
 			}
@@ -179,11 +194,13 @@ func newStatsCmd(e *env) *cobra.Command {
 			return e.emit("stats", res, func() string { return statsText(res) })
 		},
 	}
-	cmd.Flags().StringVar(&since, "since", "", "start of the window (RFC 3339, YYYY-MM-DDTHH:MMZ or YYYY-MM-DD, UTC) instead of [days]")
-	cmd.Flags().StringVar(&until, "until", "", "end of the window (default now), with --since")
+	addViewFlags(cmd, &f)
 	cmd.Flags().BoolVar(&parity, "parity", false, "compare with the baseline measured on the Hindsight integration backsight replaced")
 	_ = cmd.Flags().MarkHidden("parity")
 	cmd.AddCommand(newStatsIndexCmd(e))
+	for _, v := range metrics.Views {
+		cmd.AddCommand(newStatsViewCmd(e, v, &f))
+	}
 	return cmd
 }
 
