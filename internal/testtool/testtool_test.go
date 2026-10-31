@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -242,5 +243,28 @@ func TestFakeIgnoresSignals(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Errorf("after its file: %v", err)
+	}
+}
+
+// A fake started by its path in another case (Windows' 8.3 names are upper
+// case: POSTGRES.EXE) is still itself: its sidecar is its path without the
+// extension, whatever the extension's case.
+func TestFakeFindsItsSidecarInAnyCase(t *testing.T) {
+	for in, want := range map[string]string{
+		`C:\t\bin\postgres.exe`: `C:\t\bin\postgres`,
+		`C:\T\BIN\POSTGRES.EXE`: `C:\T\BIN\POSTGRES`,
+		"/t/bin/postgres":       "/t/bin/postgres",
+		"/t/bin/pg.ctl":         "/t/bin/pg.ctl",
+	} {
+		if got := sidecarOf(in); got != want {
+			t.Errorf("sidecarOf(%s) = %s, want %s", in, got, want)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		return // a case-blind volume only
+	}
+	path := Write(t, t.TempDir(), "postgres", Fake{Stdout: "the fake"})
+	if out, _, code := runFake(t, strings.ToUpper(path), ""); code != 0 || out != "the fake" {
+		t.Errorf("%s: code %d, stdout %q, want the fake's", strings.ToUpper(path), code, out)
 	}
 }

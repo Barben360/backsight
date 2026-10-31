@@ -166,7 +166,7 @@ func Main() {
 	if err != nil {
 		return
 	}
-	raw, err := os.ReadFile(strings.TrimSuffix(exe, ".exe") + suffix)
+	raw, err := os.ReadFile(sidecarOf(exe) + suffix)
 	if err != nil {
 		return
 	}
@@ -176,6 +176,16 @@ func Main() {
 		os.Exit(127)
 	}
 	os.Exit(s.run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// sidecarOf is the fake exe's path without its extension, whatever its
+// case: on Windows a fake started by its 8.3 name or in upper case
+// (POSTGRES.EXE) is itself, its sidecar found on the case-blind volume.
+func sidecarOf(exe string) string {
+	if ext := filepath.Ext(exe); strings.EqualFold(ext, ".exe") {
+		return exe[:len(exe)-len(ext)]
+	}
+	return exe
 }
 
 func (s spec) run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
