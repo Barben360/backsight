@@ -148,7 +148,7 @@ func TestSkipAndFailureWordsCoverEveryName(t *testing.T) {
 			t.Errorf("prompt reason %q has no words", r)
 		}
 	}
-	for _, k := range []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn", "unknown"} {
+	for _, k := range append(slices.Clone(indexgen.FailureKinds), "unknown") {
 		if FailureKindWords[k] == "" || FailureKindWords[k] == k {
 			t.Errorf("hook failure kind %q has no words", k)
 		}

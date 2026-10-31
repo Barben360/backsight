@@ -244,12 +244,17 @@ func TestPagesShowNoJargon(t *testing.T) {
 			}
 		}
 	}
-	codes = append(codes, "too_few", "cant_judge", "too_early", "recent_weighted", "wilson", "not_filtered", "same_topic", "too_short", "topic_shift", "input_too_large", "invalid_output", "judged_28d", "no_candidates", "below_floor")
+	codes = append(codes, "too_few", "cant_judge", "too_early", "recent_weighted", "wilson", "not_filtered", "same_topic", "too_short", "topic_shift", "input_too_large", "invalid_output", "judged_28d", "no_candidates", "below_floor", "never_used", "confident_miss", "quarantined", "unhide")
+	// The developer pages, /releases and /defs, show ids and stored names on purpose.
+	var pages []string
 	for page := range pageMetrics {
-		path := "/" + page
 		if page == "overview" {
-			path = "/"
+			page = ""
 		}
+		pages = append(pages, "/"+page)
+	}
+	pages = append(pages, browsePaths(t, h)...)
+	for _, path := range pages {
 		r, b := pageGet(t, h, ck, path)
 		if r.StatusCode != 200 {
 			t.Fatalf("GET %s: %d", path, r.StatusCode)
@@ -258,12 +263,12 @@ func TestPagesShowNoJargon(t *testing.T) {
 		text := strings.Join(nodes, " ")
 		for _, d := range metrics.Catalog {
 			if strings.Contains(text, d.ID) {
-				t.Errorf("%s shows the id %s", page, d.ID)
+				t.Errorf("%s shows the id %s", path, d.ID)
 			}
 		}
 		for _, k := range codes {
 			if strings.ContainsAny(k, "_0123456789") && strings.Contains(text, k) || slices.Contains(nodes, k) {
-				t.Errorf("%s shows the code %q", page, k)
+				t.Errorf("%s shows the code %q", path, k)
 			}
 		}
 	}
@@ -564,10 +569,10 @@ func TestSkipReasonsAndHookKindsAreWordsOnPages(t *testing.T) {
 		skips[r] = 1
 	}
 	kinds := map[string]int64{}
-	rawNames := append(slices.Clone(indexgen.PromptReasons), "panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn")
-	for _, k := range rawNames[len(indexgen.PromptReasons):] {
+	for _, k := range indexgen.FailureKinds {
 		kinds[k] = 1
 	}
+	rawNames := slices.Concat(indexgen.PromptReasons, indexgen.FailureKinds)
 	set := func(r *metrics.Result, id string, extra map[string]any) {
 		m := r.Metrics[id]
 		m.Status = metrics.StatusOK

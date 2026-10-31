@@ -81,6 +81,24 @@ var funcs = template.FuncMap{
 	"esc":       url.PathEscape,
 	"asset":     assetOf,
 	"pathOnly":  func(p string) string { base, _ := splitPath(p); return base },
+
+	"decision":    func(s string) string { return views.Word(views.DecisionWords, s) },
+	"declared":    func(raw []string) string { return words(views.DeclaredWords, raw) },
+	"retired":     func(s string) string { return views.Word(views.RetireWords, s) },
+	"serverstate": func(s string) string { return views.Word(views.ServerStateWords, s) },
+	"skipped":     func(s string) string { return views.Word(views.SkipWords, s) },
+	"pager":       pagerOf,
+	"links":       filterLinks,
+	"rowmetric":   rowMetric,
+	"flagships":   flagships,
+	"shares":      shares,
+	"settings":    settingLines,
+	"opt":         optInt,
+	"optpct":      optPercent,
+	"weighted":    weighted,
+	"signed":      signed,
+	"count":       roundInt,
+	"ranks":       rankLines,
 }
 
 // assetOf is the path an embedded file is served at; a name that is not

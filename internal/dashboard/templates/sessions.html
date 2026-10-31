@@ -1,5 +1,22 @@
 {{/* views: sessions */}}
 {{template "head" .}}{{template "top" .}}
+{{$r := .V.sessions}}
 <h1>{{.Frame.Title}}</h1>
 {{template "scope" .}}
+
+{{/* widget: filter. Shows only the sessions that have what the link says. */}}
+<section>
+<h2>Show only sessions with</h2>
+{{template "choices" links $.Frame.Path "has"}}
+</section>
+
+{{/* widget: sessions. Reads .V.sessions.Tables.Sessions (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent). */}}
+<section>
+<h2>Sessions</h2>
+<table>
+<tr><th>When</th><th>Session</th><th>Project</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
+{{range $r.Tables.Sessions}}<tr><td>{{when $.Loc .Start}}</td><td><a href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td title="{{.Project}}">{{clip .Project}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{sent .Sent}}</td></tr>
+{{end}}</table>
+{{template "paging" pager $.Frame.Path $r.Tables.Page}}
+</section>
 {{template "foot" .}}

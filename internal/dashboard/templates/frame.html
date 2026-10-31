@@ -114,3 +114,12 @@
 {{end}}</table>
 </section>
 {{end}}
+
+{{/* paging: dot is a Pager (Prev, Next, From, To, Total). */}}
+{{define "paging"}}{{if .Total}}<p>{{.From}}–{{.To}} of {{.Total}}{{with .Prev}} · <a href="{{.}}" rel="prev">Previous</a>{{end}}{{with .Next}} · <a href="{{.}}" rel="next">Next</a>{{end}}</p>
+{{end}}{{end}}
+
+{{/* choices: dot is a list of Choice. */}}
+{{define "choices"}}<p>{{range .}}{{template "navlink" .}}
+{{end}}</p>
+{{end}}

@@ -43,6 +43,20 @@ var (
 		"invalid_output": "gave an unreadable answer", "input_too_large": "input too large", "spawn": "could not start", "unknown": "reason not recorded",
 	}
 
+	// DecisionWords say what the recall did for a prompt; DeclaredWords what
+	// Claude said of the memories it was shown.
+	DecisionWords = map[string]string{"recall": "looked for memory", "skip": "no memory looked up"}
+	DeclaredWords = map[string]string{"used": "used", "none": "none used", "wrong": "reported wrong", "outdated": "out of date", "invalid": "not understood"}
+
+	// RetireWords name what was done to a memory; ServerStateWords the
+	// state the server keeps it in.
+	RetireWords      = map[string]string{"retire": "retired", "hide": "hidden", "unhide": "restored", "forget": "forgotten"}
+	ServerStateWords = map[string]string{"active": "available", "hidden": "hidden", "retired": "retired"}
+
+	// HasWords and SortWords label the filters and orders of the lists.
+	HasWords  = map[string]string{"used": "Used", "wrong": "Reported wrong", "undeclared": "Not declared", "memory": "Got memory"}
+	SortWords = map[string]string{"shown": "Most shown", "used": "Most used", "rate": "Used rate", "last_shown": "Last shown"}
+
 	// LanguageWords name the language groups of recall.by_lang.
 	LanguageWords = map[string]string{"unknown": "language not detected"}
 )

@@ -1,5 +1,27 @@
 {{/* views: sessions */}}
 {{template "head" .}}{{template "top" .}}
+{{$r := .V.sessions}}
 <h1>{{.Frame.Title}}</h1>
 {{template "scope" .}}
+
+{{with $r.Tables.Session}}
+{{/* widget: totals. Reads .V.sessions.Tables.Session.Totals (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent). */}}
+<section>
+<h2 title="{{.Totals.ID}}">Session {{short .Totals.ID}}</h2>
+<table>
+<tr><th>Project</th><th>Started</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
+<tr><td title="{{.Totals.Project}}">{{clip .Totals.Project}}</td><td>{{when $.Loc .Totals.Start}}</td><td>{{n .Totals.Prompts}}</td><td>{{n .Totals.PromptsWithMemory}}</td><td>{{n .Totals.Shown}}</td><td>{{n .Totals.Used}}</td><td>{{n .Totals.Wrong}}</td><td>{{n .Totals.ContextChars}} chars</td><td>{{sent .Totals.Sent}}</td></tr>
+</table>
+</section>
+
+{{/* widget: turns. Reads .V.sessions.Tables.Session.Turns (N, At, Decision, Reason, Empty, Shows: MemoryID, Rank, Path, Outcome; Searches, Declared, Check). */}}
+<section>
+<h2>Turns</h2>
+<table>
+<tr><th>Prompt</th><th>When</th><th>What memory did</th><th>Shown</th><th>Searches</th><th>Claude said it used</th><th>End of turn</th></tr>
+{{range .Turns}}<tr><td>{{opt .N}}</td><td>{{when $.Loc .At}}</td><td>{{with .Decision}}{{decision .}}{{end}}{{with .Reason}} ({{skipped .}}){{end}}{{with .Empty}} ({{empty .}}){{end}}</td><td>{{range .Shows}}<span><a href="/memories/{{esc .MemoryID}}" title="{{.MemoryID}}">{{short .MemoryID}}</a> rank {{opt .Rank}}, {{path .Path}}, {{outcome .Outcome}}</span>
+{{end}}</td><td>{{n .Searches}}</td><td>{{declared .Declared}}</td><td>{{with .Check}}{{check .}}{{end}}</td></tr>
+{{end}}</table>
+</section>
+{{end}}
 {{template "foot" .}}

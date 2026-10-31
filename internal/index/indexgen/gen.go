@@ -45,6 +45,11 @@ func End() time.Time { return Now.Add(-20 * time.Minute) }
 // set (internal/index holds the same list; its tests check the two agree).
 var PromptReasons = []string{"machine", "too_short", "same_topic", "gap", "budget", "topic_shift", "breaker", "maintenance", "first"}
 
+// FailureKinds are the hook failure kinds the lines carry: the index's
+// closed set (internal/index holds the same list; its tests check the two
+// agree).
+var FailureKinds = []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"}
+
 // telKindMix is the share, in percent, of each telemetry kind, as on the
 // author's PC: the frequent kinds first.
 var telKindMix = []struct {

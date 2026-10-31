@@ -1,5 +1,16 @@
 {{/* views: defs */}}
 {{template "head" .}}{{template "top" .}}
+{{$r := .V.defs}}
 <h1>{{.Frame.Title}}</h1>
 {{template "scope" .}}
+
+{{/* widget: definitions. Reads .V.defs.Tables.Defs (ID, Label, Question, Definition, Unit, MinN, N, MDC). */}}
+<section>
+<h2>Definitions</h2>
+<table>
+<tr><th>Number</th><th>Question</th><th>Definition</th><th>Unit</th><th>Minimum n</th><th>n now</th><th>Smallest change it can show</th><th>Id</th></tr>
+{{range $r.Tables.Defs}}<tr><td>{{.Label}}</td><td>{{.Question}}</td><td>{{.Definition}}</td><td>{{unit .Unit}}</td><td>{{.MinN}}</td><td>{{n .N}}</td><td>{{optpct .MDC}}</td><td><code>{{.ID}}</code></td></tr>
+{{end}}</table>
+{{template "paging" pager $.Frame.Path $r.Tables.Page}}
+</section>
 {{template "foot" .}}
