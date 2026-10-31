@@ -116,9 +116,10 @@ func llmPeriod(span time.Duration) string {
 
 // loadServer reads what need names (endpoint keys, plus "doctor" for the
 // live doctor run), every read in parallel under ServerTimeout and the
-// doctor beside them under doctorTimeout. The periods cover the window's
-// length (the clock is not read again: a window built a moment ago keeps
-// its period). The state is nil when need names no server read; without a
+// doctor beside them under doctorTimeout. The server's periods count back
+// from now, so they cover the window back to its start, less a minute for
+// the clock moving on since the window was built (a 7-day window built a
+// moment ago keeps the 7-day period), and at least the window's length. The state is nil when need names no server read; without a
 // server every read fails as not configured. The state's OK is false when
 // every read failed, and then its Error is the first failure's enum in key
 // order; a partial failure shows only in its metrics' reasons. A read is
@@ -145,7 +146,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		return d, nil
 	}
 
-	span := w.Length()
+	span := max(w.Length(), src.now().Sub(w.Since)-time.Minute)
 	var (
 		kmu    sync.Mutex
 		closed bool

@@ -349,6 +349,22 @@ func TestPeriodsCoverTheWindow(t *testing.T) {
 	if want := []string{"LLMStats?period=7d", "MemoriesTimeseries?period=7d&time_field=created_at"}; !reflect.DeepEqual(c, want) {
 		t.Fatalf("calls %v, want %v", c, want)
 	}
+
+	// The periods count back from now: a 7-day window ending 20 days ago
+	// needs the 27 days back to its start, the 30-day period.
+	y := newFx(t, fxNow)
+	past, err := NewWindow(fxNow, 0, fxNow.Add(-27*day), fxNow.Add(-20*day), fxParis, "Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, st := loadServer(context.Background(), y.source(), past, []string{"series", "llm:"}); st == nil || !st.OK {
+		t.Fatalf("state %+v", st)
+	}
+	c = y.server.called()
+	sort.Strings(c)
+	if want := []string{"LLMStats?period=30d", "MemoriesTimeseries?period=30d&time_field=created_at"}; !reflect.DeepEqual(c, want) {
+		t.Fatalf("past window: calls %v, want %v", c, want)
+	}
 }
 
 // deafServer's BankStats ignores its context until hang closes.
