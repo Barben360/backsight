@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -245,7 +246,7 @@ func TestProjectPageMemories(t *testing.T) {
 	x := newFx(t, fxNow)
 	x.prompts("alpha", "a", fxNow.Add(-2*time.Hour), 1, nil)
 	// the session is alpha's; the memory's project is the tag of the latest show
-	x.shows(hoursAgo(1), "s1", "t1", "", "alpha", "prompt", "alpha", "u-big", "u-small", "never-a", "other-b")
+	x.shows(hoursAgo(1), "s1", "t1", "", "alpha", "prompt", "alpha", "u-big", "u-small", "never-a", "other-b", "u-hid")
 	x.shows(hoursAgo(2), "s2", "t1", "", "alpha", "prompt", "beta", "beta-used")
 	x.ledger(feedback.Ledger{Memories: map[string]feedback.Entry{
 		"u-big":     {Shown: 8, Credits: 5, CreditsAt: fxNow, LastShown: ago(time.Hour)},
@@ -253,6 +254,7 @@ func TestProjectPageMemories(t *testing.T) {
 		"never-a":   {Shown: 12, LastShown: ago(3 * time.Hour)},
 		"other-b":   {Shown: 30, Credits: 9, CreditsAt: fxNow}, // alpha shown it, but its latest show names alpha too: see below
 		"beta-used": {Shown: 4, Credits: 7, CreditsAt: fxNow},
+		"u-hid":     {Shown: 9, Credits: 50, CreditsAt: fxNow, Hidden: &feedback.Hidden{Since: ago(day)}}, // hidden: not listed
 	}})
 	x.shows(hoursAgo(0), "s3", "t1", "", "alpha", "prompt", "beta", "other-b") // other-b's latest show: beta
 	p := x.run("projects", projectQuery(x, "alpha")).Tables.Project
@@ -1629,9 +1631,42 @@ func TestQualityStepsServeSubsets(t *testing.T) {
 		if _, ok := sub["used.rank"]; !ok { // served from the full run
 			t.Error("the subset was recomputed instead of served from the full run")
 		}
+		if !reflect.DeepEqual(obs["used.turn_rate"], full["used.turn_rate"]) {
+			t.Errorf("alone %+v, in the full run %+v", obs["used.turn_rate"], full["used.turn_rate"])
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestWorstSentNamesAnEmptyStatus: a document with no status is unknown,
+// never an empty string that reads as "nothing to report".
+func TestWorstSentNamesAnEmptyStatus(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want string
+	}{{[]string{"ok", ""}, "unknown"}, {[]string{""}, "unknown"}, {[]string{"ok", "", "failed"}, "failed"}, {[]string{"ok"}, "ok"}} {
+		if got := worstSent(slices.Clone(c.in)); got != c.want {
+			t.Errorf("worstSent(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestReleaseSharesNameTheMissingProject: prompts with no project are
+// counted under the key "none", never under an empty JSON key.
+func TestReleaseSharesNameTheMissingProject(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.binary = "0.1.16"
+	x.tel(fxNow.Add(-time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "a-1", "alpha")
+	x.tel(fxNow.Add(-2*time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "n-1", "")
+	r := x.run("releases", x.query(7))
+	if len(r.Tables.Releases) != 1 {
+		t.Fatalf("rows: %+v", r.Tables.Releases)
+	}
+	got := r.Tables.Releases[0].ProjectShares
+	if _, bad := got[""]; bad || got[NoProject] != 0.5 || got["alpha"] != 0.5 || len(got) != 2 {
+		t.Errorf("shares = %v, want alpha and none at 0.5", got)
 	}
 }

@@ -301,7 +301,7 @@ func projectMemories(e env, id string) (top, never []ReviewRow, err error) {
 	}
 	var us []used
 	for mid, m := range l.Memories {
-		if projects[mid] != id || m.RestoreOnly() {
+		if projects[mid] != id || m.RestoreOnly() || m.Hidden != nil {
 			continue
 		}
 		if c := m.DecayedTo(e.now, p).Credits; c > 0 {

@@ -58,6 +58,9 @@ type releaseAcc struct {
 	projects    map[string]int64
 }
 
+// NoProject is the project_shares key of prompts that have no project.
+const NoProject = "none"
+
 func releaseRows(e env, w Window) ([]ReleaseRow, error) {
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT binary_version, ts, COALESCE(project, ''), reason IS NULL OR reason <> 'machine' FROM tel_prompt
@@ -100,6 +103,9 @@ WHERE ts >= ? AND ts < ? AND COALESCE(binary_version, '') <> '' AND `+projectCla
 	for version, a := range accs {
 		r := ReleaseRow{Version: version, First: a.first, Last: a.last, N: a.n, ProjectShares: map[string]float64{}}
 		for p, n := range a.projects {
+			if p == "" {
+				p = NoProject
+			}
 			r.ProjectShares[p] = float64(n) / float64(a.n)
 		}
 		if len(a.days) > 0 {

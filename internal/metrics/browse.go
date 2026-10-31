@@ -166,6 +166,9 @@ func worstSent(sts []string) string {
 	slices.Sort(sts)
 	for _, s := range sts {
 		if s != "ok" {
+			if s == "" {
+				return "unknown"
+			}
 			return s
 		}
 	}
