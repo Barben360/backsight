@@ -137,26 +137,46 @@ func telemetryAbsent(e env, tables ...string) (string, bool, error) {
 // negative (a clock ahead of now reads 0).
 //
 // status is each document's last status (documentStatus's map), so a view
-// reads document_status once.
+// reads document_status once. The waits are read in one grouped pass over
+// tel_retain, whatever the number of waiting documents.
 func backlogAgeOf(tx *sql.Tx, now time.Time, status map[string]string) (time.Duration, error) {
 	var oldest sql.NullInt64
 	if err := tx.QueryRow(`SELECT notes_oldest_at FROM local_status WHERE id = 1`).Scan(&oldest); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
-	for doc, st := range status {
-		if st != "queued" && st != "retry" {
-			continue
+	waits := false
+	for _, st := range status {
+		if st == "queued" || st == "retry" {
+			waits = true
+			break
 		}
-		var since sql.NullInt64
-		err := tx.QueryRow(`
-SELECT MIN(r.ts) FROM tel_retain r
-WHERE r.document = ? AND r.ts > COALESCE((SELECT MAX(x.ts) FROM tel_retain x
-                                          WHERE x.document = ? AND x.status NOT IN ('queued', 'retry')), -1)`, doc, doc).Scan(&since)
+	}
+	if waits {
+		// Per document, the first event after its last status that was
+		// neither queued nor retry (any event when it never had one).
+		rows, err := tx.Query(`
+SELECT r.document, MIN(r.ts) FROM tel_retain r
+LEFT JOIN (SELECT document, MAX(ts) AS done FROM tel_retain
+           WHERE document IS NOT NULL AND status NOT IN ('queued', 'retry') GROUP BY document) d
+       ON d.document = r.document
+WHERE r.document IS NOT NULL AND r.ts > COALESCE(d.done, -1)
+GROUP BY r.document`)
 		if err != nil {
 			return 0, err
 		}
-		if since.Valid && (!oldest.Valid || since.Int64 < oldest.Int64) {
-			oldest = since
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var doc string
+			var since int64
+			if err := rows.Scan(&doc, &since); err != nil {
+				return 0, err
+			}
+			if st := status[doc]; (st == "queued" || st == "retry") && (!oldest.Valid || since < oldest.Int64) {
+				oldest = sql.NullInt64{Int64: since, Valid: true}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return 0, err
 		}
 	}
 	if !oldest.Valid {

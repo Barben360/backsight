@@ -112,7 +112,19 @@ func (x *gen) telLine(ts time.Time) map[string]any {
 	case "credit_check":
 		m["outcome"], m["shown"] = "declared", x.rng.IntN(6)
 	case "retain":
-		m["document"], m["items"], m["status"], m["ms"] = fmt.Sprintf("doc-%d", x.rng.IntN(5000)), x.rng.IntN(9), "ok", x.rng.IntN(3000)
+		// As on the author's PC: about 4.5 subagent notes logged queued
+		// (each its own document) for each send of a conversation, which
+		// now and then waits for a retry.
+		sid := m["session"].(string)
+		if x.rng.IntN(11) < 9 {
+			m["document"], m["items"], m["status"] = fmt.Sprintf("subagent:%s:agent-%08x", sid, x.rng.Uint32()), 1, "queued"
+			break
+		}
+		status := "ok"
+		if x.rng.IntN(40) == 0 {
+			status = "retry"
+		}
+		m["document"], m["items"], m["status"], m["ms"] = "conversation:"+sid, x.rng.IntN(9), status, x.rng.IntN(3000)
 	case "job":
 		m["name"], m["status"], m["ms"] = "tick", "done", x.rng.IntN(5000)
 	case "gate":
