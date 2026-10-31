@@ -13,6 +13,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // listed is the fake server's document listing, as ListDocuments reads it.
@@ -56,6 +57,7 @@ func (e *env) tagsOf(doc string) []string {
 // A subagent report filed under its session's directory moves, for free,
 // to the own repository its work was in; the second run finds nothing.
 func TestReattributeMovesAReportToItsWork(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, _ := subagentEnv(t)
 	e.cwd = billing
 	e.record("s1", "u1", "user", 0, "Fix the cart.")
@@ -511,6 +513,7 @@ func TestAReportsOwnDecisionIsKeptWithoutTheLedger(t *testing.T) {
 // The server took the new tags but reading the memories back fails: the
 // report's kept decision follows the tags all the same.
 func TestAFailedReadBackStillKeepsTheReportsDecision(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, _ := subagentEnv(t)
 	e.recordIn(billing, "s1", "u1", "user", 0, "go")
 	e.agent("s1", "ag1", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})

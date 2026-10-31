@@ -85,6 +85,7 @@ func guard(t *testing.T, env []string, args ...string) (string, error) {
 }
 
 func TestReleaseKeyGuardRefusesAReleaseKeyOutsideTheReleaseWorkflow(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	rel := minisignKey(t)   // stands in for minisign.pub's key
 	other := minisignKey(t) // a throwaway key
 	secret, err := os.ReadFile(rel.sec)
@@ -224,6 +225,7 @@ echo "the release key, which make snapshot must never ask for"
 }
 
 func TestSnapshotSignsWithAThrowawayKey(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	r := snapshotRun(t)
 	if r.err != nil {
 		t.Fatalf("make snapshot: %v\n%s", r.err, r.out)
@@ -266,6 +268,7 @@ func TestSnapshotSignsWithAThrowawayKey(t *testing.T) {
 // A release key handed to make snapshot is refused, not silently set
 // aside: whoever exported it is told, and nothing is built.
 func TestSnapshotRefusesAReleaseKey(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	rel := minisignKey(t)
 	secret, err := os.ReadFile(rel.sec)
 	if err != nil {

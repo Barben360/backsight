@@ -610,6 +610,7 @@ func TestSwitchInterruptedPutsTheSourceBack(t *testing.T) {
 // RF 3: a switch killed part way leaves runtime_switch running with a
 // dead owner; its rerun first puts the source back, then switches.
 func TestSwitchRerunAfterAKillStartsFromTheSource(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
 	home, w := switchSetup(t, "docker")
 	cmd := exec.Command("true")
 	if err := cmd.Run(); err != nil {
@@ -1006,6 +1007,7 @@ func TestSwitchFailureBeforeTheTargetLeavesItAlone(t *testing.T) {
 // RF 3: killed after config.toml named the target, the switch had passed:
 // its rerun says so and stops or starts nothing.
 func TestSwitchRerunAfterAKillPastTheCommit(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: the runtime switch is refused on Windows")
 	home, w := switchSetup(t, "native")
 	cmd := exec.Command("true")
 	if err := cmd.Run(); err != nil {

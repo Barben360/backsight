@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 var now = time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
@@ -96,6 +97,7 @@ func TestCheck(t *testing.T) {
 	archive := strings.Repeat("a", 64) + "  backsight_" + version + "_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz\n"
 
 	t.Run("verified", func(t *testing.T) {
+		testtool.SkipWindows(t, "Task 4: the checked binary's identity (size and mtime) on Windows, where the shim is a copy")
 		exe := r.install(t, t.TempDir(), body, archive+binaryLine(body))
 		got := Check(exe, version, runtime.GOOS, runtime.GOARCH, now)
 		fi, _ := os.Stat(exe)

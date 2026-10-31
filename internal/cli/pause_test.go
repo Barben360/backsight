@@ -81,6 +81,7 @@ func TestPauseProjectEditsTheExcludePaths(t *testing.T) {
 // From a subdirectory of a git repo: the repo root is excluded, the existing
 // entries are kept, a second pause adds nothing, --plan writes nothing.
 func TestPauseProjectKeepsTheListAndUsesTheRepoRoot(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home := devInstall(t, true)
 	repo := filepath.Join(home, "work", "billing")
 	_ = os.MkdirAll(filepath.Join(repo, "internal"), 0o700)

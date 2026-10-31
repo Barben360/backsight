@@ -97,6 +97,7 @@ func (e *env) ledger() []TurnEntry {
 // change, and each finished turn records the rule's answer beside the
 // applied one, once.
 func TestMainTurnsRunThePathRuleInShadow(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e := newEnv(t)
 	e.attributed()
 	billing := e.ownRepo("billing", "")
@@ -208,6 +209,7 @@ func subagentEnv(t *testing.T) (e *env, billing, shop, vendor string) {
 
 // Each situation E32 graded, on a subagent's own transcript.
 func TestSubagentReportsFollowTheirWork(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, vendor := subagentEnv(t)
 	home := filepath.Dir(filepath.Dir(billing))
 	claude := filepath.Join(home, ".claude")
@@ -258,6 +260,7 @@ func TestSubagentReportsFollowTheirWork(t *testing.T) {
 // once the worktree its work was in is removed; and a ledger lost too is
 // rebuilt the same from the session's own worktree command.
 func TestARebuiltReportKeepsItsProject(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, _ := subagentEnv(t)
 	testtool.RequireGit(t)
 	run := func(args ...string) {
@@ -348,6 +351,7 @@ func TestSubagentReportsNeverMoveToAnExcludedRepository(t *testing.T) {
 // A decision kept before the user excluded its repository gives way to
 // the exclusion: a rebuilt report never goes to a project now kept out.
 func TestAKeptDecisionHonoursALaterExclusion(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, _ := subagentEnv(t)
 	e.recordIn(billing, "s1", "u1", "user", 0, "go")
 	sess := filepath.Join(e.dir, "s1.jsonl")
@@ -370,6 +374,7 @@ func TestAKeptDecisionHonoursALaterExclusion(t *testing.T) {
 // that decision is provisional: a later reader, once the transcript is
 // complete, decides on the evidence and keeps that.
 func TestALaggingOrUnreadableTranscriptIsDecidedLater(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, _ := subagentEnv(t)
 	e.recordIn(billing, "s1", "u1", "user", 0, "go")
 	sess := filepath.Join(e.dir, "s1.jsonl")
@@ -459,6 +464,7 @@ func commitAs(t *testing.T, dir, email string) {
 // else's code, a remote without an owner, a session kept out (excluded,
 // paused, headless) teaches nothing; projects.deny_owners wins.
 func TestOwnersAreLearntOnlyFromRepositoriesTheUserCommittedTo(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	e, billing, shop, _ := subagentEnv(t)
 	home := filepath.Dir(filepath.Dir(billing))
 	claude := filepath.Join(home, ".claude")

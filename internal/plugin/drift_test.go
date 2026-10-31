@@ -5,9 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestDrift(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim check (a symlink branch only an admin runner takes, shim named current.exe)")
 	data := t.TempDir()
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	target := filepath.Join(data, "bin", "v1", "backsight")
@@ -39,6 +42,7 @@ func TestDrift(t *testing.T) {
 }
 
 func TestDriftShimTargetsAndSettingsFiles(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim check (a symlink branch only an admin runner takes, shim named current.exe)")
 	data := t.TempDir()
 	mk := func(v string) string {
 		p := filepath.Join(data, "bin", v, "backsight")

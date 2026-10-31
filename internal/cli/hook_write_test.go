@@ -203,6 +203,7 @@ func gitRepo(t *testing.T, dir, remote string) {
 // the hook records the decision; a third-party clone's work stays with
 // the session's project.
 func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home := hookHome(t)
 	billing, shop, vendor := filepath.Join(home, "billing"), filepath.Join(home, "src", "shop"), filepath.Join(home, "build", "vendor-tool")
 	gitRepo(t, billing, "git@github.com:me/billing.git")
