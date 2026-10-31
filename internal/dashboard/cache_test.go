@@ -167,7 +167,7 @@ func TestDoctorCached5min(t *testing.T) {
 		t.Errorf("5 min 1 s later: %d runs, want 2", n)
 	}
 
-	// A failed run is not kept.
+	// A failed run is remembered for the TTL, then asked again.
 	clk.add(5*time.Minute + time.Second)
 	mu.Lock()
 	fail = errors.New("the doctor failed")
@@ -178,11 +178,15 @@ func TestDoctorCached5min(t *testing.T) {
 	mu.Lock()
 	fail = nil
 	mu.Unlock()
+	if _, err := doc(ctx); err == nil || nruns() != 3 {
+		t.Errorf("right after a failed run: %v, %d runs; want the failure and 3 runs", err, nruns())
+	}
+	clk.add(5*time.Minute + time.Second)
 	if _, err := doc(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if n := nruns(); n != 4 {
-		t.Errorf("after a failed run: %d runs, want 4", n)
+		t.Errorf("a TTL after a failed run: %d runs, want 4", n)
 	}
 
 	// A run whose first caller leaves still ends, for the next caller.
@@ -212,5 +216,109 @@ func TestDoctorCached5min(t *testing.T) {
 	}
 	if n := nruns(); n != 5 {
 		t.Errorf("%d runs, want 5 (the held run's result reused)", n)
+	}
+}
+
+// Callers share the one run in flight; its failure is remembered for the
+// TTL, so a failing probe is not asked again at every request.
+func TestDoctorOneRunSharedAndFailureKept(t *testing.T) {
+	clk := &clock{t: indexgen.Now}
+	var (
+		mu      sync.Mutex
+		runs    int
+		entered = make(chan struct{}, 8)
+		nowCall = make(chan struct{}, 16)
+		gate    = make(chan struct{})
+		boom    = errors.New("the doctor failed")
+	)
+	run := func(ctx context.Context) ([]metrics.DoctorCheck, error) {
+		mu.Lock()
+		runs++
+		mu.Unlock()
+		entered <- struct{}{}
+		<-gate
+		return nil, boom
+	}
+	nruns := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return runs
+	}
+	// now is read under the doctor's lock: a signal means the caller is in.
+	doc := cachedDoctor(context.Background(), run, func() time.Time { nowCall <- struct{}{}; return clk.now() })
+	ctx := context.Background()
+	errs := make(chan error, 3)
+	go func() { _, err := doc(ctx); errs <- err }()
+	<-entered
+	<-nowCall
+	for range 2 {
+		go func() { _, err := doc(ctx); errs <- err }()
+		<-nowCall
+	}
+	close(gate)
+	for range 3 {
+		if err := <-errs; !errors.Is(err, boom) {
+			t.Errorf("a caller of the shared run: %v, want the run's failure", err)
+		}
+	}
+	if n := nruns(); n != 1 {
+		t.Errorf("three concurrent callers: %d runs, want 1", n)
+	}
+	if _, err := doc(ctx); !errors.Is(err, boom) || nruns() != 1 {
+		t.Errorf("right after the failure: %v, %d runs; want the failure kept and 1 run", err, nruns())
+	}
+	clk.add(doctorTTL + time.Second)
+	if _, err := doc(ctx); !errors.Is(err, boom) || nruns() != 2 {
+		t.Errorf("a TTL later: %v, %d runs; want a second run", err, nruns())
+	}
+}
+
+// A probe that ignores its context is abandoned at the bound, and no second
+// probe starts while it still runs, however many requests come.
+func TestDoctorHungProbeDoesNotStack(t *testing.T) {
+	old := doctorBound
+	doctorBound = 20 * time.Millisecond
+	ended := make(chan struct{}, 4)
+	oldEnd := onDoctorEnd
+	onDoctorEnd = func() { ended <- struct{}{} }
+	t.Cleanup(func() { doctorBound, onDoctorEnd = old, oldEnd })
+
+	clk := &clock{t: indexgen.Now}
+	var (
+		mu   sync.Mutex
+		runs int
+	)
+	hang := make(chan struct{})
+	run := func(context.Context) ([]metrics.DoctorCheck, error) { // ignores its context
+		mu.Lock()
+		runs++
+		mu.Unlock()
+		<-hang
+		return []metrics.DoctorCheck{{ID: "server", Status: "ok"}}, nil
+	}
+	nruns := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return runs
+	}
+	doc := cachedDoctor(context.Background(), run, clk.now)
+	ctx := context.Background()
+	if _, err := doc(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a hung probe: %v, want the bound's deadline", err)
+	}
+	for range 3 {
+		clk.add(doctorTTL + time.Second)
+		if _, err := doc(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("while the probe still hangs: %v", err)
+		}
+	}
+	if n := nruns(); n != 1 {
+		t.Errorf("%d probes while one hangs, want 1", n)
+	}
+	close(hang)
+	<-ended
+	clk.add(doctorTTL + time.Second)
+	if _, err := doc(ctx); err != nil || nruns() != 2 {
+		t.Errorf("once the probe returned: %v, %d runs; want a new run that succeeds", err, nruns())
 	}
 }

@@ -229,11 +229,19 @@ func (c *cachedServer) OperationsPage(ctx context.Context, status, typ string, l
 	})
 }
 
-// cachedDoctor wraps the doctor run: one run at a time, under base bounded
-// by doctorBound (a closed tab does not stop it), its checks kept
-// doctorTTL; a failed run is never kept. A caller waits for the run or for
-// its own ctx. A run that overstays its bound (a probe ignoring its
-// context) is abandoned as failed.
+// onDoctorEnd runs when a doctor probe has returned and a new run may start
+// (tests wait for it).
+var onDoctorEnd = func() {}
+
+// cachedDoctor wraps the doctor run: at most one run in flight, shared by
+// every caller, under base bounded by doctorBound (a closed tab does not
+// stop it). Its checks are kept doctorTTL, and so is its failure: a probe
+// that fails or hangs is not asked again before that, so requests do not
+// pile up runs. A caller waits for the run or for its own ctx. A run that
+// overstays its bound (a probe ignoring its context) is abandoned as
+// failed, and no new run starts until that probe has returned. The
+// goroutines are not waited for at the stop: the run's context ends with
+// the dashboard's, and the bound caps the rest.
 func cachedDoctor(base context.Context, run func(context.Context) ([]metrics.DoctorCheck, error), now func() time.Time) func(context.Context) ([]metrics.DoctorCheck, error) {
 	type doctorCall struct {
 		done   chan struct{}
@@ -241,14 +249,18 @@ func cachedDoctor(base context.Context, run func(context.Context) ([]metrics.Doc
 		err    error
 	}
 	var (
-		mu      sync.Mutex
-		kept    []metrics.DoctorCheck
-		keptAt  time.Time
-		have    bool
-		running *doctorCall
+		mu       sync.Mutex
+		kept     []metrics.DoctorCheck
+		keptAt   time.Time
+		have     bool
+		failure  error // the latest failed run; cleared by a success
+		failedAt time.Time
+		running  *doctorCall
+		probing  bool // a probe is still executing, even if abandoned
 	)
 	start := func(at time.Time) *doctorCall {
 		call := &doctorCall{done: make(chan struct{})}
+		probing = true
 		go func() {
 			ctx, cancel := context.WithTimeout(base, doctorBound)
 			defer cancel()
@@ -259,6 +271,10 @@ func cachedDoctor(base context.Context, run func(context.Context) ([]metrics.Doc
 			ran := make(chan outcome, 1) // an abandoned run still sends, to no one
 			go func() {
 				checks, err := run(ctx)
+				mu.Lock()
+				probing = false
+				mu.Unlock()
+				onDoctorEnd()
 				ran <- outcome{checks, err}
 			}()
 			var o outcome
@@ -276,6 +292,9 @@ func cachedDoctor(base context.Context, run func(context.Context) ([]metrics.Doc
 			running = nil
 			if err == nil {
 				kept, keptAt, have = checks, at, true
+				failure = nil
+			} else {
+				failure, failedAt = err, at
 			}
 			mu.Unlock()
 			call.checks, call.err = checks, err
@@ -290,6 +309,11 @@ func cachedDoctor(base context.Context, run func(context.Context) ([]metrics.Doc
 			out := slices.Clone(kept)
 			mu.Unlock()
 			return out, nil
+		}
+		if failure != nil && (probing || fresh(at, failedAt, doctorTTL)) {
+			err := failure
+			mu.Unlock()
+			return nil, err
 		}
 		if running == nil {
 			running = start(at)
