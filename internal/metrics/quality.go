@@ -397,7 +397,13 @@ WHERE s.ts >= ? AND s.ts < ? AND s.key IS NOT NULL AND COALESCE(s.path, '') <> ?
 // wrong or outdated (a credit naming no memory is none of them), each at
 // the time of its memory's earliest show in its turn, else at its own
 // time. A memory is credited after it is shown, so a credit before the
-// window's start cannot belong to it.
+// window's start cannot belong to it. A credit has no upper bound: one
+// written after the window's end for a show inside it still counts.
+//
+// The show join is the same (session, turn, memory). A credit that
+// feedback.Decide attached to the latest earlier show of its session, in an
+// earlier turn than the credit's own, finds no show here and falls back to
+// the credit's own time: that is the rule as specified, not a lost row.
 func qualityVerdicts(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	since, until := w.Since.UnixMilli(), w.Until.UnixMilli()
 	rows, err := e.tx.QueryContext(e.ctx, `

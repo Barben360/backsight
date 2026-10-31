@@ -508,6 +508,55 @@ func TestBackDatedJournalLine(t *testing.T) {
 	}
 }
 
+// TestSubagentShowInMainTurn: a subagent's show in a main turn's (session,
+// turn) is a turn of its own and moves nothing of the main turn.
+// Session "open": main show of m1 4 h ago, no stop; a subagent shows m2
+// 1 h ago. The main turn's latest show stays 4 h ago, so it is undeclared
+// (a leak would make it pending: latest show under 2 h old). Session
+// "stamp": declared, shows m1 only, credited; a subagent later shows m2.
+// The main turn has 1 memory, so it is no rubber-stamp candidate (a leak
+// would make 2 memories, 1 credited: den 1).
+func TestSubagentShowInMainTurn(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.declaredTurn(hoursAgo(1), "open", "", "", "m1")
+	x.shows(fxNow.Add(-time.Hour), "open", "t1", "agent-1", "alpha", "search", "", "m2")
+	x.declaredTurn(hoursAgo(2), "stamp", "declared", "used", "m1")
+	x.shows(hoursAgo(2).Add(2*time.Minute), "stamp", "t1", "agent-1", "alpha", "search", "", "m2")
+
+	m := qualityOf(x, x.query(7))
+	r := m["used.turn_rate"]
+	if r.Extra["pending"] != int64(0) {
+		t.Errorf("pending = %v, want 0: the subagent show must not extend the main turn", r.Extra["pending"])
+	}
+	if c := m["declare.coverage"]; num(c) != 1 || den(c) != 2 {
+		t.Errorf("coverage = %d/%d, want 1/2 (stamp declared, open undeclared)", num(c), den(c))
+	}
+	if r.Extra["subagent_turns"] != int64(2) {
+		t.Errorf("subagent_turns = %v, want 2", r.Extra["subagent_turns"])
+	}
+	if rs := m["used.rubber_stamp"]; den(rs) != 0 {
+		t.Errorf("rubber_stamp den = %d, want 0: the main turn shows one memory", den(rs))
+	}
+}
+
+// TestCreditAfterUntil: the window [10-24, 10-31) holds a show of m1 on
+// 10-29; its wrong credit is written on 11-01, after Until, and still
+// counts: verdict.wrong_rate 1/1.
+func TestCreditAfterUntil(t *testing.T) {
+	x := newFx(t, fxNov)
+	shown := time.Date(2026, 10, 29, 10, 0, 0, 0, fxParis)
+	x.declaredTurn(shown, "oct", "declared", "", "m1")
+	x.credit(time.Date(2026, 11, 1, 10, 0, 0, 0, fxParis), "oct", "", "alpha", "wrong", "m1")
+	w, err := NewWindow(x.now, 0, time.Date(2026, 10, 24, 0, 0, 0, 0, fxParis), time.Date(2026, 10, 31, 0, 0, 0, 0, fxParis), fxParis, "Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wr := qualityOf(x, Query{Window: w, Machines: "this"})["verdict.wrong_rate"]
+	if num(wr) != 1 || den(wr) != 1 {
+		t.Errorf("wrong rate = %d/%d, want 1/1", num(wr), den(wr))
+	}
+}
+
 // promptShows writes count prompt shows, one session each, the i-th of
 // memory m<i> an hour apart, and returns their keys.
 func (x *fx) promptShows(prefix, path string, count int) []string {
