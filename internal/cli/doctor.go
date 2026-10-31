@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/hindsight"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/selfcheck"
@@ -93,8 +94,49 @@ func doctorEnv(d paths.Dirs, home string) doctor.Env {
 	denv := doctor.Env{Dirs: d, Home: home, Getenv: os.Getenv, Timeout: hindsightTimeout}
 	denv.Cwd, _ = os.Getwd()
 	runtimeProbes(&denv)
+	denv.MetricsIndex = func() (doctor.IndexFacts, error) { return indexFacts(context.Background(), d, home) }
 	probes(&denv)
 	return denv
+}
+
+// indexFactsTimeout bounds doctor's read of the metrics index (a lock or
+// a disk that hangs reports the class timeout); inspectIndex is
+// index.Inspect (tests slow it down).
+var (
+	indexFactsTimeout = 5 * time.Second
+	inspectIndex      = index.Inspect
+)
+
+// indexFacts reads the metrics index for doctor, read-only (Inspect creates
+// and migrates nothing). A failure comes back as its class alone: doctor
+// output goes into report bundles, which must not carry paths. An index
+// that exists but cannot be read is "corrupt", unless a stopped rebuild
+// already says so.
+func indexFacts(ctx context.Context, d paths.Dirs, home string) (doctor.IndexFacts, error) {
+	ctx, cancel := context.WithTimeout(ctx, indexFactsTimeout)
+	defer cancel()
+	st, err := inspectIndex(ctx, indexOptions(d, home, nil))
+	if ctx.Err() != nil {
+		return doctor.IndexFacts{}, errors.New("timeout")
+	}
+	if err != nil {
+		return doctor.IndexFacts{}, errors.New(index.Class(err))
+	}
+	f := doctor.IndexFacts{
+		Built: st.Exists, Newer: st.Newer, File: st.File, Size: st.Size, Schema: st.Schema, Head: st.Head,
+		StoppedAt: st.StoppedAt, MigrateFailedAt: st.MigrateFailedAt,
+		Errors24h: st.Errors24h, ErrorsByReason: st.Errors24hByReason, LagSeconds: st.LagSeconds,
+	}
+	if st.Filesystem.Kind != index.FSLocal {
+		f.Folder = st.Filesystem.Name
+		if f.Folder == "" {
+			f.Folder = string(st.Filesystem.Kind)
+		}
+	}
+	if st.Exists && !st.Readable && st.StoppedAt.IsZero() {
+		return f, errors.New(index.Class(index.ErrUnreadable))
+	}
+	return f, nil
 }
 
 // nativeProbeWait bounds the native runtime's probes (systemctl, psql,

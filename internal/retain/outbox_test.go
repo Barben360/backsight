@@ -232,7 +232,12 @@ func TestAppendAfterTornLine(t *testing.T) {
 // kept after the flush.
 func TestAppendDuringSlowFlush(t *testing.T) {
 	release := make(chan struct{})
+	arrived := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
 		<-release
 		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
@@ -242,7 +247,7 @@ func TestAppendDuringSlowFlush(t *testing.T) {
 	_, _ = o.Append(NewNote("b", "lesson", "p", "first", at))
 	done := make(chan FlushResult)
 	go func() { r, _ := o.Flush(context.Background(), c, "b", "m"); done <- r }()
-	time.Sleep(50 * time.Millisecond) // the flush is now waiting on the server
+	<-arrived // the flush is now waiting on the server
 	if _, err := o.Append(NewNote("b", "lesson", "p", "during", at)); err != nil {
 		t.Fatalf("append blocked by a flush in flight: %v", err)
 	}
@@ -390,5 +395,28 @@ func TestOutboxGateShutDuringASendKeepsTheNote(t *testing.T) {
 	notes, _ := o.read()
 	if len(notes) != 2 || notes[0].Content != "one" || notes[1].Content != "two" || notes[0].Attempts != 0 || notes[1].Attempts != 0 {
 		t.Errorf("kept: %+v, want both notes as they were", notes)
+	}
+}
+
+func TestOutboxOldest(t *testing.T) {
+	o := outbox(t)
+	if got, err := o.Oldest(); err != nil || !got.IsZero() {
+		t.Errorf("no outbox: %v, %v; want zero", got, err)
+	}
+	later := NewNote("b", "decision", "p", "later", at.Add(time.Hour))
+	earlier := NewNote("b", "decision", "p", "earlier", at)
+	for _, n := range []Note{later, earlier} { // the earlier one second
+		if _, err := o.Append(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := o.Oldest(); err != nil || !got.Equal(at) {
+		t.Errorf("oldest %v, %v; want %v", got, err, at)
+	}
+	if err := os.WriteFile(o.Path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := o.Oldest(); err != nil || !got.IsZero() {
+		t.Errorf("empty outbox: %v, %v; want zero", got, err)
 	}
 }

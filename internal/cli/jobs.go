@@ -32,7 +32,7 @@ func newJobsCmd(e *env) *cobra.Command {
 }
 
 type tickResult struct {
-	Status   string             `json:"status"` // done | skipped | partial
+	Status   string             `json:"status"` // done | skipped | partial | failed
 	Reason   string             `json:"reason,omitempty"`
 	Sessions map[string]int     `json:"sessions,omitempty"`
 	Notes    retain.FlushResult `json:"notes"`
@@ -67,8 +67,16 @@ type tickResult struct {
 	SharedMachines int    `json:"shared_machines,omitempty"`
 	SharedSkipped  int    `json:"shared_skipped,omitempty"`
 	SharedError    string `json:"shared_error,omitempty"`
-	MS             int    `json:"ms"`
+	// MetricsIndex: the catch-up of the metrics index, run on every way
+	// out of the tick (tickIndex).
+	MetricsIndex string `json:"metrics_index,omitempty"`
+	MS           int    `json:"ms"`
 }
+
+// clientSetupFailed is the tick's reason when its client cannot be set up
+// (the sent index or the machine id unreadable, state.json not
+// writable): a fixed text, the error goes to stderr or the envelope.
+const clientSetupFailed = "the client could not be set up"
 
 // reachCheckTimeout bounds the tick's one health call.
 const reachCheckTimeout = 5 * time.Second
@@ -94,7 +102,10 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			sendsConfigLoaded()
 			tw := telemetry.New(d.State, telemetry.Common{BinaryVersion: buildinfo.Version})
 			res := tickResult{Status: "done"}
+			// Every way out goes through finish: the metrics index catches up
+			// first, so that the tick's own job event waits for the next one.
 			finish := func(failed error) error {
+				res.MetricsIndex = tickIndex(cmd.Context(), d, home)
 				res.MS = int(time.Since(start).Milliseconds())
 				tw.Emit(telemetry.Job{Name: "tick", Status: res.Status, MS: res.MS,
 					Details: map[string]any{"sessions": res.Sessions, "notes_sent": res.Notes.Sent, "notes_kept": res.Notes.Kept, "reason": res.Reason, "epoch": res.Epoch, "purges": res.Purges, "server": res.Server, "unhidden": res.Unhidden, "history": res.History,
@@ -133,7 +144,8 @@ func newJobsTickCmd(e *env) *cobra.Command {
 
 			f, err := newFlusher(d, home, cfg, sec, generation, true)
 			if err != nil {
-				return err
+				res.Status, res.Reason = "failed", clientSetupFailed
+				return finish(err)
 			}
 			// One look whether the server answers, for doctor's server-reach
 			// check and the session banner (the hooks record only recalls).
@@ -265,8 +277,12 @@ func ensureSelfCheck(d paths.Dirs) string {
 }
 
 func tickText(r tickResult) string {
+	metrics := ""
+	if r.MetricsIndex != "" {
+		metrics = ", metrics index " + r.MetricsIndex
+	}
 	if r.Status == "skipped" {
-		return "skipped: " + r.Reason + "\n"
+		return "skipped: " + r.Reason + metrics + "\n"
 	}
 	msg := fmt.Sprintf("%s: sessions %v, notes sent %d, queued %d (%d ms)", r.Status, r.Sessions, r.Notes.Sent, r.Notes.Kept, r.MS)
 	if r.Backfill != "" {
@@ -302,7 +318,7 @@ func tickText(r tickResult) string {
 	if r.SharedSkipped > 0 {
 		msg += fmt.Sprintf(", %d shared document(s) skipped (unreadable or of a newer version)", r.SharedSkipped)
 	}
-	return msg + "\n"
+	return msg + metrics + "\n"
 }
 
 // importTickBudget bounds a tick's import of earlier history, its local

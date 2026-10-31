@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/guide"
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/migrate"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
@@ -180,14 +181,17 @@ type updateApplyResult struct {
 	Binary     string          `json:"binary,omitempty"` // where the new binary is (or would be) installed
 	Previous   string          `json:"previous,omitempty"`
 	Migrations []string        `json:"migrations"` // applied, or pending with --plan
-	Plugin     string          `json:"plugin,omitempty"`
-	Server     *updateServer   `json:"server,omitempty"`
-	Steps      []step          `json:"steps"`
-	RolledBack bool            `json:"rolled_back,omitempty"`
-	Resumed    bool            `json:"resumed,omitempty"` // an unfinished update to this binary was finished
-	Warnings   []string        `json:"warnings,omitempty"`
-	MS         int             `json:"ms"`
-	changed    bool            // the update went past its install (the shim step started)
+	// IndexMigrations: the metrics index's, applied or pending with --plan
+	// (the text says how many, never their ids).
+	IndexMigrations []string      `json:"index_migrations,omitempty"`
+	Plugin          string        `json:"plugin,omitempty"`
+	Server          *updateServer `json:"server,omitempty"`
+	Steps           []step        `json:"steps"`
+	RolledBack      bool          `json:"rolled_back,omitempty"`
+	Resumed         bool          `json:"resumed,omitempty"` // an unfinished update to this binary was finished
+	Warnings        []string      `json:"warnings,omitempty"`
+	MS              int           `json:"ms"`
+	changed         bool          // the update went past its install (the shim step started)
 }
 
 // updateServer is the server step: the version deployed and the new
@@ -658,6 +662,7 @@ func (a *applyRun) plan(ctx context.Context, staged string) error {
 		add("plugin", "skipped", "Claude Code is not wired on this machine (no client install)")
 	}
 	a.refreshScheduler(ctx, staged, true)
+	a.planIndex(ctx, staged)
 	if why := serverStepSkipped(a.d, a.cfg); why != "" {
 		add("server", "skipped", why)
 		a.planDocs()
@@ -798,10 +803,13 @@ func (a *applyRun) steps(ctx context.Context) error {
 		a.rb.committed, a.marker.Committed = true, true
 		_ = state.WriteUpdateMarker(a.d, a.marker)
 
-		// 7. The new binary's bank template and docs (M5 review rules,
-		// decision 0069): warnings, never a rollback.
+		// 7. The new binary's bank template, docs and metrics index (M5
+		// review rules, decisions 0069 and 0079): warnings, never a
+		// rollback. The index migrates only now: a rollback never meets a
+		// migrated index.
 		a.bank(ctx)
 		a.docs(ctx)
+		a.metricsIndex(ctx)
 	}
 
 	// 8. Recorded: the shim's target and the one to roll back to.
@@ -846,6 +854,126 @@ func (a *applyRun) docs(ctx context.Context) {
 		_ = json.Unmarshal(env.Data, &r)
 		a.add("docs", "done", fmt.Sprintf("%d section(s) in bank %s: %d sent, %d unchanged", r.Sections, r.Bank, r.Sent, r.Unchanged+r.Retagged))
 	}
+}
+
+// indexMigrateWait bounds update apply's call to the new binary's stats
+// index migrate: a lock or a disk that hangs never holds the update.
+var indexMigrateWait = 60 * time.Second
+
+// noIndexCommand: a new binary older than the metrics index (exit 2).
+const noIndexCommand = "the new binary has no metrics index"
+
+// metricsIndex runs the new binary's stats index migrate, after the
+// commit point. A failure is a warning, never a rollback: the next jobs
+// tick opens the index, which migrates it.
+func (a *applyRun) metricsIndex(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, indexMigrateWait)
+	defer cancel()
+	r, err := runIndexMigrate(cctx, a.target, false)
+	var ce *childError
+	switch {
+	case errors.As(err, &ce) && ce.code == output.Usage:
+		a.add("index", "skipped", noIndexCommand)
+	case err != nil:
+		why := indexMigrateReason(ctx, cctx, err)
+		a.res.Warnings = append(a.res.Warnings, "the metrics index was not migrated ("+why+"): the next jobs tick retries")
+		a.add("index", "failed", why)
+	default:
+		status, detail := indexStep(r, false)
+		a.res.IndexMigrations = append(a.res.IndexMigrations, r.Applied...)
+		a.add("index", status, detail)
+	}
+}
+
+// planIndex asks the staged binary for its pending index migrations. A
+// plan never fails on the index, whose migration is only ever a warning.
+func (a *applyRun) planIndex(ctx context.Context, staged string) {
+	cctx, cancel := context.WithTimeout(ctx, indexMigrateWait)
+	defer cancel()
+	r, err := runIndexMigrate(cctx, staged, true)
+	var ce *childError
+	switch {
+	case errors.As(err, &ce) && ce.code == output.Usage:
+		a.add("index", "skipped", noIndexCommand)
+	case err != nil:
+		a.add("index", "skipped", "the new binary cannot list the metrics index migrations ("+indexMigrateReason(ctx, cctx, err)+")")
+	default:
+		status, detail := indexStep(r, true)
+		a.res.IndexMigrations = append(a.res.IndexMigrations, r.Pending...)
+		a.add("index", status, detail)
+	}
+}
+
+// runIndexMigrate is exe's stats index migrate (with plan, --plan), its
+// result decoded from its JSON envelope: its text is never relayed.
+func runIndexMigrate(ctx context.Context, exe string, plan bool) (index.MigrateResult, error) {
+	args := []string{"stats", "index", "migrate"}
+	if plan {
+		args = append(args, "--plan")
+	}
+	env, err := runChild(ctx, exe, args...)
+	if err != nil {
+		return index.MigrateResult{}, err
+	}
+	var r index.MigrateResult
+	if err := json.Unmarshal(env.Data, &r); err != nil {
+		return index.MigrateResult{}, err
+	}
+	return r, nil
+}
+
+// indexStep is a migrate result as the index step: how many migrations,
+// never their ids.
+func indexStep(r index.MigrateResult, plan bool) (status, detail string) {
+	ids, status, verb := r.Applied, "done", "migrated"
+	if plan {
+		ids, status, verb = r.Pending, "planned", "would migrate"
+	}
+	switch {
+	case !r.Built:
+		return "skipped", "no metrics index yet"
+	case r.Newer:
+		return "skipped", "the metrics index is newer than this backsight"
+	case len(ids) == 1:
+		return status, verb + " the metrics index (1 change)"
+	case len(ids) > 1:
+		return status, fmt.Sprintf("%s the metrics index (%d changes)", verb, len(ids))
+	case plan:
+		return "skipped", "the metrics index is up to date"
+	}
+	return "done", "the metrics index is up to date"
+}
+
+// indexMigrateReason is why stats index migrate failed, in fixed words:
+// never the child's stderr nor its error's text. Every failure exits 20
+// with one of indexError's fixed sentences, which name the cause; ctx is
+// update apply's, cctx the call's bound.
+func indexMigrateReason(ctx, cctx context.Context, err error) string {
+	switch {
+	case ctx.Err() != nil:
+		return "interrupted"
+	case cctx.Err() != nil:
+		return "timed out"
+	}
+	var ce *childError
+	if !errors.As(err, &ce) || ce.code != output.Blocked || ce.env == nil {
+		return "failed"
+	}
+	switch ce.env.Message {
+	case indexUpdatingSentence:
+		return "an update is in progress"
+	case indexClassMessage("busy"): // index.ErrInUse's sentence
+		return "the index is in use"
+	case indexClassMessage("full"):
+		return "the disk is full"
+	case indexUnreadableSentence, indexClassMessage("corrupt"), indexClassMessage("notadb"):
+		return "the index is unreadable"
+	case indexClassMessage("readonly"):
+		return "the index is read-only"
+	case indexClassMessage("io"):
+		return "a disk error"
+	}
+	return "failed"
 }
 
 // refreshScheduler runs the new binary's jobs refresh (with plan, its

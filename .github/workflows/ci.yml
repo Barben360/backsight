@@ -33,6 +33,8 @@ jobs:
       # The testhooks build's own code (CI's update proof, the hook chaos
       # switch), never in a release.
       - run: make test-hooks
+      # The metrics index's time budgets (first build, 15-minute catch-up).
+      - run: make bench-index
       - run: make cross
   snapshot:
     # The release build, signed by minisign with a throwaway key: the

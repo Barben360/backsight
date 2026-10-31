@@ -105,6 +105,9 @@ type Env struct {
 	// Switch is the last runtime switch, nil for none, and the other
 	// runtime's data kept since with its size ("" none); nil: not asked.
 	Switch func() (*state.RuntimeSwitch, string)
+	// MetricsIndex reads the local metrics index, read-only (nil: not
+	// asked). The cli reduces a read failure to its class.
+	MetricsIndex func() (IndexFacts, error)
 	InstallProbes
 }
 
@@ -117,7 +120,7 @@ const (
 // ClientChecks look at Claude Code's side of this machine: its wiring,
 // sessions, notes and recall. A server-only host (server.role = "server")
 // has none: each reads "not a client" there.
-var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "noise-headless", "noise-subagent",
+var ClientChecks = []string{"attribution", "backfill", "backsight-toml", "client", "feedback-journal", "feedback-ledger", "feedback-shared", "latency", "learning", "metrics-index", "noise-headless", "noise-subagent",
 	"noise-transverse", "notes", "own-owners", "recall", "reference", "remotes", "replace-unconfirmed", "restore-epoch", "retention", "searches", "server-reach", "split-session", "transcripts",
 	"transverse-keyword", "usage", "version-skew", "writes"}
 
@@ -227,6 +230,10 @@ func Run(ctx context.Context, env Env) Report {
 	feedbackOn := cfgErr != nil || cfg.Feedback.Enabled // no config.toml: the default, on
 	shareOn := cfgErr != nil || cfg.Feedback.ShareLedger
 	add(checkFeedbackJournal(env.Dirs, feedbackOn), checkFeedbackLedger(env.Dirs, feedbackOn), checkFeedbackShared(env.Dirs, feedbackOn, shareOn, now()))
+	if env.MetricsIndex != nil {
+		f, err := env.MetricsIndex()
+		add(checkMetricsIndex(f, err, f.LagSeconds > indexLagLimit && tickRecent(env.Dirs, now())))
+	}
 	if env.Scheduler != nil {
 		if c, ok := checkScheduler(env.Scheduler, schedulerModeOf(env.Dirs)); ok {
 			add(c)

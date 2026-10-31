@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -59,6 +60,12 @@ type fakeBinaries struct {
 	images map[string]string
 	// onFail runs when a fail prefix matches, before the failure returns.
 	onFail func(line string)
+	// failStderr is what a failed call prints on stderr (default
+	// "progress\n").
+	failStderr string
+	// indexes: the metrics index migrations each version embeds (default:
+	// this test binary's).
+	indexes map[string]fs.FS
 	// before and after run around each call that is not failed (ctx is
 	// the call's).
 	before func(ctx context.Context, line string)
@@ -67,7 +74,7 @@ type fakeBinaries struct {
 
 func withBinaries(t *testing.T, d paths.Dirs) *fakeBinaries {
 	t.Helper()
-	f := &fakeBinaries{t: t, migrations: map[string][]migrate.Migration{}, fail: map[string]int{}, dirs: d, claimVersion: map[string]string{}, images: map[string]string{}}
+	f := &fakeBinaries{t: t, migrations: map[string][]migrate.Migration{}, fail: map[string]int{}, indexes: map[string]fs.FS{}, dirs: d, claimVersion: map[string]string{}, images: map[string]string{}}
 	old := binaryExec
 	binaryExec = f
 	t.Cleanup(func() { binaryExec = old })
@@ -102,12 +109,19 @@ func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]b
 				e.Actions = []output.Action{{Kind: "install", Cmd: "npm install -g @anthropic-ai/claude-code", Why: "Claude Code is too old"}}
 			}
 			_ = output.WriteJSON(&out, "test", nil, e)
-			return out.Bytes(), []byte("progress\n"), code, nil
+			stderr := "progress\n"
+			if f.failStderr != "" {
+				stderr = f.failStderr
+			}
+			return out.Bytes(), []byte(stderr), code, nil
 		}
 	}
-	oldV, oldExe, oldMig, oldImg := buildinfo.Version, selfExe, migrations, server.HindsightImage
+	oldV, oldExe, oldMig, oldImg, oldReg := buildinfo.Version, selfExe, migrations, server.HindsightImage, indexRegistry
 	if img, ok := f.images[v]; ok {
 		server.HindsightImage = img
+	}
+	if reg, ok := f.indexes[v]; ok {
+		indexRegistry = func() fs.FS { return reg }
 	}
 	buildinfo.Version = v
 	if c, ok := f.claimVersion[v]; ok {
@@ -115,7 +129,9 @@ func (f *fakeBinaries) Run(ctx context.Context, exe string, args ...string) ([]b
 	}
 	selfExe = func() (string, error) { return exe, nil }
 	migrations = func() []migrate.Migration { return f.migrations[v] }
-	defer func() { buildinfo.Version, selfExe, migrations, server.HindsightImage = oldV, oldExe, oldMig, oldImg }()
+	defer func() {
+		buildinfo.Version, selfExe, migrations, server.HindsightImage, indexRegistry = oldV, oldExe, oldMig, oldImg, oldReg
+	}()
 	if f.before != nil {
 		f.before(ctx, line)
 	}

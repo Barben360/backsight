@@ -47,7 +47,7 @@ On the [native runtime](native-runtime.md), the database's unit runs a check tha
 
 ## Removing local files
 
-`--purge-local` also deletes `config.toml`, `secrets.toml` and the state directory. Files and folders backsight did not write are kept and listed. Backups are never deleted, even inside the state directory.
+`--purge-local` also deletes `config.toml`, `secrets.toml` and the state directory, the local metrics index (`index/`) and the `metrics/` and `dashboard/` directories beside it. Files and folders backsight did not write are kept and listed. Backups are never deleted, even inside the state directory.
 
 With it, uninstall first deletes this machine's shared counts (the `backsight:feedback:<machine id>` document your other machines weigh) from the server this PC joined, before `--stop` or `--delete-data` touch the server. A server that does not answer within 5 seconds keeps the document: uninstall says so in one line and goes on, and your other machines ignore it after 30 days. Nothing is deleted while another server answers at the joined address.
 

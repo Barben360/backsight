@@ -13,6 +13,7 @@ import (
 
 type pathsInfo struct {
 	paths.Dirs
+	IndexDir      string `json:"index_dir"`
 	ConfigFile    string `json:"config_file"`
 	ConfigExists  bool   `json:"config_exists"`
 	SecretsFile   string `json:"secrets_file"`
@@ -33,7 +34,7 @@ func newPathsCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			info := pathsInfo{Dirs: d, ConfigFile: d.ConfigFile(), SecretsFile: d.SecretsFile()}
+			info := pathsInfo{Dirs: d, ConfigFile: d.ConfigFile(), SecretsFile: d.SecretsFile(), IndexDir: d.IndexDir()}
 			info.ConfigExists = exists(info.ConfigFile)
 			info.SecretsExists = exists(info.SecretsFile)
 			if cfg, err := config.Load(info.ConfigFile, d, home); err == nil {
@@ -41,7 +42,7 @@ func newPathsCmd(e *env) *cobra.Command {
 			}
 			return e.emit("paths", info, func() string {
 				var b strings.Builder
-				for _, row := range [][2]string{{"data", d.Data}, {"config", d.Config}, {"state", d.State}, {"bin", d.Bin},
+				for _, row := range [][2]string{{"data", d.Data}, {"config", d.Config}, {"state", d.State}, {"bin", d.Bin}, {"index", d.IndexDir()},
 					{"config.toml", present(info.ConfigFile, info.ConfigExists)}, {"secrets.toml", present(info.SecretsFile, info.SecretsExists)}} {
 					fmt.Fprintf(&b, "%-13s %s\n", row[0], row[1])
 				}
