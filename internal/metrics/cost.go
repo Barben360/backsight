@@ -20,10 +20,10 @@ func init() { register("cost", costIDs, cost) }
 
 // extractionOps are the server operations whose LLM use is named in
 // extraction.tokens and extraction.cost; the rest of the total is "other".
-// The names are those of the server's llm-requests operations as read from
-// its API description, NOT yet confirmed by a live run: the author's live
-// run corrects them here, in this one list.
-var extractionOps = []string{"retain_extract_facts", "consolidation", "reflect"}
+// The names are those of the server's llm-requests operations, confirmed
+// live on Hindsight 1.1.0. Recall is query-time, not extraction: it, and
+// any other operation, stays in "other".
+var extractionOps = []string{"retain", "consolidation", "refresh_mental_model"}
 
 // CostServerNeeds are the server reads of a view holding the cost family
 // (loadServer keys): the LLM stats of all operations and of each
@@ -313,21 +313,31 @@ func (t *tokens) add(b hindsight.LLMBucket) {
 	t.output += b.Output + b.Thoughts
 }
 
-// llmBucketWidth is the width of the server's LLM buckets for a period:
-// hourly for 1d, daily for 7d and 30d.
-func llmBucketWidth(period string) time.Duration {
-	if period == "1d" {
+// bucketWidth is the width of a server bucket from the response's trunc:
+// "hour" is an hour, "day" a day, anything else (or none) a day.
+func bucketWidth(trunc string) time.Duration {
+	if trunc == "hour" {
 		return time.Hour
 	}
 	return day
 }
 
+// llmWidth is the bucket width of an LLM stats response, read from its
+// buckets (every bucket of a response carries the same trunc).
+func llmWidth(bs []hindsight.LLMBucket) time.Duration {
+	if len(bs) == 0 {
+		return day
+	}
+	return bucketWidth(bs[0].Trunc)
+}
+
 // inWindow sums the buckets that overlap [since, until), in total and by
-// bucket of buckets (width wide, from the period asked), and counts the distinct local days they cover. A
+// bucket of buckets (as wide as the response's trunc says), and counts the distinct local days they cover. A
 // bucket straddling the start is kept whole, as extractionOver keeps whole
 // UTC days, so the dashboard and `backsight stats` agree on one window.
-func inWindow(bs []hindsight.LLMBucket, width time.Duration, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
+func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
 	byDay = make([]tokens, len(buckets))
+	width := llmWidth(bs)
 	seen := map[string]bool{}
 	for _, b := range bs {
 		if !b.Time.Add(width).After(since) || !b.Time.Before(until) {
@@ -395,15 +405,14 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		}
 	}
 	buckets := w.Buckets()
-	width := llmBucketWidth(llmPeriod(viewSpan(e.now, w)))
 	all, reason := llmRead(e, "llm:")
 	if reason != "" {
 		fail(reason)
 		return
 	}
-	total, byDay, covered := inWindow(all, width, w.Since, w.Until, w.Loc, buckets)
-	// The total has its own read. An operation that cannot be read (its
-	// name is unconfirmed) only shrinks by_operation, even when every
+	total, byDay, covered := inWindow(all, w.Since, w.Until, w.Loc, buckets)
+	// The total has its own read. An operation that cannot be read (the
+	// server refuses it) only shrinks by_operation, even when every
 	// operation fails: the metric is tagged partial and the failed reads
 	// are counted.
 	named := map[string]tokens{}
@@ -414,7 +423,7 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 			failedOps++
 			continue
 		}
-		named[op], _, _ = inWindow(bs, width, w.Since, w.Until, w.Loc, buckets)
+		named[op], _, _ = inWindow(bs, w.Since, w.Until, w.Loc, buckets)
 	}
 	if covered == 0 { // the server holds nothing for the window
 		fail(ReasonNoEvents)
@@ -469,7 +478,7 @@ func costPerSession(e env, w Window, obs map[string]Observation, met map[string]
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	total, _, covered := inWindow(bs, day, since, until, w.Loc, nil)
+	total, _, covered := inWindow(bs, since, until, w.Loc, nil)
 	m := Metric{Extra: map[string]any{"sessions_sent": sent, "window_days": 28}}
 	if sent == 0 || covered == 0 { // no document, or nothing of the server in the 28 days: no 0
 		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, m

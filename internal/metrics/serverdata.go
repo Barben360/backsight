@@ -317,10 +317,12 @@ func opTime(o hindsight.Operation) time.Time {
 
 // operations reads up to pages pages of the operations of status and typ,
 // stopping at the last one, and returns them with the server's exact total.
-// The server is ASSUMED to list newest first (the live shape is confirmed
-// by the author's run): the pages kept are then the latest operations, so a
-// capped read still holds the recent ones. Past the cap the total is larger
-// than what was read.
+// The server lists by created time, newest first (confirmed live), not by
+// updated time: the pages kept are the latest created operations, so an
+// older one updated recently can fall outside a capped read. Readers sort
+// by updated time, and a count of the last 7 days from a capped read is a
+// lower bound (failed_capped). Past the cap the total is larger than what
+// was read.
 func operations(ctx context.Context, s ServerReader, status, typ string, pages int) ([]hindsight.Operation, int, error) {
 	var out []hindsight.Operation
 	total := 0

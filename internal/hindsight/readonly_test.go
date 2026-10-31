@@ -146,6 +146,13 @@ func TestReadOnlyDecodesTheShapes(t *testing.T) {
 	if b := lb[0]; b.Total != 10 || b.Statuses["error"] != 1 || b.Input != 1000 || b.Output != 200 || b.Cached != 300 || b.Thoughts != 50 {
 		t.Errorf("llm[0] = %+v", b)
 	}
+	if lb[0].Trunc != "day" || lb[1].Trunc != "day" {
+		t.Errorf("trunc = %q, %q, want day from the response", lb[0].Trunc, lb[1].Trunc)
+	}
+	// numeric offsets: 17:00-07:00 is the next day 00:00 UTC
+	if want := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC); !lb[0].Time.Equal(want) || lb[0].Time.Location() != time.UTC {
+		t.Errorf("llm[0].Time = %v, want %v in UTC", lb[0].Time, want)
+	}
 	if lb[1].Thoughts != 0 || lb[1].Input != 400 {
 		t.Errorf("null thoughts: llm[1] = %+v", lb[1])
 	}
@@ -188,12 +195,12 @@ func TestReadOnlyQueries(t *testing.T) {
 	defer srv.Close()
 	ro, _ := NewReadOnly(srv.URL, "", "b", time.Second)
 	ctx := context.Background()
-	_, _ = ro.LLMStats(ctx, "7d", "retain_extract_facts")
+	_, _ = ro.LLMStats(ctx, "7d", "retain")
 	_, _ = ro.LLMStats(ctx, "1d", "")
 	_, _ = ro.OperationsPage(ctx, "failed", "retain", 100, 200)
 	_, _ = ro.OperationsPage(ctx, "", "", 20, 0)
 	want := []string{
-		"/v1/default/banks/b/llm-requests/stats?operation=retain_extract_facts&period=7d",
+		"/v1/default/banks/b/llm-requests/stats?operation=retain&period=7d",
 		"/v1/default/banks/b/llm-requests/stats?period=1d",
 		"/v1/default/banks/b/operations?limit=100&offset=200&status=failed&type=retain",
 		"/v1/default/banks/b/operations?limit=20&offset=0",
@@ -202,6 +209,31 @@ func TestReadOnlyQueries(t *testing.T) {
 	defer mu.Unlock()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %q, want %q", got, want)
+	}
+}
+
+// TestNumericOffsetTimes: microseconds with a numeric offset (the operations
+// and stats times) decode to the right UTC instant, in the fields read
+// through serverTime and through the nested progress being ignored.
+func TestNumericOffsetTimes(t *testing.T) {
+	const bp = "/v1/default/banks/b"
+	ro, _ := shapeServer(t, map[string]string{bp + "/operations": "operations.json", bp + "/stats": "stats.json"})
+	page, err := ro.OperationsPage(context.Background(), "", "", 3, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 10, 30, 9, 14, 0, 250000, time.UTC); !page.Operations[2].UpdatedAt.Equal(want) {
+		t.Errorf("updated_at = %v, want %v", page.Operations[2].UpdatedAt, want)
+	}
+	s, err := ro.BankStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 10, 30, 9, 12, 0, 123456000, time.UTC); !s.LastConsolidatedAt.Equal(want) {
+		t.Errorf("last_consolidated_at = %v, want %v", s.LastConsolidatedAt, want)
+	}
+	if want := time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC); !s.LastMemoryWriteAt.Equal(want) {
+		t.Errorf("last_memory_write_at = %v, want %v", s.LastMemoryWriteAt, want)
 	}
 }
 
@@ -223,7 +255,7 @@ func TestZonelessTimes(t *testing.T) {
 	if got := page.Operations[0].UpdatedAt; !got.Equal(time.Date(2026, 10, 30, 9, 13, 0, 0, time.UTC)) {
 		t.Errorf("zone-less updated_at = %v", got)
 	}
-	if got := page.Operations[2]; !got.CreatedAt.IsZero() || got.ID != "op3" || got.Status != "pending" || !got.UpdatedAt.Equal(time.Date(2026, 10, 30, 9, 14, 0, 0, time.UTC)) {
+	if got := page.Operations[2]; !got.CreatedAt.IsZero() || got.ID != "op3" || got.Status != "pending" || !got.UpdatedAt.Equal(time.Date(2026, 10, 30, 9, 14, 0, 250000, time.UTC)) {
 		t.Errorf("garbage created_at: op3 = %+v", got)
 	}
 	s, err := ro.BankStats(context.Background())

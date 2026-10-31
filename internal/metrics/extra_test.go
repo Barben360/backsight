@@ -28,7 +28,7 @@ func TestEveryExtraKeyIsDeclared(t *testing.T) {
 		{"project alpha", func() Query { q := x.query(7); q.Project = "alpha"; return q }()},
 	} {
 		if c.name == "project alpha" {
-			x.server.fail("LLMStats:reflect", &hindsight.APIError{Kind: hindsight.NotFound})
+			x.server.fail("LLMStats:refresh_mental_model", &hindsight.APIError{Kind: hindsight.NotFound})
 		}
 		for _, v := range pageViews {
 			for id, m := range x.run(v, c.q).Metrics {

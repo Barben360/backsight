@@ -425,8 +425,8 @@ func TestViewServerReads(t *testing.T) {
 		{"system", "", []string{"Version"}},
 		{"bank", "", []string{"BankStats", "MemoriesTimeseries", "ProjectTags"}},
 		{"pipeline", "", []string{"OperationsPage(completed)", "OperationsPage(failed)", "OperationsPage(pending)", "OperationsPage(processing)"}},
-		{"cost", "", []string{"LLMStats(operation=consolidation&period=7d)", "LLMStats(operation=reflect&period=7d)",
-			"LLMStats(operation=retain_extract_facts&period=7d)", "LLMStats(period=30d)", "LLMStats(period=7d)"}},
+		{"cost", "", []string{"LLMStats(operation=consolidation&period=7d)", "LLMStats(operation=refresh_mental_model&period=7d)",
+			"LLMStats(operation=retain&period=7d)", "LLMStats(period=30d)", "LLMStats(period=7d)"}},
 	} {
 		x := newFx(t, fxNow)
 		q := x.query(7)
@@ -746,7 +746,7 @@ func TestBankTables(t *testing.T) {
 }
 
 // TestExtractionTable: TestExtractionTokensAndCost's server, per day and
-// operation: retain_extract_facts on 10-28 and 10-29, consolidation on
+// operation: retain on 10-28 and 10-29, consolidation on
 // 10-29, the rest of 10-29 as other; reflect has no tokens, day C is out
 // of the window. Without prices the cost is null; with an operation that
 // cannot be read there is no "other".
@@ -757,8 +757,8 @@ func TestExtractionTable(t *testing.T) {
 	got := x.run("cost", x.query(7)).Tables.Extraction
 	cost := func(v float64) *float64 { return &v }
 	want := []ExtractionRow{
-		{Day: "2026-10-28", Operation: "retain_extract_facts", Input: 900_000, Cached: 400_000, Output: 150_000, Cost: cost(0.328)},
-		{Day: "2026-10-29", Operation: "retain_extract_facts", Input: 300_000, Output: 100_000, Cost: cost(0.191)},
+		{Day: "2026-10-28", Operation: "retain", Input: 900_000, Cached: 400_000, Output: 150_000, Cost: cost(0.328)},
+		{Day: "2026-10-29", Operation: "retain", Input: 300_000, Output: 100_000, Cost: cost(0.191)},
 		{Day: "2026-10-29", Operation: "consolidation", Input: 200_000, Output: 60_000, Cost: cost(0.120)},
 		{Day: "2026-10-29", Operation: "other", Input: 100_000, Output: 40_000, Cost: cost(0.071)},
 	}
@@ -774,7 +774,7 @@ func TestExtractionTable(t *testing.T) {
 	y := costFx(t)
 	y.cfg = func(c *config.Config) { c.LLM.Model = "no-such-model" }
 	extractionServer(y)
-	y.server.fail("LLMStats:reflect", &hindsight.APIError{Kind: hindsight.NotFound})
+	y.server.fail("LLMStats:refresh_mental_model", &hindsight.APIError{Kind: hindsight.NotFound})
 	rows := y.run("cost", y.query(7)).Tables.Extraction
 	if len(rows) != 3 || slices.ContainsFunc(rows, func(r ExtractionRow) bool { return r.Operation == "other" || r.Cost != nil }) {
 		t.Errorf("no prices, reflect unread: %+v, want 3 rows, no other, no cost", rows)

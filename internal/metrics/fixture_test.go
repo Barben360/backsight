@@ -448,13 +448,17 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 		body = map[string]any{"bank_id": fxBank, "period": period, "trunc": d.Series.Trunc, "time_field": "created_at", "buckets": buckets}
 	case "LLMStats":
 		buckets := []map[string]any{}
+		trunc := "" // one trunc per response: the first bucket's
+		if bs := d.LLM[q.Get("operation")]; len(bs) > 0 {
+			trunc = bs[0].Trunc
+		}
 		for _, b := range d.LLM[q.Get("operation")] {
 			buckets = append(buckets, map[string]any{"time": b.Time.UTC().Format(time.RFC3339),
 				"statuses": b.Statuses, "total": b.Total, "tokens": map[string]any{"input": b.Input,
 					"output": b.Output, "cached": b.Cached, "thoughts": b.Thoughts,
 					"total": b.Input + b.Output + b.Cached + b.Thoughts}})
 		}
-		body = map[string]any{"bank_id": fxBank, "period": q.Get("period"), "buckets": buckets}
+		body = map[string]any{"bank_id": fxBank, "period": q.Get("period"), "trunc": trunc, "buckets": buckets}
 	case "OperationsPage":
 		var ops []hindsight.Operation
 		for _, o := range d.Ops {

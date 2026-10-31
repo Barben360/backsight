@@ -96,6 +96,9 @@ func (r *ReadOnly) MemoriesTimeseries(ctx context.Context, period string) (Times
 
 // LLMBucket is the LLM calls of one bucket: counts by status and tokens.
 type LLMBucket struct {
+	// Trunc is the bucket width the response named ("hour", "day"), the
+	// same for every bucket of one response.
+	Trunc                           string
 	Time                            time.Time
 	Statuses                        map[string]int64
 	Total                           int64
@@ -106,6 +109,7 @@ type LLMBucket struct {
 // 30d), for one operation or, when operation is "", all of them.
 func (r *ReadOnly) LLMStats(ctx context.Context, period, operation string) ([]LLMBucket, error) {
 	var raw struct {
+		Trunc   string `json:"trunc"`
 		Buckets []struct {
 			Time     string           `json:"time"`
 			Statuses map[string]int64 `json:"statuses"`
@@ -127,7 +131,7 @@ func (r *ReadOnly) LLMStats(ctx context.Context, period, operation string) ([]LL
 	}
 	out := make([]LLMBucket, 0, len(raw.Buckets))
 	for _, b := range raw.Buckets {
-		lb := LLMBucket{Time: serverTime(b.Time), Statuses: b.Statuses, Total: b.Total, Input: b.Tokens.Input, Output: b.Tokens.Output, Cached: b.Tokens.Cached}
+		lb := LLMBucket{Trunc: raw.Trunc, Time: serverTime(b.Time), Statuses: b.Statuses, Total: b.Total, Input: b.Tokens.Input, Output: b.Tokens.Output, Cached: b.Tokens.Cached}
 		if b.Tokens.Thoughts != nil {
 			lb.Thoughts = *b.Tokens.Thoughts
 		}

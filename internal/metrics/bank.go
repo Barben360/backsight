@@ -129,7 +129,7 @@ var bankSizeExtras = []string{"world", "experience", "observation", "documents",
 func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metric) {
 	const id = "bank.growth"
 	buckets := w.Buckets()
-	width := llmBucketWidth(seriesPeriod(viewSpan(e.now, w)))
+	width := bucketWidth(e.srv.Series.Trunc)
 	byDay := make([]map[string]int64, len(buckets))
 	for i := range byDay {
 		byDay[i] = map[string]int64{}

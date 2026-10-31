@@ -260,8 +260,7 @@ func extractionRows(e env, w Window) []ExtractionRow {
 		return out
 	}
 	buckets := w.Buckets()
-	width := llmBucketWidth(llmPeriod(viewSpan(e.now, w)))
-	_, allDays, _ := inWindow(all, width, w.Since, w.Until, w.Loc, buckets)
+	_, allDays, _ := inWindow(all, w.Since, w.Until, w.Loc, buckets)
 	cfg := e.src.Config.LLM
 	prices := retain.PricesFor(cfg.Model, cfg.PriceInput, cfg.PriceCached, cfg.PriceOutput, cfg.Currency)
 	other := slices.Clone(allDays)
@@ -273,7 +272,7 @@ func extractionRows(e env, w Window) []ExtractionRow {
 			continue
 		}
 		read++
-		_, days, _ := inWindow(bs, width, w.Since, w.Until, w.Loc, buckets)
+		_, days, _ := inWindow(bs, w.Since, w.Until, w.Loc, buckets)
 		byOp[op] = days
 		for i, t := range days {
 			other[i].input = max(0, other[i].input-t.input)

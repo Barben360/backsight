@@ -237,9 +237,9 @@ func pricesSet(x *fx) {
 // extractionServer fills the fake. All operations: day A (10-28) input
 // 900,000, cached 400,000, output 100,000, thoughts 50,000; day B (10-29)
 // input 600,000, output 200,000; day C (10-20, outside the 7-day window)
-// input 5,000,000. retain_extract_facts: day A as above, day B input
+// input 5,000,000. retain: day A as above, day B input
 // 300,000, output 100,000. consolidation: day B input 200,000, output
-// 60,000. Nothing for reflect. What is left of day B, 100,000 input and
+// 60,000. Nothing for refresh_mental_model. What is left of day B, 100,000 input and
 // 40,000 output, is "other".
 func extractionServer(x *fx) {
 	a := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
@@ -249,7 +249,7 @@ func extractionServer(x *fx) {
 		d.LLM = map[string][]hindsight.LLMBucket{
 			"": {{Time: out, Input: 5_000_000}, {Time: a, Input: 900_000, Cached: 400_000, Output: 100_000, Thoughts: 50_000},
 				{Time: b, Input: 600_000, Output: 200_000}},
-			"retain_extract_facts": {{Time: a, Input: 900_000, Cached: 400_000, Output: 100_000, Thoughts: 50_000},
+			"retain": {{Time: a, Input: 900_000, Cached: 400_000, Output: 100_000, Thoughts: 50_000},
 				{Time: b, Input: 300_000, Output: 100_000}},
 			"consolidation": {{Time: b, Input: 200_000, Output: 60_000}},
 		}
@@ -263,7 +263,7 @@ func extractionServer(x *fx) {
 // includes the 400,000 cached, which is a subset, never added).
 // Cost, all: (1,500,000 - 400,000) × 0.27 = 0.297; 400,000 × 0.07 = 0.028;
 // 350,000 × 1.10 = 0.385; total 0.710.
-// retain_extract_facts: input 1,200,000, cached 400,000, output 250,000:
+// retain: input 1,200,000, cached 400,000, output 250,000:
 // 800,000 × 0.27 = 0.216 + 0.028 + 250,000 × 1.10 = 0.275 = 0.519.
 // consolidation: input 200,000, output 60,000: 0.054 + 0.066 = 0.120.
 // other = all - named: input 100,000, cached 0, output 40,000: 0.027 +
@@ -293,10 +293,10 @@ func TestExtractionTokensAndCost(t *testing.T) {
 	}
 	ops := tk.Extra["by_operation"].(map[string]any)
 	for op, want := range map[string][4]float64{
-		"retain_extract_facts": {1_200_000, 400_000, 250_000, 0.519},
+		"retain":               {1_200_000, 400_000, 250_000, 0.519},
 		"consolidation":        {200_000, 0, 60_000, 0.120},
 		"other":                {100_000, 0, 40_000, 0.071},
-		"reflect":              {0, 0, 0, 0},
+		"refresh_mental_model": {0, 0, 0, 0},
 	} {
 		o := ops[op].(map[string]any)
 		if o["input"] != int64(want[0]) || o["cached"] != int64(want[1]) || o["output"] != int64(want[2]) || math.Abs(*o["cost"].(*float64)-want[3]) > 1e-9 {
@@ -545,7 +545,7 @@ func TestExtractionOneOperationFails(t *testing.T) {
 	if _, ok := ops["other"]; ok {
 		t.Error("other present although an operation is missing")
 	}
-	if _, ok := ops["retain_extract_facts"]; !ok {
+	if _, ok := ops["retain"]; !ok {
 		t.Error("an operation that answered is missing")
 	}
 	// all healthy: not partial
@@ -576,21 +576,31 @@ func TestContextWatchBoundary(t *testing.T) {
 	}
 }
 
-// TestExtractionBucketWidthFromPeriod: the width comes from the period
-// asked, not from the gaps. On a 1-day view (hourly buckets, window from
-// 10-29T11:00Z) a lone bucket at 10:00Z ends at 11:00Z, outside the window;
-// a lone one at 11:00Z is inside.
-func TestExtractionBucketWidthFromPeriod(t *testing.T) {
+// TestExtractionBucketWidthFromResponse: the width comes from the trunc the
+// response names, not from the period asked (the server answers a 1-day
+// view with day buckets). The window starts 10-29T11:00Z. A lone hour
+// bucket at 10:00Z ends at 11:00Z, outside; one at 11:00Z is inside. A lone
+// day bucket at 10:00Z (or with no trunc: daily) straddles the start and is
+// kept; a day bucket that ended before the start is not.
+func TestExtractionBucketWidthFromResponse(t *testing.T) {
+	at := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, time.UTC) }
 	for name, c := range map[string]struct {
-		at   time.Time
-		want string
+		trunc string
+		at    time.Time
+		want  string
 	}{
-		"hour ending at the start": {time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC), ReasonNoEvents},
-		"hour inside":              {time.Date(2026, 10, 29, 11, 0, 0, 0, time.UTC), ""},
+		"hour ending at the start": {"hour", at(29, 10), ReasonNoEvents},
+		"hour inside":              {"hour", at(29, 11), ""},
+		"day straddling the start": {"day", at(29, 10), ""},
+		"day before the window":    {"day", at(28, 0), ReasonNoEvents},
+		"unknown trunc is daily":   {"week", at(29, 10), ""},
+		"no trunc is daily":        {"", at(29, 10), ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			x := costFx(t)
-			x.server.set(func(d *fakeData) { d.LLM = map[string][]hindsight.LLMBucket{"": {{Time: c.at, Input: 7}}} })
+			x.server.set(func(d *fakeData) {
+				d.LLM = map[string][]hindsight.LLMBucket{"": {{Trunc: c.trunc, Time: c.at, Input: 7}}}
+			})
 			m := costOf(x, x.query(1))["extraction.tokens"]
 			if c.want != "" && (m.Status != StatusNoData || m.Reason != c.want) {
 				t.Errorf("%s/%s, want no_data/%s", m.Status, m.Reason, c.want)
