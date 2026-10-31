@@ -54,6 +54,11 @@ const (
 // detached instead.
 const NoLogonNote = "the server runs until you log off; it starts by itself at your next logon"
 
+// NoTaskNote is what a start says when Task Scheduler refused the
+// server's task at setup (server.start_on_session): the supervisor was
+// started detached, and the next Claude Code session starts it again.
+const NoTaskNote = "Task Scheduler refused the server's task: the server runs until you log off, and starts with your next Claude Code session"
+
 // What the task host waits for and asks with; tests replace them.
 var (
 	// superviseAsk is the pipe's client when Native.Ask is nil.
@@ -260,6 +265,10 @@ func (h taskHost) register(ctx context.Context) error {
 // (no console logon: the task cannot run) the same command detached,
 // with NoLogonNote.
 func (h taskHost) StartDB(ctx context.Context, restart bool) error {
+	h.n.clearStopped()
+	if h.n.Cfg.Server.StartOnSession {
+		return h.startWithoutTask(ctx, restart)
+	}
 	if err := h.register(ctx); err != nil {
 		return err
 	}
@@ -286,6 +295,26 @@ func (h taskHost) StartDB(ctx context.Context, restart bool) error {
 		return err
 	}
 	h.n.note(NoLogonNote)
+	return nil
+}
+
+// startWithoutTask is StartDB when Task Scheduler refused the server's
+// task (server.start_on_session): nothing is registered or enabled, the
+// supervisor is (re)started detached, with NoTaskNote.
+func (h taskHost) startWithoutTask(ctx context.Context, restart bool) error {
+	if restart {
+		if err := h.stopSupervisor(ctx); err != nil {
+			return err
+		}
+	}
+	up, err := h.running(ctx)
+	if err != nil || up {
+		return err
+	}
+	if err := h.startDetached(ctx, false); err != nil {
+		return err
+	}
+	h.n.note(NoTaskNote)
 	return nil
 }
 
@@ -340,6 +369,9 @@ func (h taskHost) startDetached(ctx context.Context, noAPI bool) error {
 func (n Native) StartIfDown(ctx context.Context) (started bool, err error) {
 	if n.Err != nil {
 		return false, n.Err
+	}
+	if n.Stopped() { // backsight server stop: down on purpose
+		return false, nil
 	}
 	h := taskHost{n: n}
 	if _, err := h.ask(ctx, "status"); !errors.Is(err, supervise.ErrNotRunning) {
@@ -492,8 +524,12 @@ func (h taskHost) Owns(pid int) bool {
 	return err == nil && in
 }
 
-// Engine is Task Scheduler: it must know the server's task.
+// Engine is Task Scheduler: it must know the server's task, unless Task
+// Scheduler refused it at setup (server.start_on_session).
 func (h taskHost) Engine(ctx context.Context) (Engine, error) {
+	if h.n.Cfg.Server.StartOnSession {
+		return Engine{Version: "backsight supervisor (no scheduled task)"}, nil
+	}
 	if !h.registered(ctx) {
 		return Engine{}, fmt.Errorf("the scheduled task %s is not registered: run backsight server start", h.n.TaskName())
 	}
@@ -506,3 +542,27 @@ func (n Native) note(s string) {
 		n.Note(s)
 	}
 }
+
+// stoppedFile, under Root(), marks a native server on Windows stopped on
+// purpose by backsight server stop: the SessionStart fallback
+// (server.start_on_session) leaves it down, and any start removes it.
+const stoppedFile = "stopped"
+
+// StoppedFile is the marker backsight server stop writes on Windows.
+func (n Native) StoppedFile() string { return n.join(n.Root(), stoppedFile) }
+
+// Stopped: backsight server stop stopped the server, and nothing started
+// it since.
+func (n Native) Stopped() bool { return pathExists(n.StoppedFile()) }
+
+// MarkStopped writes the marker after backsight server stop on the task
+// host (Windows); systemd needs none (its units stay stopped). Nothing
+// installed, nothing to mark.
+func (n Native) MarkStopped() error {
+	if _, task := n.host().(taskHost); !task || !isDir(n.Root()) {
+		return nil
+	}
+	return os.WriteFile(n.StoppedFile(), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+}
+
+func (n Native) clearStopped() { _ = os.Remove(n.StoppedFile()) }

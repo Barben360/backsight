@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/scheduler"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
@@ -636,8 +638,8 @@ func TestSessionStartStartsTheSupervisorWhenFlagged(t *testing.T) {
 }
 
 // The start-on-session fallback does nothing without its flag, off
-// Windows, on Docker, while a maintenance holds the server down, or when
-// the supervisor answers.
+// Windows, on Docker, while a maintenance holds the server down, when
+// the supervisor answers, or after backsight server stop (its marker).
 func TestSessionStartLeavesTheSupervisorAlone(t *testing.T) {
 	in := func(home string) map[string]any {
 		return map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")}
@@ -663,6 +665,20 @@ func TestSessionStartLeavesTheSupervisorAlone(t *testing.T) {
 			t.Cleanup(func() { _ = lock.Release() })
 		}, false},
 		{"running", true, func(_ *testing.T, _ string, up *bool) { *up = true }, true},
+		{"stopped on purpose", true, func(t *testing.T, home string, _ *bool) {
+			d := pathsOf(home)
+			cfg, err := config.Load(d.ConfigFile(), d, home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := server.Native{Cfg: cfg, Dirs: d}.StoppedFile()
+			if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(marker, []byte("2026-10-31T00:00:00Z\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home, asks, starts, up := onSessionHome(t, c.flag)
@@ -675,6 +691,43 @@ func TestSessionStartLeavesTheSupervisorAlone(t *testing.T) {
 			}
 			if c.asked != (len(*asks) > 0) {
 				t.Errorf("asked %q", *asks)
+			}
+		})
+	}
+}
+
+// Fix round 1 (Task 11): a pipe that fails, or a start that fails, costs
+// the session start nothing: guide, briefing, banner and env file as
+// without the fallback.
+func TestSessionStartSurvivesAFailedFallback(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		breakIt func()
+	}{
+		{"pipe fails", func() {
+			nativeAsk = func(context.Context, string, string) (supervise.Status, error) {
+				return supervise.Status{}, errors.New("pipe busy")
+			}
+		}},
+		{"start fails", func() { nativeDetach = func(...string) error { return errors.New("access denied") } }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, _, _, _ := onSessionHome(t, true)
+			c.breakIt()
+			recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16 for partial indexes.", time.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339)) + "]"
+			envFile := filepath.Join(t.TempDir(), "env")
+			t.Setenv("CLAUDE_ENV_FILE", envFile)
+			h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
+			ctx := h.Specific.Context
+			if h.Specific.Event != "SessionStart" || !strings.HasPrefix(ctx, instructions.Guide) ||
+				!strings.Contains(ctx, "Where you left off on billing") || !strings.Contains(ctx, "PostgreSQL 16") {
+				t.Errorf("context:\n%s", ctx)
+			}
+			if !strings.Contains(h.SystemMessage, "billing") {
+				t.Errorf("banner %q", h.SystemMessage)
+			}
+			if env, _ := os.ReadFile(envFile); !strings.Contains(string(env), "export BACKSIGHT_SESSION='s1'") {
+				t.Errorf("env file:\n%s", env)
 			}
 		})
 	}

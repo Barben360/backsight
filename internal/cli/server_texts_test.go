@@ -68,6 +68,39 @@ func TestServerStopNamesTheTaskOnWindows(t *testing.T) {
 	}
 }
 
+// Fix round 1 (Task 11): server stop on Windows marks the server stopped
+// on purpose, so that the SessionStart fallback leaves it down; its plan
+// marks nothing, nor does a stop on Linux.
+func TestServerStopMarksTheServerStopped(t *testing.T) {
+	home := devInstall(t, true)
+	d := pathsOf(home)
+	native := func() server.Native {
+		cfg, err := config.Load(d.ConfigFile(), d, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := runtimeWith(cfg, false).(server.Native)
+		if err := os.MkdirAll(n.Root(), 0o700); err != nil { // installed
+			t.Fatal(err)
+		}
+		return n
+	}
+	nativeOn(t, home, "windows")
+	n := native()
+	if _, out, _ := run(t, "server", "stop", "--plan"); n.Stopped() {
+		t.Errorf("the plan marked the server stopped:\n%s", out)
+	}
+	if code, out, errOut := run(t, "server", "stop"); code != output.OK || !n.Stopped() {
+		t.Errorf("stop: exit %d, marker %v\n%s%s", code, n.Stopped(), out, errOut)
+	}
+	nativeOn(t, home, "linux")
+	n = native()
+	_ = os.Remove(n.StoppedFile()) // the same path on a Windows host
+	if code, out, errOut := run(t, "server", "stop"); code != output.OK || exists(n.StoppedFile()) {
+		t.Errorf("linux stop: exit %d, marker %v\n%s%s", code, exists(n.StoppedFile()), out, errOut)
+	}
+}
+
 // A server that never reports health names where to look: the
 // supervisor's logs on Windows, journalctl on Linux.
 func TestWaitHealthyNamesTheLogsPerOS(t *testing.T) {

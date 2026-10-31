@@ -27,7 +27,8 @@ func windowsFacts() NativeFacts {
 		Pin:         `C:\Users\jo\AppData\Local\backsight\data\server\native\venv\1.1.0-14d79a0a7914`,
 		DLLManifest: `C:\Users\jo\AppData\Local\backsight\data\server\native\dlls.json`,
 		DLLCopies:   27,
-		Private: []PrivatePath{{Path: `C:\Users\jo\AppData\Local\backsight\data`}, {Path: `C:\Users\jo\AppData\Local\backsight\config`},
+		UserSID:     "S-1-5-21-1-2-3-1001",
+		Private: []PrivatePath{{Path: `C:\Users\jo\AppData\Local\backsight\data`, Dir: true}, {Path: `C:\Users\jo\AppData\Local\backsight\config`, Dir: true},
 			{Path: `C:\Users\jo\AppData\Local\backsight\config\secrets.toml`}, {Path: `C:\Users\jo\AppData\Local\backsight\data\server\native\server.env`}},
 	}
 }
@@ -95,6 +96,15 @@ func TestDoctorWindowsChecks(t *testing.T) {
 			"backsight server stop", "", []string{"native-task"}},
 		{"fsync unread after server stop", func(n *NativeFacts) { n.Task, n.Supervisor, n.Fsync = server.TaskDisabled, nil, "" }, "native-fsync", Info,
 			"the native server is stopped", "", []string{"native-task", "supervisor"}},
+		{"stopped without a task (start_on_session)", func(n *NativeFacts) {
+			n.Task, n.StartOnSession, n.Stopped, n.Supervisor = server.NotInstalled, true, true, nil
+		}, "supervisor", Info, "backsight server stop", "", []string{"native-task"}},
+		{"fsync unread, stopped without a task", func(n *NativeFacts) {
+			n.Task, n.StartOnSession, n.Stopped, n.Supervisor, n.Fsync = server.NotInstalled, true, true, nil, ""
+		}, "native-fsync", Info, "the native server is stopped", "", []string{"native-task", "supervisor"}},
+		{"down without a task, not stopped on purpose", func(n *NativeFacts) {
+			n.Task, n.StartOnSession, n.Supervisor = server.NotInstalled, true, nil
+		}, "supervisor", Error, "no supervisor answers", "backsight server start", []string{"native-task"}},
 		{"fsync unread while it should run", func(n *NativeFacts) { n.Supervisor, n.Fsync = nil, "" }, "native-fsync", Error,
 			"could not read fsync", "backsight server start", []string{"supervisor"}},
 		{"supervisor of another protocol", func(n *NativeFacts) { n.Supervisor.Proto = supervise.Proto + 1 }, "supervisor", Warn,
@@ -113,7 +123,9 @@ func TestDoctorWindowsChecks(t *testing.T) {
 		{"dlls.json unread", func(n *NativeFacts) { n.Unread = map[string]error{"native-dlls": errors.New("no such file")} }, "native-dlls", Error,
 			"could not read", "backsight server install", nil},
 		{"secrets readable by others", func(n *NativeFacts) { n.Private[2].Readers = []string{`BUILTIN\Users`} }, "native-private", Error,
-			`secrets.toml can be read by BUILTIN\Users`, `icacls`, nil},
+			`secrets.toml can be read by BUILTIN\Users`, `icacls 'C:\Users\jo\AppData\Local\backsight\config\secrets.toml' /inheritance:r /grant:r '*S-1-5-21-1-2-3-1001:F'`, nil},
+		{"data readable by others", func(n *NativeFacts) { n.Private[0].Readers = []string{`BUILTIN\Users`} }, "native-private", Error,
+			`backsight\data can be read by BUILTIN\Users`, `icacls 'C:\Users\jo\AppData\Local\backsight\data' /inheritance:r /grant:r '*S-1-5-21-1-2-3-1001:(OI)(CI)F'`, nil},
 		{"a DACL unread", func(n *NativeFacts) { n.Private[3].Err = errors.New("access denied") }, "native-private", Warn,
 			"could not read who can read", "", nil},
 		{"venv path too long", func(n *NativeFacts) { n.Venv = long }, "path-length", Error,
@@ -210,5 +222,33 @@ func TestLinuxDoctorListUnchanged(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("linux native checks on a failed probe %v\nwant %v", got, want)
+	}
+}
+
+// Fix round 1 (Task 11): what doctor tells a Windows user to delete is a
+// PowerShell command, never rm: the venv's completion marker, a database a
+// restore refused.
+func TestDoctorWindowsDeletesInPowerShell(t *testing.T) {
+	withVersion(t, "0.9.0")
+	refused := `C:\Users\jo\AppData\Local\backsight\data\server\native\home\.pg0\instances\hindsight.refused-1761700000`
+	f := newFixture(t)
+	nativeInstall(f, func() NativeFacts {
+		n := windowsFacts()
+		n.VenvDiff, n.Refused = []string{"fastmcp==3.2.0"}, []string{refused}
+		return n
+	})
+	r := f.run()
+	venv := check(t, r, "native-venv")
+	if want := `in PowerShell: backsight server stop; Remove-Item -Force '` + windowsFacts().Venv + `\.backsight-complete'; backsight server install`; !strings.HasPrefix(venv.Fix, want) {
+		t.Errorf("native-venv fix %q\nwant %q…", venv.Fix, want)
+	}
+	ref := check(t, r, "native-refused")
+	if want := `delete it yourself once you no longer need it: in PowerShell, Remove-Item -Recurse -Force '` + refused + `'`; !strings.HasSuffix(ref.Detail, want) {
+		t.Errorf("native-refused detail %q\nwant …%q", ref.Detail, want)
+	}
+	for _, c := range r.Checks {
+		if strings.Contains(c.Fix+" "+c.Detail, "rm ") {
+			t.Errorf("%s says rm: %s %s", c.ID, c.Fix, c.Detail)
+		}
 	}
 }

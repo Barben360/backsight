@@ -192,6 +192,9 @@ type setupEnv struct {
 	// startOnSession: Task Scheduler refused the server's task (Windows'
 	// pre-flight): the config step sets server.start_on_session.
 	startOnSession bool
+	// taskAccepted: the pre-flight's probe task passed: the config step
+	// removes a server.start_on_session an earlier setup set.
+	taskAccepted bool
 }
 
 // setupGOOS and setupGOARCH are the machine setup chooses defaults for
@@ -322,6 +325,7 @@ func runSetup(ctx context.Context, e *env, f setupFlags) (setupResult, error) {
 	}
 	res.Preflight = setup.Preflight(ctx, probes)
 	s.startOnSession = setup.StartOnSession(res.Preflight)
+	s.taskAccepted = setup.TaskAccepted(res.Preflight)
 	for _, c := range res.Preflight {
 		if c.ID == "scheduler" && c.Action != nil {
 			c.Action.Cmd = s.rerunWith("scheduler=off")
@@ -892,11 +896,22 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 		}},
 		{"config", 1, func(_ context.Context, r *setup.Record) (setup.Step, error) {
 			if s.cfg != nil {
-				if s.startOnSession && !s.cfg.Server.StartOnSession {
-					if err := setStartOnSession(s.dirs.ConfigFile()); err != nil {
+				// The pre-flight's task answer, set or cleared in the
+				// adopted config.toml: a refusal sets the flag, an accepted
+				// probe clears it (the task is registered at the start).
+				on := s.cfg.Server.StartOnSession
+				if want := s.startOnSession || (on && !s.taskAccepted); want != on {
+					ts, err := setStartOnSession(s.dirs, want)
+					if err != nil {
 						return setup.Step{}, err
 					}
-					return setup.Step{Name: "config", Status: "done", Detail: "adopted " + s.dirs.ConfigFile() + startOnSessionNote}, nil
+					_ = claudecfg.Pin(s.dirs.PreImagesDir(), ts) // pruning must not take what undo needs
+					r.Undo.AddRuns(ts)
+					note := startOnSessionNote
+					if !want {
+						note = startOnSessionCleared
+					}
+					return setup.Step{Name: "config", Status: "done", Detail: "adopted " + s.dirs.ConfigFile() + note}, nil
 				}
 				return setup.Step{Name: "config", Status: "skipped", Detail: "adopted " + s.dirs.ConfigFile()}, nil
 			}
@@ -1320,21 +1335,29 @@ func newRuns(before, after []string) []string {
 // refused the server's task.
 const startOnSessionNote = ", with server.start_on_session = true: Task Scheduler refused the server's task, so each Claude Code session starts the server when it is down"
 
-// setStartOnSession sets server.start_on_session in an adopted
-// config.toml, keeping the rest of the file as its owner wrote it.
-func setStartOnSession(file string) error {
-	raw, sha, err := fsutil.ReadHashed(file)
+// startOnSessionCleared ends the config step's detail when Task
+// Scheduler now accepts the task an earlier setup could not register.
+const startOnSessionCleared = ", server.start_on_session removed: Task Scheduler now accepts the server's task, which starts it at logon"
+
+// setStartOnSession sets (on) or removes server.start_on_session in an
+// adopted config.toml, keeping the rest of the file as its owner wrote
+// it, through the config editor: its run (returned) is what setup --undo
+// puts back, as for every other file setup edits.
+func setStartOnSession(d paths.Dirs, on bool) (string, error) {
+	file := d.ConfigFile()
+	runner := claudecfg.Runner{PreImages: d.PreImagesDir(), Journal: d.JournalFile(), Command: "setup", Now: now}
+	ts, _, err := runner.Apply([]claudecfg.Edit{{Target: file, Apply: func(doc []byte) ([]byte, []claudecfg.Change, error) {
+		out, err := config.SetStartOnSession(doc, on)
+		if err != nil {
+			return nil, nil, err
+		}
+		old, nw := strconv.FormatBool(!on), strconv.FormatBool(on)
+		return out, []claudecfg.Change{{Path: "server.start_on_session", Old: &old, New: &nw}}, nil
+	}}})
 	if err != nil {
-		return blocked(err)
+		return "", blocked(err)
 	}
-	out, err := config.SetStartOnSession(raw, true)
-	if err != nil {
-		return blocked(err)
-	}
-	if err := fsutil.ReplaceIfUnchanged(file, out, 0o600, sha); err != nil {
-		return blocked(fmt.Errorf("%s changed while setup wrote it: %w", file, err))
-	}
-	return nil
+	return ts, nil
 }
 
 // setupConfig is the config.toml setup writes from the answers.

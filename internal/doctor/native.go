@@ -33,11 +33,13 @@ type NativeFacts struct {
 	// Administrators that can read Home, replaces HomeMode.
 	HomeACL     bool
 	HomeReaders []string
-	Venv        string   // the deployed venv
-	Pin         string   // the venv this backsight pins (its lock's)
-	VenvDiff    []string // name==version of the lock missing or other in the deployed venv's dist-info
-	Linger      string   // loginctl's Linger: yes | no
-	Refused     []string // *.refused-* instance dirs kept by restore
+	// UserSID is the user's SID (S-1-5-…) on Windows, for the icacls fixes.
+	UserSID  string
+	Venv     string   // the deployed venv
+	Pin      string   // the venv this backsight pins (its lock's)
+	VenvDiff []string // name==version of the lock missing or other in the deployed venv's dist-info
+	Linger   string   // loginctl's Linger: yes | no
+	Refused  []string // *.refused-* instance dirs kept by restore
 	// Unread: check id → why its fact could not be read.
 	Unread map[string]error
 
@@ -49,6 +51,7 @@ type NativeFacts struct {
 	TaskName       string // \<project>\server
 	Task           string // server.TaskEnabled, server.TaskDisabled or server.NotInstalled
 	StartOnSession bool   // server.start_on_session: Task Scheduler refused the task at setup
+	Stopped        bool   // backsight server stop's marker: down on purpose
 	// Supervisor is its answer to status, nil when none answers.
 	Supervisor  *supervise.Status
 	LogDir      string // the supervisor's logs
@@ -65,6 +68,7 @@ type NativeFacts struct {
 // (Err: its DACL could not be read).
 type PrivatePath struct {
 	Path    string
+	Dir     bool // a directory: its entries are inherited by what it holds
 	Readers []string
 	Err     error
 }
@@ -101,7 +105,7 @@ func nativeChecks(ctx context.Context, probe func(context.Context) (NativeFacts,
 	}
 	for _, dir := range f.Refused {
 		out = append(out, Check{ID: "native-refused", Status: Info, Summary: "a database restore refused is kept in " + dir,
-			Detail: "restore moved it aside, never deleting it; delete it yourself once you no longer need it: rm -rf " + shellQuote(dir)})
+			Detail: "restore moved it aside, never deleting it; delete it yourself once you no longer need it: " + removeDirCmd(f.Windows, dir)})
 	}
 	return append(out, webUICheck())
 }
@@ -147,7 +151,7 @@ func checkNativeFsync(f NativeFacts) Check {
 	case "on":
 		c.Status, c.Summary = OK, "fsync is on"
 	case "":
-		if f.Windows && f.Task == server.TaskDisabled && f.Supervisor == nil {
+		if f.Windows && f.stoppedOnPurpose() {
 			c.Status, c.Summary = Info, "not read: the native server is stopped (backsight server stop)"
 			return c
 		}
@@ -235,7 +239,7 @@ func checkNativeHome(f NativeFacts) Check {
 		if len(f.HomeReaders) > 0 {
 			c.Status = Error
 			c.Summary = fmt.Sprintf("%s can be read by %s: other users can read the database", f.Home, strings.Join(f.HomeReaders, ", "))
-			c.Fix = fmt.Sprintf(`icacls "%s" /inheritance:r /grant:r "%%USERNAME%%:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"`, f.Home)
+			c.Fix = icaclsFix(f.Home, true, f.UserSID, f.HomeReaders)
 			return c
 		}
 		c.Status, c.Summary = OK, f.Home+" is private to you, SYSTEM and Administrators"
@@ -277,6 +281,10 @@ func checkNativeVenv(f NativeFacts) Check {
 		// This backsight's own venv changed since it was built: an upgrade
 		// to the version it runs does nothing, a rebuild from the lock does.
 		c.Fix = "backsight server stop; rm " + shellQuote(filepath.Join(f.Venv, ".backsight-complete")) + "; backsight server install (it builds the venv again from the lock)"
+		if f.Windows {
+			c.Fix = "in PowerShell: backsight server stop; Remove-Item -Force " + server.PSQuote(f.Venv+`\.backsight-complete`) +
+				"; backsight server install (it builds the venv again from the lock)"
+		}
 		return c
 	}
 	c.Fix = "backsight server upgrade --allow-unordered"
@@ -351,6 +359,15 @@ func sitePackages(venv string) string {
 		return filepath.Join(venv, "Lib", "site-packages")
 	}
 	return filepath.Join(venv, "lib", "python3.11", "site-packages")
+}
+
+// removeDirCmd deletes dir: rm -rf, or PowerShell's Remove-Item on
+// Windows.
+func removeDirCmd(windows bool, dir string) string {
+	if windows {
+		return "in PowerShell, Remove-Item -Recurse -Force " + server.PSQuote(dir)
+	}
+	return "rm -rf " + shellQuote(dir)
 }
 
 // shellQuote is s as one POSIX shell word, for a path spliced into a

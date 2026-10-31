@@ -226,17 +226,18 @@ func (e *events) index(s string) int { return slices.Index(e.all(), s) }
 // fakeTask is Task Scheduler and the supervisor's pipe for the task
 // host's tests.
 type fakeTask struct {
-	ev         *events
-	mu         sync.Mutex
-	registered bool
-	up         bool
-	st         supervise.Status
-	runStarts  bool // /Run starts the supervisor (a console logon)
-	runFails   bool // /Run fails
-	queryFails int  // the next /Query calls failing for another reason than a missing task
-	stopPolls  int  // status answers after a stop before the pipe goes
-	notes      []string
-	detached   [][]string
+	ev          *events
+	mu          sync.Mutex
+	registered  bool
+	up          bool
+	st          supervise.Status
+	runStarts   bool // /Run starts the supervisor (a console logon)
+	runFails    bool // /Run fails
+	createFails bool // /Create is refused (Task Scheduler refused the task at setup)
+	queryFails  int  // the next /Query calls failing for another reason than a missing task
+	stopPolls   int  // status answers after a stop before the pipe goes
+	notes       []string
+	detached    [][]string
 }
 
 func (f *fakeTask) sys(c []string) ([]byte, error) {
@@ -256,6 +257,9 @@ func (f *fakeTask) sys(c []string) ([]byte, error) {
 			return notFound()
 		}
 	case slices.Contains(c, "/Create"):
+		if f.createFails {
+			return []byte("ERROR: Access is denied."), errors.New("exit status 1")
+		}
 		f.registered = true
 	case !f.registered:
 		return notFound()
@@ -868,4 +872,150 @@ func TestTaskRestartPending(t *testing.T) {
 	if exists(n.pendingFile()) {
 		t.Error("restart-pending stays after the restart")
 	}
+}
+
+// Fix round 1 (Task 11): Task Scheduler refused the server's task at setup
+// (server.start_on_session): a start registers and enables nothing, starts
+// the supervisor detached and says the next Claude Code session starts it
+// again. Without the flag the same refusal fails the start.
+func TestStartOnSessionStartsWithoutTheTask(t *testing.T) {
+	h, f := taskFixture(t)
+	f.createFails = true
+	ctx := context.Background()
+	if err := h.StartDB(ctx, false); err == nil || !strings.Contains(err.Error(), "Access is denied") {
+		t.Fatalf("without start_on_session, a refused /Create: StartDB = %v, want the refusal", err)
+	}
+	h.n.Cfg.Server.StartOnSession = true
+	f.ev, f.detached, f.notes = &events{}, nil, nil
+	if err := h.StartDB(ctx, false); err != nil {
+		t.Fatalf("start_on_session: StartDB = %v, want the detached start", err)
+	}
+	if err := h.StartAPI(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	want := scheduler.HeadlessArgs(h.n.shim(), "server", "supervise", "--backsight-home", h.n.Env["BACKSIGHT_HOME"])
+	if len(f.detached) != 1 || !slices.Equal(f.detached[0], want) {
+		t.Errorf("detached starts %q, want one of %q", f.detached, want)
+	}
+	if got := f.ev.all(); slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "schtasks ") }) {
+		t.Errorf("start_on_session ran schtasks:\n%s", strings.Join(got, "\n"))
+	}
+	if !slices.Equal(f.notes, []string{NoTaskNote}) {
+		t.Errorf("notes %q, want the no-task note", f.notes)
+	}
+	if e, err := h.Engine(ctx); err != nil || !strings.Contains(e.Version, "no scheduled task") {
+		t.Errorf("Engine = %+v, %v, want the supervisor without a task", e, err)
+	}
+	// Running: a second start changes nothing; a restart stops it first.
+	f.ev, f.notes = &events{}, nil
+	if err := h.StartDB(ctx, false); err != nil || len(f.detached) != 1 || len(f.notes) != 0 {
+		t.Errorf("a running supervisor: StartDB = %v, detached %q, notes %q", err, f.detached, f.notes)
+	}
+	if err := h.StartDB(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	got := f.ev.all()
+	stop, det := slices.Index(got, "pipe stop"), slices.IndexFunc(got, func(e string) bool { return strings.HasPrefix(e, "detached ") })
+	if stop < 0 || det < stop || len(f.detached) != 2 {
+		t.Errorf("a restart did\n%s\nwant the supervisor stopped, then started detached", strings.Join(got, "\n"))
+	}
+}
+
+// Setup's server step with Task Scheduler refusing the task: the files
+// written, then Native.Start through the database's wait, fsync and the
+// API's health, nothing faked past it but Task Scheduler and the pipe.
+func TestSetupPathStartsWithoutTheTask(t *testing.T) {
+	for _, flag := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no start_on_session: refused", true: "start_on_session: started"}[flag], func(t *testing.T) {
+			n, _, _ := nativeFixture(t, secrets)
+			n.GOOS = ""
+			h, f := taskFixture(t)
+			h.n.Cfg, h.n.Dirs, h.n.Tools, h.n.Proc, h.n.Env = n.Cfg, n.Dirs, n.Tools, n.Proc, n.Env
+			h.n.Cfg.Server.Project = "bs" // fakeTask's
+			h.n.Cfg.Server.StartOnSession = flag
+			n = h.n
+			withHost(t, h)
+			completeVenv(t, n, n.Version())
+			f.createFails = true
+			files, err := n.Render(secrets, "box")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := n.Write(files); err != nil {
+				t.Fatal(err)
+			}
+			recordInstance(t, n, "7702339718603615110") // the database itself is the guard's tests'
+			err = n.Start(context.Background())
+			if !flag {
+				if err == nil || !strings.Contains(err.Error(), "Access is denied") {
+					t.Errorf("Start = %v, want Task Scheduler's refusal", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Start = %v, want the server started without its task", err)
+			}
+			got := f.ev.all()
+			if slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, "schtasks ") }) ||
+				!slices.Contains(got, "pipe api-start") || len(f.detached) != 1 {
+				t.Errorf("Start did\n%s\nwant no schtasks, one detached start, the API started", strings.Join(got, "\n"))
+			}
+			if !slices.Equal(f.notes, []string{NoTaskNote}) {
+				t.Errorf("notes %q, want the no-task note", f.notes)
+			}
+		})
+	}
+}
+
+// Fix round 1 (Task 11): backsight server stop marks the server stopped
+// on the task host (nothing on systemd's, nothing without an install);
+// the SessionStart fallback leaves a marked server down; any start
+// removes the marker.
+func TestStoppedOnPurpose(t *testing.T) {
+	h, f := taskFixture(t)
+	n := h.n
+	n.Cfg.Server.StartOnSession = true
+	h.n = n
+	withHost(t, h)
+	if n.Stopped() {
+		t.Fatal("stopped before any stop")
+	}
+	if err := n.MarkStopped(); err != nil || !n.Stopped() {
+		t.Fatalf("MarkStopped = %v, marker %v", err, n.Stopped())
+	}
+	if started, err := n.StartIfDown(context.Background()); started || err != nil || len(f.detached) != 0 || len(f.ev.all()) != 0 {
+		t.Errorf("stopped on purpose: StartIfDown started %v, %v, events %q", started, err, f.ev.all())
+	}
+	if err := h.StartDB(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if n.Stopped() || len(f.detached) != 1 {
+		t.Errorf("after a start: marker %v, detached %q", n.Stopped(), f.detached)
+	}
+	// The task's own path clears it too.
+	if err := n.MarkStopped(); err != nil {
+		t.Fatal(err)
+	}
+	h.n.Cfg.Server.StartOnSession = false
+	f.runStarts = true
+	if err := h.StartDB(context.Background(), false); err != nil || n.Stopped() {
+		t.Errorf("the task's start: %v, marker %v", err, n.Stopped())
+	}
+
+	t.Run("systemd: no marker", func(t *testing.T) {
+		withHost(t, systemdHost{n: n})
+		_ = os.Remove(n.StoppedFile())
+		if err := n.MarkStopped(); err != nil || n.Stopped() {
+			t.Errorf("MarkStopped on systemd = %v, marker %v", err, n.Stopped())
+		}
+	})
+	t.Run("nothing installed: no marker", func(t *testing.T) {
+		withHost(t, h)
+		if err := os.RemoveAll(n.Root()); err != nil {
+			t.Fatal(err)
+		}
+		if err := n.MarkStopped(); err != nil || exists(n.Root()) {
+			t.Errorf("MarkStopped without Root = %v, Root created %v", err, exists(n.Root()))
+		}
+	})
 }

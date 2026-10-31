@@ -409,3 +409,32 @@ func TestUVMinorLinkErrorAccepted(t *testing.T) {
 		})
 	}
 }
+
+// Fix round 1 (Task 11): huggingface_hub marks a cache folder
+// symlink-capable before its probe ends, so with several download threads
+// the others symlink and a standard user fails with WinError 1314 on a
+// fresh root. On Windows hf download runs one thread, in Windows' tool
+// environment with HF_HOME set.
+func TestWindowsModelsDownloadOnOneThread(t *testing.T) {
+	tools := &fakeTools{}
+	n := winNative(t, tools)
+	v := n.Version()
+	if err := n.fetchModels(context.Background(), io.Discard, v); err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Calls) != len(nativeModels) {
+		t.Fatalf("%d calls, want one hf download per model: %+v", len(tools.Calls), tools.Calls)
+	}
+	hf := filepath.Join(n.VenvDir(v), "Scripts", "hf.exe")
+	for i, c := range tools.Calls {
+		if c.Path != hf || len(c.Args) < 2 || c.Args[0] != "download" {
+			t.Errorf("call %d: %s %q, want %s download", i+1, c.Path, c.Args, hf)
+		}
+		if w := slices.Index(c.Args, "--max-workers"); w < 0 || w+1 >= len(c.Args) || c.Args[w+1] != "1" {
+			t.Errorf("call %d: %q, want --max-workers 1", i+1, c.Args)
+		}
+		if !slices.Contains(c.Env, "HF_HOME="+n.HF()) {
+			t.Errorf("call %d env %q lacks HF_HOME=%s", i+1, c.Env, n.HF())
+		}
+	}
+}

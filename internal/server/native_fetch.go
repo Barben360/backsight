@@ -401,6 +401,13 @@ func (n Native) fetchModels(ctx context.Context, w io.Writer, v string) error {
 		for _, f := range nativeModelFiles {
 			args = append(args, "--include", f)
 		}
+		if n.goos() == "windows" {
+			// One download thread: huggingface_hub records a cache folder as
+			// symlink-capable before its probe ends, so its other threads
+			// symlink, which a standard user cannot (WinError 1314); alone,
+			// the probe answers no and the files are copied.
+			args = append(args, "--max-workers", "1")
+		}
 		if _, err := n.Tools.Run(ctx, env, nil, hf, args...); err != nil {
 			return fmt.Errorf("hf download %s: %w", m.Repo, err)
 		}

@@ -5,6 +5,7 @@ import (
 	"runtime"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/setup"
 )
 
 // ReadHome fills f's Home facts from the directory itself: its mode on
@@ -18,6 +19,7 @@ func (f *NativeFacts) ReadHome(home string) error {
 	f.HomeMode = fi.Mode()
 	if runtime.GOOS == "windows" {
 		f.HomeACL = true
+		f.UserSID, _ = setup.UserSID() // for the icacls fix; without it, PowerShell's user name
 		f.HomeReaders, err = fsutil.OtherReaders(home)
 	}
 	return err

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"slices"
@@ -31,13 +32,17 @@ var taskDisabled = regexp.MustCompile(`(?s)<Settings>.*?<Enabled>\s*false\s*</En
 
 // TaskState is the server's scheduled task: TaskEnabled, TaskDisabled
 // (server stop disables it), or NotInstalled when schtasks cannot query
-// it. It reads the task's XML, never schtasks' localized text.
+// it; an error when ctx ended first. It reads the task's XML, never
+// schtasks' localized text.
 func (n Native) TaskState(ctx context.Context) (string, error) {
 	if n.Err != nil {
 		return "", n.Err
 	}
 	out, err := n.Sys.Run(ctx, "schtasks", "/Query", "/TN", n.TaskName(), "/XML")
 	if err != nil {
+		if cerr := ctx.Err(); cerr != nil { // no answer, not a missing task
+			return "", fmt.Errorf("querying the scheduled task %s: %w", n.TaskName(), cerr)
+		}
 		return NotInstalled, nil
 	}
 	if taskDisabled.Match(utf8XML(out)) {

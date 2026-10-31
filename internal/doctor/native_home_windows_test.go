@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/server/nativelock"
 )
 
 func TestDoctorNativeHomeOnWindows(t *testing.T) {
@@ -59,10 +60,29 @@ func TestFreeBytesOnWindows(t *testing.T) {
 
 // A Windows venv keeps its packages in Lib\site-packages: native-venv
 // reads them there (a Linux path would read nothing and report every
-// package missing).
+// package missing). A venv of the lock's versions differs in nothing; one
+// package at another version is the difference.
 func TestNativeVenvDiffReadsTheWindowsLayout(t *testing.T) {
 	venv := t.TempDir()
-	if got, want := sitePackages(venv), filepath.Join(venv, "Lib", "site-packages"); got != want {
-		t.Errorf("site-packages %s, want %s", got, want)
+	sp := filepath.Join(venv, "Lib", "site-packages")
+	var one string
+	for name, v := range nativelock.Versions() {
+		if one == "" {
+			one = name
+			v = "0.0.0"
+		}
+		if err := os.MkdirAll(filepath.Join(sp, name+"-"+v+".dist-info"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	diff, err := NativeVenvDiff(venv)
+	if err != nil || len(diff) != 1 || diff[0] != one+"=="+nativelock.Versions()[one] {
+		t.Fatalf("diff %q, %v, want only %s at its locked version", diff, err, one)
+	}
+	if err := os.Rename(filepath.Join(sp, one+"-0.0.0.dist-info"), filepath.Join(sp, one+"-"+nativelock.Versions()[one]+".dist-info")); err != nil {
+		t.Fatal(err)
+	}
+	if diff, err := NativeVenvDiff(venv); err != nil || len(diff) != 0 {
+		t.Errorf("the lock's venv: diff %q, %v", diff, err)
 	}
 }

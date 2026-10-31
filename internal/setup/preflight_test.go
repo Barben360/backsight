@@ -485,11 +485,11 @@ func TestProbeTaskAlwaysDeletes(t *testing.T) {
 		if refuse && !strings.Contains(err.Error(), "Access is denied") {
 			t.Errorf("the refusal does not say why: %v", err)
 		}
-		want := [][]string{{"schtasks", "/Create", "/XML", "", "/TN", `\bs-test-probe\probe`}, {"schtasks", "/Delete", "/F", "/TN", `\bs-test-probe\probe`}}
-		if len(calls) != 2 || len(calls[0]) != 6 {
+		want := [][]string{{"schtasks", "/Create", "/F", "/XML", "", "/TN", `\bs-test-probe\probe`}, {"schtasks", "/Delete", "/F", "/TN", `\bs-test-probe\probe`}}
+		if len(calls) != 2 || len(calls[0]) != 7 {
 			t.Fatalf("calls %q", calls)
 		}
-		calls[0][3] = ""
+		calls[0][4] = ""
 		if fmt.Sprint(calls) != fmt.Sprint(want) {
 			t.Errorf("refuse %v: calls %q\nwant %q", refuse, calls, want)
 		}

@@ -57,7 +57,7 @@ func checkSupervisor(f NativeFacts) Check {
 	}
 	st := f.Supervisor
 	if st == nil {
-		if f.Task == server.TaskDisabled {
+		if f.stoppedOnPurpose() {
 			c.Status, c.Summary = Info, "the native server is stopped (backsight server stop)"
 			return c
 		}
@@ -83,6 +83,12 @@ func checkSupervisor(f NativeFacts) Check {
 		c.Status, c.Summary = OK, fmt.Sprintf("the supervisor (pid %d) runs the database and the API", st.PID)
 	}
 	return c
+}
+
+// stoppedOnPurpose: no supervisor runs, and backsight server stop said so
+// (the task disabled, or its marker without a task).
+func (f NativeFacts) stoppedOnPurpose() bool {
+	return f.Supervisor == nil && (f.Task == server.TaskDisabled || f.Stopped)
 }
 
 func checkNativeDLLs(f NativeFacts) Check {
@@ -118,7 +124,7 @@ func checkNativePrivate(f NativeFacts) Check {
 		case len(p.Readers) > 0:
 			open = append(open, p.Path+" can be read by "+strings.Join(p.Readers, ", "))
 			if fix == "" {
-				fix = icaclsFix(p.Path)
+				fix = icaclsFix(p.Path, p.Dir, f.UserSID, p.Readers)
 			}
 		}
 	}
@@ -137,10 +143,38 @@ func checkNativePrivate(f NativeFacts) Check {
 	return c
 }
 
-// icaclsFix makes path private again (MakePrivate's DACL); a directory's
-// entries are inherited by what it holds.
-func icaclsFix(path string) string {
-	return fmt.Sprintf(`icacls "%s" /inheritance:r /grant:r "%%USERNAME%%:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"`, path)
+// icaclsFix makes path private again, MakePrivate's DACL: full access to
+// the user, SYSTEM and Administrators by SID (names are localized), the
+// inherited entries cut and the other readers' explicit ones removed. A
+// directory's entries are inherited by what it holds; a file's carry no
+// inheritance flags. It is a PowerShell command: Git Bash would rewrite
+// /inheritance:r as a path.
+func icaclsFix(path string, dir bool, sid string, readers []string) string {
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	perm := ":F"
+	if dir {
+		perm = ":(OI)(CI)F"
+	}
+	me := q("*" + sid + perm)
+	if sid == "" {
+		me = `"${env:USERNAME}` + perm + `"`
+	}
+	cmd := "in PowerShell: icacls " + q(path) + " /inheritance:r /grant:r " + me + " " + q("*S-1-5-18"+perm) + " " + q("*S-1-5-32-544"+perm)
+	var remove []string
+	for _, r := range readers {
+		switch {
+		case r == "Everyone": // a missing DACL
+			continue
+		case strings.HasPrefix(r, "S-1-"):
+			remove = append(remove, q("*"+r))
+		default:
+			remove = append(remove, q(r))
+		}
+	}
+	if len(remove) > 0 {
+		cmd += " /remove:g " + strings.Join(remove, " ")
+	}
+	return cmd
 }
 
 func checkPathLength(f NativeFacts) Check {

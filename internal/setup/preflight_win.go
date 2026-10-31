@@ -21,7 +21,7 @@ import (
 
 // The path bound (E34 ruling 9): Windows' MAX_PATH is 260 with long
 // paths off (turning them on needs admin), and the deepest file below a
-// venv root is 136 characters (measured): the root plus VenvDepth must
+// venv root is 133 characters (measured): the root plus VenvDepth must
 // stay within PathBound.
 const (
 	PathBound = 250
@@ -89,8 +89,8 @@ func conhostCheck(ctx context.Context, p Probes) Check {
 
 // TaskFallback is how the native server runs when Task Scheduler refuses
 // its task (a policy): setup goes on, and says so.
-const TaskFallback = "setup goes on without the task: start the server with backsight server start, and every Claude Code session starts it when it is down " +
-	"(setup sets server.start_on_session = true); it no longer starts at logon on its own"
+const TaskFallback = "setup goes on without the task: it starts the server until you log off and sets server.start_on_session = true, " +
+	"so every Claude Code session starts it when it is down (backsight server start does too); it no longer starts at logon on its own"
 
 func taskCheck(ctx context.Context, p Probes) Check {
 	c := Check{ID: "task"}
@@ -119,6 +119,17 @@ func StartOnSession(cs []Check) bool {
 	return false
 }
 
+// TaskAccepted: the pre-flight's probe task passed, so a
+// server.start_on_session an earlier setup set no longer holds.
+func TaskAccepted(cs []Check) bool {
+	for _, c := range cs {
+		if c.ID == "task" && c.Status == OK {
+			return true
+		}
+	}
+	return false
+}
+
 // Run runs a system program, as the real probes and tests do.
 type Run func(ctx context.Context, name string, args ...string) ([]byte, error)
 
@@ -129,7 +140,7 @@ const probeStart = "2099-01-01T00:00:00"
 // ProbeTask creates \<project>\probe from the XML scheduler.TaskXML
 // renders for the user sid (shim version under conhost --headless, never
 // due), then deletes it, always: a refused /Create may have left it
-// half made. The XML goes through a file in dir, removed after.
+// half made. /F replaces a probe an interrupted setup left behind. The XML goes through a file in dir, removed after.
 func ProbeTask(ctx context.Context, run Run, sid, project, shim, dir string) (err error) {
 	name := `\` + project + `\probe`
 	xml, err := scheduler.TaskXML(scheduler.TaskSpec{
@@ -155,7 +166,7 @@ func ProbeTask(ctx context.Context, run Run, sid, project, shim, dir string) (er
 			err = fmt.Errorf("deleting the probe task %s: %w", name, derr)
 		}
 	}()
-	if out, cerr := run(ctx, "schtasks", "/Create", "/XML", file, "/TN", name); cerr != nil {
+	if out, cerr := run(ctx, "schtasks", "/Create", "/F", "/XML", file, "/TN", name); cerr != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("%s: %w", msg, cerr)
 		}

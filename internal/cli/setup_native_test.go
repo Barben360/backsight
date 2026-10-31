@@ -554,3 +554,60 @@ func TestSetupSetsStartOnSessionWhenTheTaskIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// Fix round 1 (Task 11): a later setup whose probe task passes removes the
+// server.start_on_session an earlier one set, through the config editor,
+// and setup --undo puts it back.
+func TestSetupClearsStartOnSessionWhenTheTaskPasses(t *testing.T) {
+	home, _ := windowsMachine(t, nil)
+	withLLMKey(t, home)
+	task := errors.New("ERROR: Access is denied.")
+	inner := preflightProbes
+	preflightProbes = func(ctx context.Context, s setupEnv, x map[string]string) setup.Probes {
+		p := inner(ctx, s, x)
+		p.Task = func(context.Context) error { return task }
+		return p
+	}
+	old := runtimeWith // nothing to download: the server step is faked
+	runtimeWith = func(cfg config.Config, g bool) server.Runtime { return noDownloads{old(cfg, g)} }
+	t.Cleanup(func() { runtimeWith = old })
+	file := pathsOf(home).ConfigFile()
+	setupRun := func() setupEnvelope {
+		t.Helper()
+		code, out, errOut := run(t, "setup", "--answer", "provider=deepseek", "--answer", "consent=yes", "--non-interactive", "--json")
+		if code != output.OK {
+			t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+		}
+		return parseSetup(t, out)
+	}
+	setupRun()
+	refused, _ := os.ReadFile(file)
+	if !strings.Contains(string(refused), "\nstart_on_session = true\n") {
+		t.Fatalf("the refusal did not set start_on_session:\n%s", refused)
+	}
+
+	task = nil
+	env := setupRun()
+	accepted, _ := os.ReadFile(file)
+	if strings.Contains(string(accepted), "start_on_session") {
+		t.Errorf("the task passed, start_on_session kept:\n%s", accepted)
+	}
+	if want := strings.Replace(string(refused), "start_on_session = true\n", "", 1); string(accepted) != want {
+		t.Errorf("config.toml beyond the flag changed:\n%s\nwant\n%s", accepted, want)
+	}
+	if !hasStep(env.Data.Steps, "config", "done", "server.start_on_session removed") {
+		t.Errorf("the config step does not say so: %+v", env.Data.Steps)
+	}
+	// Nothing to change: the step changes nothing.
+	if env := setupRun(); !hasStep(env.Data.Steps, "config", "skipped", "adopted") {
+		t.Errorf("a third setup: %+v", env.Data.Steps)
+	}
+
+	code, out, errOut := run(t, "setup", "--undo", "--json")
+	if code != output.OK {
+		t.Fatalf("undo: exit %d\n%s\n%s", code, out, errOut)
+	}
+	if back, _ := os.ReadFile(file); !strings.Contains(string(back), "\nstart_on_session = true\n") {
+		t.Errorf("setup --undo did not put start_on_session back:\n%s\n%s", back, out)
+	}
+}

@@ -862,14 +862,33 @@ var _ Creator = Native{}
 // (MayCreate, ruling R35): a switch to native.
 func (n Native) AllowCreate() Runtime { n.MayCreate = true; return n }
 
-func (n Native) DataRemoveCmd() string { return n.StopCmd() + " && rm -rf " + shellWord(n.Home()) }
+// DataRemoveCmd stops the server and deletes its database: in PowerShell
+// on Windows (PowerShell 5 has no &&).
+func (n Native) DataRemoveCmd() string {
+	if n.goos() == "windows" {
+		return "in PowerShell: " + n.StopCmd() + "; Remove-Item -Recurse -Force " + PSQuote(n.Home())
+	}
+	return n.StopCmd() + " && rm -rf " + shellWord(n.Home())
+}
 
 // ImagesRemoveCmd frees what the server ran: Python, the venvs, the models
 // and uv.
 func (n Native) ImagesRemoveCmd() string {
-	return "rm -rf " + shellWord(n.Python()) + " " + shellWord(filepath.Join(n.Root(), "venv")) + " " +
-		shellWord(n.HF()) + " " + shellWord(filepath.Join(n.Root(), "uv"))
+	dirs := []string{n.Python(), n.join(n.Root(), "venv"), n.HF(), n.join(n.Root(), "uv")}
+	if n.goos() == "windows" {
+		for i, d := range dirs {
+			dirs[i] = PSQuote(d)
+		}
+		return "in PowerShell: Remove-Item -Recurse -Force " + strings.Join(dirs, ", ")
+	}
+	for i, d := range dirs {
+		dirs[i] = shellWord(d)
+	}
+	return "rm -rf " + strings.Join(dirs, " ")
 }
+
+// PSQuote is s as one PowerShell word: single-quoted, a quote doubled.
+func PSQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 // Engine is the host's service manager (systemd's: native_systemd.go).
 func (n Native) Engine(ctx context.Context) (Engine, error) {

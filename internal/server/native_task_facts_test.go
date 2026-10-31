@@ -95,6 +95,13 @@ func TestTaskStateReadsTheXML(t *testing.T) {
 			t.Errorf("%s: %q %v, want %q", c.name, got, err, c.want)
 		}
 	}
+	// A query cut short by its deadline is no answer: an error, never
+	// "not installed".
+	ctx, cancel := context.WithCancel(context.Background())
+	n.Sys = &fakeSys{Out: func([]string) ([]byte, error) { cancel(); return nil, errors.New("signal: killed") }}
+	if got, err := n.TaskState(ctx); got == NotInstalled || !errors.Is(err, context.Canceled) {
+		t.Errorf("an expired query: %q %v, want the context's error", got, err)
+	}
 }
 
 func utf16Bytes(s string) []byte {
@@ -204,5 +211,22 @@ func TestNativeTextsPerOS(t *testing.T) {
 		if !strings.Contains(c.got, c.want) {
 			t.Errorf("windows: %q lacks %q", c.got, c.want)
 		}
+	}
+}
+
+// Fix round 1 (Task 11): the removal commands printed on Windows are
+// PowerShell's (no rm, no &&), each path one quoted word; Linux keeps its
+// rm -rf.
+func TestRemoveCmdsOnWindows(t *testing.T) {
+	n := newNative(t, nil)
+	n.GOOS = "windows"
+	n.Cfg.Server.ComposeDir = `C:\Users\Jo's\backsight\server`
+	r := `C:\Users\Jo''s\backsight\server\native`
+	if got, want := n.DataRemoveCmd(), `in PowerShell: backsight server stop; Remove-Item -Recurse -Force '`+r+`\home'`; got != want {
+		t.Errorf("DataRemoveCmd = %s\nwant %s", got, want)
+	}
+	want := `in PowerShell: Remove-Item -Recurse -Force '` + r + `\python', '` + r + `\venv', '` + r + `\hf', '` + r + `\uv'`
+	if got := n.ImagesRemoveCmd(); got != want {
+		t.Errorf("ImagesRemoveCmd = %s\nwant %s", got, want)
 	}
 }

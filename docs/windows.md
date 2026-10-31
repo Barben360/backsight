@@ -63,7 +63,7 @@ Windows has no service manager a standard user can use, so backsight supervises 
 - `conhost.exe --headless` runs (Windows 10 version 1809 and later);
 - Task Scheduler accepts your task: setup registers a probe task, `\<project>\probe`, which never runs, and deletes it at once.
 
-When a policy blocks your scheduled tasks, setup warns and goes on: start the server with `backsight server start`, and setup writes `server.start_on_session = true` in `config.toml`, so each Claude Code session starts the server when it is down (its SessionStart hook starts the supervisor the way `backsight server start` does without the task, and does not wait for it). The server then no longer starts at logon by itself.
+When a policy blocks your scheduled tasks, setup warns and goes on: it writes `server.start_on_session = true` in `config.toml` and starts the server without the task, which then runs until you log off. Each Claude Code session starts the server when it is down (its SessionStart hook starts the supervisor the way `backsight server start` does without the task, and does not wait for it), and `backsight server start` starts it the same way, saying `Task Scheduler refused the server's task: the server runs until you log off, and starts with your next Claude Code session`. The server no longer starts at logon by itself. After `backsight server stop`, sessions leave it down until `backsight server start`. A later `backsight setup` whose probe task passes removes `server.start_on_session` (`backsight setup --undo` puts it back), and the next start registers the task.
 
 `backsight server runtime switch` is refused on Windows: Docker on Windows is untested in this release.
 
