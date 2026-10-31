@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The checks of the client VM's network (offline-laptop, offline-hung,
@@ -209,6 +211,7 @@ func runNetCheck(t *testing.T, fakes, dir, check string) (map[string]any, []stri
 // offline script's session and leaves nothing of it on A; each reader's
 // control turns a blind read into a FAIL.
 func TestVMBenchOfflineBringsTheLinkBack(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	cases := []struct {
 		name, status, detail string
 		breakIt              func(t *testing.T, dir, fakes string)
@@ -306,6 +309,7 @@ func TestVMBenchOfflineBringsTheLinkBack(t *testing.T) {
 // drop that never applied, a server that refused (not hung), and a run
 // where no prompt ever tried the server.
 func TestVMBenchOfflineHungDropsAndLiftsTheRule(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	cases := []struct {
 		name, status, detail string
 		breakIt              func(t *testing.T, dir, fakes string)
@@ -398,6 +402,7 @@ func TestVMBenchOfflineHungDropsAndLiftsTheRule(t *testing.T) {
 // a follow-up above 2 000 ms only; a tick that did not count the 200
 // transcripts measured nothing and fails.
 func TestVMBenchUnsentCostIsRecordedWithItsControl(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	for _, c := range []struct {
 		name, waiting, unsent, status, detail string
 		diff                                  float64
@@ -484,6 +489,7 @@ func latencyOut(t *testing.T, dir string, ms int, recall func(i int) bool, failu
 // deadline or timing out fails, and the percentiles are of the recall
 // prompts alone.
 func TestVMBenchLatencyLeavesNoNetem(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	all := func(int) bool { return true }
 	first := func(n int) func(int) bool { return func(i int) bool { return i <= n } }
 	for _, c := range []struct {
@@ -593,6 +599,7 @@ func sessionLeader(pid int) bool {
 // The run's end removes a netem or a drop rule a check could not (a run
 // stopped by hand).
 func TestVMBenchRunEndRemovesNetemAndTheDrop(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
 	fakes := newBenchFakes(t)
 	writeExec(t, filepath.Join(fakes, "ssh"), netSSH)
 	writeLines(t, filepath.Join(fakes, "netem"), "qdisc netem 8001: dev enp1s0 root refcnt 2 limit 1000 delay 80ms")

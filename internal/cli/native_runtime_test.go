@@ -14,6 +14,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // A native config gets the native runtime, with the units where the user
@@ -48,11 +49,18 @@ func TestRuntimeForPicksNative(t *testing.T) {
 	if n.Dirs != d || n.Proc != "/proc" || n.Cfg.Server.Runtime != "native" {
 		t.Errorf("Dirs %+v Proc %q", n.Dirs, n.Proc)
 	}
-	// TestMain's refusing runners: no test reaches systemd or a tool.
-	if err := n.Stop(context.Background()); err != nil {
+	// TestMain's refusing runners: no test reaches systemd, schtasks, the
+	// supervisor's pipe or a tool. Linux: no unit, nothing to stop.
+	// Windows: Stop asks the pipe, and the refusal answers (never a real
+	// supervisor of the default project's).
+	err := n.Stop(context.Background())
+	switch {
+	case runtime.GOOS == "windows" && (err == nil || !strings.Contains(err.Error(), "without a fake runner")):
+		t.Errorf("Stop on Windows: %v, want the refusing runners' error", err)
+	case runtime.GOOS != "windows" && err != nil:
 		t.Errorf("Stop without units: %v", err)
 	}
-	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir()}).StopAPI(context.Background()); err != nil {
+	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir(), GOOS: "linux"}).StopAPI(context.Background()); err != nil {
 		t.Errorf("StopAPI without units: %v", err)
 	}
 	if _, err := n.Sys.Run(context.Background(), "systemctl", "--user", "daemon-reload"); err == nil || !strings.Contains(err.Error(), "without a fake") {
@@ -68,6 +76,7 @@ func TestRuntimeForPicksNative(t *testing.T) {
 
 // execTools runs a tool with exactly the environment it is given.
 func TestExecToolsGivesExactlyItsEnvironment(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: native runtime")
 	t.Setenv("PYTHONPATH", "/evil")
 	out, err := execTools{}.Run(context.Background(), []string{"A=1"}, strings.NewReader("in"), "/usr/bin/env")
 	if err != nil {

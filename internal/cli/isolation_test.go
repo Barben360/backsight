@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // A shell that ran a hook, a verify or a scratch stack exports variables
@@ -53,7 +54,7 @@ func TestClaudeRunnerRefusesWithoutAFake(t *testing.T) {
 	bin, marker := t.TempDir(), filepath.Join(t.TempDir(), "ran")
 	// A claude of its own on PATH: the real one is never run, even when
 	// the default is the real runner.
-	_ = os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n: > "+marker+"\necho 2.1.310\n"), 0o700)
+	testtool.Write(t, bin, "claude", testtool.Fake{Stdout: "2.1.310\n", Script: "write " + marker + " ran"})
 	t.Setenv("PATH", bin)
 	_, err := claudeRunner.Run(context.Background(), nil, "--version")
 	if err == nil || !strings.Contains(err.Error(), "without a fake") {

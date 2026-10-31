@@ -9,11 +9,14 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/project"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	testtool.RequireGit(t)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t", "GIT_CONFIG_GLOBAL=/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -74,6 +77,7 @@ func input(kv ...string) map[string]json.RawMessage {
 }
 
 func TestCallOfFindsThePathsATurnNames(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: attribution sees Windows paths")
 	home := "/home/u"
 	cases := []struct {
 		tool  string
@@ -185,7 +189,9 @@ func TestThrowawayClonesCountForTheirKeptCheckout(t *testing.T) {
 	}
 	// Tally finds the kept checkout among the turn's own paths.
 	v := Tally(calls(read(file(kept)), write(file(bs)), write(file(bs))), r)
-	if got := v.Projects(); len(got) != 1 || got[0] != "tool-main" || v.Roots["tool-main"] != kept {
+	// git names a main checkout with long names: a 8.3 TEMP (C:\Users\RUNNER~1)
+	// spells kept otherwise.
+	if got := v.Projects(); len(got) != 1 || got[0] != "tool-main" || v.Roots["tool-main"] != fsutil.Normal(kept) {
 		t.Errorf("tally %+v", v)
 	}
 }
@@ -371,6 +377,7 @@ func TestMentionsAndContinuityInTransverseSessions(t *testing.T) {
 // CallOf reads the same input the same way whatever the map order: a
 // tool call with many string inputs lists its paths in one order.
 func TestCallOfIsIndependentOfInputOrder(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: attribution sees Windows paths")
 	kv := []string{"command", "cd /home/u/a && ls", "file_path", "/home/u/b/x.go"}
 	for i := range 20 {
 		kv = append(kv, fmt.Sprintf("note%02d", i), fmt.Sprintf("see /home/u/r%02d/file", i))

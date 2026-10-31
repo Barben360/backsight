@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // Native is the native runtime (decision 0078): Hindsight from PyPI, in a
@@ -48,6 +49,15 @@ type Native struct {
 	StrayWait time.Duration
 	Venv      string // "" = the pinned version; WithVersion sets another
 	Err       error  // a construction error every method returns
+	// GOOS is the OS the runtime lays out and runs for ("": this one):
+	// tests set "windows" on Linux to render the Windows layout and files.
+	GOOS string
+	// Ask is the supervisor's pipe client on Windows (nil:
+	// supervise.Ask); tests refuse it.
+	Ask func(ctx context.Context, project, op string) (supervise.Status, error)
+	// Note, when set, tells the user what a command's result does not
+	// say: on Windows, NoLogonNote.
+	Note func(string)
 	// NotInUse: config.toml names the docker runtime, so the native data
 	// here is what a switch left (the target of a switch, built before
 	// config.toml names it, sets it). A refused database then points at
@@ -72,34 +82,31 @@ type ToolRunner interface {
 
 // Root is <compose_dir>/native: a second install with another compose_dir
 // stays apart.
-func (n Native) Root() string { return filepath.Join(n.Cfg.Server.ComposeDir, "native") }
-
-// UV is the pinned uv.
-func (n Native) UV() string { return filepath.Join(n.Root(), "uv", nativelock.UVVersion, "uv") }
+func (n Native) Root() string { return n.join(n.Cfg.Server.ComposeDir, "native") }
 
 // Python is where uv installs Python (UV_PYTHON_INSTALL_DIR).
-func (n Native) Python() string { return filepath.Join(n.Root(), "python") }
+func (n Native) Python() string { return n.join(n.Root(), "python") }
 
 // PythonBin is the pinned Python's interpreter, as uv installs it.
 func (n Native) PythonBin() string {
-	return filepath.Join(n.Python(), "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")
+	return n.join(n.Python(), "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")
 }
 
 // VenvDir is version v's virtual environment.
-func (n Native) VenvDir(v string) string { return filepath.Join(n.Root(), "venv", v) }
+func (n Native) VenvDir(v string) string { return n.join(n.Root(), "venv", v) }
 
 // Home is the units' HOME: pg0 keeps its installation and instance in
 // ~/.pg0.
-func (n Native) Home() string { return filepath.Join(n.Root(), "home") }
+func (n Native) Home() string { return n.join(n.Root(), "home") }
 
 // HF is the models' cache (HF_HOME).
-func (n Native) HF() string { return filepath.Join(n.Root(), "hf") }
+func (n Native) HF() string { return n.join(n.Root(), "hf") }
 
 // EnvFile is the server unit's environment, secrets included (0600).
-func (n Native) EnvFile() string { return filepath.Join(n.Root(), "server.env") }
+func (n Native) EnvFile() string { return n.join(n.Root(), "server.env") }
 
 // IdentityFile holds the database's system identifier (0600).
-func (n Native) IdentityFile() string { return filepath.Join(n.Root(), "identity") }
+func (n Native) IdentityFile() string { return n.join(n.Root(), "identity") }
 
 func (Native) Kind() string { return "native" }
 

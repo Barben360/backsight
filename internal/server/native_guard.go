@@ -39,7 +39,7 @@ func (n Native) strayWait() time.Duration {
 
 // InstanceDir is pg0's instance: <home>/.pg0/instances/hindsight.
 func (n Native) InstanceDir() string {
-	return filepath.Join(n.Home(), ".pg0", "instances", pgInstance)
+	return n.join(n.Home(), ".pg0", "instances", pgInstance)
 }
 
 // GuardError is the identity check's refusal: the instance is missing,
@@ -54,6 +54,10 @@ type GuardError struct {
 	// the way out is server runtime clean, not restore.
 	Leftover bool
 }
+
+// Final: the refusal stands until someone acts, so the Windows
+// supervisor (supervise.Options.Check) does not retry it.
+func (e *GuardError) Final() bool { return true }
 
 func (e *GuardError) Error() string {
 	var what, way string
@@ -87,7 +91,7 @@ func (n Native) ReadIdentity(ctx context.Context) (string, error) {
 	if n.Err != nil {
 		return "", n.Err
 	}
-	out, err := n.Tools.Run(ctx, n.toolEnv(), nil, filepath.Join(n.installation(), "bin", "pg_controldata"), "-D", n.DataDir())
+	out, err := n.Tools.Run(ctx, n.toolEnv(), nil, n.pgBin("pg_controldata"), "-D", n.DataDir())
 	if err != nil {
 		return "", n.redact(fmt.Errorf("reading the native database's identity (pg_controldata -D %s): %w", n.DataDir(), err))
 	}
@@ -249,9 +253,10 @@ func (n Native) dataDirs() []string {
 }
 
 // Strays are requirement 3's processes: postmasters (argv[0] is postgres)
-// whose -D, or whose working directory, is DataDir, and whose cgroup does
-// not end in /<project>-db.service. A process that ends while it is read
-// is left out.
+// whose -D, or whose working directory, is DataDir, and which the host
+// does not own (systemd: whose cgroup does not end in
+// /<project>-db.service). A process that ends while it is read is left
+// out.
 func (n Native) Strays() ([]Stray, error) {
 	if n.Err != nil {
 		return nil, n.Err
@@ -260,15 +265,15 @@ func (n Native) Strays() ([]Stray, error) {
 	if err != nil {
 		return nil, err
 	}
-	data := n.dataDirs()
+	data, h := n.dataDirs(), n.host()
 	var out []Stray
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid <= 0 || !n.postmasterOn(pid, data) {
+		if err != nil || pid <= 0 || !n.postmasterOn(pid, data) || h.Owns(pid) {
 			continue
 		}
 		cg, ok := n.cgroupOf(pid)
-		if !ok || strings.HasSuffix(cg, "/"+n.DBUnit()) {
+		if !ok {
 			continue
 		}
 		out = append(out, Stray{PID: pid, Cgroup: cg})
@@ -353,7 +358,7 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 	wait := n.strayWait()
 	deadline := time.Now().Add(wait)
 	secs := max(1, int(wait/time.Second))
-	_, runErr := n.Tools.Run(ctx, n.toolEnv(), nil, filepath.Join(n.installation(), "bin", "pg_ctl"),
+	_, runErr := n.Tools.Run(ctx, n.toolEnv(), nil, n.pgBin("pg_ctl"),
 		"stop", "-D", n.DataDir(), "-m", "fast", "-w", "-t", strconv.Itoa(secs))
 	data := n.dataDirs()
 	for {
@@ -439,7 +444,7 @@ func (n Native) Fsync(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out, err := n.Tools.Run(ctx, n.pgEnv(pw), nil, filepath.Join(n.installation(), "bin", "psql"), "-h", "127.0.0.1", "-p", strconv.Itoa(port),
+	out, err := n.Tools.Run(ctx, n.pgEnv(pw), nil, n.pgBin("psql"), "-h", "127.0.0.1", "-p", strconv.Itoa(port),
 		"-U", "hindsight", "-d", "hindsight", "-At", "-v", "ON_ERROR_STOP=1", "-c", "SHOW fsync")
 	if err != nil {
 		return "", n.redact(fmt.Errorf("checking fsync on the native database (%s): %w", n.DBUnit(), err))

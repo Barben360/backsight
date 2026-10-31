@@ -33,7 +33,7 @@ func docFiles(t *testing.T) []string {
 		t.Fatalf("no docs/*.md: %v", err)
 	}
 	for _, d := range docs {
-		files = append(files, filepath.Join("docs", filepath.Base(d)))
+		files = append(files, "docs/"+filepath.Base(d)) // slash-separated on every OS: the keys below
 	}
 	return files
 }

@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // MaxRelated caps the projects a .backsight.toml relates (decision 0071
@@ -39,6 +41,7 @@ type Settings struct {
 // becomes tracked stops being trusted at the next one.
 type Resolver struct {
 	home       string
+	nhome      string // home in fsutil.Normal's spelling, for comparisons
 	transverse []string
 	roots      map[string]gitRoots
 	tracked    map[string]bool
@@ -50,13 +53,18 @@ type Resolver struct {
 type gitRoots struct{ top, main, common string } // empty when not in a repository
 
 func New(home string, transverse []string) *Resolver {
-	return &Resolver{home: filepath.Clean(home), transverse: transverse, roots: map[string]gitRoots{}, tracked: map[string]bool{}, trackedProbe: gitTracked}
+	return &Resolver{home: filepath.Clean(home), nhome: fsutil.Normal(filepath.Clean(home)), transverse: transverse, roots: map[string]gitRoots{}, tracked: map[string]bool{}, trackedProbe: gitTracked}
 }
 
 // Home is the home directory the resolver names projects under.
 func (r *Resolver) Home() string { return r.home }
 
+// The roots it gives are in fsutil.Normal's spelling (git writes C:/x on
+// Windows, with long names), so that they compare with the transcript's
+// and the OS's once those are normalized too. Paths the caller gave keep
+// its spelling in what the resolver reports.
 func (r *Resolver) git(dir string) gitRoots {
+	dir = fsutil.Normal(dir)
 	if g, ok := r.roots[dir]; ok {
 		return g
 	}
@@ -80,8 +88,8 @@ func (r *Resolver) git(dir string) gitRoots {
 	var g gitRoots
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").Output()
 	if lines := strings.Split(strings.TrimSpace(string(out)), "\n"); err == nil && len(lines) == 2 {
-		g.top = lines[0]
-		common := lines[1]
+		g.top = fsutil.Normal(lines[0])
+		common := fsutil.Normal(lines[1])
 		g.common = common
 		if filepath.Base(common) == ".git" {
 			g.main = filepath.Dir(common)
@@ -144,10 +152,10 @@ type view struct {
 func (r *Resolver) settings(cwd string) view {
 	var v view
 	cwd = filepath.Clean(cwd)
-	stop := r.git(cwd).top
+	stop := r.git(cwd).top // compared in fsutil.Normal's spelling
 	inGit := stop != ""
-	if stop == "" && within(cwd, r.home) {
-		stop = r.home
+	if stop == "" && within(fsutil.Normal(cwd), r.nhome) {
+		stop = r.nhome
 	}
 	type file struct {
 		path, rel string
@@ -180,30 +188,30 @@ func (r *Resolver) settings(cwd string) view {
 		}
 		// A cwd reached through a symlink meets the (resolved) top only
 		// once resolved: the walk never leaves the repository.
-		if dir == stop || dir == filepath.Dir(dir) || (inGit && resolved(dir) == stop) {
+		if fsutil.Normal(dir) == stop || dir == filepath.Dir(dir) || (inGit && fsutil.Normal(resolved(dir)) == stop) {
 			break
 		}
 	}
 	if inGit && len(claims) > 0 {
 		var ask []string
 		for _, f := range claims {
-			if _, ok := r.tracked[f.path]; !ok {
+			if _, ok := r.tracked[fsutil.Normal(f.path)]; !ok {
 				ask = append(ask, f.rel)
 			}
 		}
 		if len(ask) > 0 {
 			got := r.trackedProbe(cwd, ask)
 			for _, f := range claims {
-				if _, ok := r.tracked[f.path]; !ok {
+				if _, ok := r.tracked[fsutil.Normal(f.path)]; !ok {
 					// git could not tell: not trusted (fails closed)
 					t, known := got[f.rel]
-					r.tracked[f.path] = t || !known
+					r.tracked[fsutil.Normal(f.path)] = t || !known
 				}
 			}
 		}
 	}
 	for _, f := range claims {
-		if inGit && r.tracked[f.path] {
+		if inGit && r.tracked[fsutil.Normal(f.path)] {
 			v.ignored = append(v.ignored, f.path)
 			continue
 		}
@@ -268,8 +276,9 @@ func (r *Resolver) Project(cwd string) string {
 // use (decision 0071, C2a).
 func (r *Resolver) Named(cwd string) (name string, strong bool) {
 	cwd = filepath.Clean(cwd)
-	claude := filepath.Join(r.home, ".claude")
-	if cwd == r.home || cwd == claude || strings.HasPrefix(cwd, claude+string(filepath.Separator)) {
+	ncwd := fsutil.Normal(cwd) // its basename is the long name, not an 8.3 one
+	claude := filepath.Join(r.nhome, ".claude")
+	if ncwd == r.nhome || ncwd == claude || strings.HasPrefix(ncwd, claude+string(filepath.Separator)) {
 		return r.transverse[0], true
 	}
 	if v := r.settings(cwd); v.project != "" {
@@ -278,7 +287,7 @@ func (r *Resolver) Named(cwd string) (name string, strong bool) {
 	if g := r.git(cwd); g.main != "" {
 		return filepath.Base(g.main), true
 	}
-	return filepath.Base(cwd), false
+	return filepath.Base(ncwd), false
 }
 
 // Ignored lists the .backsight.toml files above cwd whose project or
@@ -339,8 +348,8 @@ func (r *Resolver) OptedOut(cwd string, exclude []string) (bool, string) {
 			e = filepath.Join(r.home, e[2:])
 		}
 		e = filepath.Clean(e)
-		for _, ex := range []string{e, resolved(e)} {
-			for _, c := range []string{cwd, rcwd} {
+		for _, ex := range []string{fsutil.Normal(e), fsutil.Normal(resolved(e))} {
+			for _, c := range []string{fsutil.Normal(cwd), fsutil.Normal(rcwd)} {
 				if under(c, ex) {
 					return true, "privacy.exclude_paths contains " + e
 				}

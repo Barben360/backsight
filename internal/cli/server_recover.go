@@ -156,7 +156,7 @@ func addressHere(ip net.IP) (bool, error) {
 // log after the start's own.
 func spawnServerStart(d paths.Dirs, notes ...string) error {
 	dir := filepath.Join(d.State, "logs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(dir); err != nil {
 		return err
 	}
 	log := filepath.Join(dir, "server-start.log")
@@ -246,7 +246,7 @@ func (h *hookEnv) startLateServer() {
 			}
 		}
 	}
-	if err := os.MkdirAll(h.dirs.State, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(h.dirs.State); err != nil {
 		return
 	}
 	if err := os.WriteFile(stamp, []byte(now().UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {

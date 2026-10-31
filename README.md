@@ -196,6 +196,12 @@ The agent never sees your LLM key: you type it yourself. Or install by hand:
 
    If it prints an `export PATH=…` line, run it (or open a new login shell).
 
+   On Windows x86_64, in PowerShell, without admin rights (the script checks the signature itself, in PowerShell; see [Windows](docs/windows.md)):
+
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"
+   ```
+
 2. Set it up:
 
    ```sh

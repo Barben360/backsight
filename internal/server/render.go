@@ -17,6 +17,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/redact"
 )
 
 // Images pinned by this binary (multi-arch index digests, decision 0049).
@@ -347,8 +348,9 @@ func Write(dir string, f Files) (Changes, error) {
 		if err := fsutil.WriteAtomic(env, f.Env, 0o600); err != nil {
 			return c, err
 		}
-	} else if fi, err := os.Stat(env); err == nil && fi.Mode().Perm() != 0o600 {
-		if err := os.Chmod(env, 0o600); err != nil { // loosened by hand: it holds secrets
+	}
+	if _, err := os.Stat(env); err == nil {
+		if err := fsutil.MakePrivate(env); err != nil { // loosened by hand: it holds secrets
 			return c, err
 		}
 	}
@@ -369,12 +371,7 @@ func differs(path string, want []byte) (bool, error) {
 // Redact replaces every known secret value in text, for error messages that
 // quote Docker or provider output.
 func Redact(text string, sec config.Secrets) string {
-	for _, v := range []string{sec.APIKey, sec.UIKey, sec.DBPassword, sec.LLMAPIKey, sec.BackupIdentity} {
-		if len(v) >= 6 {
-			text = strings.ReplaceAll(text, v, "[redacted]")
-		}
-	}
-	return text
+	return redact.Values(text, []string{sec.APIKey, sec.UIKey, sec.DBPassword, sec.LLMAPIKey, sec.BackupIdentity})
 }
 
 // ImageFor is the Hindsight image the install runs: the pinned one, or the

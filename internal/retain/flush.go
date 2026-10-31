@@ -786,7 +786,7 @@ func (f *Flusher) quarantine(res Result, cur *Cursor, why string) Result {
 	cur.Quarantined = true
 	entry, _ := json.Marshal(map[string]string{"ts": f.Now().UTC().Format(time.RFC3339), "session": res.Session, "reason": why})
 	p := filepath.Join(f.Dirs.QuarantineDir(), res.Session+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err == nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(p)); err == nil {
 		if fh, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600); err == nil {
 			_, _ = fh.Write(append(entry, '\n'))
 			_ = fh.Close()

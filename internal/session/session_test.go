@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func store(t *testing.T) Store {
@@ -30,9 +31,7 @@ func TestUpdateThenLoad(t *testing.T) {
 	if err != nil || st.Project != "billing" || st.Prompts != 2 || len(st.Injected) != 1 || st.Injected[0].Rule != "first" {
 		t.Fatalf("%+v %v", st, err)
 	}
-	if fi, _ := os.Stat(filepath.Join(s.Dir, "abc-123.json")); fi.Mode().Perm() != 0o600 {
-		t.Errorf("mode %v", fi.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, filepath.Join(s.Dir, "abc-123.json"))
 	if st, err := s.Load("never-seen"); err != nil || st.Prompts != 0 {
 		t.Errorf("a new session is empty: %+v %v", st, err)
 	}

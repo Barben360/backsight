@@ -12,6 +12,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // olderTemplate puts on the fake server's bank what an earlier backsight
@@ -143,6 +144,7 @@ func TestClientInstallGoesOnWhenTheBankRefuses(t *testing.T) {
 // backsight configured: its client install leaves the bank to the step
 // after the commit point, which runs the new binary's bank apply.
 func TestUpdateApplySendsTheSubagentStrategy(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	pointAt(t, home, fakeHindsight(t))
 	configure(t, home, "[backup]\nenabled = false")
@@ -174,6 +176,7 @@ func TestUpdateApplySendsTheSubagentStrategy(t *testing.T) {
 // The bank step's failure after the commit point is a warning: the update
 // stays.
 func TestUpdateApplyGoesOnWhenTheBankRefuses(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	pointAt(t, home, fakeHindsight(t))
 	configure(t, home, "[backup]\nenabled = false")

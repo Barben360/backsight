@@ -26,11 +26,16 @@ type NativeFacts struct {
 	Strays   []int
 	Home     string // the units' HOME
 	HomeMode fs.FileMode
-	Venv     string   // the deployed venv
-	Pin      string   // the venv this backsight pins (its lock's)
-	VenvDiff []string // name==version of the lock missing or other in the deployed venv's dist-info
-	Linger   string   // loginctl's Linger: yes | no
-	Refused  []string // *.refused-* instance dirs kept by restore
+	// HomeACL: the OS keeps access in ACLs, not mode bits (Windows); then
+	// HomeReaders, the accounts other than the user, SYSTEM and
+	// Administrators that can read Home, replaces HomeMode.
+	HomeACL     bool
+	HomeReaders []string
+	Venv        string   // the deployed venv
+	Pin         string   // the venv this backsight pins (its lock's)
+	VenvDiff    []string // name==version of the lock missing or other in the deployed venv's dist-info
+	Linger      string   // loginctl's Linger: yes | no
+	Refused     []string // *.refused-* instance dirs kept by restore
 	// Unread: check id → why its fact could not be read.
 	Unread map[string]error
 }
@@ -171,6 +176,16 @@ func checkNativeHome(f NativeFacts) Check {
 	c := Check{ID: "native-home"}
 	if err := f.Unread[c.ID]; err != nil {
 		c.Status, c.Summary, c.Detail = Error, "could not read "+f.Home, err.Error()
+		return c
+	}
+	if f.HomeACL {
+		if len(f.HomeReaders) > 0 {
+			c.Status = Error
+			c.Summary = fmt.Sprintf("%s can be read by %s: other users can read the database", f.Home, strings.Join(f.HomeReaders, ", "))
+			c.Fix = fmt.Sprintf(`icacls "%s" /inheritance:r /grant:r "%%USERNAME%%:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"`, f.Home)
+			return c
+		}
+		c.Status, c.Summary = OK, f.Home+" is private to you, SYSTEM and Administrators"
 		return c
 	}
 	if m := f.HomeMode.Perm(); m != 0o700 {

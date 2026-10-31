@@ -28,6 +28,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func setup(t *testing.T) (*hindsight.Client, config.Config, string) {
@@ -37,7 +38,7 @@ func setup(t *testing.T) (*hindsight.Client, config.Config, string) {
 		t.Skip("SANDBOX_HOME not set: run scripts/sandbox.sh")
 	}
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	testtool.SetHome(t, home)
 	t.Setenv("BACKSIGHT_HOME", bh)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	d, err := paths.Default()
@@ -104,8 +105,8 @@ func TestFlushSendsASessionTheServerAccepts(t *testing.T) {
 	dir := filepath.Join(home, ".claude", "projects", "-home-u-billing")
 	_ = os.MkdirAll(dir, 0o700)
 	ts := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
-	lines := `{"type":"user","uuid":"` + sid + `-u1","sessionId":"` + sid + `","cwd":"` + filepath.Join(home, "billing") + `","timestamp":"` + ts + `","message":{"role":"user","content":"We keep PostgreSQL 16 for billing because of partial indexes."}}` + "\n" +
-		`{"type":"assistant","uuid":"` + sid + `-a1","sessionId":"` + sid + `","cwd":"` + filepath.Join(home, "billing") + `","timestamp":"` + ts + `","message":{"role":"assistant","content":[{"type":"text","text":"Noted: PostgreSQL 16 stays."}]}}` + "\n"
+	lines := `{"type":"user","uuid":"` + sid + `-u1","sessionId":"` + sid + `","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) + `","timestamp":"` + ts + `","message":{"role":"user","content":"We keep PostgreSQL 16 for billing because of partial indexes."}}` + "\n" +
+		`{"type":"assistant","uuid":"` + sid + `-a1","sessionId":"` + sid + `","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) + `","timestamp":"` + ts + `","message":{"role":"assistant","content":[{"type":"text","text":"Noted: PostgreSQL 16 stays."}]}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), []byte(lines), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -109,7 +109,7 @@ func (a Attributor) learnOwner(launchDir string) (ok bool) {
 	if slices.Contains(a.Learnt(), o) {
 		return true
 	}
-	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(a.Dir); err != nil {
 		return false
 	}
 	var l *state.Lock
@@ -361,7 +361,7 @@ func (a Attributor) keepAgent(e TurnEntry) (TurnEntry, error) {
 	if err != nil {
 		return e, err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(p)); err != nil {
 		return e, err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".agent-*.tmp")
@@ -564,7 +564,7 @@ func sameFingerprint(path string, offset int64, fp string) bool {
 }
 
 func appendFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
 	}
 	fh, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)

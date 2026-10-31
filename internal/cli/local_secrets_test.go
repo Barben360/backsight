@@ -9,6 +9,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // plantLocalSecrets puts values no redaction rule knows into secrets.toml
@@ -40,7 +41,7 @@ func TestRetainRedactsLocalSecretValues(t *testing.T) {
 	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", "sec.jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
 	text := "my llm key is " + tomlValue + ", the server token " + envValue + ", base " + baseURL
-	line := `{"type":"user","uuid":"sec-u1","sessionId":"sec","cwd":"` + filepath.Join(home, "billing") +
+	line := `{"type":"user","uuid":"sec-u1","sessionId":"sec","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) +
 		`","timestamp":"` + at.Format(time.RFC3339) + `","message":{"role":"user","content":"` + text + `"}}` + "\n"
 	if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
 		t.Fatal(err)

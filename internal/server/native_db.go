@@ -41,7 +41,7 @@ type NativeDB struct {
 var _ Database = NativeDB{}
 
 // tool is a bundled Postgres program.
-func (d NativeDB) tool(name string) string { return filepath.Join(d.n.installation(), "bin", name) }
+func (d NativeDB) tool(name string) string { return d.n.pgBin(name) }
 
 // env is a bundled client's whole environment: where the database is,
 // who connects, and the password, never on argv.
@@ -177,14 +177,11 @@ func (d NativeDB) PendingOperations(ctx context.Context, banks []string) (int, e
 }
 
 // verifyWait bounds how long VerifyDump waits for its throwaway database,
-// verifyPoll how often it asks; verifyMaxSec is the throwaway unit's
-// lifetime, so that a killed backsight leaves nothing running beyond it.
+// verifyPoll how often it asks.
 var (
 	verifyWait = 90 * time.Second
 	verifyPoll = 500 * time.Millisecond
 )
-
-const verifyMaxSec = 3600
 
 // VerifyDump restores dump into a throwaway Postgres (pg0's own binaries,
 // a new cluster under <state>/staging/verify-<id>, 0700, on a free
@@ -209,12 +206,10 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 	if err != nil {
 		return nil, err
 	}
-	started := false
+	var job serverJob
 	defer func() { // registered first: a cancel must clean up too
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-		if started {
-			_, _ = n.systemctl(cctx, "stop", unit)
+		if job.stop != nil {
+			job.stop()
 		}
 		_ = os.RemoveAll(home)
 		_ = l.Release()
@@ -234,25 +229,19 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 		return nil, err
 	}
 	inst, data := n.installation(), filepath.Join(home, "data")
-	script := shellWord(filepath.Join(inst, "bin", "initdb")) + " -D " + shellWord(data) + " -U " + dbUser +
-		" --pwfile=" + shellWord(pwFile) + " -A scram-sha-256 -E UTF8 --no-locale >/dev/null && rm -f " + shellWord(pwFile) +
-		" && exec " + shellWord(filepath.Join(inst, "bin", "postgres")) + " -D " + shellWord(data) + " -p " + strconv.Itoa(port) +
-		" -c listen_addresses=127.0.0.1 -c unix_socket_directories="
-	// The service manager expands ${VAR} and $VAR in a transient unit's
-	// command line, as in ExecStart=, and turns $$ into $ (systemd-run(1),
-	// --expand-environment, on by default): every $ is doubled so the
-	// script reaches sh as written. It uses no variable today; a $ in a
-	// path would otherwise be expanded away.
-	args := []string{"--user", "--collect", "--quiet", "--unit", unit, "-p", "KillMode=control-group",
-		"-p", "RuntimeMaxSec=" + strconv.Itoa(verifyMaxSec), "-p", "UnsetEnvironment=" + unsetKeys,
-		"-E", "HOME=" + home, "-E", "LD_LIBRARY_PATH=" + filepath.Join(inst, "lib"), "-E", "PATH=/usr/bin:/bin", "-E", "LANG=C.UTF-8",
-		"/bin/sh", "-c", strings.ReplaceAll(script, "$", "$$")}
-	started = true // a failed systemd-run may still have started the unit
-	if _, err := n.Tools.Run(ctx, systemdRunEnv(), nil, "systemd-run", args...); err != nil {
+	steps := [][]string{
+		{n.pgBin("initdb"), "-D", data, "-U", dbUser, "--pwfile=" + pwFile, "-A", "scram-sha-256", "-E", "UTF8", "--no-locale", stepNoStdout},
+		{"rm", "-f", pwFile},
+		{n.pgBin("postgres"), "-D", data, "-p", strconv.Itoa(port), "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="},
+	}
+	env := []string{"HOME=" + home, "LD_LIBRARY_PATH=" + filepath.Join(inst, "lib"), "PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	// stop is set even on an error: a failed systemd-run may still have
+	// started the unit.
+	if job, err = n.serverTransient(ctx, unit, env, steps); err != nil {
 		return nil, n.redact(fmt.Errorf("starting a throwaway database (%s): %w", unit, err))
 	}
 	db := NativeDB{n: n, port: port, password: pw}
-	if err := n.waitVerify(ctx, db, unit); err != nil {
+	if err := n.waitVerify(ctx, db, unit, job.gone); err != nil {
 		return nil, err
 	}
 	if _, err := db.Restore(ctx, dump); err != nil {
@@ -277,8 +266,8 @@ func (n Native) verifyPort() (int, error) {
 
 // waitVerify waits until the throwaway database answers, verifyWait at
 // most, on its postgres database (hindsight is created by the restore); a
-// unit that is gone (initdb or postgres failed) ends the wait.
-func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string) error {
+// job that is gone (initdb or postgres failed) ends the wait.
+func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string, gone func(context.Context) error) error {
 	deadline := time.Now().Add(verifyWait)
 	for {
 		_, err := db.run(ctx, "psql", "-d", "postgres", "-At", "-v", "ON_ERROR_STOP=1", "-c", "select 1")
@@ -288,8 +277,8 @@ func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string) error 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if out, _ := n.systemctl(ctx, "is-active", unit); strings.TrimSpace(string(out)) == "failed" || strings.TrimSpace(string(out)) == "inactive" {
-			return fmt.Errorf("the throwaway database stopped (%s): see journalctl --user -u %s", unit, unit)
+		if why := gone(ctx); why != nil {
+			return n.redact(fmt.Errorf("the throwaway database stopped (%s): %w", unit, why))
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("the throwaway database (%s) did not answer within %s: %w", unit, verifyWait, err)
@@ -299,16 +288,4 @@ func (n Native) waitVerify(ctx context.Context, db NativeDB, unit string) error 
 		case <-time.After(verifyPoll):
 		}
 	}
-}
-
-// systemdRunEnv is systemd-run's own environment: it reaches the user
-// manager through the session's bus.
-func systemdRunEnv() []string {
-	env := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
-	for _, k := range []string{"XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"} {
-		if v := os.Getenv(k); v != "" {
-			env = append(env, k+"="+v)
-		}
-	}
-	return env
 }

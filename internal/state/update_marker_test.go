@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The snapshot of the files an update may change survives the process: a
@@ -17,9 +18,10 @@ func TestUpdateSnapshotRoundTrip(t *testing.T) {
 	if err := WriteUpdateSnapshot(d, files); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(d.UpdateSnapshot()); err != nil || fi.Mode().Perm() != 0o600 || filepath.Dir(d.UpdateSnapshot()) != d.State {
-		t.Fatalf("%v %v", fi, err)
+	if _, err := os.Stat(d.UpdateSnapshot()); err != nil || filepath.Dir(d.UpdateSnapshot()) != d.State {
+		t.Fatalf("%v", err)
 	}
+	testtool.RequirePrivate(t, d.UpdateSnapshot())
 	got, err := ReadUpdateSnapshot(d)
 	if err != nil || len(got) != 3 || string(got["/x/state.json"]) != `{"a":1}` || got["/x/config.toml"] != nil || got["/x/empty"] == nil {
 		t.Fatalf("%q %v", got, err)

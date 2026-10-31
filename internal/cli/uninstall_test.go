@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // installed is a whole install as setup leaves it: client install's
@@ -54,7 +56,11 @@ func installMachine(t *testing.T) installed {
 		}
 	}
 	// client install made the command on PATH, as install.sh does.
-	if got, err := os.Readlink(filepath.Join(d.Bin, "backsight")); err != nil || got != filepath.Join(d.Data, "bin", "current") {
+	if runtime.GOOS == "windows" { // a copy of the shim, not a link
+		if !shimRuns(filepath.Join(d.Bin, "backsight.exe"), filepath.Join(d.Data, "bin", "current.exe")) {
+			t.Fatal("no PATH copy of the shim")
+		}
+	} else if got, err := os.Readlink(filepath.Join(d.Bin, "backsight")); err != nil || got != filepath.Join(d.Data, "bin", "current") {
 		t.Fatalf("no PATH link to the shim: %q %v", got, err)
 	}
 	m.dk = withCompose(t)
@@ -145,6 +151,7 @@ func stepNamed(r uninstallResult, prefix string) *undoAction {
 }
 
 func TestUninstallPlanChangesNothing(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	before := treeOf(t, m.home)
 	code, env, out := uninstall(t, "--plan", "--delete-data", "--purge-local")
@@ -170,6 +177,7 @@ func TestUninstallPlanChangesNothing(t *testing.T) {
 }
 
 func TestUninstallRemovesEachPieceAndKeepsTheRest(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	code, env, out := uninstall(t)
@@ -230,6 +238,7 @@ func TestUninstallRemovesEachPieceAndKeepsTheRest(t *testing.T) {
 }
 
 func TestUninstallOffersTheRetentionBack(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	t.Run("restored", func(t *testing.T) {
 		m := installMachine(t)
 		code, env, out := uninstall(t, "--answer", "retention=restore")
@@ -263,6 +272,7 @@ func TestUninstallOffersTheRetentionBack(t *testing.T) {
 }
 
 func TestUninstallStopKeepsTheData(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	if code, env, out := uninstall(t, "--stop"); code != output.OK || stepNamed(env.Data, "server").Status != "done" {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -276,6 +286,7 @@ func TestUninstallStopKeepsTheData(t *testing.T) {
 }
 
 func TestUninstallDeletesDataOnlyWithTheBankID(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	before := treeOf(t, m.home)
 	code, env, out := uninstall(t, "--delete-data")
@@ -325,6 +336,7 @@ func atTerminal(t *testing.T, input string) {
 }
 
 func TestUninstallAsksForTheBankIDAtATerminal(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	before := treeOf(t, m.home)
 	atTerminal(t, "claude\n")
@@ -347,6 +359,7 @@ func TestUninstallAsksForTheBankIDAtATerminal(t *testing.T) {
 }
 
 func TestUninstallRefusesWhileBusy(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	for name, mark := range map[string]func(t *testing.T, home string){
 		"maintenance held": func(t *testing.T, home string) {
 			l, _, err := state.Acquire(pathsOf(home).MaintenanceLock(), "backup create")
@@ -382,6 +395,7 @@ func TestUninstallRefusesWhileBusy(t *testing.T) {
 }
 
 func TestUninstallPurgeLocalKeepsBackupsAndTheirKey(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	id, _ := agelib.GenerateX25519Identity()
@@ -418,6 +432,7 @@ func TestUninstallPurgeLocalKeepsBackupsAndTheirKey(t *testing.T) {
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func TestUninstallLeavesAPathEntryThatIsNotOurs(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	link := filepath.Join(pathsOf(m.home).Bin, "backsight")
 	_ = os.Remove(link)
@@ -435,6 +450,7 @@ func TestUninstallLeavesAPathEntryThatIsNotOurs(t *testing.T) {
 
 // A failing step stops before the binaries go, so a rerun can finish.
 func TestUninstallFailureIsResumable(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	m.claude.failOn = "plugin uninstall"
 	code, env, out := uninstall(t)
@@ -451,6 +467,7 @@ func TestUninstallFailureIsResumable(t *testing.T) {
 }
 
 func TestUninstallFlagsAreChecked(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	before := treeOf(t, m.home)
 	if code, _, out := uninstall(t, "--stop", "--delete-data"); code != output.Usage {
@@ -469,6 +486,7 @@ func TestUninstallFlagsAreChecked(t *testing.T) {
 // setup retired reference pieces: uninstall says it does not bring them
 // back, and how to.
 func TestUninstallNamesWhatSetupRetired(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	rec := &setup.Record{SchemaVersion: setup.RecordVersion}
 	rec.Undo.Timers = []string{"memory-retro.timer"}
@@ -517,6 +535,7 @@ func digestOnly(ref string) string {
 // Without --delete-data the server keeps running on its images: no
 // command to remove them.
 func TestUninstallKeepingTheServerSaysNothingOfItsImages(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	installMachine(t)
 	code, env, out := uninstall(t, "--stop")
 	if code != output.OK {

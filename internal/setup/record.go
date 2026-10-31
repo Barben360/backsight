@@ -89,7 +89,7 @@ func (r *Record) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
 	}
 	return fsutil.WriteAtomic(path, append(b, '\n'), 0o600)

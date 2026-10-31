@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,7 +20,15 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 )
 
-var dirs = paths.Dirs{Data: "/d", Config: "/c", State: "/s"}
+// dirs are absolute on every OS: a Windows path needs its drive.
+var dirs = paths.Dirs{Data: absDir("/d"), Config: absDir("/c"), State: absDir("/s")}
+
+func absDir(p string) string {
+	if runtime.GOOS == "windows" {
+		return `C:` + filepath.FromSlash(p)
+	}
+	return p
+}
 
 func write(t *testing.T, content string) string {
 	t.Helper()
@@ -40,6 +49,9 @@ func TestDefaultMatchesSpecAppendixA(t *testing.T) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&want); err != nil {
 		t.Fatalf("golden file does not fit the Config struct: %v", err)
+	}
+	if runtime.GOOS == "windows" { // the golden's two paths, as the drive-letter dirs give them
+		want.Server.ComposeDir, want.Backup.Dir = filepath.Join(dirs.Data, "server"), filepath.Join(dirs.Data, "backups")
 	}
 	if got := Default(dirs, "/home/u"); !reflect.DeepEqual(got, want) {
 		t.Errorf("defaults drifted from Appendix A.1\ngot  %+v\nwant %+v", got, want)
@@ -213,11 +225,11 @@ func TestValidate(t *testing.T) {
 }
 
 func TestUpdateKeys(t *testing.T) {
-	cfg, err := Load(write(t, "[update]\nsource = \"/srv/releases\"\nprereleases = true\n"), dirs, "/home/u")
+	cfg, err := Load(write(t, "[update]\nsource = "+strconv.Quote(absDir("/srv/releases"))+"\nprereleases = true\n"), dirs, "/home/u")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Update.Source != "/srv/releases" || !cfg.Update.Prereleases || cfg.Update.AutoApply {
+	if cfg.Update.Source != absDir("/srv/releases") || !cfg.Update.Prereleases || cfg.Update.AutoApply {
 		t.Errorf("%+v", cfg.Update)
 	}
 }

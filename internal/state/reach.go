@@ -2,7 +2,6 @@ package state
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -31,7 +30,7 @@ func reachPath(d paths.Dirs) string { return filepath.Join(d.State, "reach.json"
 // LoadReach reads reach.json; absent or unreadable: nothing known (zero).
 func LoadReach(d paths.Dirs) Reach {
 	var r Reach
-	if raw, err := os.ReadFile(reachPath(d)); err == nil && json.Unmarshal(raw, &r) != nil {
+	if raw, err := fsutil.ReadFileShared(reachPath(d)); err == nil && json.Unmarshal(raw, &r) != nil {
 		return Reach{}
 	}
 	return r
@@ -85,7 +84,7 @@ func BreakerPath(d paths.Dirs) string { return filepath.Join(d.State, "breaker.j
 // LoadBreaker reads breaker.json; absent or unreadable: closed (zero).
 func LoadBreaker(d paths.Dirs) Breaker {
 	var b Breaker
-	if raw, err := os.ReadFile(BreakerPath(d)); err == nil && json.Unmarshal(raw, &b) != nil {
+	if raw, err := fsutil.ReadFileShared(BreakerPath(d)); err == nil && json.Unmarshal(raw, &b) != nil {
 		return Breaker{}
 	}
 	return b

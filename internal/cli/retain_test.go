@@ -12,13 +12,14 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func writeTranscript(t *testing.T, home, sid string, at time.Time) {
 	t.Helper()
 	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	line := `{"type":"user","uuid":"` + sid + `-u1","sessionId":"` + sid + `","cwd":"` + filepath.Join(home, "billing") +
+	line := `{"type":"user","uuid":"` + sid + `-u1","sessionId":"` + sid + `","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) +
 		`","timestamp":"` + at.UTC().Format(time.RFC3339) + `","message":{"role":"user","content":"We keep PostgreSQL 16 for billing."}}` + "\n"
 	if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
 		t.Fatal(err)

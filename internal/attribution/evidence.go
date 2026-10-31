@@ -97,7 +97,7 @@ func CallOf(tool string, input map[string]json.RawMessage, cwd, home string) Cal
 			}
 		}
 		for _, p := range absPaths(text) {
-			if strings.HasPrefix(p, "/") && !userPath(p, home) {
+			if strings.HasPrefix(p, "/") && hostPath(p) == p && !userPath(p, home) {
 				continue // system paths: never a project
 			}
 			add(p)
@@ -111,8 +111,15 @@ func CallOf(tool string, input map[string]json.RawMessage, cwd, home string) Cal
 func absPaths(text string) []string {
 	var out []string
 	for i := 0; i < len(text); {
-		if b := text[i]; (b == '/' || b == '~' || b == '$') && (i == 0 || !glued(text[i-1])) {
-			if m := absRe.FindString(text[i:]); m != "" {
+		if i == 0 || !glued(text[i-1]) {
+			m := ""
+			switch b := text[i]; {
+			case b == '/' || b == '~' || b == '$':
+				m = absRe.FindString(text[i:])
+			case driveRe != nil:
+				m = driveRe.FindString(text[i:])
+			}
+			if m != "" {
 				out = append(out, m)
 				i += len(m)
 				continue
@@ -138,7 +145,7 @@ func userPath(p, home string) bool {
 }
 
 func absLike(p string) bool {
-	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.HasPrefix(p, "$")
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.HasPrefix(p, "$") || filepath.IsAbs(p)
 }
 
 // expand resolves ~, $HOME and ${HOME}; a relative path gives "".
@@ -147,6 +154,7 @@ func expand(p, home string) string {
 	if strings.HasPrefix(p, "~") {
 		p = home + p[1:]
 	}
+	p = hostPath(p)
 	if !filepath.IsAbs(p) {
 		return ""
 	}

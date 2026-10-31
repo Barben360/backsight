@@ -15,6 +15,8 @@ import (
 	"slices"
 	"sync/atomic"
 	"time"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // Schema is the journal line format this binary writes and reads.
@@ -155,7 +157,7 @@ func (j *Journal) Append(e Event) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(j.dir, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(j.dir); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(j.file(e.TS), os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)

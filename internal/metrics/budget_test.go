@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // viewLimit is the dashboard's page budget (300 ms p95, spec §7) with a
@@ -27,6 +28,7 @@ func TestViewBudgets(t *testing.T) {
 	if raceEnabled || testing.Short() {
 		t.Skip("time budgets are measured without -race and -short")
 	}
+	testtool.SkipWindows(t, "Task 12: indexgen.Budget's first index build is slower than the Linux budget on Windows (windows-latest over 9 min)")
 	home := t.TempDir()
 	t.Setenv("BACKSIGHT_HOME", home)
 	t.Setenv("BACKSIGHT_STATE_DIR", "")

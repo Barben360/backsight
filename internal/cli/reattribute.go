@@ -28,7 +28,7 @@ func (f reattributeFlags) resume() string {
 		cmd += " --allow-subscription"
 	}
 	for _, a := range f.answers {
-		cmd += " --answer " + shellWord(a)
+		cmd += " --answer " + resumeWord(a)
 	}
 	return cmd
 }

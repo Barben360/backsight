@@ -584,7 +584,13 @@ func TestGarbageInAMonthFile(t *testing.T) {
 func TestOnlyMonthFilesAreRead(t *testing.T) {
 	e := newEnv(t)
 	line := promptLine(1, 1)
-	for _, name := range []string{"events-2026-10.jsonl.bak", "events-2026-1.jsonl", "events-2026-10 (1).jsonl", "events-2026-13.jsonl", "events-2026-00.jsonl", "journal-2026-10.jsonl", "Events-2026-10.jsonl"} {
+	names := []string{"events-2026-10.jsonl.bak", "events-2026-1.jsonl", "events-2026-10 (1).jsonl", "events-2026-13.jsonl", "events-2026-00.jsonl", "journal-2026-10.jsonl"}
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		// a case-insensitive filesystem has one file for both spellings:
+		// the month file written below would keep this name
+		names = append(names, "Events-2026-10.jsonl")
+	}
+	for _, name := range names {
 		writeFile(t, filepath.Join(e.d.TelemetryDir(), name), line)
 	}
 	if err := os.MkdirAll(filepath.Join(e.d.TelemetryDir(), "events-2026-08.jsonl"), 0o700); err != nil {

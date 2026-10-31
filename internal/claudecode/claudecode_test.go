@@ -24,8 +24,9 @@ func env(m map[string]string) func(string) string { return func(k string) string
 
 func TestLocateDefault(t *testing.T) {
 	l := Locate("/home/u", env(nil))
-	want := Location{Dir: "/home/u/.claude", Settings: "/home/u/.claude/settings.json", State: "/home/u/.claude.json",
-		ClaudeMD: "/home/u/.claude/CLAUDE.md", Projects: "/home/u/.claude/projects"}
+	fs := filepath.FromSlash
+	want := Location{Dir: fs("/home/u/.claude"), Settings: fs("/home/u/.claude/settings.json"), State: fs("/home/u/.claude.json"),
+		ClaudeMD: fs("/home/u/.claude/CLAUDE.md"), Projects: fs("/home/u/.claude/projects")}
 	if l != want {
 		t.Errorf("got %+v\nwant %+v", l, want)
 	}
@@ -34,8 +35,9 @@ func TestLocateDefault(t *testing.T) {
 // With CLAUDE_CONFIG_DIR, Claude Code 2.1.310 keeps .claude.json inside it.
 func TestLocateConfigDirOverride(t *testing.T) {
 	l := Locate("/home/u", env(map[string]string{"CLAUDE_CONFIG_DIR": "/x/cc"}))
-	want := Location{Dir: "/x/cc", Settings: "/x/cc/settings.json", State: "/x/cc/.claude.json",
-		ClaudeMD: "/x/cc/CLAUDE.md", Projects: "/x/cc/projects"}
+	fs := filepath.FromSlash
+	want := Location{Dir: "/x/cc", Settings: fs("/x/cc/settings.json"), State: fs("/x/cc/.claude.json"),
+		ClaudeMD: fs("/x/cc/CLAUDE.md"), Projects: fs("/x/cc/projects")}
 	if l != want {
 		t.Errorf("got %+v\nwant %+v", l, want)
 	}

@@ -175,7 +175,7 @@ func (s Store) Load(id string) (State, error) {
 	if err := checkID(id); err != nil {
 		return st, err
 	}
-	raw, err := os.ReadFile(s.path(id))
+	raw, err := fsutil.ReadFileShared(s.path(id))
 	if errors.Is(err, fs.ErrNotExist) {
 		return st, nil
 	}

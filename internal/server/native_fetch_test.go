@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // toolCall is one ToolRunner call as Fetch made it.
@@ -68,10 +70,12 @@ func (f *fakeTools) Run(_ context.Context, env []string, stdin io.Reader, path s
 	return nil, nil
 }
 
+// newNative runs on the systemd host on any test host: the shared code's
+// tests keep running on Windows, whose own host is Task 9's.
 func newNative(t *testing.T, tools ToolRunner) Native {
 	t.Helper()
 	cfg := config.Default(paths.Dirs{Data: t.TempDir()}, "/home/u")
-	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}}
+	return Native{Cfg: cfg, Tools: tools, Sys: &fakeSys{}, GOOS: "linux"}
 }
 
 func touch(t *testing.T, path string, mode fs.FileMode) {
@@ -175,10 +179,11 @@ func TestNativeVersionAndOrder(t *testing.T) {
 
 func TestNativePathsAreUnderComposeDir(t *testing.T) {
 	n := newNative(t, nil)
+	n.GOOS = "" // this host's layout: uv.exe on Windows
 	root := filepath.Join(n.Cfg.Server.ComposeDir, "native")
 	for name, got := range map[string][2]string{
 		"Root":         {n.Root(), root},
-		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv")},
+		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv"+exeSuffix())},
 		"Python":       {n.Python(), filepath.Join(root, "python")},
 		"PythonBin":    {n.PythonBin(), filepath.Join(root, "python", "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")},
 		"VenvDir":      {n.VenvDir("1.1.0-0123456789ab"), filepath.Join(root, "venv", "1.1.0-0123456789ab")},
@@ -269,17 +274,12 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 		if want := "/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"; len(*got) != 1 || (*got)[0] != want {
 			t.Errorf("requests %v, want one GET of %s", *got, want)
 		}
-		st, err := os.Stat(n.UV())
-		if err != nil {
+		if _, err := os.Stat(n.UV()); err != nil {
 			t.Fatal(err)
 		}
-		if st.Mode().Perm() != 0o755 {
-			t.Errorf("uv mode %v, want 0755", st.Mode().Perm())
-		}
+		testtool.RequireUnixMode(t, n.UV(), 0o755)
 		// Final review 8: the native root is the user's alone, as home/.
-		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
-			t.Errorf("the native root %s: %v %v, want 0700", n.Root(), st.Mode(), err)
-		}
+		testtool.RequirePrivate(t, n.Root())
 		if b, _ := os.ReadFile(n.UV()); !bytes.Equal(b, uvBin) {
 			t.Errorf("uv holds %q, want the archive's uv", b)
 		}
@@ -476,6 +476,7 @@ func (e *execTools) Run(ctx context.Context, env []string, stdin io.Reader, path
 // RF 4: the user's Python and Hugging Face settings never reach the
 // install; uv is the pinned one, by absolute path, never PATH's.
 func TestNativeFetchIgnoresTheUsersPythonEnvironment(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: POSIX fakes and the Linux tool environment")
 	fakeDir := t.TempDir()
 	ranMarker := filepath.Join(fakeDir, "ran")
 	touch(t, filepath.Join(fakeDir, "uv"), 0o755)
@@ -591,6 +592,7 @@ esac
 }
 
 func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
+	testtool.SkipWindows(t, "Task 10: Linux's uv and unpack; Windows' Fetch (uv.exe, copyPostgres) has its own tests")
 	tools := &fakeTools{}
 	n := newNative(t, tools)
 	items, models, err := n.Downloads(context.Background())
@@ -662,6 +664,7 @@ func completeVenv(t *testing.T, n Native, v string) {
 // of an older build (*.partial) included; never the one the server unit
 // runs, whatever keep says.
 func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	n := newNative(t, &fakeTools{})
 	n.UnitDir = t.TempDir()
 	// Nothing installed yet: nothing to do.
@@ -700,4 +703,12 @@ func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
 	if err := n.PruneVersions(); err == nil || !exists(n.VenvDir("1.1.0-aaaaaaaaaaaa")) {
 		t.Errorf("with Err: %v", err)
 	}
+}
+
+// exeSuffix is what the OS adds to a program's name.
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }

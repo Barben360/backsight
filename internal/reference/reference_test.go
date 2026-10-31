@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/claudecode"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func put(t *testing.T, home, rel, content string) {
@@ -299,6 +300,7 @@ func TestDiscoverRetroTimerBelongsToTheProfileItRuns(t *testing.T) {
 
 // An enable link left after the unit file was deleted is a leftover.
 func TestDiscoverDanglingTimerLinkIsALeftover(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: systemd timer links")
 	home := t.TempDir()
 	put(t, home, ".config/systemd/user/memory-retro.service", retroService)
 	wants := filepath.Join(home, ".config", "systemd", "user", "timers.target.wants")

@@ -40,7 +40,7 @@ func WriteLive(dir string, pid int, l Live) error {
 // ReadLive returns the record of Claude Code process pid, if any.
 func ReadLive(dir string, pid int) (Live, bool) {
 	var l Live
-	raw, err := os.ReadFile(byPIDPath(dir, pid))
+	raw, err := fsutil.ReadFileShared(byPIDPath(dir, pid))
 	if err != nil || json.Unmarshal(raw, &l) != nil || !ValidID(l.SessionID) {
 		return Live{}, false
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // oldSession writes a transcript with one turn and, optionally, an
@@ -28,9 +29,9 @@ func oldSession(t *testing.T, home, sid string, at time.Time, withSave bool) {
 	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
 	ts := at.UTC().Format(time.RFC3339)
-	lines := `{"type":"user","uuid":"` + sid + `-u1","sessionId":"` + sid + `","cwd":"` + filepath.Join(home, "billing") + `","timestamp":"` + ts + `","message":{"role":"user","content":"We keep PostgreSQL 16 for billing."}}` + "\n"
+	lines := `{"type":"user","uuid":"` + sid + `-u1","sessionId":"` + sid + `","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) + `","timestamp":"` + ts + `","message":{"role":"user","content":"We keep PostgreSQL 16 for billing."}}` + "\n"
 	if withSave {
-		lines += `{"type":"assistant","uuid":"` + sid + `-a1","sessionId":"` + sid + `","cwd":"` + filepath.Join(home, "billing") + `","timestamp":"` + ts + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__hindsight__hindsight_ingest_document","input":{"title":"Décision : PostgreSQL 16","content":"Index partiels requis."}}]}}` + "\n"
+		lines += `{"type":"assistant","uuid":"` + sid + `-a1","sessionId":"` + sid + `","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) + `","timestamp":"` + ts + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__hindsight__hindsight_ingest_document","input":{"title":"Décision : PostgreSQL 16","content":"Index partiels requis."}}]}}` + "\n"
 	}
 	if err := os.WriteFile(p, []byte(lines), 0o600); err != nil {
 		t.Fatal(err)
@@ -285,7 +286,7 @@ func TestBackfillOptedOutSessionSendsNoNotes(t *testing.T) {
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	pointAt(t, home, fakeHindsight(t))
 	raw, _ := os.ReadFile(cfg)
-	_ = os.WriteFile(cfg, append(raw, []byte("[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]\n")...), 0o600)
+	_ = os.WriteFile(cfg, append(raw, []byte("[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "billing"))+"]\n")...), 0o600)
 	fastBackfill(t)
 	oldSession(t, home, "secret", time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC), true)
 	_, out, _ := run(t, "retain", "backfill", "--plan", "--json")
@@ -377,7 +378,7 @@ func TestBackfillProjectsDir(t *testing.T) {
 	other := filepath.Join(home, "other-profile", "projects")
 	p := filepath.Join(other, "-x", "o1.jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	_ = os.WriteFile(p, []byte(`{"type":"user","uuid":"o1-u","sessionId":"o1","cwd":"`+filepath.Join(home, "x")+`","timestamp":"2026-09-20T09:00:00Z","message":{"role":"user","content":"from another profile"}}`+"\n"), 0o600)
+	_ = os.WriteFile(p, []byte(`{"type":"user","uuid":"o1-u","sessionId":"o1","cwd":"`+testtool.JSONPath(filepath.Join(home, "x"))+`","timestamp":"2026-09-20T09:00:00Z","message":{"role":"user","content":"from another profile"}}`+"\n"), 0o600)
 	_, out, _ := run(t, "retain", "backfill", "--plan", "--projects-dir", other)
 	if !strings.Contains(out, "1 session(s) to send") {
 		t.Errorf("%s", out)

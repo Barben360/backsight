@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // pgTools are the bundled programs the native runtime runs from pg0's
@@ -173,9 +174,7 @@ func TestNativeFetchUnpacksPostgres(t *testing.T) {
 	if !exists(keep) {
 		t.Error("the hindsight instance was touched")
 	}
-	if st, err := os.Stat(n.Home()); err != nil || st.Mode().Perm() != 0o700 {
-		t.Errorf("home: %v, %v; want 0700", st, err)
-	}
+	testtool.RequirePrivate(t, n.Home())
 
 	t.Run("present, nothing runs", func(t *testing.T) {
 		before := len(tools.Calls)
@@ -389,6 +388,7 @@ func fullInstallation(t *testing.T, n Native) {
 // partial one (a cut extraction, marker or not) is removed and unpacked
 // again.
 func TestNativeFetchUnpackCompleteness(t *testing.T) {
+	testtool.SkipWindows(t, "Task 10: Linux's uv and unpack; Windows' Fetch (uv.exe, copyPostgres) has its own tests")
 	for _, tc := range []struct {
 		name   string
 		setup  func(t *testing.T, n Native)

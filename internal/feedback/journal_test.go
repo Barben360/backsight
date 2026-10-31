@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 var common = Common{Session: "s1", Project: "backsight", Binary: "0.1.8", V: "7"}
@@ -115,12 +117,8 @@ func TestAppendFillsCommonFieldsAndKeepsTheFilePrivate(t *testing.T) {
 	if err != nil || fi.Size() != off {
 		t.Fatalf("position %s:%d, stat %v", file, off, err)
 	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Errorf("journal mode %v, want 0600", fi.Mode().Perm())
-	}
-	if di, _ := os.Stat(dir); di.Mode().Perm() != 0o700 {
-		t.Errorf("dir mode %v, want 0700", di.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, file)
+	testtool.RequirePrivate(t, dir)
 	if filepath.Base(file) != "journal-2026-10.jsonl" {
 		t.Errorf("file %s", file)
 	}

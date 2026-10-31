@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/setup"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The goldens of this file were recorded from 0014c66, before the native
@@ -201,6 +202,7 @@ func dockerInstallRun(t *testing.T) (argv, keys string) {
 // Every command a Docker install runs reaches Docker with the argv it ran
 // before the native runtime, and its JSON envelope reports no units.
 func TestDockerCommandsRunTheSameArgv(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: Docker golden (Docker on Windows is untested in this release, 0080)")
 	argv, keys := dockerInstallRun(t)
 	cliGolden(t, "docker-argv.golden", []byte(argv))
 	cliGolden(t, "docker-json-keys.golden", []byte(keys))

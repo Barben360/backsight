@@ -2065,7 +2065,7 @@ func TestFreshConfigHasNoFeedbackSection(t *testing.T) {
 		if strings.Contains(string(raw), "feedback") {
 			t.Errorf("a fresh config.toml mentions feedback:\n%s", raw)
 		}
-		cfg, err := config.Parse(raw, "config.toml", paths.Dirs{Data: "/d", Config: "/c", State: "/s"}, "/home/u")
+		cfg, err := config.Parse(raw, "config.toml", paths.Dirs{Data: t.TempDir(), Config: t.TempDir(), State: t.TempDir()}, "/home/u")
 		if err != nil || cfg.Feedback != config.Default(paths.Dirs{}, "/home/u").Feedback {
 			t.Errorf("fresh config: %v, feedback %+v", err, cfg.Feedback)
 		}

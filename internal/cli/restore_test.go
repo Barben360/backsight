@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // restoreDocker plays the server's compose project: a database holding
@@ -472,11 +474,11 @@ func TestRestoreRefusals(t *testing.T) {
 			_ = os.WriteFile(f, []byte("not a key\n"), 0o600)
 			return []string{archive, "--identity", f}
 		}},
-		{"missing archive", output.Usage, "no such file", func(t *testing.T, home, _ string) []string {
+		{"missing archive", output.Usage, noSuchFile, func(t *testing.T, home, _ string) []string {
 			return []string{filepath.Join(home, "nope.tar.gz.age")}
 		}},
 		{"lock held", output.Blocked, "maintenance in progress", func(t *testing.T, home, archive string) []string {
-			_ = os.WriteFile(pathsOf(home).MaintenanceLock(), []byte(`{"pid":1,"command":"update"}`), 0o600)
+			_ = os.WriteFile(pathsOf(home).MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`,"command":"update"}`), 0o600)
 			return []string{archive}
 		}},
 	} {
@@ -599,3 +601,11 @@ func TestRestoreOfARemoteServerIsRefused(t *testing.T) {
 		t.Errorf("exit %d %q", code, errOut)
 	}
 }
+
+// noSuchFile is the operating system's words for a missing file.
+var noSuchFile = func() string {
+	if runtime.GOOS == "windows" {
+		return "cannot find the file"
+	}
+	return "no such file"
+}()

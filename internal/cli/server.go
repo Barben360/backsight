@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/target"
 )
 
@@ -42,10 +43,12 @@ func composeFor(cfg config.Config) server.Compose {
 }
 
 // nativeSys runs the native runtime's systemctl, journalctl and
-// systemd-run; nativeTools its own programs. Tests replace both.
+// systemd-run (Windows: schtasks); nativeTools its own programs;
+// nativeAsk asks the Windows supervisor's pipe. Tests replace them.
 var (
 	nativeSys   server.SysRunner  = execSys{}
 	nativeTools server.ToolRunner = execTools{}
+	nativeAsk                     = supervise.Ask
 )
 
 // execTools runs a native tool with exactly the environment it is given
@@ -91,7 +94,7 @@ func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path 
 var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	if cfg.RuntimeKind() == "native" {
 		d, home, err := machine()
-		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, Err: err}
+		n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, Err: err, Note: printNote}
 		if err == nil {
 			// A user manager that never answers must not hang the command.
 			ctx, cancel := context.WithTimeout(context.Background(), unitDirTimeout)
@@ -113,6 +116,10 @@ var runtimeWith = func(cfg config.Config, ownGroup bool) server.Runtime {
 	}
 	return server.Docker{Compose: c, Cfg: cfg}
 }
+
+// printNote prints what the runtime tells the user beside a command's
+// result (server.NoLogonNote) on stderr: JSON output stays on stdout.
+var printNote = func(s string) { fmt.Fprintln(os.Stderr, "note: "+s) }
 
 // runtimeFor is the server runtime of cfg.
 func runtimeFor(cfg config.Config) server.Runtime { return runtimeWith(cfg, false) }
@@ -344,6 +351,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				}
 				add("config", "planned", "would write "+d.ConfigFile())
 			case errors.Is(err, fs.ErrNotExist):
+				if err := fsutil.MkdirPrivate(d.Config); err != nil {
+					return blocked(err)
+				}
 				if err := fsutil.ReplaceIfUnchanged(d.ConfigFile(), initialConfig(f), 0o600, fsutil.Absent); err != nil {
 					return blocked(err)
 				}
@@ -813,7 +823,7 @@ func statusText(r statusResult) string {
 
 func newServerCmd(e *env) *cobra.Command {
 	cmd := &cobra.Command{Use: "server", Short: "Manage the local Hindsight server", Args: cobra.NoArgs}
-	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e), newServerNativeCheckCmd(e), newServerRuntimeCmd(e))
+	cmd.AddCommand(newServerRenderCmd(e), newServerInstallCmd(e), newServerStartCmd(e), newServerStopCmd(e), newServerStatusCmd(e), newServerLLMCmd(e), newServerUpgradeCmd(e), newServerTokenCmd(e), newServerExposeCmd(e), newServerNativeCheckCmd(e), newServerSuperviseCmd(e), newServerRuntimeCmd(e))
 	return cmd
 }
 

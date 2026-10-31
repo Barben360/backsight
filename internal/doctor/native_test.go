@@ -15,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // goodFacts is a healthy native install's guards.
@@ -77,6 +78,7 @@ func TestDoctorDockerChecksUnchanged(t *testing.T) {
 }
 
 func TestDoctorNativeChecks(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
 	type want struct {
 		id, summary, fix string
 	}
@@ -138,6 +140,7 @@ func TestDoctorNativeChecks(t *testing.T) {
 }
 
 func TestDoctorNativeAllGood(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
 	f := newFixture(t)
 	dockerAsked := false
 	f.env.Docker = func(context.Context) (string, error) { dockerAsked = true; return "", exec.ErrNotFound }
@@ -165,6 +168,7 @@ func TestDoctorNativeAllGood(t *testing.T) {
 
 // Each database a restore moved aside is listed, so the user can delete it.
 func TestDoctorListsRefusedInstances(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
 	f := newFixture(t)
 	dirs := []string{"/n/home/.pg0/instances/hindsight.refused-1761700000", "/n/home/.pg0/instances/hindsight.refused-1761800000"}
 	nativeInstall(f, func() NativeFacts { n := goodFacts(); n.Refused = dirs; return n })
@@ -190,6 +194,7 @@ func TestDoctorListsRefusedInstances(t *testing.T) {
 // A probe that cannot read the native install at all is an error, never a
 // silent pass.
 func TestDoctorNativeProbeFails(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
 	f := newFixture(t)
 	put(t, f.env.Dirs.ConfigFile(), "[server]\nruntime = \"native\"\n", 0o600)
 	f.env.Native = func(context.Context) (NativeFacts, error) { return NativeFacts{}, errors.New("no user manager") }
@@ -317,6 +322,7 @@ func TestNativeVenvDiff(t *testing.T) {
 // compose_dir holds: a space or a quote never turns them into another
 // command.
 func TestDoctorNativeQuotesPathsInCommands(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: doctor's native checks on Windows")
 	root := "/srv/my data/it's"
 	f := newFixture(t)
 	nativeInstall(f, func() NativeFacts {

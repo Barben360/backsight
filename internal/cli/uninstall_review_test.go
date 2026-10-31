@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +19,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // otherProfile is a Claude Code profile backsight did not wire, holding
@@ -40,6 +40,7 @@ func otherProfile(t *testing.T, home, name string) (dir, settings, content strin
 // A shell set to another profile never reaches a claude call meant for
 // ~/.claude (block 3 review: it removed that profile's plugin).
 func TestUninstallOnTheDefaultProfileIgnoresTheShellProfile(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	other, settings, content := otherProfile(t, m.home, "work-profile")
 	t.Setenv("CLAUDE_CONFIG_DIR", other)
@@ -65,6 +66,7 @@ func TestUninstallOnTheDefaultProfileIgnoresTheShellProfile(t *testing.T) {
 // Every profile setup wired is cleaned, each through its own
 // CLAUDE_CONFIG_DIR; a third one the shell points at stays as it was.
 func TestUninstallCleansEveryWiredProfile(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	wired, wiredSettings, _ := otherProfile(t, m.home, "dev-profile")
@@ -93,6 +95,7 @@ func TestUninstallCleansEveryWiredProfile(t *testing.T) {
 }
 
 func TestSetupUndoOnTheDefaultProfileIgnoresTheShellProfile(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	rec := &setup.Record{SchemaVersion: setup.RecordVersion}
 	rec.Undo.ClientProfiles = []string{filepath.Join(m.home, ".claude")}
@@ -164,6 +167,7 @@ func TestSetupPluginCheckIgnoresTheShellProfile(t *testing.T) {
 // A failed step stops before the binaries; the resume keeps every flag,
 // and a rerun finishes the job.
 func TestUninstallResumeKeepsEveryFlag(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	t.Run("rerun finishes", func(t *testing.T) {
 		m := installMachine(t)
 		d := pathsOf(m.home)
@@ -214,9 +218,7 @@ func TestUninstallResumeKeepsEveryFlag(t *testing.T) {
 // The local files go before the binaries; a failure on the binaries is no
 // longer resumable (the state may be gone): exit 20 with what is left.
 func TestUninstallBinariesLastAndTheirFailureListsWhatIsLeft(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a read-only directory mode does not stop removals on Windows")
-	}
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	if os.Geteuid() == 0 {
 		t.Skip("root removes read-only directories' entries")
 	}
@@ -280,6 +282,7 @@ func questionIDs(env uninstallEnvelope) []string {
 
 // --purge-local asks every question in one go, before any change.
 func TestUninstallPurgeLocalAsksFirst(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	id, _ := agelib.GenerateX25519Identity()
@@ -328,6 +331,7 @@ func TestUninstallPurgeLocalAsksFirst(t *testing.T) {
 
 // Nothing to lose, nothing asked: no identity, no retire, no queue.
 func TestUninstallPurgeLocalAsksNothingWhenNothingIsLost(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	rec := &setup.Record{SchemaVersion: setup.RecordVersion}
 	rec.Undo.Timers = []string{"memory-retro.timer"} // stopped timers have no pre-image
@@ -338,6 +342,7 @@ func TestUninstallPurgeLocalAsksNothingWhenNothingIsLost(t *testing.T) {
 }
 
 func TestUninstallPlanListsTheQueuedWrites(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	queueNote(t, m.home)
@@ -359,6 +364,7 @@ func TestUninstallPlanListsTheQueuedWrites(t *testing.T) {
 
 // State entries backsight did not write stay, and are named.
 func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	foreign := filepath.Join(d.State, "cutover-backup-20261025", "settings.json")
@@ -412,9 +418,7 @@ func TestUninstallPurgeLocalKeepsForeignStateEntries(t *testing.T) {
 // A backup directory reached through a symlink into the state directory
 // is kept.
 func TestUninstallPurgeLocalFollowsASymlinkedBackupDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a symlink needs a privilege or developer mode on Windows")
-	}
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	real := filepath.Join(d.State, "logs", "archives")
@@ -436,6 +440,7 @@ func TestUninstallPurgeLocalFollowsASymlinkedBackupDir(t *testing.T) {
 
 // uninstall waits for a running job, and refuses when it does not finish.
 func TestUninstallWaitsForTheJobs(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	short := func(t *testing.T, d time.Duration) {
 		old := jobLockWait
 		jobLockWait = d
@@ -475,6 +480,7 @@ func TestUninstallWaitsForTheJobs(t *testing.T) {
 
 // The timers are disabled, then the services stopped, and their files go.
 func TestUninstallStopsTheJobServices(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	unitDir := filepath.Join(m.home, "xdg", "systemd", "user")
 	if code, _, out := uninstall(t); code != output.OK {
@@ -493,6 +499,7 @@ func TestUninstallStopsTheJobServices(t *testing.T) {
 }
 
 func TestUninstallRefusesWhileALockIsHeld(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	t.Run("setup", func(t *testing.T) {
 		m := installMachine(t)
 		l, err := state.TryAcquire(filepath.Join(pathsOf(m.home).LocksDir(), "setup.lock"), "setup")
@@ -527,6 +534,7 @@ func TestUninstallRefusesWhileALockIsHeld(t *testing.T) {
 }
 
 func TestUninstallRefusesAnUnknownAnswer(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	before := treeOf(t, m.home)
 	code, _, out := uninstall(t, "--answer", "confirm=yes")
@@ -537,6 +545,7 @@ func TestUninstallRefusesAnUnknownAnswer(t *testing.T) {
 }
 
 func TestUninstallPlanWithTheRetentionBack(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	before := treeOf(t, m.home)
 	code, env, out := uninstall(t, "--plan", "--answer", "retention=restore")
@@ -550,6 +559,7 @@ func TestUninstallPlanWithTheRetentionBack(t *testing.T) {
 }
 
 func TestUninstallRemoteServerRefusesStop(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	raw := readFile(t, pathsOf(m.home).ConfigFile())
 	_ = os.WriteFile(pathsOf(m.home).ConfigFile(), []byte(strings.Replace(raw, "[server]\n", "[server]\nmode = \"remote\"\n", 1)), 0o600)
@@ -563,6 +573,7 @@ func TestUninstallRemoteServerRefusesStop(t *testing.T) {
 }
 
 func TestUninstallWarnsAboutAPathEntryThatIsNotOurs(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	link := filepath.Join(pathsOf(m.home).Bin, "backsight")
 	_ = os.Remove(link)
@@ -579,9 +590,7 @@ func TestUninstallWarnsAboutAPathEntryThatIsNotOurs(t *testing.T) {
 }
 
 func TestUninstallRemovesARelativeLinkOfOurs(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a symlink needs a privilege or developer mode on Windows")
-	}
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m := installMachine(t)
 	d := pathsOf(m.home)
 	link := filepath.Join(d.Bin, "backsight")
@@ -605,6 +614,7 @@ func TestUninstallRemovesARelativeLinkOfOurs(t *testing.T) {
 // The retire warning names setup --undo for a reference retire, and is
 // silent when setup retired nothing.
 func TestUninstallRetireWarning(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	t.Run("client retire", func(t *testing.T) {
 		m := installMachine(t)
 		clientRetireRun(t, m)

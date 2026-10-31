@@ -27,6 +27,7 @@ import (
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/telemetry"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // mcpSession starts the memory server on a fake bank and connects a client.
@@ -480,7 +481,7 @@ func TestMCPStoreFollowsAProjectPauseTakenDuringTheSession(t *testing.T) {
 	_ = session.WriteLive(pathsOf(home).SessionsDir(), 4747, session.Live{SessionID: "s1", Cwd: dir, Project: "billing", At: time.Now()})
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
-	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = [\""+dir+"\"]\n")...), 0o600)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = ["+testtool.TOMLStr(dir)+"]\n")...), 0o600)
 	before := retained.Load()
 	if out, isErr := call(t, cs, "memory_store", map[string]any{"kind": "decision", "text": "Billing keeps PostgreSQL 16."}); !isErr || !strings.Contains(out, "excluded") || retained.Load() != before {
 		t.Errorf("%v %s", isErr, out)
@@ -723,10 +724,10 @@ func TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable(t *testing.T
 	cs, home := creditSession(t)
 	showIn(t, home, "S", creditB)
 	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "journal-*.jsonl"))
-	if len(files) != 1 || os.Chmod(files[0], 0) != nil {
+	if len(files) != 1 {
 		t.Fatalf("journal %v", files)
 	}
-	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	testtool.DenyRead(t, files[0])
 	_ = sessions(home).Update("S", func(st *session.State) error { st.Seen = []string{creditA}; return nil })
 	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.Contains(out, "From memory (proj · aaaaaaaa)") {
 		t.Errorf("%v %s", isErr, out)
@@ -962,7 +963,7 @@ func TestVerdictCorrectionHonoursSecretsAndPause(t *testing.T) {
 		t.Errorf("secret in the evidence: %v %s", isErr, out)
 	}
 	// an opt-out taken during the session: the directory excluded
-	appendConfig(t, home, "[privacy]\nexclude_paths = [\""+filepath.Join(home, "proj")+"\"]")
+	appendConfig(t, home, "[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "proj"))+"]")
 	if out, isErr := call(t, cs, "memory_credit", verdict("outdated", "aaaaaaaa")); !isErr || !strings.Contains(out, "excluded") {
 		t.Errorf("opted out: %v %s", isErr, out)
 	}

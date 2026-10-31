@@ -402,20 +402,20 @@ func (s *setupEnv) rerunWith(answer string) string {
 	}
 	for _, a := range s.f.answers {
 		if k, _, _ := strings.Cut(a, "="); strings.TrimSpace(k) != key {
-			parts = append(parts, "--answer", shellWord(a))
+			parts = append(parts, "--answer", resumeWord(a))
 		}
 	}
 	if s.f.answersFile != "" {
-		parts = append(parts, "--answers-file", shellWord(s.f.answersFile))
+		parts = append(parts, "--answers-file", resumeWord(s.f.answersFile))
 	}
 	if s.f.configDir != "" {
-		parts = append(parts, "--config-dir", shellWord(s.f.configDir))
+		parts = append(parts, "--config-dir", resumeWord(s.f.configDir))
 	}
 	if s.f.role != "" {
-		parts = append(parts, "--role", shellWord(s.f.role))
+		parts = append(parts, "--role", resumeWord(s.f.role))
 	}
 	if s.f.runtime != "" {
-		parts = append(parts, "--runtime", shellWord(s.f.runtime))
+		parts = append(parts, "--runtime", resumeWord(s.f.runtime))
 	}
 	if s.f.nonInteractive {
 		parts = append(parts, "--non-interactive")
@@ -846,7 +846,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if s.cfg != nil {
 				return setup.Step{Name: "config", Status: "skipped", Detail: "adopted " + s.dirs.ConfigFile()}, nil
 			}
-			if err := os.MkdirAll(s.dirs.Config, 0o700); err != nil {
+			if err := fsutil.MkdirPrivate(s.dirs.Config); err != nil {
 				return setup.Step{}, blocked(err)
 			}
 			want := fsutil.Absent

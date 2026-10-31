@@ -91,7 +91,9 @@ func (s Supervisor) Run(ctx context.Context, event string, input []byte) ([]byte
 		return fail("timeout", "")
 	case err != nil && cmd.ProcessState == nil:
 		return fail("spawn", err.Error())
-	case err != nil && cmd.ProcessState.ExitCode() == -1:
+	case err != nil && (ctx.Err() != nil || killedBy(cmd.ProcessState.ExitCode())):
+		// The supervisor ended the child (its caller gave up), or someone
+		// else did: a signal, or on Windows a TerminateProcess or Job kill.
 		return fail("killed", err.Error())
 	case err != nil && strings.Contains(stderr, "panic:"):
 		return fail("panic", firstLine(stderr))
@@ -122,16 +124,16 @@ func RunChild(ctx context.Context, event string, stdin io.Reader, stdout io.Writ
 	chaos()
 	input, err := io.ReadAll(io.LimitReader(stdin, MaxInput))
 	if err != nil {
-		return 1
+		return childFailed
 	}
 	out, err := h(ctx, event, input)
 	if err != nil {
 		_, _ = os.Stderr.WriteString("backsight hook " + event + ": " + err.Error() + "\n")
-		return 1
+		return childFailed
 	}
 	if len(out) > 0 {
 		if _, err := stdout.Write(out); err != nil {
-			return 1
+			return childFailed
 		}
 	}
 	return 0

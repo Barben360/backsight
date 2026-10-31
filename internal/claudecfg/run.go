@@ -244,7 +244,7 @@ func (r Runner) newRun() (string, error) {
 	base := now().UTC().Format("20060102T150405.000000Z")
 	ts := base
 	for i := 2; ; i++ {
-		err := os.MkdirAll(r.PreImages, 0o700)
+		err := fsutil.MkdirPrivate(r.PreImages)
 		if err == nil {
 			err = os.Mkdir(filepath.Join(r.PreImages, ts), 0o700)
 		}
@@ -468,7 +468,7 @@ func (r Runner) journal(ts, action, target string, pre *string) error {
 func (r Runner) appendJournal(line map[string]any) error {
 	line["ts"], line["command"], line["step"] = time.Now().UTC().Format(time.RFC3339Nano), r.Command, "claude-config"
 	b, _ := json.Marshal(line)
-	if err := os.MkdirAll(filepath.Dir(r.Journal), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(r.Journal)); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(r.Journal, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)

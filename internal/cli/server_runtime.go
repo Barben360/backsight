@@ -56,10 +56,7 @@ func nativeShim(d paths.Dirs) string {
 // shimMissing: no executable file behind the shim (none, a dangling link,
 // or not executable), which systemd would fail with 203/EXEC; server
 // install and the switch install it again.
-func shimMissing(shim string) bool {
-	fi, err := os.Stat(shim)
-	return err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0
-}
+func shimMissing(shim string) bool { return !fsutil.Executable(shim) }
 
 // shimProbeWait bounds the shim's --help.
 const shimProbeWait = 15 * time.Second
@@ -951,7 +948,7 @@ func recallAgain(ctx context.Context, cl *hindsight.Client, bank string, probes 
 // appendSwitchLog records a passed switch, one JSON line.
 func appendSwitchLog(stateDir string, rs state.RuntimeSwitch) error {
 	p := switchLog(stateDir)
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(p)); err != nil {
 		return err
 	}
 	line, err := json.Marshal(map[string]any{"from": rs.From, "to": rs.To, "at": rs.At, "backup": rs.Backup, "overlap": rs.Overlap, "overlap_beyond_near_ties": rs.OverlapBeyondTies, "gate_ok": true})

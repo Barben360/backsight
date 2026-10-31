@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // oldTemplate rewrites an installed file as an older binary rendered it:
@@ -48,6 +49,7 @@ func decodeRefresh(t *testing.T, out string) jobsRefreshResult {
 // environment they were installed with, and reloads them without stopping
 // a running job: daemon-reload, never a stop or restart.
 func TestJobsRefreshRewritesStaleUnits(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
 	home := devInstall(t, true)
 	sys := withSys(t, "linux")
 	if code, out, _ := run(t, "jobs", "install"); code != output.OK {

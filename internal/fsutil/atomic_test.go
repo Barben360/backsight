@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func read(t *testing.T, p string) string {
@@ -208,6 +209,9 @@ func TestReplaceIfUnchangedDeletedAfterHash(t *testing.T) {
 }
 
 func TestRenameFailureLeavesNoTempFile(t *testing.T) {
+	old := RetryFor // Windows retries an access denied: do not wait the full 2 s
+	RetryFor = 100 * time.Millisecond
+	t.Cleanup(func() { RetryFor = old })
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f")
 	if err := os.MkdirAll(filepath.Join(target, "child"), 0o700); err != nil { // a non-empty dir cannot be renamed over

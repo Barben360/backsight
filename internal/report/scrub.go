@@ -58,7 +58,8 @@ func NewScrubber(home string) *Scrubber {
 	return s
 }
 
-// pathForms are p, its resolved form and their forward-slash spellings.
+// pathForms are p, its resolved form, their other spellings on this OS
+// and their forward-slash spellings.
 func pathForms(p string) []string {
 	if p == "" {
 		return nil
@@ -67,10 +68,12 @@ func pathForms(p string) []string {
 	seen := map[string]bool{}
 	add := func(h string) {
 		h = strings.TrimRight(h, `/\`)
-		for _, f := range []string{h, filepath.ToSlash(h)} {
-			if len(f) >= 2 && !seen[f] {
-				seen[f] = true
-				out = append(out, f)
+		for _, s := range append([]string{h}, spellings(h)...) {
+			for _, f := range []string{s, filepath.ToSlash(s)} {
+				if len(f) >= 2 && !seen[f] {
+					seen[f] = true
+					out = append(out, f)
+				}
 			}
 		}
 	}

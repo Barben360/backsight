@@ -471,7 +471,7 @@ func runUpdateApply(ctx context.Context, res *updateApplyResult, fl updateApplyF
 	}
 	add("check", "done", fmt.Sprintf("%s → %s on %s", res.Installed, rel.Version, res.Source))
 
-	if err := os.MkdirAll(d.State, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(d.State); err != nil {
 		return blocked(err)
 	}
 	work, err := os.MkdirTemp(d.State, "update-")
@@ -1277,7 +1277,7 @@ var maxBinary int64 = 512 << 20
 // (.tar.gz, or .zip on Windows) to dst.
 func unpackBinary(archive, dst string) error {
 	want := binaryName()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(filepath.Dir(dst)); err != nil {
 		return err
 	}
 	write := func(r io.Reader) error {
@@ -1407,6 +1407,11 @@ func (r *updateRollback) run(ctx context.Context, cause error) error {
 	}
 	if err := pointShim(r.previous, r.shim); err != nil {
 		errs = append(errs, "switching the shim back: "+err.Error())
+	} else if link, ours := olderPathLink(r.d, r.shim); runtime.GOOS == "windows" && ours {
+		// the PATH command is a copy there, not a link following the shim
+		if err := pointShim(r.shim, link); err != nil {
+			errs = append(errs, "switching the PATH command back: "+err.Error())
+		}
 	}
 	if r.pluginTouched {
 		cctx, cancel := context.WithTimeout(base, 5*time.Minute)

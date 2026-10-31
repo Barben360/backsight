@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/supervise"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // refuseDocker stands in for the real runner: a test that reaches Docker
@@ -33,6 +36,12 @@ type refuseTools struct{}
 
 func (refuseTools) Run(_ context.Context, _ []string, _ io.Reader, path string, args ...string) ([]byte, error) {
 	return nil, fmt.Errorf("test reached %s %v without a fake tool runner", path, args)
+}
+
+// refuseAsk: no test asks a real supervisor's pipe (a developer's own
+// server would answer, and stop).
+func refuseAsk(_ context.Context, project, op string) (supervise.Status, error) {
+	return supervise.Status{}, fmt.Errorf("test reached the supervisor of %s (%s) without a fake runner", project, op)
 }
 
 type refuseClaude struct{}
@@ -83,6 +92,10 @@ func hookChildFault(mode string) {
 var goraceSet bool
 
 func TestMain(m *testing.M) {
+	testtool.Main() // started as a fake program: behave as it and exit
+	// Before any child branch: a re-executed test binary writes the same
+	// throwaway PATH key, never the real one of the user running the tests.
+	cleanup := isolateUserPath()
 	// The race runtime sleeps 1 s at exit while other threads live: twice
 	// per hook (the shim and its child) under -race, past SessionEnd's
 	// 800 ms child deadline. The children inherit this (issue #281).
@@ -97,14 +110,18 @@ func TestMain(m *testing.M) {
 		if len(args) > 0 && args[0] == "hook-child" {
 			hookChildFault(os.Getenv(testHookFault))
 		}
-		os.Exit(Execute(args, os.Stdout, os.Stderr))
+		code := Execute(args, os.Stdout, os.Stderr)
+		cleanup()
+		os.Exit(code)
 	}
 	composeRunner = refuseDocker{}
-	nativeSys, nativeTools = refuseSys{}, refuseTools{}
+	nativeSys, nativeTools, nativeAsk = refuseSys{}, refuseTools{}, refuseAsk
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 // The race runtime's exit sleep (1 s per process with live threads) made

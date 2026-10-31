@@ -24,6 +24,7 @@ import (
 	"filippo.io/age"
 	"filippo.io/age/agessh"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/state"
 )
 
@@ -109,10 +110,10 @@ func Recipients(lines []string) ([]age.Recipient, error) {
 // knows (versions, images, bank, recipients); Create fills the rest.
 // extras are the files stored beside the dump.
 func Create(ctx context.Context, db DB, dir, staging string, m Manifest, extras map[string][]byte, recipients []age.Recipient, afterDump func(dump string) error) (string, Manifest, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(dir); err != nil {
 		return "", m, err
 	}
-	if err := os.MkdirAll(staging, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(staging); err != nil {
 		return "", m, err
 	}
 	removeStale(dir, ".work-")      // left by older versions, which staged in dir
@@ -192,7 +193,7 @@ const verifyPrefix = "verify-"
 // lock beside its directory, taken first: a directory with no live lock is
 // a killed verify's, clear dump included, and removed here and by Create.
 func VerifyDir(staging string) (string, func(), error) {
-	if err := os.MkdirAll(staging, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(staging); err != nil {
 		return "", nil, err
 	}
 	removeDeadVerifies(staging)

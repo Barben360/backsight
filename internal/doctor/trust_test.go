@@ -6,10 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	testtool.RequireGit(t)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -53,8 +56,8 @@ func TestBacksightTomlCheckNamesTrackedFilesAndTheLocalFix(t *testing.T) {
 	liveToml := filepath.Join(other, ".backsight.toml")
 	put(t, liveToml, "related = [\"x\"]\n", 0o600)
 	gitIn(t, other, "add", ".backsight.toml")
-	put(t, filepath.Join(f.env.Dirs.SessionsDir(), "by-pid", "42.json"), `{"session_id":"s1","cwd":"`+other+`"}`, 0o600)
-	put(t, filepath.Join(f.env.Dirs.SessionsDir(), "by-pid", "43.json"), `{"session_id":"s2","cwd":"`+repo+`"}`, 0o600)
+	put(t, filepath.Join(f.env.Dirs.SessionsDir(), "by-pid", "42.json"), `{"session_id":"s1","cwd":"`+testtool.JSONPath(other)+`"}`, 0o600)
+	put(t, filepath.Join(f.env.Dirs.SessionsDir(), "by-pid", "43.json"), `{"session_id":"s2","cwd":"`+testtool.JSONPath(repo)+`"}`, 0o600)
 	c = checkBacksightToml(f.env)
 	if c.Status != Info || !strings.Contains(c.Summary, "2 .backsight.toml files") || !strings.Contains(c.Detail, liveToml) || strings.Count(c.Detail, toml) != 1 {
 		t.Errorf("two files: %+v", c)
