@@ -4,6 +4,59 @@ backsight can tell you whether its memory is working and what it costs. Every an
 
 Start with `backsight stats overview`: it answers "is memory working?" in four lines and lists what needs your attention, each with the command that helps.
 
+## Opening the dashboard
+
+`backsight dashboard` serves the same views in a browser, on this machine only (`127.0.0.1`). It prints a one-time link:
+
+```
+Dashboard: http://127.0.0.1:<port>/?code=<code>
+```
+
+- **Open the link within 2 minutes.** The code works once. It signs your browser in, then the address drops the code. Open the link from a terminal or paste it in the address bar; a link clicked on another web page is refused.
+- **Another link.** `backsight dashboard link` prints a new one for the running dashboard. Use it when the first expired or was used, or to sign in from another browser.
+- **`--open`** starts your default browser with the link. The link is then on that program's command line, visible to process listings for a moment; the code works once and expires in 2 minutes.
+- **`--port <n>`** picks the port (1024 to 65535). Without it backsight takes a free one and prints it in the link.
+- **`--json`** prints `{url, port, expires_at}` instead of the line above (`backsight dashboard link --json` too).
+- **It runs in the foreground.** Ctrl+C stops it. It also stops on its own after 2 hours without a signed-in request. Your browser is signed in for as long as the dashboard is used: a session ends after 2 hours without use, and at most 8 browsers are signed in at once (the oldest is dropped).
+- **One at a time.** While a dashboard runs, `backsight dashboard` exits with code 20 and names its address; `backsight dashboard link` gives you a link to it.
+- **Fresh numbers.** A view's numbers are computed at most every 30 seconds, whatever the number of pages and browsers; the server's answers are kept up to 60 seconds and the doctor's checks up to 5 minutes. The page header has a Refresh link, and a preference reloads the page every minute.
+- **Changes to the configuration** (the server's address, the key, the prices) are read when the dashboard starts: press Ctrl+C and start it again.
+
+## From another PC
+
+The dashboard never listens on the network. To see it from another PC, forward a port over ssh. The port must be the same on both ends, because the dashboard only answers to `127.0.0.1:<its port>` and `localhost:<its port>`.
+
+1. On the host: `backsight dashboard --port 8765`.
+2. On the other PC: `ssh -L 8765:127.0.0.1:8765 <user>@<host>`, and leave it open.
+3. Open the link the host printed, in the browser of the other PC. A new one: `backsight dashboard link` on the host.
+
+## What the pages show
+
+Each page is one `backsight stats` view, with the same numbers.
+
+| Page | Question | View behind it |
+|---|---|---|
+| Overview | Is memory working, and what needs my attention? | `backsight stats overview` |
+| Quality | Does memory show up, and is what it shows right? | `backsight stats quality` |
+| Cost | What does memory cost? | `backsight stats cost` |
+| Bank | How big is the memory? | `backsight stats bank` |
+| Pipeline | Is what I write reaching the memory? | `backsight stats pipeline` |
+| System | Are the checks, the server and the jobs healthy? | `backsight stats system` |
+| Releases (developer mode) | Did a new version change anything? | `backsight stats releases` |
+| Definitions (developer mode) | What does a number mean? | `backsight stats defs` |
+| Projects | Which projects use memory? | `backsight stats projects` |
+| Sessions | Which sessions got memory? | `backsight stats sessions` |
+| Memories | Which memories are shown, used, reported? | `backsight stats memories` |
+| Days (linked from other pages) | What happened each day? | `backsight stats days` |
+
+Every number on a page is in `backsight stats <view> --json`: that is what scripts and agents read. The dashboard's own address `/api/v1/<view>` returns the same JSON, but only to a browser that is signed in, to feed the pages; it is not an interface for scripts.
+
+A memory's text is not on the pages. Its own page has a "Show text" link; the text is read from the server when you click and is never stored.
+
+## Privacy
+
+The dashboard listens on `127.0.0.1` only and sends nothing out. The sign-in cookie is sent by the browser to every other program it opens on `127.0.0.1` or `localhost`, so do not open untrusted local services in the same browser while you are signed in. [privacy.md](privacy.md#the-dashboard) has the details.
+
 ## What each view answers
 
 | Command | Question it answers |

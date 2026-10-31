@@ -688,3 +688,17 @@ func docsClient(t *testing.T, home string) *hindsight.Client {
 	}
 	return cl
 }
+
+// The shipped dashboard guide tells how to open it, how to reach it from
+// another PC and how to get a new link.
+func TestGuideDashboardTopic(t *testing.T) {
+	code, out, _ := run(t, "guide", "dashboard")
+	if code != output.OK {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{"From another PC", "ssh -L 8765:127.0.0.1:8765", "backsight dashboard link"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("guide dashboard lacks %q", want)
+		}
+	}
+}
