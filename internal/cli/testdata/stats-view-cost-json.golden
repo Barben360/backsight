@@ -1,0 +1,400 @@
+{
+  "schema_version": 1,
+  "command": "stats cost",
+  "ok": true,
+  "data": {
+    "view": "cost",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {
+      "context.per_prompt": {
+        "value": null,
+        "num": null,
+        "den": 4,
+        "unit": "chars",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats cost",
+        "extra": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "context.per_session": {
+        "value": null,
+        "num": null,
+        "den": 4,
+        "unit": "chars",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            },
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "n": 1,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-08",
+            "value": null,
+            "n": 3,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            },
+            "partial": true
+          }
+        ],
+        "extra": {
+          "histogram": [
+            {
+              "lo": 0,
+              "hi": 1000,
+              "n": 4
+            },
+            {
+              "lo": 1000,
+              "hi": 2000,
+              "n": 0
+            },
+            {
+              "lo": 2000,
+              "hi": 3000,
+              "n": 0
+            },
+            {
+              "lo": 3000,
+              "hi": 4000,
+              "n": 0
+            },
+            {
+              "lo": 4000,
+              "hi": 5000,
+              "n": 0
+            },
+            {
+              "lo": 5000,
+              "hi": 6000,
+              "n": 0
+            },
+            {
+              "lo": 6000,
+              "hi": 7000,
+              "n": 0
+            },
+            {
+              "lo": 7000,
+              "hi": 8000,
+              "n": 0
+            },
+            {
+              "lo": 8000,
+              "hi": 9000,
+              "n": 0
+            },
+            {
+              "lo": 9000,
+              "hi": 10000,
+              "n": 0
+            },
+            {
+              "lo": 10000,
+              "hi": 11000,
+              "n": 0
+            },
+            {
+              "lo": 11000,
+              "hi": 12000,
+              "n": 0
+            },
+            {
+              "lo": 12000,
+              "hi": 13000,
+              "n": 0
+            },
+            {
+              "lo": 13000,
+              "hi": 14000,
+              "n": 0
+            },
+            {
+              "lo": 14000,
+              "hi": 15000,
+              "n": 0
+            },
+            {
+              "lo": 15000,
+              "hi": 16000,
+              "n": 0
+            },
+            {
+              "lo": 16000,
+              "hi": 17000,
+              "n": 0
+            },
+            {
+              "lo": 17000,
+              "hi": 18000,
+              "n": 0
+            },
+            {
+              "lo": 18000,
+              "hi": 19000,
+              "n": 0
+            },
+            {
+              "lo": 19000,
+              "hi": 20000,
+              "n": 0
+            },
+            {
+              "lo": 20000,
+              "hi": null,
+              "n": 0
+            }
+          ],
+          "p50": null,
+          "p95": null,
+          "tokens_p50": null,
+          "tokens_p95": null
+        }
+      },
+      "extraction.cost": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "money",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats cost"
+      },
+      "extraction.per_session": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "tokens",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats cost --dev",
+        "extra": {
+          "sessions_sent": 1,
+          "window_days": 28
+        }
+      },
+      "extraction.tokens": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "tokens",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats cost"
+      },
+      "recall.latency": {
+        "value": null,
+        "num": null,
+        "den": 5,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats days",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "n": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "n": 2,
+            "p50": 800,
+            "p95": 1200
+          },
+          {
+            "day": "2026-10-08",
+            "value": null,
+            "n": 3,
+            "p50": 500,
+            "p95": 500,
+            "partial": true
+          }
+        ],
+        "extra": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "search.latency": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight doctor"
+      }
+    },
+    "tables": {
+      "extraction": []
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

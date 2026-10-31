@@ -119,19 +119,6 @@ func TestStatsViewsRun(t *testing.T) {
 	}
 }
 
-// Without --json the data is printed indented, without the envelope.
-func TestStatsViewTextIsTheIndentedData(t *testing.T) {
-	viewsFixture(t)
-	code, out, errOut := run(t, "stats", "days")
-	if code != output.OK {
-		t.Fatalf("exit %d: %s", code, errOut)
-	}
-	var data map[string]any
-	if err := json.Unmarshal([]byte(out), &data); err != nil || data["view"] != "days" || !strings.Contains(out, "\n  \"view\"") {
-		t.Errorf("text = %q (%v)", out, err)
-	}
-}
-
 func TestStatsLegacyUnchanged(t *testing.T) {
 	fixedStatsFixture(t)
 	for name, args := range map[string][]string{

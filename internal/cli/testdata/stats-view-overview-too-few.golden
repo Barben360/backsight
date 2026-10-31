@@ -1,0 +1,63 @@
+Is my memory working? (2026-10-07 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Verdict (last 7 days)
+Found    learning — Learning: day 2 of about 7, 6 prompts so far.
+Right    learning — Learning: day 2 of about 7, 6 prompts so far.
+Cost     too early — Not enough yet: 5 prompts, 100 needed.
+Flowing  attention — Health check backup reports a warning.
+
+In this window (1 day): 3 prompts got memory, Claude used it in 0 turns, about 0 tokens added; price not set (server, all PCs).
+
+Found
+Prompts that got memory                      3 of 3                   (n=3, too few, 17 more needed)
+Why prompts got nothing                      0                        (ok, -1 vs previous)
+
+Right
+Turns where Claude used memory               0 of 0                   (n=0, too few, 20 more needed)
+Turns where Claude said what it used         0 of 0                   (n=0, too few, 20 more needed)
+Memories reported wrong or out of date       —                        (no data: nothing recorded yet)
+
+Cost
+Context added per session                    —                        (n=3, too few, 97 more needed)
+Time memory adds to a prompt                 —                        (n=3, too few, 97 more needed)
+
+Memory
+Memories                                     0                        (ok, no history)
+  0 facts about you and your work, 0 facts from sessions, 0 summaries
+New memories per day                         —                        (no data: nothing recorded yet)
+Summaries waiting                            0                        (ok, no history)
+
+Flowing
+Sessions sent                                1 of 1                   (n=1, ok)
+  sent 1, failed 0, set aside after an error 0, waiting 0
+Waiting on this PC                           0                        (ok)
+Waiting on the server                        0                        (ok)
+  waiting 0, running 0, failed in the last 7 days 0, failed in all 0
+Steps that crashed                           0                        (ok, no change vs previous)
+Memory server answering                      yes                      (ok, no change vs previous)
+Health checks                                1 failed                 (watch)
+  1 failed, 1 with a warning
+Background jobs                              —                        (no data: nothing recorded yet)
+
+To review
+Often shown, never used                      —                        (no data: nothing recorded yet)
+Hidden                                       —                        (no data: nothing recorded yet)
+Reported wrong                               —                        (no data: nothing recorded yet)
+
+Needs attention
+1. Health check backup reports a warning.
+   Run: backsight backup create
+2. Health check bank failed.
+   Run: backsight doctor
+
+Activity
+3 prompts typed, 3 recalls, 3 of them added memory
+
+Lately
+Session   Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent
+s1                 2026-10-07 18:00  0        0            3      0     0      0              —
+s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
+sess-lon  p1       2026-10-08 03:00  1        1            0      0     0      0              —
+sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              —
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

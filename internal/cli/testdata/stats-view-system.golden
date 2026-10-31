@@ -1,0 +1,27 @@
+Is the service up? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Flowing
+Waiting on this PC                           0                        (ok)
+Memory server answering                      yes                      (ok, no change vs previous)
+Health checks                                1 failed                 (watch)
+  1 failed, 1 with a warning
+Background jobs                              —                        (no data: nothing recorded yet)
+
+Background jobs
+none
+
+Health checks
+Check   Status  Fix
+config  ok
+server  ok
+backup  warn    backsight backup create
+bank    error   backsight doctor
+
+System
+Memory server   version 1.1.0, running in docker, mode local
+Reach           no answer recorded yet
+Backup          none yet
+Updates         none newer (never checked)
+Activity index  ingested 2026-10-08 14:00, 0 s behind
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

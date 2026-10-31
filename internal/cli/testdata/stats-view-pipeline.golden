@@ -1,0 +1,30 @@
+Is it flowing? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Flowing
+Sessions sent                                1 of 1                   (n=1, ok)
+  sent 1, failed 0, set aside after an error 0, waiting 0
+Sends by result                              1                        (ok, +1 vs previous)
+Waiting on this PC                           0                        (ok)
+Waiting on the server                        0                        (ok)
+  waiting 0, running 0, failed in the last 7 days 0, failed in all 0
+Time to turn a session into memories         —                        (too few)
+Steps that crashed                           0                        (ok, no change vs previous)
+Memory server answering                      yes                      (ok, no change vs previous)
+Health checks                                1 failed                 (watch)
+  1 failed, 1 with a warning
+Background jobs                              —                        (no data: nothing recorded yet)
+
+Server tasks that failed
+none
+
+Background jobs
+none
+
+Health checks
+Check   Status  Fix
+config  ok
+server  ok
+backup  warn    backsight backup create
+bank    error   backsight doctor
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

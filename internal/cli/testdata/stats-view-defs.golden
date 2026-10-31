@@ -1,0 +1,44 @@
+What does each number mean? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Metrics
+Id                       What it is                                  Unit    Needs n  n now  Smallest change
+recall.hit_rate          Prompts that got memory                     rate    20       5      —
+recall.empty_reasons     Why prompts got nothing                     count   0        0      —
+recall.by_lang           Prompts that got memory, by language        rate    20       5      —
+search.rate              Prompts where Claude searched memory        rate    20       5      —
+search.empty_rate        Searches that found nothing                 rate    20       0      —
+used.turn_rate           Turns where Claude used memory              rate    20       0      —
+declare.coverage         Turns where Claude said what it used        rate    20       0      —
+used.rubber_stamp        Turns where every memory was marked used    rate    30       0      —
+used.share_confident     Confidently ranked memories that were used  rate    20       0      —
+used.rank                Position of the memories used               count   20       0      —
+used.by_path             Used, by where memory was shown             rate    20       0      —
+search.rescue_rate       Memories Claude found itself                rate    20       0      —
+verdict.wrong_rate       Memories reported wrong or out of date      rate    20       0      —
+stale.never_used         Often shown, never used                     count   0        0      —
+stale.hidden             Hidden                                      count   0        0      —
+stale.reported           Reported wrong                              count   0        0      —
+context.per_session      Context added per session                   chars   100      0      —
+context.per_prompt       Context added per prompt that got memory    chars   20       0      —
+recall.latency           Time memory adds to a prompt                time    100      0      —
+search.latency           Time of a memory search                     time    100      0      —
+extraction.tokens        What the server's model spent               tokens  0        0      —
+extraction.cost          What the server's model spent               money   0        0      —
+extraction.per_session   Extraction per session sent                 tokens  0        0      —
+bank.size                Memories                                    count   0        0      —
+bank.growth              New memories per day                        count   0        0      —
+bank.by_project          Memories per project                        count   0        0      —
+bank.consolidation       Summaries waiting                           count   0        0      —
+bank.churn               Retired, hidden, restored                   count   0        0      —
+notes.stored             Facts stored                                count   0        0      —
+pipeline.flow            Sessions sent                               rate    0        1      too few to tell
+retain.outcomes          Sends by result                             count   0        0      —
+local.backlog            Waiting on this PC                          count   0        0      —
+server.queue             Waiting on the server                       count   0        0      —
+server.extraction_delay  Time to turn a session into memories        time    100      0      —
+hooks.failures           Steps that crashed                          count   0        0      —
+server.reach             Memory server answering                     count   0        0      —
+doctor.check             Health checks                               count   0        0      —
+jobs.last_run            Background jobs                             time    0        0      —
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

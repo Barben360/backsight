@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -88,7 +87,7 @@ func usage(format string, args ...any) error {
 	return &output.Error{Code: output.Usage, Message: fmt.Sprintf(format, args...)}
 }
 
-// newStatsViewCmd is `stats <view>`: the view as JSON, or its data indented.
+// newStatsViewCmd is `stats <view>`: the view as JSON, or as plain text.
 func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 	use, short, args := view, "", cobra.PositionalArgs(cobra.NoArgs)
 	switch view {
@@ -147,10 +146,7 @@ func newStatsViewCmd(e *env, view string, f *viewFlags) *cobra.Command {
 			if err != nil {
 				return viewError(err)
 			}
-			return e.emit("stats "+view, res, func() string {
-				b, _ := json.MarshalIndent(res, "", "  ") // until the text rendering
-				return string(b) + "\n"
-			})
+			return e.emit("stats "+view, res, func() string { return viewText(res, f.dev) })
 		},
 	}
 	switch view {
