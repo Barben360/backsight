@@ -313,29 +313,22 @@ func (t *tokens) add(b hindsight.LLMBucket) {
 	t.output += b.Output + b.Thoughts
 }
 
-// bucketWidth is the width of the server's buckets: the smallest gap
-// between two of them, a day when there is one bucket or none (the server
-// answers hourly for 1d, daily otherwise).
-func bucketWidth(bs []hindsight.LLMBucket) time.Duration {
-	width := day
-	for i, a := range bs {
-		for _, b := range bs[i+1:] {
-			if g := b.Time.Sub(a.Time).Abs(); g > 0 && g < width {
-				width = g
-			}
-		}
+// llmBucketWidth is the width of the server's LLM buckets for a period:
+// hourly for 1d, daily for 7d and 30d.
+func llmBucketWidth(period string) time.Duration {
+	if period == "1d" {
+		return time.Hour
 	}
-	return width
+	return day
 }
 
 // inWindow sums the buckets that overlap [since, until), in total and by
-// bucket of buckets, and counts the distinct local days they cover. A
+// bucket of buckets (width wide, from the period asked), and counts the distinct local days they cover. A
 // bucket straddling the start is kept whole, as extractionOver keeps whole
 // UTC days, so the dashboard and `backsight stats` agree on one window.
-func inWindow(bs []hindsight.LLMBucket, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
+func inWindow(bs []hindsight.LLMBucket, width time.Duration, since, until time.Time, loc *time.Location, buckets []Bucket) (total tokens, byDay []tokens, covered int) {
 	byDay = make([]tokens, len(buckets))
 	seen := map[string]bool{}
-	width := bucketWidth(bs)
 	for _, b := range bs {
 		if !b.Time.Add(width).After(since) || !b.Time.Before(until) {
 			continue
@@ -395,6 +388,7 @@ func byOperation(named map[string]tokens, total tokens, p retain.Prices, withOth
 		other.cached -= t.cached
 		other.output -= t.output
 	}
+	other.input, other.cached, other.output = max(0, other.input), max(0, other.cached), max(0, other.output)
 	if withOther { // with an operation unread, the rest is not "other"
 		out["other"] = entry(other)
 	}
@@ -413,15 +407,17 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 		}
 	}
 	buckets := w.Buckets()
+	width := llmBucketWidth(llmPeriod(viewSpan(e.now, w)))
 	all, reason := llmRead(e, "llm:")
 	if reason != "" {
 		fail(reason)
 		return
 	}
-	total, byDay, covered := inWindow(all, w.Since, w.Until, w.Loc, buckets)
-	// An operation that cannot be read (its name is unconfirmed) does not
-	// blank the total: the operations that answered are shown, the metric
-	// is tagged partial and the failed reads are counted.
+	total, byDay, covered := inWindow(all, width, w.Since, w.Until, w.Loc, buckets)
+	// The total has its own read. An operation that cannot be read (its
+	// name is unconfirmed) only shrinks by_operation, even when every
+	// operation fails: the metric is tagged partial and the failed reads
+	// are counted.
 	named := map[string]tokens{}
 	failedOps := 0
 	for _, op := range extractionOps {
@@ -430,7 +426,7 @@ func costExtraction(e env, w Window, obs map[string]Observation, met map[string]
 			failedOps++
 			continue
 		}
-		named[op], _, _ = inWindow(bs, w.Since, w.Until, w.Loc, buckets)
+		named[op], _, _ = inWindow(bs, width, w.Since, w.Until, w.Loc, buckets)
 	}
 	if covered == 0 { // the server holds nothing for the window
 		fail(ReasonNoEvents)
@@ -485,7 +481,7 @@ func costPerSession(e env, w Window, obs map[string]Observation, met map[string]
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	total, _, covered := inWindow(bs, since, until, w.Loc, nil)
+	total, _, covered := inWindow(bs, day, since, until, w.Loc, nil)
 	m := Metric{Extra: map[string]any{"sessions_sent": sent, "window_days": 28}}
 	if sent == 0 || covered == 0 { // no document, or nothing of the server in the 28 days: no 0
 		obs[id], met[id] = Observation{Absent: true, Reason: ReasonNoEvents}, m

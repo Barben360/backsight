@@ -109,6 +109,11 @@ func seriesPeriod(span time.Duration) string {
 	return "90d"
 }
 
+// viewSpan is the span the server's periods must cover for w, read at now.
+func viewSpan(now time.Time, w Window) time.Duration {
+	return max(w.Length(), now.Sub(w.Since)-time.Minute)
+}
+
 // llmPeriod is the shortest LLM-stats period covering span (30d at most).
 func llmPeriod(span time.Duration) string {
 	switch {
@@ -152,7 +157,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		return d, nil
 	}
 
-	span := max(w.Length(), src.now().Sub(w.Since)-time.Minute)
+	span := viewSpan(src.now(), w)
 	var (
 		kmu    sync.Mutex
 		closed bool

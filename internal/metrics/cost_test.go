@@ -278,7 +278,7 @@ func TestExtractionTokensAndCost(t *testing.T) {
 	m := costOf(x, x.query(7))
 	tk, cs := m["extraction.tokens"], m["extraction.cost"]
 	if val(tk) != 1_850_000 {
-		t.Errorf("tokens = %v, want 2,250,000 (the day outside the window dropped)", val(tk))
+		t.Errorf("tokens = %v, want 1,850,000 (the day outside the window dropped)", val(tk))
 	}
 	for k, want := range map[string]int64{"input": 1_500_000, "cached": 400_000, "output": 350_000} {
 		if tk.Extra[k] != want {
@@ -573,5 +573,78 @@ func TestContextWatchBoundary(t *testing.T) {
 		if val(m) != float64(chars) || m.Status != want {
 			t.Errorf("p95 %v status %s, want %d %s", val(m), m.Status, chars, want)
 		}
+	}
+}
+
+// TestExtractionBucketWidthFromPeriod: the width comes from the period
+// asked, not from the gaps. On a 1-day view (hourly buckets, window from
+// 10-29T11:00Z) a lone bucket at 10:00Z ends at 11:00Z, outside the window;
+// a lone one at 11:00Z is inside.
+func TestExtractionBucketWidthFromPeriod(t *testing.T) {
+	for name, c := range map[string]struct {
+		at   time.Time
+		want string
+	}{
+		"hour ending at the start": {time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC), ReasonNoEvents},
+		"hour inside":              {time.Date(2026, 10, 29, 11, 0, 0, 0, time.UTC), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := costFx(t)
+			x.server.set(func(d *fakeData) { d.LLM = map[string][]hindsight.LLMBucket{"": {{Time: c.at, Input: 7}}} })
+			m := costOf(x, x.query(1))["extraction.tokens"]
+			if c.want != "" && (m.Status != StatusNoData || m.Reason != c.want) {
+				t.Errorf("%s/%s, want no_data/%s", m.Status, m.Reason, c.want)
+			}
+			if c.want == "" && val(m) != 7 {
+				t.Errorf("tokens %v, want 7", val(m))
+			}
+		})
+	}
+}
+
+// TestExtractionSparseOperation: the total has buckets 10-23 (200, straddling
+// the window start) and 10-28 (400); consolidation only 10-23 (100). Both
+// keep the edge bucket: other = 600 - 100 = 500. An operation bigger than
+// the total (1,000 > 600) leaves other at 0, never negative.
+func TestExtractionSparseOperation(t *testing.T) {
+	for name, c := range map[string]struct{ op, other int64 }{"sparse": {100, 500}, "bigger than total": {1000, 0}} {
+		t.Run(name, func(t *testing.T) {
+			x := costFx(t)
+			x.server.set(func(d *fakeData) {
+				d.LLM = map[string][]hindsight.LLMBucket{
+					"":              {{Time: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC), Input: 200}, {Time: time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC), Input: 400}},
+					"consolidation": {{Time: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC), Input: c.op}},
+				}
+			})
+			ops := costOf(x, x.query(7))["extraction.tokens"].Extra["by_operation"].(map[string]any)
+			if got := ops["consolidation"].(map[string]any)["input"]; got != c.op {
+				t.Errorf("consolidation input = %v, want %d", got, c.op)
+			}
+			if got := ops["other"].(map[string]any)["input"]; got != c.other {
+				t.Errorf("other input = %v, want %d", got, c.other)
+			}
+		})
+	}
+}
+
+// TestExtractionEveryOperationFails: the 3 operation reads fail, the total
+// is kept: no_data only when the total's own read fails.
+func TestExtractionEveryOperationFails(t *testing.T) {
+	x := costFx(t)
+	extractionServer(x)
+	for _, op := range extractionOps {
+		x.server.fail("LLMStats:"+op, &hindsight.APIError{Kind: hindsight.NotFound, Status: 404})
+	}
+	for _, id := range []string{"extraction.tokens", "extraction.cost"} {
+		m := costOf(x, x.query(7))[id]
+		if m.Status == StatusNoData || !slices.Contains(m.Tags, tagPartial) || m.Extra["failed_operations"] != 3 {
+			t.Errorf("%s: %s tags %v extra %v, want kept, partial, 3 failed", id, m.Status, m.Tags, m.Extra)
+		}
+		if ops := m.Extra["by_operation"].(map[string]any); len(ops) != 0 {
+			t.Errorf("%s by_operation = %v, want empty", id, ops)
+		}
+	}
+	if v := val(costOf(x, x.query(7))["extraction.tokens"]); v != 1_850_000 {
+		t.Errorf("tokens = %v, want 1,850,000", v)
 	}
 }
