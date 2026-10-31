@@ -49,6 +49,6 @@ func (d mcpDeps) journalRecall(live session.Live, found string, res recall.Resul
 	}
 	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version})
 	if err := j.Append(e); err != nil {
-		d.tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+		d.tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonJournalWrite))
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 func notesOutbox(d paths.Dirs) retain.Outbox { return retain.NotesOutbox(d) }
@@ -38,6 +40,22 @@ type storeResult struct {
 	Project  string `json:"project"`
 	Kind     string `json:"kind"`
 	Warning  string `json:"warning,omitempty"`
+}
+
+// storeEvent is the telemetry of one store call: refused when nothing was
+// queued or the server quarantined the note, updated when the note replaces
+// memories, else saved. The kind is kept only when it is a real note kind.
+func storeEvent(kind string, res storeResult, replaces bool) telemetry.Store {
+	if _, ok := retain.Kinds[kind]; !ok {
+		kind = ""
+	}
+	switch {
+	case res.Document == "" || res.Status == "rejected":
+		return telemetry.Store{Result: "refused", Kind: kind}
+	case replaces:
+		return telemetry.Store{Result: "updated", Kind: kind}
+	}
+	return telemetry.Store{Result: "saved", Kind: kind}
 }
 
 func kindList() string {
@@ -66,7 +84,9 @@ func newStoreCmd(e *env) *cobra.Command {
 				return err
 			}
 			cwd, _ := os.Getwd()
-			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, os.Getenv("BACKSIGHT_SESSION"), cwd, kind, proj, strings.Join(args, " "))
+			sid := os.Getenv("BACKSIGHT_SESSION")
+			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, sid, cwd, kind, proj, strings.Join(args, " "))
+			telemetry.New(d.State, telemetry.Common{Session: sid, BinaryVersion: buildinfo.Version}).Emit(storeEvent(kind, res, false))
 			if res.Document == "" {
 				return failed // refused before anything was queued
 			}

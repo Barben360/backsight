@@ -61,9 +61,10 @@ func (h *hookEnv) feedbackOn() bool {
 }
 
 // feedbackError logs a journal or turn pointer write that failed.
-func (h *hookEnv) feedbackError(err error) {
+// It carries a reason, never the error text.
+func (h *hookEnv) feedbackError(reason string, err error) {
 	if err != nil {
-		h.tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+		h.tw.Emit(telemetry.FeedbackError(reason))
 	}
 }
 
@@ -89,7 +90,7 @@ func (h *hookEnv) turnID() string {
 // setTurn records t as the session's current turn.
 func (h *hookEnv) setTurn(t feedback.Turn) {
 	h.turn, h.turnSet = t.ID, true
-	h.feedbackError(feedback.SetTurn(h.dirs.FeedbackDir(), h.in.SessionID, t))
+	h.feedbackError(telemetry.FeedbackReasonTurnPointer, feedback.SetTurn(h.dirs.FeedbackDir(), h.in.SessionID, t))
 }
 
 // startSessionTurn is a started, resumed or cleared session's pointer: no
@@ -142,7 +143,7 @@ func (h *hookEnv) beginTurn(n int, machine bool) {
 	}
 	h.setTurn(feedback.Turn{ID: id, N: n, At: now(), Machine: machine, File: file, Offset: offset, Since: sessionSince(prev, had, file)})
 	if h.feedbackOn() {
-		h.feedbackError(h.journal.Append(feedback.Event{Kind: "turn", Turn: id, N: n, Machine: machine}))
+		h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "turn", Turn: id, N: n, Machine: machine}))
 	}
 }
 
@@ -172,7 +173,7 @@ func (h *hookEnv) journalShows(path string, items []feedback.Item, flags ...stri
 	if !h.feedbackOn() || len(items) == 0 {
 		return
 	}
-	h.feedbackError(h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items, Flags: flags}))
+	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "shows", Turn: h.turnID(), Agent: h.in.AgentID, Path: path, Items: items, Flags: flags}))
 }
 
 // itemsFromHits ranks hits from 1 in the order shown, each with its boost,
@@ -390,7 +391,7 @@ func (h *hookEnv) journalCredit(text string) {
 			return // a credit naming nothing shown credits nothing
 		}
 	}
-	h.feedbackError(h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, IDs: ids, Verdict: verdict}))
+	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "credit", Turn: h.turnID(), Agent: h.in.AgentID, IDs: ids, Verdict: verdict}))
 }
 
 // sourceLineRE: a fact line of a Sources answer, whole: its project and

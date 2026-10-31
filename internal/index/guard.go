@@ -54,7 +54,7 @@ var (
 	retainStatuses  = []string{"ok", "queued", "quarantined", "failed", "retry"}
 	failureKinds    = []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"}
 	jobStatuses     = []string{"done", "skipped", "partial", "failed", "started"}
-	feedbackReasons = []string{} // block 2 brings the enum; until then every value is other
+	feedbackReasons = []string{"journal_write", "turn_pointer", "settle", "shared_combine"}
 	storeResults    = []string{"saved", "updated", "refused"}
 	dashActions     = []string{"start", "stop"}
 	verdicts        = []string{"used", "none", "wrong", "outdated", "invalid"}
