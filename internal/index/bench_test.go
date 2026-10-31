@@ -29,7 +29,10 @@ func benchOptions(t testing.TB, stateDir string) Options {
 }
 
 // firstBuild opens a new index over stateDir and ingests everything, with
-// no deadline; it returns the time that took, with the index left open.
+// no deadline, then checkpoints the WAL into the file (the jobs tick's
+// TRUNCATE checkpoint, or the close, would flush it otherwise: up to
+// 256 MiB on Windows); it returns the time that took, with the index left
+// open.
 func firstBuild(t testing.TB, stateDir string) (*Index, time.Duration) {
 	t.Helper()
 	start := time.Now()
@@ -43,6 +46,9 @@ func firstBuild(t testing.TB, stateDir string) (*Index, time.Duration) {
 	}
 	if fr.Partial {
 		t.Fatal("the first build is partial")
+	}
+	if err := ix.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	return ix, time.Since(start)
 }

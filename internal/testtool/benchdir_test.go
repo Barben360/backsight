@@ -33,7 +33,12 @@ func TestBenchTempDirUsesTheBenchDisk(t *testing.T) {
 		}
 	}
 	t.Setenv(BenchDirEnv, "")
-	if d := BenchTempDir(t); strings.HasPrefix(d, root) {
+	d := BenchTempDir(t)
+	if strings.HasPrefix(d, root) {
 		t.Errorf("unset, %s is still under %s", d, root)
+	}
+	// t.TempDir's directories share one parent per test.
+	if want := filepath.Dir(t.TempDir()); filepath.Dir(d) != want {
+		t.Errorf("unset, %s is not a test temp directory (under %s)", d, want)
 	}
 }
