@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,9 @@ func TestServerStopNamesTheTaskOnWindows(t *testing.T) {
 
 // Fix round 1 (Task 11): server stop on Windows marks the server stopped
 // on purpose, so that the SessionStart fallback leaves it down; its plan
-// marks nothing, nor does a stop on Linux.
+// marks nothing, nor does a stop on Linux. Windows' half runs on a Windows
+// host only: elsewhere its layout is no real path (TestStoppedOnPurpose
+// covers the marker on any host).
 func TestServerStopMarksTheServerStopped(t *testing.T) {
 	home := devInstall(t, true)
 	d := pathsOf(home)
@@ -85,17 +88,19 @@ func TestServerStopMarksTheServerStopped(t *testing.T) {
 		}
 		return n
 	}
-	nativeOn(t, home, "windows")
-	n := native()
-	if _, out, _ := run(t, "server", "stop", "--plan"); n.Stopped() {
-		t.Errorf("the plan marked the server stopped:\n%s", out)
-	}
-	if code, out, errOut := run(t, "server", "stop"); code != output.OK || !n.Stopped() {
-		t.Errorf("stop: exit %d, marker %v\n%s%s", code, n.Stopped(), out, errOut)
+	if runtime.GOOS == "windows" {
+		nativeOn(t, home, "windows")
+		n := native()
+		if _, out, _ := run(t, "server", "stop", "--plan"); n.Stopped() {
+			t.Errorf("the plan marked the server stopped:\n%s", out)
+		}
+		if code, out, errOut := run(t, "server", "stop"); code != output.OK || !n.Stopped() {
+			t.Errorf("stop: exit %d, marker %v\n%s%s", code, n.Stopped(), out, errOut)
+		}
+		_ = os.Remove(n.StoppedFile())
 	}
 	nativeOn(t, home, "linux")
-	n = native()
-	_ = os.Remove(n.StoppedFile()) // the same path on a Windows host
+	n := native()
 	if code, out, errOut := run(t, "server", "stop"); code != output.OK || exists(n.StoppedFile()) {
 		t.Errorf("linux stop: exit %d, marker %v\n%s%s", code, exists(n.StoppedFile()), out, errOut)
 	}
