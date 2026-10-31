@@ -25,11 +25,17 @@ type serverData struct {
 	Pending, Processing int
 	Failed              []hindsight.Operation
 	Completed           []hindsight.Operation
-	LLM                 map[string][]hindsight.LLMBucket // key: operation ("" = all)
+	LLM                 map[string][]hindsight.LLMBucket // key: operation ("" = all), over the window's period
+	LLM30               []hindsight.LLMBucket            // all operations over 30d whatever the window (llm30d:)
 	Doctor              []DoctorCheck
 	DoctorErr           error
 	Err                 map[string]error
 }
+
+// llm30dKey is the server read of the LLM stats over 30 days, all
+// operations, whatever the view's window (extraction.per_session needs 28
+// days of them under a 7-day view).
+const llm30dKey = "llm30d:"
 
 // Paging of the operation reads, opsPage operations a page: the failed
 // operations up to failedPages pages, the completed retains up to
@@ -164,6 +170,7 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		return nil
 	}
 	llm := map[string]*[]hindsight.LLMBucket{}
+	var llm30 []hindsight.LLMBucket
 	calls := map[string]func(context.Context) error{}
 	s := src.Server
 	for _, key := range keys {
@@ -214,6 +221,11 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 				v, err := operations(ctx, s, "completed", "retain", completedPages)
 				return keep(err, func() { d.Completed = v })
 			}
+		case llm30dKey:
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.LLMStats(ctx, "30d", "")
+				return keep(err, func() { llm30 = v })
+			}
 		default:
 			op, ok := strings.CutPrefix(key, "llm:")
 			if !ok {
@@ -233,6 +245,9 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	}
 	kmu.Lock()
 	closed = true
+	if _, asked := calls[llm30dKey]; asked && d.Err[llm30dKey] == nil {
+		d.LLM30 = llm30
+	}
 	kmu.Unlock()
 	for op, slot := range llm {
 		if d.Err["llm:"+op] == nil {
