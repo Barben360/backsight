@@ -73,6 +73,18 @@ func TestFetchParallelOverlaps(t *testing.T) {
 	if len(errs) != 1 || !errors.Is(errs["slow"], context.DeadlineExceeded) {
 		t.Fatalf("errors = %v, want only slow: deadline exceeded", errs)
 	}
+
+	// A call that ignores its context is abandoned at its timeout.
+	hang := make(chan struct{})
+	defer close(hang)
+	deaf := func(context.Context) error { <-hang; return nil }
+	errs = fetchParallel(guard, 10*time.Millisecond, map[string]func(context.Context) error{"a": ok, "deaf": deaf})
+	if guard.Err() != nil {
+		t.Fatal("the guard context ended: a call ignoring its context held fetchParallel")
+	}
+	if len(errs) != 1 || !errors.Is(errs["deaf"], context.DeadlineExceeded) {
+		t.Fatalf("errors = %v, want only deaf: deadline exceeded", errs)
+	}
 }
 
 func TestServerErrorEnums(t *testing.T) {
@@ -145,8 +157,8 @@ func TestServerFaultsThroughTheClient(t *testing.T) {
 func stateOf(t *testing.T, x *fx, need []string) *ServerState {
 	t.Helper()
 	var st *ServerState
-	if err := withTx(context.Background(), x.source(), need, x.window(7), func(e env) error {
-		st = e.srv.State
+	if err := withTx(context.Background(), x.source(), x.query(7), need, func(e env) error {
+		st = e.server
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -170,8 +182,8 @@ func TestServerStateWhenAllFail(t *testing.T) {
 	}
 
 	x.server.fail("Version", nil)
-	if st := stateOf(t, x, fxNeed); st == nil || !st.OK || st.Error != "unreachable" {
-		t.Fatalf("one read succeeding: state %+v, want OK true (Error the first failure, unreachable)", st)
+	if st := stateOf(t, x, fxNeed); st == nil || !st.OK || st.Error != "" {
+		t.Fatalf("one read succeeding: state %+v, want OK true and no error (a partial failure shows in its metrics)", st)
 	}
 
 	// Error is the first failure in key order (completed < failed < ... <
@@ -190,7 +202,7 @@ func TestServerStateWhenAllFail(t *testing.T) {
 	}
 	// Without a server, every read is not configured; the doctor still runs.
 	var d *serverData
-	if err := withTx(context.Background(), y.source(), fxNeed, y.window(7), func(e env) error { d = e.srv; return nil }); err != nil {
+	if err := withTx(context.Background(), y.source(), y.query(7), fxNeed, func(e env) error { d = e.srv; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range fxNeed {
@@ -323,18 +335,58 @@ func TestPeriodsCoverTheWindow(t *testing.T) {
 			t.Errorf("%s: series %s, llm %s; want %s, %s", c.span, s, l, c.series, c.llm)
 		}
 	}
-	// The span runs from the window's start to now: a 7-day window ending
-	// 10 days ago needs 17 days of series.
+	// The period follows the window's length, not the clock: the clock
+	// moving on after the window was built keeps a 7-day window on 7d.
 	x := newFx(t, fxNow)
-	w, err := NewWindow(fxNow, 0, fxNow.Add(-17*day), fxNow.Add(-10*day), fxParis, "Europe/Paris")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, st := loadServer(context.Background(), x.source(), w, []string{"series"}); st == nil || !st.OK {
+	src := x.source()
+	w := x.window(7)
+	src.Now = func() time.Time { return fxNow.Add(time.Minute) }
+	if _, st := loadServer(context.Background(), src, w, []string{"series", "llm:"}); st == nil || !st.OK {
 		t.Fatalf("state %+v", st)
 	}
-	if c := x.server.called(); len(c) != 1 || !strings.Contains(c[0], "period=30d") {
-		t.Fatalf("calls %v, want one series read over 30d", c)
+	c := x.server.called()
+	sort.Strings(c)
+	if want := []string{"LLMStats?period=7d", "MemoriesTimeseries?period=7d&time_field=created_at"}; !reflect.DeepEqual(c, want) {
+		t.Fatalf("calls %v, want %v", c, want)
+	}
+}
+
+// deafServer's BankStats ignores its context until hang closes.
+type deafServer struct {
+	*fakeServer
+	hang, returned chan struct{}
+}
+
+func (s deafServer) BankStats(context.Context) (hindsight.BankStats, error) {
+	<-s.hang
+	defer close(s.returned)
+	return hindsight.BankStats{TotalNodes: 99}, nil
+}
+
+func (s deafServer) ProjectTags(context.Context) ([]hindsight.TagCount, error) {
+	return []hindsight.TagCount{{Tag: "project:alpha", Count: 1}}, nil
+}
+
+// TestLoadServerAbandonsADeafRead: a ServerReader that ignores its
+// context cannot hold the view: its read times out, the others are kept,
+// and its late answer is dropped.
+func TestLoadServerAbandonsADeafRead(t *testing.T) {
+	lowerTimeouts(t, 10*time.Millisecond, time.Minute)
+	x := newFx(t, fxNow)
+	src := x.source()
+	deaf := deafServer{fakeServer: x.server, hang: make(chan struct{}), returned: make(chan struct{})}
+	src.Server = deaf
+	d, st := loadServer(context.Background(), src, x.window(7), []string{"stats", "tags"})
+	if enum, _ := serverError(d.Err["stats"]); enum != "timeout" || d.Err["tags"] != nil || len(d.Tags) != 1 {
+		t.Fatalf("stats %v, tags %v %v; want stats timeout and the tags", d.Err["stats"], d.Err["tags"], d.Tags)
+	}
+	if st == nil || !st.OK || st.Error != "" {
+		t.Fatalf("state %+v, want OK", st)
+	}
+	close(deaf.hang)
+	<-deaf.returned
+	if d.Stats.TotalNodes != 0 {
+		t.Fatalf("the late answer was kept: %d nodes", d.Stats.TotalNodes)
 	}
 }
 
@@ -358,7 +410,7 @@ func TestDoctorRun(t *testing.T) {
 
 	// A run that ignores its context is abandoned at doctorTimeout; the
 	// server reads are not held back.
-	doctorTimeout = 10 * time.Millisecond
+	lowerTimeouts(t, time.Minute, 10*time.Millisecond)
 	hang := make(chan struct{})
 	defer close(hang)
 	src.Doctor = func(context.Context) ([]DoctorCheck, error) { <-hang; return checks, nil }
@@ -390,7 +442,20 @@ func TestFixtureTelIsTheWritersLine(t *testing.T) {
 		t.Fatalf("writer files %v, fixture lines %d", files, len(ours))
 	}
 	theirs := readLines(t, files[0])
+	// Both ts read back exactly in one layout (UTC, milliseconds), and each
+	// line is in the file of its ts's month.
+	const layout = "2006-01-02T15:04:05.000Z"
 	for i := range ours {
+		for who, line := range map[string]map[string]any{"fixture": ours[i], "writer": theirs[i]} {
+			s, _ := line["ts"].(string)
+			at, err := time.Parse(layout, s)
+			if err != nil || at.Format(layout) != s {
+				t.Errorf("%s line %d ts %q is not in the layout %s", who, i, s, layout)
+			}
+			if who == "writer" && filepath.Base(files[0]) != "events-"+at.Format("2006-01")+".jsonl" {
+				t.Errorf("writer line %d at %s is in %s", i, s, filepath.Base(files[0]))
+			}
+		}
 		if ours[i]["ts"] != "2026-09-30T23:30:00.123Z" {
 			t.Errorf("line %d ts = %v", i, ours[i]["ts"])
 		}

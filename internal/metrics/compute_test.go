@@ -81,7 +81,7 @@ func TestComputeOneTransaction(t *testing.T) {
 	w7, w28 := x.window(7), x.window(28)
 	ids := []string{"recall.hit_rate", "recall.empty_reasons", "bank.size"}
 	var m7, m28 map[string]Metric
-	err := withTx(context.Background(), src, nil, w7, func(e env) error {
+	err := withTx(context.Background(), src, Query{Window: w7}, nil, func(e env) error {
 		var err error
 		if m7, err = reg.compute(e, w7, ids); err != nil {
 			return err
@@ -176,7 +176,7 @@ func TestComputeFillsEveryMetric(t *testing.T) {
 				"recall.latency":   {Den: 150, P95: fp(1200)},
 				"bank.size":        {Den: 0},
 			},
-			prev: {"declare.coverage": {Num: 1, Den: 2}, "recall.latency": {}, "bank.size": {}},
+			prev: {"declare.coverage": {Num: 1, Den: 2}, "recall.latency": {Den: 120}, "bank.size": {}},
 		},
 		met: map[time.Time]map[string]Metric{
 			w.Since: {
@@ -190,9 +190,12 @@ func TestComputeFillsEveryMetric(t *testing.T) {
 	reg := &registry{byID: map[string]*family{}}
 	reg.register("mixed", []string{"declare.coverage", "recall.latency", "bank.size"}, fam.run)
 
+	// The project filter of the query reaches the families and the tags.
 	var got map[string]Metric
-	err := withTx(context.Background(), x.source(), nil, w, func(e env) error {
-		e.q.Project = "alpha"
+	err := withTx(context.Background(), x.source(), Query{Window: w, Project: "alpha"}, nil, func(e env) error {
+		if e.q.Project != "alpha" || e.q.Window != w {
+			t.Errorf("env query %+v, want the window and project alpha", e.q)
+		}
 		var err error
 		got, err = reg.compute(e, w, []string{"declare.coverage", "recall.latency", "bank.size"})
 		return err
@@ -224,7 +227,7 @@ func TestComputeRefuses(t *testing.T) {
 	src := x.source()
 	w := x.window(7)
 	run := func(reg *registry, ids []string) error {
-		return withTx(context.Background(), src, nil, w, func(e env) error {
+		return withTx(context.Background(), src, Query{Window: w}, nil, func(e env) error {
 			_, err := reg.compute(e, w, ids)
 			return err
 		})
@@ -245,7 +248,7 @@ func TestComputeRefuses(t *testing.T) {
 	if err := run(reg, []string{"bank.growth"}); err == nil || !strings.Contains(err.Error(), "bank.growth") {
 		t.Errorf("an id the family did not compute: %v", err)
 	}
-	if err := withTx(context.Background(), Source{}, nil, w, func(env) error { return nil }); !errors.Is(err, errNoIndex) {
+	if err := withTx(context.Background(), Source{}, Query{Window: w}, nil, func(env) error { return nil }); !errors.Is(err, errNoIndex) {
 		t.Errorf("no index: %v", err)
 	}
 }
@@ -297,7 +300,62 @@ func TestFixtureMetrics(t *testing.T) {
 
 	lowerTimeouts(t, 10*time.Millisecond, time.Minute)
 	x.server.block("BankStats")
-	if bs := x.metrics([]string{"bank.size"}, x.query(7))["bank.size"]; bs.Status != StatusNoData || bs.Reason != ReasonServerDown {
+	if bs := x.metrics([]string{"bank.size"}, x.query(28))["bank.size"]; bs.Status != StatusNoData || bs.Reason != ReasonServerDown {
 		t.Errorf("stats blocked: bank.size %s %s, want no_data server_down", bs.Status, bs.Reason)
+	}
+}
+
+// TestPreviousAndDeltaNeedMinN: the previous value shows only when the
+// previous window has min_n trials; the delta only when both windows do.
+func TestPreviousAndDeltaNeedMinN(t *testing.T) {
+	x := newFx(t, fxNow)
+	src := x.source()
+	w := x.window(7)
+	prev := w.Previous().Since
+	for _, c := range []struct {
+		name               string
+		id                 string
+		cur, old           Observation
+		noOld              bool // the family computes nothing for the previous window
+		wantPrev, wantDelt bool
+	}{
+		{name: "both at min_n", id: "recall.hit_rate", cur: Observation{Num: 5, Den: 20}, old: Observation{Num: 4, Den: 20}, wantPrev: true, wantDelt: true},
+		{name: "previous under min_n", id: "recall.hit_rate", cur: Observation{Num: 5, Den: 20}, old: Observation{Num: 4, Den: 19}},
+		{name: "current under min_n", id: "recall.hit_rate", cur: Observation{Num: 5, Den: 19}, old: Observation{Num: 4, Den: 20}, wantPrev: true},
+		{name: "both under min_n", id: "recall.hit_rate", cur: Observation{Num: 5, Den: 19}, old: Observation{Num: 4, Den: 19}},
+		{name: "previous absent", id: "recall.hit_rate", cur: Observation{Num: 5, Den: 20}, old: Observation{Absent: true, Den: 40}},
+		{name: "previous not computed", id: "recall.hit_rate", cur: Observation{Num: 5, Den: 20}, noOld: true},
+		{name: "min_n 0, previous computed", id: "bank.size", cur: Observation{}, old: Observation{}, wantPrev: true, wantDelt: true},
+		{name: "min_n 0, previous not computed", id: "bank.size", cur: Observation{}, noOld: true},
+		{name: "percentile n at 100", id: "recall.latency", cur: Observation{Den: 100, P95: fp(800)}, old: Observation{Den: 100}, wantPrev: true, wantDelt: true},
+		{name: "percentile previous n 99", id: "recall.latency", cur: Observation{Den: 100, P95: fp(800)}, old: Observation{Den: 99}},
+		{name: "percentile current n 99", id: "recall.latency", cur: Observation{Den: 99, P95: fp(800)}, old: Observation{Den: 100}, wantPrev: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			oldObs := map[string]Observation{c.id: c.old}
+			if c.noOld {
+				oldObs = map[string]Observation{}
+			}
+			fam := &fixedFamily{
+				obs: map[time.Time]map[string]Observation{w.Since: {c.id: c.cur}, prev: oldObs, {}: {}},
+				met: map[time.Time]map[string]Metric{w.Since: {c.id: {Value: fp(0.25)}}, prev: {c.id: {Value: fp(0.2)}}},
+			}
+			reg := &registry{byID: map[string]*family{}}
+			reg.register("one", []string{c.id}, fam.run)
+			var m Metric
+			if err := withTx(context.Background(), src, Query{Window: w}, nil, func(e env) error {
+				got, err := reg.compute(e, w, []string{c.id})
+				m = got[c.id]
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if (m.Previous != nil) != c.wantPrev || (m.Previous != nil && *m.Previous != 0.2) {
+				t.Errorf("previous = %v, want set %v (0.2)", m.Previous, c.wantPrev)
+			}
+			if (m.Delta != nil) != c.wantDelt || (m.Delta != nil && !same(*m.Delta, 0.05)) {
+				t.Errorf("delta = %v, want set %v (0.05)", m.Delta, c.wantDelt)
+			}
+		})
 	}
 }

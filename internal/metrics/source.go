@@ -10,7 +10,10 @@ import (
 	"github.com/Barben360/backsight/internal/index"
 )
 
-// ServerTimeout bounds each server read of a view; tests lower it.
+// ServerTimeout bounds each server read of a view, per endpoint key: the
+// pages of one key (the queue's two totals, the failed operations' pages)
+// share it, so a view waits at most this long for the server. Tests lower
+// it.
 var ServerTimeout = 3 * time.Second
 
 // doctorTimeout bounds the live doctor run of a view: past it the run is

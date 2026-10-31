@@ -226,8 +226,7 @@ func (x *fx) source() Source {
 func (x *fx) metrics(ids []string, q Query) map[string]Metric {
 	x.t.Helper()
 	var out map[string]Metric
-	err := withTx(context.Background(), x.source(), x.need, q.Window, func(e env) error {
-		e.q = q
+	err := withTx(context.Background(), x.source(), q, x.need, func(e env) error {
 		var err error
 		out, err = computeMetrics(e, q.Window, ids)
 		return err

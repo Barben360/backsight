@@ -16,9 +16,7 @@ import (
 // serverData is what one view needs from the server, fetched once, in
 // parallel, before the read transaction. Err holds the reads that failed,
 // by endpoint key (stats, series, tags, version, queue, failed, completed,
-// llm:<op>); a key absent from it was read or not asked for. State is the
-// server section of the view (nil when the view reads nothing from the
-// server); withTx sets its LastOK.
+// llm:<op>); a key absent from it was read or not asked for.
 type serverData struct {
 	Stats               hindsight.BankStats
 	Series              hindsight.Timeseries
@@ -31,7 +29,6 @@ type serverData struct {
 	Doctor              []DoctorCheck
 	DoctorErr           error
 	Err                 map[string]error
-	State               *ServerState
 }
 
 // Paging of the operation reads, opsPage operations a page: the failed
@@ -55,7 +52,9 @@ var errUnknownRead = errors.New("unknown server read")
 
 // fetchParallel runs every call at once, each under its own context
 // bounded by timeout, and returns the errors of those that failed, by key.
-// It waits for every call: a call must honour its context.
+// A call still running when its context ends is abandoned with that
+// context's error (a ServerReader that ignores its context cannot hold the
+// view): its results must not be used after fetchParallel returns.
 func fetchParallel(ctx context.Context, timeout time.Duration, calls map[string]func(context.Context) error) map[string]error {
 	var (
 		wg   sync.WaitGroup
@@ -68,7 +67,19 @@ func fetchParallel(ctx context.Context, timeout time.Duration, calls map[string]
 			defer wg.Done()
 			cctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			if err := call(cctx); err != nil {
+			done := make(chan error, 1) // an abandoned call still sends, to no one
+			go func() { done <- call(cctx) }()
+			var err error
+			select {
+			case err = <-done:
+			case <-cctx.Done():
+				select {
+				case err = <-done: // it ended as its context did
+				default:
+					err = cctx.Err()
+				}
+			}
+			if err != nil {
 				mu.Lock()
 				errs[key] = err
 				mu.Unlock()
@@ -105,11 +116,13 @@ func llmPeriod(span time.Duration) string {
 
 // loadServer reads what need names (endpoint keys, plus "doctor" for the
 // live doctor run), every read in parallel under ServerTimeout and the
-// doctor beside them under doctorTimeout. The periods cover the window
-// from its start to now. The state is nil when need names no server read;
-// without a server every read fails as not configured. The state's OK is
-// false when every read failed; its Error is the first failure's enum in
-// key order.
+// doctor beside them under doctorTimeout. The periods cover the window's
+// length (the clock is not read again: a window built a moment ago keeps
+// its period). The state is nil when need names no server read; without a
+// server every read fails as not configured. The state's OK is false when
+// every read failed, and then its Error is the first failure's enum in key
+// order; a partial failure shows only in its metrics' reasons. A read is
+// kept only when it ends in time: a late one is dropped.
 func loadServer(ctx context.Context, src Source, w Window, need []string) (*serverData, *ServerState) {
 	d := &serverData{LLM: map[string][]hindsight.LLMBucket{}, Err: map[string]error{}}
 	keys := slices.Clone(need)
@@ -132,7 +145,23 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		return d, nil
 	}
 
-	span := max(src.now().Sub(w.Since), 0)
+	span := w.Length()
+	var (
+		kmu    sync.Mutex
+		closed bool
+	)
+	// keep stores a read's result unless fetchParallel already gave up on it.
+	keep := func(err error, set func()) error {
+		if err != nil {
+			return err
+		}
+		kmu.Lock()
+		defer kmu.Unlock()
+		if !closed {
+			set()
+		}
+		return nil
+	}
 	llm := map[string]*[]hindsight.LLMBucket{}
 	calls := map[string]func(context.Context) error{}
 	s := src.Server
@@ -143,16 +172,25 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		}
 		switch key {
 		case "stats":
-			calls[key] = func(ctx context.Context) (err error) { d.Stats, err = s.BankStats(ctx); return err }
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.BankStats(ctx)
+				return keep(err, func() { d.Stats = v })
+			}
 		case "series":
-			calls[key] = func(ctx context.Context) (err error) {
-				d.Series, err = s.MemoriesTimeseries(ctx, seriesPeriod(span))
-				return err
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.MemoriesTimeseries(ctx, seriesPeriod(span))
+				return keep(err, func() { d.Series = v })
 			}
 		case "tags":
-			calls[key] = func(ctx context.Context) (err error) { d.Tags, err = s.ProjectTags(ctx); return err }
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.ProjectTags(ctx)
+				return keep(err, func() { d.Tags = v })
+			}
 		case "version":
-			calls[key] = func(ctx context.Context) (err error) { d.Version, err = s.Version(ctx); return err }
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.Version(ctx)
+				return keep(err, func() { d.Version = v })
+			}
 		case "queue":
 			calls[key] = func(ctx context.Context) error {
 				p, err := s.OperationsPage(ctx, "pending", "", 1, 0)
@@ -163,18 +201,17 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 				if err != nil {
 					return err
 				}
-				d.Pending, d.Processing = p.Total, q.Total
-				return nil
+				return keep(nil, func() { d.Pending, d.Processing = p.Total, q.Total })
 			}
 		case "failed":
-			calls[key] = func(ctx context.Context) (err error) {
-				d.Failed, err = operations(ctx, s, "failed", "", failedPages)
-				return err
+			calls[key] = func(ctx context.Context) error {
+				v, err := operations(ctx, s, "failed", "", failedPages)
+				return keep(err, func() { d.Failed = v })
 			}
 		case "completed":
-			calls[key] = func(ctx context.Context) (err error) {
-				d.Completed, err = operations(ctx, s, "completed", "retain", completedPages)
-				return err
+			calls[key] = func(ctx context.Context) error {
+				v, err := operations(ctx, s, "completed", "retain", completedPages)
+				return keep(err, func() { d.Completed = v })
 			}
 		default:
 			op, ok := strings.CutPrefix(key, "llm:")
@@ -184,15 +221,18 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 			}
 			slot := new([]hindsight.LLMBucket)
 			llm[op] = slot
-			calls[key] = func(ctx context.Context) (err error) {
-				*slot, err = s.LLMStats(ctx, llmPeriod(span), op)
-				return err
+			calls[key] = func(ctx context.Context) error {
+				v, err := s.LLMStats(ctx, llmPeriod(span), op)
+				return keep(err, func() { *slot = v })
 			}
 		}
 	}
 	for key, err := range fetchParallel(ctx, ServerTimeout, calls) {
 		d.Err[key] = err
 	}
+	kmu.Lock()
+	closed = true
+	kmu.Unlock()
 	for op, slot := range llm {
 		if d.Err["llm:"+op] == nil {
 			d.LLM[op] = *slot
@@ -204,12 +244,11 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 
 	st := &ServerState{OK: len(d.Err) < len(keys)}
 	for _, key := range keys { // sorted
-		if err := d.Err[key]; err != nil {
+		if err := d.Err[key]; err != nil && !st.OK {
 			st.Error, _ = serverError(err)
 			break
 		}
 	}
-	d.State = st
 	return d, st
 }
 

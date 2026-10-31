@@ -23,14 +23,16 @@ const (
 const tagNotFiltered = "not_filtered"
 
 // env is one view's run: its read transaction, source, query and clock,
-// and the server data read before the transaction.
+// the server data read before the transaction, and the view's server
+// section (nil when it reads nothing from the server).
 type env struct {
-	ctx context.Context
-	tx  *sql.Tx
-	src Source
-	q   Query
-	now time.Time
-	srv *serverData
+	ctx    context.Context
+	tx     *sql.Tx
+	src    Source
+	q      Query
+	now    time.Time
+	srv    *serverData
+	server *ServerState
 }
 
 // computeFunc computes a family's metrics over one window: each id's
@@ -72,8 +74,9 @@ func (r *registry) register(name string, ids []string, f computeFunc) {
 // once per window it needs: w, w.Previous() (previous value and delta)
 // and, when one of its ids is relative, the four 7-day w.Baselines(). It
 // fills Status, Reason, Borderline, CI, MDC (rates with Den ≥ min_n),
-// Previous, Delta (value − previous value), Drill and Tags. An id no
-// family registered yet reads no_data, no_events.
+// Previous (when the previous window has Den ≥ min_n), Delta (value −
+// previous value, when both windows have Den ≥ min_n), Drill and Tags. An
+// id no family registered yet reads no_data, no_events.
 func computeMetrics(e env, w Window, ids []string) (map[string]Metric, error) {
 	return families.compute(e, w, ids)
 }
@@ -103,7 +106,7 @@ func (r *registry) compute(e env, w Window, ids []string) (map[string]Metric, er
 		if err != nil {
 			return nil, fmt.Errorf("metrics: %s: %w", fam.name, err)
 		}
-		_, prev, err := fam.f(e, w.Previous())
+		prevObs, prev, err := fam.f(e, w.Previous())
 		if err != nil {
 			return nil, fmt.Errorf("metrics: %s, previous window: %w", fam.name, err)
 		}
@@ -126,7 +129,8 @@ func (r *registry) compute(e env, w Window, ids []string) (map[string]Metric, er
 				o.Baseline = baselineOf(d.ID, bases)
 			}
 			var p *Metric
-			if m, ok := prev[d.ID]; ok {
+			po, computed := prevObs[d.ID]
+			if m, ok := prev[d.ID]; ok && computed && enough(d, po) {
 				p = &m
 			}
 			out[d.ID] = finish(d, o, met[d.ID], p, e.q)
@@ -151,7 +155,14 @@ func baselineOf(id string, bases []map[string]Observation) []BaselineValue {
 	return out
 }
 
-// finish judges one metric and fills what every metric carries.
+// enough reports whether an observation of d has the trials d needs to be
+// read as a figure: not absent, Den ≥ min_n (for a percentile row, min_n
+// is the n of the percentile shown).
+func enough(d Def, o Observation) bool { return !o.Absent && o.Den >= int64(d.MinN) }
+
+// finish judges one metric and fills what every metric carries. prev is
+// the previous window's metric, nil when that window has too few trials;
+// the delta needs this window to have enough too.
 func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 	j := Judge(d, o)
 	m.Status, m.Reason, m.Borderline, m.CI = j.Status, j.Reason, j.Borderline, j.CI
@@ -170,7 +181,7 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 	if prev != nil && prev.Value != nil {
 		p := *prev.Value
 		m.Previous = &p
-		if m.Value != nil {
+		if m.Value != nil && enough(d, o) {
 			delta := *m.Value - p
 			m.Delta = &delta
 		}
@@ -188,13 +199,14 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 // errNoIndex: a source without an index cannot run a view.
 var errNoIndex = errors.New("metrics: the source has no index")
 
-// withTx runs a view: the server reads first (loadServer), then fn in one
-// read transaction of the index, where the server state's LastOK is read
-// from local_status. e.q holds w only: the caller sets its filters.
-func withTx(ctx context.Context, src Source, need []string, w Window, fn func(e env) error) error {
+// withTx runs a view for q: the server reads first (loadServer, over
+// q.Window), then fn in one read transaction of the index, where the
+// server state's LastOK is read from local_status.
+func withTx(ctx context.Context, src Source, q Query, need []string, fn func(e env) error) error {
 	if src.Index == nil {
 		return errNoIndex
 	}
+	w := q.Window
 	srv, state := loadServer(ctx, src, w, need)
 	now := src.now()
 	return src.Index.ReadTx(ctx, func(tx *sql.Tx) error {
@@ -205,7 +217,7 @@ func withTx(ctx context.Context, src Source, need []string, w Window, fn func(e 
 			}
 			state.LastOK = last
 		}
-		return fn(env{ctx: ctx, tx: tx, src: src, q: Query{Window: w}, now: now, srv: srv})
+		return fn(env{ctx: ctx, tx: tx, src: src, q: q, now: now, srv: srv, server: state})
 	})
 }
 
