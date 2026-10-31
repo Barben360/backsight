@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
 	"io/fs"
@@ -11,11 +12,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/paths"
 )
 
 // freePort is a port nothing listens on: the system's pick, released.
@@ -251,9 +255,10 @@ func TestCreatesPrivateDirs(t *testing.T) {
 
 func TestHostCheck(t *testing.T) {
 	h := newHarness(t)
+	ck := cookieHdr(h.login())
 	p := strconv.Itoa(h.port)
 	for _, host := range []string{"localhost:" + p, "127.0.0.1:" + p} {
-		if r := h.do("GET", "/", "Host", host); r.StatusCode != http.StatusOK {
+		if r := h.do("GET", "/", append([]string{"Host", host}, ck...)...); r.StatusCode != http.StatusOK {
 			t.Errorf("Host %s: %d, want 200", host, r.StatusCode)
 		}
 	}
@@ -279,7 +284,7 @@ func TestHostCheck(t *testing.T) {
 		if strings.Contains(target, "evil") {
 			other = h.host()
 		}
-		req := "GET " + target + " HTTP/1.1\r\nHost: " + other + "\r\nConnection: close\r\n\r\n"
+		req := "GET " + target + " HTTP/1.1\r\nHost: " + other + "\r\nCookie: " + ck[1] + "\r\nConnection: close\r\n\r\n"
 		if got := rawStatus(t, h.raw(req)); got != want {
 			t.Errorf("GET %s with Host %s: %d, want %d", target, other, got, want)
 		}
@@ -320,11 +325,12 @@ func TestMethods(t *testing.T) {
 
 func TestSecFetchSite(t *testing.T) {
 	h := newHarness(t)
-	if r := h.do("GET", "/"); r.StatusCode != http.StatusOK {
+	ck := cookieHdr(h.login())
+	if r := h.do("GET", "/", ck...); r.StatusCode != http.StatusOK {
 		t.Errorf("no Sec-Fetch-Site: %d, want 200", r.StatusCode)
 	}
 	for _, v := range []string{"same-origin", "none"} {
-		if r := h.do("GET", "/", "Sec-Fetch-Site", v); r.StatusCode != http.StatusOK {
+		if r := h.do("GET", "/", append([]string{"Sec-Fetch-Site", v}, ck...)...); r.StatusCode != http.StatusOK {
 			t.Errorf("Sec-Fetch-Site %s: %d, want 200", v, r.StatusCode)
 		}
 	}
@@ -334,7 +340,7 @@ func TestSecFetchSite(t *testing.T) {
 	}
 	for _, hdr := range refused {
 		for _, path := range []string{"/", assetPath("logo-light.svg")} {
-			r := h.do("GET", path, hdr...)
+			r := h.do("GET", path, append(hdr, ck...)...)
 			if r.StatusCode != http.StatusForbidden {
 				t.Errorf("%q on %s: %d, want 403", hdr, path, r.StatusCode)
 			}
@@ -354,8 +360,10 @@ type response struct {
 }
 
 // everyResponse is the set TestHeadersOnEveryResponse checks: each route's
-// sample by GET and HEAD, and each refusal the guard writes.
+// sample by GET and HEAD under a session, each refusal the guard writes,
+// a login and the 401 answers.
 func everyResponse(h *harness) []response {
+	ck := cookieHdr(h.login())
 	var set []response
 	for _, r := range routes {
 		want := http.StatusOK
@@ -363,17 +371,21 @@ func everyResponse(h *harness) []response {
 			want = http.StatusNotImplemented
 		}
 		for _, m := range []string{"GET", "HEAD"} {
-			set = append(set, response{r.Pattern, m, r.Sample, nil, want})
+			set = append(set, response{r.Pattern, m, r.Sample, ck, want})
 		}
 	}
 	return append(set,
-		response{"wrong host", "GET", "/", []string{"Host", "evil.example:" + strconv.Itoa(h.port)}, http.StatusMisdirectedRequest},
-		response{"post", "POST", "/", nil, http.StatusMethodNotAllowed},
-		response{"cross-site", "GET", "/", []string{"Sec-Fetch-Site", "cross-site"}, http.StatusForbidden},
-		response{"unknown asset", "GET", "/assets/nope.css", nil, http.StatusNotFound},
-		response{"unhashed asset", "GET", "/assets/logo-light.svg", nil, http.StatusNotFound},
-		response{"unknown route", "GET", "/nope", nil, http.StatusNotFound},
-		response{"cleaned path", "GET", "/cost/../quality", nil, 0}, // net/http's own redirect
+		response{"wrong host", "GET", "/", append([]string{"Host", "evil.example:" + strconv.Itoa(h.port)}, ck...), http.StatusMisdirectedRequest},
+		response{"post", "POST", "/", ck, http.StatusMethodNotAllowed},
+		response{"cross-site", "GET", "/", append([]string{"Sec-Fetch-Site", "cross-site"}, ck...), http.StatusForbidden},
+		response{"unknown asset", "GET", "/assets/nope.css", ck, http.StatusNotFound},
+		response{"unhashed asset", "GET", "/assets/logo-light.svg", ck, http.StatusNotFound},
+		response{"unknown route", "GET", "/nope", ck, http.StatusNotFound},
+		response{"cleaned path", "GET", "/cost/../quality", ck, 0}, // net/http's own redirect
+		response{"login", "GET", "/quality?code=" + h.mint(), nil, http.StatusSeeOther},
+		response{"401 page", "GET", "/quality", nil, http.StatusUnauthorized},
+		response{"401 page, HEAD", "HEAD", "/quality", nil, http.StatusUnauthorized},
+		response{"401 envelope", "GET", "/api/v1/overview", nil, http.StatusUnauthorized},
 	)
 }
 
@@ -442,7 +454,7 @@ func TestServerLimits(t *testing.T) {
 
 func TestStartSweepsOldCodes(t *testing.T) {
 	var cfg Config
-	newHarness(t, func(c *Config) {
+	h := newHarness(t, func(c *Config) {
 		cfg = *c
 		dir := CodesDir(c.Dirs)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -454,8 +466,10 @@ func TestStartSweepsOldCodes(t *testing.T) {
 			}
 		}
 	})
-	if got := codeDirNames(t, cfg); len(got) != 1 || got[0] != "notes.txt" {
-		t.Errorf("codes/ after Start: %q, want notes.txt only", got)
+	// Left: notes.txt and the first link's code, minted after the sweep.
+	first := codeName(strings.TrimPrefix(h.s.FirstLink().URL, "http://"+h.host()+"/?code="))
+	if got := codeDirNames(t, cfg); !slices.Equal(got, []string{first, "notes.txt"}) {
+		t.Errorf("codes/ after Start: %q, want %s and notes.txt", got, first)
 	}
 }
 
@@ -507,8 +521,9 @@ func TestHarnessClock(t *testing.T) {
 // starting "//" is a path, never a host.
 func TestCleanedPathRedirectStaysLocal(t *testing.T) {
 	h := newHarness(t)
+	ck := cookieHdr(h.login())
 	for _, target := range []string{"//evil.example/x", "/.//evil.example/x", "/a/..//evil.example/x"} {
-		resp := h.raw("GET " + target + " HTTP/1.1\r\nHost: " + h.host() + "\r\nConnection: close\r\n\r\n")
+		resp := h.raw("GET " + target + " HTTP/1.1\r\nHost: " + h.host() + "\r\nCookie: " + ck[1] + "\r\nConnection: close\r\n\r\n")
 		if got := rawStatus(t, resp); got < 300 || got > 399 {
 			t.Errorf("GET %s: %d, want a redirect", target, got)
 			continue
@@ -525,34 +540,50 @@ func TestCleanedPathRedirectStaysLocal(t *testing.T) {
 	}
 }
 
-// A Start failing after its claim (here: the old codes cannot be swept)
-// releases the claim and the port, and returns an error.
+// A Start failing after its claim (the old codes cannot be swept, the
+// first code cannot be minted) releases the claim and the port, and
+// returns an error.
 func TestFailedStartAfterClaimUndoes(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs a directory its owner cannot read")
+	for _, c := range []struct {
+		name  string
+		spoil func(t *testing.T, d paths.Dirs)
+	}{
+		{"sweep", func(t *testing.T, d paths.Dirs) {
+			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+				t.Skip("needs a directory its owner cannot read")
+			}
+			codes := CodesDir(d)
+			if err := os.MkdirAll(codes, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(codes, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(codes, 0o700) })
+		}},
+		{"mint", func(t *testing.T, _ paths.Dirs) {
+			t.Cleanup(func() { randRead = rand.Read })
+			randRead = func([]byte) (int, error) { return 0, errors.New("no randomness") }
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := testDirs(t)
+			c.spoil(t, d)
+			p := freePort(t)
+			cfg := Config{Dirs: d, Port: p}
+			s, err := Start(context.Background(), cfg)
+			if err == nil {
+				_ = s.ln.Close()
+				t.Fatal("Start succeeded")
+			}
+			ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
+			if err != nil {
+				t.Fatalf("a failed Start left port %d bound: %v", p, err)
+			}
+			_ = ln.Close()
+			noRuntimeFile(t, cfg)
+		})
 	}
-	d := testDirs(t)
-	codes := CodesDir(d)
-	if err := os.MkdirAll(codes, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(codes, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(codes, 0o700) })
-	p := freePort(t)
-	cfg := Config{Dirs: d, Port: p}
-	s, err := Start(context.Background(), cfg)
-	if err == nil {
-		_ = s.ln.Close()
-		t.Fatal("Start succeeded with an unreadable codes directory")
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
-	if err != nil {
-		t.Fatalf("a failed Start left port %d bound: %v", p, err)
-	}
-	_ = ln.Close()
-	noRuntimeFile(t, cfg)
 }
 
 // blockRoute makes the first request that passes the guard wait in
@@ -579,9 +610,9 @@ func blockRoute(t *testing.T) (entered, release chan struct{}, cancelled chan bo
 	return entered, release, cancelled
 }
 
-// get sends GET / in the background: its status, or -1 when the request
-// got no response.
-func (h *harness) get() chan int {
+// get sends GET / with session cookie c in the background: its status,
+// or -1 when the request got no response.
+func (h *harness) get(c *http.Cookie) chan int {
 	got := make(chan int, 1)
 	go func() {
 		req, err := http.NewRequest("GET", "http://"+h.host()+"/", nil)
@@ -589,6 +620,7 @@ func (h *harness) get() chan int {
 			got <- -1
 			return
 		}
+		req.AddCookie(c)
 		resp, err := h.client.Do(req)
 		if err != nil {
 			got <- -1
@@ -608,7 +640,7 @@ func TestStopLetsARunningRequestFinish(t *testing.T) {
 	t.Cleanup(func() { beforeShutdown = func() {} })
 	h := newHarness(t)
 	beforeShutdown = func() { close(release) }
-	got := h.get()
+	got := h.get(h.login())
 	<-entered
 	reason, err := h.stop()
 	if reason != "interrupted" || err != nil {
@@ -629,7 +661,7 @@ func TestStopCutsARequestAfterTheGrace(t *testing.T) {
 	shutdownGrace = 0
 	entered, _, cancelled := blockRoute(t)
 	h := newHarness(t)
-	got := h.get()
+	got := h.get(h.login())
 	<-entered
 	reason, err := h.stop()
 	if reason != "interrupted" || err != nil {

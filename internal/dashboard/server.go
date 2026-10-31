@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Barben360/backsight/internal/paths"
@@ -46,19 +47,24 @@ var beforeShutdown = func() {}
 
 // Server is a started dashboard: bound, claimed, not yet serving.
 type Server struct {
-	cfg  Config
-	now  func() time.Time
-	ln   net.Listener
-	port int
-	pid  int
-	srv  *http.Server
+	cfg      Config
+	now      func() time.Time
+	ln       net.Listener
+	port     int
+	pid      int
+	srv      *http.Server
+	sessions *sessions
+	link     Link
+
+	idleMu    sync.Mutex
+	lastTouch time.Time // the latest signed-in request or login; Start's time before
 }
 
 // Start refuses while another dashboard runs or starts (a *RunningError,
 // read before binding), listens on 127.0.0.1:cfg.Port (ErrPortTaken when
-// that port is in use), claims the runtime file with the bound port and
-// removes every login code a previous run left. A Start that fails after
-// a step undoes it.
+// that port is in use), claims the runtime file with the bound port,
+// removes every login code a previous run left and, last, mints the first
+// code (FirstLink). A Start that fails after a step undoes it.
 func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	if cfg.Port != 0 && (cfg.Port < 1024 || cfg.Port > 65535) {
 		return nil, fmt.Errorf("port %d: give 0 for a free port, or a port from 1024 to 65535", cfg.Port)
@@ -105,7 +111,8 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 		return nil, err
 	}
 	undo = append(undo, func() { _ = Release(cfg.Dirs, pid) })
-	s := &Server{cfg: cfg, now: cfg.Now, ln: ln, port: port, pid: pid}
+	s := &Server{cfg: cfg, now: cfg.Now, ln: ln, port: port, pid: pid, sessions: newSessions(cfg.Now)}
+	s.lastTouch = s.now().Round(0)
 	if err := SweepCodes(cfg.Dirs, s.now(), true); err != nil {
 		return nil, err
 	}
@@ -120,28 +127,50 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 		DisableGeneralOptionsHandler: true, // "OPTIONS *" reaches the guard: 405
 		ErrorLog:                     log.New(io.Discard, "", 0),
 	}
+
+	// Last: the code's 120 s start once everything before is done.
+	minted := s.now()
+	code, err := MintCode(cfg.Dirs, minted)
+	if err != nil {
+		return nil, err
+	}
+	s.link = Link{URL: URL(port, code), Port: port, ExpiresAt: minted.Add(CodeTTL)}
 	return s, nil
 }
 
 // Port is the port the dashboard listens on.
 func (s *Server) Port() int { return s.port }
 
-// Serve answers requests until ctx ends ("interrupted"). It then lets the
-// running requests finish for up to shutdownGrace, closes what is left,
-// removes the runtime file and every login code.
+// Serve answers requests until ctx ends ("interrupted") or nobody signed
+// in used the dashboard for idleLimit ("idle"). It then lets the running
+// requests finish for up to shutdownGrace, closes what is left, removes
+// the runtime file and every login code.
 func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 	// The requests' context outlives ctx: a request running at the stop
 	// gets the shutdown grace, then the forced close cancels it.
 	base := context.WithoutCancel(ctx)
 	s.srv.BaseContext = func(net.Listener) context.Context { return base }
+	ticks, stopTicks := idleTicks()
+	defer stopTicks()
 	served := make(chan error, 1)
 	go func() { served <- s.srv.Serve(s.ln) }()
 
 	var reason StopReason
 	var errs []error
-	select {
-	case <-ctx.Done():
-		reason = StopInterrupted
+	for reason == "" && errs == nil {
+		select {
+		case <-ctx.Done():
+			reason = StopInterrupted
+		case <-ticks:
+			if s.idle() {
+				reason = StopIdle
+			}
+		case err := <-served:
+			errs = append(errs, fmt.Errorf("serve the dashboard: %w", err))
+			_ = s.srv.Close()
+		}
+	}
+	if reason != "" {
 		beforeShutdown()
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		if s.srv.Shutdown(sctx) != nil {
@@ -151,9 +180,6 @@ func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 		if err := <-served; !errors.Is(err, http.ErrServerClosed) {
 			errs = append(errs, fmt.Errorf("serve the dashboard: %w", err))
 		}
-	case err := <-served:
-		errs = append(errs, fmt.Errorf("serve the dashboard: %w", err))
-		_ = s.srv.Close()
 	}
 	errs = append(errs, Release(s.cfg.Dirs, s.pid), SweepCodes(s.cfg.Dirs, s.now(), true))
 	return reason, errors.Join(errs...)

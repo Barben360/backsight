@@ -33,13 +33,22 @@ var routes = []route{
 }
 
 // routes is the mux of every route, behind the guard.
-func (s *Server) routes() http.Handler {
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	for _, r := range routes {
 		mux.Handle(r.Pattern, s.handler(r))
 	}
 	return mux
 }
+
+// kindOf maps each route's pattern to its kind.
+var kindOf = func() map[string]string {
+	m := map[string]string{}
+	for _, r := range routes {
+		m[r.Pattern] = r.Kind
+	}
+	return m
+}()
 
 // handler is the handler of r's kind.
 func (s *Server) handler(r route) http.Handler {

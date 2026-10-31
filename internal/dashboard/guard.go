@@ -31,9 +31,10 @@ var beforeRoute = func(*http.Request) {}
 
 // guard is the outermost handler. It sets the security headers, then
 // checks, each before any work: the Host (421), the method (405), the
-// Fetch Metadata site (403); it serves /assets/ and hands the rest to
-// next.
-func (s *Server) guard(next http.Handler) http.Handler {
+// Fetch Metadata site (403); it serves /assets/, logs in a navigation to
+// a page with a code, answers 401 without a valid session and hands the
+// rest to mux.
+func (s *Server) guard(mux *http.ServeMux) http.Handler {
 	port := strconv.Itoa(s.port)
 	hosts := [2]string{"127.0.0.1:" + port, "localhost:" + port}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,8 +60,20 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			serveAsset(w, r)
 			return
 		}
+		// Only a navigation spends a code: not a HEAD, not a prefetch, not
+		// a call to the API, /prefs or the text page.
+		if _, pattern := mux.Handler(r); kindOf[pattern] == "page" && r.Method == http.MethodGet &&
+			r.URL.Query().Has("code") && !prefetched(r.Header) {
+			s.login(w, r)
+			return
+		}
+		if !s.signedIn(r) {
+			s.unauthorized(w, r)
+			return
+		}
+		s.touch()
 		beforeRoute(r)
-		next.ServeHTTP(w, r)
+		mux.ServeHTTP(w, r)
 	})
 }
 

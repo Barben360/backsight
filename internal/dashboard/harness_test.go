@@ -190,3 +190,26 @@ func rawStatus(t *testing.T, resp string) int {
 	}
 	return n
 }
+
+// login mints a code and opens it: the session cookie it set.
+func (h *harness) login() *http.Cookie {
+	h.t.Helper()
+	code, err := MintCode(h.dirs, h.clock.now())
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	r := h.do("GET", "/?code="+code)
+	if r.StatusCode != http.StatusSeeOther {
+		h.t.Fatalf("log in: %d, want 303", r.StatusCode)
+	}
+	for _, c := range r.Cookies() {
+		if c.Name == cookieName(h.port) {
+			return c
+		}
+	}
+	h.t.Fatalf("log in: no session cookie in %q", r.Header.Values("Set-Cookie"))
+	return nil
+}
+
+// cookieHdr is the request header that sends c, as a pair for do.
+func cookieHdr(c *http.Cookie) []string { return []string{"Cookie", c.Name + "=" + c.Value} }
