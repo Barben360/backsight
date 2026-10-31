@@ -181,11 +181,15 @@ func TestM6UUIDCountsSeeEverySegment(t *testing.T) {
 
 // RF 2: a skipped tick (another tick running, a maintenance) is retried,
 // so it never reads as "sent nothing"; one that stays skipped fails, and
-// so does a tick that did not succeed.
+// so does a tick that did not succeed. One that stays skipped is retried
+// for the whole wait before it fails: started late in a wall-clock second
+// (bash's SECONDS ticks there), a 1 s wait once ended after 0.1 s and one
+// call (CI).
 func TestM6TickRetriesASkippedTick(t *testing.T) {
 	testtool.SkipWindows(t, "linux-only: POSIX script")
 	const fake = `#!/bin/sh
 t=$(dirname "$(dirname "$0")")
+date +%s.%N >> "$t/stamps"
 n=$(($(cat "$t/calls" 2>/dev/null || echo 0) + 1))
 echo "$n" > "$t/calls"
 if [ "$n" -le "$(cat "$t/skips")" ]; then
@@ -196,7 +200,8 @@ else
 fi
 `
 	const done = `{"ok":true,"data":{"status":"done","sessions":{"sent":1}}}`
-	run := func(skips, reason, final, finalCode string, env ...string) (stdout, stderr, calls string, code int) {
+	// late: m6_tick starts 0.8 s into a wall-clock second.
+	run := func(late bool, skips, reason, final, finalCode string, env ...string) (stdout, stderr, calls string, span float64, code int) {
 		dir := t.TempDir()
 		m6Lib(t, dir, m6TestDriver, "true")
 		writeExec(t, filepath.Join(dir, "bin", "backsight"), fake)
@@ -204,24 +209,38 @@ fi
 		writeLines(t, filepath.Join(dir, "reason"), reason)
 		writeLines(t, filepath.Join(dir, "final"), final)
 		writeLines(t, filepath.Join(dir, "final-code"), finalCode)
+		if late {
+			time.Sleep(time.Duration((1800e6 - time.Now().Nanosecond()) % 1e9))
+		}
 		stdout, stderr, code = m6Lib(t, dir, m6TestDriver, `m6_tick a`, env...)
 		raw, _ := os.ReadFile(filepath.Join(dir, "calls"))
-		return stdout, stderr, strings.TrimSpace(string(raw)), code
+		stamps, _ := os.ReadFile(filepath.Join(dir, "stamps"))
+		if f := strings.Fields(string(stamps)); len(f) > 1 {
+			first, _ := strconv.ParseFloat(f[0], 64)
+			last, _ := strconv.ParseFloat(f[len(f)-1], 64)
+			span = last - first
+		}
+		return stdout, stderr, strings.TrimSpace(string(raw)), span, code
 	}
 	for _, reason := range []string{"another tick is running", "maintenance in progress"} {
-		stdout, stderr, calls, code := run("2", reason, done, "0", "M6_TICK_EVERY=0")
+		stdout, stderr, calls, _, code := run(false, "2", reason, done, "0", "M6_TICK_EVERY=0")
 		if code != 0 || strings.TrimSpace(stdout) != done || calls != "3" {
 			t.Errorf("%s twice: exit %d, %s call(s), stdout %q (want the done tick alone, after 3 calls); stderr:\n%s", reason, code, calls, stdout, stderr)
 		}
-		stdout, stderr, calls, code = run("1000000", reason, done, "0", "M6_TICK_EVERY=0.2", "M6_TICK_WAIT=1")
+		stdout, stderr, calls, span, code := run(true, "1000000", reason, done, "0", "M6_TICK_EVERY=0.2", "M6_TICK_WAIT=1")
 		if code == 0 || !strings.Contains(stderr, "FAIL: jobs tick on a: still skipped ("+reason+") after 1 s") || stdout != "" {
 			t.Errorf("always skipped (%s): exit %d, stdout %q, stderr:\n%s", reason, code, stdout, stderr)
 		}
 		if calls == "1" || calls == "" {
 			t.Errorf("always skipped (%s): %q call(s), want it tried again before failing", reason, calls)
 		}
+		// The last call comes at least the wait after the first, less
+		// the time of the calls themselves.
+		if span < 0.7 {
+			t.Errorf("always skipped (%s): its calls span %.2f s of a 1 s wait", reason, span)
+		}
 	}
-	stdout, stderr, _, code := run("0", "", `{"ok":false,"data":{"status":"partial"},"error":{"code":40,"message":"some notes stay queued"}}`, "40", "M6_TICK_EVERY=0")
+	stdout, stderr, _, _, code := run(false, "0", "", `{"ok":false,"data":{"status":"partial"},"error":{"code":40,"message":"some notes stay queued"}}`, "40", "M6_TICK_EVERY=0")
 	if code == 0 || !strings.Contains(stderr, "FAIL: jobs tick on a did not succeed (exit 40): some notes stay queued") || stdout != "" {
 		t.Errorf("a failed tick: exit %d, stdout %q, stderr:\n%s", code, stdout, stderr)
 	}
@@ -946,6 +965,30 @@ func TestM6FlushSentNeedsTheCursorToProveATicksSend(t *testing.T) {
 		if code != 0 || strings.TrimSpace(stdout) != tc.want {
 			t.Errorf("%s: exit %d, stdout %q, want %s; stderr:\n%s", tc.name, code, stdout, tc.want, stderr)
 		}
+	}
+}
+
+// m6_flush_sent waits for a session another flusher holds for the whole
+// M6_TICK_WAIT before it fails, even started late in a wall-clock second,
+// where bash's SECONDS ticks.
+func TestM6FlushSentWaitsTheWholeWaitForALock(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: POSIX script")
+	const locked = `{"ok":true,"data":{"results":[{"session":"sp1","status":"locked"}],"counts":{"locked":1}}}`
+	dir := t.TempDir()
+	m6Lib(t, dir, m6TestDriver, "true")
+	writeExec(t, filepath.Join(dir, "bin", "backsight"), m6StateFake)
+	for i := 1; i <= 100; i++ {
+		writeLines(t, filepath.Join(dir, "flush."+strconv.Itoa(i)), locked)
+	}
+	time.Sleep(time.Duration((1800e6 - time.Now().Nanosecond()) % 1e9))
+	start := time.Now()
+	_, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_flush_sent a sp1 sp1-a5`, "M6_TICK_EVERY=0.1", "M6_TICK_WAIT=1")
+	took := time.Since(start)
+	if code == 0 || !strings.Contains(stderr, "FAIL: the flush of sp1 on a: still locked after 1 s") {
+		t.Errorf("exit %d, stderr:\n%s", code, stderr)
+	}
+	if took < 900*time.Millisecond {
+		t.Errorf("gave up after %v of a 1 s wait", took.Round(10*time.Millisecond))
 	}
 }
 

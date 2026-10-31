@@ -319,7 +319,9 @@ m6_queue_wait() {
 # maintenance) is no tick: it is tried again every M6_TICK_EVERY s (5) for
 # M6_TICK_WAIT s (120), then fails. A tick that did not succeed (ok not
 # true) fails, but with partial a partial one (data.status partial: the
-# server refused a send) is taken.
+# server refused a send) is taken. SECONDS counts whole wall-clock
+# seconds: it passes the deadline (-le, not -lt) only once the whole wait
+# has gone by.
 m6_tick() {
   local who=$1 mode=${2:-} out rc deadline=$((SECONDS + ${M6_TICK_WAIT:-120}))
   while :; do
@@ -336,7 +338,7 @@ m6_tick() {
       printf '%s\n' "$out"
       return 0
     fi
-    [ "$SECONDS" -lt "$deadline" ] || fail "jobs tick on $who: still skipped ($(jq -r '.data.reason // ""' <<<"$out")) after ${M6_TICK_WAIT:-120} s"
+    [ "$SECONDS" -le "$deadline" ] || fail "jobs tick on $who: still skipped ($(jq -r '.data.reason // ""' <<<"$out")) after ${M6_TICK_WAIT:-120} s"
     sleep "${M6_TICK_EVERY:-5}"
   done
 }
@@ -377,7 +379,7 @@ m6_flush_sent() {
         echo sent
         return 0
         ;;
-      locked) [ "$SECONDS" -lt "$deadline" ] || fail "the flush of $sid on $who: still locked after ${M6_TICK_WAIT:-120} s" ;;
+      locked) [ "$SECONDS" -le "$deadline" ] || fail "the flush of $sid on $who: still locked after ${M6_TICK_WAIT:-120} s" ;;
       nothing)
         last=$(m6_cursor "$who" "$sid" | jq -r '.last_uuid // empty')
         [ "$last" = "$want" ] || fail "the flush of $sid on $who sent nothing, and its cursor ends at ${last:-none}, not $want"
