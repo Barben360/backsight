@@ -69,19 +69,22 @@ func newPauseCmd(e *env, pause bool) *cobra.Command {
 					return &output.Error{Code: output.Usage, Message: err.Error()}
 				}
 				res.Path = project.New(home, cfg.Projects.Transverse).Root(cwd)
-				if rel, err := filepath.Rel(res.Path, home); err == nil && !strings.HasPrefix(rel, "..") {
+				// Compared in one spelling: Windows may give the home or the
+				// working directory in 8.3 form (C:\Users\RUNNER~1).
+				if rel, err := filepath.Rel(fsutil.Normal(res.Path), fsutil.Normal(home)); err == nil && !strings.HasPrefix(rel, "..") {
 					// Outside a repository the project is the directory: in the
 					// home directory (or above) it would stop all recording.
 					return &output.Error{Code: output.Usage, Message: res.Path + " holds your home directory: pausing it would stop memory everywhere. Run it inside the project's directory, or pause this session with backsight pause"}
 				}
 				paths := slices.Clone(cfg.Privacy.ExcludePaths)
-				has := slices.Contains(paths, res.Path)
+				same := func(p string) bool { return fsutil.SamePath(p, res.Path) }
+				has := slices.ContainsFunc(paths, same)
 				switch {
 				case pause && !has:
 					paths = append(paths, res.Path)
 					res.Changed = true
 				case !pause && has:
-					paths = slices.DeleteFunc(paths, func(p string) bool { return p == res.Path })
+					paths = slices.DeleteFunc(paths, same)
 					res.Changed = true
 				}
 				if res.Changed {

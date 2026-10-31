@@ -17,6 +17,10 @@ func normal(p string) string {
 	return p
 }
 
+func samePath(a, b string) bool {
+	return a != "" && b != "" && strings.EqualFold(Normal(a), Normal(b))
+}
+
 // longName expands the 8.3 names of p's longest existing prefix; the rest
 // keeps its spelling.
 func longName(p string) string {

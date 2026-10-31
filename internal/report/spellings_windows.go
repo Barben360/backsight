@@ -10,16 +10,23 @@ import (
 )
 
 // spellings are the other ways Windows and Git Bash write path p: its long
-// and 8.3 names (C:\Users\RUNNER~1 is C:\Users\runneradmin), either case
-// of its drive letter, and Git Bash's /c/Users/... form.
+// name, its 8.3 names from any ancestor down (C:\Users\RUNNER~1 is
+// C:\Users\runneradmin), either case of its drive letter, and Git Bash's
+// /c/Users/... form.
 func spellings(p string) []string {
 	var out []string
 	forms := []string{p}
+	long := p
 	if l, err := fsutil.LongPathName(p); err == nil {
+		long = l
 		forms = append(forms, l)
 	}
-	if s, err := fsutil.ShortPathName(p); err == nil {
-		forms = append(forms, s)
+	// Any ancestor may come in its 8.3 form with the rest long: a TEMP of
+	// C:\Users\RUNNER~1\AppData\Local\Temp holds long names below it.
+	for a := long; filepath.Dir(a) != a; a = filepath.Dir(a) {
+		if s, err := fsutil.ShortPathName(a); err == nil && s != a {
+			forms = append(forms, s+long[len(a):])
+		}
 	}
 	for _, f := range forms {
 		out = append(out, f)

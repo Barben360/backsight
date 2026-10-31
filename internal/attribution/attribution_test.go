@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -188,7 +189,9 @@ func TestThrowawayClonesCountForTheirKeptCheckout(t *testing.T) {
 	}
 	// Tally finds the kept checkout among the turn's own paths.
 	v := Tally(calls(read(file(kept)), write(file(bs)), write(file(bs))), r)
-	if got := v.Projects(); len(got) != 1 || got[0] != "tool-main" || v.Roots["tool-main"] != kept {
+	// git names a main checkout with long names: a 8.3 TEMP (C:\Users\RUNNER~1)
+	// spells kept otherwise.
+	if got := v.Projects(); len(got) != 1 || got[0] != "tool-main" || v.Roots["tool-main"] != fsutil.Normal(kept) {
 		t.Errorf("tally %+v", v)
 	}
 }

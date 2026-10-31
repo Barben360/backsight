@@ -11,3 +11,12 @@ func Normal(p string) string {
 	}
 	return normal(p)
 }
+
+// SamePath says whether a and b name one path: equal strings on Unix; on
+// Windows equal once Normal, whatever their case.
+func SamePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return samePath(a, b)
+}

@@ -123,7 +123,8 @@ func TestClientInstallFirstTime(t *testing.T) {
 	}
 	shim := filepath.Join(d.Data, "bin", plugin.ShimName(runtime.GOOS))
 	target, err := filepath.EvalSymlinks(shim)
-	if err != nil || !strings.HasPrefix(target, filepath.Join(d.Data, "bin")) {
+	// EvalSymlinks gives long names; a TEMP in 8.3 form (RUNNER~1) spells d.Data short
+	if err != nil || !strings.HasPrefix(fsutil.Normal(target), fsutil.Normal(filepath.Join(d.Data, "bin"))) {
 		t.Fatalf("shim %s -> %s %v", shim, target, err)
 	}
 	if !fsutil.Executable(target) {
