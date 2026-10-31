@@ -189,7 +189,7 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 	m.Drill = d.Drill
 	tags := make([]string, 0, len(m.Tags)+1)
 	tags = append(tags, m.Tags...)
-	if d.Scope == "server" && q.Project != "" && !slices.Contains(tags, tagNotFiltered) {
+	if d.Scope == "server" && q.Project != "" && !o.Filtered && !slices.Contains(tags, tagNotFiltered) {
 		tags = append(tags, tagNotFiltered)
 	}
 	m.Tags = tags

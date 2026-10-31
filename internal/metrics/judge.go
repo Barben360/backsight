@@ -16,6 +16,7 @@ type Observation struct {
 	Err      Status          // error-class rule result (rules.go), "" when not error class
 	Baseline []BaselineValue // the 4 previous 7-day windows, newest first (relative metrics)
 	Watch    *float64        // a run-time watch threshold (context.per_session); nil: Def's
+	Filtered bool            // a server metric whose figure does answer the project filter: no not_filtered tag
 }
 
 // BaselineValue is one previous 7-day window of a relative metric: its

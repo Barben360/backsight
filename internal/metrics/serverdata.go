@@ -346,3 +346,14 @@ func serverError(err error) (enum string, reason string) {
 	}
 	return "server_error", ReasonServerDown
 }
+
+// serverReason is the no_data reason of a failed read of key, "" when it
+// succeeded (or was not asked for): without a server, every read failed.
+func serverReason(e env, key string) string {
+	err := errNoServer
+	if e.srv != nil {
+		err = e.srv.Err[key]
+	}
+	_, reason := serverError(err)
+	return reason
+}

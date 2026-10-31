@@ -346,12 +346,7 @@ func inWindow(bs []hindsight.LLMBucket, width time.Duration, since, until time.T
 // llmRead is the server's LLM buckets of key ("" = all operations, or
 // llm30dKey), or the no_data reason of its failure.
 func llmRead(e env, key string) ([]hindsight.LLMBucket, string) {
-	if e.srv == nil {
-		_, r := serverError(errNoServer)
-		return nil, r
-	}
-	if err := e.srv.Err[key]; err != nil {
-		_, r := serverError(err)
+	if r := serverReason(e, key); r != "" {
 		return nil, r
 	}
 	if key == llm30dKey {
