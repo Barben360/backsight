@@ -479,7 +479,16 @@ func TestStraysOnWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = windows.CloseHandle(h)
-	strayA, strayB := startFake(t, pg), startFake(t, pg)
+	// One started by its 8.3 path, when the volume has one: the image a
+	// process reports is the path it was started by.
+	short := pg
+	if p, err := windows.UTF16PtrFromString(pg); err == nil {
+		buf := make([]uint16, windows.MAX_LONG_PATH)
+		if n, err := windows.GetShortPathName(p, &buf[0], uint32(len(buf))); err == nil && n > 0 {
+			short = windows.UTF16ToString(buf[:n])
+		}
+	}
+	strayA, strayB := startFake(t, pg), startFake(t, short)
 	startFake(t, other)
 	time.Sleep(300 * time.Millisecond) // the fakes are running
 

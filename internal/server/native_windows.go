@@ -79,9 +79,17 @@ func (n Native) pgRoot() string {
 	return strings.ToLower(strings.TrimRight(root, `\`) + `\`)
 }
 
-// underPG: image is a program of <Root>\pg\.
+// underPG: image is a program of <Root>\pg\. The image is the path the
+// process was started by, which can hold 8.3 names (RUNNER~1): its long
+// form is compared, as root's.
 func (n Native) underPG(image, root string) bool {
-	return image != "" && strings.HasPrefix(strings.ToLower(image), root)
+	if image == "" {
+		return false
+	}
+	if long, err := fsutil.LongPathName(image); err == nil {
+		image = long
+	}
+	return strings.HasPrefix(strings.ToLower(image), root)
 }
 
 // straysWindows are requirement 3's processes on Windows (decision 0080):
