@@ -255,7 +255,7 @@ func TestCreatesPrivateDirs(t *testing.T) {
 }
 
 func TestHostCheck(t *testing.T) {
-	h := newHarness(t)
+	h := dataHarness(t) // pages need the data layer
 	ck := cookieHdr(h.login())
 	p := strconv.Itoa(h.port)
 	for _, host := range []string{"localhost:" + p, "127.0.0.1:" + p} {
@@ -325,7 +325,7 @@ func TestMethods(t *testing.T) {
 }
 
 func TestSecFetchSite(t *testing.T) {
-	h := newHarness(t)
+	h := dataHarness(t) // pages need the data layer
 	ck := cookieHdr(h.login())
 	if r := h.do("GET", "/", ck...); r.StatusCode != http.StatusOK {
 		t.Errorf("no Sec-Fetch-Site: %d, want 200", r.StatusCode)
@@ -370,8 +370,9 @@ func everyResponse(h *harness) []response {
 	for _, r := range routes {
 		want := http.StatusOK
 		switch {
-		case r.Kind == "api" && strings.Contains(r.Sample, "/sessions/"):
-			want = http.StatusNotFound // the sample names no session of the generated index
+		case r.Kind == "api" && strings.Contains(r.Sample, "/sessions/"),
+			r.Kind == "page" && (r.Page == "project" || r.Page == "session" || r.Page == "memory"):
+			want = http.StatusNotFound // the sample names no project, session or memory of the generated index
 		case r.Kind != "page" && r.Kind != "asset" && r.Kind != "api":
 			want = http.StatusNotImplemented
 		}
@@ -687,7 +688,7 @@ func (h *harness) get(c *http.Cookie) chan int {
 func TestStopLetsARunningRequestFinish(t *testing.T) {
 	entered, release, cancelled := blockRoute(t)
 	t.Cleanup(func() { beforeShutdown = func() {} })
-	h := newHarness(t)
+	h := dataHarness(t) // pages need the data layer
 	beforeShutdown = func() { close(release) }
 	got := h.get(h.login())
 	<-entered

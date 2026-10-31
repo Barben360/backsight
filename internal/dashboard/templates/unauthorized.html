@@ -1,15 +1,16 @@
-{{/* views: none */}}<!doctype html>
+{{/* views: none */}}
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>backsight dashboard</title>
-<link rel="stylesheet" href="{{assetPath "dashboard.css"}}">
+<link rel="stylesheet" href="{{index .Frame.Assets "dashboard.css"}}">
 </head>
 <body>
 <main>
-<p><img src="{{assetPath "logo-light.svg"}}" width="64" height="64" alt="backsight"></p>
+<p><img src="{{index .Frame.Assets "logo-light.svg"}}" width="64" height="64" alt="backsight"></p>
 <p>This dashboard needs a fresh link: run backsight dashboard link in a terminal and open the link it prints.</p>
 </main>
 </body>

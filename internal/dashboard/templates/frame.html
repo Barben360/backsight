@@ -1,0 +1,56 @@
+{{/* views: none */}}
+{{/*
+  The frame every page shares. Fields read: .Frame (Title, Version, HelpURL,
+  Reload, Nav, Prefs.Dev, Assets, Scope, Generated) and .Loc. Nav is sliced by
+  position: 0-5 the questions, 5-8 Browse, 8-9 System, 9- the developer pair.
+*/}}
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+{{if .Frame.Reload}}<meta http-equiv="refresh" content="{{.Frame.Reload}}">
+{{end}}<title>{{.Frame.Title}} - backsight</title>
+<link rel="stylesheet" href="{{index .Frame.Assets "dashboard.css"}}">
+</head>
+<body>
+{{end}}
+
+{{define "top"}}<header>
+<nav aria-label="Pages">
+<a href="/"><img src="{{index .Frame.Assets "logo-light.svg"}}" width="24" height="24" alt="backsight"></a>
+{{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
+{{end}}<details>
+<summary>Browse</summary>
+{{range slice .Frame.Nav 5 8}}{{template "navlink" .}}
+{{end}}</details>
+{{range slice .Frame.Nav 8 9}}{{template "navlink" .}}
+{{end}}{{if .Frame.Prefs.Dev}}<details>
+<summary>Developer</summary>
+{{range slice .Frame.Nav 9}}{{template "navlink" .}}
+{{end}}</details>
+{{end}}</nav>
+</header>
+<main>
+{{end}}
+
+{{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+
+{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if .Server}}memory on {{.Server}}{{else}}no memory server set up{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
+{{end}}{{end}}
+
+{{define "foot"}}</main>
+<footer>
+<p>backsight {{.Frame.Version}} · Help: backsight guide dashboard · <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">{{.Frame.HelpURL}}</a></p>
+</footer>
+</body>
+</html>
+{{end}}
+
+{{/* metric: dot is a MetricView; reads .Def.Question, .M. Task 11 completes it. */}}
+{{define "metric"}}<section>
+<h3>{{.Def.Question}}</h3>
+<p>{{value .}} · {{status .}}</p>
+</section>
+{{end}}

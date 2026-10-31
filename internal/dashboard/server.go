@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
@@ -68,6 +69,8 @@ type Server struct {
 	srv      *http.Server
 	sessions *sessions
 	data     *data
+	tpl      *pageSet
+	served   atomic.Int64 // page responses 200 under a session
 	link     Link
 
 	idleMu    sync.Mutex
@@ -139,6 +142,9 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	}
 	s.data.warm()
 
+	if s.tpl, err = newPageSet(); err != nil {
+		return nil, err
+	}
 	s.srv = &http.Server{
 		Handler:                      s.guard(s.routes()),
 		ReadHeaderTimeout:            5 * time.Second,

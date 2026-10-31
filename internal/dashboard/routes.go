@@ -58,17 +58,10 @@ func (s *Server) handler(r route) http.Handler {
 	case "api":
 		return http.HandlerFunc(s.serveAPI)
 	case "page":
-		return http.HandlerFunc(placeholderPage)
+		return s.servePage(s.tpl.specs[r.Page])
 	default:
 		return http.HandlerFunc(notBuilt)
 	}
-}
-
-// placeholderPage stands for a page until its renderer exists.
-func placeholderPage(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>backsight</title></head>" +
-		"<body><p>This page is not built yet.</p></body></html>\n"))
 }
 
 // notBuilt stands for a route whose handler does not exist yet.

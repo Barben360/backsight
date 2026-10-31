@@ -26,12 +26,12 @@ func Templates() fs.FS {
 // data, only the asset paths.
 var unauthorizedPage = renderStatic("unauthorized.html")
 
-// renderStatic renders a template that reads no data. A template that
-// fails to parse or render is a programming error.
+// renderStatic renders a template that reads only the frame's assets. A
+// template that fails to parse or render is a programming error.
 func renderStatic(name string) []byte {
-	t := template.Must(template.New(name).Funcs(template.FuncMap{"assetPath": assetPath}).ParseFS(templateFS, "templates/"+name))
+	t := template.Must(template.New(name).Funcs(funcs).Option("missingkey=error").ParseFS(templateFS, "templates/"+name))
 	var b bytes.Buffer
-	if err := t.Execute(&b, nil); err != nil {
+	if err := t.Execute(&b, PageData{Frame: Frame{Assets: frameAssets()}}); err != nil {
 		panic(err)
 	}
 	return b.Bytes()

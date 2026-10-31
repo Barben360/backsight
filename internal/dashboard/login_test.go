@@ -63,7 +63,7 @@ func isUnauthorizedPage(t *testing.T, resp *http.Response) bool {
 }
 
 func TestCodeLogin(t *testing.T) {
-	h := newHarness(t)
+	h := dataHarness(t) // pages need the data layer
 	for _, c := range []struct{ target, want string }{
 		{"/quality?days=30&code=", "/quality?days=30"},
 		{"/quality?days=30&code=%s&tz=UTC", "/quality?days=30&tz=UTC"},
@@ -103,8 +103,9 @@ func TestCodeLogin(t *testing.T) {
 		if h.codeLeft(code) {
 			t.Errorf("GET %s: the code was not spent", c.target)
 		}
-		if r := h.do("GET", c.want, cookieHdr(ck)...); r.StatusCode != http.StatusOK {
-			t.Errorf("GET %s with the new session: %d, want 200", c.want, r.StatusCode)
+		// A project the generated index lacks is a 404: the session is what counts.
+		if r := h.do("GET", c.want, cookieHdr(ck)...); r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s with the new session: %d, want 200 or 404", c.want, r.StatusCode)
 		}
 	}
 }
@@ -374,7 +375,7 @@ func TestLocalBack(t *testing.T) {
 }
 
 func TestSessionRequired(t *testing.T) {
-	h := newHarness(t)
+	h := dataHarness(t) // pages need the data layer
 	ck := h.login()
 	other := "backsight_dash_" + strconv.Itoa(h.port+1)
 	cases := map[string][]string{
@@ -420,7 +421,7 @@ func TestSessionRequired(t *testing.T) {
 }
 
 func TestSessionsEndToEnd(t *testing.T) {
-	h := newHarness(t)
+	h := dataHarness(t) // pages need the data layer
 	var cookies []*http.Cookie
 	for range 9 {
 		cookies = append(cookies, h.login())

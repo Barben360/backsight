@@ -71,7 +71,7 @@ func TestIdleStop(t *testing.T) {
 
 	t.Run("after the last signed-in request", func(t *testing.T) {
 		ticks := manualTicks(t)
-		h := newHarness(t)
+		h := dataHarness(t)
 		at := h.clock.now()
 		ck := h.login()
 		h.clock.set(at.Add(time.Hour + 59*time.Minute))
