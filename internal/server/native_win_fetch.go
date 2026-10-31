@@ -2,6 +2,7 @@ package server
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -60,14 +62,18 @@ func extractUVZip(archive *os.File, dst string) error {
 	return errors.New("the uv archive holds no uv.exe")
 }
 
-// uvMinorLink is in uv's error when, over SSH, it cannot create the
-// minor-version junction after installing the Python itself (E34 W6:
-// "untrusted mount point", os error 448).
-const uvMinorLink = "minor version link"
+// uvMinorLink and uvUntrustedMount are in uv's error when, over SSH, it
+// cannot create the minor-version junction after installing the Python
+// itself (E34 W6: "untrusted mount point", os error 448).
+const (
+	uvMinorLink      = "minor version link"
+	uvUntrustedMount = "os error 448"
+)
 
 // uvPythonInstallWindows installs the pinned Python with --no-bin
 // --no-registry (E34 ruling 6). uv's exit 2 whose error is the minor
-// version link's is accepted when the pinned python.exe then runs: the
+// version link's, refused as an untrusted mount point, is accepted when
+// the pinned python.exe then runs: the
 // Python is complete, only uv's junction is missing, which nothing uses.
 func (n Native) uvPythonInstallWindows(ctx context.Context) error {
 	py := n.pins().Python()
@@ -76,7 +82,8 @@ func (n Native) uvPythonInstallWindows(ctx context.Context) error {
 		return nil
 	}
 	var code interface{ ExitCode() int }
-	if !errors.As(err, &code) || code.ExitCode() != 2 || !strings.Contains(strings.ToLower(err.Error()), uvMinorLink) {
+	msg := strings.ToLower(err.Error())
+	if !errors.As(err, &code) || code.ExitCode() != 2 || !strings.Contains(msg, uvMinorLink) || !strings.Contains(msg, uvUntrustedMount) {
 		return fmt.Errorf("uv python install %s: %w", py, err)
 	}
 	if _, runErr := n.Tools.Run(ctx, n.toolEnvFor(filepath.Dir(n.PythonBin())), nil, n.PythonBin(), "-c", "import sys"); runErr != nil {
@@ -121,10 +128,23 @@ func (n Native) pg0Exe(v string) string { return n.join(n.pg0BinDir(v), n.exe("p
 // is not enough (E34 W5).
 func (n Native) onnxCapi(v string) string { return n.join(n.sitePackages(v), "onnxruntime", "capi") }
 
+// venvDLLDirs are the places fetchVenv copies version v's runtime DLLs
+// into: pg0's bin\, onnxruntime\capi\, and the copied installation's
+// bin\ when there is one (shared by every version: a new msvc-runtime
+// replaces its DLLs, for the manifest to hold for all three).
+func (n Native) venvDLLDirs(v string) []string {
+	dirs := []string{n.pg0BinDir(v), n.onnxCapi(v)}
+	if bin := n.join(n.installation(), "bin"); isDir(bin) {
+		dirs = append(dirs, bin)
+	}
+	return dirs
+}
+
 // copyRuntimeDLLs copies the runtime DLLs from version v's Scripts\ into
 // each of dirs (E34 ruling 3: the copied installation's bin\, pg0's bin\,
 // onnxruntime\capi\) and writes the manifest. A DLL missing from the venv
-// is an error: the lock's msvc-runtime was not installed.
+// is an error: the lock's msvc-runtime was not installed. A copy that is
+// already the same is left alone (a running postgres has it loaded).
 func (n Native) copyRuntimeDLLs(v string, dirs ...string) error {
 	sums := map[string]string{}
 	for _, name := range runtimeDLLs {
@@ -139,7 +159,7 @@ func (n Native) copyRuntimeDLLs(v string, dirs ...string) error {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
-			if err := fsutil.WriteAtomic(n.join(dir, name), raw, 0o755); err != nil {
+			if err := placeDLL(n.join(dir, name), raw); err != nil {
 				return fmt.Errorf("copying %s into %s: %w", name, dir, err)
 			}
 		}
@@ -149,4 +169,41 @@ func (n Native) copyRuntimeDLLs(v string, dirs ...string) error {
 		return err
 	}
 	return fsutil.WriteAtomic(n.join(n.Root(), dllManifest), append(raw, '\n'), 0o644)
+}
+
+// isDir: p is a directory.
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// dllAside is the suffix's start of a replaced DLL moved aside (placeDLL).
+const dllAside = ".old-"
+
+// placeDLL writes raw at dst unless dst already holds it. A DLL a running
+// program has loaded cannot be replaced, only renamed: it is moved aside
+// first, and removed once nothing holds it (at a later placeDLL).
+func placeDLL(dst string, raw []byte) error {
+	if old, _ := filepath.Glob(dst + dllAside + "*"); len(old) > 0 {
+		for _, f := range old {
+			_ = os.Remove(f) // still loaded: left for the next time
+		}
+	}
+	if cur, err := os.ReadFile(dst); err == nil && bytes.Equal(cur, raw) {
+		return nil
+	}
+	err := fsutil.WriteAtomic(dst, raw, 0o755)
+	if err == nil || !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	aside := dst + dllAside + randHex()
+	if renameErr := os.Rename(dst, aside); renameErr != nil {
+		return errors.Join(err, renameErr)
+	}
+	if err := fsutil.WriteAtomic(dst, raw, 0o755); err != nil {
+		_ = os.Rename(aside, dst)
+		return err
+	}
+	_ = os.Remove(aside)
+	return nil
 }

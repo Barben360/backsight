@@ -373,7 +373,7 @@ func (n Native) fetchVenv(ctx context.Context, w io.Writer, v string) (err error
 	if n.goos() == "windows" {
 		// Before pg0's first run, which needs them, and onnxruntime's
 		// import (E34 W5).
-		if err := n.copyRuntimeDLLs(v, n.pg0BinDir(v), n.onnxCapi(v)); err != nil {
+		if err := n.copyRuntimeDLLs(v, n.venvDLLDirs(v)...); err != nil {
 			return err
 		}
 	}

@@ -16,6 +16,9 @@ func joinJob(string) error { return nil }
 // InJob: no Job Object here (the Linux host asks systemd's cgroups).
 func InJob(string, int) (bool, error) { return false, nil }
 
+// InNamedJob: no Job Object here.
+func InNamedJob(string, string, int) (bool, error) { return false, nil }
+
 // tree is a child's process group (childAttr makes it its leader).
 type tree struct{}
 
@@ -44,7 +47,8 @@ func signalGroup(p *os.Process, sig syscall.Signal) error {
 // in systemd units); Start starts the process alone.
 type Job struct{}
 
-func NewJob() (*Job, error)            { return &Job{}, nil }
-func (*Job) Start(cmd *exec.Cmd) error { return cmd.Start() }
-func (*Job) Terminate() error          { return nil }
-func (*Job) Close() error              { return nil }
+func NewJob() (*Job, error)                    { return &Job{}, nil }
+func NewNamedJob(string, string) (*Job, error) { return &Job{}, nil }
+func (*Job) Start(cmd *exec.Cmd) error         { return cmd.Start() }
+func (*Job) Terminate() error                  { return nil }
+func (*Job) Close() error                      { return nil }

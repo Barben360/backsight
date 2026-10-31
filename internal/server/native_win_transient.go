@@ -133,7 +133,7 @@ func (h taskHost) Transient(ctx context.Context, name string, env []string, stdi
 	if !ok {
 		return fmt.Errorf("the native runtime's tool runner cannot run %s's steps in a job object", name)
 	}
-	job, err := supervise.NewJob()
+	job, err := h.n.transientJob(name)
 	if err != nil {
 		return err
 	}
@@ -161,6 +161,17 @@ func (h taskHost) Transient(ctx context.Context, name string, env []string, stdi
 		}
 	}
 	return nil
+}
+
+// transientJob is the Job Object of the transient job name: a backup
+// verify's is named (supervise.NewNamedJob), for the stray scan to skip its
+// throwaway database (and initdb's bootstrap postgres) while it runs;
+// any other is unnamed.
+func (n Native) transientJob(name string) (*supervise.Job, error) {
+	if id, ok := strings.CutPrefix(name, n.project()+"-verify-"); ok {
+		return supervise.NewNamedJob(n.project(), verifyJobSuffix(id))
+	}
+	return supervise.NewJob()
 }
 
 // logTail is a failed step's log's end, for its error: "" without one.

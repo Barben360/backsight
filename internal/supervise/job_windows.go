@@ -116,6 +116,22 @@ func InJob(project string, pid int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return inNamedJob(name, pid)
+}
+
+// InNamedJob: pid is in NewNamedJob(project, suffix)'s Job Object; no such
+// job is false, without an error.
+func InNamedJob(project, suffix string, pid int) (bool, error) {
+	name, err := objectName(project)
+	if err != nil {
+		return false, err
+	}
+	return inNamedJob(name+"-"+suffix, pid)
+}
+
+// inNamedJob: pid is in the Job Object Global\<name>, opened by name
+// (never IsProcessInJob's "any job", which a CI runner's own job answers).
+func inNamedJob(name string, pid int) (bool, error) {
 	p, err := windows.UTF16PtrFromString(`Global\` + name)
 	if err != nil {
 		return false, err
@@ -177,8 +193,12 @@ func newJob(pid int) (windows.Handle, error) {
 
 // killOnCloseJob is a new unnamed Job Object whose processes die when its
 // last handle closes.
-func killOnCloseJob() (windows.Handle, error) {
-	job, err := windows.CreateJobObject(nil, nil)
+func killOnCloseJob() (windows.Handle, error) { return killOnCloseJobAs(nil, nil) }
+
+// killOnCloseJobAs is killOnCloseJob with a security descriptor and a
+// name.
+func killOnCloseJobAs(sa *windows.SecurityAttributes, name *uint16) (windows.Handle, error) {
+	job, err := windows.CreateJobObject(sa, name)
 	if err != nil {
 		return 0, err
 	}
@@ -215,6 +235,31 @@ func NewJob() (*Job, error) {
 	h, err := killOnCloseJob()
 	if err != nil {
 		return nil, fmt.Errorf("creating a job object: %w", err)
+	}
+	return &Job{h: h}, nil
+}
+
+// NewNamedJob is a Job named Global\backsight-<project>-<user SID>-<suffix>,
+// the user's alone (E34 W7): another backsight of the user finds its
+// processes by that name (InNamedJob), as the guard's stray scan does
+// VerifyDump's throwaway database's.
+func NewNamedJob(project, suffix string) (*Job, error) {
+	name, err := objectName(project)
+	if err != nil {
+		return nil, err
+	}
+	name += "-" + suffix
+	sa, _, err := userOnly()
+	if err != nil {
+		return nil, err
+	}
+	p, err := windows.UTF16PtrFromString(`Global\` + name)
+	if err != nil {
+		return nil, err
+	}
+	h, err := killOnCloseJobAs(sa, p)
+	if err != nil {
+		return nil, fmt.Errorf("creating the job object Global\\%s: %w", name, err)
 	}
 	return &Job{h: h}, nil
 }

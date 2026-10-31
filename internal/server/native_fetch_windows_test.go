@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -15,7 +16,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"golang.org/x/sys/windows"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 )
 
@@ -236,6 +241,113 @@ func TestWindowsVenvLayout(t *testing.T) {
 			t.Error("the venv without its DLLs is left")
 		}
 	})
+
+	t.Run("no installation yet: none created", func(t *testing.T) {
+		if exists(filepath.Join(n.installation(), "bin")) {
+			t.Errorf("fetchVenv created %s before the unpack", filepath.Join(n.installation(), "bin"))
+		}
+	})
+}
+
+// Fix round 1 (Task 10): the copied installation's bin\ is shared by every
+// version, so a venv whose msvc-runtime changed replaces its DLLs there
+// too, and dlls.json holds for all three places; an unchanged DLL is left
+// alone (a running postgres has it loaded).
+func TestVenvRefreshesTheInstallationsDLLs(t *testing.T) {
+	tools := &fakeTools{}
+	n := winNative(t, tools)
+	v := n.Version()
+	tools.Effect = winEffects(t, n)
+	touch(t, n.UV(), 0o644)
+	touch(t, n.PythonBin(), 0o755)
+	bin := filepath.Join(n.installation(), "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range runtimeDLLs { // an older msvc-runtime's
+		if err := os.WriteFile(filepath.Join(bin, d), []byte("old "+d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	same := filepath.Join(bin, "concrt140.dll")
+	if err := os.WriteFile(same, []byte("dll concrt140.dll"), 0o755); err != nil { // unchanged in the new one
+		t.Fatal(err)
+	}
+	before, err := os.Stat(same)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := n.fetchVenv(context.Background(), io.Discard, v); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(n.Root(), dllManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]string
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{bin, n.pg0BinDir(v), n.onnxCapi(v)} {
+		for _, d := range runtimeDLLs {
+			b, err := os.ReadFile(filepath.Join(dir, d))
+			sum := sha256.Sum256(b)
+			if err != nil || string(b) != "dll "+d || manifest[d] != hex.EncodeToString(sum[:]) {
+				t.Errorf("%s: %q %v, manifest %q: want the new venv's, as the manifest says", filepath.Join(dir, d), b, err, manifest[d])
+			}
+		}
+	}
+	if after, err := os.Stat(same); err != nil || !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("an unchanged DLL was rewritten (%v → %v, %v)", before.ModTime(), after.ModTime(), err)
+	}
+}
+
+// A DLL a running program has loaded cannot be overwritten, only renamed:
+// placeDLL moves it aside, writes the new one, and removes the old one
+// once nothing holds it.
+func TestPlaceDLLReplacesALoadedDLL(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "concrt140.dll")
+	sys, err := os.ReadFile(filepath.Join(os.Getenv("SYSTEMROOT"), "System32", "version.dll"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, sys, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.LoadLibraryEx(dst, 0, windows.LOAD_LIBRARY_AS_IMAGE_RESOURCE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freed := false
+	free := func() {
+		if !freed {
+			freed = true
+			_ = windows.FreeLibrary(h)
+		}
+	}
+	t.Cleanup(free)
+	if err := fsutil.WriteAtomic(dst, []byte("new"), 0o755); err == nil {
+		t.Fatal("a loaded DLL was overwritten in place: this test proves nothing here")
+	}
+	if err := placeDLL(dst, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "new" {
+		t.Errorf("%s = %d bytes, want the new DLL", dst, len(b))
+	}
+	aside, _ := filepath.Glob(dst + dllAside + "*")
+	if len(aside) != 1 {
+		t.Fatalf("aside %v, want the loaded one kept aside", aside)
+	}
+	free()
+	if err := placeDLL(dst, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if exists(aside[0]) {
+		t.Error("the old DLL stays aside once nothing holds it")
+	}
 }
 
 // exitCodeErr is a tool's failure with its exit code, as exec's ExitError
@@ -262,6 +374,7 @@ func TestUVMinorLinkErrorAccepted(t *testing.T) {
 		{"the minor link alone", exitCodeErr{2, minorLink}, nil, true},
 		{"the minor link, Python broken", exitCodeErr{2, minorLink}, errors.New("exit status 3221225781"), false},
 		{"another exit code", exitCodeErr{1, minorLink}, nil, false},
+		{"the minor link refused otherwise", exitCodeErr{2, "exit status 2: error: Failed to create Python minor version link directory: Access is denied. (os error 5)"}, nil, false},
 		{"another error", exitCodeErr{2, "exit status 2: error: download failed"}, nil, false},
 		{"no exit code", errors.New(minorLink), nil, false},
 	} {

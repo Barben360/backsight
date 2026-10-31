@@ -24,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -168,15 +169,40 @@ func requireNoPassword(t *testing.T, calls []toolCall) {
 	}
 }
 
+// requireNoPasswordInFiles fails when a file under dir holds winPassword.
+func requireNoPasswordInFiles(t *testing.T, dir string) int {
+	t.Helper()
+	files := 0
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		files++
+		if raw, err := os.ReadFile(p); err == nil && strings.Contains(string(raw), winPassword) {
+			t.Errorf("%s holds the password", p)
+		}
+		return nil
+	})
+	return files
+}
+
 // Review focus 5: the first install puts the real password nowhere but
-// psql's stdin (pg0 and psql run on pg0's default one, PGPASSWORD).
+// psql's stdin (pg0 and psql run on pg0's default one, PGPASSWORD): not on
+// an argv, in an environment, nor in a log under <Root>\tmp.
 func TestWindowsInstanceCreationNeverPutsThePasswordOnArgv(t *testing.T) {
 	n, tools, _ := winInstall(t)
 	pgInstallation(t, n.installation()) // Fetch's copy
+	out := tools.Out
+	tools.Out = func(c toolCall) []byte { // every step says what it got
+		return append([]byte(strings.Join(append(append([]string{c.Path}, c.Args...), c.Env...), " ")+"\n"+string(c.Stdin)), out(c)...)
+	}
 	if err := firstStart(t, n); err != nil {
 		t.Fatal(err)
 	}
 	requireNoPassword(t, tools.Calls)
+	if logs := requireNoPasswordInFiles(t, filepath.Join(n.Root(), "tmp")); logs < 2 {
+		t.Errorf("%d logs under <Root>\\tmp, want pg0's start's and stop's at least", logs)
+	}
 	var withStdin []toolCall
 	for _, c := range tools.Calls {
 		if len(c.Stdin) > 0 {
@@ -351,6 +377,121 @@ func TestFirstInstallCopiesPostgresAndForgetsPg0sInstance(t *testing.T) {
 		check(t, n, tools, pg0dir)
 	})
 
+	// Fix round 1: a failure after pg0 created the database (here the move
+	// of its installation) removes it too: kept, ensureInstance would
+	// refuse it for ever, no identity recorded for it.
+	t.Run("a failed move removes the new database; the next install succeeds", func(t *testing.T) {
+		n, tools, pg0dir := winInstall(t)
+		old := renameDir
+		renameDir = func(from, to string) error {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: windows.ERROR_INVALID_PARAMETER}
+		}
+		err := firstStart(t, n)
+		renameDir = old
+		if err == nil || !strings.Contains(err.Error(), "moving pg0's") || strings.Contains(err.Error(), winPassword) {
+			t.Fatalf("first start = %v, want the move's failure without the password", err)
+		}
+		for _, p := range []string{n.DataDir(), filepath.Join(pg0dir, "instances", "bs"), n.IdentityFile()} {
+			if exists(p) {
+				t.Errorf("%s stays after a failed move", p)
+			}
+		}
+		tools.Calls = nil
+		if err := firstStart(t, n); err != nil {
+			t.Fatalf("the next first start = %v, want it to succeed", err)
+		}
+		check(t, n, tools, pg0dir)
+	})
+
+	// Fix round 1: a copy cut midway is never taken for complete; a
+	// killed copy's staging is removed; the marker comes after a complete
+	// copy only.
+	t.Run("an interrupted copy is never taken for complete", func(t *testing.T) {
+		n, tools, pg0dir := winInstall(t)
+		oldRename, oldCopy := renameDir, copyFile
+		t.Cleanup(func() { renameDir, copyFile = oldRename, oldCopy })
+		renameDir = func(from, to string) error {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: windows.ERROR_NOT_SAME_DEVICE}
+		}
+		copied := 0
+		copyFile = func(out io.Writer, in io.Reader) error {
+			if copied++; copied > 3 {
+				return errors.New("the disk is full")
+			}
+			return oldCopy(out, in)
+		}
+		if err := firstStart(t, n); err == nil || !strings.Contains(err.Error(), "the disk is full") {
+			t.Fatalf("first start = %v, want the copy's failure", err)
+		}
+		if exists(n.installation()) || exists(filepath.Join(n.installation(), pgUnpacked)) {
+			t.Error("a cut copy is at the installation's place")
+		}
+		if left, _ := filepath.Glob(n.installation() + "*"); len(left) != 0 {
+			t.Errorf("left beside the installation: %v", left)
+		}
+		if exists(n.DataDir()) {
+			t.Error("the database stays after a failed copy")
+		}
+		// A killed copy's staging, then a whole run.
+		killed := n.installation() + partialPrefix + "dead"
+		pgInstallation(t, killed) // complete-looking: never taken for the installation
+		copyFile = oldCopy
+		tools.Calls = nil
+		if err := firstStart(t, n); err != nil {
+			t.Fatal(err)
+		}
+		if exists(killed) {
+			t.Error("a killed copy's staging stays")
+		}
+		check(t, n, tools, pg0dir)
+	})
+
+	// Fix round 1: a copy killed midway (no cleanup runs) leaves no tree at
+	// the installation's place, where its programs would pass pgMissing
+	// and the unpack's shortcut would mark it complete; the next unpack
+	// removes its staging and copies the whole tree, the marker after.
+	t.Run("a copy killed midway is never taken for complete", func(t *testing.T) {
+		n, _, pg0dir := winInstall(t)
+		withFreePort(t, 18997)
+		oldRename, oldCopy := renameDir, copyFile
+		t.Cleanup(func() { renameDir, copyFile = oldRename, oldCopy })
+		renameDir = func(from, to string) error {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: windows.ERROR_NOT_SAME_DEVICE}
+		}
+		extracted := filepath.Join(pg0dir, "installation", nativelock.PGInstallation)
+		pgInstallation(t, extracted)
+		touch(t, filepath.Join(extracted, "zz-last"), 0o644) // copied after every program
+		copyFile = func(out io.Writer, in io.Reader) error {
+			if f, ok := in.(*os.File); ok && filepath.Base(f.Name()) == "zz-last" {
+				panic("killed")
+			}
+			return oldCopy(out, in)
+		}
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("the copy was not killed")
+				}
+			}()
+			_ = n.copyPostgres(pg0dir)
+		}()
+		if exists(n.installation()) {
+			t.Fatalf("a killed copy is at the installation's place (missing: %q)", n.pgMissing())
+		}
+		copyFile = oldCopy
+		if err := n.unpackPostgres(context.Background(), io.Discard, n.Version()); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{"zz-last", pgUnpacked, `bin\msvcp140.dll`} {
+			if !exists(filepath.Join(n.installation(), f)) {
+				t.Errorf("%s missing from the installation", f)
+			}
+		}
+		if left, _ := filepath.Glob(n.installation() + partialPrefix + "*"); len(left) != 0 {
+			t.Errorf("a killed copy's staging stays: %v", left)
+		}
+	})
+
 	t.Run("a failed first start removes the new database", func(t *testing.T) {
 		n, tools, pg0dir := winInstall(t)
 		tools.Fail = func(c toolCall) error {
@@ -432,21 +573,50 @@ func startFake(t *testing.T, path string) *exec.Cmd {
 	return cmd
 }
 
+// shortPath is p's 8.3 form, p itself when its volume has none.
+func shortPath(p string) string {
+	u, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return p
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	if n, err := windows.GetShortPathName(u, &buf[0], uint32(len(buf))); err == nil && n > 0 {
+		return windows.UTF16ToString(buf[:n])
+	}
+	return p
+}
+
+// waitGone waits until none of pids runs, 10 s at most.
+func waitGone(t *testing.T, pids string) {
+	t.Helper()
+	for end := time.Now().Add(10 * time.Second); len(pidsAlive(pids)) > 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("pids %v still run", pidsAlive(pids))
+		}
+	}
+}
+
 // Requirement 3 on Windows (0080): a postgres.exe of <Root>\pg\ outside
 // the supervisor's Job Object is a stray, postmaster.pid's first; one in
-// the job is not, nor one of another directory. StopStrays stops the
-// pidfile's with pg_ctl and waits for it; one the pidfile does not name is
-// refused, stopping nothing.
+// the job is not, nor one of another directory, nor a backend (its parent
+// is the stray); the image's path matches in any case and in its 8.3
+// form. StopStrays stops the pidfile's with pg_ctl and waits for it; one
+// the pidfile does not name is refused, stopping nothing.
 func TestStraysOnWindows(t *testing.T) {
 	n, _, _ := winInstall(t)
 	n.Cfg.Server.Project = "bs-test-" + strconv.Itoa(os.Getpid()) + "-strays"
+	// <Root> spelled in another case than on the volume: the scan matches
+	// whatever the case.
+	n.Cfg.Server.ComposeDir = strings.ToUpper(n.Cfg.Server.ComposeDir)
 	tools := &execTools{}
 	n.Tools = tools
 	n.StrayWait = 10 * time.Second
 	bin := filepath.Join(n.installation(), "bin")
 	stop := filepath.Join(t.TempDir(), "stop")
-	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
-	pg := testtool.Write(t, bin, "postgres", testtool.Fake{Script: "waitfile " + stop, NoLog: true})
+	pids := filepath.Join(t.TempDir(), "pids") // every postgres' and backend's
+	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644); waitGone(t, pids) })
+	backend := testtool.Write(t, filepath.Join(n.Root(), "pg", "backend", "bin"), "postgres", testtool.Fake{Script: "pid " + pids + "\nwaitfile " + stop, NoLog: true})
+	pg := testtool.Write(t, bin, "postgres", testtool.Fake{Script: "pid " + pids + "\nstart " + backend + "\nwaitfile " + stop, NoLog: true})
 	testtool.Write(t, bin, "pg_ctl", testtool.Fake{Script: "write " + stop + " x"})
 	other := testtool.Write(t, filepath.Join(t.TempDir(), "elsewhere"), "postgres", testtool.Fake{Script: "waitfile " + stop, NoLog: true})
 
@@ -479,18 +649,16 @@ func TestStraysOnWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = windows.CloseHandle(h)
-	// One started by its 8.3 path, when the volume has one: the image a
-	// process reports is the path it was started by.
-	short := pg
-	if p, err := windows.UTF16PtrFromString(pg); err == nil {
-		buf := make([]uint16, windows.MAX_LONG_PATH)
-		if n, err := windows.GetShortPathName(p, &buf[0], uint32(len(buf))); err == nil && n > 0 {
-			short = windows.UTF16ToString(buf[:n])
+	// One started by its path in upper case, one by its 8.3 path (when the
+	// volume has one): the image a process reports is the path it was
+	// started by. Each starts a backend.
+	strayA, strayB := startFake(t, strings.ToUpper(pg)), startFake(t, shortPath(pg))
+	startFake(t, other)
+	for end := time.Now().Add(5 * time.Second); len(pidsAlive(pids)) < 4; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("pids %v: want two postgres and their backends", pidsAlive(pids))
 		}
 	}
-	strayA, strayB := startFake(t, pg), startFake(t, short)
-	startFake(t, other)
-	time.Sleep(300 * time.Millisecond) // the fakes are running
 
 	writePidFile := func(pid int) {
 		t.Helper()
@@ -510,7 +678,7 @@ func TestStraysOnWindows(t *testing.T) {
 	}
 	lo, hi := min(strayA.Process.Pid, strayB.Process.Pid), max(strayA.Process.Pid, strayB.Process.Pid)
 	if want := []int{hi, lo}; !slices.Equal(got, want) {
-		t.Fatalf("Strays = %v, want %v (postmaster.pid's first; the job's pid %d and the other directory's are none)", got, want, inJob.Process.Pid)
+		t.Fatalf("Strays = %v, want %v (postmaster.pid's first; the job's pid %d, the other directory's and the backends %v are none)", got, want, inJob.Process.Pid, pidsAlive(pids))
 	}
 
 	// Two strays, the pidfile names one: refused, nothing stopped.
@@ -522,17 +690,24 @@ func TestStraysOnWindows(t *testing.T) {
 		t.Errorf("ran %+v on a refusal", tools.Calls)
 	}
 
-	// The pidfile's own: pg_ctl stop -m fast -D <db>, then gone.
-	_ = strayA.Process.Kill()
-	_, _ = strayA.Process.Wait()
-	_ = strayB.Process.Kill()
-	_, _ = strayB.Process.Wait()
-	_ = os.Remove(stop)
+	// The pidfile's own, with its backend: pg_ctl stop -m fast -D <db>,
+	// then gone.
+	if err := os.WriteFile(stop, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitGone(t, pids)
+	if err := os.Remove(stop); err != nil {
+		t.Fatal(err)
+	}
 	one := startFake(t, pg)
-	time.Sleep(300 * time.Millisecond)
+	for end := time.Now().Add(5 * time.Second); len(pidsAlive(pids)) < 2; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("pids %v: want postgres and its backend", pidsAlive(pids))
+		}
+	}
 	writePidFile(one.Process.Pid)
 	if strays, err = n.Strays(); err != nil || len(strays) != 1 || strays[0].PID != one.Process.Pid {
-		t.Fatalf("Strays = %v %v, want pid %d", strays, err, one.Process.Pid)
+		t.Fatalf("Strays = %v %v, want pid %d alone (not its backend)", strays, err, one.Process.Pid)
 	}
 	if err := n.StopStrays(context.Background(), strays); err != nil {
 		t.Fatal(err)
@@ -545,6 +720,89 @@ func TestStraysOnWindows(t *testing.T) {
 	}
 	if n.strayRunning(inJob.Process.Pid) != true {
 		t.Error("the job's postgres was stopped too, or is not seen")
+	}
+}
+
+// Fix round 1's ruling: a backup verify's throwaway database (and initdb's
+// bootstrap postgres) runs under <Root>\pg\ in the verify's named Job
+// Object; while its lock is held it is no stray. Released, it is; so is
+// one in another verify's job, whose lock nobody holds.
+func TestVerifyInProgressIsNoStray(t *testing.T) {
+	n, _, _ := winInstall(t)
+	n.Cfg.Server.Project = "bs-test-" + strconv.Itoa(os.Getpid()) + "-verify"
+	stop := filepath.Join(t.TempDir(), "stop")
+	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+	pg := testtool.Write(t, filepath.Join(n.installation(), "bin"), "postgres", testtool.Fake{Script: "waitfile " + stop, NoLog: true})
+	start := func(id string) int {
+		t.Helper()
+		job, err := n.transientJob(n.project() + "-verify-" + id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = job.Close() })
+		cmd := exec.Command(pg)
+		if err := job.Start(cmd); err != nil {
+			t.Fatal(err)
+		}
+		go func() { _ = cmd.Wait() }()
+		return cmd.Process.Pid
+	}
+	verifying, unlocked := start("aaaa"), start("bbbb")
+	lock, err := state.TryAcquire(filepath.Join(n.Root(), "tmp", "verify-aaaa.lock"), "backup verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Release() })
+	time.Sleep(300 * time.Millisecond)
+	pidsOf := func() []int {
+		t.Helper()
+		strays, err := n.Strays()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []int
+		for _, s := range strays {
+			out = append(out, s.PID)
+		}
+		return out
+	}
+	if got := pidsOf(); !slices.Equal(got, []int{unlocked}) {
+		t.Errorf("Strays = %v, want %d alone (verify aaaa's %d runs under its held lock)", got, unlocked, verifying)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pidsOf(), []int{min(verifying, unlocked), max(verifying, unlocked)}; !slices.Equal(got, want) {
+		t.Errorf("Strays with the lock released = %v, want %v", got, want)
+	}
+}
+
+// Only a backup verify's transient job is named, after the project and
+// its id; any other is unnamed.
+func TestOnlyAVerifysJobIsNamed(t *testing.T) {
+	n, _, _ := winInstall(t)
+	n.Cfg.Server.Project = "bs-test-" + strconv.Itoa(os.Getpid()) + "-named"
+	stop := filepath.Join(t.TempDir(), "stop")
+	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+	fake := testtool.Write(t, t.TempDir(), "waiter", testtool.Fake{Script: "waitfile " + stop, NoLog: true})
+	for _, tc := range []struct {
+		name  string
+		named bool
+	}{{n.project() + "-verify-cafe", true}, {n.project() + "-db-init", false}, {"other-verify-cafe", false}} {
+		job, err := n.transientJob(tc.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(fake)
+		if err := job.Start(cmd); err != nil {
+			t.Fatal(err)
+		}
+		in, err := supervise.InNamedJob(n.project(), "verify-cafe", cmd.Process.Pid)
+		if err != nil || in != tc.named {
+			t.Errorf("%s: in the job verify-cafe %v %v, want %v", tc.name, in, err, tc.named)
+		}
+		_ = job.Close()
+		_ = cmd.Wait()
 	}
 }
 

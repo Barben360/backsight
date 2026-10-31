@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/server/nativelock"
@@ -27,7 +28,31 @@ import (
 var pg0Home = userPg0Home
 
 // renameDir moves a directory; tests make it fail as across volumes.
-var renameDir = os.Rename
+var renameDir = renameRetry
+
+// osRename is os.Rename; tests make it fail.
+var osRename = os.Rename
+
+// renameRetryWait bounds renameRetry.
+var renameRetryWait = 10 * time.Second
+
+// renameRetry is os.Rename, retried for a few seconds while it is denied:
+// on Windows a file just closed by a job's process, or held a moment by
+// an indexer or an antivirus, refuses a move of its directory.
+func renameRetry(from, to string) error {
+	deadline := time.Now().Add(renameRetryWait)
+	for {
+		err := osRename(from, to)
+		if err == nil || !errors.Is(err, fs.ErrPermission) || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// partialPrefix is the suffix's start of a copy in progress beside its
+// destination (copyPostgres): a killed copy's is removed at the next.
+const partialPrefix = ".partial-"
 
 // copyPostgres moves pg0's extracted installation under pg0dir to
 // installation() (E34 ruling 8): a rename on the same volume, else a copy
@@ -46,6 +71,12 @@ func (n Native) copyPostgres(pg0dir string) error {
 	if err := os.RemoveAll(dst); err != nil { // a partial one
 		return err
 	}
+	stale, _ := filepath.Glob(dst + partialPrefix + "*") // a killed copy's
+	for _, d := range stale {
+		if err := removeAllRetry(d); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -53,8 +84,15 @@ func (n Native) copyPostgres(pg0dir string) error {
 		if !crossVolume(err) {
 			return fmt.Errorf("moving pg0's %s to %s: %w", NativePostgres, dst, err)
 		}
-		if err := copyTree(src, dst); err != nil {
-			_ = os.RemoveAll(dst)
+		// Into a sibling first: a copy cut midway is never dst, which a
+		// later run would take for complete.
+		staging := dst + partialPrefix + randHex()
+		if err := copyTree(src, staging); err != nil {
+			_ = removeAllRetry(staging)
+			return fmt.Errorf("copying pg0's %s to %s: %w", NativePostgres, dst, err)
+		}
+		if err := renameRetry(staging, dst); err != nil {
+			_ = removeAllRetry(staging)
 			return fmt.Errorf("copying pg0's %s to %s: %w", NativePostgres, dst, err)
 		}
 		if err := os.RemoveAll(src); err != nil {
@@ -65,6 +103,12 @@ func (n Native) copyPostgres(pg0dir string) error {
 		return fmt.Errorf("the %s moved to %s is incomplete: %s is missing", NativePostgres, dst, m)
 	}
 	return nil
+}
+
+// copyFile copies one file of copyTree; tests make it fail midway.
+var copyFile = func(out io.Writer, in io.Reader) error {
+	_, err := io.Copy(out, in)
+	return err
 }
 
 // copyTree copies the directory src to dst, which must not exist: files
@@ -98,7 +142,7 @@ func copyTree(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(out, in); err != nil {
+		if err := copyFile(out, in); err != nil {
 			_ = out.Close()
 			return err
 		}
@@ -217,9 +261,15 @@ func (n Native) createInstanceWindows(ctx context.Context) error {
 	env := append(n.toolEnvFor(filepath.Dir(pg0)), "PGPASSWORD=postgres")
 	// A failing statement is never logged: it would hold the password.
 	stdin := "SET log_min_error_statement = panic;\nALTER ROLE hindsight PASSWORD '" + pw + "';\nALTER ROLE postgres PASSWORD '" + pw + "';\n"
-	if err := n.host().Transient(ctx, n.project()+"-db-init", env, strings.NewReader(stdin), steps); err != nil {
-		// The job's processes died with the call: a database left on pg0's
-		// default password is removed, never kept.
+	err = n.host().Transient(ctx, n.project()+"-db-init", env, strings.NewReader(stdin), steps)
+	if err == nil {
+		err = n.finishInstance(pg0dir, inst, v)
+	}
+	if err != nil {
+		// The job's processes died with the call. A database without its
+		// installation, or still on pg0's default password, is removed,
+		// never kept: ensureInstance would refuse it for ever, having
+		// recorded no identity for it.
 		for _, d := range []string{n.DataDir(), inst} {
 			if rmErr := removeAllRetry(d); rmErr != nil {
 				err = errors.Join(err, rmErr)
@@ -227,6 +277,13 @@ func (n Native) createInstanceWindows(ctx context.Context) error {
 		}
 		return n.redact(fmt.Errorf("creating the native database (%s): %w", n.DataDir(), err))
 	}
+	return nil
+}
+
+// finishInstance is the first install's end, once pg0 created the
+// database: its installation moved under Root(), its instance entry
+// forgotten, the installation's DLLs and marker.
+func (n Native) finishInstance(pg0dir, inst, v string) error {
 	if err := n.copyPostgres(pg0dir); err != nil {
 		return err
 	}
@@ -259,3 +316,35 @@ func pathOf(env []string) string {
 	}
 	return "PATH="
 }
+
+// winProc is a postgres.exe of <Root>\pg\ as the stray scan saw it.
+type winProc struct {
+	pid, parent uint32
+	created     int64 // its creation time (FILETIME), 0 when unknown
+}
+
+// strayProcs are the strays among procs (decision 0080): each that skip
+// does not keep (the supervisor's, a backup verify's) and that is no
+// backend, a process whose parent is one of procs and older than it (a
+// parent's pid reused by a newer process is no parent).
+func strayProcs(procs []winProc, skip func(pid uint32) bool) []uint32 {
+	byPID := map[uint32]winProc{}
+	for _, p := range procs {
+		byPID[p.pid] = p
+	}
+	var out []uint32
+	for _, p := range procs {
+		if parent, ok := byPID[p.parent]; ok && parent.pid != p.pid && parent.created != 0 && p.created != 0 && parent.created <= p.created {
+			continue // a backend: its postmaster is the stray
+		}
+		if skip(p.pid) {
+			continue
+		}
+		out = append(out, p.pid)
+	}
+	return out
+}
+
+// verifyJobSuffix is VerifyDump id's Job Object's suffix (supervise's
+// named job): the stray scan skips its processes while it runs.
+func verifyJobSuffix(id string) string { return "verify-" + id }
