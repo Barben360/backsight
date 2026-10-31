@@ -276,7 +276,7 @@ func installedOn(t *testing.T, home, v string) (*fakeClaude, *fakeBinaries) {
 		t.Fatalf("client install: exit %d\n%s", code, out)
 	}
 	f.calls = nil
-	f.marketplaces = `[{"name":"backsight","path":"` + filepath.Join(d.Data, "marketplace") + `"}]`
+	f.marketplaces = `[{"name":"backsight","path":"` + testtool.JSONPath(filepath.Join(d.Data, "marketplace")) + `"}]`
 	f.plugins = `[{"id":"` + plugin.PluginID() + `"}]`
 	return f, withBinaries(t, d)
 }

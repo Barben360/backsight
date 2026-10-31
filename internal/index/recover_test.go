@@ -19,6 +19,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // corrupt overwrites bytes 4096–8191 of a closed index with 0xFF: page 2,
@@ -477,6 +478,7 @@ func TestFullDiskLeavesTheFileIntact(t *testing.T) {
 }
 
 func TestOpenFollowsAReplacedFile(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: Windows refuses to rename a file SQLite holds open (sharing violation), so it is never replaced under a connection")
 	r := newRecEnv(t)
 	r.build()
 	other := newRecEnv(t)

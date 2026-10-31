@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // indexUserVersion is metrics.db's schema version, read without opening
@@ -67,6 +68,7 @@ func applyStep(steps []step, name string) (int, step) {
 const indexWarningFailed = "the metrics index was not migrated (failed): the next jobs tick retries"
 
 func TestUpdateApplyMigratesTheIndexAfterTheCommitPoint(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, _, _, bins, _ := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -112,6 +114,7 @@ func TestUpdateApplyMigratesTheIndexAfterTheCommitPoint(t *testing.T) {
 // The text says how many migrations ran, never their ids (they read like
 // the design-record numbers user-visible text never shows).
 func TestUpdateApplyIndexTextNamesNoMigrationID(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -129,6 +132,7 @@ func TestUpdateApplyIndexTextNamesNoMigrationID(t *testing.T) {
 }
 
 func TestUpdateApplyKeepsTheUpdateWhenTheIndexMigrationFails(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -168,6 +172,7 @@ func TestUpdateApplyKeepsTheUpdateWhenTheIndexMigrationFails(t *testing.T) {
 // The warning says why in fixed words: an index in use, not the child's
 // own sentence.
 func TestUpdateApplyIndexWarningSaysWhyInFixedWords(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -191,6 +196,7 @@ func TestUpdateApplyIndexWarningSaysWhyInFixedWords(t *testing.T) {
 }
 
 func TestUpdateApplyRollbackNeverMeetsAMigratedIndex(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, dk, _, bins, _ := serverInstalledAt(t, "0.1.0", "0.2.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -214,6 +220,7 @@ func TestUpdateApplyRollbackNeverMeetsAMigratedIndex(t *testing.T) {
 }
 
 func TestUpdateApplyPlanListsPendingIndexMigrations(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -247,6 +254,7 @@ func TestUpdateApplyPlanListsPendingIndexMigrations(t *testing.T) {
 }
 
 func TestUpdateApplyWithoutAnIndex(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -280,6 +288,7 @@ func TestUpdateApplyWithoutAnIndex(t *testing.T) {
 }
 
 func TestUpdateApplyIndexUpToDate(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -298,6 +307,7 @@ func TestUpdateApplyIndexUpToDate(t *testing.T) {
 }
 
 func TestUpdateApplyIndexNewerThanTheNewBinary(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	d := pathsOf(home)
 	src := t.TempDir()
@@ -317,6 +327,7 @@ func TestUpdateApplyIndexNewerThanTheNewBinary(t *testing.T) {
 
 // A new binary without the command (exit 2) has no index to migrate.
 func TestUpdateApplyIndexWithABinaryWithoutIt(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -336,6 +347,7 @@ func TestUpdateApplyIndexWithABinaryWithoutIt(t *testing.T) {
 // A plan never fails on the index: the new binary's failure to list its
 // migrations is a skipped step, in fixed words.
 func TestUpdateApplyPlanSkipsAnIndexItCannotList(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -355,6 +367,7 @@ func TestUpdateApplyPlanSkipsAnIndexItCannotList(t *testing.T) {
 // update apply bounds the child; one past the bound is a warning that says
 // so.
 func TestUpdateApplyIndexMigrationIsBounded(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
@@ -377,6 +390,7 @@ func TestUpdateApplyIndexMigrationIsBounded(t *testing.T) {
 
 // The deadline the child gets is update apply's bound.
 func TestUpdateApplyIndexMigrationGetsTheBound(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply (the fixture's release has no windows/amd64 archive)")
 	home, _, bins := installedAt(t, "0.1.0")
 	src := t.TempDir()
 	signedRelease(t, src, "0.2.0", trustTestKey(t), relOpts{})
