@@ -10,7 +10,7 @@
 <h2 title="{{.Totals.ID}}">Session {{short .Totals.ID}}</h2>
 <table>
 <tr><th>Project</th><th>Started</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
-<tr><td title="{{.Totals.Project}}">{{clip .Totals.Project}}</td><td>{{when $.Loc .Totals.Start}}</td><td>{{n .Totals.Prompts}}</td><td>{{n .Totals.PromptsWithMemory}}</td><td>{{n .Totals.Shown}}</td><td>{{n .Totals.Used}}</td><td>{{n .Totals.Wrong}}</td><td>{{n .Totals.ContextChars}} chars</td><td>{{sent .Totals.Sent}}</td></tr>
+<tr><td>{{if .Totals.Project}}<a href="/projects/{{esc .Totals.Project}}" title="{{.Totals.Project}}">{{clip .Totals.Project}}</a>{{end}}</td><td>{{when $.Loc .Totals.Start}}</td><td>{{n .Totals.Prompts}}</td><td>{{n .Totals.PromptsWithMemory}}</td><td>{{n .Totals.Shown}}</td><td>{{n .Totals.Used}}</td><td>{{n .Totals.Wrong}}</td><td>{{n .Totals.ContextChars}} chars</td><td>{{sent .Totals.Sent}}</td></tr>
 </table>
 </section>
 

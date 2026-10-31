@@ -80,6 +80,7 @@ var funcs = template.FuncMap{
 	"when":      when,
 	"esc":       url.PathEscape,
 	"asset":     assetOf,
+	"sentence":  sentence,
 	"pathOnly":  func(p string) string { base, _ := splitPath(p); return base },
 
 	"decision":    func(s string) string { return views.Word(views.DecisionWords, s) },

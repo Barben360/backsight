@@ -376,7 +376,7 @@ func TestReleasesListsVersionsAndSettings(t *testing.T) {
 		}
 	}
 	for _, w := range []string{res.Tables.Note, "feedback.boost_weight"} {
-		if !strings.Contains(text, w) {
+		if !strings.Contains(strings.ToLower(text), strings.ToLower(w)) {
 			t.Errorf("/releases lacks %q", w)
 		}
 	}
@@ -431,7 +431,7 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 		want []string
 		not  []string
 	}
-	notStored := []string{"confident_miss", "never_used", "quarantined", "same_topic", "too_short", "below_floor", "unhide", "no_candidates", "undeclared", "outdated", "batch_retain"}
+	notStored := []string{"invalidated", "confident_miss", "never_used", "quarantined", "same_topic", "too_short", "below_floor", "unhide", "no_candidates", "undeclared", "outdated", "batch_retain"}
 	for _, p := range []page{
 		{"sessions", func(d *PageData) { sessions(&d.V["sessions"].Tables, "quarantined") }, []string{"set aside after an error"}, notStored},
 		{"session", func(d *PageData) {
@@ -451,11 +451,11 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 		}, []string{"often shown, never used", "recent-weighted counts"}, notStored},
 		{"memory", func(d *PageData) {
 			m := d.V["memories"].Tables.Memory
-			m.Kind, m.ServerState = "world", "active"
+			m.Kind, m.ServerState = "world", "invalidated"
 			m.Row.State = "wrong"
 			m.Shows = []metrics.ShowMark{{At: now, Path: "search", Outcome: "confident_miss", Session: "sess-1", Rank: &one}}
 			m.Retirements = []metrics.RetireMark{{At: now, Kind: "unhide"}, {At: now, Kind: "hide"}}
-		}, []string{"facts about you and your work", "available", "reported wrong", "Claude's search", "shown, then ignored", "restored", "hidden"}, notStored},
+		}, []string{"facts about you and your work", "forgotten", "reported wrong", "Claude's search", "shown, then ignored", "restored", "hidden"}, notStored},
 		{"day", func(d *PageData) { sessions(&metrics.Tables{Sessions: d.V["days"].Tables.Day.Sessions}, "failed") }, []string{"failed"}, notStored},
 		{"project", func(d *PageData) {
 			for i := range d.V["projects"].Tables.Project.Sessions {
@@ -497,6 +497,72 @@ func TestBrowsePagesDoNotCryWolfAboutTheServer(t *testing.T) {
 	for _, p := range []string{"/projects", "/sessions", "/memories", "/days", "/releases", "/defs", "/memories/" + url.PathEscape(mem)} {
 		if _, b := pageGet(t, h, ck, p); strings.Contains(visibleText(b), "not answering") {
 			t.Errorf("%s with a server that answers: %q", p, visibleText(b))
+		}
+	}
+}
+
+func TestServerStatesAreWords(t *testing.T) {
+	for _, st := range []string{"active", "valid", "invalidated"} {
+		if w := views.Word(views.ServerStateWords, st); w == st {
+			t.Errorf("server state %q has no words", st)
+		}
+	}
+}
+
+func TestSessionsOfProjectAndDayArePaged(t *testing.T) {
+	h := dataHarness(t)
+	ck := h.login()
+	// A project and a day with at least two sessions: the second is reached by the next link.
+	var proj, day string
+	for _, p := range apiPath(t, h, "/api/v1/projects").Tables.Projects {
+		if p.Sessions >= 3 {
+			proj = p.Project
+			break
+		}
+	}
+	for _, d := range apiPath(t, h, "/api/v1/days").Tables.Days {
+		if d.Sessions >= 3 {
+			day = d.Day
+			break
+		}
+	}
+	if proj == "" || day == "" {
+		t.Fatalf("fixture lacks a project (%q) or a day (%q) with 3 sessions", proj, day)
+	}
+	for _, path := range []string{"/projects/" + url.PathEscape(proj) + "?limit=1", "/days/" + day + "?limit=1"} {
+		_, b := pageGet(t, h, ck, path)
+		if got := strings.Count(b, `href="/sessions/`); got != 1 {
+			t.Errorf("%s: %d session rows, want 1", path, got)
+		}
+		next := hrefs(b, "next")
+		if len(next) != 1 || !strings.Contains(next[0], "offset=1") {
+			t.Fatalf("%s: next links %q", path, next)
+		}
+		r, b2 := pageGet(t, h, ck, next[0])
+		if r.StatusCode != 200 || strings.Count(b2, `href="/sessions/`) != 1 || len(hrefs(b2, "prev")) != 1 {
+			t.Errorf("%s: the next page is not reachable (%d)", next[0], r.StatusCode)
+		}
+	}
+}
+
+func TestEmptyDayAndProjectLinks(t *testing.T) {
+	b := render(t, "day", func(d *PageData) { d.V["days"].Tables.Day.Sessions = nil })
+	if !strings.Contains(visibleText(b), "No sessions that day.") || strings.Contains(section(b, "Sessions"), "<table>") {
+		t.Errorf("an empty day: %q", section(b, "Sessions"))
+	}
+	for _, name := range []string{"sessions", "memories", "day"} {
+		b := render(t, name, func(d *PageData) {
+			switch name {
+			case "sessions":
+				d.V["sessions"].Tables.Sessions[0].Project = "my project"
+			case "memories":
+				d.V["memories"].Tables.Memories[0].Project = "my project"
+			case "day":
+				d.V["days"].Tables.Day.Sessions[0].Project = "my project"
+			}
+		})
+		if !strings.Contains(b, `<a href="/projects/my%20project" title="my project">my project</a>`) {
+			t.Errorf("%s: project name not linked", name)
 		}
 	}
 }

@@ -51,7 +51,7 @@ var (
 	// RetireWords name what was done to a memory; ServerStateWords the
 	// state the server keeps it in.
 	RetireWords      = map[string]string{"retire": "retired", "hide": "hidden", "unhide": "restored", "forget": "forgotten"}
-	ServerStateWords = map[string]string{"active": "available", "hidden": "hidden", "retired": "retired"}
+	ServerStateWords = map[string]string{"active": "available", "valid": "available", "invalidated": "forgotten"}
 
 	// HasWords and SortWords label the filters and orders of the lists.
 	HasWords  = map[string]string{"used": "Used", "wrong": "Reported wrong", "undeclared": "Not declared", "memory": "Got memory"}

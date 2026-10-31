@@ -15,7 +15,7 @@
 <h2>Sessions</h2>
 <table>
 <tr><th>When</th><th>Session</th><th>Project</th><th>Prompts</th><th>Prompts with memory</th><th>Shown</th><th>Used</th><th>Reported wrong</th><th>Context added</th><th>Sent</th></tr>
-{{range $r.Tables.Sessions}}<tr><td>{{when $.Loc .Start}}</td><td><a href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td title="{{.Project}}">{{clip .Project}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{sent .Sent}}</td></tr>
+{{range $r.Tables.Sessions}}<tr><td>{{when $.Loc .Start}}</td><td><a href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{if .Project}}<a href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{end}}</td><td>{{n .Prompts}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{sent .Sent}}</td></tr>
 {{end}}</table>
 {{template "paging" pager $.Frame.Path $r.Tables.Page}}
 </section>

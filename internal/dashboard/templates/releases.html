@@ -12,7 +12,7 @@
 {{range $r.Tables.Releases}}{{$row := .}}<tr><td>{{.Version}}</td><td>{{when $.Loc .First}}</td><td>{{when $.Loc .Last}}</td><td>{{n .N}}</td>{{range flagships}}<td>{{value (rowmetric .ID $row.Flagship)}}</td>{{end}}<td>{{range shares .ProjectShares}}{{.}}; {{end}}</td><td>{{printf "%.1f" .PromptsPerDay}}</td><td>{{opt .BankSize}}</td></tr>
 {{end}}</table>
 {{template "paging" pager $.Frame.Path $r.Tables.Page}}
-<p>{{$r.Tables.Note}}</p>
+<p>{{sentence $r.Tables.Note}}</p>
 </section>
 
 {{/* widget: settings in force. Reads .V.releases.Tables.Settings through the settings func. */}}

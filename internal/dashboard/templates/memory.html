@@ -10,7 +10,7 @@
 <h2 title="{{.Row.ID}}">Memory {{short .Row.ID}}</h2>
 <table>
 <tr><th>Project</th><th>Shown</th><th>Used</th><th>Ignored</th><th>Used rate</th><th>Learned ranking</th><th>Last shown</th><th>Last used</th><th>State</th></tr>
-<tr><td title="{{.Row.Project}}">{{clip .Row.Project}}</td><td>{{n .Row.Shown}}</td><td>{{weighted .Row.Used}}</td><td>{{weighted .Row.Ignored}}</td><td>{{optpct .Row.Rate}}</td><td>{{signed .Row.Boost}}</td><td>{{when $.Loc .Row.LastShown}}</td><td>{{when $.Loc .Row.LastUsed}}</td><td>{{memstate .Row.State}}</td></tr>
+<tr><td>{{if .Row.Project}}<a href="/projects/{{esc .Row.Project}}" title="{{.Row.Project}}">{{clip .Row.Project}}</a>{{end}}</td><td>{{n .Row.Shown}}</td><td>{{weighted .Row.Used}}</td><td>{{weighted .Row.Ignored}}</td><td>{{optpct .Row.Rate}}</td><td>{{signed .Row.Boost}}</td><td>{{when $.Loc .Row.LastShown}}</td><td>{{when $.Loc .Row.LastUsed}}</td><td>{{memstate .Row.State}}</td></tr>
 </table>
 <p>Used and ignored are recent-weighted counts: recent showings weigh more.</p>
 {{if or .Kind .ServerState .Created}}<p>Kind: {{with .Kind}}{{kind .}}{{else}}—{{end}} · on the server: {{with .ServerState}}{{serverstate .}}{{else}}—{{end}} · created {{when $.Loc .Created}}</p>
