@@ -548,7 +548,8 @@ func TestWorkflowsBoundEveryJob(t *testing.T) {
 }
 
 // ci.yml runs the whole unit-test suite on Windows (M7 block 2): the job
-// exists and runs `go test ./...` uncached, whatever else it does.
+// exists and runs `go test ./...` uncached, whatever else it does, with
+// the time budgets' files on the runner's local disk (Task 12b).
 func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 	for _, w := range workflows(t) {
 		if w.name != "ci.yml" {
@@ -560,6 +561,9 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 			}
 			if !strings.Contains(j.raw, "runs-on: windows-latest") || !strings.Contains(j.raw, "- run: go test ./... -count=1") {
 				t.Errorf("ci.yml job test-windows does not run go test ./... -count=1 on windows-latest:\n%s", j.raw)
+			}
+			if !strings.Contains(j.raw, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
+				t.Errorf("ci.yml job test-windows does not put the time budgets' files on the runner's local disk (BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}):\n%s", j.raw)
 			}
 			return
 		}

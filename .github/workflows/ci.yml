@@ -59,6 +59,10 @@ jobs:
           # The runner has a console logon: the server task runs there
           # (TestTaskStartStopForReal checks it came up through the task).
           BACKSIGHT_TEST_CONSOLE_LOGON: "1"
+          # The time budgets' files on the runner's local disk (D:): its
+          # C: flushes about 340 random 4 KiB writes a second, 30 times
+          # fewer than D: or the Windows VM (testtool.BenchTempDir).
+          BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}
   snapshot:
     # The release build, signed by minisign with a throwaway key: the
     # pre-publish key check passes, every signature verifies, and the Go

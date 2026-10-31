@@ -28,8 +28,7 @@ func TestViewBudgets(t *testing.T) {
 	if raceEnabled || testing.Short() {
 		t.Skip("time budgets are measured without -race and -short")
 	}
-	testtool.SkipWindows(t, "Task 12: indexgen.Budget's first index build is slower than the Linux budget on Windows (windows-latest over 9 min)")
-	home := t.TempDir()
+	home := testtool.BenchTempDir(t)
 	t.Setenv("BACKSIGHT_HOME", home)
 	t.Setenv("BACKSIGHT_STATE_DIR", "")
 	dirs, err := paths.Resolve(runtime.GOOS, home, os.Getenv)

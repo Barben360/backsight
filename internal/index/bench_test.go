@@ -65,11 +65,10 @@ func catchUp15(t testing.TB, ix *Index, stateDir string, round int) time.Duratio
 }
 
 func TestIndexBudgets(t *testing.T) {
-	testtool.SkipWindows(t, "Task 12: the first build is slower than the Linux budget on Windows (VM 77 s for 60 s; windows-latest over 10 min in the WAL checkpoint)")
 	if raceEnabled || testing.Short() {
 		t.Skip("time budgets are measured without -race and -short")
 	}
-	state := t.TempDir()
+	state := testtool.BenchTempDir(t)
 	indexgen.Generate(t, state, budgetSpec)
 	ix, build := firstBuild(t, state)
 	defer func() { _ = ix.Close() }()

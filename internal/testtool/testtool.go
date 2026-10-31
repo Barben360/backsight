@@ -377,6 +377,30 @@ func SkipWindows(t testing.TB, reason string) {
 	}
 }
 
+// BenchDirEnv names a directory for the time budgets' files, on the
+// disk the budgets are measured on. CI's windows-latest sets it to the
+// runner's local disk (D:): its C: is a network disk that flushes about
+// 340 random 4 KiB writes a second, 30 times fewer than the local disk
+// or the Windows test VM's (Task 12b), where no PC keeps its profile.
+const BenchDirEnv = "BACKSIGHT_TEST_BENCH_DIR"
+
+// BenchTempDir is a new directory for a time budget's files: under
+// BenchDirEnv when it is set (removed when the test ends), else
+// t.TempDir().
+func BenchTempDir(t testing.TB) string {
+	t.Helper()
+	root := os.Getenv(BenchDirEnv)
+	if root == "" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp(root, "bench-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // JSONPath escapes a file path for a JSON string written by hand: the
 // backslashes of a Windows path would otherwise be taken as escapes.
 func JSONPath(p string) string { return strings.ReplaceAll(p, `\`, `\\`) }

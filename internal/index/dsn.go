@@ -24,7 +24,7 @@ func dsn(path string, fs FSInfo, readOnly bool) string {
 	if readOnly {
 		q += "&mode=ro&_txlock=deferred"
 	} else {
-		q += "&_txlock=immediate"
+		q += "&_txlock=immediate" + writerPragmas
 	}
 	return fileURI(path) + "?" + q
 }
