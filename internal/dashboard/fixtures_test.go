@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -39,6 +40,23 @@ func goldenResult(t *testing.T, name string) *metrics.Result {
 	}
 	if err := json.Unmarshal(raw, &env); err != nil || env.Data == nil {
 		t.Fatalf("golden %s: data %v, error %v", name, env.Data, err)
+	}
+	// A field the struct no longer reads (a renamed json tag) would stay
+	// zero and the pages would run on less data than the golden holds: the
+	// data must survive a round trip through the struct.
+	var rawEnv struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &rawEnv); err != nil {
+		t.Fatalf("golden %s: %v", name, err)
+	}
+	again, err := json.Marshal(env.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want, got any
+	if json.Unmarshal(rawEnv.Data, &want) != nil || json.Unmarshal(again, &got) != nil || !reflect.DeepEqual(want, got) {
+		t.Fatalf("golden %s: the data does not survive a round trip through metrics.Result (a renamed json field?)", name)
 	}
 	return env.Data
 }

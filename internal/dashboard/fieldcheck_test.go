@@ -11,6 +11,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"text/template/parse"
+	"time"
 
 	"github.com/Barben360/backsight/internal/metrics"
 )
@@ -24,6 +25,7 @@ var (
 	viewsMapT   = reflect.TypeFor[map[string]*metrics.Result]()
 	metricsMapT = reflect.TypeFor[map[string]metrics.Metric]()
 	axesMapT    = reflect.TypeFor[map[string]metrics.Axis]()
+	extraMapT   = reflect.TypeFor[map[string]any]() // Metric.Extra
 	resultPtrT  = reflect.TypeFor[*metrics.Result]()
 	resultT     = reflect.TypeFor[metrics.Result]()
 	anyT        = reflect.TypeFor[any]()
@@ -441,6 +443,40 @@ func (c *checker) function(n parse.Node, name string, args []argument) reflect.T
 // resultKeys checks a literal metric id against the catalog.
 func resultKeys(key string) bool { _, ok := metrics.DefOf(key); return ok }
 
+// extraOwner is the literal metric id of a node like
+// (metric .V.x "id").M.Extra; "" when the metric is not known statically.
+func extraOwner(n parse.Node) string {
+	ch, ok := n.(*parse.ChainNode)
+	if !ok || !slices.Equal(ch.Field, []string{"M", "Extra"}) {
+		return ""
+	}
+	p, ok := ch.Node.(*parse.PipeNode)
+	if !ok || len(p.Cmds) != 1 || len(p.Cmds[0].Args) != 3 {
+		return ""
+	}
+	a := p.Cmds[0].Args
+	if id, ok := a[0].(*parse.IdentifierNode); !ok || id.Ident != "metric" {
+		return ""
+	}
+	if lit, ok := a[2].(*parse.StringNode); ok {
+		return lit.Text
+	}
+	return ""
+}
+
+// extraKeys accepts the Extra keys the catalog declares for metric id, or
+// for any metric when id is "".
+func extraKeys(id string) func(string) bool {
+	return func(key string) bool {
+		for _, d := range metrics.Catalog {
+			if (id == "" || d.ID == id) && slices.Contains(d.Extra, key) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // checkKey checks a literal argument with ok; a computed one passes.
 func (c *checker) checkKey(n parse.Node, ok func(string) bool, a argument) {
 	if s, lit := a.node.(*parse.StringNode); lit && !ok(s.Text) {
@@ -466,6 +502,8 @@ func (c *checker) index(n parse.Node, args []argument) reflect.Type {
 				c.checkKey(n, func(s string) bool { return slices.Contains(axisNames, s) }, k)
 			case viewsMapT:
 				c.checkKey(n, func(s string) bool { return slices.Contains(c.spec.Views, s) }, k)
+			case extraMapT:
+				c.checkKey(n, extraKeys(extraOwner(args[0].node)), k)
 			}
 			t = t.Elem()
 		case t.Kind() == reflect.Slice || t.Kind() == reflect.Array || t.Kind() == reflect.String:
@@ -516,6 +554,15 @@ func TestFieldCheckCatches(t *testing.T) {
 		{`{{index .V "quality"}}`, `quality`},
 		{`{{.Frame.Title.Foo}}`, `.Frame.Title.Foo`},
 		{`{{template "metric" .Frame}}`, `.Def`},
+		{`{{index (metric .V.overview "recall.hit_rate").M.Extra "bogus"}}`, `bogus`},
+		{`{{index (metric .V.overview "recall.hit_rate").M.Extra "p95"}}`, `p95`}, // declared by other metrics only
+		{`{{$m := metric .V.overview "recall.hit_rate"}}{{index $m.M.Extra "bogus"}}`, `bogus`},
+		{`{{with .V.overview.Verdict}}{{else}}{{.Nope}}{{end}}`, `.Nope`},
+		{`{{with .V.overview.Verdict}}{{else}}{{.Axes}}{{end}}`, `.Axes`},
+		{`{{template "metric"}}`, `.Def`},
+		{`{{slice .Frame.Nav 0 1}}{{range slice .Frame.Nav 0 1}}{{.Nope}}{{end}}`, `.Nope`},
+		{`{{$x := .Frame}}{{$x = .V.overview}}{{$x.Title}}`, `$x.Title`},
+		{`{{range .V.overview.Tables.Lately}}{{else}}{{.Project}}{{end}}`, `.Project`},
 		{`{{.Frame.Prefs.String}}`, `.Frame.Prefs.String`},
 	} {
 		got := checkTemplate(synthSet(t, tc.src), synthSpec())
@@ -531,6 +578,14 @@ func TestFieldCheckAccepts(t *testing.T) {
 		`{{$m := metric .V.overview "recall.hit_rate"}}{{value $m}} {{$m.M.Num}}`,
 		`{{range .V.overview.Tables.Lately}}{{clip .Project}} {{when $.Loc .Last}}{{end}}`,
 		`{{template "metric" metric .V.overview "recall.hit_rate"}}`,
+		`{{index (metric .V.overview "used.rank").M.Extra "hit_at_1"}}`,
+		`{{$m := metric .V.overview "recall.hit_rate"}}{{index $m.M.Extra "p95"}}`, // owner unknown: any declared key
+		`{{with .Frame.Scope}}{{.Server}}{{else}}{{.Frame.Title}}{{end}}`,
+		`{{range slice .Frame.Nav 0 5}}{{.Label}}{{end}}{{with .Frame.Nav}}{{range .}}{{.Href}}{{end}}{{end}}`,
+		`{{range .Frame.PrefMenu}}{{range .Choices}}{{.Label}}{{end}}{{end}}`,
+		`{{$x := .Frame}}{{$x = .Frame}}{{$x.Title}}{{index .Frame.Nav 0}}{{(index .Frame.Nav 0).Label}}`,
+		`{{.Frame.Title | printf "%s" | clip}}{{.Frame.Path | pathOnly | esc}}`,
+		`{{with .V.overview.Server}}{{.}}{{end}}`,
 	} {
 		if got := checkTemplate(synthSet(t, src), synthSpec()); len(got) != 0 {
 			t.Errorf("%s: problems %q", src, got)
@@ -601,18 +656,57 @@ func TestPageTemplatesRunOnFixtures(t *testing.T) {
 			}
 		}
 	}
-	for _, empty := range []bool{false, true} {
+	for _, run := range []struct {
+		label          string
+		empty, noScope bool
+	}{{"goldens", false, false}, {"empty", true, false}, {"goldens without scope", false, true}} {
 		tpls, specs, err := loadPages(Templates()) // a set of its own per run
 		if err != nil {
 			t.Fatal(err)
 		}
 		for name, spec := range specs {
-			var buf bytes.Buffer
-			if err := tpls[name].ExecuteTemplate(&buf, spec.File, fixtureData(t, spec, empty)); err != nil {
-				t.Errorf("%s (empty %v): %v", name, empty, err)
-			} else if buf.Len() == 0 {
-				t.Errorf("%s (empty %v): no output", name, empty)
+			data := fixtureData(t, spec, run.empty)
+			if run.noScope {
+				data.Frame.Scope = nil
 			}
+			var buf bytes.Buffer
+			if err := tpls[name].ExecuteTemplate(&buf, spec.File, data); err != nil {
+				t.Errorf("%s (%s): %v", name, run.label, err)
+			} else if buf.Len() == 0 {
+				t.Errorf("%s (%s): no output", name, run.label)
+			}
+		}
+	}
+}
+
+// The state page is no page of loadPages (it reads no view): it is checked
+// and executed here, in each of its shapes.
+func TestStatePageFieldsAndRuns(t *testing.T) {
+	spec := pageSpec{Name: "state", File: "state.html"}
+	set, err := parseWithFrame(Templates(), "state.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := checkTemplate(set, spec); len(got) != 0 {
+		t.Errorf("state.html: %q", got)
+	}
+	set, err = parseWithFrame(Templates(), "state.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reload := range []int{0, 2} {
+		data := fixtureData(t, pageSpec{Name: "overview", File: "overview.html", Views: []string{"overview"}}, true)
+		data.V, data.Loc, data.Frame.Scope = nil, time.UTC, nil
+		data.Frame.Reload, data.Msg = reload, "A sentence."
+		var buf bytes.Buffer
+		if err := set.ExecuteTemplate(&buf, "state.html", data); err != nil {
+			t.Fatalf("reload %d: %v", reload, err)
+		}
+		if !strings.Contains(buf.String(), "A sentence.") {
+			t.Errorf("reload %d: the message is not shown", reload)
+		}
+		if got := strings.Contains(buf.String(), `http-equiv="refresh"`); got != (reload > 0) {
+			t.Errorf("reload %d: refresh header %v", reload, got)
 		}
 	}
 }
