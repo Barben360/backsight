@@ -188,7 +188,7 @@ func detailsOf(v MetricView) []string {
 		if loc == nil {
 			loc = time.UTC
 		}
-		return views.MetricDetails(d, m, loc)
+		return views.PageDetails(d, m, loc)
 	})
 }
 

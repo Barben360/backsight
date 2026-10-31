@@ -63,19 +63,19 @@ func extraTime(m metrics.Metric, key string, loc *time.Location) (string, bool) 
 }
 
 // extraCounts reads a map of counts, sorted by key.
-func extraCounts(m metrics.Metric, key string) []string {
+func extraCounts(m metrics.Metric, key string, words map[string]string) []string {
 	var out []string
 	switch v := m.Extra[key].(type) {
 	case map[string]int64:
 		for k, n := range v {
 			if n > 0 {
-				out = append(out, k+" "+Grouped(n))
+				out = append(out, Word(words, k)+" "+Grouped(n))
 			}
 		}
 	case map[string]any:
 		for k, x := range v {
 			if n, ok := x.(int64); ok && n > 0 {
-				out = append(out, k+" "+Grouped(n))
+				out = append(out, Word(words, k)+" "+Grouped(n))
 			}
 		}
 	}
@@ -86,14 +86,28 @@ func extraCounts(m metrics.Metric, key string) []string {
 // MetricDetails are the indented lines under a metric: what the number does
 // not say by itself (a lower bound, a partial total, a split).
 func MetricDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string {
+	return details(d, m, loc, false)
+}
+
+// PageDetails are the same lines for a page, which names the skip reasons
+// and the hook failure kinds in words.
+func PageDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string {
+	return details(d, m, loc, true)
+}
+
+func details(d metrics.Def, m metrics.Metric, loc *time.Location, page bool) []string {
+	var skipWords, failureWords map[string]string
+	if page {
+		skipWords, failureWords = SkipWords, FailureKindWords
+	}
 	var out []string
 	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
 	switch d.ID {
 	case "recall.empty_reasons":
-		if e := extraCounts(m, "empty"); len(e) > 0 {
+		if e := extraCounts(m, "empty", nil); len(e) > 0 {
 			add("why: %s", EmptyWords.Replace(strings.Join(e, ", ")))
 		}
-		if s := extraCounts(m, "skips"); len(s) > 0 {
+		if s := extraCounts(m, "skips", skipWords); len(s) > 0 {
 			add("prompts skipped: %s", strings.Join(s, ", "))
 		}
 	case "used.turn_rate":
@@ -156,7 +170,7 @@ func MetricDetails(d metrics.Def, m metrics.Metric, loc *time.Location) []string
 		}
 		add("waiting %s, running %s, failed in the last 7 days %s, failed in all %s", Grouped(pending), Grouped(proc), f, Grouped(total))
 	case "hooks.failures":
-		if l := extraCounts(m, "last_24h"); len(l) > 0 {
+		if l := extraCounts(m, "last_24h", failureWords); len(l) > 0 {
 			add("in the last 24 h: %s", strings.Join(l, ", "))
 		}
 	case "server.reach":

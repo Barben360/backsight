@@ -32,6 +32,17 @@ var (
 	RuntimeWords = map[string]string{"docker": "Docker", "native": "a native install"}
 	ModeWords    = map[string]string{"local": "on this PC", "remote": "on another machine"}
 
+	// SkipWords name why a prompt got no recall; FailureKindWords how a hook failed.
+	SkipWords = map[string]string{
+		"machine": "a background session", "too_short": "too short", "same_topic": "same topic as before", "gap": "too soon after the last recall",
+		"budget": "over the size limit", "topic_shift": "topic changed", "breaker": "memory server paused", "maintenance": "while backsight was being serviced",
+		"first": "start of a session", "other": "other", "unknown": "reason not recorded",
+	}
+	FailureKindWords = map[string]string{
+		"panic": "crashed", "fatal": "stopped on an error", "timeout": "ran too long", "killed": "was stopped", "exit": "exited with an error",
+		"invalid_output": "gave an unreadable answer", "input_too_large": "input too large", "spawn": "could not start", "unknown": "reason not recorded",
+	}
+
 	// LanguageWords name the language groups of recall.by_lang.
 	LanguageWords = map[string]string{"unknown": "language not detected"}
 )

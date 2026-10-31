@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"html"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -242,7 +244,7 @@ func TestPagesShowNoJargon(t *testing.T) {
 			}
 		}
 	}
-	codes = append(codes, "too_few", "cant_judge", "too_early", "recent_weighted", "wilson", "not_filtered", "judged_28d", "no_candidates", "below_floor")
+	codes = append(codes, "too_few", "cant_judge", "too_early", "recent_weighted", "wilson", "not_filtered", "same_topic", "too_short", "topic_shift", "input_too_large", "invalid_output", "judged_28d", "no_candidates", "below_floor")
 	for page := range pageMetrics {
 		path := "/" + page
 		if page == "overview" {
@@ -536,4 +538,64 @@ func TestExtraBreakdownsAreShown(t *testing.T) {
 	check("cost", func(d *PageData) {
 		set(d.V["cost"], "context.per_session", map[string]any{"p50": 1200.0, "p95": 9000.0})
 	}, "typical 1,200 chars, high 9,000 chars")
+}
+
+func TestRealBreakdownsAreShown(t *testing.T) {
+	h := dataHarness(t)
+	res, st, err := h.s.data.result(context.Background(), "quality", views.Params{Limit: 50, Dev: true}, "")
+	if err != nil || st != stateReady {
+		t.Fatalf("quality: state %d, %v", st, err)
+	}
+	def, _ := metrics.DefOf("recall.by_lang")
+	lines := views.ExtraLines(def, res.Metrics["recall.by_lang"])
+	if len(lines) == 0 {
+		t.Fatal("no language lines from the computed metric: the shape of langStat changed")
+	}
+	for _, l := range lines {
+		if !regexp.MustCompile(`: \d+ of \d+ \(\d+ %\)$`).MatchString(l) {
+			t.Errorf("line %q", l)
+		}
+	}
+}
+
+func TestSkipReasonsAndHookKindsAreWordsOnPages(t *testing.T) {
+	skips := map[string]int64{}
+	for _, r := range indexgen.PromptReasons {
+		skips[r] = 1
+	}
+	kinds := map[string]int64{}
+	rawNames := append(slices.Clone(indexgen.PromptReasons), "panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn")
+	for _, k := range rawNames[len(indexgen.PromptReasons):] {
+		kinds[k] = 1
+	}
+	set := func(r *metrics.Result, id string, extra map[string]any) {
+		m := r.Metrics[id]
+		m.Status = metrics.StatusOK
+		m.Extra = extra
+		r.Metrics[id] = m
+	}
+	for page, edit := range map[string]func(*PageData){
+		"quality": func(d *PageData) {
+			set(d.V["quality"], "recall.empty_reasons", map[string]any{"empty": map[string]int64{}, "skips": skips})
+		},
+		"overview": func(d *PageData) {
+			set(d.V["overview"], "recall.empty_reasons", map[string]any{"empty": map[string]int64{}, "skips": skips})
+		},
+		"pipeline": func(d *PageData) {
+			set(d.V["pipeline"], "hooks.failures", map[string]any{"by_kind": kinds, "last_24h": kinds})
+		},
+	} {
+		text := visibleText(render(t, page, edit))
+		if !strings.Contains(text, "skipped") && page != "pipeline" || !strings.Contains(text, "in the last 24 h") && page == "pipeline" {
+			if page == "overview" {
+				continue // the overview shows no such metric
+			}
+			t.Errorf("%s shows no breakdown: %q", page, text)
+		}
+		for _, r := range rawNames {
+			if hasWord(text, r) {
+				t.Errorf("%s shows the stored name %q", page, r)
+			}
+		}
+	}
 }
