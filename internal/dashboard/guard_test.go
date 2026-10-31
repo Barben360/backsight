@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -268,6 +269,21 @@ func TestHostCheck(t *testing.T) {
 	if got := rawStatus(t, h.raw("GET / HTTP/1.0\r\n\r\n")); got != http.StatusMisdirectedRequest {
 		t.Errorf("no Host: %d, want 421", got)
 	}
+	// An absolute-form target names the host (RFC 7230 5.4): checked as
+	// the Host. A browser never sends one to an origin server.
+	for target, want := range map[string]int{
+		"http://evil.example:" + p + "/": http.StatusMisdirectedRequest,
+		"http://" + h.host() + "/":       http.StatusOK,
+	} {
+		other := "evil.example:" + p
+		if strings.Contains(target, "evil") {
+			other = h.host()
+		}
+		req := "GET " + target + " HTTP/1.1\r\nHost: " + other + "\r\nConnection: close\r\n\r\n"
+		if got := rawStatus(t, h.raw(req)); got != want {
+			t.Errorf("GET %s with Host %s: %d, want %d", target, other, got, want)
+		}
+	}
 }
 
 func TestMethods(t *testing.T) {
@@ -284,6 +300,12 @@ func TestMethods(t *testing.T) {
 			if b := body(t, r); b != "only GET and HEAD\n" {
 				t.Errorf("%s %s: body %q", m, path, b)
 			}
+		}
+	}
+	for host, want := range map[string]int{h.host(): http.StatusMethodNotAllowed, "evil.example:" + strconv.Itoa(h.port): http.StatusMisdirectedRequest} {
+		req := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+		if got := rawStatus(t, h.raw(req)); got != want {
+			t.Errorf("CONNECT %s: %d, want %d", host, got, want)
 		}
 	}
 	// net/http answers "OPTIONS *" itself unless told not to.
@@ -479,4 +501,145 @@ func TestHarnessClock(t *testing.T) {
 	if got, want := h.s.now(), at.Add(90*time.Second); !got.Equal(want) {
 		t.Errorf("server clock %v, want %v", got, want)
 	}
+}
+
+// net/http's path-cleaning redirect stays on this origin: a target
+// starting "//" is a path, never a host.
+func TestCleanedPathRedirectStaysLocal(t *testing.T) {
+	h := newHarness(t)
+	for _, target := range []string{"//evil.example/x", "/.//evil.example/x", "/a/..//evil.example/x"} {
+		resp := h.raw("GET " + target + " HTTP/1.1\r\nHost: " + h.host() + "\r\nConnection: close\r\n\r\n")
+		if got := rawStatus(t, resp); got < 300 || got > 399 {
+			t.Errorf("GET %s: %d, want a redirect", target, got)
+			continue
+		}
+		loc := ""
+		for _, l := range strings.Split(resp, "\r\n") {
+			if v, ok := strings.CutPrefix(l, "Location: "); ok {
+				loc = v
+			}
+		}
+		if !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") || strings.HasPrefix(loc, "/\\") {
+			t.Errorf("GET %s: Location %q, want a local path", target, loc)
+		}
+	}
+}
+
+// A Start failing after its claim (here: the old codes cannot be swept)
+// releases the claim and the port, and returns an error.
+func TestFailedStartAfterClaimUndoes(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory its owner cannot read")
+	}
+	d := testDirs(t)
+	codes := CodesDir(d)
+	if err := os.MkdirAll(codes, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(codes, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(codes, 0o700) })
+	p := freePort(t)
+	cfg := Config{Dirs: d, Port: p}
+	s, err := Start(context.Background(), cfg)
+	if err == nil {
+		_ = s.ln.Close()
+		t.Fatal("Start succeeded with an unreadable codes directory")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
+	if err != nil {
+		t.Fatalf("a failed Start left port %d bound: %v", p, err)
+	}
+	_ = ln.Close()
+	noRuntimeFile(t, cfg)
+}
+
+// blockRoute makes the first request that passes the guard wait in
+// beforeRoute until release is closed or its context ends; entered is
+// closed once it waits, cancelled receives whether its context had ended.
+func blockRoute(t *testing.T) (entered, release chan struct{}, cancelled chan bool) {
+	t.Helper()
+	entered, release, cancelled = make(chan struct{}), make(chan struct{}), make(chan bool, 1)
+	var once sync.Once
+	beforeRoute = func(r *http.Request) {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return
+		}
+		close(entered)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		cancelled <- r.Context().Err() != nil
+	}
+	t.Cleanup(func() { beforeRoute = func(*http.Request) {} })
+	return entered, release, cancelled
+}
+
+// get sends GET / in the background: its status, or -1 when the request
+// got no response.
+func (h *harness) get() chan int {
+	got := make(chan int, 1)
+	go func() {
+		req, err := http.NewRequest("GET", "http://"+h.host()+"/", nil)
+		if err != nil {
+			got <- -1
+			return
+		}
+		resp, err := h.client.Do(req)
+		if err != nil {
+			got <- -1
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		got <- resp.StatusCode
+	}()
+	return got
+}
+
+// A request running when Serve's context ends keeps its own context and
+// finishes within the grace.
+func TestStopLetsARunningRequestFinish(t *testing.T) {
+	entered, release, cancelled := blockRoute(t)
+	t.Cleanup(func() { beforeShutdown = func() {} })
+	h := newHarness(t)
+	beforeShutdown = func() { close(release) }
+	got := h.get()
+	<-entered
+	reason, err := h.stop()
+	if reason != "interrupted" || err != nil {
+		t.Errorf("Serve: %q, %v; want interrupted, nil", reason, err)
+	}
+	if <-cancelled {
+		t.Error("the running request's context ended with Serve's: it got no grace")
+	}
+	if status := <-got; status != http.StatusOK {
+		t.Errorf("the running request got %d, want 200", status)
+	}
+}
+
+// A request still running after the grace is cut: its connection is
+// closed, its context ends, and Serve returns.
+func TestStopCutsARequestAfterTheGrace(t *testing.T) {
+	defer func(g time.Duration) { shutdownGrace = g }(shutdownGrace)
+	shutdownGrace = 0
+	entered, _, cancelled := blockRoute(t)
+	h := newHarness(t)
+	got := h.get()
+	<-entered
+	reason, err := h.stop()
+	if reason != "interrupted" || err != nil {
+		t.Errorf("Serve: %q, %v; want interrupted, nil", reason, err)
+	}
+	if !<-cancelled {
+		t.Error("the request left running was not cancelled")
+	}
+	if status := <-got; status != -1 {
+		t.Errorf("the request cut at the stop got a response %d", status)
+	}
+	noRuntimeFile(t, Config{Dirs: h.dirs})
 }

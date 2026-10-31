@@ -35,7 +35,7 @@ func TestAssetsPublic(t *testing.T) {
 		}
 	}
 	for _, p := range []string{
-		"/assets/logo-light.svg", "/assets/..%2Fserver.go", "/assets/", "/assets/dashboard.000000000000.css",
+		"/assets/logo-light.svg", "/assets/..%2Fserver.go", "/assets/%2e%2e/server.go", "/assets/%2e%2e/x", "/assets/", "/assets/dashboard.000000000000.css",
 		assetPath("logo-light.svg") + "x",
 		strings.TrimSuffix(assetPath("logo-light.svg"), ".svg") + "%2Esvg", // the exact path only, not a decoded one
 	} {

@@ -25,6 +25,10 @@ func securityHeaders(h http.Header, immutable bool) {
 	}
 }
 
+// beforeRoute runs as a request that passed the guard reaches its route:
+// tests block a request there.
+var beforeRoute = func(*http.Request) {}
+
 // guard is the outermost handler. It sets the security headers, then
 // checks, each before any work: the Host (421), the method (405), the
 // Fetch Metadata site (403); it serves /assets/ and hands the rest to
@@ -55,6 +59,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			serveAsset(w, r)
 			return
 		}
+		beforeRoute(r)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -40,6 +40,10 @@ const StopInterrupted StopReason = "interrupted"
 // shutdownGrace is how long the requests running at the stop may finish.
 var shutdownGrace = 5 * time.Second
 
+// beforeShutdown runs once Serve's context ended, before the shutdown:
+// tests release a blocked request there.
+var beforeShutdown = func() {}
+
 // Server is a started dashboard: bound, claimed, not yet serving.
 type Server struct {
 	cfg  Config
@@ -55,7 +59,7 @@ type Server struct {
 // that port is in use), claims the runtime file with the bound port and
 // removes every login code a previous run left. A Start that fails after
 // a step undoes it.
-func Start(ctx context.Context, cfg Config) (s *Server, err error) {
+func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	if cfg.Port != 0 && (cfg.Port < 1024 || cfg.Port > 65535) {
 		return nil, fmt.Errorf("port %d: give 0 for a free port, or a port from 1024 to 65535", cfg.Port)
 	}
@@ -94,12 +98,14 @@ func Start(ctx context.Context, cfg Config) (s *Server, err error) {
 	}()
 	undo = append(undo, func() { _ = ln.Close() })
 
-	s = &Server{cfg: cfg, now: cfg.Now, ln: ln, port: ln.Addr().(*net.TCPAddr).Port, pid: os.Getpid()}
+	// The undo steps read only these locals: the result is nil when they run.
+	pid, port := os.Getpid(), ln.Addr().(*net.TCPAddr).Port
 	started := time.Now().UTC()
-	if err := Claim(cfg.Dirs, Runtime{PID: s.pid, Port: s.port, StartedAt: started}, started); err != nil {
+	if err := Claim(cfg.Dirs, Runtime{PID: pid, Port: port, StartedAt: started}, started); err != nil {
 		return nil, err
 	}
-	undo = append(undo, func() { _ = Release(cfg.Dirs, s.pid) })
+	undo = append(undo, func() { _ = Release(cfg.Dirs, pid) })
+	s := &Server{cfg: cfg, now: cfg.Now, ln: ln, port: port, pid: pid}
 	if err := SweepCodes(cfg.Dirs, s.now(), true); err != nil {
 		return nil, err
 	}
@@ -124,7 +130,10 @@ func (s *Server) Port() int { return s.port }
 // running requests finish for up to shutdownGrace, closes what is left,
 // removes the runtime file and every login code.
 func (s *Server) Serve(ctx context.Context) (StopReason, error) {
-	s.srv.BaseContext = func(net.Listener) context.Context { return ctx }
+	// The requests' context outlives ctx: a request running at the stop
+	// gets the shutdown grace, then the forced close cancels it.
+	base := context.WithoutCancel(ctx)
+	s.srv.BaseContext = func(net.Listener) context.Context { return base }
 	served := make(chan error, 1)
 	go func() { served <- s.srv.Serve(s.ln) }()
 
@@ -133,6 +142,7 @@ func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 	select {
 	case <-ctx.Done():
 		reason = StopInterrupted
+		beforeShutdown()
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		if s.srv.Shutdown(sctx) != nil {
 			_ = s.srv.Close() // the grace is over: drop what still runs
