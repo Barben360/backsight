@@ -50,6 +50,7 @@ func installShimRun(t *testing.T, version string) installedShim {
 // user PATH (the test's throwaway key, TestMain) once.
 func TestInstallShimInstallsThisBinaryUnderItsVersion(t *testing.T) {
 	home := isolate(t)
+	setBuild(t, "9.9.9", "abc") // a release installs as its own version
 	src := t.TempDir()
 	exe := fakeRelease(t, src, "9.9.9", true)
 	d := pathsOf(home)
@@ -98,5 +99,54 @@ func TestInstallShimRefusesAnUnexpectedVersion(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(pathsOf(home).Data, "bin")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("data/bin written for a refused version (%v)", err)
+	}
+}
+
+// A release binary installs only under its own version: install.ps1 takes
+// the version from the archive name, the binary knows its own.
+func TestInstallShimRefusesAnotherVersionThanItsOwn(t *testing.T) {
+	home := isolate(t)
+	setBuild(t, "9.9.8", "abc")
+	fakeRelease(t, t.TempDir(), "9.9.8", true)
+	code, _, errOut := run(t, "__install-shim", "9.9.9")
+	if code != output.Usage || !strings.Contains(errOut, "this binary is backsight 9.9.8, not 9.9.9") {
+		t.Errorf("exit %d, want %d and the reason\n%s", code, output.Usage, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(pathsOf(home).Data, "bin")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("data/bin written for another version (%v)", err)
+	}
+}
+
+// Something of the user's at the PATH command is left alone and not
+// reported as the command; on Windows, where any file there is
+// backsight's copy, a directory is refused.
+func TestInstallShimLeavesTheUsersOwnCommand(t *testing.T) {
+	home := isolate(t)
+	fakeRelease(t, t.TempDir(), "9.9.9", true)
+	d := pathsOf(home)
+	link := pathCommand(d.Bin)
+	if err := os.MkdirAll(d.Bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Mkdir(link, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		code, _, errOut := run(t, "__install-shim", "9.9.9")
+		if code != output.Blocked || !strings.Contains(errOut, "is not a file backsight made") {
+			t.Errorf("exit %d, want %d and the reason\n%s", code, output.Blocked, errOut)
+		}
+		return
+	}
+	own := "#!/bin/sh\necho my own build\n"
+	if err := os.WriteFile(link, []byte(own), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := installShimRun(t, "9.9.9")
+	if r.Command != "" {
+		t.Errorf("reported the user's own %s as the command", r.Command)
+	}
+	if got, err := os.ReadFile(link); err != nil || string(got) != own {
+		t.Errorf("the user's own command was changed: %q %v", got, err)
 	}
 }

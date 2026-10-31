@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 )
@@ -18,6 +19,7 @@ type installedShim struct {
 	Version string `json:"version"`
 	Target  string `json:"target"`
 	Shim    string `json:"shim"`
+	// Command is empty when the user's own file is at <bin>/backsight.
 	Command string `json:"command"`
 	Bin     string `json:"bin"`
 	// UserPathAdded: <bin> was added to the user PATH (Windows).
@@ -45,6 +47,11 @@ func newInstallShimCmd(e *env) *cobra.Command {
 			if !releaseVersion.MatchString(args[0]) {
 				return &output.Error{Code: output.Usage, Message: fmt.Sprintf("unexpected release version %q", args[0])}
 			}
+			// The directory names the version this binary is: a release
+			// installs only as itself (a dev build has no version to check).
+			if v := buildinfo.Version; v != "" && v != "dev" && v != args[0] {
+				return &output.Error{Code: output.Usage, Message: fmt.Sprintf("this binary is backsight %s, not %s", v, args[0])}
+			}
 			d, _, err := machine()
 			if err != nil {
 				return err
@@ -63,6 +70,9 @@ func newInstallShimCmd(e *env) *cobra.Command {
 				return blocked(err)
 			}
 			// The command on PATH runs the shim, as client install makes it.
+			// Anything else there is the user's and stays (on Windows,
+			// where any file there is backsight's copy, it is refused):
+			// no command is reported then.
 			link, older := olderPathLink(d, r.Shim)
 			switch {
 			case older || absentPathLink(d):
@@ -72,15 +82,19 @@ func newInstallShimCmd(e *env) *cobra.Command {
 				if err := pointShim(r.Shim, link); err != nil {
 					return blocked(err)
 				}
+				r.Command = link
 			case runtime.GOOS == "windows":
 				return blocked(fmt.Errorf("%s is not a file backsight made: remove it, then install again", link))
+			default:
+				if dest, err := os.Readlink(link); err == nil && filepath.Clean(dest) == filepath.Clean(r.Shim) {
+					r.Command = link // already the shim's link
+				}
 			}
-			r.Command = link
 			if r.UserPathAdded, err = ensureUserPath(d.Bin); err != nil {
 				return blocked(fmt.Errorf("adding %s to the user PATH: %w", d.Bin, err))
 			}
 			return e.emit("__install-shim", r, func() string {
-				return fmt.Sprintf("backsight %s installed: %s\n", r.Version, r.Command)
+				return fmt.Sprintf("backsight %s installed: %s\n", r.Version, r.Target)
 			})
 		},
 	}

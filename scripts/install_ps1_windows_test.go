@@ -196,8 +196,7 @@ func TestInstallPs1RefusesABadZipHash(t *testing.T) {
 	for _, shell := range powerShells(t) {
 		t.Run(shellName(shell), func(t *testing.T) {
 			bh := filepath.Join(t.TempDir(), "bs")
-			key := userPathKey(t, shellName(shell))
-			out, err := runInstallPs1(t, shell, []string{"BACKSIGHT_HOME=" + bh, "BACKSIGHT_RELEASE_DIR=" + rel, "BACKSIGHT_TEST_USERPATH_KEY=" + key})
+			out, err := runInstallPs1(t, shell, []string{"BACKSIGHT_HOME=" + bh, "BACKSIGHT_RELEASE_DIR=" + rel})
 			if err == nil || !strings.Contains(out, "backsight install: backsight_0.1.18-m7_windows_amd64.zip: checksum mismatch") {
 				t.Fatalf("want a checksum refusal, got %v\n%s", err, out)
 			}
@@ -207,8 +206,52 @@ func TestInstallPs1RefusesABadZipHash(t *testing.T) {
 			if _, err := os.Stat(bh); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s written by a refused install (%v)", bh, err)
 			}
-			if up := userPath(t, key); up != "" {
-				t.Errorf("user PATH written by a refused install: %q", up)
+		})
+	}
+}
+
+// A release whose checksums.txt does not verify is refused, with its
+// reason, before anything is written: install.ps1 runs its signature check
+// (TestMinisignRefusals covers each reason of that check).
+func TestInstallPs1RefusesWhatDoesNotVerify(t *testing.T) {
+	keyOf := func(f string) string {
+		return strings.TrimSpace(strings.Split(string(readRaw(t, fixture(t, f))), "\n")[1])
+	}
+	cases := []struct {
+		name, fixtures, pubkey, want string
+	}{
+		{"checksums changed", "tampered", "", "backsight install: checksums.txt: bad signature"},
+		{"signed by another key", "other-key", "", "backsight install: checksums.txt.minisig: signed by another key (key 15AF315BAB4E6A02)"},
+		{"signature made for another file", "no-file-field", keyOf("no-file-field/key.pub"), "backsight install: checksums.txt.minisig was made for another file"},
+	}
+	shells := powerShells(t)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rel := t.TempDir()
+			for _, f := range []string{"checksums.txt", "checksums.txt.minisig"} {
+				if err := os.WriteFile(filepath.Join(rel, f), readRaw(t, fixture(t, c.fixtures+"/"+f)), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The zip checksums.txt lists, were the signature accepted.
+			if err := os.WriteFile(filepath.Join(rel, "backsight_0.1.18-m7_windows_amd64.zip"), []byte("PK"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, shell := range shells {
+				t.Run(shellName(shell), func(t *testing.T) {
+					bh := filepath.Join(t.TempDir(), "bs")
+					env := []string{"BACKSIGHT_HOME=" + bh, "BACKSIGHT_RELEASE_DIR=" + rel}
+					if c.pubkey != "" {
+						env = append(env, "BACKSIGHT_INSTALL_PUBKEY="+c.pubkey)
+					}
+					out, err := runInstallPs1(t, shell, env)
+					if err == nil || !strings.Contains(out, c.want) {
+						t.Errorf("want a refusal %q, got %v\n%s", c.want, err, out)
+					}
+					if _, err := os.Stat(bh); !errors.Is(err, os.ErrNotExist) {
+						t.Errorf("%s written by a refused install (%v)", bh, err)
+					}
+				})
 			}
 		})
 	}

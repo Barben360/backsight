@@ -290,6 +290,45 @@ function Test-Minisign([string]$file, [string]$sigFile, [string]$pubKeyB64) {
     return $true
 }
 
+# Invoke-Https: a GET that must end on https, as install.sh's curl
+# --proto '=https': Windows PowerShell 5.1 (.NET Framework) follows a
+# redirect from https to http, so the final address is checked. The files'
+# integrity never rests on it (checksums.txt is signed, the zip is listed
+# in it), the newest release's tag does. $outFile: saved there, removed
+# when refused.
+function Invoke-Https([string]$uri, [string]$outFile, [hashtable]$headers) {
+    if (-not $uri.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase)) { throw 'not https' }
+    $a = @{ UseBasicParsing = $true; Uri = $uri }
+    if ($headers) { $a.Headers = $headers }
+    if ($outFile) { $a.OutFile = $outFile; $a.PassThru = $true }
+    $r = Invoke-WebRequest @a
+    $final = $r.BaseResponse.ResponseUri # Windows PowerShell 5.1
+    if ($null -eq $final -and $null -ne $r.BaseResponse.RequestMessage) { $final = $r.BaseResponse.RequestMessage.RequestUri } # PowerShell 7
+    if ($null -eq $final -or $final.Scheme -ne 'https') {
+        if ($outFile) { Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue }
+        throw "redirected to $final, not https"
+    }
+    return $r
+}
+
+# Get-NewestTag: the tag of the newest release, pre-releases included.
+# GitHub's /releases/latest skips pre-releases; the release list, newest
+# first, does not.
+function Get-NewestTag([string]$api, [string]$repo, [string]$downloads) {
+    $list = "$api/repos/$repo/releases?per_page=1"
+    $how = "set BACKSIGHT_RELEASE_URL=$downloads/<tag> (tags: https://github.com/$repo/releases), or BACKSIGHT_RELEASE_DIR to a downloaded release"
+    try { $content = (Invoke-Https $list $null @{ Accept = 'application/vnd.github+json' }).Content }
+    catch { throw "cannot list the releases at ${list}: $how" }
+    if ($content -is [byte[]]) { $content = [Text.Encoding]::UTF8.GetString($content) }
+    $first = $null
+    try { $parsed = ConvertFrom-Json -InputObject $content; $first = @($parsed)[0] } catch { }
+    $tag = $null
+    if ($first -isnot [string] -and $null -ne $first) { $tag = $first.tag_name }
+    if (-not $tag) { throw "no release found at ${list}: $how" }
+    if ($tag -isnot [string] -or $tag -cnotmatch '^[A-Za-z0-9._+-]+\z' -or $tag.StartsWith('.')) { throw "unexpected release tag at ${list}: $how" }
+    return $tag
+}
+
 function Install-Backsight {
     Set-StrictMode -Off # a strict profile would refuse the absent JSON fields read below
     $ErrorActionPreference = 'Stop'
@@ -341,25 +380,12 @@ function Install-Backsight {
                 Copy-Item -LiteralPath $src -Destination (Join-Path $tmp $name)
                 return
             }
-            # https only, as install.sh's curl --proto '=https'
-            if (-not $url.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase)) { throw "cannot download $url/${name}: not https" }
-            try { Invoke-WebRequest -UseBasicParsing -Uri "$url/$name" -OutFile (Join-Path $tmp $name) }
-            catch { throw "cannot download $url/$name" }
+            try { Invoke-Https "$url/$name" (Join-Path $tmp $name) $null | Out-Null }
+            catch { throw "cannot download $url/${name}: $($_.Exception.Message)" }
         }
 
-        # newest: the tag of the newest release, pre-releases included.
-        # GitHub's /releases/latest skips pre-releases; the release list,
-        # newest first, does not.
         if (-not $env:BACKSIGHT_RELEASE_DIR -and -not $url) {
-            $list = "$api/repos/$repo/releases?per_page=1"
-            $how = "set BACKSIGHT_RELEASE_URL=$downloads/<tag> (tags: https://github.com/$repo/releases), or BACKSIGHT_RELEASE_DIR to a downloaded release"
-            try { $releases = Invoke-RestMethod -UseBasicParsing -Uri $list -Headers @{ Accept = 'application/vnd.github+json' } }
-            catch { throw "cannot list the releases at ${list}: $how" }
-            $tag = $null
-            $first = @($releases)[0]
-            if ($first -isnot [string] -and $null -ne $first) { $tag = $first.tag_name }
-            if (-not $tag) { throw "no release found at ${list}: $how" }
-            if ($tag -isnot [string] -or $tag -cnotmatch '^[A-Za-z0-9._+-]+\z' -or $tag.StartsWith('.')) { throw "unexpected release tag at ${list}: $how" }
+            $tag = Get-NewestTag $api $repo $downloads
             say "newest release: $tag"
             $url = "$downloads/$tag"
         }
@@ -390,15 +416,14 @@ function Install-Backsight {
         $x = Join-Path $tmp 'x'
         New-Item -ItemType Directory -Path $x | Out-Null
         $exe = Join-Path $x 'backsight.exe'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        try { $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $tmp $archive)) }
+        catch { throw "$archive is not a zip archive" }
         try {
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $tmp $archive))
-            try {
-                $entries = @($zip.Entries | Where-Object { $_.FullName -ceq 'backsight.exe' })
-                if ($entries.Count -ne 1) { throw 'none' }
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $exe)
-            } finally { $zip.Dispose() }
-        } catch { throw "$archive holds no backsight.exe" }
+            $entries = @($zip.Entries | Where-Object { $_.FullName -ceq 'backsight.exe' })
+            if ($entries.Count -ne 1) { throw "$archive holds no backsight.exe" }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $exe)
+        } finally { $zip.Dispose() }
         # The binary checks itself against the signed checksums on its
         # first run: they go with it.
         foreach ($f in 'checksums.txt', 'checksums.txt.minisig') { Copy-Item -LiteralPath (Join-Path $tmp $f) -Destination (Join-Path $x $f) }
@@ -417,7 +442,9 @@ function Install-Backsight {
             throw "cannot install backsight ${version}: $why"
         }
         $bin = $res.data.bin
-        say "backsight $version installed: $($res.data.command)"
+        $command = $res.data.command # none: the user's own file is there, left alone
+        if (-not $command) { $command = $res.data.shim }
+        say "backsight $version installed: $command"
         $here = @($env:PATH -split ';' | Where-Object { $_.TrimEnd('\') -eq $bin.TrimEnd('\') })
         if ($here.Count -eq 0) { say "$bin is on your user PATH: open a new terminal to run backsight" }
         say 'next: backsight setup'
@@ -434,9 +461,12 @@ if ($env:BACKSIGHT_INSTALL_LIB -ne '1') {
     try { Install-Backsight } catch { [Console]::Error.WriteLine("backsight install: $($_.Exception.Message)"); $failed = $true }
     if ($failed) {
         # powershell -c "irm ... | iex" or -File: the exit code tells the
-        # caller. Typed at a prompt, exit would close the user's window.
+        # caller. Typed at a prompt, or under -NoExit, exit would close the
+        # user's window.
         $hostArgs = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)
-        if (@($hostArgs | Where-Object { $_ -match '^[-/](c|f|e|ec|com\w*|fi\w*|enc\w*)$' }).Count -gt 0) { exit 1 }
+        $scripted = @($hostArgs | Where-Object { $_ -match '^[-/](c|f|e|ec|com\w*|fi\w*|enc\w*)$' }).Count -gt 0
+        $noExit = @($hostArgs | Where-Object { $_ -match '^[-/]noe\w*$' }).Count -gt 0
+        if ($scripted -and -not $noExit) { exit 1 }
         $global:LASTEXITCODE = 1
     }
 }

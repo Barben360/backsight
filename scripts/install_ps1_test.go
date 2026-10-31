@@ -10,6 +10,7 @@ package scripts
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/edwards25519"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -219,8 +221,24 @@ func TestEd25519Vectors(t *testing.T) {
 	s.Add(s, l)
 	sl := append(append([]byte{}, sig[:32]...), reverse(s.FillBytes(make([]byte, 32)))...)
 	vecs = append(vecs, vec{rfc1.pub, rfc1.msg, hex.EncodeToString(sl), false, "RFC 8032 test 1 with S + L"})
-	// The vectors themselves, through Go's verifier.
-	for _, v := range vecs {
+	// Public keys RFC 8032's decoding refuses and Go's verifier accepts,
+	// each with a signature that verifies with such a decoding: y >= p
+	// (p + 1, the identity's non-canonical encoding) and x = 0 with the
+	// sign bit set (the identity, y = 1).
+	nonCanonical := map[string]string{
+		"public key y >= p":                      "ee" + strings.Repeat("ff", 30) + "7f",
+		"public key x = 0 with the sign bit set": "01" + strings.Repeat("00", 30) + "80",
+	}
+	for _, name := range []string{"public key y >= p", "public key x = 0 with the sign bit set"} {
+		enc, _ := hex.DecodeString(nonCanonical[name])
+		msg, sig := smallOrderSignature(t, enc)
+		if !ed25519.Verify(enc, msg, sig) {
+			t.Fatalf("%s: Go's verifier refuses the vector: it no longer proves the decoding check", name)
+		}
+		vecs = append(vecs, vec{hex.EncodeToString(enc), hex.EncodeToString(msg), hex.EncodeToString(sig), false, name})
+	}
+	// The other vectors, through Go's verifier.
+	for _, v := range vecs[:len(vecs)-len(nonCanonical)] {
 		pub, _ := hex.DecodeString(v.pub)
 		msg, _ := hex.DecodeString(v.msg)
 		sig, _ := hex.DecodeString(v.sig)
@@ -246,6 +264,31 @@ func TestEd25519Vectors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// smallOrderSignature signs for enc, a (non-canonical) encoding of a
+// small-order point A that only a lax decoder accepts: R = [s]B, and a
+// message for which [k]A is the identity, so [s]B - [k]A = R.
+func smallOrderSignature(t *testing.T, enc []byte) (msg, sig []byte) {
+	t.Helper()
+	a, err := new(edwards25519.Point).SetBytes(enc)
+	if err != nil {
+		t.Fatalf("edwards25519 refuses %x: %v", enc, err)
+	}
+	seed := make([]byte, 64)
+	_, _ = rand.Read(seed)
+	s, _ := new(edwards25519.Scalar).SetUniformBytes(seed)
+	r := new(edwards25519.Point).ScalarBaseMult(s).Bytes()
+	for i := 0; i < 1000; i++ {
+		msg = []byte(fmt.Sprintf("message %d", i))
+		h := sha512.Sum512(append(append(append([]byte{}, r...), enc...), msg...))
+		k, _ := new(edwards25519.Scalar).SetUniformBytes(h[:])
+		if new(edwards25519.Point).ScalarMult(k, a).Equal(edwards25519.NewIdentityPoint()) == 1 {
+			return msg, append(append([]byte{}, r...), s.Bytes()...)
+		}
+	}
+	t.Fatal("no message found")
+	return nil, nil
 }
 
 func reverse(b []byte) []byte {
@@ -315,6 +358,24 @@ func TestMinisignRefusals(t *testing.T) {
 	// global signature over it does not.
 	commentChanged := filepath.Join(dir, "comment.minisig")
 	writeLines(t, commentChanged, lines[0], lines[1], strings.Replace(lines[2], "timestamp:1793379364", "timestamp:1793379365", 1), lines[3])
+	// Another key's genuine signature under the release key's id: past
+	// the key id check, the Ed25519 check refuses it.
+	otherSig := strings.Split(readFile(t, fixture(t, "other-key/checksums.txt.minisig")), "\n")
+	other, err := base64.StdEncoding.DecodeString(otherSig[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := base64.StdEncoding.DecodeString(releaseKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(other[2:10], pub[2:10])
+	forgedDir := filepath.Join(dir, "forged")
+	if err := os.Mkdir(forgedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	forged := filepath.Join(forgedDir, "checksums.txt.minisig")
+	writeLines(t, forged, otherSig[0], base64.StdEncoding.EncodeToString(other), otherSig[2], otherSig[3])
 	// No trusted comment line.
 	noComment := filepath.Join(dir, "nocomment.minisig")
 	writeLines(t, noComment, lines[0], lines[1])
@@ -328,12 +389,14 @@ func TestMinisignRefusals(t *testing.T) {
 	}{
 		{"tampered file", fixture(t, "tampered/checksums.txt"), fixture(t, "tampered/checksums.txt.minisig"), releaseKey(t),
 			"checksums.txt: bad signature"},
-		{"wrong key", fixture(t, "other-key/checksums.txt"), fixture(t, "other-key/checksums.txt.minisig"), releaseKey(t),
+		{"another key's signature, its own key id", fixture(t, "other-key/checksums.txt"), fixture(t, "other-key/checksums.txt.minisig"), releaseKey(t),
 			"checksums.txt.minisig: signed by another key (key 15AF315BAB4E6A02)"},
 		{"missing file:checksums.txt", fixture(t, "no-file-field/checksums.txt"), fixture(t, "no-file-field/checksums.txt.minisig"), keyOf("no-file-field/key.pub"),
 			"checksums.txt.minisig was made for another file"},
-		{"key id mismatch", sums, idChanged, releaseKey(t),
+		{"the release key's signature under another key id", sums, idChanged, releaseKey(t),
 			"id.minisig: signed by another key (key CB9E8D3622A9CE21)"},
+		{"another key's signature under the release key's id", fixture(t, "other-key/checksums.txt"), forged, releaseKey(t),
+			"checksums.txt: bad signature"},
 		{"trusted comment changed", sums, commentChanged, releaseKey(t),
 			"comment.minisig: bad trusted comment signature"},
 		{"no trusted comment", sums, noComment, releaseKey(t),
@@ -413,4 +476,77 @@ func runInstallPs1(t *testing.T, shell string, env []string) (string, error) {
 	cmd.Dir = t.TempDir()
 	out, err := cmd.CombinedOutput()
 	return strings.ReplaceAll(string(out), "\r\n", "\n"), err
+}
+
+// The newest release, found through GitHub's API (Get-NewestTag), with
+// Invoke-WebRequest replaced by a fake: no network. As install.sh: the
+// first release's tag (pre-releases included, decoys ignored), and each
+// failure names the lookup and BACKSIGHT_RELEASE_URL. A lookup redirected
+// off https is refused (Invoke-Https), as is a download, whose file is
+// then removed.
+func TestNewestReleaseLookup(t *testing.T) {
+	const list = "https://api.github.com/repos/Barben360/backsight/releases?per_page=1"
+	cases := []struct {
+		name, body, final string
+		fail              bool
+		want              string
+	}{
+		{"compact", releaseJSON("v9.9.9-m5", false), list, false, "TAG v9.9.9-m5"},
+		{"pretty", releaseJSON("v9.9.9-m5", true), list, false, "TAG v9.9.9-m5"},
+		{"refused (private, rate limited)", "", list, true, "REFUSED cannot list the releases at " + list},
+		{"redirected off https", releaseJSON("v9.9.9-m5", false), "http://api.github.com/x", false, "REFUSED cannot list the releases at " + list},
+		{"no release yet", "[]", list, false, "REFUSED no release found at " + list},
+		{"not JSON", "<html>maintenance</html>", list, false, "REFUSED no release found at " + list},
+		{"tag escaping the URL", releaseJSON("v1/../../evil", false), list, false, "REFUSED unexpected release tag at " + list},
+		{"tag with a query", releaseJSON("v1?x=1", false), list, false, "REFUSED unexpected release tag at " + list},
+		{"dot-dot tag", releaseJSON("..", false), list, false, "REFUSED unexpected release tag at " + list},
+	}
+	out := filepath.Join(t.TempDir(), "file")
+	body := `
+$script:calls = @()
+function Invoke-WebRequest {
+	param([switch]$UseBasicParsing, $Uri, $Headers, $OutFile, [switch]$PassThru)
+	$accept = ''
+	if ($Headers) { $accept = $Headers['Accept'] }
+	$script:calls += "$Uri $accept"
+	if ($script:fail) { throw 'HTTP 403' }
+	if ($OutFile) { [IO.File]::WriteAllText($OutFile, 'data') }
+	[pscustomobject]@{ Content = $script:body; BaseResponse = [pscustomobject]@{ ResponseUri = [Uri]$script:final } }
+}
+function Try-Tag {
+	$script:calls = @()
+	try { $r = 'TAG ' + (Get-NewestTag 'https://api.github.com' 'Barben360/backsight' 'https://github.com/Barben360/backsight/releases/download') }
+	catch { $r = 'REFUSED ' + $_.Exception.Message }
+	$r + ' || ' + ($script:calls -join ',')
+}
+`
+	for _, c := range cases {
+		body += fmt.Sprintf("$script:body = %s; $script:final = %s; $script:fail = $%v\nTry-Tag\n", psQuote(c.body), psQuote(c.final), c.fail)
+	}
+	body += "$script:fail = $false; $script:final = 'http://objects.example/x'\n" +
+		"try { Invoke-Https 'https://github.com/x' " + psQuote(out) + " $null | Out-Null; 'SAVED' } catch { 'REFUSED ' + $_.Exception.Message + ' || ' + (Test-Path -LiteralPath " + psQuote(out) + ") }\n" +
+		"$script:calls = @(); try { Invoke-Https 'http://github.com/x' $null $null | Out-Null; 'FETCHED' } catch { 'REFUSED ' + $_.Exception.Message + ' || ' + ($script:calls.Count) }\n"
+	for _, shell := range powerShells(t) {
+		t.Run(shellName(shell), func(t *testing.T) {
+			got := strings.Split(strings.TrimSpace(psLib(t, shell, body)), "\n")
+			if len(got) != len(cases)+2 {
+				t.Fatalf("%d answers for %d cases:\n%s", len(got), len(cases)+2, strings.Join(got, "\n"))
+			}
+			for i, c := range cases {
+				answer, calls, _ := strings.Cut(got[i], " || ")
+				if !strings.HasPrefix(answer, c.want) || (strings.HasPrefix(c.want, "REFUSED") && !strings.Contains(answer, "BACKSIGHT_RELEASE_URL")) {
+					t.Errorf("%s: %q, want %q (naming BACKSIGHT_RELEASE_URL when refused)", c.name, answer, c.want)
+				}
+				if calls != list+" application/vnd.github+json" {
+					t.Errorf("%s: requests %q, want one GET %s with Accept application/vnd.github+json, no token", c.name, calls, list)
+				}
+			}
+			if want := "REFUSED redirected to http://objects.example/x, not https || False"; got[len(cases)] != want {
+				t.Errorf("a download redirected off https: %q, want %q (its file removed)", got[len(cases)], want)
+			}
+			if want := "REFUSED not https || 0"; got[len(cases)+1] != want {
+				t.Errorf("an http URL: %q, want %q (no request)", got[len(cases)+1], want)
+			}
+		})
+	}
 }
