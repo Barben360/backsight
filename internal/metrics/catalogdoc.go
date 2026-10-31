@@ -74,7 +74,7 @@ func statusRule(d Def) string {
 		what := "the lower end of the interval"
 		switch t.On {
 		case "p95":
-			what = "the 95th percentile"
+			what = "the slowest 1 in 20"
 		case "value":
 			what = "the value"
 		}
@@ -84,7 +84,7 @@ func statusRule(d Def) string {
 		case t.Watch != nil:
 			parts = append(parts, fmt.Sprintf("watch when %s is over %s", what, amount(*t.Watch, d.Unit)))
 		case t.On == "p95":
-			parts = append(parts, "watch when the 95th percentile is over 1.5 times the configured session budget")
+			parts = append(parts, "watch when the slowest 1 in 20 is over 1.5 times the configured session budget")
 		}
 	}
 	if d.Relative {
@@ -95,7 +95,7 @@ func statusRule(d Def) string {
 		}
 	}
 	if d.ErrorClass {
-		parts = append(parts, "error rule, given in what it counts")
+		parts = append(parts, "see What it counts")
 	}
 	if len(parts) == 0 {
 		return "shown, not judged"

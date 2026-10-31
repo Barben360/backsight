@@ -234,7 +234,7 @@ func TestCatalogText(t *testing.T) {
 		"pipeline.flow":      "documents",
 		"server.queue":       "last 7 days",
 		"bank.consolidation": "current total",
-		"context.per_prompt": "p50",
+		"context.per_prompt": "typical (median)",
 	} {
 		d, _ := DefOf(id)
 		if !strings.Contains(d.Definition, want) {

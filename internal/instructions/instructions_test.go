@@ -58,7 +58,7 @@ func TestCreditAskIsQuotedVerbatimWhereClaudeIsAskedToDeclare(t *testing.T) {
 // v8: memory_credit takes the verdicts wrong and outdated, with their
 // rubric and an example each.
 func TestGuideV8(t *testing.T) {
-	if Version != "v10" {
+	if Version != "v11" {
 		t.Errorf("version %s", Version)
 	}
 	for _, want := range []string{
@@ -365,7 +365,8 @@ var wordings = map[string]string{
 	"v7":  "7fd50b7571d14bbdc98a3c43cf9aea1fea971864dfece3053510650d308a8308",
 	"v8":  "12d06be831db7e934a0f7b733c2908eb1fde75d73d6f00d7a7fd645f23faa87b",
 	"v9":  "a53915333ea092b317d01464304f17d79053635c57bdffca975896af0542f32c",
-	"v10": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
+	"v10": "951a7ad31110632dda7081ea584084a93ecb0ede29141181d32ff0fb8f0a1295",
+	"v11": "d13ec35e73d4639aaa418dd50cba48b3a683ca929001dec22ae584d3d4928f4b",
 }
 
 func wordingHash() string {
@@ -406,10 +407,13 @@ func TestSkillsAllowOnlyReadOnlyStats(t *testing.T) {
 	for _, skill := range []string{"memory", "doctor"} {
 		tools := skillTools(skill)
 		for _, cmd := range []string{"/s stats overview --json", "/s stats sessions --has used", "/s stats", "/s stats --json", "/s stats index --json", "/s stats index",
-			"/s stats defs recall.hit_rate", "/s stats memories --state wrong"} {
+			"/s stats defs recall.hit_rate"} {
 			if !allows(tools, cmd) {
 				t.Errorf("%s: %q needs a prompt: %s", skill, cmd, tools)
 			}
+		}
+		if got := allows(tools, "/s stats memories --text"); got != (skill == "memory") {
+			t.Errorf("%s: stats memories allowed = %v (only the memory skill may run it unprompted)", skill, got)
 		}
 		for _, cmd := range []string{"/s stats index rebuild", "/s stats index rebuild --yes", "/s stats --days 3 index rebuild --yes", "/s stats --json index rebuild",
 			"/s stats index migrate", "/s stats index --yes rebuild"} {

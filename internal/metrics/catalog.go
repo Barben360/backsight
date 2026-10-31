@@ -53,7 +53,7 @@ var Catalog = withDrills([]Def{
 		Absolute: Threshold{Watch: f(0.10), On: "hi"}, Relative: true, CI: "wilson", Scope: "machine", Source: "telemetry",
 		Family: "reach", Series: "daily", Command: "backsight stats quality", Drill: "backsight stats sessions --has memory",
 		Question:   "Does memory show up when you ask something?",
-		Definition: "Prompt recalls that put at least one memory in front of Claude, out of all prompt recalls. Shown with a 95% Wilson interval; it is watched when even the interval's upper bound stays under 10%.",
+		Definition: "Prompt recalls that put at least one memory in front of Claude, out of all prompt recalls. Shown with a 95% range; it is watched when even the interval's upper bound stays under 10%.",
 		Action:     "Memory may be thin or the recall cut-offs too strict. Look at why prompts got nothing, and import past sessions.",
 	},
 	{
@@ -180,7 +180,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight config set recall.session_budget_chars <n>", Drill: "backsight stats sessions",
 		Extra:      []string{"p50", "p95", "tokens_p50", "tokens_p95", "histogram"},
 		Question:   "How much does backsight add to Claude's context in a session?",
-		Definition: "Characters backsight added to Claude's context per session (prompt recall plus briefing), typical (p50) and high (p95), with approximate tokens (characters divided by 4). Watched when the high value passes 1.5 times the session budget.",
+		Definition: "Characters backsight added to Claude's context per session (prompt recall plus briefing), typical (median) and high (slowest 1 in 20), with approximate tokens (characters divided by 4). Watched when the high value passes 1.5 times the session budget.",
 		Action:     "Too much context per session. Lower the session budget.",
 	},
 	{
@@ -188,7 +188,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "telemetry", Family: "cost", Series: "none", Command: "backsight stats cost",
 		Extra:      pctExtra,
 		Question:   "How big is a recall when memory shows up?",
-		Definition: "Characters injected by prompt recalls that put memory in front of Claude. The value is the typical (p50) size; the high value (p95) is given beside it once there are 100 recalls.",
+		Definition: "Characters injected by prompt recalls that put memory in front of Claude. The value is the typical (median) size; the high value (slowest 1 in 20) is given beside it once there are 100 recalls.",
 		Action:     "Large recalls cost context without being asked for; lower the per-prompt caps.",
 	},
 	{
@@ -197,7 +197,7 @@ var Catalog = withDrills([]Def{
 		Command: "backsight doctor", Drill: "backsight stats days",
 		Extra:      pctExtra,
 		Question:   "How long does memory make a prompt wait?",
-		Definition: "Wall time of the prompt recall, typical (p50) and slowest 1 in 20 (p95). Watched above 2,000 ms, bad above 2,500 ms.",
+		Definition: "Wall time of the prompt recall, typical (median) and slowest 1 in 20. Watched above 2,000 ms, bad above 2,500 ms.",
 		Action:     "The server or the embeddings are slow. Run backsight doctor.",
 	},
 	{
@@ -206,7 +206,7 @@ var Catalog = withDrills([]Def{
 		Command:    "backsight doctor",
 		Extra:      pctExtra,
 		Question:   "How long does a memory search take?",
-		Definition: "Time of a memory_search call, typical (p50) and slowest 1 in 20 (p95). Watched above 3,000 ms.",
+		Definition: "Time of a memory_search call, typical (median) and slowest 1 in 20. Watched above 3,000 ms.",
 		Action:     "The server is slow. Run backsight doctor.",
 	},
 	{
@@ -294,7 +294,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily", Command: "backsight stats pipeline",
 		Extra:      []string{"by_status", "p95_ms"},
 		Question:   "How did each day's sends end?",
-		Definition: "Per day, documents by their last status. The duration (p95) counts successful sends only.",
+		Definition: "Per day, documents by their last status. The duration (slowest 1 in 20) counts successful sends only.",
 		Action:     "Days with many failures show when sending broke.",
 	},
 	{
@@ -319,7 +319,7 @@ var Catalog = withDrills([]Def{
 		Command:    "backsight doctor",
 		Extra:      pctExtra,
 		Question:   "How long until a session becomes memories?",
-		Definition: "Time between a completed operation's creation and its last update, typical (p50) and slowest 1 in 20 (p95), over the last 200 in the window. Watched above 30 minutes.",
+		Definition: "Time between a completed operation's creation and its last update, typical (median) and slowest 1 in 20, over the last 200 in the window. Watched above 30 minutes.",
 		Action:     "The server is slow to extract. Run backsight doctor.",
 	},
 	{

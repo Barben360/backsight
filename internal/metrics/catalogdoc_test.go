@@ -76,7 +76,7 @@ func TestCatalogMarkdownStatusRules(t *testing.T) {
 		"verdict.wrong_rate":  "over 5%, bad over 15%",
 		"recall.latency":      "over 2000 ms, bad over 2500 ms",
 		"context.per_session": "1.5 times the configured session budget",
-		"hooks.failures":      "error rule",
+		"hooks.failures":      "see What it counts",
 	} {
 		if r := row(id); !strings.Contains(r, want) {
 			t.Errorf("%s: row lacks %q:\n%s", id, want, r)
@@ -84,5 +84,33 @@ func TestCatalogMarkdownStatusRules(t *testing.T) {
 	}
 	if strings.Count(md, "\n") != len(Catalog)+2 {
 		t.Errorf("table has %d lines for %d metrics", strings.Count(md, "\n"), len(Catalog))
+	}
+}
+
+// An error-class metric has no number in the Status rule cell: its rule is
+// said in its definition, so every one must say it.
+func TestErrorClassDefinitionsStateTheirRule(t *testing.T) {
+	n := 0
+	for _, d := range Catalog {
+		if !d.ErrorClass {
+			continue
+		}
+		n++
+		if !strings.Contains(d.Definition, "Watched") && !strings.Contains(d.Definition, "Bad") && !strings.Contains(d.Definition, "bad") {
+			t.Errorf("%s: its definition states no rule: %q", d.ID, d.Definition)
+		}
+	}
+	if n == 0 {
+		t.Error("no error-class metric")
+	}
+}
+
+func TestCatalogRowsUseNoJargon(t *testing.T) {
+	for _, bad := range []string{"Wilson", "p50", "p95", "percentile"} {
+		for _, d := range Catalog {
+			if strings.Contains(d.Definition+statusRule(d), bad) {
+				t.Errorf("%s: %q in a user-visible cell", d.ID, bad)
+			}
+		}
 	}
 }
