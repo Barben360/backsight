@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -19,7 +20,7 @@ type proc struct {
 	pid     int
 	done    chan error
 	outDone chan struct{}
-	tree    tree  // the child and what it starts (job_*.go)
+	tree    *tree // the child and what it starts (job_*.go)
 	treeErr error // why the tree is the child alone, if it is
 }
 
@@ -58,8 +59,19 @@ func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, e
 	}
 	p := &proc{cmd: cmd, pid: cmd.Process.Pid, done: make(chan error, 1), outDone: make(chan struct{})}
 	// The child starts suspended where its tree must hold it from its
-	// first instruction (Windows); ownTree resumes it in any case.
+	// first instruction (Windows): in its tree, then resumed. A child that
+	// cannot be resumed is killed, and the start failed.
 	p.tree, p.treeErr = ownTree(cmd.Process)
+	if err := resumeChild(cmd.Process); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		p.tree.close()
+		_ = r.Close()
+		return nil, fmt.Errorf("resuming it (pid %d) failed, killed: %w", cmd.Process.Pid, err)
+	}
+	if tm.wrapOutput != nil {
+		out = tm.wrapOutput(out)
+	}
 	go func() {
 		defer close(p.outDone)
 		_, _ = io.Copy(out, r)
@@ -77,21 +89,30 @@ func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, e
 // kill ends the child and everything it started.
 func (p *proc) kill() error { return p.tree.kill(p.cmd.Process) }
 
+// How a stop ended.
+type stopOutcome int
+
+const (
+	stopExited      stopOutcome = iota // the child exited on the interrupt
+	stopKilled                         // still running after the wait: killed
+	stopNoInterrupt                    // no interrupt possible (no console): killed at once
+)
+
 // stop interrupts the child's group (CTRL_BREAK on Windows, SIGTERM
-// elsewhere), kills its tree after wait, and returns whether it had to be
-// killed and its exit.
-func (p *proc) stop(wait time.Duration) (killed bool, err error) {
-	if err := interrupt(p.cmd.Process); err != nil {
+// elsewhere), kills its tree after wait, and returns how it ended and the
+// child's exit.
+func (p *proc) stop(wait time.Duration) (stopOutcome, error) {
+	if err := tm.interrupt(p.cmd.Process); err != nil {
 		_ = p.kill()
-		return true, <-p.done
+		return stopNoInterrupt, <-p.done
 	}
 	select {
 	case err := <-p.done:
-		return false, err
+		return stopExited, err
 	case <-time.After(wait):
 	}
 	_ = p.kill()
-	return true, <-p.done
+	return stopKilled, <-p.done
 }
 
 // waitOutput waits up to d for the child's last output to reach its log.

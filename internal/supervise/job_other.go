@@ -15,12 +15,15 @@ func joinJob(string) error { return nil }
 // tree is a child's process group (childAttr makes it its leader).
 type tree struct{}
 
-func ownTree(*os.Process) (tree, error) { return tree{}, nil }
+func ownTree(*os.Process) (*tree, error) { return &tree{}, nil }
+
+// resumeChild: children start running here.
+func resumeChild(*os.Process) error { return nil }
 
 // kill sends SIGKILL to the group p leads.
-func (tree) kill(p *os.Process) error { return signalGroup(p, syscall.SIGKILL) }
+func (*tree) kill(p *os.Process) error { return signalGroup(p, syscall.SIGKILL) }
 
-func (tree) close() {}
+func (*tree) close() {}
 
 // interrupt sends SIGTERM to the group p leads.
 func interrupt(p *os.Process) error { return signalGroup(p, syscall.SIGTERM) }

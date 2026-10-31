@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -111,43 +112,48 @@ func interrupt(p *os.Process) error {
 // supervisor's: kill ends the child and what it started (the venv
 // launcher's python, postgres' backends), and closing it once the child
 // exited ends whatever it left. A zero job (the assignment failed) leaves
-// the child alone to kill.
-type tree struct{ job windows.Handle }
-
-// ownTree puts the child, started suspended (childAttr), in a job of its
-// own, then resumes it: nothing it starts can escape the job. The child
-// is resumed whatever fails, and the error says why it has no tree.
-func ownTree(p *os.Process) (tree, error) {
-	t, err := newTree(p.Pid)
-	if rerr := resume(uint32(p.Pid)); rerr != nil {
-		err = errors.Join(err, fmt.Errorf("resuming the child: %w", rerr))
-	}
-	return t, err
+// the child alone to kill. kill and close may race (the loop kills while
+// the child's Wait closes): a kill after the close does nothing.
+type tree struct {
+	mu     sync.Mutex
+	job    windows.Handle
+	closed bool
 }
 
-func newTree(pid int) (tree, error) {
+// ownTree puts the child, started suspended (childAttr), in a job of its
+// own before resumeChild lets it run: nothing it starts can escape the
+// job. On failure the child has no tree and the error says why.
+func ownTree(p *os.Process) (*tree, error) {
+	job, err := newJob(p.Pid)
+	return &tree{job: job}, err
+}
+
+func newJob(pid int) (windows.Handle, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
-		return tree{}, fmt.Errorf("creating the child's job object: %w", err)
+		return 0, fmt.Errorf("creating the child's job object: %w", err)
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		_ = windows.CloseHandle(job)
-		return tree{}, fmt.Errorf("setting the child's job object: %w", err)
+		return 0, fmt.Errorf("setting the child's job object: %w", err)
 	}
 	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
 	if err != nil {
 		_ = windows.CloseHandle(job)
-		return tree{}, fmt.Errorf("opening the child: %w", err)
+		return 0, fmt.Errorf("opening the child: %w", err)
 	}
 	defer func() { _ = windows.CloseHandle(h) }()
 	if err := windows.AssignProcessToJobObject(job, h); err != nil {
 		_ = windows.CloseHandle(job)
-		return tree{}, fmt.Errorf("nesting the child's job object in the supervisor's: %w", err)
+		return 0, fmt.Errorf("nesting the child's job object in the supervisor's: %w", err)
 	}
-	return tree{job: job}, nil
+	return job, nil
 }
+
+// resumeChild lets the suspended child run; tests make it fail.
+var resumeChild = func(p *os.Process) error { return resume(uint32(p.Pid)) }
 
 // resume resumes the threads of the suspended process pid (Go's exec
 // closes the main thread's handle).
@@ -180,8 +186,14 @@ func resume(pid uint32) error {
 	return nil
 }
 
-// kill ends the child's job, else the child alone.
-func (t tree) kill(p *os.Process) error {
+// kill ends the child's job, else the child alone; after close, nothing
+// (the child exited, its job is gone).
+func (t *tree) kill(p *os.Process) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil
+	}
 	if t.job != 0 {
 		return windows.TerminateJobObject(t.job, 1)
 	}
@@ -193,8 +205,11 @@ func (t tree) kill(p *os.Process) error {
 }
 
 // close closes the job: what the child left running dies with it.
-func (t tree) close() {
-	if t.job != 0 {
+func (t *tree) close() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.closed && t.job != 0 {
 		_ = windows.CloseHandle(t.job)
 	}
+	t.closed = true
 }

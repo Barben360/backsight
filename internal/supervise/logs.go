@@ -97,11 +97,15 @@ func (r *rotating) Close() error {
 // lineRedactor writes a child's output to its log line by line, each line
 // with the known secrets' forms replaced (redact.Forms, as redact.Values):
 // a secret is never cut in two by a write boundary. A line longer than
-// maxLine is written in parts, keeping its last keepTail bytes back for
-// the next part, and never cutting through a secret's form.
+// maxLine is redacted whole, then written but for its last keep bytes,
+// which wait for what follows: a form cut by the end of the buffer is
+// shorter than keep, so it is held back whole, and a form wholly inside
+// the buffer is already replaced. No search for a cut, so no walk-back a
+// periodic secret could drive.
 type lineRedactor struct {
 	dst   io.Writer
 	forms [][]byte
+	keep  int // keepTail, or the longest form if longer
 	buf   []byte
 }
 
@@ -111,9 +115,10 @@ const (
 )
 
 func newLineRedactor(dst io.Writer, secrets []string) *lineRedactor {
-	l := &lineRedactor{dst: dst}
+	l := &lineRedactor{dst: dst, keep: keepTail}
 	for _, f := range redact.Forms(secrets) {
 		l.forms = append(l.forms, []byte(f))
+		l.keep = max(l.keep, len(f))
 	}
 	return l
 }
@@ -129,39 +134,22 @@ func (l *lineRedactor) Write(p []byte) (int, error) {
 		l.buf = l.buf[i+1:]
 	}
 	if len(l.buf) > maxLine {
-		if cut := l.safeCut(len(l.buf) - keepTail); cut > 0 {
-			l.emit(l.buf[:cut])
-			l.buf = append([]byte{}, l.buf[cut:]...)
-		}
+		red := l.redacted(l.buf)
+		cut := len(red) - l.keep
+		_, _ = l.dst.Write(red[:cut])
+		l.buf = append([]byte{}, red[cut:]...)
 	}
 	return len(p), nil
 }
 
-// safeCut moves cut back to the start of any secret's form that straddles
-// it, until none does.
-func (l *lineRedactor) safeCut(cut int) int {
-	for moved := true; moved && cut > 0; {
-		moved = false
-		for _, f := range l.forms {
-			lo := max(cut-len(f)+1, 0)
-			hi := min(cut+len(f)-1, len(l.buf))
-			if lo >= hi {
-				continue
-			}
-			if i := bytes.Index(l.buf[lo:hi], f); i >= 0 && lo+i < cut {
-				cut, moved = lo+i, true
-			}
-		}
-	}
-	return cut
-}
-
-func (l *lineRedactor) emit(b []byte) {
+func (l *lineRedactor) redacted(b []byte) []byte {
 	for _, f := range l.forms {
 		b = bytes.ReplaceAll(b, f, []byte("[redacted]"))
 	}
-	_, _ = l.dst.Write(b)
+	return b
 }
+
+func (l *lineRedactor) emit(b []byte) { _, _ = l.dst.Write(l.redacted(b)) }
 
 // Close writes what is left (a last line without a newline).
 func (l *lineRedactor) Close() error {

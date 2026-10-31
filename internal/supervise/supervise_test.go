@@ -750,7 +750,8 @@ func TestAPIIgnoringTheInterruptIsKilled(t *testing.T) {
 // a secret or one of its URL forms.
 func TestRedactorNeverCutsASecretInALongLine(t *testing.T) {
 	secret := "long-line s3cr@t"
-	for _, form := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret)} {
+	userinfo := strings.TrimPrefix(url.UserPassword("", secret).String(), ":") // %20, %40
+	for _, form := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret), userinfo} {
 		path := filepath.Join(t.TempDir(), "p-api.log")
 		r, err := openRotating(path)
 		if err != nil {
@@ -766,7 +767,7 @@ func TestRedactorNeverCutsASecretInALongLine(t *testing.T) {
 		_ = l.Close()
 		_ = r.Close()
 		got := readFile(path)
-		for _, f := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret), form[:len(form)/2] + form[len(form)/2:]} {
+		for _, f := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret), userinfo} {
 			if strings.Contains(got, f) {
 				t.Errorf("form %q: the log carries %q", form, f)
 			}
@@ -777,12 +778,22 @@ func TestRedactorNeverCutsASecretInALongLine(t *testing.T) {
 	}
 }
 
+// slowWriter delays each write: a log writer behind a busy disk, so the
+// last output arrives after the child exited.
+type slowWriter struct{ io.WriteCloser }
+
+func (w slowWriter) Write(p []byte) (int, error) {
+	time.Sleep(300 * time.Millisecond)
+	return w.WriteCloser.Write(p)
+}
+
 // A child's last words, printed as it stops, are in its log once Run
-// returned.
+// returned, though they reach it after the child exited.
 func TestLastOutputReachesTheLog(t *testing.T) {
 	fast(t)
+	tm.wrapOutput = func(w io.WriteCloser) io.WriteCloser { return slowWriter{w} }
 	x := newFx(t, "lastwords", fakes{
-		pg:  "write {dir}/ready x\nwaitfile {dir}/pg-stop\nsleep 100\nstdout database system is shut down",
+		pg:  "write {dir}/ready x\nwaitfile {dir}/pg-stop\nstdout database system is shut down",
 		api: "waitfile {dir}/never",
 	})
 	done := x.start(Options{NoAPI: true})
@@ -862,23 +873,54 @@ func TestAPIStartRefreshesTheRedactedSecrets(t *testing.T) {
 	}
 }
 
-// Output still coming after the child exited (a process it started holds
-// the pipe, as postgres' backends do) reaches the log, within outputWait.
-func TestOutputAfterTheChildExitedReachesTheLog(t *testing.T) {
-	testtool.SkipWindows(t, "linux-only: on Windows the child's own job ends what it left once it exits")
+// A periodic secret in a long line costs one pass per part and never
+// stops the line from being written as it comes (a cut walked back to 0
+// would hold it all).
+func TestRedactorHandlesAPeriodicSecretPromptly(t *testing.T) {
+	var b strings.Builder
+	l := newLineRedactor(nopWriteCloser{&b}, []string{"aaaaaaaa"})
+	start := time.Now()
+	for range 64 {
+		_, _ = l.Write([]byte(strings.Repeat("a", 64<<10)))
+	}
+	// Written as it comes, not held until the line ends: memory stays
+	// bounded whatever the line's length.
+	if written, held := b.Len(), len(l.buf); written < 3<<20 || held > maxLine+l.keep {
+		t.Errorf("after 4 MiB without a newline: %d bytes written, %d held; want the parts written, at most %d held", written, held, maxLine+l.keep)
+	}
+	_, _ = l.Write([]byte("\n"))
+	_ = l.Close()
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("4 MiB of a periodic secret took %s", d)
+	}
+	got := b.String()
+	if strings.Contains(got, "aaaaaaaa") || !strings.HasSuffix(got, "\n") || strings.Count(got, "[redacted]") < (4<<20)/8-1024 {
+		t.Errorf("%d bytes, %d [redacted], secret left %v: want the line written, the secret gone", len(got), strings.Count(got, "[redacted]"), strings.Contains(got, "aaaaaaaa"))
+	}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+// Without a console (a supervisor started detached) the API cannot be
+// interrupted: it is killed at once, and the log says why.
+func TestNoConsoleKillsTheAPIAtOnce(t *testing.T) {
 	fast(t)
-	x := newFx(t, "afterwords", fakes{})
-	// postgres is a shell that leaves a writer behind, then runs the fake.
-	x.cfg.Postgres = []string{"/bin/sh", "-c", "(sleep 0.3; echo backend: last words) & exec " + x.pg}
-	done := x.start(Options{NoAPI: true})
-	waitStatus(t, x.cfg.Project, stateRunning, stateStopped)
-	if _, err := ask(x.cfg.Project, opStop); err != nil {
-		t.Fatal(err)
+	tm.apiStopWait = 10 * time.Second
+	tm.interrupt = func(*os.Process) error { return errors.New("no console") }
+	x := newFx(t, "noconsole", fakes{})
+	x.start(Options{})
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	start := time.Now()
+	if st, err := ask(x.cfg.Project, opAPIStop); err != nil || st.API != stateStopped {
+		t.Fatalf("api-stop: %+v %v", st, err)
 	}
-	if err := waitExit(t, done, 15*time.Second); err != nil {
-		t.Fatal(err)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("api-stop took %s: no wait for an interrupt that could not be sent", d)
 	}
-	if l := x.log("db"); !strings.Contains(l, "backend: last words") {
-		t.Errorf("db log lost the output written after postgres exited:\n%s", l)
+	l := x.log("supervisor")
+	if !strings.Contains(l, "api: no console to interrupt it: killed") || strings.Contains(l, "after the interrupt") {
+		t.Errorf("supervisor log: want the no-console kill:\n%s", l)
 	}
 }

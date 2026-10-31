@@ -86,6 +86,9 @@ type timing struct {
 	requestWait                        time.Duration // a client's request and answer
 	after                              func(time.Duration) <-chan time.Time
 	now                                func() time.Time
+	interrupt                          func(*os.Process) error // CTRL_BREAK / SIGTERM to the group
+	// wrapOutput, set by a test, wraps a child's log writer (a slow one).
+	wrapOutput func(io.WriteCloser) io.WriteCloser
 }
 
 var tm = timing{
@@ -93,7 +96,7 @@ var tm = timing{
 	readyPoll: 100 * time.Millisecond, readyWait: 300 * time.Second,
 	apiStopWait: 30 * time.Second, dbStopWait: 60 * time.Second,
 	requestWait: 5 * time.Second,
-	after:       time.After, now: time.Now,
+	after:       time.After, now: time.Now, interrupt: interrupt,
 }
 
 // backoff is a child's restart delay: 1 s doubling to 5 min, back to 1 s
@@ -551,9 +554,12 @@ func (s *supervisor) stopAPI(r *run) {
 		return
 	}
 	s.logf("api stopping (pid %d)", r.api.pid)
-	killed, err := r.api.stop(tm.apiStopWait)
-	if killed {
+	how, err := r.api.stop(tm.apiStopWait)
+	switch how {
+	case stopKilled:
 		s.logf("api killed, still running %s after the interrupt: %v", tm.apiStopWait, exitText(err))
+	case stopNoInterrupt:
+		s.logf("api: no console to interrupt it: killed (%v)", exitText(err))
 	}
 	s.logf("api stopped: %v", exitText(err))
 	r.api = nil

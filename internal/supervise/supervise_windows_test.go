@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -270,11 +271,15 @@ func TestPipeSurvivesClientsThatComeAndGo(t *testing.T) {
 	}
 	opened := 0
 	for i := range 500 {
-		h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
-		if err != nil {
-			if errors.Is(err, windows.ERROR_PIPE_BUSY) {
-				continue
+		var h windows.Handle
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			h, err = windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
+			if !errors.Is(err, windows.ERROR_PIPE_BUSY) || time.Now().After(deadline) {
+				break
 			}
+			_, _, _ = procWaitNamedPipe.Call(uintptr(unsafe.Pointer(p)), 50) // every instance busy: wait for one
+		}
+		if err != nil {
 			t.Fatalf("open %d: %v (the pipe is gone)", i, err)
 		}
 		opened++
@@ -283,9 +288,6 @@ func TestPipeSurvivesClientsThatComeAndGo(t *testing.T) {
 			_ = windows.WriteFile(h, []byte("garbage"), &n, nil) // half a request
 		}
 		_ = windows.CloseHandle(h)
-	}
-	if opened < 100 {
-		t.Fatalf("only %d of 500 opens reached the pipe", opened)
 	}
 	for range 3 {
 		if st, err := ask(x.cfg.Project, opStatus); err != nil || st.DB != stateRunning {
@@ -330,3 +332,30 @@ func TestKillEndsTheChildsTree(t *testing.T) {
 type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
+
+// A child that cannot be resumed is killed, and its start failed: the
+// restart backoff applies, nothing waits for a frozen postgres.
+func TestUnresumableChildIsKilledAndRetried(t *testing.T) {
+	fast(t)
+	fa := &fakeAfter{fire: 0}
+	tm.after = fa.after
+	old := resumeChild
+	resumeChild = func(*os.Process) error { return errors.New("resume refused") }
+	t.Cleanup(func() { resumeChild = old })
+	x := newFx(t, "frozen", fakes{})
+	x.start(Options{})
+	waitStatus(t, x.cfg.Project, stateRestarting, stateStarting)
+	waitFor(t, "a restart scheduled", func() bool { return len(fa.got()) == 1 })
+	l := x.log("supervisor")
+	m := regexp.MustCompile(`db: starting postgres: resuming it \(pid (\d+)\) failed, killed: resume refused`).FindStringSubmatch(l)
+	if m == nil {
+		t.Fatalf("supervisor log: want the failed resume:\n%s", l)
+	}
+	pid, _ := strconv.Atoi(m[1])
+	if !gone(pid, 2*time.Second) {
+		t.Errorf("the unresumable postgres %d still exists", pid)
+	}
+	if got := testtool.Calls(t, x.pg); got != nil {
+		t.Errorf("the frozen postgres ran %q", got)
+	}
+}
