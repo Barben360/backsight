@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -728,5 +729,47 @@ func TestServerQueueCappedFailedList(t *testing.T) {
 	m = pipeOf(x, x.query(7))["server.queue"]
 	if extraInt(t, m, "failed_total") != 5 || m.Extra["failed_capped"] != false {
 		t.Errorf("extra = %v, want failed_total 5, not capped", m.Extra)
+	}
+}
+
+// TestFailedReadSortsNewestFirst: six failed operations listed in no order
+// (one with only a creation time) are held newest first after the read, so
+// the first is the latest failure; four of them changed in the last 7 days
+// (1 h, 5 h, 2 days, 3 days ago).
+func TestFailedReadSortsNewestFirst(t *testing.T) {
+	x := pipeFx(t)
+	agos := []time.Duration{9 * day, time.Hour, 3 * day, 20 * day, 5 * time.Hour, 2 * day}
+	x.server.set(func(d *fakeData) {
+		d.Ops = fakeOps(len(agos), "failed", func(i int) (time.Time, time.Time) { return ago(agos[i]), ago(agos[i]) })
+		d.Ops[2].UpdatedAt = time.Time{} // 3 days: read from its creation time
+	})
+	d, _ := loadServer(context.Background(), x.source(), x.window(7), []string{"failed"})
+	var got []string
+	for _, o := range d.Failed {
+		got = append(got, o.ID)
+	}
+	want := []string{"failed-1", "failed-4", "failed-5", "failed-2", "failed-0", "failed-3"}
+	if !slices.Equal(got, want) {
+		t.Errorf("failed read in order %v, want newest first %v", got, want)
+	}
+	m := pipeOf(x, x.query(7))["server.queue"]
+	if extraInt(t, m, "failed") != 4 || extraInt(t, m, "failed_total") != 6 {
+		t.Errorf("extra = %v, want failed 4 of 6", m.Extra)
+	}
+}
+
+// TestHookFailureUnknownKind: a failure of a kind the supervisor does not
+// report counts under "other", in the window and in the last 24 h; one is
+// not serious, so the metric stays ok. The index already files an unknown
+// kind as other (its closed set), so this pins the end-to-end reading; the
+// family's own hookKind is the second guard, pinned by TestHookKind.
+func TestHookFailureUnknownKind(t *testing.T) {
+	x := pipeFx(t)
+	x.tel(ago(time.Hour), telemetry.HookFailure{Hook: "prompt", Kind: "foo", MS: 5}, "s", "alpha")
+	m := pipeOf(x, x.query(7))["hooks.failures"]
+	wantStatus(t, "hooks.failures", m, StatusOK)
+	by, last := m.Extra["by_kind"].(map[string]int64), m.Extra["last_24h"].(map[string]int64)
+	if !maps.Equal(by, map[string]int64{"other": 1}) || !maps.Equal(last, map[string]int64{"other": 1}) {
+		t.Errorf("by_kind %v last_24h %v, want {other: 1} in both", by, last)
 	}
 }
