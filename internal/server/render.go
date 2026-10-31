@@ -347,8 +347,9 @@ func Write(dir string, f Files) (Changes, error) {
 		if err := fsutil.WriteAtomic(env, f.Env, 0o600); err != nil {
 			return c, err
 		}
-	} else if fi, err := os.Stat(env); err == nil && fi.Mode().Perm() != 0o600 {
-		if err := os.Chmod(env, 0o600); err != nil { // loosened by hand: it holds secrets
+	}
+	if _, err := os.Stat(env); err == nil {
+		if err := fsutil.MakePrivate(env); err != nil { // loosened by hand: it holds secrets
 			return c, err
 		}
 	}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -22,7 +21,7 @@ type Sticky struct {
 // Load returns {memory id: injection times} within the window of now.
 func (s Sticky) Load(now time.Time, window time.Duration) map[string][]time.Time {
 	out := map[string][]time.Time{}
-	raw, err := os.ReadFile(s.Path)
+	raw, err := fsutil.ReadFileShared(s.Path)
 	if err != nil {
 		return out
 	}

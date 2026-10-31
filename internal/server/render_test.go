@@ -244,19 +244,16 @@ func TestRedact(t *testing.T) {
 // A .env someone loosened goes back to 0600 even when its content is
 // unchanged: it holds the database password and keys (M1 review).
 func TestWriteTightensALooseEnvFile(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	dir := t.TempDir()
 	f := Files{Compose: []byte("services: {}\n"), Env: []byte("KEY=v\n")}
 	if _, err := Write(dir, f); err != nil {
 		t.Fatal(err)
 	}
-	_ = os.Chmod(filepath.Join(dir, ".env"), 0o644)
+	testtool.ShareWithOthers(t, filepath.Join(dir, ".env"))
 	if _, err := Write(dir, f); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(filepath.Join(dir, ".env")); fi.Mode().Perm() != 0o600 {
-		t.Errorf(".env mode %v", fi.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, filepath.Join(dir, ".env"))
 }
 
 func TestRenderAndComposeUseTheConfiguredProject(t *testing.T) {

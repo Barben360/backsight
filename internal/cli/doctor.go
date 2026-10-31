@@ -148,12 +148,7 @@ func nativeFacts(ctx context.Context, d paths.Dirs, home string) (doctor.NativeF
 	}
 	f.Linger, err = linger()
 	unread("native-linger", err)
-	f.Home = n.Home()
-	fi, err := os.Stat(f.Home)
-	unread("native-home", err)
-	if err == nil {
-		f.HomeMode = fi.Mode()
-	}
+	unread("native-home", f.ReadHome(n.Home()))
 	v, err := n.Deployed()
 	if v == "" {
 		v = n.Version()

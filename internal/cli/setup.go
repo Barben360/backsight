@@ -846,7 +846,7 @@ func (s *setupEnv) steps(answers map[string]string, interactive bool, restart *b
 			if s.cfg != nil {
 				return setup.Step{Name: "config", Status: "skipped", Detail: "adopted " + s.dirs.ConfigFile()}, nil
 			}
-			if err := os.MkdirAll(s.dirs.Config, 0o700); err != nil {
+			if err := fsutil.MkdirPrivate(s.dirs.Config); err != nil {
 				return setup.Step{}, blocked(err)
 			}
 			want := fsutil.Absent

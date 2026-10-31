@@ -718,17 +718,16 @@ func TestCreditWithoutSessionAsksToRetry(t *testing.T) {
 // An unreadable journal does not fail the call: the session state's seen
 // ids stand in for the shows.
 func TestCreditFallsBackToTheSessionStateWhenTheJournalIsUnreadable(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits (an unreadable journal)")
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a file without permissions")
 	}
 	cs, home := creditSession(t)
 	showIn(t, home, "S", creditB)
 	files, _ := filepath.Glob(filepath.Join(pathsOf(home).FeedbackDir(), "journal-*.jsonl"))
-	if len(files) != 1 || os.Chmod(files[0], 0) != nil {
+	if len(files) != 1 {
 		t.Fatalf("journal %v", files)
 	}
-	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	testtool.DenyRead(t, files[0])
 	_ = sessions(home).Update("S", func(st *session.State) error { st.Seen = []string{creditA}; return nil })
 	if out, isErr := call(t, cs, "memory_credit", map[string]any{"ids": []string{"aaaaaaaa"}}); isErr || !strings.Contains(out, "From memory (proj · aaaaaaaa)") {
 		t.Errorf("%v %s", isErr, out)

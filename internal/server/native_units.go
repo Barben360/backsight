@@ -412,8 +412,9 @@ func (n Native) write(f Files, apply bool) (Changes, error) {
 		if err := fsutil.WriteAtomic(n.EnvFile(), f.Env, 0o600); err != nil {
 			return c, err
 		}
-	} else if fi, err := os.Stat(n.EnvFile()); err == nil && fi.Mode().Perm() != 0o600 {
-		if err := os.Chmod(n.EnvFile(), 0o600); err != nil { // loosened by hand: it holds secrets
+	}
+	if _, err := os.Stat(n.EnvFile()); err == nil {
+		if err := fsutil.MakePrivate(n.EnvFile()); err != nil { // loosened by hand: it holds secrets
 			return c, err
 		}
 	}
@@ -905,9 +906,10 @@ func (n Native) deployedFrom(unit []byte) (string, error) {
 		}
 	}
 	venvs := filepath.Join(n.Root(), "venv")
-	rest, ok := strings.CutPrefix(start, venvs+"/")
-	v, ok2 := strings.CutSuffix(rest, "/bin/hindsight-api")
-	if !ok || !ok2 || v == "" || strings.Contains(v, "/") {
+	sep := string(filepath.Separator)
+	rest, ok := strings.CutPrefix(start, venvs+sep)
+	v, ok2 := strings.CutSuffix(rest, filepath.Join(sep, "bin", "hindsight-api"))
+	if !ok || !ok2 || v == "" || strings.Contains(v, sep) {
 		return "", fmt.Errorf("ExecStart=%s is not one of %s's venvs", start, venvs)
 	}
 	return v, nil

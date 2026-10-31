@@ -344,6 +344,9 @@ func newServerInstallCmd(e *env) *cobra.Command {
 				}
 				add("config", "planned", "would write "+d.ConfigFile())
 			case errors.Is(err, fs.ErrNotExist):
+				if err := fsutil.MkdirPrivate(d.Config); err != nil {
+					return blocked(err)
+				}
 				if err := fsutil.ReplaceIfUnchanged(d.ConfigFile(), initialConfig(f), 0o600, fsutil.Absent); err != nil {
 					return blocked(err)
 				}

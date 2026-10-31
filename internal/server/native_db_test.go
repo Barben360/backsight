@@ -212,7 +212,6 @@ func (s *ctxSys) Run(ctx context.Context, name string, args ...string) ([]byte, 
 // most), and is stopped and removed after a success, a failing restore
 // and a cancel alike.
 func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	for _, name := range []string{"success", "failing restore", "cancelled"} {
 		t.Run(name, func(t *testing.T) {
 			n, _, tools := nativeFixture(t, secrets)
@@ -232,8 +231,8 @@ func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
 					}
 					if !exists(home) {
 						t.Errorf("the throwaway's HOME %s does not exist when its unit starts", home)
-					} else if fi, _ := os.Stat(home); fi.Mode().Perm() != 0o700 {
-						t.Errorf("HOME mode %v", fi.Mode().Perm())
+					} else {
+						testtool.RequirePrivate(t, home)
 					}
 				}
 			}

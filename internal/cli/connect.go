@@ -1217,7 +1217,7 @@ func applyConnect(ctx context.Context, d paths.Dirs, home string, tok token.Toke
 	if err := connectFault("config"); err != nil {
 		return rollback(err)
 	}
-	if err := os.MkdirAll(d.Config, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(d.Config); err != nil {
 		return rollback(err)
 	}
 	if !bytes.Equal(out, raw) {

@@ -84,7 +84,6 @@ func TestConcurrentAppendsStayWhole(t *testing.T) {
 }
 
 func TestAppendFillsCommonFieldsAndKeepsTheFilePrivate(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	dir := filepath.Join(t.TempDir(), "feedback")
 	j := NewJournal(dir, common)
 	at := time.Date(2026, 10, 28, 11, 0, 0, 123456789, time.FixedZone("CET", 3600))
@@ -118,12 +117,8 @@ func TestAppendFillsCommonFieldsAndKeepsTheFilePrivate(t *testing.T) {
 	if err != nil || fi.Size() != off {
 		t.Fatalf("position %s:%d, stat %v", file, off, err)
 	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Errorf("journal mode %v, want 0600", fi.Mode().Perm())
-	}
-	if di, _ := os.Stat(dir); di.Mode().Perm() != 0o700 {
-		t.Errorf("dir mode %v, want 0700", di.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, file)
+	testtool.RequirePrivate(t, dir)
 	if filepath.Base(file) != "journal-2026-10.jsonl" {
 		t.Errorf("file %s", file)
 	}

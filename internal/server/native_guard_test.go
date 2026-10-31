@@ -137,7 +137,6 @@ func TestNativeCheckInstance(t *testing.T) {
 }
 
 func TestNativeReadsAndRecordsTheIdentity(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	ctx := context.Background()
 	n, _, tools := nativeFixture(t, secrets)
 	rendered(t, n, secrets)
@@ -152,9 +151,7 @@ func TestNativeReadsAndRecordsTheIdentity(t *testing.T) {
 	if err != nil || string(raw) != "7702339718603615110\n" {
 		t.Errorf("identity %q %v", raw, err)
 	}
-	if st, _ := os.Stat(n.IdentityFile()); st.Mode().Perm() != 0o600 {
-		t.Errorf("identity mode %v, want 0600", st.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, n.IdentityFile())
 	c := tools.Calls[len(tools.Calls)-1]
 	inst := n.installation()
 	if c.Path != filepath.Join(inst, "bin", "pg_controldata") || !reflect.DeepEqual(c.Args, []string{"-D", n.DataDir()}) {

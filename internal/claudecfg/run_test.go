@@ -60,7 +60,6 @@ func journal(t *testing.T, r Runner) []map[string]any {
 }
 
 func TestApplyBacksUpThenWritesOnce(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	r, dir := runner(t)
 	target := filepath.Join(dir, "settings.json")
 	orig := "{\n  \"model\": \"opus\"\n}\n"
@@ -74,9 +73,7 @@ func TestApplyBacksUpThenWritesOnce(t *testing.T) {
 	if got := read(t, target); got != "{\n  \"model\": \"opus\",\n  \"cleanupPeriodDays\": 3650\n}\n" {
 		t.Errorf("file:\n%s", got)
 	}
-	if fi, _ := os.Stat(target); fi.Mode().Perm() != 0o644 {
-		t.Errorf("mode %v, want the file's own 0644", fi.Mode().Perm())
-	}
+	testtool.RequireUnixMode(t, target, 0o644) // the file's own
 	m, err := LoadManifest(r.PreImages, ts)
 	if err != nil || len(m.Files) != 1 || m.Files[0].PreImage == nil || m.Files[0].ShaBefore == m.Files[0].ShaAfter || m.Command != "client config apply" {
 		t.Fatalf("manifest %+v err %v", m, err)
@@ -85,9 +82,7 @@ func TestApplyBacksUpThenWritesOnce(t *testing.T) {
 	if read(t, pre) != orig {
 		t.Error("pre-image is not the original bytes")
 	}
-	if fi, _ := os.Stat(pre); fi.Mode().Perm() != 0o600 {
-		t.Errorf("pre-image mode %v", fi.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, pre)
 	j := journal(t, r)
 	if len(j) != 1 || j[0]["step"] != "claude-config" || j[0]["action"] != "edit" || j[0]["target"] != target || j[0]["pre_image"] != pre {
 		t.Errorf("journal %v", j)

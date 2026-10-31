@@ -182,8 +182,7 @@ func isRegular(p string) bool {
 }
 
 func (n Native) uvInstalled() bool {
-	st, err := os.Stat(n.UV())
-	return err == nil && st.Mode().IsRegular() && st.Size() > 0 && st.Mode().Perm()&0o111 != 0
+	return fsutil.Executable(n.UV())
 }
 
 func (n Native) venvInstalled(v string) bool {
@@ -284,14 +283,14 @@ func (n Native) ensureRoot() error {
 	if err := os.MkdirAll(n.Root(), 0o700); err != nil {
 		return err
 	}
-	return os.Chmod(n.Root(), 0o700)
+	return fsutil.MakePrivate(n.Root())
 }
 
 func (n Native) ensureHome() error {
 	if err := os.MkdirAll(n.Home(), 0o700); err != nil {
 		return err
 	}
-	return os.Chmod(n.Home(), 0o700)
+	return fsutil.MakePrivate(n.Home())
 }
 
 // fetchPython installs the pinned Python with the pinned uv into Python().

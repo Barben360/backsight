@@ -13,15 +13,15 @@ import (
 // present file comes back byte for byte (an empty one too), an absent one
 // as absent.
 func TestUpdateSnapshotRoundTrip(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	d := paths.Dirs{State: t.TempDir()}
 	files := map[string][]byte{"/x/state.json": []byte(`{"a":1}`), "/x/config.toml": nil, "/x/empty": {}}
 	if err := WriteUpdateSnapshot(d, files); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(d.UpdateSnapshot()); err != nil || fi.Mode().Perm() != 0o600 || filepath.Dir(d.UpdateSnapshot()) != d.State {
-		t.Fatalf("%v %v", fi, err)
+	if _, err := os.Stat(d.UpdateSnapshot()); err != nil || filepath.Dir(d.UpdateSnapshot()) != d.State {
+		t.Fatalf("%v", err)
 	}
+	testtool.RequirePrivate(t, d.UpdateSnapshot())
 	got, err := ReadUpdateSnapshot(d)
 	if err != nil || len(got) != 3 || string(got["/x/state.json"]) != `{"a":1}` || got["/x/config.toml"] != nil || got["/x/empty"] == nil {
 		t.Fatalf("%q %v", got, err)

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -179,7 +180,7 @@ func TestNativePathsAreUnderComposeDir(t *testing.T) {
 	root := filepath.Join(n.Cfg.Server.ComposeDir, "native")
 	for name, got := range map[string][2]string{
 		"Root":         {n.Root(), root},
-		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv")},
+		"UV":           {n.UV(), filepath.Join(root, "uv", "0.13.1", "uv"+exeSuffix())},
 		"Python":       {n.Python(), filepath.Join(root, "python")},
 		"PythonBin":    {n.PythonBin(), filepath.Join(root, "python", "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")},
 		"VenvDir":      {n.VenvDir("1.1.0-0123456789ab"), filepath.Join(root, "venv", "1.1.0-0123456789ab")},
@@ -234,7 +235,6 @@ func serveUV(t *testing.T, body []byte) *[]string {
 }
 
 func TestNativeFetchVerifiesUV(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	uvBin := []byte("#!/bin/sh\necho uv 0.13.1\n")
 	tarball := uvTarball(t, uvBin)
 
@@ -271,17 +271,12 @@ func TestNativeFetchVerifiesUV(t *testing.T) {
 		if want := "/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"; len(*got) != 1 || (*got)[0] != want {
 			t.Errorf("requests %v, want one GET of %s", *got, want)
 		}
-		st, err := os.Stat(n.UV())
-		if err != nil {
+		if _, err := os.Stat(n.UV()); err != nil {
 			t.Fatal(err)
 		}
-		if st.Mode().Perm() != 0o755 {
-			t.Errorf("uv mode %v, want 0755", st.Mode().Perm())
-		}
+		testtool.RequireUnixMode(t, n.UV(), 0o755)
 		// Final review 8: the native root is the user's alone, as home/.
-		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
-			t.Errorf("the native root %s: %v %v, want 0700", n.Root(), st.Mode(), err)
-		}
+		testtool.RequirePrivate(t, n.Root())
 		if b, _ := os.ReadFile(n.UV()); !bytes.Equal(b, uvBin) {
 			t.Errorf("uv holds %q, want the archive's uv", b)
 		}
@@ -594,7 +589,6 @@ esac
 }
 
 func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: uvInstalled reads the executable bit")
 	tools := &fakeTools{}
 	n := newNative(t, tools)
 	items, models, err := n.Downloads(context.Background())
@@ -705,4 +699,12 @@ func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
 	if err := n.PruneVersions(); err == nil || !exists(n.VenvDir("1.1.0-aaaaaaaaaaaa")) {
 		t.Errorf("with Err: %v", err)
 	}
+}
+
+// exeSuffix is what the OS adds to a program's name.
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }

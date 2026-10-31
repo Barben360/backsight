@@ -411,7 +411,6 @@ func TestNativeUnitsQuoteTheirPaths(t *testing.T) {
 // RF 1: no secret on any argv, in a unit, or in an error; server.env 0600
 // and home/ 0700 hold them.
 func TestNativeNeverPutsASecretOnArgvOrInAUnit(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	sec := config.Secrets{DBPassword: "dbpw-XYZ", APIKey: "api-XYZ", LLMAPIKey: "llm-XYZ", UIKey: "uikey-XYZ"}
 	n, sys, tools := nativeFixture(t, sec)
 	sys.Out = func(c []string) ([]byte, error) {
@@ -437,12 +436,8 @@ func TestNativeNeverPutsASecretOnArgvOrInAUnit(t *testing.T) {
 			}
 		}
 	}
-	if st, err := os.Stat(n.EnvFile()); err != nil || st.Mode().Perm() != 0o600 {
-		t.Errorf("server.env: %v", err)
-	}
-	if st, err := os.Stat(n.Home()); err != nil || st.Mode().Perm() != 0o700 {
-		t.Errorf("home/: %v %v", st.Mode(), err)
-	}
+	testtool.RequirePrivate(t, n.EnvFile())
+	testtool.RequirePrivate(t, n.Home())
 
 	for _, step := range []func() error{
 		func() error { return n.Start(ctx) },
@@ -1194,7 +1189,6 @@ func TestNativeStartRefusesAnIncompleteVenv(t *testing.T) {
 // home/: it holds server.env, the database and its identity. A root an
 // earlier build made 0755 is tightened.
 func TestNativeWriteMakesTheRootPrivate(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	for _, existing := range []bool{false, true} {
 		n, _, _ := nativeFixture(t, secrets)
 		if err := os.RemoveAll(n.Root()); err != nil {
@@ -1204,14 +1198,10 @@ func TestNativeWriteMakesTheRootPrivate(t *testing.T) {
 			if err := os.MkdirAll(n.Root(), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Chmod(n.Root(), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			testtool.ShareWithOthers(t, n.Root())
 		}
 		rendered(t, n, secrets)
-		if st, err := os.Stat(n.Root()); err != nil || st.Mode().Perm() != 0o700 {
-			t.Errorf("existing %v: the native root %v %v, want 0700", existing, st.Mode(), err)
-		}
+		testtool.RequirePrivate(t, n.Root())
 	}
 }
 

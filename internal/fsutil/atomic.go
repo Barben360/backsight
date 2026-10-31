@@ -26,7 +26,7 @@ var syncFile = (*os.File).Sync
 // caller edits exactly the bytes it will later compare against. A missing
 // file is (nil, Absent, nil).
 func ReadHashed(path string) ([]byte, string, error) {
-	b, err := os.ReadFile(path)
+	b, err := ReadFileShared(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, Absent, nil
 	}
@@ -143,7 +143,7 @@ func write(path string, data []byte, perm fs.FileMode, check func() error) error
 			return err
 		}
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := renameRetry(tmp.Name(), path); err != nil {
 		return err
 	}
 	ok = true

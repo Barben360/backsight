@@ -19,13 +19,12 @@ func dirs(t *testing.T) paths.Dirs {
 	return paths.Dirs{Data: filepath.Join(root, "d"), Config: filepath.Join(root, "c"), State: filepath.Join(root, "s")}
 }
 
-func put(t *testing.T, p, content string, mode os.FileMode) {
+func put(t *testing.T, p, content string) {
 	t.Helper()
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	if err := os.WriteFile(p, []byte(content), mode); err != nil {
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_ = os.Chmod(p, mode)
 }
 
 func TestFromConfigMissing(t *testing.T) {
@@ -36,8 +35,8 @@ func TestFromConfigMissing(t *testing.T) {
 
 func TestFromConfigWithSecrets(t *testing.T) {
 	d := dirs(t)
-	put(t, d.ConfigFile(), "[server]\nurl = \"http://10.0.0.2:8888\"\nbank = \"b\"\n", 0o600)
-	put(t, d.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
+	put(t, d.ConfigFile(), "[server]\nurl = \"http://10.0.0.2:8888\"\nbank = \"b\"\n")
+	put(t, d.SecretsFile(), "api_key = \"fakevalue\"\n")
 	tg, err := FromConfig(d, "/home/u")
 	if err != nil || tg.URL != "http://10.0.0.2:8888" || tg.Bank != "b" || tg.Source != "config" || tg.Token != "fakevalue" {
 		t.Fatalf("%+v %v", tg, err)
@@ -50,7 +49,7 @@ func TestFromConfigWithSecrets(t *testing.T) {
 // A config without secrets.toml is valid: the server may run without a key.
 func TestFromConfigWithoutSecrets(t *testing.T) {
 	d := dirs(t)
-	put(t, d.ConfigFile(), "", 0o600)
+	put(t, d.ConfigFile(), "")
 	tg, err := FromConfig(d, "/home/u")
 	if err != nil || tg.Token != "" || tg.URL != "http://127.0.0.1:8888" {
 		t.Errorf("%+v %v", tg, err)
@@ -58,15 +57,15 @@ func TestFromConfigWithoutSecrets(t *testing.T) {
 }
 
 func TestFromConfigErrors(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits (an unreadable secrets.toml)")
 	d := dirs(t)
-	put(t, d.ConfigFile(), "[recall]\nmin_scor = 1\n", 0o600)
+	put(t, d.ConfigFile(), "[recall]\nmin_scor = 1\n")
 	var ce *ConfigError
 	if _, err := FromConfig(d, "/home/u"); !errors.As(err, &ce) || ce.File != d.ConfigFile() {
 		t.Errorf("want a ConfigError on config.toml, got %v", err)
 	}
-	put(t, d.ConfigFile(), "", 0o600)
-	put(t, d.SecretsFile(), "api_key = \"fakevalue\"\n", 0o644)
+	put(t, d.ConfigFile(), "")
+	put(t, d.SecretsFile(), "api_key = \"fakevalue\"\n")
+	testtool.ShareWithOthers(t, d.SecretsFile()) // others can read it: refused
 	if _, err := FromConfig(d, "/home/u"); !errors.As(err, &ce) || ce.File != d.SecretsFile() || strings.Contains(err.Error(), "fakevalue") {
 		t.Errorf("want a ConfigError on secrets.toml, got %v", err)
 	}

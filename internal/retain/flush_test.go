@@ -1039,16 +1039,15 @@ func TestStaleServerMetadataDoesNotDuplicate(t *testing.T) {
 
 // A cursor that cannot be saved after a send must not cause a resend.
 func TestCursorSaveFailureDoesNotDuplicate(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits (a directory made read-only)")
 	if os.Getuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
 	e := newEnv(t)
 	e.record("s1", "u1", "user", 0, "first")
 	_ = os.MkdirAll(e.f.Dirs.CursorsDir(), 0o700)
-	_ = os.Chmod(e.f.Dirs.CursorsDir(), 0o500) // writes fail
+	restore := testtool.DenyWrite(t, e.f.Dirs.CursorsDir()) // writes fail
 	r := e.flush("s1", Options{})
-	_ = os.Chmod(e.f.Dirs.CursorsDir(), 0o700)
+	restore()
 	if r.Status != Sent || !strings.Contains(r.Detail, "cursor was not saved") {
 		t.Fatalf("%+v", r)
 	}

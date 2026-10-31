@@ -45,7 +45,6 @@ func (f fakeDB) Dump(_ context.Context, dst string, tables []string) (map[string
 }
 
 func TestCreateOpenRoundTrip(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3: mode bits")
 	dir := t.TempDir()
 	id, _ := age.GenerateX25519Identity()
 	at := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
@@ -69,9 +68,7 @@ func TestCreateOpenRoundTrip(t *testing.T) {
 	if strings.Contains(string(raw), "s3cr3t-value") || strings.Contains(string(raw), "PGDMP") || strings.Contains(string(side), "s3cr3t") {
 		t.Error("archive or sidecar in clear")
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
-		t.Errorf("mode %o", fi.Mode().Perm())
-	}
+	testtool.RequirePrivate(t, path)
 	out := t.TempDir()
 	got, err := Open(path, []age.Identity{id}, out, nil)
 	if err != nil || got.DumpSHA256 != m.DumpSHA256 || got.Counts["memory_units"] != 2204 {

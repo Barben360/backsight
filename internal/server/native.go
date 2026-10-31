@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"time"
 
@@ -74,8 +75,14 @@ type ToolRunner interface {
 // stays apart.
 func (n Native) Root() string { return filepath.Join(n.Cfg.Server.ComposeDir, "native") }
 
-// UV is the pinned uv.
-func (n Native) UV() string { return filepath.Join(n.Root(), "uv", nativelock.UVVersion, "uv") }
+// UV is the pinned uv (uv.exe on Windows).
+func (n Native) UV() string {
+	name := "uv"
+	if runtime.GOOS == "windows" {
+		name = "uv.exe"
+	}
+	return filepath.Join(n.Root(), "uv", nativelock.UVVersion, name)
+}
 
 // Python is where uv installs Python (UV_PYTHON_INSTALL_DIR).
 func (n Native) Python() string { return filepath.Join(n.Root(), "python") }

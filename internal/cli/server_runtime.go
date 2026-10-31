@@ -56,10 +56,7 @@ func nativeShim(d paths.Dirs) string {
 // shimMissing: no executable file behind the shim (none, a dangling link,
 // or not executable), which systemd would fail with 203/EXEC; server
 // install and the switch install it again.
-func shimMissing(shim string) bool {
-	fi, err := os.Stat(shim)
-	return err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0
-}
+func shimMissing(shim string) bool { return !fsutil.Executable(shim) }
 
 // shimProbeWait bounds the shim's --help.
 const shimProbeWait = 15 * time.Second

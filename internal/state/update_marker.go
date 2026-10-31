@@ -48,7 +48,7 @@ func WriteUpdateMarker(d paths.Dirs, m UpdateMarker) error {
 // ReadUpdateMarker reads the marker: nil, nil when there is none; one
 // that cannot be parsed is returned empty with the error.
 func ReadUpdateMarker(d paths.Dirs) (*UpdateMarker, error) {
-	raw, err := os.ReadFile(d.UpdateMarker())
+	raw, err := fsutil.ReadFileShared(d.UpdateMarker())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -106,7 +106,7 @@ func WriteUpdateSnapshot(d paths.Dirs, files map[string][]byte) error {
 // ReadUpdateSnapshot reads the persisted snapshot: nil, nil when there is
 // none.
 func ReadUpdateSnapshot(d paths.Dirs) (map[string][]byte, error) {
-	raw, err := os.ReadFile(d.UpdateSnapshot())
+	raw, err := fsutil.ReadFileShared(d.UpdateSnapshot())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
