@@ -158,14 +158,11 @@ func extraText(m Metric) string {
 	return b.String()
 }
 
-// TestUsedTurnRate: 33 declared turns, 12 with a used credit (one of them
-// credited by a subagent: any agent counts), 4 declaring only wrong,
-// outdated or none; 3 undeclared; 2 pending (no stop, shown 1 h ago); 1
-// check_skipped; 1 subagent turn. used.turn_rate = 12/33 = 0.3636, worst
-// case 12/(33+3) = 0.3333; declare.coverage = 33/36 = 0.9167, interval
-// [0.7817, 0.9713]: its upper bound is above 0.80, so no unreliable tag.
-func TestUsedTurnRate(t *testing.T) {
-	x := newFx(t, fxNow)
+// usedTurnRateJournal writes TestUsedTurnRate's journal: 33 declared
+// turns, 12 with a used credit, 3 undeclared, 2 pending, 1 check_skipped
+// and 1 subagent turn.
+func usedTurnRateJournal(x *fx) {
+	x.t.Helper()
 	h := 0
 	next := func() time.Time { h++; return hoursAgo(h) }
 	for i := range 33 {
@@ -197,6 +194,17 @@ func TestUsedTurnRate(t *testing.T) {
 	at := next()
 	x.turnEvent(at, "sub", "alpha")
 	x.shows(at, "sub", "t1", "agent-2", "alpha", "search", "", "mx")
+}
+
+// TestUsedTurnRate: 33 declared turns, 12 with a used credit (one of them
+// credited by a subagent: any agent counts), 4 declaring only wrong,
+// outdated or none; 3 undeclared; 2 pending (no stop, shown 1 h ago); 1
+// check_skipped; 1 subagent turn. used.turn_rate = 12/33 = 0.3636, worst
+// case 12/(33+3) = 0.3333; declare.coverage = 33/36 = 0.9167, interval
+// [0.7817, 0.9713]: its upper bound is above 0.80, so no unreliable tag.
+func TestUsedTurnRate(t *testing.T) {
+	x := newFx(t, fxNow)
+	usedTurnRateJournal(x)
 
 	m := qualityOf(x, x.query(7))
 	r := m["used.turn_rate"]

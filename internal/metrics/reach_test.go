@@ -31,14 +31,26 @@ func reachOf(x *fx, q Query) map[string]Metric {
 	return x.metrics(reachIDs, q)
 }
 
+// hitRatePrompts writes TestHitRate's telemetry: 33 recalls of which the
+// first 12 injected (chars characters each), 2 machine and 3 typed skips,
+// and 20 recalls of the previous window of which 6 injected.
+func hitRatePrompts(x *fx, chars int) {
+	x.t.Helper()
+	x.prompts("alpha", "cur", fxNow, 33, func(i int, p *telemetry.Prompt) {
+		if i < 12 {
+			p.Injected, p.Chars = 1, chars
+		}
+	})
+	x.prompts("alpha", "mach", fxNow.Add(-40*time.Hour), 2, func(_ int, p *telemetry.Prompt) { p.Decision, p.Reason = "skip", "machine" })
+	x.prompts("alpha", "skip", fxNow.Add(-50*time.Hour), 3, func(_ int, p *telemetry.Prompt) { p.Decision, p.Reason = "skip", "gap" })
+	x.prompts("alpha", "prev", since7, 20, injecting(6))
+}
+
 // TestHitRate: 12 of 33 recalls injected; typed skips and machine prompts
 // are not recalls; the previous window is 6 of 20.
 func TestHitRate(t *testing.T) {
 	x := newFx(t, fxNow)
-	x.prompts("alpha", "cur", fxNow, 33, injecting(12))
-	x.prompts("alpha", "mach", fxNow.Add(-40*time.Hour), 2, func(_ int, p *telemetry.Prompt) { p.Decision, p.Reason = "skip", "machine" })
-	x.prompts("alpha", "skip", fxNow.Add(-50*time.Hour), 3, func(_ int, p *telemetry.Prompt) { p.Decision, p.Reason = "skip", "gap" })
-	x.prompts("alpha", "prev", since7, 20, injecting(6))
+	hitRatePrompts(x, 0)
 
 	m := reachOf(x, x.query(7))["recall.hit_rate"]
 	if m.Num == nil || *m.Num != 12 || m.Den == nil || *m.Den != 33 || m.Value == nil || !close4(*m.Value, 12.0/33) {

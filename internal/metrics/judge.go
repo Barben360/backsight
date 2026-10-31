@@ -131,21 +131,8 @@ func relative(d Def, o Observation, lo, hi float64) Status {
 	if !d.Relative {
 		return ""
 	}
-	var vals []float64
-	for _, b := range o.Baseline {
-		if b.Den >= int64(d.MinN) {
-			vals = append(vals, b.Value)
-		}
-	}
-	if len(vals) < 2 {
-		return ""
-	}
-	slices.Sort(vals)
-	m := vals[len(vals)/2]
-	if len(vals)%2 == 0 {
-		m = (vals[len(vals)/2-1] + m) / 2
-	}
-	if m <= 0 {
+	m, ok := baselineMedian(d, o.Baseline)
+	if !ok || m <= 0 {
 		return ""
 	}
 	switch d.Direction {
@@ -159,6 +146,26 @@ func relative(d Def, o Observation, lo, hi float64) Status {
 		}
 	}
 	return StatusOK
+}
+
+// baselineMedian is the median of the point values of the baselines with
+// n >= d's min_n; false when fewer than two qualify.
+func baselineMedian(d Def, bs []BaselineValue) (float64, bool) {
+	var vals []float64
+	for _, b := range bs {
+		if b.Den >= int64(d.MinN) {
+			vals = append(vals, b.Value)
+		}
+	}
+	if len(vals) < 2 {
+		return 0, false
+	}
+	slices.Sort(vals)
+	m := vals[len(vals)/2]
+	if len(vals)%2 == 0 {
+		m = (vals[len(vals)/2-1] + m) / 2
+	}
+	return m, true
 }
 
 // rank orders statuses for worst; anything but ok, watch and bad (no rule
