@@ -84,15 +84,17 @@ func (execSys) Run(ctx context.Context, name string, args ...string) ([]byte, er
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-// noRunSys is execSys whose /Run starts nothing: a PC with no console
-// logon, where the task cannot run.
-type noRunSys struct{ execSys }
+// noTaskSys stands for a Task Scheduler that never runs the task (no
+// console logon): every change succeeds and nothing is registered. A
+// really registered task would not do: StartWhenAvailable runs its
+// missed 5-minute start as soon as it is registered (seen on CI's runner).
+type noTaskSys struct{}
 
-func (s noRunSys) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if slices.Contains(args, "/Run") {
-		return nil, nil
+func (noTaskSys) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if slices.Contains(args, "/Query") {
+		return nil, errors.New("exit status 1")
 	}
-	return s.execSys.Run(ctx, name, args...)
+	return nil, nil
 }
 
 // buildBacksight builds the backsight binary as the shim, testhooks on:
@@ -168,7 +170,7 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	n := Native{Cfg: cfg, Dirs: d, Env: map[string]string{"BACKSIGHT_HOME": home}, Sys: execSys{}, GOOS: "windows",
 		Note: func(s string) { notes = append(notes, s) }}
 	if forceDetached {
-		n.Sys = noRunSys{}
+		n.Sys = noTaskSys{}
 	}
 	h := taskHost{n: n}
 	if err := copyFileForTest(built, n.shim()); err != nil {
@@ -260,7 +262,7 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	if !h.Owns(children[0]) || h.Owns(os.Getpid()) {
 		t.Errorf("Owns: postgres %v, this test %v: want the job's processes only", h.Owns(children[0]), h.Owns(os.Getpid()))
 	}
-	if e, err := h.Engine(ctx); err != nil || e.Version != "Task Scheduler" {
+	if e, err := h.Engine(ctx); !forceDetached && (err != nil || e.Version != "Task Scheduler") {
 		t.Errorf("Engine = %+v %v", e, err)
 	}
 
@@ -279,9 +281,11 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 		t.Errorf("the pipe after Stop: %v, want it gone", err)
 	}
 	sys := execSys{}
-	q, err := sys.Run(ctx, "schtasks", "/Query", "/TN", n.TaskName(), "/XML")
-	if err != nil || !regexp.MustCompile(`(?s)<Settings>.*<Enabled>false</Enabled>.*</Settings>`).Match(q) {
-		t.Errorf("the task after Stop is not disabled (%v):\n%s", err, q)
+	if !forceDetached {
+		q, err := sys.Run(ctx, "schtasks", "/Query", "/TN", n.TaskName(), "/XML")
+		if err != nil || !regexp.MustCompile(`(?s)<Settings>.*<Enabled>false</Enabled>.*</Settings>`).Match(q) {
+			t.Errorf("the task after Stop is not disabled (%v):\n%s", err, q)
+		}
 	}
 	log := supervisorLog(h)
 	if !strings.Contains(log, "api stopped") || strings.Contains(log, "no console to interrupt it") {
