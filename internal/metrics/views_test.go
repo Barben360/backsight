@@ -22,8 +22,8 @@ import (
 // The page views. Clock fxNow (2026-10-30T12:00+01:00), window the 7 days
 // before it unless a test says otherwise.
 
-// TestRunDispatches: Run serves the six page views by name; a browse view
-// (Task 14) and an unknown name are ErrUnknownView.
+// TestRunDispatches: Run serves the twelve views by name; an unknown name
+// is ErrUnknownView.
 func TestRunDispatches(t *testing.T) {
 	x := newFx(t, fxNow)
 	for _, v := range pageViews {
@@ -34,7 +34,12 @@ func TestRunDispatches(t *testing.T) {
 	if !slices.Equal(Views[:6], pageViews) || len(Views) != 12 {
 		t.Errorf("Views = %v, want the six page views first, 12 in all", Views)
 	}
-	for _, v := range []string{"sessions", "nope", ""} {
+	for _, v := range Views[6:] {
+		if r := x.run(v, x.query(7)); r.View != v || r.ViewSchema != ViewSchema {
+			t.Errorf("%s: view %q schema %d", v, r.View, r.ViewSchema)
+		}
+	}
+	for _, v := range []string{"nope", ""} {
 		if _, err := Run(context.Background(), v, x.source(), x.query(7)); !errors.Is(err, ErrUnknownView) {
 			t.Errorf("Run(%q) = %v, want ErrUnknownView", v, err)
 		}

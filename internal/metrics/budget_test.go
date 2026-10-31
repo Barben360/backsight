@@ -20,8 +20,9 @@ const viewLimit = 900 * time.Millisecond
 // TestViewBudgets times the page views on block 1's generated 13 months
 // (indexgen.Budget), the default 7-day window, a server that answers at
 // once and an instant doctor: each view, best of 3 runs, within viewLimit.
-// The overview and the quality view are the budget's; the others are
-// timed and held to it too.
+// The overview and the quality view are the budget's; the others, the
+// browse views (their lists and a page of each) included, are timed and held
+// to it too.
 func TestViewBudgets(t *testing.T) {
 	if raceEnabled || testing.Short() {
 		t.Skip("time budgets are measured without -race and -short")
@@ -58,7 +59,8 @@ func TestViewBudgets(t *testing.T) {
 	}
 	q := Query{Window: w, Machines: "this"}
 
-	for _, view := range Views[:6] {
+	// timed runs view for query and returns its best of 3 and its result.
+	timed := func(name, view string, q Query) Result {
 		best := time.Duration(1<<63 - 1)
 		var r Result
 		for range 3 { // best of 3: a slow shared runner's one-off stall is not the view's cost
@@ -66,17 +68,48 @@ func TestViewBudgets(t *testing.T) {
 			r, err = Run(ctx, view, src, q)
 			best = min(best, time.Since(start))
 			if err != nil {
-				t.Fatalf("%s: %v", view, err)
+				t.Fatalf("%s: %v", name, err)
 			}
 		}
+		t.Logf("%s: best of 3 %v (limit %v)", name, best, viewLimit)
+		if best > viewLimit {
+			t.Errorf("%s took %v, limit %v", name, best, viewLimit)
+		}
+		return r
+	}
+	for _, view := range Views[:6] {
+		r := timed(view, view, q)
 		// the measure is of real work: each view read the generated week
 		if c := realWork[view]; !c.ok(r) {
 			t.Errorf("%s: %s = %+v, want %s", view, c.id, r.Metrics[c.id], c.what)
 		}
-		t.Logf("%s: best of 3 %v (limit %v)", view, best, viewLimit)
-		if best > viewLimit {
-			t.Errorf("%s took %v, limit %v", view, best, viewLimit)
-		}
+	}
+
+	// The browse views: the lists, then a page of the first row of each.
+	projects := timed("projects", "projects", q).Tables
+	sessions := timed("sessions", "sessions", q).Tables
+	memories := timed("memories", "memories", q).Tables
+	days := timed("days", "days", q).Tables
+	releases := timed("releases", "releases", q).Tables
+	defs := timed("defs", "defs", q).Tables
+	if len(projects.Projects) == 0 || projects.Pooled.Totals.Prompts < 1000 || len(sessions.Sessions) != q.EffectiveLimit() || sessions.Page.Total < 100 ||
+		len(memories.Memories) != q.EffectiveLimit() || memories.Page.Total < 100 || len(days.Days) != 8 || len(releases.Releases) == 0 || len(defs.Defs) != len(Catalog) {
+		t.Errorf("the browse views did not read the generated week: %d projects (%d prompts), %d of %d sessions, %d of %d memories, %d days, %d releases, %d defs",
+			len(projects.Projects), projects.Pooled.Totals.Prompts, len(sessions.Sessions), sessions.Page.Total, len(memories.Memories), memories.Page.Total,
+			len(days.Days), len(releases.Releases), len(defs.Defs))
+		return
+	}
+	for _, p := range []struct {
+		name, view, id string
+	}{
+		{"projects <name>", "projects", projects.Projects[0].Project},
+		{"sessions <id>", "sessions", sessions.Sessions[0].ID},
+		{"memories <id>", "memories", memories.Memories[0].ID},
+		{"days <date>", "days", days.Days[0].Day},
+	} {
+		pq := q
+		pq.ID = p.id
+		timed(p.name, p.view, pq)
 	}
 }
 

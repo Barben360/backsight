@@ -146,12 +146,12 @@ func costSessions(e env, w Window, obs map[string]Observation, met map[string]Me
 	// internal/stats counts the prompt-hook text per session.
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT ts, session, COALESCE(chars, 0), 1 FROM tel_prompt
-WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND COALESCE(reason, '') <> 'machine' AND `+projectClause+`
+WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND COALESCE(reason, '') <> 'machine' AND `+projectClause+` AND `+versionClause+`
 UNION ALL
 SELECT ts, session, COALESCE(chars, 0), 0 FROM tel_briefing
-WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND `+projectClause,
-		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project,
-		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
+WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND `+projectClause+` AND `+versionClause,
+		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version,
+		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version)
 	if err != nil {
 		return err
 	}
@@ -222,7 +222,7 @@ WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND `+projectClause,
 func costPrompts(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	xs, _, err := costSamples(e, w, `
 SELECT ts, chars FROM tel_prompt
-WHERE decision = 'recall' AND injected > 0 AND chars IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause)
+WHERE decision = 'recall' AND injected > 0 AND chars IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause+` AND `+versionClause)
 	if err != nil {
 		return err
 	}
@@ -238,10 +238,10 @@ type samples struct {
 	byDay [][]int64
 }
 
-// costSamples reads (ts, value) rows of query (binding since, until and
-// the project twice) into samples.
+// costSamples reads (ts, value) rows of query (binding since, until, the
+// project twice and the version twice) into samples.
 func costSamples(e env, w Window, query string) (samples, []Bucket, error) {
-	rows, err := e.tx.QueryContext(e.ctx, query, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
+	rows, err := e.tx.QueryContext(e.ctx, query, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version)
 	if err != nil {
 		return samples{}, nil, err
 	}
@@ -288,13 +288,13 @@ func latency(e env, w Window, id, query string, obs map[string]Observation, met 
 func costRecallLatency(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	return latency(e, w, "recall.latency", `
 SELECT ts, ms FROM tel_prompt
-WHERE decision = 'recall' AND ms IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause, obs, met)
+WHERE decision = 'recall' AND ms IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause+` AND `+versionClause, obs, met)
 }
 
 func costSearchLatency(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
 	return latency(e, w, "search.latency", `
 SELECT ts, ms FROM tel_tool
-WHERE name = 'memory_search' AND ok = 1 AND ms IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause, obs, met)
+WHERE name = 'memory_search' AND ok = 1 AND ms IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause+` AND `+versionClause, obs, met)
 }
 
 // tokens are the LLM tokens of a set of buckets. The one reading, here and

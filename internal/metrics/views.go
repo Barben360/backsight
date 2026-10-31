@@ -33,6 +33,18 @@ func Run(ctx context.Context, view string, s Source, q Query) (Result, error) {
 		return Pipeline(ctx, s, q)
 	case "system":
 		return System(ctx, s, q)
+	case "releases":
+		return Releases(ctx, s, q)
+	case "projects":
+		return Projects(ctx, s, q)
+	case "sessions":
+		return Sessions(ctx, s, q)
+	case "memories":
+		return Memories(ctx, s, q)
+	case "days":
+		return Days(ctx, s, q)
+	case "defs":
+		return Defs(ctx, s, q)
 	}
 	return Result{}, fmt.Errorf("%w %q", ErrUnknownView, view)
 }

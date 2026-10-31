@@ -54,7 +54,11 @@ type memo struct {
 	docStatus map[string]string    // document_status
 	stale     *feedback.StaleLists // feedback.Stale of the index's ledger, as of now
 	ledger    *feedback.Ledger     // the index's ledger
+	projects  map[string]string    // every memory's project (memoryProjects)
 }
+
+// newMemo is an empty memo.
+func newMemo() *memo { return &memo{runs: map[runKey]familyRun{}} }
 
 // runKey is one family run: the window read and the view's own window
 // (figures as of now are read only for the latter).
@@ -309,7 +313,7 @@ func withTx(ctx context.Context, src Source, q Query, need []string, fn func(e e
 			}
 			state.LastOK = last
 		}
-		return fn(env{ctx: ctx, tx: tx, src: src, q: q, now: now, srv: srv, server: state, memo: &memo{runs: map[runKey]familyRun{}}})
+		return fn(env{ctx: ctx, tx: tx, src: src, q: q, now: now, srv: srv, server: state, memo: newMemo()})
 	})
 }
 

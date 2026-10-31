@@ -115,27 +115,41 @@ func (w Window) Buckets() []Bucket {
 	if loc == nil {
 		loc = time.UTC
 	}
+	if w.Length() > hourlyMax {
+		return w.DayBuckets()
+	}
 	var out []Bucket
-	add := func(key string, from, to time.Time) {
-		out = append(out, Bucket{Key: key, Since: max2(from, w.Since), Until: min2(to, w.Until),
-			Partial: from.Before(w.Since) || to.After(w.Until)})
+	s := w.Since.In(loc)
+	h := s.Add(-time.Duration(s.Minute())*time.Minute - time.Duration(s.Second())*time.Second - time.Duration(s.Nanosecond()))
+	for ; h.Before(w.Until); h = h.Add(time.Hour) {
+		out = append(out, w.clipped(h.Format("2006-01-02T15:04-07:00"), h, h.Add(time.Hour)))
 	}
-	if w.Length() <= hourlyMax {
-		s := w.Since.In(loc)
-		h := s.Add(-time.Duration(s.Minute())*time.Minute - time.Duration(s.Second())*time.Second - time.Duration(s.Nanosecond()))
-		for ; h.Before(w.Until); h = h.Add(time.Hour) {
-			add(h.Format("2006-01-02T15:04-07:00"), h, h.Add(time.Hour))
-		}
-		return out
+	return out
+}
+
+// DayBuckets splits the window into local days whatever its length (the
+// days view lists days even for a window drawn by the hour); the first and
+// last are clipped and marked Partial as in Buckets.
+func (w Window) DayBuckets() []Bucket {
+	loc := w.Loc
+	if loc == nil {
+		loc = time.UTC
 	}
+	var out []Bucket
 	y, m, d := w.Since.In(loc).Date()
 	for t := time.Date(y, m, d, 0, 0, 0, 0, loc); t.Before(w.Until); {
 		y, m, d = t.Date()
 		next := time.Date(y, m, d+1, 0, 0, 0, 0, loc)
-		add(t.Format("2006-01-02"), t, next)
+		out = append(out, w.clipped(t.Format("2006-01-02"), t, next))
 		t = next
 	}
 	return out
+}
+
+// clipped is the bucket [from, to) cut to the window.
+func (w Window) clipped(key string, from, to time.Time) Bucket {
+	return Bucket{Key: key, Since: max2(from, w.Since), Until: min2(to, w.Until),
+		Partial: from.Before(w.Since) || to.After(w.Until)}
 }
 
 func max2(a, b time.Time) time.Time {

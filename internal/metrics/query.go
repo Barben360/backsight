@@ -14,6 +14,10 @@ type Query struct {
 	Limit, Offset int
 	// Dev adds the developer-only metrics; Text asks for a memory's text.
 	Dev, Text bool
+	// version restricts the reach, quality and cost rows behind the
+	// releases view's flagship metrics to one binary version (each row by
+	// its own version; a journal row by its turn's).
+	version string
 }
 
 // Paging limits of the browse views.

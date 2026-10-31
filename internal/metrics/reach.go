@@ -84,6 +84,10 @@ func i64(v int64) *int64 { return &v }
 // projectClause is the project filter, two bind values.
 const projectClause = `(? = '' OR project = ?)`
 
+// versionClause is the binary-version filter of the releases view's
+// metrics, two bind values (empty: no filter).
+const versionClause = `(? = '' OR binary_version = ?)`
+
 // reachAbsent reports why the family has nothing to read: a server-only
 // host, or no row at all in table (any time) for the project.
 func reachAbsent(e env, table string) (string, bool, error) {
@@ -147,14 +151,14 @@ func reachPrompts(e env, w Window, obs map[string]Observation, met map[string]Me
 	}
 	args = append(args, w.Since.UnixMilli())
 	args = append(args, names...)
-	args = append(args, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
+	args = append(args, w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project, e.q.version, e.q.version)
 	rows, err := e.tx.QueryContext(e.ctx, `
 SELECT p.ts, p.decision, p.reason, p.plen, p.lang, p.injected, p.empty, s.n IS NOT NULL
 FROM tel_prompt p
 LEFT JOIN (SELECT DISTINCT session, n FROM tel_tool_use
            WHERE ts >= ? AND COALESCE(subagent, 0) = 0 AND (`+strings.Join(cond, " OR ")+`)) s
        ON s.session = p.session AND s.n = p.n
-WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?)`, args...)
+WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?) AND (? = '' OR p.binary_version = ?)`, args...)
 	if err != nil {
 		return err
 	}

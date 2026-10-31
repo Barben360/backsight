@@ -38,6 +38,13 @@ func sessionProject(a string) string {
 	return fmt.Sprintf(`(? = '' OR EXISTS (SELECT 1 FROM turns tp WHERE tp.session = %[1]s.session AND tp.turn = %[1]s.turn AND tp.project = ?))`, a)
 }
 
+// sessionVersion is the binary-version filter of a journal row aliased a:
+// the version of its turn (two bind values: the version twice; empty: no
+// filter).
+func sessionVersion(a string) string {
+	return fmt.Sprintf(`(? = '' OR EXISTS (SELECT 1 FROM turns tv WHERE tv.session = %[1]s.session AND tv.turn = %[1]s.turn AND tv.binary_version = ?))`, a)
+}
+
 // quality computes the quality metrics over w.
 func quality(e env, w Window) (map[string]Observation, map[string]Metric, error) {
 	obs := make(map[string]Observation, len(qualityIDs))
@@ -126,8 +133,8 @@ t AS (
 SELECT t.agent, t.first, t.last, t.mems, t.credited, f.outcome,
        EXISTS (SELECT 1 FROM credits c WHERE c.session = t.session AND c.turn = t.turn AND c.verdict = 'used')
 FROM t LEFT JOIN turn_final_stop f ON f.session = t.session AND f.turn = t.turn AND COALESCE(f.agent, '') = ''
-WHERE t.first >= ? AND t.first < ? AND `+sessionProject("t"),
-		since, until, since, until, e.q.Project, e.q.Project)
+WHERE t.first >= ? AND t.first < ? AND `+sessionProject("t")+` AND `+sessionVersion("t"),
+		since, until, since, until, e.q.Project, e.q.Project, e.q.version, e.q.version)
 	if err != nil {
 		return err
 	}
@@ -411,9 +418,9 @@ SELECT verdict, at FROM (
   SELECT c.verdict, COALESCE((SELECT MIN(s.ts) FROM shows s
            WHERE s.session = c.session AND s.turn = c.turn AND s.memory_id = c.memory_id), c.ts) AS at
   FROM credits c
-  WHERE c.memory_id IS NOT NULL AND c.verdict IN ('used', 'wrong', 'outdated') AND c.ts >= ? AND `+sessionProject("c")+`)
+  WHERE c.memory_id IS NOT NULL AND c.verdict IN ('used', 'wrong', 'outdated') AND c.ts >= ? AND `+sessionProject("c")+` AND `+sessionVersion("c")+`)
 WHERE at >= ? AND at < ?`,
-		since, e.q.Project, e.q.Project, since, until)
+		since, e.q.Project, e.q.Project, e.q.version, e.q.version, since, until)
 	if err != nil {
 		return err
 	}
@@ -511,7 +518,8 @@ func (e env) ledger() (feedback.Ledger, error) {
 }
 
 func readLedger(e env) (feedback.Ledger, error) {
-	rows, err := e.tx.QueryContext(e.ctx, `SELECT memory_id, shown, credits, wrong, hidden_since, imported_shown, last_shown FROM ledger`)
+	rows, err := e.tx.QueryContext(e.ctx, `SELECT memory_id, shown, credits, credits_at, misses, misses_at, last_shown, last_credited,
+       wrong, hidden_since, unhidden_at, imported_shown, imported_credits FROM ledger`)
 	if err != nil {
 		return feedback.Ledger{}, err
 	}
@@ -519,25 +527,34 @@ func readLedger(e env) (feedback.Ledger, error) {
 	l := feedback.Ledger{Memories: map[string]feedback.Entry{}}
 	for rows.Next() {
 		var (
-			id                     string
-			shown, wrong, imported sql.NullInt64
-			credits                sql.NullFloat64
-			hiddenSince, lastShown sql.NullInt64
+			id                                                        string
+			shown, wrong, imported                                    sql.NullInt64
+			credits, misses, importedCredits                          sql.NullFloat64
+			creditsAt, missesAt, lastShown, lastCredited, hiddenSince sql.NullInt64
+			unhiddenAt                                                sql.NullInt64
 		)
-		if err := rows.Scan(&id, &shown, &credits, &wrong, &hiddenSince, &imported, &lastShown); err != nil {
+		if err := rows.Scan(&id, &shown, &credits, &creditsAt, &misses, &missesAt, &lastShown, &lastCredited,
+			&wrong, &hiddenSince, &unhiddenAt, &imported, &importedCredits); err != nil {
 			return feedback.Ledger{}, err
 		}
-		m := feedback.Entry{Shown: int(shown.Int64), Credits: credits.Float64, Wrong: int(wrong.Int64),
-			Imported: feedback.Imported{Shown: int(imported.Int64)}}
-		if lastShown.Valid {
-			m.LastShown = time.UnixMilli(lastShown.Int64)
-		}
+		m := feedback.Entry{Shown: int(shown.Int64), Credits: credits.Float64, Misses: misses.Float64, Wrong: int(wrong.Int64),
+			Imported:  feedback.Imported{Shown: int(imported.Int64), Credits: importedCredits.Float64},
+			CreditsAt: msTime(creditsAt), MissesAt: msTime(missesAt), LastShown: msTime(lastShown),
+			LastCredited: msTime(lastCredited), UnhiddenAt: msTime(unhiddenAt)}
 		if hiddenSince.Valid {
 			m.Hidden = &feedback.Hidden{Since: time.UnixMilli(hiddenSince.Int64)}
 		}
 		l.Memories[id] = m
 	}
 	return l, rows.Err()
+}
+
+// msTime is a nullable unix-millisecond column as a time, zero when null.
+func msTime(ms sql.NullInt64) time.Time {
+	if !ms.Valid {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms.Int64)
 }
 
 // staleLists is feedback.Stale of the index's ledger as of now, read once

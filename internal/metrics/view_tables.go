@@ -69,7 +69,11 @@ func countBy(e env, query string, into map[string]int64, args ...any) error {
 // outdated, and the characters added (typed prompts' recalls and
 // briefings). The project is the session's (its telemetry's, else its
 // turns'). Sent is left to the caller.
-func sessionRows(e env, w Window) ([]SessionRow, error) {
+func sessionRows(e env, w Window) ([]SessionRow, error) { return sessionRowsOf(e, w, "") }
+
+// sessionRowsOf is sessionRows for the one session named only ("": every
+// session).
+func sessionRowsOf(e env, w Window, only string) ([]SessionRow, error) {
 	since, until, p := w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project
 	rows, err := e.tx.QueryContext(e.ctx, `
 WITH a AS (
@@ -78,21 +82,21 @@ WITH a AS (
          CASE WHEN (reason IS NULL OR reason <> 'machine') AND decision = 'recall' AND COALESCE(injected, 0) > 0 THEN 1 ELSE 0 END AS pwm,
          0 AS shown, 0 AS used, 0 AS wrong,
          CASE WHEN reason IS NULL OR reason <> 'machine' THEN COALESCE(chars, 0) ELSE 0 END AS chars
-  FROM tel_prompt WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND `+projectClause+`
+  FROM tel_prompt WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND (? = '' OR session = ?) AND `+projectClause+`
   UNION ALL
   SELECT session, ts, project, 0, 0, 0, 0, 0, COALESCE(chars, 0)
-  FROM tel_briefing WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND `+projectClause+`
+  FROM tel_briefing WHERE ts >= ? AND ts < ? AND COALESCE(session, '') <> '' AND (? = '' OR session = ?) AND `+projectClause+`
   UNION ALL
   SELECT s.session, s.ts, NULL, 0, 0, 1, 0, 0, 0
-  FROM shows s WHERE s.ts >= ? AND s.ts < ? AND COALESCE(s.session, '') <> '' AND COALESCE(s.path, '') <> ? AND `+sessionProject("s")+`
+  FROM shows s WHERE s.ts >= ? AND s.ts < ? AND COALESCE(s.session, '') <> '' AND (? = '' OR s.session = ?) AND COALESCE(s.path, '') <> ? AND `+sessionProject("s")+`
   UNION ALL
   SELECT c.session, c.ts, NULL, 0, 0, 0,
          CASE WHEN c.verdict = 'used' THEN 1 ELSE 0 END, CASE WHEN c.verdict IN ('wrong', 'outdated') THEN 1 ELSE 0 END, 0
-  FROM credits c WHERE c.ts >= ? AND c.ts < ? AND COALESCE(c.session, '') <> '' AND c.memory_id IS NOT NULL AND `+sessionProject("c")+`)
+  FROM credits c WHERE c.ts >= ? AND c.ts < ? AND COALESCE(c.session, '') <> '' AND (? = '' OR c.session = ?) AND c.memory_id IS NOT NULL AND `+sessionProject("c")+`)
 SELECT session, COALESCE(MAX(project), (SELECT MAX(t.project) FROM turns t WHERE t.session = a.session), ''),
        MIN(ts), MAX(ts), SUM(prompts), SUM(pwm), SUM(shown), SUM(used), SUM(wrong), SUM(chars)
 FROM a GROUP BY session`,
-		since, until, p, p, since, until, p, p, since, until, feedback.PathSources, p, p, since, until, p, p)
+		since, until, only, only, p, p, since, until, only, only, p, p, since, until, only, only, feedback.PathSources, p, p, since, until, only, only, p, p)
 	if err != nil {
 		return nil, err
 	}

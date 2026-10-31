@@ -37,6 +37,10 @@ func (it listItem) item() DocumentItem {
 	return d
 }
 
+// ServerTime is serverTime for callers outside the package: the zero time
+// when s is not one of the server's ISO times.
+func ServerTime(s string) time.Time { return serverTime(s) }
+
 // serverTime reads the server's ISO times, with or without a zone (UTC).
 func serverTime(s string) time.Time {
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999"} {

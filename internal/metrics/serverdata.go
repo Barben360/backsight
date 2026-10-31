@@ -28,11 +28,15 @@ type serverData struct {
 	Completed           []hindsight.Operation
 	LLM                 map[string][]hindsight.LLMBucket // key: operation ("" = all), over the window's period
 	LLM30               []hindsight.LLMBucket            // all operations over 30d whatever the window (llm30d:)
+	Memory              hindsight.MemoryDetail           // memory:<id>
 	Doctor              []DoctorCheck
 	DoctorErr           error
 	Err                 map[string]error
 	Have                map[string]bool // the keys read successfully; a key in neither Have nor Err was not asked for
 }
+
+// memoryKeyPrefix starts the server read of one memory: memory:<id>.
+const memoryKeyPrefix = "memory:"
 
 // llm30dKey is the server read of the LLM stats over 30 days, all
 // operations, whatever the view's window (extraction.per_session needs 28
@@ -239,6 +243,13 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 				return keep(err, func() { llm30 = v })
 			}
 		default:
+			if id, ok := strings.CutPrefix(key, memoryKeyPrefix); ok {
+				calls[key] = func(ctx context.Context) error {
+					v, err := s.Memory(ctx, id)
+					return keep(err, func() { d.Memory = v })
+				}
+				continue
+			}
 			op, ok := strings.CutPrefix(key, "llm:")
 			if !ok {
 				d.Err[key] = fmt.Errorf("%w %q", errUnknownRead, key)
