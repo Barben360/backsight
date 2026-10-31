@@ -1,0 +1,126 @@
+{{/* views: none */}}
+{{/*
+  The frame every page shares. Fields read: .Frame (Title, Path, Version,
+  HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
+  Prefs, Scope, Generated) and .Loc. No Windows (the text page): no window
+  links and no project filter. Nav is sliced by position: 0-5 the
+  questions, 5-8 Browse, 8-9 System, 9- the developer pair.
+*/}}
+{{define "head"}}<!doctype html>
+<html data-theme="{{.Frame.Prefs.Theme}}" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+{{if .Frame.Reload}}<meta http-equiv="refresh" content="{{.Frame.Reload}}">
+{{else if .Frame.Prefs.Refresh}}<meta http-equiv="refresh" content="60">
+{{end}}<title>{{.Frame.Title}} - backsight</title>
+<link rel="stylesheet" href="{{asset "dashboard.css"}}">
+</head>
+<body>
+{{end}}
+
+{{define "top"}}<header>
+<nav aria-label="Pages">
+<a href="/"><img src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"></a>
+{{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
+{{end}}<details>
+<summary>Browse</summary>
+{{range slice .Frame.Nav 5 8}}{{template "navlink" .}}
+{{end}}</details>
+{{range slice .Frame.Nav 8 9}}{{template "navlink" .}}
+{{end}}{{if .Frame.Prefs.Dev}}<details>
+<summary>Developer</summary>
+{{range slice .Frame.Nav 9}}{{template "navlink" .}}
+{{end}}</details>
+{{end}}</nav>
+<div>
+{{if .Frame.Windows}}<nav aria-label="Window">
+{{range .Frame.Windows}}{{template "navlink" .}}
+{{end}}</nav>
+<form method="get" action="{{.Frame.Path | pathOnly}}">
+{{range .Frame.Keep}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
+{{end}}<label>Project <input type="text" name="project" value="{{.Frame.ProjectInput}}"></label>
+<button type="submit">Filter</button>
+<a href="{{.Frame.AllProjects}}">All projects</a>
+</form>
+{{end}}<a href="{{.Frame.Path}}">Refresh</a>
+<details>
+<summary>Preferences</summary>
+{{range .Frame.PrefMenu}}<p>{{.Label}}:
+{{range .Choices}}{{template "navlink" .}}
+{{end}}</p>
+{{end}}</details>
+</div>
+</header>
+<main>
+{{end}}
+
+{{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+
+{{/*
+  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt), .Frame.ServerRead
+  (OK, set when the page's own view read the server), .Frame.Generated, .Loc.
+*/}}
+{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if not .Server}}no memory server set up{{else}}memory on {{.Server}}{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}} (memory server not answering){{end}}{{else if .ServerOKAt}} (memory server {{if .ServerOK}}last answered{{else}}did not answer{{end}} {{since $.Frame.Generated .ServerOKAt}} ago){{end}}{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
+{{end}}{{end}}
+
+{{define "foot"}}</main>
+<footer>
+<p>backsight {{.Frame.Version}} · Help: backsight guide dashboard · <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">{{.Frame.HelpURL}}</a></p>
+</footer>
+</body>
+</html>
+{{end}}
+
+{{/*
+  metric: dot is a MetricView. Reads .Def (Question, Scope, Series), .M (Den,
+  CI, Tags, Series, Drill), .Found, .ShowID, .ID, and the funcs value, status
+  (which says why there is no number), interval, delta, details and extras
+  (the metric's Extra breakdowns: why prompts found nothing, split by kind,
+  result, path, language and rank, typical and high values, what waits on
+  this PC).
+*/}}
+{{define "metric"}}<section>
+<h3>{{.Def.Question}}</h3>
+<p>{{value .}}{{with .M.Den}} · n = {{.}}{{end}} · {{status .}}{{with interval .}} · interval {{.}}{{end}}{{with delta .}} · {{.}}{{end}}</p>
+<p>{{if eq .Def.Scope "machine"}}this PC{{else}}server{{end}}{{range .M.Tags}}{{if eq . "not_filtered"}} · not filtered{{end}}{{end}}{{if .M.Series}} · {{len .M.Series}} {{if eq .Def.Series "weekly"}}weeks{{else}}days{{end}}{{end}}</p>
+{{with details .}}<ul>
+{{range .}}<li>{{.}}</li>
+{{end}}</ul>
+{{end}}{{with extras .}}<ul>
+{{range .}}<li>{{.}}</li>
+{{end}}</ul>
+{{end}}{{if .M.Drill}}<details><summary>CLI</summary><code>{{.M.Drill}}</code></details>
+{{end}}{{if .ShowID}}<p><code>{{.ID}}</code></p>
+{{end}}</section>
+{{end}}
+
+{{/* jobs: dot is a Tabled. Reads .T.Jobs (Name, Status, LastAt, MS, AgeMS) and .Loc. */}}
+{{define "jobs"}}<section>
+<h2>Background jobs</h2>
+<table>
+<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
+{{range .T.Jobs}}<tr><td>{{job .Name}}</td><td>{{jobstatus .Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
+{{end}}</table>
+</section>
+{{end}}
+
+{{/* doctor: dot is a Tabled. Reads .T.Doctor (ID, Status, Fix). */}}
+{{define "doctor"}}<section>
+<h2>Health checks</h2>
+<table>
+<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
+{{range .T.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{dstatus .Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
+{{end}}</table>
+</section>
+{{end}}
+
+{{/* paging: dot is a Pager (Prev, Next, From, To, Total). */}}
+{{define "paging"}}{{if .Total}}<p>{{.From}}–{{.To}} of {{.Total}}{{with .Prev}} · <a href="{{.}}" rel="prev">Previous</a>{{end}}{{with .Next}} · <a href="{{.}}" rel="next">Next</a>{{end}}</p>
+{{end}}{{end}}
+
+{{/* choices: dot is a list of Choice. */}}
+{{define "choices"}}<p>{{range .}}{{template "navlink" .}}
+{{end}}</p>
+{{end}}

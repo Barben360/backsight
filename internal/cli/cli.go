@@ -101,7 +101,7 @@ func newRoot(e *env) *cobra.Command {
 	root.PersistentFlags().Var(dirFlag("BACKSIGHT_STATE_DIR"), "backsight-state-dir", "backsight's state directory (BACKSIGHT_STATE_DIR), which a scheduled task cannot set")
 	_ = root.PersistentFlags().MarkHidden("backsight-home")
 	_ = root.PersistentFlags().MarkHidden("backsight-state-dir")
-	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e), newInstallShimCmd(e))
+	root.AddCommand(newVersionCmd(e), newPathsCmd(e), newDoctorCmd(e), newSecretCmd(e), newServerCmd(e), newBankCmd(e), newRetainCmd(e), newStoreCmd(e), newJobsCmd(e), newClientCmd(e), newSearchCmd(e), newReadCmd(e), newMCPCmd(), newWhyCmd(e), newRecallPromptCmd(e), newPauseCmd(e, true), newPauseCmd(e, false), newForgetCmd(e), newMemoryCmd(e), newAskCmd(e), newProjectsCmd(e), newStatsCmd(e), newFeedbackCmd(e), newDetectReplayCmd(), newBackupCmd(e), newRestoreCmd(e), newSetupCmd(e), newVerifyCmd(e), newUpdateCmd(e), newChangelogCmd(e), newReportCmd(e), newUninstallCmd(e), newGuideCmd(e), newConnectCmd(e), newInstallShimCmd(e), newDashboardCmd(e))
 	requireSubcommands(root)
 	return root
 }

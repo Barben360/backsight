@@ -1,0 +1,56 @@
+{{/* views: memories */}}
+{{template "head" .}}{{template "top" .}}
+{{$r := .V.memories}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{with $r.Tables.Memory}}
+{{/* widget: the memory. Reads .V.memories.Tables.Memory (Row: ID, Project, Shown, Used, Ignored, Rate, Boost, LastShown, LastUsed, State; Kind, ServerState, Created). */}}
+<section>
+<h2 title="{{.Row.ID}}">Memory {{short .Row.ID}}</h2>
+<table>
+<tr><th>Project</th><th>Shown</th><th>Used</th><th>Ignored</th><th>Used rate</th><th>Learned ranking</th><th>Last shown</th><th>Last used</th><th>State</th></tr>
+<tr><td>{{if .Row.Project}}<a href="/projects/{{esc .Row.Project}}" title="{{.Row.Project}}">{{clip .Row.Project}}</a>{{end}}</td><td>{{n .Row.Shown}}</td><td>{{weighted .Row.Used}}</td><td>{{weighted .Row.Ignored}}</td><td>{{optpct .Row.Rate}}</td><td>{{signed .Row.Boost}}</td><td>{{when $.Loc .Row.LastShown}}</td><td>{{when $.Loc .Row.LastUsed}}</td><td>{{memstate .Row.State}}</td></tr>
+</table>
+<p>Used and ignored are recent-weighted counts: recent showings weigh more.</p>
+{{if or .Kind .ServerState .Created}}<p>Kind: {{with .Kind}}{{kind .}}{{else}}—{{end}} · on the server: {{with .ServerState}}{{serverstate .}}{{else}}—{{end}} · created {{when $.Loc .Created}}</p>
+{{else}}<p>Kind, creation and state on the server are not available: the server did not answer.</p>
+{{end}}<p><a href="/memories/{{esc .Row.ID}}/text">Show text</a></p>
+</section>
+
+{{/* widget: showings. Reads .V.memories.Tables.Memory.Shows (At, Path, Outcome, Session, Prompt, Rank, RankWithoutBoost). */}}
+<section>
+<h2>Showings</h2>
+<table>
+<tr><th>When</th><th>Shown</th><th>What happened</th><th>Session</th><th>Prompt</th><th>Rank</th><th>Rank without the learned ranking</th></tr>
+{{range .Shows}}<tr><td>{{when $.Loc .At}}</td><td>{{path .Path}}</td><td>{{outcome .Outcome}}</td><td>{{if .Session}}<a href="/sessions/{{esc .Session}}" title="{{.Session}}">{{short .Session}}</a>{{else}}—{{end}}</td><td>{{opt .Prompt}}</td><td>{{opt .Rank}}</td><td>{{opt .RankWithoutBoost}}</td></tr>
+{{end}}</table>
+{{template "paging" pager $.Frame.Path $r.Tables.Page}}
+</section>
+
+{{/* widget: retirements. Reads .V.memories.Tables.Memory.Retirements (At, Kind). */}}
+<section>
+<h2>Hidden and restored</h2>
+<table>
+<tr><th>When</th><th>What</th></tr>
+{{range .Retirements}}<tr><td>{{when $.Loc .At}}</td><td>{{retired .Kind}}</td></tr>
+{{end}}</table>
+</section>
+
+{{/* widget: rank histogram. Reads .V.memories.Tables.Memory.RankHistogram through the ranks func. */}}
+<section>
+<h2>Where it ranked when shown</h2>
+<ul>
+{{range ranks .RankHistogram}}<li>{{.}}</li>
+{{end}}</ul>
+</section>
+
+{{/* widget: commands. Reads .V.memories.Tables.Memory.Commands. */}}
+<section>
+<h2>What you can do</h2>
+<ul>
+{{range .Commands}}<li><code>{{.}}</code></li>
+{{end}}</ul>
+</section>
+{{end}}
+{{template "foot" .}}

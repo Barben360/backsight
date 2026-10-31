@@ -155,6 +155,14 @@ type Job struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
+// Dashboard is one run of backsight dashboard: its start (MS to listen)
+// and its stop (MS of run time, Pages served under a session).
+type Dashboard struct {
+	Action string `json:"action"` // start | stop
+	MS     int64  `json:"ms"`
+	Pages  int64  `json:"pages"`
+}
+
 // Raw is an ad-hoc event for experiments and tools outside the A.4 list.
 // The writer owns ts, v, event, session, project and binary_version: a
 // field of Fields with one of those names is overwritten (set the session
@@ -179,4 +187,5 @@ func (Retain) EventName() string          { return "retain" }
 func (HookFailure) EventName() string     { return "hook_failure" }
 func (Attribution) EventName() string     { return "attribution" }
 func (Job) EventName() string             { return "job" }
+func (Dashboard) EventName() string       { return "dashboard" }
 func (r Raw) EventName() string           { return r.Name }

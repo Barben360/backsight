@@ -147,6 +147,15 @@ When the user asks whether memory works or is worth it, run `backsight stats ove
 - Never run `backsight stats index rebuild` without the user: it replaces the local index.
 - Never pass `--text` unless the user asks for a memory's text.
 
+## The dashboard
+
+`backsight dashboard` is a web page for the user; it is not an interface for you: never start the dashboard on your own. When the user asks for it, run `backsight dashboard --open` in the background: it opens their browser. For a link to give them (another browser, a lost link), run `backsight dashboard link`. The links are one-time and valid 2 minutes.
+
+- Rule: never put a session secret, a cookie or a login code on a command line (no `curl` with them). The pages need a signed-in browser; you do not.
+- For numbers, use `backsight stats <view> --json`: it returns what the pages show.
+- Exit 20 with `a dashboard is already running`: one runs already; `backsight dashboard link` prints a link to it.
+- To stop it, the user presses Ctrl+C in its terminal (or stop the background process you started). It stops by itself after 2 hours without use.
+
 ## More
 
 The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md).

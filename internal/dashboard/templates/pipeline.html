@@ -1,0 +1,29 @@
+{{/* views: pipeline */}}
+{{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.pipeline}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: flow and outcomes. Reads the metrics pipeline.flow, retain.outcomes. */}}
+{{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}
+{{template "metric" framed (metric $r "retain.outcomes") $d $.Loc}}
+
+{{/* widget: backlog and queue. Reads the metrics local.backlog, server.queue and .V.pipeline.Tables.FailedOperations (Type, AgeMS, Retries). */}}
+{{template "metric" framed (metric $r "local.backlog") $d $.Loc}}
+{{template "metric" framed (metric $r "server.queue") $d $.Loc}}
+<table>
+<tr><th>Task</th><th>Age</th><th>Retries</th></tr>
+{{range $r.Tables.FailedOperations}}<tr><td>{{operation .Type}}</td><td>{{age .AgeMS}}</td><td>{{n .Retries}}</td></tr>
+{{end}}</table>
+
+{{/* widget: delay and failures. Reads the metrics server.extraction_delay, hooks.failures. */}}
+{{template "metric" framed (metric $r "server.extraction_delay") $d $.Loc}}
+{{template "metric" framed (metric $r "hooks.failures") $d $.Loc}}
+
+{{/* widget: jobs. Reads the metric jobs.last_run and .V.pipeline.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
+{{template "metric" framed (metric $r "jobs.last_run") $d $.Loc}}
+{{template "jobs" tabled $r $.Loc}}
+
+{{/* widget: health checks. Reads .V.pipeline.Tables.Doctor (ID, Status, Fix). */}}
+{{template "doctor" tabled $r $.Loc}}
+{{template "foot" .}}

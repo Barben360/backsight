@@ -1,0 +1,25 @@
+{{/* views: memories */}}
+{{template "head" .}}{{template "top" .}}
+{{$r := .V.memories}}{{$d := .Frame.Prefs.Dev}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: sort and state. Links that order the list or keep one state. */}}
+<section>
+<h2>Order</h2>
+{{template "choices" links $.Frame.Path "sort"}}
+<h2>Show only memories that are</h2>
+{{template "choices" links $.Frame.Path "state"}}
+</section>
+
+{{/* widget: memories. Reads .V.memories.Tables.Memories (ID, Project, Shown, Used, Ignored, Rate, Boost, LastShown, LastUsed, State). */}}
+<section>
+<h2>Memories</h2>
+<p>Used and ignored are recent-weighted counts: recent showings weigh more.</p>
+<table>
+<tr><th>Memory</th><th>Project</th><th>Shown</th><th>Used</th><th>Ignored</th><th>Used rate</th><th>Learned ranking</th><th>Last shown</th><th>Last used</th><th>State</th></tr>
+{{range $r.Tables.Memories}}<tr><td><a href="/memories/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td><td>{{if .Project}}<a href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{end}}</td><td>{{n .Shown}}</td><td>{{weighted .Used}}</td><td>{{weighted .Ignored}}</td><td>{{optpct .Rate}}</td><td>{{signed .Boost}}</td><td>{{when $.Loc .LastShown}}</td><td>{{when $.Loc .LastUsed}}</td><td>{{memstate .State}}</td></tr>
+{{end}}</table>
+{{template "paging" pager $.Frame.Path $r.Tables.Page}}
+</section>
+{{template "foot" .}}

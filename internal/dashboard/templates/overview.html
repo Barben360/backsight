@@ -1,0 +1,61 @@
+{{/* views: overview */}}
+{{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: verdict. Reads .V.overview.Verdict.Axes (State, Reasons.Text, Reasons.Command). */}}
+<section>
+<h2>Verdict, last 7 days</h2>
+{{with $r.Verdict}}{{$ax := .Axes}}{{range axes}}<h3>{{.Name}}</h3>
+{{with index $ax .Key}}<p>{{axis .State}}</p>
+<ul>
+{{range .Reasons}}<li>{{.Text}}{{with .Command}} <code>{{.}}</code>{{end}}</li>
+{{end}}</ul>
+{{end}}{{end}}{{end}}</section>
+
+{{/* widget: summary line. Reads .V.overview.Summary (PromptsWithMemory, TurnsWithMemoryUsed, TokensApprox, ExtractionCost, Currency, PriceSet). */}}
+{{with $r.Summary}}<p>{{n .PromptsWithMemory}} prompts with memory · {{n .TurnsWithMemoryUsed}} turns used it · about {{n .TokensApprox}} tokens added · extraction {{if .PriceSet}}{{money .ExtractionCost .Currency}}{{else}}price not set{{end}} (server, all PCs)</p>
+{{end}}
+
+{{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow. */}}
+<section>
+<h2>The numbers</h2>
+{{template "metric" framed (metric $r "recall.hit_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "used.turn_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "declare.coverage") $d $.Loc}}
+{{template "metric" framed (metric $r "verdict.wrong_rate") $d $.Loc}}
+{{template "metric" framed (metric $r "context.per_session") $d $.Loc}}
+{{template "metric" framed (metric $r "recall.latency") $d $.Loc}}
+{{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}
+</section>
+
+{{/* widget: needs attention. Reads .V.overview.Attention (Text, Command, Why), .AttentionMore. */}}
+<section>
+<h2>Needs attention</h2>
+{{range $r.Attention}}<div>
+<p>{{.Text}}{{with .Command}} <code>{{.}}</code>{{end}}</p>
+{{with .Why}}<details><summary>Why</summary><p>{{.}}</p></details>
+{{end}}</div>
+{{else}}<p>Nothing needs attention.</p>
+{{end}}{{if $r.AttentionMore}}<p><a href="/system">{{$r.AttentionMore}} more</a></p>
+{{end}}</section>
+
+{{/* widget: lately. Reads .V.overview.Tables.Lately (ID, Project, Last, Shown, Used, Wrong). */}}
+<section>
+<h2>Lately</h2>
+<table>
+<tr><th>Project</th><th>Last prompt</th><th>Shown</th><th>Used</th><th>Reported wrong</th></tr>
+{{range $r.Tables.Lately}}<tr><td><a href="/sessions/{{esc .ID}}">{{clip .Project}}</a></td><td>{{when $.Loc .Last}}</td><td>{{n .Shown}}</td><td>{{n .Used}}</td><td>{{n .Wrong}}</td></tr>
+{{end}}</table>
+</section>
+
+{{/* widget: memory at a glance. Reads the metrics bank.size, bank.growth and .V.overview.Info (Metric, Count, Command). */}}
+<section>
+<h2>Memory at a glance</h2>
+{{template "metric" framed (metric $r "bank.size") $d $.Loc}}
+{{template "metric" framed (metric $r "bank.growth") $d $.Loc}}
+{{range $r.Info}}<p>{{n .Count}} {{(metric $r .Metric).Def.Label}} <code>{{.Command}}</code></p>
+{{end}}<p><a href="/bank">Memory in detail</a></p>
+</section>
+{{template "foot" .}}

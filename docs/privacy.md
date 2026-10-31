@@ -12,13 +12,25 @@ The server turns this text into memories: short facts tagged with their project,
 
 ## The metrics index
 
-backsight keeps a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it). It builds it there, from its own usage events, the feedback journal and the local status files; `backsight stats index` shows its state. The statistics views and the dashboard to come will read it.
+backsight keeps a small database on your machine, `metrics.db` in the `index/` folder of the state directory (`backsight paths` shows it). It builds it there, from its own usage events, the feedback journal and the local status files; `backsight stats index` shows its state. The statistics views and the dashboard read it.
 
 The views (`backsight stats overview`, `quality`, `sessions`…) read this index and make read-only calls to your server. They print counts, times, ids, and project and session names; they never print the text of a memory, a prompt or an error, except `backsight stats memories <id> --text`, which you ask for.
 
 - It holds ids, numbers, fixed words and timestamps only: never the text of a memory, a prompt, an error or the configuration. A value that is not a known word or a plain name is stored as `other`, or not at all.
 - Project names and session ids in it are local names (from your folders and Claude Code's session ids). They never leave this machine, `backsight report` included.
 - `backsight stats index rebuild` recreates it from the files on disk. `backsight uninstall --purge-local` deletes it.
+
+## The dashboard
+
+`backsight dashboard` serves the memory dashboard in a browser. It listens on `127.0.0.1` only. Its pages make no request outside the dashboard. The dashboard itself reads the memory server you configured (a memory's text only on "Show text") and runs the doctor's checks. The footer's help link opens GitHub only when you click it.
+
+- **What the pages show**: counts, ids, and project and session names, like `backsight stats`. A memory's text shows only on its own page, after a click on "Show text"; it is read from the server at that moment and never stored.
+- **The browser** (its history, its extensions) sees what the pages show. Use a browser profile you trust.
+- **The sign-in cookie** is sent by the browser to every program that answers on the same host name (`127.0.0.1`, or `localhost` if you signed in through it), on any port: browsers do not separate cookies by port. A program that receives it can read every page and any memory's text until the session expires (2 hours without use) or the dashboard stops. Local development servers are the typical case: do not open untrusted local services in the same browser while you are signed in.
+- **Over `ssh -L`**, the cookie lives in the browser of the other PC, and other users of that PC can reach the forwarded port. Forward only to a PC you trust.
+- **`--open`** puts the one-time link on the browser's command line for a moment. The code works once and expires in 2 minutes.
+- **Files**, under `dashboard/` in the state directory: `dashboard.json` (the process id, the port and the start time), `codes/` (the SHA-256 hashes of the one-time codes, each valid 2 minutes; removed when used, when presented after they expired, and when the dashboard starts or stops; beside a code, a `<hash>.claim` file marks the code being spent and is removed right after, or at the next start or stop if a crash left it) and `claim.lock` (an empty file that keeps two starts apart).
+- `backsight report` never includes `dashboard/`. `backsight uninstall --purge-local` deletes it.
 
 ## What leaves the machine
 

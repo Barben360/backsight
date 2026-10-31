@@ -64,16 +64,11 @@ func TestStatsViewsGolden(t *testing.T) {
 	})
 }
 
-// The browse views and the id pages, as text and as JSON, on the same
-// fixture plus one declared turn of sess-long-1 that showed mem-long-1 at
-// its third prompt (credited used), two releases (the older one in p2) and
-// a ledger: the projects list and p1's page, the
-// sessions page with its turn rail, the memories list and mem-long-1's
-// page (its showings by session and prompt), a day's page and the
-// releases.
-func TestStatsBrowseViewsGolden(t *testing.T) {
-	viewsFixture(t)
-	fixedDoctor(t)
+// browseFixture adds to viewsFixture what the browse views show: two releases
+// (the older one in p2), a ledger of the memories and one declared turn of
+// sess-long-1 that showed mem-long-1 at its third prompt.
+func browseFixture(t *testing.T) {
+	t.Helper()
 	home, _ := os.UserHomeDir()
 	d := pathsOf(home)
 	// two releases ran: a prompt of each, and a ledger of the memories
@@ -102,6 +97,19 @@ func TestStatsBrowseViewsGolden(t *testing.T) {
 		feedback.Event{Kind: "credit", TS: at.Add(time.Minute), Session: "sess-long-1", Turn: "t3", Project: "p1", Verdict: "used", IDs: []string{"mem-long-1"}},
 		feedback.Event{Kind: "stop", TS: at.Add(2 * time.Minute), Session: "sess-long-1", Turn: "t3", Outcome: "declared"},
 	)
+}
+
+// The browse views and the id pages, as text and as JSON, on the same
+// fixture plus one declared turn of sess-long-1 that showed mem-long-1 at
+// its third prompt (credited used), two releases (the older one in p2) and
+// a ledger: the projects list and p1's page, the
+// sessions page with its turn rail, the memories list and mem-long-1's
+// page (its showings by session and prompt), a day's page and the
+// releases.
+func TestStatsBrowseViewsGolden(t *testing.T) {
+	viewsFixture(t)
+	fixedDoctor(t)
+	browseFixture(t)
 	for _, c := range []struct{ name, view, id string }{
 		{"projects", "projects", ""}, {"project-page", "projects", "p1"},
 		{"session-page", "sessions", "sess-long-1"},

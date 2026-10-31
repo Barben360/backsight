@@ -1,0 +1,24 @@
+{{/* views: system */}}
+{{template "head" .}}{{template "top" .}}
+{{$d := .Frame.Prefs.Dev}}{{$r := .V.system}}
+<h1>{{.Frame.Title}}</h1>
+{{template "scope" .}}
+
+{{/* widget: health checks. Reads .V.system.Tables.Doctor (ID, Status, Fix) and the metric doctor.check. */}}
+{{template "doctor" tabled $r $.Loc}}
+{{template "metric" framed (metric $r "doctor.check") $d $.Loc}}
+
+{{/* widget: system. Reads .V.system.Tables.System through the sysrows func (Label, Text). */}}
+<section>
+<h2>System</h2>
+<dl>
+{{range sysrows $r.Tables.System $.Loc}}<dt>{{.Label}}</dt><dd>{{.Text}}</dd>
+{{end}}</dl>
+</section>
+
+{{/* widget: reach, backlog and jobs. Reads the metrics server.reach, local.backlog, jobs.last_run and .V.system.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
+{{template "metric" framed (metric $r "server.reach") $d $.Loc}}
+{{template "metric" framed (metric $r "local.backlog") $d $.Loc}}
+{{template "metric" framed (metric $r "jobs.last_run") $d $.Loc}}
+{{template "jobs" tabled $r $.Loc}}
+{{template "foot" .}}

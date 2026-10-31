@@ -14,7 +14,9 @@ import (
 
 	"github.com/Barben360/backsight/internal/claudecfg"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/setup"
@@ -698,5 +700,52 @@ func TestUninstallPurgeLocalOwnsEveryIndexFile(t *testing.T) {
 	}
 	if readFile(t, foreign) != "mine" || !strings.Contains(strings.Join(env.Data.Kept, "\n"), foreign) {
 		t.Errorf("the foreign file was removed or not named: %q", env.Data.Kept)
+	}
+}
+
+// dashboardFiles writes the dashboard's files with its own writers: the
+// runtime file of this process on port 54321, and two login codes.
+func dashboardFiles(t *testing.T, d paths.Dirs) {
+	t.Helper()
+	at := time.Now()
+	if err := dashboard.Claim(d, dashboard.Runtime{PID: os.Getpid(), Port: 54321, StartedAt: at}, at); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := dashboard.MintCode(d, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if entries, err := os.ReadDir(dashboard.CodesDir(d)); err != nil || len(entries) != 2 {
+		t.Fatalf("the codes directory holds %d entries (%v): want 2", len(entries), err)
+	}
+}
+
+// The files the dashboard really writes, its runtime file, the claim lock
+// and the codes, are backsight's: uninstall --purge-local removes the
+// dashboard directory and none of them is listed as kept (acceptance).
+func TestPurgeLocalRemovesTheDashboardFiles(t *testing.T) {
+	m := installMachine(t)
+	d := pathsOf(m.home)
+	dashboardFiles(t, d)
+	listed, err := os.ReadDir(d.DashboardDir())
+	if err != nil || len(listed) < 3 {
+		t.Fatalf("the dashboard directory holds %d entries (%v): want the runtime file, the claim lock and codes", len(listed), err)
+	}
+	if code, _, out := uninstall(t, "--plan", "--purge-local"); code != output.OK || !onDisk(dashboard.RuntimeFile(d)) {
+		t.Fatalf("the plan: exit %d, runtime file on disk %v\n%s", code, onDisk(dashboard.RuntimeFile(d)), out)
+	}
+	code, env, out := uninstall(t, "--purge-local")
+	if code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, p := range []string{d.DashboardDir(), dashboard.RuntimeFile(d), dashboard.CodesDir(d)} {
+		if onDisk(p) {
+			t.Errorf("not purged: %s", p)
+		}
+	}
+	kept := strings.Join(env.Data.Kept, "\n")
+	if strings.Contains(kept, d.DashboardDir()) {
+		t.Errorf("a dashboard file is listed as kept: %q", env.Data.Kept)
 	}
 }
