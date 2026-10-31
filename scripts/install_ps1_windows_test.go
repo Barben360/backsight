@@ -51,6 +51,13 @@ func userPath(t *testing.T, key string) string {
 	return v
 }
 
+// sameFile: a and b name one file, whatever their spelling.
+func sameFile(a, b string) bool {
+	fa, err1 := os.Stat(a)
+	fb, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(fa, fb)
+}
+
 func readRaw(t *testing.T, name string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(name)
@@ -162,7 +169,9 @@ func TestInstallPs1FromADirectory(t *testing.T) {
 				t.Fatalf("backsight from the user PATH: %v\n%s", err, got)
 			}
 			lines := strings.Split(strings.ReplaceAll(string(got), "\r\n", "\n"), "\n")
-			if !strings.EqualFold(lines[0], command) || !strings.Contains(string(got), "backsight 9.9.9 ") ||
+			// where prints the long spelling of a path the runner's TEMP
+			// gives in its 8.3 short form: the same file either way.
+			if !sameFile(lines[0], command) || !strings.Contains(string(got), "backsight 9.9.9 ") ||
 				!strings.Contains(string(got), "test build: trusts the test signing key") {
 				t.Errorf("want %s running backsight 9.9.9, the test build, got:\n%s", command, got)
 			}
