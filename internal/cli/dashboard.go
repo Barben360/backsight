@@ -69,7 +69,10 @@ func runDashboard(ctx context.Context, e *env, port int, open bool) error {
 	}
 	s, err := startServer(ctx, cfg)
 	if err != nil {
-		if ctx.Err() != nil { // stopped before it served: nothing is left running
+		// Stopped before it served: nothing is left running. A failure that
+		// is not the stop itself (a taken port, an unwritable directory) is
+		// still reported, even when Ctrl+C came at the same time.
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 			_, _ = fmt.Fprintln(e.stderr, "the dashboard was stopped before it started")
 			return nil
 		}
@@ -93,11 +96,28 @@ func runDashboard(ctx context.Context, e *env, port int, open bool) error {
 	tw.Emit(telemetry.Dashboard{Action: "stop", MS: time.Since(served).Milliseconds(), Pages: s.Pages()})
 	if err != nil {
 		// The result is already on stdout: the failure goes to stderr only,
-		// as a sentence (the error's own text holds paths).
-		_, _ = fmt.Fprintf(e.stderr, "backsight: the dashboard stopped but could not clean up its files in the state directory (%s): check that directory\n", fileClass(err))
+		// as sentences (the error's own text holds paths).
+		reportStopFailure(e.stderr, err)
 		return reported{output.Blocked}
 	}
 	return nil
+}
+
+// reportStopFailure says why Serve ended with err: a cleanup failure is
+// one, anything else has its own sentence.
+func reportStopFailure(w io.Writer, err error) {
+	var serve *dashboard.ServeError
+	var cleanup *dashboard.CleanupError
+	isServe, isCleanup := errors.As(err, &serve), errors.As(err, &cleanup)
+	if isServe {
+		_, _ = fmt.Fprintln(w, "backsight: the dashboard stopped because it could not keep serving")
+	}
+	if isCleanup {
+		_, _ = fmt.Fprintf(w, "backsight: the dashboard stopped but could not clean up its files in the state directory (%s): check that directory\n", fileClass(cleanup))
+	}
+	if !isServe && !isCleanup {
+		_, _ = fmt.Fprintln(w, "backsight: the dashboard stopped with an error")
+	}
 }
 
 // fileClass names why a file operation failed, never the path.
@@ -141,12 +161,18 @@ func dashboardStartError(port int, err error) error {
 		case dashboard.StartIndex:
 			return indexError(err)
 		case dashboard.StartListen:
-			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not listen on 127.0.0.1:%s (%s)", strconv.Itoa(port), fileClass(err))}
+			on := "on a free port of 127.0.0.1"
+			if port != 0 {
+				on = "on 127.0.0.1:" + strconv.Itoa(port)
+			}
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not listen %s (%s)", on, fileClass(err))}
 		case dashboard.StartLoginCode:
 			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not create a login code (%s)", fileClass(err))}
+		case dashboard.StartRuntimeFile:
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not write the dashboard's runtime file or its directory in the state directory (%s)", fileClass(err))}
 		}
 	}
-	return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not write the dashboard's runtime file or its directory in the state directory (%s)", fileClass(err))}
+	return &output.Error{Code: output.Blocked, Message: "the dashboard could not start: an unexpected internal error"}
 }
 
 func runDashboardLink(e *env) error {

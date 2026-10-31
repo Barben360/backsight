@@ -25,6 +25,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // syncBuf is a buffer a command writes while a test reads it.
@@ -89,8 +90,10 @@ func serveDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, fi
 	stderr = &syncBuf{}
 	ctx, cancel := context.WithCancel(context.Background())
 	exit := make(chan int, 1)
+	exited := make(chan struct{})
 	go func() {
 		exit <- ExecuteContext(ctx, append([]string{"dashboard"}, args...), pw, stderr)
+		close(exited)
 		_ = pw.Close()
 	}()
 	out = &syncBuf{}
@@ -121,7 +124,15 @@ func serveDashboard(t *testing.T, args ...string) (base string, d paths.Dirs, fi
 		return code
 	}
 	t.Cleanup(func() { stop() })
-	<-ready
+	select {
+	case <-ready:
+	case <-exited: // ready closes too when the output ends; a link may have come first
+		select {
+		case <-ready:
+		default:
+			t.Fatalf("the dashboard exited without printing a link (stderr %q)", stderr.String())
+		}
+	}
 	first = out.String()
 	port := ""
 	if m := dashLine.FindStringSubmatch(strings.TrimSpace(strings.SplitN(first, "\n", 2)[0])); m != nil {
@@ -548,20 +559,76 @@ func TestDashboardStartErrorClasses(t *testing.T) {
 		code int
 		want string
 	}{
-		{"index", indexErr, output.Blocked, "metrics index"},
+		{"index", indexErr, output.Blocked, views.IndexError(indexErr).Error()},
 		{"listen", &dashboard.StartError{Kind: dashboard.StartListen, Err: denied}, output.Blocked, "could not listen on 127.0.0.1:4242 (permission denied)"},
+		{"untyped", errors.New("parse /secret/templates"), output.Blocked, "the dashboard could not start: an unexpected internal error"},
 		{"login code", &dashboard.StartError{Kind: dashboard.StartLoginCode, Err: denied}, output.Blocked, "could not create a login code (permission denied)"},
-		{"runtime file", &dashboard.StartError{Kind: dashboard.StartRuntimeFile, Err: denied}, output.Blocked, "could not write the dashboard's runtime file"},
+		{"runtime file", &dashboard.StartError{Kind: dashboard.StartRuntimeFile, Err: denied}, output.Blocked, "could not write the dashboard's runtime file or its directory in the state directory (permission denied)"},
 		{"port taken", fmt.Errorf("port 4242: %w", dashboard.ErrPortTaken), output.Usage, "port 4242 is taken: choose another --port or leave it out for a free one"},
 	} {
 		err := dashboardStartError(4242, c.err)
-		if output.CodeOf(err) != c.code || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "/secret") {
+		if output.CodeOf(err) != c.code || err.Error() != c.want || strings.Contains(err.Error(), "/secret") {
 			t.Errorf("%s: exit %d, %q; want %d, %q", c.name, output.CodeOf(err), err, c.code, c.want)
 		}
 	}
 	var se *dashboard.StartError
 	if !errors.As(indexErr, &se) || se.Kind != dashboard.StartIndex {
 		t.Errorf("Start's index failure: %v", indexErr)
+	}
+}
+
+// With no --port, a listen failure does not name a port 0; with one, it does.
+func TestDashboardListenSentenceByPort(t *testing.T) {
+	denied := &dashboard.StartError{Kind: dashboard.StartListen, Err: &fs.PathError{Op: "listen", Path: "x", Err: fs.ErrPermission}}
+	if got, want := dashboardStartError(0, denied).Error(), "could not listen on a free port of 127.0.0.1 (permission denied)"; got != want {
+		t.Errorf("no --port: %q, want %q", got, want)
+	}
+	if got, want := dashboardStartError(5000, denied).Error(), "could not listen on 127.0.0.1:5000 (permission denied)"; got != want {
+		t.Errorf("--port 5000: %q, want %q", got, want)
+	}
+}
+
+// A failure of Start that is not the stop itself is reported even when
+// Ctrl+C came at the same time, not hidden as a clean exit.
+func TestDashboardStartFailureWinsOverInterrupt(t *testing.T) {
+	viewsFixture(t)
+	old := startServer
+	startServer = func(context.Context, dashboard.Config) (*dashboard.Server, error) {
+		return nil, &dashboard.StartError{Kind: dashboard.StartRuntimeFile, Err: &fs.PathError{Op: "open", Path: "/secret/x", Err: fs.ErrPermission}}
+	}
+	t.Cleanup(func() { startServer = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	code := ExecuteContext(ctx, []string{"dashboard"}, &out, &errb)
+	if code != output.Blocked || !strings.Contains(errb.String(), "could not write the dashboard's runtime file") || strings.Contains(errb.String(), "/secret") {
+		t.Errorf("exit %d, stderr %q; want %d and the start failure", code, errb.String(), output.Blocked)
+	}
+}
+
+// The end-of-run sentences say what failed: cleanup is cleanup, a serving
+// failure and anything else have their own, and none shows a path.
+func TestReportStopFailure(t *testing.T) {
+	denied := &fs.PathError{Op: "remove", Path: "/secret/x", Err: fs.ErrPermission}
+	const (
+		cleanup = "backsight: the dashboard stopped but could not clean up its files in the state directory (permission denied): check that directory\n"
+		serving = "backsight: the dashboard stopped because it could not keep serving\n"
+		other   = "backsight: the dashboard stopped with an error\n"
+	)
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"cleanup": {&dashboard.CleanupError{Err: denied}, cleanup},
+		"serving": {&dashboard.ServeError{Err: denied}, serving},
+		"both":    {errors.Join(&dashboard.ServeError{Err: denied}, &dashboard.CleanupError{Err: denied}), serving + cleanup},
+		"other":   {denied, other},
+	} {
+		var b bytes.Buffer
+		reportStopFailure(&b, c.err)
+		if b.String() != c.want {
+			t.Errorf("%s: %q, want %q", name, b.String(), c.want)
+		}
 	}
 }
 
