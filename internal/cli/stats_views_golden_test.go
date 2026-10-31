@@ -309,6 +309,18 @@ func TestViewTextLines(t *testing.T) {
 			t.Errorf("only an axis's first reason is printed:\n%s", text)
 		}
 	})
+	t.Run("Right judged on 28 days gives its cause, then the note", func(t *testing.T) {
+		r := result("overview", "recall.hit_rate", hit)
+		r.Verdict = &metrics.Verdict{WindowDays: 7, Axes: map[string]metrics.Axis{
+			"right": {State: metrics.AxisAttention, WindowDays: 28, Reasons: []metrics.Reason{
+				{Metric: "verdict.wrong_rate", Severity: metrics.SeverityBad, Text: "10 memories reported wrong or out of date in the last 28 days."},
+				{Metric: "used.turn_rate", Severity: metrics.SeverityInfo, Text: "Judged on the last 28 days: too few turns in 7."}}},
+		}}
+		want := "Right    attention — 10 memories reported wrong or out of date in the last 28 days. Judged on the last 28 days: too few turns in 7.\n"
+		if text := viewText(r, false); !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	})
 	t.Run("ids and projects are cut", func(t *testing.T) {
 		r := result("sessions", "recall.hit_rate", hit)
 		r.Tables.Sessions = []metrics.SessionRow{{ID: "abcdefghijklmnop", Project: strings.Repeat("p", 30), Start: r.Window.Since}}

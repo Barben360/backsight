@@ -201,7 +201,7 @@ func assess(e env) (assessment, error) {
 	if err != nil {
 		return assessment{}, err
 	}
-	items, err := r.items(root != nil)
+	items, warns, err := r.items(root != nil)
 	if err != nil {
 		return assessment{}, err
 	}
@@ -250,9 +250,6 @@ func assess(e env) (assessment, error) {
 		if state != nil {
 			ax.Reasons = append(ax.Reasons, *state)
 		}
-		if name == "right" && out.Right28 != nil {
-			ax.Reasons = append(ax.Reasons, Reason{Metric: "used.turn_rate", Severity: SeverityInfo, Text: judged28Sentence})
-		}
 		axes[name] = ax
 	}
 	if cantJudge != nil { // one item for the coverage, the can't-judge one
@@ -260,10 +257,18 @@ func assess(e env) (assessment, error) {
 		items = append(items, *cantJudge)
 	}
 	sortItems(items)
+	// The doctor's warnings never change an axis: after everything that
+	// does, in the doctor's order.
+	items = append(items, warns...)
 	for _, name := range axisOrder {
 		ax := axes[name]
 		if ax.State != AxisOK {
 			ax.Reasons = withItems(ax.Reasons, items, name, root)
+		}
+		// Right judged on 28 days says so after its own reasons: the cause
+		// of an attention comes first.
+		if name == "right" && out.Right28 != nil {
+			ax.Reasons = append(ax.Reasons, Reason{Metric: "used.turn_rate", Severity: SeverityInfo, Text: judged28Sentence})
 		}
 		if ax.Reasons == nil {
 			ax.Reasons = []Reason{}
@@ -453,12 +458,12 @@ func serverDown(e env) bool {
 
 // items is the attention list before sorting: every non-dev metric at
 // watch or bad (error-class ones at once, the others under the two-window
-// rule; Right's on its own window), one item per doctor check in error and
-// per warning but update. Under a root cause, what it stands for is left
-// out: the backlog, the queue, the reach, the doctor's server checks, and
-// pipeline.flow but for its failed and set-aside documents.
-func (r *judgingRun) items(root bool) ([]Item, error) {
-	var out []Item
+// rule; Right's on its own window) and one item per doctor check in error;
+// then, apart (warns, in the doctor's order), one per doctor warning but
+// update. Under a root cause, what it stands for is left out: the backlog,
+// the queue, the reach, the doctor's server checks, and pipeline.flow but
+// for its failed and set-aside documents.
+func (r *judgingRun) items(root bool) (out, warns []Item, err error) {
 	for _, d := range Catalog {
 		if d.Dev || d.ID == "doctor.check" || strings.HasPrefix(d.ID, "stale.") {
 			continue
@@ -488,9 +493,8 @@ func (r *judgingRun) items(root bool) ([]Item, error) {
 		var median float64
 		var hasMedian bool
 		if d.Relative {
-			var err error
 			if median, hasMedian, err = r.median(d, w); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		out = append(out, Item{Metric: d.ID, Severity: sev, Axis: familyAxis[d.Family],
@@ -502,23 +506,22 @@ func (r *judgingRun) items(root bool) ([]Item, error) {
 			if root && rootCauseChecks[c.ID] {
 				continue
 			}
-			var text string
-			switch {
-			case c.Status == "error":
-				text = doctorErrorSentence(c.ID)
-			case c.Status == "warn" && c.ID != "update":
-				text = doctorWarnSentence(c.ID)
-			default:
-				continue
-			}
 			cmd := c.Fix
 			if cmd == "" {
 				cmd = d.Command
 			}
-			out = append(out, Item{Metric: d.ID, Severity: SeverityWatch, Axis: "flowing", Text: text, Why: d.Action, Command: cmd})
+			it := Item{Metric: d.ID, Severity: SeverityWatch, Axis: "flowing", Why: d.Action, Command: cmd}
+			switch {
+			case c.Status == "error":
+				it.Text = doctorErrorSentence(c.ID)
+				out = append(out, it)
+			case c.Status == "warn" && c.ID != "update":
+				it.Text = doctorWarnSentence(c.ID)
+				warns = append(warns, it)
+			}
 		}
 	}
-	return out, nil
+	return out, warns, nil
 }
 
 // median is a relative metric's baseline median for w: the family run on
@@ -540,8 +543,11 @@ func (r *judgingRun) median(d Def, w Window) (float64, bool, error) {
 	return m, ok, nil
 }
 
-// sortItems orders the attention list: bad first, then by axis, then by
-// metric id; items of one metric keep their order.
+// sortItems orders the attention list: bad first, then by axis, then the
+// doctor's errors (each alone puts Flowing in attention, so no cap drops
+// one for a metric that sorts before it), then by metric id; items of one
+// metric keep their order. The doctor's warnings are not sorted here: they
+// follow the sorted list.
 func sortItems(items []Item) {
 	slices.SortStableFunc(items, func(a, b Item) int {
 		if a.Severity != b.Severity {
@@ -554,6 +560,12 @@ func sortItems(items []Item) {
 		}
 		if ia, ib := slices.Index(axisOrder, a.Axis), slices.Index(axisOrder, b.Axis); ia != ib {
 			return ia - ib
+		}
+		if da, db := a.Metric == "doctor.check", b.Metric == "doctor.check"; da != db {
+			if da {
+				return -1
+			}
+			return 1
 		}
 		return strings.Compare(a.Metric, b.Metric)
 	})

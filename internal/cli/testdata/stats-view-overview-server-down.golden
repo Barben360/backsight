@@ -47,12 +47,12 @@ Hidden                                       —                        (no data
 Reported wrong                               —                        (no data: nothing recorded yet)
 
 Needs attention
-1. Health check «backup» reports a warning.
+1. Health check «memory» failed.
+   Run: backsight doctor
+2. Memory server unreachable since 12:00: 0 notes and 0 sessions wait on this PC, nothing is lost.
+   Run: backsight doctor
+3. Health check «backup» reports a warning.
    Run: backsight backup create
-2. Health check «memory» failed.
-   Run: backsight doctor
-3. Memory server unreachable since 12:00: 0 notes and 0 sessions wait on this PC, nothing is lost.
-   Run: backsight doctor
 
 Activity
 6 prompts typed, 5 recalls, 4 of them added memory

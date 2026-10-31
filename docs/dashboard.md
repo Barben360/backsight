@@ -35,7 +35,7 @@ Flags go after the view word: `backsight stats overview --days 30`, `--project <
 - **Not declared.** A turn that showed memory but ended with no statement of what was used. Such turns are counted apart, never as "unused".
 - **Recent-weighted counts.** The review-queue counts (often shown but never used, hidden, reported wrong) weigh recent shows and credits more than old ones, so an old burst does not keep a memory on the list. They are listings to review (`info`), not alarms.
 - **"Last 7 days" whatever the window.** The verdict and the attention list always judge the last 7 days against the 7 before, for the selected project. The window you choose (`--days`, `--since`) changes the displayed counts, charts and tables, not the verdict. A few metrics are judged on "now" (hook failures over the last 24 hours, the current local backlog); the window only sets their displayed counts.
-- **The 28-day fallback.** Right needs enough turns to judge. When the last 7 days have too few, its metrics are judged on 28 days and tagged `judged_28d`.
+- **The 28-day fallback.** Right needs enough turns to judge. When the last 7 days have too few, its metrics are judged on 28 days and tagged `judged_28d`; the axis says so after its own reasons.
 - **This PC or the server.** Metrics marked *this PC* count only this machine's usage. Metrics marked *server (all PCs)* come from the server and cover every PC using it, so they ignore the project filter (tagged `not_filtered`). A server that does not answer never fails a view: its sections read `ok: false` with the reason. On a PC with no memory server set up, the server's numbers read `no_data` with the reason `not_configured` ("no memory server set up"), not a failure.
 - **Partial.** `partial` means the figures are incomplete: the index was still catching up, a day was cut by the window, or part of a server read failed (the failed part is counted beside the total).
 
@@ -64,7 +64,7 @@ A document's status is the last one logged for it. A note (a subagent's report, 
 
 ### Attention and doctor
 
-The attention list holds each item's `text`, `why` and the `command` that helps, loudest first. It includes every warning of `backsight doctor` that affects how memory works: all of them but "an update is available". A doctor error makes Flowing need attention. When the server does not answer, the items that follow from it fold into one root cause with the time it began.
+The attention list holds each item's `text`, `why` and the `command` that helps, loudest first. It includes every warning of `backsight doctor` that affects how memory works: all of them but "an update is available". A doctor error makes Flowing need attention and comes first among Flowing's reasons; the doctor's warnings, which never change an axis, come after everything else. When the server does not answer, the items that follow from it fold into one root cause with the time it began.
 
 ### Two meanings of `ingested_at`
 

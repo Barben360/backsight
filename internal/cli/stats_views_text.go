@@ -101,6 +101,10 @@ func viewText(r metrics.Result, dev bool) string {
 			if len(ax.Reasons) > 0 {
 				line += " — " + ax.Reasons[0].Text
 			}
+			// Right judged on 28 days: its cause, then that note.
+			if n := len(ax.Reasons); n > 1 && ax.WindowDays == 28 && ax.Reasons[n-1].Severity == metrics.SeverityInfo {
+				line += " " + ax.Reasons[n-1].Text
+			}
 			b.WriteString(line + "\n")
 		}
 	}

@@ -535,8 +535,8 @@ func TestRightFallsBackTo28Days(t *testing.T) {
 		}, axes{okay, attn, early, okay}, func(t *testing.T, a assessment) {
 			r := a.Verdict.Axes["right"]
 			want := Reason{Metric: "verdict.wrong_rate", Severity: SeverityBad, Text: "10 memories reported wrong or out of date in the last 28 days.", Command: "backsight memory stale"}
-			if r.WindowDays != 28 || len(r.Reasons) != 2 || r.Reasons[0].Text != judged28Sentence || r.Reasons[1] != want {
-				t.Errorf("right = %+v, want 28 days, the info reason then %+v", r, want)
+			if r.WindowDays != 28 || len(r.Reasons) != 2 || r.Reasons[0] != want || r.Reasons[1].Text != judged28Sentence {
+				t.Errorf("right = %+v, want 28 days, %+v then the info reason", r, want)
 			}
 			if got := metricsOfItems(a.Items); !slices.Equal(got, []string{"verdict.wrong_rate"}) {
 				t.Errorf("attention = %v", got)
@@ -688,8 +688,42 @@ func TestAttentionOrderAndCap(t *testing.T) {
 	for _, r := range v.Axes["flowing"].Reasons {
 		fl = append(fl, r.Metric)
 	}
-	if !slices.Equal(fl, []string{"hooks.failures", "doctor.check", "local.backlog"}) {
-		t.Errorf("flowing reasons = %v, want the 3 flowing items, bad first", fl)
+	if !slices.Equal(fl, []string{"hooks.failures", "local.backlog", "doctor.check"}) {
+		t.Errorf("flowing reasons = %v, want the 3 flowing items, bad first, the doctor's warning last", fl)
+	}
+}
+
+// TestDoctorErrorLeadsFlowing: four warnings the doctor ran before its one
+// error: the error (the only reason Flowing is in attention) is Flowing's
+// first reason and the first doctor item of the attention list; the
+// warnings follow it, so the axis's cap of 3 keeps two of them and the
+// list's cap of 5 the four.
+func TestDoctorErrorLeadsFlowing(t *testing.T) {
+	x := newFx(t, fxNow)
+	x.doctor = []DoctorCheck{{ID: "backup", Status: "warn"}, {ID: "latency", Status: "warn"}, {ID: "transcripts", Status: "warn"},
+		{ID: "noise", Status: "warn"}, {ID: "metrics-index", Status: "error"}}
+	var v Verdict
+	var items []Item
+	err := withTx(context.Background(), x.source(), x.query(7), x.need, func(e env) error {
+		var err error
+		v, items, _, _, err = verdict(e)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fl := v.Axes["flowing"]
+	if fl.State != AxisAttention || len(fl.Reasons) != 3 || fl.Reasons[0].Text != "Health check «activity index» failed." {
+		t.Errorf("flowing = %+v, want attention led by the failed check", fl)
+	}
+	var doctor []string
+	for _, it := range items {
+		if it.Metric == "doctor.check" {
+			doctor = append(doctor, it.Text)
+		}
+	}
+	if len(doctor) != 5 || doctor[0] != "Health check «activity index» failed." || !strings.HasSuffix(doctor[1], "reports a warning.") {
+		t.Errorf("doctor items = %q, want the failed check first, then the warnings", doctor)
 	}
 }
 

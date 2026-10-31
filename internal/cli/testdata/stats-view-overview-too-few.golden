@@ -4,7 +4,7 @@ Verdict (last 7 days)
 Found    learning — Learning: day 2 of about 7, 6 prompts so far.
 Right    learning — Learning: day 2 of about 7, 6 prompts so far.
 Cost     too early — Not enough yet: 5 prompts, 100 needed.
-Flowing  attention — Health check «backup» reports a warning.
+Flowing  attention — Health check «memory» failed.
 
 In this window (1 day): 3 prompts got memory, Claude used it in 0 turns, about 0 tokens added; extraction cost unknown: costs need prices, set price_input, price_cached and price_output under [llm] in the config file (server, all PCs).
 
@@ -45,10 +45,10 @@ Hidden                                       —                        (no data
 Reported wrong                               —                        (no data: nothing recorded yet)
 
 Needs attention
-1. Health check «backup» reports a warning.
-   Run: backsight backup create
-2. Health check «memory» failed.
+1. Health check «memory» failed.
    Run: backsight doctor
+2. Health check «backup» reports a warning.
+   Run: backsight backup create
 
 Activity
 3 prompts typed, 3 recalls, 3 of them added memory
