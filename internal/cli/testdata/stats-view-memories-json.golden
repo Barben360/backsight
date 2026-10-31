@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "command": "stats memories",
+  "ok": true,
+  "data": {
+    "view": "memories",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": false
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "metrics": {
+      "stale.hidden": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "recent_weighted",
+        "status": "info",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": 0,
+        "delta": 0,
+        "drill": "backsight memory stale"
+      },
+      "stale.never_used": {
+        "value": 1,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "recent_weighted",
+        "status": "info",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": 1,
+        "delta": 0,
+        "drill": "backsight memory stale"
+      },
+      "stale.reported": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "recent_weighted",
+        "status": "info",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": 0,
+        "delta": 0,
+        "drill": "backsight memory stale"
+      }
+    },
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 2
+      },
+      "memories": [
+        {
+          "id": "mem-long-2",
+          "project": "",
+          "shown": 12,
+          "used": 0,
+          "ignored": 0,
+          "rate": null,
+          "boost": 0,
+          "last_shown": "2026-10-07T11:00:00+02:00",
+          "last_used": null,
+          "state": "never_used"
+        },
+        {
+          "id": "mem-long-1",
+          "project": "p1",
+          "shown": 4,
+          "used": 1.4989341507460414,
+          "ignored": 0,
+          "rate": 1,
+          "boost": 0.008328069464635475,
+          "last_shown": "2026-10-08T05:00:01+02:00",
+          "last_used": null,
+          "state": ""
+        }
+      ]
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

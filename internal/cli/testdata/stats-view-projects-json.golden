@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "command": "stats projects",
+  "ok": true,
+  "data": {
+    "view": "projects",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {},
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 1
+      },
+      "projects": [
+        {
+          "project": "p1",
+          "sessions": 6,
+          "prompts": 8,
+          "prompts_with_memory": 6,
+          "used_turns": 1,
+          "reported_wrong": 0,
+          "memories_on_server": 0,
+          "last_activity": "2026-10-08T05:01:00+02:00",
+          "series": [
+            {
+              "day": "2026-10-01",
+              "value": 0,
+              "partial": true
+            },
+            {
+              "day": "2026-10-02",
+              "value": 0
+            },
+            {
+              "day": "2026-10-03",
+              "value": 0
+            },
+            {
+              "day": "2026-10-04",
+              "value": 0
+            },
+            {
+              "day": "2026-10-05",
+              "value": 0
+            },
+            {
+              "day": "2026-10-06",
+              "value": 1
+            },
+            {
+              "day": "2026-10-07",
+              "value": 3
+            },
+            {
+              "day": "2026-10-08",
+              "value": 4,
+              "partial": true
+            }
+          ]
+        }
+      ],
+      "pooled": {
+        "label": "all projects pooled",
+        "totals": {
+          "project": "",
+          "sessions": 6,
+          "prompts": 8,
+          "prompts_with_memory": 6,
+          "used_turns": 1,
+          "reported_wrong": 0,
+          "memories_on_server": null,
+          "last_activity": "2026-10-08T05:01:00+02:00",
+          "series": [
+            {
+              "day": "2026-10-01",
+              "value": 0,
+              "partial": true
+            },
+            {
+              "day": "2026-10-02",
+              "value": 0
+            },
+            {
+              "day": "2026-10-03",
+              "value": 0
+            },
+            {
+              "day": "2026-10-04",
+              "value": 0
+            },
+            {
+              "day": "2026-10-05",
+              "value": 0
+            },
+            {
+              "day": "2026-10-06",
+              "value": 1
+            },
+            {
+              "day": "2026-10-07",
+              "value": 3
+            },
+            {
+              "day": "2026-10-08",
+              "value": 4,
+              "partial": true
+            }
+          ]
+        },
+        "min": {
+          "prompts": 8,
+          "prompts_with_memory": 6,
+          "reported_wrong": 0,
+          "sessions": 6,
+          "used_turns": 1
+        },
+        "max": {
+          "prompts": 8,
+          "prompts_with_memory": 6,
+          "reported_wrong": 0,
+          "sessions": 6,
+          "used_turns": 1
+        }
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

@@ -1,0 +1,8 @@
+Which projects use memory? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Projects
+Project              Sessions  Prompts  With memory  Used turns  Reported wrong  Memories  Last activity
+p1                   6         8        6            1           0               0         2026-10-08 05:01
+all projects pooled  6         8        6            1           0               —         2026-10-08 05:01
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

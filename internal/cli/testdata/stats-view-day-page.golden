@@ -1,0 +1,27 @@
+How did each day go? (2026-10-08 00:00 → 2026-10-09 00:00, Europe/Paris)
+
+Found
+Prompts that got memory                      4 of 4                   (n=4, too few, 16 more needed)
+
+Right
+Turns where Claude used memory               1 of 1                   (n=1, too few, 19 more needed)
+  worst case, if every turn where Claude did not say counts as unused: 100 %
+Memories reported wrong or out of date       0 of 1                   (n=1, too few, 19 more needed)
+
+Cost
+Context added per session                    —                        (n=4, too few, 96 more needed)
+Time memory adds to a prompt                 —                        (n=4, too few, 96 more needed)
+
+Flowing
+Sessions sent                                0 of 0                   (n=0, ok)
+  sent 0, failed 0, set aside after an error 0, waiting 0
+
+Sessions of 2026-10-08
+Session   Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent
+sess-lon  p1       2026-10-08 03:00  1        1            1      1     0      0              —
+s1                 2026-10-08 05:00  0        0            2      0     0      0              —
+rel-v0.1  p1       2026-10-08 04:00  1        1            0      0     0      0              —
+s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
+sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              —
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

@@ -1,0 +1,38 @@
+Did a release or a setting help? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Versions that ran
+Version  First             Last              Events  Prompts per day  Memories
+v0.1.18  2026-10-08 04:00  2026-10-08 04:00  1       1.0              0
+v0.1.17  2026-10-06 12:00  2026-10-06 12:00  1       1.0              0
+
+Settings in force
+feedback.boost_weight              0.1
+feedback.confident_rank            2
+feedback.credit_half_life_days     365
+feedback.enabled                   1
+feedback.max_retirements           3
+feedback.miss_half_life_days       90
+feedback.prior_credits             3
+feedback.prior_misses              9
+feedback.share_ledger              1
+feedback.stale_shows               10
+recall.failure_pitfalls            0
+recall.families                    0
+recall.global_min_score            0.6
+recall.min_gap                     3
+recall.min_score                   0.5
+recall.project_boost               0.05
+recall.prompt_chars                800
+recall.prompt_hits                 3
+recall.query_chars                 300
+recall.quiet_prompts               3
+recall.recall_min_chars            60
+recall.reminder_min_chars          40
+recall.session_budget_chars        6000
+recall.sticky_bypass               0.97
+recall.sticky_max                  3
+recall.sticky_window_h             24
+
+Observational: weeks, projects and memory differ
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

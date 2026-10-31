@@ -963,11 +963,21 @@ func memoriesText(b *strings.Builder, t metrics.Tables, loc *time.Location) {
 		return
 	}
 	section(b, "Memory "+idText(p.Row.ID), head, [][]string{memoryRow(p.Row, loc)})
-	created := "unknown (the server did not answer)"
-	if p.Created != nil {
-		created = whenText(*p.Created, loc)
+	if p.Kind == "" && p.ServerState == "" && p.Created == nil {
+		b.WriteString("Kind, creation and state on the server: unknown (the server did not answer)\n")
+	} else {
+		created, kind, state := "unknown", "unknown", "unknown"
+		if p.Created != nil {
+			created = whenText(*p.Created, loc)
+		}
+		if p.Kind != "" {
+			kind = word(kindWords, p.Kind)
+		}
+		if p.ServerState != "" {
+			state = p.ServerState
+		}
+		fmt.Fprintf(b, "Kind %s, created %s, on the server: %s\n", kind, created, state)
 	}
-	fmt.Fprintf(b, "Kind %s, created %s, on the server: %s\n", word(kindWords, p.Kind), created, p.ServerState)
 	var rows [][]string
 	for _, s := range p.Shows {
 		rank := "—"

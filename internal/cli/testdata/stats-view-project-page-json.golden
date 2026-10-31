@@ -1,0 +1,714 @@
+{
+  "schema_version": 1,
+  "command": "stats projects",
+  "ok": true,
+  "data": {
+    "view": "projects",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true,
+      "project": "p1"
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {
+      "context.per_session": {
+        "value": null,
+        "num": null,
+        "den": 6,
+        "unit": "chars",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            },
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "n": 1,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "n": 1,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "day": "2026-10-08",
+            "value": null,
+            "n": 4,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            },
+            "partial": true
+          }
+        ],
+        "extra": {
+          "histogram": [
+            {
+              "lo": 0,
+              "hi": 1000,
+              "n": 6
+            },
+            {
+              "lo": 1000,
+              "hi": 2000,
+              "n": 0
+            },
+            {
+              "lo": 2000,
+              "hi": 3000,
+              "n": 0
+            },
+            {
+              "lo": 3000,
+              "hi": 4000,
+              "n": 0
+            },
+            {
+              "lo": 4000,
+              "hi": 5000,
+              "n": 0
+            },
+            {
+              "lo": 5000,
+              "hi": 6000,
+              "n": 0
+            },
+            {
+              "lo": 6000,
+              "hi": 7000,
+              "n": 0
+            },
+            {
+              "lo": 7000,
+              "hi": 8000,
+              "n": 0
+            },
+            {
+              "lo": 8000,
+              "hi": 9000,
+              "n": 0
+            },
+            {
+              "lo": 9000,
+              "hi": 10000,
+              "n": 0
+            },
+            {
+              "lo": 10000,
+              "hi": 11000,
+              "n": 0
+            },
+            {
+              "lo": 11000,
+              "hi": 12000,
+              "n": 0
+            },
+            {
+              "lo": 12000,
+              "hi": 13000,
+              "n": 0
+            },
+            {
+              "lo": 13000,
+              "hi": 14000,
+              "n": 0
+            },
+            {
+              "lo": 14000,
+              "hi": 15000,
+              "n": 0
+            },
+            {
+              "lo": 15000,
+              "hi": 16000,
+              "n": 0
+            },
+            {
+              "lo": 16000,
+              "hi": 17000,
+              "n": 0
+            },
+            {
+              "lo": 17000,
+              "hi": 18000,
+              "n": 0
+            },
+            {
+              "lo": 18000,
+              "hi": 19000,
+              "n": 0
+            },
+            {
+              "lo": 19000,
+              "hi": 20000,
+              "n": 0
+            },
+            {
+              "lo": 20000,
+              "hi": null,
+              "n": 0
+            }
+          ],
+          "p50": null,
+          "p95": null,
+          "tokens_p50": null,
+          "tokens_p95": null
+        }
+      },
+      "pipeline.flow": {
+        "value": 1,
+        "num": 1,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0.20654329147389294,
+          1
+        ],
+        "mdc": 1.3859292911256331,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats pipeline",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "num": 0,
+            "den": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-07",
+            "value": 1,
+            "num": 1,
+            "den": 1
+          },
+          {
+            "day": "2026-10-08",
+            "value": null,
+            "num": 0,
+            "den": 0,
+            "partial": true
+          }
+        ],
+        "extra": {
+          "backlog_oldest_ms": 0,
+          "failed": 0,
+          "ok": 1,
+          "set_aside": 0,
+          "waiting": 0
+        }
+      },
+      "recall.hit_rate": {
+        "value": 0.8571428571428571,
+        "num": 6,
+        "den": 7,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0.48686549668097007,
+          0.9743210440510253
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has memory",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "num": 0,
+            "den": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": 1,
+            "num": 1,
+            "den": 1
+          },
+          {
+            "day": "2026-10-07",
+            "value": 0.5,
+            "num": 1,
+            "den": 2
+          },
+          {
+            "day": "2026-10-08",
+            "value": 1,
+            "num": 4,
+            "den": 4,
+            "partial": true
+          }
+        ]
+      },
+      "recall.latency": {
+        "value": null,
+        "num": null,
+        "den": 7,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats days",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "n": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "n": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "n": 1,
+            "p50": 300,
+            "p95": 300
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "n": 2,
+            "p50": 800,
+            "p95": 1200
+          },
+          {
+            "day": "2026-10-08",
+            "value": null,
+            "n": 4,
+            "p50": 500,
+            "p95": 500,
+            "partial": true
+          }
+        ],
+        "extra": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "used.turn_rate": {
+        "value": 1,
+        "num": 1,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0.20654329147389294,
+          1
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has used",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "num": 0,
+            "den": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-08",
+            "value": 1,
+            "num": 1,
+            "den": 1,
+            "partial": true
+          }
+        ],
+        "extra": {
+          "check_skipped": 0,
+          "pending": 0,
+          "subagent_turns": 0,
+          "worst_case": 1
+        }
+      },
+      "verdict.wrong_rate": {
+        "value": 0,
+        "num": 0,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0,
+          0.7934567085261071
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has wrong",
+        "series": [
+          {
+            "day": "2026-10-01",
+            "value": null,
+            "num": 0,
+            "den": 0,
+            "partial": true
+          },
+          {
+            "day": "2026-10-02",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-03",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-04",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-05",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-06",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-07",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "day": "2026-10-08",
+            "value": 0,
+            "num": 0,
+            "den": 1,
+            "partial": true
+          }
+        ],
+        "extra": {
+          "outdated": 0,
+          "used": 1,
+          "wrong": 0
+        }
+      }
+    },
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 6
+      },
+      "project": {
+        "project": "p1",
+        "top_used": [
+          {
+            "id": "mem-long-1",
+            "project": "p1",
+            "shown": 4,
+            "last_shown": "2026-10-08T05:00:01+02:00",
+            "command": "backsight read mem-long-1"
+          }
+        ],
+        "never_used": [],
+        "sessions": [
+          {
+            "id": "sess-long-1",
+            "project": "p1",
+            "start": "2026-10-08T03:00:00+02:00",
+            "last": "2026-10-08T05:01:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 1,
+            "used": 1,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "rel-v0.1.18",
+            "project": "p1",
+            "start": "2026-10-08T04:00:00+02:00",
+            "last": "2026-10-08T04:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "s2",
+            "project": "p1",
+            "start": "2026-10-08T04:00:00+02:00",
+            "last": "2026-10-08T04:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "sess-long-2",
+            "project": "p1",
+            "start": "2026-10-08T02:00:00+02:00",
+            "last": "2026-10-08T02:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "s1",
+            "project": "p1",
+            "start": "2026-10-07T08:00:00+02:00",
+            "last": "2026-10-07T10:00:00+02:00",
+            "prompts": 3,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "rel-v0.1.17",
+            "project": "p1",
+            "start": "2026-10-06T12:00:00+02:00",
+            "last": "2026-10-06T12:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          }
+        ],
+        "attribution_disagreements": 0,
+        "no_memories": true,
+        "command": "backsight retain backfill --project p1 --plan"
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

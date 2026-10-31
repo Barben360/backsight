@@ -3,14 +3,17 @@ package cli
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Barben360/backsight/internal/doctor"
+	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 // goldenViews are the views whose text and JSON are pinned.
@@ -59,6 +62,62 @@ func TestStatsViewsGolden(t *testing.T) {
 	t.Run("too few", func(t *testing.T) { // a day of data: nothing is judged
 		viewGolden(t, "stats-view-overview-too-few.golden", "stats", "overview", "--tz", "Europe/Paris", "--days", "1")
 	})
+}
+
+// The browse views and the id pages, as text and as JSON, on the same
+// fixture plus one declared turn of sess-long-1 that showed mem-long-1 at
+// its third prompt (credited used): the projects list and p1's page, the
+// sessions page with its turn rail, the memories list and mem-long-1's
+// page (its showings by session and prompt), a day's page and the
+// releases.
+func TestStatsBrowseViewsGolden(t *testing.T) {
+	viewsFixture(t)
+	fixedDoctor(t)
+	home, _ := os.UserHomeDir()
+	d := pathsOf(home)
+	// two releases ran: a prompt of each, and a ledger of the memories
+	f, err := os.OpenFile(filepath.Join(d.TelemetryDir(), "events-2026-10.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range []string{"v0.1.17", "v0.1.18"} {
+		line := telLineFor(t, goldenNow.Add(-time.Duration(50-i*40)*time.Hour), telemetry.Prompt{N: 1, Decision: "recall", Plen: 90, MS: 300, Injected: 1}, "rel-"+v, "p1")
+		line = strings.Replace(line, `{`, `{"binary_version":"`+v+`",`, 1)
+		if _, err := f.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = f.Close()
+	ledger := `{"schema":1,"memories":{"mem-long-1":{"shown":4,"credits":1.5,"credits_at":"2026-10-08T03:01:00Z","last_shown":"2026-10-08T03:00:01Z"},` +
+		`"mem-long-2":{"shown":12,"last_shown":"2026-10-07T09:00:00Z"}}}`
+	if err := os.WriteFile(filepath.Join(d.FeedbackDir(), "ledger.json"), []byte(ledger), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	at := goldenNow.Add(-9 * time.Hour)
+	journalIn(t, home,
+		feedback.Event{Kind: "turn", TS: at, Session: "sess-long-1", Turn: "t3", Project: "p1", N: 3},
+		feedback.Event{Kind: "shows", Path: "prompt", TS: at.Add(time.Second), Session: "sess-long-1", Turn: "t3", Project: "p1",
+			Items: []feedback.Item{{ID: "mem-long-1", Rank: 1}}},
+		feedback.Event{Kind: "credit", TS: at.Add(time.Minute), Session: "sess-long-1", Turn: "t3", Project: "p1", Verdict: "used", IDs: []string{"mem-long-1"}},
+		feedback.Event{Kind: "stop", TS: at.Add(2 * time.Minute), Session: "sess-long-1", Turn: "t3", Outcome: "declared"},
+	)
+	for _, c := range []struct{ name, view, id string }{
+		{"projects", "projects", ""}, {"project-page", "projects", "p1"},
+		{"session-page", "sessions", "sess-long-1"},
+		{"memories", "memories", ""}, {"memory-page", "memories", "mem-long-1"},
+		{"day-page", "days", "2026-10-08"},
+		{"releases", "releases", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			args := []string{"stats", c.view}
+			if c.id != "" {
+				args = append(args, c.id)
+			}
+			args = append(args, "--tz", "Europe/Paris")
+			viewGolden(t, "stats-view-"+c.name+".golden", args...)
+			viewGolden(t, "stats-view-"+c.name+"-json.golden", append(args, "--json")...)
+		})
+	}
 }
 
 // With the server down, its numbers read "no data" with the reason, the
