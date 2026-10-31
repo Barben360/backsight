@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -72,6 +73,11 @@ func (s *Server) guard(mux *http.ServeMux) http.Handler {
 			return
 		}
 		s.touch()
+		// Every authenticated request is bounded: a view that outlasts it
+		// is answered as too slow.
+		ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
+		defer cancel()
+		r = r.WithContext(ctx)
 		beforeRoute(r)
 		mux.ServeHTTP(w, r)
 	})

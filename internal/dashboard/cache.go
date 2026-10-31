@@ -22,7 +22,8 @@ var (
 	doctorBound = 30 * time.Second // how long a doctor run may take
 )
 
-// renderTimeout bounds each shared computation of a view.
+// renderTimeout bounds each authenticated request and each shared
+// computation of a view.
 var renderTimeout = 10 * time.Second
 
 // onJoin runs when a caller joins a computation already running for its

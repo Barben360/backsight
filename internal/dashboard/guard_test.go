@@ -358,6 +358,7 @@ type response struct {
 	name, method, path string
 	hdr                []string
 	status             int // 0: a redirect, whatever its code
+	pre                func()
 }
 
 // everyResponse is the set TestHeadersOnEveryResponse checks: each route's
@@ -368,30 +369,37 @@ func everyResponse(h *harness) []response {
 	var set []response
 	for _, r := range routes {
 		want := http.StatusOK
-		if r.Kind != "page" && r.Kind != "asset" {
+		switch {
+		case r.Kind == "api" && strings.Contains(r.Sample, "/sessions/"):
+			want = http.StatusNotFound // the sample names no session of the generated index
+		case r.Kind != "page" && r.Kind != "asset" && r.Kind != "api":
 			want = http.StatusNotImplemented
 		}
 		for _, m := range []string{"GET", "HEAD"} {
-			set = append(set, response{r.Pattern, m, r.Sample, ck, want})
+			set = append(set, response{r.Pattern, m, r.Sample, ck, want, nil})
 		}
 	}
 	return append(set,
-		response{"wrong host", "GET", "/", append([]string{"Host", "evil.example:" + strconv.Itoa(h.port)}, ck...), http.StatusMisdirectedRequest},
-		response{"post", "POST", "/", ck, http.StatusMethodNotAllowed},
-		response{"cross-site", "GET", "/", append([]string{"Sec-Fetch-Site", "cross-site"}, ck...), http.StatusForbidden},
-		response{"unknown asset", "GET", "/assets/nope.css", ck, http.StatusNotFound},
-		response{"unhashed asset", "GET", "/assets/logo-light.svg", ck, http.StatusNotFound},
-		response{"unknown route", "GET", "/nope", ck, http.StatusNotFound},
-		response{"cleaned path", "GET", "/cost/../quality", ck, 0}, // net/http's own redirect
-		response{"login", "GET", "/quality?code=" + h.mint(), nil, http.StatusSeeOther},
-		response{"401 page", "GET", "/quality", nil, http.StatusUnauthorized},
-		response{"401 page, HEAD", "HEAD", "/quality", nil, http.StatusUnauthorized},
-		response{"401 envelope", "GET", "/api/v1/overview", nil, http.StatusUnauthorized},
+		response{"wrong host", "GET", "/", append([]string{"Host", "evil.example:" + strconv.Itoa(h.port)}, ck...), http.StatusMisdirectedRequest, nil},
+		response{"post", "POST", "/", ck, http.StatusMethodNotAllowed, nil},
+		response{"cross-site", "GET", "/", append([]string{"Sec-Fetch-Site", "cross-site"}, ck...), http.StatusForbidden, nil},
+		response{"unknown asset", "GET", "/assets/nope.css", ck, http.StatusNotFound, nil},
+		response{"unhashed asset", "GET", "/assets/logo-light.svg", ck, http.StatusNotFound, nil},
+		response{"unknown route", "GET", "/nope", ck, http.StatusNotFound, nil},
+		response{"cleaned path", "GET", "/cost/../quality", ck, 0, nil}, // net/http's own redirect
+		response{"login", "GET", "/quality?code=" + h.mint(), nil, http.StatusSeeOther, nil},
+		response{"401 page", "GET", "/quality", nil, http.StatusUnauthorized, nil},
+		response{"401 page, HEAD", "HEAD", "/quality", nil, http.StatusUnauthorized, nil},
+		response{"401 envelope", "GET", "/api/v1/overview", nil, http.StatusUnauthorized, nil},
+		response{"api 400", "GET", "/api/v1/overview?limit=0", ck, http.StatusBadRequest, nil},
+		response{"api 404", "GET", "/api/v1/nope", ck, http.StatusNotFound, nil},
+		// Last: the index is marked as changed by a newer backsight, for good.
+		response{"api 503", "GET", "/api/v1/overview?days=3", ck, http.StatusServiceUnavailable, func() { h.ix.set(func(f *fakeIndex) { f.side = true }) }},
 	)
 }
 
 func TestHeadersOnEveryResponse(t *testing.T) {
-	h := newHarness(t)
+	h := dataHarness(t)
 	five := map[string]string{
 		"Content-Security-Policy":      "default-src 'none'; style-src 'self'; img-src 'self' data:; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 		"X-Content-Type-Options":       "nosniff",
@@ -400,6 +408,9 @@ func TestHeadersOnEveryResponse(t *testing.T) {
 		"Cross-Origin-Resource-Policy": "same-origin",
 	}
 	for _, c := range everyResponse(h) {
+		if c.pre != nil {
+			c.pre()
+		}
 		r := h.do(c.method, c.path, append([]string{"Origin", "http://evil.example"}, c.hdr...)...)
 		at := c.method + " " + c.path + " (" + c.name + ")"
 		if c.status == 0 && (r.StatusCode < 300 || r.StatusCode > 399) || c.status != 0 && r.StatusCode != c.status {

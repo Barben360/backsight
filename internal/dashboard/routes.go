@@ -55,6 +55,8 @@ func (s *Server) handler(r route) http.Handler {
 	switch r.Kind {
 	case "asset":
 		return http.HandlerFunc(serveAsset)
+	case "api":
+		return http.HandlerFunc(s.serveAPI)
 	case "page":
 		return http.HandlerFunc(placeholderPage)
 	default:
