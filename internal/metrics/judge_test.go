@@ -236,12 +236,19 @@ func TestRelativeThresholds(t *testing.T) {
 		{name: "empty 6/20 (0.30, lo 0.1455) ok, not borderline", id: "search.empty_rate", o: withBase(rate(6, 20), emptyBase), status: StatusOK},
 		// No empty search at all: lo 0.
 		{name: "empty 0/20 ok", id: "search.empty_rate", o: withBase(rate(0, 20), emptyBase), status: StatusOK},
-		// lo exactly at the limit: baselines of 0 give a limit of 0 / 0.7 =
-		// 0; 0/20 has lo exactly 0; > is strict: ok. 1/20 has lo 0.0089: watch.
-		{name: "empty lo exactly at the limit: ok", id: "search.empty_rate",
-			o: withBase(rate(0, 20), []BaselineValue{{0, 20}, {0, 20}}), status: StatusOK},
-		{name: "empty lo just above a zero limit: watch", id: "search.empty_rate",
-			o: withBase(rate(1, 20), []BaselineValue{{0, 20}, {0, 20}}), status: StatusWatch},
+		// A median of 0: the rule is a ratio to it, so no relative status.
+		// 1/20 has lo 0.0089, which a limit of 0 / 0.7 = 0 would call watch.
+		{name: "empty median 0: no relative watch", id: "search.empty_rate",
+			o: withBase(rate(1, 20), []BaselineValue{{0, 20}, {0, 20}, {0, 20}, {0, 20}}), status: StatusOK},
+		{name: "empty median 0, 10/20: still no relative watch", id: "search.empty_rate",
+			o: withBase(rate(10, 20), []BaselineValue{{0, 20}, {0, 20}, {0, 20}, {0, 20}}), status: StatusOK},
+		// A median just above 0 judges again: baselines 0, 0, 0.01, 0.01
+		// give 0.005, limit 0.005 / 0.7 = 0.0071; 1/20 lo 0.0089: watch.
+		{name: "empty small median > 0, bound past it: watch", id: "search.empty_rate",
+			o: withBase(rate(1, 20), []BaselineValue{{0, 20}, {0, 20}, {0.01, 20}, {0.01, 20}}), status: StatusWatch},
+		// Higher is better with a median of 0: never fires (0/100, hi 0.037).
+		{name: "turn median 0: no relative watch", id: "used.turn_rate",
+			o: withBase(rate(0, 100), []BaselineValue{{0, 20}, {0, 20}}), status: StatusOK},
 		// A metric that is not relative ignores baselines: used.share_confident
 		// (up, min_n 20, no rule) at 0/40, hi 0.0876, would be under the
 		// 0.7 × 0.50 = 0.35 limit if it were relative.

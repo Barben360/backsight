@@ -124,7 +124,8 @@ func absolute(t Threshold, o Observation, lo, hi float64) (Status, bool) {
 // relative is step 5: only for relative metrics with at least two baseline
 // windows of n >= min_n, whose point values give the median m. Higher is
 // better: watch when the upper bound is under 0.7 × m; lower is better:
-// watch when the lower bound is over m / 0.7.
+// watch when the lower bound is over m / 0.7. The rule is a ratio to m, so a
+// median of 0 gives no relative status, in either direction.
 func relative(d Def, o Observation, lo, hi float64) Status {
 	if !d.Relative {
 		return ""
@@ -142,6 +143,9 @@ func relative(d Def, o Observation, lo, hi float64) Status {
 	m := vals[len(vals)/2]
 	if len(vals)%2 == 0 {
 		m = (vals[len(vals)/2-1] + m) / 2
+	}
+	if m <= 0 {
+		return ""
 	}
 	switch d.Direction {
 	case "up":
