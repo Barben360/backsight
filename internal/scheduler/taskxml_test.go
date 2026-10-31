@@ -59,6 +59,7 @@ type parsedTask struct {
 		RestartCount   int    `xml:"RestartOnFailure>Count"`
 		RestartEvery   string `xml:"RestartOnFailure>Interval"`
 		AllowTerminate string `xml:"AllowHardTerminate"`
+		Priority       string `xml:"Priority"`
 	} `xml:"Settings"`
 	Command   string `xml:"Actions>Exec>Command"`
 	Arguments string `xml:"Actions>Exec>Arguments"`
@@ -173,7 +174,9 @@ func TestTaskXMLRefusesWhatATaskCannotCarry(t *testing.T) {
 		"a repetition too short": func(s *TaskSpec) {
 			s.Triggers = []Trigger{{Kind: TriggerTime, Start: "2026-01-01T00:00:00", Every: 30 * time.Second}}
 		},
-		"a line break": func(s *TaskSpec) { s.Args = []string{"server\nsupervise"} },
+		"a line break":        func(s *TaskSpec) { s.Args = []string{"server\nsupervise"} },
+		"a priority above 10": func(s *TaskSpec) { s.Priority = 11 },
+		"a negative priority": func(s *TaskSpec) { s.Priority = -1 },
 	}
 	if _, err := TaskXML(ok); err != nil {
 		t.Fatalf("the valid spec: %v", err)
@@ -185,6 +188,26 @@ func TestTaskXMLRefusesWhatATaskCannotCarry(t *testing.T) {
 		if raw, err := TaskXML(s); err == nil {
 			t.Errorf("%s: accepted (%d bytes)", name, len(raw))
 		}
+	}
+}
+
+// Priority is set when asked (the server: 5, normal), else left to Task
+// Scheduler's default (7, below normal: the jobs).
+func TestTaskXMLPriority(t *testing.T) {
+	spec := serverSpec(`C:\x\current.exe`, "server", "supervise")
+	raw, err := TaskXML(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := parseTask(t, raw).Settings.Priority; p != "" {
+		t.Errorf("default priority written as %q, want none", p)
+	}
+	spec.Priority = 5
+	if raw, err = TaskXML(spec); err != nil {
+		t.Fatal(err)
+	}
+	if p := parseTask(t, raw).Settings.Priority; p != "5" {
+		t.Errorf("priority %q, want 5", p)
 	}
 }
 

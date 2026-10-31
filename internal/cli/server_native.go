@@ -52,7 +52,7 @@ func newServerNativeCheckCmd(e *env) *cobra.Command {
 			}
 			// Built whatever server.runtime says: a switch to native starts
 			// the units before config.toml names native.
-			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, StrayWait: nativeStrayWait}
+			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, StrayWait: nativeStrayWait}
 			res, err := nativeGuard(cmd.Context(), n, e.stderr)
 			if err != nil {
 				return blocked(err)
@@ -126,7 +126,7 @@ func newServerSuperviseCmd(e *env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Proc: nativeProc, StrayWait: nativeStrayWait}
+			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, StrayWait: nativeStrayWait}
 			path := n.SuperviseFile()
 			raw, err := os.ReadFile(path)
 			if err != nil {

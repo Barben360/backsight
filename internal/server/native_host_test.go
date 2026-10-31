@@ -34,6 +34,7 @@ func (stubHost) Engine(context.Context) (Engine, error)            { return Engi
 func (stubHost) fileNames() []string                               { return []string{"stub.conf"} }
 func (stubHost) markers() []string                                 { return []string{"db", "api"} }
 func (stubHost) restartsFor(string) []string                       { return []string{"api"} }
+func (stubHost) stopsWithoutFiles() bool                           { return false }
 func (stubHost) Transient(context.Context, string, []string, io.Reader, [][]string) error {
 	return errStubHost
 }

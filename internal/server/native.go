@@ -13,6 +13,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/supervise"
 )
 
 // Native is the native runtime (decision 0078): Hindsight from PyPI, in a
@@ -51,6 +52,9 @@ type Native struct {
 	// GOOS is the OS the runtime lays out and runs for ("": this one):
 	// tests set "windows" on Linux to render the Windows layout and files.
 	GOOS string
+	// Ask is the supervisor's pipe client on Windows (nil:
+	// supervise.Ask); tests refuse it.
+	Ask func(ctx context.Context, project, op string) (supervise.Status, error)
 	// Note, when set, tells the user what a command's result does not
 	// say: on Windows, NoLogonNote.
 	Note func(string)

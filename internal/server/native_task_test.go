@@ -209,6 +209,8 @@ type fakeTask struct {
 	up         bool
 	st         supervise.Status
 	runStarts  bool // /Run starts the supervisor (a console logon)
+	runFails   bool // /Run fails
+	queryFails int  // the next /Query calls failing for another reason than a missing task
 	stopPolls  int  // status answers after a stop before the pipe goes
 	notes      []string
 	detached   [][]string
@@ -218,16 +220,28 @@ func (f *fakeTask) sys(c []string) ([]byte, error) {
 	f.ev.add(strings.Join(c, " "))
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	notFound := func() ([]byte, error) {
+		return []byte("ERROR: The system cannot find the file specified."), errors.New("exit status 1")
+	}
 	switch {
 	case slices.Contains(c, "/Query"):
+		if f.queryFails > 0 {
+			f.queryFails--
+			return []byte("ERROR: The RPC server is unavailable."), errors.New("exit status 1")
+		}
 		if !f.registered {
-			return []byte("ERROR: The system cannot find the file specified."), errors.New("exit status 1")
+			return notFound()
 		}
 	case slices.Contains(c, "/Create"):
 		f.registered = true
+	case !f.registered:
+		return notFound()
 	case slices.Contains(c, "/Delete"):
 		f.registered = false
 	case slices.Contains(c, "/Run"):
+		if f.runFails {
+			return []byte("ERROR: Access is denied."), errors.New("exit status 1")
+		}
 		if f.runStarts {
 			f.start()
 		}
@@ -380,8 +394,9 @@ func TestStartWithoutALogonStartsDetached(t *testing.T) {
 	if err := h.StartDB(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
-	if f.ev.index(`schtasks /Run /TN \bs\server`) < 0 {
-		t.Fatalf("the task was not run first:\n%s", strings.Join(f.ev.all(), "\n"))
+	run, det := f.ev.index(`schtasks /Run /TN \bs\server`), slices.IndexFunc(f.ev.all(), func(e string) bool { return strings.HasPrefix(e, "detached ") })
+	if run < 0 || det < run {
+		t.Fatalf("the task was not run before the detached start:\n%s", strings.Join(f.ev.all(), "\n"))
 	}
 	want := scheduler.HeadlessArgs(h.n.shim(), "server", "supervise", "--backsight-home", h.n.Env["BACKSIGHT_HOME"])
 	if len(f.detached) != 1 || !slices.Equal(f.detached[0], want) {
@@ -407,6 +422,11 @@ func TestStartFailsWhenTheDetachedSupervisorNeverAnswers(t *testing.T) {
 	startSupervisor = func(...string) error { return errors.New("access denied") }
 	if err := h.StartDB(context.Background(), false); err == nil || !strings.Contains(err.Error(), "access denied") {
 		t.Errorf("StartDB = %v, want the start's error", err)
+	}
+	f.runFails = true
+	if err := h.StartDB(context.Background(), false); err == nil || !strings.Contains(err.Error(), "the task did not run") ||
+		!strings.Contains(err.Error(), "Access is denied") || !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("StartDB = %v, want both the /Run's error and the detached start's", err)
 	}
 }
 
@@ -459,6 +479,20 @@ func TestStartAPIThroughThePipe(t *testing.T) {
 	if got := f.ev.all(); !reflect.DeepEqual(got, []string{"pipe status", "pipe api-start"}) {
 		t.Errorf("StartAPI did %q", got)
 	}
+	// An API not started yet, or one the supervisor StartDB just restarted
+	// started, already reads the new server.env: no second restart.
+	f.st.API = "starting"
+	f.ev = &events{}
+	if err := h.StartAPI(ctx, true); err != nil || !reflect.DeepEqual(f.ev.all(), []string{"pipe status", "pipe api-start"}) {
+		t.Errorf("StartAPI restart of a starting API: %v %q", err, f.ev.all())
+	}
+	if err := os.WriteFile(h.n.pendingFile(), []byte("supervisor\napi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.ev = &events{}
+	if err := h.StartAPI(ctx, true); err != nil || !reflect.DeepEqual(f.ev.all(), []string{"pipe status", "pipe api-start"}) {
+		t.Errorf("StartAPI restart after the supervisor's restart: %v %q", err, f.ev.all())
+	}
 	f.ev = &events{}
 	if err := h.StopAPI(ctx); err != nil || !reflect.DeepEqual(f.ev.all(), []string{"pipe api-stop"}) {
 		t.Errorf("StopAPI: %v %q", err, f.ev.all())
@@ -499,14 +533,40 @@ func TestStopEdges(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "still runs") || !strings.Contains(err.Error(), "bs-supervisor.log") {
 		t.Errorf("Stop of a supervisor that never stops = %v", err)
 	}
-	h2, f2 := taskFixture(t)
+	h2, _ := taskFixture(t)
 	if err := h2.Stop(context.Background()); err != nil {
-		t.Errorf("Stop with nothing: %v", err)
+		t.Errorf("Stop with nothing registered or running: %v", err)
 	}
-	for _, e := range f2.ev.all() {
-		if strings.Contains(e, "/Change") {
-			t.Errorf("Stop changed a task that is not registered: %s", e)
+	if err := h2.Remove(context.Background()); err != nil {
+		t.Errorf("Remove with nothing registered or running: %v", err)
+	}
+	// A /Change failing on a registered task is Stop's failure.
+	h3, f3 := taskFixture(t)
+	f3.registered = true
+	h3.n.Sys = &fakeSys{Out: func(c []string) ([]byte, error) {
+		if slices.Contains(c, "/Change") {
+			return []byte("ERROR: Access is denied."), errors.New("exit status 1")
 		}
+		return f3.sys(c)
+	}}
+	if err := h3.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "Access is denied") {
+		t.Errorf("Stop with /DISABLE refused on a registered task = %v", err)
+	}
+}
+
+// A /Query failing for another reason than a missing task (the service
+// busy) never skips the /DISABLE: the 5-minute trigger would start the
+// server again.
+func TestStopDisablesThroughAFailingQuery(t *testing.T) {
+	h, f := taskFixture(t)
+	f.registered = true
+	f.queryFails = 5
+	f.start()
+	if err := h.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.ev.index(`schtasks /Change /TN \bs\server /DISABLE`) < 0 {
+		t.Errorf("a failing /Query skipped the /DISABLE:\n%s", strings.Join(f.ev.all(), "\n"))
 	}
 }
 
@@ -671,6 +731,38 @@ func TestDeleteStopsAndUnregistersTheTaskFirst(t *testing.T) {
 	}
 }
 
+// A retried delete (the files gone after a failed /Delete), or files
+// removed by hand: the task is still disabled, the supervisor stopped and
+// the task unregistered before Root goes, never orphaned.
+func TestDeleteWithoutTheFilesStillStopsAndUnregisters(t *testing.T) {
+	h, f := taskFixture(t)
+	n := h.n
+	if err := os.Remove(filepath.Join(n.Root(), "task.xml")); err != nil {
+		t.Fatal(err)
+	}
+	touch(t, filepath.Join(n.Root(), "home", "data"), 0o600)
+	f.registered = true
+	f.start()
+	var rootWhileStopping bool
+	superviseAsk = func(ctx context.Context, project, op string) (supervise.Status, error) {
+		if op == "stop" && f.up {
+			rootWhileStopping = exists(n.Root())
+		}
+		return f.ask(ctx, project, op)
+	}
+	if err := n.Delete(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := f.ev.all()
+	disable, stop, del := slices.Index(got, `schtasks /Change /TN \bs\server /DISABLE`), slices.Index(got, "pipe stop"), slices.Index(got, `schtasks /Delete /F /TN \bs\server`)
+	if disable < 0 || stop < disable || del < stop {
+		t.Errorf("Delete without the files did\n%s\nwant disable, stop, then /Delete", strings.Join(got, "\n"))
+	}
+	if !rootWhileStopping || f.up || f.registered || exists(n.Root()) {
+		t.Errorf("Root while stopping %v, supervisor up %v, task registered %v, Root after %v", rootWhileStopping, f.up, f.registered, exists(n.Root()))
+	}
+}
+
 // Ruling 2 of Task 9: Write keys restart-pending on the task host's
 // files: server.env restarts the API, supervise.json the supervisor,
 // task.xml registers the task again; Start acts on each and clears the
@@ -748,8 +840,8 @@ func TestTaskRestartPending(t *testing.T) {
 	if err := n.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.ev.all(); !slices.Contains(got, "pipe stop") || !slices.Contains(got, `schtasks /Run /TN \bs\server`) {
-		t.Errorf("Start after a supervise.json change did\n%s\nwant the supervisor stopped and started again", strings.Join(got, "\n"))
+	if got := f.ev.all(); !slices.Contains(got, "pipe stop") || !slices.Contains(got, `schtasks /Run /TN \bs\server`) || slices.Contains(got, "pipe api-stop") {
+		t.Errorf("Start after a supervise.json change did\n%s\nwant the supervisor stopped and started again, its new API not restarted", strings.Join(got, "\n"))
 	}
 	if exists(n.pendingFile()) {
 		t.Error("restart-pending stays after the restart")

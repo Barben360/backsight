@@ -610,7 +610,7 @@ func (n Native) Delete(ctx context.Context) error {
 	}
 	h := n.host()
 	units := n.installedFiles()
-	if len(units) > 0 {
+	if len(units) > 0 || h.stopsWithoutFiles() {
 		if err := h.Stop(ctx); err != nil {
 			return err
 		}

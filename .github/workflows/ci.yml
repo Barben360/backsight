@@ -55,6 +55,10 @@ jobs:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
           cache: true
       - run: go test ./... -count=1
+        env:
+          # The runner has a console logon: the server task runs there
+          # (TestTaskStartStopForReal checks it came up through the task).
+          BACKSIGHT_TEST_CONSOLE_LOGON: "1"
   snapshot:
     # The release build, signed by minisign with a throwaway key: the
     # pre-publish key check passes, every signature verifies, and the Go

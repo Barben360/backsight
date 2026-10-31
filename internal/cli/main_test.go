@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -35,6 +36,12 @@ type refuseTools struct{}
 
 func (refuseTools) Run(_ context.Context, _ []string, _ io.Reader, path string, args ...string) ([]byte, error) {
 	return nil, fmt.Errorf("test reached %s %v without a fake tool runner", path, args)
+}
+
+// refuseAsk: no test asks a real supervisor's pipe (a developer's own
+// server would answer, and stop).
+func refuseAsk(_ context.Context, project, op string) (supervise.Status, error) {
+	return supervise.Status{}, fmt.Errorf("test reached the supervisor of %s (%s) without a fake runner", project, op)
 }
 
 type refuseClaude struct{}
@@ -108,7 +115,7 @@ func TestMain(m *testing.M) {
 		os.Exit(code)
 	}
 	composeRunner = refuseDocker{}
-	nativeSys, nativeTools = refuseSys{}, refuseTools{}
+	nativeSys, nativeTools, nativeAsk = refuseSys{}, refuseTools{}, refuseAsk
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	githubAPI = "http://" + hangUpListener().Addr().String() // nothing answers: no test reaches GitHub

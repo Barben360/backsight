@@ -50,6 +50,9 @@ type TaskSpec struct {
 	Triggers    []Trigger
 	Program     string   // what conhost --headless runs
 	Args        []string // its arguments
+	// Priority is the task's priority class, 1-10 (4-6 normal, 7 below
+	// normal: Task Scheduler's default, its value when 0).
+	Priority int
 }
 
 // HeadlessArgs is conhost's argv for program and its args: what a task's
@@ -73,6 +76,9 @@ func TaskXML(spec TaskSpec) ([]byte, error) {
 	}
 	if len(spec.Triggers) == 0 {
 		return nil, errors.New("a task needs a trigger")
+	}
+	if spec.Priority < 0 || spec.Priority > 10 {
+		return nil, fmt.Errorf("task priority %d: 1 to 10, or 0 for the default", spec.Priority)
 	}
 	argv := HeadlessArgs(spec.Program, spec.Args...)
 	for _, s := range append(argv, spec.Description) {
@@ -102,7 +108,11 @@ func TaskXML(spec TaskSpec) ([]byte, error) {
 	b.WriteString("  </Triggers>\n")
 	b.WriteString("  <Principals>\n    <Principal id=\"Author\">\n      <UserId>" + spec.UserSID + "</UserId>\n" +
 		"      <LogonType>InteractiveToken</LogonType>\n      <RunLevel>LeastPrivilege</RunLevel>\n    </Principal>\n  </Principals>\n")
-	b.WriteString(taskSettings)
+	settings := taskSettings
+	if spec.Priority != 0 {
+		settings = strings.Replace(settings, "  </Settings>\n", "    <Priority>"+strconv.Itoa(spec.Priority)+"</Priority>\n  </Settings>\n", 1)
+	}
+	b.WriteString(settings)
 	b.WriteString("  <Actions Context=\"Author\">\n    <Exec>\n      <Command>" + Conhost + "</Command>\n" +
 		"      <Arguments>" + xmlEscape(strings.Join(quoted, " ")) + "</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n")
 	return utf16LE(b.String()), nil

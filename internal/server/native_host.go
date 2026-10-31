@@ -35,6 +35,9 @@ type nativeHost interface {
 	// restartsFor are the markers a change to Files' name, or to
 	// server.env (""), records when that file already existed.
 	restartsFor(name string) []string
+	// stopsWithoutFiles: Delete stops and removes even when none of
+	// fileNames exists (systemd: no unit file, nothing to stop).
+	stopsWithoutFiles() bool
 }
 
 // host is the service manager of n's OS.

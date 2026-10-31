@@ -215,6 +215,9 @@ func (h systemdHost) restartsFor(name string) []string {
 	return []string{h.n.ServerUnit()}
 }
 
+// stopsWithoutFiles: without a unit file systemd has nothing to stop.
+func (h systemdHost) stopsWithoutFiles() bool { return false }
+
 func (h systemdHost) StopCmd() string {
 	return "systemctl --user disable --now " + h.n.ServerUnit() + " " + h.n.DBUnit()
 }

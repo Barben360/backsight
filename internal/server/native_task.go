@@ -57,14 +57,15 @@ const NoLogonNote = "the server runs until you log off; it starts by itself at y
 
 // What the task host waits for and asks with; tests replace them.
 var (
+	// superviseAsk is the pipe's client when Native.Ask is nil.
 	superviseAsk = supervise.Ask
 	// startSupervisor starts conhost.exe (its real path) with args,
 	// detached from the caller and out of its job (native_task_*.go).
 	startSupervisor = startDetachedSupervisor
 	// userSID is the current user's SID, the task's principal.
 	userSID           = currentUserSID
-	taskRunWait       = 10 * time.Second // the pipe answering after /Run or a detached start
-	superviseStopWait = 60 * time.Second // the pipe gone after stop
+	taskRunWait       = 10 * time.Second  // the pipe answering after /Run or a detached start
+	superviseStopWait = 100 * time.Second // the pipe gone after stop: the API's 30 s, then pg_ctl's 60 s
 	supervisePoll     = 200 * time.Millisecond
 	askStatusWait     = 10 * time.Second // a status answer
 	askOpWait         = 2 * time.Minute  // api-stop waits for the API to stop
@@ -144,6 +145,7 @@ func (h taskHost) Files(pg int, venv string) (map[string][]byte, error) {
 		Triggers:    []scheduler.Trigger{{Kind: scheduler.TriggerLogon}, {Kind: scheduler.TriggerTime, Start: taskEpoch, Every: taskEvery}},
 		Program:     n.shim(),
 		Args:        args,
+		Priority:    5, // normal: Task Scheduler's default 7 is below normal, for the CPU and the disk
 	})
 	if err != nil {
 		return nil, err
@@ -183,7 +185,11 @@ func (h taskHost) ask(ctx context.Context, op string) (supervise.Status, error) 
 	}
 	actx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	return superviseAsk(actx, h.n.project(), op)
+	ask := h.n.Ask
+	if ask == nil {
+		ask = superviseAsk
+	}
+	return ask(actx, h.n.project(), op)
 }
 
 // running: the supervisor answers.
@@ -270,10 +276,14 @@ func (h taskHost) StartDB(ctx context.Context, restart bool) error {
 	if err != nil || up {
 		return err
 	}
-	if _, err := h.schtasks(ctx, "/Run", "/TN", h.n.TaskName()); err == nil && h.waitAnswer(ctx, taskRunWait) {
+	_, runErr := h.schtasks(ctx, "/Run", "/TN", h.n.TaskName())
+	if runErr == nil && h.waitAnswer(ctx, taskRunWait) {
 		return nil
 	}
 	if err := h.startDetached(ctx, false); err != nil {
+		if runErr != nil {
+			return errors.Join(fmt.Errorf("the task did not run: %w", runErr), err)
+		}
 		return err
 	}
 	h.n.note(NoLogonNote)
@@ -309,7 +319,9 @@ func (h taskHost) startDetached(ctx context.Context, noAPI bool) error {
 
 // StartAPI has the running supervisor start the API, after stopping it
 // when restart (server.env changed: the supervisor reads it at each API
-// start).
+// start). An API not started yet, or started by the supervisor StartDB
+// just restarted (restart-pending's supervisor marker), already reads
+// the new server.env.
 func (h taskHost) StartAPI(ctx context.Context, restart bool) error {
 	st, err := h.ask(ctx, "status")
 	if errors.Is(err, supervise.ErrNotRunning) {
@@ -318,7 +330,7 @@ func (h taskHost) StartAPI(ctx context.Context, restart bool) error {
 	if err != nil {
 		return err
 	}
-	if restart && st.API != "stopped" {
+	if restart && st.API != "stopped" && st.API != "starting" && !h.n.pending()[markSupervisor] {
 		if _, err := h.ask(ctx, "api-stop"); err != nil {
 			return err
 		}
@@ -340,11 +352,7 @@ func (h taskHost) StopAPI(ctx context.Context) error {
 // supervisor again), then stops the supervisor: nothing runs, nothing
 // starts at logon.
 func (h taskHost) Stop(ctx context.Context) error {
-	var disable error
-	if h.registered(ctx) {
-		_, disable = h.schtasks(ctx, "/Change", "/TN", h.n.TaskName(), "/DISABLE")
-	}
-	return errors.Join(disable, h.stopSupervisor(ctx))
+	return errors.Join(h.onTask(ctx, "/Change", "/TN", h.n.TaskName(), "/DISABLE"), h.stopSupervisor(ctx))
 }
 
 // Remove stops, then unregisters the task.
@@ -352,12 +360,25 @@ func (h taskHost) Remove(ctx context.Context) error {
 	if err := h.Stop(ctx); err != nil {
 		return err
 	}
-	if !h.registered(ctx) {
+	return h.onTask(ctx, "/Delete", "/F", "/TN", h.n.TaskName())
+}
+
+// onTask runs schtasks on the task, always: a failure counts only while
+// the task is registered (schtasks' text, localized, is never read). A
+// /Query that failed for another reason would otherwise skip a /DISABLE,
+// and the 5-minute trigger would start the server again.
+func (h taskHost) onTask(ctx context.Context, args ...string) error {
+	_, err := h.schtasks(ctx, args...)
+	if err != nil && !h.registered(ctx) {
 		return nil
 	}
-	_, err := h.schtasks(ctx, "/Delete", "/F", "/TN", h.n.TaskName())
 	return err
 }
+
+// stopsWithoutFiles: Delete stops and unregisters even when supervise.json
+// and task.xml are gone (a retried delete, files removed by hand): the
+// task and the supervisor do not need them.
+func (h taskHost) stopsWithoutFiles() bool { return true }
 
 // taskStates maps the supervisor's states to systemd's ActiveState
 // (Status and doctor read those).

@@ -49,11 +49,16 @@ func TestRuntimeForPicksNative(t *testing.T) {
 	if n.Dirs != d || n.Proc != "/proc" || n.Cfg.Server.Runtime != "native" {
 		t.Errorf("Dirs %+v Proc %q", n.Dirs, n.Proc)
 	}
-	// TestMain's refusing runners: no test reaches systemd or a tool.
-	// Nothing installed (no unit; on Windows no task registered and no
-	// supervisor answering): Stop has nothing to do.
-	if err := n.Stop(context.Background()); err != nil {
-		t.Errorf("Stop without units or task: %v", err)
+	// TestMain's refusing runners: no test reaches systemd, schtasks, the
+	// supervisor's pipe or a tool. Linux: no unit, nothing to stop.
+	// Windows: Stop asks the pipe, and the refusal answers (never a real
+	// supervisor of the default project's).
+	err := n.Stop(context.Background())
+	switch {
+	case runtime.GOOS == "windows" && (err == nil || !strings.Contains(err.Error(), "without a fake runner")):
+		t.Errorf("Stop on Windows: %v, want the refusing runners' error", err)
+	case runtime.GOOS != "windows" && err != nil:
+		t.Errorf("Stop without units: %v", err)
 	}
 	if err := (server.Native{Cfg: cfg, Sys: n.Sys, UnitDir: t.TempDir(), GOOS: "linux"}).StopAPI(context.Background()); err != nil {
 		t.Errorf("StopAPI without units: %v", err)

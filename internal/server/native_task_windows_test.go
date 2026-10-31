@@ -26,9 +26,14 @@ import (
 )
 
 // TestMain lets the test binary be a testtool fake (postgres, the API)
-// under TestTaskStartStopForReal's supervisor.
+// under TestTaskStartStopForReal's supervisor. No test asks a real
+// supervisor's pipe by default (a developer's own server would answer,
+// and stop): TestTaskStartStopForReal sets Native.Ask for its project.
 func TestMain(m *testing.M) {
 	testtool.Main()
+	superviseAsk = func(_ context.Context, project, op string) (supervise.Status, error) {
+		return supervise.Status{}, errors.New("test reached the supervisor of " + project + " (" + op + ") without a fake")
+	}
 	os.Exit(m.Run())
 }
 
@@ -168,7 +173,7 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	cfg.Server.Project = project
 	var notes []string
 	n := Native{Cfg: cfg, Dirs: d, Env: map[string]string{"BACKSIGHT_HOME": home}, Sys: execSys{}, GOOS: "windows",
-		Note: func(s string) { notes = append(notes, s) }}
+		Ask: supervise.Ask, Note: func(s string) { notes = append(notes, s) }}
 	if forceDetached {
 		n.Sys = noTaskSys{}
 	}
@@ -227,8 +232,13 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 		how = "the detached path"
 	}
 	t.Logf("the supervisor came up through %s", how)
-	if forceDetached && how != "the detached path" {
-		t.Errorf("with /Run starting nothing, notes %q: the detached path did not run", notes)
+	switch {
+	case forceDetached && how != "the detached path":
+		t.Errorf("with Task Scheduler running nothing, notes %q: the detached path did not run", notes)
+	case !forceDetached && os.Getenv("BACKSIGHT_TEST_CONSOLE_LOGON") == "1" && how != "the task":
+		t.Errorf("with a console logon (BACKSIGHT_TEST_CONSOLE_LOGON=1) the task did not bring the supervisor up: notes %q", notes)
+	case !forceDetached && os.Getenv("BACKSIGHT_TEST_CONSOLE_LOGON") != "1":
+		t.Log("BACKSIGHT_TEST_CONSOLE_LOGON is not 1: which path came up is not checked")
 	}
 	if err := h.StartAPI(ctx, false); err != nil {
 		t.Fatal(err)
