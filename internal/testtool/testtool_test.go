@@ -185,7 +185,14 @@ func TestFakeStartsAChildItDoesNotWaitFor(t *testing.T) {
 	pids, stop := filepath.Join(dir, "child.pids"), filepath.Join(dir, "stop")
 	child := Write(t, dir, "child", Fake{Script: "pid " + pids + "\nwaitfile " + stop})
 	parent := Write(t, dir, "parent", Fake{Script: "start " + child + "\nstdout started"})
-	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+	// The child stopped and gone before TempDir's removal: Windows cannot
+	// remove a running program.
+	t.Cleanup(func() {
+		_ = os.WriteFile(stop, nil, 0o644)
+		for deadline := time.Now().Add(10 * time.Second); os.Remove(child) != nil && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	if out, _, code := runFake(t, parent, ""); code != 0 || out != "started\n" {
 		t.Fatalf("parent: code %d, stdout %q", code, out)
 	}
