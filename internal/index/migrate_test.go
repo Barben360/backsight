@@ -910,3 +910,54 @@ func TestMigrateSuccessWritesNoStatus(t *testing.T) {
 		t.Error("status.json was rewritten")
 	}
 }
+
+// TestMigrationAppliedMeanwhileIsNotAnError: two processes open a fresh
+// index at once; one read the version before the other migrated, then
+// meets the other's write lock (its first batch) past the busy timeout.
+// The migrations it planned are applied already: it goes on.
+func TestMigrationAppliedMeanwhileIsNotAnError(t *testing.T) {
+	shortBusyWait(t)
+	d := tempDirs(t)
+	o := opts(t, d, nil)
+	ix := mustOpen(t, o)
+	reg, err := registry(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := holdWriteLock(t, ix.Path(), ix.FS())
+	defer release()
+	w, err := openWriter(context.Background(), ix.Path(), ix.FS())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	// The stale plan: every migration, as read before the other process's.
+	applied, err := applyPending(context.Background(), w, reg, reg[len(reg)-1].Num, o)
+	if err != nil || len(applied) != 0 {
+		t.Fatalf("applied %v, %v; want none and no error", applied, err)
+	}
+}
+
+// TestMigrationStillPendingStaysBusy: the same lock on a file nobody
+// migrated is the busy error it was.
+func TestMigrationStillPendingStaysBusy(t *testing.T) {
+	shortBusyWait(t)
+	o := opts(t, tempDirs(t), nil)
+	reg, err := registry(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	fsi := FSInfo{Kind: FSLocal}
+	w, err := openWriter(context.Background(), path, fsi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	release := holdWriteLock(t, path, fsi)
+	defer release()
+	applied, err := applyPending(context.Background(), w, reg, reg[len(reg)-1].Num, o)
+	if !isBusy(err) || len(applied) != 0 {
+		t.Fatalf("applied %v, %v; want none and SQLITE_BUSY", applied, err)
+	}
+}
