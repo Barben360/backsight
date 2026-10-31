@@ -291,9 +291,12 @@ func (s *Server) frame(r *http.Request, title string, p Prefs) Frame {
 		AllProjects: without(path, "project"), ProjectInput: q.Get("project"), Keep: keep,
 		PrefMenu: prefMenu(path, p),
 	}
-	// The text page takes no parameter: it offers no window or filter.
+	// The text page takes no parameter: it offers no window or filter. It
+	// never refreshes on its own: each reading of the text is a click. The
+	// menu still shows the preference as set.
 	if kindOf[r.Pattern] == "text" {
 		f.Windows, f.Keep = nil, nil
+		f.Prefs.Refresh = false
 	}
 	return f
 }

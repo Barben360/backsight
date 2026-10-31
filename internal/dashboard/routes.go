@@ -72,11 +72,6 @@ func (s *Server) handler(r route) http.Handler {
 	case "page":
 		return s.servePage(s.tpl.specs[r.Page])
 	default:
-		return http.HandlerFunc(notBuilt)
+		panic("route " + r.Pattern + ": unknown kind " + r.Kind)
 	}
-}
-
-// notBuilt stands for a route whose handler does not exist yet.
-func notBuilt(w http.ResponseWriter, _ *http.Request) {
-	refuse(w, http.StatusNotImplemented, "not built yet")
 }

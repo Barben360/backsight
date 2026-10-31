@@ -376,8 +376,6 @@ func everyResponse(h *harness) []response {
 			want = http.StatusNotFound // the sample names no project, session or memory of the generated index
 		case r.Kind == "prefs":
 			want = http.StatusBadRequest // the sample sets nothing and names no page to go back to
-		case r.Kind != "page" && r.Kind != "asset" && r.Kind != "api":
-			want = http.StatusNotImplemented
 		}
 		for _, m := range []string{"GET", "HEAD"} {
 			code := want

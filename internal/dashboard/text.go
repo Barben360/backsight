@@ -20,13 +20,16 @@ const (
 
 // serveText answers /memories/{id}/text, the one page that shows a
 // memory's text. The guard checked the session cookie (never a bearer) and
-// Sec-Fetch-Site; a Sec-Fetch-Dest, when sent, must be a document, and a
-// prefetch, a HEAD or any query is refused before any work. The text is
+// Sec-Fetch-Site; a Sec-Fetch-Dest, when sent, must be a document (else a
+// Sec-Fetch-Mode, when sent, a navigation), and a prefetch, a HEAD or any
+// query is refused before any work. It never refreshes on its own (frame). The text is
 // read live from the server, outside the result cache and without a
 // catch-up (the index only resolves the id), and is escaped in the page.
 func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 	// An <img>, an <iframe>, a fetch() or a prefetch is not the page opened.
-	if dest, ok := r.Header["Sec-Fetch-Dest"]; ok && (len(dest) != 1 || dest[0] != "document") || prefetched(r.Header) {
+	// Without a destination, a mode other than a navigation is not either.
+	dest, ok := r.Header["Sec-Fetch-Dest"]
+	if ok && (len(dest) != 1 || dest[0] != "document") || !ok && !navigation(r.Header) || prefetched(r.Header) {
 		refuse(w, http.StatusForbidden, notOpened)
 		return
 	}

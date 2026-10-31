@@ -113,6 +113,7 @@ func TestTextPageRefusesCrossSite(t *testing.T) {
 		{[]string{"Sec-Fetch-Dest", "empty"}, 403},
 		{[]string{"Sec-Fetch-Dest", "iframe"}, 403},
 		{[]string{"Sec-Fetch-Site", "same-origin", "Sec-Fetch-Dest", "document"}, 200},
+		{[]string{"Sec-Fetch-Site", "none", "Sec-Fetch-Dest", "document"}, 200}, // the address bar
 		{nil, 200},
 	}
 	oks := 0
@@ -151,6 +152,10 @@ func TestTextPageRefusesWhatIsNotAnOpenedPage(t *testing.T) {
 		"legacy prefetch":  {"Purpose", "prefetch"},
 		"firefox prefetch": {"X-Moz", "prefetch"},
 		"safari preview":   {"X-Purpose", "preview"},
+		"cors mode":        {"Sec-Fetch-Mode", "cors"},
+		"no-cors mode":     {"Sec-Fetch-Mode", "no-cors"},
+		"same-origin mode": {"Sec-Fetch-Mode", "same-origin"},
+		"two modes":        {"Sec-Fetch-Mode", "navigate", "Sec-Fetch-Mode", "cors"},
 	}
 	for name, hdr := range cases {
 		r, b := rawGet(t, h, ck, path, hdr...)
@@ -158,12 +163,39 @@ func TestTextPageRefusesWhatIsNotAnOpenedPage(t *testing.T) {
 			t.Errorf("%s: %d %q, want 403 without the text", name, r.StatusCode, b)
 		}
 	}
+	if got := h.srv.count("Memory"); got != 0 {
+		t.Errorf("Memory called %d times, want 0", got)
+	}
+	// A navigation without a destination (an older browser) is the page.
+	if r, b := rawGet(t, h, ck, path, "Sec-Fetch-Mode", "navigate"); r.StatusCode != 200 || !strings.Contains(b, textCanary) {
+		t.Errorf("Sec-Fetch-Mode navigate alone: %d, want 200 with the text", r.StatusCode)
+	}
 	r := h.do("HEAD", path, cookieHdr(ck)...)
 	if r.StatusCode != http.StatusMethodNotAllowed || r.Header.Get("Allow") != "GET" {
 		t.Errorf("HEAD: %d, Allow %q; want 405, GET", r.StatusCode, r.Header.Get("Allow"))
 	}
-	if got := h.srv.count("Memory"); got != 0 {
-		t.Errorf("Memory called %d times, want 0", got)
+	if got := h.srv.count("Memory"); got != 1 {
+		t.Errorf("Memory called %d times, want 1 (the navigation only)", got)
+	}
+}
+
+// The auto-refresh preference does not reach the text page, nor its state
+// pages; the menu still shows it as set, and other pages keep it.
+func TestTextPageNeverRefreshes(t *testing.T) {
+	h, _, path := textHarness(t, textCanary)
+	hdr := withPrefs(h.login(), "v1.system.0.1")
+	for _, p := range []string{path, "/memories/zzzzzzzz/text", path + "?days=7"} {
+		r := h.do("GET", p, hdr...)
+		b := body(t, r)
+		if strings.Contains(b, `http-equiv="refresh"`) {
+			t.Errorf("%s (%d) refreshes on its own: %q", p, r.StatusCode, b)
+		}
+		if !strings.Contains(b, `<a href="/prefs?refresh=1&amp;back=`+url.QueryEscape(p)+`" aria-current="page">On</a>`) {
+			t.Errorf("%s: the menu does not show auto-refresh as on: %q", p, b)
+		}
+	}
+	if b := body(t, h.do("GET", "/memories", hdr...)); !strings.Contains(b, `<meta http-equiv="refresh" content="60">`) {
+		t.Errorf("the preference no longer refreshes other pages: %q", b)
 	}
 }
 
