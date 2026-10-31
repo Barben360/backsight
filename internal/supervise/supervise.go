@@ -325,7 +325,14 @@ func (s *supervisor) answer(op string, done <-chan struct{}) (Status, bool) {
 	case st := <-r.reply:
 		return st, true
 	case <-done:
-		return Status{}, false
+		// The loop answers before it returns and the channel closes
+		// (stop): an answer already there still goes to the client.
+		select {
+		case st := <-r.reply:
+			return st, true
+		default:
+			return Status{}, false
+		}
 	}
 }
 

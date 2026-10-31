@@ -924,3 +924,21 @@ func TestNoConsoleKillsTheAPIAtOnce(t *testing.T) {
 		t.Errorf("supervisor log: want the no-console kill:\n%s", l)
 	}
 }
+
+// The loop answers stop, then returns, and the channel closes: the answer
+// already given still reaches the client, never an EOF taken for "not
+// running".
+func TestAnswerGivenBeforeTheChannelClosesIsSent(t *testing.T) {
+	for i := range 500 {
+		s := &supervisor{ops: make(chan opRequest)}
+		done := make(chan struct{})
+		go func() {
+			r := <-s.ops
+			r.reply <- Status{DB: stateStopped}
+			close(done)
+		}()
+		if st, ok := s.answer(opStop, done); !ok || st.DB != stateStopped {
+			t.Fatalf("try %d: answer %+v, ok %v: the stop's answer was dropped", i, st, ok)
+		}
+	}
+}
