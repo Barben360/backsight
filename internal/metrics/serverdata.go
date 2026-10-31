@@ -23,7 +23,8 @@ type serverData struct {
 	Tags                []hindsight.TagCount
 	Version             hindsight.Version
 	Pending, Processing int
-	Failed              []hindsight.Operation
+	Failed              []hindsight.Operation // newest first (sorted by updated time on read)
+	FailedTotal         int                   // the server's exact count of failed operations; Failed holds at most failedPages pages of them
 	Completed           []hindsight.Operation
 	LLM                 map[string][]hindsight.LLMBucket // key: operation ("" = all), over the window's period
 	LLM30               []hindsight.LLMBucket            // all operations over 30d whatever the window (llm30d:)
@@ -220,12 +221,13 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 			}
 		case "failed":
 			calls[key] = func(ctx context.Context) error {
-				v, err := operations(ctx, s, "failed", "", failedPages)
-				return keep(err, func() { d.Failed = v })
+				v, total, err := operations(ctx, s, "failed", "", failedPages)
+				slices.SortStableFunc(v, func(a, b hindsight.Operation) int { return opTime(b).Compare(opTime(a)) })
+				return keep(err, func() { d.Failed, d.FailedTotal = v, total })
 			}
 		case "completed":
 			calls[key] = func(ctx context.Context) error {
-				v, err := operations(ctx, s, "completed", "retain", completedPages)
+				v, _, err := operations(ctx, s, "completed", "retain", completedPages)
 				return keep(err, func() { d.Completed = v })
 			}
 		case llm30dKey:
@@ -279,21 +281,36 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	return d, st
 }
 
+// opTime is when an operation last changed: its update time, else its
+// creation time.
+func opTime(o hindsight.Operation) time.Time {
+	if o.UpdatedAt.IsZero() {
+		return o.CreatedAt
+	}
+	return o.UpdatedAt
+}
+
 // operations reads up to pages pages of the operations of status and typ,
-// most recent first, stopping at the last one.
-func operations(ctx context.Context, s ServerReader, status, typ string, pages int) ([]hindsight.Operation, error) {
+// stopping at the last one, and returns them with the server's exact total.
+// The server is ASSUMED to list newest first (the live shape is confirmed
+// by the author's run): the pages kept are then the latest operations, so a
+// capped read still holds the recent ones. Past the cap the total is larger
+// than what was read.
+func operations(ctx context.Context, s ServerReader, status, typ string, pages int) ([]hindsight.Operation, int, error) {
 	var out []hindsight.Operation
+	total := 0
 	for k := range pages {
 		p, err := s.OperationsPage(ctx, status, typ, opsPage, k*opsPage)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		total = p.Total
 		out = append(out, p.Operations...)
 		if len(p.Operations) < opsPage || (k+1)*opsPage >= p.Total {
 			break
 		}
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // runDoctor runs the live doctor under doctorTimeout and abandons it past

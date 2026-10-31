@@ -59,7 +59,7 @@ var catalogRows = []catalogRow{
 	{"pipeline.flow", "Sessions sent", "ratio", "up", 0, none, none, "", false, true, "wilson", "machine", false, "pipeline", "daily", "backsight stats pipeline", "ok,failed,set_aside,waiting,backlog_oldest_ms"},
 	{"retain.outcomes", "Sends by result", "count", "none", 0, none, none, "", false, false, "none", "machine", false, "pipeline", "daily", "backsight stats pipeline", "by_status,p95_ms"},
 	{"local.backlog", "Waiting on this PC", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight jobs tick", "notes_queued,sessions_waiting,quarantined,oldest_ms"},
-	{"server.queue", "Waiting on the server", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight doctor", "pending,processing,failed,failed_total"},
+	{"server.queue", "Waiting on the server", "count", "none", 0, none, none, "", false, true, "none", "server", false, "pipeline", "none", "backsight doctor", "pending,processing,failed,failed_total,failed_capped"},
 	{"server.extraction_delay", "Time to turn a session into memories", "ms", "down", 100, 1800000, none, "p95", false, false, "none", "server", false, "pipeline", "none", "backsight doctor", "p50,p95"},
 	{"hooks.failures", "Steps that crashed", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "daily", "backsight doctor", "by_kind,last_24h"},
 	{"server.reach", "Memory server answering", "count", "none", 0, none, none, "", false, true, "none", "machine", false, "pipeline", "none", "backsight doctor", "last_ok,failing_since,breaker_open_until,skipped_prompts"},

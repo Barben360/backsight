@@ -308,9 +308,9 @@ var Catalog = withDrills([]Def{
 	{
 		ID: "server.queue", Label: "Waiting on the server", Unit: "count", Direction: "none", MinN: 0,
 		ErrorClass: true, CI: "none", Scope: "server", Source: "server", Family: "pipeline", Series: "none", Command: "backsight doctor",
-		Extra:      []string{"pending", "processing", "failed", "failed_total"},
+		Extra:      []string{"pending", "processing", "failed", "failed_total", "failed_capped"},
 		Question:   "Is the server keeping up?",
-		Definition: "Operations queued and running on the server, from its operations list. The failed count covers operations updated in the last 7 days, whatever the window. Watched when any failed.",
+		Definition: "Operations queued and running on the server, from its operations list. The failed count covers operations updated in the last 7 days, whatever the window; when the server holds more failed operations than are read (failed_capped), it is a lower bound. Watched when any failed.",
 		Action:     "Failed operations need the server looked at. Run backsight doctor.",
 	},
 	{

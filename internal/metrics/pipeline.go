@@ -313,6 +313,18 @@ SELECT COUNT(*) FROM tel_prompt WHERE decision = 'skip' AND reason = 'breaker' A
 	return nil
 }
 
+// hookKinds are the kinds of hook failure the supervisor reports; any other
+// value counts under "other", so no free text reaches a view.
+var hookKinds = []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"}
+
+// hookKind is kind when the supervisor reports it, else "other".
+func hookKind(kind string) string {
+	if slices.Contains(hookKinds, kind) {
+		return kind
+	}
+	return "other"
+}
+
 // pipelineHooks fills hooks.failures: the failures counted in the window,
 // judged on the last 24 h, whatever the window.
 func pipelineHooks(e env, w Window, obs map[string]Observation, met map[string]Metric) error {
@@ -346,6 +358,7 @@ WHERE ((ts >= ? AND ts < ?) OR (ts >= ? AND ts < ?)) AND `+projectClause,
 		if err := rows.Scan(&ts, &kind); err != nil {
 			return err
 		}
+		kind = hookKind(kind)
 		t := time.UnixMilli(ts)
 		if !t.Before(w.Since) && t.Before(w.Until) {
 			total++
@@ -386,10 +399,7 @@ func pipelineQueue(e env, obs map[string]Observation, met map[string]Metric) {
 	const id = "server.queue"
 	var failed int64
 	for _, o := range e.srv.Failed {
-		t := o.UpdatedAt
-		if t.IsZero() {
-			t = o.CreatedAt
-		}
+		t := opTime(o)
 		if !t.Before(e.now.Add(-failedWindow)) && t.Before(e.now) {
 			failed++
 		}
@@ -397,7 +407,8 @@ func pipelineQueue(e env, obs map[string]Observation, met map[string]Metric) {
 	obs[id] = Observation{Err: ruleServerQueue(failed)}
 	met[id] = Metric{Value: ptr(float64(e.srv.Pending + e.srv.Processing)), Extra: map[string]any{
 		"pending": int64(e.srv.Pending), "processing": int64(e.srv.Processing),
-		"failed": failed, "failed_total": int64(len(e.srv.Failed))}}
+		"failed": failed, "failed_total": int64(max(e.srv.FailedTotal, len(e.srv.Failed))),
+		"failed_capped": e.srv.FailedTotal > len(e.srv.Failed)}}
 }
 
 // pipelineDelay fills server.extraction_delay: the creation-to-last-update
@@ -441,7 +452,7 @@ func doctorEntries(checks []DoctorCheck) []DoctorCheck {
 		if r < 0 {
 			continue
 		}
-		if !strings.HasPrefix(c.Fix, "backsight ") {
+		if !strings.HasPrefix(c.Fix, "backsight ") || strings.TrimSpace(c.Fix) == "backsight" {
 			c.Fix = ""
 		}
 		i, seen := at[c.ID]
@@ -507,7 +518,7 @@ func pipelineJobs(e env, w Window, obs map[string]Observation, met map[string]Me
 		var st sql.NullString
 		var ms sql.NullInt64
 		err := e.tx.QueryRowContext(e.ctx, `
-SELECT ts, status, ms FROM tel_job WHERE name = ? ORDER BY ts DESC, source_file DESC, "offset" DESC LIMIT 1`, j.name).Scan(&ts, &st, &ms)
+SELECT ts, status, ms FROM tel_job WHERE name = ? AND ts <= ? ORDER BY ts DESC, source_file DESC, "offset" DESC LIMIT 1`, j.name, e.now.UnixMilli()).Scan(&ts, &st, &ms)
 		if errors.Is(err, sql.ErrNoRows) {
 			extra[j.name] = nil
 			continue

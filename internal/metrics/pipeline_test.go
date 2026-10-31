@@ -569,6 +569,7 @@ func TestDoctorEntries(t *testing.T) {
 		{ID: "hook", Status: "error", Fix: "backsightfoo"},
 		{ID: "weird", Status: "fatal", Fix: "backsight x"},
 		{ID: "hook2", Status: "error", Fix: "backsight "},
+		{ID: "hook3", Status: "error", Fix: "backsight"},
 	})
 	want := []DoctorCheck{
 		{ID: "server", Status: "ok", Fix: "backsight doctor"},
@@ -577,7 +578,8 @@ func TestDoctorEntries(t *testing.T) {
 		{ID: "index", Status: "info", Fix: "backsight stats index rebuild"},
 		{ID: "update", Status: "warn"},
 		{ID: "hook", Status: "error"},
-		{ID: "hook2", Status: "error", Fix: "backsight "},
+		{ID: "hook2", Status: "error"},
+		{ID: "hook3", Status: "error"},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("entries =\n%+v\nwant\n%+v", got, want)
@@ -656,14 +658,28 @@ func TestFutureRowsAndAges(t *testing.T) {
 		wantStatus(t, "jobs.last_run", ms["jobs.last_run"], StatusOK)
 	})
 	t.Run("a tick in the future", func(t *testing.T) {
+		// The tick stamped now + 1 h is ignored: the real one, 40 min ago,
+		// is the latest run; with a typed prompt since it is due, bad.
 		x := pipeFx(t)
+		x.tel(ago(40*time.Minute), telemetry.Job{Name: "tick", Status: "done", MS: 1}, "", "")
 		x.tel(fxNow.Add(time.Hour), telemetry.Job{Name: "tick", Status: "done", MS: 1}, "", "")
+		x.tel(ago(10*time.Minute), telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}, "s", "alpha")
 		m := pipeOf(x, x.query(7))["jobs.last_run"]
 		tick, _ := m.Extra["tick"].(map[string]any)
-		if tick["age_ms"] != int64(0) || val(m) != 0 {
-			t.Errorf("age = %v value %v, want 0", tick["age_ms"], val(m))
+		if tick["age_ms"] != int64(2_400_000) {
+			t.Errorf("age = %v, want 2400000 (the future tick is ignored)", tick["age_ms"])
 		}
-		wantStatus(t, "jobs.last_run", m, StatusOK)
+		wantStatus(t, "jobs.last_run", m, StatusBad)
+		// Only a future tick: no run yet.
+		y := pipeFx(t)
+		y.tel(fxNow.Add(time.Hour), telemetry.Job{Name: "tick", Status: "done", MS: 1}, "", "")
+		wantNoData(t, "jobs.last_run", pipeOf(y, y.query(7))["jobs.last_run"], ReasonNoEvents)
+	})
+	t.Run("a tool event in the future", func(t *testing.T) {
+		x := pipeFx(t)
+		x.tel(ago(40*time.Minute), telemetry.Job{Name: "tick", Status: "done", MS: 1}, "", "")
+		x.tel(fxNow.Add(2*time.Hour), telemetry.Tool{Name: "memory_search", OK: true}, "s", "alpha")
+		wantStatus(t, "jobs.last_run", pipeOf(x, x.query(7))["jobs.last_run"], StatusOK)
 	})
 	t.Run("a note in the future", func(t *testing.T) {
 		x := pipeFx(t)
@@ -674,4 +690,43 @@ func TestFutureRowsAndAges(t *testing.T) {
 		}
 		wantStatus(t, "local.backlog", m, StatusOK)
 	})
+}
+
+// TestHookKind: the supervisor's eight kinds pass, anything else (an empty
+// or unknown value) counts under "other".
+func TestHookKind(t *testing.T) {
+	for _, k := range []string{"panic", "fatal", "timeout", "killed", "exit", "invalid_output", "input_too_large", "spawn"} {
+		if hookKind(k) != k {
+			t.Errorf("hookKind(%q) = %q", k, hookKind(k))
+		}
+	}
+	for _, k := range []string{"", "foo", "Exit", "exit "} {
+		if hookKind(k) != "other" {
+			t.Errorf("hookKind(%q) = %q, want other", k, hookKind(k))
+		}
+	}
+}
+
+// TestServerQueueCappedFailedList: 520 failed operations, updated 1..520
+// minutes ago, listed newest first; 5 pages of 100 are read (500). failed_total
+// is the server's 520 and failed_capped is true, the 7-day count is the
+// 500 read (a lower bound). With 5 failed operations nothing is capped.
+func TestServerQueueCappedFailedList(t *testing.T) {
+	x := pipeFx(t)
+	x.server.set(func(d *fakeData) {
+		d.Ops = fakeOps(520, "failed", func(i int) (time.Time, time.Time) {
+			u := ago(time.Duration(i+1) * time.Minute)
+			return u, u
+		})
+	})
+	m := pipeOf(x, x.query(7))["server.queue"]
+	if extraInt(t, m, "failed_total") != 520 || extraInt(t, m, "failed") != 500 || m.Extra["failed_capped"] != true {
+		t.Errorf("extra = %v, want failed_total 520, failed 500, capped", m.Extra)
+	}
+	wantStatus(t, "server.queue", m, StatusWatch)
+	x.server.set(func(d *fakeData) { d.Ops = d.Ops[:5] })
+	m = pipeOf(x, x.query(7))["server.queue"]
+	if extraInt(t, m, "failed_total") != 5 || m.Extra["failed_capped"] != false {
+		t.Errorf("extra = %v, want failed_total 5, not capped", m.Extra)
+	}
 }
