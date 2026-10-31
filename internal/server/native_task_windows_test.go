@@ -247,7 +247,13 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	if states, err := h.States(ctx); err != nil || states["db"] != "active" || states["hindsight"] != "active" {
 		t.Errorf("States = %v %v", states, err)
 	}
-	children := append(pidsIn(file("pg.pids")), pidsIn(file("api.pids"))...)
+	// "running" is the start's: a fake writes its pid once it runs.
+	var children []int
+	for end := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if children = append(pidsIn(file("pg.pids")), pidsIn(file("api.pids"))...); len(children) == 2 || time.Now().After(end) {
+			break
+		}
+	}
 	if len(children) != 2 {
 		t.Fatalf("children %v, want postgres' and the API's", children)
 	}
