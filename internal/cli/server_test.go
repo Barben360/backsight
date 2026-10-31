@@ -181,6 +181,15 @@ func (f *fakeCompose) subcommands() []string {
 // each accepted item.
 var retained, llmInput, llmPerRetain, queued, processing, failRetains, statsCalls, statsFailAfter, retainStatus, recallStatus atomic.Int64
 
+// fakeOperations are the operations the fake lists as failed or completed
+// (each one a JSON object with operation_type, status, created_at,
+// updated_at, retry_count, error_message); nil lists none. fakeSeriesDown
+// makes the memories time series fail.
+var (
+	fakeOperations []string
+	fakeSeriesDown bool
+)
+
 // statsDown makes the LLM usage endpoint fail; retainedTags records the
 // tags of every accepted item.
 var (
@@ -291,6 +300,7 @@ func fakeHindsight(t *testing.T) (port int) {
 	refusedCalls.Store(0)
 	bankCalls, retainBody = nil, `{"detail":"refused"}`
 	fakeHook = nil
+	fakeOperations, fakeSeriesDown = nil, false
 	var mu sync.Mutex
 	banks := map[string]string{} // bank → name
 	bankDocs := map[string]map[string]bool{}
@@ -697,6 +707,26 @@ func fakeHindsight(t *testing.T) (port int) {
 				buckets += `,{"time":"` + old + `T00:00:00+00:00","tokens":{"input":` + strconv.FormatInt(llmOldInput.Load(), 10) + `,"output":0,"cached":0,"thoughts":0}}`
 			}
 			_, _ = w.Write([]byte(`{"buckets":[` + buckets + `]}`))
+		case strings.HasSuffix(r.URL.Path, "/stats/memories-timeseries"):
+			if fakeSeriesDown {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			day := time.Now().UTC().Format("2006-01-02")
+			_, _ = w.Write([]byte(`{"period":"` + r.URL.Query().Get("period") + `","trunc":"day","buckets":[{"time":"` + day + `T00:00:00+00:00","world":1,"experience":0,"observation":2}]}`))
+		case strings.HasSuffix(r.URL.Path, "/operations") && fakeOperations != nil && (r.URL.Query().Get("status") == "failed" || r.URL.Query().Get("status") == "completed"):
+			var items []string
+			for _, op := range fakeOperations {
+				var o struct {
+					Status string `json:"status"`
+					Type   string `json:"operation_type"`
+				}
+				_ = json.Unmarshal([]byte(op), &o)
+				if o.Status == r.URL.Query().Get("status") && (r.URL.Query().Get("type") == "" || o.Type == r.URL.Query().Get("type")) {
+					items = append(items, op)
+				}
+			}
+			_, _ = w.Write([]byte(`{"total":` + strconv.Itoa(len(items)) + `,"operations":[` + strings.Join(items, ",") + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/operations"):
 			// Pending and processing are reported separately, like Hindsight;
 			// only pending drains as it is polled.
@@ -712,7 +742,7 @@ func fakeHindsight(t *testing.T) (port int) {
 			}
 			_, _ = w.Write([]byte(`{"total":` + strconv.FormatInt(n, 10) + `,"operations":[]}`))
 		case strings.HasSuffix(r.URL.Path, "/stats"):
-			_, _ = w.Write([]byte(`{"total_nodes":0,"pending_operations":0,"pending_consolidation":0}`))
+			_, _ = w.Write([]byte(`{"total_nodes":0,"nodes_by_fact_type":{},"pending_operations":0,"pending_consolidation":0,"failed_consolidation":0}`))
 		case strings.HasSuffix(r.URL.Path, "/memories/dry-run-extract") && extractFails.Load():
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte(`{"detail":"provider said: invalid api key fakellmkey"}`))

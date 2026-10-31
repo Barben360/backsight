@@ -240,7 +240,8 @@ func (h *hookEnv) userPrompt() []byte {
 	memoryChars := 0
 	if ok {
 		ev.Decision = "recall"
-		text, chosen, flags, items, res := h.promptRecall(st, prompt, reason)
+		text, chosen, flags, items, res, empty := h.promptRecall(st, prompt, reason)
+		ev.Empty = empty
 		ev.Scopes = map[string]telemetry.ScopeResult{}
 		failed := len(res.Scopes) > 0
 		for name, m := range res.Scopes {
@@ -290,6 +291,9 @@ func (h *hookEnv) userPrompt() []byte {
 		ids = append(ids, in.ID)
 	}
 	ev.IDs, ev.Injected, ev.Chars = ids, len(ids), len([]rune(text))
+	if ev.Injected > 0 {
+		ev.Empty = ""
+	}
 	h.updateSession(func(s *session.State) error {
 		s.Project, s.Remote, s.ProjectExplicit = h.project, h.remote(), h.resolver.Explicit(h.cwd)
 		s.Prompts = max(s.Prompts, n)
@@ -348,7 +352,9 @@ func (h *hookEnv) sticky() session.Sticky {
 // promptRecall searches the prompt and keeps up to PromptHits unseen,
 // unmuted memories above the reranker floor, within PromptChars; flags
 // holds set_changed when the boost changed which ones (boostChangedSet).
-func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block string, chosen []recall.Hit, flags []string, items []session.Injection, res recall.Result) {
+// empty says why nothing was chosen (the prompt event's empty field):
+// no_candidates, below_floor, all_seen or capped; "" when something was.
+func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block string, chosen []recall.Hit, flags []string, items []session.Injection, res recall.Result, empty string) {
 	_, res = h.searchPrompt(prompt)
 	counts := h.sticky().Load(now(), h.stickyWindow())
 	rc := h.cfg.Recall
@@ -357,7 +363,17 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block str
 	}
 	block, chosen = selectHits(res.Hits, rc, skip)
 	if len(chosen) == 0 {
-		return "", nil, nil, nil, res
+		switch {
+		case len(res.Hits) == 0 && rawHits(res) == 0:
+			empty = "no_candidates"
+		case len(res.Hits) == 0:
+			empty = "below_floor"
+		case !slices.ContainsFunc(res.Hits, func(hit recall.Hit) bool { return !skip(hit) }):
+			empty = "all_seen"
+		default:
+			empty = "capped"
+		}
+		return "", nil, nil, nil, res, empty
 	}
 	if boostChangedSet(res.Hits, chosen, rc, skip) {
 		flags = []string{feedback.FlagSetChanged}
@@ -367,7 +383,16 @@ func (h *hookEnv) promptRecall(st session.State, prompt, rule string) (block str
 	for _, hit := range chosen {
 		items = append(items, session.Injection{ID: hit.ID, Text: hit.Text, Project: hit.Project, Score: hit.Score, Scope: hit.Scope, Prompt: st.Prompts + 1, Rule: rule, At: at})
 	}
-	return block, chosen, flags, items, res
+	return block, chosen, flags, items, res, ""
+}
+
+// rawHits is how many hits the scopes returned before the reranker floor.
+func rawHits(res recall.Result) int {
+	n := 0
+	for _, m := range res.Scopes {
+		n += m.Raw
+	}
+	return n
 }
 
 // boostChangedSet: the boost changed which hits a prompt injects. The

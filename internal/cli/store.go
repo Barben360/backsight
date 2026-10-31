@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
@@ -22,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/telemetry"
 )
 
 func notesOutbox(d paths.Dirs) retain.Outbox { return retain.NotesOutbox(d) }
@@ -38,6 +40,29 @@ type storeResult struct {
 	Project  string `json:"project"`
 	Kind     string `json:"kind"`
 	Warning  string `json:"warning,omitempty"`
+}
+
+// noteKind is kind when it is a real note kind, else "": telemetry never
+// holds what a caller typed.
+func noteKind(kind string) string {
+	if _, ok := retain.Kinds[kind]; !ok {
+		return ""
+	}
+	return kind
+}
+
+// storeEvent is the telemetry of one store call: refused when nothing was
+// queued or the server quarantined the note, updated when the note replaces
+// memories, else saved. The kind is kept only when it is a real note kind.
+func storeEvent(kind string, res storeResult, replaces bool) telemetry.Store {
+	kind = noteKind(kind)
+	switch {
+	case res.Document == "" || res.Status == "rejected":
+		return telemetry.Store{Result: "refused", Kind: kind}
+	case replaces:
+		return telemetry.Store{Result: "updated", Kind: kind}
+	}
+	return telemetry.Store{Result: "saved", Kind: kind}
 }
 
 func kindList() string {
@@ -66,7 +91,9 @@ func newStoreCmd(e *env) *cobra.Command {
 				return err
 			}
 			cwd, _ := os.Getwd()
-			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, os.Getenv("BACKSIGHT_SESSION"), cwd, kind, proj, strings.Join(args, " "))
+			sid := os.Getenv("BACKSIGHT_SESSION")
+			res, failed := storeNote(cmd.Context(), d, home, cfg, sec, generation, sid, cwd, kind, proj, strings.Join(args, " "))
+			telemetry.New(d.State, telemetry.Common{Session: sid, BinaryVersion: buildinfo.Version}).Emit(storeEvent(kind, res, false))
 			if res.Document == "" {
 				return failed // refused before anything was queued
 			}
@@ -165,6 +192,7 @@ func storeNote(ctx context.Context, d paths.Dirs, home string, cfg config.Config
 		ob.Gate = sendsGate(d, generation)
 		fr, err := ob.Flush(fctx, cl, cfg.Server.Bank, machineID)
 		cancel()
+		emitNoteEvents(d.State, fr)
 		if errors.Is(err, retain.ErrStartedOver) {
 			res.Warning = "this PC joined another server since this process started: the note goes out with the next jobs tick"
 		}

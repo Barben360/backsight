@@ -252,9 +252,11 @@ func TestSkillsAreGeneratedWithTheShimOnly(t *testing.T) {
 		"remember":     "",
 		"pause":        "Bash(/opt/b/current pause*)", // resume always asks
 		"memory-retro": "Bash(git log --oneline -15), Bash(git branch --show-current), Bash(/opt/b/current why*), Bash(true)",
-		"memory":       "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*)",
+		"memory": "Bash(/opt/b/current search *), Bash(/opt/b/current read *), Bash(/opt/b/current why*), " +
+			"Bash(/opt/b/current stats), Bash(/opt/b/current stats --json), Bash(/opt/b/current stats index), Bash(/opt/b/current stats index --json), Bash(/opt/b/current stats overview*), Bash(/opt/b/current stats quality*), Bash(/opt/b/current stats cost*), Bash(/opt/b/current stats bank*), Bash(/opt/b/current stats pipeline*), Bash(/opt/b/current stats system*), Bash(/opt/b/current stats releases*), Bash(/opt/b/current stats projects*), Bash(/opt/b/current stats sessions*), Bash(/opt/b/current stats memories*), Bash(/opt/b/current stats days*), Bash(/opt/b/current stats defs*)",
 		// then one guide entry per docs topic (instructions' test: never guide index)
-		"doctor": "Bash(/opt/b/current doctor*), Bash(/opt/b/current verify --live*), Bash(/opt/b/current verify --no-round-trip*), Bash(/opt/b/current stats*), " +
+		"doctor": "Bash(/opt/b/current doctor*), Bash(/opt/b/current verify --live*), Bash(/opt/b/current verify --no-round-trip*), " +
+			"Bash(/opt/b/current stats), Bash(/opt/b/current stats --json), Bash(/opt/b/current stats index), Bash(/opt/b/current stats index --json), Bash(/opt/b/current stats overview*), Bash(/opt/b/current stats quality*), Bash(/opt/b/current stats cost*), Bash(/opt/b/current stats bank*), Bash(/opt/b/current stats pipeline*), Bash(/opt/b/current stats system*), Bash(/opt/b/current stats releases*), Bash(/opt/b/current stats projects*), Bash(/opt/b/current stats sessions*), Bash(/opt/b/current stats days*), Bash(/opt/b/current stats defs*), " +
 			"Bash(/opt/b/current why*), Bash(/opt/b/current version), Bash(/opt/b/current update check*), Bash(/opt/b/current report*), " +
 			"Bash(/opt/b/current guide), Bash(/opt/b/current guide search *), Bash(/opt/b/current guide agent-guide*), ",
 	}

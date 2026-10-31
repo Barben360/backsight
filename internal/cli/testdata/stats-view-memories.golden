@@ -1,0 +1,13 @@
+Which memories were shown? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+To review
+Often shown, never used                      1                        (info, no change vs previous)
+Hidden                                       0                        (info, no change vs previous)
+Reported wrong                               0                        (info, no change vs previous)
+
+Memories (recent-weighted counts)
+Memory    Project  Shown  Used  Ignored  Used rate  Learned ranking  Last shown        Last used  State
+mem-long           12     0.0   0.0      —          +0.00            2026-10-07 11:00  never      often shown, never used
+mem-long  p1       4      1.5   0.0      100 %      +0.01            2026-10-08 05:00  never      —
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

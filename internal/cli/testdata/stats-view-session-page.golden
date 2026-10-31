@@ -1,0 +1,12 @@
+Which sessions used memory? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Session sess-lon
+Session   Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent
+sess-lon  p1       2026-10-08 03:00  1        1            1      1     0      0              —
+
+Turns
+Prompt  When              What memory did  Shown                                      Searches  Claude said it used  End of turn
+1       2026-10-08 03:00  recall                                                      0
+3       2026-10-08 05:00                   mem-long #1 pending (added to the prompt)  0         used                 said what it used
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

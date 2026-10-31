@@ -1,0 +1,38 @@
+Which projects use memory? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+Project: p1
+
+Found
+Prompts that got memory                      5 of 6                   (n=6, too few, 14 more needed)
+
+Right
+Turns where Claude used memory               1 of 1                   (n=1, too few, 19 more needed)
+  worst case, if every turn where Claude did not say counts as unused: 100 %
+Memories reported wrong or out of date       0 of 1                   (n=1, too few, 19 more needed)
+
+Cost
+Context added per session                    —                        (n=5, too few, 95 more needed)
+Time memory adds to a prompt                 —                        (n=6, too few, 94 more needed)
+
+Flowing
+Sessions sent                                1 of 1                   (n=1, ok)
+  sent 1, failed 0, set aside after an error 0, waiting 0
+
+Project p1
+It has no memories yet.
+
+Most used
+Memory    Project  Shown  Last shown        Look at it
+mem-long  p1       4      2026-10-08 05:00  backsight read mem-long-1
+
+Often shown, never used
+none
+
+Sessions
+Session   Project  Started           Prompts  With memory  Shown  Used  Wrong  Context chars  Sent
+sess-lon  p1       2026-10-08 03:00  1        1            1      1     0      0              —
+rel-v0.1  p1       2026-10-08 04:00  1        1            0      0     0      0              —
+s2        p1       2026-10-08 04:00  1        1            0      0     0      0              —
+sess-lon  p1       2026-10-08 02:00  1        1            0      0     0      0              —
+s1        p1       2026-10-07 08:00  3        1            0      0     0      0              —
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

@@ -1,0 +1,20 @@
+Which memories were shown? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+Memory server: does not provide it. The numbers that come from it are missing.
+
+Memory mem-long
+Memory    Project  Shown  Used  Ignored  Used rate  Learned ranking  Last shown        Last used  State
+mem-long  p1       4      1.5   0.0      100 %      +0.01            2026-10-08 05:00  never      —
+Kind, creation and state on the server: unknown (the server did not answer)
+
+Showings
+When              Shown                What happened  Session and prompt  Rank
+2026-10-08 05:00  added to the prompt  pending        sess-lon #3         1
+2026-10-08 05:00  added to the prompt  pending        s1                  1
+
+Hidden and restored
+none
+Run: backsight read mem-long-1
+Run: backsight forget mem-long-1
+Run: backsight forget --restore mem-long-1
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

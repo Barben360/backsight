@@ -135,6 +135,18 @@ No ssh access to the host: `backsight server install --print-commands --json` li
 
 `backsight report --json` builds a redacted diagnostic (versions, the doctor report, local counts, recent backsight errors; no memory text, prompt, transcript, secret, home path, project name or git remote) with `data.search_url` (existing issues with the same error class), `data.issue_url` (a new issue with the title and a summary filled in) and `data.paste` (the full diagnostic to paste into it). It sends nothing. Show the user the diagnostic and both links; never open, submit or post them yourself: the user decides whether to report.
 
+## Is memory working?
+
+When the user asks whether memory works or is worth it, run `backsight stats overview --json` and read two fields of `data`: `verdict` (four axes, found, right, cost and flowing; each has a `state` and its `reasons`) and `attention` (each item has `text`, `why` and the `command` that helps). Report the verdict in plain words, then the attention items with their commands.
+
+- Drill down with `backsight stats quality`, `cost`, `bank`, `pipeline` or `system` (each `--json`), `stats sessions --has used|wrong|undeclared|memory`, `stats memories <id>`, `stats projects`, `stats days`. `backsight stats defs <id>` gives a metric's definition and when it is judged.
+- Each view answers one question: quality (does memory show up and is it right), cost (context, time and server tokens), bank (size and what to review), pipeline (are writes arriving), system (checks, server, jobs).
+- Every rate carries `num` and `den`, its sample. Statuses use confidence bounds, not the raw point: a rate is `watch` or `bad` only when its interval is past the line.
+- `too_few` means not enough data yet and `no_data` means nothing to count: neither is a failure. Say so rather than calling it a problem.
+- Put flags after the view word: `backsight stats overview --days 30`, `--project <name>`.
+- Never run `backsight stats index rebuild` without the user: it replaces the local index.
+- Never pass `--text` unless the user asks for a memory's text.
+
 ## More
 
 The user documentation covers each topic in detail: [install](install.md), [daily use](daily-use.md), [commands](commands.md), [privacy](privacy.md), [backups and restore](backups-and-restore.md), [update](update.md), [uninstall](uninstall.md) (`backsight uninstall --plan --json` first, then its `--answer` ids), [troubleshooting](troubleshooting.md), [several PCs](several-pcs.md).

@@ -327,6 +327,6 @@ func (d mcpDeps) journal(live session.Live, e feedback.Event) {
 	}
 	j := feedback.NewJournal(dir, feedback.Common{Session: live.SessionID, Project: live.Project, Binary: buildinfo.Version, V: instructions.Version})
 	if err := j.AppendFolded(e); err != nil {
-		d.tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+		d.tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonJournalWrite))
 	}
 }

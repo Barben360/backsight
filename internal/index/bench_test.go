@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -50,7 +51,7 @@ func firstBuild(t testing.TB, stateDir string) (*Index, time.Duration) {
 // times one catch-up within ViewBudget; the ledger is unchanged.
 func catchUp15(t testing.TB, ix *Index, stateDir string, round int) time.Duration {
 	t.Helper()
-	appendRecent(t, stateDir, budgetSpec, 60, 10, round)
+	indexgen.AppendRecent(t, stateDir, budgetSpec, 60, 10, round)
 	start := time.Now()
 	fr, err := ix.CatchUp(context.Background(), ViewBudget)
 	d := time.Since(start)
@@ -69,7 +70,7 @@ func TestIndexBudgets(t *testing.T) {
 		t.Skip("time budgets are measured without -race and -short")
 	}
 	state := t.TempDir()
-	genState(t, state, budgetSpec)
+	indexgen.Generate(t, state, budgetSpec)
 	ix, build := firstBuild(t, state)
 	defer func() { _ = ix.Close() }()
 	// best of 3 catch-ups (each of new lines): a slow shared runner's
@@ -106,7 +107,7 @@ func TestIndexBudgets(t *testing.T) {
 
 func BenchmarkFirstBuild(b *testing.B) {
 	state := b.TempDir()
-	genState(b, state, budgetSpec)
+	indexgen.Generate(b, state, budgetSpec)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		clean(b, state)
@@ -119,7 +120,7 @@ func BenchmarkFirstBuild(b *testing.B) {
 
 func BenchmarkCatchUp15Minutes(b *testing.B) {
 	state := b.TempDir()
-	genState(b, state, budgetSpec)
+	indexgen.Generate(b, state, budgetSpec)
 	ix, _ := firstBuild(b, state)
 	defer func() { _ = ix.Close() }()
 	var total time.Duration

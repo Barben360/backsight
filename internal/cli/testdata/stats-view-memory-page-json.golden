@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "command": "stats memories",
+  "ok": true,
+  "data": {
+    "view": "memories",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": false
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": false,
+      "error": "not_found",
+      "last_ok": null
+    },
+    "metrics": {},
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 2
+      },
+      "memory": {
+        "row": {
+          "id": "mem-long-1",
+          "project": "p1",
+          "shown": 4,
+          "used": 1.4989341507460414,
+          "ignored": 0,
+          "rate": 1,
+          "boost": 0.008328069464635475,
+          "last_shown": "2026-10-08T05:00:01+02:00",
+          "last_used": null,
+          "state": ""
+        },
+        "kind": "",
+        "server_state": "",
+        "created": null,
+        "shows": [
+          {
+            "at": "2026-10-08T05:00:01+02:00",
+            "path": "prompt",
+            "outcome": "pending",
+            "turn": "t3",
+            "session": "sess-long-1",
+            "prompt": 3,
+            "rank": 1,
+            "rank_without_boost": null,
+            "score_without_boost": null
+          },
+          {
+            "at": "2026-10-08T05:00:00+02:00",
+            "path": "prompt",
+            "outcome": "pending",
+            "turn": "",
+            "session": "s1",
+            "prompt": null,
+            "rank": 1,
+            "rank_without_boost": null,
+            "score_without_boost": null
+          }
+        ],
+        "retirements": [],
+        "rank_histogram": {
+          "1": 2,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6+": 0,
+          "unranked": 0
+        },
+        "commands": [
+          "backsight read mem-long-1",
+          "backsight forget mem-long-1",
+          "backsight forget --restore mem-long-1"
+        ]
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

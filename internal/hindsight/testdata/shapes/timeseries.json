@@ -1,0 +1,1 @@
+{"bank_id":"backsight","period":"7d","trunc":"day","time_field":"created_at","buckets":[{"time":"2026-10-29T00:00:00Z","world":3,"experience":2,"observation":1},{"time":"2026-10-30T00:00:00","world":0,"experience":5,"observation":4}]}

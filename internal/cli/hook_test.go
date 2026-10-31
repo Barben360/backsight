@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/telemetry"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -412,6 +414,9 @@ func TestStopFailsOpenOnAnUnreadableJournal(t *testing.T) {
 	}
 	if tel := telemetryText(t, home); !strings.Contains(tel, `"event":"credit_check"`) || !strings.Contains(tel, `"outcome":"check_skipped"`) {
 		t.Errorf("telemetry:\n%s", tel)
+	}
+	if got := reasonsOf(t, home); !slices.Contains(got, telemetry.FeedbackReasonJournalRead) {
+		t.Errorf("the failed read is not a journal_read: %v", got)
 	}
 	if st, _ := sessions(home).Load("s1"); st.LastAssistant != "done" {
 		t.Errorf("reply not recorded: %q", st.LastAssistant)

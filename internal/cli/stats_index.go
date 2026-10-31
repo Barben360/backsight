@@ -27,6 +27,10 @@ func newStatsIndexCmd(e *env) *cobra.Command {
 		Use:   "index",
 		Short: "Show the local metrics index: its file, how current it is, the lines it skipped (reads only)",
 		Args:  usageArgs(cobra.NoArgs),
+		// Every command beneath it refuses the flags of a view.
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			return refuseViewFlags(cmd, append([]string{"days", "since", "until"}, viewFlagNames...)...)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, home, err := machine()
 			if err != nil {

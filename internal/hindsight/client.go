@@ -232,6 +232,42 @@ type BankStats struct {
 	FailedConsolidation  int            `json:"failed_consolidation"`
 	LastConsolidatedAt   time.Time      `json:"last_consolidated_at"`
 	LastMemoryWriteAt    time.Time      `json:"last_memory_write_at"`
+
+	TotalLinks         int            `json:"total_links"`
+	TotalObservations  int            `json:"total_observations"`
+	OperationsByStatus map[string]int `json:"operations_by_status"`
+	LinksByLinkType    map[string]int `json:"links_by_link_type"`
+
+	// Present names the fields the response carried, not null: a field it
+	// lacks decodes to 0, which is not the server saying 0.
+	Present map[string]bool `json:"-"`
+}
+
+// UnmarshalJSON reads the two times with serverTime: the server sends them
+// with or without a zone, and null or garbage is the zero time.
+func (s *BankStats) UnmarshalJSON(b []byte) error {
+	type plain BankStats
+	aux := struct {
+		*plain
+		LastConsolidatedAt string `json:"last_consolidated_at"`
+		LastMemoryWriteAt  string `json:"last_memory_write_at"`
+	}{plain: (*plain)(s)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	s.LastConsolidatedAt = serverTime(aux.LastConsolidatedAt)
+	s.LastMemoryWriteAt = serverTime(aux.LastMemoryWriteAt)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return err
+	}
+	s.Present = map[string]bool{}
+	for k, v := range fields {
+		if string(bytes.TrimSpace(v)) != "null" {
+			s.Present[k] = true
+		}
+	}
+	return nil
 }
 
 func (c *Client) BankStats(ctx context.Context, bank string) (BankStats, error) {
@@ -529,6 +565,31 @@ type Operation struct {
 	Status     string    `json:"status"`
 	DocumentID string    `json:"document_id"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	RetryCount int       `json:"retry_count"`
+	TaskType   string    `json:"task_type"`
+	// error_message is free text and is deliberately not decoded.
+}
+
+// UnmarshalJSON reads the times with serverTime (zone-less is UTC, null or
+// garbage is the zero time) and a null retry_count as 0.
+func (o *Operation) UnmarshalJSON(b []byte) error {
+	type plain Operation
+	aux := struct {
+		*plain
+		UpdatedAt  string `json:"updated_at"`
+		CreatedAt  string `json:"created_at"`
+		RetryCount *int   `json:"retry_count"`
+	}{plain: (*plain)(o)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	o.UpdatedAt, o.CreatedAt = serverTime(aux.UpdatedAt), serverTime(aux.CreatedAt)
+	o.RetryCount = 0
+	if aux.RetryCount != nil {
+		o.RetryCount = *aux.RetryCount
+	}
+	return nil
 }
 
 // Operations lists up to limit operations of bank with status (pending,

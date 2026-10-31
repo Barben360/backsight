@@ -277,6 +277,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				proj, err = noteTarget(deps.cfg, a.Project, live.Project, `project "transverse"`)
 			}
 			if err != nil {
+				deps.tw.Emit(telemetry.Store{Result: "refused", Kind: noteKind(a.Kind)})
 				deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Live: found})
 				return errorResult(err.Error()), nil, nil
 			}
@@ -291,6 +292,7 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 				similar = eng.Search(ctx, q)
 			}
 			res, err := storeNote(ctx, deps.dirs, deps.home, cfg, sec, deps.generation, live.SessionID, live.Cwd, a.Kind, proj, a.Text)
+			deps.tw.Emit(storeEvent(a.Kind, res, false))
 			deps.tw.Emit(telemetry.Tool{Name: "memory_store", MS: int(time.Since(start).Milliseconds()), Hits: len(similar.Hits), OK: err == nil, Live: found})
 			if res.Document == "" {
 				return errorResult(err.Error()), nil, nil
@@ -513,6 +515,7 @@ func (d mcpDeps) correct(ctx context.Context, key *mcpKey, live session.Live, ve
 	}
 	sec, _ := key.get()
 	res, err := storeNote(ctx, d.dirs, d.home, cfg, sec, d.generation, live.SessionID, live.Cwd, "correction", proj, correction, noteOptions{Replaces: ids, Evidence: evidence, checked: true})
+	d.tw.Emit(storeEvent("correction", res, true))
 	if err != nil {
 		return "", err
 	}

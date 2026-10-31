@@ -206,6 +206,29 @@ func retainEvents(r retain.Result, ms int) []telemetry.Retain {
 	return append(out, telemetry.Retain{Document: doc, Items: 1, Status: st, MS: ms})
 }
 
+// noteEvents are a notes flush's telemetry: one retain event per note it
+// tried, with a conversation flush's statuses (telemetryStatus): ok with
+// the send's duration, quarantined when set aside, retry for the note whose
+// failure stopped the flush (it stays queued). A note the hook logged
+// queued thus ends ok once a flush sends it.
+func noteEvents(fr retain.FlushResult) []telemetry.Retain {
+	out := make([]telemetry.Retain, 0, len(fr.Outcomes))
+	for _, o := range fr.Outcomes {
+		if st, ok := telemetryStatus[o.Status]; ok && o.Document != "" {
+			out = append(out, telemetry.Retain{Document: o.Document, Items: 1, Status: st, MS: o.MS})
+		}
+	}
+	return out
+}
+
+// emitNoteEvents logs a notes flush's noteEvents.
+func emitNoteEvents(stateDir string, fr retain.FlushResult) {
+	tw := telemetry.New(stateDir, telemetry.Common{BinaryVersion: buildinfo.Version})
+	for _, ev := range noteEvents(fr) {
+		tw.Emit(ev)
+	}
+}
+
 type flushReport struct {
 	Results []retain.Result `json:"results"`
 	Counts  map[string]int  `json:"counts"`

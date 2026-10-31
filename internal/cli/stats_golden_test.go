@@ -22,6 +22,12 @@ var goldenNow = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 // telLineAt is one telemetry line of e at ts.
 func telLineAt(t *testing.T, ts time.Time, e telemetry.Event) string {
 	t.Helper()
+	return telLineFor(t, ts, e, "s1", "p1")
+}
+
+// telLineFor is telLineAt for another session and project.
+func telLineFor(t *testing.T, ts time.Time, e telemetry.Event, session, project string) string {
+	t.Helper()
 	raw, err := json.Marshal(e)
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +36,7 @@ func telLineAt(t *testing.T, ts time.Time, e telemetry.Event) string {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	m["ts"], m["event"], m["session"], m["project"] = ts.UTC().Format("2006-01-02T15:04:05.000Z"), e.EventName(), "s1", "p1"
+	m["ts"], m["event"], m["session"], m["project"] = ts.UTC().Format("2006-01-02T15:04:05.000Z"), e.EventName(), session, project
 	out, _ := json.Marshal(m)
 	return string(out) + "\n"
 }
@@ -57,7 +63,7 @@ func fixedStatsFixture(t *testing.T) {
 		telemetry.Credit{Verdict: "used", IDs: 1, OK: true},
 		telemetry.CreditCheck{Outcome: "declared"},
 		telemetry.FeedbackSettle{Shows: 4, Credits: 1, Misses: 1},
-		telemetry.Retain{Document: "d1", Items: 2, Status: "ok", MS: 300},
+		telemetry.Retain{Document: "conversation:d1", Items: 2, Status: "ok", MS: 300},
 	} {
 		b.WriteString(telLineAt(t, at(30-i), e))
 	}
@@ -87,6 +93,8 @@ func TestStatsOutputIsUnchanged(t *testing.T) {
 		{"stats-default.golden", []string{"stats"}},
 		{"stats-14.golden", []string{"stats", "14"}},
 		{"stats-14-json.golden", []string{"stats", "14", "--json"}},
+		{"stats-parity.golden", []string{"stats", "--parity"}},
+		{"stats-parity-json.golden", []string{"stats", "--parity", "--json"}},
 		{"stats-window-parity.golden", []string{"stats", "--since", "2026-10-01", "--until", "2026-10-08", "--parity"}},
 		{"stats-window-parity-json.golden", []string{"stats", "--since", "2026-10-01", "--until", "2026-10-08", "--parity", "--json"}},
 	}
