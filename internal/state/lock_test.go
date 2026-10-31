@@ -11,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestAcquireWritesOwner(t *testing.T) {
@@ -72,7 +70,6 @@ func deadPID(t *testing.T) int {
 
 // A dead owner's lock is reported as stale and left in place (SPEC §11.4).
 func TestStaleLockReportedNotStolen(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows")
 	p := filepath.Join(t.TempDir(), "maintenance.lock")
 	stale := []byte(`{"pid":` + itoa(deadPID(t)) + `,"command":"restore","since":"2026-10-24T08:00:00Z"}`)
 	_ = os.WriteFile(p, stale, 0o600)
@@ -145,7 +142,6 @@ func TestOldUnreadableLockIsStale(t *testing.T) {
 }
 
 func TestBreakStale(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	dir := t.TempDir()
 	p := filepath.Join(dir, "x.lock")
 	writeOwner(t, p, Owner{PID: deadPID(t), Command: "jobs tick", Since: time.Now().UTC()})
@@ -165,7 +161,6 @@ func TestBreakStale(t *testing.T) {
 }
 
 func TestBreakStaleRefusesLiveOrChangedLock(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows")
 	p := filepath.Join(t.TempDir(), "x.lock")
 	l, _ := TryAcquire(p, "owner")
 	_, err := TryAcquire(p, "a")
@@ -218,7 +213,6 @@ func itoa(i int) string { b, _ := json.Marshal(i); return string(b) }
 // Acquire takes over a dead owner's lock and says so; a live owner's lock
 // stays held and untouched.
 func TestAcquireTakesOverOnlyAStaleLock(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	p := filepath.Join(t.TempDir(), "job-backfill.lock")
 	_ = os.WriteFile(p, []byte(`{"pid":`+itoa(deadPID(t))+`,"command":"retain backfill","since":"2026-10-24T08:00:00Z"}`), 0o600)
 	l, broke, err := Acquire(p, "jobs tick")

@@ -77,9 +77,9 @@ func (f sshInstallFlags) planCommand() string {
 // command is this run as a command line, for every resume: flag names and
 // paths, never a key.
 func (f sshInstallFlags) command() string {
-	cmd := "backsight server install --ssh " + shellWord(f.target)
+	cmd := "backsight server install --ssh " + resumeWord(f.target)
 	if f.private != "" {
-		cmd += " --private " + shellWord(f.private)
+		cmd += " --private " + resumeWord(f.private)
 	}
 	abs := func(p string) string {
 		if a, err := filepath.Abs(p); err == nil {
@@ -88,27 +88,27 @@ func (f sshInstallFlags) command() string {
 		return p
 	}
 	if f.source != "" {
-		cmd += " --source " + shellWord(abs(f.source))
+		cmd += " --source " + resumeWord(abs(f.source))
 	}
 	if f.keyEnv != "" {
-		cmd += " --llm-key-from-env " + shellWord(f.keyEnv)
+		cmd += " --llm-key-from-env " + resumeWord(f.keyEnv)
 	}
 	if f.keyFile != "" {
-		cmd += " --llm-key-from-file " + shellWord(abs(f.keyFile))
+		cmd += " --llm-key-from-file " + resumeWord(abs(f.keyFile))
 	}
 	for _, p := range installFlagAnswers {
 		if v, ok := f.flagValue(p[0]); ok {
-			cmd += " --" + p[0] + " " + shellWord(v)
+			cmd += " --" + p[0] + " " + resumeWord(v)
 		}
 	}
 	for _, a := range f.answers {
-		cmd += " --answer " + shellWord(a)
+		cmd += " --answer " + resumeWord(a)
 	}
 	if f.nonInteractive {
 		cmd += " --non-interactive"
 	}
 	if f.configDir != "" {
-		cmd += " --config-dir " + shellWord(abs(f.configDir))
+		cmd += " --config-dir " + resumeWord(abs(f.configDir))
 	}
 	return cmd
 }

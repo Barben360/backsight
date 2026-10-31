@@ -12,7 +12,6 @@ import (
 	"github.com/Barben360/backsight/internal/doctor"
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/stats"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestScrubHomeOnlyWhereItStartsAPath(t *testing.T) {
@@ -31,7 +30,6 @@ func TestScrubHomeOnlyWhereItStartsAPath(t *testing.T) {
 }
 
 func TestScrubResolvedHome(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: scrubbing a resolved home compares 8.3 short names (RUNNER~1) with long ones")
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "home")
 	if err := os.Symlink(real, link); err != nil {

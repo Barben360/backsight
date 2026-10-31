@@ -819,7 +819,7 @@ func runConnect(ctx context.Context, e *env, f connectFlags) (connectResult, err
 		resume, consentResume, planCmd = f.resume, f.resume+" --answer consent=yes", f.resume+" --plan"
 	case f.tokenFile != "":
 		if abs, err := filepath.Abs(f.tokenFile); err == nil {
-			resume = "backsight connect --token-file " + shellWord(abs) + " --answer consent=yes"
+			resume = "backsight connect --token-file " + resumeWord(abs) + " --answer consent=yes"
 		}
 	}
 	interactive := !e.json && !f.nonInteractive && stdinIsTerminal() && stdoutIsTerminal()

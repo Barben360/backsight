@@ -160,7 +160,6 @@ func TestAnExcludedRepositoryIsNeverEvidence(t *testing.T) {
 // under the kept checkout's name (never the remote's), and for nothing
 // when no kept checkout of that remote is known.
 func TestThrowawayClonesCountForTheirKeptCheckout(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	w := newWorld(t)
 	cache := filepath.Join(w.home, ".cache")
 	kept := repo(t, filepath.Join(w.home, "src", "tool-main"), "git@github.com:me/Tool.git") // kept checkout named otherwise
@@ -197,7 +196,6 @@ func TestThrowawayClonesCountForTheirKeptCheckout(t *testing.T) {
 // A clone of a repository kept out of memory never names nor receives it,
 // live or removed since.
 func TestAnExcludedRepositorysClonesAreNeverEvidence(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	w := newWorld(t)
 	private := repo(t, filepath.Join(w.home, "src", "private-notes"), "git@github.com:me/private-notes.git")
 	live := repo(t, filepath.Join(w.home, ".cache", "pn"), "git@github.com:me/private-notes.git")
@@ -229,7 +227,6 @@ func TestALaunchNamesakeIsNotOwn(t *testing.T) {
 }
 
 func TestRemovedWorktreesStillCountFromTheSessionsCommands(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	w := newWorld(t)
 	gone := filepath.Join(w.home, ".cache", "dev", "wt-feature")
 	r := w.repos(w.alpha)

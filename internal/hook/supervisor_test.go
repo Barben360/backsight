@@ -3,14 +3,13 @@ package hook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The test binary doubles as the child: TestMain runs childMain when the
@@ -36,6 +35,8 @@ func TestMain(m *testing.M) {
 				return []byte("not json"), nil
 			case "array":
 				return []byte(`[1,2]`), nil
+			case "fail":
+				return nil, errors.New("handler failed")
 			case "slow":
 				time.Sleep(300 * time.Millisecond)
 				return []byte(`{"systemMessage":"late but in time"}`), nil
@@ -82,7 +83,6 @@ func TestChildOutputPassesThroughWhenValid(t *testing.T) {
 // Every failure of the child prints nothing and is reported once (SPEC
 // §6.1): the handler fails here as a bug would, in every build.
 func TestEveryChildFailurePrintsNothing(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: a killed hook child is classified \"exit\" on Windows")
 	for _, c := range []struct {
 		behaviour, kind string
 		deadline        time.Duration
@@ -92,6 +92,7 @@ func TestEveryChildFailurePrintsNothing(t *testing.T) {
 		{"fault-hang", "timeout", 400 * time.Millisecond},
 		{"fault-kill", "killed", 5 * time.Second},
 		{"fault-exit2", "exit", 5 * time.Second},
+		{"fail", "exit", 5 * time.Second}, // the handler's own failure is no kill, on Windows too
 		{"garbage", "invalid_output", 5 * time.Second},
 		{"array", "invalid_output", 5 * time.Second},
 	} {
@@ -103,6 +104,31 @@ func TestEveryChildFailurePrintsNothing(t *testing.T) {
 		if c.behaviour == "fault-hang" && time.Since(start) > 3*time.Second {
 			t.Errorf("hang not cut at the deadline: %s", time.Since(start))
 		}
+	}
+}
+
+// A child the supervisor ends because its caller gave up was killed, not
+// timed out and not a failure of its own, on every OS (Windows has no
+// signal to tell it by).
+func TestAChildEndedForItsCallerIsKilled(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Supervisor{
+		Command: func(ctx context.Context, event string) *exec.Cmd {
+			c := exec.CommandContext(ctx, exe, "-test.run=^$", event)
+			c.Env = append(os.Environ(), "HOOK_TEST_CHILD=1", "HOOK_TEST_BEHAVIOUR=fault-hang")
+			return c
+		},
+		Deadline: func(string, []byte) time.Duration { return time.Minute },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { time.Sleep(500 * time.Millisecond); cancel() }()
+	out, f := s.Run(ctx, "stop", []byte(`{}`))
+	if len(out) != 0 || f == nil || f.Kind != "killed" {
+		t.Errorf("out %q failure %+v", out, f)
 	}
 }
 

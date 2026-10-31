@@ -25,7 +25,6 @@ import (
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
-	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/token"
 	"github.com/Barben360/backsight/scripts"
 )
@@ -810,7 +809,6 @@ func TestSSHInstallRefusesAHostItWouldBreak(t *testing.T) {
 // RF 5: a run that stopped on the host resumes: the release and the key
 // already there are not sent again, setup goes on.
 func TestSSHInstallRerunAfterAFailedSetupResumes(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: resume commands quote a Windows path POSIX-style")
 	_, src, h := sshMachine(t, "100.101.1.2")
 	h.setupErr = &output.Error{Code: output.Blocked, Message: "Docker is not running"}
 	code, out, errOut := run(t, sshInstallArgs(src, "--json")...)
@@ -873,7 +871,6 @@ func TestSSHInstallPlanChangesNothing(t *testing.T) {
 
 // The consent and the LLM key come before anything changes on the host.
 func TestSSHInstallNeedsConsentAndKeyBeforeTouchingTheHost(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: resume commands quote a Windows path POSIX-style")
 	_, src, h := sshMachine(t, "100.101.1.2")
 	code, out, _ := run(t, "server", "install", "--ssh", "u@h", "--source", src, "--llm-key-from-env", llmKeyEnv, "--non-interactive", "--json")
 	env := parseSSHInstall(t, out)

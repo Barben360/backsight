@@ -93,10 +93,10 @@ func (f uninstallFlags) resume() string {
 		}
 	}
 	if f.answersFile != "" {
-		cmd += " --answers-file " + shellWord(f.answersFile)
+		cmd += " --answers-file " + resumeWord(f.answersFile)
 	}
 	for _, a := range f.answers {
-		cmd += " --answer " + shellWord(a)
+		cmd += " --answer " + resumeWord(a)
 	}
 	return cmd
 }

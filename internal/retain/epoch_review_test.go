@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/state"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // history encodes epoch/backup pairs as the epoch document stores them.
@@ -266,7 +265,6 @@ func TestReconcileOlderThanTheHistoryUsesItsOwnReconcileTime(t *testing.T) {
 // killed half way): the server may be the old one, the restored one or
 // none.
 func TestARestoreMarkerHoldsEverySend(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	e := restoredEnv(t)
 	_ = os.WriteFile(e.f.Dirs.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(deadPID(t))+`,"command":"restore"}`), 0o600)
 	if err := state.WriteRestoreMarker(e.f.Dirs, state.RestoreMarker{Command: "restore", Safety: "/b/safety.tar.gz.age", Archive: "/b/a.tar.gz.age", StartedAt: clockAt(13, 20)}); err != nil {

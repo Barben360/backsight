@@ -382,7 +382,7 @@ func liveResume(configDir string) string {
 	if configDir == "" {
 		return "backsight verify --live"
 	}
-	return "backsight verify --live --config-dir " + shellQuote(configDir)
+	return "backsight verify --live --config-dir " + resumeQuote(configDir)
 }
 
 // liveText is the check's verdict; nothing when the check did not run

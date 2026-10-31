@@ -65,16 +65,16 @@ type exposeFlags struct {
 func (f exposeFlags) command() string {
 	cmd := "backsight server expose --loopback"
 	if f.private != "" {
-		cmd = "backsight server expose --private " + shellWord(f.private)
+		cmd = "backsight server expose --private " + resumeWord(f.private)
 	}
 	if f.plan {
 		cmd += " --plan"
 	}
 	if f.out != "" {
-		cmd += " --out " + shellWord(f.out)
+		cmd += " --out " + resumeWord(f.out)
 	}
 	for _, a := range f.answers {
-		cmd += " --answer " + shellWord(a)
+		cmd += " --answer " + resumeWord(a)
 	}
 	if f.json {
 		cmd += " --json"

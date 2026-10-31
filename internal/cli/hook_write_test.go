@@ -203,7 +203,6 @@ func gitRepo(t *testing.T, dir, remote string) {
 // the hook records the decision; a third-party clone's work stays with
 // the session's project.
 func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home := hookHome(t)
 	billing, shop, vendor := filepath.Join(home, "billing"), filepath.Join(home, "src", "shop"), filepath.Join(home, "build", "vendor-tool")
 	gitRepo(t, billing, "git@github.com:me/billing.git")
@@ -216,7 +215,7 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+testtool.JSONPath(billing)+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
 		agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
 		line := func(uuid, file string) string {
-			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + filepath.Join(file, "x.go") + `"}}]}}` + "\n"
+			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(file, "x.go")) + `"}}]}}` + "\n"
 		}
 		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
 		if c.sid == "s3" {

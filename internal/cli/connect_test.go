@@ -824,7 +824,7 @@ func TestConnectResumesAFailedBinding(t *testing.T) {
 	withConnectFault(t, "binding")
 	code, out, errOut := run(t, "connect", "--token-file", file, "--answer", "consent=yes", "--non-interactive", "--json")
 	env := parseConnect(t, out)
-	if code != output.Partial || env.Error == nil || env.Error.Resume != "backsight connect --token-file "+shellWord(file)+" --answer consent=yes" {
+	if code != output.Partial || env.Error == nil || env.Error.Resume != "backsight connect --token-file "+resumeWord(file)+" --answer consent=yes" {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
 	d := pathsOf(home)

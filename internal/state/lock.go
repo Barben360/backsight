@@ -71,7 +71,7 @@ func TryAcquire(path, command string) (*Lock, error) {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) {
+	if errors.Is(err, fs.ErrExist) || deletePending(path, err) {
 		return nil, held(path)
 	}
 	if err != nil {
@@ -123,7 +123,7 @@ func Inspect(path string) *HeldError {
 
 func held(path string) error {
 	e := &HeldError{Path: path}
-	raw, err := os.ReadFile(path)
+	raw, err := fsutil.ReadFileShared(path) // shared: a reader never makes the owner's delete wait
 	if err != nil {
 		return e // unreadable: held
 	}
@@ -177,7 +177,7 @@ func BreakStale(e *HeldError) error {
 	if !e.Stale {
 		return fmt.Errorf("%s: not stale, refusing to break it", e.Path)
 	}
-	raw, err := os.ReadFile(e.Path)
+	raw, err := fsutil.ReadFileShared(e.Path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -195,7 +195,7 @@ func (l *Lock) Owner() Owner { return l.owner }
 
 // Release removes the lock file if it still names this lock's owner.
 func (l *Lock) Release() error {
-	raw, err := os.ReadFile(l.path)
+	raw, err := fsutil.ReadFileShared(l.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}

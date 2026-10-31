@@ -498,7 +498,6 @@ func TestRetentionCorruptSettings(t *testing.T) {
 }
 
 func TestMaintenanceLock(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows")
 	f := newFixture(t)
 	expect(t, check(t, f.run(), "maintenance"), OK, "no maintenance")
 	if _, err := os.Stat(f.env.Dirs.MaintenanceLock()); err == nil {

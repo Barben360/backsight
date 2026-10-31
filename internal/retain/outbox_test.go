@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/hindsight"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func outbox(t *testing.T) Outbox {
@@ -139,7 +138,6 @@ func TestOutboxSizeLimits(t *testing.T) {
 }
 
 func TestOutboxConcurrentAppends(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: concurrent appends to the outbox lose notes on Windows")
 	o := outbox(t)
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {

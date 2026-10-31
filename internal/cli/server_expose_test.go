@@ -166,7 +166,6 @@ func TestExposeRefusesPublicAddress(t *testing.T) {
 }
 
 func TestExposeAsksCleartext(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: resume commands quote a Windows path POSIX-style")
 	fx := exposeHost(t)
 	before := fx.config(t)
 	f := filepath.Join(t.TempDir(), "join.token")

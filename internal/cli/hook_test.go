@@ -45,7 +45,6 @@ func runHookCmd(t *testing.T, input string, args ...string) (int, string) {
 // Whatever the child does, `backsight hook` exits 0 and prints nothing but
 // valid hook JSON; failures land in telemetry (SPEC §6.1, chaos per event).
 func TestHookAlwaysExitsZero(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: a killed hook child is classified \"exit\" or \"panic\" on Windows")
 	home := isolate(t)
 	events := []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure", "subagent-start", "subagent-stop", "stop", "session-end"}
 	for _, chaos := range []string{"panic", "fatal", "kill", "exit2"} {

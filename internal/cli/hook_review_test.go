@@ -15,7 +15,6 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // Block-2 review: a recall decision restarts the gap even when nothing was
@@ -244,7 +243,6 @@ func TestHooksUpdateStateWhileAFlushHoldsTheSession(t *testing.T) {
 }
 
 func TestParallelToolHooksKeepEveryStore(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: concurrent appends to the outbox lose notes on Windows")
 	home := hookHome(t)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

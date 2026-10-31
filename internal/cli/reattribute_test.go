@@ -92,7 +92,7 @@ func reportToMove(t *testing.T, home string, port int) {
 	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	agent := filepath.Join(home, ".claude", "projects", "-home-u-billing", "s1", "subagents", "agent-ag1.jsonl")
 	_ = os.MkdirAll(filepath.Dir(agent), 0o700)
-	edit := `{"type":"assistant","isSidechain":true,"uuid":"e%d","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Edit","input":{"file_path":"` + filepath.Join(shop, "cart.go") + `"}}]}}` + "\n"
+	edit := `{"type":"assistant","isSidechain":true,"uuid":"e%d","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(shop, "cart.go")) + `"}}]}}` + "\n"
 	_ = os.WriteFile(agent, []byte(fmt.Sprintf(edit, 1, 1)+fmt.Sprintf(edit, 2, 2)), 0o600)
 	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
 	if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "Fixed the cart.", DocumentID: "subagent:s1:ag1",
@@ -115,7 +115,6 @@ func reattributeEnv(t *testing.T) (string, *backupDocker) {
 // The move happens after a verified backup; a failed write exits 40 and
 // the same command finishes it; the run after that has nothing to do.
 func TestReattributeMovesAfterAVerifiedBackupAndFinishesAfterAFailure(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	_, dk := reattributeEnv(t)
 	docPatchFails.Store(true)
 	code, out, _ := run(t, "retain", "reattribute", "--json")
@@ -144,7 +143,6 @@ func TestReattributeMovesAfterAVerifiedBackupAndFinishesAfterAFailure(t *testing
 // Nothing is written while it is not safe: a backup that does not verify,
 // the maintenance lock held, a restore or an update not finished.
 func TestReattributeRefusesWhenItIsNotSafe(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	for name, c := range map[string]struct {
 		prep func(home string, dk *backupDocker)
 		code int
@@ -199,7 +197,6 @@ func TestReattributeWritesNothingAfterAConnectDuringItsBackup(t *testing.T) {
 // The claude-code provider runs the server's work on the subscription:
 // the moves wait for --allow-subscription, as a backfill does.
 func TestReattributeAsksBeforeUsingTheSubscription(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home, _ := reattributeEnv(t)
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
@@ -243,7 +240,6 @@ func deletedDocs() []string {
 // queue operations; a re-send that finds the queue busy changes nothing,
 // the run exits 20, and the next run completes it, once.
 func TestReattributeResendsBeforeRetagsAndWaitsForTheQueue(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home := devInstall(t, true)
 	port := fakeHindsight(t)
 	pointAt(t, home, port)
@@ -283,7 +279,6 @@ func TestReattributeResendsBeforeRetagsAndWaitsForTheQueue(t *testing.T) {
 // re-sends one (the mixed session stays, recorded for doctor), and a
 // failing server only marks its line "failed".
 func TestMaintainMovesAfterItsVerifiedBackupAndNeverResends(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home := devInstall(t, true)
 	port := fakeHindsight(t)
 	pointAt(t, home, port)
@@ -321,7 +316,6 @@ func TestMaintainMovesAfterItsVerifiedBackupAndNeverResends(t *testing.T) {
 // is not finished, or the provider runs on the subscription; the reason
 // is kept for doctor.
 func TestMaintainMovesNothingWhenItIsNotSafe(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	for name, c := range map[string]struct {
 		prep func(home string, dk *backupDocker)
 		line string

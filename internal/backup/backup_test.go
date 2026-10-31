@@ -291,7 +291,6 @@ func deadPID(t *testing.T) int {
 // A killed verify leaves its clear dump in staging: the next backup or
 // verify removes it, never the directory of a verify still running.
 func TestDeadVerifiesAreRemoved(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	staging := t.TempDir()
 	dead := map[string]string{
 		"verify-4242":        "", // no lock: an older layout, or killed between its steps

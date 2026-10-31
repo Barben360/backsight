@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // A .backsight.toml git tracks came with the repository: anyone who
@@ -212,7 +210,6 @@ func TestTrackedCheckWithoutAnyCommit(t *testing.T) {
 // A cwd reached through a symlink still stops at the repository top: the
 // git question never names a path outside the repository.
 func TestSymlinkedCwdIntoARepositoryKeepsItsUntrackedFile(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: attribution with git on Windows (git's forward slashes, C:\\ transcript paths, 8.3 short names, drive-letter case)")
 	home, r := fixture(t)
 	repo := filepath.Join(home, "work", "billing")
 	write(t, filepath.Join(repo, ".backsight.toml"), "project = \"billing-api\"\n")

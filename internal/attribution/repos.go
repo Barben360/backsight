@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/project"
 )
 
@@ -64,9 +65,9 @@ type resolved struct {
 // privacy.exclude_paths: a directory kept out of memory is never evidence,
 // so its project's name is never sent.
 func NewRepos(res *project.Resolver, home string, transverse []string, launchDir string, owners, exclude []string) *Repos {
-	r := &Repos{res: res, home: filepath.Clean(home), transverse: transverse, exclude: exclude, owners: map[string]bool{},
+	r := &Repos{res: res, home: fsutil.Normal(filepath.Clean(home)), transverse: transverse, exclude: exclude, owners: map[string]bool{},
 		gone: map[string]resolved{}, cache: map[string]resolved{}}
-	r.throwaway = []string{filepath.Join(r.home, ".cache"), "/tmp", filepath.Clean(os.TempDir())}
+	r.throwaway = throwaway(r.home)
 	for _, o := range owners {
 		if o = OwnerOf(o); o != "" {
 			r.owners[o] = true
@@ -100,7 +101,8 @@ func LaunchOwner(res *project.Resolver, home, launchDir string, exclude []string
 		return ""
 	}
 	main := res.Main(launchDir)
-	if main == "" || (&Repos{home: filepath.Clean(home), throwaway: []string{filepath.Join(filepath.Clean(home), ".cache"), "/tmp", filepath.Clean(os.TempDir())}}).under(main) {
+	h := fsutil.Normal(filepath.Clean(home))
+	if main == "" || (&Repos{home: h, throwaway: throwaway(h)}).under(main) {
 		return ""
 	}
 	o := Owner(res.Remote(launchDir))
@@ -108,6 +110,12 @@ func LaunchOwner(res *project.Resolver, home, launchDir string, exclude []string
 		return ""
 	}
 	return o
+}
+
+// throwaway are the throwaway places of home (in fsutil.Normal's
+// spelling): ~/.cache, /tmp and the temporary directory.
+func throwaway(home string) []string {
+	return []string{filepath.Join(home, ".cache"), fsutil.Normal(hostPath("/tmp")), fsutil.Normal(filepath.Clean(os.TempDir()))}
 }
 
 // Deny removes owners from the own ones (projects.deny_owners): their
@@ -187,7 +195,7 @@ func (r *Repos) Kept(paths []string) map[string]Checkout {
 }
 
 func (r *Repos) resolve(path string) resolved {
-	p := filepath.Clean(path)
+	p := fsutil.Normal(filepath.Clean(hostPath(path)))
 	if v, ok := r.cache[p]; ok {
 		return v
 	}
@@ -323,7 +331,7 @@ func (r *Repos) Learn(cmd, cwd string) {
 		// a worktree of a repository is that repository: same answer,
 		// exclusions and clones included
 		if v := r.resolve(repo); v.project != "" || v.clone {
-			r.gone[filepath.Clean(dst)] = v
+			r.gone[fsutil.Normal(dst)] = v
 		}
 	}
 	for _, m := range cloneRe.FindAllStringSubmatch(cmd, -1) {
@@ -336,6 +344,6 @@ func (r *Repos) Learn(cmd, cwd string) {
 			continue
 		}
 		// named, once removed, through its kept checkout like a live clone
-		r.gone[dst] = resolved{clone: true, remote: remote}
+		r.gone[fsutil.Normal(dst)] = resolved{clone: true, remote: remote}
 	}
 }

@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Barben360/backsight/internal/fsutil"
 )
 
 // MaxRelated caps the projects a .backsight.toml relates (decision 0071
@@ -50,13 +52,17 @@ type Resolver struct {
 type gitRoots struct{ top, main, common string } // empty when not in a repository
 
 func New(home string, transverse []string) *Resolver {
-	return &Resolver{home: filepath.Clean(home), transverse: transverse, roots: map[string]gitRoots{}, tracked: map[string]bool{}, trackedProbe: gitTracked}
+	return &Resolver{home: fsutil.Normal(filepath.Clean(home)), transverse: transverse, roots: map[string]gitRoots{}, tracked: map[string]bool{}, trackedProbe: gitTracked}
 }
 
 // Home is the home directory the resolver names projects under.
 func (r *Resolver) Home() string { return r.home }
 
+// Every path it takes and gives is in fsutil.Normal's spelling, git's
+// (C:/x on Windows) included, so that they compare with the transcript's
+// and the OS's.
 func (r *Resolver) git(dir string) gitRoots {
+	dir = fsutil.Normal(dir)
 	if g, ok := r.roots[dir]; ok {
 		return g
 	}
@@ -80,8 +86,8 @@ func (r *Resolver) git(dir string) gitRoots {
 	var g gitRoots
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").Output()
 	if lines := strings.Split(strings.TrimSpace(string(out)), "\n"); err == nil && len(lines) == 2 {
-		g.top = lines[0]
-		common := lines[1]
+		g.top = fsutil.Normal(lines[0])
+		common := fsutil.Normal(lines[1])
 		g.common = common
 		if filepath.Base(common) == ".git" {
 			g.main = filepath.Dir(common)
@@ -143,7 +149,7 @@ type view struct {
 // the one place that decides what a file is trusted for.
 func (r *Resolver) settings(cwd string) view {
 	var v view
-	cwd = filepath.Clean(cwd)
+	cwd = fsutil.Normal(filepath.Clean(cwd))
 	stop := r.git(cwd).top
 	inGit := stop != ""
 	if stop == "" && within(cwd, r.home) {
@@ -180,7 +186,7 @@ func (r *Resolver) settings(cwd string) view {
 		}
 		// A cwd reached through a symlink meets the (resolved) top only
 		// once resolved: the walk never leaves the repository.
-		if dir == stop || dir == filepath.Dir(dir) || (inGit && resolved(dir) == stop) {
+		if dir == stop || dir == filepath.Dir(dir) || (inGit && fsutil.Normal(resolved(dir)) == stop) {
 			break
 		}
 	}
@@ -267,7 +273,7 @@ func (r *Resolver) Project(cwd string) string {
 // is only cwd's basename, which a session's later directories do not get to
 // use (decision 0071, C2a).
 func (r *Resolver) Named(cwd string) (name string, strong bool) {
-	cwd = filepath.Clean(cwd)
+	cwd = fsutil.Normal(filepath.Clean(cwd))
 	claude := filepath.Join(r.home, ".claude")
 	if cwd == r.home || cwd == claude || strings.HasPrefix(cwd, claude+string(filepath.Separator)) {
 		return r.transverse[0], true
@@ -312,7 +318,7 @@ func (r *Resolver) Root(cwd string) string {
 	if g := r.git(cwd); g.main != "" {
 		return g.main
 	}
-	return filepath.Clean(cwd)
+	return fsutil.Normal(filepath.Clean(cwd))
 }
 
 // OptedOut reports whether sessions in cwd must not be retained, and why.
@@ -321,7 +327,7 @@ func (r *Resolver) OptedOut(cwd string, exclude []string) (bool, string) {
 	if strings.TrimSpace(cwd) == "" {
 		return true, "no working directory recorded"
 	}
-	cwd = filepath.Clean(cwd)
+	cwd = fsutil.Normal(filepath.Clean(cwd))
 	rcwd := resolved(cwd)
 	// A linked worktree lives outside its main checkout: excluding the
 	// project (its main checkout, what pause --project writes) covers it.
@@ -338,7 +344,7 @@ func (r *Resolver) OptedOut(cwd string, exclude []string) (bool, string) {
 		case strings.HasPrefix(e, "~/"):
 			e = filepath.Join(r.home, e[2:])
 		}
-		e = filepath.Clean(e)
+		e = fsutil.Normal(filepath.Clean(e))
 		for _, ex := range []string{e, resolved(e)} {
 			for _, c := range []string{cwd, rcwd} {
 				if under(c, ex) {

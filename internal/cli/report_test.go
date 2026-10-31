@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,7 +93,8 @@ func plantedMachine(t *testing.T) reportPlant {
 	_ = os.MkdirAll(d.SessionsDir(), 0o700)
 	_ = os.WriteFile(filepath.Join(d.SessionsDir(), "s1.json"), []byte(`{"last_prompt":"`+p.prompt+`"}`), 0o600)
 	// A failed update check that quotes the home and the secret.
-	_ = os.WriteFile(d.StateFile(), []byte(`{"schema_version":1,"plugin_version":"0.9.1","update_check":{"checked_at":"`+now.Format(time.RFC3339)+`","error":"reading `+home+`/.config/gh/hosts.yml: oauth_token: `+p.secret+`"}}`), 0o600)
+	checkErr, _ := json.Marshal("reading " + home + "/.config/gh/hosts.yml: oauth_token: " + p.secret) // a Windows home holds backslashes
+	_ = os.WriteFile(d.StateFile(), []byte(`{"schema_version":1,"plugin_version":"0.9.1","update_check":{"checked_at":"`+now.Format(time.RFC3339)+`","error":`+string(checkErr)+`}}`), 0o600)
 	return p
 }
 
@@ -155,16 +157,14 @@ func assertScrubbed(t *testing.T, planted map[string]string, wants []string) {
 }
 
 func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: report's redaction of the home directory is POSIX-style")
 	p := plantedMachine(t)
 	assertScrubbed(t, map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
 		"host": "annsbox", "project": "ann-secret-project"},
-		[]string{"[redacted:", "~/backsight/config/config.toml", "~/work/<host>/state.json", "worker backsight-<host>", "[server answer omitted]",
+		[]string{"[redacted:", testtool.JSONPath(filepath.Join("~", "backsight", "config", "config.toml")), "~/work/<host>/state.json", "worker backsight-<host>", "[server answer omitted]",
 			"doctor/server/error", "hook_failure/prompt/timeout", "recall/scope_failed", "session_state_error", "job/tick/partial"})
 }
 
 func TestReportJSONLinksAndSendsNothing(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: report's redaction of the home directory is POSIX-style")
 	p := plantedMachine(t)
 	before := tree(t, p.home)
 	code, out, _ := run(t, "report", "--json")
@@ -221,7 +221,10 @@ func TestReportJSONLinksAndSendsNothing(t *testing.T) {
 	}
 }
 
-// tree lists every file under dir with its size and modification time.
+// tree lists every file under dir with its size and modification time,
+// and every directory. A directory's time is left out: NTFS updates it in
+// its parent's listing lazily, after the files made in it, so it moves on
+// Windows with nobody writing.
 func tree(t *testing.T, dir string) string {
 	t.Helper()
 	var b strings.Builder
@@ -233,10 +236,11 @@ func tree(t *testing.T, dir string) string {
 		if err != nil {
 			return err
 		}
-		b.WriteString(p + " " + fi.Mode().String() + " " + fi.ModTime().String() + "\n")
-		if !d.IsDir() {
-			b.WriteString(itoa(int(fi.Size())) + "\n")
+		if d.IsDir() {
+			b.WriteString(p + " " + fi.Mode().String() + "\n")
+			return nil
 		}
+		b.WriteString(p + " " + fi.Mode().String() + " " + fi.ModTime().String() + "\n" + itoa(int(fi.Size())) + "\n")
 		return nil
 	})
 	return b.String()
@@ -387,14 +391,13 @@ func TestReportHidesTheEscapedBankAndAMultiLineAnswer(t *testing.T) {
 }
 
 func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
-	testtool.SkipWindows(t, "Task 3b: report's redaction of the home directory is POSIX-style")
 	home := isolate(t)
 	withClaude(t)
 	setUser(t, "annuser")
 	ext := t.TempDir()
 	bs := filepath.Join(ext, "run", "media", "annuser", "bs")
 	t.Setenv("BACKSIGHT_HOME", bs)
-	d, err := paths.Resolve("linux", home, os.Getenv)
+	d, err := paths.Resolve(runtime.GOOS, home, os.Getenv)
 	if err != nil || d.Data != filepath.Join(bs, "data") {
 		t.Fatalf("dirs %+v, %v", d, err)
 	}
@@ -428,7 +431,7 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 
 	assertScrubbed(t, map[string]string{"user": "annuser", "temp dir": ext, "BACKSIGHT_HOME": bs, "backup dir": vault,
 		"secrets.toml key": tomlKey, "secrets.toml phrase": phrase, ".env key": envKey},
-		[]string{"<config>/config.toml", "no backup in <backups>", "/run/media/<user>/usb/notes.json on <user>-laptop", "<state>/sessions/a.json and <bin>/backsight",
+		[]string{testtool.JSONPath(filepath.Join("<config>", "config.toml")), "no backup in <backups>", "/run/media/<user>/usb/notes.json on <user>-laptop", "<state>/sessions/a.json and <bin>/backsight",
 			"copy to <backups>/x.tar", "dial [redacted:secret]: refused", "lookup [redacted:secret]: no such host", "stat [redacted:secret]: gone"})
 }
 
