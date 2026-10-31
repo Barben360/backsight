@@ -4,8 +4,12 @@ package supervise
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,7 +17,25 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
+
+// The product's supervisor runs under conhost --headless, a console its
+// children share: CTRL_BREAK reaches them. A test run over SSH or by CI
+// may have none; it gets one (hidden from no one: session 0 or the
+// runner's), so the interrupt path is the one tested. Go's os.Stdout keeps
+// the handle it started with: the test output still goes to go test.
+func init() {
+	beforeTests = func() {
+		if _, err := windows.GetConsoleCP(); err == nil {
+			return
+		}
+		if r, _, err := kernel32.NewProc("AllocConsole").Call(); r == 0 {
+			fmt.Fprintln(os.Stderr, "supervise tests: no console, and AllocConsole failed:", err)
+		}
+	}
+}
 
 // pids reads the PIDs a fake's pid step wrote.
 func pids(t *testing.T, path string) []int {
@@ -229,3 +251,82 @@ func TestPostgresGetsARestrictedTokenWhenAdmin(t *testing.T) {
 		t.Errorf("the API's token: Administrators attributes %#x (present %v), want enabled", attrs, ok)
 	}
 }
+
+// Clients that open the pipe and close it at once, some before the
+// supervisor accepts them (ERROR_NO_DATA), cost nothing: the pipe still
+// answers.
+func TestPipeSurvivesClientsThatComeAndGo(t *testing.T) {
+	fast(t)
+	x := newFx(t, "churn", fakes{})
+	x.start(Options{})
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	name, err := pipeName(x.cfg.Project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := 0
+	for i := range 500 {
+		h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
+		if err != nil {
+			if errors.Is(err, windows.ERROR_PIPE_BUSY) {
+				continue
+			}
+			t.Fatalf("open %d: %v (the pipe is gone)", i, err)
+		}
+		opened++
+		if i%5 == 0 {
+			var n uint32
+			_ = windows.WriteFile(h, []byte("garbage"), &n, nil) // half a request
+		}
+		_ = windows.CloseHandle(h)
+	}
+	if opened < 100 {
+		t.Fatalf("only %d of 500 opens reached the pipe", opened)
+	}
+	for range 3 {
+		if st, err := ask(x.cfg.Project, opStatus); err != nil || st.DB != stateRunning {
+			t.Fatalf("status after %d clients came and went: %+v %v", opened, st, err)
+		}
+	}
+}
+
+// A kill ends the child's whole tree: what it started dies with it (the
+// venv launcher's python, postgres' backends).
+func TestKillEndsTheChildsTree(t *testing.T) {
+	dir := t.TempDir()
+	gc := filepath.Join(dir, "grandchild.pids")
+	fake := testtool.Write(t, dir, "grandchild", testtool.Fake{Script: "pid " + gc + "\nwaitfile " + filepath.Join(dir, "never")})
+	cmdExe := filepath.Join(os.Getenv("SYSTEMROOT"), "System32", "cmd.exe")
+	var out strings.Builder
+	p, err := startChild([]string{cmdExe, "/d", "/c", fake}, nil, nopCloser{&out}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.treeErr != nil {
+		t.Fatalf("the child has no job of its own (nested job assignment failed here): %v", p.treeErr)
+	}
+	waitFor(t, "the grandchild's pid", func() bool { return len(pids(t, gc)) == 1 })
+	grandchild := pids(t, gc)[0]
+	if err := p.kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the child did not exit after kill")
+	}
+	if !gone(grandchild, 2*time.Second) {
+		t.Errorf("grandchild %d still runs after its parent's kill", grandchild)
+		if gp, err := os.FindProcess(grandchild); err == nil {
+			_ = gp.Kill()
+		}
+	}
+}
+
+type nopCloser struct{ io.Writer }
+
+func (nopCloser) Close() error { return nil }

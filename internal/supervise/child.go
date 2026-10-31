@@ -12,16 +12,21 @@ import (
 	"time"
 )
 
-// proc is a running child: done receives its exit once.
+// proc is a running child: done receives its exit once; outDone closes
+// once its output is all in the log (every holder of the pipe gone).
 type proc struct {
-	cmd  *exec.Cmd
-	pid  int
-	done chan error
+	cmd     *exec.Cmd
+	pid     int
+	done    chan error
+	outDone chan struct{}
+	tree    tree  // the child and what it starts (job_*.go)
+	treeErr error // why the tree is the child alone, if it is
 }
 
 // startChild starts argv with exactly env (nothing inherited), in a
-// process group of its own, its stdout and stderr to out. postgres gets a
-// restricted token when this process is an administrator's (token_*.go).
+// process group and a process tree of its own (job_*.go: kill ends both),
+// its stdout and stderr to out. postgres gets a restricted token when
+// this process is an administrator's (token_*.go).
 //
 // The output goes through a pipe this process reads, and the child's
 // exit is waited for apart from it: postgres' backends inherit the pipe
@@ -51,29 +56,50 @@ func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, e
 		_ = r.Close()
 		return nil, err
 	}
+	p := &proc{cmd: cmd, pid: cmd.Process.Pid, done: make(chan error, 1), outDone: make(chan struct{})}
+	// The child starts suspended where its tree must hold it from its
+	// first instruction (Windows); ownTree resumes it in any case.
+	p.tree, p.treeErr = ownTree(cmd.Process)
 	go func() {
+		defer close(p.outDone)
 		_, _ = io.Copy(out, r)
 		_ = r.Close()
 		_ = out.Close()
 	}()
-	p := &proc{cmd: cmd, pid: cmd.Process.Pid, done: make(chan error, 1)}
-	go func() { p.done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		p.tree.close()
+		p.done <- err
+	}()
 	return p, nil
 }
 
+// kill ends the child and everything it started.
+func (p *proc) kill() error { return p.tree.kill(p.cmd.Process) }
+
 // stop interrupts the child's group (CTRL_BREAK on Windows, SIGTERM
-// elsewhere), kills it after wait, and returns its exit.
-func (p *proc) stop(wait time.Duration) error {
+// elsewhere), kills its tree after wait, and returns whether it had to be
+// killed and its exit.
+func (p *proc) stop(wait time.Duration) (killed bool, err error) {
 	if err := interrupt(p.cmd.Process); err != nil {
-		_ = kill(p.cmd.Process)
+		_ = p.kill()
+		return true, <-p.done
 	}
 	select {
 	case err := <-p.done:
-		return err
+		return false, err
 	case <-time.After(wait):
 	}
-	_ = kill(p.cmd.Process)
-	return <-p.done
+	_ = p.kill()
+	return true, <-p.done
+}
+
+// waitOutput waits up to d for the child's last output to reach its log.
+func (p *proc) waitOutput(d time.Duration) {
+	select {
+	case <-p.outDone:
+	case <-time.After(d):
+	}
 }
 
 // runTool runs a short tool (pg_isready, pg_ctl stop) with exactly env

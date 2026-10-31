@@ -56,6 +56,9 @@ type listener interface {
 	Close() error
 }
 
+// errListenerClosed is a listener's Accept after Close: serve's only end.
+var errListenerClosed = errors.New("the control channel is closed")
+
 // maxRequest bounds a request line.
 const maxRequest = 4096
 
@@ -121,8 +124,13 @@ func serve(l listener, h handler) <-chan struct{} {
 		}()
 		for {
 			c, err := l.Accept()
-			if err != nil {
+			if errors.Is(err, errListenerClosed) {
 				return
+			}
+			if err != nil {
+				// One client's trouble: the channel keeps answering.
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 			wg.Add(1)
 			go func() {
@@ -143,7 +151,9 @@ func answerOne(c conn, h handler, done <-chan struct{}) {
 	}
 	var req Request
 	if json.Unmarshal(line, &req) != nil || !slices.Contains(ops, req.Op) {
-		return
+		// Malformed or unknown (a newer client): the status answers,
+		// with Proto telling the client what this supervisor speaks.
+		req.Op = opStatus
 	}
 	// api-stop waits for the API to stop: no deadline while the loop acts.
 	_ = c.SetDeadline(time.Time{})

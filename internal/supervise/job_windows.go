@@ -107,11 +107,94 @@ func interrupt(p *os.Process) error {
 	return windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(p.Pid))
 }
 
-// kill ends p.
-func kill(p *os.Process) error {
+// tree is a child's own unnamed kill-on-close Job Object, nested in the
+// supervisor's: kill ends the child and what it started (the venv
+// launcher's python, postgres' backends), and closing it once the child
+// exited ends whatever it left. A zero job (the assignment failed) leaves
+// the child alone to kill.
+type tree struct{ job windows.Handle }
+
+// ownTree puts the child, started suspended (childAttr), in a job of its
+// own, then resumes it: nothing it starts can escape the job. The child
+// is resumed whatever fails, and the error says why it has no tree.
+func ownTree(p *os.Process) (tree, error) {
+	t, err := newTree(p.Pid)
+	if rerr := resume(uint32(p.Pid)); rerr != nil {
+		err = errors.Join(err, fmt.Errorf("resuming the child: %w", rerr))
+	}
+	return t, err
+}
+
+func newTree(pid int) (tree, error) {
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return tree{}, fmt.Errorf("creating the child's job object: %w", err)
+	}
+	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		_ = windows.CloseHandle(job)
+		return tree{}, fmt.Errorf("setting the child's job object: %w", err)
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		_ = windows.CloseHandle(job)
+		return tree{}, fmt.Errorf("opening the child: %w", err)
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+	if err := windows.AssignProcessToJobObject(job, h); err != nil {
+		_ = windows.CloseHandle(job)
+		return tree{}, fmt.Errorf("nesting the child's job object in the supervisor's: %w", err)
+	}
+	return tree{job: job}, nil
+}
+
+// resume resumes the threads of the suspended process pid (Go's exec
+// closes the main thread's handle).
+func resume(pid uint32) error {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = windows.CloseHandle(snap) }()
+	te := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
+	resumed := 0
+	for err = windows.Thread32First(snap, &te); err == nil; err = windows.Thread32Next(snap, &te) {
+		if te.OwnerProcessID != pid {
+			continue
+		}
+		th, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, te.ThreadID)
+		if err != nil {
+			return err
+		}
+		_, rerr := windows.ResumeThread(th)
+		_ = windows.CloseHandle(th)
+		if rerr != nil {
+			return rerr
+		}
+		resumed++
+	}
+	if resumed == 0 {
+		return fmt.Errorf("no thread of process %d found", pid)
+	}
+	return nil
+}
+
+// kill ends the child's job, else the child alone.
+func (t tree) kill(p *os.Process) error {
+	if t.job != 0 {
+		return windows.TerminateJobObject(t.job, 1)
+	}
 	err := p.Kill()
 	if errors.Is(err, os.ErrProcessDone) {
 		return nil
 	}
 	return err
+}
+
+// close closes the job: what the child left running dies with it.
+func (t tree) close() {
+	if t.job != 0 {
+		_ = windows.CloseHandle(t.job)
+	}
 }

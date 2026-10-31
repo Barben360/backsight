@@ -26,11 +26,12 @@ func noWindow() uint32 {
 }
 
 // childAttr: a process group of its own (CTRL_BREAK reaches the child
-// alone), and for postgres a restricted token when this process is an
+// alone), started suspended, and for postgres a restricted token when this process is an
 // administrator's: postgres refuses to run with administrative rights
 // (E34 W4).
 func childAttr(postgres bool) (*syscall.SysProcAttr, func(), error) {
-	attr := &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | noWindow()}
+	// Suspended until ownTree has it in its own job (job_windows.go).
+	attr := &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED | noWindow()}
 	if !postgres || !isAdmin() {
 		return attr, func() {}, nil
 	}

@@ -23,8 +23,14 @@ func socketPath(project string) (string, error) {
 
 type unixListener struct{ l net.Listener }
 
-func (u unixListener) Accept() (conn, error) { return u.l.Accept() }
-func (u unixListener) Close() error          { return u.l.Close() }
+func (u unixListener) Accept() (conn, error) {
+	c, err := u.l.Accept()
+	if errors.Is(err, net.ErrClosed) {
+		return nil, errListenerClosed
+	}
+	return c, err
+}
+func (u unixListener) Close() error { return u.l.Close() }
 
 // listen opens the project's socket; the caller holds the lock, so a
 // socket left there is a dead supervisor's.

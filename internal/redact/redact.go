@@ -491,19 +491,19 @@ func Encodings(v string) []string {
 	return out
 }
 
-// MinValue is the shortest value Values replaces.
-const MinValue = 6
+// minValue is the shortest value Values replaces.
+const minValue = 6
 
-// Values is text with every one of values (MinValue bytes or more) and its
-// URL-escaped forms replaced by [redacted]: the runtime's redaction of the
-// known secrets, for error messages quoting a tool and for the native
-// server's logs (a database URL carries the password escaped). Unlike
-// Text, it applies no rule: a value is replaced wherever it appears, and
-// nothing else is.
-func Values(text string, values []string) string {
+// EnvSecretKey names the environment-file entries that hold a secret even
+// unquoted (the server's .env and server.env).
+var EnvSecretKey = regexp.MustCompile(`(?i)(key|pass|secret|token)`)
+
+// Forms are what Values replaces for values: each one of minValue bytes or
+// more and its URL-escaped forms (Encodings), longest first.
+func Forms(values []string) []string {
 	var forms []string
 	for _, v := range values {
-		if len(v) < MinValue {
+		if len(v) < minValue {
 			continue
 		}
 		for _, f := range Encodings(v) {
@@ -513,7 +513,16 @@ func Values(text string, values []string) string {
 		}
 	}
 	sort.SliceStable(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
-	for _, f := range forms {
+	return forms
+}
+
+// Values is text with every one of Forms(values) replaced by [redacted]:
+// the runtime's redaction of the known secrets, for error messages quoting
+// a tool and for the native server's logs (a database URL carries the
+// password escaped). Unlike Text, it applies no rule: a value is replaced
+// wherever it appears, and nothing else is.
+func Values(text string, values []string) string {
+	for _, f := range Forms(values) {
 		text = strings.ReplaceAll(text, f, "[redacted]")
 	}
 	return text

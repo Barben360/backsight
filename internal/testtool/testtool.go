@@ -20,10 +20,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -48,6 +50,7 @@ import (
 //	waitfile <path>          wait until the file exists (a process that runs until told to stop)
 //	nofile <path> <code>     exit now with the code when the file does not exist
 //	pid <path>               append this process's PID and a newline to the file
+//	ignoresignals            ignore interrupts from now on (SIGINT, SIGTERM; CTRL_BREAK on Windows)
 //
 // A step may start with a condition on an argument, `<n>=<value>` or
 // `<n>!=<value>` (n from 1; a missing argument is ""), and runs only when
@@ -297,6 +300,15 @@ func (s spec) step(step string, args []string, stdin io.Reader, stdout, stderr i
 			n, _ := strconv.Atoi(f[2])
 			return n, true
 		}
+	case "ignoresignals":
+		// Notify, not Ignore: on Windows an ignored CTRL_BREAK still ends
+		// the process (the runtime handles only notified ones).
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			for range c {
+			}
+		}()
 	case "pid":
 		w, err := os.OpenFile(f[1], os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,8 +41,13 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	beforeTests()
 	os.Exit(m.Run())
 }
+
+// beforeTests prepares the process for the tests (Windows: a console, as
+// conhost gives the product's supervisor).
+var beforeTests = func() {}
 
 // fx is a project's supervise.json with testtool fakes for postgres,
 // pg_isready, pg_ctl and the API, all files in dir.
@@ -673,5 +679,206 @@ func TestAskWithoutSupervisorIsNotRunning(t *testing.T) {
 	}
 	if _, err := ask(p, "reboot"); err == nil || errors.Is(err, ErrNotRunning) {
 		t.Errorf("Ask with an unknown request: %v, want a refusal", err)
+	}
+}
+
+// The numbers of 0080's Global Constraints, as the product runs them.
+func TestDefaultTimings(t *testing.T) {
+	want := map[string][2]time.Duration{
+		"readiness poll":    {tm.readyPoll, 100 * time.Millisecond},
+		"readiness timeout": {tm.readyWait, 300 * time.Second},
+		"API stop wait":     {tm.apiStopWait, 30 * time.Second},
+		"DB stop wait":      {tm.dbStopWait, 60 * time.Second},
+		"backoff start":     {tm.backoffMin, time.Second},
+		"backoff cap":       {tm.backoffMax, 5 * time.Minute},
+		"backoff reset":     {tm.resetAfter, 60 * time.Second},
+	}
+	for name, v := range want {
+		if v[0] != v[1] {
+			t.Errorf("%s %v, want %v", name, v[0], v[1])
+		}
+	}
+	if outputWait != 2*time.Second {
+		t.Errorf("output wait %v, want 2s", outputWait)
+	}
+}
+
+// A postgres that never answers pg_isready is killed after the readiness
+// timeout and started again with the backoff.
+func TestReadinessTimeoutKillsAndRestartsPostgres(t *testing.T) {
+	fast(t)
+	tm.readyWait = 300 * time.Millisecond
+	fa := &fakeAfter{fire: 1}
+	tm.after = fa.after
+	x := newFx(t, "readytimeout", fakes{isReady: "exit 2"})
+	x.start(Options{})
+	waitFor(t, "postgres started again", func() bool { return calls(t, x.pg) >= 2 })
+	if got := fa.got(); len(got) == 0 || got[0] != tm.backoffMin {
+		t.Errorf("restart delays %v, want the backoff's first, %v", got, tm.backoffMin)
+	}
+	l := x.log("supervisor")
+	if !strings.Contains(l, "pg_isready did not answer within 300ms: killing it") || !strings.Contains(l, "db exited") {
+		t.Errorf("supervisor log: want the timeout, the kill, the exit:\n%s", l)
+	}
+	if n := calls(t, x.api); n != 0 {
+		t.Errorf("the API started %d times on a database that never answered", n)
+	}
+}
+
+// An API that ignores the interrupt is killed once apiStopWait is over.
+func TestAPIIgnoringTheInterruptIsKilled(t *testing.T) {
+	fast(t)
+	tm.apiStopWait = 500 * time.Millisecond
+	x := newFx(t, "stubborn", fakes{api: "ignoresignals\npid {dir}/api.pids\nwaitfile {dir}/never"})
+	x.start(Options{})
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	waitFor(t, "the API's pid", func() bool { return strings.TrimSpace(readFile(x.file("api.pids"))) != "" })
+	start := time.Now()
+	st, err := ask(x.cfg.Project, opAPIStop)
+	if err != nil || st.API != stateStopped {
+		t.Fatalf("api-stop: %+v %v", st, err)
+	}
+	if d := time.Since(start); d < tm.apiStopWait {
+		t.Errorf("api-stop answered after %s, before the %s the API is given", d, tm.apiStopWait)
+	}
+	if l := x.log("supervisor"); !strings.Contains(l, "api killed, still running 500ms after the interrupt") {
+		t.Errorf("supervisor log: want the kill after the wait:\n%s", l)
+	}
+}
+
+// A line longer than maxLine is written in parts, never cutting through
+// a secret or one of its URL forms.
+func TestRedactorNeverCutsASecretInALongLine(t *testing.T) {
+	secret := "long-line s3cr@t"
+	for _, form := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret)} {
+		path := filepath.Join(t.TempDir(), "p-api.log")
+		r, err := openRotating(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := newLineRedactor(r, []string{secret})
+		size := 70 << 10
+		cut := size - keepTail
+		line := []byte(strings.Repeat("a", size))
+		copy(line[cut-len(form)/2:], form) // straddling where the part is cut
+		_, _ = l.Write(line)
+		_, _ = l.Write([]byte("\n"))
+		_ = l.Close()
+		_ = r.Close()
+		got := readFile(path)
+		for _, f := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret), form[:len(form)/2] + form[len(form)/2:]} {
+			if strings.Contains(got, f) {
+				t.Errorf("form %q: the log carries %q", form, f)
+			}
+		}
+		if strings.Count(got, "[redacted]") != 1 || len(got) != size-len(form)+len("[redacted]")+1 {
+			t.Errorf("form %q: %d bytes, %d [redacted]; want the line whole with one", form, len(got), strings.Count(got, "[redacted]"))
+		}
+	}
+}
+
+// A child's last words, printed as it stops, are in its log once Run
+// returned.
+func TestLastOutputReachesTheLog(t *testing.T) {
+	fast(t)
+	x := newFx(t, "lastwords", fakes{
+		pg:  "write {dir}/ready x\nwaitfile {dir}/pg-stop\nsleep 100\nstdout database system is shut down",
+		api: "waitfile {dir}/never",
+	})
+	done := x.start(Options{NoAPI: true})
+	waitStatus(t, x.cfg.Project, stateRunning, stateStopped)
+	if _, err := ask(x.cfg.Project, opStop); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(t, done, 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if l := x.log("db"); !strings.Contains(l, "database system is shut down") {
+		t.Errorf("db log lost postgres' last line:\n%s", l)
+	}
+}
+
+// A request the supervisor does not know, or cannot read, is answered
+// with the status: its Proto tells a newer client what it speaks, and Ask
+// never takes an answering supervisor for a missing one.
+func TestUnknownRequestIsAnsweredWithTheStatus(t *testing.T) {
+	fast(t)
+	x := newFx(t, "unknown", fakes{})
+	x.start(Options{Version: "8.8.8"})
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	for _, line := range []string{`{"op":"reboot"}`, `not json`} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		c, err := dial(ctx, x.cfg.Project)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = c.Write([]byte(line + "\n"))
+		raw, err := io.ReadAll(c)
+		_ = c.Close()
+		cancel()
+		var st Status
+		if err != nil || json.Unmarshal(raw, &st) != nil || st.Proto != Proto || st.Version != "8.8.8" || st.DB != stateRunning {
+			t.Errorf("request %q answered %q (%v), want the status", line, raw, err)
+		}
+	}
+	if n := calls(t, x.ctl); n != 0 {
+		t.Errorf("an unknown request ran pg_ctl %d times", n)
+	}
+}
+
+// server.env is read at each API start, and its secrets with it: a key
+// rotated between api-stop and api-start is redacted too.
+func TestAPIStartRefreshesTheRedactedSecrets(t *testing.T) {
+	fast(t)
+	oldKey, newKey := "sk-old-key-1234567890", "sk-new-key-0987654321"
+	x := newFx(t, "rotate", fakes{api: "env HINDSIGHT_API_LLM_API_KEY\nwaitfile {dir}/never"})
+	write := func(key string) {
+		if err := os.WriteFile(x.cfg.EnvFile, []byte("HINDSIGHT_API_LLM_API_KEY="+key+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(oldKey)
+	x.start(Options{}) // neither key among Options.Secrets
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	waitFor(t, "the API's first output", func() bool { return strings.Count(x.log("api"), "\n") >= 1 })
+	if _, err := ask(x.cfg.Project, opAPIStop); err != nil {
+		t.Fatal(err)
+	}
+	write(newKey)
+	if _, err := ask(x.cfg.Project, opAPIStart); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the API's second output", func() bool { return strings.Count(x.log("api"), "\n") >= 2 })
+	for _, name := range []string{"api", "supervisor"} {
+		l := x.log(name)
+		if strings.Contains(l, oldKey) || strings.Contains(l, newKey) {
+			t.Errorf("%s log carries a key:\n%s", name, l)
+		}
+	}
+	if got := strings.Count(x.log("api"), "[redacted]"); got != 2 {
+		t.Errorf("api log has %d [redacted], want 2:\n%s", got, x.log("api"))
+	}
+}
+
+// Output still coming after the child exited (a process it started holds
+// the pipe, as postgres' backends do) reaches the log, within outputWait.
+func TestOutputAfterTheChildExitedReachesTheLog(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: on Windows the child's own job ends what it left once it exits")
+	fast(t)
+	x := newFx(t, "afterwords", fakes{})
+	// postgres is a shell that leaves a writer behind, then runs the fake.
+	x.cfg.Postgres = []string{"/bin/sh", "-c", "(sleep 0.3; echo backend: last words) & exec " + x.pg}
+	done := x.start(Options{NoAPI: true})
+	waitStatus(t, x.cfg.Project, stateRunning, stateStopped)
+	if _, err := ask(x.cfg.Project, opStop); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(t, done, 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if l := x.log("db"); !strings.Contains(l, "backend: last words") {
+		t.Errorf("db log lost the output written after postgres exited:\n%s", l)
 	}
 }

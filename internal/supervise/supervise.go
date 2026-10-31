@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,6 +67,10 @@ const (
 	stateStopped    = "stopped"
 	stateRefused    = "refused"
 )
+
+// outputWait bounds the wait for the children's last output before the
+// logs close (a postgres backend may hold the pipe a moment longer).
+const outputWait = 2 * time.Second
 
 // refusedFile, under the root (server.env's directory), holds the reason
 // of a refusal for server status and doctor; it is removed once the guard
@@ -122,6 +127,13 @@ type supervisor struct {
 
 	mu sync.Mutex
 	st Status
+	// envSecrets are server.env's secrets, read at each API start: a
+	// rotated key is redacted from then on.
+	envSecrets []string
+
+	// outputs are the children's output copies, waited for (a bounded
+	// time) before the logs close.
+	outputs []*proc
 
 	ops chan opRequest
 }
@@ -185,6 +197,7 @@ func Run(ctx context.Context, cfg Config, opts Options) error {
 	}()
 	s.logf("supervisor of %s started (pid %d, backsight %s, server %s)", cfg.Project, os.Getpid(), opts.Version, cfg.Venv)
 	err = s.loop(ctx)
+	s.waitOutputs(outputWait)
 	s.logf("supervisor of %s stopped", cfg.Project)
 	return err
 }
@@ -212,7 +225,63 @@ func (s *supervisor) logPath(what string) string {
 // root is the native runtime's root: server.env's directory.
 func (s *supervisor) root() string { return filepath.Dir(s.cfg.EnvFile) }
 
-func (s *supervisor) redact(text string) string { return redact.Values(text, s.opts.Secrets) }
+// secrets are the values the logs never carry: Options.Secrets and
+// server.env's secret-named values (and its database URL's password).
+func (s *supervisor) secrets() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append(append([]string{}, s.opts.Secrets...), s.envSecrets...)
+}
+
+func (s *supervisor) redact(text string) string { return redact.Values(text, s.secrets()) }
+
+// envSecretValues are the secrets among server.env's pairs: the values of
+// secret-named keys and the password of any URL value.
+func envSecretValues(pairs []string) []string {
+	var out []string
+	for _, kv := range pairs {
+		k, v, _ := strings.Cut(kv, "=")
+		if redact.EnvSecretKey.MatchString(k) {
+			out = append(out, v)
+		}
+		if u, err := url.Parse(v); err == nil && u.User != nil {
+			if pw, ok := u.User.Password(); ok {
+				out = append(out, pw)
+			}
+		}
+	}
+	return out
+}
+
+// started records p's output copy and why it has no process tree, if so.
+func (s *supervisor) started(name string, p *proc) {
+	s.mu.Lock()
+	// The finished copies go: a supervisor restarting for days keeps none.
+	s.outputs = slices.DeleteFunc(s.outputs, func(q *proc) bool {
+		select {
+		case <-q.outDone:
+			return true
+		default:
+			return false
+		}
+	})
+	s.outputs = append(s.outputs, p)
+	s.mu.Unlock()
+	if p.treeErr != nil {
+		s.logf("%s (pid %d) runs without a job of its own, a kill ends it alone: %v", name, p.pid, p.treeErr)
+	}
+}
+
+// waitOutputs gives the children's last output up to d to reach the logs.
+func (s *supervisor) waitOutputs(d time.Duration) {
+	deadline := time.Now().Add(d)
+	s.mu.Lock()
+	outs := s.outputs
+	s.mu.Unlock()
+	for _, p := range outs {
+		p.waitOutput(max(time.Until(deadline), 0))
+	}
+}
 
 // logf writes a line to the supervisor's log, redacted.
 func (s *supervisor) logf(format string, args ...any) {
@@ -316,7 +385,7 @@ func (s *supervisor) loop(ctx context.Context) error {
 			}
 			if res.err != nil {
 				s.logf("db: %v: killing it", res.err)
-				_ = kill(r.db.cmd.Process)
+				_ = r.db.kill()
 				continue
 			}
 			r.dbReady = true
@@ -399,11 +468,12 @@ func (s *supervisor) startDB(ctx context.Context, r *run) error {
 	if err := os.Remove(filepath.Join(s.root(), refusedFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logf("removing %s: %v", refusedFile, err)
 	}
-	p, err := startChild(s.cfg.Postgres, s.cfg.Env, newLineRedactor(s.dbLog, s.opts.Secrets), true)
+	p, err := startChild(s.cfg.Postgres, s.cfg.Env, newLineRedactor(s.dbLog, s.secrets()), true)
 	if err != nil {
 		retry("starting postgres", err)
 		return nil
 	}
+	s.started("db", p)
 	r.db, r.dbUp, r.dbReady = p, tm.now(), false
 	r.dbGen++
 	s.logf("db started (pid %d)", p.pid)
@@ -459,11 +529,15 @@ func (s *supervisor) startAPI(r *run) {
 		retry("reading its environment", err)
 		return
 	}
-	p, err := startChild(s.cfg.API, append(append([]string{}, s.cfg.Env...), pairs...), newLineRedactor(s.apiLog, s.opts.Secrets), false)
+	s.mu.Lock()
+	s.envSecrets = envSecretValues(pairs)
+	s.mu.Unlock()
+	p, err := startChild(s.cfg.API, append(append([]string{}, s.cfg.Env...), pairs...), newLineRedactor(s.apiLog, s.secrets()), false)
 	if err != nil {
 		retry("starting it", err)
 		return
 	}
+	s.started("api", p)
 	r.api, r.apiUp = p, tm.now()
 	s.logf("api started (pid %d)", p.pid)
 	s.set(func(st *Status) { st.API = stateRunning })
@@ -477,7 +551,10 @@ func (s *supervisor) stopAPI(r *run) {
 		return
 	}
 	s.logf("api stopping (pid %d)", r.api.pid)
-	err := r.api.stop(tm.apiStopWait)
+	killed, err := r.api.stop(tm.apiStopWait)
+	if killed {
+		s.logf("api killed, still running %s after the interrupt: %v", tm.apiStopWait, exitText(err))
+	}
 	s.logf("api stopped: %v", exitText(err))
 	r.api = nil
 }
@@ -493,7 +570,7 @@ func (s *supervisor) stopAll(ctx context.Context, r *run) {
 		s.logf("db stopping (pid %d): %s", r.db.pid, strings.Join(s.cfg.PGCtlStop, " "))
 		deadline := time.Now().Add(tm.dbStopWait)
 		sctx, cancel := context.WithDeadline(ctx, deadline)
-		if err := runTool(sctx, s.cfg.PGCtlStop, s.cfg.Env, newLineRedactor(s.dbLog, s.opts.Secrets)); err != nil {
+		if err := runTool(sctx, s.cfg.PGCtlStop, s.cfg.Env, newLineRedactor(s.dbLog, s.secrets())); err != nil {
 			s.logf("db: pg_ctl stop: %v", err)
 		}
 		cancel()
@@ -502,7 +579,7 @@ func (s *supervisor) stopAll(ctx context.Context, r *run) {
 			s.logf("db stopped: %v", exitText(err))
 		case <-time.After(time.Until(deadline)):
 			s.logf("db still running after %s: killing it", tm.dbStopWait)
-			_ = kill(r.db.cmd.Process)
+			_ = r.db.kill()
 			s.logf("db killed: %v", exitText(<-r.db.done))
 		}
 		r.db = nil

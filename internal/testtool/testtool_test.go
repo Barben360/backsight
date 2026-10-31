@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -174,5 +175,42 @@ func TestFakeWaitsForAFileAndRecordsItsPID(t *testing.T) {
 	}
 	if _, _, code := runFake(t, probe, ""); code != 0 {
 		t.Errorf("probe with its file: code %d, want 0", code)
+	}
+}
+
+// ignoresignals keeps the fake running through an interrupt: a server that
+// does not stop when asked. (Windows' CTRL_BREAK is the supervisor's
+// tests'.)
+func TestFakeIgnoresSignals(t *testing.T) {
+	SkipWindows(t, "linux-only: os.Process.Signal cannot interrupt on Windows")
+	dir := t.TempDir()
+	stop := filepath.Join(dir, "stop")
+	path := Write(t, dir, "stubborn", Fake{Script: "ignoresignals\nwrite " + filepath.Join(dir, "up") + " x\nwaitfile " + stop})
+	cmd := exec.Command(path)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(dir, "up")); err == nil {
+			break
+		}
+		if time.Since(start) > 10*time.Second {
+			t.Fatal("the fake never started")
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Process.Signal(os.Interrupt)
+	select {
+	case err := <-done:
+		t.Fatalf("exited on an interrupt: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := os.WriteFile(stop, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("after its file: %v", err)
 	}
 }

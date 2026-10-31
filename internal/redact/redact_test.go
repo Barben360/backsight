@@ -381,7 +381,7 @@ func TestRedactMasksAnEncodedToken(t *testing.T) {
 }
 
 // Values replaces each known value, escaped as a URL carries it too, and
-// leaves a value shorter than MinValue and everything else alone.
+// leaves a value shorter than minValue and everything else alone.
 func TestValuesReplacesKnownSecretsAndTheirURLForms(t *testing.T) {
 	pw := "p@ss/w:rd 9x"
 	text := "pw " + pw + " url postgresql://hindsight:" + url.UserPassword("hindsight", pw).String()[len("hindsight:"):] + "@127.0.0.1:5432/hindsight key sk-long-key short abc"
