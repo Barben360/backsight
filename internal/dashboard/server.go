@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -27,6 +28,18 @@ type Config struct {
 	Now     func() time.Time // nil: time.Now
 	Version string           // the footer's
 	Stderr  io.Writer        // progress and hints; nil: io.Discard
+
+	// OpenIndex opens the metrics index (index.Open with the command
+	// line's options, progress on Stderr); nil: no data layer, every data
+	// route answers that the index cannot be read.
+	OpenIndex func(ctx context.Context) (Index, error)
+	// NeedsBuild reports that the index is missing or was never ingested
+	// (index.Inspect): it is then built in the background. nil: never.
+	NeedsBuild func(ctx context.Context) (bool, error)
+	// Source is what the views read besides the index: the configuration,
+	// the server (a GET-only client, nil when none is configured) and the
+	// doctor. Index, Fresh and Now are set per request.
+	Source metrics.Source
 }
 
 // ErrPortTaken: the fixed port asked for is in use.
@@ -54,6 +67,7 @@ type Server struct {
 	pid      int
 	srv      *http.Server
 	sessions *sessions
+	data     *data
 	link     Link
 
 	idleMu    sync.Mutex
@@ -63,8 +77,10 @@ type Server struct {
 // Start refuses while another dashboard runs or starts (a *RunningError,
 // read before binding), listens on 127.0.0.1:cfg.Port (ErrPortTaken when
 // that port is in use), claims the runtime file with the bound port,
-// removes every login code a previous run left and, last, mints the first
-// code (FirstLink). A Start that fails after a step undoes it.
+// removes every login code a previous run left, opens the metrics index
+// (or starts its first build in the background), starts the doctor's first
+// run and, last, mints the first code (FirstLink). A Start that fails
+// after a step undoes it.
 func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	if cfg.Port != 0 && (cfg.Port < 1024 || cfg.Port > 65535) {
 		return nil, fmt.Errorf("port %d: give 0 for a free port, or a port from 1024 to 65535", cfg.Port)
@@ -116,6 +132,12 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	if err := SweepCodes(cfg.Dirs, s.now(), true); err != nil {
 		return nil, err
 	}
+	s.data = newData(ctx, cfg)
+	undo = append(undo, func() { _ = s.data.stop() })
+	if err := s.data.start(ctx); err != nil {
+		return nil, err
+	}
+	s.data.warm()
 
 	s.srv = &http.Server{
 		Handler:                      s.guard(s.routes()),
@@ -143,8 +165,9 @@ func (s *Server) Port() int { return s.port }
 
 // Serve answers requests until ctx ends ("interrupted") or nobody signed
 // in used the dashboard for idleLimit ("idle"). It then lets the running
-// requests finish for up to shutdownGrace, closes what is left, removes
-// the runtime file and every login code.
+// requests finish for up to shutdownGrace, closes what is left, stops the
+// first build and the detached work, closes the index, removes the runtime
+// file and every login code.
 func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 	// The requests' context outlives ctx: a request running at the stop
 	// gets the shutdown grace, then the forced close cancels it.
@@ -181,7 +204,7 @@ func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 			errs = append(errs, fmt.Errorf("serve the dashboard: %w", err))
 		}
 	}
-	errs = append(errs, Release(s.cfg.Dirs, s.pid), SweepCodes(s.cfg.Dirs, s.now(), true))
+	errs = append(errs, s.data.stop(), Release(s.cfg.Dirs, s.pid), SweepCodes(s.cfg.Dirs, s.now(), true))
 	return reason, errors.Join(errs...)
 }
 

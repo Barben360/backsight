@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,9 +49,15 @@ type harness struct {
 	t      *testing.T
 	s      *Server
 	dirs   paths.Dirs
+	home   string
 	port   int
 	clock  *clock
 	client *http.Client
+
+	// The data layer's fakes, set by withIndex, withServer and withDoctor.
+	ix         *fakeIndex
+	srv        *fakeServer
+	doctorRuns atomic.Int64
 
 	cancel context.CancelFunc
 	done   chan struct{} // closed when Serve returns
@@ -58,10 +65,26 @@ type harness struct {
 	err    error
 }
 
-// newHarness starts a dashboard on a free port; opts adjust the Config
-// (whose Dirs are set) before Start. The cleanup cancels Serve and waits
-// for it, so a package variable a test set is restored only after.
+// harnessOpt adjusts a harness's Config before Start; h has its t, dirs,
+// home and clock.
+type harnessOpt func(h *harness, c *Config)
+
+// newHarness starts a dashboard on a free port, without a data layer; opts
+// adjust the Config (whose Dirs are set) before Start. The cleanup cancels
+// Serve and waits for it, so a package variable a test set is restored
+// only after.
 func newHarness(t *testing.T, opts ...func(*Config)) *harness {
+	t.Helper()
+	hopts := make([]harnessOpt, 0, len(opts))
+	for _, o := range opts {
+		hopts = append(hopts, func(_ *harness, c *Config) { o(c) })
+	}
+	return newDataHarness(t, hopts...)
+}
+
+// newDataHarness is newHarness with options that may install the data
+// layer's fakes (withIndex, withServer, withDoctor, withNeedsBuild).
+func newDataHarness(t *testing.T, opts ...harnessOpt) *harness {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("BACKSIGHT_HOME", home)
@@ -71,9 +94,16 @@ func newHarness(t *testing.T, opts ...func(*Config)) *harness {
 		t.Fatal(err)
 	}
 	c := &clock{t: indexgen.Now}
+	h := &harness{
+		t: t, dirs: dirs, home: home, clock: c, done: make(chan struct{}),
+		client: &http.Client{
+			Transport:     &http.Transport{Proxy: nil},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}
 	cfg := Config{Dirs: dirs, Now: c.now, Version: "test"}
 	for _, o := range opts {
-		o(&cfg)
+		o(h, &cfg)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s, err := Start(ctx, cfg)
@@ -81,13 +111,7 @@ func newHarness(t *testing.T, opts ...func(*Config)) *harness {
 		cancel()
 		t.Fatalf("Start: %v", err)
 	}
-	h := &harness{
-		t: t, s: s, dirs: dirs, port: s.Port(), clock: c, cancel: cancel, done: make(chan struct{}),
-		client: &http.Client{
-			Transport:     &http.Transport{Proxy: nil},
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	}
+	h.s, h.port, h.cancel = s, s.Port(), cancel
 	go func() {
 		h.reason, h.err = s.Serve(ctx)
 		close(h.done)

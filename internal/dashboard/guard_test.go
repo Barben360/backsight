@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/paths"
 )
 
@@ -544,9 +545,23 @@ func TestCleanedPathRedirectStaysLocal(t *testing.T) {
 // first code cannot be minted) releases the claim and the port, and
 // returns an error.
 func TestFailedStartAfterClaimUndoes(t *testing.T) {
+	// waitOpen is an index open waiting for its context's end; openEnded
+	// receives how it ended.
+	openEnded := make(chan error, 1)
+	waitOpen := func(ctx context.Context) error {
+		<-ctx.Done()
+		openEnded <- ctx.Err()
+		return ctx.Err()
+	}
+	failRand := func(t *testing.T) {
+		t.Cleanup(func() { randRead = rand.Read })
+		randRead = func([]byte) (int, error) { return 0, errors.New("no randomness") }
+	}
 	for _, c := range []struct {
 		name  string
 		spoil func(t *testing.T, d paths.Dirs)
+		cfg   func(*Config)
+		check func(t *testing.T)
 	}{
 		{"sweep", func(t *testing.T, d paths.Dirs) {
 			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
@@ -560,10 +575,27 @@ func TestFailedStartAfterClaimUndoes(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = os.Chmod(codes, 0o700) })
-		}},
-		{"mint", func(t *testing.T, _ paths.Dirs) {
-			t.Cleanup(func() { randRead = rand.Read })
-			randRead = func([]byte) (int, error) { return 0, errors.New("no randomness") }
+		}, nil, nil},
+		{"mint", func(t *testing.T, _ paths.Dirs) { failRand(t) }, nil, nil},
+		{"needs build", func(*testing.T, paths.Dirs) {}, func(c *Config) {
+			c.OpenIndex = func(ctx context.Context) (Index, error) { return nil, waitOpen(ctx) }
+			c.NeedsBuild = func(context.Context) (bool, error) { return false, errors.New("cannot inspect") }
+		}, nil},
+		{"open", func(*testing.T, paths.Dirs) {}, func(c *Config) {
+			c.OpenIndex = func(context.Context) (Index, error) { return nil, index.ErrUnreadable }
+		}, nil},
+		{"mint during the first build", func(t *testing.T, _ paths.Dirs) { failRand(t) }, func(c *Config) {
+			c.OpenIndex = func(ctx context.Context) (Index, error) { return nil, waitOpen(ctx) }
+			c.NeedsBuild = func(context.Context) (bool, error) { return true, nil }
+		}, func(t *testing.T) {
+			select {
+			case err := <-openEnded:
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("the build's open ended with %v, want context.Canceled", err)
+				}
+			default:
+				t.Error("Start returned with the first build still running")
+			}
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -571,6 +603,9 @@ func TestFailedStartAfterClaimUndoes(t *testing.T) {
 			c.spoil(t, d)
 			p := freePort(t)
 			cfg := Config{Dirs: d, Port: p}
+			if c.cfg != nil {
+				c.cfg(&cfg)
+			}
 			s, err := Start(context.Background(), cfg)
 			if err == nil {
 				_ = s.ln.Close()
@@ -582,6 +617,9 @@ func TestFailedStartAfterClaimUndoes(t *testing.T) {
 			}
 			_ = ln.Close()
 			noRuntimeFile(t, cfg)
+			if c.check != nil {
+				c.check(t)
+			}
 		})
 	}
 }
