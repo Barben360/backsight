@@ -467,3 +467,29 @@ func nonNil[T any](xs []T) []T {
 	}
 	return xs
 }
+
+// toolUse writes a tool_use line (a main-agent or subagent tool call of
+// turn n) at ts.
+func (x *fx) toolUse(ts time.Time, session, project string, n int, name string, subagent bool) {
+	x.t.Helper()
+	x.tel(ts, telemetry.Raw{Name: "tool_use", Fields: map[string]any{"n": n, "name": name, "ids": 0, "subagent": subagent}}, session, project)
+}
+
+// prompts writes count prompts of project, one per hour going back from
+// start (the first one an hour before it), each in its own session
+// prefix-<i> as turn 1; edit changes the i-th prompt before it is
+// written. It returns the sessions' names.
+func (x *fx) prompts(project, prefix string, start time.Time, count int, edit func(i int, p *telemetry.Prompt)) []string {
+	x.t.Helper()
+	var sessions []string
+	for i := range count {
+		p := telemetry.Prompt{N: 1, Decision: "recall", Plen: 80}
+		if edit != nil {
+			edit(i, &p)
+		}
+		s := fmt.Sprintf("%s-%d", prefix, i)
+		x.tel(start.Add(-time.Duration(i+1)*time.Hour), p, s, project)
+		sessions = append(sessions, s)
+	}
+	return sessions
+}
