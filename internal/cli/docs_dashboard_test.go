@@ -38,7 +38,7 @@ func TestAgentGuideDashboardRules(t *testing.T) {
 
 func TestPrivacyDashboardSection(t *testing.T) {
 	requireInSection(t, "../../docs/privacy.md", "The dashboard",
-		"dashboard.json", "codes/", "claim.lock", "127.0.0.1", "extensions", "localhost", "2 hours",
+		"dashboard.json", "codes/", "`<hash>.claim`", "claim.lock", "127.0.0.1", "extensions", "localhost", "2 hours",
 		"**`--open`** puts the one-time link on the browser's command line",
 		"can read every page and any memory's text", "Local development servers",
 		"Over `ssh -L`", "`backsight report` never includes `dashboard/`", "--purge-local",
@@ -63,5 +63,6 @@ func TestTroubleshootingDashboardErrorPages(t *testing.T) {
 		"`misdirected request` (421)", "`this page opens only from its own links or the address bar` (403)",
 		"webmail", "\"This dashboard needs a fresh link\" (401)", "opened `localhost:<port>`",
 		"`only GET and HEAD` (405)", "`the memory text shows only in a page you open",
-		"backsight dashboard link", "already running", "replaced on its own")
+		"backsight dashboard link", "already running", "replaced on its own",
+		"process id was reused", "delete `dashboard/dashboard.json` in the state directory (`backsight paths` shows it)")
 }
