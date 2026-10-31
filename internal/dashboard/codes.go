@@ -35,6 +35,14 @@ var (
 // hex characters. Only its SHA-256 is kept, as the name of an empty file
 // in CodesDir whose mtime is now: the clock AcceptCode compares with.
 func MintCode(d paths.Dirs, now time.Time) (string, error) {
+	code, err := mintCode(d, now)
+	if err != nil {
+		return "", startFail(StartLoginCode, err)
+	}
+	return code, nil
+}
+
+func mintCode(d paths.Dirs, now time.Time) (string, error) {
 	var b [16]byte
 	if _, err := randRead(b[:]); err != nil {
 		return "", fmt.Errorf("draw a login code: %w", err)

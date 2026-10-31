@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -114,12 +113,6 @@ func fileClass(err error) string {
 	return "io"
 }
 
-// indexFailure marks an error of the metrics index (opened or inspected):
-// the only start failures reported as an index problem.
-type indexFailure struct{ error }
-
-func (e indexFailure) Unwrap() error { return e.error }
-
 // startServer is dashboard.Start; tests replace it.
 var startServer = dashboard.Start
 
@@ -142,22 +135,18 @@ func dashboardStartError(port int, err error) error {
 	case errors.Is(err, dashboard.ErrPortTaken):
 		return &output.Error{Code: output.Usage, Message: fmt.Sprintf("port %d is taken: choose another --port or leave it out for a free one", port)}
 	}
-	var ixf indexFailure
-	switch {
-	case errors.As(err, &ixf):
-		return indexError(err)
-	case strings.HasPrefix(err.Error(), "listen on 127.0.0.1"):
-		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not listen on 127.0.0.1:%s (%s)", strconv.Itoa(port), fileClass(err))}
-	case codeFailure(err):
-		return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not create a login code (%s)", fileClass(err))}
+	var se *dashboard.StartError
+	if errors.As(err, &se) {
+		switch se.Kind {
+		case dashboard.StartIndex:
+			return indexError(err)
+		case dashboard.StartListen:
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not listen on 127.0.0.1:%s (%s)", strconv.Itoa(port), fileClass(err))}
+		case dashboard.StartLoginCode:
+			return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not create a login code (%s)", fileClass(err))}
+		}
 	}
 	return &output.Error{Code: output.Blocked, Message: fmt.Sprintf("could not write the dashboard's runtime file or its directory in the state directory (%s)", fileClass(err))}
-}
-
-// codeFailure: err comes from MintCode.
-func codeFailure(err error) bool {
-	m := err.Error()
-	return strings.HasPrefix(m, "draw a login code") || strings.HasPrefix(m, "write a login code") || strings.HasPrefix(m, "create the login codes directory")
 }
 
 func runDashboardLink(e *env) error {
@@ -198,14 +187,14 @@ func dashboardConfig(_ context.Context, d paths.Dirs, home string, port int, std
 		OpenIndex: func(ctx context.Context) (dashboard.Index, error) {
 			ix, err := index.Open(ctx, indexOptionsAt(d, home, stderr))
 			if err != nil {
-				return nil, indexFailure{err} // wrapped, not mapped: the dashboard tells the update-in-progress error apart
+				return nil, err // raw: the dashboard tells the update-in-progress error apart
 			}
 			return ix, nil
 		},
 		NeedsBuild: func(ctx context.Context) (bool, error) {
 			st, err := index.Inspect(ctx, indexOptionsAt(d, home, nil))
 			if err != nil {
-				return false, indexFailure{err}
+				return false, err
 			}
 			return !st.Exists || st.IngestedAt.IsZero(), nil
 		},

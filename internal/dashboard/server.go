@@ -46,6 +46,29 @@ type Config struct {
 // ErrPortTaken: the fixed port asked for is in use.
 var ErrPortTaken = errors.New("the port is taken")
 
+// StartKind says which part of the start failed.
+type StartKind string
+
+// The parts of a start that can fail with a *StartError.
+const (
+	StartListen      StartKind = "listen"       // binding 127.0.0.1
+	StartRuntimeFile StartKind = "runtime-file" // the dashboard directory, claim lock or runtime file
+	StartLoginCode   StartKind = "login-code"   // minting or sweeping login codes
+	StartIndex       StartKind = "index"        // opening or inspecting the metrics index
+)
+
+// StartError is a failure of Start or MintCode, with the part that failed.
+// Its text may hold a path: callers show a sentence of their own.
+type StartError struct {
+	Kind StartKind
+	Err  error
+}
+
+func (e *StartError) Error() string { return e.Err.Error() }
+func (e *StartError) Unwrap() error { return e.Err }
+
+func startFail(kind StartKind, err error) error { return &StartError{Kind: kind, Err: err} }
+
 // StopReason says why Serve returned.
 type StopReason string
 
@@ -95,12 +118,12 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 		cfg.Stderr = io.Discard
 	}
 	if err := privateDirs(cfg.Dirs); err != nil {
-		return nil, err
+		return nil, startFail(StartRuntimeFile, err)
 	}
 	// The runtime file's times are the system's (file mtimes, process
 	// start times): it is judged on the real clock, not cfg.Now.
 	if r, alive, err := Running(cfg.Dirs, time.Now()); err != nil {
-		return nil, err
+		return nil, startFail(StartRuntimeFile, err)
 	} else if alive {
 		return nil, &RunningError{Port: r.Port}
 	}
@@ -111,7 +134,7 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 		if addrInUse(err) {
 			return nil, fmt.Errorf("port %d: %w", cfg.Port, ErrPortTaken)
 		}
-		return nil, fmt.Errorf("listen on 127.0.0.1: %w", err)
+		return nil, startFail(StartListen, fmt.Errorf("listen on 127.0.0.1: %w", err))
 	}
 	var undo []func()
 	defer func() {
@@ -127,18 +150,22 @@ func Start(ctx context.Context, cfg Config) (_ *Server, err error) {
 	pid, port := os.Getpid(), ln.Addr().(*net.TCPAddr).Port
 	started := time.Now().UTC()
 	if err := Claim(cfg.Dirs, Runtime{PID: pid, Port: port, StartedAt: started}, started); err != nil {
-		return nil, err
+		var running *RunningError
+		if errors.As(err, &running) {
+			return nil, err
+		}
+		return nil, startFail(StartRuntimeFile, err)
 	}
 	undo = append(undo, func() { _ = Release(cfg.Dirs, pid) })
 	s := &Server{cfg: cfg, now: cfg.Now, ln: ln, port: port, pid: pid, sessions: newSessions(cfg.Now)}
 	s.lastTouch = s.now().Round(0)
 	if err := SweepCodes(cfg.Dirs, s.now(), true); err != nil {
-		return nil, err
+		return nil, startFail(StartLoginCode, err)
 	}
 	s.data = newData(ctx, cfg)
 	undo = append(undo, func() { _ = s.data.stop() })
 	if err := s.data.start(ctx); err != nil {
-		return nil, err
+		return nil, startFail(StartIndex, err)
 	}
 	s.data.warm()
 

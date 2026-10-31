@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -513,24 +514,56 @@ func TestDashboardStartFailureIsNotAnIndexProblem(t *testing.T) {
 	}
 }
 
-// Each class of start failure has its own sentence, and none shows a path.
+// Each kind of start failure has its own sentence, and none shows a path.
+// The kinds come from the dashboard's real failure paths where a test can
+// provoke them; a listen failure other than a taken port cannot be.
 func TestDashboardStartErrorClasses(t *testing.T) {
+	viewsFixture(t)
+	d, home, _ := machine()
+	cfg, err := dashboardConfig(context.Background(), d, home, 0, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.NeedsBuild = func(context.Context) (bool, error) {
+		return false, &fs.PathError{Op: "open", Path: "/secret/index", Err: fs.ErrPermission}
+	}
+	_, indexErr := dashboard.Start(context.Background(), cfg)
 	denied := &fs.PathError{Op: "open", Path: "/secret/state/x", Err: fs.ErrPermission}
 	for _, c := range []struct {
+		name string
 		err  error
 		code int
 		want string
 	}{
-		{fmt.Errorf("listen on 127.0.0.1: %w", denied), output.Blocked, "could not listen on 127.0.0.1:4242 (permission denied)"},
-		{fmt.Errorf("write a login code: %w", denied), output.Blocked, "could not create a login code (permission denied)"},
-		{fmt.Errorf("create the dashboard runtime file: %w", denied), output.Blocked, "could not write the dashboard's runtime file"},
-		{fmt.Errorf("open the metrics index: %w", indexFailure{denied}), output.Blocked, "metrics index"},
-		{fmt.Errorf("port 4242: %w", dashboard.ErrPortTaken), output.Usage, "port 4242 is taken: choose another --port or leave it out for a free one"},
+		{"index", indexErr, output.Blocked, "metrics index"},
+		{"listen", &dashboard.StartError{Kind: dashboard.StartListen, Err: denied}, output.Blocked, "could not listen on 127.0.0.1:4242 (permission denied)"},
+		{"login code", &dashboard.StartError{Kind: dashboard.StartLoginCode, Err: denied}, output.Blocked, "could not create a login code (permission denied)"},
+		{"runtime file", &dashboard.StartError{Kind: dashboard.StartRuntimeFile, Err: denied}, output.Blocked, "could not write the dashboard's runtime file"},
+		{"port taken", fmt.Errorf("port 4242: %w", dashboard.ErrPortTaken), output.Usage, "port 4242 is taken: choose another --port or leave it out for a free one"},
 	} {
 		err := dashboardStartError(4242, c.err)
 		if output.CodeOf(err) != c.code || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "/secret") {
-			t.Errorf("%v: exit %d, %q; want %d, %q", c.err, output.CodeOf(err), err, c.code, c.want)
+			t.Errorf("%s: exit %d, %q; want %d, %q", c.name, output.CodeOf(err), err, c.code, c.want)
 		}
+	}
+	var se *dashboard.StartError
+	if !errors.As(indexErr, &se) || se.Kind != dashboard.StartIndex {
+		t.Errorf("Start's index failure: %v", indexErr)
+	}
+}
+
+// A login code that cannot be written is its own failure, not an index
+// problem, and names no path.
+func TestDashboardLoginCodeFailure(t *testing.T) {
+	viewsFixture(t)
+	d, _, _ := machine()
+	if err := os.MkdirAll(dashboard.CodesDir(d), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyDir(t, dashboard.CodesDir(d))
+	code, out, errOut := run(t, "dashboard")
+	if code != output.Blocked || out != "" || !strings.Contains(errOut, "could not create a login code (permission denied)") || strings.Contains(errOut, d.State) {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
 
@@ -540,7 +573,7 @@ func TestDashboardStoppedBeforeServing(t *testing.T) {
 	viewsFixture(t)
 	old := startServer
 	startServer = func(ctx context.Context, _ dashboard.Config) (*dashboard.Server, error) {
-		return nil, fmt.Errorf("open the metrics index: %w", indexFailure{ctx.Err()})
+		return nil, fmt.Errorf("open the metrics index: %w", &dashboard.StartError{Kind: dashboard.StartIndex, Err: ctx.Err()})
 	}
 	t.Cleanup(func() { startServer = old })
 	ctx, cancel := context.WithCancel(context.Background())
