@@ -64,7 +64,7 @@ func pipeline(e env, w Window) (map[string]Observation, map[string]Metric, error
 	absent := func(id, reason string) {
 		obs[id], met[id] = Observation{Absent: true, Reason: reason}, Metric{}
 	}
-	age, err := backlogAge(e.tx, e.now)
+	age, err := e.backlogAge()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -155,6 +155,36 @@ SELECT MIN(t) FROM (
 	return max(0, now.Sub(time.UnixMilli(oldest.Int64))), nil
 }
 
+// documentStatus is document_status as a map, each document's last status
+// overall ("" when it carries none), read once per transaction: every
+// window of the pipeline family needs it whole.
+func (e env) documentStatus() (map[string]string, error) {
+	if e.memo != nil && e.memo.docStatus != nil {
+		return e.memo.docStatus, nil
+	}
+	rows, err := e.tx.QueryContext(e.ctx, `SELECT document, status FROM document_status WHERE document IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]string{}
+	for rows.Next() {
+		var doc string
+		var st sql.NullString
+		if err := rows.Scan(&doc, &st); err != nil {
+			return nil, err
+		}
+		out[doc] = st.String
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if e.memo != nil {
+		e.memo.docStatus = out
+	}
+	return out, nil
+}
+
 // localRow is the local_status row, nil when this PC never wrote one.
 type localRow struct {
 	notesQueued, sessionsWaiting, quarantined        int64
@@ -206,10 +236,13 @@ func pipelineRetain(e env, w Window, age time.Duration, obs map[string]Observati
 		}
 		return nil
 	}
+	lastStatus, err := e.documentStatus()
+	if err != nil {
+		return err
+	}
 	rows, err := e.tx.QueryContext(e.ctx, `
-SELECT r.document, r.ts, r.status, r.ms, ds.status
-FROM tel_retain r JOIN document_status ds ON ds.document = r.document
-WHERE r.ts >= ? AND r.ts < ? AND `+projectClause,
+SELECT document, ts, status, ms FROM tel_retain
+WHERE document IS NOT NULL AND ts >= ? AND ts < ? AND `+projectClause,
 		w.Since.UnixMilli(), w.Until.UnixMilli(), e.q.Project, e.q.Project)
 	if err != nil {
 		return err
@@ -220,14 +253,18 @@ WHERE r.ts >= ? AND r.ts < ? AND `+projectClause,
 	for rows.Next() {
 		var doc string
 		var ts int64
-		var status, last sql.NullString
+		var status sql.NullString
 		var ms sql.NullInt64
-		if err := rows.Scan(&doc, &ts, &status, &ms, &last); err != nil {
+		if err := rows.Scan(&doc, &ts, &status, &ms); err != nil {
 			return err
+		}
+		last, ok := lastStatus[doc]
+		if !ok {
+			continue
 		}
 		d := docs[doc]
 		if d == nil {
-			d = &docEvent{status: last.String}
+			d = &docEvent{status: last}
 			docs[doc] = d
 		}
 		d.lastTS = max(d.lastTS, ts)

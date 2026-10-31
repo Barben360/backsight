@@ -241,6 +241,20 @@ func (x *fx) metrics(ids []string, q Query) map[string]Metric {
 	return out
 }
 
+// run computes view for q through Run on the fixture's source, the path
+// of `stats <view>` and of the dashboard.
+func (x *fx) run(view string, q Query) Result {
+	x.t.Helper()
+	r, err := Run(context.Background(), view, x.source(), q)
+	if err != nil {
+		x.t.Fatalf("%s: %v", view, err)
+	}
+	return r
+}
+
+// pageViews are the views of this package's page functions.
+var pageViews = []string{"overview", "quality", "cost", "bank", "pipeline", "system"}
+
 // lowerTimeouts sets ServerTimeout and doctorTimeout for one test.
 func lowerTimeouts(t *testing.T, server, doctor time.Duration) {
 	t.Helper()

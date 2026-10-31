@@ -3,33 +3,34 @@ package metrics
 import "time"
 
 // Tables holds the rows a view lists beside its metrics; each view fills
-// only its own.
+// only its own. A table the view does not fill (nil) is left out; one it
+// fills with no rows marshals as [] (omitzero, not omitempty).
 type Tables struct {
-	Page             *Page              `json:"page,omitempty"`
-	Activity         *Activity          `json:"activity,omitempty"`
-	Lately           []SessionRow       `json:"lately,omitempty"`
-	OutcomeMix       []OutcomeDay       `json:"outcome_mix,omitempty"`
-	Reported         []ReportedRow      `json:"reported,omitempty"`
-	Extraction       []ExtractionRow    `json:"extraction,omitempty"`
-	ByProject        []ProjectCount     `json:"by_project,omitempty"`
-	Review           *Review            `json:"review,omitempty"`
-	FailedOperations []OperationRow     `json:"failed_operations,omitempty"`
-	Jobs             []JobRow           `json:"jobs,omitempty"`
-	Doctor           []DoctorRow        `json:"doctor,omitempty"`
-	System           *SystemInfo        `json:"system,omitempty"`
-	Projects         []ProjectRow       `json:"projects,omitempty"`
-	Pooled           *PooledRow         `json:"pooled,omitempty"`
-	Project          *ProjectPage       `json:"project,omitempty"`
-	Sessions         []SessionRow       `json:"sessions,omitempty"`
-	Session          *SessionPage       `json:"session,omitempty"`
-	Memories         []MemoryRow        `json:"memories,omitempty"`
-	Memory           *MemoryPage        `json:"memory,omitempty"`
-	Days             []DayRow           `json:"days,omitempty"`
-	Day              *DayPage           `json:"day,omitempty"`
-	Releases         []ReleaseRow       `json:"releases,omitempty"`
-	Settings         map[string]float64 `json:"settings,omitempty"`
-	Defs             []DefRow           `json:"defs,omitempty"`
-	Note             string             `json:"note,omitempty"`
+	Page             *Page              `json:"page,omitzero"`
+	Activity         *Activity          `json:"activity,omitzero"`
+	Lately           []SessionRow       `json:"lately,omitzero"`
+	OutcomeMix       []OutcomeDay       `json:"outcome_mix,omitzero"`
+	Reported         []ReportedRow      `json:"reported,omitzero"`
+	Extraction       []ExtractionRow    `json:"extraction,omitzero"`
+	ByProject        []ProjectCount     `json:"by_project,omitzero"`
+	Review           *Review            `json:"review,omitzero"`
+	FailedOperations []OperationRow     `json:"failed_operations,omitzero"`
+	Jobs             []JobRow           `json:"jobs,omitzero"`
+	Doctor           []DoctorRow        `json:"doctor,omitzero"`
+	System           *SystemInfo        `json:"system,omitzero"`
+	Projects         []ProjectRow       `json:"projects,omitzero"`
+	Pooled           *PooledRow         `json:"pooled,omitzero"`
+	Project          *ProjectPage       `json:"project,omitzero"`
+	Sessions         []SessionRow       `json:"sessions,omitzero"`
+	Session          *SessionPage       `json:"session,omitzero"`
+	Memories         []MemoryRow        `json:"memories,omitzero"`
+	Memory           *MemoryPage        `json:"memory,omitzero"`
+	Days             []DayRow           `json:"days,omitzero"`
+	Day              *DayPage           `json:"day,omitzero"`
+	Releases         []ReleaseRow       `json:"releases,omitzero"`
+	Settings         map[string]float64 `json:"settings,omitzero"`
+	Defs             []DefRow           `json:"defs,omitzero"`
+	Note             string             `json:"note,omitzero"`
 }
 
 // Page is a browse view's paging.
@@ -72,6 +73,7 @@ type OutcomeDay struct {
 	NotDeclared int64                 `json:"not_declared"`
 	ShownOnly   int64                 `json:"shown_only"`
 	Pending     int64                 `json:"pending"`
+	Partial     bool                  `json:"partial,omitempty"` // a day the window covers only in part
 	ByPath      map[string]OutcomeDay `json:"by_path,omitempty"`
 }
 

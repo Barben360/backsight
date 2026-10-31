@@ -95,14 +95,22 @@ func TestComputeOneTransaction(t *testing.T) {
 	if n := cr.n.Load(); n != 1 {
 		t.Fatalf("%d read transactions, want 1", n)
 	}
-	if len(txs) != 12 || slices.ContainsFunc(txs, func(tx *sql.Tx) bool { return tx != txs[0] }) {
-		t.Fatalf("%d family runs, want 12 (2 windows × itself, previous, 4 baselines) in one transaction", len(txs))
+	// Each window is run once per transaction: the 7-day window's previous
+	// window is its first baseline, and its last baseline (35 to 28 days
+	// back) is the 28-day window's first, so 2 × 6 windows are 10 runs.
+	if len(txs) != 10 || slices.ContainsFunc(txs, func(tx *sql.Tx) bool { return tx != txs[0] }) {
+		t.Fatalf("%d family runs, want 10 (2 windows × itself, previous, 4 baselines; each window once) in one transaction", len(txs))
 	}
 	var want []time.Time
+	var seen []Span
 	for _, w := range []Window{w7, w28} {
-		want = append(want, w.Since, w.Previous().Since)
-		for _, b := range w.Baselines() {
-			want = append(want, b.Since)
+		for _, r := range append([]Window{w, w.Previous()}, w.Baselines()...) {
+			if span := (Span{r.Since, r.Until}); !slices.ContainsFunc(seen, func(s Span) bool {
+				return s.Since.Equal(span.Since) && s.Until.Equal(span.Until)
+			}) {
+				seen = append(seen, span)
+				want = append(want, r.Since)
+			}
 		}
 	}
 	if !reflect.DeepEqual(calls, want) {

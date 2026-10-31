@@ -132,6 +132,11 @@ func TestBankGrowthPicksThePeriod(t *testing.T) {
 	if !slices.Contains(m.Tags, tagSnapshot) {
 		t.Errorf("growth tags = %v, want snapshot", m.Tags)
 	}
+	for k, want := range map[string]int64{"world": 28, "experience": 7, "observation": 7} { // 7 + 14 + 7; 7; 7
+		if m.Extra[k] != want {
+			t.Errorf("growth extra %s = %v, want %d", k, m.Extra[k], want)
+		}
+	}
 	if _, ok := m.Extra["days_covered"]; ok {
 		t.Errorf("days_covered on a 7-day window: %v", m.Extra)
 	}

@@ -413,7 +413,7 @@ func (r *judgingRun) rootCause() (*Item, error) {
 			since = time.UnixMilli(l.reachLastOK.Int64)
 		}
 	}
-	age, err := backlogAge(e.tx, e.now)
+	age, err := e.backlogAge()
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +519,7 @@ func (r *judgingRun) median(d Def, w Window) (float64, bool, error) {
 	}
 	bases := make([]map[string]Observation, 0, 4)
 	for _, b := range w.Baselines() {
-		obs, _, err := fam.f(r.e, b)
+		obs, _, err := r.e.run(fam, b)
 		if err != nil {
 			return 0, false, err
 		}

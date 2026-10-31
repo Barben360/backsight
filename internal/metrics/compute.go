@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/Barben360/backsight/internal/feedback"
 )
 
 // The no_data reasons a metric can carry.
@@ -23,8 +25,9 @@ const (
 const tagNotFiltered = "not_filtered"
 
 // env is one view's run: its read transaction, source, query and clock,
-// the server data read before the transaction, and the view's server
-// section (nil when it reads nothing from the server).
+// the server data read before the transaction, the view's server section
+// (nil when it reads nothing from the server) and what the transaction
+// already computed.
 type env struct {
 	ctx    context.Context
 	tx     *sql.Tx
@@ -33,6 +36,60 @@ type env struct {
 	now    time.Time
 	srv    *serverData
 	server *ServerState
+	memo   *memo
+}
+
+// memo is what one view's transaction already computed, so that a view
+// and its verdict, which read many overlapping windows (a window, the one
+// before, the four 7-day baselines, the same again for the previous
+// window), run each family once per window: the index does not change
+// within the transaction, nor the server data, the clock or the query.
+type memo struct {
+	runs      map[runKey]familyRun
+	backlog   *time.Duration
+	docStatus map[string]string    // document_status
+	stale     *feedback.StaleLists // feedback.Stale of the index's ledger, as of now
+}
+
+// runKey is one family run: the window read and the view's own window
+// (figures as of now are read only for the latter).
+type runKey struct {
+	family                       string
+	since, until, qSince, qUntil int64
+}
+
+type familyRun struct {
+	obs map[string]Observation
+	met map[string]Metric
+}
+
+// run is fam over w, computed once per transaction. Callers read the maps
+// and never write them.
+func (e env) run(fam *family, w Window) (map[string]Observation, map[string]Metric, error) {
+	if e.memo == nil {
+		return fam.f(e, w)
+	}
+	k := runKey{fam.name, w.Since.UnixNano(), w.Until.UnixNano(), e.q.Window.Since.UnixNano(), e.q.Window.Until.UnixNano()}
+	if r, ok := e.memo.runs[k]; ok {
+		return r.obs, r.met, nil
+	}
+	obs, met, err := fam.f(e, w)
+	if err == nil {
+		e.memo.runs[k] = familyRun{obs, met}
+	}
+	return obs, met, err
+}
+
+// backlogAge is backlogAge as of e.now, read once per transaction.
+func (e env) backlogAge() (time.Duration, error) {
+	if e.memo != nil && e.memo.backlog != nil {
+		return *e.memo.backlog, nil
+	}
+	age, err := backlogAge(e.tx, e.now)
+	if err == nil && e.memo != nil {
+		e.memo.backlog = &age
+	}
+	return age, err
 }
 
 // computeFunc computes a family's metrics over one window: each id's
@@ -75,8 +132,9 @@ func (r *registry) register(name string, ids []string, f computeFunc) {
 // and, when one of its ids is relative, the four 7-day w.Baselines(). It
 // fills Status, Reason, Borderline, CI, MDC (rates with Den ≥ min_n),
 // Previous (when the previous window has Den ≥ min_n), Delta (value −
-// previous value, when both windows have Den ≥ min_n), Drill and Tags. An
-// id no family registered yet reads no_data, no_events.
+// previous value, when both windows have Den ≥ min_n), Drill and Tags, and
+// marks the series points of w's partial buckets. An id no family
+// registered yet reads no_data, no_events.
 func computeMetrics(e env, w Window, ids []string) (map[string]Metric, error) {
 	return families.compute(e, w, ids)
 }
@@ -102,18 +160,18 @@ func (r *registry) compute(e env, w Window, ids []string) (map[string]Metric, er
 	}
 	for _, fam := range order {
 		defs := asked[fam]
-		obs, met, err := fam.f(e, w)
+		obs, met, err := e.run(fam, w)
 		if err != nil {
 			return nil, fmt.Errorf("metrics: %s: %w", fam.name, err)
 		}
-		prevObs, prev, err := fam.f(e, w.Previous())
+		prevObs, prev, err := e.run(fam, w.Previous())
 		if err != nil {
 			return nil, fmt.Errorf("metrics: %s, previous window: %w", fam.name, err)
 		}
 		var bases []map[string]Observation
 		if slices.ContainsFunc(defs, func(d Def) bool { return d.Relative }) {
 			for _, b := range w.Baselines() {
-				bo, _, err := fam.f(e, b)
+				bo, _, err := e.run(fam, b)
 				if err != nil {
 					return nil, fmt.Errorf("metrics: %s, baseline window: %w", fam.name, err)
 				}
@@ -136,7 +194,31 @@ func (r *registry) compute(e env, w Window, ids []string) (map[string]Metric, er
 			out[d.ID] = finish(d, o, met[d.ID], p, e.q)
 		}
 	}
+	markPartial(w, out)
 	return out, nil
+}
+
+// markPartial flags the day and hour points of ms whose bucket w covers
+// only in part (its first and last, cut by the window's edges), so a
+// per-day count is never read as a dip.
+func markPartial(w Window, ms map[string]Metric) {
+	partial := map[string]bool{}
+	for _, b := range w.Buckets() {
+		if b.Partial {
+			partial[b.Key] = true
+		}
+	}
+	if len(partial) == 0 {
+		return
+	}
+	for _, m := range ms {
+		for i := range m.Series {
+			p := &m.Series[i]
+			if k := p.Day + p.Hour; k != "" && partial[k] {
+				p.Partial = true
+			}
+		}
+	}
 }
 
 // baselineOf is id's point value and denominator in each baseline window,
@@ -187,6 +269,7 @@ func finish(d Def, o Observation, m Metric, prev *Metric, q Query) Metric {
 		}
 	}
 	m.Drill = d.Drill
+	m.Series = slices.Clone(m.Series) // the family run's own stays as computed (memo)
 	tags := make([]string, 0, len(m.Tags)+1)
 	tags = append(tags, m.Tags...)
 	if d.Scope == "server" && q.Project != "" && !o.Filtered && !slices.Contains(tags, tagNotFiltered) {
@@ -217,7 +300,7 @@ func withTx(ctx context.Context, src Source, q Query, need []string, fn func(e e
 			}
 			state.LastOK = last
 		}
-		return fn(env{ctx: ctx, tx: tx, src: src, q: q, now: now, srv: srv, server: state})
+		return fn(env{ctx: ctx, tx: tx, src: src, q: q, now: now, srv: srv, server: state, memo: &memo{runs: map[runKey]familyRun{}}})
 	})
 }
 

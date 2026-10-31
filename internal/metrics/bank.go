@@ -124,7 +124,8 @@ var bankSizeExtras = []string{"world", "experience", "observation", "documents",
 
 // bankGrowth fills bank.growth from the server's time series, read for the
 // period asked (seriesPeriod): the buckets overlapping the window, whole
-// (as inWindow keeps them), summed by kind and re-bucketed to local days.
+// (as inWindow keeps them), summed by kind (extra) and re-bucketed to
+// local days.
 func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metric) {
 	const id = "bank.growth"
 	buckets := w.Buckets()
@@ -135,6 +136,7 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 	}
 	seen := map[string]bool{}
 	var total int64
+	byKind := map[string]int64{}
 	var kept int
 	for _, b := range e.srv.Series.Buckets {
 		if !b.Time.Add(width).After(w.Since) || !b.Time.Before(w.Until) {
@@ -149,6 +151,7 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 		i := bucketIndex(buckets, local)
 		for k, n := range map[string]int64{"world": b.World, "experience": b.Experience, "observation": b.Observation} {
 			total += n
+			byKind[k] += n
 			if i >= 0 {
 				byDay[i][k] += n
 			}
@@ -162,9 +165,12 @@ func bankGrowth(e env, w Window, obs map[string]Observation, met map[string]Metr
 	// The rate is over the time the counted buckets span (whole buckets,
 	// the first one possibly before the window), not the window's length.
 	days := float64(kept) * width.Hours() / 24
-	m := Metric{Tags: []string{tagSnapshot}}
+	m := Metric{Tags: []string{tagSnapshot}, Extra: map[string]any{}}
+	for _, k := range seriesKinds { // the memories added over the buckets kept, by kind
+		m.Extra[k] = byKind[k]
+	}
 	if w.Length() > maxSeriesDays*day { // the series cannot reach back further
-		m.Extra = map[string]any{"days_covered": covered}
+		m.Extra["days_covered"] = covered
 	}
 	m.Value = ptr(float64(total) / days)
 	for i, b := range buckets {

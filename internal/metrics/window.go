@@ -22,10 +22,13 @@ type Span struct {
 }
 
 // Bucket is one day (key "2026-10-24") or one hour (key
-// "2026-10-24T15:00+01:00") of a window, clipped to the window.
+// "2026-10-24T15:00+01:00") of a window, clipped to the window. Partial:
+// the clip cut it (the window starts or ends inside it), so its counts
+// cover less than a whole day or hour.
 type Bucket struct {
 	Key          string
 	Since, Until time.Time
+	Partial      bool
 }
 
 const day = 24 * time.Hour
@@ -103,8 +106,10 @@ func (w Window) Last(d time.Duration) Window {
 
 // Buckets splits the window into local days (a DST day lasts 23 or 25 h),
 // or into hours when it is at most 48 h long. The first and last bucket are
-// clipped to the window, so the buckets tile it exactly. Hours are counted
-// from the local hour of Since.
+// clipped to the window, so the buckets tile it exactly, and marked
+// Partial when the clip cut them. Hours are counted from the local hour of
+// Since: a 48 h window starting at 10:30 has 49 buckets, the first and the
+// last half an hour each.
 func (w Window) Buckets() []Bucket {
 	loc := w.Loc
 	if loc == nil {
@@ -112,7 +117,8 @@ func (w Window) Buckets() []Bucket {
 	}
 	var out []Bucket
 	add := func(key string, from, to time.Time) {
-		out = append(out, Bucket{Key: key, Since: max2(from, w.Since), Until: min2(to, w.Until)})
+		out = append(out, Bucket{Key: key, Since: max2(from, w.Since), Until: min2(to, w.Until),
+			Partial: from.Before(w.Since) || to.After(w.Until)})
 	}
 	if w.Length() <= hourlyMax {
 		s := w.Since.In(loc)

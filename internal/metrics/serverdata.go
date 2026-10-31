@@ -179,6 +179,9 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 	}
 	llm := map[string]*[]hindsight.LLMBucket{}
 	var llm30 []hindsight.LLMBucket
+	// Over 7 days the stats of all operations are read for 30 days, the
+	// very request of llm30d:: asked for both, the server is asked once.
+	sameLLM := slices.Contains(keys, "llm:") && slices.Contains(keys, llm30dKey) && llmPeriod(span) == "30d"
 	calls := map[string]func(context.Context) error{}
 	s := src.Server
 	for _, key := range keys {
@@ -241,6 +244,9 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 				d.Err[key] = fmt.Errorf("%w %q", errUnknownRead, key)
 				continue
 			}
+			if op == "" && sameLLM {
+				continue // read as llm30d:, copied below
+			}
 			slot := new([]hindsight.LLMBucket)
 			llm[op] = slot
 			calls[key] = func(ctx context.Context) error {
@@ -265,6 +271,14 @@ func loadServer(ctx context.Context, src Source, w Window, need []string) (*serv
 		if d.Err["llm:"+op] == nil {
 			d.LLM[op] = *slot
 		}
+	}
+	if sameLLM && s != nil {
+		if err := d.Err[llm30dKey]; err != nil {
+			d.Err["llm:"] = err
+		} else {
+			d.LLM[""] = d.LLM30
+		}
+		d.Have["llm:"] = d.Have[llm30dKey]
 	}
 	if doctorDone != nil {
 		<-doctorDone

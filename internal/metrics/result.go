@@ -104,6 +104,9 @@ type Point struct {
 	P50   *float64         `json:"p50,omitempty"`
 	P95   *float64         `json:"p95,omitempty"`
 	Parts map[string]int64 `json:"parts,omitempty"`
+	// Partial: the window covers only part of this day or hour (its first
+	// or last), so its counts are not a dip.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // Item is one entry of the attention list.
