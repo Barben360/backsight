@@ -53,6 +53,9 @@ type TaskSpec struct {
 	// Priority is the task's priority class, 1-10 (4-6 normal, 7 below
 	// normal: Task Scheduler's default, its value when 0).
 	Priority int
+	// NoRestart drops the restart on failure (3 times, a minute apart):
+	// a job's failed run waits for its next trigger, as on Linux.
+	NoRestart bool
 }
 
 // HeadlessArgs is conhost's argv for program and its args: what a task's
@@ -109,6 +112,9 @@ func TaskXML(spec TaskSpec) ([]byte, error) {
 	b.WriteString("  <Principals>\n    <Principal id=\"Author\">\n      <UserId>" + spec.UserSID + "</UserId>\n" +
 		"      <LogonType>InteractiveToken</LogonType>\n      <RunLevel>LeastPrivilege</RunLevel>\n    </Principal>\n  </Principals>\n")
 	settings := taskSettings
+	if spec.NoRestart {
+		settings = strings.Replace(settings, taskRestart, "", 1)
+	}
 	if spec.Priority != 0 {
 		settings = strings.Replace(settings, "  </Settings>\n", "    <Priority>"+strconv.Itoa(spec.Priority)+"</Priority>\n  </Settings>\n", 1)
 	}
@@ -132,11 +138,15 @@ const taskSettings = `  <Settings>
       <StopOnIdleEnd>false</StopOnIdleEnd>
       <RestartOnIdle>false</RestartOnIdle>
     </IdleSettings>
-    <RestartOnFailure>
+` + taskRestart + `  </Settings>
+`
+
+// taskRestart restarts a task whose run failed, up to 3 times a minute
+// apart (the server's supervisor; not the jobs).
+const taskRestart = `    <RestartOnFailure>
       <Interval>PT1M</Interval>
       <Count>3</Count>
     </RestartOnFailure>
-  </Settings>
 `
 
 func triggerXML(t Trigger, sid string) (string, error) {

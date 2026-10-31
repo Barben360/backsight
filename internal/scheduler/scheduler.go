@@ -275,6 +275,7 @@ type Installed struct {
 	Timers   []string // systemd timers (name.timer)
 	Services []string // systemd services (name.service)
 	Labels   []string // launchd labels
+	Tasks    []string // Task Scheduler names (project\job)
 }
 
 // InstalledFrom reads the names from the files' own names; a file that is
@@ -290,6 +291,12 @@ func InstalledFrom(files []string) Installed {
 			in.Services = append(in.Services, base)
 		case strings.HasSuffix(base, ".plist"):
 			in.Labels = append(in.Labels, strings.TrimSuffix(base, ".plist"))
+		case strings.HasSuffix(base, ".xml"):
+			// <state>\tasks\<project>\<job>.xml
+			project := filepath.Dir(f)
+			if filepath.Base(filepath.Dir(project)) == "tasks" {
+				in.Tasks = append(in.Tasks, filepath.Base(project)+`\`+strings.TrimSuffix(base, ".xml"))
+			}
 		}
 	}
 	return in
@@ -312,8 +319,7 @@ func TimersEnabled(files []string) bool {
 	return false
 }
 
-// Remove deactivates the entries for kind (none for tasks: they have no
-// files to name them; their plan's Remove does).
+// Remove deactivates the entries for kind.
 func (in Installed) Remove(kind string, uid int) [][]string {
 	var out [][]string
 	switch kind {
@@ -324,6 +330,10 @@ func (in Installed) Remove(kind string, uid int) [][]string {
 	case "launchd":
 		for _, l := range in.Labels {
 			out = append(out, []string{"launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, l)})
+		}
+	case "schtasks":
+		for _, t := range in.Tasks {
+			out = append(out, []string{"schtasks", "/Delete", "/F", "/TN", t})
 		}
 	}
 	return out
@@ -391,11 +401,36 @@ const (
 	maintainEpoch = "2026-01-01T04:00:00"
 )
 
+// TaskDirArgs are the hidden flags that carry env's BACKSIGHT_HOME and
+// BACKSIGHT_STATE_DIR to a task's program: a task cannot carry
+// environment variables.
+func TaskDirArgs(env map[string]string) []string {
+	var args []string
+	for _, f := range [][2]string{{"BACKSIGHT_HOME", "--backsight-home"}, {"BACKSIGHT_STATE_DIR", "--backsight-state-dir"}} {
+		if v := env[f[0]]; v != "" {
+			args = append(args, f[1], v)
+		}
+	}
+	return args
+}
+
+// TaskEnv adds to env, on Windows only (goos), what a task must carry
+// beyond the directories every scheduler gets: BACKSIGHT_STATE_DIR, which
+// moves the state (the jobs' locks, the server's logs). Linux's units stay
+// as they are.
+func TaskEnv(goos string, env map[string]string, getenv func(string) string) map[string]string {
+	if v := getenv("BACKSIGHT_STATE_DIR"); goos == "windows" && v != "" {
+		env["BACKSIGHT_STATE_DIR"] = v
+	}
+	return env
+}
+
 // schtasks registers each job as a task from XML (TaskXML, the server
 // task's principal and settings): a hidden console, no battery stop, no
 // time limit. A task cannot carry environment variables: a BACKSIGHT_HOME
-// the install resolved reaches the job as --backsight-home; the rest of
-// o.Env (XDG_*, PATH) means nothing on Windows. Whether a job runs is its
+// or BACKSIGHT_STATE_DIR the install resolved reaches the job as a hidden
+// flag (TaskDirArgs); the rest of o.Env (XDG_*, PATH) means nothing on
+// Windows. Whether a job runs is its
 // own lock file held, never schtasks' text (localized).
 func schtasks(o Options) (Plan, error) {
 	p := Plan{Kind: "schtasks", Start: map[string][]string{}}
@@ -404,16 +439,15 @@ func schtasks(o Options) (Plan, error) {
 		if j.Name == "maintain" {
 			trigger = Trigger{Kind: TriggerDaily, Start: maintainEpoch}
 		}
-		args := []string{"jobs", j.Name}
-		if home := o.Env["BACKSIGHT_HOME"]; home != "" {
-			args = append(args, "--backsight-home", home)
-		}
+		args := append([]string{"jobs", j.Name}, TaskDirArgs(o.Env)...)
 		task, err := TaskXML(TaskSpec{Description: "backsight jobs " + j.Name + " (" + o.name() + ")", UserSID: o.UserSID,
-			Triggers: []Trigger{trigger}, Program: o.Shim, Args: args})
+			Triggers: []Trigger{trigger}, Program: o.Shim, Args: args, NoRestart: true})
 		if err != nil {
 			return Plan{}, fmt.Errorf("the %s task: %w", j.Name, err)
 		}
-		file := filepath.Join(o.State, "tasks", j.Name+".xml")
+		// Under the project's name, so that the recorded files name the
+		// tasks (InstalledFrom), whatever the project is called later.
+		file := filepath.Join(o.State, "tasks", o.name(), j.Name+".xml")
 		p.Files = append(p.Files, File{file, string(task)})
 		create := []string{"schtasks", "/Create", "/F", "/XML", file, "/TN", o.TaskName(j)}
 		p.Activate = append(p.Activate, create)
@@ -421,7 +455,7 @@ func schtasks(o Options) (Plan, error) {
 		// The lock jobs tick and jobs maintain take (job-<name>.lock).
 		p.Entries = append(p.Entries, Entry{Job: j.Name, Files: []string{file}, Lock: filepath.Join(o.State, "locks", "job-"+j.Name+".lock"),
 			Reload: [][]string{create}})
-		p.Remove = append(p.Remove, []string{"schtasks", "/Delete", "/F", "/TN", o.TaskName(j)})
 	}
+	p.Remove = InstalledFrom(p.Paths()).Remove(p.Kind, o.UID)
 	return p, nil
 }

@@ -130,6 +130,29 @@ func TestTaskXMLOddPathGolden(t *testing.T) {
 	}
 }
 
+// A BACKSIGHT_STATE_DIR (the supervisor's logs are under the state) reaches
+// the task and a detached supervisor as --backsight-state-dir, after
+// --backsight-home.
+func TestTaskCarriesTheStateDir(t *testing.T) {
+	withSID(t)
+	windowsUser(t, `C:\Users\u`)
+	home := `C:\Users\u\bs`
+	n := windowsNative(t, home, home+`\data`, `E:\st ate`)
+	n.Env["BACKSIGHT_STATE_DIR"] = `E:\st ate`
+	h := taskHost{n: n}
+	f, err := h.Files(8890, n.Version())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `server supervise --backsight-home C:\Users\u\bs --backsight-state-dir "E:\st ate"</Arguments>`
+	if doc := decodeUTF16(t, f["task.xml"]); !strings.Contains(doc, want) {
+		t.Errorf("task.xml lacks\n%s\n%s", want, doc)
+	}
+	if got, want := h.superviseArgs(true), scheduler.HeadlessArgs(n.shim(), "server", "supervise", "--no-api", "--backsight-home", home, "--backsight-state-dir", `E:\st ate`); !slices.Equal(got, want) {
+		t.Errorf("detached %q, want %q", got, want)
+	}
+}
+
 // A % in the shim's or BACKSIGHT_HOME's path is refused (Task Scheduler
 // would expand it): no task.xml for another path.
 func TestTaskFilesRefuseAPercent(t *testing.T) {

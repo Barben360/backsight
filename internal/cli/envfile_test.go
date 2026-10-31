@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -37,6 +38,8 @@ func TestEnvFileLinesSourceUnderBash(t *testing.T) {
 		"BS_SHELL":  "$HOME `id` $(id) \\n \\",
 		"BS_SPACES": "Jé & Co; ls | wc",
 		"BS_EMPTY":  "",
+		"BS_LINES":  "first line\nsecond 'line'\n",
+		"BS_DRIVE":  `C:/Users/Jé & Co/src`,
 	}
 	file := filepath.Join(t.TempDir(), "env")
 	var b strings.Builder
@@ -47,6 +50,14 @@ func TestEnvFileLinesSourceUnderBash(t *testing.T) {
 		}
 		b.WriteString(line)
 	}
+	// The writer's own rule for this OS: a backslash drive path comes
+	// back with forward slashes on Windows (Git Bash), unchanged elsewhere.
+	native, nativeWant := `C:\Users\Jé & Co\src`, `C:\Users\Jé & Co\src`
+	if runtime.GOOS == "windows" {
+		nativeWant = `C:/Users/Jé & Co/src`
+	}
+	b.WriteString(envFileLine(runtime.GOOS, "BS_NATIVE", native))
+	values["BS_NATIVE"] = nativeWant
 	if err := os.WriteFile(file, []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}

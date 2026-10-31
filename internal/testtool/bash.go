@@ -5,13 +5,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
 // Bash is the bash Claude Code's Bash tool runs: on Windows Git Bash,
 // found from git's install directory, then where Git for Windows installs
-// per machine, per user or portable, never WSL's bash in System32. It
+// per machine, per user or portable: never bash from PATH, which can be
+// WSL's in System32. It
 // skips the test when there is none, and fails it on CI, where a missing
 // bash would hide what it checks.
 func Bash(t testing.TB) string {
@@ -53,7 +53,7 @@ func findBash(goos string, look func(string) (string, error), getenv func(string
 	}
 	for _, r := range roots {
 		for _, p := range []string{filepath.Join(r, "bin", "bash.exe"), filepath.Join(r, "usr", "bin", "bash.exe")} {
-			if isFile(p) && !strings.EqualFold(filepath.Base(filepath.Dir(p)), "System32") {
+			if isFile(p) {
 				return p
 			}
 		}

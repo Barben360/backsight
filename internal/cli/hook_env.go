@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -103,12 +104,16 @@ func newHookEnv(ctx context.Context, input []byte, side string) (*hookEnv, bool)
 	// The live record is what lets pause and the MCP server find this
 	// session: written whatever the components (0056).
 	live := session.Live{SessionID: h.in.SessionID, Cwd: cwd, Project: h.project, At: now()}
-	if pid, err := strconv.Atoi(os.Getenv(claudePIDEnv)); err == nil {
+	pid, err := strconv.Atoi(os.Getenv(claudePIDEnv))
+	if err == nil {
 		_ = session.WriteLive(h.dirs.SessionsDir(), pid, live)
 	}
-	// Under the session id too: the MCP server's fallback when Claude
-	// Code's process tree does not pair them by pid (0080).
-	_ = session.WriteLiveSession(h.dirs.SessionsDir(), live)
+	// Under the session id too where the pid may not pair (0080): on
+	// Windows, whose Claude Code process tree may differ, or without a
+	// Claude Code pid. Elsewhere the pid record is enough.
+	if runtime.GOOS == "windows" || err != nil {
+		_ = session.WriteLiveSession(h.dirs.SessionsDir(), live)
+	}
 	c := h.cfg.Components
 	if (side == readSide && !c.Read) || (side == writeSide && !c.Write) || (side == "" && !c.Read && !c.Write) {
 		return nil, false

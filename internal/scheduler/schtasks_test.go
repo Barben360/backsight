@@ -33,7 +33,7 @@ func TestSchtasksPlanIsXML(t *testing.T) {
 	}
 	for i, j := range []string{"tick", "maintain"} {
 		f := p.Files[i]
-		if want := filepath.Join(o.State, "tasks", j+".xml"); f.Path != want {
+		if want := filepath.Join(o.State, "tasks", "backsight", j+".xml"); f.Path != want {
 			t.Errorf("%s file %q, want %q", j, f.Path, want)
 		}
 		golden := filepath.Join("testdata", j+".xml")
@@ -75,9 +75,12 @@ func TestSchtasksPlanIsXML(t *testing.T) {
 		t.Errorf("maintain triggers %+v", maintain.Triggers)
 	}
 	// The jobs keep Task Scheduler's default priority: only the server
-	// asks for normal.
+	// asks for normal. A failed run waits for the next trigger: no restart.
 	if tick.Settings.Priority != "" || maintain.Settings.Priority != "" {
 		t.Errorf("priority %q %q, want the default", tick.Settings.Priority, maintain.Settings.Priority)
+	}
+	if tick.Settings.RestartCount != 0 || maintain.Settings.RestartEvery != "" {
+		t.Errorf("a job restarts on failure: %+v", tick.Settings)
 	}
 }
 
@@ -109,19 +112,20 @@ func TestSchtasksEntriesProbeTheJobsLock(t *testing.T) {
 	}
 }
 
-// A task cannot carry environment variables: a BACKSIGHT_HOME the install
-// resolved reaches the job as --backsight-home, quoted as Windows splits
-// it; without one the job gets no flag.
+// A task cannot carry environment variables: a BACKSIGHT_HOME and a
+// BACKSIGHT_STATE_DIR the install resolved reach the job as
+// --backsight-home and --backsight-state-dir, quoted as Windows splits
+// them; without them the job gets no flag.
 func TestJobsTaskCarriesBacksightHome(t *testing.T) {
 	o := winOptions()
-	o.Env = map[string]string{"BACKSIGHT_HOME": `D:\bs home\Jé & Co`, "PATH": `C:\Windows\System32`}
+	o.Env = map[string]string{"BACKSIGHT_HOME": `D:\bs home\Jé & Co`, "BACKSIGHT_STATE_DIR": `E:\st ate`, "PATH": `C:\Windows\System32`}
 	p, err := For("windows", o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, j := range []string{"tick", "maintain"} {
 		got := parseTask(t, []byte(p.Files[i].Content)).Arguments
-		want := `--headless "` + o.Shim + `" jobs ` + j + ` --backsight-home "D:\bs home\Jé & Co"`
+		want := `--headless "` + o.Shim + `" jobs ` + j + ` --backsight-home "D:\bs home\Jé & Co" --backsight-state-dir "E:\st ate"`
 		if got != want {
 			t.Errorf("%s arguments\n%s\nwant\n%s", j, got, want)
 		}
@@ -131,8 +135,49 @@ func TestJobsTaskCarriesBacksightHome(t *testing.T) {
 	}
 	o.Env = map[string]string{"PATH": `C:\Windows\System32`}
 	p, _ = For("windows", o)
-	if got := parseTask(t, []byte(p.Files[0].Content)).Arguments; strings.Contains(got, "--backsight-home") {
-		t.Errorf("no BACKSIGHT_HOME, yet %s", got)
+	if got := parseTask(t, []byte(p.Files[0].Content)).Arguments; strings.Contains(got, "--backsight-") {
+		t.Errorf("no BACKSIGHT_HOME nor BACKSIGHT_STATE_DIR, yet %s", got)
+	}
+}
+
+// BACKSIGHT_STATE_DIR is a task's to carry only: on Windows TaskEnv adds
+// it, elsewhere the units stay as they are (they inherit nothing of it
+// today).
+func TestTaskEnvAddsTheStateDirOnWindowsOnly(t *testing.T) {
+	get := func(k string) string { return map[string]string{"BACKSIGHT_STATE_DIR": `E:\st`}[k] }
+	if env := TaskEnv("windows", map[string]string{"BACKSIGHT_HOME": `D:\bs`}, get); env["BACKSIGHT_STATE_DIR"] != `E:\st` || env["BACKSIGHT_HOME"] != `D:\bs` {
+		t.Errorf("windows %q", env)
+	}
+	for _, goos := range []string{"linux", "darwin"} {
+		if env := TaskEnv(goos, map[string]string{}, get); len(env) != 0 {
+			t.Errorf("%s %q", goos, env)
+		}
+	}
+	if env := TaskEnv("windows", map[string]string{}, func(string) string { return "" }); len(env) != 0 {
+		t.Errorf("unset %q", env)
+	}
+}
+
+// The recorded task files name their tasks: a project renamed since still
+// deletes the tasks it installed.
+func TestInstalledTasksFromRecordedFiles(t *testing.T) {
+	o := winOptions()
+	o.Name = "old-name"
+	p, _ := For("windows", o)
+	in := InstalledFrom(p.Paths())
+	if strings.Join(in.Tasks, " ") != `old-name\tick old-name\maintain` {
+		t.Errorf("tasks %q", in.Tasks)
+	}
+	got := in.Remove("schtasks", 0)
+	if len(got) != 2 || strings.Join(got[0], " ") != `schtasks /Delete /F /TN old-name\tick` || strings.Join(got[1], " ") != `schtasks /Delete /F /TN old-name\maintain` {
+		t.Errorf("remove %q", got)
+	}
+	if strings.Join(p.Remove[0], " ") != strings.Join(got[0], " ") {
+		t.Errorf("the plan's remove %q differs from the recorded files' %q", p.Remove, got)
+	}
+	// An XML file elsewhere names no task.
+	if in := InstalledFrom([]string{filepath.Join("x", "notes", "a.xml"), "b.xml"}); len(in.Tasks) != 0 {
+		t.Errorf("foreign files %q", in.Tasks)
 	}
 }
 

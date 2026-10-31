@@ -211,6 +211,23 @@ func TestTaskXMLPriority(t *testing.T) {
 	}
 }
 
+// NoRestart drops the restart on failure (the jobs); the server keeps it.
+func TestTaskXMLNoRestart(t *testing.T) {
+	spec := serverSpec(`C:\x\current.exe`, "server", "supervise")
+	spec.NoRestart = true
+	raw, err := TaskXML(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := parseTask(t, raw)
+	if p.Settings.RestartCount != 0 || p.Settings.RestartEvery != "" || strings.Contains(decodeTask(t, raw), "RestartOnFailure") {
+		t.Errorf("restart kept: %+v", p.Settings)
+	}
+	if p.Settings.WhenAvailable != "true" || p.Settings.Limit != "PT0S" {
+		t.Errorf("other settings lost: %+v", p.Settings)
+	}
+}
+
 // The jobs' triggers (Task 12): every 15 minutes, and daily at 04:00.
 func TestTaskXMLJobTriggers(t *testing.T) {
 	spec := TaskSpec{Description: "backsight tick", UserSID: testSID, Program: `C:\x\current.exe`, Args: []string{"jobs", "tick"},

@@ -139,10 +139,7 @@ func (h taskHost) Files(pg int, venv string) (map[string][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the task's principal: %w", err)
 	}
-	args := []string{"server", "supervise"}
-	if home := n.Env["BACKSIGHT_HOME"]; home != "" {
-		args = append(args, "--backsight-home", home)
-	}
+	args := append([]string{"server", "supervise"}, scheduler.TaskDirArgs(n.Env)...)
 	task, err := scheduler.TaskXML(scheduler.TaskSpec{
 		Description: "backsight memory server (" + n.project() + ")",
 		UserSID:     sid,
@@ -164,9 +161,7 @@ func (h taskHost) superviseArgs(noAPI bool) []string {
 	if noAPI {
 		args = append(args, "--no-api")
 	}
-	if home := h.n.Env["BACKSIGHT_HOME"]; home != "" {
-		args = append(args, "--backsight-home", home)
-	}
+	args = append(args, scheduler.TaskDirArgs(h.n.Env)...)
 	return scheduler.HeadlessArgs(h.n.shim(), args...)
 }
 

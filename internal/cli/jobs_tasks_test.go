@@ -62,7 +62,7 @@ func TestJobsInstallRegistersTasksFromXML(t *testing.T) {
 	if code, out, errOut := run(t, "jobs", "install"); code != output.OK {
 		t.Fatalf("install: exit %d\n%s%s", code, out, errOut)
 	}
-	files := []string{filepath.Join(d.State, "tasks", "tick.xml"), filepath.Join(d.State, "tasks", "maintain.xml")}
+	files := []string{filepath.Join(d.State, "tasks", "backsight", "tick.xml"), filepath.Join(d.State, "tasks", "backsight", "maintain.xml")}
 	want := []string{
 		"schtasks /Create /F /XML " + files[0] + ` /TN backsight\tick`,
 		"schtasks /Create /F /XML " + files[1] + ` /TN backsight\maintain`,
@@ -111,7 +111,7 @@ func TestJobsUninstallKeepsATaskItCouldNotDelete(t *testing.T) {
 	if code, _, errOut := run(t, "jobs", "uninstall"); code != output.Blocked || !strings.Contains(errOut, "Access is denied") {
 		t.Errorf("exit %d %q", code, errOut)
 	}
-	if _, err := os.Stat(filepath.Join(d.State, "tasks", "maintain.xml")); err != nil {
+	if _, err := os.Stat(filepath.Join(d.State, "tasks", "backsight", "maintain.xml")); err != nil {
 		t.Error("the file of a task still registered was removed")
 	}
 	if st, _ := state.Load(d.StateFile()); st.Scheduler == nil {
@@ -136,7 +136,7 @@ func TestJobsRefreshScheduledTasks(t *testing.T) {
 	if code, out, _ := run(t, "jobs", "refresh", "--json"); decodeRefresh(t, out).Status != "unchanged" || code != output.OK || len(sys.calls) != 0 {
 		t.Errorf("fresh install: exit %d, calls %q\n%s", code, sys.calls, out)
 	}
-	tick := filepath.Join(d.State, "tasks", "tick.xml")
+	tick := filepath.Join(d.State, "tasks", "backsight", "tick.xml")
 	_ = os.WriteFile(tick, []byte("an older template"), 0o600)
 	sys.calls = nil
 	code, out, _ := run(t, "jobs", "refresh", "--json")
@@ -158,7 +158,7 @@ func TestJobsRefreshDefersARunningTask(t *testing.T) {
 	d := pathsOf(home)
 	run(t, "jobs", "install")
 	for _, j := range []string{"tick", "maintain"} {
-		_ = os.WriteFile(filepath.Join(d.State, "tasks", j+".xml"), []byte("old"), 0o600)
+		_ = os.WriteFile(filepath.Join(d.State, "tasks", "backsight", j+".xml"), []byte("old"), 0o600)
 	}
 	lock := filepath.Join(d.LocksDir(), "job-maintain.lock")
 	holdLock(t, lock, testtool.OtherPID())
@@ -182,7 +182,7 @@ func TestJobsRefreshDefersARunningTask(t *testing.T) {
 			t.Errorf("schtasks was asked whether a job runs: %s", c)
 		}
 	}
-	if raw, _ := os.ReadFile(filepath.Join(d.State, "tasks", "maintain.xml")); string(raw) != "old" {
+	if raw, _ := os.ReadFile(filepath.Join(d.State, "tasks", "backsight", "maintain.xml")); string(raw) != "old" {
 		t.Error("the running job's task file was rewritten")
 	}
 	// The job ended without removing its lock (killed): not running.
@@ -214,4 +214,51 @@ func deadPID(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return cmd.Process.Pid
+}
+
+// The task files are under the project's name, so a project renamed
+// after jobs install behaves as on Linux: a refresh refuses (the entries
+// are elsewhere), and uninstall deletes the tasks installed, never the new
+// name's.
+func TestJobsTasksOfARenamedProject(t *testing.T) {
+	home, sys := windowsInstall(t)
+	if code, _, errOut := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("install: exit %d %s", code, errOut)
+	}
+	cfg := filepath.Join(home, "backsight", "config", "config.toml")
+	raw, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, []byte(strings.Replace(string(raw), "[server]\n", "[server]\nproject = \"renamed\"\n", 1)), 0o600)
+	sys.calls = nil
+	if code, _, errOut := run(t, "jobs", "refresh"); code != output.Blocked || !strings.Contains(errOut, "jobs uninstall") || len(sys.calls) != 0 {
+		t.Errorf("refresh: exit %d, calls %q: %s", code, sys.calls, errOut)
+	}
+	if code, _, errOut := run(t, "jobs", "uninstall"); code != output.OK {
+		t.Fatalf("uninstall: exit %d %s", code, errOut)
+	}
+	if want := []string{`schtasks /Delete /F /TN backsight\tick`, `schtasks /Delete /F /TN backsight\maintain`}; !slices.Equal(sys.calls, want) {
+		t.Errorf("uninstall calls %q, want %q", sys.calls, want)
+	}
+}
+
+// A BACKSIGHT_STATE_DIR set at install reaches each task as
+// --backsight-state-dir, and the lock a refresh probes is the one the job
+// then takes, under that state directory.
+func TestJobsTasksCarryTheStateDir(t *testing.T) {
+	home, sys := windowsInstall(t)
+	st := filepath.Join(home, "other state")
+	t.Setenv("BACKSIGHT_STATE_DIR", st)
+	if code, _, errOut := run(t, "jobs", "install"); code != output.OK {
+		t.Fatalf("install: exit %d %s", code, errOut)
+	}
+	tick := filepath.Join(st, "tasks", "backsight", "tick.xml")
+	if doc := taskText(t, tick); !strings.Contains(doc, " --backsight-state-dir ") || !strings.Contains(doc, st) || !strings.Contains(doc, " --backsight-home ") {
+		t.Errorf("the task does not carry both directories:\n%s", doc)
+	}
+	_ = os.WriteFile(tick, []byte("old"), 0o600)
+	holdLock(t, filepath.Join(st, "locks", "job-tick.lock"), testtool.OtherPID())
+	sys.calls = nil
+	code, out, _ := run(t, "jobs", "refresh", "--json")
+	if r := decodeRefresh(t, out); code != output.OK || strings.Join(r.Deferred, ",") != "tick" {
+		t.Errorf("the job's lock under the state dir was not seen: exit %d\n%s", code, out)
+	}
 }

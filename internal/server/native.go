@@ -32,7 +32,7 @@ type Native struct {
 	Cfg     config.Config
 	Dirs    paths.Dirs        // shim (<data>/bin), config editor journal, state
 	UnitDir string            // the scheduler's rule (jobs_install.go)
-	Env     map[string]string // BACKSIGHT_HOME, XDG_*_HOME carried into the units (scheduler.Options.Env)
+	Env     map[string]string // BACKSIGHT_HOME, XDG_*_HOME carried into the units (scheduler.Options.Env); Windows: BACKSIGHT_HOME and BACKSIGHT_STATE_DIR, as the task's flags
 	Sys     SysRunner         // systemctl, loginctl, systemd-run, journalctl
 	Tools   ToolRunner        // uv, pg0, Postgres tools, hindsight-admin, hf
 	Proc    string            // "/proc"; tests: a fake tree

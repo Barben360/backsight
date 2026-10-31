@@ -85,7 +85,11 @@ func (d mcpDeps) live() (session.Live, string) {
 	return session.Live{Cwd: cwd, Project: d.current}, found
 }
 
-// paired: live found this server's own session.
+// paired: live found this server's session, by its parent pid or by the
+// session id. The id is the one of the session the server was spawned
+// for: after a /clear it names the previous one. Only what is bounded to
+// that session's own shows takes it (memory_credit, memory_read's short
+// ids); a pause and the recall audit trust the pid record alone.
 func paired(found string) bool { return found == "record" || found == "session" }
 
 // freshPrivacy is the server's config with the privacy and components
@@ -284,9 +288,12 @@ func newMCPServer(deps mcpDeps) *mcp.Server {
 			live, found := deps.live()
 			cfg := deps.freshPrivacy()
 			err := checkNote(deps.dirs, deps.home, cfg, live.SessionID, live.Cwd, a.Kind, a.Project, a.Text)
-			if err == nil && !paired(found) && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
+			if err == nil && found != "record" && session.AnyPaused(deps.dirs.SessionsDir(), 48*time.Hour) {
 				// Without its session this server cannot honour a pause:
-				// while one is on, it fails closed.
+				// while one is on, it fails closed. A pairing by the
+				// session id is no proof either: the id is the one Claude
+				// Code gave at spawn, and after a /clear the session that
+				// runs (and may be paused) is another.
 				err = errors.New("not stored: a session is paused and this server cannot tell which session it belongs to (no current hook record); resume it, or store from the shell with backsight store")
 			}
 			var proj string

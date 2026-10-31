@@ -77,7 +77,7 @@ func schedulerPlan(ctx context.Context, tweak ...func(*scheduler.Options)) (sche
 		return scheduler.Plan{}, &output.Error{Code: output.Usage, Message: err.Error()}
 	}
 	o := scheduler.Options{Shim: filepath.Join(d.Data, "bin", plugin.ShimName(schedulerGOOS)), Home: home, UID: os.Getuid(),
-		LogDir: filepath.Join(d.State, "logs"), Env: directoryEnv(), Name: cfg.Server.Project}
+		LogDir: filepath.Join(d.State, "logs"), Env: scheduler.TaskEnv(schedulerGOOS, directoryEnv(), os.Getenv), Name: cfg.Server.Project}
 	if v := os.Getenv("PATH"); v != "" {
 		o.Env["PATH"] = v
 	}
@@ -130,7 +130,7 @@ func userUnitDir(ctx context.Context, home string) string {
 // unitDirAndEnv are the scheduler's unit directory and directories, which
 // the native runtime's units share.
 func unitDirAndEnv(ctx context.Context, home string) (string, map[string]string) {
-	return userUnitDir(ctx, home), directoryEnv()
+	return userUnitDir(ctx, home), scheduler.TaskEnv(runtime.GOOS, directoryEnv(), os.Getenv)
 }
 
 func cmdLine(c []string) string { return strings.Join(c, " ") }
@@ -284,13 +284,9 @@ func newJobsUninstallCmd(e *env) *cobra.Command {
 			files, remove := p.Paths(), p.Remove
 			if st, err := state.Load(d.StateFile()); err == nil && st.Scheduler != nil && len(st.Scheduler.Files) > 0 {
 				// Where they were written and the names they were written
-				// under, whatever the paths and the project are now. A
-				// task's file does not name its task: tasks are deleted by
-				// this install's names.
+				// under, whatever the paths and the project are now.
 				files = st.Scheduler.Files
-				if st.Scheduler.Kind != "schtasks" {
-					remove = scheduler.InstalledFrom(files).Remove(st.Scheduler.Kind, os.Getuid())
-				}
+				remove = scheduler.InstalledFrom(files).Remove(st.Scheduler.Kind, os.Getuid())
 			}
 			res := jobsInstallResult{Kind: p.Kind, Planned: plan}
 			for _, c := range remove {

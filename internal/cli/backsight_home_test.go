@@ -81,3 +81,24 @@ func TestServerSuperviseStillTakesBacksightHome(t *testing.T) {
 		t.Errorf("a relative one: exit %d %s", code, errOut)
 	}
 }
+
+// --backsight-state-dir is BACKSIGHT_STATE_DIR for a task: the state alone
+// moves; a relative one is refused; it is hidden.
+func TestBacksightStateDirFlag(t *testing.T) {
+	home := isolate(t)
+	st := filepath.Join(home, "task state")
+	code, out, errOut := run(t, "paths", "--backsight-state-dir", st)
+	if code != output.OK || !strings.Contains(out, st+"\n") || !strings.Contains(out, filepath.Join(home, "backsight", "config")+"\n") {
+		t.Errorf("exit %d %s\n%s", code, errOut, out)
+	}
+	before := os.Getenv("BACKSIGHT_STATE_DIR")
+	if code, _, errOut := run(t, "paths", "--backsight-state-dir", "st"); code != output.Usage || !strings.Contains(errOut, "--backsight-state-dir") || !strings.Contains(errOut, "absolute") {
+		t.Errorf("relative: exit %d %s", code, errOut)
+	}
+	if os.Getenv("BACKSIGHT_STATE_DIR") != before {
+		t.Error("a refused flag changed BACKSIGHT_STATE_DIR")
+	}
+	if _, out, _ := run(t, "jobs", "tick", "--help"); strings.Contains(out, "state-dir") {
+		t.Errorf("shown:\n%s", out)
+	}
+}
