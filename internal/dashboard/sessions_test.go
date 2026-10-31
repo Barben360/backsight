@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -52,9 +54,19 @@ func TestSessionSecretShape(t *testing.T) {
 	if a == b {
 		t.Fatal("two sessions share a secret")
 	}
-	dump := fmt.Sprintf("%#v", s)
-	if strings.Contains(dump, a) || strings.Contains(dump, b) {
-		t.Fatal("the store holds a secret in the clear")
+	for _, x := range []string{a, b} {
+		raw, err := hex.DecodeString(x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forms := []string{x, string(raw), base64.StdEncoding.EncodeToString(raw), base64.URLEncoding.EncodeToString(raw), base64.RawStdEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw)}
+		for _, dump := range []string{fmt.Sprintf("%#v", s), fmt.Sprintf("%v", s), fmt.Sprintf("%+v", s.list)} {
+			for _, f := range forms {
+				if strings.Contains(dump, f) {
+					t.Fatalf("the store holds a secret as %q", f)
+				}
+			}
+		}
 	}
 }
 
@@ -94,6 +106,77 @@ func TestNinthSessionDropsTheOldest(t *testing.T) {
 	}
 	if s.len() != maxSessions {
 		t.Fatalf("len = %d, want %d", s.len(), maxSessions)
+	}
+}
+
+// TestNinthDropsOldestByCreation: the oldest by creation goes, even when it
+// was the most recently seen.
+func TestNinthDropsOldestByCreation(t *testing.T) {
+	s, c := newTestSessions(t)
+	var secrets []string
+	for i := 0; i < maxSessions; i++ {
+		c.set(t0.Add(time.Duration(i) * time.Second))
+		secrets = append(secrets, mustCreate(t, s))
+	}
+	c.set(t0.Add(time.Minute))
+	if !s.valid(secrets[0]) {
+		t.Fatal("the first session is refused")
+	}
+	ninth := mustCreate(t, s)
+	if s.valid(secrets[0]) {
+		t.Fatal("the least recently seen was dropped instead of the oldest by creation")
+	}
+	if !s.valid(secrets[1]) || !s.valid(ninth) {
+		t.Fatal("a younger session was dropped")
+	}
+}
+
+// TestExpiredDroppedBeforeTheCap: a ninth session evicts an expired one
+// rather than a live session that was created earlier.
+func TestExpiredDroppedBeforeTheCap(t *testing.T) {
+	s, c := newTestSessions(t)
+	a := mustCreate(t, s)
+	c.set(t0.Add(time.Second))
+	b := mustCreate(t, s)
+	c.set(t0.Add(2 * time.Second))
+	var others []string
+	for i := 0; i < maxSessions-2; i++ {
+		others = append(others, mustCreate(t, s))
+	}
+	c.set(t0.Add(time.Hour + 50*time.Minute))
+	for _, x := range append([]string{a}, others...) {
+		if !s.valid(x) {
+			t.Fatal("a session expired early")
+		}
+	}
+	c.set(t0.Add(2*time.Hour + time.Minute)) // b is idle for more than 2 h
+	mustCreate(t, s)
+	if !s.valid(a) {
+		t.Fatal("a live session was dropped while an expired one was kept")
+	}
+	if s.valid(b) {
+		t.Fatal("the expired session is still accepted")
+	}
+	if s.len() != maxSessions {
+		t.Fatalf("len = %d, want %d", s.len(), maxSessions)
+	}
+}
+
+// TestNoMonotonicReading: the store keeps wall-clock times only, so a
+// suspend (which stops the monotonic clock) still counts as idle time.
+func TestNoMonotonicReading(t *testing.T) {
+	s := newSessions(time.Now)
+	secret := mustCreate(t, s)
+	if !s.valid(secret) {
+		t.Fatal("the created secret is refused")
+	}
+	s.len()
+	for _, x := range s.list {
+		for _, tm := range []time.Time{x.created, x.lastSeen} {
+			if strings.Contains(tm.String(), "m=") {
+				t.Fatalf("a stored time carries a monotonic reading: %v", tm)
+			}
+		}
 	}
 }
 

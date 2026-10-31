@@ -47,7 +47,7 @@ func (s *sessions) create() (string, error) {
 		return "", fmt.Errorf("draw a session secret: %w", err)
 	}
 	secret := hex.EncodeToString(b[:])
-	now := s.now()
+	now := s.wall()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dropExpired(now)
@@ -64,7 +64,7 @@ func (s *sessions) create() (string, error) {
 // a clock stepped back neither expires a session nor keeps it alive.
 func (s *sessions) valid(secret string) bool {
 	h := sha256.Sum256([]byte(secret))
-	now := s.now()
+	now := s.wall()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dropExpired(now)
@@ -83,11 +83,17 @@ func (s *sessions) valid(secret string) bool {
 	return true
 }
 
+// wall is now as wall-clock time: the monotonic reading is stripped, so a
+// suspend longer than sessionIdle expires a session.
+func (s *sessions) wall() time.Time {
+	return s.now().Round(0)
+}
+
 // len is the number of live sessions.
 func (s *sessions) len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.dropExpired(s.now())
+	s.dropExpired(s.wall())
 	return len(s.list)
 }
 
