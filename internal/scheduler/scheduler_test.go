@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestSystemdUnits(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
 	p, err := For("linux", Options{Shim: "/home/a/.local/share/backsight/bin/current", Home: "/home/a", UnitDir: "/home/a/.config/systemd/user",
 		Env: map[string]string{"BACKSIGHT_HOME": "/srv/bs 1", "PATH": "/usr/bin:/home/a/.local/bin"}})
 	if err != nil || p.Kind != "systemd" || len(p.Files) != 4 {
@@ -56,6 +59,7 @@ func TestSystemdUnits(t *testing.T) {
 }
 
 func TestLaunchdAgents(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
 	p, err := For("darwin", Options{Shim: "/Users/a/Library/Application Support/backsight/bin/current", Home: "/Users/a", UID: 501,
 		LogDir: "/Users/a/Library/Application Support/backsight/state/logs", Env: map[string]string{"PATH": "/opt/homebrew/bin:/usr/bin"}})
 	if err != nil || p.Kind != "launchd" || len(p.Files) != 2 {
@@ -103,6 +107,7 @@ func TestScheduledTasks(t *testing.T) {
 
 // A second install (another Compose project) gets entries of its own.
 func TestEntriesAreNamedAfterTheProject(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
 	o := Options{Shim: "/s", Home: "/h", UnitDir: "/u", Name: "bs-fresh"}
 	p, _ := For("linux", o)
 	got := strings.Join(p.Paths(), " ")
@@ -164,6 +169,7 @@ func TestInstalledEnvRoundTrips(t *testing.T) {
 // Each entry names its files, how to reload them and, where reloading
 // stops a running job, how to tell that it runs.
 func TestEntries(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
 	s, _ := For("linux", Options{Shim: "/s", Home: "/h", UnitDir: "/u"})
 	if len(s.Entries) != 2 || len(s.Entries[0].Files) != 2 || s.Entries[0].Running != nil || len(s.Entries[0].Reload) != 0 {
 		t.Errorf("systemd entries %+v", s.Entries)
@@ -235,6 +241,7 @@ func TestInstalledFromRecordedFiles(t *testing.T) {
 // Only a timer linked into timers.target.wants beside it is enabled;
 // services and a missing link are not.
 func TestTimersEnabled(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
 	dir := t.TempDir()
 	files := []string{filepath.Join(dir, "bs-tick.service"), filepath.Join(dir, "bs-tick.timer"), filepath.Join(dir, "bs-maintain.timer")}
 	if TimersEnabled(files) {
@@ -254,6 +261,7 @@ func TestTimersEnabled(t *testing.T) {
 
 // A link that cannot be read may be there: it counts as enabled.
 func TestTimersEnabledUnreadable(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler tests build POSIX paths")
 	if os.Geteuid() == 0 {
 		t.Skip("root reads every directory")
 	}

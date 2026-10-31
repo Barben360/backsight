@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/project"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -588,7 +589,7 @@ func TestLocks(t *testing.T) {
 	_ = l.Release()
 
 	_ = os.MkdirAll(filepath.Dir(e.f.Dirs.MaintenanceLock()), 0o700)
-	_ = os.WriteFile(e.f.Dirs.MaintenanceLock(), []byte(`{"pid":1,"command":"backup create"}`), 0o600)
+	_ = os.WriteFile(e.f.Dirs.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`,"command":"backup create"}`), 0o600)
 	e.record("s1", "u2", "user", 60, "q2")
 	if r := e.flush("s1", Options{Force: true}); r.Status != Maintenance {
 		t.Errorf("maintenance: %+v", r)
@@ -652,6 +653,7 @@ func TestProjectChangeMidSessionSplitsSegments(t *testing.T) {
 // directory: a strong project name (project.Resolver.Named).
 func (e *env) repo(name string) string {
 	e.t.Helper()
+	testtool.RequireGit(e.t)
 	dir := filepath.Join(filepath.Dir(e.cwd), name)
 	_ = os.MkdirAll(dir, 0o700)
 	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
@@ -1037,6 +1039,7 @@ func TestStaleServerMetadataDoesNotDuplicate(t *testing.T) {
 
 // A cursor that cannot be saved after a send must not cause a resend.
 func TestCursorSaveFailureDoesNotDuplicate(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits (a directory made read-only)")
 	if os.Getuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}

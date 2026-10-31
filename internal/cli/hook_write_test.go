@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 type gateOut struct {
@@ -189,6 +190,7 @@ func TestSubagentStopIgnoresInternalHelperAgents(t *testing.T) {
 // gitRepo makes dir a git repository with origin remote.
 func gitRepo(t *testing.T, dir, remote string) {
 	t.Helper()
+	testtool.RequireGit(t)
 	_ = os.MkdirAll(dir, 0o700)
 	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", remote}} {
 		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
@@ -210,16 +212,16 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 	// evidence may be partial and the report keeps its session's project.
 	for _, c := range []struct{ sid, edits, want string }{{"s1", shop, "shop"}, {"s2", vendor, "billing"}, {"s3", shop, "billing"}} {
 		parent := subagentTranscript(t, c.sid, "ag1")
-		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+billing+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+		_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"`+c.sid+`","cwd":"`+testtool.JSONPath(billing)+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
 		agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
 		line := func(uuid, file string) string {
-			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + filepath.Join(file, "x.go") + `"}}]}}` + "\n"
+			return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + filepath.Join(file, "x.go") + `"}}]}}` + "\n"
 		}
-		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
+		reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed in ` + c.sid + `"}]}}` + "\n"
 		if c.sid == "s3" {
 			reply = ""
 		}
-		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+billing+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)+reply), 0o600)
+		_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+testtool.JSONPath(billing)+`","message":{"role":"user","content":"Fix it."}}`+"\n"+line("e1", c.edits)+line("e2", c.edits)+reply), 0o600)
 		fire(t, "subagent-stop", map[string]any{"session_id": c.sid, "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
 			"transcript_path": parent, "last_assistant_message": "Fixed in " + c.sid})
 	}

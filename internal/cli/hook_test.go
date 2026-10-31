@@ -14,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/feedback"
 	"github.com/Barben360/backsight/internal/recall"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // childFromTestBinary makes the supervisor's child this test binary, which
@@ -44,6 +45,7 @@ func runHookCmd(t *testing.T, input string, args ...string) (int, string) {
 // Whatever the child does, `backsight hook` exits 0 and prints nothing but
 // valid hook JSON; failures land in telemetry (SPEC §6.1, chaos per event).
 func TestHookAlwaysExitsZero(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): a killed hook child is classified \"exit\" or \"panic\" on Windows")
 	home := isolate(t)
 	events := []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure", "subagent-start", "subagent-stop", "stop", "session-end"}
 	for _, chaos := range []string{"panic", "fatal", "kill", "exit2"} {
@@ -82,7 +84,7 @@ func TestHookWithoutAnEventOrWithJunkArgsExitsZero(t *testing.T) {
 func TestHookPrintsTheChildAnswerAndCutsAHang(t *testing.T) {
 	home := hookHome(t)
 	childFromTestBinary(t, "")
-	code, out := runHookCmd(t, `{"session_id":"s1","source":"resume","cwd":"`+home+`"}`, "session-start")
+	code, out := runHookCmd(t, `{"session_id":"s1","source":"resume","cwd":"`+testtool.JSONPath(home)+`"}`, "session-start")
 	if code != 0 || !strings.Contains(out, `"hookEventName":"SessionStart"`) || !strings.Contains(out, "memory_search") {
 		t.Fatalf("exit %d: %q", code, out)
 	}

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The test binary doubles as the child: TestMain runs childMain when the
@@ -80,6 +82,7 @@ func TestChildOutputPassesThroughWhenValid(t *testing.T) {
 // Every failure of the child prints nothing and is reported once (SPEC
 // §6.1): the handler fails here as a bug would, in every build.
 func TestEveryChildFailurePrintsNothing(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): a killed hook child is classified \"exit\" on Windows")
 	for _, c := range []struct {
 		behaviour, kind string
 		deadline        time.Duration

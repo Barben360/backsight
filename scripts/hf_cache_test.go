@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeDocker is a docker on PATH that logs each call and answers from
@@ -96,6 +98,7 @@ func pinnedImage(t *testing.T) string {
 }
 
 func TestHFCacheDoesNothingWithoutItsVariable(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fake := newFakeDocker(t)
 	calls, _, err := hfCache(t, fake, "", "hfc_seed bs-x; hfc_save bs-x")
 	if err != nil || calls != nil {
@@ -104,6 +107,7 @@ func TestHFCacheDoesNothingWithoutItsVariable(t *testing.T) {
 }
 
 func TestHFCacheSeedsANewVolumeFromTheTar(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fake := newFakeDocker(t)
 	tarPath := filepath.Join(t.TempDir(), "hf_cache.tar")
 	want := tarOf(t, "./huggingface/hub/models--a/blob")
@@ -124,6 +128,7 @@ func TestHFCacheSeedsANewVolumeFromTheTar(t *testing.T) {
 }
 
 func TestHFCacheSeedLeavesAnExistingVolumeAndAMissingTarAlone(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fake := newFakeDocker(t, "inspect-ok")
 	tarPath := filepath.Join(t.TempDir(), "hf_cache.tar")
 	_ = os.WriteFile(tarPath, tarOf(t, "./huggingface/hub/models--a/blob"), 0o644)
@@ -140,6 +145,7 @@ func TestHFCacheSeedLeavesAnExistingVolumeAndAMissingTarAlone(t *testing.T) {
 
 // A broken cache is a miss: the half-filled volume goes, the run goes on.
 func TestHFCacheSeedFailureRemovesTheVolume(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fake := newFakeDocker(t, "run-fails")
 	tarPath := filepath.Join(t.TempDir(), "hf_cache.tar")
 	_ = os.WriteFile(tarPath, []byte("not a tar"), 0o644)
@@ -153,6 +159,7 @@ func TestHFCacheSeedFailureRemovesTheVolume(t *testing.T) {
 }
 
 func TestHFCacheSavesTheVolumeOnce(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fake := newFakeDocker(t, "inspect-ok")
 	out := tarOf(t, "./", "./huggingface/hub/models--a/blob")
 	_ = os.WriteFile(filepath.Join(fake, "out.tar"), out, 0o644)
@@ -176,6 +183,7 @@ func TestHFCacheSavesTheVolumeOnce(t *testing.T) {
 }
 
 func TestHFCacheDoesNotSaveAVolumeWithoutModels(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for name, flags := range map[string][]string{"no models": {"inspect-ok"}, "no volume": nil, "docker fails": {"inspect-ok", "run-fails"}} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeDocker(t, flags...)
@@ -197,6 +205,7 @@ func TestHFCacheDoesNotSaveAVolumeWithoutModels(t *testing.T) {
 // the volume is seeded, frees the runner's disk, and the run does not
 // write it again. Without the variable a seeded tar stays.
 func TestHFCacheDropsASeededTarOnRequest(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for _, drop := range []bool{true, false} {
 		fake := newFakeDocker(t)
 		tarPath := filepath.Join(t.TempDir(), "hf_cache.tar")

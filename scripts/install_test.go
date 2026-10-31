@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/blake2b"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 type key struct {
@@ -373,6 +375,7 @@ func TestInstallKeepsTheSignedChecksums(t *testing.T) {
 // An install.sh from before decision 0067's block review linked the PATH
 // command to a versioned binary: a new install points it at the shim.
 func TestInstallPointsAnOlderPathLinkAtTheShim(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	k := newKey(t)
 	dir, _ := release(t, k)
 	home := t.TempDir()

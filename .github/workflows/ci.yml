@@ -34,6 +34,21 @@ jobs:
       # switch), never in a release.
       - run: make test-hooks
       - run: make cross
+  test-windows:
+    # The unit tests on Windows (M7 block 2, decision 0080): the fakes are
+    # the test binary itself (internal/testtool), the POSIX scripts' tests
+    # skip. Nothing here needs admin or touches the machine.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
+          cache: true
+      - run: go test ./... -count=1
   snapshot:
     # The release build, signed by minisign with a throwaway key: the
     # pre-publish key check passes, every signature verifies, and the Go

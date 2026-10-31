@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/selfcheck"
 	"github.com/Barben360/backsight/internal/signing"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeRelease installs a fake release binary of version v in dir, with the
@@ -169,7 +170,7 @@ func TestHooksNeverRunTheSelfCheck(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	childFromTestBinary(t, "")
 	d := pathsOf(home)
-	in := `{"session_id":"s1","source":"startup","cwd":"` + filepath.Join(home, "billing") + `","prompt":"how do we deploy billing?"}`
+	in := `{"session_id":"s1","source":"startup","cwd":"` + testtool.JSONPath(filepath.Join(home, "billing")) + `","prompt":"how do we deploy billing?"}`
 	for _, ev := range []string{"session-start", "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure", "subagent-start", "subagent-stop", "stop", "session-end"} {
 		code, out := runHookCmd(t, in, ev)
 		if code != 0 || (ev == "session-start" && !strings.Contains(out, "additionalContext")) {

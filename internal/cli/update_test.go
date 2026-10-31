@@ -15,6 +15,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // releaseDir lays out one goreleaser dist/ per version under a temp root
@@ -221,7 +222,7 @@ func TestUpdateCheckReadsGitHubWithTheEnvironmentToken(t *testing.T) {
 func TestUpdateCheckRecordsOnlyTheConfiguredSource(t *testing.T) {
 	home := devInstall(t, true)
 	setBuild(t, "0.1.0", "abc1234")
-	configure(t, home, "[update]\nsource = \""+releaseDir(t, "0.2.0")+"\"")
+	configure(t, home, "[update]\nsource = "+testtool.TOMLStr(releaseDir(t, "0.2.0"))+"")
 	if code, _, _ := run(t, "update", "check", "--source", releaseDir(t, "0.9.0")); code != output.OK {
 		t.Fatalf("exit %d", code)
 	}
@@ -268,7 +269,7 @@ func TestMaintainRecordsTheUpdateCheck(t *testing.T) {
 	configure(t, home, "[backup]\nenabled = false")
 	setBuild(t, "0.1.0", "abc1234")
 	src := releaseDir(t, "0.1.0", "0.2.0")
-	configure(t, home, "[update]\nsource = \""+src+"\"")
+	configure(t, home, "[update]\nsource = "+testtool.TOMLStr(src)+"")
 	withClock(t, time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC))
 	code, out, _ := run(t, "jobs", "maintain")
 	if code != output.OK || !strings.Contains(out, "update 0.2.0 available") {

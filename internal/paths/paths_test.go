@@ -3,11 +3,14 @@ package paths
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
 func TestResolve(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): Resolve(\"linux\", ...) checks absolute paths with the host's rules")
 	cases := []struct {
 		name string
 		goos string
@@ -89,6 +92,7 @@ func TestStateLayout(t *testing.T) {
 }
 
 func TestStateDirOverrideMovesOnlyTheState(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): Resolve(\"linux\", ...) checks absolute paths with the host's rules")
 	env := map[string]string{"BACKSIGHT_HOME": "/b", "BACKSIGHT_STATE_DIR": "/scratch/state"}
 	d, err := Resolve("linux", "/home/u", func(k string) string { return env[k] })
 	if err != nil || d.State != "/scratch/state" || d.Config != "/b/config" || d.Data != "/b/data" {

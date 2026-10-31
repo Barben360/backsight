@@ -14,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 type hookOut struct {
@@ -280,7 +281,7 @@ func TestExcludedProjectGetsNoBriefingPage(t *testing.T) {
 	home := hookHome(t)
 	cfg := filepath.Join(home, "backsight", "config", "config.toml")
 	raw, _ := os.ReadFile(cfg)
-	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]\n")...), 0o600)
+	_ = os.WriteFile(cfg, append(raw, []byte("\n[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "billing"))+"]\n")...), 0o600)
 	recentAnswer["observation"] = "[" + obs("o1", "Billing keeps PostgreSQL 16.", "2026-10-24T09:00:00Z") + "]"
 	h := fire(t, "session-start", map[string]any{"session_id": "s1", "source": "startup", "cwd": filepath.Join(home, "billing")})
 	if len(mentalCalls) != 0 || !strings.Contains(h.Specific.Context, "Billing keeps PostgreSQL 16.") {
@@ -447,6 +448,7 @@ func TestThePageReachesCompactionAndSubagents(t *testing.T) {
 func TestSessionStartAndPromptRecordTheRepositoryRemote(t *testing.T) {
 	home := hookHome(t)
 	repo := filepath.Join(home, "billing")
+	testtool.RequireGit(t)
 	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", "git@github.com:Acme/billing.git"}} {
 		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)

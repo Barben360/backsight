@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/plugin"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeClaude records claude CLI calls and answers the list commands.
@@ -104,6 +104,7 @@ func mutating(f *fakeClaude) []string {
 }
 
 func TestClientInstallFirstTime(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	settings := filepath.Join(home, ".claude", "settings.json")
@@ -147,6 +148,7 @@ func TestClientInstallFirstTime(t *testing.T) {
 }
 
 func TestClientInstallAgainUpdatesInsteadOfAdding(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	run(t, "client", "install")
@@ -294,6 +296,7 @@ func TestClientInstallShimTargetIsAVerifiedCopy(t *testing.T) {
 }
 
 func TestClientInstallOnANewVersionSwitchesTheShim(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	withClaude(t)
 	setBuild(t, "1.0.0", "a")
@@ -327,6 +330,7 @@ func TestClientInstallMovedDataDirReaddsTheMarketplace(t *testing.T) {
 }
 
 func TestClientInstallMarketplaceKnownPluginNot(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	f.marketplaces = `[{"name":"backsight","source":"directory","path":"` + filepath.Join(pathsOf(home).Data, "marketplace") + `"}]`
@@ -337,6 +341,7 @@ func TestClientInstallMarketplaceKnownPluginNot(t *testing.T) {
 }
 
 func TestClientInstallHalfwayFailureThenRerun(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	f.failOn = "plugin install"
@@ -415,14 +420,8 @@ func TestClientInstallRefusesUnreadableClaudeOutputAndConcurrency(t *testing.T) 
 // The real runner parses stdout only: a warning on stderr must not break
 // the JSON (block-3 review, proven).
 func TestExecClaudeIgnoresStderrWarnings(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script")
-	}
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho 'Warning: something' >&2\nif [ \"$1\" = --version ]; then echo '2.1.310 (Claude Code)'; else echo '[]'; fi\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testtool.Write(t, bin, "claude", testtool.Fake{Script: "stderr Warning: something\n1=--version stdout 2.1.310 (Claude Code)\n1!=--version stdout []"})
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := execClaude{}.Run(context.Background(), nil, "plugin", "list", "--json")
 	if err != nil || strings.TrimSpace(string(out)) != "[]" {
@@ -437,14 +436,8 @@ func TestExecClaudeIgnoresStderrWarnings(t *testing.T) {
 // The real runner never passes on the shell's CLAUDE_CONFIG_DIR: the
 // caller names the profile, and none means ~/.claude (block 3 review).
 func TestExecClaudeTakesTheProfileFromTheCallerOnly(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script")
-	}
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho \"${CLAUDE_CONFIG_DIR-unset}\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testtool.Write(t, bin, "claude", testtool.Fake{Script: "env CLAUDE_CONFIG_DIR unset"})
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("CLAUDE_CONFIG_DIR", "/home/u/.claude-work")
 	if out, err := (execClaude{}).Run(context.Background(), nil, "plugin", "list"); err != nil || strings.TrimSpace(string(out)) != "unset" {
@@ -482,6 +475,7 @@ func TestDoctorAsksClaudeCodeWhetherThePluginIsEnabled(t *testing.T) {
 // Two installs cannot share a profile: a marketplace that still exists
 // elsewhere is another install's, a missing one is this install's, moved.
 func TestClientInstallRefusesAProfileWiredToAnotherInstall(t *testing.T) {
+	testtool.SkipWindows(t, "Task 4: the shim and the PATH link")
 	home := devInstall(t, true)
 	f := withClaude(t)
 	other := filepath.Join(home, "other-install", "marketplace")

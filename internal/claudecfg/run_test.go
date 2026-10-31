@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func runner(t *testing.T) (Runner, string) {
@@ -58,6 +60,7 @@ func journal(t *testing.T, r Runner) []map[string]any {
 }
 
 func TestApplyBacksUpThenWritesOnce(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	r, dir := runner(t)
 	target := filepath.Join(dir, "settings.json")
 	orig := "{\n  \"model\": \"opus\"\n}\n"

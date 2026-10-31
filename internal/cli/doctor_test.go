@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // isolatedEnv are the variables of the shell running the tests (a hook,
@@ -49,7 +50,7 @@ func isolate(t *testing.T) string {
 	home := t.TempDir()
 	unsetMachineEnv(t)
 	t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
-	t.Setenv("HOME", home)
+	testtool.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	old := probes
 	probes = func(e *doctor.Env) {
@@ -352,6 +353,7 @@ func doctorChecks(t *testing.T) (int, map[string]doctor.Check) {
 // only reads: no unit started or stopped, no stray stopped, nothing
 // written under the native directory.
 func TestDoctorOnNativeReadsTheGuards(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7-10: native runtime")
 	_, n, tools, _, _ := nativeHost(t)
 	sys := &doctorSys{states: "ActiveState=active\nSubState=running\n\nActiveState=active\nSubState=running\n", linger: "yes"}
 	nativeSys = sys
@@ -468,6 +470,7 @@ func put0(t *testing.T, p string, size int) {
 // df takes up to 15 s on every doctor, report and maintain run); after a
 // day it names what is kept without a size, and doctor --json measures it.
 func TestDoctorUsesTheSwitchsKeptSize(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: native allowed on windows/amd64 (the test switches the config to native)")
 	t.Run("docker kept", func(t *testing.T) {
 		home := devInstall(t, true)
 		d := pathsOf(home)

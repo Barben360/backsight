@@ -19,6 +19,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // guardHS fronts fakeHS with what the look for recreated purged documents
@@ -440,6 +441,7 @@ func TestGuardWaitsForMaintenanceAndMarkers(t *testing.T) {
 // A maintenance lock whose owner is gone (a crash mid-backup) is broken:
 // the purge goes on; the lock is released after it.
 func TestGuardBreaksAStaleMaintenanceLock(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	e, g := guardEnv(t)
 	g.recreate("conversation:s1", serverAt(12, 25), "f1")
 	_ = os.MkdirAll(filepath.Dir(e.f.Dirs.MaintenanceLock()), 0o700)

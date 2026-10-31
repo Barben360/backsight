@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // backupDocker answers the commands a backup and a verify run: psql values,
@@ -137,7 +139,7 @@ func TestBackupRefusesDuringMaintenanceAndReportsAFailedDump(t *testing.T) {
 	dk := withBackupDocker(t)
 	d := pathsOf(home)
 	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
-	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1,"command":"update"}`), 0o600)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`,"command":"update"}`), 0o600)
 	if code, _, errOut := run(t, "backup", "create"); code != output.Blocked || !strings.Contains(errOut, "maintenance") {
 		t.Errorf("exit %d %q", code, errOut)
 	}

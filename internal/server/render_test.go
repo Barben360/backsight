@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -243,6 +244,7 @@ func TestRedact(t *testing.T) {
 // A .env someone loosened goes back to 0600 even when its content is
 // unchanged: it holds the database password and keys (M1 review).
 func TestWriteTightensALooseEnvFile(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	dir := t.TempDir()
 	f := Files{Compose: []byte("services: {}\n"), Env: []byte("KEY=v\n")}
 	if _, err := Write(dir, f); err != nil {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestStoreSendsAtOnce(t *testing.T) {
@@ -82,7 +84,7 @@ func TestStoreQueuesDuringMaintenance(t *testing.T) {
 	pointAt(t, home, fakeHindsight(t))
 	d := pathsOf(home)
 	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
-	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1}`), 0o600)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`}`), 0o600)
 	before := retained.Load()
 	_, out, _ := run(t, "store", "--kind", "lesson", "--project", "p", "Queued during maintenance.")
 	if !strings.Contains(out, "queued") || retained.Load() != before {

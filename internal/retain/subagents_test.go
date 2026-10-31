@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // subagent writes subagents/agent-<agent>.jsonl beside session sid's
@@ -24,8 +25,8 @@ func (e *env) subagentAt(sid, agent, agentType, reply string, at time.Time) {
 	e.t.Helper()
 	dir := filepath.Join(e.dir, sid, "subagents")
 	_ = os.MkdirAll(dir, 0o700)
-	lines := `{"type":"user","isSidechain":true,"uuid":"` + agent + `-1","timestamp":"` + at.Add(-5*time.Minute).UTC().Format(time.RFC3339) + `","cwd":"` + e.cwd + `","message":{"role":"user","content":"Look at the export."}}` + "\n" +
-		`{"type":"assistant","isSidechain":true,"uuid":"` + agent + `-2","timestamp":"` + at.UTC().Format(time.RFC3339) + `","cwd":"` + e.cwd + `","message":{"role":"assistant","content":[{"type":"text","text":` + quote(reply) + `}]}}` + "\n"
+	lines := `{"type":"user","isSidechain":true,"uuid":"` + agent + `-1","timestamp":"` + at.Add(-5*time.Minute).UTC().Format(time.RFC3339) + `","cwd":"` + testtool.JSONPath(e.cwd) + `","message":{"role":"user","content":"Look at the export."}}` + "\n" +
+		`{"type":"assistant","isSidechain":true,"uuid":"` + agent + `-2","timestamp":"` + at.UTC().Format(time.RFC3339) + `","cwd":"` + testtool.JSONPath(e.cwd) + `","message":{"role":"assistant","content":[{"type":"text","text":` + quote(reply) + `}]}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "agent-"+agent+".jsonl"), []byte(lines), 0o600); err != nil {
 		e.t.Fatal(err)
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/report"
 	"github.com/Barben360/backsight/internal/target"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // reportPlant is what a report must never show, planted where a real
@@ -63,7 +64,7 @@ func plantedMachine(t *testing.T) reportPlant {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 
 	d := pathsOf(home)
 	now := time.Now().UTC()
@@ -154,6 +155,7 @@ func assertScrubbed(t *testing.T, planted map[string]string, wants []string) {
 }
 
 func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): report's redaction of the home directory is POSIX-style")
 	p := plantedMachine(t)
 	assertScrubbed(t, map[string]string{"secret": p.secret, "memory": p.memory, "prompt": p.prompt, "home": p.home,
 		"host": "annsbox", "project": "ann-secret-project"},
@@ -162,6 +164,7 @@ func TestReportNeverShowsSecretsMemoriesPromptsOrHome(t *testing.T) {
 }
 
 func TestReportJSONLinksAndSendsNothing(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): report's redaction of the home directory is POSIX-style")
 	p := plantedMachine(t)
 	before := tree(t, p.home)
 	code, out, _ := run(t, "report", "--json")
@@ -254,7 +257,7 @@ func TestReportHidesTheBankName(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"ann-private-notes\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"ann-private-notes\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 	code, out, _ := run(t, "report")
 	if code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -375,7 +378,7 @@ func TestReportHidesTheEscapedBankAndAMultiLineAnswer(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	_ = os.MkdirAll(filepath.Join(home, "backsight", "config"), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\nui_port = "+itoa(closedPort(t))+"\n"), 0o600)
 	assertScrubbed(t, map[string]string{"bank": "coding-agent::memoire", "memory": memory, "memory word": "quokkatrellis"},
 		[]string{"/v1/default/banks/<bank>/stats: HTTP 500", "cannot read bank <bank>"})
 	if c := reportCheck(reportJSON(t), "bank"); !strings.HasSuffix(c.Detail, "HTTP 500 (server_error): [server answer omitted]") {
@@ -384,6 +387,7 @@ func TestReportHidesTheEscapedBankAndAMultiLineAnswer(t *testing.T) {
 }
 
 func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): report's redaction of the home directory is POSIX-style")
 	home := isolate(t)
 	withClaude(t)
 	setUser(t, "annuser")
@@ -401,8 +405,8 @@ func TestReportHidesRootsUserAndSecretsOutsideHome(t *testing.T) {
 
 	_ = os.MkdirAll(d.Config, 0o700)
 	_ = os.WriteFile(d.ConfigFile(), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
-		"\n[backup]\ndir = \""+vault+"\"\n"), 0o600)
-	_ = os.WriteFile(d.SecretsFile(), []byte("api_key = \""+tomlKey+"\"\nllm_api_key = \""+phrase+"\"\n"), 0o600)
+		"\n[backup]\ndir = "+testtool.TOMLStr(vault)+"\n"), 0o600)
+	_ = os.WriteFile(d.SecretsFile(), []byte("api_key = "+testtool.TOMLStr(tomlKey)+"\nllm_api_key = "+testtool.TOMLStr(phrase)+"\n"), 0o600)
 	_ = os.MkdirAll(filepath.Join(d.Data, "server"), 0o700)
 	_ = os.WriteFile(filepath.Join(d.Data, "server", ".env"), []byte("# old render\nHINDSIGHT_API_TENANT_API_KEY='"+envKey+"'\nHINDSIGHT_API_LLM_PROVIDER=openai\n"), 0o600)
 
@@ -519,7 +523,7 @@ func localProjects(t *testing.T, home string, serverOnly ...string) []string {
 	put(filepath.Join(d.SessionsDir(), "s1.json"), `{"project":"brambleway","injected":[{"id":"m1","project":"fernhollow"}]}`)
 	repo := filepath.Join(home, "work", "mg")
 	put(filepath.Join(repo, ".backsight.toml"), "project = \"mossgarden\"\nrelated = [\"tidewater\"]\n")
-	put(filepath.Join(d.SessionsDir(), "by-pid", "4242.json"), `{"session_id":"s1","cwd":"`+repo+`","project":"brambleway"}`)
+	put(filepath.Join(d.SessionsDir(), "by-pid", "4242.json"), `{"session_id":"s1","cwd":"`+testtool.JSONPath(repo)+`","project":"brambleway"}`)
 	put(filepath.Join(d.CursorsDir(), "s9.json"), `{"transcript":"","document":"conversation:s9@cinderfield","home":"emberlane","segments":{"cinderfield":1,"emberlane":2}}`)
 	names := []string{"brambleway", "fernhollow", "mossgarden", "tidewater", "cinderfield", "emberlane", "quillpond"}
 	ts := time.Now().UTC().Add(-time.Hour)
@@ -584,7 +588,7 @@ func TestReportHidesEveryKnownProjectName(t *testing.T) {
 	withClaude(t)
 	url := projectBank(t, "ann-memory", "project:workspace", "project:.claude", "project:lanternfish", "project:saltmarsh", "project:ops")
 	_ = os.MkdirAll(filepath.Dir(cfgFile(home)), 0o700)
-	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \""+url+"\"\nbank = \"ann-memory\"\nui_port = "+itoa(closedPort(t))+
+	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = "+testtool.TOMLStr(url)+"\nbank = \"ann-memory\"\nui_port = "+itoa(closedPort(t))+
 		"\n[projects]\ntransverse = [\"workspace\", \".claude\"]\n"), 0o600)
 	names := localProjects(t, home, "saltmarsh", "--project ops")
 	// doctor's remotes check names a short project: two repositories share api.
@@ -647,7 +651,7 @@ func TestReportHidesLiveRecordProjectsWithoutTransverse(t *testing.T) {
 	_ = os.WriteFile(cfgFile(home), []byte("[server]\nurl = \"http://127.0.0.1:"+itoa(closedPort(t))+"\"\nui_port = "+itoa(closedPort(t))+
 		"\n[projects]\ntransverse = []\n"), 0o600)
 	localProjects(t, home)
-	_ = os.WriteFile(filepath.Join(pathsOf(home).SessionsDir(), "by-pid", "4343.json"), []byte(`{"session_id":"s2","cwd":"`+home+`"}`), 0o600)
+	_ = os.WriteFile(filepath.Join(pathsOf(home).SessionsDir(), "by-pid", "4343.json"), []byte(`{"session_id":"s2","cwd":"`+testtool.JSONPath(home)+`"}`), 0o600)
 	assertScrubbed(t, map[string]string{"project from .backsight.toml": "mossgarden", "related from .backsight.toml": "tidewater"},
 		[]string{"flush of <project>, <project>, <project>, <project>,"})
 }

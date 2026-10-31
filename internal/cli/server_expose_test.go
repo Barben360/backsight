@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/token"
 )
 
@@ -165,6 +166,7 @@ func TestExposeRefusesPublicAddress(t *testing.T) {
 }
 
 func TestExposeAsksCleartext(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): resume commands quote a Windows path POSIX-style")
 	fx := exposeHost(t)
 	before := fx.config(t)
 	f := filepath.Join(t.TempDir(), "join.token")
@@ -416,6 +418,7 @@ func configLockedAtFirstUp(t *testing.T, home string) {
 // expose again; the server is not started on a config it does not hold,
 // and no key is printed.
 func TestExposeSaysWhenConfigCannotBePutBack(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits (a read-only config)")
 	fx := exposeHost(t)
 	fx.dk.failOn = "100.101.1.2"
 	configLockedAtFirstUp(t, fx.home)
@@ -488,6 +491,7 @@ func TestExposeRefusesASymlinkOut(t *testing.T) {
 // to private exposure; config.toml, server.env and both units stay
 // byte-identical and the units are left alone.
 func TestServerExposeRefusedOnNative(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7-10: native runtime")
 	home, n, _, sys, _ := nativeHost(t)
 	files := []string{pathsOf(home).ConfigFile(), n.EnvFile(), unitPath(home, n.DBUnit()), unitPath(home, n.ServerUnit())}
 	before := map[string]string{}

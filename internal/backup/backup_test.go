@@ -18,6 +18,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 type fakeDB struct{ dump string }
@@ -44,6 +45,7 @@ func (f fakeDB) Dump(_ context.Context, dst string, tables []string) (map[string
 }
 
 func TestCreateOpenRoundTrip(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	dir := t.TempDir()
 	id, _ := age.GenerateX25519Identity()
 	at := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
@@ -292,6 +294,7 @@ func deadPID(t *testing.T) int {
 // A killed verify leaves its clear dump in staging: the next backup or
 // verify removes it, never the directory of a verify still running.
 func TestDeadVerifiesAreRemoved(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): state.processAlive treats an exited process as alive on Windows (a dead pid is not reliably dead)")
 	staging := t.TempDir()
 	dead := map[string]string{
 		"verify-4242":        "", // no lock: an older layout, or killed between its steps

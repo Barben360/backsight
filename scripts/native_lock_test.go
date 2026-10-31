@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeLockDocker prints the image's listing from listing.txt and
@@ -82,6 +84,7 @@ func runNativeLockIn(t *testing.T, listing, body, lock string, args ...string) (
 }
 
 func TestNativeLockScriptChecksThePin(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	pin := pinnedImage(t) // render.go's
 	tag := strings.Split(pin, "@")[0]
 	tag = tag[strings.LastIndex(tag, ":")+1:]

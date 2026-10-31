@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // Security review M3: a local snapshot is never signed with a release key,
@@ -141,6 +143,7 @@ func TestReleaseKeyGuardRefusesAReleaseKeyOutsideTheReleaseWorkflow(t *testing.T
 // keys: --list prints the ids it read from minisign.pub and
 // minisign.next.pub.
 func TestReleaseKeyGuardKnowsThePublishedKeys(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	out, err := guard(t, nil, "--list")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)

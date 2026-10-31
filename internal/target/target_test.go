@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/reference"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func dirs(t *testing.T) paths.Dirs {
@@ -57,6 +58,7 @@ func TestFromConfigWithoutSecrets(t *testing.T) {
 }
 
 func TestFromConfigErrors(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits (an unreadable secrets.toml)")
 	d := dirs(t)
 	put(t, d.ConfigFile(), "[recall]\nmin_scor = 1\n", 0o600)
 	var ce *ConfigError

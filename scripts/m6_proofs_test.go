@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The test driver of scripts/m6-proofs.sh: each machine is a directory of
@@ -106,6 +108,7 @@ printf %s "$code"
 // other answer fails naming its status, never reads as absent. The key
 // reaches curl only through -K, never its argv nor the trace.
 func TestM6DocRefusesAnythingButFoundOrAbsent(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for _, tc := range []struct {
 		code, want string
 		fails      bool
@@ -146,6 +149,7 @@ func TestM6DocRefusesAnythingButFoundOrAbsent(t *testing.T) {
 // field holding the first one only, and a record sent twice counts 2. An
 // absent document or one without original_text fails.
 func TestM6UUIDCountsSeeEverySegment(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	m6ServerFakes(t, dir)
 	writeLines(t, filepath.Join(dir, "code"), "200")
@@ -179,6 +183,7 @@ func TestM6UUIDCountsSeeEverySegment(t *testing.T) {
 // so it never reads as "sent nothing"; one that stays skipped fails, and
 // so does a tick that did not succeed.
 func TestM6TickRetriesASkippedTick(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const fake = `#!/bin/sh
 t=$(dirname "$(dirname "$0")")
 n=$(($(cat "$t/calls" 2>/dev/null || echo 0) + 1))
@@ -225,6 +230,7 @@ fi
 // Each result is one line and one JSONL record with its fields; no key or
 // token passes through its values or detail.
 func TestM6ResultWritesALineAndARecord(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	stdout, stderr, code := m6Lib(t, dir, m6TestDriver,
 		`m6_result two-clients PASS "joined with bst1.eyJhIjoxfQ.sig" '{"records":6,"api_key":"k-S3CR3T","tokens":1200,"nested":{"token":"bst1.x","note":"got bst1.abc_DEF-1","llm_key":"m","max_tokens":9,"bearer_token":"t","client_secret":"s"}}'`)
@@ -268,6 +274,7 @@ func TestM6ResultWritesALineAndARecord(t *testing.T) {
 // Learning a key never traces it, and a machine with no backsight adds
 // nothing and fails nothing.
 func TestM6ScrubMasksTheKeysTheRunKnows(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const kb, ks1, ks2 = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", "s1s1s1s1-s1s1s1s1_s1s1s1s1", "s2s2s2s2s2s2s2s2s2s2s2s2s2s2"
 	dir := t.TempDir()
 	m6ServerFakes(t, dir)
@@ -316,6 +323,7 @@ stat -c %a "$M6_WORK/known-keys"`, "PS4=+ ")
 // ends the check; one that records nothing fails too; m6_check refuses to
 // run in a condition, where set -e would be off.
 func TestM6CheckStopsTheRunAtTheFirstFail(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	stdout, stderr, code := m6Lib(t, dir, m6TestDriver, `
 c1() { m6_result c1 PASS "one"; }
@@ -481,6 +489,7 @@ func m6Chain(t *testing.T, dir, check string) (stdout, stderr, calls string) {
 }
 
 func TestM6ProofsNeverRunSSHInstallOnB(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for _, c := range []string{"ssh-unknown-host-key", "ssh-dropped-mid-install", "ssh-install", "ssh-changed-host-key", "two-clients"} {
 		dir := t.TempDir()
 		stdout, stderr, calls := m6Chain(t, dir, c)
@@ -511,6 +520,7 @@ func TestM6ProofsNeverRunSSHInstallOnB(t *testing.T) {
 // the resumed install's output by ssh-install; a hit fails the check,
 // without showing the key.
 func TestM6InstallOutputHoldsNoServerKey(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const key = "k3y-0f-the-server-0123456789"
 	for _, c := range []struct{ check, leak, want string }{
 		{"ssh-dropped-mid-install", "leak-drop", "the install's output holds the LLM key, a token or the server's API key (1 line(s))"},
@@ -533,6 +543,7 @@ func TestM6InstallOutputHoldsNoServerKey(t *testing.T) {
 // skipped (no config read) is not a reach, and a revoked host key's
 // refusal ("… Nothing was changed") is not a changed one.
 func TestM6InstallChainRefusesLookalikes(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	writeLines(t, filepath.Join(dir, "reach"), "skipped: no backsight config")
 	if stdout, stderr, _ := m6Chain(t, dir, "ssh-install"); !strings.HasPrefix(stdout, "bs-m6 ssh-install: FAIL doctor's server-reach on A was skipped") {
@@ -548,6 +559,7 @@ func TestM6InstallChainRefusesLookalikes(t *testing.T) {
 // vb_authorize_a, run's preparation: A's public login key, read on A,
 // appended to bs's authorized_keys on the server, as ssh-copy-id would.
 func TestVMBenchRunAuthorizesAsKey(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fakes := newBenchFakes(t)
 	// The fake ssh decodes the remote script (vb_remote) and logs it with
 	// its host and stdin; on the client it prints a public key.
@@ -580,6 +592,7 @@ case $host in bs-m6-client-bs) echo 'ssh-ed25519 AAAAPUB bs@bs-m6-client' ;; esa
 // runs B's backsight in VB_DIR/client-b with no profile, XDG dir or agent
 // of the user's.
 func TestVMBenchClientBIsIsolated(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fakes := newBenchFakes(t)
 	bench := filepath.Join(t.TempDir(), "bs-m6")
 	for _, d := range []string{"bin", "client-b"} {
@@ -662,6 +675,7 @@ func m6Transcript(t *testing.T, path string) []m6Record {
 // this PC's own (a), in order, each text naming its uuid; the file's mtime
 // is its newest record's time.
 func TestM6SessionWritesSharedAndOwnRecords(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	start := time.Now()
 	_, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_session a sp1 bs-m6-dedup 1 3 r 90
@@ -707,6 +721,7 @@ m6_session a sp1 bs-m6-dedup 5 5 a 120`)
 // The copy is the transcript as it is, with its mtime: a session written
 // 120 min ago stays 120 min old on the other PC.
 func TestM6CopyKeepsTheMtime(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	_, stderr, code := m6Lib(t, dir, m6TestDriver, `m6_session a cp1 bs-m6-dedup 1 3 r 120; m6_copy a b cp1 bs-m6-dedup`)
 	if code != 0 {
@@ -745,6 +760,7 @@ fi
 // The old key's tick (key-rotation) is partial: m6_tick takes it only when
 // told to, still retries a skipped tick first, and fails any other failure.
 func TestM6TickTakesAPartialTickOnlyWhenAsked(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const partial = `{"ok":false,"data":{"status":"partial","sessions":{"retry":1},"notes":{"sent":0,"kept":1}},"error":{"code":20,"message":"the server refused backsight (401): run backsight doctor"}}`
 	run := func(skips, final, finalCode, script string) (stdout, stderr, calls string, code int) {
 		dir := t.TempDir()
@@ -789,6 +805,7 @@ esac
 // takes and releases; a lock someone else holds is waited for, then the
 // helper fails with state.json and that lock left as they were.
 func TestM6LiveSinceOnlyMovesRetainSinceBack(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	setup := func(retainSince string) string {
 		dir := t.TempDir()
 		m6Lib(t, dir, m6TestDriver, "true")
@@ -884,6 +901,7 @@ func TestM6LiveSinceOnlyMovesRetainSinceBack(t *testing.T) {
 // before it, which only the cursor at the wanted record proves; another
 // flusher holding the session is waited for; anything else fails.
 func TestM6FlushSentNeedsTheCursorToProveATicksSend(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const sent = `{"ok":true,"data":{"results":[{"session":"sp1","status":"sent","segment":2}],"counts":{"sent":1}}}`
 	const nothing = `{"ok":true,"data":{"results":[],"counts":{"nothing":1}}}`
 	const locked = `{"ok":true,"data":{"results":[{"session":"sp1","status":"locked"}],"counts":{"locked":1}}}`
@@ -935,6 +953,7 @@ func TestM6FlushSentNeedsTheCursorToProveATicksSend(t *testing.T) {
 // old one) is not the run the check judges: it waits for one after both
 // the install and the key change.
 func TestM6TimersJudgesARunAfterTheKeyChange(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const driver = `
 m6_home() { echo "$T/$1"; }
 m6_sh() {
@@ -970,6 +989,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 // However a run ends, no token stays in client B's home: two-clients'
 // (the old one once the key rotated) and key-rotation's new one.
 func TestVMBenchRunEndRemovesBsTokens(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fakes := newBenchFakes(t)
 	bench := filepath.Join(t.TempDir(), "bs-m6")
 	if err := os.MkdirAll(filepath.Join(bench, "client-b"), 0o700); err != nil {
@@ -1045,6 +1065,7 @@ esac
 // one a case needs: the server's (a fail before the token is handed out),
 // A's (B fails first) and B's (a fail before B's connect).
 func TestM6KeyRotationKeepsEachSchedulerAndRemovesTheNewToken(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	run := func(fails string, opts ...string) (stdout, stderr, calls, dir string) {
 		dir = t.TempDir()
 		m6Lib(t, dir, m6TestDriver, "true")
@@ -1127,6 +1148,7 @@ func TestM6KeyRotationKeepsEachSchedulerAndRemovesTheNewToken(t *testing.T) {
 // m6_scheduler reads the scheduler answer that machine's setup recorded;
 // none recorded fails rather than guessing.
 func TestM6SchedulerIsTheMachinesOwnAnswer(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for _, tc := range []struct{ setup, want string }{
 		{`{"answers":{"scheduler":"on"}}`, "on"},
 		{`{"answers":{"scheduler":"off"}}`, "off"},
@@ -1157,6 +1179,7 @@ func TestM6SchedulerIsTheMachinesOwnAnswer(t *testing.T) {
 // that document (observations aside); a page that does not hold them all,
 // or any answer but 200, fails rather than reading as fewer facts.
 func TestM6FactsCountsADocumentsFacts(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for _, tc := range []struct {
 		name, code, body, want string
 	}{
@@ -1190,6 +1213,7 @@ func TestM6FactsCountsADocumentsFacts(t *testing.T) {
 // first check, run builds the binary and its signed release afresh, gives
 // them to A (~/backsight, ~/release) and is B's binary (VB_DIR/bin).
 func TestVMBenchRunRebuildsBeforeTheFirstCheck(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fakes := newBenchFakes(t)
 	order := filepath.Join(fakes, "order")
 	// make: the build writes OUT with this run's content; ssh logs its host
@@ -1284,6 +1308,7 @@ vb_run two-clients`
 // rest NOT RUN, and vb_run_end still brings A's link up. Nothing it
 // started is left running (the test would wait for it).
 func TestVMBenchRunStopsAtItsBound(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	fakes := newBenchFakes(t)
 	writeExec(t, filepath.Join(fakes, "make"), `#!/bin/sh
 for a in "$@"; do case $a in OUT=*) printf 'built\n' > "${a#OUT=}" ;; esac; done
@@ -1354,6 +1379,7 @@ vb_run ssh-unknown-host-key ssh-dropped-mid-install`
 // job or an earlier tick, across the months' files. No telemetry is no
 // tick: an empty answer, which the check's own tick must then fill.
 func TestM6ReconcilesReadsEveryTickSince(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	m6ServerFakes(t, dir)
 	tel := filepath.Join(dir, "a", "state", "telemetry")
@@ -1408,6 +1434,7 @@ func TestM6ReconcilesReadsEveryTickSince(t *testing.T) {
 // keeps sending fails the check after M6_SETTLE_ROUNDS rounds, never
 // passing on a count an earlier check's session would spoil.
 func TestM6SettleTicksUntilNothingIsSent(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const fake = `#!/bin/sh
 t=$(dirname "$(dirname "$0")")
 case "$*" in
@@ -1484,6 +1511,7 @@ echo '{"total":0}'
 // fails, never passes on an absent record, another document's tombstone,
 // metadata that does not parse or an answer but 200.
 func TestM6TombstonedNeedsTheControlBanksRecord(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const listed = `{"id":"backsight:tombstones","document_metadata":{"tombstones":"[{\"bank\":\"bk\",\"document\":\"conversation:pg1\"}]"}}`
 	for _, tc := range []struct {
 		name, code, body, fail string
@@ -1518,6 +1546,7 @@ func TestM6TombstonedNeedsTheControlBanksRecord(t *testing.T) {
 // The restore epoch a PC reconciled with is its state.json's, 0 when it
 // never reconciled; an unreadable state fails rather than reading as 0.
 func TestM6EpochIsThePCsOwn(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	m6ServerFakes(t, dir)
 	st := filepath.Join(dir, "a", "state")
@@ -1545,6 +1574,7 @@ func TestM6EpochIsThePCsOwn(t *testing.T) {
 // a PC, one a line, and nothing when the check is not info: the restore
 // check allows those (and only those) to be re-sent with rs-<who>.
 func TestM6SplitListNamesOnlyDoctorsSplitSessions(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	for _, c := range []struct{ name, check, want string }{
 		{"two", `{"id":"split-session","status":"info","detail":"sp1, sp2"}`, "sp1\nsp2\n"},
 		{"one", `{"id":"split-session","status":"info","detail":"sp1"}`, "sp1\n"},
@@ -1573,6 +1603,7 @@ func TestM6SplitListNamesOnlyDoctorsSplitSessions(t *testing.T) {
 // and a check comparing cursors must not read that as a send. A missing
 // cursor stays empty.
 func TestM6CursorLeavesOutPendingReplaces(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	fake := "#!/bin/sh\nprintf '%s\\n' '{\"ok\":true,\"data\":{\"state\":\"'\"$HOME\"'/state\"}}'\n"
 	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o700); err != nil {
@@ -1605,6 +1636,7 @@ func TestM6CursorLeavesOutPendingReplaces(t *testing.T) {
 // first-segment check confirmed by a tick changes no hash, a sent record
 // does.
 func TestM6CursorsHashWithoutPendingReplaces(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	fake := "#!/bin/sh\nprintf '%s\\n' '{\"ok\":true,\"data\":{\"state\":\"'\"$HOME\"'/state\"}}'\n"
 	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o700); err != nil {
@@ -1646,6 +1678,7 @@ func TestM6CursorsHashWithoutPendingReplaces(t *testing.T) {
 // dedup-copied does. The steps around the flushes are stubs; each flush's
 // status is the fake backsight's answer for that PC and session.
 func TestM6DedupConcurrentNeedsARace(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	const stubs = `
 m6_session() { :; }; m6_copy() { :; }; m6_flush_sent() { :; }; m6_queue_wait() { :; }
 m6_wait_doc() { echo '{"document_metadata":{"records":3}}'; }

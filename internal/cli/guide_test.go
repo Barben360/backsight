@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/guide"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // withGuideDocs makes the guide show and search a small fixture instead
@@ -231,10 +232,7 @@ func TestGuidePagesAtATerminal(t *testing.T) {
 	stdoutIsTerminal = func() bool { return true }
 	t.Cleanup(func() { stdoutIsTerminal = old })
 	paged := filepath.Join(home, "paged.txt")
-	pager := filepath.Join(home, "pager.sh")
-	if err := os.WriteFile(pager, []byte("#!/bin/sh\ncat > "+paged+"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	pager := testtool.Write(t, home, "pager", testtool.Fake{Script: "stdinto " + paged})
 	t.Setenv("PAGER", pager)
 	code, out, _ := run(t, "guide", "install")
 	got, _ := os.ReadFile(paged)
@@ -390,6 +388,7 @@ func TestMemoryCommandsNeverReadTheDocsBank(t *testing.T) {
 // update apply has the new binary index its docs once the update is
 // committed; a failure there is a warning, never a rollback.
 func TestUpdateApplyIndexesTheNewBinarysDocs(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0")
 	withGuideDocs(t)
 	f := newDocsHindsight(t, home)
@@ -408,6 +407,7 @@ func TestUpdateApplyIndexesTheNewBinarysDocs(t *testing.T) {
 }
 
 func TestUpdateApplyGoesOnWhenTheDocsCannotBeIndexed(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: update apply")
 	home, _, bins := installedAt(t, "0.1.0") // its server hangs up
 	d := pathsOf(home)
 	withGuideDocs(t)
@@ -564,10 +564,7 @@ func TestGuidePagerFallsBackOnlyWhenItCannotStart(t *testing.T) {
 	old := stdoutIsTerminal
 	stdoutIsTerminal = func() bool { return true }
 	t.Cleanup(func() { stdoutIsTerminal = old })
-	pager := filepath.Join(home, "pager.sh")
-	if err := os.WriteFile(pager, []byte("#!/bin/sh\ncat >/dev/null\nexit 3\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	pager := testtool.Write(t, home, "pager", testtool.Fake{Script: "stdinto " + os.DevNull, Code: 3})
 	t.Setenv("PAGER", pager)
 	if code, out, _ := run(t, "guide", "install"); code != output.OK || out != "" {
 		t.Errorf("a pager that exited 3 was followed by a copy: exit %d %q", code, out)

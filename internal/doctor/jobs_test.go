@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/setup"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func jobsDirs(t *testing.T, installedAgo time.Duration, runs map[string]time.Duration) paths.Dirs {
@@ -146,6 +147,7 @@ func leftoverEntries(t *testing.T, d paths.Dirs, enabled bool) {
 // entries on disk whose timers were never enabled run nothing and warn,
 // with the fix that applies (removal when the answer was off).
 func TestJobsWhenTheSchedulerIsOff(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
 	d := jobsDirs(t, -1, nil)
 	saveAnsweredOff(t, d)
 	c := checkJobs(d, usageNow, nil)
@@ -189,9 +191,10 @@ func TestSchedulerCheckWhenOff(t *testing.T) {
 // The backup fix names the maintain job's own log, and never a journal
 // when the scheduler is off.
 func TestBackupFixFollowsTheScheduler(t *testing.T) {
+	testtool.SkipWindows(t, "Task 12: scheduler entries are systemd units")
 	f := newFixture(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+filepath.Join(f.home, "bk")+"\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = "+testtool.TOMLStr(filepath.Join(f.home, "bk"))+"\n", 0o600)
 	saveAnsweredOff(t, f.env.Dirs)
 	if c := checkBackup(f.env, now); c.Status != Warn || strings.Contains(c.Fix, "journalctl") || !strings.Contains(c.Fix, "jobs maintain") {
 		t.Errorf("off: %+v", c)

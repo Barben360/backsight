@@ -20,6 +20,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/token"
 )
 
@@ -350,6 +351,7 @@ func TestRotateFailedRollbackSaysSo(t *testing.T) {
 // that the old token no longer works, and what to run; Docker's output
 // quoting the new key is masked, and neither key is printed.
 func TestRotateSaysWhenTheOldKeyCannotBePutBack(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits (a read-only env file)")
 	home, _, dk := tokenHost(t)
 	old, _ := config.LoadSecrets(secretsFile(home))
 	dk.only, dk.echo = "neither-key", true

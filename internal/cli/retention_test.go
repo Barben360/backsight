@@ -9,6 +9,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func cfgFile(home string) string { return filepath.Join(home, "backsight", "config", "config.toml") }
@@ -90,6 +91,7 @@ func TestRetentionPlanWritesNothing(t *testing.T) {
 }
 
 func TestRetentionCreatesAMinimalConfig(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	home, _ := clientHome(t, userSettings, 0)
 	if code, _, out := retentionRun(t); code != output.OK {
 		t.Fatalf("exit %d\n%s", code, out)

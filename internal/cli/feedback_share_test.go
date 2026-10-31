@@ -26,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 const (
@@ -510,7 +511,7 @@ func TestTwoMachinesShareOneLedger(t *testing.T) {
 	a, b := newMachine(), newMachine()
 	use := func(home string) {
 		t.Setenv("BACKSIGHT_HOME", filepath.Join(home, "backsight"))
-		t.Setenv("HOME", home)
+		testtool.SetHome(t, home)
 	}
 	t.Setenv("BACKSIGHT_PROJECT", "billing")
 	oldNow := now

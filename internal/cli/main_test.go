@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // refuseDocker stands in for the real runner: a test that reaches Docker
@@ -83,6 +85,7 @@ func hookChildFault(mode string) {
 var goraceSet bool
 
 func TestMain(m *testing.M) {
+	testtool.Main() // started as a fake program: behave as it and exit
 	// The race runtime sleeps 1 s at exit while other threads live: twice
 	// per hook (the shim and its child) under -race, past SessionEnd's
 	// 800 ms child deadline. The children inherit this (issue #281).

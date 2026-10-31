@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // argOf is the value after flag in args ("" without it).
@@ -211,6 +212,7 @@ func (s *ctxSys) Run(ctx context.Context, name string, args ...string) ([]byte, 
 // most), and is stopped and removed after a success, a failing restore
 // and a cancel alike.
 func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	for _, name := range []string{"success", "failing restore", "cancelled"} {
 		t.Run(name, func(t *testing.T) {
 			n, _, tools := nativeFixture(t, secrets)
@@ -313,6 +315,7 @@ func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
 // password file then postgres, on the free port, on loopback only, with no
 // Unix socket; a unit that stops ends the wait at once.
 func TestNativeVerifyDumpRunsItsOwnCluster(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units and scripts are the systemd host's")
 	n, _, tools := nativeFixture(t, secrets)
 	installed(t, n, secrets)
 	withFreePort(t, 18890)

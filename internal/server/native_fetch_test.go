@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // toolCall is one ToolRunner call as Fetch made it.
@@ -233,6 +234,7 @@ func serveUV(t *testing.T, body []byte) *[]string {
 }
 
 func TestNativeFetchVerifiesUV(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	uvBin := []byte("#!/bin/sh\necho uv 0.13.1\n")
 	tarball := uvTarball(t, uvBin)
 
@@ -476,6 +478,7 @@ func (e *execTools) Run(ctx context.Context, env []string, stdin io.Reader, path
 // RF 4: the user's Python and Hugging Face settings never reach the
 // install; uv is the pinned one, by absolute path, never PATH's.
 func TestNativeFetchIgnoresTheUsersPythonEnvironment(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: POSIX fakes and the Linux tool environment")
 	fakeDir := t.TempDir()
 	ranMarker := filepath.Join(fakeDir, "ran")
 	touch(t, filepath.Join(fakeDir, "uv"), 0o755)
@@ -591,6 +594,7 @@ esac
 }
 
 func TestNativeDownloadsListsWhatIsMissing(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: uvInstalled reads the executable bit")
 	tools := &fakeTools{}
 	n := newNative(t, tools)
 	items, models, err := n.Downloads(context.Background())
@@ -662,6 +666,7 @@ func completeVenv(t *testing.T, n Native, v string) {
 // of an older build (*.partial) included; never the one the server unit
 // runs, whatever keep says.
 func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	n := newNative(t, &fakeTools{})
 	n.UnitDir = t.TempDir()
 	// Nothing installed yet: nothing to do.

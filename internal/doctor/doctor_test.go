@@ -26,6 +26,7 @@ import (
 	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/target"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func put(t *testing.T, p, content string, mode os.FileMode) {
@@ -233,7 +234,7 @@ func TestConfiguredServerDown(t *testing.T) {
 	srv := fakeServer(t)
 	url := srv.URL
 	srv.Close()
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+url+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(url)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	c := check(t, f.run(), "server")
 	expect(t, c, Error, "unreachable")
@@ -272,7 +273,7 @@ func TestBackSightConfigWinsOverReference(t *testing.T) {
 	f := newFixture(t)
 	srv := fakeServer(t)
 	f.reference("http://127.0.0.1:1")
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	r := f.run()
 	expect(t, check(t, r, "config"), OK, f.env.Dirs.ConfigFile())
@@ -497,6 +498,7 @@ func TestRetentionCorruptSettings(t *testing.T) {
 }
 
 func TestMaintenanceLock(t *testing.T) {
+	testtool.SkipWindows(t, "no owning task (concern): state.processAlive treats an exited process as alive on Windows")
 	f := newFixture(t)
 	expect(t, check(t, f.run(), "maintenance"), OK, "no maintenance")
 	if _, err := os.Stat(f.env.Dirs.MaintenanceLock()); err == nil {
@@ -815,7 +817,7 @@ func TestCheckBackupAge(t *testing.T) {
 		t.Errorf("no config: %+v", c)
 	}
 	dir := filepath.Join(f.home, "bk")
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = "+testtool.TOMLStr(dir)+"\n", 0o600)
 	if c := checkBackup(f.env, now); c.Status != Warn || !strings.Contains(c.Summary, "no backup in") {
 		t.Errorf("none: %+v", c)
 	}
@@ -840,7 +842,7 @@ func TestCheckBackupOnAClient(t *testing.T) {
 	f := newFixture(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	dir := filepath.Join(f.home, "bk")
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \"http://192.168.1.20:8888\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \"http://192.168.1.20:8888\"\n[backup]\ndir = "+testtool.TOMLStr(dir)+"\n", 0o600)
 	want := "backups are made on the server's host (backsight backup create there)"
 	if c := checkBackup(f.env, now); c.Status != Info || c.Summary != want || c.Fix != "" {
 		t.Errorf("none: %+v", c)
@@ -867,7 +869,7 @@ func TestCheckBackupCountsOnlyArchivesThisMachineCanRead(t *testing.T) {
 	f := newFixture(t)
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	dir := filepath.Join(f.home, "bk")
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+dir+"\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = "+testtool.TOMLStr(dir)+"\n", 0o600)
 	old, _ := age.GenerateX25519Identity()
 	mine, _ := age.GenerateX25519Identity()
 	archive(t, dir, now.Add(-2*time.Hour), old.Recipient().String())
@@ -878,7 +880,7 @@ func TestCheckBackupCountsOnlyArchivesThisMachineCanRead(t *testing.T) {
 		t.Errorf("no identity: %+v", c)
 	}
 	// A new identity: the old archive is still not readable here.
-	put(t, f.env.Dirs.SecretsFile(), "backup_identity = \""+mine.String()+"\"\n", 0o600)
+	put(t, f.env.Dirs.SecretsFile(), "backup_identity = "+testtool.TOMLStr(mine.String())+"\n", 0o600)
 	if c := checkBackup(f.env, now); c.Status != Warn || !strings.Contains(c.Summary, "no backup of this install") {
 		t.Errorf("another identity: %+v", c)
 	}
@@ -891,7 +893,7 @@ func TestCheckBackupCountsOnlyArchivesThisMachineCanRead(t *testing.T) {
 	// A configured recipient (the identity kept elsewhere) is this install's.
 	other, _ := age.GenerateX25519Identity()
 	archive(t, dir, now.Add(-30*time.Minute), other.Recipient().String())
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = \""+dir+"\"\nrecipient = \""+other.Recipient().String()+"\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \"http://127.0.0.1:1\"\n[backup]\ndir = "+testtool.TOMLStr(dir)+"\nrecipient = \""+other.Recipient().String()+"\"\n", 0o600)
 	if c := checkBackup(f.env, now); c.Status != OK || !strings.Contains(c.Summary, "11:30 UTC, 2 kept") {
 		t.Errorf("configured recipient: %+v", c)
 	}
@@ -902,7 +904,7 @@ func TestCheckBackupCountsOnlyArchivesThisMachineCanRead(t *testing.T) {
 func TestCheckBankConfigDrift(t *testing.T) {
 	f := newFixture(t)
 	srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, `{"config":{},"overrides":{"enable_observations":false}}`}})
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	c := check(t, f.run(), "bank-config")
 	if c.Status != Warn || !strings.Contains(c.Detail, "enable_observations") || !strings.Contains(c.Fix, "backsight bank apply") {
@@ -962,7 +964,7 @@ func TestCheckBankConfigTellsAnOlderTemplateFromAServerChange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
 			srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, overridesOf(t, tc.bank)}})
-			put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+			put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 			put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 			if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion, BankConfigHash: tc.recorded}); err != nil {
 				t.Fatal(err)
@@ -997,7 +999,7 @@ func TestBankConfigOnAClientIsInfo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
 			srv := fakeServerWith(t, map[string]reply{"/v1/default/banks/coding-agent%3A%3Amemoire/config": {200, overridesOf(t, tc.bank)}})
-			put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+			put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 			put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 			c := check(t, f.run(), "bank-config")
 			if c.Status != Info || !strings.Contains(c.Summary, "the server's host") || !strings.Contains(c.Detail, tc.detail) || c.Fix != tc.fix {
@@ -1014,7 +1016,7 @@ func TestCheckRestoreEpoch(t *testing.T) {
 	epochPath := "/v1/default/banks/coding-agent%3A%3Amemoire-control/documents/backsight%3Aepoch"
 	srv := fakeServerWith(t, map[string]reply{epochPath: {200, `{"id":"backsight:epoch","document_metadata":{"epoch":"2","restored_at":"2026-10-25T10:00:00Z","backup_created_at":"2026-10-25T03:00:00Z"}}`}})
 	f := newFixture(t)
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	c := check(t, f.run(), "restore-epoch")
 	if c.Status != Warn || !strings.Contains(c.Summary, "client on an old restore epoch") || !strings.Contains(c.Summary, "epoch 2") || c.Fix != "backsight jobs tick" {
@@ -1049,7 +1051,7 @@ func TestCheckRestoreEpoch(t *testing.T) {
 func TestServerOnlyHostSkipsTheClientChecks(t *testing.T) {
 	f := newFixture(t)
 	srv := fakeServer(t)
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\nrole = \"server\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	f.env.ClaudePlugins = func(string) ([]byte, error) {
 		t.Error("doctor asked Claude Code on a server-only host")
@@ -1082,7 +1084,7 @@ const serverIDPath = "/v1/default/banks/coding-agent%3A%3Amemoire-control/docume
 // boundClient is a client of srv that joined server id.
 func boundClient(t *testing.T, srv *httptest.Server, mode, id string) *fixture {
 	f := newFixture(t)
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \""+mode+"\"\nurl = \""+srv.URL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = "+testtool.TOMLStr(mode)+"\nurl = "+testtool.TOMLStr(srv.URL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	if id != "" {
 		if err := state.Save(f.env.Dirs.StateFile(), state.State{SchemaVersion: state.SchemaVersion,
@@ -1132,7 +1134,7 @@ const reachURL = "http://127.0.0.1:1"
 func reachingClient(t *testing.T, now, lastOK, failing time.Time) *fixture {
 	f := newFixture(t)
 	f.env.Now = func() time.Time { return now }
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = \""+reachURL+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nmode = \"remote\"\nurl = "+testtool.TOMLStr(reachURL)+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	put(t, f.env.Dirs.SecretsFile(), "api_key = \"fakevalue\"\n", 0o600)
 	put(t, filepath.Join(f.env.Dirs.OutboxDir(), "notes.jsonl"), `{"operation_id":"a","content":"x"}`+"\n", 0o600)
 	state.RecordReach(f.env.Dirs, true, lastOK)
@@ -1232,7 +1234,7 @@ func tailnetServer(t *testing.T, overrides map[string]reply) string {
 func TestServerReachCountsATailnetAnswer(t *testing.T) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	f := reachingClient(t, now, now.Add(-3*time.Hour), now.Add(-2*time.Hour))
-	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = \""+tailnetServer(t, nil)+"\"\nbank = \"coding-agent::memoire\"\n", 0o600)
+	put(t, f.env.Dirs.ConfigFile(), "[server]\nurl = "+testtool.TOMLStr(tailnetServer(t, nil))+"\nbank = \"coding-agent::memoire\"\n", 0o600)
 	r := f.run()
 	expect(t, check(t, r, "server"), Info, "Hindsight")
 	c := check(t, r, "server-reach")

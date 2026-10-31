@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/paths"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The snapshot of the files an update may change survives the process: a
 // present file comes back byte for byte (an empty one too), an absent one
 // as absent.
 func TestUpdateSnapshotRoundTrip(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	d := paths.Dirs{State: t.TempDir()}
 	files := map[string][]byte{"/x/state.json": []byte(`{"a":1}`), "/x/config.toml": nil, "/x/empty": {}}
 	if err := WriteUpdateSnapshot(d, files); err != nil {

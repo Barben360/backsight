@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // pgTools are the bundled programs the native runtime runs from pg0's
@@ -109,6 +110,7 @@ func installation(n Native) string {
 // binaries before anything starts. Fetch now has pg0 unpack it, in a
 // throwaway instance it drops, never the hindsight one.
 func TestNativeFetchUnpacksPostgres(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	tools := &fakeTools{Fail: missingIs127, Effect: pg0Effects}
 	n := newNative(t, tools)
 	fetchedButPG(t, n)
@@ -389,6 +391,7 @@ func fullInstallation(t *testing.T, n Native) {
 // partial one (a cut extraction, marker or not) is removed and unpacked
 // again.
 func TestNativeFetchUnpackCompleteness(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: uvInstalled reads the executable bit")
 	for _, tc := range []struct {
 		name   string
 		setup  func(t *testing.T, n Native)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // dbToolsOut answers as the bundled Postgres tools would: pg_controldata
@@ -135,6 +137,7 @@ func TestNativeCheckInstance(t *testing.T) {
 }
 
 func TestNativeReadsAndRecordsTheIdentity(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	ctx := context.Background()
 	n, _, tools := nativeFixture(t, secrets)
 	rendered(t, n, secrets)
@@ -216,6 +219,7 @@ const scope = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
 // the db unit's cgroup is a stray; one inside it, one on another data
 // directory and the postmaster's own children are not.
 func TestNativeStraysAreFoundByDataDirectoryAndCgroup(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: /proc and cgroups are Linux's")
 	n, _, _ := nativeFixture(t, secrets)
 	data := n.DataDir()
 	pg := filepath.Join(n.installation(), "bin", "postgres")
@@ -245,6 +249,7 @@ func TestNativeStraysAreFoundByDataDirectoryAndCgroup(t *testing.T) {
 // A stray is stopped with the bundled pg_ctl (ruling R22), never pg0,
 // and must be gone; one still alive after the wait is an error naming it.
 func TestNativeStopStraysStopsThemWithPgCtl(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: /proc and cgroups are Linux's")
 	ctx := context.Background()
 	n, _, tools := nativeFixture(t, secrets)
 	data := n.DataDir()
@@ -318,6 +323,7 @@ func TestNativeStopStraysStopsThemWithPgCtl(t *testing.T) {
 
 // Requirement 1: fsync off after a start stops and disables both units.
 func TestNativeStartRefusesFsyncOff(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	for _, start := range []string{"Start", "StartDatabase"} {
 		t.Run(start, func(t *testing.T) {
@@ -350,6 +356,7 @@ func TestNativeStartRefusesFsyncOff(t *testing.T) {
 // R29: the first start creates the instance and records its identity
 // before the db unit starts, so native-check passes on it.
 func TestNativeFirstStartRecordsTheIdentity(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
 	n.MayCreate = true
@@ -395,6 +402,7 @@ func TestNativeFirstStartRecordsTheIdentity(t *testing.T) {
 // A lost instance whose identity was recorded is never replaced by a
 // fresh one: Start refuses before enabling anything.
 func TestNativeStartNeverRecreatesALostInstance(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name, reason string
@@ -449,6 +457,7 @@ func systemdRuns(tools *fakeTools) int {
 // another compose_dir) is the missing refusal, never a new empty memory;
 // with it, the first start creates the database and records it.
 func TestNativeStartCreatesOnlyWhereAllowed(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
 	rendered(t, n, secrets)
@@ -490,6 +499,7 @@ func TestNativeStartCreatesOnlyWhereAllowed(t *testing.T) {
 // (ENOENT): an empty identity file, or an instance path that cannot be
 // read, never creates.
 func TestNativeCreationNeedsBothAbsent(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	t.Run("an empty identity file", func(t *testing.T) {
 		n, _, tools := nativeFixture(t, secrets)
@@ -523,6 +533,7 @@ func TestNativeCreationNeedsBothAbsent(t *testing.T) {
 // A new instance whose identity cannot be recorded is removed, so the
 // next start creates it again instead of refusing it as unrecorded.
 func TestNativeFailedIdentityRemovesTheNewInstance(t *testing.T) {
+	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
 	n.MayCreate = true

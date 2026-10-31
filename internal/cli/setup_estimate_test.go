@@ -8,6 +8,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/testtool"
 	"github.com/Barben360/backsight/internal/transcript"
 )
 
@@ -18,7 +19,7 @@ func TestBackfillEstimateFlusherCanonicalisesNotes(t *testing.T) {
 	d := pathsOf(home)
 	cwd := filepath.Join(home, "billing")
 	p := filepath.Join(home, "s1.jsonl")
-	line := `{"type":"assistant","uuid":"a1","sessionId":"s1","cwd":"` + cwd + `","timestamp":"2026-09-20T09:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__plugin_backsight_memory__memory_store","input":{"kind":"convention","text":"Tabs in Makefiles.","project":"transverse"}}]}}` + "\n"
+	line := `{"type":"assistant","uuid":"a1","sessionId":"s1","cwd":"` + testtool.JSONPath(cwd) + `","timestamp":"2026-09-20T09:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__plugin_backsight_memory__memory_store","input":{"kind":"convention","text":"Tabs in Makefiles.","project":"transverse"}}]}}` + "\n"
 	if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}

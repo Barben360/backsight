@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 var common = Common{Session: "s1", Project: "backsight", Binary: "0.1.8", V: "7"}
@@ -82,6 +84,7 @@ func TestConcurrentAppendsStayWhole(t *testing.T) {
 }
 
 func TestAppendFillsCommonFieldsAndKeepsTheFilePrivate(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	dir := filepath.Join(t.TempDir(), "feedback")
 	j := NewJournal(dir, common)
 	at := time.Date(2026, 10, 28, 11, 0, 0, 123456789, time.FixedZone("CET", 3600))

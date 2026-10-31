@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The CI proof of the native runtime and the switch (decision 0078,
@@ -114,6 +116,7 @@ func realUnitDir(t *testing.T) string {
 // project is backsight: the chain refuses that project and any project
 // its trap's $PROJECT-* would match them with, before it runs anything.
 func TestNativeChainNeverTouchesTheLiveInstall(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	real := realUnitDir(t)
 	for _, project := range []string{"backsight", "backsight-dev", "backsightx"} {
 		t.Run(project, func(t *testing.T) {
@@ -155,6 +158,7 @@ func TestNativeChainNeverTouchesTheLiveInstall(t *testing.T) {
 }
 
 func TestNativeChainListsItsLegs(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	xdg := t.TempDir()
 	bin, _ := fakeTools(t, xdg)
 	cmd := exec.Command("bash", mustAbs(t, "native-chain.sh"))
@@ -173,6 +177,7 @@ func TestNativeChainListsItsLegs(t *testing.T) {
 // exactly: another project sharing the prefix (bs-x-db's units are
 // bs-x-db-db.service, …) is never matched.
 func TestNativeChainTrapMatchesItsOwnUnitsOnly(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	src := `. "$1"; project=bs-x; shift; for u; do if nc_own_unit "$u"; then echo "own $u"; else echo "other $u"; fi; done`
 	own := []string{"bs-x-db.service", "bs-x-server.service", "bs-x-db-init.service", "bs-x-pg-unpack.service", "bs-x-verify-0123456789ab.service",
 		"bs-x-tick.service", "bs-x-tick.timer", "bs-x-maintain.service", "bs-x-maintain.timer"}
@@ -197,6 +202,7 @@ func TestNativeChainTrapMatchesItsOwnUnitsOnly(t *testing.T) {
 // A run's exit status survives its cleanup, even when every cleanup step
 // fails (here systemctl, docker and journalctl all exit 1).
 func TestNativeChainTrapKeepsTheRunsStatus(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	bin := t.TempDir()
 	for _, name := range []string{"systemctl", "docker", "journalctl", "pgrep"} {
 		writeExec(t, filepath.Join(bin, name), "#!/bin/sh\necho \"$0 $*\" >&2\nexit 1\n")
@@ -229,6 +235,7 @@ func TestNativeChainTrapKeepsTheRunsStatus(t *testing.T) {
 // The same when removing the files fails too (a fake rm exiting 1): the
 // run still exits with its own status.
 func TestNativeChainTrapKeepsTheRunsStatusWhenRemovingFails(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	bin := t.TempDir()
 	for _, name := range []string{"systemctl", "docker", "journalctl", "pgrep", "rm", "chmod"} {
 		writeExec(t, filepath.Join(bin, name), "#!/bin/sh\nexit 1\n")
@@ -248,6 +255,7 @@ func TestNativeChainTrapKeepsTheRunsStatusWhenRemovingFails(t *testing.T) {
 // to-docker ends with server runtime clean, which removes server/native
 // whole, and to-native refuses to start while it is there.
 func TestNativeChainToNativeStartsFromNoNative(t *testing.T) {
+	testtool.SkipWindows(t, "POSIX script, Linux only")
 	dir := t.TempDir()
 	native, calls := filepath.Join(dir, "native"), filepath.Join(dir, "calls")
 	if err := os.MkdirAll(filepath.Join(native, "home", ".pg0", "installation"), 0o700); err != nil {

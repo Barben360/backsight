@@ -23,6 +23,7 @@ import (
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/session"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestJobsTickSendsSettledSessionsAndNotes(t *testing.T) {
@@ -93,7 +94,7 @@ func TestJobsTickSkipsDuringMaintenance(t *testing.T) {
 	home := devInstall(t, true)
 	d := pathsOf(home)
 	_ = os.MkdirAll(filepath.Dir(d.MaintenanceLock()), 0o700)
-	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":1}`), 0o600)
+	_ = os.WriteFile(d.MaintenanceLock(), []byte(`{"pid":`+strconv.Itoa(testtool.OtherPID())+`}`), 0o600)
 	if code, out, _ := run(t, "jobs", "tick"); code != output.OK || !strings.Contains(out, "maintenance") {
 		t.Errorf("exit %d\n%s", code, out)
 	}

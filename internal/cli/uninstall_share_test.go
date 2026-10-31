@@ -16,6 +16,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // sharedInstall is installMachine on the fake server, with this
@@ -70,6 +71,7 @@ func stepIndex(r uninstallResult, name string) int {
 // machines'; --plan lists it, and an uninstall that keeps the id keeps
 // the document.
 func TestUninstallDeletesThisMachinesDocument(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m, machine, cl := sharedInstall(t)
 	code, env, out := uninstall(t, "--plan", "--stop", "--purge-local")
 	if s := stepNamed(env.Data, "shared counts"); code != output.OK || s == nil || s.Status != "planned" || !strings.Contains(s.Detail, machine) {
@@ -104,6 +106,7 @@ func TestUninstallDeletesThisMachinesDocument(t *testing.T) {
 // budget, and says in one line that the document stays and that the other
 // machines ignore it after 30 days.
 func TestUninstallSurvivesAnUnreachableServer(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	old := uninstallShareBudget
 	uninstallShareBudget = 300 * time.Millisecond
 	t.Cleanup(func() { uninstallShareBudget = old })
@@ -143,6 +146,7 @@ func TestUninstallSurvivesAnUnreachableServer(t *testing.T) {
 
 // Another server answers at the joined address: nothing is deleted there.
 func TestUninstallLeavesAnotherServerAlone(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m, _, cl := sharedInstall(t)
 	recordMismatch(t, m.home)
 	code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")
@@ -165,6 +169,7 @@ func TestUninstallLeavesAnotherServerAlone(t *testing.T) {
 // A machine that never sent its counts (no record of a send) or has no
 // machine id: nothing to delete, the server is not asked.
 func TestUninstallSkipsAMachineThatNeverShared(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	for name, spoil := range map[string]func(installed) error{
 		"no send recorded": func(m installed) error {
 			return os.Remove(feedback.SharedUploadFile(pathsOf(m.home).FeedbackDir()))
@@ -196,6 +201,7 @@ func TestUninstallSkipsAMachineThatNeverShared(t *testing.T) {
 // A connect while uninstall runs (after it read its config): this
 // machine's counts are not deleted on the server it loaded.
 func TestUninstallDeletesNothingAfterAConnect(t *testing.T) {
+	testtool.SkipWindows(t, "Task 13: uninstall (the PATH link is a copy on Windows, Task 4)")
 	m, _, cl := sharedInstall(t)
 	connectAfterLoad(t, m.home)
 	code, env, out := uninstall(t, "--purge-local", "--answer", "identity_saved=yes")

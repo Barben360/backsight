@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func store(t *testing.T) Store {
@@ -17,6 +18,7 @@ func store(t *testing.T) Store {
 }
 
 func TestUpdateThenLoad(t *testing.T) {
+	testtool.SkipWindows(t, "Task 3: mode bits")
 	s := store(t)
 	err := s.Update("abc-123", func(st *State) error {
 		st.Project, st.Prompts = "billing", 2

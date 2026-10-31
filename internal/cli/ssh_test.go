@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // fakeSSH answers sshRun in-process: it records each call and writes the
@@ -55,7 +56,7 @@ func withSSH(t *testing.T, f sshCLI) {
 func fakeSSHOnPath(t *testing.T, body string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("the fake ssh is a shell script")
+		t.Skip("the fake ssh is a POSIX shell script: Linux only")
 	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
@@ -123,20 +124,17 @@ func TestCheckTargetRefusesOptionInjection(t *testing.T) {
 // execSSH runs the ssh found on PATH with the given argv, feeds it the
 // given stdin and never this process's own, and returns its exit code.
 func TestExecSSHRunsTheSystemSSH(t *testing.T) {
-	dir := fakeSSHOnPath(t, `log="$(dirname "$0")"
-printf '%s\n' "$@" > "$log/argv"
-cat > "$log/stdin"
-echo out-line
-echo err-line >&2
-exit 7`)
+	dir := t.TempDir()
+	ssh := testtool.Write(t, dir, "ssh", testtool.Fake{Stdout: "out-line\n", Stderr: "err-line\n", Code: 7,
+		Script: "stdinto " + filepath.Join(dir, "stdin")})
+	t.Setenv("PATH", dir)
 	args := sshArgs("u@example.invalid", "echo hi")
 	var out, errb bytes.Buffer
 	code, err := execSSH{}.Run(context.Background(), args, strings.NewReader("secret-value\nline2"), &out, &errb)
 	if err != nil || code != 7 {
 		t.Fatalf("Run = %d, %v; want 7, nil", code, err)
 	}
-	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
-	if got := strings.Split(strings.TrimSuffix(string(argv), "\n"), "\n"); !slices.Equal(got, args) {
+	if got := testtool.Calls(t, ssh); len(got) != 1 || !slices.Equal(got[0], args) {
 		t.Errorf("argv = %q, want %q", got, args)
 	}
 	if in, _ := os.ReadFile(filepath.Join(dir, "stdin")); string(in) != "secret-value\nline2" {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/instructions"
 	"github.com/Barben360/backsight/internal/session"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 const npmError = "Exit code 1\nError: Cannot find module 'express'\nRequire stack:\n- /home/u/app/server.js"
@@ -99,7 +100,7 @@ func TestFailureRecallSkips(t *testing.T) {
 			_ = sessions(home).Update("s1", func(st *session.State) error { st.Paused = true; return nil })
 		}},
 		"excluded": {tool: "Bash", err: npmError, reason: "excluded", setup: func(t *testing.T, home string) {
-			appendConfig(t, home, "[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]")
+			appendConfig(t, home, "[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "billing"))+"]")
 		}},
 		"budget": {tool: "Bash", err: npmError, reason: "budget", setup: func(t *testing.T, home string) {
 			_ = sessions(home).Update("s1", func(st *session.State) error { st.CharsInjected = 6000; return nil })

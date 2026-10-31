@@ -11,6 +11,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/hook"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 // The lines a user sees in a session (systemMessage), rendered exactly:
@@ -59,7 +60,7 @@ func TestSessionStartBannerStates(t *testing.T) {
 	}{
 		{"on", func(*testing.T, string) {}, "🧠 backsight · 🗂️ billing"},
 		{"project excluded", func(t *testing.T, home string) {
-			appendConfig(t, home, "[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]")
+			appendConfig(t, home, "[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "billing"))+"]")
 		}, "⏸️ backsight · 🗂️ billing · recall on, this project is not recorded"},
 		{"retain = false in .backsight.toml", func(t *testing.T, home string) {
 			_ = os.WriteFile(filepath.Join(home, "billing", ".backsight.toml"), []byte("retain = false\n"), 0o600)
@@ -68,13 +69,13 @@ func TestSessionStartBannerStates(t *testing.T) {
 			appendConfig(t, home, "[components]\nwrite = false")
 		}, "🔕 backsight · 🗂️ billing · recall on, recording off"},
 		{"recording off wins over an excluded project", func(t *testing.T, home string) {
-			appendConfig(t, home, "[components]\nwrite = false\n[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]")
+			appendConfig(t, home, "[components]\nwrite = false\n[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "billing"))+"]")
 		}, "🔕 backsight · 🗂️ billing · recall on, recording off"},
 		{"server unreachable", func(*testing.T, string) { recentDown.Store(true) },
 			"⚠️ backsight · 🗂️ billing · memory unavailable (server unreachable) · run `backsight doctor`"},
 		{"unreachable wins over an excluded project", func(t *testing.T, home string) {
 			recentDown.Store(true)
-			appendConfig(t, home, "[privacy]\nexclude_paths = [\""+filepath.Join(home, "billing")+"\"]")
+			appendConfig(t, home, "[privacy]\nexclude_paths = ["+testtool.TOMLStr(filepath.Join(home, "billing"))+"]")
 		}, "⚠️ backsight · 🗂️ billing · memory unavailable (server unreachable) · run `backsight doctor`"},
 		{"breaker open", func(t *testing.T, home string) {
 			_ = os.MkdirAll(pathsOf(home).State, 0o700)

@@ -17,6 +17,7 @@ import (
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/retain"
 	"github.com/Barben360/backsight/internal/state"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestReattributeRefusesUnknownAnswers(t *testing.T) {
@@ -91,7 +92,7 @@ func reportToMove(t *testing.T, home string, port int) {
 	writeTranscript(t, home, "s1", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
 	agent := filepath.Join(home, ".claude", "projects", "-home-u-billing", "s1", "subagents", "agent-ag1.jsonl")
 	_ = os.MkdirAll(filepath.Dir(agent), 0o700)
-	edit := `{"type":"assistant","isSidechain":true,"uuid":"e%d","cwd":"` + billing + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Edit","input":{"file_path":"` + filepath.Join(shop, "cart.go") + `"}}]}}` + "\n"
+	edit := `{"type":"assistant","isSidechain":true,"uuid":"e%d","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Edit","input":{"file_path":"` + filepath.Join(shop, "cart.go") + `"}}]}}` + "\n"
 	_ = os.WriteFile(agent, []byte(fmt.Sprintf(edit, 1, 1)+fmt.Sprintf(edit, 2, 2)), 0o600)
 	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
 	if err := cl.RetainNow(context.Background(), "claude-memory", []hindsight.RetainItem{{Content: "Fixed the cart.", DocumentID: "subagent:s1:ag1",
@@ -215,7 +216,7 @@ func mixedSessionDoc(t *testing.T, home string, port int, sid string) {
 	p := filepath.Join(home, ".claude", "projects", "-home-u-billing", sid+".jsonl")
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
 	rec := func(uuid, cwd string) string {
-		return `{"type":"user","uuid":"` + uuid + `","sessionId":"` + sid + `","cwd":"` + cwd + `","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"work"}}` + "\n"
+		return `{"type":"user","uuid":"` + uuid + `","sessionId":"` + sid + `","cwd":"` + testtool.JSONPath(cwd) + `","timestamp":"2026-10-24T09:00:00Z","message":{"role":"user","content":"work"}}` + "\n"
 	}
 	_ = os.WriteFile(p, []byte(rec(sid+"-u1", filepath.Join(home, "billing"))+rec(sid+"-u2", filepath.Join(home, "src", "shop"))), 0o600)
 	cl, _ := hindsight.New("http://127.0.0.1:"+strconv.Itoa(port), "k", 5*time.Second)
