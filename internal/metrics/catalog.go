@@ -54,15 +54,15 @@ var Catalog = withDrills([]Def{
 		Family: "reach", Series: "daily", Command: "backsight stats quality", Drill: "backsight stats sessions --has memory",
 		Question:   "Does memory show up when you ask something?",
 		Definition: "Prompt recalls that put at least one memory in front of Claude, out of all prompt recalls. Shown with a 95% Wilson interval; it is watched when even the interval's upper bound stays under 10%.",
-		Action:     "The bank may be thin or the recall floors too strict. Look at why prompts got nothing, and import past sessions.",
+		Action:     "Memory may be thin or the recall cut-offs too strict. Look at why prompts got nothing, and import past sessions.",
 	},
 	{
 		ID: "recall.empty_reasons", Label: "Why prompts got nothing", Unit: "count", Direction: "none", MinN: 0,
 		CI: "none", Scope: "machine", Source: "telemetry", Family: "reach", Series: "daily", Command: "backsight stats quality",
 		Extra:      []string{"empty", "skips"},
 		Question:   "Why did some prompts get no memory?",
-		Definition: "Recalls that injected nothing, counted by reason (no candidates, below the floor, all already seen, capped), and prompts skipped, counted by reason.",
-		Action:     "Tells which fix applies: a thin bank, floors that are too strict, or memories already shown this session.",
+		Definition: "Recalls that injected nothing, counted by reason (no candidates, below the cut-off, all already seen, capped), and prompts skipped, counted by reason.",
+		Action:     "Tells which fix applies: thin memory, cut-offs that are too strict, or memories already shown this session.",
 	},
 	{
 		ID: "recall.by_lang", Label: "Prompts that got memory, by language", Unit: "ratio", Direction: "up", MinN: 20,
@@ -85,7 +85,7 @@ var Catalog = withDrills([]Def{
 		Extra:      []string{"failed"},
 		Question:   "How often does a memory search come back empty?",
 		Definition: "memory_search calls that succeeded with no hit, out of memory_search calls that succeeded. Failed calls are counted apart.",
-		Action:     "Gaps in the bank: what Claude looks for is not stored.",
+		Action:     "Gaps in memory: what Claude looks for is not stored.",
 	},
 	{
 		ID: "used.turn_rate", Label: "Turns where Claude used memory", Unit: "ratio", Direction: "up", MinN: 20,
@@ -94,7 +94,7 @@ var Catalog = withDrills([]Def{
 		Extra:      []string{"worst_case", "pending", "check_skipped", "subagent_turns"},
 		Question:   "When memory was shown, did Claude use it?",
 		Definition: "Main-agent turns that showed memory and whose final stop declared at least one memory used, out of those turns that declared (a turn declaring only wrong, outdated or none counts as declared without use). The worst case, counting undeclared turns as unused, is given beside it. Unreliable while the declaring coverage's upper bound is under 80%.",
-		Action:     "Recall is noisy. Tighten the floors and review the memories that are never used.",
+		Action:     "Recall is noisy. Tighten the recall cut-offs and review the memories that are never used.",
 	},
 	{
 		ID: "declare.coverage", Label: "Turns where Claude said what it used", Unit: "ratio", Direction: "up", MinN: 20,
@@ -151,7 +151,7 @@ var Catalog = withDrills([]Def{
 		Extra:      []string{"wrong", "outdated", "used"},
 		Question:   "How many memories that Claude relied on were wrong?",
 		Definition: "Wrong and out-of-date verdicts, out of used, wrong and out-of-date verdicts. Watched when even the interval's lower bound is above 5%, bad above 15%.",
-		Action:     "Stale facts are in the bank. Go through the reported list and forget or fix them.",
+		Action:     "Stale facts are in memory. Go through the reported list and forget or fix them.",
 	},
 	{
 		ID: "stale.never_used", Label: "Often shown, never used", Unit: "count", Direction: "none", MinN: 0,
@@ -164,7 +164,7 @@ var Catalog = withDrills([]Def{
 		ID: "stale.hidden", Label: "Hidden", Unit: "count", Direction: "none", MinN: 0,
 		Aggregation: "recent_weighted", CI: "none", Scope: "machine", Source: "ledger", Family: "quality", Series: "none", Command: "backsight memory stale",
 		Question:   "How many memories are hidden from recall?",
-		Definition: "The memories hidden from recall, counted from the feedback ledger.",
+		Definition: "The memories hidden from recall, counted from the feedback ledger with recent feedback weighted more.",
 		Action:     "Check that each is still better hidden; backsight forget --restore <id> brings one back.",
 	},
 	{
@@ -222,7 +222,7 @@ var Catalog = withDrills([]Def{
 		CI: "none", Scope: "server", Source: "server", Family: "cost", Series: "daily", Command: "backsight stats cost",
 		Extra:      []string{"price_set", "currency", "by_operation"},
 		Question:   "How much does the server's model cost?",
-		Definition: "The tokens spent, priced from the prices set in the server's [llm] settings; it reads \"price not set\" when no price is set. For all PCs using the server.",
+		Definition: "The tokens spent, priced from the [llm] prices in your backsight config; it reads \"price not set\" when no price is set. For all PCs using the server.",
 		Action:     "Set the model prices to see the cost; a high cost calls for a cheaper model or fewer projects sent.",
 	},
 	{
@@ -237,15 +237,15 @@ var Catalog = withDrills([]Def{
 		ID: "bank.size", Label: "Memories", Unit: "count", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "bank", Series: "none", Command: "backsight stats bank",
 		Extra:      []string{"world", "experience", "observation", "documents", "links"},
-		Question:   "How many memories does the bank hold?",
+		Question:   "How many memories are stored?",
 		Definition: "Memories by kind (facts about you and your work, facts from sessions, summaries) and the documents they come from.",
-		Action:     "No judgement; a bank that stays small explains a low share of prompts that got memory.",
+		Action:     "No judgement; small memory explains a low share of prompts that got memory.",
 	},
 	{
 		ID: "bank.growth", Label: "New memories per day", Unit: "count", Direction: "none", MinN: 0,
 		CI: "none", Scope: "server", Source: "server", Family: "bank", Series: "daily", Command: "backsight stats bank",
 		Extra:      []string{"world", "experience", "observation", "days_covered"},
-		Question:   "Is the bank still learning?",
+		Question:   "Is memory still growing?",
 		Definition: "Memories added per day, by kind, from the server's time series.",
 		Action:     "A flat line while you work means memory is not learning; run backsight doctor.",
 	},
@@ -274,7 +274,7 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "notes.stored", Label: "Facts stored", Unit: "count", Direction: "none", MinN: 0,
-		CI: "none", Scope: "machine", Source: "journal", Family: "bank", Series: "none", Command: "backsight stats bank",
+		CI: "none", Scope: "machine", Source: "telemetry", Family: "bank", Series: "none", Command: "backsight stats bank",
 		Extra:      []string{"by_result", "by_kind"},
 		Question:   "How many facts did Claude store?",
 		Definition: "Store events by result (saved, updated, refused) and by kind.",
@@ -282,7 +282,7 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "pipeline.flow", Label: "Sessions sent", Unit: "ratio", Direction: "up", MinN: 0,
-		ErrorClass: true, CI: "wilson", Scope: "machine", Source: "journal", Family: "pipeline", Series: "daily",
+		ErrorClass: true, CI: "wilson", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily",
 		Command: "backsight doctor", Drill: "backsight stats pipeline",
 		Extra:      []string{"ok", "failed", "set_aside", "waiting", "backlog_oldest_ms"},
 		Question:   "Are finished sessions reaching the server?",
@@ -291,7 +291,7 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "retain.outcomes", Label: "Sends by result", Unit: "count", Direction: "none", MinN: 0,
-		CI: "none", Scope: "machine", Source: "journal", Family: "pipeline", Series: "daily", Command: "backsight stats pipeline",
+		CI: "none", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "daily", Command: "backsight stats pipeline",
 		Extra:      []string{"by_status", "p95_ms"},
 		Question:   "How did each day's sends end?",
 		Definition: "Per day, documents by their last status. The duration (p95) counts successful sends only.",
@@ -335,7 +335,7 @@ var Catalog = withDrills([]Def{
 		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight doctor",
 		Extra:      []string{"last_ok", "failing_since", "breaker_open_until"},
 		Question:   "Does the memory server answer this PC?",
-		Definition: "The last answer, since when it is failing, and until when the breaker stays open, as this PC recorded them. Watched when failing or when the breaker is open; bad when a backlog older than 24 hours builds up with it.",
+		Definition: "The last answer, since when it is failing, and until when the breaker stays open, as this PC recorded them, with the prompts skipped while the breaker was open. Watched when failing or when the breaker is open; bad when a backlog older than 24 hours builds up with it.",
 		Action:     "The server cannot be reached, so recall is skipped. Run backsight doctor.",
 	},
 	{
@@ -348,7 +348,7 @@ var Catalog = withDrills([]Def{
 	},
 	{
 		ID: "jobs.last_run", Label: "Background jobs", Unit: "ms", Direction: "none", MinN: 0,
-		ErrorClass: true, CI: "none", Scope: "machine", Source: "local", Family: "pipeline", Series: "none", Command: "backsight jobs tick",
+		ErrorClass: true, CI: "none", Scope: "machine", Source: "telemetry", Family: "pipeline", Series: "none", Command: "backsight jobs tick",
 		Extra:      []string{"tick", "maintain"},
 		Question:   "Are the background jobs running?",
 		Definition: "The last tick and maintain runs, with status and duration. Bad when a job is more than twice its cadence late and prompts or tool events happened since it was due (a sleeping laptop is not a fault).",

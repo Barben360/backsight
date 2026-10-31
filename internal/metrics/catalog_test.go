@@ -107,6 +107,35 @@ func TestCatalogRows(t *testing.T) {
 	}
 }
 
+// Where each row's data comes from (the index tables it reads).
+func TestCatalogSources(t *testing.T) {
+	want := map[string]string{}
+	for _, id := range []string{"recall.hit_rate", "recall.empty_reasons", "recall.by_lang", "search.rate", "search.empty_rate", "context.per_session", "context.per_prompt", "recall.latency", "search.latency", "hooks.failures", "notes.stored", "pipeline.flow", "retain.outcomes", "jobs.last_run"} {
+		want[id] = "telemetry"
+	}
+	for _, id := range []string{"used.turn_rate", "declare.coverage", "used.rubber_stamp", "used.share_confident", "used.rank", "used.by_path", "search.rescue_rate", "verdict.wrong_rate", "bank.churn"} {
+		want[id] = "journal"
+	}
+	for _, id := range []string{"stale.never_used", "stale.hidden", "stale.reported"} {
+		want[id] = "ledger"
+	}
+	for _, id := range []string{"local.backlog", "server.reach"} {
+		want[id] = "local"
+	}
+	for _, id := range []string{"extraction.tokens", "extraction.cost", "extraction.per_session", "bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "server.queue", "server.extraction_delay"} {
+		want[id] = "server"
+	}
+	want["doctor.check"] = "doctor"
+	if len(want) != len(Catalog) {
+		t.Fatalf("source table covers %d rows, catalog has %d", len(want), len(Catalog))
+	}
+	for _, d := range Catalog {
+		if d.Source != want[d.ID] {
+			t.Errorf("%s: source %q, want %q", d.ID, d.Source, want[d.ID])
+		}
+	}
+}
+
 // Every id is unique and every row carries its text and source.
 func TestCatalogRowsAreComplete(t *testing.T) {
 	seen := map[string]bool{}
@@ -172,6 +201,13 @@ func TestCatalogText(t *testing.T) {
 		for name, v := range map[string]string{"label": d.Label, "question": d.Question, "definition": d.Definition, "action": d.Action} {
 			if r := privateRefsIn(v); r != "" {
 				t.Errorf("%s %s cites %s", d.ID, name, r)
+			}
+		}
+		for _, w := range []string{"bank", "floor"} {
+			for name, v := range map[string]string{"label": d.Label, "question": d.Question, "definition": d.Definition, "action": d.Action} {
+				if strings.Contains(strings.ToLower(v), w) {
+					t.Errorf("%s: %s uses the internal word %q", d.ID, name, w)
+				}
 			}
 		}
 		if !strings.HasSuffix(d.Question, "?") {
