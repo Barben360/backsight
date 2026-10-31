@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -264,12 +265,22 @@ func openWriter(ctx context.Context, path string, fs FSInfo) (*sql.DB, error) {
 	}
 }
 
-// busyWait is the busy timeout of the DSN.
-const busyWait = 5 * time.Second
+// busyWait is the busy timeout of the DSN (a var for the tests).
+var busyWait = 5 * time.Second
 
 func isBusy(err error) bool {
 	var e *sqlite.Error
 	return errors.As(err, &e) && e.Code()&0xff == sqlite3.SQLITE_BUSY
+}
+
+// lockHeld: err is SQLITE_BUSY or SQLITE_LOCKED (any extended code).
+func lockHeld(err error) bool {
+	var e *sqlite.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	c := e.Code() & 0xff
+	return c == sqlite3.SQLITE_BUSY || c == sqlite3.SQLITE_LOCKED
 }
 
 // Close drops this handle's reference; the files close with the last one.
@@ -317,13 +328,23 @@ var ErrSchemaChanged = errors.New("the metrics index was changed by another vers
 // count them).
 var onWriteTx = func() {}
 
+// errOtherWriter: a write transaction could not begin within the busy
+// timeout, another connection holding the write lock (another backsight
+// process catching up, in the middle of a batch). It wraps the SQLite
+// error, whose class stays busy.
+var errOtherWriter = errors.New("another process holds the write lock of the metrics index")
+
 // beginWrite begins a write transaction (BEGIN IMMEDIATE: the writer
 // DSN's _txlock) and reads user_version under its lock: a file another
 // binary migrated since this handle opened it (a long-lived process, the
-// dashboard) is not written, ErrSchemaChanged.
+// dashboard) is not written, ErrSchemaChanged. A lock still held by
+// another connection after the busy timeout is errOtherWriter.
 func (ix *Index) beginWrite(ctx context.Context) (*sql.Tx, error) {
 	onWriteTx()
 	tx, err := ix.sh.w.BeginTx(ctx, nil)
+	if lockHeld(err) {
+		return nil, fmt.Errorf("%w: %w", errOtherWriter, err)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,27 +299,50 @@ func TestTickCheckpointsTheWAL(t *testing.T) {
 }
 
 // TestTickBoundsTheIngest: past its budget the tick stops between
-// batches, and the next tick goes on.
+// batches, and each next tick goes on from there until caught up. The
+// catch-up's clock moves a second at each reading, so that the budget
+// runs out after the same work on any machine, however slow.
 func TestTickBoundsTheIngest(t *testing.T) {
 	home := devInstall(t, true)
 	pointAt(t, home, fakeHindsight(t))
 	d := pathsOf(home)
-	writeIndexLines(t, d, "2026-09", 12_000, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
-	prev := tickIndexBudget
-	tickIndexBudget = time.Nanosecond
-	code, res := tickJSON(t)
-	tickIndexBudget = prev
-	if code != output.OK || !strings.HasPrefix(res.MetricsIndex, "partial: ") || !strings.HasSuffix(res.MetricsIndex, " line(s), the next tick goes on") {
-		t.Errorf("exit %d metrics_index %q", code, res.MetricsIndex)
+	const total = 12_000
+	writeIndexLines(t, d, "2026-09", total, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	var mu sync.Mutex
+	at := time.Now()
+	prevClock, prevBudget := tickIndexClock, tickIndexBudget
+	tickIndexClock = func() time.Time { mu.Lock(); defer mu.Unlock(); at = at.Add(time.Second); return at }
+	tickIndexBudget = index.TickBudget
+	t.Cleanup(func() { tickIndexClock, tickIndexBudget = prevClock, prevBudget })
+	rows := func() int {
+		return indexCount(t, home, `SELECT count(*) FROM tel_prompt WHERE session = ?`, indexCanary)
 	}
-	if n := indexCount(t, home, `SELECT count(*) FROM tel_prompt WHERE session = ?`, indexCanary); n >= 12_000 {
-		t.Errorf("%d rows: the budget did not stop the ingest", n)
-	}
-	if _, res := tickJSON(t); !strings.HasPrefix(res.MetricsIndex, "caught up: ") {
-		t.Errorf("next tick: %q", res.MetricsIndex)
-	}
-	if n := indexCount(t, home, `SELECT count(*) FROM tel_prompt WHERE session = ?`, indexCanary); n != 12_000 {
-		t.Errorf("%d rows after the next tick, want 12000", n)
+	prev := 0
+	for tick := 1; ; tick++ {
+		code, res := tickJSON(t)
+		n := rows()
+		if code != output.OK {
+			t.Fatalf("tick %d: exit %d metrics_index %q", tick, code, res.MetricsIndex)
+		}
+		if strings.HasPrefix(res.MetricsIndex, "caught up: ") {
+			if n != total {
+				t.Errorf("tick %d caught up with %d rows, want %d", tick, n, total)
+			}
+			if tick == 1 {
+				t.Error("one tick read all the lines: the budget did not stop it")
+			}
+			return
+		}
+		if !strings.HasPrefix(res.MetricsIndex, "partial: ") || !strings.HasSuffix(res.MetricsIndex, " line(s), the next tick goes on") {
+			t.Fatalf("tick %d: metrics_index %q", tick, res.MetricsIndex)
+		}
+		if n <= prev || n >= total {
+			t.Fatalf("tick %d: %d rows after %d: a partial tick must go on from the last one and stop short", tick, n, prev)
+		}
+		if tick == 10 {
+			t.Fatalf("still partial after %d ticks (%d rows)", tick, n)
+		}
+		prev = n
 	}
 }
 

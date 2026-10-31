@@ -307,7 +307,7 @@ func buildTmp(ctx context.Context, o Options, t target) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, st, err := ix.refresh(ctx, o.Now(), time.Time{})
+	_, st, err := ix.refresh(ctx, o.Now(), time.Time{}, false)
 	if err == nil {
 		err = ix.leaveWAL(ctx)
 	}

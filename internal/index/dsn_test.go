@@ -58,13 +58,17 @@ func TestDSNsOpenADoubleSlashPath(t *testing.T) {
 	if !strings.HasPrefix(slashed, "//") && !strings.HasPrefix(slashed, `\\?\`) {
 		t.Fatalf("%s is not another spelling", slashed)
 	}
-	for name, d := range map[string]string{
-		"writer": dsn(slashed, FSInfo{Kind: FSLocal}, false),
-		"reader": dsn(slashed, FSInfo{Kind: FSLocal}, true),
-		"probe":  probeDSN(slashed, false),
-		"lock":   lockDSN(slashed),
+	// In this order, as an open does: the writer first, which puts the
+	// file in WAL mode; the read-only reader cannot (its journal_mode
+	// pragma on a rollback-journal file is a write it is refused).
+	for _, c := range []struct{ name, dsn string }{
+		{"writer", dsn(slashed, FSInfo{Kind: FSLocal}, false)},
+		{"reader", dsn(slashed, FSInfo{Kind: FSLocal}, true)},
+		{"probe", probeDSN(slashed, false)},
+		{"lock", lockDSN(slashed)},
 	} {
-		t.Run(name, func(t *testing.T) {
+		d := c.dsn
+		t.Run(c.name, func(t *testing.T) {
 			db, err := sql.Open(driverName, d)
 			if err != nil {
 				t.Fatal(err)

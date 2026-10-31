@@ -16,6 +16,10 @@ import (
 // longer one stops between batches, and the next tick goes on.
 var tickIndexBudget = index.TickBudget
 
+// tickIndexClock is the clock of the tick's catch-up, which its budget
+// is measured by (a var for the tests).
+var tickIndexClock = time.Now
+
 // indexStepTimeout bounds the whole index step of a job (open, daily
 // check, catch-up, checkpoint, pruning): a lock or a disk that hangs
 // never holds the job.
@@ -28,7 +32,9 @@ const indexStepTimeout = 60 * time.Second
 func tickIndex(ctx context.Context, d paths.Dirs, home string) string {
 	ctx, cancel := context.WithTimeout(ctx, indexStepTimeout)
 	defer cancel()
-	ix, err := index.Open(ctx, indexOptions(d, home, nil))
+	o := indexOptions(d, home, nil)
+	o.Now = tickIndexClock
+	ix, err := index.Open(ctx, o)
 	if err != nil {
 		return indexStepError(err)
 	}

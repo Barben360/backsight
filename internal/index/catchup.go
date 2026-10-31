@@ -96,32 +96,56 @@ func ctxErr(err error) bool {
 
 func (ix *Index) catchUp(ctx context.Context, budget time.Duration) (Freshness, error) {
 	start := ix.opts.Now()
-	fr, _, err := ix.refresh(ctx, start, start.Add(max(budget, 0)))
+	fr, _, err := ix.refresh(ctx, start, start.Add(max(budget, 0)), true)
 	return fr, err
 }
 
 // refresh is a catch-up started at start: the month files until deadline
-// (zero: none), the ledger, the local status.
-func (ix *Index) refresh(ctx context.Context, start, deadline time.Time) (Freshness, ingestStats, error) {
+// (zero: none), the ledger, the local status. With yield, a write
+// transaction that finds the write lock held past the busy timeout
+// (errOtherWriter: another process is catching up) ends the run without
+// an error: what this run committed stays, the rest is that process's,
+// and the freshness is read from what is there, Partial. Without yield (a
+// rebuild's build of its own file), that is an error as any other.
+func (ix *Index) refresh(ctx context.Context, start, deadline time.Time, yield bool) (Freshness, ingestStats, error) {
 	p, err := ix.newProgress(ctx, start)
 	if err != nil {
 		return Freshness{}, ingestStats{}, err
 	}
+	yielded := false
+	step := func(what string, err error) error {
+		if yield && errors.Is(err, errOtherWriter) {
+			yielded = true
+			return nil
+		}
+		if err != nil && what != "" {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		return err
+	}
 	st, err := ix.ingest(ctx, deadline, p.batch)
-	if err != nil {
+	if err := step("", err); err != nil {
 		return Freshness{}, st, err
 	}
-	if err := ix.refreshLedger(ctx); err != nil {
-		return Freshness{}, st, fmt.Errorf("ledger: %w", err)
+	if !yielded {
+		if err := step("ledger", ix.refreshLedger(ctx)); err != nil {
+			return Freshness{}, st, err
+		}
 	}
-	if err := ix.refreshLocal(ctx); err != nil {
-		return Freshness{}, st, fmt.Errorf("local status: %w", err)
+	if !yielded {
+		if err := step("local status", ix.refreshLocal(ctx)); err != nil {
+			return Freshness{}, st, err
+		}
 	}
+	st.More = st.More || yielded
 	fr, err := ix.freshness(ctx, st.More)
 	if err != nil {
 		return Freshness{}, st, err
 	}
 	fr.Lines = st.Lines
+	// Yielded, the run is partial even with no line left: the ledger or
+	// the local status may not be written yet.
+	fr.Partial = fr.Partial || yielded
 	if !fr.Partial {
 		// Caught up as of start, whether or not it wrote anything (a
 		// catch-up with nothing new writes no cursor).

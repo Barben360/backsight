@@ -98,8 +98,19 @@ func catchUpIndex(t *testing.T, home string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ix.CatchUp(context.Background(), time.Minute); err != nil {
-		t.Fatal(err)
+	// Until caught up: a slow machine (the race detector) may stop a
+	// run at its budget, and every run goes on from the last one.
+	for run := 1; ; run++ {
+		fr, err := ix.CatchUp(context.Background(), time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fr.Partial {
+			break
+		}
+		if run == 20 {
+			t.Fatalf("still partial after %d runs: %+v", run, fr)
+		}
 	}
 	if err := ix.Close(); err != nil {
 		t.Fatal(err)

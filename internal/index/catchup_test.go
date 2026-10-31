@@ -503,7 +503,10 @@ func TestCatchUpWaiterRunsAgainAfterTheLeadersContext(t *testing.T) {
 }
 
 // TestHelperIngest is the child of TestTwoProcessesIngestConcurrently: it
-// catches up the index of the state directory it is given.
+// catches up the index of the state directory it is given, again while a
+// run comes back partial (it yielded the write lock to the other child,
+// which may hold it past the busy timeout on a slow machine). Never an
+// error.
 func TestHelperIngest(t *testing.T) {
 	dir := os.Getenv("BACKSIGHT_INDEX_HELPER")
 	if dir == "" {
@@ -514,13 +517,18 @@ func TestHelperIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = ix.Close() }()
-	fr, err := ix.CatchUp(context.Background(), 5*time.Minute)
-	if err != nil {
-		t.Fatal(err)
+	// Each partial run means the other child committed meanwhile: the
+	// bound is far above what the 20,000 lines can take.
+	for range 100 {
+		fr, err := ix.CatchUp(context.Background(), 5*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fr.Partial {
+			return
+		}
 	}
-	if fr.Partial {
-		t.Fatalf("partial: %+v", fr)
-	}
+	t.Fatal("still partial after 100 runs")
 }
 
 func TestTwoProcessesIngestConcurrently(t *testing.T) {
@@ -558,9 +566,147 @@ func TestTwoProcessesIngestConcurrently(t *testing.T) {
 	if n := e.count("tel_prompt"); n != 20_000 {
 		t.Errorf("%d rows, want 20000", n)
 	}
+	if fr := e.catchUp(time.Minute); fr.Partial || fr.Lines != 0 {
+		t.Errorf("the children left work: %+v", fr)
+	}
 	if got, want := dump(t, e.ix), freshDump(t, e); got != want {
 		t.Error("two processes built an index other than a fresh build")
 	}
+}
+
+// shortBusyWait cuts the busy timeout of the connections opened from here
+// on (the DSN's busy_timeout, openWriter's retry) to 200 ms.
+func shortBusyWait(t *testing.T) {
+	t.Helper()
+	prev := busyWait
+	busyWait = 200 * time.Millisecond
+	t.Cleanup(func() { busyWait = prev })
+}
+
+// holdWriteLock takes the write lock of the index at path from a
+// connection of its own (BEGIN IMMEDIATE), as another backsight process
+// in the middle of a batch does; release lets it go.
+func holdWriteLock(t *testing.T, path string, fs FSInfo) (release func()) {
+	t.Helper()
+	db, err := sql.Open(driverName, dsn(path, fs, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	tx, err := db.Begin()
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = tx.Rollback(); _ = db.Close() }) }
+	t.Cleanup(release)
+	return release
+}
+
+// Opening an index another process is writing (a tick in the middle of a
+// batch) does not wait for its write lock: nothing to migrate, nothing to
+// write.
+func TestOpenDoesNotWaitForAnotherWriter(t *testing.T) {
+	shortBusyWait(t)
+	o := opts(t, tempDirs(t), nil)
+	ix := mustOpen(t, o)
+	path, fs := ix.Path(), ix.FS()
+	mustClose(t, ix)
+	holdWriteLock(t, path, fs)
+	ix, err := Open(context.Background(), o)
+	if err != nil {
+		t.Fatalf("open while another process writes: %v", err)
+	}
+	mustClose(t, ix)
+}
+
+// A catch-up whose write transaction finds the lock held past the busy
+// timeout leaves the work to the process that holds it: no error, Partial,
+// nothing written (the ledger and the local status are not tried either);
+// once the lock is free the next catch-up does it all.
+func TestCatchUpYieldsToAnotherWriter(t *testing.T) {
+	shortBusyWait(t)
+	r := &fakeReader{l: ledgerOf(map[string]feedback.Entry{"m1": {Shown: 1}})}
+	var b strings.Builder
+	for i := 1; i <= 10; i++ {
+		b.WriteString(promptLine(i, 1))
+	}
+	e := envWith(t, func(o *Options) { o.Ledger = r })
+	e.write("2026-10", b.String())
+	release := holdWriteLock(t, e.ix.Path(), e.ix.FS())
+	writes := 0
+	prev := onWriteTx
+	onWriteTx = func() { writes++ }
+	t.Cleanup(func() { onWriteTx = prev })
+	fr, err := e.ix.CatchUp(context.Background(), time.Minute)
+	if err != nil || !fr.Partial || fr.Lines != 0 {
+		t.Fatalf("%+v, %v; want a partial catch-up and no error", fr, err)
+	}
+	if writes != 1 {
+		t.Errorf("%d write transactions tried, want 1: the rest is left to the other process", writes)
+	}
+	release()
+	if fr := e.catchUp(time.Minute); fr.Partial || fr.Lines != 10 {
+		t.Errorf("after the lock was freed: %+v", fr)
+	}
+	if n, m := e.count("tel_prompt"), e.count("ledger"); n != 10 || m != 1 {
+		t.Errorf("%d prompt rows and %d ledger rows, want 10 and 1", n, m)
+	}
+}
+
+// The files caught up, a ledger write that finds the lock held is left to
+// the other process too: Partial, no error.
+func TestCatchUpYieldsOnTheLedgerWrite(t *testing.T) {
+	shortBusyWait(t)
+	r := &fakeReader{l: ledgerOf(map[string]feedback.Entry{"m1": {Shown: 1}})}
+	e := envWith(t, func(o *Options) { o.Ledger = r })
+	e.write("2026-10", promptLine(1, 1))
+	e.catchUp(time.Minute)
+	r.set(ledgerOf(map[string]feedback.Entry{"m1": {Shown: 1}, "m2": {Shown: 2}}), nil)
+	release := holdWriteLock(t, e.ix.Path(), e.ix.FS())
+	fr, err := e.ix.CatchUp(context.Background(), time.Minute)
+	if err != nil || !fr.Partial {
+		t.Fatalf("%+v, %v; want a partial catch-up and no error", fr, err)
+	}
+	release()
+	if fr := e.catchUp(time.Minute); fr.Partial || e.count("ledger") != 2 {
+		t.Errorf("after the lock was freed: %+v, %d ledger rows", fr, e.count("ledger"))
+	}
+}
+
+// The other writers do not yield: a rebuild's build (its own file: a lock
+// held there is no catch-up of another process), a migration and the
+// pruning return the lock's error.
+func TestOnlyTheCatchUpYieldsTheLock(t *testing.T) {
+	shortBusyWait(t)
+	t.Run("rebuild build", func(t *testing.T) {
+		e := newEnv(t)
+		e.write("2026-10", promptLine(1, 1))
+		holdWriteLock(t, e.ix.Path(), e.ix.FS())
+		if _, _, err := e.ix.refresh(context.Background(), clock, time.Time{}, false); Class(err) != "busy" {
+			t.Errorf("err %v, want the class busy", err)
+		}
+	})
+	t.Run("migration", func(t *testing.T) {
+		d := tempDirs(t)
+		ix := mustOpen(t, opts(t, d, regA()))
+		path, fs := ix.Path(), ix.FS()
+		mustClose(t, ix)
+		holdWriteLock(t, path, fs)
+		if _, err := Open(context.Background(), opts(t, d, regB())); Class(err) != "busy" {
+			t.Errorf("err %v, want the class busy", err)
+		}
+	})
+	t.Run("prune", func(t *testing.T) {
+		e := newEnv(t)
+		e.addError("telemetry/events-2026-08.jsonl", 0, "bad_json", clock.AddDate(0, 0, -60))
+		holdWriteLock(t, e.ix.Path(), e.ix.FS())
+		o := opts(t, e.d, nil)
+		if _, err := Maintain(context.Background(), o); Class(err) != "busy" {
+			t.Errorf("err %v, want the class busy", err)
+		}
+	})
 }
 
 var progressRE = regexp.MustCompile(`^metrics index: \d+\.\d/\d+\.\d MB$`)

@@ -312,9 +312,9 @@ func updateGate(d paths.Dirs) error {
 }
 
 // migrate brings the file ix holds to t's head. The version the writer
-// reads under the write lock is the authority (the probe's may be stale,
-// or missing): above the head on metrics.db, nothing is written and
-// errNewer sends the open to the side file.
+// reads is the authority (the probe's may be stale, or missing): above
+// the head on metrics.db, nothing is written and errNewer sends the open
+// to the side file.
 func (ix *Index) migrate(ctx context.Context, t target) ([]string, error) {
 	v, err := writerVersion(ctx, ix.sh.w)
 	if err != nil {
@@ -337,16 +337,17 @@ func (ix *Index) migrate(ctx context.Context, t target) ([]string, error) {
 	return applied, ix.sh.w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&ix.schema)
 }
 
-// writerVersion reads user_version inside BEGIN IMMEDIATE (the writer
-// DSN's _txlock), so no other writer is half way through a migration.
+// writerVersion reads the committed user_version through the writer's
+// connection, the -wal included, without the write lock: an open never
+// waits for another process's batch (a tick catching up holds the lock
+// for a whole batch, past the busy timeout on a slow machine). A
+// migration half way in another process is not seen; each migration reads
+// the version again under the lock (applyOne), and a write transaction
+// that finds it changed since the open stops with ErrSchemaChanged
+// (beginWrite).
 func writerVersion(ctx context.Context, w *sql.DB) (int, error) {
-	tx, err := w.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
 	var v int
-	err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v)
+	err := w.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v)
 	return v, err
 }
 
