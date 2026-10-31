@@ -388,7 +388,7 @@ func fullInstallation(t *testing.T, n Native) {
 // partial one (a cut extraction, marker or not) is removed and unpacked
 // again.
 func TestNativeFetchUnpackCompleteness(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: Linux's uv and unpack; Windows' Fetch (uv.exe, copyPostgres) has its own tests")
+	testtool.SkipWindows(t, "linux-only: Linux's uv and unpack; Windows' Fetch (uv.exe, copyPostgres) has its own tests")
 	for _, tc := range []struct {
 		name   string
 		setup  func(t *testing.T, n Native)

@@ -40,17 +40,20 @@ const (
 	NativeWheelsMB = 1100
 )
 
-// uvBaseURL and uvSHA256 are where the pinned uv comes from and what it
-// must hash to; tests serve another.
+// uvBaseURL and uvSHA256 are where the pinned uv comes from and what an
+// OS's archive must hash to; tests serve another.
 var (
 	uvBaseURL = "https://github.com/astral-sh/uv/releases/download"
-	uvSHA256  = nativelock.UVSHA256
+	uvSHA256  = func(p nativelock.Platform) string { return p.UVSHA256 }
 )
 
 // uvClient fetches uv: a stalled download fails instead of hanging.
 var uvClient = &http.Client{Timeout: 10 * time.Minute}
 
-func uvURL() string { return uvBaseURL + "/" + nativelock.UVVersion + "/" + nativelock.UVAsset }
+// uvURL is n's OS's uv archive: Linux's tarball, Windows' zip.
+func (n Native) uvURL() string {
+	return uvBaseURL + "/" + nativelock.UVVersion + "/" + n.pins().UVAsset
+}
 
 // hfModel is a model fetched by commit (Task 1 C5).
 type hfModel struct{ Repo, Revision string }
@@ -99,8 +102,12 @@ func toolEnv(set ...string) []string {
 func (n Native) uvCache() string { return n.join(n.Root(), "uv-cache") }
 
 // uvEnv is the pinned uv's environment: no configuration file, managed
-// Pythons only, its Pythons and cache under Root().
+// Pythons only, its Pythons and cache under Root() (Windows: toolEnvFor's,
+// which carries uv's two settings).
 func (n Native) uvEnv() []string {
+	if n.goos() == "windows" {
+		return append(n.toolEnvFor(filepath.Dir(n.UV())), "UV_PYTHON_INSTALL_DIR="+n.Python(), "UV_CACHE_DIR="+n.uvCache())
+	}
 	return toolEnv("HOME="+n.Home(), "UV_NO_CONFIG=1", "UV_PYTHON_PREFERENCE=only-managed",
 		"UV_PYTHON_INSTALL_DIR="+n.Python(), "UV_CACHE_DIR="+n.uvCache())
 }
@@ -209,7 +216,8 @@ func (n Native) fetchUV(ctx context.Context, w io.Writer) error {
 		return err
 	}
 	defer func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uvURL(), http.NoBody)
+	url, want := n.uvURL(), uvSHA256(n.pins())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return err
 	}
@@ -219,14 +227,17 @@ func (n Native) fetchUV(ctx context.Context, w io.Writer) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("downloading uv %s from %s: %s", nativelock.UVVersion, uvURL(), resp.Status)
+		return fmt.Errorf("downloading uv %s from %s: %s", nativelock.UVVersion, url, resp.Status)
 	}
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, maxUV)); err != nil {
 		return fmt.Errorf("downloading uv %s: %w", nativelock.UVVersion, err)
 	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != uvSHA256 {
-		return fmt.Errorf("the uv download does not match the sha256 this backsight carries: nothing was installed (%s has sha256 %s, want %s)", uvURL(), got, uvSHA256)
+	if got := hex.EncodeToString(h.Sum(nil)); got != want {
+		return fmt.Errorf("the uv download does not match the sha256 this backsight carries: nothing was installed (%s has sha256 %s, want %s)", url, got, want)
+	}
+	if n.goos() == "windows" {
+		return extractUVZip(tmp, n.UV())
 	}
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		return err
@@ -280,14 +291,14 @@ func extractUV(archive io.Reader, dst string) error {
 // ensureRoot makes Root() this user's alone (0700), as home/ is: it holds
 // server.env, the database and its identity.
 func (n Native) ensureRoot() error {
-	if err := os.MkdirAll(n.Root(), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(n.Root()); err != nil {
 		return err
 	}
 	return fsutil.MakePrivate(n.Root())
 }
 
 func (n Native) ensureHome() error {
-	if err := os.MkdirAll(n.Home(), 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(n.Home()); err != nil {
 		return err
 	}
 	return fsutil.MakePrivate(n.Home())
@@ -302,8 +313,13 @@ func (n Native) fetchPython(ctx context.Context, w io.Writer) error {
 	if err := n.ensureHome(); err != nil {
 		return err
 	}
-	// --no-bin: no python3.11 link in the user's ~/.local/bin.
-	if _, err := n.Tools.Run(ctx, n.uvEnv(), nil, n.UV(), "python", "install", "--no-bin", nativelock.Python()); err != nil {
+	// --no-bin: no python3.11 link in the user's ~/.local/bin; on Windows
+	// --no-registry too: no PEP 514 entry under HKCU (E34 ruling 6).
+	if n.goos() == "windows" {
+		if err := n.uvPythonInstallWindows(ctx); err != nil {
+			return err
+		}
+	} else if _, err := n.Tools.Run(ctx, n.uvEnv(), nil, n.UV(), "python", "install", "--no-bin", nativelock.Python()); err != nil {
 		return fmt.Errorf("uv python install %s: %w", nativelock.Python(), err)
 	}
 	if !isRegular(n.PythonBin()) {
@@ -340,19 +356,26 @@ func (n Native) fetchVenv(ctx context.Context, w io.Writer, v string) (err error
 		return err
 	}
 	defer func() { _ = os.Remove(req.Name()) }()
-	if _, err := req.Write(nativelock.Requirements); err != nil {
+	if _, err := req.Write(n.pins().Requirements); err != nil {
 		_ = req.Close()
 		return err
 	}
 	if err := req.Close(); err != nil {
 		return err
 	}
-	if _, err := n.Tools.Run(ctx, n.uvEnv(), nil, n.UV(), "venv", "--no-project", "--python", n.PythonBin(), venv); err != nil {
+	if _, err := n.Tools.Run(ctx, n.uvEnv(), nil, n.UV(), "venv", "--no-project", "--python", n.venvPython(), venv); err != nil {
 		return fmt.Errorf("uv venv %s: %w", venv, err)
 	}
 	if _, err := n.Tools.Run(ctx, n.uvEnv(), nil, n.UV(), "pip", "install", "--require-hashes", "--no-deps",
 		"--python", n.venvBin(v, "python"), "-r", req.Name()); err != nil {
 		return fmt.Errorf("uv pip install (the locked %s): %w", NativeWheels, err)
+	}
+	if n.goos() == "windows" {
+		// Before pg0's first run, which needs them, and onnxruntime's
+		// import (E34 W5).
+		if err := n.copyRuntimeDLLs(v, n.pg0BinDir(v), n.onnxCapi(v)); err != nil {
+			return err
+		}
 	}
 	return fsutil.WriteAtomic(filepath.Join(venv, venvComplete), []byte(nativelock.Hash12()+"\n"), 0o644)
 }
@@ -370,6 +393,9 @@ func (n Native) fetchModels(ctx context.Context, w io.Writer, v string) error {
 	}
 	hf := n.venvBin(v, "hf")
 	env := toolEnv("HOME="+n.Home(), "HF_HOME="+n.HF())
+	if n.goos() == "windows" {
+		env = append(n.toolEnvFor(filepath.Dir(hf)), "HF_HOME="+n.HF())
+	}
 	for _, m := range nativeModels {
 		args := []string{"download", m.Repo, "--revision", m.Revision}
 		for _, f := range nativeModelFiles {
@@ -406,9 +432,16 @@ var pgRequired = []string{"bin/initdb", "bin/postgres", "bin/pg_ctl", "bin/pg_co
 
 // pgMissing is the first of pgRequired missing from the installation, ""
 // when all are there.
-func (n Native) pgMissing() string {
+func (n Native) pgMissing() string { return n.pgMissingIn(n.installation()) }
+
+// pgMissingIn is pgMissing for the installation at dir: on Windows the
+// programs are .exe.
+func (n Native) pgMissingIn(dir string) string {
 	for _, f := range pgRequired {
-		if p := filepath.Join(n.installation(), filepath.FromSlash(f)); !isRegular(p) {
+		if strings.HasPrefix(f, "bin/") {
+			f = n.exe(f)
+		}
+		if p := n.join(dir, filepath.FromSlash(f)); !isRegular(p) {
 			return p
 		}
 	}
@@ -439,6 +472,9 @@ func (n Native) stopUnpack(ctx context.Context) {
 // where there is none. The unit is stopped before its files are removed,
 // whatever happens: a cancel kills systemd-run's client, not the unit.
 func (n Native) unpackPostgres(ctx context.Context, w io.Writer, v string) (err error) {
+	if n.goos() == "windows" {
+		return n.unpackPostgresWindows(ctx, w, v)
+	}
 	marker := filepath.Join(n.installation(), pgUnpacked)
 	if n.pgMissing() == "" {
 		if isRegular(marker) {

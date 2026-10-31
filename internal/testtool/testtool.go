@@ -51,6 +51,7 @@ import (
 //	nofile <path> <code>     exit now with the code when the file does not exist
 //	pid <path>               append this process's PID and a newline to the file
 //	ignoresignals            ignore interrupts from now on (SIGINT, SIGTERM; CTRL_BREAK on Windows)
+//	start <path> [args]      start the program and go on without waiting for it (a child that outlives the fake)
 //
 // A step may start with a condition on an argument, `<n>=<value>` or
 // `<n>!=<value>` (n from 1; a missing argument is ""), and runs only when
@@ -317,6 +318,15 @@ func (s spec) step(step string, args []string, stdin io.Reader, stdout, stderr i
 		}
 		fmt.Fprintln(w, os.Getpid())
 		_ = w.Close()
+	case "start":
+		// A child of the fake that outlives it (postgres' backends):
+		// started, not waited for.
+		cmd := exec.Command(f[1], f[2:]...)
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintln(stderr, "testtool:", err)
+			return 127, true
+		}
+		_ = cmd.Process.Release()
 	default:
 		fmt.Fprintf(stderr, "testtool: unknown step %q\n", step)
 		return 127, true

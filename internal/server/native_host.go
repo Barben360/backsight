@@ -66,9 +66,19 @@ var hostFor = func(n Native) nativeHost {
 // anywhere in a step, give it no stdin, or no stdout: pg0 forks a
 // postmaster that keeps the stdout it was given, which must never be the
 // call's pipe.
+//
+// On Windows (taskHost, native_win_transient.go) there is no shell: stdin
+// goes to the step whose argv holds "-f -" only; a KEY=value word replaces
+// that key of env (names ignore case); stepNoStdin is no stdin (NUL);
+// stepNoStdout and stepToLog send the step's stdout and stderr to its log
+// file, <Root>\tmp\<program>-<job>-<n>.log, never a pipe (E34 ruling 2:
+// pg0's postmaster inherits both, and a pipe it holds never ends), whose
+// tail a failure's error carries. stepToLog is Windows' only: the Linux
+// steps never use it.
 const (
 	stepNoStdin  = "</dev/null"
 	stepNoStdout = ">/dev/null"
+	stepToLog    = "&>log"
 )
 
 // stateParts splits a States value into its state and its host's

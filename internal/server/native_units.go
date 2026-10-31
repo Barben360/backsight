@@ -87,8 +87,14 @@ func (n Native) project() string {
 func (n Native) DBUnit() string     { return n.project() + "-db.service" }
 func (n Native) ServerUnit() string { return n.project() + "-server.service" }
 
-// DataDir is the database's data directory (pg0's instance).
-func (n Native) DataDir() string { return n.join(n.InstanceDir(), "data") }
+// DataDir is the database's data directory (pg0's instance; on Windows
+// <Root>\db, InstanceDir itself).
+func (n Native) DataDir() string {
+	if n.goos() == "windows" {
+		return n.InstanceDir()
+	}
+	return n.join(n.InstanceDir(), "data")
+}
 
 func (n Native) shim() string { return n.join(n.Dirs.Data, "bin", plugin.ShimName(n.goos())) }
 
@@ -141,6 +147,13 @@ func (n Native) Render(sec config.Secrets, host string) (Files, error) {
 	// is one of them after a switch. python-dotenv skips any with this.
 	env.comment("No .env file from the server's directory or above overrides this file.")
 	env.plain("PYTHON_DOTENV_DISABLED", "1")
+	if n.goos() == "windows" {
+		// The API's output is a pipe to the supervisor's log, which Python
+		// encodes in the ANSI code page: Hindsight's banner (U+2584) then
+		// stops the API at its start (seen on the VM).
+		env.comment("Windows: the API writes UTF-8 to its log, whatever the code page.")
+		env.plain("PYTHONUTF8", "1")
+	}
 	if env.err != nil {
 		return Files{}, env.err
 	}
@@ -443,6 +456,10 @@ func (n Native) waitDB(ctx context.Context) error {
 			return nil
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			if n.goos() == "windows" {
+				return n.redact(fmt.Errorf("the database (127.0.0.1:%d) did not answer within %s: %w: see %s",
+					port, dbWait, err, taskHost{n: n}.logFile("db")))
+			}
 			return n.redact(fmt.Errorf("the database (%s, 127.0.0.1:%d) did not answer within %s: %w", n.DBUnit(), port, dbWait, err))
 		}
 		select {
@@ -534,6 +551,10 @@ func (n Native) waitAPI(ctx context.Context) error {
 			err = fmt.Errorf("its database is %q", db)
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			if n.goos() == "windows" {
+				return n.redact(fmt.Errorf("the server did not answer %s/health with its database connected within %s (%w): see %s",
+					base, apiWait, err, taskHost{n: n}.logFile("api")))
+			}
 			return n.redact(fmt.Errorf("the server (%s) did not answer %s/health with its database connected within %s (%w): see journalctl --user -u %s",
 				n.ServerUnit(), base, apiWait, err, n.ServerUnit()))
 		}
@@ -657,7 +678,8 @@ func (n Native) Status(ctx context.Context) ([]Container, error) {
 const NotInstalled = "not-installed"
 
 // UnitStates maps both units to systemd's ActiveState (doctor's check),
-// NotInstalled for a unit without its file.
+// NotInstalled for a unit without its file. Windows has no unit: its keys
+// are the services, db and hindsight.
 func (n Native) UnitStates(ctx context.Context) (map[string]string, error) {
 	if n.Err != nil {
 		return nil, n.Err
@@ -668,9 +690,13 @@ func (n Native) UnitStates(ctx context.Context) (map[string]string, error) {
 	}
 	out := map[string]string{}
 	for _, u := range n.units() {
-		out[u[0]] = NotInstalled
+		key := u[0]
+		if n.goos() == "windows" {
+			key = u[1]
+		}
+		out[key] = NotInstalled
 		if s, ok := states[u[1]]; ok {
-			out[u[0]], _ = stateParts(s)
+			out[key], _ = stateParts(s)
 		}
 	}
 	return out, nil
@@ -747,7 +773,12 @@ func (n Native) DataExists(context.Context) (bool, error) {
 	return err == nil, err
 }
 
-func (n Native) DataName() string { return "the native database in " + n.Home() }
+func (n Native) DataName() string {
+	if n.goos() == "windows" {
+		return "the native database in " + n.DataDir()
+	}
+	return "the native database in " + n.Home()
+}
 
 var _ Sizer = Native{}
 
@@ -756,6 +787,21 @@ var _ Sizer = Native{}
 func (n Native) DataSize(context.Context) (int64, error) {
 	if n.Err != nil {
 		return 0, n.Err
+	}
+	if n.goos() == "windows" { // <Root>\db and the db.refused-* beside it
+		dirs, err := filepath.Glob(n.InstanceDir() + ".refused-*")
+		if err != nil {
+			return 0, err
+		}
+		var total int64
+		for _, d := range append([]string{n.InstanceDir()}, dirs...) {
+			s, err := dirSize(d)
+			if err != nil {
+				return 0, err
+			}
+			total += s
+		}
+		return total, nil
 	}
 	return dirSize(filepath.Dir(n.InstanceDir()))
 }
@@ -855,6 +901,9 @@ func (n Native) RenameBank(ctx context.Context, from, to string, dryRun bool) ([
 		return nil, fmt.Errorf("the native server's environment: %w (run backsight server render)", err)
 	}
 	env := append([]string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}, parseEnvFile(raw)...)
+	if n.goos() == "windows" {
+		env = append(n.windowsEnv(filepath.Dir(n.venvBin(n.runningVersion(), "hindsight-admin"))), parseEnvFile(raw)...)
+	}
 	args := []string{"rename-bank", "--from", from, "--to", to}
 	if dryRun {
 		args = append(args, "--dry-run")
@@ -878,6 +927,9 @@ func (n Native) SecretFiles() []string { return []string{n.EnvFile()} }
 func (n Native) createInstance(ctx context.Context) error {
 	if n.Err != nil {
 		return n.Err
+	}
+	if n.goos() == "windows" {
+		return n.createInstanceWindows(ctx)
 	}
 	pw, err := n.dbPassword()
 	if err != nil {

@@ -87,6 +87,14 @@ func (t execTools) Run(ctx context.Context, env []string, stdin io.Reader, path 
 	return out, err
 }
 
+// RunStep runs a Windows transient step in job (server.RunInJob): the
+// step's own Job Object, not a process group, holds what it starts.
+func (execTools) RunStep(ctx context.Context, job *supervise.Job, env []string, stdin io.Reader, out *os.File, path string, args ...string) ([]byte, error) {
+	return server.RunInJob(ctx, job, env, stdin, out, path, args...)
+}
+
+var _ server.StepRunner = execTools{}
+
 // runtimeWith is the server runtime of cfg (decisions 0070, 0078): Docker
 // Compose, or the native runtime's two systemd user units. ownGroup runs
 // its children in their own process group: a Ctrl-C at the terminal must

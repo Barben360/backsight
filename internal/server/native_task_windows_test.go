@@ -102,8 +102,9 @@ func (noTaskSys) Run(_ context.Context, _ string, args ...string) ([]byte, error
 	return nil, nil
 }
 
-// buildBacksight builds the backsight binary as the shim, testhooks on:
-// its supervisor's guard skips the stray scan (Task 10's).
+// buildBacksight builds the backsight binary as the shim, testhooks on
+// (as CI's other real tests): its supervisor runs the real guard, the
+// stray scan included.
 func buildBacksight(t *testing.T, out string) {
 	t.Helper()
 	gobin, err := exec.LookPath("go")
@@ -196,7 +197,8 @@ func taskForReal(t *testing.T, built string, forceDetached bool) {
 	if err := os.MkdirAll(n.Root(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	sc := supervise.Config{Project: project, DataDir: file("db"), Postgres: []string{pg, "-D", file("db")}, PGIsReady: []string{isReady},
+	// fsync=on: the guard refuses a postgres without it.
+	sc := supervise.Config{Project: project, DataDir: file("db"), Postgres: []string{pg, "-D", file("db"), "-c", "fsync=on"}, PGIsReady: []string{isReady},
 		PGCtlStop: []string{ctl, "stop"}, API: []string{api}, Env: n.windowsEnv(fakes), EnvFile: n.EnvFile(), LogDir: n.LogDir(), Venv: "1.1.0-abcdefabcdef"}
 	raw, err := json.Marshal(sc)
 	if err != nil {

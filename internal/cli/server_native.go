@@ -82,20 +82,24 @@ func nativeGuard(ctx context.Context, n server.Native, stderr io.Writer) (native
 	}
 	strays, err := n.Strays()
 	if err != nil {
-		return res, fmt.Errorf("looking for a postgres on %s outside %s: %w", n.DataDir(), n.DBUnit(), err)
+		return res, fmt.Errorf("looking for a postgres on %s outside %s: %w", n.DataDir(), n.DBOwner(), err)
 	}
 	for _, s := range strays {
-		fmt.Fprintf(stderr, "a postgres (pid %d) runs on %s outside %s: stopping it, never adopting it\n", s.PID, n.DataDir(), n.DBUnit())
+		fmt.Fprintf(stderr, "a postgres (pid %d) runs on %s outside %s: stopping it, never adopting it\n", s.PID, n.DataDir(), n.DBOwner())
 		res.Stopped = append(res.Stopped, s.PID)
 	}
 	return res, n.StopStrays(ctx, strays)
 }
 
 // superviseGuard is the supervisor's guard before every start of the
-// database: native-check's. A testhooks build on Windows replaces it
-// until Task 10 (supervise_guard_testhooks_windows.go).
-var superviseGuard = func(ctx context.Context, n server.Native, stderr io.Writer) error {
-	_, err := nativeGuard(ctx, n, stderr)
+// database: supervise.json's postgres must run with fsync on (final
+// refusal), then native-check's guard, its strays reported on log (the
+// supervisor's log).
+func superviseGuard(ctx context.Context, n server.Native, sc supervise.Config, log io.Writer) error {
+	if err := server.CheckFsyncArgs(n.SuperviseFile(), sc.Postgres); err != nil {
+		return err
+	}
+	_, err := nativeGuard(ctx, n, log)
 	return err
 }
 
@@ -104,7 +108,7 @@ var superviseGuard = func(ctx context.Context, n server.Native, stderr io.Writer
 // server from <Root>\supervise.json until a stop on its pipe; a second
 // one of the project exits 0 at once. --backsight-home carries
 // BACKSIGHT_HOME, which a task cannot set.
-func newServerSuperviseCmd(e *env) *cobra.Command {
+func newServerSuperviseCmd(*env) *cobra.Command {
 	var noAPI bool
 	var home string
 	cmd := &cobra.Command{
@@ -144,7 +148,7 @@ func newServerSuperviseCmd(e *env) *cobra.Command {
 				return blocked(fmt.Errorf("%s supervises project %q, config.toml names %q: run backsight server render", path, sc.Project, want))
 			}
 			opts := supervise.Options{
-				Check:   func(ctx context.Context) error { return superviseGuard(ctx, n, e.stderr) },
+				Check:   func(ctx context.Context, log io.Writer) error { return superviseGuard(ctx, n, sc, log) },
 				NoAPI:   noAPI,
 				Secrets: localSecretValues(),
 				Version: buildinfo.Version,

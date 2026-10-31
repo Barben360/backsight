@@ -1,0 +1,261 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/Barben360/backsight/internal/fsutil"
+	"github.com/Barben360/backsight/internal/server/nativelock"
+)
+
+// The database's first install on Windows (decision 0080, E34 W4 and W5):
+// pg0 ignores HOME and USERPROFILE there and keeps its installation and
+// instances in the user's own %USERPROFILE%\.pg0, so it only extracts
+// Postgres and creates the cluster, in <Root>\db; backsight then moves
+// the installation to <Root>\pg\<version>, runs that copy, and forgets
+// pg0's instance. Nothing backsight depends on stays under .pg0.
+
+// pg0Home is pg0's own directory on Windows, %USERPROFILE%\.pg0 of the
+// user's profile (native_windows.go); tests use another.
+var pg0Home = userPg0Home
+
+// renameDir moves a directory; tests make it fail as across volumes.
+var renameDir = os.Rename
+
+// copyPostgres moves pg0's extracted installation under pg0dir to
+// installation() (E34 ruling 8): a rename on the same volume, else a copy
+// and the original removed (pg0 extracts again if it ever needs it). A
+// complete installation with its marker is kept as it is. The caller
+// copies the runtime DLLs into it, then marks it complete.
+func (n Native) copyPostgres(pg0dir string) error {
+	dst := n.installation()
+	if n.pgMissing() == "" && isRegular(n.join(dst, pgUnpacked)) {
+		return nil
+	}
+	src := n.join(pg0dir, "installation", nativelock.PGInstallation)
+	if m := n.pgMissingIn(src); m != "" {
+		return fmt.Errorf("pg0 ran, but the %s it extracts is incomplete: %s is missing", NativePostgres, m)
+	}
+	if err := os.RemoveAll(dst); err != nil { // a partial one
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if err := renameDir(src, dst); err != nil {
+		if !crossVolume(err) {
+			return fmt.Errorf("moving pg0's %s to %s: %w", NativePostgres, dst, err)
+		}
+		if err := copyTree(src, dst); err != nil {
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("copying pg0's %s to %s: %w", NativePostgres, dst, err)
+		}
+		if err := os.RemoveAll(src); err != nil {
+			return err
+		}
+	}
+	if m := n.pgMissing(); m != "" {
+		return fmt.Errorf("the %s moved to %s is incomplete: %s is missing", NativePostgres, dst, m)
+	}
+	return nil
+}
+
+// copyTree copies the directory src to dst, which must not exist: files
+// with their mode, directories 0755.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(to, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", p)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		in, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = in.Close() }()
+		out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			_ = out.Close()
+			return err
+		}
+		return out.Close()
+	})
+}
+
+// markInstallation copies the runtime DLLs into the installation's bin\
+// (version v's venv holds them), then marks it complete: an installation
+// whose programs cannot load their DLLs is never complete.
+func (n Native) markInstallation(v string) error {
+	if err := n.copyRuntimeDLLs(v, n.join(n.installation(), "bin")); err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(n.join(n.installation(), pgUnpacked), []byte(nativelock.PG0+"\n"), 0o644)
+}
+
+// unpackPostgresWindows is unpackPostgres on Windows: pg0 starts and
+// drops a throwaway of its own, <project>-unpack, on <Root>\tmp\unpack (pg0
+// extracts its Postgres at a first start only), in a transient job;
+// copyPostgres then moves the installation under Root(). The throwaway's
+// data and pg0's entry for it are removed whatever happens.
+func (n Native) unpackPostgresWindows(ctx context.Context, w io.Writer, v string) (err error) {
+	if n.pgMissing() == "" {
+		if isRegular(n.join(n.installation(), pgUnpacked)) {
+			return nil
+		}
+		return n.markInstallation(v)
+	}
+	fmt.Fprintf(w, "Unpacking %s\n", NativeUnpack)
+	if err := n.ensureRoot(); err != nil {
+		return err
+	}
+	pg0dir, err := pg0Home()
+	if err != nil {
+		return err
+	}
+	port, err := n.verifyPort()
+	if err != nil {
+		return err
+	}
+	name := n.project() + "-unpack"
+	data := n.join(n.Root(), "tmp", "unpack")
+	throwaway := n.join(pg0dir, "instances", name)
+	extracted := n.join(pg0dir, "installation", nativelock.PGInstallation)
+	stale := []string{data, throwaway, n.installation()} // a killed run's, a partial copy
+	if n.pgMissingIn(extracted) != "" {
+		stale = append(stale, extracted) // a cut extraction: pg0 extracts only where there is none
+	}
+	for _, d := range stale {
+		if err := os.RemoveAll(d); err != nil {
+			return err
+		}
+	}
+	if err := fsutil.MkdirPrivate(filepath.Dir(data)); err != nil {
+		return err
+	}
+	defer func() {
+		for _, d := range []string{data, throwaway} {
+			if rmErr := removeAllRetry(d); rmErr != nil {
+				err = errors.Join(err, rmErr)
+			}
+		}
+	}()
+	pg0 := n.pg0Exe(v)
+	steps := [][]string{
+		{pg0, "start", "--name", name, "--data-dir", data, "--port", strconv.Itoa(port), "-c", "listen_addresses=127.0.0.1", stepToLog},
+		{pg0, "drop", "--force", "--name", name, stepToLog},
+	}
+	if err := n.host().Transient(ctx, name, n.toolEnvFor(filepath.Dir(pg0)), nil, steps); err != nil {
+		return fmt.Errorf("unpacking %s with pg0 into %s: %w", NativePostgres, n.installation(), err)
+	}
+	if err := n.copyPostgres(pg0dir); err != nil {
+		return err
+	}
+	return n.markInstallation(v)
+}
+
+// createInstanceWindows is createInstance on Windows (E34 W4): pg0 creates
+// and starts the cluster in DataDir() with its default password, psql
+// sets the real one for hindsight and postgres from stdin, pg0 stops it,
+// all in one transient job; then pg0's installation is moved under Root()
+// and its instance entry deleted (never pg0 drop, which would delete the
+// data). No password is on any argv. A failure removes the new database.
+func (n Native) createInstanceWindows(ctx context.Context) error {
+	pw, err := n.dbPassword()
+	if err != nil {
+		return err
+	}
+	port, err := n.envPort()
+	if err != nil {
+		return err
+	}
+	if err := n.ensureRoot(); err != nil {
+		return err
+	}
+	pg0dir, err := pg0Home()
+	if err != nil {
+		return err
+	}
+	v := n.runningVersion()
+	pg0, p := n.pg0Exe(v), strconv.Itoa(port)
+	inst := n.join(pg0dir, "instances", n.project())
+	// psql is the copy's when Root() has it (Fetch's unpack), else the one
+	// pg0's start extracts, which finds the runtime DLLs in pg0's bin\ on
+	// the job's PATH.
+	psql := []string{pathOf(n.toolEnvFor(n.join(n.installation(), "bin"))), n.pgBin("psql")}
+	if n.pgMissing() != "" {
+		psql = []string{n.join(pg0dir, "installation", nativelock.PGInstallation, "bin", "psql.exe")}
+	}
+	steps := [][]string{
+		{pg0, "start", "--name", n.project(), "--data-dir", n.DataDir(), "--port", p, "-u", "hindsight", "-n", "hindsight", "-c", "fsync=on", stepToLog},
+		append(psql, "-h", "127.0.0.1", "-p", p, "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"),
+		{pg0, "stop", "--name", n.project(), stepToLog},
+	}
+	env := append(n.toolEnvFor(filepath.Dir(pg0)), "PGPASSWORD=postgres")
+	// A failing statement is never logged: it would hold the password.
+	stdin := "SET log_min_error_statement = panic;\nALTER ROLE hindsight PASSWORD '" + pw + "';\nALTER ROLE postgres PASSWORD '" + pw + "';\n"
+	if err := n.host().Transient(ctx, n.project()+"-db-init", env, strings.NewReader(stdin), steps); err != nil {
+		// The job's processes died with the call: a database left on pg0's
+		// default password is removed, never kept.
+		for _, d := range []string{n.DataDir(), inst} {
+			if rmErr := removeAllRetry(d); rmErr != nil {
+				err = errors.Join(err, rmErr)
+			}
+		}
+		return n.redact(fmt.Errorf("creating the native database (%s): %w", n.DataDir(), err))
+	}
+	if err := n.copyPostgres(pg0dir); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(inst); err != nil {
+		return fmt.Errorf("forgetting pg0's instance %s: %w", inst, err)
+	}
+	n.dropExtracted(pg0dir)
+	return n.markInstallation(v)
+}
+
+// dropExtracted removes the installation pg0 extracted again for the
+// first start when Root() already had its copy (copyPostgres kept it):
+// moved aside first, so that pg0 never sees a half-removed one, and left
+// where it is if pg0 runs from it elsewhere (a file in use). pg0 extracts
+// again if it ever needs it.
+func (n Native) dropExtracted(pg0dir string) {
+	src := n.join(pg0dir, "installation", nativelock.PGInstallation)
+	aside := n.join(n.Root(), "tmp", "pg0-installation-"+randHex())
+	if renameDir(src, aside) == nil {
+		_ = removeAllRetry(aside)
+	}
+}
+
+// pathOf is env's PATH=… entry.
+func pathOf(env []string) string {
+	for _, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			return e
+		}
+	}
+	return "PATH="
+}

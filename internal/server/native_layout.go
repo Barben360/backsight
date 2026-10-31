@@ -48,6 +48,9 @@ func winJoin(elem ...string) string {
 	return strings.Join(parts, `\`)
 }
 
+// pins are the lock and uv of n's OS (nativelock.For).
+func (n Native) pins() nativelock.Platform { return nativelock.For(n.goos()) }
+
 // exe is name as an executable's file name on n's OS.
 func (n Native) exe(name string) string {
 	if n.goos() == "windows" {

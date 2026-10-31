@@ -19,7 +19,7 @@ import (
 // no identifier without it), psql answers SHOW fsync with fsync.
 func dbToolsOut(fsync string) func(c toolCall) []byte {
 	return func(c toolCall) []byte {
-		switch filepath.Base(c.Path) {
+		switch strings.TrimSuffix(filepath.Base(c.Path), ".exe") {
 		case "pg_controldata":
 			i := slices.Index(c.Args, "-D")
 			if i < 0 || i+1 >= len(c.Args) {
@@ -624,5 +624,46 @@ func TestNativeRefusalOnADockerInstallPointsAtClean(t *testing.T) {
 	setups["identity"](t, n)
 	if err := n.CheckInstance(context.Background()); err == nil || !strings.Contains(err.Error(), "backsight restore <archive>") || strings.Contains(err.Error(), "runtime clean") {
 		t.Errorf("on native: %v", err)
+	}
+}
+
+// Requirement 1 for the Windows supervisor (Task 10's ruling): the
+// postgres command line in supervise.json must end with fsync on, however
+// it sets it; anything else is a final refusal naming the file.
+func TestCheckFsyncArgs(t *testing.T) {
+	base := []string{`C:\pg\bin\postgres.exe`, "-D", `C:\db`, "-p", "5433"}
+	for _, tc := range []struct {
+		name string
+		args []string
+		ok   bool
+		got  string
+	}{
+		{"-c fsync=on", []string{"-c", "fsync=on", "-c", "listen_addresses=127.0.0.1"}, true, ""},
+		{"on, then off", []string{"-c", "fsync=on", "-c", "fsync=off"}, false, "off"},
+		{"off, then on", []string{"-c", "fsync=off", "-c", "fsync=on"}, true, ""},
+		{"none", []string{"-c", "listen_addresses=127.0.0.1"}, false, ""},
+		{"-cfsync=off", []string{"-c", "fsync=on", "-cfsync=off"}, false, "off"},
+		{"--fsync=off", []string{"-c", "fsync=on", "--fsync=off"}, false, "off"},
+		{"-F", []string{"-c", "fsync=on", "-F"}, false, "off"},
+		{"FSYNC = on", []string{"-c", "FSYNC = on"}, true, ""},
+		{"fsync=true is not on", []string{"-c", "fsync=true"}, false, "true"},
+		{"a dangling -c", []string{"-c", "fsync=on", "-c"}, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckFsyncArgs(`C:\bs\supervise.json`, append(slices.Clone(base), tc.args...))
+			if tc.ok {
+				if err != nil {
+					t.Errorf("CheckFsyncArgs = %v, want nil", err)
+				}
+				return
+			}
+			var fe *FsyncArgsError
+			if !errors.As(err, &fe) || fe.Got != tc.got || !fe.Final() {
+				t.Fatalf("CheckFsyncArgs = %#v, want a final refusal reading %q", err, tc.got)
+			}
+			if !strings.Contains(err.Error(), `C:\bs\supervise.json`) || !strings.Contains(err.Error(), "not fsync=on") {
+				t.Errorf("refusal %q does not name the file and fsync=on", err)
+			}
+		})
 	}
 }

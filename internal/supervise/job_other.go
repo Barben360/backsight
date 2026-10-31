@@ -5,6 +5,7 @@ package supervise
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"syscall"
 )
 
@@ -38,3 +39,12 @@ func signalGroup(p *os.Process, sig syscall.Signal) error {
 	}
 	return err
 }
+
+// Job: no Job Object here (Linux runs the native runtime's transient jobs
+// in systemd units); Start starts the process alone.
+type Job struct{}
+
+func NewJob() (*Job, error)            { return &Job{}, nil }
+func (*Job) Start(cmd *exec.Cmd) error { return cmd.Start() }
+func (*Job) Terminate() error          { return nil }
+func (*Job) Close() error              { return nil }

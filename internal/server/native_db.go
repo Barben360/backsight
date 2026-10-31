@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/server/nativelock"
 	"github.com/Barben360/backsight/internal/state"
 )
@@ -195,8 +196,11 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 	if n.Err != nil {
 		return nil, n.Err
 	}
+	if n.goos() == "windows" {
+		return n.verifyDumpWindows(ctx, dump, tables)
+	}
 	staging := filepath.Join(n.Dirs.State, "staging")
-	if err := os.MkdirAll(staging, 0o700); err != nil {
+	if err := fsutil.MkdirPrivate(staging); err != nil {
 		return nil, err
 	}
 	id := randHex()
@@ -242,6 +246,75 @@ func (n Native) VerifyDump(ctx context.Context, dump string, tables []string) (m
 	}
 	db := NativeDB{n: n, port: port, password: pw}
 	if err := n.waitVerify(ctx, db, unit, job.gone); err != nil {
+		return nil, err
+	}
+	if _, err := db.Restore(ctx, dump); err != nil {
+		return nil, fmt.Errorf("restoring: %w", err)
+	}
+	return db.Counts(ctx, tables)
+}
+
+// verifyDumpWindows is VerifyDump on Windows: the throwaway cluster under
+// <Root>\tmp\verify-<id> (its lock beside it), initdb as one transient
+// job, its password file removed, then postgres as a second one, which
+// runs until the restore and the counts are done. The calling backsight
+// holds the job's kill-on-close Job Object (the plan's ruling: no
+// supervisor mode of its own), so the throwaway dies with the call, or
+// with backsight; the directory is removed whatever happens.
+func (n Native) verifyDumpWindows(ctx context.Context, dump string, tables []string) (map[string]int64, error) {
+	if err := n.ensureRoot(); err != nil {
+		return nil, err
+	}
+	tmp := n.join(n.Root(), "tmp")
+	if err := fsutil.MkdirPrivate(tmp); err != nil {
+		return nil, err
+	}
+	id := randHex()
+	home := n.join(tmp, "verify-"+id)
+	name := n.project() + "-verify-" + id
+	l, err := state.TryAcquire(home+".lock", "backup verify")
+	if err != nil {
+		return nil, err
+	}
+	var job serverJob
+	defer func() { // registered first: a cancel must clean up too
+		if job.stop != nil {
+			job.stop()
+		}
+		_ = removeAllRetry(home)
+		logs, _ := filepath.Glob(n.join(tmp, "*-"+name+"-*.log")) // its steps' (stepToLog)
+		for _, f := range logs {
+			_ = os.Remove(f)
+		}
+		_ = l.Release()
+	}()
+	if err := os.Mkdir(home, 0o700); err != nil {
+		return nil, err
+	}
+	pw := "verify-" + randHex() + randHex()
+	pwFile := n.join(home, "pwfile")
+	if err := os.WriteFile(pwFile, []byte(pw+"\n"), 0o600); err != nil {
+		return nil, err
+	}
+	port, err := n.verifyPort()
+	if err != nil {
+		return nil, err
+	}
+	data := n.join(home, "data")
+	env := n.toolEnv()
+	initdb := [][]string{{n.pgBin("initdb"), "-D", data, "-U", dbUser, "--pwfile=" + pwFile, "-A", "scram-sha-256", "-E", "UTF8", "--no-locale", stepNoStdout}}
+	if err := n.host().Transient(ctx, name, env, nil, initdb); err != nil {
+		return nil, n.redact(fmt.Errorf("creating a throwaway database (%s): %w", name, err))
+	}
+	if err := os.Remove(pwFile); err != nil {
+		return nil, err
+	}
+	server := [][]string{{n.pgBin("postgres"), "-D", data, "-p", strconv.Itoa(port), "-c", "listen_addresses=127.0.0.1", stepToLog}}
+	if job, err = n.serverTransient(ctx, name, env, server); err != nil {
+		return nil, n.redact(fmt.Errorf("starting a throwaway database (%s): %w", name, err))
+	}
+	db := NativeDB{n: n, port: port, password: pw}
+	if err := n.waitVerify(ctx, db, name, job.gone); err != nil {
 		return nil, err
 	}
 	if _, err := db.Restore(ctx, dump); err != nil {

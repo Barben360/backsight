@@ -18,7 +18,6 @@ import (
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/scheduler"
 	"github.com/Barben360/backsight/internal/supervise"
-	"github.com/Barben360/backsight/internal/testtool"
 )
 
 const taskTestSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
@@ -176,6 +175,30 @@ func TestSuperviseJSONHasNoSecret(t *testing.T) {
 	}
 	if cfg.EnvFile != `C:\bs\data\server\native\server.env` {
 		t.Errorf("env_file %q: the API's secrets come from server.env", cfg.EnvFile)
+	}
+}
+
+// The API on Windows writes UTF-8 whatever the code page (its output is
+// a pipe to the supervisor's log; Hindsight's banner stopped it under
+// cp1252 on the VM); Linux's server.env does not change.
+func TestWindowsServerEnvSetsUTF8(t *testing.T) {
+	withSID(t)
+	windowsUser(t, `C:\Users\u`)
+	withFreePort(t, 8890)
+	f, err := windowsNative(t, `C:\bs`, `C:\bs\data`, `C:\bs\state`).Render(secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(parseEnvFile(f.Env), "PYTHONUTF8=1") {
+		t.Errorf("Windows server.env lacks PYTHONUTF8=1:\n%s", f.Env)
+	}
+	n, _, _ := nativeFixture(t, secrets)
+	lf, err := n.Render(secrets, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(lf.Env), "PYTHONUTF8") {
+		t.Errorf("Linux server.env sets PYTHONUTF8:\n%s", lf.Env)
 	}
 }
 
@@ -768,7 +791,6 @@ func TestDeleteWithoutTheFilesStillStopsAndUnregisters(t *testing.T) {
 // task.xml registers the task again; Start acts on each and clears the
 // marker once the API answered.
 func TestTaskRestartPending(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: Start's guard scans /proc for strays until then")
 	n, _, _ := nativeFixture(t, secrets)
 	n.GOOS = ""
 	h, f := taskFixture(t)

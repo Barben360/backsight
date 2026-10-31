@@ -52,8 +52,10 @@ type Options struct {
 	// Check is server native-check's guard, run before every start of the
 	// database. An error whose Final method returns true (the identity
 	// check's *server.GuardError) is a refusal: nothing starts until stop.
-	// Any other error is retried with the restart backoff.
-	Check   func(ctx context.Context) error
+	// Any other error is retried with the restart backoff. What it writes
+	// to log (the strays it stops) goes to the supervisor's log, a line
+	// each.
+	Check   func(ctx context.Context, log io.Writer) error
 	NoAPI   bool
 	Secrets []string // redacted from child output and the supervisor's log
 	Version string
@@ -286,6 +288,20 @@ func (s *supervisor) waitOutputs(d time.Duration) {
 	}
 }
 
+// logLines is the supervisor's log as a writer: each line written is a
+// line of it, stamped and redacted (a Write is whole lines: the guard's
+// Fprintf calls).
+type logLines struct{ s *supervisor }
+
+func (l logLines) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		if line != "" {
+			l.s.logf("%s", line)
+		}
+	}
+	return len(p), nil
+}
+
 // logf writes a line to the supervisor's log, redacted.
 func (s *supervisor) logf(format string, args ...any) {
 	line := tm.now().UTC().Format(time.RFC3339) + " " + fmt.Sprintf(format, args...) + "\n"
@@ -467,7 +483,7 @@ func (s *supervisor) startDB(ctx context.Context, r *run) error {
 		r.dbTimer = tm.after(d)
 	}
 	if s.opts.Check != nil {
-		if err := s.opts.Check(ctx); err != nil {
+		if err := s.opts.Check(ctx, logLines{s}); err != nil {
 			if isFinal(err) {
 				return err
 			}

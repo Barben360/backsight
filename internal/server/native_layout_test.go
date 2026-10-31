@@ -34,7 +34,7 @@ func TestLayoutByOS(t *testing.T) {
 			`C:\bs\native\pg\` + pg + `\bin\postgres.exe`,
 			`C:\bs\native\uv\` + uv + `\uv.exe`,
 			`C:\bs\native\server.env`,
-			`C:\bs\native\home\.pg0\instances\hindsight\data`}, // Task 10 moves it to db\
+			`C:\bs\native\db`},
 	} {
 		t.Run(tc.goos, func(t *testing.T) {
 			n := Native{GOOS: tc.goos, Cfg: config.Config{Server: config.Server{ComposeDir: tc.compose}}}

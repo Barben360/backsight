@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -162,27 +164,122 @@ func ownTree(p *os.Process) (*tree, error) {
 }
 
 func newJob(pid int) (windows.Handle, error) {
-	job, err := windows.CreateJobObject(nil, nil)
+	job, err := killOnCloseJob()
 	if err != nil {
 		return 0, fmt.Errorf("creating the child's job object: %w", err)
+	}
+	if err := assign(job, pid); err != nil {
+		_ = windows.CloseHandle(job)
+		return 0, fmt.Errorf("nesting the child's job object in the supervisor's: %w", err)
+	}
+	return job, nil
+}
+
+// killOnCloseJob is a new unnamed Job Object whose processes die when its
+// last handle closes.
+func killOnCloseJob() (windows.Handle, error) {
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return 0, err
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		_ = windows.CloseHandle(job)
-		return 0, fmt.Errorf("setting the child's job object: %w", err)
-	}
-	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
-	if err != nil {
-		_ = windows.CloseHandle(job)
-		return 0, fmt.Errorf("opening the child: %w", err)
-	}
-	defer func() { _ = windows.CloseHandle(h) }()
-	if err := windows.AssignProcessToJobObject(job, h); err != nil {
-		_ = windows.CloseHandle(job)
-		return 0, fmt.Errorf("nesting the child's job object in the supervisor's: %w", err)
+		return 0, err
 	}
 	return job, nil
+}
+
+// assign puts process pid in job.
+func assign(job windows.Handle, pid int) error {
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		return fmt.Errorf("opening process %d: %w", pid, err)
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+	return windows.AssignProcessToJobObject(job, h)
+}
+
+// Job is an unnamed kill-on-close Job Object for one-off processes (the
+// native runtime's transient jobs: pg0's first start, VerifyDump's
+// throwaway database): every process Start puts in it, and whatever
+// those start, dies at Terminate or Close, or with this process.
+type Job struct {
+	mu sync.Mutex
+	h  windows.Handle
+}
+
+// NewJob creates a Job.
+func NewJob() (*Job, error) {
+	h, err := killOnCloseJob()
+	if err != nil {
+		return nil, fmt.Errorf("creating a job object: %w", err)
+	}
+	return &Job{h: h}, nil
+}
+
+// Start starts cmd in the job: suspended until it is in (nothing it
+// starts escapes), without a window of its own, and with pg_ctl's
+// restricted token when this process is an administrator's (postgres
+// refuses to run as one, E34 ruling 4). A process that cannot be put in
+// the job or resumed is killed, and Start fails.
+func (j *Job) Start(cmd *exec.Cmd) error {
+	attr := cmd.SysProcAttr
+	if attr == nil {
+		attr = &syscall.SysProcAttr{}
+	}
+	attr.CreationFlags |= windows.CREATE_SUSPENDED | noWindow()
+	if isAdmin() {
+		tok, err := restrictedToken()
+		if err != nil {
+			return fmt.Errorf("restricting the token for %s: %w", cmd.Path, err)
+		}
+		defer func() { _ = tok.Close() }()
+		attr.Token = syscall.Token(tok)
+	}
+	cmd.SysProcAttr = attr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	j.mu.Lock()
+	h := j.h
+	j.mu.Unlock()
+	err := errors.New("the job is closed")
+	if h != 0 {
+		err = assign(h, cmd.Process.Pid)
+	}
+	if err == nil {
+		err = resume(uint32(cmd.Process.Pid))
+	}
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("starting %s in its job object: %w", cmd.Path, err)
+	}
+	return nil
+}
+
+// Terminate kills every process of the job.
+func (j *Job) Terminate() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.h == 0 {
+		return nil
+	}
+	return windows.TerminateJobObject(j.h, 1)
+}
+
+// Close closes the job: whatever still runs in it dies.
+func (j *Job) Close() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.h == 0 {
+		return nil
+	}
+	err := windows.CloseHandle(j.h)
+	j.h = 0
+	return err
 }
 
 // resumeChild lets the suspended child run; tests make it fail.

@@ -98,7 +98,7 @@ func checkRefuses(t *testing.T, msg string) {
 }
 
 func TestNativeCheckRefusesAMissingInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "111", "111")
 	if err := os.RemoveAll(n.InstanceDir()); err != nil {
@@ -108,7 +108,7 @@ func TestNativeCheckRefusesAMissingInstance(t *testing.T) {
 }
 
 func TestNativeCheckRefusesAnEmptyInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	if err := os.MkdirAll(n.DataDir(), 0o700); err != nil {
 		t.Fatal(err)
@@ -120,21 +120,21 @@ func TestNativeCheckRefusesAnEmptyInstance(t *testing.T) {
 }
 
 func TestNativeCheckRefusesAnotherIdentity(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "222", "111")
 	checkRefuses(t, "the native database "+n.InstanceDir()+" is not the one backsight recorded (identifier 222, recorded 111): refusing to start it. Put the right one back, or restore a backup: backsight restore <archive>")
 }
 
 func TestNativeCheckRefusesAnUnrecordedInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "111", "")
 	checkRefuses(t, "the native database "+n.InstanceDir()+" has no recorded identity ("+n.IdentityFile()+" is missing): refusing to start it. Restore a backup to adopt one: backsight restore <archive>")
 }
 
 func TestNativeCheckPassesAFirstInstall(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	nativeCheckHost(t)
 	if code, out, errOut := run(t, "server", "native-check"); code != output.OK {
 		t.Errorf("exit %d\n%s%s", code, out, errOut)
@@ -142,7 +142,7 @@ func TestNativeCheckPassesAFirstInstall(t *testing.T) {
 }
 
 func TestNativeCheckPassesTheRecordedInstance(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "7702339718603615110", "7702339718603615110")
 	if code, out, errOut := run(t, "server", "native-check"); code != output.OK {
@@ -174,7 +174,7 @@ func writeProc(t *testing.T, pid string, argv []string, cgroup, cwd string) {
 // outside the db unit is reported and stopped with the bundled pg_ctl;
 // one in the db unit, or on another data directory, is left alone.
 func TestNativeCheckStopsAStrayPostgres(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "linux-only: a fake /proc (TestStraysOnWindows covers Windows' scan)")
 	n, tools := nativeCheckHost(t)
 	withInstance(t, n, "111", "111")
 	pg := filepath.Join(n.Home(), ".pg0", "installation", "18.1.0", "bin", "postgres")
@@ -256,7 +256,7 @@ func pgCtlRuns(tools *checkTools) int {
 
 // A /proc that cannot be read is a refusal: the guard cannot tell.
 func TestNativeCheckRefusesWhenItCannotLookForStrays(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "111", "111")
 	nativeProc = filepath.Join(t.TempDir(), "no-proc")
@@ -268,7 +268,7 @@ func TestNativeCheckRefusesWhenItCannotLookForStrays(t *testing.T) {
 
 // A stray still running after the wait is a refusal naming its pid.
 func TestNativeCheckRefusesAStrayThatDoesNotStop(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "linux-only: a fake /proc (TestStraysOnWindows covers Windows' scan)")
 	n, tools := strayHost(t)
 	writePidFile(t, n, "4242")
 	old := nativeStrayWait
@@ -286,7 +286,7 @@ func TestNativeCheckRefusesAStrayThatDoesNotStop(t *testing.T) {
 // Ruling R36: pg_ctl stops postmaster.pid's pid, so another pid there is a
 // refusal naming both, and nothing is stopped.
 func TestNativeCheckStopsNothingWhenThePidFileNamesAnother(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "linux-only: a fake /proc (TestStraysOnWindows covers Windows' scan)")
 	n, tools := strayHost(t)
 	writePidFile(t, n, "4243")
 	code, out, errOut := run(t, "server", "native-check")
@@ -301,7 +301,7 @@ func TestNativeCheckStopsNothingWhenThePidFileNamesAnother(t *testing.T) {
 // server render's text on native names the files it writes: server.env
 // and the two units, never compose.yaml.
 func TestNativeRenderNamesItsFiles(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	home, n, _, _, _ := nativeHost(t)
 	code, out, errOut := run(t, "server", "render")
 	if code != output.OK {
@@ -320,7 +320,7 @@ func TestNativeRenderNamesItsFiles(t *testing.T) {
 // A native server that never reports health points at its journal, not
 // at docker compose.
 func TestNativeHealthTimeoutNamesTheJournal(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	_, n, _, _, _ := nativeHost(t)
 	oldT := healthTimeout
 	healthTimeout = 20 * time.Millisecond
@@ -339,7 +339,7 @@ func TestNativeHealthTimeoutNamesTheJournal(t *testing.T) {
 // clean, and so does the switch's own target, built before config.toml
 // names native.
 func TestNativeRefusalOnADockerInstallNamesClean(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: native runtime")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	n, _ := nativeCheckHost(t)
 	withInstance(t, n, "222", "111")
 	if err := os.WriteFile(n.Dirs.ConfigFile(), []byte("[server]\n"), 0o600); err != nil { // back on docker
@@ -390,7 +390,7 @@ func superviseHost(t *testing.T, p string) (server.Native, supervise.Config) {
 	if err := os.WriteFile(n.EnvFile(), []byte("X=1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sc := supervise.Config{Project: p, DataDir: n.DataDir(), Postgres: []string{pg, "-D", n.DataDir()}, PGIsReady: []string{isReady},
+	sc := supervise.Config{Project: p, DataDir: n.DataDir(), Postgres: []string{pg, "-D", n.DataDir(), "-c", "fsync=on"}, PGIsReady: []string{isReady},
 		PGCtlStop: []string{ctl, "stop"}, API: []string{api}, EnvFile: n.EnvFile(), LogDir: file("logs"), Venv: "1.1.0-abcdefabcdef"}
 	raw, err := json.Marshal(sc)
 	if err != nil {
@@ -475,7 +475,7 @@ func TestServerSuperviseRefusesAnUnrecordedInstance(t *testing.T) {
 }
 
 func TestServerSuperviseRunsSuperviseJSON(t *testing.T) {
-	testtool.SkipWindows(t, "Task 10: the guard's stray scan on Windows")
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
 	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-runs"
 	_, sc := superviseHost(t, p)
 	setBuild(t, "7.7.7", "abc")
@@ -491,6 +491,80 @@ func TestServerSuperviseRunsSuperviseJSON(t *testing.T) {
 		t.Errorf("the API ran %q under --no-api", got)
 	}
 	stopSupervise(t, p, done)
+}
+
+// Requirement 1 on Windows (Task 10's ruling): supervise.json whose
+// postgres would not run with fsync on is a final refusal naming the file,
+// before anything starts; the task starts the supervisor with no backsight
+// command after it to check the running database.
+func TestServerSuperviseRefusesFsyncOff(t *testing.T) {
+	testtool.SkipWindows(t, "Task 11: config.toml refuses the native runtime on Windows until then")
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"fsync=off after on", []string{"-c", "fsync=on", "-c", "fsync=off"}},
+		{"no fsync setting", nil},
+		{"-F", []string{"-c", "fsync=on", "-F"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-fsync-" + strconv.Itoa(len(tc.args))
+			n, sc := superviseHost(t, p)
+			withInstance(t, n, "111", "111")
+			sc.Postgres = append([]string{sc.Postgres[0], "-D", n.DataDir()}, tc.args...)
+			raw, _ := json.Marshal(sc)
+			if err := os.WriteFile(n.SuperviseFile(), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			done := runSupervise(t, p)
+			st := superviseStatus(t, p, "refused")
+			if !strings.Contains(st.Refusal, n.SuperviseFile()) || !strings.Contains(st.Refusal, "not fsync=on") {
+				t.Errorf("refusal %q: want the fsync refusal naming %s", st.Refusal, n.SuperviseFile())
+			}
+			if got := testtool.Calls(t, sc.Postgres[0]); got != nil {
+				t.Errorf("postgres ran %q with fsync not on", got)
+			}
+			stopSupervise(t, p, done)
+		})
+	}
+}
+
+// The guard's stray report goes to the supervisor's log (nobody reads a
+// task's stderr), and the stray is stopped before postgres starts.
+func TestServerSuperviseLogsTheStraysItStops(t *testing.T) {
+	testtool.SkipWindows(t, "linux-only: a fake /proc (TestStraysOnWindows covers Windows' scan)")
+	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-stray"
+	n, sc := superviseHost(t, p)
+	withInstance(t, n, "111", "111")
+	pg := filepath.Join(n.Home(), ".pg0", "installation", "18.1.0", "bin", "postgres")
+	writeProc(t, "4242", []string{pg, "-D", n.DataDir()}, "foo.scope", n.DataDir())
+	writePidFile(t, n, "4242")
+	tools := nativeTools.(*checkTools)
+	tools.effect = func(path string, _ []string) {
+		if filepath.Base(path) == "pg_ctl" {
+			_ = os.RemoveAll(filepath.Join(nativeProc, "4242"))
+		}
+	}
+	done := make(chan int, 1)
+	var errOut string
+	go func() {
+		var code int
+		code, _, errOut = run(t, "server", "supervise")
+		done <- code
+	}()
+	superviseStatus(t, p, "running")
+	stopSupervise(t, p, done)
+	raw, _ := os.ReadFile(filepath.Join(sc.LogDir, p+"-supervisor.log"))
+	report := "a postgres (pid 4242) runs on " + n.DataDir() + " outside " + p + "-db.service: stopping it, never adopting it"
+	if !strings.Contains(string(raw), report) {
+		t.Errorf("supervisor log lacks %q:\n%s", report, raw)
+	}
+	if strings.Contains(errOut, "pid 4242") {
+		t.Errorf("the stray report went to stderr: %q", errOut)
+	}
+	if !slices.ContainsFunc(tools.calls, func(c string) bool { return filepath.Base(strings.Fields(c)[0]) == "pg_ctl" }) {
+		t.Errorf("the stray was not stopped with pg_ctl: %q", tools.calls)
+	}
 }
 
 // --backsight-home is BACKSIGHT_HOME for a task, which cannot set it.

@@ -28,14 +28,14 @@ func stopNativeStrays(ctx context.Context, rt server.Runtime) ([]string, error) 
 	}
 	strays, err := n.Strays()
 	if err != nil {
-		return nil, fmt.Errorf("looking for a postgres on %s outside %s: %w", n.DataDir(), n.DBUnit(), err)
+		return nil, fmt.Errorf("looking for a postgres on %s outside %s: %w", n.DataDir(), n.DBOwner(), err)
 	}
 	if err := n.StopStrays(ctx, strays); err != nil {
 		return nil, err
 	}
 	var out []string
 	for _, s := range strays {
-		out = append(out, fmt.Sprintf("a postgres (pid %d) ran on %s outside %s: stopped, never adopted", s.PID, n.DataDir(), n.DBUnit()))
+		out = append(out, fmt.Sprintf("a postgres (pid %d) ran on %s outside %s: stopped, never adopted", s.PID, n.DataDir(), n.DBOwner()))
 	}
 	return out, nil
 }

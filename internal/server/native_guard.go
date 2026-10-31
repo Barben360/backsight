@@ -37,8 +37,13 @@ func (n Native) strayWait() time.Duration {
 	return strayWait
 }
 
-// InstanceDir is pg0's instance: <home>/.pg0/instances/hindsight.
+// InstanceDir is pg0's instance: <home>/.pg0/instances/hindsight. On
+// Windows, where pg0's instance is forgotten once the database exists
+// (decision 0080), it is the data directory, <Root>\db.
 func (n Native) InstanceDir() string {
+	if n.goos() == "windows" {
+		return n.join(n.Root(), "db")
+	}
 	return n.join(n.Home(), ".pg0", "instances", pgInstance)
 }
 
@@ -79,8 +84,12 @@ func (e *GuardError) Error() string {
 	return "the native database " + e.Instance + " " + what + ". " + way
 }
 
-// toolEnv is a bundled Postgres tool's whole environment, no password.
+// toolEnv is a bundled Postgres tool's whole environment, no password
+// (Windows: toolEnvFor the installation's bin\).
 func (n Native) toolEnv() []string {
+	if n.goos() == "windows" {
+		return n.toolEnvFor(n.join(n.installation(), "bin"))
+	}
 	return []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + n.Home(),
 		"LD_LIBRARY_PATH=" + filepath.Join(n.installation(), "lib")}
 }
@@ -261,6 +270,9 @@ func (n Native) Strays() ([]Stray, error) {
 	if n.Err != nil {
 		return nil, n.Err
 	}
+	if n.goos() == "windows" {
+		return n.straysWindows()
+	}
 	entries, err := os.ReadDir(n.proc())
 	if err != nil {
 		return nil, err
@@ -361,10 +373,14 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 	_, runErr := n.Tools.Run(ctx, n.toolEnv(), nil, n.pgBin("pg_ctl"),
 		"stop", "-D", n.DataDir(), "-m", "fast", "-w", "-t", strconv.Itoa(secs))
 	data := n.dataDirs()
+	running := func(pid int) bool { return n.postmasterOn(pid, data) }
+	if n.goos() == "windows" {
+		running = n.strayRunning
+	}
 	for {
 		var alive []string
 		for _, s := range strays {
-			if n.postmasterOn(s.PID, data) {
+			if running(s.PID) {
 				alive = append(alive, strconv.Itoa(s.PID))
 			}
 		}
@@ -372,8 +388,8 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 			return nil
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
-			err := fmt.Errorf("a postgres still runs on %s outside %s after %s (pid %s): stop it (kill -INT %s), then start again",
-				n.DataDir(), n.DBUnit(), wait, strings.Join(alive, ", "), strings.Join(alive, " "))
+			err := fmt.Errorf("a postgres still runs on %s outside %s after %s (pid %s): stop it (%s), then start again",
+				n.DataDir(), n.DBOwner(), wait, strings.Join(alive, ", "), n.killHint(alive))
 			if runErr != nil {
 				err = fmt.Errorf("%w; pg_ctl stop: %w", err, runErr)
 			}
@@ -392,12 +408,7 @@ func (n Native) StopStrays(ctx context.Context, strays []Stray) error {
 // stopping nothing.
 func (n Native) ownsPidFile(strays []Stray) error {
 	pidFile := filepath.Join(n.DataDir(), "postmaster.pid")
-	raw, err := os.ReadFile(pidFile)
-	owner := ""
-	if err == nil {
-		first, _, _ := strings.Cut(string(raw), "\n")
-		owner = strings.TrimSpace(first)
-	}
+	owner := n.pidFileOwner()
 	var others []string
 	for _, s := range strays {
 		if strconv.Itoa(s.PID) != owner {
@@ -411,8 +422,44 @@ func (n Native) ownsPidFile(strays []Stray) error {
 	if owner == "" {
 		names = "no pid"
 	}
-	return fmt.Errorf("a postgres (pid %s) runs on %s outside %s, but %s names %s: refusing to stop anything with pg_ctl, which stops the pid that file names. Stop pid %s yourself (kill -INT %s), then start again",
-		strings.Join(others, ", "), n.DataDir(), n.DBUnit(), pidFile, names, strings.Join(others, ", "), strings.Join(others, " "))
+	return fmt.Errorf("a postgres (pid %s) runs on %s outside %s, but %s names %s: refusing to stop anything with pg_ctl, which stops the pid that file names. Stop pid %s yourself (%s), then start again",
+		strings.Join(others, ", "), n.DataDir(), n.DBOwner(), pidFile, names, strings.Join(others, ", "), n.killHint(others))
+}
+
+// pidFileOwner is the pid DataDir's postmaster.pid names, "" without one.
+func (n Native) pidFileOwner() string {
+	raw, err := os.ReadFile(filepath.Join(n.DataDir(), "postmaster.pid"))
+	if err != nil {
+		return ""
+	}
+	first, _, _ := strings.Cut(string(raw), "\n")
+	return strings.TrimSpace(first)
+}
+
+// killHint is how the user stops pids by hand: kill -INT (a fast
+// shutdown), on Windows taskkill /F.
+func (n Native) killHint(pids []string) string {
+	if n.goos() == "windows" {
+		return "taskkill /F /PID " + strings.Join(pids, " /PID ")
+	}
+	return "kill -INT " + strings.Join(pids, " ")
+}
+
+// DBOwner names what runs the database, as the guards' messages say it:
+// the db unit on Linux, the supervisor on Windows.
+func (n Native) DBOwner() string {
+	if n.goos() == "windows" {
+		return "the native server's supervisor"
+	}
+	return n.DBUnit()
+}
+
+// dbSettings is where the database's settings are, for fsync's messages.
+func (n Native) dbSettings() string {
+	if n.goos() == "windows" {
+		return n.SuperviseFile() + "'s postgres"
+	}
+	return n.DBUnit() + "'s"
 }
 
 // CheckFsync is requirement 1: the running database's fsync must read on.
@@ -425,10 +472,64 @@ func (n Native) CheckFsync(ctx context.Context) error {
 	case "on":
 		return nil
 	case "off":
-		return errors.New("fsync is off on the native database: refusing to run it (an OS crash could corrupt it); check " + n.DBUnit() + "'s settings")
+		return errors.New("fsync is off on the native database: refusing to run it (an OS crash could corrupt it); check " + n.dbSettings() + " settings")
 	default:
-		return fmt.Errorf("fsync reads %q on the native database, not on: refusing to run it (an OS crash could corrupt it); check %s's settings", v, n.DBUnit())
+		return fmt.Errorf("fsync reads %q on the native database, not on: refusing to run it (an OS crash could corrupt it); check %s settings", v, n.dbSettings())
 	}
+}
+
+// FsyncArgsError is the Windows supervisor's refusal of a postgres
+// command line (supervise.json's) that does not run the database with
+// fsync on (requirement 1): the task starts the supervisor at logon, with
+// no backsight command after it to check the running database. It is
+// final until server render writes supervise.json again.
+type FsyncArgsError struct {
+	File string // supervise.json
+	Got  string // the last fsync setting, "" for none
+}
+
+// Final: no retry changes supervise.json.
+func (e *FsyncArgsError) Final() bool { return true }
+
+func (e *FsyncArgsError) Error() string {
+	got := "sets no fsync"
+	if e.Got != "" {
+		got = "sets fsync=" + e.Got
+	}
+	return "the native database's command line in " + e.File + " " + got + ", not fsync=on: refusing to run it (an OS crash could corrupt it). " +
+		"Run backsight server render, then backsight server start"
+}
+
+// CheckFsyncArgs refuses a postgres argv whose last fsync setting (-c
+// fsync=…, -cfsync=…, --fsync=… or -F, fsync off, as postgres reads them,
+// the last one winning over the data directory's files) is not exactly
+// on, or that sets none (postgresql.conf would decide).
+func CheckFsyncArgs(file string, argv []string) error {
+	got, set := "", false
+	for i := 0; i < len(argv); i++ {
+		a, v := argv[i], ""
+		switch {
+		case a == "-F": // postgres' own "fsync off"
+			got, set = "off", true
+			continue
+		case a == "-c" && i+1 < len(argv):
+			i++
+			v = argv[i]
+		case strings.HasPrefix(a, "-c") && len(a) > 2:
+			v = a[2:]
+		case strings.HasPrefix(a, "--"):
+			v = a[2:]
+		default:
+			continue
+		}
+		if name, val, ok := strings.Cut(v, "="); ok && strings.EqualFold(strings.TrimSpace(name), "fsync") {
+			got, set = strings.TrimSpace(val), true
+		}
+	}
+	if set && got == "on" {
+		return nil
+	}
+	return &FsyncArgsError{File: file, Got: got}
 }
 
 // Fsync is the running database's SHOW fsync (doctor shows it).
@@ -447,7 +548,7 @@ func (n Native) Fsync(ctx context.Context) (string, error) {
 	out, err := n.Tools.Run(ctx, n.pgEnv(pw), nil, n.pgBin("psql"), "-h", "127.0.0.1", "-p", strconv.Itoa(port),
 		"-U", "hindsight", "-d", "hindsight", "-At", "-v", "ON_ERROR_STOP=1", "-c", "SHOW fsync")
 	if err != nil {
-		return "", n.redact(fmt.Errorf("checking fsync on the native database (%s): %w", n.DBUnit(), err))
+		return "", n.redact(fmt.Errorf("checking fsync on the native database (%s): %w", n.DBOwner(), err))
 	}
 	return strings.TrimSpace(string(out)), nil
 }

@@ -178,6 +178,29 @@ func TestFakeWaitsForAFileAndRecordsItsPID(t *testing.T) {
 	}
 }
 
+// start runs another program and goes on: the fake exits while its child
+// still runs (a postmaster's backend).
+func TestFakeStartsAChildItDoesNotWaitFor(t *testing.T) {
+	dir := t.TempDir()
+	pids, stop := filepath.Join(dir, "child.pids"), filepath.Join(dir, "stop")
+	child := Write(t, dir, "child", Fake{Script: "pid " + pids + "\nwaitfile " + stop})
+	parent := Write(t, dir, "parent", Fake{Script: "start " + child + "\nstdout started"})
+	t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+	if out, _, code := runFake(t, parent, ""); code != 0 || out != "started\n" {
+		t.Fatalf("parent: code %d, stdout %q", code, out)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if raw, _ := os.ReadFile(pids); strings.TrimSpace(string(raw)) != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the child never ran")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // ignoresignals keeps the fake running through an interrupt: a server that
 // does not stop when asked. (Windows' CTRL_BREAK is the supervisor's
 // tests'.)

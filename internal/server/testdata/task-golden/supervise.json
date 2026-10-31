@@ -1,10 +1,10 @@
 {
   "project": "bs",
-  "data_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\home\\.pg0\\instances\\hindsight\\data",
+  "data_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\db",
   "postgres": [
     "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\pg\\18.1.0\\bin\\postgres.exe",
     "-D",
-    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\home\\.pg0\\instances\\hindsight\\data",
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\db",
     "-p",
     "8890",
     "-c",
@@ -40,7 +40,7 @@
     "-m",
     "fast",
     "-D",
-    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\home\\.pg0\\instances\\hindsight\\data"
+    "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\db"
   ],
   "api": [
     "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\venv\\1.1.0-0123456789ab\\Scripts\\hindsight-api.exe"

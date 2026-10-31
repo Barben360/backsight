@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -452,11 +451,6 @@ func (h taskHost) DeployedVenv(files map[string][]byte) (string, error) {
 		return "", errors.New("it names no venv")
 	}
 	return cfg.Venv, nil
-}
-
-// Transient runs nothing yet: Task 10 runs the jobs in a Job Object.
-func (h taskHost) Transient(context.Context, string, []string, io.Reader, [][]string) error {
-	return errors.New("the native server's one-off jobs are not implemented on Windows until Task 10")
 }
 
 // Owns: pid is in the supervisor's Job Object.

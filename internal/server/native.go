@@ -89,6 +89,9 @@ func (n Native) Python() string { return n.join(n.Root(), "python") }
 
 // PythonBin is the pinned Python's interpreter, as uv installs it.
 func (n Native) PythonBin() string {
+	if n.goos() == "windows" {
+		return n.join(n.Python(), "cpython-"+n.pins().Python()+"-windows-x86_64-none", "python.exe")
+	}
 	return n.join(n.Python(), "cpython-"+nativelock.Python()+"-linux-x86_64-gnu", "bin", "python3.11")
 }
 

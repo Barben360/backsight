@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -347,7 +348,7 @@ func TestRefusalStartsNothingAndIsReported(t *testing.T) {
 	x := newFx(t, "refused", fakes{})
 	secret := "s3cret-in-a-reason"
 	reason := "the native database " + x.cfg.DataDir + " is missing: refusing to start an empty memory in its place (" + secret + ")"
-	done := x.start(Options{Secrets: []string{secret}, Check: func(context.Context) error {
+	done := x.start(Options{Secrets: []string{secret}, Check: func(context.Context, io.Writer) error {
 		return fmt.Errorf("guard: %w", finalErr{reason})
 	}})
 	st := waitStatus(t, x.cfg.Project, stateRefused, stateStopped)
@@ -383,7 +384,7 @@ func TestTransientGuardErrorIsRetried(t *testing.T) {
 	fast(t)
 	x := newFx(t, "retried", fakes{})
 	var n atomic.Int32
-	x.start(Options{Check: func(context.Context) error {
+	x.start(Options{Check: func(context.Context, io.Writer) error {
 		if n.Add(1) <= 2 {
 			return errors.New("pg_controldata failed for a moment")
 		}
@@ -398,6 +399,29 @@ func TestTransientGuardErrorIsRetried(t *testing.T) {
 	}
 }
 
+// What the guard writes (the strays it stops) is in the supervisor's log,
+// a stamped line each and redacted, never on the supervisor's stderr
+// (nobody reads a task's).
+func TestGuardOutputGoesToTheSupervisorLog(t *testing.T) {
+	fast(t)
+	x := newFx(t, "guardlog", fakes{})
+	secret := "pw-in-a-stray-line"
+	x.start(Options{Secrets: []string{secret}, Check: func(_ context.Context, log io.Writer) error {
+		fmt.Fprintf(log, "a postgres (pid 4242) runs on %s outside the supervisor: stopping it (%s)\n", x.cfg.DataDir, secret)
+		fmt.Fprintf(log, "a postgres (pid 4343) runs too\n")
+		return nil
+	}})
+	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+	l := x.log("supervisor")
+	stamped := regexp.MustCompile(`(?m)^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ a postgres \(pid 4242\) runs on .* outside the supervisor: stopping it \(\[redacted\]\)\r?$`)
+	if !stamped.MatchString(l) || !regexp.MustCompile(`(?m)^\S+ a postgres \(pid 4343\) runs too\r?$`).MatchString(l) {
+		t.Errorf("supervisor log lacks the guard's two lines, stamped:\n%s", l)
+	}
+	if strings.Contains(l, secret) {
+		t.Errorf("supervisor log holds the secret:\n%s", l)
+	}
+}
+
 // A refused file from an earlier run goes once the guard passes.
 func TestPassingGuardRemovesTheRefusedFile(t *testing.T) {
 	fast(t)
@@ -405,7 +429,7 @@ func TestPassingGuardRemovesTheRefusedFile(t *testing.T) {
 	if err := os.WriteFile(x.file(refusedFile), []byte("old reason\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	x.start(Options{Check: func(context.Context) error { return nil }})
+	x.start(Options{Check: func(context.Context, io.Writer) error { return nil }})
 	waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
 	if _, err := os.Stat(x.file(refusedFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("refused file still there after the guard passed: %v", err)
@@ -529,7 +553,7 @@ func TestSecondSupervisorExitsWithoutStartingAnything(t *testing.T) {
 	// instead of hanging it.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := Run(ctx, second.cfg, Options{Check: func(context.Context) error { checked = true; return nil }})
+	err := Run(ctx, second.cfg, Options{Check: func(context.Context, io.Writer) error { checked = true; return nil }})
 	if err != nil || time.Since(start) > 2*time.Second {
 		t.Errorf("the second supervisor returned %v after %s, want nil within 2 s", err, time.Since(start))
 	}
@@ -582,7 +606,7 @@ func TestSupervisorLogsCarryNoSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	var tries atomic.Int32
-	x.start(Options{Secrets: []string{pw, llm}, Check: func(context.Context) error {
+	x.start(Options{Secrets: []string{pw, llm}, Check: func(context.Context, io.Writer) error {
 		if tries.Add(1) == 1 {
 			return errors.New("pg_controldata failed with " + pw) // logged, retried
 		}
