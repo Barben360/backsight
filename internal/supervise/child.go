@@ -34,20 +34,27 @@ type proc struct {
 // and may outlive the postmaster for a moment (E34 ruling 2's lesson).
 func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, error) {
 	if len(argv) == 0 {
+		_ = out.Close()
 		return nil, errors.New("no program to start")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append([]string{}, env...)
+	// out is closed on every path: by the output copy once started, here
+	// on a failure (a log writer always ends with its Close).
+	fail := func(err error) (*proc, error) {
+		_ = out.Close()
+		return nil, err
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	cmd.Stdout, cmd.Stderr = w, w
 	attr, release, err := childAttr(postgres)
 	if err != nil {
 		_ = r.Close()
 		_ = w.Close()
-		return nil, err
+		return fail(err)
 	}
 	cmd.SysProcAttr = attr
 	err = cmd.Start()
@@ -55,7 +62,7 @@ func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, e
 	_ = w.Close()
 	if err != nil {
 		_ = r.Close()
-		return nil, err
+		return fail(err)
 	}
 	p := &proc{cmd: cmd, pid: cmd.Process.Pid, done: make(chan error, 1), outDone: make(chan struct{})}
 	// The child starts suspended where its tree must hold it from its
@@ -67,7 +74,7 @@ func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, e
 		_ = cmd.Wait()
 		p.tree.close()
 		_ = r.Close()
-		return nil, fmt.Errorf("resuming it (pid %d) failed, killed: %w", cmd.Process.Pid, err)
+		return fail(fmt.Errorf("resuming it (pid %d) failed, killed: %w", cmd.Process.Pid, err))
 	}
 	if tm.wrapOutput != nil {
 		out = tm.wrapOutput(out)

@@ -746,34 +746,44 @@ func TestAPIIgnoringTheInterruptIsKilled(t *testing.T) {
 	}
 }
 
-// A line longer than maxLine is written in parts, never cutting through
-// a secret or one of its URL forms.
+// A line longer than maxLine is written in parts as it comes. A secret's
+// form cut by the write that takes the buffer past maxLine is held back
+// whole (the tail kept for what follows), so the log never carries it in
+// two pieces that read as the secret; a whole one in the same line is
+// redacted once.
 func TestRedactorNeverCutsASecretInALongLine(t *testing.T) {
 	secret := "long-line s3cr@t"
 	userinfo := strings.TrimPrefix(url.UserPassword("", secret).String(), ":") // %20, %40
-	for _, form := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret), userinfo} {
+	forms := []string{secret, url.QueryEscape(secret), url.PathEscape(secret), userinfo}
+	for _, form := range forms {
 		path := filepath.Join(t.TempDir(), "p-api.log")
 		r, err := openRotating(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		l := newLineRedactor(r, []string{secret})
-		size := 70 << 10
-		cut := size - keepTail
-		line := []byte(strings.Repeat("a", size))
-		copy(line[cut-len(form)/2:], form) // straddling where the part is cut
-		_, _ = l.Write(line)
-		_, _ = l.Write([]byte("\n"))
+		half := len(form) / 2
+		// First write: past maxLine, ending inside the form.
+		_, _ = l.Write([]byte(strings.Repeat("a", maxLine+100) + form[:half]))
+		if len(l.buf) > l.keep {
+			t.Fatalf("form %q: %d bytes held after the first write, want at most %d", form, len(l.buf), l.keep)
+		}
+		// Then the rest of it, more text, a whole one, the line's end.
+		_, _ = l.Write([]byte(form[half:] + strings.Repeat("b", 100)))
+		_, _ = l.Write([]byte(form + "c\n"))
 		_ = l.Close()
 		_ = r.Close()
 		got := readFile(path)
-		for _, f := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret), userinfo} {
+		for _, f := range forms {
 			if strings.Contains(got, f) {
 				t.Errorf("form %q: the log carries %q", form, f)
 			}
 		}
-		if strings.Count(got, "[redacted]") != 1 || len(got) != size-len(form)+len("[redacted]")+1 {
-			t.Errorf("form %q: %d bytes, %d [redacted]; want the line whole with one", form, len(got), strings.Count(got, "[redacted]"))
+		if n := strings.Count(got, "[redacted]"); n != 2 {
+			t.Errorf("form %q: %d [redacted], want 2 (the cut one, the whole one)", form, n)
+		}
+		if want := strings.Repeat("a", maxLine+100) + "[redacted]" + strings.Repeat("b", 100) + "[redacted]c\n"; got != want {
+			t.Errorf("form %q: the log is not the line with its two forms redacted (%d bytes, want %d)", form, len(got), len(want))
 		}
 	}
 }
@@ -940,5 +950,19 @@ func TestAnswerGivenBeforeTheChannelClosesIsSent(t *testing.T) {
 		if st, ok := s.answer(opStop, done); !ok || st.DB != stateStopped {
 			t.Fatalf("try %d: answer %+v, ok %v: the stop's answer was dropped", i, st, ok)
 		}
+	}
+}
+
+// A long buffer that redaction shrinks below what is held back (a long
+// secret, repeated) is held, not cut at a negative offset.
+func TestRedactorHoldsABufferRedactionShrinks(t *testing.T) {
+	secret := strings.Repeat("k", 2000) // longer than keepTail: keep grows to it
+	var b strings.Builder
+	l := newLineRedactor(nopWriteCloser{&b}, []string{secret})
+	_, _ = l.Write([]byte(strings.Repeat(secret, 33))) // 66 000 bytes, 330 once redacted
+	_, _ = l.Write([]byte("\n"))
+	_ = l.Close()
+	if want := strings.Repeat("[redacted]", 33) + "\n"; b.String() != want {
+		t.Errorf("got %d bytes, want %d: the 33 copies redacted", b.Len(), len(want))
 	}
 }

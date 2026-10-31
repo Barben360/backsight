@@ -135,9 +135,13 @@ func (l *lineRedactor) Write(p []byte) (int, error) {
 	}
 	if len(l.buf) > maxLine {
 		red := l.redacted(l.buf)
-		cut := len(red) - l.keep
-		_, _ = l.dst.Write(red[:cut])
-		l.buf = append([]byte{}, red[cut:]...)
+		// Redaction may shrink the buffer below keep: then all of it waits.
+		if cut := len(red) - l.keep; cut > 0 {
+			_, _ = l.dst.Write(red[:cut])
+			l.buf = append([]byte{}, red[cut:]...)
+		} else {
+			l.buf = red
+		}
 	}
 	return len(p), nil
 }
