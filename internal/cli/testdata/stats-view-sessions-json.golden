@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "command": "stats sessions",
+  "ok": true,
+  "data": {
+    "view": "sessions",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": false
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "metrics": {},
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 4
+      },
+      "sessions": [
+        {
+          "id": "s1",
+          "project": "p1",
+          "start": "2026-10-07T08:00:00+02:00",
+          "last": "2026-10-08T05:00:00+02:00",
+          "prompts": 3,
+          "prompts_with_memory": 1,
+          "shown": 3,
+          "used": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sent": ""
+        },
+        {
+          "id": "s2",
+          "project": "p1",
+          "start": "2026-10-08T04:00:00+02:00",
+          "last": "2026-10-08T04:00:00+02:00",
+          "prompts": 1,
+          "prompts_with_memory": 1,
+          "shown": 0,
+          "used": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sent": ""
+        },
+        {
+          "id": "sess-long-1",
+          "project": "p1",
+          "start": "2026-10-08T03:00:00+02:00",
+          "last": "2026-10-08T03:00:00+02:00",
+          "prompts": 1,
+          "prompts_with_memory": 1,
+          "shown": 0,
+          "used": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sent": ""
+        },
+        {
+          "id": "sess-long-2",
+          "project": "p1",
+          "start": "2026-10-08T02:00:00+02:00",
+          "last": "2026-10-08T02:00:00+02:00",
+          "prompts": 1,
+          "prompts_with_memory": 1,
+          "shown": 0,
+          "used": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sent": ""
+        }
+      ]
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

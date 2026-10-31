@@ -1,0 +1,30 @@
+Memory over the last 7 day(s), 2026-10-01 12:00 → 2026-10-08 12:00 (UTC)
+
+Server       not recorded yet
+Runtime      docker
+Prompts      3 typed, 0 machine messages; recalls 2 (50% injected something); skipped: short 1
+Recall       p50 800 ms, p95 1200 ms; scope calls failed 0 / 1
+By language  French 1 recalls (100% injected), English 1 (0%)
+Searches     0 of 2 prompts ≥ 40 chars (0%); replies after a search: none
+Injections   1: followed by a search 0%, credited 0%, contradicted next prompt 0
+Briefings    0 (0 mental-model pages, 0 empty): 0 recent memories, - returned again by a memory tool later
+Detector     fired 0, followed by a save -
+Context      1 session(s), prompt-hook text per session p95 0 chars
+Gate         none
+MCP tools    none; session found: none
+Retains      ok 1
+Credits      turns with memories shown: declared 1, after a block 0, undeclared 0, skipped 0; used 1, none 0, wrong 0, outdated 0, refused 0
+Retirements  0 raw fact(s) invalidated on the server (0 verdict(s) the server refused halfway), 0 observation(s) hidden on this machine
+Ledger       settled 4 live shows: 1 credits, 1 confident misses (33% of uncredited), 0 unknown, 0 late; imported 0 shows of earlier history (0 credits); honesty flags: none
+Boost        changed the shown set of 1 of 1 prompt recalls (100%) and 0 of 1 searches (0%)
+Hook failures none; unknown transcript records: none
+Extraction   unavailable: GET /v1/default/banks/claude-memory/llm-requests/stats: HTTP 500 (server_error): 
+
+Parity against the baseline of the Hindsight integration backsight replaced (a verdict needs 10 events)
+  recalls that injected something              >= 26% (16/61)      now 50% (1/2)              too few
+  prompt hook p95                              <= 4200 ms          now 1200 ms (2 recalls)    too few
+  failed recall scope calls                    <= 0% (0/124), up to 1% now 0% (0/1)               too few
+  injections followed by a memory_search       >= 44% (7/16)       now 0% (0/1)               too few
+  injections credited (exact)                  >= 19% (3/16)       now 0% (0/1)               too few
+  replies after a search that cite the memory  >= 24% (4/17)       now - (0/0)                too few
+Parity       not yet

@@ -93,7 +93,7 @@ func settleFeedback(d paths.Dirs, cfg config.Config, tw *telemetry.Writer) feedb
 	}
 	res, err := feedback.Settle(d.FeedbackDir(), feedbackParams(cfg), now)
 	if err != nil {
-		tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+		tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSettle))
 		return feedback.SettleResult{}
 	}
 	if res != (feedback.SettleResult{}) {

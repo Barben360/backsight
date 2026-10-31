@@ -374,6 +374,11 @@ func applyPending(ctx context.Context, w *sql.DB, pending []Migration, head int,
 func applyOne(ctx context.Context, w *sql.DB, m Migration, head int, o Options) (bool, error) {
 	tx, err := w.BeginTx(ctx, nil) // BEGIN IMMEDIATE: the writer DSN's _txlock
 	if err != nil {
+		// Another process may have applied it, then held the lock for its
+		// first batch past the busy timeout: the committed version says.
+		if v, verr := writerVersion(ctx, w); isBusy(err) && verr == nil && v >= m.Num && v <= head {
+			return false, nil
+		}
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()

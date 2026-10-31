@@ -28,6 +28,10 @@ func TestStoreSendsAtOnce(t *testing.T) {
 	if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 0 {
 		t.Errorf("%d notes left in the outbox", n)
 	}
+	// its send is logged, as the tick's notes flush logs its own
+	if got := noteRetains(t, home, env.Data.Document); len(got) != 1 || got[0].Status != "ok" {
+		t.Errorf("retain events of %s: %+v, want one ok", env.Data.Document, got)
+	}
 }
 
 // store reads the sends generation as it starts: after a connect it sends

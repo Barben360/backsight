@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "command": "stats system",
+  "ok": true,
+  "data": {
+    "view": "system",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {
+      "doctor.check": {
+        "value": 1,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "watch",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight doctor",
+        "extra": {
+          "error": 1,
+          "info": 0,
+          "ok": 2,
+          "warn": 1
+        }
+      },
+      "jobs.last_run": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight jobs tick"
+      },
+      "local.backlog": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight jobs tick",
+        "extra": {
+          "notes_queued": 0,
+          "oldest_ms": 0,
+          "quarantined": 0,
+          "sessions_waiting": 0
+        }
+      },
+      "server.reach": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": 0,
+        "delta": 0,
+        "drill": "backsight doctor",
+        "extra": {
+          "breaker_open_until": null,
+          "failing_since": null,
+          "last_ok": null,
+          "skipped_prompts": 0
+        }
+      }
+    },
+    "tables": {
+      "jobs": [],
+      "doctor": [
+        {
+          "id": "config",
+          "status": "ok",
+          "fix": ""
+        },
+        {
+          "id": "server",
+          "status": "ok",
+          "fix": ""
+        },
+        {
+          "id": "backup",
+          "status": "warn",
+          "fix": "backsight backup create"
+        },
+        {
+          "id": "bank",
+          "status": "error",
+          "fix": "backsight doctor"
+        }
+      ],
+      "system": {
+        "server_version": "1.1.0",
+        "runtime": "docker",
+        "mode": "local",
+        "reach": {
+          "breaker_failures": 0
+        },
+        "backup": {
+          "ok": false
+        },
+        "update": {
+          "newer": 0,
+          "check_failed": false
+        },
+        "index": {
+          "schema": 1,
+          "ingested_at": "2026-10-08T14:00:00+02:00",
+          "lag_seconds": 0,
+          "partial": false
+        }
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

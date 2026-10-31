@@ -31,7 +31,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 	mode := h.cfg.Feedback.StopCheck
 	events, _, err := feedback.ReadSince(t.File, t.Offset)
 	if err != nil {
-		h.feedbackError(err)
+		h.feedbackError(telemetry.FeedbackReasonJournalRead, err)
 		h.journalStop(t.ID, agent, "check_skipped", mode, 0, nil, false)
 		return nil
 	}
@@ -77,7 +77,7 @@ func (h *hookEnv) creditCheck(agent string) []byte {
 
 // journalStop records the check's outcome, best effort, and its telemetry.
 func (h *hookEnv) journalStop(turn, agent, outcome, mode string, shown int, flags []string, afterBlock bool) {
-	h.feedbackError(h.journal.Append(feedback.Event{Kind: "stop", Turn: turn, Agent: agent, Outcome: outcome, StopCheck: mode, Flags: flags}))
+	h.feedbackError(telemetry.FeedbackReasonJournalWrite, h.journal.Append(feedback.Event{Kind: "stop", Turn: turn, Agent: agent, Outcome: outcome, StopCheck: mode, Flags: flags}))
 	h.tw.Emit(telemetry.CreditCheck{Outcome: outcome, Shown: shown, Flags: flags, AfterBlock: afterBlock})
 }
 

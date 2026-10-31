@@ -1,0 +1,1276 @@
+{
+  "schema_version": 1,
+  "command": "stats days",
+  "ok": true,
+  "data": {
+    "view": "days",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-08T00:00:00+02:00",
+      "until": "2026-10-09T00:00:00+02:00",
+      "days": 1,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-10-07T00:00:00+02:00",
+      "until": "2026-10-08T00:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": false
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "metrics": {
+      "context.per_session": {
+        "value": null,
+        "num": null,
+        "den": 4,
+        "unit": "chars",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions",
+        "series": [
+          {
+            "hour": "2026-10-08T00:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T01:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T02:00+02:00",
+            "value": null,
+            "n": 1,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T03:00+02:00",
+            "value": null,
+            "n": 1,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T04:00+02:00",
+            "value": null,
+            "n": 2,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T05:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T06:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T07:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T08:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T09:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T10:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T11:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T12:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T13:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T14:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T15:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T16:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T17:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T18:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T19:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T20:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T21:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T22:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          },
+          {
+            "hour": "2026-10-08T23:00+02:00",
+            "value": null,
+            "n": 0,
+            "parts": {
+              "briefing": 0,
+              "prompts": 0
+            }
+          }
+        ],
+        "extra": {
+          "histogram": [
+            {
+              "lo": 0,
+              "hi": 1000,
+              "n": 4
+            },
+            {
+              "lo": 1000,
+              "hi": 2000,
+              "n": 0
+            },
+            {
+              "lo": 2000,
+              "hi": 3000,
+              "n": 0
+            },
+            {
+              "lo": 3000,
+              "hi": 4000,
+              "n": 0
+            },
+            {
+              "lo": 4000,
+              "hi": 5000,
+              "n": 0
+            },
+            {
+              "lo": 5000,
+              "hi": 6000,
+              "n": 0
+            },
+            {
+              "lo": 6000,
+              "hi": 7000,
+              "n": 0
+            },
+            {
+              "lo": 7000,
+              "hi": 8000,
+              "n": 0
+            },
+            {
+              "lo": 8000,
+              "hi": 9000,
+              "n": 0
+            },
+            {
+              "lo": 9000,
+              "hi": 10000,
+              "n": 0
+            },
+            {
+              "lo": 10000,
+              "hi": 11000,
+              "n": 0
+            },
+            {
+              "lo": 11000,
+              "hi": 12000,
+              "n": 0
+            },
+            {
+              "lo": 12000,
+              "hi": 13000,
+              "n": 0
+            },
+            {
+              "lo": 13000,
+              "hi": 14000,
+              "n": 0
+            },
+            {
+              "lo": 14000,
+              "hi": 15000,
+              "n": 0
+            },
+            {
+              "lo": 15000,
+              "hi": 16000,
+              "n": 0
+            },
+            {
+              "lo": 16000,
+              "hi": 17000,
+              "n": 0
+            },
+            {
+              "lo": 17000,
+              "hi": 18000,
+              "n": 0
+            },
+            {
+              "lo": 18000,
+              "hi": 19000,
+              "n": 0
+            },
+            {
+              "lo": 19000,
+              "hi": 20000,
+              "n": 0
+            },
+            {
+              "lo": 20000,
+              "hi": null,
+              "n": 0
+            }
+          ],
+          "p50": null,
+          "p95": null,
+          "tokens_p50": null,
+          "tokens_p95": null
+        }
+      },
+      "pipeline.flow": {
+        "value": null,
+        "num": 0,
+        "den": 0,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": 1,
+        "delta": null,
+        "drill": "backsight stats pipeline",
+        "series": [
+          {
+            "hour": "2026-10-08T00:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T01:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T02:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T03:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T04:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T05:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T06:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T07:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T08:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T09:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T10:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T11:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T12:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T13:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T14:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T15:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T16:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T17:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T18:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T19:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T20:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T21:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T22:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T23:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          }
+        ],
+        "extra": {
+          "backlog_oldest_ms": 0,
+          "failed": 0,
+          "ok": 0,
+          "set_aside": 0,
+          "waiting": 0
+        }
+      },
+      "recall.hit_rate": {
+        "value": 1,
+        "num": 4,
+        "den": 4,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0.5100999795960008,
+          1
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has memory",
+        "series": [
+          {
+            "hour": "2026-10-08T00:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T01:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T02:00+02:00",
+            "value": 1,
+            "num": 1,
+            "den": 1
+          },
+          {
+            "hour": "2026-10-08T03:00+02:00",
+            "value": 1,
+            "num": 1,
+            "den": 1
+          },
+          {
+            "hour": "2026-10-08T04:00+02:00",
+            "value": 1,
+            "num": 2,
+            "den": 2
+          },
+          {
+            "hour": "2026-10-08T05:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T06:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T07:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T08:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T09:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T10:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T11:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T12:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T13:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T14:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T15:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T16:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T17:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T18:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T19:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T20:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T21:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T22:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T23:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          }
+        ]
+      },
+      "recall.latency": {
+        "value": null,
+        "num": null,
+        "den": 4,
+        "unit": "ms",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats days",
+        "series": [
+          {
+            "hour": "2026-10-08T00:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T01:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T02:00+02:00",
+            "value": null,
+            "n": 1,
+            "p50": 500,
+            "p95": 500
+          },
+          {
+            "hour": "2026-10-08T03:00+02:00",
+            "value": null,
+            "n": 1,
+            "p50": 500,
+            "p95": 500
+          },
+          {
+            "hour": "2026-10-08T04:00+02:00",
+            "value": null,
+            "n": 2,
+            "p50": 300,
+            "p95": 500
+          },
+          {
+            "hour": "2026-10-08T05:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T06:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T07:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T08:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T09:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T10:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T11:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T12:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T13:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T14:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T15:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T16:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T17:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T18:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T19:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T20:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T21:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T22:00+02:00",
+            "value": null,
+            "n": 0
+          },
+          {
+            "hour": "2026-10-08T23:00+02:00",
+            "value": null,
+            "n": 0
+          }
+        ],
+        "extra": {
+          "p50": null,
+          "p95": null
+        }
+      },
+      "used.turn_rate": {
+        "value": 1,
+        "num": 1,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0.20654329147389294,
+          1
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has used",
+        "series": [
+          {
+            "hour": "2026-10-08T00:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T01:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T02:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T03:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T04:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T05:00+02:00",
+            "value": 1,
+            "num": 1,
+            "den": 1
+          },
+          {
+            "hour": "2026-10-08T06:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T07:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T08:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T09:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T10:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T11:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T12:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T13:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T14:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T15:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T16:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T17:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T18:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T19:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T20:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T21:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T22:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T23:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          }
+        ],
+        "extra": {
+          "check_skipped": 0,
+          "pending": 0,
+          "subagent_turns": 0,
+          "worst_case": 1
+        }
+      },
+      "verdict.wrong_rate": {
+        "value": 0,
+        "num": 0,
+        "den": 1,
+        "unit": "ratio",
+        "aggregation": "raw",
+        "status": "too_few",
+        "borderline": false,
+        "tags": [],
+        "ci": [
+          0,
+          0.7934567085261071
+        ],
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats sessions --has wrong",
+        "series": [
+          {
+            "hour": "2026-10-08T00:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T01:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T02:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T03:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T04:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T05:00+02:00",
+            "value": 0,
+            "num": 0,
+            "den": 1
+          },
+          {
+            "hour": "2026-10-08T06:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T07:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T08:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T09:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T10:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T11:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T12:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T13:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T14:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T15:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T16:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T17:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T18:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T19:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T20:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T21:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T22:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          },
+          {
+            "hour": "2026-10-08T23:00+02:00",
+            "value": null,
+            "num": 0,
+            "den": 0
+          }
+        ],
+        "extra": {
+          "outdated": 0,
+          "used": 1,
+          "wrong": 0
+        }
+      }
+    },
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 5
+      },
+      "day": {
+        "day": "2026-10-08",
+        "sessions": [
+          {
+            "id": "sess-long-1",
+            "project": "p1",
+            "start": "2026-10-08T03:00:00+02:00",
+            "last": "2026-10-08T05:01:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 1,
+            "used": 1,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "s1",
+            "project": "",
+            "start": "2026-10-08T05:00:00+02:00",
+            "last": "2026-10-08T05:00:00+02:00",
+            "prompts": 0,
+            "prompts_with_memory": 0,
+            "shown": 2,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "rel-v0.1.18",
+            "project": "p1",
+            "start": "2026-10-08T04:00:00+02:00",
+            "last": "2026-10-08T04:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "s2",
+            "project": "p1",
+            "start": "2026-10-08T04:00:00+02:00",
+            "last": "2026-10-08T04:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          },
+          {
+            "id": "sess-long-2",
+            "project": "p1",
+            "start": "2026-10-08T02:00:00+02:00",
+            "last": "2026-10-08T02:00:00+02:00",
+            "prompts": 1,
+            "prompts_with_memory": 1,
+            "shown": 0,
+            "used": 0,
+            "wrong": 0,
+            "context_chars": 0,
+            "sent": ""
+          }
+        ]
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

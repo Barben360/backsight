@@ -225,6 +225,18 @@ type FlushResult struct {
 	// quarantined, so a caller can tell what became of its own note.
 	SentDocs        []string `json:"-"`
 	QuarantinedDocs []string `json:"-"`
+	// Outcomes is what became of each note this flush tried, in order: the
+	// ones sent, set aside, and the one whose failure stopped it (it stays
+	// queued, Retry). The notes after it were not tried.
+	Outcomes []NoteOutcome `json:"-"`
+}
+
+// NoteOutcome is one note a flush tried: its document, Sent, Quarantined or
+// Retry, and how long its send took.
+type NoteOutcome struct {
+	Document string
+	Status   string
+	MS       int
 }
 
 // MaxAttempts: a note failing this many times (about half a day of ticks)
@@ -254,7 +266,9 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 				break // this note and the rest stay as they are
 			}
 		}
+		start := time.Now()
 		err := c.Retain(ctx, bank, []hindsight.RetainItem{n.Item(machineID)}, n.OperationID)
+		ms := int(time.Since(start).Milliseconds())
 		if err == nil && o.Gate != nil {
 			if gateErr = o.Gate(); gateErr != nil {
 				break // connect started over during the send: kept for the new server
@@ -263,6 +277,7 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 		if err == nil {
 			res.Sent++
 			res.SentDocs = append(res.SentDocs, n.DocumentID)
+			res.Outcomes = append(res.Outcomes, NoteOutcome{n.DocumentID, Sent, ms})
 			done[n.OperationID] = true
 			continue
 		}
@@ -274,12 +289,14 @@ func (o Outbox) Flush(ctx context.Context, c *hindsight.Client, bank, machineID 
 			if qerr := appendJSON(o.QuarantinePath, n); qerr == nil {
 				res.Quarantined++
 				res.QuarantinedDocs = append(res.QuarantinedDocs, n.DocumentID)
+				res.Outcomes = append(res.Outcomes, NoteOutcome{n.DocumentID, Quarantined, ms})
 				done[n.OperationID] = true
 				continue
 			}
 		}
 		// Unreachable, misconfigured or busy: stop, keep this note and the rest.
 		res.LastError = n.LastError
+		res.Outcomes = append(res.Outcomes, NoteOutcome{n.DocumentID, Retry, ms})
 		failed[n.OperationID] = n
 		break
 	}

@@ -1,0 +1,14 @@
+Is it worth it? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Cost
+Context added per session                    —                        (n=4, too few, 96 more needed)
+Context added per prompt that got memory     —                        (n=4, too few, 16 more needed)
+Time memory adds to a prompt                 —                        (n=5, too few, 95 more needed)
+Time of a memory search                      —                        (no data: nothing recorded yet)
+What the server's model spent (tokens)       —                        (no data: nothing recorded yet)
+What the server's model spent (cost)         —                        (no data: nothing recorded yet)
+
+What the server's model spent, by day
+none
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 
 // staleHidden: a memory hidden on this machine is listed once it stayed
 // hidden this long without the server rewriting it; before, it waits.
-const staleHidden = 7 * 24 * time.Hour
+const staleHidden = feedback.StaleHidden
 
 // staleMemory is one memory memory stale lists, with the command that
 // moves it on.
@@ -78,41 +77,33 @@ func newMemoryStaleCmd(e *env) *cobra.Command {
 	}
 }
 
-// staleOf sorts l's memories into what needs review, each once: hidden
-// for staleHidden without a rewrite, else reported wrong or outdated,
-// else shown live at least shows times and never used. A memory hidden for
-// less is left out: the server may still rewrite it. Each list is most
-// shown first.
+// staleOf is feedback.Stale's three lists (the one definition, shared with
+// the dashboard's stale counts), each memory with its counts and the
+// command that moves it on.
 func staleOf(l feedback.Ledger, shows int, at time.Time) staleResult {
-	res := staleResult{NeverUsed: []staleMemory{}, Hidden: []staleMemory{}, Reported: []staleMemory{}}
-	for id, m := range l.Memories {
-		s := staleMemory{ID: id, Shown: m.Shown, LastShown: m.LastShown, Wrong: m.Wrong, Command: "backsight forget " + id}
-		switch {
-		case m.Hidden != nil && at.Sub(m.Hidden.Since) >= staleHidden:
-			// Hidden because the server could not list its source facts:
-			// a forget fails on it until it can, a restore always works.
-			s.HiddenSince, s.Command = m.Hidden.Since, "backsight forget --restore "+id
-			res.Hidden = append(res.Hidden, s)
-		case m.Hidden != nil:
-		case m.Wrong > 0:
-			// Already invalidated: a plain forget changes nothing on the
-			// server. --purge lists what deleting it for good takes, and
-			// deletes only with --yes.
-			s.Command += " --purge"
-			res.Reported = append(res.Reported, s)
-		case m.Shown-m.Imported.Shown >= shows && m.Credits == 0:
-			// Live shows only: an import never counts a miss, so its
-			// shows alone say nothing of use.
-			res.NeverUsed = append(res.NeverUsed, s)
-		}
+	lists := feedback.Stale(l, shows, at)
+	memory := func(id string) staleMemory {
+		m := l.Memories[id]
+		return staleMemory{ID: id, Shown: m.Shown, LastShown: m.LastShown, Wrong: m.Wrong, Command: "backsight forget " + id}
 	}
-	for _, ms := range [][]staleMemory{res.NeverUsed, res.Hidden, res.Reported} {
-		slices.SortFunc(ms, func(a, b staleMemory) int {
-			if a.Shown != b.Shown {
-				return b.Shown - a.Shown
-			}
-			return strings.Compare(a.ID, b.ID)
-		})
+	res := staleResult{NeverUsed: []staleMemory{}, Hidden: []staleMemory{}, Reported: []staleMemory{}}
+	for _, id := range lists.NeverUsed {
+		res.NeverUsed = append(res.NeverUsed, memory(id))
+	}
+	for _, id := range lists.Hidden {
+		// Hidden because the server could not list its source facts: a
+		// forget fails on it until it can, a restore always works.
+		s := memory(id)
+		s.HiddenSince, s.Command = l.Memories[id].Hidden.Since, "backsight forget --restore "+id
+		res.Hidden = append(res.Hidden, s)
+	}
+	for _, id := range lists.Reported {
+		// Already invalidated: a plain forget changes nothing on the
+		// server. --purge lists what deleting it for good takes, and
+		// deletes only with --yes.
+		s := memory(id)
+		s.Command += " --purge"
+		res.Reported = append(res.Reported, s)
 	}
 	return res
 }

@@ -79,6 +79,10 @@ var typedCases = []typedCase{
 		"tel_feedback_settle", map[string]any{"shows": 5, "credits": 2, "misses": 1, "unknown": 2, "late": 1}},
 	{"feedback_error", map[string]any{"error": "disk full"},
 		"tel_feedback_error", map[string]any{"reason": "other"}},
+	{"feedback_error", map[string]any{"reason": "settle"},
+		"tel_feedback_error", map[string]any{"reason": "settle"}},
+	{"feedback_error", map[string]any{"reason": "disk full"},
+		"tel_feedback_error", map[string]any{"reason": "other"}},
 	{"gate", map[string]any{"n": 2, "decision": "deny", "reason": "no_search"},
 		"tel_gate", map[string]any{"n": 2, "decision": "deny", "reason": "no_search"}},
 	{"retain", map[string]any{"document": "conversation:s1", "items": 1, "status": "queued", "ms": 15},
@@ -349,4 +353,16 @@ func TestUnknownKindsKeepNoPayload(t *testing.T) {
 		}
 	}
 	noBytes(t, e.ix, canary)
+}
+
+// The five reasons the emitters write are kept; any other text is other.
+func TestIndexKeepsTheFeedbackReasons(t *testing.T) {
+	for _, r := range []string{"journal_read", "journal_write", "turn_pointer", "settle", "shared_combine"} {
+		if closedValue(r, feedbackReasons) != r {
+			t.Errorf("reason %q not kept", r)
+		}
+	}
+	if closedValue("disk full", feedbackReasons) != "other" {
+		t.Error("a free-text reason is not other")
+	}
 }

@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "command": "stats bank",
+  "ok": true,
+  "data": {
+    "view": "bank",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {
+      "bank.by_project": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [
+          "snapshot"
+        ],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats projects"
+      },
+      "bank.churn": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory stale"
+      },
+      "bank.consolidation": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [
+          "snapshot"
+        ],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight doctor",
+        "extra": {
+          "failed": 0,
+          "last_consolidated_at": null,
+          "pending": 0
+        }
+      },
+      "bank.growth": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats bank"
+      },
+      "bank.size": {
+        "value": 0,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "ok",
+        "borderline": false,
+        "tags": [
+          "snapshot"
+        ],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats bank",
+        "extra": {
+          "documents": 0,
+          "experience": 0,
+          "links": 0,
+          "observation": 0,
+          "world": 0
+        }
+      },
+      "notes.stored": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "raw",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight stats bank"
+      },
+      "stale.hidden": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "recent_weighted",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory stale"
+      },
+      "stale.never_used": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "recent_weighted",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory stale"
+      },
+      "stale.reported": {
+        "value": null,
+        "num": null,
+        "den": null,
+        "unit": "count",
+        "aggregation": "recent_weighted",
+        "status": "no_data",
+        "reason": "no_events",
+        "borderline": false,
+        "tags": [],
+        "ci": null,
+        "mdc": null,
+        "previous": null,
+        "delta": null,
+        "drill": "backsight memory stale"
+      }
+    },
+    "tables": {
+      "by_project": [],
+      "review": {
+        "never_used": [],
+        "hidden": [],
+        "reported": []
+      }
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

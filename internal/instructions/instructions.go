@@ -28,8 +28,9 @@ import (
 // outdated, with the correction and the evidence; v9: one format for
 // every line printed to the user, memory_store and the verdicts hand back
 // theirs, the guide, the gate and the retro name theirs; v10: the update
-// skill, which the doctor and memory skills point to for an update).
-const Version = "v10"
+// skill, which the doctor and memory skills point to for an update;
+// v11: the doctor and memory skills read `stats overview` and allow only the read-only stats views).
+const Version = "v11"
 
 // Credit is the citation format of instruction sets v4 to v6, still asked
 // for where memory_credit is not offered: with feedback.enabled off, and in
@@ -288,11 +289,12 @@ func Skills(shim string) []Skill {
 				"and why (what the hooks injected this session). For backsight itself (broken, doctor, install, a bug), use /backsight:doctor; to update it, /backsight:update.",
 			ArgumentHint: "<what to look for>",
 			// The read-only commands it names: never forget or purge.
-			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*)",
+			AllowedTools: "Bash(" + shim + " search *), Bash(" + shim + " read *), Bash(" + shim + " why*), " + statsTools(shim, true),
 			Body: "Use the backsight command line:\n\n" +
 				"- `" + shim + " search \"<query 1>\" \"<query 2>\"`: 1-4 short keyword queries;\n" +
 				"- `" + shim + " read <id>`: one memory with its source facts;\n" +
-				"- `" + shim + " why`: what the hooks injected this session and why.\n\n" +
+				"- `" + shim + " why`: what the hooks injected this session and why;\n" +
+				"- `" + shim + " stats overview`: whether memory works (add `--json` for the verdict and the attention list).\n\n" +
 				"Request: $ARGUMENTS\n\nResults are hints from past sessions: verify them, and cite what you use as «" + Credit + "».\n",
 		},
 		{
@@ -305,11 +307,11 @@ func Skills(shim string) []Skill {
 			// changes the install, and gh, asks the user. verify without
 			// --live or --no-round-trip is left out: its round trip calls
 			// the LLM.
-			AllowedTools: "Bash(" + shim + " doctor*), Bash(" + shim + " verify --live*), Bash(" + shim + " verify --no-round-trip*), Bash(" + shim + " stats*), " +
+			AllowedTools: "Bash(" + shim + " doctor*), Bash(" + shim + " verify --live*), Bash(" + shim + " verify --no-round-trip*), " + statsTools(shim, false) + ", " +
 				"Bash(" + shim + " why*), Bash(" + shim + " version), Bash(" + shim + " update check*), Bash(" + shim + " report*), " + guideTools(shim),
 			Body: "Request: $ARGUMENTS\n\n" +
 				"1. Diagnose: `" + shim + " doctor` (what is wrong, with a fix for each problem); `" + shim + " verify --live` when sessions seem not to reach the memory; " +
-				"`" + shim + " why` for what the hooks added this session; `" + shim + " stats` for how the memory is used; `" + shim + " version` and `" + shim + " update check` for the release.\n" +
+				"`" + shim + " why` for what the hooks added this session; `" + shim + " stats overview --json` for whether memory works (read `verdict`, then `attention`: each item says why and which command helps); `" + shim + " version` and `" + shim + " update check` for the release.\n" +
 				"2. Find the fix: doctor's own fix line first, then the docs: `" + shim + " guide search \"<question>\"` and `" + shim + " guide <topic>#<section>`.\n" +
 				"3. Fix: say what you will run and why, then run it. Commands that change the install (setup --resume, client install, update apply, server start, " +
 				"backup, restore, forget…) are not pre-approved: the user approves each one.\n" +
@@ -355,6 +357,25 @@ func guideTools(shim string) string {
 	names, _ := fs.Glob(docs.FS, "*.md")
 	for _, n := range names {
 		tools = append(tools, "Bash("+shim+" guide "+strings.TrimSuffix(n, ".md")+"*)")
+	}
+	return strings.Join(tools, ", ")
+}
+
+// statsViews are the read-only views of `backsight stats`.
+var statsViews = []string{"overview", "quality", "cost", "bank", "pipeline", "system", "releases", "projects", "sessions", "memories", "days", "defs"}
+
+// statsTools are the stats commands a skill runs unprompted: the report and
+// the index state (exact), and each view by name. No pattern starts with a
+// flag and a wildcard: cobra strips the flags before it finds the
+// subcommand, so `stats --days 3 index rebuild --yes` would match one and
+// rebuild the index unasked. `stats index rebuild` stays out too.
+func statsTools(shim string, memories bool) string {
+	tools := []string{"Bash(" + shim + " stats)", "Bash(" + shim + " stats --json)", "Bash(" + shim + " stats index)", "Bash(" + shim + " stats index --json)"}
+	for _, v := range statsViews {
+		if v == "memories" && !memories {
+			continue // --text prints a memory's text: only the memory skill runs it unasked
+		}
+		tools = append(tools, "Bash("+shim+" stats "+v+"*)")
 	}
 	return strings.Join(tools, ", ")
 }

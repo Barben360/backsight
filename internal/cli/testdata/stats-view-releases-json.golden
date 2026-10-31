@@ -1,0 +1,1188 @@
+{
+  "schema_version": 1,
+  "command": "stats releases",
+  "ok": true,
+  "data": {
+    "view": "releases",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": true
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "server": {
+      "ok": true,
+      "last_ok": null
+    },
+    "metrics": {},
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 2
+      },
+      "releases": [
+        {
+          "version": "v0.1.18",
+          "first": "2026-10-08T04:00:00+02:00",
+          "last": "2026-10-08T04:00:00+02:00",
+          "n": 1,
+          "flagship": {
+            "context.per_session": {
+              "value": null,
+              "num": null,
+              "den": 1,
+              "unit": "chars",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "n": 1,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                }
+              ],
+              "extra": {
+                "histogram": [
+                  {
+                    "lo": 0,
+                    "hi": 1000,
+                    "n": 1
+                  },
+                  {
+                    "lo": 1000,
+                    "hi": 2000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 2000,
+                    "hi": 3000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 3000,
+                    "hi": 4000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 4000,
+                    "hi": 5000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 5000,
+                    "hi": 6000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 6000,
+                    "hi": 7000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 7000,
+                    "hi": 8000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 8000,
+                    "hi": 9000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 9000,
+                    "hi": 10000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 10000,
+                    "hi": 11000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 11000,
+                    "hi": 12000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 12000,
+                    "hi": 13000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 13000,
+                    "hi": 14000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 14000,
+                    "hi": 15000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 15000,
+                    "hi": 16000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 16000,
+                    "hi": 17000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 17000,
+                    "hi": 18000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 18000,
+                    "hi": 19000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 19000,
+                    "hi": 20000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 20000,
+                    "hi": null,
+                    "n": 0
+                  }
+                ],
+                "p50": null,
+                "p95": null,
+                "tokens_p50": null,
+                "tokens_p95": null
+              }
+            },
+            "declare.coverage": {
+              "value": null,
+              "num": 0,
+              "den": 0,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has undeclared",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ],
+              "extra": {
+                "check_skipped": 0,
+                "pending": 0
+              }
+            },
+            "recall.hit_rate": {
+              "value": 1,
+              "num": 1,
+              "den": 1,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": [
+                0.20654329147389294,
+                1
+              ],
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has memory",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": 1,
+                  "num": 1,
+                  "den": 1
+                }
+              ]
+            },
+            "recall.latency": {
+              "value": null,
+              "num": null,
+              "den": 1,
+              "unit": "ms",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats days",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "n": 1,
+                  "p50": 300,
+                  "p95": 300
+                }
+              ],
+              "extra": {
+                "p50": null,
+                "p95": null
+              }
+            },
+            "used.turn_rate": {
+              "value": null,
+              "num": 0,
+              "den": 0,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has used",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ],
+              "extra": {
+                "check_skipped": 0,
+                "pending": 0,
+                "subagent_turns": 0,
+                "worst_case": null
+              }
+            },
+            "verdict.wrong_rate": {
+              "value": null,
+              "num": 0,
+              "den": 0,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has wrong",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ],
+              "extra": {
+                "outdated": 0,
+                "used": 0,
+                "wrong": 0
+              }
+            }
+          },
+          "project_shares": {
+            "p1": 1
+          },
+          "prompts_per_day": 1,
+          "bank_size": 0
+        },
+        {
+          "version": "v0.1.17",
+          "first": "2026-10-06T12:00:00+02:00",
+          "last": "2026-10-06T12:00:00+02:00",
+          "n": 1,
+          "flagship": {
+            "context.per_session": {
+              "value": null,
+              "num": null,
+              "den": 1,
+              "unit": "chars",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "n": 1,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "n": 0,
+                  "parts": {
+                    "briefing": 0,
+                    "prompts": 0
+                  }
+                }
+              ],
+              "extra": {
+                "histogram": [
+                  {
+                    "lo": 0,
+                    "hi": 1000,
+                    "n": 1
+                  },
+                  {
+                    "lo": 1000,
+                    "hi": 2000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 2000,
+                    "hi": 3000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 3000,
+                    "hi": 4000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 4000,
+                    "hi": 5000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 5000,
+                    "hi": 6000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 6000,
+                    "hi": 7000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 7000,
+                    "hi": 8000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 8000,
+                    "hi": 9000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 9000,
+                    "hi": 10000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 10000,
+                    "hi": 11000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 11000,
+                    "hi": 12000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 12000,
+                    "hi": 13000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 13000,
+                    "hi": 14000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 14000,
+                    "hi": 15000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 15000,
+                    "hi": 16000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 16000,
+                    "hi": 17000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 17000,
+                    "hi": 18000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 18000,
+                    "hi": 19000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 19000,
+                    "hi": 20000,
+                    "n": 0
+                  },
+                  {
+                    "lo": 20000,
+                    "hi": null,
+                    "n": 0
+                  }
+                ],
+                "p50": null,
+                "p95": null,
+                "tokens_p50": null,
+                "tokens_p95": null
+              }
+            },
+            "declare.coverage": {
+              "value": null,
+              "num": 0,
+              "den": 0,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has undeclared",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ],
+              "extra": {
+                "check_skipped": 0,
+                "pending": 0
+              }
+            },
+            "recall.hit_rate": {
+              "value": 1,
+              "num": 1,
+              "den": 1,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": [
+                0.20654329147389294,
+                1
+              ],
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has memory",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": 1,
+                  "num": 1,
+                  "den": 1
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ]
+            },
+            "recall.latency": {
+              "value": null,
+              "num": null,
+              "den": 1,
+              "unit": "ms",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats days",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "n": 1,
+                  "p50": 300,
+                  "p95": 300
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "n": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "n": 0
+                }
+              ],
+              "extra": {
+                "p50": null,
+                "p95": null
+              }
+            },
+            "used.turn_rate": {
+              "value": null,
+              "num": 0,
+              "den": 0,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has used",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ],
+              "extra": {
+                "check_skipped": 0,
+                "pending": 0,
+                "subagent_turns": 0,
+                "worst_case": null
+              }
+            },
+            "verdict.wrong_rate": {
+              "value": null,
+              "num": 0,
+              "den": 0,
+              "unit": "ratio",
+              "aggregation": "raw",
+              "status": "too_few",
+              "borderline": false,
+              "tags": [],
+              "ci": null,
+              "mdc": null,
+              "previous": null,
+              "delta": null,
+              "drill": "backsight stats sessions --has wrong",
+              "series": [
+                {
+                  "day": "2026-10-01",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-02",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-03",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-04",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-05",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-06",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-07",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                },
+                {
+                  "day": "2026-10-08",
+                  "value": null,
+                  "num": 0,
+                  "den": 0
+                }
+              ],
+              "extra": {
+                "outdated": 0,
+                "used": 0,
+                "wrong": 0
+              }
+            }
+          },
+          "project_shares": {
+            "p2": 1
+          },
+          "prompts_per_day": 1,
+          "bank_size": 0
+        }
+      ],
+      "settings": {
+        "feedback.boost_weight": 0.1,
+        "feedback.confident_rank": 2,
+        "feedback.credit_half_life_days": 365,
+        "feedback.enabled": 1,
+        "feedback.max_retirements": 3,
+        "feedback.miss_half_life_days": 90,
+        "feedback.prior_credits": 3,
+        "feedback.prior_misses": 9,
+        "feedback.share_ledger": 1,
+        "feedback.stale_shows": 10,
+        "recall.failure_pitfalls": 0,
+        "recall.families": 0,
+        "recall.global_min_score": 0.6,
+        "recall.min_gap": 3,
+        "recall.min_score": 0.5,
+        "recall.project_boost": 0.05,
+        "recall.prompt_chars": 800,
+        "recall.prompt_hits": 3,
+        "recall.query_chars": 300,
+        "recall.quiet_prompts": 3,
+        "recall.recall_min_chars": 60,
+        "recall.reminder_min_chars": 40,
+        "recall.session_budget_chars": 6000,
+        "recall.sticky_bypass": 0.97,
+        "recall.sticky_max": 3,
+        "recall.sticky_window_h": 24
+      },
+      "note": "observational: weeks, projects and memory differ"
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

@@ -24,7 +24,20 @@ type Prompt struct {
 	Hinted   bool                   `json:"hinted"`
 	Detector *string                `json:"detector"` // rule | approval | null
 	Chars    int                    `json:"chars"`
+	// Empty: why a recall decision injected nothing (no_candidates |
+	// below_floor | all_seen | capped); unset when it injected something.
+	Empty string `json:"empty,omitempty"`
 }
+
+// Store is one backsight store or memory_store call: saved, updated (the
+// note replaces memories) or refused. Kind is the note kind, empty when
+// the call was refused before it was parsed.
+type Store struct {
+	Result string `json:"result"` // saved | updated | refused
+	Kind   string `json:"kind"`
+}
+
+func (Store) EventName() string { return "store" }
 
 // Outcome is what followed the previous prompt's injection.
 type Outcome struct {

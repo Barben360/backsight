@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "command": "stats days",
+  "ok": true,
+  "data": {
+    "view": "days",
+    "view_schema": 1,
+    "generated_at": "2026-10-08T14:00:00+02:00",
+    "window": {
+      "since": "2026-10-01T14:00:00+02:00",
+      "until": "2026-10-08T14:00:00+02:00",
+      "days": 7,
+      "tz": "Europe/Paris"
+    },
+    "previous": {
+      "since": "2026-09-24T14:00:00+02:00",
+      "until": "2026-10-01T14:00:00+02:00"
+    },
+    "scope": {
+      "machines": "this",
+      "server": "127.0.0.1:PORT",
+      "server_ok": false
+    },
+    "index": {
+      "ingested_at": "2026-10-08T14:00:00+02:00",
+      "lag_seconds": 0,
+      "partial": false
+    },
+    "metrics": {},
+    "tables": {
+      "page": {
+        "limit": 50,
+        "offset": 0,
+        "total": 8
+      },
+      "days": [
+        {
+          "day": "2026-10-08",
+          "prompts": 3,
+          "recalls": 3,
+          "prompts_with_memory": 3,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 4,
+          "sent_ok": 0,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-07",
+          "prompts": 3,
+          "recalls": 2,
+          "prompts_with_memory": 1,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 1,
+          "sent_ok": 1,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-06",
+          "prompts": 0,
+          "recalls": 0,
+          "prompts_with_memory": 0,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 0,
+          "sent_ok": 0,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-05",
+          "prompts": 0,
+          "recalls": 0,
+          "prompts_with_memory": 0,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 0,
+          "sent_ok": 0,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-04",
+          "prompts": 0,
+          "recalls": 0,
+          "prompts_with_memory": 0,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 0,
+          "sent_ok": 0,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-03",
+          "prompts": 0,
+          "recalls": 0,
+          "prompts_with_memory": 0,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 0,
+          "sent_ok": 0,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-02",
+          "prompts": 0,
+          "recalls": 0,
+          "prompts_with_memory": 0,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 0,
+          "sent_ok": 0,
+          "sent_failed": 0
+        },
+        {
+          "day": "2026-10-01",
+          "prompts": 0,
+          "recalls": 0,
+          "prompts_with_memory": 0,
+          "used_turns": 0,
+          "wrong": 0,
+          "context_chars": 0,
+          "sessions": 0,
+          "sent_ok": 0,
+          "sent_failed": 0
+        }
+      ]
+    },
+    "attention": [],
+    "attention_more": 0,
+    "info": []
+  }
+}

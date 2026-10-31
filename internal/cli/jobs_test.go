@@ -747,3 +747,67 @@ func TestHiddenChecksAreCapped(t *testing.T) {
 		t.Errorf("out of time: lifted %d, %d reads, want 0 and 3", n, len(read))
 	}
 }
+
+// noteRetains are the retain events telemetry holds for doc, in order.
+func noteRetains(t *testing.T, home, doc string) []telemetryRetain {
+	t.Helper()
+	var out []telemetryRetain
+	for l := range strings.SplitSeq(telemetryText(t, home), "\n") {
+		var e telemetryRetain
+		if json.Unmarshal([]byte(l), &e) == nil && e.Event == "retain" && e.Document == doc {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+type telemetryRetain struct {
+	Event, Document, Status string
+	MS                      *int `json:"ms"`
+}
+
+// The tick's notes flush logs each note it tried, as a session's flush
+// does: a subagent note the hook logged queued ends ok once sent (with its
+// send's duration); a note the server refuses ends quarantined; with the
+// server down the note that failed is logged retry and stays queued.
+func TestTickLogsEachNoteItTried(t *testing.T) {
+	sub := retain.NewSubagentNote("claude-memory", "s1", "agent-7", "Explore", "p", "Found the leak.", time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC))
+	t.Run("sent", func(t *testing.T) {
+		home := devInstall(t, true)
+		pointAt(t, home, fakeHindsight(t))
+		n := newTestNote()
+		for _, x := range []retain.Note{sub, n} {
+			if _, err := notesOutbox(pathsOf(home)).Append(x); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run(t, "jobs", "tick")
+		for _, doc := range []string{sub.DocumentID, n.DocumentID} {
+			if got := noteRetains(t, home, doc); len(got) != 1 || got[0].Status != "ok" || got[0].MS == nil {
+				t.Errorf("%s: retain events %+v, want one ok with its ms", doc, got)
+			}
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		home := devInstall(t, true)
+		pointAt(t, home, fakeHindsight(t))
+		retainStatus.Store(400)
+		t.Cleanup(func() { retainStatus.Store(0) })
+		_, _ = notesOutbox(pathsOf(home)).Append(sub)
+		run(t, "jobs", "tick")
+		if got := noteRetains(t, home, sub.DocumentID); len(got) != 1 || got[0].Status != "quarantined" {
+			t.Errorf("retain events %+v, want one quarantined", got)
+		}
+	})
+	t.Run("server down", func(t *testing.T) {
+		home := devInstall(t, true) // closed port
+		_, _ = notesOutbox(pathsOf(home)).Append(sub)
+		run(t, "jobs", "tick")
+		if got := noteRetains(t, home, sub.DocumentID); len(got) != 1 || got[0].Status != "retry" {
+			t.Errorf("retain events %+v, want one retry", got)
+		}
+		if n, _ := notesOutbox(pathsOf(home)).Pending(); n != 1 {
+			t.Errorf("%d notes queued, want the note kept", n)
+		}
+	})
+}

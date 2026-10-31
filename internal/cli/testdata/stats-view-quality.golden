@@ -1,0 +1,35 @@
+Is it right? (2026-10-01 14:00 → 2026-10-08 14:00, Europe/Paris)
+
+Found
+Prompts that got memory                      4 of 5                   (n=5, too few, 15 more needed)
+Prompts that found nothing                   1 prompt                 (ok, +1 vs previous)
+  why: reason not recorded 1
+  prompts skipped: other 1
+Prompts where Claude searched memory         0 of 5                   (n=5, too few, 15 more needed)
+Searches that found nothing                  —                        (no data: nothing recorded yet)
+
+Right
+Turns where Claude used memory               0 of 0                   (n=0, too few, 20 more needed)
+Turns where Claude said what it used         0 of 0                   (n=0, too few, 20 more needed)
+Memories reported wrong or out of date       —                        (no data: nothing recorded yet)
+
+To review
+Often shown, never used                      —                        (no data: nothing recorded yet)
+Hidden                                       —                        (no data: nothing recorded yet)
+Reported wrong                               —                        (no data: nothing recorded yet)
+
+Memories shown, by what happened
+Day         Used by Claude  Shown, then ignored  Not declared  Shown only  Pending  Note
+2026-10-01  0               0                    0             0           0        partial day
+2026-10-02  0               0                    0             0           0
+2026-10-03  0               0                    0             0           0
+2026-10-04  0               0                    0             0           0
+2026-10-05  0               0                    0             0           0
+2026-10-06  0               0                    0             0           0
+2026-10-07  0               0                    0             0           1
+2026-10-08  0               0                    0             0           2        partial day
+
+Reported wrong or out of date
+none
+
+Activity on this PC · memory on 127.0.0.1:PORT · --json for every field

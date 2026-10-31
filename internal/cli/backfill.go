@@ -426,7 +426,9 @@ func runBackfill(ctx context.Context, f *retain.Flusher, d paths.Dirs, cfg confi
 			// never queued again, unless connect started the sends over
 			// meanwhile, before or during a send (the cursor may be the new
 			// server's own, and the notes stay queued for it).
-			if _, err := ob.Flush(ctx, f.Client, cfg.Server.Bank, f.MachineID); !errors.Is(err, retain.ErrStartedOver) {
+			fr, err := ob.Flush(ctx, f.Client, cfg.Server.Bank, f.MachineID)
+			emitNoteEvents(d.State, fr)
+			if !errors.Is(err, retain.ErrStartedOver) {
 				_ = retain.MarkNotesReplayed(d.CursorsDir(), sid)
 			}
 		}

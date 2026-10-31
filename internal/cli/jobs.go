@@ -135,7 +135,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 			res.Binary = ensureSelfCheck(d)
 			res.Feedback = settleFeedback(d, cfg, tw) // local only: before the server start, which can wait
 			if err := recombineShared(d, cfg, retain.ReadMachineID(d.State), now()); err != nil {
-				tw.Emit(telemetry.Raw{Name: "feedback_error", Fields: map[string]any{"error": err.Error()}})
+				tw.Emit(telemetry.FeedbackError(telemetry.FeedbackReasonSharedCombine))
 			}
 			// First: a server left down at boot makes every send below fail.
 			sctx, scancel := context.WithTimeout(cmd.Context(), serverCheckTimeout)
@@ -227,6 +227,7 @@ func newJobsTickCmd(e *env) *cobra.Command {
 				ob := notesOutboxFor(d, cfg)
 				ob.Gate = f.StartedOver // queued notes go to the server this tick began with only
 				res.Notes, err = ob.Flush(cmd.Context(), f.Client, cfg.Server.Bank, f.MachineID)
+				emitNoteEvents(d.State, res.Notes)
 				// No note queued asks no gate: the deletes below look again.
 				if errors.Is(err, retain.ErrStartedOver) || errors.Is(f.StartedOver(), retain.ErrStartedOver) {
 					// The client is the old server's: nothing is written or

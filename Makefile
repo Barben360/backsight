@@ -55,10 +55,12 @@ test-hooks:
 	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -tags testhooks ./internal/buildinfo/ ./internal/hook/ ./internal/migrate/ ./internal/server/ ./internal/server/nativelock/ ./internal/cli/
 
 # The metrics index's time budgets on a year of generated history (first
-# build, 15-minute catch-up), then the same two as benchmarks. Without
-# -race, which skips the budget test.
+# build, 15-minute catch-up), the page views' render budget on the same
+# history, then the index's two as benchmarks. Without -race, which skips
+# the budget tests.
 bench-index:
 	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
+	go test -count=1 -run 'TestViewBudgets' -v ./internal/metrics/
 	go test -run '^$$' -bench 'FirstBuild|CatchUp15' -benchtime 1x ./internal/index/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
