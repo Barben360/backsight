@@ -245,10 +245,9 @@ WHERE p.ts >= ? AND p.ts < ? AND (? = '' OR p.project = ?)`, args...)
 	met["recall.empty_reasons"] = er
 
 	// recall.by_lang: the top-level status is the envelope of the overall
-	// hit rate (so the metric reads too_few or ok), not a per-language
-	// verdict; each language carries its own status below. The whole
-	// window's rate judged on its own, and each
-	// language judged with the same min_n.
+	// hit rate, so the metric reads too_few or ok; it is not a per-language
+	// verdict. Each language carries its own status below, judged with the
+	// same min_n.
 	def, _ := DefOf("recall.by_lang")
 	byLang := make(map[string]langStat, len(total.langs))
 	for lang, c := range total.langs {

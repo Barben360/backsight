@@ -225,7 +225,7 @@ func TestSearchRate(t *testing.T) {
 	mach := x.prompts("alpha", "mach", fxNow.Add(-6*time.Hour), 1, func(_ int, p *telemetry.Prompt) { p.Decision, p.Reason = "skip", "machine" })
 	x.toolUse(at, mach[0], "alpha", 1, "memory_search", false)
 
-	// A tool use 3 h after its prompt still belongs to the prompt's turn; one
+	// A tool use 4 h after its prompt still belongs to the prompt's turn; one
 	// of a prompt outside the window counts for nothing.
 	late := x.prompts("alpha", "late", fxNow.Add(-10*time.Hour), 1, nil)
 	x.toolUse(fxNow.Add(-6*time.Hour), late[0], "alpha", 1, "memory_search", false)
@@ -239,6 +239,26 @@ func TestSearchRate(t *testing.T) {
 	}
 	if m.Value == nil || !close4(*m.Value, 0.5) {
 		t.Errorf("value = %v, want 0.5", m.Value)
+	}
+}
+
+// TestSearchRateToolUseAfterWindow: a tool use belongs to its prompt's turn
+// however long after the window's end it was logged; the join has no time
+// bound.
+func TestSearchRateToolUseAfterWindow(t *testing.T) {
+	x := newFx(t, fxNow)
+	until := fxNow.Add(-2 * day)
+	w, err := NewWindow(fxNow, 0, until.Add(-day), until, fxParis, "Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The prompt is inside the window; its search comes 5 h after Until.
+	p := x.prompts("alpha", "edge", until, 1, func(_ int, p *telemetry.Prompt) { p.Plen = 40 })
+	x.toolUse(until.Add(5*time.Hour), p[0], "alpha", 1, "memory_search", false)
+
+	m := reachOf(x, Query{Window: w, Machines: "this"})["search.rate"]
+	if m.Num == nil || *m.Num != 1 || m.Den == nil || *m.Den != 1 {
+		t.Fatalf("search rate = %v/%v, want 1/1", m.Num, m.Den)
 	}
 }
 
