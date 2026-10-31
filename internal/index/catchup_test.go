@@ -987,3 +987,31 @@ func TestFreshnessLeavesOutAZeroTime(t *testing.T) {
 		t.Errorf("%s", got)
 	}
 }
+
+// A migration another process committed while this one waited for the
+// write lock needs no lock: the open that read version 0 before that
+// commit finds it applied once the wait times out, instead of failing
+// with SQLITE_BUSY (the process holding the lock runs batches back to
+// back, and a waiter can starve past the busy timeout).
+func TestMigrationCommittedWhileWaitingIsSkipped(t *testing.T) {
+	shortBusyWait(t)
+	o := opts(t, tempDirs(t), nil)
+	ix := mustOpen(t, o)
+	reg, err := registry(o.withDefaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdWriteLock(t, ix.Path(), ix.FS())
+	applied, err := applyPending(context.Background(), ix.sh.w, reg, Head(reg), o.withDefaults())
+	if err != nil || len(applied) != 0 {
+		t.Fatalf("applyPending = %v, %v; want nothing applied, no error", applied, err)
+	}
+
+	// A migration nobody committed is still waited for, then refused.
+	next := Migration{ID: "9999-pending", Num: Head(reg) + 1, SQL: "SELECT 1"}
+	_, err = applyPending(context.Background(), ix.sh.w, []Migration{next}, next.Num, o.withDefaults())
+	if err == nil || !isBusy(err) {
+		t.Fatalf("applyPending of an uncommitted migration = %v, want SQLITE_BUSY", err)
+	}
+	mustClose(t, ix)
+}
