@@ -175,9 +175,14 @@ func TestReadOnlyDecodesTheShapes(t *testing.T) {
 }
 
 func TestReadOnlyQueries(t *testing.T) {
-	var got []string
+	var (
+		mu  sync.Mutex
+		got []string
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		got = append(got, r.URL.Path+"?"+r.URL.Query().Encode())
+		mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
@@ -193,6 +198,8 @@ func TestReadOnlyQueries(t *testing.T) {
 		"/v1/default/banks/b/operations?limit=100&offset=200&status=failed&type=retain",
 		"/v1/default/banks/b/operations?limit=20&offset=0",
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %q, want %q", got, want)
 	}
@@ -248,11 +255,18 @@ func TestReadOnlyCallsTimeOut(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	ro, err := NewReadOnly(srv.URL, "k", "b", 500*time.Millisecond)
+	// the blocked call gets a tiny timeout (the handler waits for the
+	// request context, so no duration matters); the fast call gets a long
+	// one, so a slow runner cannot turn it into a timeout.
+	slow, err := NewReadOnly(srv.URL, "k", "b", time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ro.BankStats(context.Background()); !errors.Is(err, ErrTimeout) {
+	ro, err := NewReadOnly(srv.URL, "k", "b", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := slow.BankStats(context.Background()); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("slow call: err = %v, want ErrTimeout", err)
 	}
 	if v, err := ro.Version(context.Background()); err != nil || v.APIVersion != "1.1.0" {
