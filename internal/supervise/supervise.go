@@ -273,6 +273,7 @@ type run struct {
 	dbBack, apiBack  backoff
 	dbTimer, apiTime <-chan time.Time
 	stopPoll         context.CancelFunc
+	polls            sync.WaitGroup // every pollReady, waited for before the loop returns
 	ready            chan readyResult
 }
 
@@ -284,6 +285,10 @@ func immediate() <-chan time.Time {
 
 func (s *supervisor) loop(ctx context.Context) error {
 	r := &run{apiWanted: !s.opts.NoAPI, dbTimer: immediate(), ready: make(chan readyResult, 1), stopPoll: func() {}}
+	defer func() {
+		r.stopPoll()
+		r.polls.Wait()
+	}()
 	for {
 		var dbDone, apiDone <-chan error
 		if r.db != nil {
@@ -409,7 +414,8 @@ func (s *supervisor) startDB(ctx context.Context, r *run) error {
 	})
 	pctx, cancel := context.WithCancel(ctx)
 	r.stopPoll = cancel
-	go s.pollReady(pctx, r.dbGen, r.ready)
+	gen := r.dbGen
+	r.polls.Go(func() { s.pollReady(pctx, gen, r.ready) })
 	return nil
 }
 
