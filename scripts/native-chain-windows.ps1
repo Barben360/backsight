@@ -801,7 +801,10 @@ function Step-uninstall {
     $up = Get-NcUserPath $script:userPathKey
     if (";$up;".Contains(";$($script:bh)\bin;")) { Fail "$($script:bh)\bin is still on the user PATH (throwaway key): '$up'" }
     if ((Get-NcUserPath 'Environment') -ne $script:realPath) { Fail 'the real user PATH changed' }
-    if (-not $script:pg0Before -and (Test-Path -LiteralPath $script:pg0Home)) { Fail "$($script:pg0Home), which this run's install created, is still there" }
+    if (-not $script:pg0Before -and (Test-Path -LiteralPath $script:pg0Home)) {
+        $in = @(Get-ChildItem -LiteralPath $script:pg0Home -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 30 | ForEach-Object { $_.FullName.Substring($script:pg0Home.Length + 1) + $(if ($_.PSIsContainer) { '\' } else { " ($($_.Length) bytes)" }) }) -join ', '
+        Fail "$($script:pg0Home), which this run's install created, is still there, holding: $in"
+    }
     $left = @(Get-ChildItem -LiteralPath $script:bh -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($script:bh.Length + 1) } |
         Where-Object { $_ -notlike 'config\*' -and $_ -notlike 'state\*' }) -join ', '
     if (-not $left) { $left = 'nothing' }
