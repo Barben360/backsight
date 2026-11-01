@@ -69,11 +69,8 @@ func imageOf(pid uint32) (string, int64) {
 	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
 		return "", 0
 	}
-	var created, exited, kernel, user windows.Filetime
-	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil {
-		return windows.UTF16ToString(buf[:size]), 0
-	}
-	return windows.UTF16ToString(buf[:size]), int64(created.HighDateTime)<<32 | int64(created.LowDateTime)
+	created, _ := state.ProcessCreated(h) // 0 when it cannot be told
+	return windows.UTF16ToString(buf[:size]), created
 }
 
 // pgRoot is <Root>\pg\ in its long form (a root under an 8.3 profile name,

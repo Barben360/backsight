@@ -18,8 +18,9 @@ type Owner struct {
 	Command string    `json:"command"`
 	Since   time.Time `json:"since"`
 	// StartTicks and BootID identify the owner process beyond its PID
-	// (Linux: its start time in ticks since boot, and that boot): a PID
-	// reused by another process, or after a reboot, does not match.
+	// (Linux: its start time in ticks since boot, and that boot; Windows:
+	// its creation time, a FILETIME, and no boot id): a PID reused by
+	// another process, or after a reboot, does not match.
 	StartTicks int64  `json:"start_ticks,omitempty"`
 	BootID     string `json:"boot_id,omitempty"`
 }

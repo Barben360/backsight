@@ -5,12 +5,15 @@ package state
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/Barben360/backsight/internal/fsutil"
-	"golang.org/x/sys/windows"
 )
 
 // A scanner or an editor holds the lock file for a moment: releasing and
@@ -144,4 +147,104 @@ func TestARefusedLockIsAnError(t *testing.T) {
 	if err == nil || errors.As(err, &held) {
 		t.Fatalf("a refused create: %v, want a plain error", err)
 	}
+}
+
+// liveChild is a process that runs until the test ends (cmd.exe waiting
+// on a pipe nobody writes): someone else's PID, alive.
+func liveChild(t *testing.T) int {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe"), "/c", "pause")
+	cmd.Stdin = r
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait(); _ = w.Close() })
+	return cmd.Process.Pid
+}
+
+// Windows reuses PIDs within minutes: a lock left by a killed process (a
+// tick killed at logoff, a hook child killed at its deadline) names a PID
+// another process may run under by now. A live process created after the
+// lock's Since got that PID, and the lock is stale; the same process with
+// a Since after its creation, and the genuine owner, keep it held. A lock
+// that carries its owner's creation time (StartTicks) is compared with it
+// exactly, whatever Since says.
+func TestALockWhosePIDWindowsReusedIsStale(t *testing.T) {
+	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	pid := liveChild(t)
+	p := filepath.Join(t.TempDir(), "outbox.lock")
+	writeOwner(t, p, Owner{PID: pid, Command: "jobs tick", Since: before})
+	if h := Inspect(p); h == nil || !h.Stale {
+		t.Errorf("a live PID whose process was created after the lock was taken: %+v, want stale", h)
+	}
+	if MaintenanceHeld(p) {
+		t.Error("a reused PID holds the lock")
+	}
+	writeOwner(t, p, Owner{PID: pid, Command: "jobs tick", Since: time.Now().UTC().Truncate(time.Second)})
+	if h := Inspect(p); h == nil || h.Stale {
+		t.Errorf("the PID's process created before the lock was taken: %+v, want held", h)
+	}
+	created, ok := startTicks(pid)
+	if !ok || created == 0 {
+		t.Fatalf("no creation time for the live child %d", pid)
+	}
+	for name, c := range map[string]struct {
+		o     Owner
+		stale bool
+	}{
+		"its own creation time, Since far before": {Owner{PID: pid, Command: "x", Since: before, StartTicks: created}, false},
+		"another creation time, Since after":      {Owner{PID: pid, Command: "x", Since: time.Now().UTC(), StartTicks: created + 1}, true},
+	} {
+		writeOwner(t, p, c.o)
+		if h := Inspect(p); h == nil || h.Stale != c.stale {
+			t.Errorf("%s: %+v, want stale %v", name, h, c.stale)
+		}
+	}
+	own := filepath.Join(t.TempDir(), "own.lock")
+	l, err := TryAcquire(own, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+	if l.Owner().StartTicks == 0 {
+		t.Errorf("the lock does not record its owner's creation time: %+v", l.Owner())
+	}
+	if h := Inspect(own); h == nil || h.Stale {
+		t.Errorf("the genuine owner's lock: %+v, want held", h)
+	}
+}
+
+// A process this user may not open (another user's: ACCESS_DENIED) tells
+// no creation time: a lock naming its PID stays held whatever its Since,
+// never broken under a live owner (decision: the safe side).
+func TestALockOnAProcessThatRefusesAccessStaysHeld(t *testing.T) {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = windows.CloseHandle(snap) }()
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		h, oerr := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, e.ProcessID)
+		if oerr == nil {
+			_ = windows.CloseHandle(h)
+			continue
+		}
+		if !errors.Is(oerr, windows.ERROR_ACCESS_DENIED) {
+			continue
+		}
+		p := filepath.Join(t.TempDir(), "x.lock")
+		writeOwner(t, p, Owner{PID: int(e.ProcessID), Command: "x", Since: time.Now().UTC().Add(-24 * time.Hour)})
+		if h := Inspect(p); h == nil || h.Stale {
+			t.Errorf("pid %d (%s) refuses access: %+v, want held", e.ProcessID, windows.UTF16ToString(e.ExeFile[:]), h)
+		}
+		return
+	}
+	t.Skip("every process here can be opened (an elevated runner): no access-denied process to check")
 }
