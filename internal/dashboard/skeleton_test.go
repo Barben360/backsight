@@ -330,11 +330,12 @@ func TestScopeLine(t *testing.T) {
 		not   []string
 	}{
 		{"no server", metrics.Scope{}, nil, []string{"no memory server set up"}, []string{"not answering"}},
-		{"never recorded", metrics.Scope{Server: "srv:1"}, nil, []string{"memory on srv:1"}, []string{"not answering", "did not answer", "last answered"}},
-		{"never recorded and not ok", metrics.Scope{Server: "srv:1", ServerOK: false}, nil, nil, []string{"not answering", "did not answer"}},
-		{"recorded failure", metrics.Scope{Server: "srv:1", ServerOKAt: &at}, nil, []string{"did not answer 12 min ago"}, []string{"memory server not answering"}},
-		{"recorded answer", metrics.Scope{Server: "srv:1", ServerOK: true, ServerOKAt: &at}, nil, []string{"last answered 12 min ago"}, []string{"not answering"}},
-		{"read and failed", metrics.Scope{Server: "srv:1"}, &metrics.ServerState{}, []string{"memory server not answering"}, nil},
+		{"never recorded", metrics.Scope{Server: "srv:1"}, nil, []string{"memory on srv:1"}, []string{"not answering"}},
+		{"never recorded and not ok", metrics.Scope{Server: "srv:1", ServerOK: false}, nil, nil, []string{"not answering"}},
+		{"recorded failure", metrics.Scope{Server: "srv:1", ServerOKAt: &at}, nil, []string{"not answering since 13:48"}, nil},
+		{"recorded answer", metrics.Scope{Server: "srv:1", ServerOK: true, ServerOKAt: &at}, nil, []string{"memory on srv:1"}, []string{"not answering"}},
+		{"read and failed", metrics.Scope{Server: "srv:1"}, &metrics.ServerState{}, []string{"not answering"}, []string{"not answering since"}},
+		{"read and failed after an answer", metrics.Scope{Server: "srv:1"}, &metrics.ServerState{LastOK: &at}, []string{"not answering since 13:48"}, nil},
 		{"read and answered", metrics.Scope{Server: "srv:1", ServerOK: true}, &metrics.ServerState{OK: true}, []string{"memory on srv:1"}, []string{"not answering"}},
 	} {
 		b := visibleText(render(t, "quality", func(d *PageData) {

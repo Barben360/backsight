@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
@@ -138,6 +139,7 @@ type PageData struct {
 	ID    string                     // the route's id, name or date; "" for a list
 	Msg   string                     // state, error and not-found pages
 	Loc   *time.Location             // the window's zone (tz or this machine's): every time is shown in it
+	L     format.Locale              // the browser's language: numbers are written by funcs that take it; English on the 401 page
 }
 
 // Frame is what every page shows around its content.
@@ -155,6 +157,7 @@ type Frame struct {
 	RenderedAt                             time.Time // the request's start (Config.Now)
 	RenderMS                               int64     // ms from the request's start to just before the template runs (views computed)
 	Window                                 string    // windowPhrase of the page's params and window; "" on the text and state pages
+	Catching                               string    // catchingOf the first view's freshness; "" when the history is read
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -285,25 +288,6 @@ func prefMenu(path string, p Prefs) []PrefGroup {
 	}
 }
 
-func init() {
-	funcs["anyCurrent"] = func(cs []Choice) bool {
-		return slices.ContainsFunc(cs, func(c Choice) bool { return c.Current })
-	}
-	// The footer's time: HH:MM, the machine-readable instant, in the window's zone.
-	funcs["clock"] = func(loc *time.Location, t time.Time) string {
-		if t.IsZero() {
-			return dash
-		}
-		return t.In(zoneOr(loc)).Format("15:04")
-	}
-	funcs["iso"] = func(loc *time.Location, t time.Time) string {
-		if t.IsZero() {
-			return ""
-		}
-		return t.In(zoneOr(loc)).Format(time.RFC3339)
-	}
-}
-
 // zoneOr is loc, UTC when nil.
 func zoneOr(loc *time.Location) *time.Location {
 	if loc == nil {
@@ -333,6 +317,20 @@ func dayTitle(day string) string {
 		return "What happened that day?"
 	}
 	return "What happened on " + d.Format("Monday, Jan 2") + "?"
+}
+
+// localeOf is the language the browser asked for, English when none is known.
+func localeOf(r *http.Request) format.Locale {
+	return format.FromAcceptLanguage(r.Header.Get("Accept-Language"))
+}
+
+// catchingOf is the sentence for an index still reading its history; ""
+// when it is not.
+func catchingOf(fr index.Freshness) string {
+	if !fr.Partial {
+		return ""
+	}
+	return "Catching up: " + views.Age(fr.LagSeconds*1000) + " of history still being read"
 }
 
 // windowPhrase says the window of a page: the days it spans or, for a
@@ -409,7 +407,7 @@ func (s *Server) Pages() int64 { return s.served.Load() }
 func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		first := spec.Views[0]
-		started, wall := s.now(), time.Now()
+		started := s.now()
 		id := ""
 		for _, k := range []string{"name", "id", "date"} {
 			if id == "" {
@@ -437,7 +435,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		} else {
 			p.Dev = prefs.Dev
 		}
-		data := PageData{V: map[string]*metrics.Result{}, ID: id}
+		data := PageData{V: map[string]*metrics.Result{}, ID: id, L: localeOf(r)}
 		for _, v := range spec.Views {
 			res, st, err := s.data.result(r.Context(), v, p, id)
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
@@ -461,7 +459,8 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		data.Frame.Generated = head.GeneratedAt
 		data.Loc = head.Window.Loc
 		data.Frame.RenderedAt = started
-		data.Frame.RenderMS = max(0, time.Since(wall).Milliseconds())
+		data.Frame.RenderMS = max(0, s.now().Sub(started).Milliseconds())
+		data.Frame.Catching = catchingOf(head.Index)
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)
 		}
@@ -531,7 +530,7 @@ func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, t
 	f := s.frame(r, title, prefs)
 	f.Reload = reload
 	var buf bytes.Buffer
-	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", PageData{Frame: f, Msg: msg, Loc: time.UTC}); err != nil {
+	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", PageData{Frame: f, Msg: msg, Loc: time.UTC, L: localeOf(r)}); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")
 		return
 	}

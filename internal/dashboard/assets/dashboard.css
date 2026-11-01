@@ -160,6 +160,10 @@ details.menu { position: relative; }
 .chip .i { width: 12px; height: 12px; vertical-align: 0; }
 .chip-nf { border-style: dashed; }
 .chip-stale { color: var(--watch); border-color: currentColor; background: var(--watch-bg); }
+.chip-watch { color: var(--watch); border-color: currentColor; background: var(--watch-bg); }
+/* The stale chip shows itself 300 s after the page was drawn, from CSS alone: a zero-duration step on visibility, no motion. */
+.chip-stale { visibility: hidden; animation: stale-show 0s linear 300s forwards; }
+@keyframes stale-show { to { visibility: visible; } }
 .chip-dev { font-family: var(--mono); color: var(--fg-3); border-style: dotted; }
 
 /* id chips and truncation */

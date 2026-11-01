@@ -271,9 +271,46 @@ func TestPageTitles(t *testing.T) {
 	if got := windowPhrase(p, metrics.Window{}); got != "Oct 1 to Oct 7" {
 		t.Errorf("custom window without a resolved one %q", got)
 	}
+	// A custom window of one day is a date, whatever days says.
+	one, err := metrics.NewWindow(time.Date(2026, 10, 30, 12, 0, 0, 0, paris), 0,
+		time.Date(2026, 10, 1, 0, 0, 0, 0, paris), time.Date(2026, 10, 2, 0, 0, 0, 0, paris), paris, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := windowPhrase(views.Params{Days: 1, Since: "2026-10-01", Until: "2026-10-02"}, one); got != "Oct 1 to Oct 1" {
+		t.Errorf("custom one-day window %q", got)
+	}
 	for days, want := range map[int]string{1: "last 24 h", 7: "last 7 days", 90: "last 90 days"} {
 		if got := windowPhrase(views.Params{Days: days}, metrics.Window{Days: days}); got != want {
 			t.Errorf("%d days: %q, want %q", days, got, want)
 		}
+	}
+}
+
+func TestMenuRefreshProjectAndPreferencesHint(t *testing.T) {
+	h := dataHarness(t)
+	ck := cookieHdr(h.login())
+	menuLink := func(doc *node, text string) []string {
+		var hrefs []string
+		for _, a := range doc.find("details.navmenu a") {
+			if strings.HasPrefix(a.text(), text) {
+				hrefs = append(hrefs, a.attr("href"))
+			}
+		}
+		return hrefs
+	}
+	doc := rawPage(t, h, ck, "/quality?days=30&project=p1")
+	if got := menuLink(doc, "Refresh"); !slices.Equal(got, []string{"/quality?days=30&project=p1"}) {
+		t.Errorf("Menu Refresh links %q; want the page itself", got)
+	}
+	if got := menuLink(doc, "p1"); !slices.Equal(got, []string{"/projects"}) {
+		t.Errorf("Menu Project row %q; want the project list", got)
+	}
+	if got := menuLink(rawPage(t, h, ck, "/quality"), "All projects"); !slices.Equal(got, []string{"/projects"}) {
+		t.Errorf("unfiltered Menu Project row %q", got)
+	}
+	hints := doc.find("span.hint")
+	if len(hints) != 1 || hints[0].text() != "Adds ranking, learned ranking and release detail." {
+		t.Errorf("preference hints %+v", hints)
 	}
 }

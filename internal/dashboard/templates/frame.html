@@ -107,10 +107,18 @@
 {{define "choice"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="check">{{if .Current}}✓{{end}}</span>{{.Label}}</a>{{end}}
 
 {{/*
-  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt), .Frame.ServerRead
-  (OK, set when the page's own view read the server), .Frame.Generated, .Loc.
+  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt, Project), .Frame.ServerRead
+  (OK, LastOK; set when the page's own view read the server), .Frame.Generated,
+  .Frame.RenderedAt, .Frame.Path, .Frame.Catching, .Loc.
 */}}
-{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if not .Server}}no memory server set up{{else}}memory on {{.Server}}{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}} (memory server not answering){{end}}{{else if .ServerOKAt}} (memory server {{if .ServerOK}}last answered{{else}}did not answer{{end}} {{since $.Frame.Generated .ServerOKAt}} ago){{end}}{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
+{{define "scope"}}{{with .Frame.Scope}}<div class="scopebar"><div class="wrap scope">
+<span>Activity on <b>this PC</b></span>
+{{if not .Server}}<span class="dot">no memory server set up</span>{{else}}<span class="dot">memory on <b>{{.Server}}</b></span>{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}}<span class="st st-watch">not answering{{with $.Frame.ServerRead.LastOK}} since {{clock $.Frame.Generated . $.Loc}}{{end}}</span>{{end}}{{else if and .ServerOKAt (not .ServerOK)}}<span class="st st-watch">not answering since {{clock $.Frame.Generated .ServerOKAt $.Loc}}</span>{{end}}{{end}}
+<span class="dot">updated {{with rel $.Frame.RenderedAt $.Frame.Generated $.Loc}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}</span>
+<a class="chip chip-stale" href="{{$.Frame.Path}}"><span class="i i-sm i-clock"></span>Updated over 5 min ago. Refresh.</a>
+{{with .Project}}<span class="dot">project <b>{{clip .}}</b></span>
+{{end}}{{with $.Frame.Catching}}<span class="chip chip-watch"><span class="i i-sm i-clock"></span>{{.}}</span>
+{{end}}</div></div>
 {{end}}{{end}}
 
 {{define "foot"}}</main>
@@ -119,7 +127,7 @@
 <span>backsight {{.Frame.Version}}</span>
 <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">Help: backsight guide dashboard</a>
 <a href="/defs">Definitions</a>
-<span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Loc .Frame.RenderedAt}}</time> in {{.Frame.RenderMS}} ms</span>
+<span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Frame.RenderedAt .Frame.RenderedAt .Loc}}</time> in {{.Frame.RenderMS}} ms</span>
 </div>
 <p class="sr-only" id="copy-status" aria-live="polite"></p>
 </footer>

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -204,7 +205,14 @@ func TestPageCounter(t *testing.T) {
 }
 
 func TestFooter(t *testing.T) {
-	h := dataHarness(t)
+	// A clock that moves 5 ms at each reading: the render takes a known
+	// multiple of 5 ms, and a footer that ignores the configured clock
+	// (or clamps to 0) says 0.
+	var reads atomic.Int64
+	h := newDataHarness(t, withIndex(), withServer(), withDoctor(), func(h *harness, c *Config) {
+		base := c.Now
+		c.Now = func() time.Time { return base().Add(time.Duration(reads.Add(1)*5) * time.Millisecond) }
+	})
 	r := h.do("GET", "/", cookieHdr(h.login())...)
 	doc := parseHTML(t, body(t, r))
 	foot := doc.first("footer.foot")
@@ -228,8 +236,8 @@ func TestFooter(t *testing.T) {
 	if ms == nil {
 		t.Fatalf("no render time in %q", foot.text())
 	}
-	if n, _ := strconv.Atoi(ms[1]); n < 0 {
-		t.Errorf("rendered in %d ms", n)
+	if n, _ := strconv.Atoi(ms[1]); n <= 0 || n%5 != 0 {
+		t.Errorf("rendered in %d ms; the clock moves 5 ms per reading, so want a positive multiple of 5", n)
 	}
 
 	got := render(t, "quality", func(d *PageData) {
@@ -246,6 +254,7 @@ func TestFooter(t *testing.T) {
 func TestScopeLineOnThePage(t *testing.T) {
 	h := dataHarness(t)
 	_, b := pageGet(t, h, h.login(), "/")
+	b = visibleText(b)
 	for _, want := range []string{"memory on hindsight.test:8888", "Activity on this PC"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("/ lacks %q", want)
