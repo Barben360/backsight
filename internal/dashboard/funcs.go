@@ -103,6 +103,22 @@ var funcs = template.FuncMap{
 	"count":       roundInt,
 	"ranks":       rankLines,
 
+	"head":     headOf,
+	"fixed":    fixedHead,
+	"withinfo": withInfo,
+	"level":    level,
+	"fig":      figOf,
+	"drill":    drillHref,
+	"clifor":   cliFor,
+	"statusword": func(d metrics.Def, m metrics.Metric, learning bool) Word {
+		w, c := statusWord(d, m, learning)
+		return Word{w, c}
+	},
+	"nodatum": func(v MetricView, f Frame, l format.Locale, loc *time.Location) NoData {
+		n, _ := noDataOf(v, f, l, loc) // a metric with a number has no sentence: Text is empty
+		return n
+	},
+
 	"anyCurrent": func(cs []Choice) bool {
 		return slices.ContainsFunc(cs, func(c Choice) bool { return c.Current })
 	},

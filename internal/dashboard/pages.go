@@ -140,6 +140,8 @@ type PageData struct {
 	Msg   string                     // state, error and not-found pages
 	Loc   *time.Location             // the window's zone (tz or this machine's): every time is shown in it
 	L     format.Locale              // the browser's language: numbers are written by funcs that take it; English on the 401 page
+	P     views.Params               // the page's parameters: its links carry the window and filters
+	CLI   string                     // the command that prints the page's first view
 }
 
 // Frame is what every page shows around its content.
@@ -455,7 +457,8 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p.Dev = prefs.Dev
 		}
 		data := s.pageData(r, title, prefs, started)
-		data.V, data.ID = map[string]*metrics.Result{}, id
+		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
+		data.CLI = cliFor(first, id, p)
 		for _, v := range spec.Views {
 			res, st, err := s.data.result(r.Context(), v, p, id)
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
