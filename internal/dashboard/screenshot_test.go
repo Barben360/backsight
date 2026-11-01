@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -115,9 +116,15 @@ func TestScreenshots(t *testing.T) {
 		head := d.V[spec.Views[0]]
 		d.Frame.Scope, d.Frame.Generated, d.Loc = &head.Scope, head.GeneratedAt, head.Window.Loc
 		d.Frame.Window = windowPhrase(d.P, head.Window)
+		// The footer reads "Rendered at 10:21 in 12 ms", not a placeholder.
+		d.Frame.RenderedAt, d.Frame.RenderMS = head.GeneratedAt.Add(2*time.Minute), 12
 		d.CLI = cliFor(spec.Views[0], s.id, d.P)
 		if s.page == "session" || s.page == "memory" {
 			d.Frame.Windows, d.Frame.Window = nil, "all time"
+			d.Frame.SessionHead = s.page == "session"
+			if d.Frame.SessionHead {
+				d.Frame.Window = ""
+			}
 			d.CLI = cliFor(spec.Views[0], s.id, allTimeParams(d.P))
 		}
 		if s.build != nil {
@@ -126,6 +133,9 @@ func TestScreenshots(t *testing.T) {
 		body, err := renderPage(set, s.page, d)
 		if err != nil {
 			t.Fatalf("%s %s: %v", s.name, theme, err)
+		}
+		if strings.Contains(string(body), "Rendered at —") || strings.Contains(string(body), " in 0 ms") {
+			t.Errorf("%s %s: the footer shows a placeholder render time", s.name, theme)
 		}
 		return body
 	}

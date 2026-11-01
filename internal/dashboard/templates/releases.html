@@ -10,7 +10,7 @@
 <tr><th class="r xs">recall.hit_rate</th><th class="r xs">used.turn_rate</th><th class="r xs">declare.coverage</th><th class="r xs">verdict.wrong_rate</th><th class="r xs">context.per_session</th><th class="r xs">recall.latency</th><th class="side">Top project</th><th class="r">Prompts / day</th><th class="r">Memories</th></tr>
 </thead>
 <tbody>
-{{range .Rows}}<tr id="{{.Version}}"><td class="mono"><a href="{{.Href}}">{{.Version}}</a></td><td>{{.Span}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Judged}}</td>{{range .Flags}}<td class="r">{{if .Class}}<span class="st {{.Class}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}</td>{{end}}<td class="side" title="{{.Shares}}">{{template "projlink" .Top}} {{.TopShare}}</td><td class="r">{{.PerDay}}</td><td class="r">{{.Bank}}</td></tr>
+{{range .Rows}}<tr id="release-{{.Version}}"><td class="mono"><a href="{{.Href}}">{{.Version}}</a></td><td>{{.Span}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Judged}}</td>{{range .Flags}}<td class="r">{{if .Class}}<span class="st {{.Class}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}</td>{{end}}<td class="side" title="{{.Shares}}">{{template "projlink" .Top}} {{.TopShare}}</td><td class="r">{{.PerDay}}</td><td class="r">{{.Bank}}</td></tr>
 {{end}}</tbody></table></div>
 {{end}}{{with .Foot}}<p class="xs muted">{{.}}</p>
 {{end}}{{template "card-close" .Head}}

@@ -3,8 +3,7 @@
 
 {{/* widgets: the page of one session through sessionpage (SessionDetail: Found, ID, Project, Span, Turns, Sent, Figs, Rail; Rail: Head, Legend, Note, Rows; Rows: Name, Time, Lines; Lines: Key, Text, Class, Chips; Chips: Href, Title, Class, Swatch, ID, Rank, Where, Word). Reads .V.sessions.Tables.Session (Totals: ID, Project, Start, Last, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent; Turns: N, At, Decision, Reason, Empty, Shows: MemoryID, Rank, Path, Outcome; Searches, Declared, Check). The rail shows ids, words and numbers only. */}}
 {{with sessionpage .}}{{$pg := .}}<nav class="small muted" aria-label="Breadcrumb"><a href="/sessions">Sessions</a> / <span class="mono" title="{{.ID.Full}}">{{.ID.Text}}</span></nav>
-{{if .Found}}<div class="row small muted session-meta">{{template "projlink" .Project}}{{if .Span.Text}} · {{template "reltime" .Span}}{{end}} · {{.Turns}}{{if .Sent.Word}}<span class="pill st {{.Sent.Class}}">{{.Sent.Word}}</span>{{end}}</div>
-<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
+{{if .Found}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
 {{end}}{{with .Rail}}{{template "card-open" .Head}}
 {{template "nodata" .Note}}{{if .Rows}}<div class="legend">{{range .Legend}}<span><i class="sw {{.Swatch}}"></i>{{.Word}}</span>{{end}}<span class="muted">· chip: memory id, rank when shown, where it was shown</span></div>
 <ol class="rail">

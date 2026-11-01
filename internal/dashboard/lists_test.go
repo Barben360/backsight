@@ -167,7 +167,7 @@ func TestProjectAndDayTiles(t *testing.T) {
 		tiles := mainOf(t, n).find("article.tile")
 		var got []string
 		for _, a := range tiles {
-			got = append(got, a.attr("aria-label"))
+			got = append(got, a.first("h3.tile-name").text())
 		}
 		if strings.Join(got, ",") != names {
 			t.Fatalf("%s: tiles %q", label, got)
@@ -182,7 +182,7 @@ func TestProjectAndDayTiles(t *testing.T) {
 		}
 		for _, a := range tiles {
 			if q := a.first("p.tile-q"); q == nil || q.text() == "" {
-				t.Errorf("%s: %s has no question", label, a.attr("aria-label"))
+				t.Errorf("%s: %s has no question", label, a.first("h3.tile-name").text())
 			}
 		}
 	}
@@ -833,5 +833,44 @@ func TestFilterLabelsAreCapitalised(t *testing.T) {
 				t.Errorf("%s label %q", key, l.Label)
 			}
 		}
+	}
+}
+
+// A tile whose series holds no value draws no sparkline (red when it drew a
+// 24-dash label), and a tile that has values still draws one.
+func TestTileWithoutValuesDrawsNoSpark(t *testing.T) {
+	has := goldenResult(t, "day-page")
+	var withSeries int
+	for _, m := range has.Metrics {
+		for _, p := range m.Series {
+			if p.Value != nil {
+				withSeries++
+				break
+			}
+		}
+	}
+	n := pageNode(t, "day", false, func(d *PageData) {
+		for id, m := range d.V["days"].Metrics {
+			for i := range m.Series {
+				m.Series[i].Value = nil
+			}
+			d.V["days"].Metrics[id] = m
+		}
+	})
+	tiles := mainOf(t, n).find("article.tile")
+	if len(tiles) != 6 {
+		t.Fatalf("%d tiles, want the six", len(tiles))
+	}
+	for _, a := range tiles {
+		if sp := a.first("svg.spark"); sp != nil {
+			t.Errorf("a tile without values draws %q", sp.attr("aria-label"))
+		}
+	}
+	if withSeries == 0 {
+		t.Skip("the golden holds no series")
+	}
+	full := mainOf(t, pageNode(t, "day", false, nil)).find("article.tile svg.spark")
+	if len(full) == 0 {
+		t.Error("a tile with values lost its sparkline")
 	}
 }

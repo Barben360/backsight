@@ -257,7 +257,7 @@ func flowingTile(t *Tile, r *metrics.Result, l format.Locale, p views.Params, m 
 		return
 	}
 	if haveND {
-		t.Sub = l.Int(num) + " of " + l.Int(den) + " sessions sent"
+		t.Sub = ofCount(l, num, den, "session", "sessions") + " sent"
 	}
 }
 

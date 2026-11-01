@@ -62,7 +62,8 @@ func (d PageData) frame() Frame {
 
 // noData is the sentence for a card whose metrics all lack a number: the
 // first one's reason. Zero when one of them has a number.
-func (d PageData) noData(vs ...MetricView) NoData {
+func (d PageData) noData(first MetricView, rest ...MetricView) NoData {
+	vs := append([]MetricView{first}, rest...)
 	for _, v := range vs {
 		if hasValue(v) {
 			return NoData{}
@@ -305,7 +306,7 @@ func (d PageData) rankingCard(r *metrics.Result) *Card {
 	}
 	c.Dev = d.devIDs(vs...)
 	// Without a number among them, the card says why (feedback off, ...) and draws nothing.
-	if c.Note = d.noData(vs...); c.Note.Text != "" {
+	if c.Note = d.noData(vs[0], vs[1:]...); c.Note.Text != "" {
 		return &c
 	}
 	for _, v := range vs {

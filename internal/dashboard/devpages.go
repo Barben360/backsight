@@ -62,16 +62,20 @@ type SettingsCard struct {
 // SettingLine is one setting and its value.
 type SettingLine struct{ Name, Value string }
 
+// releaseIDPrefix starts the id of a release row, so a version named like an
+// element of the page ("main", "copy-status") cannot take its id.
+const releaseIDPrefix = "release-"
+
 // versionHref is the link to a version's row on the Releases page. A
 // version without a row in the window opens the page at its top.
 func versionHref(version string) string {
-	return "/releases#" + (&url.URL{Fragment: version}).EscapedFragment()
+	return "/releases#" + (&url.URL{Fragment: releaseIDPrefix + version}).EscapedFragment()
 }
 
 // versionHref is the link to a version's row on the Releases page; the
 // page's window travels with it, as the row may be outside the default one.
 func (d PageData) versionHref(version string) string {
-	return "/releases" + windowQuery(d.P, "days", "since", "until", "tz") + "#" + (&url.URL{Fragment: version}).EscapedFragment()
+	return "/releases" + windowQuery(d.P, "days", "since", "until", "tz") + "#" + (&url.URL{Fragment: releaseIDPrefix + version}).EscapedFragment()
 }
 
 // dayText is a day as "Oct 8", with the year when it is not now's.

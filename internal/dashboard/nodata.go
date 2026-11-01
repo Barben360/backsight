@@ -56,6 +56,9 @@ func noDataOf(v MetricView, f Frame, l format.Locale, loc *time.Location) (NoDat
 	}
 	switch m.Reason {
 	case metrics.ReasonNoEvents:
+		if snapshotMetric[v.Def.ID] {
+			return NoData{Text: "No reading yet."}, true
+		}
 		n := NoData{Text: "Nothing recorded in the " + f.Window + "."}
 		if cur := windowDaysOf(f.Window); cur > 0 && cur < 90 {
 			for _, w := range f.Windows {
@@ -92,6 +95,15 @@ func noDataOf(v MetricView, f Frame, l format.Locale, loc *time.Location) (NoDat
 		return NoData{Text: "This memory server does not provide it."}, true
 	}
 	return NoData{Text: "No data."}, true
+}
+
+// snapshotMetric holds the metrics that say a state now (what is waiting,
+// whether the server answers, how many memories there are), not events over
+// a window: their no-data sentence does not name a window.
+var snapshotMetric = map[string]bool{
+	"local.backlog": true, "server.reach": true, "server.queue": true, "server.extraction_delay": true,
+	"bank.size": true, "bank.growth": true, "bank.by_project": true, "bank.consolidation": true,
+	"doctor.check": true, "jobs.last_run": true,
 }
 
 // daysOfLabel is the days of a window link's label ("7 d"); 0 when unknown.

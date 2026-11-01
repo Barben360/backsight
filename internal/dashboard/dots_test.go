@@ -82,3 +82,38 @@ func TestTitlesFromDataArePlain(t *testing.T) {
 		}
 	}
 }
+
+// A metric that says a state now, not events over a window, does not claim
+// a window when it has no reading (red on "Nothing recorded in the last
+// 30 days." for each).
+func TestSnapshotMetricsDoNotNameAWindow(t *testing.T) {
+	for _, c := range []struct{ page, card string }{
+		{"bank", "w-bank-growth"}, {"pipeline", "w-local-backlog"}, {"system", "w-server-reach"},
+	} {
+		id := strings.TrimPrefix(c.card, "w-")
+		id = strings.Replace(id, "-", ".", 1)
+		n := pageNode(t, c.page, false, func(d *PageData) {
+			for _, r := range d.V {
+				if m, ok := r.Metrics[id]; ok {
+					m.Status, m.Reason, m.Value, m.Num, m.Den, m.Extra = metrics.StatusNoData, metrics.ReasonNoEvents, nil, nil, nil, nil
+					r.Metrics[id] = m
+				}
+			}
+		})
+		e := cardOf(t, n, c.card).first("div.empty")
+		if e == nil || !strings.Contains(e.text(), "No reading yet.") || strings.Contains(e.text(), "last 30 days") || strings.Contains(e.text(), "Pick a longer window") {
+			t.Errorf("%s: %v", c.card, e)
+		}
+	}
+	// A windowed metric keeps its sentence.
+	n := pageNode(t, "bank", false, nil)
+	if e := cardOf(t, n, "w-notes-stored").first("div.empty"); e == nil || !strings.Contains(e.text(), "Nothing recorded in the last 30 days.") {
+		t.Errorf("windowed no-data: %v", e)
+	}
+	// The set only names metrics the catalog has.
+	for id := range snapshotMetric {
+		if _, ok := metrics.DefOf(id); !ok {
+			t.Errorf("snapshotMetric names %q, not in the catalog", id)
+		}
+	}
+}

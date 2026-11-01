@@ -98,7 +98,7 @@
 {{template "pagehead" .}}
 {{end}}
 
-{{define "pagehead"}}<div class="page-head"><h1>{{.Frame.Title}}</h1>{{with .Frame.Window}}<span class="muted">window: {{.}}</span>{{end}}</div>{{end}}
+{{define "pagehead"}}<div class="page-head"><h1>{{.Frame.Title}}</h1>{{if .Frame.SessionHead}}{{with sessionpage .}}{{if .Found}}<div class="row small muted session-meta">{{template "projlink" .Project}}{{if .Span.Text}} · {{template "reltime" .Span}}{{end}} · {{.Turns}}{{if .Sent.Word}}<span class="pill st {{.Sent.Class}}">{{.Sent.Word}}</span>{{end}}</div>{{end}}{{end}}{{else}}{{with .Frame.Window}}<span class="muted">window: {{.}}</span>{{end}}{{end}}</div>{{end}}
 
 {{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
 
@@ -156,9 +156,9 @@
 {{end}}{{range .Info.Paras}}<p>{{.}}</p>
 {{end}}{{with .Info.Term}}<code class="term">{{.}}</code>{{end}}{{with .Info.Href}}<a href="{{.}}">{{$.Info.HrefText}}</a>{{end}}</div></details>{{end}}{{end}}
 
-{{define "cli"}}{{if .CLI}}<details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>{{.CLI}}</code><button class="copy" type="button" hidden><span class="i i-sm i-copy"></span>Copy</button></div></details>{{end}}{{end}}
+{{define "cli"}}{{if .CLI}}<details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>{{.CLI}}</code><button class="copy" type="button" hidden aria-label="Copy: {{plain .CLI}}"><span class="i i-sm i-copy"></span>Copy</button></div></details>{{end}}{{end}}
 
-{{define "cmd"}}<div class="cmd"><code>{{.}}</code><button class="copy" type="button" hidden><span class="i i-sm i-copy"></span>Copy</button></div>{{end}}
+{{define "cmd"}}<div class="cmd"><code>{{.}}</code><button class="copy" type="button" hidden aria-label="Copy: {{plain .}}"><span class="i i-sm i-copy"></span>Copy</button></div>{{end}}
 
 {{define "card-close"}}{{if .Pager.Total}}<div class="pager">{{with .Pager.Prev}}<a href="{{.}}" rel="prev" class="btn">← Previous</a>{{end}}<span>{{.Pager.From}}–{{.Pager.To}} of {{.Pager.Total}}</span>{{with .Pager.Next}}<a href="{{.}}" rel="next" class="btn">Next →</a>{{end}}</div>
 {{end}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a></div>
@@ -221,19 +221,10 @@
 {{end}}</tbody></table></div>
 {{end}}
 
-{{/* paging: dot is a Pager (Prev, Next, From, To, Total). */}}
-{{define "paging"}}{{if .Total}}<p>{{.From}}–{{.To}} of {{.Total}}{{with .Prev}} · <a href="{{.}}" rel="prev">Previous</a>{{end}}{{with .Next}} · <a href="{{.}}" rel="next">Next</a>{{end}}</p>
-{{end}}{{end}}
-
-{{/* choices: dot is a list of Choice. */}}
-{{define "choices"}}<p>{{range .}}{{template "navlink" .}}
-{{end}}</p>
-{{end}}
-
 {{/* tilegroups: dot is a list of TileGroup (Name, Tiles); Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev. */}}
-{{define "tilegroups"}}<div class="tgroups" aria-label="Key numbers">
+{{define "tilegroups"}}<div class="tgroups" role="group" aria-label="Key numbers">
 {{range .}}<section class="tgroup"><h2 class="tgroup-h">{{.Name}}</h2><div class="tgroup-tiles">
-{{range .Tiles}}<article class="tile {{.Class}}" aria-label="{{.Name}}">
+{{range .Tiles}}<article class="tile {{.Class}}" aria-labelledby="{{.Head.ID}}">
 <div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
 {{if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
 {{template "info" .Head}}</div>

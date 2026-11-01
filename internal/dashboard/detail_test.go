@@ -686,7 +686,7 @@ func TestStripOfMemoryPage(t *testing.T) {
 		t.Error("a memory with no creation time has a created line")
 	}
 	// The strip says what it draws to a reader who cannot see it.
-	if label := n.first("svg[role=img]").attr("aria-label"); label != "Every time memory 7f3a9c21 was shown, by where" {
+	if label := n.first("svg[role=group]").attr("aria-label"); label != "Every time memory 7f3a9c21 was shown, by where" {
 		t.Errorf("label %q", label)
 	}
 }
@@ -973,18 +973,29 @@ func TestSessionAndMemoryPagesAreAllTime(t *testing.T) {
 	}
 }
 
-func TestSessionPageNamesItsSpan(t *testing.T) {
+// A session has no window: its head says the project, when it ran and how
+// it was sent (red while the head read "window: Oct 30").
+func TestSessionPageHeadSaysProjectSpanAndSent(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
 	var s metrics.SessionRow
 	for _, r := range apiPath(t, h, "/api/v1/sessions").Tables.Sessions {
-		s = r
-		break
+		if r.Project != "" && r.Sent != "" && !r.Start.IsZero() {
+			s = r
+			break
+		}
+	}
+	if s.ID == "" {
+		t.Fatal("the data holds no session with a project, a span and a sent state")
 	}
 	_, b := pageGet(t, h, ck, "/sessions/"+url.PathEscape(s.ID))
-	want := "window: " + spanPhrase(s.Start, s.Last, apiPath(t, h, "/api/v1/sessions").Window.Loc)
-	if head := mainOf(t, parseHTML(t, b)).first("div.page-head").text(); !strings.Contains(head, want) || strings.Contains(head, "last ") {
-		t.Errorf("heading %q, want it to hold %q", head, want)
+	head := mainOf(t, parseHTML(t, b)).first("div.page-head")
+	if strings.Contains(head.text(), "window") {
+		t.Errorf("the session head names a window: %q", head.text())
+	}
+	meta := head.first("div.session-meta")
+	if meta == nil || meta.first("time") == nil || meta.first("span.pill") == nil || !strings.Contains(meta.text(), views.Clip(s.Project)) {
+		t.Errorf("session head %q lacks the project, the span or the sent pill", head.text())
 	}
 }
 

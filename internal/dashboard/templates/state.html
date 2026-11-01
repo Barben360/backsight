@@ -17,4 +17,5 @@
 {{end}}{{with .State.Retry}}<a class="btn" href="{{.}}"><span class="i i-refresh"></span>Try again</a>
 {{end}}</div>
 {{else}}{{template "top" .}}<p class="sub{{with .State}} state-{{.Kind}}{{end}}">{{.Msg}}</p>
-{{end}}{{template "foot" .}}
+{{if and .State (eq .State.Kind "notfound")}}<p class="small"><a class="btn btn-quiet" href="/">Back to the Overview</a></p>
+{{end}}{{end}}{{template "foot" .}}

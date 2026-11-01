@@ -103,5 +103,6 @@ func fixtureData(t *testing.T, spec pageSpec, empty bool) PageData {
 		Prefs: Prefs{Theme: "auto", Dev: true}, AllProjects: "/", Scope: &head.Scope, Generated: head.GeneratedAt,
 		Keep: [][2]string{{"days", "7"}},
 	}
+	d.Frame.SessionHead = spec.Name == "session" // as the handler sets it
 	return d
 }

@@ -280,10 +280,10 @@ func TestReleaseAnchors(t *testing.T) {
 	ids := idsOf(parseHTML(t, b))
 	var want []string
 	for _, r := range res.Tables.Releases {
-		want = append(want, r.Version)
+		want = append(want, releaseIDPrefix+r.Version)
 	}
 	if len(want) == 0 || !slices.Equal(ids, want) {
-		t.Fatalf("row ids %q, the versions (newest first) %q", ids, want)
+		t.Fatalf("row ids %q, the prefixed versions (newest first) %q", ids, want)
 	}
 	if !strings.Contains(visibleText(b), "Observational: weeks, projects and memory differ.") {
 		t.Errorf("the page does not say it is observational: %q", visibleText(b))
@@ -297,7 +297,7 @@ func TestReleaseAnchors(t *testing.T) {
 		if len(foot) != 1 {
 			t.Fatalf("%s: %d version links in the footer", p, len(foot))
 		}
-		if got := fragmentsOf(t, `<a href="`+foot[0].attr("href")+`">`, "/releases"); len(got) != 1 || got[0] != "test" || foot[0].text() != "test" {
+		if got := fragmentsOf(t, `<a href="`+foot[0].attr("href")+`">`, "/releases"); len(got) != 1 || got[0] != releaseIDPrefix+"test" || foot[0].text() != "test" {
 			t.Errorf("%s: the footer links %q for the version %q, want test", p, got, foot[0].text())
 		}
 		for _, a := range releaseLinks(doc, "main a") {
@@ -316,17 +316,17 @@ func TestReleaseVersionIsEscaped(t *testing.T) {
 	hostile := `v"><b id="z">1 a#b`
 	b := pageHTML(t, "releases", func(d *PageData) { d.V["releases"].Tables.Releases[0].Version = hostile })
 	doc := parseHTML(t, b)
-	if got := idsOf(doc)[0]; got != hostile {
+	if got := idsOf(doc)[0]; got != "release-"+hostile {
 		t.Errorf("row id %q, want the hostile version as plain text", got)
 	}
 	if n := len(doc.find("main tbody b")); n != 0 {
 		t.Errorf("the version broke out of its attribute: %d injected nodes", n)
 	}
 	got := fragmentsOf(t, b, "/releases")
-	if len(got) == 0 || got[0] != hostile {
+	if len(got) == 0 || got[0] != "release-"+hostile {
 		t.Errorf("link fragments %q, want the version first, decoded", got)
 	}
-	if !strings.Contains(b, `#v%22%3E%3Cb%20id=%22z%22%3E1%20a%23b"`) {
+	if !strings.Contains(b, `#release-v%22%3E%3Cb%20id=%22z%22%3E1%20a%23b"`) {
 		t.Errorf("the version is not escaped as a fragment: %q", fragmentsOf(t, b, "/releases"))
 	}
 }
@@ -336,7 +336,7 @@ func TestReleaseRowsKeepTheViewsOrder(t *testing.T) {
 	var golden []string
 	b := pageHTML(t, "releases", func(d *PageData) {
 		for _, r := range d.V["releases"].Tables.Releases {
-			golden = append(golden, r.Version)
+			golden = append(golden, releaseIDPrefix+r.Version)
 		}
 	})
 	if got := idsOf(parseHTML(t, b)); len(golden) < 2 || !slices.Equal(got, golden) {
@@ -353,7 +353,7 @@ func TestReleaseRowsKeepTheViewsOrder(t *testing.T) {
 
 func TestReleaseLinkKeepsTheWindow(t *testing.T) {
 	b := pageHTML(t, "releases", nil)
-	if !strings.Contains(b, `href="/releases?days=30#v0.1.18"`) {
+	if !strings.Contains(b, `href="/releases?days=30#release-v0.1.18"`) {
 		t.Errorf("a version link lacks the window: %q", linksIn(parseHTML(t, b), "main tbody"))
 	}
 }
@@ -565,5 +565,27 @@ func TestDefinitionWithoutFamilyIsUnderOther(t *testing.T) {
 	}
 	if tab != "Other 1" {
 		t.Errorf("tab %q, want Other 1", tab)
+	}
+}
+
+// A version named like an element of the page cannot take that element's id
+// (red while the row id was the bare version: "main" and "copy-status" would
+// have been duplicated).
+func TestReleaseIDsCannotCollideWithThePage(t *testing.T) {
+	b := pageHTML(t, "releases", func(d *PageData) {
+		rows := d.V["releases"].Tables.Releases
+		rows[0].Version, rows[1].Version = "main", "copy-status"
+	})
+	seen := map[string]int{}
+	for _, id := range idsOf(parseHTML(t, b)) {
+		seen[id]++
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("id %q used %d times", id, n)
+		}
+	}
+	if got := strings.Count(b, `id="main"`) + strings.Count(b, `id="copy-status"`); got != 2 {
+		t.Errorf("the page's own ids main and copy-status appear %d times, want 2", got)
 	}
 }

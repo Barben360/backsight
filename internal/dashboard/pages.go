@@ -158,6 +158,7 @@ type Frame struct {
 	Reload                                 int       // seconds until the browser asks again; 0: never (the first build's page)
 	RenderedAt                             time.Time // the request's start (Config.Now)
 	RenderMS                               int64     // ms from the request's start to just before the template runs (views computed)
+	SessionHead                            bool      // the page head says the session's project, span and sent state, not a window
 	Window                                 string    // windowPhrase of the page's params and window; "" on the text and state pages
 	Catching                               string    // catchingOf the first view's freshness; "" when the history is read
 }
@@ -512,8 +513,10 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 				// Both pages read the whole history: no window to pick, and none to name.
 				data.Frame.Windows = nil
 				data.Frame.Window = "all time"
-				if t := head.Tables.Session; spec.Name == "session" && t != nil {
-					data.Frame.Window = spanPhrase(t.Totals.Start, t.Totals.Last, head.Window.Loc)
+				if spec.Name == "session" {
+					// A session has no window: its head says its project,
+					// when it ran and how it was sent.
+					data.Frame.Window, data.Frame.SessionHead = "", true
 				}
 			}
 		}

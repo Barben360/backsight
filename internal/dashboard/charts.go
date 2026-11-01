@@ -24,8 +24,13 @@ func sparkOf(v MetricView, label string, l format.Locale) template.HTML {
 		series = series[1:]
 	}
 	y := make([]*float64, len(series))
+	present := false
 	for i, p := range series {
 		y[i] = p.Value
+		present = present || (p.Value != nil && !math.IsNaN(*p.Value) && !math.IsInf(*p.Value, 0))
+	}
+	if !present {
+		return "" // a line of dashes says nothing, and its label is a wall of them
 	}
 	return chart.Spark{Label: label, Y: y, Fmt: unitFormat(v.Def.Unit, l)}.HTML()
 }

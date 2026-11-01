@@ -269,7 +269,7 @@ func rightNote(r *metrics.Result, l format.Locale, ax metrics.Axis) (string, boo
 		if c.Num == nil || c.Den == nil {
 			return "", false
 		}
-		return "Claude said what it used on " + l.Int(*c.Num) + " of " + l.Int(*c.Den) + " turns", true
+		return "Claude said what it used on " + ofCount(l, *c.Num, *c.Den, "turn", "turns"), true
 	}
 	m := r.Metrics["used.turn_rate"]
 	if slices.Contains(m.Tags, "judged_28d") {
@@ -316,12 +316,25 @@ func flowingNote(r *metrics.Result, l format.Locale, ax metrics.Axis, cause bool
 	if flow.Num == nil || flow.Den == nil {
 		return "", false
 	}
-	return l.Int(*flow.Num) + " of " + l.Int(*flow.Den) + " sessions sent", true
+	return ofCount(l, *flow.Num, *flow.Den, "session", "sessions") + " sent", true
 }
 
 // SummaryLine is the figures of the line under the banner.
 // When is the opening words, "In the last 30 days" or "From Oct 1 to Oct 7".
-type SummaryLine struct{ When, Prompts, Turns, Tokens, Cost, Scope string }
+type SummaryLine struct{ When, Prompts, PromptsNoun, Turns, TurnsNoun, Tokens, Cost, Scope string }
+
+// ofCount is "4 of 5 prompts", "1 of 1 prompt": the noun agrees with the whole.
+func ofCount(l format.Locale, num, den int64, one, many string) string {
+	return l.Int(num) + " of " + format.Count(l, den, one, many)
+}
+
+// nounFor is the noun that follows a count of n.
+func nounFor(n int64, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
 
 // summaryOf is the summary line of r, which holds a Summary.
 func summaryOf(r *metrics.Result, l format.Locale) SummaryLine {
@@ -334,7 +347,8 @@ func summaryOf(r *metrics.Result, l format.Locale) SummaryLine {
 		down = !r.Server.OK
 	}
 	out := SummaryLine{
-		Prompts: l.Int(s.PromptsWithMemory), Turns: l.Int(s.TurnsWithMemoryUsed),
+		Prompts: l.Int(s.PromptsWithMemory), PromptsNoun: nounFor(s.PromptsWithMemory, "prompt", "prompts"),
+		Turns: l.Int(s.TurnsWithMemoryUsed), TurnsNoun: nounFor(s.TurnsWithMemoryUsed, "turn", "turns"),
 		Tokens: l.Size(float64(s.TokensApprox), ""), Scope: "(server, all PCs).",
 	}
 	switch {

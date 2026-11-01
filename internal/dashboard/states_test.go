@@ -116,7 +116,17 @@ func TestStatePagesFollowTheDesign(t *testing.T) {
 					t.Errorf("copy buttons %v, want one rendered hidden", b)
 				}
 			}
-			links := main.find("a.btn")
+			// A page that is not found leads back to the Overview (red without the link).
+			back := main.find("p.small a.btn[href=/]")
+			if want := c.name == "not found"; want != (len(back) == 1 && back[0].text() == "Back to the Overview") || (!want && len(back) != 0) {
+				t.Errorf("%s: back links %v", c.name, back)
+			}
+			var links []*node
+			for _, a := range main.find("a.btn") {
+				if len(back) == 0 || a != back[0] {
+					links = append(links, a)
+				}
+			}
 			switch {
 			case c.retry == "" && len(links) != 0:
 				t.Errorf("links %v, want none", links)

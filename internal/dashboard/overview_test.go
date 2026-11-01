@@ -557,3 +557,24 @@ func TestCalmSentenceByAxisState(t *testing.T) {
 		t.Errorf("no verdict: %q", got)
 	}
 }
+
+// A count of one meets a singular noun (red on "1 prompts" and "1 turns").
+func TestOverviewPluralsAgreeWithTheCount(t *testing.T) {
+	r := scenarioNamed(t, "healthy")
+	r.Summary.PromptsWithMemory, r.Summary.TurnsWithMemoryUsed = 1, 1
+	p := renderOverview(t, r).first("p.summary")
+	if p == nil || !strings.Contains(p.text(), "1 prompt got memory, Claude used it in 1 turn, about") {
+		t.Errorf("summary %v", p)
+	}
+	r.Summary.PromptsWithMemory, r.Summary.TurnsWithMemoryUsed = 2, 0
+	p = renderOverview(t, r).first("p.summary")
+	if p == nil || !strings.Contains(p.text(), "2 prompts got memory, Claude used it in 0 turns, about") {
+		t.Errorf("summary %v", p)
+	}
+	if got := ofCount(en, 1, 1, "session", "sessions"); got != "1 of 1 session" {
+		t.Errorf("ofCount %q", got)
+	}
+	if got := ofCount(en, 0, 3, "session", "sessions"); got != "0 of 3 sessions" {
+		t.Errorf("ofCount %q", got)
+	}
+}

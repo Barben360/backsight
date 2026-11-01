@@ -17,7 +17,7 @@
 {{end}}</section>
 {{end}}
 {{/* widget: summary line. Reads .V.overview.Summary through summaryline (Prompts, Turns, Tokens, Cost, Scope). */}}
-{{with summaryline $r $.L $.Frame.Window}}<p class="summary">{{.When}}: <b>{{.Prompts}}</b> prompts got memory, Claude used it in <b>{{.Turns}}</b> turns, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
+{{with summaryline $r $.L $.Frame.Window}}<p class="summary">{{.When}}: <b>{{.Prompts}}</b> {{.PromptsNoun}} got memory, Claude used it in <b>{{.Turns}}</b> {{.TurnsNoun}}, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
 {{end}}
 
 {{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow through tiles (TileGroup: Name, Tiles; Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev). */}}
