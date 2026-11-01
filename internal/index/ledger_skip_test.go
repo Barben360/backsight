@@ -289,6 +289,32 @@ func TestAWriteDuringTheReadIsReadAgain(t *testing.T) {
 	}
 }
 
+// A failed read forgets the recorded stamp: should the files come back to
+// it (an mtime-preserving restore of other content), the next catch-up
+// reads rather than trusting the stamp of a read before the failure.
+func TestAFailureForgetsTheRecordedStamp(t *testing.T) {
+	e, r := skipEnv(t)
+	recorded := stampAt(clock.Add(-time.Hour), 10)
+	e.catchUp(time.Minute)
+	e.wantReads(r, 1, "first catch-up")
+
+	r.setStamp(stampAt(clock.Add(-time.Hour), 11))
+	r.setLedger(feedback.Ledger{}, errors.New("unreadable"))
+	e.catchUp(time.Minute)
+	e.wantReads(r, 2, "a changed stamp, the reader failing")
+	if _, err := e.ix.sh.w.Exec(`DELETE FROM ingest_errors`); err != nil { // another process's good read of the same ledger
+		t.Fatal(err)
+	}
+
+	r.setStamp(recorded)
+	r.setLedger(ledgerOf(map[string]feedback.Entry{"m3": {Shown: 1}}), nil)
+	e.catchUp(time.Minute)
+	e.wantReads(r, 3, "the recorded stamp back after a failure")
+	if ids := e.ledgerIDs(); len(ids) != 1 || ids[0] != "m3" {
+		t.Fatalf("ledger table %v, want [m3]", ids)
+	}
+}
+
 // countReader is a LedgerReader without a stamp.
 type countReader struct {
 	mu   sync.Mutex
@@ -350,6 +376,38 @@ func TestCatchUpSeesAJournalAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(journal, old, old); err != nil {
+		t.Fatal(err)
+	}
+	e.catchUp(time.Minute)
+	if ids := e.ledgerIDs(); len(ids) != 1 || ids[0] != "m2" {
+		t.Fatalf("after the forget: ledger table %v, want [m2]", ids)
+	}
+}
+
+// On real files: a hand-edited ledger.json whose journal_at names a file
+// outside the journal glob; a forget appended to that file, its mtime put
+// back, reaches the next catch-up's table.
+func TestCatchUpSeesAnAppendToTheFileJournalAtNames(t *testing.T) {
+	fsOf(t, FSLocal)
+	e := envWith(t, func(*Options) {})
+	dir := e.d.FeedbackDir()
+	old := clock.Add(-time.Hour)
+	ledger := filepath.Join(dir, "ledger.json")
+	notes := filepath.Join(dir, "notes.jsonl")
+	writeFile(t, ledger, `{"schema":1,"watermark":"2026-10-30T10:00:00Z","journal_at":{"file":"notes.jsonl","offset":0},"memories":{"m1":{"shown":4},"m2":{"shown":2}}}`)
+	writeFile(t, notes, "")
+	for _, p := range []string{ledger, notes} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.catchUp(time.Minute)
+	e.catchUp(time.Minute) // skip-eligible: the stamp is recorded and unchanged
+	if ids := e.ledgerIDs(); len(ids) != 2 {
+		t.Fatalf("before the forget: %v", ids)
+	}
+	writeFile(t, notes, jline(t, feedback.Event{TS: clock.Add(-30 * time.Minute), Kind: "forget", IDs: []string{"m1"}}))
+	if err := os.Chtimes(notes, old, old); err != nil {
 		t.Fatal(err)
 	}
 	e.catchUp(time.Minute)

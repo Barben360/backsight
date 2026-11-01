@@ -191,3 +191,42 @@ func TestStampSurfacesStatErrors(t *testing.T) {
 		t.Errorf("read dir error: %v", err)
 	}
 }
+
+// A hand-edited ledger.json whose journal_at names a file outside the
+// journal glob: All reads that file, so the stamp covers it, its absence
+// included; a ledger.json that does not parse is no stamp.
+func TestStampCoversTheFileJournalAtNames(t *testing.T) {
+	dir := t.TempDir()
+	mt := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	put(t, dir, "ledger.json", `{"schema":1,"journal_at":{"file":"notes.jsonl","offset":0},"memories":{}}`, mt)
+	put(t, dir, "journal-2026-10.jsonl", "", mt)
+	r := CurrentReader{Dir: dir}
+
+	missing := stampOf(t, r)
+	if !slices.Contains(missing.Files, StampFile{Name: "notes.jsonl", Size: -1}) {
+		t.Fatalf("a named file that does not exist is not stamped as such: %+v", missing.Files)
+	}
+	put(t, dir, "notes.jsonl", "", mt)
+	there := stampOf(t, r)
+	if there.Equal(missing) || !slices.Contains(there.Files, StampFile{Name: "notes.jsonl", Size: 0, ModTime: mt.UnixNano()}) {
+		t.Fatalf("after the named file appeared: %+v", there.Files)
+	}
+	if got := names(there); !slices.IsSorted(got) || len(got) != 3 {
+		t.Fatalf("names %v", got)
+	}
+	put(t, dir, "notes.jsonl", "{}\n", mt) // an append, the mtime put back
+	if grown := stampOf(t, r); grown.Equal(there) {
+		t.Fatalf("an append to the named file left the stamp unchanged: %+v", grown.Files)
+	}
+
+	// Not a bare name: journalSince does not read it, nor is it stamped.
+	put(t, dir, "ledger.json", `{"schema":1,"journal_at":{"file":"../notes.jsonl","offset":0},"memories":{}}`, mt)
+	if got := names(stampOf(t, r)); !slices.Equal(got, []string{"journal-2026-10.jsonl", "ledger.json"}) {
+		t.Fatalf("a path in journal_at: %v", got)
+	}
+
+	put(t, dir, "ledger.json", `{"schema":1,"memories":`, mt)
+	if _, err := r.Stamp(); err == nil {
+		t.Error("a ledger.json that does not parse gave a stamp")
+	}
+}
