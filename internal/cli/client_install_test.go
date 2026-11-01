@@ -33,6 +33,9 @@ type fakeClaude struct {
 	failOn       string // a command line that fails
 	failOnly     int    // with failOn: fail that many times, then pass (0: always)
 	failed       int
+	// onRun, when set, sees each command line with the profile it acts on
+	// ("" is ~/.claude): a test makes Claude Code's side effects with it.
+	onRun func(line, configDir string)
 }
 
 func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byte, error) {
@@ -42,6 +45,9 @@ func (f *fakeClaude) Run(_ context.Context, env []string, args ...string) ([]byt
 	f.calls = append(f.calls, args)
 	f.envs = append(f.envs, env)
 	f.ran = append(f.ran, claudeCall{strings.Join(args, " "), configDirIn(claudeEnviron(env))})
+	if f.onRun != nil {
+		f.onRun(strings.Join(args, " "), configDirIn(claudeEnviron(env)))
+	}
 	if f.failOn != "" && strings.HasPrefix(strings.Join(args, " "), f.failOn) && (f.failOnly == 0 || f.failed < f.failOnly) {
 		f.failed++
 		return nil, errors.New("claude failed: " + f.failOn)
