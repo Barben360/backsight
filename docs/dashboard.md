@@ -39,7 +39,7 @@ Each page asks one question, and its cards answer parts of it. Overview, Quality
 | Page | The question it asks | What it shows | `stats` view |
 |---|---|---|---|
 | Overview | Is my memory working? | The verdict on four axes (Found, Right, Cost, Flowing) for the last 7 days, a summary line, six tiles with their change from the previous period and a small trend, what to do about it, how big the memory is and what happened lately. | `backsight stats overview` |
-| Quality | Is it right? | Whether Claude used the memories shown, whether it says which it used, memories reported wrong, why some prompts got nothing, Claude's own searches and what became of each memory shown. | `backsight stats quality` |
+| Quality | Is it right? | How many prompts got memory, whether Claude used the memories shown, whether it says which it used, memories reported wrong, why some prompts got nothing, Claude's own searches and what became of each memory shown. | `backsight stats quality` |
 | Cost | Is it worth it? | The context backsight adds per session and where it adds it, the time memory adds to a prompt and to a search, and what the server's model spent. | `backsight stats cost` |
 | Bank | Is the memory healthy? | The memory's size by kind, its growth, memories per project, summaries waiting, facts stored, memories retired, hidden or restored, and which memories need a look. | `backsight stats bank` |
 | Pipeline | Is it flowing? | Sessions sent, what waits on this PC and on the server, the time to turn a session into memories, the background jobs and the steps that crashed. | `backsight stats pipeline` |
@@ -69,24 +69,28 @@ The sign-in cookie is sent by the browser to every program that answers on the s
 
 ## When a number is missing
 
-A card never shows a bare dash: it says why there is no number. These are the sentences, and what to do.
+A card with no number usually says why; a dash stands where a value simply does not exist yet. These are the main sentences that call for an action.
 
 | The page says | It means | What to do |
 |---|---|---|
 | "12 of 140: too few to judge. 140 prompts; 200 are needed." | The number is shown but there are too few events to judge it. | Nothing is wrong. Use memory a while and look again. |
-| "Nothing recorded in the last 7 days." | No event of this kind in the window. | Pick a longer window: the card offers the longer ones up to 90 days. If a longer window is also empty, the feature has not been used. |
+| "Nothing recorded in the last 7 days." | No event of this kind in the window. | Pick a longer window: the card offers the longer ones up to 90 days. |
 | "Memory feedback is off (`feedback.enabled`). Quality numbers need it. Found, Cost and Flowing still work." | backsight is not recording which memories Claude used. | To see quality numbers, set `enabled = true` under `[feedback]` in `config.toml` ([configuration](configuration.md)). |
 | "This PC runs the server only: activity is recorded on the PCs that use it." | This PC hosts the memory server and has no Claude Code activity of its own. | Open the dashboard on a PC that uses the memory. |
 | "Memory server not answering since 14:02." (or without the time) | The dashboard could not read the server. Numbers that come from the server wait; the others stay. | Run `backsight doctor`; it gives the fix. |
 | "No memory server is set up on this PC." | There is no server to ask. | Run `backsight setup`, or `backsight connect` to join one. |
 | "This memory server does not provide it." | The server is older than the number needs. | Update backsight with `backsight update apply`; if the server runs on another machine, update it there. |
 | "No data." | The source holds nothing to count. | Not a fault; look again after some use. |
+| "Judged on the last 28 days: too few turns in 7." | The last 7 days hold too few turns to judge the Right axis, so it is judged on 28 days. | Nothing to do; the verdict is still valid. |
+| A "too few" chip on a tile or axis | Fewer events than the number needs to be judged. | Same as the first row. |
+
+Other lines say that a list or a card is empty, for example "No session in this window." (with "matches this filter" when a filter is on), "Nothing was reported wrong or out of date in the last 7 days.", "No step failed in the last 7 days." and "Nothing needs a look." They are good news or an empty window, not faults.
 
 A whole page can also be replaced by a short message:
 
 | The page says | What to do |
 |---|---|
-| "Preparing the dashboard." (building the metrics index from this PC's history; the page refreshes every 2 seconds) | Wait; the first build takes seconds to a minute or two. |
+| "Preparing the dashboard." (building the metrics index from this PC's history; the page refreshes every 2 seconds) | Wait; the page refreshes itself. |
 | "An update is being applied." ("Try again in a minute.") | Wait, then use Try again. |
 | "backsight was updated." (stop this dashboard and start it again) | Press Ctrl+C in its terminal and run `backsight dashboard`. |
 | "The page took too long." | Use Try again. |
@@ -107,14 +111,16 @@ The dashboard changes memory in no way: a preference only changes what you see.
 ## Keyboard and screen readers
 
 - **Skip to content.** The first Tab stop on every page is "Skip to content", which jumps over the top bar.
-- **Tab order.** On the Overview it runs: Skip to content, the logo, the pages (Overview, Quality, Cost, Bank, Pipeline, Browse, System), the window picker (24 h, 7 d, 30 d, 90 d), the project filter, Refresh, Preferences, then the verdict's info and CLI buttons, and the cards from top to bottom. Menus are native disclosure controls: Enter or Space opens one.
-- **Charts have a table.** Every chart has a "Show as a table" control with the same numbers as text, which a screen reader can walk. It needs no script.
+- **Tab order.** On the Overview it runs: Skip to content, the logo, the pages (Overview, Quality, Cost, Bank, Pipeline, Browse, System), the window picker (24 h, 7 d, 30 d, 90 d), the project filter, Refresh, Preferences, then the verdict's info and CLI buttons, and the cards from top to bottom. Enter or Space opens a menu.
+- **Charts have a table.** Every chart card has a "Show as a table" control with the same numbers as text, which a screen reader can walk. It needs no script. The small trends in the Overview's tiles have a spoken summary instead.
 - **Copy buttons need scripts.** Commands the page suggests have a Copy button. Without scripts the button is absent and the command is plain text you can select. With scripts, if the browser does not let the page use the clipboard, the button selects the command and says "Selected: press Ctrl+C".
 - **Works without scripts.** Everything else, including the menus, the preferences and the table views, works with scripts off.
-- **Contrast and colours.** Text has at least 4.5:1 contrast and chart marks at least 3:1, in the light and the dark theme. Status is never only a colour: it is also a word or an icon. In a high-contrast mode (forced colours) the page and its charts use your system's colours.
-- **Small screens.** Under 900 px wide, buttons and links are at least 40 px tall, and the window and project choices move into the Menu button.
+- **Contrast and colours.** Text has at least 4.5:1 contrast in the light and the dark theme, and the colours that carry a meaning in charts (used, ignored, a path's state) have at least 3:1. The shades of the stacked bars do not, so a legend and the table behind each chart say the same. Status is never only a colour: it is also a word or an icon. In a high-contrast mode (forced colours) the page's text, borders and focus follow your system's colours; charts keep their own colours, with an outline in the system's text colour.
+- **Small screens.** Under 900 px wide, most buttons and links are at least 40 px tall, and the window and project choices move into the Menu button.
 
 ## What each view answers
+
+The pages' titles above are the short form of these questions.
 
 | Command | Question it answers |
 |---|---|

@@ -29,6 +29,8 @@ func TestReadmeShowsTheDashboard(t *testing.T) {
 	if !strings.Contains(section, "docs/dashboard.md") {
 		t.Error("the dashboard section does not link docs/dashboard.md")
 	}
+	const alt = `alt="The dashboard's Overview: the verdict, the summary line and six tiles" src="docs/assets/`
+	var shots [][]byte
 	for _, img := range []struct{ file, mode string }{
 		{"dashboard-light.png", "gh-light-mode-only"},
 		{"dashboard-dark.png", "gh-dark-mode-only"},
@@ -36,10 +38,14 @@ func TestReadmeShowsTheDashboard(t *testing.T) {
 		if !strings.Contains(section, "docs/assets/"+img.file+"#"+img.mode) {
 			t.Errorf("the dashboard section does not show docs/assets/%s#%s", img.file, img.mode)
 		}
+		if !strings.Contains(section, alt+img.file) {
+			t.Errorf("%s has no alt text of the Overview", img.file)
+		}
 		data, err := os.ReadFile("../../docs/assets/" + img.file)
 		if err != nil {
 			t.Fatal(err)
 		}
+		shots = append(shots, data)
 		if !bytes.HasPrefix(data, []byte("\x89PNG\r\n\x1a\n")) {
 			t.Errorf("%s is not a PNG", img.file)
 		}
@@ -53,6 +59,9 @@ func TestReadmeShowsTheDashboard(t *testing.T) {
 		if cfg.Width != 1440 || cfg.Height != 900 {
 			t.Errorf("%s is %d x %d, want 1440 x 900", img.file, cfg.Width, cfg.Height)
 		}
+	}
+	if len(shots) == 2 && bytes.Equal(shots[0], shots[1]) {
+		t.Error("the light and the dark screenshots are the same file")
 	}
 }
 

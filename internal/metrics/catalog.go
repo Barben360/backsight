@@ -45,7 +45,7 @@ var pctExtra = []string{"p50", "p95"}
 // Catalog lists every metric, in the order a view lists them. Sources:
 // telemetry, journal, ledger, local (this PC's state files), server, doctor.
 // context.per_session carries no Watch value here: it is 1.5 times the
-// configured recall.session_budget_chars (9,000 by default), computed when
+// configured recall.session_budget_chars (9,000 with the default 6,000-character budget), computed when
 // a view runs.
 var Catalog = withDrills([]Def{
 	{
