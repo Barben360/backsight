@@ -103,6 +103,10 @@ var funcs = template.FuncMap{
 	"count":       roundInt,
 	"ranks":       rankLines,
 
+	"banner":      bannerOf,
+	"summaryline": summaryPage,
+	"attention":   attentionPage,
+
 	"head":     headOf,
 	"fixed":    fixedHead,
 	"withinfo": withInfo,

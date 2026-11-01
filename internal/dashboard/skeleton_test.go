@@ -129,12 +129,12 @@ func TestOverviewSkeleton(t *testing.T) {
 		t.Fatal("no verdict in the API")
 	}
 	for _, a := range views.AxisNames {
-		word := views.AxisStateWords[res.Verdict.Axes[a.Key].State]
+		word := scenarioAxisWords[res.Verdict.Axes[a.Key].State]
 		if word == "" || !strings.Contains(text, a.Name+" "+word) {
 			t.Errorf("overview lacks %q followed by %q", a.Name, word)
 		}
 	}
-	for _, want := range []string{"last 7 days", "Needs attention", "Lately", "Memory at a glance"} {
+	for _, want := range []string{"last 7 days", "What should I do?", "Lately", "Memory at a glance"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("overview lacks %q", want)
 		}
@@ -484,7 +484,7 @@ func TestOverviewAttentionAndExtras(t *testing.T) {
 		r.Attention = []metrics.Item{{Text: "Something is off", Why: "Because of a thing", Command: "backsight doctor"}}
 		r.AttentionMore = 3
 	})
-	for _, w := range []string{`<a href="/system">3 more</a>`, "<details><summary>Why</summary><p>Because of a thing</p></details>", "<code>backsight doctor</code>"} {
+	for _, w := range []string{`<a href="/system">3 more on the System page →</a>`, "<details class=\"why\"><summary>Why this matters</summary><div>Because of a thing</div></details>", "<code>backsight doctor</code>"} {
 		if !strings.Contains(b, w) {
 			t.Errorf("overview lacks %q", w)
 		}

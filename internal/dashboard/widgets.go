@@ -24,6 +24,7 @@ type Head struct {
 	CLI         string
 	Drill       string
 	DrillText   string
+	Aside       string // a short muted note after the spacer, before the ⓘ; "" none
 }
 
 // Info is the ⓘ popover of a widget.

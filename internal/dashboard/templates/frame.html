@@ -148,13 +148,13 @@
 
 {{define "card-head"}}<div class="card-head">{{if eq .Level 3}}<h3 id="{{.ID}}">{{.Title}}</h3>{{else}}<h2 id="{{.ID}}">{{.Title}}</h2>{{end}}
 {{if eq .Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
-{{template "info" .}}{{template "cli" .}}</div>
+{{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
 {{end}}
 
-{{define "info"}}<details class="info"><summary aria-label="{{.Info.Label}}" aria-describedby="{{.ID}}-info"><span class="i i-info"></span></summary><div class="pop" id="{{.ID}}-info" role="note"><b>{{.Info.Name}}</b>
+{{define "info"}}{{if .Info.Label}}<details class="info"><summary aria-label="{{.Info.Label}}" aria-describedby="{{.ID}}-info"><span class="i i-info"></span></summary><div class="pop" id="{{.ID}}-info" role="note"><b>{{.Info.Name}}</b>
 {{if or .Info.What .Info.Limits .Info.BasedOn .Info.Smallest}}<dl>{{with .Info.What}}<dt>What</dt><dd>{{.}}</dd>{{end}}{{with .Info.Limits}}<dt>Limits</dt><dd>{{.}}</dd>{{end}}{{with .Info.BasedOn}}<dt>Based on</dt><dd>{{.}}</dd>{{end}}{{with .Info.Smallest}}<dt>Smallest change it can see</dt><dd>{{.}}</dd>{{end}}</dl>
 {{end}}{{range .Info.Paras}}<p>{{.}}</p>
-{{end}}{{with .Info.Term}}<code class="term">{{.}}</code>{{end}}{{with .Info.Href}}<a href="{{.}}">{{$.Info.HrefText}}</a>{{end}}</div></details>{{end}}
+{{end}}{{with .Info.Term}}<code class="term">{{.}}</code>{{end}}{{with .Info.Href}}<a href="{{.}}">{{$.Info.HrefText}}</a>{{end}}</div></details>{{end}}{{end}}
 
 {{define "cli"}}{{if .CLI}}<details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>{{.CLI}}</code><button class="copy" type="button" hidden><span class="i i-sm i-copy"></span>Copy</button></div></details>{{end}}{{end}}
 

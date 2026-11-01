@@ -2,18 +2,22 @@
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}
 
-{{/* widget: verdict. Reads .V.overview.Verdict.Axes (State, Reasons.Text, Reasons.Command). */}}
-<section>
-<h2>Verdict, last 7 days</h2>
-{{with $r.Verdict}}{{$ax := .Axes}}{{range axes}}<h3>{{.Name}}</h3>
-{{with index $ax .Key}}<p>{{axis .State}}</p>
-<ul>
-{{range .Reasons}}<li>{{.Text}}{{with .Command}} <code>{{.}}</code>{{end}}</li>
+{{/* widget: verdict banner. Reads the verdict and metrics through banner (Banner: Title, Class, Icon, Axes, Reasons, Head). */}}
+{{with banner $r $.L $.Loc $.P}}<section class="verdict {{.Class}}" aria-labelledby="{{.Head.ID}}">
+<div class="v-head"><span class="v-ico {{.Icon}}" aria-hidden="true"></span><h2 class="v-title" id="{{.Head.ID}}">{{.Title}} <span class="v-when">(last 7 days)</span></h2>
+{{template "info" .Head}}{{template "cli" .Head}}</div>
+{{if .Axes}}<ul class="axes">
+{{range .Axes}}<li class="axis"><span class="axis-name">{{.Name}}</span> <span class="st {{.Class}}">{{.Word}}</span> <span class="axis-note">{{.Note}}</span></li>
 {{end}}</ul>
-{{end}}{{end}}{{end}}</section>
-
-{{/* widget: summary line. Reads .V.overview.Summary (PromptsWithMemory, TurnsWithMemoryUsed, TokensApprox, ExtractionCost, Currency, PriceSet). */}}
-{{with $r.Summary}}<p>{{n .PromptsWithMemory}} prompts with memory · {{n .TurnsWithMemoryUsed}} turns used it · about {{n .TokensApprox}} tokens added · extraction {{if .PriceSet}}{{money .ExtractionCost .Currency}}{{else}}price not set{{end}} (server, all PCs)</p>
+{{end}}{{if .Reasons}}<ul class="reasons">
+{{range .Reasons}}<li class="reason"><span class="pill st {{.Class}}">{{.Word}}</span>
+<p>{{.Text}}</p>
+{{with .Command}}{{template "cmd" .}}{{end}}</li>
+{{end}}</ul>
+{{end}}</section>
+{{end}}
+{{/* widget: summary line. Reads .V.overview.Summary through summaryline (Prompts, Turns, Tokens, Cost, Scope). */}}
+{{with summaryline $r $.L}}<p class="summary">In the last 7 days: <b>{{.Prompts}}</b> prompts got memory, Claude used it in <b>{{.Turns}}</b> turns, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
 {{end}}
 
 {{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow. */}}
@@ -28,16 +32,18 @@
 {{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}
 </section>
 
-{{/* widget: needs attention. Reads .V.overview.Attention (Text, Command, Why), .AttentionMore. */}}
-<section>
-<h2>Needs attention</h2>
-{{range $r.Attention}}<div>
-<p>{{.Text}}{{with .Command}} <code>{{.}}</code>{{end}}</p>
-{{with .Why}}<details><summary>Why</summary><p>{{.}}</p></details>
-{{end}}</div>
-{{else}}<p>Nothing needs attention.</p>
-{{end}}{{if $r.AttentionMore}}<p><a href="/system">{{$r.AttentionMore}} more</a></p>
-{{end}}</section>
+{{/* widget: What should I do?. Reads .V.overview.Attention and .AttentionMore through attention (AttentionCard: Head, Count, Items, Whys, Calm, More, MoreHref). */}}
+{{with attention $r $.L $.CLI}}{{template "card-open" .Head}}
+{{if .Items}}{{$whys := .Whys}}<ul class="att">
+{{range $i, $it := .Items}}<li class="att-item"><span class="pill st {{$it.Class}}">{{$it.Word}}</span>
+<div class="body">
+<p>{{$it.Text}}</p>
+{{with $it.Command}}{{template "cmd" .}}{{end}}{{with index $whys $i}}<details class="why"><summary>Why this matters</summary><div>{{.}}</div></details>{{end}}
+</div></li>
+{{end}}</ul>
+{{else}}<div class="empty"><span class="row"><span class="st st-ok">Nothing needs attention.</span></span><span class="small">{{.Calm}}</span></div>
+{{end}}{{if .More}}<p class="small"><a href="{{.MoreHref}}">{{.More}}</a></p>
+{{end}}{{template "card-close" .Head}}{{end}}
 
 {{/* widget: lately. Reads .V.overview.Tables.Lately (ID, Project, Last, Shown, Used, Wrong). */}}
 <section>
