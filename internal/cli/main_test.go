@@ -6,11 +6,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/server"
 	"github.com/Barben360/backsight/internal/supervise"
 	"github.com/Barben360/backsight/internal/testtool"
 )
@@ -126,6 +129,10 @@ func TestMain(m *testing.M) {
 	}
 	composeRunner = refuseDocker{}
 	nativeSys, nativeTools, nativeAsk, nativeDetach = refuseSys{}, refuseTools{}, refuseAsk, refuseDetach
+	// A Native built without Ask (setup's, doctor's) asks server's own
+	// client: refused too, so no test asks, or stops, a developer's real
+	// supervisor on Windows.
+	server.SetSuperviseAsk(refuseAsk)
 	sysRunner, claudeRunner, spawnDetached, spawnLogged = refuseSys{}, refuseClaude{}, refuseSpawn, refuseSpawnLogged
 	sshRunner = refuseSSH{}
 	// Windows: no test deletes a real Task Scheduler folder (a no-op that
@@ -160,4 +167,20 @@ func liveProcess(t *testing.T) int {
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	return cmd.Process.Pid
+}
+
+// No test reaches a real supervisor's pipe, even through a Native built
+// without Ask: server's default client is refused as nativeAsk is (a
+// developer's Windows PC runs a real supervisor, which a status would
+// reach and a stop would stop).
+func TestTestsNeverAskTheRealSupervisor(t *testing.T) {
+	home := isolate(t)
+	d := pathsOf(home)
+	cfg := config.Default(d, home)
+	cfg.Server.Runtime, cfg.Server.Project = "native", "bs-test-"+strconv.Itoa(os.Getpid())+"-realpipe"
+	n := server.Native{Cfg: cfg, Dirs: d, GOOS: "windows"} // no Ask
+	_, err := n.SupervisorStatus(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "test reached the supervisor") {
+		t.Errorf("a Native without Ask asked %v, want the tests' refusal", err)
+	}
 }

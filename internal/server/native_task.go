@@ -96,6 +96,14 @@ func startUnelevated(args ...string) error {
 	return detachSupervisor(args...)
 }
 
+// SetSuperviseAsk replaces the pipe's client a Native without Ask uses
+// (superviseAsk). cli's tests refuse it, as they refuse nativeAsk: a
+// Native built without Ask (setup's) would otherwise ask, or stop, a
+// developer's real supervisor on Windows.
+func SetSuperviseAsk(ask func(ctx context.Context, project, op string) (supervise.Status, error)) {
+	superviseAsk = ask
+}
+
 // SuperviseFile is the supervisor's configuration: Render writes it on
 // Windows, server supervise reads it.
 func (n Native) SuperviseFile() string { return n.join(n.Root(), superviseFile) }
