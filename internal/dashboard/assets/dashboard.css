@@ -467,6 +467,7 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
   .pop { position: fixed; left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; }
   .idc, .menu > summary, .nav a, .menu-pop a, .menu-pop button, a.chip, .skip, .tblfb > summary, details.tabs > summary { min-height: var(--touch); }
   a.trunc { min-height: var(--touch); line-height: var(--touch); }
+  .tile-foot a, .card-foot a, .pop a, nav.small a, .foot a { display: inline-flex; align-items: center; min-height: var(--touch); }
 }
 
 /* ---------- forced colors (Windows contrast themes) ----------

@@ -190,7 +190,7 @@ func TestTextPageNeverRefreshes(t *testing.T) {
 		if strings.Contains(b, `http-equiv="refresh"`) {
 			t.Errorf("%s (%d) refreshes on its own: %q", p, r.StatusCode, b)
 		}
-		if doc := parseHTML(t, b); doc.first("div.page-head h1") == nil || doc.first("div.page-head span") != nil || doc.first("nav.seg") != nil {
+		if doc := parseHTML(t, b); doc.first("div.page-head h1") == nil || doc.first("div.page-head span") != nil || windowNavs(doc) != 0 {
 			t.Errorf("%s: the text page's head or window links: %q", p, b)
 		}
 		if !strings.Contains(b, `<a href="/prefs?refresh=1&amp;back=`+url.QueryEscape(p)+`" aria-current="true"><span class="check">✓</span>Every minute</a>`) {
@@ -434,4 +434,16 @@ func TestBuildingPageRefreshOnlyOffTheTextPage(t *testing.T) {
 			t.Errorf("GET %s while building: refresh %v, want %v", path, got, want)
 		}
 	}
+}
+
+// windowNavs counts the window pickers of doc: the bar's "Window" and the
+// Menu's "Window (menu)".
+func windowNavs(doc *node) int {
+	n := 0
+	for _, s := range doc.find("nav.seg") {
+		if strings.HasPrefix(s.attr("aria-label"), "Window") {
+			n++
+		}
+	}
+	return n
 }

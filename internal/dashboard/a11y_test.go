@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/index"
 )
@@ -82,6 +83,15 @@ func allA11yPages(t *testing.T) []a11yPage {
 				add(p, body(t, resp))
 			}
 		}
+		// A list in the middle of its pages has both pager links.
+		for _, p := range []string{"/sessions?limit=1&offset=1", "/memories?limit=1&offset=1"} {
+			resp := h.do("GET", p, ck...)
+			if resp.StatusCode != 200 {
+				t.Errorf("GET %s: %d", p, resp.StatusCode)
+				continue
+			}
+			add(p, body(t, resp))
+		}
 		for _, p := range []string{"/sessions/zzzzzzzz", "/quality?days=0"} {
 			add("state "+p, body(t, h.do("GET", p, ck...)))
 		}
@@ -92,6 +102,7 @@ func allA11yPages(t *testing.T) []a11yPage {
 			{"building", newDataHarness(t, withIndex(func(f *fakeIndex) { f.openGate = make(chan struct{}) }), withServer(), withNeedsBuild())},
 			{"updating", dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, index.ErrUpdateInProgress} })},
 			{"updated", dataHarness(t, func(f *fakeIndex) { f.side = true })},
+			{"timeout", timeoutHarness(t)},
 			{"broken", dataHarness(t, func(f *fakeIndex) { f.catchUpErr = errors.New("disk exploded") })},
 		} {
 			add("state "+c.name, body(t, c.h.do("GET", "/", cookieHdr(c.h.login())...)))
@@ -130,10 +141,21 @@ func eachA11yPage(t *testing.T, f func(t *testing.T, doc *node)) {
 	}
 }
 
+// timeoutHarness is a dashboard whose pages take too long.
+func timeoutHarness(t *testing.T) *harness {
+	t.Helper()
+	old := renderTimeout
+	renderTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { renderTimeout = old })
+	h := dataHarness(t)
+	h.ix.set(func(f *fakeIndex) { f.block = make(chan struct{}) })
+	return h
+}
+
 func TestPagesParse(t *testing.T) {
 	pages := allA11yPages(t)
-	// 16 page routes dev off and on, the text page; 2 failures, 4 solo states, the 401; the scenarios.
-	if want := 16*2 + 1 + 2 + 4 + 1 + len(scenarios); len(pages) != want {
+	// 16 page routes dev off and on, the text page; 2 paged lists, 2 failures, 5 card states, the 401; the scenarios.
+	if want := 16*2 + 1 + 2 + 2 + 5 + 1 + len(scenarios); len(pages) != want {
 		t.Errorf("%d pages parsed, want %d", len(pages), want)
 	}
 }
@@ -195,7 +217,11 @@ func TestLandmarksAndSkipLink(t *testing.T) {
 		}
 		// A card page (build, update, 401) has one thing to read: no header,
 		// footer or skip link.
-		if !within(doc.first("main"), "main", "solo") {
+		if within(doc.first("main"), "main", "solo") {
+			if m := doc.first("main"); m.attr("id") != "main" {
+				t.Errorf("solo main id %q, want main", m.attr("id"))
+			}
+		} else {
 			if hs, fs := doc.find("header"), doc.find("footer"); len(hs) != 1 || len(fs) != 1 {
 				t.Errorf("%d header, %d footer; want one each", len(hs), len(fs))
 			}
@@ -215,6 +241,23 @@ func TestLandmarksAndSkipLink(t *testing.T) {
 			seen[l] = true
 		}
 	})
+}
+
+// TestSoloPagesAreTheCards pins which pages are exempt from the header,
+// footer and skip link: the card state pages and the 401, no other.
+func TestSoloPagesAreTheCards(t *testing.T) {
+	var solo []string
+	for _, p := range allA11yPages(t) {
+		if within(p.Doc.first("main"), "main", "solo") {
+			solo = append(solo, p.Name)
+		}
+	}
+	want := []string{"state building", "state updating", "state updated", "state timeout", "state broken", "unauthorized"}
+	slices.Sort(solo)
+	slices.Sort(want)
+	if !slices.Equal(solo, want) {
+		t.Errorf("solo pages %q, want %q", solo, want)
+	}
 }
 
 func TestHeadingOrder(t *testing.T) {

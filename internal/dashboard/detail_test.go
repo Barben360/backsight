@@ -943,7 +943,7 @@ func TestSessionAndMemoryPagesAreAllTime(t *testing.T) {
 		n := parseHTML(t, b)
 		if got := n.find("nav.seg"); len(got) != 0 {
 			for _, s := range got {
-				if s.attr("aria-label") == "Window" {
+				if strings.HasPrefix(s.attr("aria-label"), "Window") {
 					t.Errorf("%s offers window links", c.path)
 				}
 			}

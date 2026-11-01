@@ -437,68 +437,6 @@ func TestScopeLine(t *testing.T) {
 	}
 }
 
-func TestMetricPartial(t *testing.T) {
-	tpls, _, err := loadPages(Templates())
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := func(v MetricView) string {
-		var buf bytes.Buffer
-		if err := tpls["overview"].ExecuteTemplate(&buf, "metric", v); err != nil {
-			t.Fatal(err)
-		}
-		return buf.String()
-	}
-	one := int64(12)
-	val, delta := 4000.0, 500.0
-	ctx, _ := metrics.DefOf("context.per_session")
-	m := metrics.Metric{Value: &val, Den: &one, Status: metrics.StatusOK, Unit: "chars", Tags: []string{"not_filtered"},
-		CI: &[2]float64{3000, 5000}, Delta: &delta, Previous: &val, Drill: "backsight stats cost --days 7",
-		Series: []metrics.Point{{}, {}, {}}}
-	v := MetricView{ID: ctx.ID, Def: ctx, M: m, Found: true}
-	full := run(v)
-	text := visibleText(full)
-	for _, want := range []string{ctx.Question, views.FormatValue(ctx, m), "n = 12", "interval " + views.IntervalText(ctx, m), views.DeltaText(ctx, m), "this PC", "not filtered", "3 days"} {
-		if want == "" || !strings.Contains(text, want) {
-			t.Errorf("metric lacks %q in %q", want, text)
-		}
-	}
-	if !strings.Contains(full, "<details><summary>CLI</summary><code>backsight stats cost --days 7</code></details>") {
-		t.Errorf("the CLI disclosure: %s", full)
-	}
-	if strings.Contains(full, "<code>"+ctx.ID+"</code>") {
-		t.Error("the id shows without the developer preference")
-	}
-	v.ShowID = true
-	if !strings.Contains(run(v), "<code>"+ctx.ID+"</code>") {
-		t.Error("the id does not show with the developer preference")
-	}
-	// A server metric, weekly series, nothing optional.
-	bank, _ := metrics.DefOf("bank.size")
-	bare := visibleText(run(MetricView{ID: bank.ID, Def: bank, M: metrics.Metric{Status: metrics.StatusOK}, Found: true}))
-	for _, not := range []string{"n =", "interval", "this PC", "not filtered", "days", "CLI"} {
-		if strings.Contains(bare, not) {
-			t.Errorf("a bare server metric shows %q: %q", not, bare)
-		}
-	}
-	if !strings.Contains(bare, "server") {
-		t.Errorf("no server chip: %q", bare)
-	}
-	// The reason a number is missing shows once.
-	nd := visibleText(run(MetricView{ID: bank.ID, Def: bank, Found: true,
-		M: metrics.Metric{Status: metrics.StatusNoData, Reason: metrics.ReasonServerDown}}))
-	if got := strings.Count(nd, views.NoDataWords[metrics.ReasonServerDown]); got != 1 {
-		t.Errorf("the no-data reason shows %d times: %q", got, nd)
-	}
-	// A ratio's interval is in its value, once.
-	hit, _ := metrics.DefOf("recall.hit_rate")
-	rv := 0.15
-	rm := metrics.Metric{Value: &rv, Status: metrics.StatusOK, CI: &[2]float64{0.1, 0.2}}
-	if got := strings.Count(visibleText(run(MetricView{ID: hit.ID, Def: hit, M: rm, Found: true})), "10–20"); got != 1 {
-		t.Errorf("a ratio's interval shows %d times", got)
-	}
-}
-
 // raw are values the stored data holds that a reader must never see as they are.
 var raw = []string{"outdated", "batch_retain", "maintain", "partial", "warn", "docker", "remote", "bank-config", "tick"}
 

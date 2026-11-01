@@ -205,29 +205,6 @@
 {{if .Links}}<span class="small">{{.Pick}}</span><div class="seg" role="group" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</div>
 {{end}}</div>{{end}}{{end}}
 
-{{/*
-  metric: dot is a MetricView. Reads .Def (Question, Scope, Series), .M (Den,
-  CI, Tags, Series, Drill), .Found, .ShowID, .ID, and the funcs value, status
-  (which says why there is no number), interval, delta, details and extras
-  (the metric's Extra breakdowns: why prompts found nothing, split by kind,
-  result, path, language and rank, typical and high values, what waits on
-  this PC).
-*/}}
-{{define "metric"}}<section>
-<h3>{{.Def.Question}}</h3>
-<p>{{value .}}{{with .M.Den}} · n = {{.}}{{end}} · {{status .}}{{with interval .}} · interval {{.}}{{end}}{{with delta .}} · {{.}}{{end}}</p>
-<p>{{if eq .Def.Scope "machine"}}this PC{{else}}server{{end}}{{range .M.Tags}}{{if eq . "not_filtered"}} · not filtered{{end}}{{end}}{{if .M.Series}} · {{len .M.Series}} {{if eq .Def.Series "weekly"}}weeks{{else}}days{{end}}{{end}}</p>
-{{with details .}}<ul>
-{{range .}}<li>{{.}}</li>
-{{end}}</ul>
-{{end}}{{with extras .}}<ul>
-{{range .}}<li>{{.}}</li>
-{{end}}</ul>
-{{end}}{{if .M.Drill}}<details><summary>CLI</summary><code>{{.M.Drill}}</code></details>
-{{end}}{{if .ShowID}}<p><code>{{.ID}}</code></p>
-{{end}}</section>
-{{end}}
-
 {{/* jobs: dot is a list of JobLine (Job, Code, When, Result, Class, Took). */}}
 {{define "jobs"}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Job</th><th>Last run</th><th>Result</th><th class="r">Took</th></tr></thead>

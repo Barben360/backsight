@@ -143,9 +143,7 @@ func TestTouchTargetsUnder900(t *testing.T) {
 			if n.Name == "a" && !n.has("href") {
 				return
 			}
-			// A link without a class sits in running text or a table cell
-			// of the page body; the bar's and the menus' links are not.
-			if n.Name == "a" && n.attr("class") == "" && (within(n, "main", "") || within(n, "footer", "")) {
+			if n.Name == "a" && n.attr("class") == "" && inRunningText(n) {
 				return
 			}
 			for _, s := range all {
@@ -172,6 +170,32 @@ func TestTouchTargetsUnder900(t *testing.T) {
 	}
 }
 
+// inRunningText reports whether the link a is a word or phrase of a
+// paragraph, list item or table cell that has other text around it, in the
+// page body: the one place a small target is accepted (WCAG 2.5.8 inline
+// links), or a link in a table cell. A link that stands alone in a footer, a breadcrumb, a popover or a
+// card's foot is a control.
+func inRunningText(a *node) bool {
+	p := a.Parent
+	if p == nil || !slices.Contains([]string{"p", "li", "td", "dd"}, p.Name) || !within(p, "main", "") {
+		return false
+	}
+	for _, c := range [][2]string{{"nav", ""}, {"footer", ""}, {"div", "pop"}, {"div", "tile-foot"}, {"div", "card-foot"}} {
+		if within(p, c[0], c[1]) {
+			return false
+		}
+	}
+	if p.Name == "td" {
+		return true // a table cell's text: the row is the target
+	}
+	for _, it := range p.items {
+		if it.kid == nil && strings.TrimSpace(it.text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // touchExempt are the controls that are not a target of their own and need
 // no rule: none today.
 var touchExempt = map[string]bool{}
@@ -193,19 +217,43 @@ func TestFocusIsVisible(t *testing.T) {
 	}
 }
 
+// removesOutline reports whether r takes an outline away: none, 0 (a
+// length of zero, not 0.5px), transparent, or an outline-style of none.
+func removesOutline(r cssRule) bool {
+	re := regexp.MustCompile(`(?i)(?:^|[;\s])outline(-style|-color)?\s*:\s*([^;]*)`)
+	for _, m := range re.FindAllStringSubmatch(r.Body, -1) {
+		v := strings.Join(strings.Fields(m[2]), " ")
+		first, _, _ := strings.Cut(v, " ")
+		switch m[1] {
+		case "-style":
+			if strings.EqualFold(first, "none") || strings.EqualFold(first, "hidden") {
+				return true
+			}
+		case "-color":
+			if strings.EqualFold(first, "transparent") {
+				return true
+			}
+		default:
+			if strings.EqualFold(first, "none") || regexp.MustCompile(`^0(px|em|rem)?$`).MatchString(first) || strings.Contains(strings.ToLower(v), "transparent") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // outlineViolations are the rules that remove an outline without giving
 // the same selector a :focus-visible outline.
 func outlineViolations(rules []cssRule) []string {
 	var out []string
 	for _, r := range rules {
-		if !r.declStarts("outline", "none") && !r.declStarts("outline", "0") {
+		if !removesOutline(r) {
 			continue
 		}
 		for _, s := range r.Sel {
-			base := strings.TrimSuffix(s, ":focus-visible")
 			ok := false
 			for _, o := range rules {
-				if slices.Contains(o.Sel, base+":focus-visible") && !o.declStarts("outline", "none") && !o.declStarts("outline", "0") && o.declStarts("outline", "") {
+				if slices.Contains(o.Sel, s+":focus-visible") && o.declStarts("outline", "") && !removesOutline(o) {
 					ok = true
 				}
 			}
@@ -218,10 +266,17 @@ func outlineViolations(rules []cssRule) []string {
 }
 
 func TestOutlineCheckerSeesViolations(t *testing.T) {
-	bad := cssRules(`a { outline: none; } b { outline: 0 } c { outline: none } c:focus-visible { outline: 2px solid red }`)
+	bad := cssRules(`a { outline: none; } b { outline: 0 } c { outline: none } c:focus-visible { outline: 2px solid red }
+d { outline-style: none } e { outline: transparent } f { outline: 0.5px solid red } g { outline: 2px solid transparent }`)
 	got := outlineViolations(bad)
-	if len(got) != 2 || !strings.Contains(got[0], "a") || !strings.Contains(got[1], "b") {
-		t.Errorf("violations %q, want a and b only", got)
+	want := []string{"a", "b", "d", "e", "g"} // not c (it has the :focus-visible rule), not f (0.5px)
+	if len(got) != len(want) {
+		t.Fatalf("violations %q, want %q", got, want)
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(got[i], "outline removed from "+w+" ") {
+			t.Errorf("violation %d %q, want %s", i, got[i], w)
+		}
 	}
 }
 
@@ -251,7 +306,7 @@ func TestForcedColors(t *testing.T) {
 	for _, r := range rules {
 		if r.At == "@media (forced-colors: active)" && r.declStarts("forced-color-adjust", "none") && !r.declStarts("background", "CanvasText") {
 			for _, s := range r.Sel {
-				if !strings.Contains(s, "svg") && s != ".sw" && s != ".spark" {
+				if !strings.HasPrefix(s, ".chart svg") && s != ".kbar-svg" && s != ".pbar" && s != ".sw" && s != ".spark" {
 					t.Errorf("forced-colors: %q switches forced colours off", s)
 				}
 			}
