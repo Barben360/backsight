@@ -360,3 +360,83 @@ func viewBoxWidth(vb string) (int, error) {
 	w, err := strconv.ParseFloat(f[2], 64)
 	return int(w), err
 }
+
+// Every table scrolls sideways inside its own .tbl-wrap, so a wide table
+// never makes the page scroll.
+func TestEveryTableScrollsInItsWrap(t *testing.T) {
+	tables := 0
+	for _, p := range allA11yPages(t) {
+		for _, tb := range p.Doc.find("table") {
+			tables++
+			if !within(tb, "div", "tbl-wrap") {
+				t.Errorf("%s: table at line %d is not inside div.tbl-wrap", p.Name, tb.line)
+			}
+		}
+	}
+	if tables == 0 {
+		t.Error("no table on any page")
+	}
+}
+
+// A row of links or a command box must not be wider than the card at 390 px:
+// the axis tabs wrap, and a command in an empty state stays inside it.
+func TestNarrowRowsStayInsideTheirCard(t *testing.T) {
+	rules := cssRules(dashboardCSS(t))
+	for _, c := range [][3]string{{".seg", "flex-wrap", "wrap"}, {".seg", "max-width", "100%"}, {".empty .cmd", "max-width", "100%"}} {
+		ok := false
+		for _, r := range rules {
+			ok = ok || r.At == "" && slices.Contains(r.Sel, c[0]) && r.declStarts(c[1], c[2])
+		}
+		if !ok {
+			t.Errorf("%s { %s: %s } is missing", c[0], c[1], c[2])
+		}
+	}
+}
+
+// A chart is never drawn much larger than its viewBox, whatever its card,
+// so the 12 user units of its text stay about 12 px and every chart's text
+// is the same size: the widest a chart svg gets is within 1.13 of its
+// viewBox width, for both widths (the full-width strip is vb1000).
+func TestChartsAreNotScaledUp(t *testing.T) {
+	rules := cssRules(dashboardCSS(t))
+	val := func(sel, prop string) float64 {
+		for _, r := range rules {
+			if r.At == "" && slices.Contains(r.Sel, sel) {
+				if m := regexp.MustCompile(`(?i)(?:^|[;\s])` + prop + `\s*:\s*(\d+)px`).FindStringSubmatch(r.Body); m != nil {
+					v, _ := strconv.ParseFloat(m[1], 64)
+					return v
+				}
+			}
+		}
+		return 0
+	}
+	for _, c := range []struct {
+		sel string
+		vb  float64
+	}{{".vb560", 560}, {".vb1000", 1000}} {
+		if min := val(c.sel, "min-width"); min != c.vb {
+			t.Errorf("%s min-width = %v, want %v", c.sel, min, c.vb)
+		}
+		max := val(c.sel, "max-width")
+		if max < c.vb || max > c.vb*1.13 {
+			t.Errorf("%s max-width = %v, want %v to %v: a chart scaled up shows larger text", c.sel, max, c.vb, c.vb*1.13)
+		}
+	}
+	// The strip draws with a vb class like the others, on the memory page.
+	strips := 0
+	for _, p := range allA11yPages(t) {
+		for _, f := range p.Doc.find("figure.chart") {
+			walk(f, func(s *node) {
+				if s.Name == "svg" && strings.Contains(s.attr("aria-label"), "was shown, by where") {
+					strips++
+					if !slices.Contains(strings.Fields(s.attr("class")), "vb1000") {
+						t.Errorf("%s: the strip svg has class %q, want vb1000", p.Name, s.attr("class"))
+					}
+				}
+			})
+		}
+	}
+	if strips == 0 {
+		t.Error("no strip svg on any page")
+	}
+}

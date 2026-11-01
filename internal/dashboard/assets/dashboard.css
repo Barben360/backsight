@@ -553,3 +553,11 @@ details.tabs .count { font-variant-numeric: tabular-nums; color: var(--fg-3); fo
 .day-nav { justify-content: space-between; }
 th.side, td.side { border-left: 1px solid var(--border); }
 .state-notfound, .state-bad { max-width: 60ch; }
+
+/* ---------- narrow screens and chart size: additions to the design ---------- */
+/* A row of links wraps and a command box stays inside its card, so no page scrolls sideways at 390 px. */
+.seg { flex-wrap: wrap; max-width: 100%; }
+.empty .cmd { max-width: 100%; }
+/* A chart is drawn at most about 1.13 times its viewBox, so its 12-unit text is the same size on every chart. */
+.vb560 { max-width: 630px; }
+.vb1000 { max-width: 1125px; }
