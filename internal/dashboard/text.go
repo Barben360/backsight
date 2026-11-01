@@ -42,7 +42,7 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 	started := s.now()
 	prefs := s.prefsOf(r)
 	if r.URL.RawQuery != "" {
-		s.statePage(w, r, http.StatusBadRequest, textTitle, prefs, sentence(textNoParams), 0)
+		s.statePage(w, r, http.StatusBadRequest, kindBad, textTitle, prefs, sentence(textNoParams), 0)
 		return
 	}
 	ctx := r.Context()
@@ -62,7 +62,7 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 	}
 	q, err := views.Query("memories", views.Params{Limit: 50, Text: true}, id, s.now())
 	if err != nil {
-		s.statePage(w, r, http.StatusBadRequest, textTitle, prefs, sentence(err.Error()), 0)
+		s.statePage(w, r, http.StatusBadRequest, kindBad, textTitle, prefs, sentence(err.Error()), 0)
 		return
 	}
 	// Never s.data.result: the result cache's key ignores Text.

@@ -18,7 +18,6 @@ import (
 
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
-	"github.com/Barben360/backsight/internal/views"
 )
 
 // pageGet is the status and unescaped body of GET path under ck.
@@ -130,16 +129,16 @@ func TestStatePages(t *testing.T) {
 		}, "/", firstBuildSentence},
 		{"updating", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, index.ErrUpdateInProgress} })
-		}, "/", sentence(views.UpdatingSentence)},
+		}, "/", "Try again in a minute."},
 		{"updated", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.side = true })
-		}, "/", "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."},
+		}, "/", "Stop this dashboard (Ctrl+C in its terminal) and start it again:"},
 		{"broken", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, errors.New("boom /secret/path")} })
 		}, "/", "The metrics index could not be read"},
 		{"catch-up meets an update", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.catchUpErr = index.ErrUpdateInProgress })
-		}, "/quality", sentence(views.UpdatingSentence)},
+		}, "/quality", "Try again in a minute."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -162,7 +161,7 @@ func TestStatePages(t *testing.T) {
 		h := dataHarness(t)
 		h.ix.set(func(f *fakeIndex) { f.block = make(chan struct{}) })
 		r, b := pageGet(t, h, h.login(), "/")
-		if r.StatusCode != 503 || !strings.Contains(b, "The page took too long: try again.") {
+		if r.StatusCode != 503 || !strings.Contains(b, "The page took too long.") {
 			t.Errorf("%d %q", r.StatusCode, b)
 		}
 	})

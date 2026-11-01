@@ -40,8 +40,7 @@ const (
 	firstBuildSentence = "Building the metrics index from this PC's history. This page refreshes every 2 seconds."
 	// firstBuildTextSentence is the text page's: it never refreshes.
 	firstBuildTextSentence = "Building the metrics index from this PC's history. Open the text again in a few seconds."
-	updatedPage            = "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."
-	tooSlowPage            = "The page took too long: try again."
+	updatedPage            = updatedTitle // the heading of the page that says backsight was updated
 )
 
 // declared reads the views header of a template file; ok is false when
@@ -142,6 +141,7 @@ type PageData struct {
 	L     format.Locale              // the browser's language: numbers are written by funcs that take it; English on the 401 page
 	P     views.Params               // the page's parameters: its links carry the window and filters
 	CLI   string                     // the command that prints the page's first view
+	State *StateView                 // the state pages' words; nil elsewhere
 }
 
 // Frame is what every page shows around its content.
@@ -461,7 +461,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p, err = views.FromValues(first, q)
 		}
 		if err != nil {
-			s.statePage(w, r, http.StatusBadRequest, title, prefs, sentence(err.Error()), 0)
+			s.statePage(w, r, http.StatusBadRequest, kindBad, title, prefs, sentence(err.Error()), 0)
 			return
 		}
 		if p.DevSet { // the query beats the preference for this request
@@ -541,11 +541,11 @@ func (s *Server) notReadyPage(w http.ResponseWriter, r *http.Request, st indexSt
 		if kindOf[r.Pattern] == "text" {
 			reload, msg = 0, firstBuildTextSentence
 		}
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, msg, reload)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindBuilding, "backsight", prefs, msg, reload)
 	case stateUpdating:
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, sentence(views.UpdatingSentence), 0)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindUpdating, "backsight", prefs, "", 0)
 	case stateUpdated:
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, updatedPage, 0)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindUpdated, "backsight", prefs, "", 0)
 	default:
 		return false
 	}
@@ -556,11 +556,11 @@ func (s *Server) notReadyPage(w http.ResponseWriter, r *http.Request, st indexSt
 // deadline is the timeout page, an unclassified failure a fixed sentence.
 func (s *Server) failurePage(w http.ResponseWriter, r *http.Request, title string, prefs Prefs, err error) {
 	if errors.Is(r.Context().Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		s.statePage(w, r, http.StatusServiceUnavailable, title, prefs, tooSlowPage, 0)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindTimeout, title, prefs, "", 0)
 		return
 	}
 	status, reported := apiFailure(err)
-	s.statePage(w, r, status, title, prefs, sentence(reported.Error()), 0)
+	s.statePage(w, r, status, failureKind(status), title, prefs, sentence(reported.Error()), 0)
 }
 
 // sentence is a reported message as a page shows it: its first letter
@@ -577,11 +577,12 @@ func sentence(s string) string {
 	return string(r)
 }
 
-// statePage answers status with the state page: a sentence, and for
-// reload > 0 a browser that asks again after that many seconds.
-func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, title string, prefs Prefs, msg string, reload int) {
+// statePage answers status with the state page of kind: a sentence, and
+// for reload > 0 a browser that asks again after that many seconds.
+func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, kind, title string, prefs Prefs, msg string, reload int) {
 	data := s.pageData(r, title, prefs, s.now())
 	data.Frame.Reload, data.Msg = reload, msg
+	data.State = stateOf(kind, title, msg, data.Frame.Path)
 	var buf bytes.Buffer
 	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", data); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")

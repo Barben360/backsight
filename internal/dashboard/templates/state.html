@@ -1,5 +1,20 @@
 {{/* views: none */}}
-{{/* A state, error or not-found page. Fields read: .Frame, .Msg. */}}
-{{template "head" .}}{{template "top" .}}
-<p>{{.Msg}}</p>
-{{template "foot" .}}
+{{/*
+  A state, error or not-found page. Fields read: .Frame, .Msg, .State (Kind, Title, Msg,
+  Command, Retry). The build, update and timeout pages are a centred card; the pages that
+  answer a question (not found, bad request, broken) keep the frame and its question.
+*/}}
+{{template "head" .}}{{if and .State (or (eq .State.Kind "building") (eq .State.Kind "updating") (eq .State.Kind "updated") (eq .State.Kind "timeout"))}}<div class="page">
+<main id="main" class="solo">
+<div class="solo-box card">
+<img class="logo-l" src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"><img class="logo-d" src="{{asset "logo-dark.svg"}}" width="24" height="24" alt="backsight">
+{{if eq .State.Kind "updating"}}<span class="v-ico st-learn" aria-hidden="true"></span>
+{{else if eq .State.Kind "updated"}}<span class="v-ico st-ok" aria-hidden="true"></span>
+{{else if eq .State.Kind "timeout"}}<span class="v-ico st-watch" aria-hidden="true"></span>
+{{end}}<div class="page-head"><h1>{{.State.Title}}</h1></div>
+<p class="sub">{{.State.Msg}}</p>
+{{with .State.Command}}{{template "cmd" .}}
+{{end}}{{with .State.Retry}}<a class="btn" href="{{.}}"><span class="i i-refresh"></span>Try again</a>
+{{end}}</div>
+{{else}}{{template "top" .}}<p class="sub">{{.Msg}}</p>
+{{end}}{{template "foot" .}}

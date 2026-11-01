@@ -26,10 +26,11 @@ func Templates() fs.FS {
 // data, nothing.
 var unauthorizedPage = renderStatic("unauthorized.html")
 
-// renderStatic renders a template that reads nothing from its data. A
+// renderStatic renders a template that reads nothing from its data, with
+// the frame's partials. A
 // template that fails to parse or render is a programming error.
 func renderStatic(name string) []byte {
-	t := template.Must(template.New(name).Funcs(funcs).Option("missingkey=error").ParseFS(templateFS, "templates/"+name))
+	t := template.Must(template.New(name).Funcs(funcs).Option("missingkey=error").ParseFS(templateFS, "templates/frame.html", "templates/"+name))
 	var b bytes.Buffer
 	if err := t.Execute(&b, PageData{}); err != nil {
 		panic(err)

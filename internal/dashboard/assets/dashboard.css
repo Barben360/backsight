@@ -427,6 +427,12 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
 .solo-box { max-width: 520px; display: flex; flex-direction: column; align-items: center; gap: var(--sp-4); text-align: center; }
 .solo-box img { height: var(--logo-401); width: auto; }
 .solo-box h1 { font-size: var(--fs-xl); }
+.solo-box .cmd { width: 100%; }
+.solo-box .cmd code { text-align: left; }
+.solo-box.card { width: min(520px, 100%); align-items: center; padding: 40px; gap: 16px; }
+.solo-box.card img { height: 24px; }
+.solo-box.card h1 { font-size: 20px; text-wrap: balance; }
+.solo-box.card .page-head { justify-content: center; }
 .progress { width: 100%; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
 .progress span { display: block; height: 100%; background: var(--c-used); }
 

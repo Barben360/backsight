@@ -12,9 +12,14 @@
 <script src="{{asset "copy.js"}}" defer></script>
 </head>
 <body>
-<main>
-<p><img src="{{asset "logo-light.svg"}}" width="64" height="64" alt="backsight"></p>
-<p>This dashboard needs a fresh link: run backsight dashboard link in a terminal and open the link it prints.</p>
+<main class="solo">
+<div class="solo-box">
+<img class="logo-l" src="{{asset "logo-light.svg"}}" width="64" height="64" alt="backsight"><img class="logo-d" src="{{asset "logo-dark.svg"}}" width="64" height="64" alt="backsight">
+<h1>This link has expired.</h1>
+<p class="sub">Run this in a terminal on this PC for a new one:</p>
+{{template "cmd" "backsight dashboard link"}}
+<p class="xs muted">Each link opens the dashboard once. It only answers on this PC (127.0.0.1) and forgets you after 2 hours idle.</p>
+</div>
 </main>
 </body>
 </html>
