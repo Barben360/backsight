@@ -78,10 +78,10 @@ func TestStripShapesAndRows(t *testing.T) {
 		`<svg class="vb1000" viewBox="0 0 1000 122"`,
 		`<svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-used"`,
 		`</svg>shown, then ignored</span>`, `</svg>pending</span>`, `<i class="sw sw-dash"></i>retired`,
-		`<th>When</th><th>Where</th><th>What</th><th>Detail</th>`,
+		`<th scope="col">When</th><th scope="col">Where</th><th scope="col">What</th><th scope="col">Detail</th>`,
 		`<td>all</td><td>retired</td><td>retired on Oct 4</td>`, `<td>at session start</td><td>shown only</td>`)
 	// the table is in time order, the label row text aligned left.
-	if strings.Contains(out, `<td class="r">`) || strings.Contains(out, `<th class="r">`) {
+	if strings.Contains(out, `<td class="r">`) || strings.Contains(out, `<th class="r"`) {
 		t.Error("the strip table has no right-aligned column")
 	}
 }
@@ -458,7 +458,7 @@ func TestStripTruncatedNamesTakeFromTheMarkBudget(t *testing.T) {
 // The plot is as tall as its rows: a single row is the row band plus the
 // axis band, not the five-row height with an empty area under it.
 func TestStripHeightFitsItsRows(t *testing.T) {
-	vb := regexp.MustCompile(`viewBox="0 0 1000 (\d+)" role="img"`)
+	vb := regexp.MustCompile(`viewBox="0 0 1000 (\d+)" role="(?:img|group)"`)
 	height := func(rows int) int {
 		c := baseStrip()
 		c.Rows = c.Rows[:0]

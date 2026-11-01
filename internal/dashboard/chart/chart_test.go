@@ -163,13 +163,24 @@ func TestLineGeometry(t *testing.T) {
 	must(t, l, `<line class="thr" x1="44.0" x2="992.0" y1="106.0" y2="106.0">`, `class="thr-t ta-e"`, `>2.5 s</text>`, `>5000</text>`)
 }
 
+// A table fallback is named after its chart and its headers scope columns
+// (red without the caption and the scope).
+func TestTableFallbackHasCaptionAndScopes(t *testing.T) {
+	out := keep(string(usedLine([]string{"Oct 24", "Oct 25"}, p(0.5), nil).HTML()))
+	label := regexp.MustCompile(`<svg[^>]*aria-label="([^"]*)"`).FindStringSubmatch(out)[1]
+	must(t, out, `<table class="tbl"><caption class="sr-only">`+label+`</caption>`)
+	if strings.Contains(out, "<th>") || strings.Contains(out, `<th class="r">`) {
+		t.Error("a header cell without scope")
+	}
+}
+
 func TestLineTableFallback(t *testing.T) {
 	out := keep(string(func() Line {
 		c := usedLine([]string{"Oct 24", "Oct 25"}, p(0.5), nil)
 		c.N, c.NName = []int64{3, 4}, "turns"
 		return c
 	}().HTML()))
-	must(t, out, `<th>Day</th>`, `<th class="r">Used</th>`, `<th class="r">turns</th>`,
+	must(t, out, `<th scope="col">Day</th>`, `<th class="r" scope="col">Used</th>`, `<th class="r" scope="col">turns</th>`,
 		`<tr><td>Oct 24</td><td class="r">50 %</td><td class="r">3</td></tr>`,
 		`<tr><td>Oct 25</td><td class="r">—</td><td class="r">4</td></tr>`,
 		`<summary>Show as a table</summary>`, `<details class="tblfb">`)
@@ -230,7 +241,7 @@ func TestChartEscapesText(t *testing.T) {
 		t.Error("the more-command is not escaped")
 	}
 	line := keep(string(c.HTML()))
-	for _, want := range []string{`aria-label="` + escaped + `"`, `<th>` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
+	for _, want := range []string{`aria-label="` + escaped + `"`, `<th scope="col">` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
 		if !strings.Contains(line, want) {
 			t.Errorf("line lacks %q", want)
 		}
@@ -365,6 +376,14 @@ func TestFocusableMarks(t *testing.T) {
 	}
 	if strings.Count(big, "tabindex") != 1 || !regexp.MustCompile(`<svg[^>]*tabindex="0"`).MatchString(big) {
 		t.Error("with many positions the svg alone is the focus stop")
+	}
+	// Children of role=img are presentational: a chart with focusable marks
+	// is a group (red while it was always role=img), one without keeps img.
+	if !strings.Contains(small, `role="group" aria-label="`) || strings.Contains(small, `role="img"`) {
+		t.Error("focusable marks need role=group on the svg")
+	}
+	if !strings.Contains(big, `role="img" aria-label="`) || strings.Contains(big, `role="group"`) {
+		t.Error("with nothing focusable inside the svg stays role=img")
 	}
 	if strings.Count(mk(100), "tabindex") != 100 || strings.Count(mk(101), "tabindex") != 1 {
 		t.Error("the focus limit is 100 positions")

@@ -54,7 +54,7 @@ func TestHistBins(t *testing.T) {
 	if lines[0][2] != want {
 		t.Errorf("marker x %s, want %s", lines[0][2], want)
 	}
-	must(t, out, `<th>Rank when shown</th><th class="r">times shown</th>`, `<td>Rank 1</td><td class="r">9</td>`)
+	must(t, out, `<th scope="col">Rank when shown</th><th class="r" scope="col">times shown</th>`, `<td>Rank 1</td><td class="r">9</td>`)
 }
 
 func TestHistMergesBinsPastTheCap(t *testing.T) {
@@ -169,7 +169,7 @@ func TestHistEscapesText(t *testing.T) {
 	h := Hist{Label: markup, Size: Half, XName: markup, Unit: markup, Fmt: func(float64) string { return markup },
 		Bins: []Bin{{markup, 2}, {markup + "2", 3}}, Markers: []Marker{{markup, 1, "thr-w"}}, More: markup, Empty: markup}
 	out := string(h.HTML())
-	for _, want := range []string{`aria-label="` + escaped + `"`, `<th>` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
+	for _, want := range []string{`aria-label="` + escaped + `"`, `<th scope="col">` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
 		if !strings.Contains(out, want) {
 			t.Errorf("histogram lacks %q", want)
 		}

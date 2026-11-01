@@ -47,7 +47,7 @@ var Classes = []string{
 	"seg", "seg-fine", "hatch-ln", "val",
 	"f-used", "f-ignored", "f-undeclared", "f-shown", "f-pending", "f-summary", "f-about", "f-session",
 	"f-ok", "f-queued", "f-aside", "f-failed", "f-neutral", "f-seq1", "f-seq2", "f-seq3",
-	"mkp", "mk-pend", "lbl", "sw-dash", "mk",
+	"mkp", "mk-pend", "lbl", "sw-dash", "mk", "sr-only",
 }
 
 // known keeps the tokens of a caller's class list that Classes defines.
@@ -117,11 +117,17 @@ func figure(label string, sz Size, focusable bool, svg string, legend []legendIt
 func figureLegend(label string, sz Size, focusable bool, svg string, legend string, legendTop bool, t tableData) string {
 	var b strings.Builder
 	b.WriteString(`<figure class="chart">`)
+	// The children of role=img are presentational: a chart whose marks are
+	// focusable (the svg itself is not) is a group so they keep their names.
+	role := "img"
+	if !focusable {
+		role = "group"
+	}
 	if legendTop {
 		b.WriteString(`<div class="legend">` + legend + `</div>`)
 	}
 	b.WriteString(`<div class="chart-plot"><svg class="` + esc(known(sz.Class)) + `" viewBox="0 0 ` +
-		strconv.Itoa(sz.W) + ` ` + strconv.Itoa(sz.H) + `" role="img" aria-label="` + esc(label) + `"`)
+		strconv.Itoa(sz.W) + ` ` + strconv.Itoa(sz.H) + `" role="` + role + `" aria-label="` + esc(label) + `"`)
 	if focusable {
 		b.WriteString(` tabindex="0"`)
 	}
@@ -129,12 +135,12 @@ func figureLegend(label string, sz Size, focusable bool, svg string, legend stri
 	if !legendTop {
 		b.WriteString(`<div class="legend">` + legend + `</div>`)
 	}
-	b.WriteString(`<details class="tblfb"><summary>Show as a table</summary><div class="tbl-wrap"><table class="tbl"><thead><tr>`)
+	b.WriteString(`<details class="tblfb"><summary>Show as a table</summary><div class="tbl-wrap"><table class="tbl"><caption class="sr-only">` + esc(label) + `</caption><thead><tr>`)
 	for i, h := range t.head {
 		if i == 0 || t.text {
-			b.WriteString(`<th>` + esc(h) + `</th>`)
+			b.WriteString(`<th scope="col">` + esc(h) + `</th>`)
 		} else {
-			b.WriteString(`<th class="r">` + esc(h) + `</th>`)
+			b.WriteString(`<th class="r" scope="col">` + esc(h) + `</th>`)
 		}
 	}
 	b.WriteString(`</tr></thead><tbody>`)

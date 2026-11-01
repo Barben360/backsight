@@ -561,3 +561,5 @@ th.side, td.side { border-left: 1px solid var(--border); }
 /* A chart is drawn at most about 1.13 times its viewBox, so its 12-unit text is the same size on every chart. */
 .vb560 { max-width: 630px; }
 .vb1000 { max-width: 1125px; }
+/* An attention item's pill keeps its own height when the text beside it wraps. */
+.att-item > .pill { align-self: start; }

@@ -60,7 +60,7 @@ func TestBarsStackBottomUp(t *testing.T) {
 	if got := len(hit(out)); got != 2 {
 		t.Errorf("hit rects = %d, want 2", got)
 	}
-	must(t, out, `<th>Day</th>`, `<th class="r">used</th>`, `<tr><td>Oct 25</td><td class="r">0</td><td class="r">2</td></tr>`)
+	must(t, out, `<th scope="col">Day</th>`, `<th class="r" scope="col">used</th>`, `<tr><td>Oct 25</td><td class="r">0</td><td class="r">2</td></tr>`)
 
 	none := kept(string(outcomes([]string{"a", "b"}, []float64{1, 0}, []float64{0, 0}).Bars()))
 	must(t, none, `<title>b · none</title>`)
@@ -328,7 +328,7 @@ func TestStackEscapesText(t *testing.T) {
 		}
 	}
 	bars := string(c.Bars())
-	for _, want := range []string{`aria-label="` + escaped + `"`, `<th>` + escaped, `<span><i class="sw f-used"></i>` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
+	for _, want := range []string{`aria-label="` + escaped + `"`, `<th scope="col">` + escaped, `<span><i class="sw f-used"></i>` + escaped, `>` + escaped + `</text>`, `<title>` + escaped} {
 		if !strings.Contains(bars, want) {
 			t.Errorf("bars lack %q", want)
 		}
@@ -461,7 +461,7 @@ func TestAreaSkipsZeroPartsAndDrawsOnePositionAsBand(t *testing.T) {
 	if strings.Count(out, `<path class="seg`) != 1 || strings.Count(out, `<i class="sw f-ignored">`) != 1 {
 		t.Errorf("an all-zero part draws no path but stays in the legend: %s", out)
 	}
-	must(t, out, `<th class="r">ignored</th>`)
+	must(t, out, `<th class="r" scope="col">ignored</th>`)
 
 	one := string(outcomes([]string{"only"}, []float64{4}, []float64{2}).Area())
 	paths := regexp.MustCompile(`<path class="seg [^"]*" d="([^"]*)"`).FindAllStringSubmatch(one, -1)

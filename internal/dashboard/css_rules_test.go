@@ -440,3 +440,14 @@ func TestChartsAreNotScaledUp(t *testing.T) {
 		t.Error("no strip svg on any page")
 	}
 }
+
+// A grid item stretches to its row: the attention pill would grow into a
+// tall oval beside wrapped text. Red without the align-self rule.
+func TestAttentionPillDoesNotStretch(t *testing.T) {
+	for _, r := range cssRules(dashboardCSS(t)) {
+		if slices.Contains(r.Sel, ".att-item > .pill") && r.declStarts("align-self", "start") {
+			return
+		}
+	}
+	t.Error(".att-item > .pill has no align-self: start")
+}

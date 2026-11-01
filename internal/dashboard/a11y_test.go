@@ -315,12 +315,55 @@ func TestLabels(t *testing.T) {
 		}
 		for _, s := range doc.find("svg") {
 			switch {
-			case s.attr("role") == "img":
+			case s.attr("role") == "img" || s.attr("role") == "group":
 				if strings.TrimSpace(s.attr("aria-label")) == "" {
-					t.Errorf("svg role=img at line %d has no aria-label", s.line)
+					t.Errorf("svg role=%s at line %d has no aria-label", s.attr("role"), s.line)
+				}
+				// The children of role=img are presentational: nothing
+				// inside may be a focus stop.
+				if s.attr("role") == "img" {
+					walk(s, func(k *node) {
+						if k != s && k.attr("tabindex") == "0" {
+							t.Errorf("%s at line %d is focusable inside svg role=img", k.Name, k.line)
+						}
+					})
 				}
 			case s.attr("aria-hidden") != "true" && !within(s.Parent, "svg", ""):
-				t.Errorf("svg at line %d is neither role=img with a label nor aria-hidden", s.line)
+				t.Errorf("svg at line %d is neither role=img or group with a label nor aria-hidden", s.line)
+			}
+		}
+		// A copy button is named after the command it copies, so a page
+		// with several does not read "Copy, Copy, Copy".
+		for _, b := range doc.find("button.copy") {
+			if b.has("data-copy") {
+				continue // the memory page's id button has its own name
+			}
+			name, code := b.attr("aria-label"), b.Parent.first("code")
+			if code == nil || name != "Copy: "+strings.TrimSpace(code.text()) {
+				t.Errorf("copy button at line %d is named %q, want %q", b.line, name, "Copy: <its command>")
+			}
+		}
+		// A tile is named by its heading, not by a second copy of the text.
+		for _, tile := range doc.find("article.tile") {
+			h := tile.first("h3")
+			if tile.has("aria-label") || h == nil || tile.attr("aria-labelledby") != h.attr("id") || h.attr("id") == "" {
+				t.Errorf("tile at line %d is not named by aria-labelledby on its h3", tile.line)
+			}
+		}
+		for _, g := range doc.find("div.tgroups") {
+			if g.attr("role") != "group" {
+				t.Errorf("div.tgroups at line %d has an aria-label but no role", g.line)
+			}
+		}
+		// Every table fallback is named and scopes its column headers.
+		for _, tb := range doc.find("details.tblfb table") {
+			if c := tb.first("caption"); c == nil || strings.TrimSpace(c.text()) == "" {
+				t.Errorf("table fallback at line %d has no caption", tb.line)
+			}
+			for _, th := range tb.find("th") {
+				if th.attr("scope") != "col" && th.attr("scope") != "row" {
+					t.Errorf("th %q at line %d has no scope", th.text(), th.line)
+				}
 			}
 		}
 		for _, in := range doc.find("input") {

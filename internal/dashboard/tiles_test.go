@@ -183,10 +183,12 @@ func TestTileMarkup(t *testing.T) {
 	tiles := n.find("article.tile")
 	var names []string
 	for _, a := range tiles {
-		names = append(names, a.attr("aria-label"))
-		if h := a.first("h3.tile-name"); h == nil || h.text() != a.attr("aria-label") {
-			t.Errorf("%s: no h3.tile-name", a.attr("aria-label"))
+		h := a.first("h3.tile-name")
+		if h == nil || a.has("aria-label") || a.attr("aria-labelledby") != h.attr("id") {
+			t.Errorf("tile at line %d: no h3.tile-name it is labelled by", a.line)
+			continue
 		}
+		names = append(names, h.text())
 		if a.first("svg.spark[role=img]") == nil {
 			t.Errorf("%s: no spark", a.attr("aria-label"))
 		}
