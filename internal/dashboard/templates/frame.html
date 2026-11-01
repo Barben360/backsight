@@ -196,7 +196,7 @@
 
 {{/* dl: dot is a list of DLRow; rows of a description list, a moment in the middle of a row's text. */}}
 {{define "dl"}}<dl class="dl">
-{{range .}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{if .Class}}<span class="st {{.Class}}">{{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}{{if .Class}}</span>{{end}}</dd>
+{{range .}}<dt>{{.Label}}</dt><dd{{if or .Mono .Num}} class="{{if .Mono}}mono{{end}}{{if .Num}}num{{end}}"{{end}}>{{if .Class}}<span class="st {{.Class}}">{{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}{{if .Class}}</span>{{end}}</dd>
 {{end}}</dl>
 {{end}}
 

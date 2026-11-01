@@ -215,18 +215,19 @@ func (d PageData) lookCard(r *metrics.Result, doctor MetricView) LookCard {
 			warn++
 		}
 	}
+	// A check reads the same word here as in the table of checks.
 	for _, status := range []string{"error", "warn"} {
 		for _, row := range r.Tables.Doctor {
 			if row.Status != status {
 				continue
 			}
-			w := Word{"watch", "st-watch"}
+			class := "st-watch"
 			if status == "error" {
-				w, bad = Word{"attention", "st-bad"}, bad+1
+				class, bad = "st-bad", bad+1
 			} else {
 				warn++
 			}
-			c.Items = append(c.Items, LookLine{Pill: w, Text: metrics.DoctorName(row.ID) + ": " + wordOr(views.DoctorStatusWords, status, status), Cmd: row.Fix})
+			c.Items = append(c.Items, LookLine{Pill: Word{views.DoctorStatusWords[status], class}, Text: metrics.DoctorName(row.ID), Cmd: row.Fix})
 		}
 	}
 	var counts []string

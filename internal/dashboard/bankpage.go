@@ -124,8 +124,8 @@ func bankOf(d PageData) BankPage {
 			built = DLRow{Label: "Last built", Time: format.Rel(r.GeneratedAt, at, d.Loc)}
 		}
 		b.Consolidation.Rows = []DLRow{
-			textRow("Waiting", format.Count(l, pending, "memory", "memories")),
-			textRow("Failed", l.Int(failed)),
+			{Label: "Waiting", Pre: format.Count(l, pending, "memory", "memories"), Num: true},
+			{Label: "Failed", Pre: l.Int(failed), Num: true},
 			built,
 		}
 		b.Consolidation.Info = "Building summaries groups facts into one memory. It runs on the server after each send."

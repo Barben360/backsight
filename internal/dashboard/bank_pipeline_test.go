@@ -1200,8 +1200,8 @@ func TestSystemCards(t *testing.T) {
 		for _, li := range c.find("li.att-item") {
 			items = append(items, li.first("span.pill").text()+" | "+li.first("p").text())
 		}
-		// Worst first: a problem, then a warning.
-		if w := []string{"attention | memory: problem", "watch | backup: warning"}; !slices.Equal(items, w) {
+		// Worst first: a problem, then a warning; the words are the table of checks's.
+		if w := []string{"problem | memory", "warning | backup"}; !slices.Equal(items, w) {
 			t.Errorf("items %q, want %q", items, w)
 		}
 		if li := c.find("li.att-item")[1]; !hasCode(li, "backsight backup create") {
@@ -1460,5 +1460,178 @@ func TestFlowCardDrawsWhenOnlyTheResultsHaveANumber(t *testing.T) {
 	g := pageNode(t, "pipeline", false, nil)
 	if hasCode(cardOf(t, g, "w-pipeline-flow"), "backsight doctor") {
 		t.Error("advice for a pipeline that is fine")
+	}
+}
+
+func TestFixRoundBank(t *testing.T) {
+	t.Run("the kinds area keeps a leading partial day", func(t *testing.T) {
+		v, _ := metricOf(&metrics.Result{Metrics: map[string]metrics.Metric{"bank.growth": {Value: fp(1), Series: []metrics.Point{
+			{Day: "2026-10-05", Partial: true, Parts: map[string]int64{"world": 3}}, {Day: "2026-10-06", Parts: map[string]int64{"world": 1}}}}}}, "bank.growth")
+		out := parseHTML(t, string(kindsOf(en, "", v)))
+		if got := len(out.find("rect.hit")); got != 2 {
+			t.Errorf("%d days drawn, want both (the server counts a straddling bucket whole)", got)
+		}
+	})
+	t.Run("the project link keeps the whole name in its title", func(t *testing.T) {
+		long := strings.Repeat("p", 30)
+		n := pageNode(t, "bank", false, func(d *PageData) {
+			richBank(d.V["bank"])
+			d.V["bank"].Tables.ByProject = []metrics.ProjectCount{{Project: long, Memories: 2}}
+		})
+		a := cardOf(t, n, "w-bank-by_project").first("tbody a")
+		if a.attr("title") != long || a.text() == long {
+			t.Errorf("title %q text %q", a.attr("title"), a.text())
+		}
+	})
+	t.Run("the foot of a list shows only when the list is shorter than its count", func(t *testing.T) {
+		n := pageNode(t, "bank", false, func(d *PageData) {
+			richBank(d.V["bank"])
+			give(d.V["bank"], "stale.never_used", func(m *metrics.Metric) { m.Value = fp(2) }) // the 2 rows shown
+		})
+		tab := cardOf(t, n, "w-review").find("details.tabs")[0]
+		if tab.first("p.tbl-more") != nil {
+			t.Errorf("a foot for a complete list: %q", tab.text())
+		}
+		n = pageNode(t, "bank", false, func(d *PageData) {
+			richBank(d.V["bank"])
+			give(d.V["bank"], "stale.never_used", func(m *metrics.Metric) { m.Value = fp(3) })
+		})
+		if f := cardOf(t, n, "w-review").find("details.tabs")[0].first("p.tbl-more"); f == nil || !strings.Contains(f.text(), "Showing 2 of 3 memories.") {
+			t.Errorf("foot %v", f)
+		}
+	})
+	t.Run("titles of the review rows drop control characters", func(t *testing.T) {
+		n := pageNode(t, "bank", false, func(d *PageData) {
+			richBank(d.V["bank"])
+			d.V["bank"].Tables.Review.NeverUsed = []metrics.ReviewRow{{ID: "ab\x1b[31mcd", Project: "pr\x1boj", Shown: 1, Command: "backsight forget x"}}
+		})
+		cells := cardOf(t, n, "w-review").first("tbody tr").find("td")
+		if a := cells[0].first("a"); a.attr("title") != "ab[31mcd" {
+			t.Errorf("id title %q", a.attr("title"))
+		}
+		if a := cells[1].first("a"); a.attr("title") != "proj" {
+			t.Errorf("project title %q", a.attr("title"))
+		}
+	})
+	t.Run("the counts of the consolidation are numbers", func(t *testing.T) {
+		n := pageNode(t, "bank", false, func(d *PageData) { richBank(d.V["bank"]) })
+		dds := cardOf(t, n, "w-bank-consolidation").find("dl.dl dd")
+		if dds[0].attr("class") != "num" || dds[1].attr("class") != "num" || dds[2].has("class") {
+			t.Errorf("classes %q %q %q", dds[0].attr("class"), dds[1].attr("class"), dds[2].attr("class"))
+		}
+	})
+}
+
+func TestFixRoundPipeline(t *testing.T) {
+	t.Run("failed tasks are capped", func(t *testing.T) {
+		n := pageNode(t, "pipeline", false, func(d *PageData) {
+			richPipeline(d.V["pipeline"])
+			d.V["pipeline"].Tables.FailedOperations = nil
+			for range 130 {
+				d.V["pipeline"].Tables.FailedOperations = append(d.V["pipeline"].Tables.FailedOperations, metrics.OperationRow{Type: "retain", AgeMS: 60_000, Retries: 1})
+			}
+		})
+		c := cardOf(t, n, "w-server-queue")
+		if got := len(c.find("tbody tr")); got != 120 {
+			t.Errorf("%d rows, want the cap (120)", got)
+		}
+		if m := c.first("p.tbl-more"); m == nil || !strings.Contains(m.text(), "Showing 120 of 130 failed tasks") || !hasCode(m, "backsight stats pipeline --days 30 --json") {
+			t.Errorf("cap note %v", m)
+		}
+		exact := pageNode(t, "pipeline", false, func(d *PageData) { richPipeline(d.V["pipeline"]) })
+		if cardOf(t, exact, "w-server-queue").first("p.tbl-more") != nil {
+			t.Error("a cap note under a complete table")
+		}
+	})
+	t.Run("job result classes", func(t *testing.T) {
+		n := pageNode(t, "pipeline", false, func(d *PageData) {
+			richPipeline(d.V["pipeline"])
+			at := d.V["pipeline"].GeneratedAt
+			d.V["pipeline"].Tables.Jobs = []metrics.JobRow{{Name: "tick", Status: "partial", LastAt: at, MS: 1}, {Name: "tick", Status: "started", LastAt: at, MS: 1},
+				{Name: "tick", Status: "error", LastAt: at, MS: 1}, {Name: "tick", Status: "zz", LastAt: at, MS: 1}}
+		})
+		var got []string
+		for _, s := range cardOf(t, n, "w-jobs-last_run").find("tbody span.st") {
+			got = append(got, s.attr("class")+"|"+s.text())
+		}
+		w := []string{"st st-watch|partly done", "st st-watch|started, not finished", "st st-bad|failed", "st st-few|not recorded"}
+		if !slices.Equal(got, w) {
+			t.Errorf("results %q, want %q", got, w)
+		}
+	})
+	t.Run("kinds with no failure in the window stay out of the chart", func(t *testing.T) {
+		n := pageNode(t, "pipeline", false, func(d *PageData) {
+			richPipeline(d.V["pipeline"])
+			give(d.V["pipeline"], "hooks.failures", func(m *metrics.Metric) {
+				m.Extra = map[string]any{"by_kind": map[string]int64{"timeout": 2}, "last_24h": map[string]int64{"panic": 1, "timeout": 1}}
+			})
+		})
+		c := cardOf(t, n, "w-hooks-failures")
+		var legend []string
+		for _, s := range c.find("figure.chart .legend span") {
+			legend = append(legend, s.text())
+		}
+		if !slices.Equal(legend, []string{"ran too long"}) {
+			t.Errorf("legend %v", legend)
+		}
+		if got := len(c.find("table.tbl")[0].find("tbody tr")); got != 2 {
+			t.Errorf("%d rows: the kind seen in the last 24 h alone belongs in the table", got)
+		}
+	})
+	t.Run("the alert icon follows its class", func(t *testing.T) {
+		bad := pageNode(t, "pipeline", false, func(d *PageData) { richPipeline(d.V["pipeline"]) })
+		if mainOf(t, bad).first("div.state span.i-bad") == nil {
+			t.Error("a bad alert without its icon")
+		}
+		watch := pageNode(t, "pipeline", false, func(d *PageData) {
+			richPipeline(d.V["pipeline"])
+			give(d.V["pipeline"], "pipeline.flow", func(m *metrics.Metric) { m.Status = metrics.StatusWatch })
+			give(d.V["pipeline"], "local.backlog", func(m *metrics.Metric) { m.Status = metrics.StatusOK })
+			give(d.V["pipeline"], "hooks.failures", func(m *metrics.Metric) { m.Status = metrics.StatusOK })
+		})
+		if a := mainOf(t, watch).first("div.state"); a == nil || a.first("span.i-watch") == nil || a.first("span.i-bad") != nil {
+			t.Errorf("watch alert %v", a)
+		}
+	})
+	t.Run("a status with nothing to say shows no alert", func(t *testing.T) {
+		n := pageNode(t, "pipeline", false, func(d *PageData) {
+			give(d.V["pipeline"], "pipeline.flow", func(m *metrics.Metric) {
+				m.Status = metrics.StatusWatch
+				m.Extra = map[string]any{"ok": int64(1), "failed": int64(0), "set_aside": int64(0), "waiting": int64(0), "backlog_oldest_ms": int64(0)}
+			})
+		})
+		if a := mainOf(t, n).first("div.state"); a != nil {
+			t.Errorf("an alert with no sentence: %q", a.text())
+		}
+	})
+	t.Run("unknown sends are judged on the days drawn", func(t *testing.T) {
+		v, _ := metricOf(&metrics.Result{Metrics: map[string]metrics.Metric{"retain.outcomes": {Value: fp(3), Series: []metrics.Point{
+			{Day: "2026-10-05", Partial: true, Parts: map[string]int64{"unknown": 2}}, {Day: "2026-10-06", Parts: map[string]int64{"ok": 1}}}}}}, "retain.outcomes")
+		out := parseHTML(t, string(flowOf(en, "", v)))
+		for _, s := range out.find(".legend span") {
+			if s.text() == "unknown" {
+				t.Error("`unknown` is in the legend, though its only day is not drawn")
+			}
+		}
+	})
+}
+
+func TestFixRoundSystem(t *testing.T) {
+	lag := func(secs int64) string {
+		n := pageNode(t, "system", false, func(d *PageData) {
+			richSystem(d.V["system"])
+			d.V["system"].Tables.System.Index.LagSeconds = secs
+		})
+		for _, r := range dlOf(cardOf(t, n, "w-this-pc")) {
+			if r[0] == "History index" {
+				return r[1]
+			}
+		}
+		return ""
+	}
+	for secs, want := range map[int64]string{0: "updated 3 min ago, up to date", 1: "updated 3 min ago, 1 s behind", 59: "updated 3 min ago, 59 s behind", 60: "updated 3 min ago, 1 min behind"} {
+		if got := lag(secs); got != want {
+			t.Errorf("lag %d: %q, want %q", secs, got, want)
+		}
 	}
 }

@@ -503,7 +503,7 @@ func (d PageData) strip(perSession, perPrompt, rl, sl, price MetricView) []Fig {
 type DLRow struct {
 	Label, Pre, Post, Class string
 	Time                    format.Time
-	Mono                    bool
+	Mono, Num               bool
 }
 
 // textRow is a row of plain text.

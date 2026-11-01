@@ -304,6 +304,9 @@ func TestDevWidgetsOnlyInDevMode(t *testing.T) {
 	}
 }
 
+// chartOrCounts are the chart figures and the queue counts of /pipeline.
+var chartOrCounts = regexp.MustCompile(`(?s)<figure class="chart">.*?</figure>|<div class="row small sub counts">.*?</div>`)
+
 func TestPagesShowNoJargon(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
@@ -343,10 +346,15 @@ func TestPagesShowNoJargon(t *testing.T) {
 			}
 		}
 		for _, k := range codes {
-			if k == "queued" && path == "/pipeline" { // the sends chart says `queued`: the plain word the design gives it
-				continue
+			ns, tx := nodes, text
+			if k == "queued" && path == "/pipeline" {
+				// The sends chart and the queue counts say `queued`: the plain word the design gives it.
+				// Anywhere else on the page it would be a raw status.
+				rest := chartOrCounts.ReplaceAllString(b, "")
+				ns = textNodes(rest)
+				tx = strings.Join(ns, " ")
 			}
-			if strings.ContainsAny(k, "_0123456789") && strings.Contains(text, k) || slices.Contains(nodes, k) {
+			if strings.ContainsAny(k, "_0123456789") && strings.Contains(tx, k) || slices.Contains(ns, k) {
 				t.Errorf("%s shows the code %q", path, k)
 			}
 		}
