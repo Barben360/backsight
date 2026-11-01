@@ -361,6 +361,58 @@ func TestUninstallRemovesOnlyItsPathEntry(t *testing.T) {
 	}
 }
 
+// The backsight.exe.old-<n> copies a swap of the PATH command left
+// (setup run from that command renames it aside: pointShimWindows) go
+// with it, and <bin> with them.
+func TestUninstallRemovesThePathCommandsOldCopies(t *testing.T) {
+	_, d, _ := windowsUninstallHost(t)
+	link := pathCommand(d.Bin)
+	olds := []string{link + ".old-1", link + ".old-3"}
+	for _, p := range olds {
+		if err := os.WriteFile(p, []byte("MZ an older copy"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, env, out := uninstall(t, "--plan")
+	if s := stepNamed(env.Data, "binaries"); code != output.OK || s == nil || !strings.Contains(s.Detail, olds[1]) {
+		t.Errorf("the plan does not name %s: exit %d\n%s", olds[1], code, out)
+	}
+	if !onDisk(olds[0]) {
+		t.Fatal("the plan removed a copy")
+	}
+	if code, _, out := uninstall(t); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, p := range append(olds, link, d.Bin) {
+		if onDisk(p) {
+			t.Errorf("%s stays", p)
+		}
+	}
+}
+
+// A file in <bin> that is neither the PATH command, its signed checksums
+// nor one of its .old-<n> copies stays, and <bin> with it.
+func TestUninstallKeepsAnotherFileBesideThePathCommand(t *testing.T) {
+	_, d, _ := windowsUninstallHost(t)
+	other := []string{filepath.Join(d.Bin, "notes.txt"), pathCommand(d.Bin) + ".old-x"}
+	for _, p := range other {
+		if err := os.WriteFile(p, []byte("mine"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, _, out := uninstall(t); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, p := range other {
+		if !onDisk(p) {
+			t.Errorf("%s was removed", p)
+		}
+	}
+	if onDisk(pathCommand(d.Bin)) {
+		t.Error("the PATH command stays")
+	}
+}
+
 // A <bin>\backsight.exe that is not a file (not backsight's copy) stays,
 // and <bin> stays on the user PATH with it.
 func TestUninstallKeepsAPathEntryWhoseCommandIsNotOurs(t *testing.T) {

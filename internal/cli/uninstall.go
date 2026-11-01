@@ -1036,13 +1036,14 @@ func uninstallBinaries(d paths.Dirs, trash *trashBin, keep []string, plan bool) 
 	a := binariesAction{undoAction: undoAction{Name: "binaries"}}
 	var warn []string
 	bin, mkt := filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace")
-	link := ""
+	link, olds := "", []string(nil)
 	if runtime.GOOS == "windows" && d.Bin != "" {
 		// A copy of the shim: any file there is backsight's (install
-		// refuses another), anything else stays.
+		// refuses another), anything else stays. Its .old-<n> copies
+		// (a swap from that running command renamed it aside) go with it.
 		if p, ours, there := windowsPathCommand(d); ours {
-			link = p
-			a.paths = append(a.paths, p)
+			link, olds = p, shimCopies(p)
+			a.paths = append(append(a.paths, p), olds...)
 		} else if there {
 			warn = append(warn, p+" is not backsight's copy of the shim: kept; remove it by hand if it is an old backsight")
 		}
@@ -1077,10 +1078,15 @@ func uninstallBinaries(d paths.Dirs, trash *trashBin, keep []string, plan bool) 
 				return a, warn, err
 			}
 			if runtime.GOOS == "windows" {
-				// The signed checksums the copy carries (pointShimWindows),
-				// then backsight's own directory there.
+				// Its .old-<n> copies and the signed checksums the copy
+				// carries (pointShimWindows), then backsight's own
+				// directory there.
+				rm := slices.Clone(olds)
 				for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
-					if err := trash.remove(filepath.Join(d.Bin, name)); err != nil {
+					rm = append(rm, filepath.Join(d.Bin, name))
+				}
+				for _, p := range rm {
+					if err := trash.remove(p); err != nil {
 						return a, warn, err
 					}
 				}
