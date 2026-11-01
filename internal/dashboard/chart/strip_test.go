@@ -353,7 +353,7 @@ func TestStripBoundsRowsByTheMarkCap(t *testing.T) {
 	if drawn < 100 || drawn >= 700 {
 		t.Errorf("rows drawn: %d", drawn)
 	}
-	must(t, out, `<span>`+strconv.Itoa(700-drawn)+` more rows in the table</span>`)
+	must(t, out, `<span>`+strconv.Itoa(700-drawn)+` rows not drawn</span>`)
 	if strings.Contains(out, "<title>mark 699</title>") || !strings.Contains(out, "<title>mark 0</title>") {
 		t.Error("marks of the rows not drawn are drawn, or the first row is not")
 	}
@@ -362,14 +362,15 @@ func TestStripBoundsRowsByTheMarkCap(t *testing.T) {
 		t.Error("the table does not hold every mark")
 	}
 	c.Rows, c.Marks = c.Rows[:1], c.Marks[:1]
-	if strings.Contains(string(c.HTML()), "more row") {
+	if strings.Contains(string(c.HTML()), "not drawn") {
 		t.Error("nothing is hidden, nothing is said")
 	}
+	// 451 rows and no retirement: 500 / 4 = 125 are drawn, 326 are not.
 	two := baseStrip()
 	two.Rows = make([]string, 451)
 	two.Marks = []Mark{{450, t0, "used", "last"}}
-	if !strings.Contains(string(two.HTML()), "338 more rows in the table") && !strings.Contains(string(two.HTML()), "more rows in the table") {
-		t.Error("rows past the cap are not announced")
+	if o := string(two.HTML()); !strings.Contains(o, "<span>326 rows not drawn</span>") {
+		t.Errorf("rows past the cap are not counted exactly: %s", o)
 	}
 }
 
@@ -380,7 +381,7 @@ func TestStripOneHiddenRowIsSingular(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		c.Marks = append(c.Marks, Mark{0, t0, "retired", "r"})
 	}
-	must(t, string(c.HTML()), "<span>1 more row in the table</span>")
+	must(t, string(c.HTML()), "<span>1 row not drawn</span>")
 }
 
 func TestStripOtherShapesHaveTheirGeometry(t *testing.T) {
@@ -429,5 +430,27 @@ func TestStripFocusCountsRetirements(t *testing.T) {
 	}
 	if n := strings.Count(string(c.HTML()), "tabindex"); n != 1 {
 		t.Errorf("99 marks and 50 retirements are 149 stops: the svg alone is one, got %d", n)
+	}
+}
+
+func TestStripTruncatedNamesTakeFromTheMarkBudget(t *testing.T) {
+	c := baseStrip()
+	c.Rows = nil
+	// 112 rows are drawn with 50 retirements; each has a long name (a title) and 200 shows.
+	for i := 0; i < 112; i++ {
+		c.Rows = append(c.Rows, fmt.Sprintf("row number %d with a very long name", i))
+		for j := 0; j < 200; j++ {
+			c.Marks = append(c.Marks, Mark{i, t0.Add(time.Duration(j) * 5 * 24 * time.Hour / 25), "shown", "s"})
+		}
+	}
+	for i := 0; i < 50; i++ {
+		c.Marks = append(c.Marks, Mark{0, t0.Add(time.Duration(i) * time.Hour), "retired", "r"})
+	}
+	out := string(c.HTML())
+	if n := strings.Count(out, "<title>"); n > MaxMarks || n < MaxMarks-112 {
+		t.Errorf("%d titles: want at most %d and the budget used", n, MaxMarks)
+	}
+	if strings.Contains(out, "not drawn") {
+		t.Error("112 rows fit")
 	}
 }

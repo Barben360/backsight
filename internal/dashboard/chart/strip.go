@@ -290,11 +290,11 @@ func (c Strip) HTML() template.HTML {
 	}
 
 	if hidden := len(c.Rows) - nrows; hidden > 0 {
-		word := " more rows"
+		word := " rows not drawn"
 		if hidden == 1 {
-			word = " more row"
+			word = " row not drawn"
 		}
-		lg.WriteString(`<span>` + strconv.Itoa(hidden) + word + ` in the table</span>`)
+		lg.WriteString(`<span>` + strconv.Itoa(hidden) + word + `</span>`)
 	}
 	rows := make([][]string, len(all))
 	for i, m := range all {
