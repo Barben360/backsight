@@ -289,7 +289,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	// CLAUDE_CONFIG_DIR: a scheduled job has neither and reads the recorded
 	// one. "" is ~/.claude.
 	profile := ""
-	if filepath.Clean(c.loc.Dir) != filepath.Join(home, ".claude") {
+	if !isDefaultProfile(home, c.loc.Dir) {
 		profile, _ = filepath.Abs(c.loc.Dir)
 	}
 	if err := state.Update(c.dirs, "client install", func(s *state.State) error {

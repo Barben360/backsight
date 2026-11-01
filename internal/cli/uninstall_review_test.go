@@ -156,6 +156,40 @@ func TestUninstallOfAnotherProfileKeepsTheDefaultProfilesPlugin(t *testing.T) {
 	}
 }
 
+// A recorded profile naming ~/.claude another way (a symlink here; on
+// Windows another case or an 8.3 name) is the default profile: claude acts
+// on it without CLAUDE_CONFIG_DIR, and the plugin entry its own removal
+// deletes is not put back.
+func TestUninstallSeesTheDefaultProfileUnderAnotherName(t *testing.T) {
+	m := installMachine(t)
+	d := pathsOf(m.home)
+	alias := filepath.Join(m.home, "claude-alias")
+	if err := os.Symlink(filepath.Join(m.home, ".claude"), alias); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	if err := state.Update(d, "test", func(s *state.State) error { s.Client.Profile = alias; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	def := "{\n  \"enabledPlugins\": {\n    \"backsight@backsight\": true\n  }\n}\n"
+	if err := os.WriteFile(m.settings, []byte(def), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.claude.onRun = func(line, _ string) {
+		if line == "plugin uninstall "+plugin.PluginID()+" --scope user" { // Claude Code's own removal, in that profile
+			_ = os.WriteFile(m.settings, []byte("{\n  \"enabledPlugins\": {}\n}\n"), 0o644)
+		}
+	}
+	if code, _, out := uninstall(t); code != output.OK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := m.claude.profilesOf("plugin uninstall"); !reflect.DeepEqual(got, []string{""}) {
+		t.Errorf("plugin uninstall ran on %q, want ~/.claude without CLAUDE_CONFIG_DIR", got)
+	}
+	if _, there, _ := claudecfg.Get([]byte(readFile(t, m.settings)), []string{"enabledPlugins", plugin.PluginID()}); there {
+		t.Errorf("the uninstalled profile's plugin entry was put back:\n%s", readFile(t, m.settings))
+	}
+}
+
 func TestSetupUndoOnTheDefaultProfileIgnoresTheShellProfile(t *testing.T) {
 	m := installMachine(t)
 	rec := &setup.Record{SchemaVersion: setup.RecordVersion}

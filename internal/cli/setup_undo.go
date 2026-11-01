@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -370,10 +371,30 @@ func done(plan bool) string { return map[bool]string{true: "planned", false: "do
 // none for the default ~/.claude (CLAUDE_CONFIG_DIR would move
 // .claude.json into it), and claudeEnviron drops the shell's.
 func profileEnv(home, profile string) []string {
-	if profile == "" || filepath.Clean(profile) == filepath.Join(home, ".claude") {
+	if isDefaultProfile(home, profile) {
 		return nil
 	}
 	return []string{"CLAUDE_CONFIG_DIR=" + profile}
+}
+
+// isDefaultProfile reports that profile ("" included) is ~/.claude, also
+// when named another way (a symlink; on Windows another case or an 8.3
+// name): the same directory when both exist, else the same cleaned path
+// (case-insensitively on Windows).
+func isDefaultProfile(home, profile string) bool {
+	def := filepath.Join(home, ".claude")
+	if profile == "" {
+		return true
+	}
+	a, errA := os.Stat(profile)
+	b, errB := os.Stat(def)
+	if errA == nil && errB == nil {
+		return os.SameFile(a, b)
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(profile), def)
+	}
+	return filepath.Clean(profile) == def
 }
 
 // removePlugin uninstalls backsight's plugin and marketplace when present,

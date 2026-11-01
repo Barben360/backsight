@@ -621,7 +621,7 @@ func wiredProfiles(home string, st state.State, rec *setup.Record) []string {
 // profileGetenv locates a profile as Claude Code would with it.
 func profileGetenv(home, profile string) func(string) string {
 	return func(k string) string {
-		if k == "CLAUDE_CONFIG_DIR" && filepath.Clean(profile) != filepath.Join(home, ".claude") {
+		if k == "CLAUDE_CONFIG_DIR" && !isDefaultProfile(home, profile) {
 			return profile
 		}
 		return ""
