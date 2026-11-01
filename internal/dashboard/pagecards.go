@@ -497,3 +497,37 @@ func (d PageData) strip(perSession, perPrompt, rl, sl, price MetricView) []Fig {
 	}
 	return out
 }
+
+// DLRow is a row of a card's description list: the text around a moment,
+// the moment itself when it has one, and the class that colours the row.
+type DLRow struct {
+	Label, Pre, Post, Class string
+	Time                    format.Time
+	Mono                    bool
+}
+
+// textRow is a row of plain text.
+func textRow(label, text string) DLRow { return DLRow{Label: label, Pre: text} }
+
+// wordOr is the word for k, else fallback: what a log or the server wrote
+// that the dashboard has no word for is never printed as it came.
+func wordOr(words map[string]string, k, fallback string) string {
+	if w, ok := words[k]; ok {
+		return w
+	}
+	return fallback
+}
+
+// head is the frame of the card showing metric v.
+func (d PageData) head(v MetricView) Head { return headOf(v, d.CLI, d.L, "", d.P) }
+
+// cardPill is the status of v as a card's pill; none without a number.
+func cardPill(v MetricView) Word {
+	if !hasValue(v) {
+		return Word{}
+	}
+	return word(v)
+}
+
+// sentenceOf is a no-data sentence as one line of text, for a figure.
+func sentenceOf(n NoData) string { return strings.TrimSpace(n.Text + n.Code + n.Close) }

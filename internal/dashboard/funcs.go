@@ -88,6 +88,7 @@ var funcs = template.FuncMap{
 	"decision":    func(s string) string { return views.Word(views.DecisionWords, s) },
 	"declared":    func(raw []string) string { return words(views.DeclaredWords, raw) },
 	"retired":     func(s string) string { return views.Word(views.RetireWords, s) },
+	"failkind":    func(s string) string { return wordOr(views.FailureKindWords, s, views.FailureKindWords["unknown"]) },
 	"serverstate": func(s string) string { return views.Word(views.ServerStateWords, s) },
 	"skipped":     func(s string) string { return views.Word(views.SkipWords, s) },
 	"pager":       pagerOf,
@@ -111,6 +112,9 @@ var funcs = template.FuncMap{
 	"glance":      glancePage,
 	"quality":     qualityOf,
 	"cost":        costOf,
+	"bankpage":    bankOf,
+	"pipepage":    pipelineOf,
+	"systempage":  systemOf,
 	"latelyhead":  latelyHead,
 
 	"head":     headOf,

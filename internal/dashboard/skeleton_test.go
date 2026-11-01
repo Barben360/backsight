@@ -216,7 +216,7 @@ func TestServerDownMarksServerSections(t *testing.T) {
 	h.srv.set(func(f *fakeServer) { f.down = true })
 	ck := h.login()
 	r, b := pageGet(t, h, ck, "/bank")
-	if r.StatusCode != 200 || !strings.Contains(visibleText(b), "memory server not answering") {
+	if r.StatusCode != 200 || !strings.Contains(strings.ToLower(visibleText(b)), "memory server not answering") {
 		t.Errorf("/bank: %d, %q", r.StatusCode, visibleText(b))
 	}
 	// Every metric the server provides says it is not answering, in its own section.
@@ -343,6 +343,9 @@ func TestPagesShowNoJargon(t *testing.T) {
 			}
 		}
 		for _, k := range codes {
+			if k == "queued" && path == "/pipeline" { // the sends chart says `queued`: the plain word the design gives it
+				continue
+			}
 			if strings.ContainsAny(k, "_0123456789") && strings.Contains(text, k) || slices.Contains(nodes, k) {
 				t.Errorf("%s shows the code %q", path, k)
 			}
@@ -535,15 +538,15 @@ func TestTablesShowWordsNotStoredValues(t *testing.T) {
 	want := map[string][]string{
 		"quality":  {"out of date", `<td class="r">11</td>`, `<td class="r">12</td>`, `<td class="r">13</td>`, `<td class="r">14</td>`, `<td class="r">15</td>`, `href="/memories/mem-aaaa1111bbbb"`, `href="/sessions/ses-cccc2222dddd"`, "mem-aaaa"},
 		"cost":     {"saving notes in batches", `<td class="r">101</td>`, `<td class="r">102</td>`, `<td class="r">103</td>`, "0.50"},
-		"bank":     {"mem-n111", "mem-h222", "mem-r333", "<code>backsight forget mem-n1111111</code>", "<code>backsight forget mem-h2222222</code>", "<code>backsight forget mem-r3333333</code>", `<td>21</td>`},
-		"pipeline": {"saving notes in batches", `<td>4</td>`, "2026-10-30 13:00 CET", "1 h", "daily maintenance", "partly done", "memory settings", "warning", "<code>backsight doctor --fix</code>"},
-		"system":   {"regular upkeep", "partly done", "warning", "version 1.2.3, running in Docker, mode on another machine"},
+		"bank":     {"mem-n111", "mem-h222", "mem-r333", "<code>backsight forget mem-n1111111</code>", "<code>backsight forget mem-h2222222</code>", "<code>backsight forget mem-r3333333</code>", `<td class="r">21</td>`},
+		"pipeline": {"saving notes in batches", `<td class="r">4</td>`, "2026-10-30 13:00 CET", "1 h", "daily maintenance", "partly done"},
+		"system":   {"regular upkeep", "partly done", "memory settings", "warning", "<code>backsight doctor --fix</code>", "1.2.3", "Docker, on another machine"},
 	}
 	for name, edit := range pages {
 		b := render(t, name, func(d *PageData) { edit(d) })
 		// The ⓘ popovers are the catalog's own prose, which names the stored values it counts.
 		text := visibleText(b)
-		if name == "quality" { // its popovers say "outdated" in the catalog's prose
+		if name == "quality" || name == "pipeline" { // their popovers say "outdated", "tick and maintain" in the catalog's prose
 			text = visibleText(popovers.ReplaceAllString(b, ""))
 		}
 		for _, w := range want[name] {
@@ -584,7 +587,8 @@ func TestCostDeveloperGate(t *testing.T) {
 
 func TestSystemBlockIsShown(t *testing.T) {
 	b := visibleText(render(t, "system", nil))
-	for _, w := range []string{"Memory server", "Reach", "Backup", "Updates", "Activity index"} {
+	// The memory server, its last answer, the backup, the updates and the activity index.
+	for _, w := range []string{"Memory server", "Last answer", "Last backup", "Update", "History index"} {
 		if !strings.Contains(b, w) {
 			t.Errorf("system lacks %q", w)
 		}
@@ -621,6 +625,9 @@ func TestExtraBreakdownsAreShown(t *testing.T) {
 		"rank 1 6, rank 2 2", "not ranked 1")
 	check("bank", func(d *PageData) {
 		set(d.V["bank"], "bank.growth", map[string]any{"world": int64(5), "experience": int64(2), "observation": int64(1), "days_covered": 30})
+		m, rate := d.V["bank"].Metrics["bank.growth"], 0.3 // a number to stand beside the lines
+		m.Value = &rate
+		d.V["bank"].Metrics["bank.growth"] = m
 	}, "added over the period: 5 facts about you and your work, 2 facts from sessions, 1 summaries", "the server keeps only 30 days of history")
 	check("pipeline", func(d *PageData) {
 		r := d.V["pipeline"]
@@ -680,7 +687,11 @@ func TestSkipReasonsAndHookKindsAreWordsOnPages(t *testing.T) {
 			set(d.V["pipeline"], "hooks.failures", map[string]any{"by_kind": kinds, "last_24h": kinds})
 		},
 	} {
-		text := visibleText(render(t, page, edit))
+		b := render(t, page, edit)
+		text := visibleText(b)
+		if page == "pipeline" { // its popover says "an error exit": the catalog's prose for hooks.failures
+			text = visibleText(popovers.ReplaceAllString(b, ""))
+		}
 		if !strings.Contains(text, "skipped") && page != "pipeline" || !strings.Contains(text, "in the last 24 h") && page == "pipeline" {
 			if page == "overview" {
 				continue // the overview shows no such metric

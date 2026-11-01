@@ -147,8 +147,8 @@
 {{template "card-head" .}}{{end}}
 
 {{define "card-head"}}<div class="card-head">{{if eq .Level 3}}<h3 id="{{.ID}}">{{.Title}}</h3>{{else}}<h2 id="{{.ID}}">{{.Title}}</h2>{{end}}
-{{if eq .Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{with .Chip}}<span class="chip chip-dev">{{.}}</span>{{end}}<span class="spacer"></span>
-{{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
+{{if eq .Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else if eq .Scope "server"}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{with .Chip}}<span class="chip chip-dev">{{.}}</span>{{end}}<span class="spacer"></span>
+{{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{if .Pill.Word}}<span class="pill st {{.Pill.Class}}">{{.Pill.Word}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
 {{end}}
 
 {{define "info"}}{{if .Info.Label}}<details class="info"><summary aria-label="{{.Info.Label}}" aria-describedby="{{.ID}}-info"><span class="i i-info"></span></summary><div class="pop" id="{{.ID}}-info" role="note"><b>{{.Info.Name}}</b>
@@ -164,7 +164,7 @@
 {{end}}</section>
 {{end}}
 
-{{define "fig"}}<div class="fig"><span class="lab">{{.Label}}</span><span class="v">{{.Value}}</span><span class="st {{.Class}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
+{{define "fig"}}<div class="fig"><span class="lab">{{with .Icon}}<span class="i i-sm i-{{.}}"></span>{{end}}{{with .Swatch}}<i class="sw {{.}}"></i>{{end}}{{.Label}}</span><span class="v">{{.Value}}</span>{{if .Word}}<span class="st {{.Class}}">{{.Word}}</span>{{end}}{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
 
 {{/*
   lead: dot is a Card; its headline numbers and the word for the first.
@@ -180,13 +180,25 @@
 {{define "pcard"}}{{template "card-open" .Head}}
 {{template "devids" .}}{{template "lead" .}}{{template "nodata" .Note}}{{range .Charts}}{{with .Name}}<h3 class="chart-name">{{.}}</h3>
 {{end}}{{.HTML}}
-{{end}}{{if .Figs}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
+{{end}}{{template "ctail" .}}{{template "card-close" .Head}}{{end}}
+
+{{/* ctail: dot is a Card; what a card shows under its numbers and charts: figures, lines, foot, advice. */}}
+{{define "ctail"}}{{if .Figs}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
 {{end}}{{with .Extras}}<ul class="extras small sub">
 {{range .}}<li>{{.}}</li>
 {{end}}</ul>
 {{end}}{{with .Foot}}<p class="small muted">{{.}}</p>
 {{end}}{{with .Hint}}<p class="small muted">{{.}}</p>
-{{end}}{{with .HintCmd}}{{template "cmd" .}}{{end}}{{template "card-close" .Head}}{{end}}
+{{end}}{{with .HintCmd}}{{template "cmd" .}}{{end}}{{end}}
+
+{{/* reltime: dot is a format.Time; a moment as the time element shows it. */}}
+{{define "reltime"}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}
+
+{{/* dl: dot is a list of DLRow; rows of a description list, a moment in the middle of a row's text. */}}
+{{define "dl"}}<dl class="dl">
+{{range .}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{if .Class}}<span class="st {{.Class}}">{{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}{{if .Class}}</span>{{end}}</dd>
+{{end}}</dl>
+{{end}}
 
 {{define "nodata"}}{{if .Text}}<div class="empty{{with .Class}} {{.}}{{end}}"><span>{{.Text}}{{with .Code}}<code>{{.}}</code>{{end}}{{.Close}}</span>{{with .Tail}}<span class="xs muted">{{.}}</span>{{end}}
 {{if .Links}}<span class="small">{{.Pick}}</span><nav class="seg" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</nav>
@@ -215,24 +227,20 @@
 {{end}}</section>
 {{end}}
 
-{{/* jobs: dot is a Tabled. Reads .T.Jobs (Name, Status, LastAt, MS, AgeMS) and .Loc. */}}
-{{define "jobs"}}<section>
-<h2>Background jobs</h2>
-<table>
-<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
-{{range .T.Jobs}}<tr><td>{{job .Name}}</td><td>{{jobstatus .Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
-{{end}}</table>
-</section>
+{{/* jobs: dot is a list of JobLine (Job, Code, When, Result, Class, Took). */}}
+{{define "jobs"}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Job</th><th>Last run</th><th>Result</th><th class="r">Took</th></tr></thead>
+<tbody>
+{{range .}}<tr><td>{{.Job}} (<code>{{.Code}}</code>)</td><td>{{template "reltime" .When}}</td><td><span class="st {{.Class}}">{{.Result}}</span></td><td class="r">{{.Took}}</td></tr>
+{{end}}</tbody></table></div>
 {{end}}
 
-{{/* doctor: dot is a Tabled. Reads .T.Doctor (ID, Status, Fix). */}}
-{{define "doctor"}}<section>
-<h2>Health checks</h2>
-<table>
-<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
-{{range .T.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{dstatus .Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
-{{end}}</table>
-</section>
+{{/* doctor: dot is a list of CheckLine (Status, Class, Check, Fix). */}}
+{{define "doctor"}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Status</th><th>Check</th><th>Fix</th></tr></thead>
+<tbody>
+{{range .}}<tr><td><span class="st {{.Class}}">{{.Status}}</span></td><td>{{.Check}}</td><td>{{with .Fix}}{{template "cmd" .}}{{else}}<span class="muted">{{dash}}</span>{{end}}</td></tr>
+{{end}}</tbody></table></div>
 {{end}}
 
 {{/* paging: dot is a Pager (Prev, Next, From, To, Total). */}}

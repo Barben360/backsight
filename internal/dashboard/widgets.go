@@ -26,6 +26,7 @@ type Head struct {
 	DrillText   string
 	Aside       string // a short muted note after the spacer, before the ⓘ; "" none
 	Chip        string // a chip after the scope ("developer"); "" none
+	Pill        Word   // the status of the card, a pill after the spacer; zero none
 }
 
 // Info is the ⓘ popover of a widget.
@@ -394,6 +395,8 @@ type Fig struct {
 	Delta                     *format.Delta
 	Dev                       string
 	Sub                       string // a muted line under the value; "" none
+	Icon                      string // the icon before the label (server, pc, doc); "" none
+	Swatch                    string // the class of a swatch before the label (a kind of memory); "" none
 }
 
 // figOf is the figure of metric v; the developer's detail is its id.

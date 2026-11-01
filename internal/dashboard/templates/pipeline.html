@@ -1,27 +1,44 @@
 {{/* views: pipeline */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.pipeline}}
 
-{{/* widget: flow and outcomes. Reads the metrics pipeline.flow, retain.outcomes. */}}
-{{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}
-{{template "metric" framed (metric $r "retain.outcomes") $d $.Loc}}
-
-{{/* widget: backlog and queue. Reads the metrics local.backlog, server.queue and .V.pipeline.Tables.FailedOperations (Type, AgeMS, Retries). */}}
-{{template "metric" framed (metric $r "local.backlog") $d $.Loc}}
-{{template "metric" framed (metric $r "server.queue") $d $.Loc}}
-<table>
-<tr><th>Task</th><th>Age</th><th>Retries</th></tr>
-{{range $r.Tables.FailedOperations}}<tr><td>{{operation .Type}}</td><td>{{age .AgeMS}}</td><td>{{n .Retries}}</td></tr>
-{{end}}</table>
-
-{{/* widget: delay and failures. Reads the metrics server.extraction_delay, hooks.failures. */}}
-{{template "metric" framed (metric $r "server.extraction_delay") $d $.Loc}}
-{{template "metric" framed (metric $r "hooks.failures") $d $.Loc}}
-
-{{/* widget: jobs. Reads the metric jobs.last_run and .V.pipeline.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
-{{template "metric" framed (metric $r "jobs.last_run") $d $.Loc}}
-{{template "jobs" tabled $r $.Loc}}
-
-{{/* widget: health checks. Reads .V.pipeline.Tables.Doctor (ID, Status, Fix). */}}
-{{template "doctor" tabled $r $.Loc}}
+{{/* widgets: the cards of pipeline (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Backlog adds Rows, Oldest, OldestClass, Why; Queue adds Counts, Rows, Shown, Count, More, None; Hooks adds Rows, WindowHead; Jobs adds Rows). Reads the metrics pipeline.flow, retain.outcomes, local.backlog, server.queue, server.extraction_delay, hooks.failures, jobs.last_run, .V.pipeline.Tables.FailedOperations and .Jobs. */}}
+{{with pipepage .}}{{with .Alert}}<div class="state {{.Class}}" role="status"><span class="i {{.Icon}}" aria-hidden="true"></span><span><b>{{.Lead}}</b>{{with .Rest}} {{.}}{{end}}</span></div>
+{{end}}<div class="grid-2">
+{{template "pcard" .Flow}}
+{{with .Backlog}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Waiting</th><th class="r">Count</th><th>What to run</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{.What}}</td><td class="r">{{.Count}}</td><td>{{with .Cmd}}{{template "cmd" .}}{{else}}{{with .Muted}}<span class="muted">{{.}}</span>{{end}}{{end}}</td></tr>
+{{end}}</tbody></table></div>
+{{if .Oldest}}<p class="oldest small">Oldest: {{if .OldestClass}}<span class="st {{.OldestClass}}">{{.Oldest}}</span>{{else}}{{.Oldest}}{{end}}</p>
+{{end}}{{end}}{{template "ctail" .Card}}{{with .Why}}<details class="why"><summary>Why this matters</summary><div>{{.}}</div></details>
+{{end}}{{template "card-close" .Head}}{{end}}
+</div>
+<div class="grid-2">
+{{with .Queue}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Counts}}<div class="row small sub counts">{{range .Counts}}<span><b class="num">{{.Big}}</b> {{.Label}}</span>{{end}}</div>
+{{end}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Failed server task</th><th>Age</th><th class="r">Retries</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{.Task}}</td><td>{{.Age}}</td><td class="r">{{.Retries}}</td></tr>
+{{end}}</tbody></table></div>
+{{if gt .Count .Shown}}<p class="tbl-more">Showing {{.Shown}} of {{.Count}} failed tasks. Every one: <code>{{.More}}</code></p>
+{{end}}{{end}}{{with .None}}<p class="small muted">{{.}}</p>
+{{end}}{{template "ctail" .Card}}{{template "card-close" .Head}}{{end}}
+{{template "pcard" .Delay}}
+</div>
+<div class="grid-2">
+{{with .Hooks}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>How it stopped</th><th class="r">Last 24 h</th><th class="r">{{.WindowHead}}</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{failkind .Kind}}</td><td class="r">{{.Day}}</td><td class="r">{{.Window}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{range .Charts}}{{.HTML}}
+{{end}}{{template "ctail" .Card}}{{template "card-close" .Head}}{{end}}
+{{with .Jobs}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}{{template "jobs" .Rows}}{{end}}{{template "ctail" .Card}}{{template "card-close" .Head}}{{end}}
+</div>
+{{end}}
 {{template "foot" .}}

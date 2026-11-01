@@ -3,6 +3,7 @@ package dashboard
 import (
 	"html/template"
 	"math"
+	"net/url"
 	"slices"
 	"time"
 
@@ -248,7 +249,11 @@ func wordsOf(keys []string, name func(string) string) map[string]string {
 // class whose count is printed above each bar.
 func partsOf(l format.Locale, label, more string, v MetricView, order []string, words map[string]string, classes []string, valued string) template.HTML {
 	ps := withoutPartialLead(v.M.Series)
-	c := chart.Stack{Label: label, Size: chart.Half, XName: "Day", X: xsOf(ps), Valued: valued,
+	xname := "Day"
+	if v.Def.Series == "weekly" {
+		xname = "Week"
+	}
+	c := chart.Stack{Label: label, Size: chart.Half, XName: xname, X: xsOf(ps), Valued: valued,
 		Fmt: unitFormat(v.Def.Unit, l), More: more, Empty: "Nothing to draw in this window."}
 	for i, k := range order {
 		s := chart.Series{Name: words[k], Class: classes[i%len(classes)]}
@@ -441,4 +446,85 @@ func extractionOf(l format.Locale, more string, rows []metrics.ExtractionRow) te
 
 func hasOther(rows []metrics.ExtractionRow) bool {
 	return slices.ContainsFunc(rows, func(r metrics.ExtractionRow) bool { return r.Operation == "other" })
+}
+
+// kindsOf stacks, per day, the memories added to the server by kind
+// (bank.growth's parts): summaries at the bottom. Every day is drawn: the
+// server's buckets that straddle the window's start are counted whole, so
+// the first day is no dip.
+func kindsOf(l format.Locale, more string, v MetricView) template.HTML {
+	c := chart.Stack{Label: "Memories added per day, by kind", Size: chart.Half, XName: "Day", X: xsOf(v.M.Series),
+		Fmt: unitFormat(v.Def.Unit, l), More: more, Empty: "No memory was added in this window."}
+	for _, k := range glanceKinds {
+		s := chart.Series{Name: k.one, Class: k.class}
+		for _, p := range v.M.Series {
+			n := float64(p.Parts[k.key])
+			s.Y = append(s.Y, chart.Y{V: &n})
+		}
+		c.Parts = append(c.Parts, s)
+	}
+	return c.Area()
+}
+
+// ProjectBar is a row of the projects table: the name clipped and whole,
+// the page of the project, the count and the bar's length as a share of
+// the largest project's, in percent.
+type ProjectBar struct {
+	Name, Full, Href, Count string
+	W                       float64
+}
+
+// projectBars are the rows of the projects table, in the order given.
+func projectBars(l format.Locale, rows []metrics.ProjectCount) []ProjectBar {
+	var most int64
+	for _, r := range rows {
+		most = max(most, r.Memories)
+	}
+	out := make([]ProjectBar, 0, len(rows))
+	for _, r := range rows {
+		b := ProjectBar{Name: views.Clip(r.Project), Full: views.Plain(r.Project, ""), Href: "/projects/" + url.PathEscape(r.Project), Count: l.Int(r.Memories)}
+		if most > 0 {
+			b.W = math.Round(float64(r.Memories)/float64(most)*1000) / 10
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// sendParts are the parts of a day's sends, bottom first: the plain word,
+// the class and the stored statuses it adds up. A document with no status
+// logged is "unknown", drawn only when the window has one.
+var sendParts = []struct {
+	word, class string
+	keys        []string
+}{
+	{"sent", "f-ok", []string{"ok"}},
+	{"queued", "f-queued", []string{"queued", "retry"}},
+	{"set aside", "f-aside", []string{"quarantined"}},
+	{"failed", "f-failed", []string{"failed"}},
+	{"unknown", "f-neutral", []string{"unknown"}},
+}
+
+// flowOf stacks each day's sends by how they ended; the failed count is
+// printed above its bar. The statuses are merged into the plain words first
+// (queued and retrying are both "queued").
+func flowOf(l format.Locale, more string, v MetricView) template.HTML {
+	merged := make([]metrics.Point, len(v.M.Series))
+	for i, p := range v.M.Series {
+		merged[i] = p
+		merged[i].Parts = map[string]int64{}
+		for _, sp := range sendParts {
+			for _, k := range sp.keys {
+				merged[i].Parts[sp.word] += p.Parts[k]
+			}
+		}
+	}
+	v.M.Series = merged
+	var order, classes []string
+	for _, sp := range sendParts {
+		if sp.word != "unknown" || slices.ContainsFunc(withoutPartialLead(merged), func(p metrics.Point) bool { return p.Parts["unknown"] > 0 }) {
+			order, classes = append(order, sp.word), append(classes, sp.class)
+		}
+	}
+	return partsOf(l, "Sends by result, per day", more, v, order, wordsOf(order, func(k string) string { return k }), classes, "f-failed")
 }
