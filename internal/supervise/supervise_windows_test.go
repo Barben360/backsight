@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -416,5 +417,28 @@ func TestAskTellsAPipeThatRefusesAccessFromNotRunning(t *testing.T) {
 	_, err = Ask(ctx, p, opStatus)
 	if !errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrNotRunning) || !strings.Contains(err.Error(), "elevated") {
 		t.Errorf("Ask on a pipe that refuses access = %v, want ErrAccessDenied naming the elevated terminal", err)
+	}
+}
+
+// Ruling: the supervisor's job lets nothing break away. Nothing it starts
+// needs to (postgres, the API, pg_isready, pg_ctl and the guard's tools
+// live and die with it), and a child that could leave would outlive a
+// killed supervisor (E29 requirement 3).
+func TestNothingBreaksAwayFromTheSupervisorsJob(t *testing.T) {
+	if err := joinJob(project("breakaway")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_BREAKAWAY_FROM_JOB}
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("a child started with CREATE_BREAKAWAY_FROM_JOB left the supervisor's job")
+	}
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Errorf("the breakaway start failed with %v, want access denied", err)
+	}
+	// Without the flag, a child starts (in the job).
+	if err := exec.Command(os.Args[0], "-test.run=^$").Run(); err != nil {
+		t.Errorf("a plain child: %v", err)
 	}
 }

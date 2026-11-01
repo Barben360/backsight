@@ -70,11 +70,12 @@ func inJob(process, job windows.Handle) (bool, error) {
 	return in != 0, nil
 }
 
-// joinJob puts this process in the project's Job Object, kill-on-close
-// and breakaway-ok, so every child it starts dies with it (E29
-// requirement 3). Its handle is never closed: the last handle's close
-// kills the job's processes, this one included, which only its exit may
-// do.
+// joinJob puts this process in the project's Job Object, kill-on-close,
+// so every child it starts dies with it (E29 requirement 3); no child may
+// break away (ruling: nothing it starts needs to, and one that left
+// would outlive a killed supervisor). Its handle is never closed: the
+// last handle's close kills the job's processes, this one included,
+// which only its exit may do.
 func joinJob(project string) error {
 	name, err := objectName(project)
 	if err != nil {
@@ -93,7 +94,7 @@ func joinJob(project string) error {
 		return fmt.Errorf("creating the job object Global\\%s: %w", name, err)
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
-	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(h, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		_ = windows.CloseHandle(h)
 		return fmt.Errorf("setting the job object's limits: %w", err)
