@@ -494,3 +494,12 @@ details.tblfb > summary { font-size: var(--fs-xs); color: var(--link); cursor: p
 .s-search-latency { stroke: var(--fg-2); color: var(--fg-2); }
 .sw.s-used, .sw.s-coverage, .sw.s-hit, .sw.s-search, .sw.s-empty, .sw.s-latency, .sw.s-search-latency, .sw.s-fg { width: 14px; height: 2px; border-radius: 1px; background: currentColor; }
 .sw.ln-2 { background: none; height: 0; border-top: 2px dashed currentColor; border-radius: 0; }
+
+/* ---------- stacked bars and stacked areas ---------- */
+rect.seg { stroke: var(--surface); stroke-width: 2; }
+rect.seg.f-pending { fill: none; stroke: var(--c-shown); }
+.hatch-ln { stroke: var(--c-shown); stroke-width: 1; }
+.chart text.val { font-size: 12px; }
+@media (forced-colors: active) {
+  .chart svg rect.seg, .chart svg path.seg[class*="f-"] { stroke: CanvasText; stroke-width: 1; }
+}
