@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	_ "time/tzdata" // the scenarios are in Europe/Paris whatever the host has
 
 	"github.com/Barben360/backsight/internal/metrics"
 )
@@ -149,11 +148,12 @@ type scPart struct {
 
 type scOpt func(*metrics.Metric)
 
-// scMetric is m with its catalog unit, aggregation and drill (with the
-// window's flag), and no tag as [], as the views return it.
+// scMetric is m with its catalog unit, aggregation and drill (bare, as the
+// engine emits it: the page's link adds the window and filters), and no tag
+// as [], as the views return it.
 func scMetric(id string, m metrics.Metric, opts []scOpt) scPart {
 	d, _ := metrics.DefOf(id)
-	m.Unit, m.Aggregation, m.Drill = d.Unit, d.Aggregation, d.Drill+" --days 7"
+	m.Unit, m.Aggregation, m.Drill = d.Unit, d.Aggregation, d.Drill
 	m.Tags = []string{}
 	for _, o := range opts {
 		o(&m)
@@ -199,13 +199,15 @@ func scDeltaFrom(prev float64) scOpt {
 }
 func scSnapshot() scOpt { return scTags("snapshot") }
 
-// scDaily is the tile's sparkline: one value per day from 2026-10-24 to
-// 2026-10-30 (the last day partial), each times scale; scNull is a day
-// without a value.
+// scDaily is the tile's sparkline over the window's 8 day buckets,
+// 2026-10-23 to 2026-10-30, the first and the last partial: vals are the
+// canvas's 7 days, 24 to 30, each times scale; the partial head the canvas
+// does not draw repeats its first day. scNull is a day without a value.
 func scDaily(scale float64, vals ...float64) scOpt {
 	return func(m *metrics.Metric) {
+		vals = append([]float64{vals[0]}, vals...)
 		for i, v := range vals {
-			p := metrics.Point{Day: fmt.Sprintf("2026-10-%02d", 24+i), Partial: i == len(vals)-1}
+			p := metrics.Point{Day: fmt.Sprintf("2026-10-%02d", 23+i), Partial: i == 0 || i == len(vals)-1}
 			if !math.IsNaN(v) {
 				p.Value = scF(v * scale)
 			}
@@ -546,6 +548,23 @@ func scenarioTileWord(m metrics.Metric, learning bool) string {
 // only catalog metrics with their catalog drills) and must read, through
 // the page's status and axis words, as its expected texts say.
 func TestScenarioFixturesAreConsistent(t *testing.T) {
+	// The shared sentences feed the fixtures and the wants alike, so they
+	// are pinned here to the brief's wording, typed out again.
+	for _, c := range [][2]string{
+		{scLearnText, "Learning: day 2 of about 7, 12 prompts so far."},
+		{scJudged28Text, "Judged on the last 28 days: too few turns in 7."},
+		{scCantText, "Can't judge yet: Claude said what it used on only 64 % of turns."},
+		{scFoundText, "Fewer prompts get memory than usual: 14 % vs 27 % before."},
+		{scLatencyText, "Memory adds 2.3 s to the slowest prompts (limit 2.5 s)."},
+		{scServerText, "Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost."},
+		{scFailedText, "3 sessions could not be sent; 1 set aside after an error."},
+		{scWaitedText, "A session has waited on this PC for 26 h."},
+		{scCrashedText, "2 steps crashed in the last 24 h."},
+	} {
+		if c[0] != c[1] {
+			t.Errorf("sentence %q, want %q", c[0], c[1])
+		}
+	}
 	var names []string
 	for _, s := range scenarios {
 		names = append(names, s.Name)
@@ -638,9 +657,12 @@ func checkScenarioMetrics(t *testing.T, r *metrics.Result) {
 			t.Errorf("metric %s is not in the catalog", id)
 			continue
 		}
-		if m.Drill != d.Drill+" --days 7" || m.Unit != d.Unit || m.Aggregation != d.Aggregation {
-			t.Errorf("metric %s: drill %q unit %q aggregation %q, want %q %q %q", id, m.Drill, m.Unit, m.Aggregation,
-				d.Drill+" --days 7", d.Unit, d.Aggregation)
+		if m.Drill != d.Drill || m.Unit != d.Unit || m.Aggregation != d.Aggregation {
+			t.Errorf("metric %s: drill %q unit %q aggregation %q, want the catalog's %q %q %q", id, m.Drill, m.Unit, m.Aggregation,
+				d.Drill, d.Unit, d.Aggregation)
+		}
+		if m.Series != nil {
+			checkScenarioSeries(t, id, m.Series, r.Window.Buckets())
 		}
 		for k := range m.Extra {
 			if !slices.Contains(d.Extra, k) {
@@ -685,9 +707,7 @@ func checkScenarioVerdict(t *testing.T, r *metrics.Result, want scenarioWant) {
 		if got := [2]string{a[1], scenarioAxisWords[ax.State]}; got != [2]string{want.Axes[i][0], want.Axes[i][1]} {
 			t.Errorf("axis %d reads %v, want %v", i, got, want.Axes[i][:2])
 		}
-		if want.Axes[i][2] == "" {
-			t.Errorf("axis %s has no note", a[0])
-		}
+		checkScenarioNote(t, r, a[0], want.Axes[i][2])
 		if ax.Reasons == nil {
 			t.Errorf("axis %s: reasons are [] when there are none, as the views return them", a[0])
 		}
@@ -767,4 +787,86 @@ func checkScenarioAttention(t *testing.T, r *metrics.Result, want scenarioWant) 
 			}
 		}
 	}
+}
+
+// checkScenarioSeries: a series has one point per bucket of the window,
+// with the bucket's key and partial flag, as the views return it.
+func checkScenarioSeries(t *testing.T, id string, series []metrics.Point, buckets []metrics.Bucket) {
+	t.Helper()
+	if len(series) != len(buckets) {
+		t.Errorf("metric %s: %d points for the window's %d buckets", id, len(series), len(buckets))
+		return
+	}
+	for i, p := range series {
+		if p.Day != buckets[i].Key || p.Partial != buckets[i].Partial {
+			t.Errorf("metric %s point %d: day %s partial %v, want %s %v", id, i, p.Day, p.Partial, buckets[i].Key, buckets[i].Partial)
+		}
+	}
+}
+
+// checkScenarioNote: every figure an axis note states is the fixture's.
+func checkScenarioNote(t *testing.T, r *metrics.Result, axis, note string) {
+	t.Helper()
+	figures, ok := scenarioNoteFigures(r, axis, note)
+	if !ok {
+		t.Errorf("axis %s note %q: no form of note this check reads", axis, note)
+		return
+	}
+	for _, f := range figures {
+		if !strings.Contains(note, f) {
+			t.Errorf("axis %s note %q does not state the fixture's %q", axis, note, f)
+		}
+	}
+}
+
+// scenarioNoteFigures are the figures, read from r, that an axis note of
+// note's form must state; false for a note no form covers.
+func scenarioNoteFigures(r *metrics.Result, axis, note string) ([]string, bool) {
+	m := r.Metrics
+	pct := func(x *float64) string { return fmt.Sprintf("%d %%", int(math.Round(*x*100))) }
+	ax := r.Verdict.Axes[axis]
+	switch {
+	case note == "day 2 of about 7": // cut from the learning sentence
+		return []string{"day 2 of about 7"}, ax.State == metrics.AxisLearning && strings.Contains(ax.Reasons[0].Text, note)
+	case note == scJudged28Text:
+		return nil, axis == "right" && ax.WindowDays == 28 && slices.Contains(m["used.turn_rate"].Tags, "judged_28d")
+	case axis == "found" && strings.Contains(note, " vs "):
+		f := m["recall.hit_rate"]
+		return []string{pct(f.Value) + " vs " + pct(f.Previous) + " usual"}, true
+	case axis == "found":
+		return []string{pct(m["recall.hit_rate"].Value)}, true
+	case axis == "right" && strings.HasSuffix(note, " turns"):
+		c := m["declare.coverage"]
+		return []string{fmt.Sprintf("%d of %d turns", *c.Num, *c.Den)}, true
+	case axis == "right":
+		return []string{pct(m["used.turn_rate"].Value) + " used"}, true
+	case axis == "cost":
+		v := *m["recall.latency"].Value
+		if v < 1000 {
+			return []string{fmt.Sprintf("%d ms", int(v))}, true
+		}
+		return []string{fmt.Sprintf("%.1f s", v/1000)}, true
+	case axis == "flowing" && strings.HasSuffix(note, "sessions sent"):
+		f := m["pipeline.flow"]
+		return []string{fmt.Sprintf("%d of %d sessions sent", *f.Num, *f.Den)}, true
+	case axis == "flowing" && strings.Contains(note, " notes and "):
+		x := m["local.backlog"].Extra
+		return []string{fmt.Sprintf("%d notes and %d sessions waiting", scInt(x["notes_queued"]), scInt(x["sessions_waiting"]))}, true
+	case axis == "flowing" && strings.Contains(note, " failed"):
+		x := m["pipeline.flow"].Extra
+		hours := scInt(x["backlog_oldest_ms"]) / int64(time.Hour/time.Millisecond)
+		return []string{fmt.Sprintf("%d failed, oldest waiting %d h", scInt(x["failed"]), hours)}, true
+	}
+	return nil, false
+}
+
+// scInt is an extra's count as the fixtures hold it.
+func scInt(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	}
+	return -1
 }
