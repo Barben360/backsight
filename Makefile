@@ -61,7 +61,7 @@ test-hooks:
 bench-index:
 	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
 	go test -count=1 -run 'TestViewBudgets' -v ./internal/metrics/
-	go test -count=1 -run 'TestPageBudgets' -v ./internal/dashboard/
+	go test -count=1 -run 'TestPageBudgets|TestRenderBudgets' -v ./internal/dashboard/
 	go test -run '^$$' -bench 'FirstBuild|CatchUp15' -benchtime 1x ./internal/index/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)
