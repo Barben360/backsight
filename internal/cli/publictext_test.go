@@ -315,8 +315,8 @@ func TestReleaseDocumentsNameNoPrivateReference(t *testing.T) {
 
 // The dashboard's pages are text a user reads: every template file, and
 // every page and answer of a dashboard on the canary state, names no private
-// reference. The placeholder stylesheet is not scanned: hex colours are not
-// text.
+// reference. The stylesheets and the script are scanned too (every asset
+// the overview links); hex colours, icon path data and the logos' drawings are not text.
 func TestDashboardPagesArePublicText(t *testing.T) {
 	files, err := fs.Glob(dashboard.Templates(), "*.html")
 	if err != nil || len(files) < 10 {
@@ -334,6 +334,18 @@ func TestDashboardPagesArePublicText(t *testing.T) {
 		t.Fatalf("%d requests, %d distinct bodies: the scan misses most of the dashboard", got.asked, len(got.pages))
 	}
 	for path, body := range got.pages {
+		if strings.HasPrefix(path, "/assets/") {
+			if strings.HasSuffix(path, ".svg") {
+				continue // a drawing, not text
+			}
+			body = svgPath.ReplaceAllString(hexColour.ReplaceAllString(body, ""), "")
+		}
 		checkPublic(t, "the dashboard's answer to "+path, body)
 	}
 }
+
+// svgPath is the path data of an icon inlined in a stylesheet, d='M8 12...'.
+var svgPath = regexp.MustCompile(`\bd=(?:'[^']*'|"[^"]*")`)
+
+// hexColour is a CSS colour such as #0a3d62, which is not text.
+var hexColour = regexp.MustCompile(`#[0-9A-Fa-f]{3,8}\b`)

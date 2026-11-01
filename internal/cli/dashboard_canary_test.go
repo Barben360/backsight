@@ -175,11 +175,24 @@ func canaryCrawl(t *testing.T) crawled {
 		got.asked++
 	}
 	_, overview := dashGet(t, base, c, "/?tz=UTC")
-	asset := regexp.MustCompile(`/assets/[A-Za-z0-9._-]+`).FindString(overview)
-	if asset == "" {
-		t.Fatal("the overview links no asset")
+	seen := map[string]bool{}
+	for _, asset := range regexp.MustCompile(`/assets/[A-Za-z0-9._-]+`).FindAllString(overview, -1) {
+		if !seen[asset] {
+			seen[asset] = true
+			get(asset, http.StatusOK)
+		}
 	}
-	get(asset, http.StatusOK)
+	// the stylesheets and the script, whatever the logos: every asset the
+	// dashboard embeds is linked from the overview, and was read above
+	for _, base := range []string{"tokens.", "dashboard.", "copy."} {
+		found := false
+		for a := range seen {
+			found = found || strings.HasPrefix(a, "/assets/"+base)
+		}
+		if !found {
+			t.Errorf("the overview links no %s asset", base)
+		}
+	}
 
 	stop()
 	got.stderr = stderr.String()

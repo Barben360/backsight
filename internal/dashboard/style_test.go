@@ -129,6 +129,24 @@ func TestHeadLinksTheAssets(t *testing.T) {
 		if m == nil || m.attr("content") != scheme {
 			t.Errorf("%s: color-scheme meta %v, want %q", name, m, scheme)
 		}
+		// in the head, in this order: meta, tokens, dashboard, script
+		var order []string
+		if head := root.first("head"); head != nil {
+			for _, k := range head.Kids {
+				switch {
+				case k.Name == "meta" && k.attr("name") == "color-scheme":
+					order = append(order, "meta")
+				case k.Name == "link" && k.attr("rel") == "stylesheet":
+					order = append(order, k.attr("href"))
+				case k.Name == "script":
+					order = append(order, k.attr("src"))
+				}
+			}
+		}
+		wantOrder := []string{"meta", assetPath("tokens.css"), assetPath("dashboard.css"), assetPath("copy.js")}
+		if strings.Join(order, " ") != strings.Join(wantOrder, " ") {
+			t.Errorf("%s: head order %q, want %q", name, order, wantOrder)
+		}
 	}
 	page := func(prefs string) string {
 		cookie := ck.Name + "=" + ck.Value

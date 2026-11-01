@@ -1,5 +1,5 @@
 /*
- * backsight dashboard: the one stylesheet (block 3 draft), built on ../tokens.css.
+ * backsight dashboard: the one stylesheet, built on ../tokens.css.
  * Server-rendered HTML, no script needed: menus, popovers and disclosures are <details>.
  * Responsive through a container query on .page (same breakpoint as a 900 px media query),
  * so a page reflows the same way in a browser window and in a 390 px mockup frame.
