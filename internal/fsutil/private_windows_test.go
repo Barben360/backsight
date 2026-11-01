@@ -248,3 +248,34 @@ func TestPrivateTempIsPrivateAtCreation(t *testing.T) {
 		t.Errorf("the owner writes: %v", err)
 	}
 }
+
+// The public private writers create their temp file private: looked at
+// right after its creation, before a byte or a permission change, it is
+// readable by no one else and its DACL is not inherited.
+func TestPrivateWritersCreateTheTempPrivate(t *testing.T) {
+	root := openRoot(t)
+	for name, write := range map[string]func(string, []byte) error{"WritePrivate": WritePrivate, "WritePrivateNoFollow": WritePrivateNoFollow} {
+		var seen []string
+		afterCreate = func(tmp string) {
+			fi, err := os.Stat(tmp)
+			if err != nil || fi.Size() != 0 {
+				t.Errorf("%s: %s at creation: %v %v", name, tmp, fi, err)
+			}
+			if r, err := OtherReaders(tmp); err != nil || len(r) != 0 {
+				t.Errorf("%s: the temp file is readable by %v at creation (%v)", name, r, err)
+			}
+			if !protected(t, tmp) {
+				t.Errorf("%s: the temp file's DACL inherits from the folder at creation", name)
+			}
+			seen = append(seen, tmp)
+		}
+		if err := write(filepath.Join(root, name+".token"), []byte("bst1.secret\n")); err != nil {
+			t.Fatal(err)
+		}
+		afterCreate = nil
+		if len(seen) != 1 {
+			t.Errorf("%s: temp files seen %v", name, seen)
+		}
+	}
+	t.Cleanup(func() { afterCreate = nil })
+}

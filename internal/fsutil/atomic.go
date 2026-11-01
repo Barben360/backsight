@@ -22,6 +22,10 @@ var ErrConflict = errors.New("file changed since it was read")
 // syncFile is swapped by tests to simulate a failure before the rename.
 var syncFile = (*os.File).Sync
 
+// afterCreate, set by a test, sees each temp file right after its creation,
+// before anything is written to it or its permissions change.
+var afterCreate func(tmp string)
+
 // ReadHashed returns path's content and its hex SHA-256 from one read, so a
 // caller edits exactly the bytes it will later compare against. A missing
 // file is (nil, Absent, nil).
@@ -145,6 +149,9 @@ func write(path string, data []byte, perm fs.FileMode, check func() error, priva
 	tmp, err := create(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
+	}
+	if afterCreate != nil {
+		afterCreate(tmp.Name())
 	}
 	ok := false
 	defer func() {
