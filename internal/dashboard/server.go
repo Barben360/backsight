@@ -234,8 +234,12 @@ func (s *Server) Serve(ctx context.Context) (StopReason, error) {
 		case <-ctx.Done():
 			reason = StopInterrupted
 		case <-ticks:
-			if s.idle() {
+			stop := s.idle()
+			if stop {
 				reason = StopIdle
+			}
+			if idleChecked != nil {
+				idleChecked(stop)
 			}
 		case err := <-served:
 			errs = append(errs, fmt.Errorf("serve the dashboard: %w", err))

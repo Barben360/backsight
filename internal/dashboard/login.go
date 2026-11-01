@@ -29,6 +29,10 @@ func defaultIdleTicks() (<-chan time.Time, func()) {
 
 var idleTicks = defaultIdleTicks
 
+// idleChecked, when set (tests), hears each idle check's verdict once the
+// check is over, so a test moves its clock only between checks.
+var idleChecked func(stop bool)
+
 // noSession is the API's answer to a request without a valid session.
 const noSession = "no valid session: run backsight dashboard link and open the link it prints"
 
