@@ -159,16 +159,20 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	wantTarget, _ := filepath.EvalSymlinks(target)
 	shimChanged := current == "" || current != wantTarget
 	exe, _ := selfExe()
+	exeHash, _ := fsutil.HashFile(exe) // hashed once for the copies below
 	if runtime.GOOS == "windows" {
 		// A copy: changed unless it already holds this binary's bytes, which
 		// pointShim then leaves in place (a supervisor or a session running
-		// it keeps running current.exe, not a .old-<n>).
-		shimChanged = !sameContent(shim, exe)
+		// it keeps running current.exe, not a .old-<n>), or the signed
+		// checksums beside it were written again.
+		shimChanged = !holds(shim, exeHash)
 	}
 	if !plan {
+		sumsBefore := checksumsIn(filepath.Dir(shim))
 		if err := installShim(target, shim); err != nil {
 			return res, blocked(err)
 		}
+		shimChanged = shimChanged || checksumsIn(filepath.Dir(shim)) != sumsBefore
 	}
 	add("shim", did(shimChanged), shim+" → "+target)
 	// The command on PATH runs the shim (decision 0067 block review), and
@@ -176,14 +180,16 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	if link, older := olderPathLink(c.dirs, shim); older || absentPathLink(c.dirs) {
 		// On Windows the PATH command is a copy of the shim, always ours:
 		// unchanged when it already holds this binary's bytes.
-		pathChanged := runtime.GOOS != "windows" || !sameContent(link, exe)
+		pathChanged := runtime.GOOS != "windows" || !holds(link, exeHash)
 		if !plan {
 			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 				return res, blocked(err)
 			}
+			sumsBefore := checksumsIn(filepath.Dir(link))
 			if err := pointShim(shim, link); err != nil {
 				return res, blocked(err)
 			}
+			pathChanged = pathChanged || checksumsIn(filepath.Dir(link)) != sumsBefore
 		}
 		add("path", did(pathChanged), link+" → "+shim)
 	}
@@ -468,14 +474,21 @@ func installShim(target, shim string) error {
 	return pointShim(target, shim)
 }
 
-// sameContent reports that a and b both exist with the same bytes.
-func sameContent(a, b string) bool {
-	ha, err := fsutil.HashFile(a)
-	if err != nil || ha == fsutil.Absent {
-		return false
+// holds reports that path exists with the bytes whose hash is want.
+func holds(path, want string) bool {
+	got, err := fsutil.HashFile(path)
+	return err == nil && want != fsutil.Absent && got == want
+}
+
+// checksumsIn is the state of the signed checksums in dir (their hashes),
+// which the Windows shim copies carry beside them.
+func checksumsIn(dir string) string {
+	var b strings.Builder
+	for _, name := range []string{selfcheck.ChecksumsFile, selfcheck.SignatureFile} {
+		h, _ := fsutil.HashFile(filepath.Join(dir, name))
+		b.WriteString(name + "=" + h + ";")
 	}
-	hb, err := fsutil.HashFile(b)
-	return err == nil && ha == hb
+	return b.String()
 }
 
 // pointShim makes the shim run target: a symlink swapped atomically, or

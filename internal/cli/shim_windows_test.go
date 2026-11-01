@@ -488,3 +488,47 @@ func TestClientInstallAgainLeavesTheShimInPlace(t *testing.T) {
 		t.Error("the shim or the PATH copy is not this binary")
 	}
 }
+
+// A repeat client install whose shim holds the right bytes but lacks the
+// signed checksums beside it puts them back, and says the shim step did
+// something.
+func TestClientInstallReportsTheChecksumsItRewrites(t *testing.T) {
+	home := devInstall(t, true)
+	withClaude(t)
+	d := pathsOf(home)
+	exe := sleeper(t, filepath.Join(home, "release"), "r")
+	sums := []byte("0123  backsight\n")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(exe), selfcheck.ChecksumsFile), sums, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := selfExe
+	selfExe = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { selfExe = old })
+	if code, out, _ := run(t, "client", "install"); code != output.OK {
+		t.Fatalf("first install: exit %d\n%s", code, out)
+	}
+	beside := filepath.Join(d.Data, "bin", selfcheck.ChecksumsFile)
+	if err := os.Remove(beside); err != nil {
+		t.Fatalf("the shim's checksums: %v", err)
+	}
+	code, out, _ := run(t, "client", "install", "--json")
+	if code != output.OK {
+		t.Fatalf("second install: exit %d\n%s", code, out)
+	}
+	var env struct {
+		Data clientInstallResult `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	status := ""
+	for _, s := range env.Data.Steps {
+		if s.Name == "shim" {
+			status = s.Status
+		}
+	}
+	if status != "done" {
+		t.Errorf("shim step %q, want done: its checksums were written again\n%s", status, out)
+	}
+	if got, err := os.ReadFile(beside); err != nil || !bytes.Equal(got, sums) {
+		t.Errorf("checksums beside the shim: %q %v", got, err)
+	}
+}

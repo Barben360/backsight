@@ -166,3 +166,13 @@ func writeChecksums(dir string, set checksumSet) error {
 	}
 	return errors.Join(errs...)
 }
+
+// sameContent reports that a and b both exist with the same bytes.
+func sameContent(a, b string) bool {
+	ha, err := fsutil.HashFile(a)
+	if err != nil || ha == fsutil.Absent {
+		return false
+	}
+	hb, err := fsutil.HashFile(b)
+	return err == nil && ha == hb
+}
