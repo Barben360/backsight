@@ -157,7 +157,14 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	}
 	current, _ := filepath.EvalSymlinks(shim)
 	wantTarget, _ := filepath.EvalSymlinks(target)
-	shimChanged := runtime.GOOS == "windows" || current == "" || current != wantTarget
+	shimChanged := current == "" || current != wantTarget
+	exe, _ := selfExe()
+	if runtime.GOOS == "windows" {
+		// A copy: changed unless it already holds this binary's bytes, which
+		// pointShim then leaves in place (a supervisor or a session running
+		// it keeps running current.exe, not a .old-<n>).
+		shimChanged = !sameContent(shim, exe)
+	}
 	if !plan {
 		if err := installShim(target, shim); err != nil {
 			return res, blocked(err)
@@ -167,6 +174,9 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 	// The command on PATH runs the shim (decision 0067 block review), and
 	// is made when absent, as install.sh makes it (M5 review rules, PATH).
 	if link, older := olderPathLink(c.dirs, shim); older || absentPathLink(c.dirs) {
+		// On Windows the PATH command is a copy of the shim, always ours:
+		// unchanged when it already holds this binary's bytes.
+		pathChanged := runtime.GOOS != "windows" || !sameContent(link, exe)
 		if !plan {
 			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 				return res, blocked(err)
@@ -175,7 +185,7 @@ func clientInstall(ctx context.Context, configDir string, plan bool) (clientInst
 				return res, blocked(err)
 			}
 		}
-		add("path", did(true), link+" → "+shim)
+		add("path", did(pathChanged), link+" → "+shim)
 	}
 	if runtime.GOOS == "windows" && c.dirs.Bin != "" {
 		// The PATH copy is found through the user's PATH (HKCU, no admin).
@@ -456,6 +466,16 @@ func installShim(target, shim string) error {
 		}
 	}
 	return pointShim(target, shim)
+}
+
+// sameContent reports that a and b both exist with the same bytes.
+func sameContent(a, b string) bool {
+	ha, err := fsutil.HashFile(a)
+	if err != nil || ha == fsutil.Absent {
+		return false
+	}
+	hb, err := fsutil.HashFile(b)
+	return err == nil && ha == hb
 }
 
 // pointShim makes the shim run target: a symlink swapped atomically, or
