@@ -1,8 +1,6 @@
 {{/* views: system */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.system}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: health checks. Reads .V.system.Tables.Doctor (ID, Status, Fix) and the metric doctor.check. */}}
 {{template "doctor" tabled $r $.Loc}}

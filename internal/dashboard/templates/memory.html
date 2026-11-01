@@ -1,8 +1,6 @@
 {{/* views: memories */}}
 {{template "head" .}}{{template "top" .}}
 {{$r := .V.memories}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{with $r.Tables.Memory}}
 {{/* widget: the memory. Reads .V.memories.Tables.Memory (Row: ID, Project, Shown, Used, Ignored, Rate, Boost, LastShown, LastUsed, State; Kind, ServerState, Created). */}}

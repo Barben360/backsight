@@ -1,8 +1,6 @@
 {{/* views: days */}}
 {{template "head" .}}{{template "top" .}}
 {{$r := .V.days}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: days. Reads .V.days.Tables.Days (Day, Prompts, Recalls, PromptsWithMemory, UsedTurns, Wrong, ContextChars, Sessions, SentOK, SentFailed). */}}
 <section>

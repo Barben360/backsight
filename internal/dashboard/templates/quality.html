@@ -1,8 +1,6 @@
 {{/* views: quality */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.quality}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: used and declared. Reads the metrics used.turn_rate, declare.coverage. */}}
 {{template "metric" framed (metric $r "used.turn_rate") $d $.Loc}}

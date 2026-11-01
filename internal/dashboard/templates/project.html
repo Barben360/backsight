@@ -1,8 +1,6 @@
 {{/* views: projects */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.projects}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: tiles. Reads the metrics recall.hit_rate, used.turn_rate, verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow. */}}
 {{template "metric" framed (metric $r "recall.hit_rate") $d $.Loc}}

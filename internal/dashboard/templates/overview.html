@@ -1,8 +1,6 @@
 {{/* views: overview */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.overview}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: verdict. Reads .V.overview.Verdict.Axes (State, Reasons.Text, Reasons.Command). */}}
 <section>

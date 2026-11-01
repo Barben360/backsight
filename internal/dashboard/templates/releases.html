@@ -1,8 +1,6 @@
 {{/* views: releases */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.releases}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: versions. Reads .V.releases.Tables.Releases (Version, First, Last, N, Flagship through rowmetric and value, ProjectShares, PromptsPerDay, BankSize). */}}
 <section>

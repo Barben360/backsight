@@ -1,8 +1,6 @@
 {{/* views: sessions */}}
 {{template "head" .}}{{template "top" .}}
 {{$r := .V.sessions}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{with $r.Tables.Session}}
 {{/* widget: totals. Reads .V.sessions.Tables.Session.Totals (ID, Project, Start, Prompts, PromptsWithMemory, Shown, Used, Wrong, ContextChars, Sent). */}}

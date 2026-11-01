@@ -1,8 +1,6 @@
 {{/* views: cost */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.cost}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: context and speed. Reads the metrics context.per_session, context.per_prompt, recall.latency, search.latency. */}}
 {{template "metric" framed (metric $r "context.per_session") $d $.Loc}}

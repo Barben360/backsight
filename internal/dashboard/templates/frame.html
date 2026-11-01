@@ -2,7 +2,7 @@
 {{/*
   The frame every page shares. Fields read: .Frame (Title, Path, Version,
   HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
-  Prefs, Scope, Generated) and .Loc. No Windows (the text page): no window
+  Prefs, Scope, Generated, Window, RenderedAt, RenderMS) and .Loc. No Windows (the text page): no window
   links and no project filter. Nav is sliced by position: 0-5 the
   questions, 5-8 Browse, 8-9 System, 9- the developer pair.
 */}}
@@ -23,43 +23,88 @@
 <body>
 {{end}}
 
-{{define "top"}}<header>
-<nav aria-label="Pages">
-<a href="/"><img src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"></a>
+{{define "top"}}<div class="page">
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+<div class="wrap">
+<a class="brand" href="/" title="Overview"><img class="logo-l" src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"><img class="logo-d" src="{{asset "logo-dark.svg"}}" width="24" height="24" alt="backsight"></a>
+<nav class="nav" aria-label="Pages">
 {{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
-{{end}}<details>
-<summary>Browse</summary>
+{{end}}<span class="nav-sep" aria-hidden="true"></span>
+<details class="menu{{if anyCurrent (slice .Frame.Nav 5 8)}} is-current{{end}}">
+<summary>Browse <span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop">
 {{range slice .Frame.Nav 5 8}}{{template "navlink" .}}
-{{end}}</details>
+{{end}}</div>
+</details>
+<span class="nav-sep" aria-hidden="true"></span>
 {{range slice .Frame.Nav 8 9}}{{template "navlink" .}}
-{{end}}{{if .Frame.Prefs.Dev}}<details>
-<summary>Developer</summary>
+{{end}}{{if .Frame.Prefs.Dev}}<span class="nav-sep" aria-hidden="true"></span>
+<details class="menu{{if anyCurrent (slice .Frame.Nav 9)}} is-current{{end}}">
+<summary>Developer <span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop">
 {{range slice .Frame.Nav 9}}{{template "navlink" .}}
-{{end}}</details>
+{{end}}</div>
+</details>
 {{end}}</nav>
-<div>
-{{if .Frame.Windows}}<nav aria-label="Window">
-{{range .Frame.Windows}}{{template "navlink" .}}
-{{end}}</nav>
+<div class="tools">
+{{if .Frame.Windows}}<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+<details class="menu proj">
+<summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short"{{if .Frame.ProjectInput}} title="{{.Frame.ProjectInput}}"{{end}}>{{if .Frame.ProjectInput}}{{clip .Frame.ProjectInput}}{{else}}All projects{{end}}</span><span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop right wide">
+<span class="grp">Project</span>
 <form method="get" action="{{.Frame.Path | pathOnly}}">
 {{range .Frame.Keep}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
 {{end}}<label>Project <input type="text" name="project" value="{{.Frame.ProjectInput}}"></label>
 <button type="submit">Filter</button>
-<a href="{{.Frame.AllProjects}}">All projects</a>
 </form>
-{{end}}<a href="{{.Frame.Path}}">Refresh</a>
-<details>
-<summary>Preferences</summary>
-{{range .Frame.PrefMenu}}<p>{{.Label}}:
-{{range .Choices}}{{template "navlink" .}}
-{{end}}</p>
-{{end}}</details>
+<a href="{{.Frame.AllProjects}}"{{if not .Frame.ProjectInput}} aria-current="true"{{end}}><span class="check">{{if not .Frame.ProjectInput}}✓{{end}}</span>All projects</a>
+<a href="/projects">Choose from the list →</a>
+</div>
+</details>
+{{end}}<a class="btn btn-quiet refresh-t" href="{{.Frame.Path}}"><span class="i i-refresh"></span>Refresh</a>
+<details class="menu">
+<summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
+<div class="menu-pop right wide">
+{{range $i, $g := .Frame.PrefMenu}}{{if $i}}<hr>
+{{end}}<span class="grp">{{$g.Label}}</span>
+{{range $g.Choices}}{{template "choice" .}}
+{{end}}{{with $g.Hint}}<span class="hint">{{.}}</span>
+{{end}}{{end}}</div>
+</details>
+<details class="menu navmenu">
+<summary class="btn"><span class="i i-menu"></span>Menu</summary>
+<div class="menu-pop right wider">
+{{if .Frame.Windows}}<span class="grp">Window</span>
+<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+<span class="grp">Project</span>
+<a href="/projects"><span class="i i-filter"></span>{{if .Frame.ProjectInput}}{{clip .Frame.ProjectInput}}{{else}}All projects{{end}} <span class="caret" aria-hidden="true">▾</span></a>
+<hr>
+{{end}}{{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
+{{end}}<span class="grp">Browse</span>
+{{range slice .Frame.Nav 5 8}}{{template "navlink" .}}
+{{end}}<hr>
+{{range slice .Frame.Nav 8 9}}{{template "navlink" .}}
+{{end}}{{if .Frame.Prefs.Dev}}<span class="grp">Developer</span>
+{{range slice .Frame.Nav 9}}{{template "navlink" .}}
+{{end}}{{end}}<hr>
+<a href="{{.Frame.Path}}"><span class="i i-refresh"></span>Refresh</a>
+</div>
+</details>
+</div>
 </div>
 </header>
-<main>
+{{template "scope" .}}<main id="main" class="wrap main">
+{{template "pagehead" .}}
 {{end}}
 
+{{define "pagehead"}}<div class="page-head"><h1>{{.Frame.Title}}</h1>{{with .Frame.Window}}<span class="muted">window: {{.}}</span>{{end}}</div>{{end}}
+
 {{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+
+{{/* seglink: a window link; choice: a preference choice, its mark shown. */}}
+{{define "seglink"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}
+{{define "choice"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="check">{{if .Current}}✓{{end}}</span>{{.Label}}</a>{{end}}
 
 {{/*
   scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt), .Frame.ServerRead
@@ -69,9 +114,16 @@
 {{end}}{{end}}
 
 {{define "foot"}}</main>
-<footer>
-<p>backsight {{.Frame.Version}} · Help: backsight guide dashboard · <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">{{.Frame.HelpURL}}</a></p>
+<footer class="foot">
+<div class="wrap">
+<span>backsight {{.Frame.Version}}</span>
+<a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">Help: backsight guide dashboard</a>
+<a href="/defs">Definitions</a>
+<span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Loc .Frame.RenderedAt}}</time> in {{.Frame.RenderMS}} ms</span>
+</div>
+<p class="sr-only" id="copy-status" aria-live="polite"></p>
 </footer>
+</div>
 </body>
 </html>
 {{end}}

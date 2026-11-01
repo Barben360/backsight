@@ -1,7 +1,5 @@
 {{/* views: memories */}}
 {{template "head" .}}{{template "top" .}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: the text. Reads .V.memories.Text (ID, Text, Reason): the text, escaped, or why it could not be read. */}}
 {{with .V.memories.Text}}<section>

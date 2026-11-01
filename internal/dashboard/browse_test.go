@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -339,9 +340,10 @@ func TestDeveloperPagesInTheMenu(t *testing.T) {
 			}
 		}
 		_, b := with(prefs, "/projects")
-		for _, link := range []string{`href="/releases"`, `href="/defs"`} {
-			if got := strings.Contains(b, link); got != (prefs != "") {
-				t.Errorf("preference %q: menu has %s: %v", prefs, link, got)
+		links := linksIn(parseHTML(t, b), "nav.nav")
+		for _, link := range []string{"/releases", "/defs"} {
+			if got := slices.Contains(links, link); got != (prefs != "") {
+				t.Errorf("preference %q: the navigation has %s: %v", prefs, link, got)
 			}
 		}
 	}

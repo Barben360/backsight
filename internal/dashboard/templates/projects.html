@@ -1,8 +1,6 @@
 {{/* views: projects */}}
 {{template "head" .}}{{template "top" .}}
 {{$r := .V.projects}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: projects. Reads .V.projects.Tables.Projects (Project, Sessions, Prompts, PromptsWithMemory, UsedTurns, ReportedWrong, MemoriesOnServer, LastActivity, Series). */}}
 <section>

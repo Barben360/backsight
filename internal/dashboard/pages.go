@@ -151,7 +151,10 @@ type Frame struct {
 	Scope                                  *metrics.Scope       // the first declared view's; nil on state pages
 	ServerRead                             *metrics.ServerState // the server's answer when that view read it, else nil
 	Generated                              time.Time
-	Reload                                 int // seconds until the browser asks again; 0: never (the first build's page)
+	Reload                                 int       // seconds until the browser asks again; 0: never (the first build's page)
+	RenderedAt                             time.Time // the request's start (Config.Now)
+	RenderMS                               int64     // ms from the request's start to just before the template runs (views computed)
+	Window                                 string    // windowPhrase of the page's params and window; "" on the text and state pages
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -191,10 +194,12 @@ func navFor(path string, dev bool) []Choice {
 	return out
 }
 
-// PrefGroup is one setting of the preferences menu and its choices.
+// PrefGroup is one setting of the preferences menu and its choices; Hint
+// is a line under them, if any.
 type PrefGroup struct {
 	Label   string
 	Choices []Choice
+	Hint    string
 }
 
 // windowDays are the window choices, shortest first.
@@ -266,14 +271,105 @@ func prefMenu(path string, p Prefs) []PrefGroup {
 	link := func(label, key, val string, cur bool) Choice {
 		return Choice{Label: label, Href: "/prefs?" + key + "=" + val + "&back=" + url.QueryEscape(path), Current: cur}
 	}
-	flag := func(key string, on bool) []Choice {
-		return []Choice{link("On", key, "1", on), link("Off", key, "0", !on)}
+	flag := func(key, onLabel string, on bool) []Choice {
+		return []Choice{link("Off", key, "0", !on), link(onLabel, key, "1", on)}
 	}
 	theme := make([]Choice, 0, len(themes))
 	for _, t := range themes {
 		theme = append(theme, link(strings.ToUpper(t[:1])+t[1:], "theme", t, p.Theme == t))
 	}
-	return []PrefGroup{{"Theme", theme}, {"Developer mode", flag("dev", p.Dev)}, {"Auto-refresh", flag("refresh", p.Refresh)}}
+	return []PrefGroup{
+		{Label: "Theme", Choices: theme},
+		{Label: "Developer mode", Choices: flag("dev", "On", p.Dev), Hint: "Adds ranking, learned ranking and release detail."},
+		{Label: "Auto-refresh", Choices: flag("refresh", "Every minute", p.Refresh)},
+	}
+}
+
+func init() {
+	funcs["anyCurrent"] = func(cs []Choice) bool {
+		return slices.ContainsFunc(cs, func(c Choice) bool { return c.Current })
+	}
+	// The footer's time: HH:MM, the machine-readable instant, in the window's zone.
+	funcs["clock"] = func(loc *time.Location, t time.Time) string {
+		if t.IsZero() {
+			return dash
+		}
+		return t.In(zoneOr(loc)).Format("15:04")
+	}
+	funcs["iso"] = func(loc *time.Location, t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.In(zoneOr(loc)).Format(time.RFC3339)
+	}
+}
+
+// zoneOr is loc, UTC when nil.
+func zoneOr(loc *time.Location) *time.Location {
+	if loc == nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// pageTitle is the question a page asks: its first view's, except for the
+// pages about one day, session or memory.
+func pageTitle(spec pageSpec, id string) string {
+	switch spec.Name {
+	case "day":
+		return dayTitle(id)
+	case "session":
+		return "What happened in session " + views.ShortID(id) + "?"
+	case "memory":
+		return "How has memory " + views.ShortID(id) + " done?"
+	}
+	return views.Questions[spec.Views[0]]
+}
+
+// dayTitle is the question of the page about one day (2026-10-29).
+func dayTitle(day string) string {
+	d, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return "What happened that day?"
+	}
+	return "What happened on " + d.Format("Monday, Jan 2") + "?"
+}
+
+// windowPhrase says the window of a page: the days it spans or, for a
+// start or an end given, its first and last day (the end is exclusive).
+func windowPhrase(p views.Params, w metrics.Window) string {
+	if p.Since == "" && p.Until == "" {
+		days := w.Days
+		if days == 0 {
+			days = p.Days
+		}
+		if days == 1 {
+			return "last 24 h"
+		}
+		return "last " + strconv.Itoa(days) + " days"
+	}
+	const f = "Jan 2"
+	if !w.Since.IsZero() && !w.Until.IsZero() {
+		loc := zoneOr(w.Loc)
+		return w.Since.In(loc).Format(f) + " to " + w.Until.In(loc).Add(-time.Nanosecond).Format(f)
+	}
+	// No resolved window: read the dates as given.
+	day := func(s string) (time.Time, bool) {
+		if len(s) >= 10 {
+			t, err := time.Parse("2006-01-02", s[:10])
+			return t, err == nil
+		}
+		return time.Time{}, false
+	}
+	from, ok := day(p.Since)
+	if !ok {
+		return ""
+	}
+	to, ok := day(p.Until)
+	if !ok {
+		return "since " + from.Format(f)
+	}
+	return from.Format(f) + " to " + to.AddDate(0, 0, -1).Format(f)
 }
 
 // frame is the frame of a page about r.
@@ -313,7 +409,14 @@ func (s *Server) Pages() int64 { return s.served.Load() }
 func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		first := spec.Views[0]
-		title := views.Questions[first]
+		started, wall := s.now(), time.Now()
+		id := ""
+		for _, k := range []string{"name", "id", "date"} {
+			if id == "" {
+				id = r.PathValue(k)
+			}
+		}
+		title := pageTitle(spec, id)
 		prefs := s.prefsOf(r)
 		// A pair net/http cannot parse is refused, not dropped: a garbled
 		// filter must not read as no filter.
@@ -333,12 +436,6 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			prefs.Dev = p.Dev
 		} else {
 			p.Dev = prefs.Dev
-		}
-		id := ""
-		for _, k := range []string{"name", "id", "date"} {
-			if id == "" {
-				id = r.PathValue(k)
-			}
 		}
 		data := PageData{V: map[string]*metrics.Result{}, ID: id}
 		for _, v := range spec.Views {
@@ -363,6 +460,11 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		data.Frame.Scope, data.Frame.ServerRead = &head.Scope, head.Server
 		data.Frame.Generated = head.GeneratedAt
 		data.Loc = head.Window.Loc
+		data.Frame.RenderedAt = started
+		data.Frame.RenderMS = max(0, time.Since(wall).Milliseconds())
+		if kindOf[r.Pattern] != "text" {
+			data.Frame.Window = windowPhrase(p, head.Window)
+		}
 		var buf bytes.Buffer
 		if err := s.tpl.pages[spec.Name].ExecuteTemplate(&buf, spec.File, data); err != nil {
 			refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")

@@ -1,8 +1,6 @@
 {{/* views: bank */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.bank}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: size and growth. Reads the metrics bank.size, bank.growth. */}}
 {{template "metric" framed (metric $r "bank.size") $d $.Loc}}

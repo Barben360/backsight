@@ -53,7 +53,7 @@ func TestPrefs(t *testing.T) {
 	for _, c := range []struct{ cookie, want string }{
 		{"v1.dark.0.0", `<html data-theme="dark"`},
 		{"v1.system.0.1", `<meta http-equiv="refresh" content="60">`},
-		{"v1.system.1.0", `<summary>Developer</summary>`},
+		{"v1.system.1.0", `Developer <span class="caret" aria-hidden="true">▾</span></summary>`},
 	} {
 		resp := h.do("GET", "/cost", withPrefs(ck, c.cookie)...)
 		if got := body(t, resp); resp.StatusCode != 200 || !strings.Contains(got, c.want) {
@@ -62,7 +62,7 @@ func TestPrefs(t *testing.T) {
 	}
 	// Without the preferences the page has none of these.
 	_, b := pageGet(t, h, ck, "/cost")
-	for _, no := range []string{`<meta http-equiv="refresh"`, `<summary>Developer</summary>`, `data-theme="dark"`} {
+	for _, no := range []string{`<meta http-equiv="refresh"`, `Developer <span class="caret"`, `data-theme="dark"`} {
 		if strings.Contains(b, no) {
 			t.Errorf("default page has %q", no)
 		}

@@ -1,8 +1,6 @@
 {{/* views: pipeline */}}
 {{template "head" .}}{{template "top" .}}
 {{$d := .Frame.Prefs.Dev}}{{$r := .V.pipeline}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
 {{/* widget: flow and outcomes. Reads the metrics pipeline.flow, retain.outcomes. */}}
 {{template "metric" framed (metric $r "pipeline.flow") $d $.Loc}}

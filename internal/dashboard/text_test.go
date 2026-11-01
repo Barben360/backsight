@@ -190,7 +190,10 @@ func TestTextPageNeverRefreshes(t *testing.T) {
 		if strings.Contains(b, `http-equiv="refresh"`) {
 			t.Errorf("%s (%d) refreshes on its own: %q", p, r.StatusCode, b)
 		}
-		if !strings.Contains(b, `<a href="/prefs?refresh=1&amp;back=`+url.QueryEscape(p)+`" aria-current="page">On</a>`) {
+		if doc := parseHTML(t, b); doc.first("div.page-head h1") == nil || doc.first("div.page-head span") != nil || doc.first("nav.seg") != nil {
+			t.Errorf("%s: the text page's head or window links: %q", p, b)
+		}
+		if !strings.Contains(b, `<a href="/prefs?refresh=1&amp;back=`+url.QueryEscape(p)+`" aria-current="true"><span class="check">✓</span>Every minute</a>`) {
 			t.Errorf("%s: the menu does not show auto-refresh as on: %q", p, b)
 		}
 	}
