@@ -35,7 +35,10 @@ const (
 var (
 	charted   = map[string]bool{"overview": true, "quality": true, "cost": true, "bank": true, "pipeline": true, "projects": true, "project": true, "day": true, "memory": true}
 	devCharts = map[string]bool{"overview": true, "quality": true, "cost": true}
-	mainPage  = map[string]bool{"overview": true, "quality": true, "cost": true, "bank": true, "pipeline": true, "system": true}
+	// devPages are the pages whose body changes with the developer menu, and one list for the menu alone.
+	devPages = map[string]bool{"overview": true, "quality": true, "cost": true, "bank": true, "pipeline": true, "system": true, "memory": true, "sessions": true}
+	// defaultPages are the pages whose defaults differ from 90 days (their empty-state words and windows).
+	defaultPages = map[string]bool{"overview": true, "system": true}
 )
 
 // accPage is one served page of the sweeps.
@@ -46,6 +49,9 @@ type accPage struct {
 	Set  string // "90" (days=90), "365" (since/until), "default" (no window), "all" (the memory with limit=500), "scenario"
 	Body string
 }
+
+// accFail lists the pages that did not answer as expected while the set was built.
+var accFail []string
 
 var (
 	accOnce  sync.Once
@@ -86,11 +92,11 @@ func allAcceptancePages(t *testing.T) []accPage {
 		long := indexgen.AppendLongSession(t, h.dirs.State, longTurns)
 		hot := indexgen.AppendHotMemory(t, h.dirs.State, hotShows)
 		ck := cookieHdr(h.login())
-		get := func(p string) (string, bool) {
+		get := func(p string, want int) (string, bool) {
 			resp := h.do("GET", p, ck...)
 			b := body(t, resp)
-			if resp.StatusCode != 200 {
-				t.Errorf("GET %s: %d", p, resp.StatusCode)
+			if resp.StatusCode != want {
+				accFail = append(accFail, fmt.Sprintf("GET %s: %d, want %d", p, resp.StatusCode, want))
 				return "", false
 			}
 			return b, true
@@ -128,7 +134,7 @@ func allAcceptancePages(t *testing.T) []accPage {
 				path = "/days/" + day
 			}
 			if r.Kind == "text" {
-				if b, ok := get("/memories/" + url.PathEscape(hot) + "/text"); ok {
+				if b, ok := get("/memories/"+url.PathEscape(hot)+"/text", 200); ok {
 					accPages = append(accPages, accPage{Name: path, Kind: "text", Set: "default", Body: b})
 				}
 				continue
@@ -139,32 +145,43 @@ func allAcceptancePages(t *testing.T) []accPage {
 				// The 365-day window is for the pages that draw charts, the developer menu's extra charts
 				// on the three that have them; the defaults only for the main pages, whose empty-state
 				// words differ. Each page costs a second or more under -race.
-				if set.name == "365" && !charted[r.Page] || set.name == "default" && !mainPage[r.Page] {
+				if set.name == "365" && !charted[r.Page] || set.name == "default" && !defaultPages[r.Page] {
 					continue
 				}
 				for _, dev := range []bool{false, true} {
-					if dev && (set.name == "default" || set.name == "365" && !devCharts[r.Page]) {
+					if dev && (set.name == "default" || !devPages[r.Page] || set.name == "365" && !devCharts[r.Page]) {
 						continue
 					}
 					q := set.query + "dev=" + map[bool]string{false: "0", true: "1"}[dev]
-					if b, ok := get(path + "?" + q); ok {
+					if b, ok := get(path+"?"+q, 200); ok {
 						accPages = append(accPages, accPage{Name: path + "?" + q, Kind: r.Page, Dev: dev, Set: set.name, Body: b})
 					}
 				}
 			}
 			if r.Page == "memory" {
-				for _, dev := range []string{"0", "1"} {
-					q := sweepWindow90 + "&limit=500&dev=" + dev
-					if b, ok := get(path + "?" + q); ok {
-						accPages = append(accPages, accPage{Name: path + "?" + q, Kind: "memory", Dev: dev == "1", Set: "all", Body: b})
-					}
+				q := sweepWindow90 + "&limit=500&dev=0"
+				if b, ok := get(path+"?"+q, 200); ok {
+					accPages = append(accPages, accPage{Name: path + "?" + q, Kind: "memory", Set: "all", Body: b})
 				}
 			}
 		}
 		// The framed failure pages, which carry a class of their kind.
-		for _, p := range []string{"/sessions/zzzzzzzz", "/quality?days=0"} {
-			resp := h.do("GET", p, ck...)
-			accPages = append(accPages, accPage{Name: "state " + p, Kind: "state", Set: "state", Body: body(t, resp)})
+		for _, c := range []struct {
+			path string
+			want int
+		}{{"/sessions/zzzzzzzz", 404}, {"/quality?days=0", 400}} {
+			if b, ok := get(c.path, c.want); ok {
+				accPages = append(accPages, accPage{Name: "state " + c.path, Kind: "state", Set: "state", Body: b})
+			}
+		}
+		// The preferences route asked for without a form, and the sign-in page.
+		if b, ok := get("/prefs", 400); ok {
+			accPages = append(accPages, accPage{Name: "/prefs", Kind: "prefs", Set: "state", Body: b})
+		}
+		if resp := newHarness(t).do("GET", "/"); resp.StatusCode != 401 {
+			accFail = append(accFail, fmt.Sprintf("GET / without a session: %d, want 401", resp.StatusCode))
+		} else {
+			accPages = append(accPages, accPage{Name: "unauthorized", Kind: "unauthorized", Set: "state", Body: body(t, resp)})
 		}
 		for _, s := range scenarios {
 			b, err := scenarioPage(t, s)
@@ -175,8 +192,12 @@ func allAcceptancePages(t *testing.T) []accPage {
 			accPages = append(accPages, accPage{Name: "overview scenario " + s.Name, Kind: "scenario", Set: "scenario", Body: b})
 		}
 	})
-	if len(accPages) == 0 {
-		t.Fatal("no pages rendered")
+	// A page that did not answer as expected, or a set short of its pinned size, fails every sweep.
+	if len(accFail) > 0 {
+		t.Fatalf("pages did not answer as expected:\n%s", strings.Join(accFail, "\n"))
+	}
+	if want := wantPages(); len(accPages) != want {
+		t.Fatalf("%d pages in the set, want %d", len(accPages), want)
 	}
 	return accPages
 }
@@ -209,13 +230,15 @@ func pageOf(t *testing.T, kind, set string, dev bool) accPage {
 	return accPage{}
 }
 
+// wantPages is the size of the set: 16 routes at 90 days, dev on for the pages that change with it;
+// the charting pages at 365 days (dev on for three); Overview and System at the defaults; the memory
+// with limit=500; the text page; two failure pages, /prefs and the sign-in page; the scenarios.
+func wantPages() int {
+	return 16 + len(devPages) + len(charted) + len(devCharts) + len(defaultPages) + 1 + 1 + 2 + 2 + len(scenarios)
+}
+
 func TestAcceptancePageSet(t *testing.T) {
-	pages := allAcceptancePages(t)
-	// 16 routes at 90 days with dev off and on; the charting pages at 365 days (the developer menu on for three); the main pages at the defaults;
-	// the memory twice more with limit=500; the text page; two failure pages; the scenarios.
-	if want := 16*2 + (len(charted) + len(devCharts)) + len(mainPage) + 2 + 1 + 2 + len(scenarios); len(pages) != want {
-		t.Errorf("%d pages, want %d", len(pages), want)
-	}
+	allAcceptancePages(t) // fails when a page did not answer as pinned, or the set is short
 	// The pages hold what the caps are for: a full page of turns, a full strip of shows, a year of days.
 	if n := len(parseHTML(t, pageOf(t, "session", "90", false).Body).find("li.turn")); n != 50 {
 		t.Errorf("the long session's page lists %d turns, want a page of 50", n)
@@ -251,10 +274,18 @@ var mustShow = map[string][]string{
 // listTables are the pages whose widget is a table.
 var listTables = []string{"projects", "sessions", "memories", "days"}
 
-var onAttr = regexp.MustCompile(`(?i)<[^>]*\son[a-z]+\s*=`)
+var onAttr = regexp.MustCompile(`(?i)<[^>]*[\s/"']on[a-z]+\s*=`)
+
+var (
+	detailsClasses = []string{"menu", "navmenu", "info", "cli", "tabs", "tblfb"}
+	popClasses     = []string{"pop", "menu-pop"}
+)
 
 func TestPagesWorkWithoutScripts(t *testing.T) {
-	eachAcceptancePage(t, func(p accPage) bool { return p.Set == "90" || p.Set == "scenario" }, func(t *testing.T, p accPage) {
+	opened := map[string]int{} // the elements of each class seen across the set
+	eachAcceptancePage(t, func(p accPage) bool {
+		return p.Set != "365" && p.Set != "all" && p.Set != "default" || p.Kind == "text"
+	}, func(t *testing.T, p accPage) {
 		stripped := scriptEl.ReplaceAllString(p.Body, "")
 		if strings.Contains(strings.ToLower(stripped), "<script") {
 			t.Error("a <script> element the check does not strip")
@@ -299,21 +330,29 @@ func TestPagesWorkWithoutScripts(t *testing.T) {
 			}
 		}
 		// Everything that opens does it without a script: a <details>.
-		for _, class := range []string{"menu", "navmenu", "info", "cli", "tabs", "tblfb"} {
+		for _, class := range detailsClasses {
 			for _, n := range doc.find("." + class) {
+				opened[class]++
 				if n.Name != "details" {
 					t.Errorf("the .%s is a %s, not a details", class, n.Name)
 				}
 			}
 		}
-		for _, class := range []string{"pop", "menu-pop"} {
+		for _, class := range popClasses {
 			for _, n := range doc.find("." + class) {
+				opened[class]++
 				if !within(n, "details", "") {
 					t.Errorf("a .%s outside any details: it opens only with a script or a hover", class)
 				}
 			}
 		}
 	})
+	// A class renamed away would make the loops above see nothing: each must meet its elements.
+	for _, class := range append(slices.Clone(detailsClasses), popClasses...) {
+		if opened[class] == 0 {
+			t.Errorf("no .%s element on any page: the check sees nothing", class)
+		}
+	}
 }
 
 func TestEveryCopyButtonIsHidden(t *testing.T) {
@@ -382,6 +421,17 @@ func TestNoChartOverMaxMarks(t *testing.T) {
 	}
 }
 
+var altAttr = regexp.MustCompile(`(?is)\salt\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+
+// spoken is spokenText plus the alt text, which a screen reader says too.
+func spoken(page string) string {
+	out := []string{spokenText(page)}
+	for _, m := range altAttr.FindAllStringSubmatch(page, -1) {
+		out = append(out, m[1]+m[2])
+	}
+	return strings.Join(out, " ")
+}
+
 // internalTerms are the words of the issue that no person reads on a page.
 var internalTerms = []string{"credited", "confident miss", "consolidation", "quarantine", "backfill", "boost", "retain", "settle",
 	"p50", "p95", "mrr", "hit@", "gini", "hook failure"}
@@ -395,7 +445,7 @@ func TestNoInternalTermsOnPages(t *testing.T) {
 	eachAcceptancePage(t, func(p accPage) bool {
 		return !p.Dev && p.Kind != "text" && p.Kind != "releases" && p.Kind != "defs" && p.Set != "365"
 	}, func(t *testing.T, p accPage) {
-		text := strings.ToLower(spokenText(html.UnescapeString(p.Body)))
+		text := strings.ToLower(spoken(html.UnescapeString(p.Body)))
 		for _, term := range internalTerms {
 			if termAt(text, term) {
 				i := regexp.MustCompile(`(?:^|[^a-z])` + regexp.QuoteMeta(term)).FindStringIndex(text)
@@ -426,6 +476,9 @@ func TestTermMatchingStartsAtAWord(t *testing.T) {
 	}
 }
 
+// devidClass is a class attribute holding the devid token.
+var devidClass = regexp.MustCompile(`\sclass=(?:"[^"]*\bdevid\b[^"]*"|'[^']*\bdevid\b[^']*')`)
+
 func TestDeveloperMetricsOnlyInDeveloperMode(t *testing.T) {
 	var dev []metrics.Def
 	for _, d := range metrics.Catalog {
@@ -453,7 +506,7 @@ func TestDeveloperMetricsOnlyInDeveloperMode(t *testing.T) {
 				t.Errorf("developer metric shown without developer mode: %v", m)
 			}
 		}
-		if strings.Contains(p.Body, `class="devid"`) || strings.Contains(p.Body, `<span class="devid">`) {
+		if devidClass.MatchString(p.Body) {
 			t.Error("a devid line without developer mode")
 		}
 		if strings.Contains(p.Body, `id="w-ranking"`) {
@@ -481,13 +534,15 @@ func TestDeveloperMetricsOnlyInDeveloperMode(t *testing.T) {
 	if !strings.Contains(q.Body, `id="w-ranking"`) {
 		t.Error("the quality page in developer mode lacks the ranking card")
 	}
-	if o := pageOf(t, "overview", "90", true); !strings.Contains(o.Body, `class="devid"`) {
+	if o := pageOf(t, "overview", "90", true); !devidClass.MatchString(o.Body) {
 		t.Error("the Overview in developer mode lacks the devid lines")
 	}
 }
 
 var (
-	classAttr = regexp.MustCompile(`\sclass="([^"]*)"`)
+	classAttr = regexp.MustCompile(`\sclass=(?:"([^"]*)"|'([^']*)')`)
+	notSel    = regexp.MustCompile(`:not\([^)]*\)|\[[^\]]*\]`)
+	tplCtl    = regexp.MustCompile(`(?s)\{\{-?\s*(?:if|else|end|range|with|/\*)\b.*?\}\}`)
 	selClass  = regexp.MustCompile(`\.(-?[A-Za-z_][\w-]*)`)
 	tplExpr   = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
 )
@@ -498,7 +553,8 @@ func styledClasses(t *testing.T) map[string]bool {
 	out := map[string]bool{}
 	for _, r := range cssRules(dashboardCSS(t)) {
 		for _, sel := range r.Sel {
-			for _, m := range selClass.FindAllStringSubmatch(sel, -1) {
+			// A class only inside :not(...) or [...] is excluded, not styled.
+			for _, m := range selClass.FindAllStringSubmatch(notSel.ReplaceAllString(sel, ""), -1) {
 				out[m[1]] = true
 			}
 		}
@@ -522,7 +578,7 @@ func TestEveryClassIsStyled(t *testing.T) {
 	}
 	for _, p := range allAcceptancePages(t) {
 		for _, m := range classAttr.FindAllStringSubmatch(p.Body, -1) {
-			for _, c := range strings.Fields(m[1]) {
+			for _, c := range strings.Fields(m[1] + m[2]) {
 				note(c, p.Name)
 			}
 		}
@@ -538,11 +594,13 @@ func TestEveryClassIsStyled(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, m := range classAttr.FindAllStringSubmatch(string(src), -1) {
-			for _, c := range strings.Fields(tplExpr.ReplaceAllString(m[1], " ")) {
-				// A token cut by an expression (`i-{{.}}`) is a prefix: the pages above hold the composed classes.
-				if strings.HasSuffix(c, "-") {
-					if !slices.ContainsFunc(slices.Collect(maps.Keys(styled)), func(s string) bool { return strings.HasPrefix(s, c) }) {
-						t.Errorf("no class of dashboard.css starts with %q (template %s)", c, f)
+			// Control actions (`{{if}}`, `{{end}}`) split tokens; an output action (`{{.X}}`) makes a token
+			// computed: the pages above hold the composed classes, a literal prefix must still be styled.
+			attr := tplExpr.ReplaceAllString(tplCtl.ReplaceAllString(m[1]+m[2], " "), "\x00")
+			for _, c := range strings.Fields(attr) {
+				if i := strings.IndexByte(c, 0); i >= 0 {
+					if prefix := c[:i]; prefix != "" && !slices.ContainsFunc(slices.Collect(maps.Keys(styled)), func(s string) bool { return strings.HasPrefix(s, prefix) }) {
+						t.Errorf("no class of dashboard.css starts with %q (template %s)", prefix, f)
 					}
 					continue
 				}
@@ -581,6 +639,8 @@ func inlineScripts(src string) int {
 	return n + len(scriptOpen.FindAllString(src, -1)) - len(inlineScript.FindAllString(src, -1))
 }
 
+var copyButton = regexp.MustCompile(`(?is)<button\b[^>]*\bclass="copy"[^>]*>`)
+
 func TestNoInlineStyleOrScript(t *testing.T) {
 	for _, p := range allAcceptancePages(t) {
 		if styleAttr.MatchString(p.Body) {
@@ -609,10 +669,29 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 		if inlineScripts(s) > 0 {
 			t.Errorf("template %s: an inline script", f)
 		}
+		if strings.Contains(strings.ToLower(s), "<noscript") || strings.Contains(strings.ToLower(s), "javascript:") || onAttr.MatchString(s) {
+			t.Errorf("template %s: a noscript, a javascript: URL or an event handler", f)
+		}
+		for _, b := range copyButton.FindAllString(s, -1) {
+			if !strings.Contains(b, "hidden") {
+				t.Errorf("template %s: a copy button that shows without a script: %s", f, b)
+			}
+		}
 	}
 }
 
 func TestInlineCheckersSeeViolations(t *testing.T) {
+	for _, src := range []string{`<a href="/" onclick="x()">`, `<a/onclick=x>`, `<a href='/' onfocus = "x">`} {
+		if !onAttr.MatchString(src) {
+			t.Errorf("onAttr misses %s", src)
+		}
+	}
+	if onAttr.MatchString(`<a href="/online" class="one">`) {
+		t.Error("onAttr reads a value as a handler")
+	}
+	if !devidClass.MatchString(`<p class="x devid">`) || !devidClass.MatchString(`<p class='devid'>`) || devidClass.MatchString(`<p class="devidx">`) {
+		t.Error("devidClass does not read a class list")
+	}
 	if !styleAttr.MatchString(`<p style="x:y">`) || !styleEl.MatchString(`<style>`) || !styleAttr.MatchString("<p\nstyle = 'x'>") {
 		t.Error("the style checks miss a style")
 	}
