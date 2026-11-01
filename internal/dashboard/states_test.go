@@ -49,7 +49,7 @@ func TestStatePagesFollowTheDesign(t *testing.T) {
 		{"bad request", dataHarness0, "/quality?days=0", 400, views.Questions["quality"], "--days: a whole number from 1 to 365.", "", "", ""},
 		{"broken", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.catchUpErr = errors.New("disk exploded at /home/x/secret.db") })
-		}, "/", 500, views.Questions["overview"], "The view failed: run backsight doctor.", "", "", ""},
+		}, "/", 500, views.Questions["overview"], "The view failed: run backsight doctor.", "", "", "st-watch"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestStatePagesFollowTheDesign(t *testing.T) {
 			}
 			// The build, update and timeout pages are a centred card; the pages
 			// that answer a question keep the frame, whose brand holds both logos.
-			solo := c.name == "building" || c.name == "updating" || c.name == "updated" || c.name == "timeout"
+			solo := c.name != "not found" && c.name != "bad request"
 			main, box := doc.first("main#main"), doc.first("main.solo .solo-box")
 			if main == nil || solo != (box != nil) || solo != (doc.first("main.solo") != nil) || solo == (doc.first("header.topbar") != nil) {
 				t.Fatalf("solo %t: main %v, card %v, topbar %v in %q", solo, main, box, doc.first("header.topbar"), raw)
@@ -81,11 +81,19 @@ func TestStatePagesFollowTheDesign(t *testing.T) {
 			if hs := main.find("h1"); len(hs) != 1 || hs[0].text() != c.h1 || hs[0].Parent.attr("class") != "page-head" {
 				t.Errorf("h1 %v, want exactly %q in .page-head", hs, c.h1)
 			}
+			// Kind decides the shape: the framed pages carry their kind.
+			wantClass := map[string]string{"not found": "sub state-notfound", "bad request": "sub state-bad"}[c.name]
+			if wantClass == "" {
+				wantClass = "sub"
+			}
+			if ps := main.find("p.sub"); len(ps) != 1 || ps[0].attr("class") != wantClass {
+				t.Errorf("sentence class %v, want %q", ps, wantClass)
+			}
 			if ps := main.find("p.sub"); len(ps) != 1 || ps[0].text() != c.sub {
 				t.Errorf("sentence %v, want %q", ps, c.sub)
 			}
 			for _, cl := range []string{"logo-l", "logo-d"} {
-				if imgs := box.find("img." + cl); len(imgs) != 1 || imgs[0].attr("alt") != "backsight" || imgs[0].attr("src") != assetPath(map[string]string{"logo-l": "logo-light.svg", "logo-d": "logo-dark.svg"}[cl]) {
+				if imgs := box.find("img." + cl); len(imgs) != 1 || imgs[0].attr("alt") != "backsight" || imgs[0].attr("width") != "24" || imgs[0].attr("height") != "24" || imgs[0].attr("src") != assetPath(map[string]string{"logo-l": "logo-light.svg", "logo-d": "logo-dark.svg"}[cl]) {
 					t.Errorf("logo %s: %v", cl, imgs)
 				}
 			}
@@ -210,5 +218,26 @@ func TestFeedbackOffNoDataRendersItsClosingBracket(t *testing.T) {
 	}
 	if tail := doc.first("div.empty .xs.muted"); tail == nil || tail.text() != "Quality numbers need it. Found, Cost and Flowing still work." {
 		t.Errorf("tail %v", tail)
+	}
+}
+
+// The text page never refreshes: its first-build page says to open the text
+// again, and its update page has the same heading as the others.
+func TestTextPageStatePagesWords(t *testing.T) {
+	path := "/memories/mem-a1b2c3d4/text"
+	h := newDataHarness(t, withIndex(func(f *fakeIndex) { f.openGate = make(chan struct{}) }), withServer(), withNeedsBuild())
+	r := h.do("GET", path, cookieHdr(h.login())...)
+	doc := parseHTML(t, body(t, r))
+	if r.StatusCode != 503 || len(doc.find("meta[http-equiv=refresh]")) != 0 {
+		t.Errorf("first build: %d, refresh %v", r.StatusCode, doc.find("meta[http-equiv=refresh]"))
+	}
+	if ps := doc.find("main p.sub"); len(ps) != 1 || ps[0].text() != "Building the metrics index from this PC's history. Open the text again in a few seconds." {
+		t.Errorf("first-build sentence %v", ps)
+	}
+	h = dataHarness(t, func(f *fakeIndex) { f.side = true })
+	r = h.do("GET", path, cookieHdr(h.login())...)
+	doc = parseHTML(t, body(t, r))
+	if hs := doc.find("main h1"); r.StatusCode != 503 || len(hs) != 1 || hs[0].text() != updatedPage || updatedPage != "backsight was updated." {
+		t.Errorf("updated: %d, %v", r.StatusCode, hs)
 	}
 }
