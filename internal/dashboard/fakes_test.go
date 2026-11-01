@@ -31,6 +31,7 @@ type fakeIndex struct {
 	fileVersion int
 	side        bool
 	catchUpErr  error
+	fresh       *index.Freshness // CatchUp answers it in place of the real index's
 	block       chan struct{}
 	entered     chan struct{}
 	catchUps    int
@@ -102,12 +103,16 @@ func (f *fakeIndex) CatchUp(ctx context.Context, budget time.Duration) (index.Fr
 	f.mu.Lock()
 	f.catchUps++
 	f.budgets = append(f.budgets, budget)
-	err := f.catchUpErr
+	err, fresh := f.catchUpErr, f.fresh
 	f.mu.Unlock()
 	if err != nil {
 		return index.Freshness{}, err
 	}
-	return f.real.CatchUp(ctx, budget)
+	fr, err := f.real.CatchUp(ctx, budget)
+	if fresh != nil {
+		return *fresh, err
+	}
+	return fr, err
 }
 
 func (f *fakeIndex) Schema() int { return f.real.Schema() }

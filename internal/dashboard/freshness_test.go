@@ -1,10 +1,14 @@
 package dashboard
 
 import (
+	"io/fs"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/format"
@@ -71,7 +75,7 @@ func TestScopeLineAndFreshness(t *testing.T) {
 	if scope == nil || !strings.HasPrefix(scope.text(), "Activity on this PC memory on hindsight.test:8888") || !strings.Contains(scope.text(), "updated") {
 		t.Fatalf("scope line %+v", scope)
 	}
-	if strings.Contains(scope.text(), "not answering") || scope.first("span.chip-watch") != nil {
+	if strings.Contains(scope.text(), "not answering") || scope.first("span.chip") != nil {
 		t.Errorf("a healthy page alarms: %q", scope.text())
 	}
 	tm := scope.first("time")
@@ -130,11 +134,11 @@ func TestCatchingSentence(t *testing.T) {
 		}
 	}
 	const sentence = "Catching up: 3 days of history still being read"
-	chip := parseHTML(t, render(t, "quality", func(d *PageData) { d.Frame.Catching = sentence })).first("div.scope span.chip-watch")
+	chip := parseHTML(t, render(t, "quality", func(d *PageData) { d.Frame.Catching = sentence })).first("div.scope span.chip")
 	if chip == nil || chip.text() != sentence {
 		t.Errorf("catching chip %+v", chip)
 	}
-	if parseHTML(t, render(t, "quality", nil)).first("span.chip-watch") != nil {
+	if parseHTML(t, render(t, "quality", nil)).first("span.chip") != nil {
 		t.Error("a chip without a catch-up")
 	}
 }
@@ -145,8 +149,14 @@ func TestStaleChipIsCSSOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	css := string(b)
-	if !strings.Contains(css, "animation: stale-show 0s linear 300s forwards") || !strings.Contains(css, "@keyframes stale-show") {
-		t.Error("the stale chip's rule is missing")
+	// The chip starts hidden and a zero-duration animation, delayed 300 s,
+	// ends it visible: dropping either leaves it always or never shown.
+	hidden := regexp.MustCompile(`\.chip-stale\s*\{[^}]*visibility:\s*hidden;[^}]*animation:\s*stale-show 0s linear 300s forwards;[^}]*\}`)
+	if !hidden.MatchString(css) {
+		t.Error("the stale chip is not hidden at first with the delayed animation")
+	}
+	if !regexp.MustCompile(`@keyframes stale-show\s*\{\s*to\s*\{\s*visibility:\s*visible;\s*\}\s*\}`).MatchString(css) {
+		t.Error("the keyframe does not end in visibility: visible")
 	}
 	decl := regexp.MustCompile(`(?m)(?:^|[;{\s])(animation|transition)[\w-]*\s*:`)
 	if n := len(decl.FindAllString(css, -1)); n != 1 {
@@ -154,6 +164,88 @@ func TestStaleChipIsCSSOnly(t *testing.T) {
 	}
 	if strings.Contains(css, "transition") {
 		t.Error("a transition in the stylesheet")
+	}
+}
+
+func TestCatchingChipComesFromTheIndex(t *testing.T) {
+	h := dataHarness(t)
+	ck := cookieHdr(h.login())
+	if c := rawPage(t, h, ck, "/").first("div.scope span.chip"); c != nil {
+		t.Errorf("a healthy index shows %q", c.text())
+	}
+	h.ix.set(func(f *fakeIndex) { f.fresh = &index.Freshness{Partial: true, LagSeconds: 259200} })
+	c := rawPage(t, h, ck, "/quality").first("div.scope span.chip")
+	if c == nil || c.text() != "Catching up: 3 days of history still being read" {
+		t.Errorf("catching chip %+v", c)
+	}
+}
+
+// probe replaces the page (and the state page) with templates that write a
+// number (French groups by spaces, which text() folds) in the request's locale, through the real handlers.
+func probe(t *testing.T, h *harness, page string) {
+	t.Helper()
+	frame, err := fs.ReadFile(Templates(), "frame.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := h.s.tpl.specs[page]
+	body := "{{template \"head\" .}}{{template \"top\" .}}<p id=\"probe\">{{num .L 1234567}}</p>{{template \"foot\" .}}"
+	mem := fstest.MapFS{
+		"frame.html": {Data: frame},
+		spec.File:    {Data: []byte("{{/* views: " + strings.Join(spec.Views, ", ") + " */}}\n" + body)},
+		"state.html": {Data: []byte("{{/* views: none */}}\n" + body)},
+	}
+	if h.s.tpl.pages[page], err = parseWithFrame(mem, spec.File); err != nil {
+		t.Fatal(err)
+	}
+	if h.s.tpl.state, err = parseWithFrame(mem, "state.html"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocaleReachesEveryPage(t *testing.T) {
+	h, _, text := textHarness(t, "the text")
+	probe(t, h, "quality")
+	probe(t, h, textPageName)
+	ck := h.login()
+	for _, c := range []struct{ path, lang, want string }{
+		{"/quality", "fr", "1 234 567"},
+		{"/quality", "de-DE", "1.234.567"},
+		{"/quality", "", "1,234,567"},
+		{"/quality?days=0", "fr", "1 234 567"}, // a state page
+		{"/quality?days=0", "", "1,234,567"},
+		{text, "de", "1.234.567"},
+		{text, "", "1,234,567"},
+	} {
+		hdr := cookieHdr(ck)
+		if c.lang != "" {
+			hdr = append(hdr, "Accept-Language", c.lang)
+		}
+		doc := parseHTML(t, body(t, h.do("GET", c.path, hdr...))) // a state page is a 400
+		if p := doc.first("p#probe"); p == nil || p.text() != c.want {
+			t.Errorf("%s with %q: %+v, want %q", c.path, c.lang, p, c.want)
+		}
+	}
+}
+
+func TestTextPageHasTheFreshnessOfAPage(t *testing.T) {
+	var reads atomic.Int64
+	h, _, text := textHarness(t, "the text", func(h *harness, c *Config) {
+		base := c.Now
+		c.Now = func() time.Time { return base().Add(time.Duration(reads.Add(1)*5) * time.Millisecond) }
+	})
+	doc := rawPage(t, h, cookieHdr(h.login()), text)
+	scope := doc.first("div.scope")
+	if scope == nil || !strings.Contains(scope.text(), "updated just now") || scope.first("time") == nil {
+		t.Errorf("scope line %+v", scope)
+	}
+	foot := doc.first("footer.foot")
+	ms := regexp.MustCompile(`Rendered at \d\d:\d\d in (\d+) ms$`).FindStringSubmatch(foot.first("span time").Parent.text())
+	if ms == nil {
+		t.Fatalf("footer %q: no render time", foot.text())
+	}
+	if n, _ := strconv.Atoi(ms[1]); n <= 0 || n%5 != 0 {
+		t.Errorf("rendered in %d ms", n)
 	}
 }
 

@@ -319,6 +319,25 @@ func dayTitle(day string) string {
 	return "What happened on " + d.Format("Monday, Jan 2") + "?"
 }
 
+// pageData is the part of a page's data every page has, the text and state
+// pages included: the frame with the request's start and the time spent
+// since, and the browser's locale. started is the request's start.
+func (s *Server) pageData(r *http.Request, title string, prefs Prefs, started time.Time) PageData {
+	f := s.frame(r, title, prefs)
+	f.RenderedAt, f.RenderMS = started, max(0, s.now().Sub(started).Milliseconds())
+	return PageData{Frame: f, Loc: time.UTC, L: localeOf(r)}
+}
+
+// withResult sets what the first view's result says about the page: the
+// scope, the server's answer, when it was generated, the zone and the
+// catch-up sentence; the views being computed, it also sets the time spent.
+func (s *Server) withResult(d *PageData, head *metrics.Result) {
+	d.Frame.RenderMS = max(0, s.now().Sub(d.Frame.RenderedAt).Milliseconds())
+	d.Frame.Scope, d.Frame.ServerRead, d.Frame.Generated = &head.Scope, head.Server, head.GeneratedAt
+	d.Frame.Catching = catchingOf(head.Index)
+	d.Loc = head.Window.Loc
+}
+
 // localeOf is the language the browser asked for, English when none is known.
 func localeOf(r *http.Request) format.Locale {
 	return format.FromAcceptLanguage(r.Header.Get("Accept-Language"))
@@ -435,7 +454,8 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		} else {
 			p.Dev = prefs.Dev
 		}
-		data := PageData{V: map[string]*metrics.Result{}, ID: id, L: localeOf(r)}
+		data := s.pageData(r, title, prefs, started)
+		data.V, data.ID = map[string]*metrics.Result{}, id
 		for _, v := range spec.Views {
 			res, st, err := s.data.result(r.Context(), v, p, id)
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
@@ -454,13 +474,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			data.V[v] = &res
 		}
 		head := data.V[first]
-		data.Frame = s.frame(r, title, prefs)
-		data.Frame.Scope, data.Frame.ServerRead = &head.Scope, head.Server
-		data.Frame.Generated = head.GeneratedAt
-		data.Loc = head.Window.Loc
-		data.Frame.RenderedAt = started
-		data.Frame.RenderMS = max(0, s.now().Sub(started).Milliseconds())
-		data.Frame.Catching = catchingOf(head.Index)
+		s.withResult(&data, head)
 		if kindOf[r.Pattern] != "text" {
 			data.Frame.Window = windowPhrase(p, head.Window)
 		}
@@ -527,10 +541,10 @@ func sentence(s string) string {
 // statePage answers status with the state page: a sentence, and for
 // reload > 0 a browser that asks again after that many seconds.
 func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, title string, prefs Prefs, msg string, reload int) {
-	f := s.frame(r, title, prefs)
-	f.Reload = reload
+	data := s.pageData(r, title, prefs, s.now())
+	data.Frame.Reload, data.Msg = reload, msg
 	var buf bytes.Buffer
-	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", PageData{Frame: f, Msg: msg, Loc: time.UTC, L: localeOf(r)}); err != nil {
+	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", data); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")
 		return
 	}

@@ -39,6 +39,7 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusMethodNotAllowed, textGetOnly)
 		return
 	}
+	started := s.now()
 	prefs := s.prefsOf(r)
 	if r.URL.RawQuery != "" {
 		s.statePage(w, r, http.StatusBadRequest, textTitle, prefs, sentence(textNoParams), 0)
@@ -70,9 +71,9 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 		s.failurePage(w, r, textTitle, prefs, err)
 		return
 	}
-	data := PageData{V: map[string]*metrics.Result{"memories": &res}, ID: id, Loc: res.Window.Loc}
-	data.Frame = s.frame(r, textTitle, prefs)
-	data.Frame.Scope, data.Frame.ServerRead, data.Frame.Generated = &res.Scope, res.Server, res.GeneratedAt
+	data := s.pageData(r, textTitle, prefs, started)
+	data.V, data.ID = map[string]*metrics.Result{"memories": &res}, id
+	s.withResult(&data, &res)
 	var buf bytes.Buffer
 	if err := s.tpl.pages[textPageName].ExecuteTemplate(&buf, textPageName+".html", data); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")

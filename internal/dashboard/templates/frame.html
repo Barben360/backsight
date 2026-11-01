@@ -117,7 +117,7 @@
 <span class="dot">updated {{with rel $.Frame.RenderedAt $.Frame.Generated $.Loc}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}</span>
 <a class="chip chip-stale" href="{{$.Frame.Path}}"><span class="i i-sm i-clock"></span>Updated over 5 min ago. Refresh.</a>
 {{with .Project}}<span class="dot">project <b>{{clip .}}</b></span>
-{{end}}{{with $.Frame.Catching}}<span class="chip chip-watch"><span class="i i-sm i-clock"></span>{{.}}</span>
+{{end}}{{with $.Frame.Catching}}<span class="chip"><span class="i i-sm i-clock"></span>{{.}}</span>
 {{end}}</div></div>
 {{end}}{{end}}
 
