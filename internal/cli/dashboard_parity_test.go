@@ -446,8 +446,8 @@ func TestPagesShowTheFixturesNumbers(t *testing.T) {
 	}
 	text := visibleText(page)
 	for _, want := range []string{
-		"Does memory show up when you ask something? 80 % ",
-		"· n = 5 · too few, 15 more needed",
+		"How often does a prompt get memory? 4 of 5 prompts got memory too few",
+		"4 of 5: too few to judge.",
 		"Found learning day 2 of about 7",
 		"Flowing needs attention (2 reasons).",
 		"Flowing attention 1 of 1 sessions sent",

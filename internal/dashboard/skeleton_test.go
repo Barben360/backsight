@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"html"
 	"regexp"
 	"slices"
@@ -55,7 +56,7 @@ func TestVisibleText(t *testing.T) {
 
 // pageMetrics are the metrics each page shows to everyone, by page.
 var pageMetrics = map[string][]string{
-	"overview": {"recall.hit_rate", "used.turn_rate", "declare.coverage", "verdict.wrong_rate", "context.per_session", "recall.latency", "pipeline.flow", "bank.size", "bank.growth"},
+	"overview": {"bank.size", "bank.growth"}, // the six tiles have their own checks (tileTexts)
 	"quality":  {"used.turn_rate", "declare.coverage", "recall.hit_rate", "recall.empty_reasons", "search.rate", "search.empty_rate"},
 	"cost":     {"context.per_session", "context.per_prompt", "recall.latency", "search.latency", "extraction.tokens", "extraction.cost"},
 	"bank":     {"bank.size", "bank.growth", "bank.by_project", "bank.consolidation", "notes.stored", "bank.churn", "stale.never_used", "stale.hidden", "stale.reported"},
@@ -120,6 +121,15 @@ func TestPagesShowTheViewsNumbers(t *testing.T) {
 	}
 }
 
+// tileText is the number a tile shows for m: "4 of 5" while too few events
+// support a rate, else the value in its unit.
+func tileText(d metrics.Def, m metrics.Metric) string {
+	if m.Status == metrics.StatusTooFew && m.Num != nil && m.Den != nil {
+		return fmt.Sprintf("%d of %d", *m.Num, *m.Den)
+	}
+	return views.FormatValue(d, m)
+}
+
 func TestOverviewSkeleton(t *testing.T) {
 	h := dataHarness(t)
 	res := apiResult(t, h, "overview")
@@ -139,11 +149,21 @@ func TestOverviewSkeleton(t *testing.T) {
 			t.Errorf("overview lacks %q", want)
 		}
 	}
-	for _, id := range []string{"recall.hit_rate", "used.turn_rate", "verdict.wrong_rate", "context.per_session", "recall.latency", "pipeline.flow"} {
-		def, _ := metrics.DefOf(id)
-		if !strings.Contains(text, def.Question) {
-			t.Errorf("overview lacks the tile %s", def.Question)
+	shown := 0
+	for _, sp := range tileSpecs {
+		if !strings.Contains(text, sp.question) {
+			t.Errorf("overview lacks the tile question %q", sp.question)
 		}
+		def, _ := metrics.DefOf(sp.id)
+		if want := tileText(def, res.Metrics[sp.id]); want != "—" {
+			shown++
+			if !strings.Contains(text, want) {
+				t.Errorf("overview lacks the value of %s: %q", sp.id, want)
+			}
+		}
+	}
+	if shown == 0 {
+		t.Error("no tile has a value in the fixtures: the test checks nothing")
 	}
 	if len(res.Tables.Lately) == 0 {
 		t.Fatal("no lately rows in the API")
@@ -194,7 +214,7 @@ func TestServerDownMarksServerSections(t *testing.T) {
 	res := apiResult(t, h, "overview")
 	def, _ := metrics.DefOf("recall.hit_rate")
 	m, ok := res.Metrics["recall.hit_rate"]
-	want := views.FormatValue(def, m)
+	want := tileText(def, m)
 	_, o := pageGet(t, h, ck, "/")
 	if !ok || want == "—" || !strings.Contains(visibleText(o), want) {
 		t.Errorf("/ with the server down: recall.hit_rate %q (in API %v), want it shown", want, ok)

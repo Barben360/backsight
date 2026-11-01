@@ -106,6 +106,7 @@ var funcs = template.FuncMap{
 	"banner":      bannerOf,
 	"summaryline": summaryPage,
 	"attention":   attentionPage,
+	"tiles":       tilesOf,
 
 	"head":     headOf,
 	"fixed":    fixedHead,
