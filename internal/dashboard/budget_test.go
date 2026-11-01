@@ -27,12 +27,29 @@ const (
 // pageLimit is basePageLimit, doubled on GitHub's Windows runner: its
 // pages take 1.1 to 1.6 s where the Windows test VM's slowest is 709 ms,
 // so the runner, not Windows, is slow; the VM keeps the base limit.
-var pageLimit = func() time.Duration {
-	if runtime.GOOS == "windows" && os.Getenv("GITHUB_ACTIONS") == "true" {
-		return 2 * basePageLimit
+var pageLimit = runnerLimit(basePageLimit, runtime.GOOS, os.Getenv("GITHUB_ACTIONS"))
+
+// runnerLimit is base, doubled on GitHub's Windows runner.
+func runnerLimit(base time.Duration, goos, githubActions string) time.Duration {
+	if goos == "windows" && githubActions == "true" {
+		return 2 * base
 	}
-	return basePageLimit
-}()
+	return base
+}
+
+func TestRunnerLimitDoublesOnlyOnGitHubWindows(t *testing.T) {
+	for _, c := range []struct {
+		goos, ci string
+		want     time.Duration
+	}{{"windows", "true", 2 * time.Second}, {"windows", "", time.Second}, {"linux", "true", time.Second}} {
+		if got := runnerLimit(time.Second, c.goos, c.ci); got != c.want {
+			t.Errorf("%s ci=%q: %v, want %v", c.goos, c.ci, got, c.want)
+		}
+	}
+	if renderLimit != runnerLimit(baseRenderLimit, runtime.GOOS, os.Getenv("GITHUB_ACTIONS")) {
+		t.Error("renderLimit does not go through runnerLimit")
+	}
+}
 
 // TestPageBudgets times the pages on 13 months of generated history with
 // every cache off, then the first byte of a page with the server down.

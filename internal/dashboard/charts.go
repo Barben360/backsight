@@ -3,7 +3,6 @@ package dashboard
 import (
 	"html/template"
 	"math"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -484,7 +483,7 @@ func projectBars(l format.Locale, rows []metrics.ProjectCount) []ProjectBar {
 	}
 	out := make([]ProjectBar, 0, len(rows))
 	for _, r := range rows {
-		b := ProjectBar{Name: views.Clip(r.Project), Full: views.Plain(r.Project, ""), Href: "/projects/" + url.PathEscape(r.Project), Count: l.Int(r.Memories)}
+		b := ProjectBar{Name: views.Clip(r.Project), Full: views.Plain(r.Project, ""), Href: pathHref("/projects/", r.Project, ""), Count: l.Int(r.Memories)}
 		if most > 0 {
 			b.W = math.Round(float64(r.Memories)/float64(most)*1000) / 10
 		}

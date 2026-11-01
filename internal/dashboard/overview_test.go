@@ -25,6 +25,7 @@ func renderOverview(t *testing.T, r *metrics.Result) *node {
 	d.V["overview"] = r
 	d.Loc, d.L = r.Window.Loc, en
 	d.P = views.Params{Days: 7}
+	d.Frame.Window = "last 7 days"
 	d.CLI = "backsight stats overview"
 	var buf bytes.Buffer
 	if err := tpls["overview"].ExecuteTemplate(&buf, spec.File, d); err != nil {
@@ -482,4 +483,77 @@ func jsonRoundTrip(t *testing.T, m map[string]any) map[string]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// renderOverviewIn is renderOverview with the page's window phrase set.
+func renderOverviewIn(t *testing.T, r *metrics.Result, window string) *node {
+	t.Helper()
+	tpls, specs, err := loadPages(Templates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := specs["overview"]
+	d := fixtureData(t, spec, false)
+	d.V["overview"] = r
+	d.Loc, d.L = r.Window.Loc, en
+	d.Frame.Window = window
+	var buf bytes.Buffer
+	if err := tpls["overview"].ExecuteTemplate(&buf, spec.File, d); err != nil {
+		t.Fatal(err)
+	}
+	return parseHTML(t, buf.String())
+}
+
+// The summary line speaks of the page's window, not always of seven days
+// (red on the old fixed "In the last 7 days").
+func TestSummaryLineFollowsTheWindow(t *testing.T) {
+	for window, want := range map[string]string{
+		"last 30 days":   "In the last 30 days: ",
+		"last 24 h":      "In the last 24 h: ",
+		"Oct 1 to Oct 7": "From Oct 1 to Oct 7: ",
+	} {
+		n := renderOverviewIn(t, scenarioNamed(t, "healthy"), window)
+		p := n.first("p.summary")
+		if p == nil || !strings.HasPrefix(p.text(), want) {
+			t.Errorf("window %q: summary %v, want prefix %q", window, p, want)
+		}
+		if b := n.first("h2.v-title .v-when"); b == nil || b.text() != "(last 7 days)" {
+			t.Errorf("the banner keeps its seven days: %v", b)
+		}
+	}
+}
+
+// The calm sentence claims a usual range only when every axis is ok (red on
+// the old code, which said it for can't judge and too few axes too).
+func TestCalmSentenceByAxisState(t *testing.T) {
+	const ok = "Everything is within its usual range. Nothing to do."
+	const few = "Nothing needs attention. Some numbers have too few events to judge yet."
+	for _, state := range []struct {
+		st   metrics.AxisState
+		want string
+	}{
+		{metrics.AxisOK, ok}, {metrics.AxisCantJudge, few}, {metrics.AxisTooEarly, few},
+	} {
+		r := scenarioNamed(t, "healthy")
+		r.Attention = nil
+		r.Verdict.Learning = false
+		for k, ax := range r.Verdict.Axes {
+			ax.State = metrics.AxisOK
+			r.Verdict.Axes[k] = ax
+		}
+		for k, ax := range r.Verdict.Axes {
+			ax.State = state.st
+			r.Verdict.Axes[k] = ax
+			break
+		}
+		if got := attentionOf(r, en).Calm; got != state.want {
+			t.Errorf("one axis %s: calm %q, want %q", state.st, got, state.want)
+		}
+	}
+	r := scenarioNamed(t, "healthy")
+	r.Attention = nil
+	r.Verdict = nil
+	if got := attentionOf(r, en).Calm; got != few {
+		t.Errorf("no verdict: %q", got)
+	}
 }

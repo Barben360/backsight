@@ -11,10 +11,10 @@
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Memory</th><th>Report</th><th>Project</th><th>Session</th><th>When</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr><td><a class="idc" href="/memories/{{esc .Memory}}" title="{{.Memory}}">{{short .Memory}}</a></td>
+{{range .Rows}}<tr><td>{{template "idlink" (memlink .Memory)}}</td>
 <td>{{.Verdict}}</td>
-<td>{{if .Project}}<a class="trunc" href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{else}}{{dash}}{{end}}</td>
-<td>{{if .Session}}<a class="idc" href="/sessions/{{esc .Session}}" title="{{.Session}}">{{short .Session}}</a>{{else}}{{dash}}{{end}}</td>
+<td>{{if .Project}}{{template "projlink" (projref .Project)}}{{else}}{{dash}}{{end}}</td>
+<td>{{if .Session}}{{template "idlink" (sesslink .Session)}}{{else}}{{dash}}{{end}}</td>
 <td><time datetime="{{.When.Datetime}}" title="{{.When.Title}}">{{.When.Text}}</time></td></tr>
 {{end}}</tbody></table></div>
 <p class="small"><a href="/bank">Review them: often shown, never used · hidden · reported wrong →</a></p>

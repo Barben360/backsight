@@ -17,7 +17,7 @@
 {{end}}</section>
 {{end}}
 {{/* widget: summary line. Reads .V.overview.Summary through summaryline (Prompts, Turns, Tokens, Cost, Scope). */}}
-{{with summaryline $r $.L}}<p class="summary">In the last 7 days: <b>{{.Prompts}}</b> prompts got memory, Claude used it in <b>{{.Turns}}</b> turns, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
+{{with summaryline $r $.L $.Frame.Window}}<p class="summary">{{.When}}: <b>{{.Prompts}}</b> prompts got memory, Claude used it in <b>{{.Turns}}</b> turns, about <b>{{.Tokens}}</b> tokens added; extraction cost <b>{{.Cost}}</b> <span class="muted">{{.Scope}}</span></p>
 {{end}}
 
 {{/* widget: six tiles. Reads the metrics recall.hit_rate, used.turn_rate (subline declare.coverage), verdict.wrong_rate, context.per_session, recall.latency, pipeline.flow through tiles (TileGroup: Name, Tiles; Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev). */}}
@@ -42,8 +42,8 @@
 {{if $r.Tables.Lately}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
 <tbody>
-{{range $r.Tables.Lately}}<tr><td><a class="idc" href="/sessions/{{esc .ID}}" title="{{.ID}}">{{short .ID}}</a></td>
-<td>{{if .Project}}<a class="trunc" href="/projects/{{esc .Project}}" title="{{.Project}}">{{clip .Project}}</a>{{else}}{{dash}}{{end}}</td>
+{{range $r.Tables.Lately}}<tr><td>{{template "idlink" (sesslink .ID)}}</td>
+<td>{{if .Project}}{{template "projlink" (projref .Project)}}{{else}}{{dash}}{{end}}</td>
 <td>{{with rel $r.GeneratedAt .Last $.Loc}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{end}}</td>
 <td class="r">{{n .Shown}}</td><td class="r">{{n .Used}}</td><td class="r">{{if gt .Wrong 0}}<span class="st st-watch">{{n .Wrong}}</span>{{else}}{{n .Wrong}}{{end}}</td></tr>
 {{end}}</tbody></table></div>

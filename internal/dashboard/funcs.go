@@ -122,6 +122,8 @@ var funcs = template.FuncMap{
 	"sessionpage":  sessionOf,
 	"memorypage":   memoryOf,
 	"memlink":      memlink,
+	"sesslink":     sesslink,
+	"projref":      projref,
 	"dayspage":     daysOf,
 	"daypage":      dayOf,
 	"latelyhead":   latelyHead,

@@ -424,6 +424,15 @@ func memoryOf(d PageData) MemoryDetail {
 // memlink is the link to a memory's page as an id reference.
 func memlink(id string) Ref { return idLink("/memories/", id) }
 
+// sesslink is a session id as the tables show it.
+func sesslink(id string) Ref { return idLink("/sessions/", id) }
+
+// projref is a project name as a table cell shows it, without a window (the
+// link refuses "", "." and "..").
+func projref(name string) Ref {
+	return Ref{Text: views.Clip(name), Full: views.Plain(name, ""), Href: pathHref("/projects/", name, "")}
+}
+
 // allTimeParams are p without the window: the pages about one session or
 // one memory read the whole history.
 func allTimeParams(p views.Params) views.Params {

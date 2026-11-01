@@ -320,7 +320,8 @@ func flowingNote(r *metrics.Result, l format.Locale, ax metrics.Axis, cause bool
 }
 
 // SummaryLine is the figures of the line under the banner.
-type SummaryLine struct{ Prompts, Turns, Tokens, Cost, Scope string }
+// When is the opening words, "In the last 30 days" or "From Oct 1 to Oct 7".
+type SummaryLine struct{ When, Prompts, Turns, Tokens, Cost, Scope string }
 
 // summaryOf is the summary line of r, which holds a Summary.
 func summaryOf(r *metrics.Result, l format.Locale) SummaryLine {
@@ -375,13 +376,29 @@ func attentionOf(r *metrics.Result, l format.Locale) AttentionCard {
 		c.Head.Aside = c.Count
 	case r.Verdict != nil && r.Verdict.Learning:
 		c.Calm = "Memory is still learning: the verdict firms up after about a week of prompts."
-	default:
+	case allAxesOK(r.Verdict):
 		c.Calm = "Everything is within its usual range. Nothing to do."
+	default:
+		c.Calm = "Nothing needs attention. Some numbers have too few events to judge yet."
 	}
 	if r.AttentionMore > 0 {
 		c.More, c.MoreHref = l.Int(int64(r.AttentionMore))+" more on the System page →", "/system"
 	}
 	return c
+}
+
+// allAxesOK is true when the verdict judges at least one axis and every
+// axis is ok.
+func allAxesOK(v *metrics.Verdict) bool {
+	if v == nil || len(v.Axes) == 0 {
+		return false
+	}
+	for _, ax := range v.Axes {
+		if ax.State != metrics.AxisOK {
+			return false
+		}
+	}
+	return true
 }
 
 // attentionPage is attentionOf with the page's command on its CLI.
@@ -392,10 +409,23 @@ func attentionPage(r *metrics.Result, l format.Locale, cli string) AttentionCard
 }
 
 // summaryPage is the summary line of r, nil when r holds no summary.
-func summaryPage(r *metrics.Result, l format.Locale) *SummaryLine {
+func summaryPage(r *metrics.Result, l format.Locale, window string) *SummaryLine {
 	if r.Summary == nil {
 		return nil
 	}
 	s := summaryOf(r, l)
+	s.When = summaryWhen(window)
 	return &s
+}
+
+// summaryWhen is the opening of the summary line for a window phrase: "In the
+// last 30 days", or "From Oct 1 to Oct 7" for dates.
+func summaryWhen(window string) string {
+	switch {
+	case window == "":
+		return "Over the window"
+	case strings.HasPrefix(window, "last "):
+		return "In the " + window
+	}
+	return "From " + window
 }

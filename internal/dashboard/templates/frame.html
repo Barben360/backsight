@@ -50,7 +50,7 @@
 <div class="tools">
 {{if .Frame.Windows}}<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
 <details class="menu proj">
-<summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short"{{if .Frame.ProjectInput}} title="{{.Frame.ProjectInput}}"{{end}}>{{if .Frame.ProjectInput}}{{clip .Frame.ProjectInput}}{{else}}All projects{{end}}</span><span class="caret" aria-hidden="true">▾</span></summary>
+<summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short"{{if .Frame.ProjectInput}} title="{{plain .Frame.ProjectInput}}"{{end}}>{{if .Frame.ProjectInput}}{{clip (plain .Frame.ProjectInput)}}{{else}}All projects{{end}}</span><span class="caret" aria-hidden="true">▾</span></summary>
 <div class="menu-pop right wide">
 <span class="grp">Project</span>
 <form method="get" action="{{.Frame.Path | pathOnly}}">
@@ -78,7 +78,7 @@
 {{if .Frame.Windows}}<span class="grp">Window</span>
 <nav class="seg" aria-label="Window (menu)">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
 <span class="grp">Project</span>
-<a href="/projects"><span class="i i-filter"></span>{{if .Frame.ProjectInput}}{{clip .Frame.ProjectInput}}{{else}}All projects{{end}} <span class="caret" aria-hidden="true">▾</span></a>
+<a href="/projects"><span class="i i-filter"></span>{{if .Frame.ProjectInput}}{{clip (plain .Frame.ProjectInput)}}{{else}}All projects{{end}} <span class="caret" aria-hidden="true">▾</span></a>
 <hr>
 {{end}}{{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
 {{end}}<span class="grp">Browse</span>

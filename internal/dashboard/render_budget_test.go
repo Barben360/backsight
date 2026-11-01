@@ -2,6 +2,8 @@ package dashboard
 
 import (
 	"net/url"
+	"os"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -9,9 +11,13 @@ import (
 	"github.com/Barben360/backsight/internal/index/indexgen"
 )
 
-// renderLimit is the render target (30 ms a page) times three, for a
+// baseRenderLimit is the render target (30 ms a page) times three, for a
 // shared runner.
-const renderLimit = 90 * time.Millisecond
+const baseRenderLimit = 90 * time.Millisecond
+
+// renderLimit is baseRenderLimit, doubled on GitHub's Windows runner like
+// pageLimit.
+var renderLimit = runnerLimit(baseRenderLimit, runtime.GOOS, os.Getenv("GITHUB_ACTIONS"))
 
 // TestRenderBudgets times the pages with the result cache on and warmed by
 // one request per route: what the dashboard itself costs once the views are

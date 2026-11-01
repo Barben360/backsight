@@ -13,7 +13,7 @@
 {{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Bars}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Project</th><th><span class="sr-only">Share of the largest project</span></th><th class="r">Memories</th></tr></thead>
 <tbody>
-{{range .Bars}}<tr><td><a class="trunc" href="{{.Href}}" title="{{.Full}}">{{.Name}}</a></td><td class="bar"><svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{if eq .Count "1"}}1 memory{{else}}{{.Count}} memories{{end}}"><rect class="f-seq2" x="0" y="0" width="{{printf "%.1f" .W}}" height="10"></rect></svg></td><td class="r">{{.Count}}</td></tr>
+{{range .Bars}}<tr><td>{{if .Href}}<a class="trunc" href="{{.Href}}" title="{{.Full}}">{{.Name}}</a>{{else}}<span class="trunc" title="{{.Full}}">{{.Name}}</span>{{end}}</td><td class="bar"><svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{if eq .Count "1"}}1 memory{{else}}{{.Count}} memories{{end}}"><rect class="f-seq2" x="0" y="0" width="{{printf "%.1f" .W}}" height="10"></rect></svg></td><td class="r">{{.Count}}</td></tr>
 {{end}}</tbody></table></div>
 {{if gt .Count .Shown}}<p class="tbl-more">Showing {{.Shown}} of {{.Count}} projects. Every project: <code>{{.More}}</code></p>
 {{end}}{{end}}{{template "card-close" .Head}}{{end}}
@@ -31,8 +31,8 @@
 {{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Memory</th><th>Project</th><th class="r">Shown</th><th>Last shown</th><th>Command</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr><td><a class="idc" href="/memories/{{esc .ID}}" title="{{plain .ID}}">{{short .ID}}</a></td>
-<td>{{if .Project}}<a class="trunc" href="/projects/{{esc .Project}}" title="{{plain .Project}}">{{clip .Project}}</a>{{else}}{{dash}}{{end}}</td>
+{{range .Rows}}<tr><td>{{template "idlink" (memlink .ID)}}</td>
+<td>{{if .Project}}{{template "projlink" (projref .Project)}}{{else}}{{dash}}{{end}}</td>
 <td class="r">{{.Shown}}</td>
 <td>{{template "reltime" .Last}}</td>
 <td>{{template "cmd" .Command}}</td></tr>
