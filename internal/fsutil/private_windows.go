@@ -31,6 +31,16 @@ func userSID() (*windows.SID, error) {
 	return u.User.Sid, nil
 }
 
+// CurrentUserSID is the current user's SID (S-1-5-…), "" when the token
+// does not tell it.
+func CurrentUserSID() string {
+	sid, err := userSID()
+	if err != nil {
+		return ""
+	}
+	return sid.String()
+}
+
 func wellKnown(t windows.WELL_KNOWN_SID_TYPE) (*windows.SID, error) {
 	return windows.CreateWellKnownSid(t)
 }

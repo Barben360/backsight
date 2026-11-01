@@ -4,6 +4,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,9 @@ import (
 )
 
 // Windows has no mode bits: a secrets.toml the Users group can read is
-// refused, naming the group and the fix.
+// refused, naming the group and the fix: doctor's PowerShell icacls
+// command (cmd's %USERNAME% means nothing there), which makes the file
+// loadable again.
 func TestLoadSecretsRefusesAFileOtherAccountsCanReadOnWindows(t *testing.T) {
 	p := writeSecrets(t, secretsTOML, 0o600)
 	if _, err := LoadSecrets(p); err != nil {
@@ -21,8 +24,18 @@ func TestLoadSecretsRefusesAFileOtherAccountsCanReadOnWindows(t *testing.T) {
 	}
 	testtool.ShareWithOthers(t, p)
 	_, err := LoadSecrets(p)
-	if err == nil || !strings.Contains(err.Error(), "Users") || !strings.Contains(err.Error(), "icacls") || strings.Contains(err.Error(), "fakevalue") {
-		t.Errorf("a file Users can read: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Users") || strings.Contains(err.Error(), "fakevalue") {
+		t.Fatalf("a file Users can read: %v", err)
+	}
+	_, fix, ok := strings.Cut(err.Error(), "run in PowerShell: ")
+	if !ok || !strings.HasPrefix(fix, "icacls '"+p+"' /inheritance:r") || strings.Contains(fix, "%") {
+		t.Fatalf("the refusal's fix is not the PowerShell icacls command: %v", err)
+	}
+	if out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", fix).CombinedOutput(); err != nil {
+		t.Fatalf("running the fix %s: %v\n%s", fix, err, out)
+	}
+	if _, err := LoadSecrets(p); err != nil {
+		t.Errorf("still refused after its fix: %v", err)
 	}
 }
 

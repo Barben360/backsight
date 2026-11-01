@@ -4,12 +4,14 @@ package doctor
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/server/nativelock"
+	"github.com/Barben360/backsight/internal/testtool"
 )
 
 func TestDoctorNativeHomeOnWindows(t *testing.T) {
@@ -84,5 +86,29 @@ func TestNativeVenvDiffReadsTheWindowsLayout(t *testing.T) {
 	}
 	if diff, err := NativeVenvDiff(venv); err != nil || len(diff) != 0 {
 		t.Errorf("the lock's venv: diff %q, %v", diff, err)
+	}
+}
+
+// The config check's fix for a secrets.toml other users can read is, on
+// Windows, the PowerShell icacls command native-private gives (never
+// chmod), and running it clears the check.
+func TestDoctorSecretsFixOnWindows(t *testing.T) {
+	f := newFixture(t)
+	secrets := f.env.Dirs.SecretsFile()
+	put(t, f.env.Dirs.ConfigFile(), "", 0o600)
+	put(t, secrets, "api_key = \"fakevalue\"\n", 0o600)
+	testtool.ShareWithOthers(t, secrets)
+	c := check(t, f.run(), "config")
+	expect(t, c, Error, "secrets")
+	fix, ok := strings.CutPrefix(c.Fix, "in PowerShell: ")
+	if !ok || !strings.HasPrefix(fix, "icacls '"+secrets+"' /inheritance:r /grant:r '*S-1-5-") || !strings.Contains(fix, " /remove:g ") ||
+		strings.Contains(c.Fix, "chmod") || strings.Contains(c.Fix, "%") || strings.Contains(c.Summary+c.Detail+c.Fix, "fakevalue") {
+		t.Fatalf("config fix %q: want the PowerShell icacls command for %s", c.Fix, secrets)
+	}
+	if out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", fix).CombinedOutput(); err != nil {
+		t.Fatalf("running the fix: %v\n%s", err, out)
+	}
+	if c := check(t, f.run(), "config"); c.Status != OK {
+		t.Errorf("after its fix: %+v", c)
 	}
 }

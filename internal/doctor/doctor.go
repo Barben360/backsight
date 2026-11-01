@@ -24,6 +24,7 @@ import (
 	"github.com/Barben360/backsight/internal/buildinfo"
 	"github.com/Barben360/backsight/internal/claudecode"
 	"github.com/Barben360/backsight/internal/config"
+	"github.com/Barben360/backsight/internal/fsutil"
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/paths"
 	"github.com/Barben360/backsight/internal/plugin"
@@ -280,7 +281,7 @@ func checkConfig(env Env) (Check, *target.Target) {
 		return c, nil
 	case errors.As(err, &ce) && ce.File == env.Dirs.SecretsFile():
 		c.Status, c.Summary, c.Detail = Error, "secrets.toml cannot be used", err.Error()
-		c.Fix = "chmod 600 " + ce.File
+		c.Fix = secretsFix(ce.File)
 		return c, nil
 	case err != nil:
 		c.Status, c.Summary, c.Detail = Error, "config.toml is invalid", err.Error()
@@ -289,6 +290,16 @@ func checkConfig(env Env) (Check, *target.Target) {
 	}
 	c.Status, c.Summary = OK, "config "+env.Dirs.ConfigFile()
 	return c, tg
+}
+
+// secretsFix makes the secrets file its owner's alone: chmod on Unix, the
+// icacls command in PowerShell on Windows (native-private's form).
+func secretsFix(path string) string {
+	if runtime.GOOS != "windows" {
+		return "chmod 600 " + path
+	}
+	readers, _ := fsutil.OtherReaders(path)
+	return fsutil.PrivateFix(path, false, fsutil.CurrentUserSID(), readers)
 }
 
 func checkDocker(ctx context.Context, env Env) Check {

@@ -57,7 +57,7 @@ func LoadSecrets(path string) (Secrets, error) {
 			return s, err
 		}
 		if len(who) > 0 {
-			return s, fmt.Errorf("%s is readable by %s: run icacls \"%s\" /inheritance:r /grant:r \"%%USERNAME%%:F\"", path, strings.Join(who, ", "), path)
+			return s, fmt.Errorf("%s is readable by %s: run %s", path, strings.Join(who, ", "), fsutil.PrivateFix(path, false, fsutil.CurrentUserSID(), who))
 		}
 	} else {
 		fi, err := f.Stat()

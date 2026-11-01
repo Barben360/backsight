@@ -392,7 +392,7 @@ The metrics index is a local SQLite file (`index/metrics.db` in the state direct
 | `backup` (info): backups are made on the server's host | This PC is a client of a shared server: its memory lives on the server, and the server's host backs it up (`backsight backup create` there; this PC refuses it). Archives this PC made before it joined, of its own server, stay where they are. |
 | `binary`: not self-verified, or does not match its release | Reinstall the release with `install.sh`, then `backsight client install`. |
 | `config`: unknown key or invalid value | Correct the key doctor names in `config.toml`. Unknown keys are refused, not ignored. |
-| `config`: secrets file readable by others | `chmod 600` on the file doctor names. On Windows, run the `icacls` command doctor's detail gives, in PowerShell: it leaves the file to you alone. |
+| `config`: secrets file readable by others | `chmod 600` on the file doctor names. On Windows, run the `icacls` command doctor's fix gives, in PowerShell (not cmd.exe or Git Bash): it leaves the file to you, SYSTEM and Administrators. |
 | `disk`: low free space | Free space where doctor says: the queues, backups and the server's database grow there. |
 | `untagged`: memories without a project tag | A server-side problem: report it (below). |
 | `noise-transverse`: over 20 % of the transverse pool's observations name another project | New sessions go to the right project. Older ones: `backsight forget --project <transverse alias> --source subagent --plan`, then decide, or leave them. |

@@ -36,3 +36,6 @@ func OtherReaders(path string) ([]string, error) {
 	}
 	return who, nil
 }
+
+// CurrentUserSID is "" outside Windows: no SIDs.
+func CurrentUserSID() string { return "" }
