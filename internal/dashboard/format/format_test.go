@@ -48,6 +48,11 @@ func TestPercentAndInterval(t *testing.T) {
 	eq(t, English.Percent(1), "100 %")
 	eq(t, English.Percent(0), "0 %")
 	eq(t, English.Interval([2]float64{0.21, 0.35}), "(21–35 %)")
+	// tiny positive percent
+	eq(t, English.Percent(0.00001), "< 0.1 %")
+	eq(t, English.Percent(0.00049), "< 0.1 %")
+	eq(t, English.Percent(0.0005), "0.1 %")
+	eq(t, English.Percent(0.0099), "1.0 %")
 }
 
 func TestSizesAndDurations(t *testing.T) {
@@ -63,6 +68,10 @@ func TestSizesAndDurations(t *testing.T) {
 	eq(t, English.Duration(1600), "1.6 s")
 	eq(t, English.Duration(999.6), "1.0 s")
 	eq(t, English.Duration(910), "910 ms")
+	// size boundary
+	eq(t, English.Size(10000, ""), "10 k")
+	eq(t, English.Size(9999.4, ""), "9,999")
+	eq(t, English.Size(9999.5, ""), "10 k")
 }
 
 func TestMoney(t *testing.T) {
@@ -146,6 +155,14 @@ func TestDeltas(t *testing.T) {
 			t.Errorf("%s: got %+v, want none", name, d)
 		}
 	}
+	// ratio delta between half a point and a point
+	dl, _ := English.Delta(hit, metrics.Metric{Value: fp(0.3), Delta: fp(0.006), Status: metrics.StatusOK})
+	eq(t, dl.Text, "+1 pt, better")
+	dl, _ = English.Delta(hit, metrics.Metric{Value: fp(0.3), Delta: fp(0.0049), Status: metrics.StatusOK})
+	eq(t, dl.Text, "+0.5 pts, better")
+	// ms delta under 50 ms at a value of a second or more stays in ms
+	dl, _ = English.Delta(def(t, "recall.latency"), metrics.Metric{Value: fp(1600), Delta: fp(40), Status: metrics.StatusOK})
+	eq(t, dl.Text, "+40 ms, worse")
 }
 
 func TestLocaleFromHostileHeaders(t *testing.T) {
@@ -170,6 +187,19 @@ func TestLocaleFromHostileHeaders(t *testing.T) {
 	}
 	// the cap reads 32 entries: the 33rd is never seen
 	eq(t, FromAcceptLanguage(strings.Repeat("xx,", 32)+"fr").Tag, "en")
+	// q=0 refuses the tag
+	for h, tag := range map[string]string{
+		"fr;q=0": "en", "fr;q=0, de": "de", "fr;q=0.0,de;q=0.1": "de", "de;q=0, fr;q=0.1": "fr",
+		"fr;q=0.000, fr-CA;q=0": "en", "de-CH;q=0, de": "de",
+	} {
+		eq(t, FromAcceptLanguage(h).Tag, tag)
+	}
+
+	// hostile headers with a concrete outcome
+	eq(t, FromAcceptLanguage(strings.Repeat("x", 10<<10)+",fr").Tag, "fr")
+	eq(t, FromAcceptLanguage(strings.Repeat("xx,", 40)+"de;q=1,fr").Tag, "en")
+	eq(t, FromAcceptLanguage(strings.Repeat("xx,", 31)+"de,fr;q=0.9").Tag, "de")
+	eq(t, FromAcceptLanguage(strings.Repeat("en;q=0.1,", 31)+"fr;q=0.2,de;q=0.9").Tag, "fr")
 }
 
 func TestRelativeTimeEdges(t *testing.T) {
@@ -221,6 +251,19 @@ func TestRelativeTimeEdges(t *testing.T) {
 	eq(t, Rel(late, late.Add(-90*time.Minute), paris).Text, "yesterday")
 	eq(t, Rel(late, late.Add(-90*time.Minute), time.UTC).Text, "1 h ago")
 	eq(t, Rel(now, now.Add(-time.Hour), nil).Title[len("2026-10-30 14:44 "):], "UTC")
+	// calendar days across the DST changes (at before 01:00 on the long day)
+	at := func(y int, m time.Month, d, h, mi int) time.Time { return time.Date(y, m, d, h, mi, 0, 0, paris) }
+	// fall-back day, 25 h long: at is before 01:00 CEST
+	eq(t, Rel(at(2026, 10, 26, 0, 30), at(2026, 10, 25, 0, 10), paris).Text, "yesterday")
+	eq(t, Rel(at(2026, 10, 25, 0, 30), at(2026, 10, 24, 23, 50), paris).Text, "40 min ago")
+	// spring-forward day, 23 h long
+	eq(t, Rel(at(2026, 3, 30, 0, 30), at(2026, 3, 29, 0, 10), paris).Text, "yesterday")
+	eq(t, Rel(at(2026, 3, 31, 0, 30), at(2026, 3, 29, 0, 10), paris).Text, "2 d ago")
+	eq(t, Rel(at(2026, 3, 30, 12, 0), at(2026, 3, 29, 23, 30), paris).Text, "yesterday")
+	// Rel 6 d / 7 d
+	wk := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
+	eq(t, Rel(wk, wk.AddDate(0, 0, -6), nil).Text, "6 d ago")
+	eq(t, Rel(wk, wk.AddDate(0, 0, -7), nil).Text, "Oct 23")
 }
 
 func TestClockAndCount(t *testing.T) {
@@ -230,66 +273,17 @@ func TestClockAndCount(t *testing.T) {
 	eq(t, Count(English, 1, "turn", "turns"), "1 turn")
 	eq(t, Count(English, 61, "turn", "turns"), "61 turns")
 	eq(t, Count(English, 1234, "turn", "turns"), "1,234 turns")
-}
-
-func TestFixRound1(t *testing.T) {
-	paris, _ := time.LoadLocation("Europe/Paris")
-	at := func(y int, m time.Month, d, h, mi int) time.Time { return time.Date(y, m, d, h, mi, 0, 0, paris) }
-	// fall-back day, 25 h long: at is before 01:00 CEST
-	eq(t, Rel(at(2026, 10, 26, 0, 30), at(2026, 10, 25, 0, 10), paris).Text, "yesterday")
-	eq(t, Rel(at(2026, 10, 25, 0, 30), at(2026, 10, 24, 23, 50), paris).Text, "40 min ago")
-	// spring-forward day, 23 h long
-	eq(t, Rel(at(2026, 3, 30, 0, 30), at(2026, 3, 29, 0, 10), paris).Text, "yesterday")
-	eq(t, Rel(at(2026, 3, 31, 0, 30), at(2026, 3, 29, 0, 10), paris).Text, "2 d ago")
-	eq(t, Rel(at(2026, 3, 30, 12, 0), at(2026, 3, 29, 23, 30), paris).Text, "yesterday")
-
-	// q=0 refuses
-	for h, tag := range map[string]string{
-		"fr;q=0": "en", "fr;q=0, de": "de", "fr;q=0.0,de;q=0.1": "de", "de;q=0, fr;q=0.1": "fr",
-		"fr;q=0.000, fr-CA;q=0": "en", "de-CH;q=0, de": "de",
-	} {
-		eq(t, FromAcceptLanguage(h).Tag, tag)
-	}
-
-	// size boundary
-	eq(t, English.Size(10000, ""), "10 k")
-	eq(t, English.Size(9999.4, ""), "9,999")
-	eq(t, English.Size(9999.5, ""), "10 k")
-	// ratio delta between half a point and a point
-	hit := def(t, "recall.hit_rate")
-	d, _ := English.Delta(hit, metrics.Metric{Value: fp(0.3), Delta: fp(0.006), Status: metrics.StatusOK})
-	eq(t, d.Text, "+1 pt, better")
-	d, _ = English.Delta(hit, metrics.Metric{Value: fp(0.3), Delta: fp(0.0049), Status: metrics.StatusOK})
-	eq(t, d.Text, "+0.5 pts, better")
-	// ms delta under 50 ms at a value of a second or more stays in ms
-	d, _ = English.Delta(def(t, "recall.latency"), metrics.Metric{Value: fp(1600), Delta: fp(40), Status: metrics.StatusOK})
-	eq(t, d.Text, "+40 ms, worse")
-
-	// Rel 6 d / 7 d
-	now := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
-	eq(t, Rel(now, now.AddDate(0, 0, -6), nil).Text, "6 d ago")
-	eq(t, Rel(now, now.AddDate(0, 0, -7), nil).Text, "Oct 23")
 	// Clock across midnight within 24 h
 	eq(t, Clock(time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 29, 23, 0, 0, 0, time.UTC), nil), "Oct 29 23:00")
 	eq(t, Count(English, 0, "turn", "turns"), "0 turns")
+}
 
-	// hostile headers with a concrete outcome
-	eq(t, FromAcceptLanguage(strings.Repeat("x", 10<<10)+",fr").Tag, "fr")
-	eq(t, FromAcceptLanguage(strings.Repeat("xx,", 40)+"de;q=1,fr").Tag, "en")
-	eq(t, FromAcceptLanguage(strings.Repeat("xx,", 31)+"de,fr;q=0.9").Tag, "de")
-	eq(t, FromAcceptLanguage(strings.Repeat("en;q=0.1,", 31)+"fr;q=0.2,de;q=0.9").Tag, "fr")
-
+func TestNonFiniteRendersABareDash(t *testing.T) {
 	// non-finite: a bare dash, no unit
 	nan := math.NaN()
 	for _, got := range []string{English.Percent(nan), English.Size(math.Inf(1), "chars"), English.Duration(nan), English.Money(nan, "USD"), English.Interval([2]float64{nan, 1})} {
 		eq(t, got, "—")
 	}
-	eq(t, English.Value(hit, metrics.Metric{Value: fp(nan)}), "—")
+	eq(t, English.Value(def(t, "recall.hit_rate"), metrics.Metric{Value: fp(nan)}), "—")
 	eq(t, English.Value(def(t, "recall.latency"), metrics.Metric{Value: fp(math.Inf(1))}), "—")
-
-	// tiny positive percent
-	eq(t, English.Percent(0.00001), "< 0.1 %")
-	eq(t, English.Percent(0.00049), "< 0.1 %")
-	eq(t, English.Percent(0.0005), "0.1 %")
-	eq(t, English.Percent(0.0099), "1.0 %")
 }
