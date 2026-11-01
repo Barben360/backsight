@@ -238,6 +238,12 @@ func TestKillAt(t *testing.T) {
 		{"earlier", strconv.FormatInt(early.UnixNano(), 10), early},
 		{"later", strconv.FormatInt(start.Add(time.Minute).UnixNano(), 10), own},
 		{"garbage", "soon", own},
+		// A value before the child began is no deadline its supervisor set
+		// for this run (a stale inherited variable, 0, a negative): taken,
+		// it would make the child give up at once.
+		{"zero", "0", own},
+		{"negative", "-5", own},
+		{"stale", strconv.FormatInt(start.Add(-time.Second).UnixNano(), 10), own},
 	} {
 		got := KillAt(start, "subagent-stop", nil, func(k string) string {
 			if k != KillAtEnv {
