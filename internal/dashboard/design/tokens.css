@@ -1,5 +1,5 @@
 /*
- * backsight dashboard: design tokens (block 3 draft, issue #115, decision 0079 §9–§10).
+ * backsight dashboard: design tokens.
  *
  * Light values live on :root (and on [data-theme="light"], so an element forced light
  * stays light inside a dark OS). Dark values follow the OS through prefers-color-scheme,

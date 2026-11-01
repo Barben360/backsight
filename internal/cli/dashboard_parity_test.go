@@ -446,10 +446,12 @@ func TestPagesShowTheFixturesNumbers(t *testing.T) {
 	}
 	text := visibleText(page)
 	for _, want := range []string{
-		"Does memory show up when you ask something? 80 % ",
-		"· n = 5 · too few, 15 more needed",
-		"Found learning Learning: day 2 of about 7, 6 prompts so far.",
-		"Flowing attention Health check «memory» failed.",
+		"Does memory show up when you ask something? 4 of 5 prompts got memory too few",
+		"4 of 5: too few to judge.",
+		"Found learning day 2 of about 7",
+		"Flowing needs attention (2 reasons).",
+		"Flowing attention 1 of 1 session sent",
+		"watch Health check «memory» failed.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the overview does not show %q:\n%s", want, text)

@@ -4,9 +4,11 @@ import (
 	"errors"
 	"html/template"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
 )
@@ -86,6 +88,7 @@ var funcs = template.FuncMap{
 	"decision":    func(s string) string { return views.Word(views.DecisionWords, s) },
 	"declared":    func(raw []string) string { return words(views.DeclaredWords, raw) },
 	"retired":     func(s string) string { return views.Word(views.RetireWords, s) },
+	"failkind":    func(s string) string { return wordOr(views.FailureKindWords, s, views.FailureKindWords["unknown"]) },
 	"serverstate": func(s string) string { return views.Word(views.ServerStateWords, s) },
 	"skipped":     func(s string) string { return views.Word(views.SkipWords, s) },
 	"pager":       pagerOf,
@@ -100,6 +103,90 @@ var funcs = template.FuncMap{
 	"signed":      signed,
 	"count":       roundInt,
 	"ranks":       rankLines,
+
+	"banner":       bannerOf,
+	"summaryline":  summaryPage,
+	"attention":    attentionPage,
+	"tiles":        tilesOf,
+	"dash":         func() string { return dash },
+	"glance":       glancePage,
+	"quality":      qualityOf,
+	"cost":         costOf,
+	"bankpage":     bankOf,
+	"pipepage":     pipelineOf,
+	"systempage":   systemOf,
+	"projectspage": projectsOf,
+	"projectpage":  projectOf,
+	"sessionspage": sessionsOf,
+	"memoriespage": memoriesOf,
+	"sessionpage":  sessionOf,
+	"memorypage":   memoryOf,
+	"memlink":      memlink,
+	"sesslink":     sesslink,
+	"projref":      projref,
+	"dayspage":     daysOf,
+	"daypage":      dayOf,
+	"latelyhead":   latelyHead,
+	"releasespage": releasesOf,
+	"versionlink":  versionHref,
+	"defspage":     defsOf,
+
+	"head":     headOf,
+	"fixed":    fixedHead,
+	"withinfo": withInfo,
+	"level":    level,
+	"fig":      figOf,
+	"drill":    drillHref,
+	"clifor":   cliFor,
+	"statusword": func(d metrics.Def, m metrics.Metric, learning bool) Word {
+		w, c := statusWord(d, m, learning)
+		return Word{w, c}
+	},
+	"nodatum": func(v MetricView, f Frame, l format.Locale, loc *time.Location) NoData {
+		n, _ := noDataOf(v, f, l, loc) // a metric with a number has no sentence: Text is empty
+		return n
+	},
+
+	"anyCurrent": func(cs []Choice) bool {
+		return slices.ContainsFunc(cs, func(c Choice) bool { return c.Current })
+	},
+	"iso": func(loc *time.Location, t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.In(zoneOr(loc)).Format(time.RFC3339)
+	},
+	// The locale is an argument, never a method: {{num .L 1234}}.
+	"num": func(l format.Locale, n int64) string { return l.Int(n) },
+	"rel": func(now time.Time, at any, loc *time.Location) format.Time {
+		t, ok := instant(at)
+		if !ok {
+			return format.Time{Text: dash}
+		}
+		return format.Rel(now, t, loc)
+	},
+	"clock": func(now time.Time, at any, loc *time.Location) string {
+		t, ok := instant(at)
+		if !ok {
+			return dash
+		}
+		return format.Clock(now, t, loc)
+	},
+}
+
+// instant is at (a time.Time or a *time.Time) as a time; ok is false for
+// nil, zero or anything else.
+func instant(at any) (time.Time, bool) {
+	var t time.Time
+	switch x := at.(type) {
+	case time.Time:
+		t = x
+	case *time.Time:
+		if x != nil {
+			t = *x
+		}
+	}
+	return t, !t.IsZero()
 }
 
 // assetOf is the path an embedded file is served at; a name that is not
@@ -217,4 +304,26 @@ func since(now time.Time, at *time.Time) string {
 		return ""
 	}
 	return views.Age(max(0, now.Sub(*at).Milliseconds()))
+}
+
+// pagingOf is the paging of a list the page cuts itself, total rows long:
+// Limit rows from Offset, the default size when none is asked, at most the largest.
+func pagingOf(p views.Params, total int) *metrics.Page {
+	limit := p.Limit
+	switch {
+	case limit <= 0:
+		limit = metrics.DefaultLimit
+	case limit > metrics.MaxLimit:
+		limit = metrics.MaxLimit
+	}
+	return &metrics.Page{Limit: limit, Offset: max(p.Offset, 0), Total: total}
+}
+
+// turnsPage is the turns the page shows: Limit of them from Offset. The
+// view gives a session's turns whole; the slice shares their memory and
+// changes none.
+func turnsPage(turns []metrics.TurnRow, p views.Params) []metrics.TurnRow {
+	pg := pagingOf(p, len(turns))
+	lo := min(pg.Offset, len(turns))
+	return turns[lo:min(lo+pg.Limit, len(turns))]
 }

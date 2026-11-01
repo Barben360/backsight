@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Service pages</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light" style="min-height: 900px; padding: 32px">
+  <div class="grid-3" style="gap: 32px">
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <span class="xs muted">First build · page refreshes itself every 2 s (meta refresh, no script)</span>
+      <div class="card" style="min-height: 520px; justify-content: center; align-items: center; text-align: center; gap: 16px; padding: 40px">
+        <img class="logo-l" src="/_blob/f3b15505bfa61aad5ef945ca461922b5" alt="backsight" style="height: 24px">
+        <img class="logo-d" src="/_blob/0b7633182cb35fbccfe34d3cc0c1422c" alt="backsight" style="height: 24px">
+        <h1 style="font-size: 20px; text-wrap: balance">Preparing the dashboard: reading 13 months of history…</h1>
+        <div class="progress" role="progressbar" aria-valuenow="42" aria-valuemin="0" aria-valuemax="100" aria-label="History read"><span style="width: 42%"></span></div>
+        <p class="small sub">42 % · about 20 s left. This page refreshes on its own.</p>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <span class="xs muted">Update in progress</span>
+      <div class="card" style="min-height: 520px; justify-content: center; align-items: center; text-align: center; gap: 16px; padding: 40px">
+        <img class="logo-l" src="/_blob/f3b15505bfa61aad5ef945ca461922b5" alt="backsight" style="height: 24px">
+        <img class="logo-d" src="/_blob/0b7633182cb35fbccfe34d3cc0c1422c" alt="backsight" style="height: 24px">
+        <span class="v-ico st-learn" style="color: var(--learn)" aria-hidden="true"></span>
+        <h1 style="font-size: 20px">An update is being applied.</h1>
+        <p class="sub">Try again in a minute.</p>
+        <a class="btn" href="#"><span class="i i-refresh"></span>Try again</a>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <span class="xs muted">Updated: this dashboard is from the old version</span>
+      <div class="card" style="min-height: 520px; justify-content: center; align-items: center; text-align: center; gap: 16px; padding: 40px">
+        <img class="logo-l" src="/_blob/f3b15505bfa61aad5ef945ca461922b5" alt="backsight" style="height: 24px">
+        <img class="logo-d" src="/_blob/0b7633182cb35fbccfe34d3cc0c1422c" alt="backsight" style="height: 24px">
+        <span class="v-ico st-ok" style="color: var(--ok)" aria-hidden="true"></span>
+        <h1 style="font-size: 20px">backsight was updated.</h1>
+        <p class="sub">Stop this dashboard (Ctrl+C in its terminal) and start it again:</p>
+        <div class="cmd" style="width: 100%"><code>backsight dashboard</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

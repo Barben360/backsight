@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Session</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="sessions" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <nav class="small muted" aria-label="Breadcrumb"><a href="#">Sessions</a> / a41c09e2</nav>
+  <div class="page-head">
+    <h1>What happened in session <span class="mono" title="a41c09e24e1b0c9d2f7a63e85b1d0c4a">a41c09e2</span>?</h1>
+    <span class="muted"><a href="#">backsight</a> · <time datetime="2026-10-30T14:52" title="2026-10-30 14:52 → 15:19">today 14:52–15:19</time> · 5 turns</span>
+    <span class="pill st st-ok">sent</span>
+  </div>
+
+  <div class="figs">
+    <div class="fig"><span class="lab">Prompts</span><span class="v">5</span><span class="s">2 got memory</span></div>
+    <div class="fig"><span class="lab">Memories shown</span><span class="v">10</span><span class="s">9 distinct</span></div>
+    <div class="fig"><span class="lab"><i class="sw f-used"></i>Used by Claude</span><span class="v">2</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-bad" style="color: var(--bad)"></span>Reported wrong</span><span class="v">1</span></div>
+    <div class="fig"><span class="lab">Context added</span><span class="v">3,100</span><span class="s">characters · ≈ 780 tokens</span></div>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Turn by turn</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions a41c09e2</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="legend">
+      <span><i class="sw f-used"></i>used by Claude</span><span><i class="sw f-ignored"></i>shown, then ignored</span><span><i class="sw f-undeclared"></i>not declared</span><span><i class="sw f-shown"></i>shown only</span><span><i class="sw f-pending"></i>pending</span>
+      <span class="muted">· chip: memory id, rank when shown, where it was shown</span>
+    </div>
+    <ol class="rail">
+      <sc-for list="{{turns}}" as="t" hint-placeholder-count="5">
+        <li class="turn">
+          <div class="turn-n"><b>Turn {{t.n}}</b><time datetime="2026-10-30" title="2026-10-30 {{t.time}}">{{t.time}}</time></div>
+          <div class="turn-body">
+            <sc-for list="{{t.lines}}" as="l" hint-placeholder-count="3">
+              <div class="turn-line">
+                <span class="k">{{l.k}}</span>
+                <sc-if value="{{l.hasText}}" hint-placeholder-val="{{ true }}"><span class="{{l.cls}}">{{l.text}}</span></sc-if>
+                <sc-if value="{{l.hasChips}}" hint-placeholder-val="{{ false }}">
+                  <span class="mchips">
+                    <sc-for list="{{l.chips}}" as="c" hint-placeholder-count="2">
+                      <a class="mchip {{c.oc}}" href="#" title="{{c.title}}"><i class="sw {{c.f}}"></i><span class="mid">{{c.id}}</span><span class="rk">{{c.rank}}</span><span class="muted">{{c.where}}</span><span class="oc">{{c.word}}</span></a>
+                    </sc-for>
+                  </span>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </li>
+      </sc-for>
+    </ol>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const OC = {
+      used: ['used', 'f-used', 'used by Claude'],
+      ignored: ['ignored', 'f-ignored', 'shown, then ignored'],
+      wrong: ['ignored', 'f-ignored', 'reported wrong'],
+      undeclared: ['', 'f-undeclared', 'not declared'],
+      shown: ['', 'f-shown', 'shown only'],
+      pending: ['', 'f-pending', 'pending'],
+    };
+    const chip = (id, rank, where, oc) => ({ id, rank: rank ? '#' + rank : '', where, oc: OC[oc][0], f: OC[oc][1], word: OC[oc][2], title: id + '4d0e9a1f6c55b2d18e07 · ' + (rank ? 'rank ' + rank + ' · ' : '') + where + ' · ' + OC[oc][2] });
+    const T = (k, text, cls) => ({ k, text, cls: cls || '', hasText: true, hasChips: false });
+    const C = (k, chips) => ({ k, chips, hasText: false, hasChips: true });
+    const turns = [
+      { n: 1, time: '14:52', lines: [
+        C('At session start', [chip('5be1c3a0', 0, 'at session start', 'shown'), chip('0aa7f2d1', 0, 'at session start', 'shown')]),
+        T('Before the prompt', 'memory added to the prompt: 2 memories'),
+        C('Memories shown', [chip('7f3a9c21', 1, 'added to the prompt', 'used'), chip('2c81d0e4', 2, 'added to the prompt', 'ignored')]),
+        T('Claude said', 'used 7f3a9c21'),
+        T('End of turn', 'said what it used', 'st st-ok') ] },
+      { n: 2, time: '14:58', lines: [
+        T('Before the prompt', 'skipped: short prompt (12 characters)', 'muted'),
+        T('End of turn', 'no memory shown, nothing to say', 'muted') ] },
+      { n: 3, time: '15:03', lines: [
+        T('Before the prompt', 'nothing added: nothing close enough in memory', 'muted'),
+        T('Claude’s search', '1 search, 4 found'),
+        C('Memories shown', [chip('9d2e71b4', 1, 'Claude’s search', 'undeclared'), chip('e5f0a7b3', 3, 'Claude’s search', 'undeclared')]),
+        T('End of turn', 'didn’t say what it used', 'st st-watch') ] },
+      { n: 4, time: '15:11', lines: [
+        T('Before the prompt', 'memory added to the prompt: 3 memories'),
+        C('Memories shown', [chip('7f3a9c21', 1, 'added to the prompt', 'wrong'), chip('b81e44c0', 2, 'added to the prompt', 'ignored'), chip('c4a17e93', 3, 'added to the prompt', 'used')]),
+        T('Claude said', 'used c4a17e93 · reported wrong 7f3a9c21'),
+        T('End of turn', 'said what it used', 'st st-ok') ] },
+      { n: 5, time: '15:19', lines: [
+        T('Before the prompt', 'skipped: memory already shown this session', 'muted'),
+        C('Opened by Claude', [chip('3d9f0a27', 0, 'opened by Claude', 'pending')]),
+        T('End of turn', 'waiting for the end-of-turn check', 'muted') ] },
+    ];
+    return { theme: this.props.theme ?? 'light', turns };
+  }
+}
+</script>
+</body>
+</html>

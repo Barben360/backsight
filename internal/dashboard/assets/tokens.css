@@ -1,0 +1,215 @@
+/*
+ * backsight dashboard: design tokens.
+ *
+ * Light values live on :root (and on [data-theme="light"], so an element forced light
+ * stays light inside a dark OS). Dark values follow the OS through prefers-color-scheme,
+ * and the server-side preference sets data-theme="dark" | "light" on <html> (no flash).
+ *
+ * Colour roles:
+ *   ink       --fg, --fg-2 (secondary), --fg-3 (muted, still >= 4.5:1 on every surface)
+ *   status    --ok, --watch, --bad, --neutral, --learn (+ -bg tints); always shown with a word
+ *             and a distinct icon shape (see dashboard.css .st), never colour alone
+ *   outcomes  --c-used, --c-ignored, --c-undeclared, --c-shown, pending = hatch of --c-shown
+ *   kinds     --k-summary, --k-about, --k-session
+ *   pipeline  --p-ok, --p-queued, --p-aside, --p-failed
+ * Every category set passes the dataviz validator (deutan, protan, tritan) on its surface;
+ * the README gives the numbers.
+ */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg: #F4F5F7;          /* page plane */
+  --surface: #FFFFFF;     /* cards, top bar */
+  --surface-2: #EEF0F3;   /* inset: code, table head, tracks, segmented control */
+  --border: #D5DAE0;
+  --border-strong: #A9B1BA;
+  --shadow-pop: 0 8px 24px rgba(31, 35, 40, 0.14), 0 1px 3px rgba(31, 35, 40, 0.10);
+
+  /* ink */
+  --fg: #1F2328;
+  --fg-2: #4A535D;
+  --fg-3: #5C6670;
+  --accent: #B4436C;      /* brand berry (logo arcs): active nav, focus ring */
+  --brand-dot: #E8913A;   /* brand orange (logo dot): logo only, never ink */
+  --link: #9C3560;
+  --focus: #B4436C;
+
+  /* status: text-safe on surface, bg and their own tint */
+  --ok: #17733A;      --ok-bg: #E6F4EA;
+  --watch: #875800;   --watch-bg: #FCF2D6;
+  --bad: #BC2530;     --bad-bg: #FBEAEB;
+  --neutral: #59636E; --neutral-bg: #ECEEF1;   /* too few, can't judge, unreliable */
+  --learn: #0B62C4;   --learn-bg: #E5EFFB;     /* learning */
+
+  /* outcome categories (where memory was shown and what Claude did with it) */
+  --c-used: #2A78D6;        /* used by Claude */
+  --c-ignored: #D9581E;     /* shown, then ignored */
+  --c-undeclared: #48505A;  /* not declared */
+  --c-shown: #8A949E;       /* shown only */
+  --c-pending-ink: #8A949E; /* pending: 45° hatch of this ink on the surface */
+
+  /* the three kinds of memory */
+  --k-summary: #7A4FD0;     /* summary */
+  --k-about: #138A72;       /* fact about you and your work */
+  --k-session: #C76A1A;     /* fact from a session */
+
+  /* pipeline categories */
+  --p-ok: #2A78D6;          /* sent */
+  --p-queued: #8A949E;      /* queued */
+  --p-aside: #B07C00;       /* set aside after an error */
+  --p-failed: #C4314F;      /* failed */
+
+  /* one-hue sequential steps, for splits that are not categories
+     (session start vs prompts, server task types): dark to light */
+  --seq-1: #1C5CAB;
+  --seq-2: #3987E5;
+  --seq-3: #9EC5F4;
+
+  /* chart chrome */
+  --grid: #E6E9ED;
+  --axis: #A9B1BA;
+  --nbar: rgba(31, 35, 40, 0.07);   /* faint n bars behind a line */
+  --band: rgba(42, 120, 214, 0.12); /* interval band */
+
+  /* logo switch (both files are inlined as <img>; only one shows) */
+  --logo-l: inline-block;
+  --logo-d: none;
+}
+
+/* Dark palette, stated twice in this file: here (OS setting) and under [data-theme="dark"] below
+   (server preference). Keep the two blocks in sync, value for value. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1D232B;
+    --border: #30363D;
+    --border-strong: #4C555F;
+    --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --fg: #E6EDF3;
+    --fg-2: #B8C1CB;
+    --fg-3: #8E98A2;
+    --accent: #E07A9F;
+    --brand-dot: #F2A65A;
+    --link: #EE93B5;
+    --focus: #E07A9F;
+    --ok: #4AC25E;      --ok-bg: #13281B;
+    --watch: #DDA640;   --watch-bg: #2B2213;
+    --bad: #FF7B72;     --bad-bg: #3A1A1C;
+    --neutral: #9AA4AE; --neutral-bg: #232A33;
+    --learn: #6CB2FF;   --learn-bg: #122540;
+    --c-used: #3987E5;
+    --c-ignored: #D95926;
+    --c-undeclared: #A3ACB6;
+    --c-shown: #6B7480;
+    --c-pending-ink: #6B7480;
+    --k-summary: #9085E9;
+    --k-about: #1FA58A;
+    --k-session: #C97B2E;
+    --p-ok: #3987E5;
+    --p-queued: #6B7480;
+    --p-aside: #C99A1E;
+    --p-failed: #FF8A8A;
+    --seq-1: #9EC5F4;
+    --seq-2: #3987E5;
+    --seq-3: #184F95;
+    --grid: #252B33;
+    --axis: #4C555F;
+    --nbar: rgba(230, 237, 243, 0.08);
+    --band: rgba(57, 135, 229, 0.18);
+    --logo-l: none;
+    --logo-d: inline-block;
+  }
+}
+
+/* Same values as the prefers-color-scheme block above: keep in sync. */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0E1116;
+  --surface: #161B22;
+  --surface-2: #1D232B;
+  --border: #30363D;
+  --border-strong: #4C555F;
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --fg: #E6EDF3;
+  --fg-2: #B8C1CB;
+  --fg-3: #8E98A2;
+  --accent: #E07A9F;
+  --brand-dot: #F2A65A;
+  --link: #EE93B5;
+  --focus: #E07A9F;
+  --ok: #4AC25E;      --ok-bg: #13281B;
+  --watch: #DDA640;   --watch-bg: #2B2213;
+  --bad: #FF7B72;     --bad-bg: #3A1A1C;
+  --neutral: #9AA4AE; --neutral-bg: #232A33;
+  --learn: #6CB2FF;   --learn-bg: #122540;
+  --c-used: #3987E5;
+  --c-ignored: #D95926;
+  --c-undeclared: #A3ACB6;
+  --c-shown: #6B7480;
+  --c-pending-ink: #6B7480;
+  --k-summary: #9085E9;
+  --k-about: #1FA58A;
+  --k-session: #C97B2E;
+  --p-ok: #3987E5;
+  --p-queued: #6B7480;
+  --p-aside: #C99A1E;
+  --p-failed: #FF8A8A;
+  --seq-1: #9EC5F4;
+  --seq-2: #3987E5;
+  --seq-3: #184F95;
+  --grid: #252B33;
+  --axis: #4C555F;
+  --nbar: rgba(230, 237, 243, 0.08);
+  --band: rgba(57, 135, 229, 0.18);
+  --logo-l: none;
+  --logo-d: inline-block;
+}
+
+/* Theme-independent tokens */
+:root {
+  /* type: system fonts only */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-xs: 12px;   /* axis labels, chips, footnotes: never smaller */
+  --fs-sm: 13px;   /* secondary text, tables, scope line */
+  --fs-md: 14px;   /* body */
+  --fs-lg: 16px;   /* summary line, card titles */
+  --fs-xl: 20px;   /* page title, verdict sentence on narrow */
+  --fs-2xl: 24px;  /* verdict sentence */
+  --fs-3xl: 32px;  /* tile value */
+  --lh-tight: 1.2;
+  --lh: 1.5;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-bold: 600;
+
+  /* spacing: 4 px steps */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 48px;
+
+  /* radii */
+  --r-sm: 4px;    /* chips' inner swatches, code */
+  --r-md: 6px;    /* buttons, inputs, id chips */
+  --r-lg: 10px;   /* cards */
+  --r-pill: 999px;
+
+  /* layout */
+  --content-max: 1440px;
+  --gutter: 32px;
+  --gutter-narrow: 16px;
+  --touch: 40px;          /* minimum touch target under 900 px */
+  --bar-h: 56px;
+  --logo-bar: 24px;
+  --logo-401: 64px;
+}

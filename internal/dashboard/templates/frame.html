@@ -2,7 +2,7 @@
 {{/*
   The frame every page shares. Fields read: .Frame (Title, Path, Version,
   HelpURL, Reload, Nav, Windows, Keep, ProjectInput, AllProjects, PrefMenu,
-  Prefs, Scope, Generated) and .Loc. No Windows (the text page): no window
+  Prefs, Scope, Generated, Window, RenderedAt, RenderMS) and .Loc. No Windows (the text page): no window
   links and no project filter. Nav is sliced by position: 0-5 the
   questions, 5-8 Browse, 8-9 System, 9- the developer pair.
 */}}
@@ -15,112 +15,239 @@
 {{if .Frame.Reload}}<meta http-equiv="refresh" content="{{.Frame.Reload}}">
 {{else if .Frame.Prefs.Refresh}}<meta http-equiv="refresh" content="60">
 {{end}}<title>{{.Frame.Title}} - backsight</title>
+<meta name="color-scheme" content="{{if eq .Frame.Prefs.Theme "dark"}}dark{{else if eq .Frame.Prefs.Theme "light"}}light{{else}}light dark{{end}}">
+<link rel="stylesheet" href="{{asset "tokens.css"}}">
 <link rel="stylesheet" href="{{asset "dashboard.css"}}">
+<script src="{{asset "copy.js"}}" defer></script>
 </head>
 <body>
 {{end}}
 
-{{define "top"}}<header>
-<nav aria-label="Pages">
-<a href="/"><img src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"></a>
+{{define "top"}}<div class="page">
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+<div class="wrap">
+<a class="brand" href="/" title="Overview"><img class="logo-l" src="{{asset "logo-light.svg"}}" width="24" height="24" alt="backsight"><img class="logo-d" src="{{asset "logo-dark.svg"}}" width="24" height="24" alt="backsight"></a>
+<nav class="nav" aria-label="Pages">
 {{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
-{{end}}<details>
-<summary>Browse</summary>
+{{end}}<span class="nav-sep" aria-hidden="true"></span>
+<details class="menu{{if anyCurrent (slice .Frame.Nav 5 8)}} is-current{{end}}">
+<summary>Browse <span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop">
 {{range slice .Frame.Nav 5 8}}{{template "navlink" .}}
-{{end}}</details>
+{{end}}</div>
+</details>
+<span class="nav-sep" aria-hidden="true"></span>
 {{range slice .Frame.Nav 8 9}}{{template "navlink" .}}
-{{end}}{{if .Frame.Prefs.Dev}}<details>
-<summary>Developer</summary>
+{{end}}{{if .Frame.Prefs.Dev}}<span class="nav-sep" aria-hidden="true"></span>
+<details class="menu{{if anyCurrent (slice .Frame.Nav 9)}} is-current{{end}}">
+<summary>Developer <span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop">
 {{range slice .Frame.Nav 9}}{{template "navlink" .}}
-{{end}}</details>
+{{end}}</div>
+</details>
 {{end}}</nav>
-<div>
-{{if .Frame.Windows}}<nav aria-label="Window">
-{{range .Frame.Windows}}{{template "navlink" .}}
-{{end}}</nav>
+<div class="tools">
+{{if .Frame.Windows}}<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+<details class="menu proj">
+<summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short"{{if .Frame.ProjectInput}} title="{{plain .Frame.ProjectInput}}"{{end}}>{{if .Frame.ProjectInput}}{{clip (plain .Frame.ProjectInput)}}{{else}}All projects{{end}}</span><span class="caret" aria-hidden="true">▾</span></summary>
+<div class="menu-pop right wide">
+<span class="grp">Project</span>
 <form method="get" action="{{.Frame.Path | pathOnly}}">
 {{range .Frame.Keep}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
 {{end}}<label>Project <input type="text" name="project" value="{{.Frame.ProjectInput}}"></label>
 <button type="submit">Filter</button>
-<a href="{{.Frame.AllProjects}}">All projects</a>
 </form>
-{{end}}<a href="{{.Frame.Path}}">Refresh</a>
-<details>
-<summary>Preferences</summary>
-{{range .Frame.PrefMenu}}<p>{{.Label}}:
-{{range .Choices}}{{template "navlink" .}}
-{{end}}</p>
-{{end}}</details>
+<a href="{{.Frame.AllProjects}}"{{if not .Frame.ProjectInput}} aria-current="true"{{end}}><span class="check">{{if not .Frame.ProjectInput}}✓{{end}}</span>All projects</a>
+<a href="/projects">Choose from the list →</a>
+</div>
+</details>
+{{end}}<a class="btn btn-quiet refresh-t" href="{{.Frame.Path}}"><span class="i i-refresh"></span>Refresh</a>
+<details class="menu">
+<summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
+<div class="menu-pop right wide">
+{{range $i, $g := .Frame.PrefMenu}}{{if $i}}<hr>
+{{end}}<span class="grp">{{$g.Label}}</span>
+{{range $g.Choices}}{{template "choice" .}}
+{{end}}{{with $g.Hint}}<span class="hint">{{.}}</span>
+{{end}}{{end}}</div>
+</details>
+<details class="menu navmenu">
+<summary class="btn"><span class="i i-menu"></span>Menu</summary>
+<div class="menu-pop right wider">
+{{if .Frame.Windows}}<span class="grp">Window</span>
+<nav class="seg" aria-label="Window (menu)">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+<span class="grp">Project</span>
+<a href="/projects"><span class="i i-filter"></span>{{if .Frame.ProjectInput}}{{clip (plain .Frame.ProjectInput)}}{{else}}All projects{{end}} <span class="caret" aria-hidden="true">▾</span></a>
+<hr>
+{{end}}{{range slice .Frame.Nav 0 5}}{{template "navlink" .}}
+{{end}}<span class="grp">Browse</span>
+{{range slice .Frame.Nav 5 8}}{{template "navlink" .}}
+{{end}}<hr>
+{{range slice .Frame.Nav 8 9}}{{template "navlink" .}}
+{{end}}{{if .Frame.Prefs.Dev}}<span class="grp">Developer</span>
+{{range slice .Frame.Nav 9}}{{template "navlink" .}}
+{{end}}{{end}}<hr>
+<a href="{{.Frame.Path}}"><span class="i i-refresh"></span>Refresh</a>
+</div>
+</details>
+</div>
 </div>
 </header>
-<main>
+{{template "scope" .}}<main id="main" class="wrap main">
+{{template "pagehead" .}}
 {{end}}
+
+{{define "pagehead"}}<div class="page-head"><h1>{{.Frame.Title}}</h1>{{if .Frame.SessionHead}}{{with sessionpage .}}{{if .Found}}<div class="row small muted session-meta">{{template "projlink" .Project}}{{if .Span.Text}} · {{template "reltime" .Span}}{{end}} · {{.Turns}}{{if .Sent.Word}}<span class="pill st {{.Sent.Class}}">{{.Sent.Word}}</span>{{end}}</div>{{end}}{{end}}{{else}}{{with .Frame.Window}}<span class="muted">window: {{.}}</span>{{end}}{{end}}</div>{{end}}
 
 {{define "navlink"}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
 
+{{/* seglink: a window link; choice: a preference choice, its mark shown. */}}
+{{define "seglink"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}
+{{define "choice"}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}><span class="check">{{if .Current}}✓{{end}}</span>{{.Label}}</a>{{end}}
+
 {{/*
-  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt), .Frame.ServerRead
-  (OK, set when the page's own view read the server), .Frame.Generated, .Loc.
+  scope: reads .Frame.Scope (Server, ServerOK, ServerOKAt, Project), .Frame.ServerRead
+  (OK, LastOK; set when the page's own view read the server), .Frame.Generated,
+  .Frame.RenderedAt, .Frame.Path, .Frame.Catching, .Loc.
 */}}
-{{define "scope"}}{{with .Frame.Scope}}<p>Activity on this PC · {{if not .Server}}no memory server set up{{else}}memory on {{.Server}}{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}} (memory server not answering){{end}}{{else if .ServerOKAt}} (memory server {{if .ServerOK}}last answered{{else}}did not answer{{end}} {{since $.Frame.Generated .ServerOKAt}} ago){{end}}{{end}} · updated {{when $.Loc $.Frame.Generated}}</p>
+{{define "scope"}}{{with .Frame.Scope}}<div class="scopebar"><div class="wrap scope">
+<span>Activity on <b>this PC</b></span>
+{{if not .Server}}<span class="dot">no memory server set up</span>{{else}}<span class="dot">memory on <b>{{.Server}}</b></span>{{if $.Frame.ServerRead}}{{if not $.Frame.ServerRead.OK}}<span class="st st-watch">not answering{{with $.Frame.ServerRead.LastOK}} since {{clock $.Frame.Generated . $.Loc}}{{end}}</span>{{end}}{{else if and .ServerOKAt (not .ServerOK)}}<span class="st st-watch">not answering since {{clock $.Frame.Generated .ServerOKAt $.Loc}}</span>{{end}}{{end}}
+<span class="dot">updated {{with rel $.Frame.RenderedAt $.Frame.Generated $.Loc}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}</span>
+<a class="chip chip-stale" href="{{$.Frame.Path}}"><span class="i i-sm i-clock"></span>Updated over 5 min ago. Refresh.</a>
+{{with .Project}}<span class="dot">project <b>{{clip .}}</b></span>
+{{end}}{{with $.Frame.Catching}}<span class="chip"><span class="i i-sm i-clock"></span>{{.}}</span>
+{{end}}</div></div>
 {{end}}{{end}}
 
 {{define "foot"}}</main>
-<footer>
-<p>backsight {{.Frame.Version}} · Help: backsight guide dashboard · <a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">{{.Frame.HelpURL}}</a></p>
+<footer class="foot">
+<div class="wrap">
+<span>backsight <a href="{{versionlink .Frame.Version}}">{{.Frame.Version}}</a></span>
+<a href="{{.Frame.HelpURL}}" rel="noopener noreferrer">Help: backsight guide dashboard</a>
+<a href="/defs">Definitions</a>
+<span>Rendered at <time datetime="{{iso .Loc .Frame.RenderedAt}}" title="{{when .Loc .Frame.RenderedAt}}">{{clock .Frame.RenderedAt .Frame.RenderedAt .Loc}}</time> in {{.Frame.RenderMS}} ms</span>
+</div>
+<p class="sr-only" id="copy-status" aria-live="polite"></p>
 </footer>
+</div>
 </body>
 </html>
 {{end}}
 
 {{/*
-  metric: dot is a MetricView. Reads .Def (Question, Scope, Series), .M (Den,
-  CI, Tags, Series, Drill), .Found, .ShowID, .ID, and the funcs value, status
-  (which says why there is no number), interval, delta, details and extras
-  (the metric's Extra breakdowns: why prompts found nothing, split by kind,
-  result, path, language and rank, typical and high values, what waits on
-  this PC).
+  The widget frame. card-open and card-close wrap a card; dot is a Head (ID,
+  Level, Title, Scope, NotFiltered, Info, CLI, Drill, DrillText). info reads
+  Info (Label, Name, What, Limits, BasedOn, Smallest, Paras, Term, Href,
+  HrefText). cmd: dot is a command string. fig: dot is a Fig. nodata: dot is
+  a NoData.
 */}}
-{{define "metric"}}<section>
-<h3>{{.Def.Question}}</h3>
-<p>{{value .}}{{with .M.Den}} · n = {{.}}{{end}} · {{status .}}{{with interval .}} · interval {{.}}{{end}}{{with delta .}} · {{.}}{{end}}</p>
-<p>{{if eq .Def.Scope "machine"}}this PC{{else}}server{{end}}{{range .M.Tags}}{{if eq . "not_filtered"}} · not filtered{{end}}{{end}}{{if .M.Series}} · {{len .M.Series}} {{if eq .Def.Series "weekly"}}weeks{{else}}days{{end}}{{end}}</p>
-{{with details .}}<ul>
-{{range .}}<li>{{.}}</li>
-{{end}}</ul>
-{{end}}{{with extras .}}<ul>
-{{range .}}<li>{{.}}</li>
-{{end}}</ul>
-{{end}}{{if .M.Drill}}<details><summary>CLI</summary><code>{{.M.Drill}}</code></details>
-{{end}}{{if .ShowID}}<p><code>{{.ID}}</code></p>
+{{define "card-open"}}<section class="card" aria-labelledby="{{.ID}}">
+{{template "card-head" .}}{{end}}
+
+{{define "card-head"}}<div class="card-head">{{if eq .Level 3}}<h3 id="{{.ID}}">{{.Title}}</h3>{{else}}<h2 id="{{.ID}}">{{.Title}}</h2>{{end}}
+{{if eq .Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else if eq .Scope "server"}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}{{with .Chip}}<span class="chip chip-dev">{{.}}</span>{{end}}<span class="spacer"></span>
+{{with .Aside}}<span class="muted small">{{.}}</span>{{end}}{{if .Pill.Word}}<span class="pill st {{.Pill.Class}}">{{.Pill.Word}}</span>{{end}}{{template "info" .}}{{template "cli" .}}</div>
+{{end}}
+
+{{define "info"}}{{if .Info.Label}}<details class="info"><summary aria-label="{{.Info.Label}}" aria-describedby="{{.ID}}-info"><span class="i i-info"></span></summary><div class="pop" id="{{.ID}}-info" role="note"><b>{{.Info.Name}}</b>
+{{if or .Info.What .Info.Limits .Info.BasedOn .Info.Smallest}}<dl>{{with .Info.What}}<dt>What</dt><dd>{{.}}</dd>{{end}}{{with .Info.Limits}}<dt>Limits</dt><dd>{{.}}</dd>{{end}}{{with .Info.BasedOn}}<dt>Based on</dt><dd>{{.}}</dd>{{end}}{{with .Info.Smallest}}<dt>Smallest change it can see</dt><dd>{{.}}</dd>{{end}}</dl>
+{{end}}{{range .Info.Paras}}<p>{{.}}</p>
+{{end}}{{with .Info.Term}}<code class="term">{{.}}</code>{{end}}{{with .Info.Href}}<a href="{{.}}">{{$.Info.HrefText}}</a>{{end}}</div></details>{{end}}{{end}}
+
+{{define "cli"}}{{if .CLI}}<details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>{{.CLI}}</code><button class="copy" type="button" hidden aria-label="Copy: {{plain .CLI}}"><span class="i i-sm i-copy"></span>Copy</button></div></details>{{end}}{{end}}
+
+{{define "cmd"}}<div class="cmd"><code>{{.}}</code><button class="copy" type="button" hidden aria-label="Copy: {{plain .}}"><span class="i i-sm i-copy"></span>Copy</button></div>{{end}}
+
+{{define "card-close"}}{{if .Pager.Total}}<div class="pager">{{with .Pager.Prev}}<a href="{{.}}" rel="prev" class="btn">← Previous</a>{{end}}<span>{{.Pager.From}}–{{.Pager.To}} of {{.Pager.Total}}</span>{{with .Pager.Next}}<a href="{{.}}" rel="next" class="btn">Next →</a>{{end}}</div>
+{{end}}{{if .Drill}}<div class="card-foot"><a href="{{.Drill}}">{{.DrillText}}</a></div>
 {{end}}</section>
 {{end}}
 
-{{/* jobs: dot is a Tabled. Reads .T.Jobs (Name, Status, LastAt, MS, AgeMS) and .Loc. */}}
-{{define "jobs"}}<section>
-<h2>Background jobs</h2>
-<table>
-<tr><th>Job</th><th>Last result</th><th>Last run</th><th>Took</th><th>Age</th></tr>
-{{range .T.Jobs}}<tr><td>{{job .Name}}</td><td>{{jobstatus .Status}}</td><td>{{when $.Loc .LastAt}}</td><td>{{n .MS}} ms</td><td>{{age .AgeMS}}</td></tr>
-{{end}}</table>
-</section>
-{{end}}
+{{define "fig"}}<div class="fig"><span class="lab">{{with .Icon}}<span class="i i-sm i-{{.}}"></span>{{end}}{{with .Swatch}}<i class="sw {{.}}"></i>{{end}}{{.Label}}</span><span class="v{{if .WordValue}} v-word{{end}}">{{.Value}}</span>{{if .Word}}<span class="st {{.Class}}">{{.Word}}</span>{{end}}{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}{{with .Dev}}<code>{{.}}</code>{{end}}{{with .Sub}}<span class="s">{{.}}</span>{{end}}</div>{{end}}
 
-{{/* doctor: dot is a Tabled. Reads .T.Doctor (ID, Status, Fix). */}}
-{{define "doctor"}}<section>
-<h2>Health checks</h2>
-<table>
-<tr><th>Check</th><th>Status</th><th>Fix</th></tr>
-{{range .T.Doctor}}<tr><td>{{doctor .ID}}</td><td>{{dstatus .Status}}</td><td>{{with .Fix}}<code>{{.}}</code>{{end}}</td></tr>
-{{end}}</table>
-</section>
-{{end}}
-
-{{/* paging: dot is a Pager (Prev, Next, From, To, Total). */}}
-{{define "paging"}}{{if .Total}}<p>{{.From}}–{{.To}} of {{.Total}}{{with .Prev}} · <a href="{{.}}" rel="prev">Previous</a>{{end}}{{with .Next}} · <a href="{{.}}" rel="next">Next</a>{{end}}</p>
+{{/*
+  lead: dot is a Card; its headline numbers and the word for the first.
+  pcard: dot is a Card: head, numbers, the sentence or the charts, the figures and the lines under them.
+*/}}
+{{define "lead"}}{{if .Leads}}<div class="row lead">{{range .Leads}}<div><span class="num big">{{.Big}}</span>{{with .Unit}} <span class="unit">{{.}}</span>{{end}}{{with .CI}} <span class="small sub">{{.}}</span>{{end}} <span class="small sub">{{.Label}}</span></div>
+{{end}}{{if .Word.Word}}<span class="st {{.Word.Class}}">{{.Word.Word}}</span>{{end}}</div>
 {{end}}{{end}}
 
-{{/* choices: dot is a list of Choice. */}}
-{{define "choices"}}<p>{{range .}}{{template "navlink" .}}
-{{end}}</p>
+{{define "devids"}}{{with .Dev}}<p class="devid">{{range .}}<code>{{.}}</code> {{end}}</p>
+{{end}}{{end}}
+
+{{define "pcard"}}{{template "card-open" .Head}}
+{{template "devids" .}}{{template "lead" .}}{{template "nodata" .Note}}{{range .Charts}}{{with .Name}}<h3 class="chart-name">{{.}}</h3>
+{{end}}{{.HTML}}
+{{end}}{{template "ctail" .}}{{template "card-close" .Head}}{{end}}
+
+{{/* ctail: dot is a Card; what a card shows under its numbers and charts: figures, lines, foot, advice. */}}
+{{define "ctail"}}{{if .Figs}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
+{{end}}{{with .Extras}}<ul class="extras small sub">
+{{range .}}<li>{{.}}</li>
+{{end}}</ul>
+{{end}}{{with .Foot}}<p class="small muted">{{.}}</p>
+{{end}}{{with .Hint}}<p class="small muted">{{.}}</p>
+{{end}}{{with .HintCmd}}{{template "cmd" .}}{{end}}{{end}}
+
+{{/* reltime: dot is a format.Time; a moment as the time element shows it. */}}
+{{define "reltime"}}{{if .Datetime}}<time datetime="{{.Datetime}}" title="{{.Title}}">{{.Text}}</time>{{else}}{{.Text}}{{end}}{{end}}
+
+{{/* dl: dot is a list of DLRow; rows of a description list, a moment in the middle of a row's text. */}}
+{{define "dl"}}<dl class="dl">
+{{range .}}<dt>{{.Label}}</dt><dd{{if or .Mono .Num}} class="{{if .Mono}}mono{{end}}{{if .Num}}num{{end}}"{{end}}>{{if .Class}}<span class="st {{.Class}}">{{end}}{{.Pre}}{{if .Time.Datetime}}<time datetime="{{.Time.Datetime}}" title="{{.Time.Title}}">{{.Time.Text}}</time>{{end}}{{.Post}}{{if .Class}}</span>{{end}}</dd>
+{{end}}</dl>
+{{end}}
+
+{{define "nodata"}}{{if .Text}}<div class="empty{{with .Class}} {{.}}{{end}}"><span>{{.Text}}{{with .Code}}<code>{{.}}</code>{{end}}{{.Close}}</span>{{with .Tail}}<span class="xs muted">{{.}}</span>{{end}}
+{{if .Links}}<span class="small">{{.Pick}}</span><div class="seg" role="group" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</div>
+{{end}}</div>{{end}}{{end}}
+
+{{/* jobs: dot is a list of JobLine (Job, Code, When, Result, Class, Took). */}}
+{{define "jobs"}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Job</th><th>Last run</th><th>Result</th><th class="r">Took</th></tr></thead>
+<tbody>
+{{range .}}<tr><td>{{.Job}} (<code>{{.Code}}</code>)</td><td>{{template "reltime" .When}}</td><td><span class="st {{.Class}}">{{.Result}}</span></td><td class="r">{{.Took}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}
+
+{{/* doctor: dot is a list of CheckLine (Status, Class, Check, Fix). */}}
+{{define "doctor"}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Status</th><th>Check</th><th>Fix</th></tr></thead>
+<tbody>
+{{range .}}<tr><td><span class="st {{.Class}}">{{.Status}}</span></td><td>{{.Check}}</td><td>{{with .Fix}}{{template "cmd" .}}{{else}}<span class="muted">{{dash}}</span>{{end}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}
+
+{{/* tilegroups: dot is a list of TileGroup (Name, Tiles); Tile: Name, Class, Question, Head, Big, Unit, CI, Sub, Note, Word, WordClass, Delta, Spark, Link, LinkText, Dev. */}}
+{{define "tilegroups"}}<div class="tgroups" role="group" aria-label="Key numbers">
+{{range .}}<section class="tgroup"><h2 class="tgroup-h">{{.Name}}</h2><div class="tgroup-tiles">
+{{range .Tiles}}<article class="tile {{.Class}}" aria-labelledby="{{.Head.ID}}">
+<div class="tile-top"><h3 class="tile-name" id="{{.Head.ID}}">{{.Name}}</h3>
+{{if eq .Head.Scope "machine"}}<span class="chip" title="Activity recorded on this PC"><span class="i i-sm i-pc"></span>this PC</span>{{else}}<span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>{{end}}{{if .Head.NotFiltered}}<span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span>{{end}}<span class="spacer"></span>
+{{template "info" .Head}}</div>
+{{with .Dev}}<span class="devid">{{.}}</span>
+{{end}}<p class="tile-q">{{.Question}}</p>
+<div class="tile-v"><span class="big num">{{.Big}}</span>{{with .Unit}}<span class="unit">{{.}}</span>{{end}}{{with .CI}}<span class="ci">{{.}}</span>{{end}}</div>
+{{with .Sub}}<p class="tile-sub">{{.}}</p>
+{{end}}<div class="tile-st"><span class="st {{.WordClass}}">{{.Word}}</span>{{with .Delta}}<span class="delta {{.Class}}"><span class="arr">{{.Arrow}}</span> {{.Text}}</span>{{end}}</div>
+{{with .Note}}<p class="tile-note">{{.}}</p>
+{{end}}{{.Spark}}
+<div class="tile-foot">{{if .Link}}<a href="{{.Link}}">{{.LinkText}}</a>{{end}}<span class="spacer"></span>{{template "cli" .Head}}</div>
+</article>
+{{end}}</div></section>
+{{end}}</div>{{end}}
+
+{{/* idlink: dot is a Ref of an id; projlink: dot is a Ref of a project. */}}
+{{define "idlink"}}{{if .Href}}<a class="idc" href="{{.Href}}" title="{{.Full}}">{{.Text}}</a>{{else}}<span class="idc" title="{{.Full}}">{{.Text}}</span>{{end}}{{end}}
+{{define "projlink"}}{{if .None}}<span class="muted">no project</span>{{else if .Href}}<a class="trunc" href="{{.Href}}" title="{{.Full}}">{{.Text}}</a>{{else}}<span class="trunc" title="{{.Full}}">{{.Text}}</span>{{end}}{{end}}
+
+{{/* sessions: dot is a SessionsTable (WhenHead, Rows: When, ID, Project, Prompts, Got, Shown, Used, Wrong, WrongClass, Context, Sent). */}}
+{{define "sessions"}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>{{.WhenHead}}</th><th>Session</th><th>Project</th><th class="r">Prompts</th><th class="r">Got memory</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th><th class="r">Context added</th><th>Sent</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{template "reltime" .When}}</td><td>{{template "idlink" .ID}}</td><td>{{template "projlink" .Project}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Got}}</td><td class="r">{{.Shown}}</td><td class="r">{{.Used}}</td><td class="r">{{if .WrongClass}}<span class="st {{.WrongClass}}">{{.Wrong}}</span>{{else}}{{.Wrong}}{{end}}</td><td class="r">{{.Context}}</td><td>{{if .Sent.Class}}<span class="st {{.Sent.Class}}">{{.Sent.Word}}</span>{{else}}<span class="muted">{{.Sent.Word}}</span>{{end}}</td></tr>
+{{end}}</tbody></table></div>
 {{end}}

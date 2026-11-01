@@ -1,24 +1,20 @@
 {{/* views: system */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.system}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
-{{/* widget: health checks. Reads .V.system.Tables.Doctor (ID, Status, Fix) and the metric doctor.check. */}}
-{{template "doctor" tabled $r $.Loc}}
-{{template "metric" framed (metric $r "doctor.check") $d $.Loc}}
-
-{{/* widget: system. Reads .V.system.Tables.System through the sysrows func (Label, Text). */}}
-<section>
-<h2>System</h2>
-<dl>
-{{range sysrows $r.Tables.System $.Loc}}<dt>{{.Label}}</dt><dd>{{.Text}}</dd>
-{{end}}</dl>
-</section>
-
-{{/* widget: reach, backlog and jobs. Reads the metrics server.reach, local.backlog, jobs.last_run and .V.system.Tables.Jobs (Name, Status, LastAt, MS, AgeMS). */}}
-{{template "metric" framed (metric $r "server.reach") $d $.Loc}}
-{{template "metric" framed (metric $r "local.backlog") $d $.Loc}}
-{{template "metric" framed (metric $r "jobs.last_run") $d $.Loc}}
-{{template "jobs" tabled $r $.Loc}}
+{{/* widgets: the cards of system (Card: Head, Note; Server and PC add Rows: Label, Pre, Time, Post, Class, Mono; PC adds Cmd; Attention adds Items: Pill, Text, Why, Cmd and Info; Checks adds Rows: Status, Class, Check, Fix). Reads the metrics server.reach, doctor.check, jobs.last_run, local.backlog, .V.system.Tables.System, .Doctor and .Jobs, and .V.system.Attention. */}}
+{{with systempage .}}<div class="grid-3">
+{{with .Server}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}{{template "dl" .Rows}}{{end}}{{template "card-close" .Head}}{{end}}
+{{with .PC}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "dl" .Rows}}{{with .Cmd}}{{template "cmd" .}}{{end}}{{template "card-close" .Head}}{{end}}
+{{with .Look}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{if .Items}}<ul class="att">
+{{range .Items}}<li class="att-item"><span class="pill st {{.Pill.Class}}">{{.Pill.Word}}</span><div class="body"><p>{{.Text}}</p>{{with .Why}}<details class="why"><summary>Why this matters</summary><div>{{.}}</div></details>{{end}}{{with .Cmd}}{{template "cmd" .}}{{end}}</div></li>
+{{end}}</ul>
+{{end}}<p class="xs muted">{{.Info}}</p>
+{{template "card-close" .Head}}{{end}}
+</div>
+{{with .Checks}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}{{template "doctor" .Rows}}{{end}}{{template "card-close" .Head}}{{end}}
+{{end}}
 {{template "foot" .}}

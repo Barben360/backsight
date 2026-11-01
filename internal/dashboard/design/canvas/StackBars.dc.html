@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stacked bars</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<figure class="chart">
+  <div class="legend">
+    <sc-for list="{{legend}}" as="k" hint-placeholder-count="4"><span><i class="sw {{k.f}}"></i>{{k.label}}</span></sc-for>
+  </div>
+  <svg viewBox="0 0 680 230" role="img" aria-label="{{label}}">
+    <defs>
+      <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="hatch-ln" x1="0" y1="0" x2="0" y2="5"></line></pattern>
+    </defs>
+    <sc-for list="{{yt}}" as="g" hint-placeholder-count="4">
+      <line class="gl" x1="44" x2="672" y1="{{g.y}}" y2="{{g.y}}"></line>
+      <text class="ta-e" x="38" y="{{g.ty}}">{{g.label}}</text>
+    </sc-for>
+    <sc-for list="{{segs}}" as="s" hint-placeholder-count="40">
+      <rect class="seg {{s.f}}" x="{{s.x}}" y="{{s.y}}" width="{{s.w}}" height="{{s.h}}" rx="{{s.rx}}"><title>{{s.t}}</title></rect>
+    </sc-for>
+    <sc-for list="{{vlabels}}" as="v" hint-placeholder-count="0">
+      <text class="val ta-m" x="{{v.x}}" y="{{v.y}}">{{v.label}}</text>
+    </sc-for>
+    <line class="bl" x1="44" x2="672" y1="200" y2="200"></line>
+    <sc-for list="{{xt}}" as="x" hint-placeholder-count="5">
+      <text class="ta-m" x="{{x.x}}" y="218">{{x.label}}</text>
+    </sc-for>
+  </svg>
+  <details class="tblfb">
+    <summary>Show as a table</summary>
+    <div class="tbl-wrap" style="max-height: 220px; overflow-y: auto; margin: 0; padding: 0">
+      <table class="tbl">
+        <thead><tr><th>{{xname}}</th><sc-for list="{{cols}}" as="c" hint-placeholder-count="4"><th class="r">{{c}}</th></sc-for></tr></thead>
+        <tbody><sc-for list="{{rows}}" as="r" hint-placeholder-count="5"><tr><td>{{r.day}}</td><sc-for list="{{r.v}}" as="v" hint-placeholder-count="4"><td class="r">{{v}}</td></sc-for></tr></sc-for></tbody>
+      </table>
+    </div>
+  </details>
+</figure>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"data":{"editor":"enum","options":["outcomes","pipeline","pipelinebroken","context","extraction","churn","emptyreasons"],"default":"outcomes"},"$preview":{"width":720,"height":340}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    const which = this.props.data ?? 'outcomes';
+    const r = (i, s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
+    let N = 14, cats = [], vals = [], label = '', fmt = (v) => String(v), xname = 'Day', xl = (i) => 'Oct ' + (17 + i), labelCat = null;
+    if (which === 'outcomes') {
+      cats = [['used by Claude', 'f-used'], ['shown, then ignored', 'f-ignored'], ['not declared', 'f-undeclared'], ['shown only', 'f-shown'], ['pending', 'f-pending']];
+      vals = [...Array(N)].map((_, i) => [Math.round(3 + r(i, 1) * 6), Math.round(2 + r(i, 2) * 5), Math.round(r(i, 3) * 2), Math.round(4 + r(i, 4) * 5), i > 11 ? Math.round(2 + r(i, 5) * 4) : 0]);
+      label = 'Memories shown per day by what Claude did with them, last 14 days';
+    } else if (which === 'pipeline' || which === 'pipelinebroken') {
+      cats = [['sent', 'f-ok'], ['queued', 'f-queued'], ['set aside after an error', 'f-aside'], ['failed', 'f-failed']];
+      const broken = which === 'pipelinebroken';
+      vals = [...Array(N)].map((_, i) => [Math.round(26 + r(i, 6) * 14), i === N - 1 ? 2 : 0, broken && i === N - 2 ? 1 : 0, broken && i >= N - 2 ? (i === N - 1 ? 2 : 1) : 0]);
+      label = 'Sessions sent per day by result, last 14 days';
+      labelCat = 3;
+    } else if (which === 'context') {
+      cats = [['at session start', 'f-seq1'], ['added to the prompt', 'f-seq2']];
+      vals = [...Array(N)].map((_, i) => [Math.round(5 + r(i, 7) * 4) * 1000, Math.round(8 + r(i, 8) * 9) * 1000]);
+      fmt = (v) => (v >= 10000 ? Math.round(v / 1000) + ' k' : v.toLocaleString('en-US'));
+      label = 'Characters added to Claude’s context per day, by where, last 14 days';
+    } else if (which === 'extraction') {
+      cats = [['turning sessions into memories', 'f-seq1'], ['building summaries', 'f-seq2'], ['other server tasks', 'f-seq3']];
+      vals = [...Array(N)].map((_, i) => [Math.round(380 + r(i, 9) * 260) * 1000, Math.round(90 + r(i, 10) * 120) * 1000, Math.round(10 + r(i, 11) * 30) * 1000]);
+      fmt = (v) => (v >= 1000000 ? (v / 1000000).toFixed(1) + ' M' : Math.round(v / 1000) + ' k');
+      label = 'Tokens the server’s model spent per day, by task, last 14 days';
+    } else if (which === 'churn') {
+      N = 8; xname = 'Week'; xl = (i) => 'W' + (36 + i);
+      cats = [['retired', 'f-seq1'], ['hidden', 'f-seq2'], ['restored', 'f-seq3']];
+      vals = [...Array(N)].map((_, i) => [Math.round(r(i, 12) * 9), Math.round(r(i, 13) * 4), Math.round(r(i, 14) * 2)]);
+      label = 'Memories retired, hidden and restored per week, last 8 weeks';
+    } else {
+      cats = [['nothing close enough', 'f-seq1'], ['all already shown', 'f-seq2'], ['no candidates', 'f-seq3']];
+      vals = [...Array(N)].map((_, i) => [Math.round(10 + r(i, 15) * 8), Math.round(2 + r(i, 16) * 4), Math.round(r(i, 17) * 3)]);
+      label = 'Why prompts got nothing, per day, last 14 days';
+    }
+    const L = 44, R = 672, T = 10, B = 200;
+    const tot = vals.map((v) => v.reduce((a, b) => a + b, 0));
+    const raw = Math.max(...tot, 1);
+    const step = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000].find((s) => raw / s <= 4) || 1000000;
+    const ymax = Math.ceil(raw / step) * step;
+    const Y = (v) => B - (v / ymax) * (B - T);
+    const yt = [];
+    for (let v = 0; v <= ymax; v += step) yt.push({ y: Y(v).toFixed(1), ty: (Y(v) + 4).toFixed(1), label: fmt(v) });
+    const slot = (R - L) / N, bw = Math.min(28, slot * 0.62);
+    const segs = [], vlabels = [];
+    vals.forEach((v, i) => {
+      const x = L + slot * i + (slot - bw) / 2;
+      let acc = 0;
+      const topIdx = v.map((k, j) => (k > 0 ? j : -1)).filter((j) => j >= 0).pop();
+      v.forEach((k, j) => {
+        if (k <= 0) return;
+        const y0 = Y(acc), y1 = Y(acc + k);
+        segs.push({ f: cats[j][1], x: x.toFixed(1), w: bw.toFixed(1), y: y1.toFixed(1), h: Math.max(1, y0 - y1 - 2).toFixed(1), rx: j === topIdx ? 3 : 0, t: xl(i) + ' · ' + cats[j][0] + ': ' + fmt(k) });
+        acc += k;
+      });
+      if (labelCat !== null && v[labelCat] > 0) vlabels.push({ x: (x + bw / 2).toFixed(1), y: (Y(acc) - 5).toFixed(1), label: v[labelCat] + ' failed' });
+    });
+    const xt = [...Array(N)].map((_, i) => i).filter((i) => N <= 8 || i % 3 === 1 || i === N - 1).map((i) => ({ x: (L + slot * i + slot / 2).toFixed(1), label: xl(i) }));
+    return {
+      theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', label, yt, segs, vlabels, xt, xname,
+      legend: cats.map((c) => ({ f: c[1], label: c[0] })),
+      cols: cats.map((c) => c[0]),
+      rows: vals.map((v, i) => ({ day: xl(i), v: v.map(fmt) })).reverse().slice(0, 7),
+    };
+  }
+}
+</script>
+</body>
+</html>

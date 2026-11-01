@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Line chart with n bars</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<figure class="chart">
+  <svg viewBox="0 0 680 230" role="img" aria-label="{{label}}">
+    <sc-for list="{{yt}}" as="g" hint-placeholder-count="5">
+      <line class="gl" x1="44" x2="672" y1="{{g.y}}" y2="{{g.y}}"></line>
+      <text class="ta-e" x="38" y="{{g.ty}}">{{g.label}}</text>
+    </sc-for>
+    <sc-for list="{{nb}}" as="b" hint-placeholder-count="30">
+      <rect class="nb" x="{{b.x}}" y="{{b.y}}" width="{{b.w}}" height="{{b.h}}"><title>{{b.t}}</title></rect>
+    </sc-for>
+    <sc-if value="{{hasBand}}" hint-placeholder-val="{{ false }}"><path class="band" d="{{band}}"></path></sc-if>
+    <sc-for list="{{thr}}" as="h" hint-placeholder-count="0">
+      <line class="{{h.cls}}" x1="44" x2="672" y1="{{h.y}}" y2="{{h.y}}"></line>
+      <text class="thr-t ta-e" x="670" y="{{h.ty}}">{{h.label}}</text>
+    </sc-for>
+    <sc-for list="{{lines}}" as="l" hint-placeholder-count="2">
+      <polyline class="ln {{l.cls}}" points="{{l.pts}}"></polyline>
+    </sc-for>
+    <sc-for list="{{dots}}" as="p" hint-placeholder-count="30">
+      <circle class="pt {{p.cls}}" cx="{{p.x}}" cy="{{p.y}}" r="3"><title>{{p.t}}</title></circle>
+    </sc-for>
+    <line class="bl" x1="44" x2="672" y1="200" y2="200"></line>
+    <sc-for list="{{xt}}" as="x" hint-placeholder-count="5">
+      <text class="ta-m" x="{{x.x}}" y="218">{{x.label}}</text>
+    </sc-for>
+  </svg>
+  <div class="legend">
+    <sc-for list="{{legend}}" as="k" hint-placeholder-count="2"><span><i class="sw {{k.sw}}"></i>{{k.label}}</span></sc-for>
+  </div>
+  <details class="tblfb" open="{{tableOpen}}">
+    <summary>Show as a table</summary>
+    <div class="tbl-wrap" style="max-height: 220px; overflow-y: auto; margin: 0; padding: 0">
+      <table class="tbl">
+        <thead><tr><th>Day</th><sc-for list="{{cols}}" as="c" hint-placeholder-count="2"><th class="r">{{c}}</th></sc-for></tr></thead>
+        <tbody>
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="5"><tr><td>{{r.day}}</td><sc-for list="{{r.v}}" as="v" hint-placeholder-count="2"><td class="r">{{v}}</td></sc-for></tr></sc-for>
+        </tbody>
+      </table>
+    </div>
+  </details>
+</figure>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"data":{"editor":"enum","options":["used","found","latency","search"],"default":"used"},"table":{"editor":"boolean","default":false},"$preview":{"width":720,"height":340}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    const which = this.props.data ?? 'used';
+    const N = 30;
+    const r = (i, s) => { const x = Math.sin((i + 1) * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); };
+    const day = (i) => 'Oct ' + (i + 1);
+    const L = 44, R = 672, T = 10, B = 200;
+    const X = (i) => L + 8 + i * ((R - L - 16) / (N - 1));
+    let ymax = 100, unit = '%', series = [], nser = null, band = null, thr = [], label = '', yfmt = (v) => v + ' %';
+    if (which === 'used') {
+      const n = [...Array(N)].map((_, i) => Math.floor(r(i, 1) * 5));
+      const used = n.map((k, i) => (k === 0 ? null : Math.round(48 + r(i, 2) * 30)));
+      const cov = n.map((k, i) => (k === 0 ? null : (r(i, 3) > 0.85 ? 80 : 100)));
+      series = [{ name: 'Used by Claude', cls: 's-used', f: 'f-used', v: used }, { name: 'Said what it used', cls: 's-fg ln-2', f: 'f-neutral', v: cov, dash: true }];
+      nser = { name: 'turns that showed memory', v: n };
+      label = 'Turns where Claude used memory, and turns where it said what it used, per day, last 30 days';
+    } else if (which === 'found') {
+      const n = [...Array(N)].map((_, i) => 14 + Math.floor(r(i, 4) * 18));
+      const v = n.map((k, i) => Math.round(21 + r(i, 5) * 13));
+      series = [{ name: 'Prompts that got memory', cls: 's-used', f: 'f-used', v }];
+      nser = { name: 'prompts', v: n };
+      band = v.map((p, i) => [Math.max(0, p - 14), Math.min(100, p + 16)]);
+      ymax = 60;
+      label = 'Prompts that got memory per day with its interval, last 30 days';
+    } else if (which === 'search') {
+      const n = [...Array(N)].map((_, i) => 6 + Math.floor(r(i, 6) * 10));
+      series = [{ name: 'Prompts where Claude searched memory', cls: 's-used', f: 'f-used', v: n.map((_, i) => Math.round(18 + r(i, 7) * 14)) }, { name: 'Searches that found nothing', cls: 's-fg ln-2', f: 'f-neutral', v: n.map((_, i) => Math.round(8 + r(i, 8) * 10)), dash: true }];
+      nser = { name: 'typed prompts ≥ 40 characters', v: n };
+      ymax = 50;
+      label = 'Claude’s searches per day, last 30 days';
+    } else {
+      ymax = 3; unit = 's'; yfmt = (v) => v.toFixed(1) + ' s';
+      const p95 = [...Array(N)].map((_, i) => +(1.3 + r(i, 9) * 0.5 + (i > 24 ? 0.1 : 0)).toFixed(1));
+      const p50 = p95.map((v, i) => +(0.7 + r(i, 10) * 0.25).toFixed(2));
+      series = [{ name: 'Slowest 1 in 20', cls: 's-used', f: 'f-used', v: p95 }, { name: 'Typical', cls: 's-fg ln-2', f: 'f-neutral', v: p50, dash: true }];
+      thr = [{ v: 2.5, cls: 'thr', label: 'limit 2.5 s' }, { v: 2.0, cls: 'thr-w', label: 'watch 2.0 s' }];
+      label = 'Time memory adds to a prompt per day, last 30 days, with the 2.5 s limit';
+    }
+    const Y = (v) => B - (v / ymax) * (B - T);
+    const ticks = which === 'latency' ? [0, 1, 2, 3] : (ymax === 100 ? [0, 25, 50, 75, 100] : (ymax === 60 ? [0, 20, 40, 60] : [0, 25, 50]));
+    const yt = ticks.map((v) => ({ y: Y(v), ty: Y(v) + 4, label: yfmt(v) }));
+    let nb = [];
+    if (nser) {
+      const nmax = Math.max(...nser.v, 1);
+      const bw = (R - L - 16) / N * 0.6;
+      nb = nser.v.map((k, i) => ({ x: (X(i) - bw / 2).toFixed(1), w: bw.toFixed(1), y: (B - (k / nmax) * 70).toFixed(1), h: ((k / nmax) * 70).toFixed(1), t: day(i) + ': ' + k + ' ' + nser.name }));
+    }
+    const lines = [], dots = [];
+    series.forEach((s) => {
+      let seg = [];
+      const flush = () => { if (seg.length > 1) lines.push({ cls: s.cls, pts: seg.join(' ') }); seg = []; };
+      s.v.forEach((v, i) => {
+        if (v === null) { flush(); return; }
+        seg.push(X(i).toFixed(1) + ',' + Y(v).toFixed(1));
+        if (!s.dash) dots.push({ cls: s.f, x: X(i).toFixed(1), y: Y(v).toFixed(1), t: day(i) + ': ' + yfmt(v) + (nser ? ' (n ' + nser.v[i] + ')' : '') });
+      });
+      flush();
+    });
+    let bandPath = '';
+    if (band) {
+      const up = band.map((b, i) => X(i).toFixed(1) + ',' + Y(b[1]).toFixed(1));
+      const dn = band.map((b, i) => X(i).toFixed(1) + ',' + Y(b[0]).toFixed(1)).reverse();
+      bandPath = 'M' + up.join(' L') + ' L' + dn.join(' L') + ' Z';
+    }
+    const xt = [2, 9, 16, 23, 29].map((i) => ({ x: X(i).toFixed(1), label: day(i) }));
+    const legend = series.map((s) => ({ sw: (s.dash ? 'sw-dash ' : 'sw-line ') + s.f, label: s.name }));
+    if (band) legend.push({ sw: 'band-sw', label: 'interval (95 %)' });
+    if (nser) legend.push({ sw: 'nb-sw', label: 'faint bars: ' + nser.name });
+    thr.forEach((h) => { h.y = Y(h.v); h.ty = Y(h.v) - 5; });
+    const cols = series.map((s) => s.name).concat(nser ? ['n'] : []);
+    const rows = [...Array(N)].map((_, i) => ({ day: day(i), v: series.map((s) => (s.v[i] === null ? '—' : yfmt(s.v[i]))).concat(nser ? [String(nser.v[i])] : []) })).reverse().slice(0, 10);
+    return { theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', label, yt, nb, hasBand: !!band, band: bandPath, thr, lines, dots, xt, legend, cols, rows, tableOpen: String(this.props.table ?? false) === 'true' || undefined };
+  }
+}
+</script>
+</body>
+</html>

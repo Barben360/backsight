@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 	"time"
+	_ "time/tzdata" // parisZone loads Europe/Paris whatever the host has
 
 	"github.com/Barben360/backsight/internal/metrics"
 )
@@ -61,13 +62,14 @@ func goldenResult(t *testing.T, name string) *metrics.Result {
 	return env.Data
 }
 
-// parisZone is Europe/Paris, or a fixed +02:00 zone of that name on a
-// machine without the zone database.
+// parisZone is Europe/Paris, from the embedded zone database: a fixed
+// offset would be wrong on one side of each DST change.
 func parisZone() *time.Location {
-	if loc, err := time.LoadLocation("Europe/Paris"); err == nil {
-		return loc
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		panic("Europe/Paris: " + err.Error())
 	}
-	return time.FixedZone("Europe/Paris", 2*3600)
+	return loc
 }
 
 // fixtureData is the page data of spec, with a full frame: the goldens of
@@ -101,5 +103,6 @@ func fixtureData(t *testing.T, spec pageSpec, empty bool) PageData {
 		Prefs: Prefs{Theme: "auto", Dev: true}, AllProjects: "/", Scope: &head.Scope, Generated: head.GeneratedAt,
 		Keep: [][2]string{{"days", "7"}},
 	}
+	d.Frame.SessionHead = spec.Name == "session" // as the handler sets it
 	return d
 }

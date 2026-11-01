@@ -1,16 +1,12 @@
 {{/* views: days */}}
 {{template "head" .}}{{template "top" .}}
-{{$r := .V.days}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
-{{/* widget: days. Reads .V.days.Tables.Days (Day, Prompts, Recalls, PromptsWithMemory, UsedTurns, Wrong, ContextChars, Sessions, SentOK, SentFailed). */}}
-<section>
-<h2>Days</h2>
-<table>
-<tr><th>Day</th><th>Prompts</th><th>Memory lookups</th><th>Prompts with memory</th><th>Turns that used memory</th><th>Reported wrong</th><th>Context added</th><th>Sessions</th><th>Sent</th><th>Send failed</th></tr>
-{{range $r.Tables.Days}}<tr><td><a href="/days/{{.Day}}">{{.Day}}</a></td><td>{{n .Prompts}}</td><td>{{n .Recalls}}</td><td>{{n .PromptsWithMemory}}</td><td>{{n .UsedTurns}}</td><td>{{n .Wrong}}</td><td>{{n .ContextChars}} chars</td><td>{{n .Sessions}}</td><td>{{n .SentOK}}</td><td>{{n .SentFailed}}</td></tr>
-{{end}}</table>
-{{template "paging" pager $.Frame.Path $r.Tables.Page}}
-</section>
+{{/* widget: days. Reads .V.days.Tables.Days (Day, Prompts, Recalls, PromptsWithMemory, UsedTurns, Wrong, ContextChars, Sessions, SentOK, SentFailed) and .Page, through dayspage (DaysPage: Head, Note, Rows; DayLine: Day, Sessions, Prompts, Lookups, Got, Used, Wrong, Context, Sent, Failed, FailedClass). */}}
+{{with dayspage .}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Day</th><th class="r">Sessions</th><th class="r">Prompts</th><th class="r">Memory lookups</th><th class="r">Got memory</th><th class="r">Used</th><th class="r">Wrong</th><th class="r">Context added</th><th class="r">Sent</th><th class="r">Send failed</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{if .Day.Href}}<a href="{{.Day.Href}}">{{.Day.Text}}</a>{{else}}{{.Day.Text}}{{end}}</td><td class="r">{{.Sessions}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Lookups}}</td><td class="r">{{.Got}}</td><td class="r">{{.Used}}</td><td class="r">{{.Wrong}}</td><td class="r">{{.Context}}</td><td class="r">{{.Sent}}</td><td class="r">{{if .FailedClass}}<span class="st {{.FailedClass}}">{{.Failed}}</span>{{else}}{{.Failed}}{{end}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
 {{template "foot" .}}

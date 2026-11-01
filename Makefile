@@ -44,9 +44,15 @@ check:
 	@echo "check: all passed"
 
 # atexit_sleep_ms=0: no race runtime sleep (1 s) as each test binary and
-# hook child exits; a GORACE of the caller's wins.
+# hook child exits; a GORACE of the caller's wins. internal/cli alone runs
+# about 9 minutes under -race on the CI runner: go test's default 10-minute
+# bound per package would cut it. The dashboard's page sweep (a year of
+# history, every page) reads content, not concurrency: it skips under -race
+# and runs in the second line, where -short leaves the time budgets to
+# bench-index.
 test:
-	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race ./...
+	GORACE="$${GORACE-atexit_sleep_ms=0}" CGO_ENABLED=1 go test -race -timeout 20m ./...
+	go test -short -count=1 ./internal/dashboard/
 
 # The packages with test-only code behind the testhooks tag (the failing
 # migration and server smoke of CI's update proof, the hook chaos switch),
@@ -61,7 +67,7 @@ test-hooks:
 bench-index:
 	go test -count=1 -run 'TestIndexBudgets' -v ./internal/index/
 	go test -count=1 -run 'TestViewBudgets' -v ./internal/metrics/
-	go test -count=1 -run 'TestPageBudgets' -v ./internal/dashboard/
+	go test -count=1 -run 'TestPageBudgets|TestRenderBudgets' -v ./internal/dashboard/
 	go test -run '^$$' -bench 'FirstBuild|CatchUp15' -benchtime 1x ./internal/index/
 
 # --allow-parallel-runners: run beside another lint (a CI job, the gate)

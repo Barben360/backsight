@@ -70,12 +70,19 @@ func filterLinks(path, key string) []Choice {
 	if strings.Contains(base, "?") {
 		sep = "&"
 	}
+	capital := func(s string) string {
+		if s == "" {
+			return s
+		}
+		r := []rune(s)
+		return strings.ToUpper(string(r[:1])) + string(r[1:])
+	}
 	out := []Choice{{Label: "All", Href: base, Current: cur == ""}}
 	if key == "sort" {
 		out[0].Label = "Default order"
 	}
 	for _, v := range values {
-		out = append(out, Choice{Label: views.Word(words, v), Href: base + sep + key + "=" + url.QueryEscape(v), Current: cur == v})
+		out = append(out, Choice{Label: capital(views.Word(words, v)), Href: base + sep + key + "=" + url.QueryEscape(v), Current: cur == v})
 	}
 	return out
 }

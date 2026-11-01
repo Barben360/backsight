@@ -1,26 +1,30 @@
 {{/* views: releases */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.releases}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
-{{/* widget: versions. Reads .V.releases.Tables.Releases (Version, First, Last, N, Flagship through rowmetric and value, ProjectShares, PromptsPerDay, BankSize). */}}
-<section>
-<h2>Versions that ran</h2>
-<table>
-<tr><th>Version</th><th>First</th><th>Last</th><th>Typed prompts</th>{{range flagships}}<th>{{.Question}}</th>{{end}}<th>Projects</th><th>Prompts per active day</th><th>Memories</th></tr>
-{{range $r.Tables.Releases}}{{$row := .}}<tr><td>{{.Version}}</td><td>{{when $.Loc .First}}</td><td>{{when $.Loc .Last}}</td><td>{{n .N}}</td>{{range flagships}}<td>{{value (rowmetric .ID $row.Flagship)}}</td>{{end}}<td>{{range shares .ProjectShares}}{{.}}; {{end}}</td><td>{{printf "%.1f" .PromptsPerDay}}</td><td>{{opt .BankSize}}</td></tr>
-{{end}}</table>
-{{template "paging" pager $.Frame.Path $r.Tables.Page}}
-<p>{{sentence $r.Tables.Note}}</p>
-</section>
-
-{{/* widget: settings in force. Reads .V.releases.Tables.Settings through the settings func. */}}
-<section>
-<h2>Settings in force</h2>
-<ul>
-{{range settings $r.Tables.Settings}}<li>{{.}}</li>
-{{end}}</ul>
-<p>Replay past prompts under other settings: <code>backsight feedback replay --set name=value</code></p>
-</section>
+{{/* widget: versions. Reads .V.releases.Tables.Releases (Version, First, Last, N, Flagship through the flagship cells, ProjectShares, PromptsPerDay, BankSize) and .Page, through releasespage (ReleasesPage: Observational, Head, Note, Rows, Foot, Settings, Replay; ReplayCard: Head, Text, Cmd; ReleaseLine: Version, Href, Span, Prompts, Judged, Flags, Top, TopShare, Shares, PerDay, Bank; SettingsCard: Head, Note, Rows; SettingLine: Name, Value). Reads .V.releases.Tables.Settings and .Note. */}}
+{{with releasespage .}}<div class="state st-few"><span class="i i-info"></span><span><b>{{.Observational}}</b> Each row covers different days and different work. Read differences as hints, not proof.</span></div>
+{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead>
+<tr><th rowspan="2">Version</th><th rowspan="2">In use</th><th class="r" rowspan="2">Prompts</th><th class="r" rowspan="2">Turns judged</th><th class="r">Found</th><th class="r">Used</th><th class="r">Said what it used</th><th class="r">Reported wrong</th><th class="r">Context</th><th class="r">Speed</th><th colspan="3" class="side">Beside it (covariates)</th></tr>
+<tr><th class="r xs">recall.hit_rate</th><th class="r xs">used.turn_rate</th><th class="r xs">declare.coverage</th><th class="r xs">verdict.wrong_rate</th><th class="r xs">context.per_session</th><th class="r xs">recall.latency</th><th class="side">Top project</th><th class="r">Prompts / day</th><th class="r">Memories</th></tr>
+</thead>
+<tbody>
+{{range .Rows}}<tr id="release-{{.Version}}"><td class="mono"><a href="{{.Href}}">{{.Version}}</a></td><td>{{.Span}}</td><td class="r">{{.Prompts}}</td><td class="r">{{.Judged}}</td>{{range .Flags}}<td class="r">{{if .Class}}<span class="st {{.Class}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}</td>{{end}}<td class="side" title="{{.Shares}}">{{template "projlink" .Top}} {{.TopShare}}</td><td class="r">{{.PerDay}}</td><td class="r">{{.Bank}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{with .Foot}}<p class="xs muted">{{.}}</p>
+{{end}}{{template "card-close" .Head}}
+<div class="grid-2">
+{{with .Settings}}{{template "card-open" .Head}}
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Setting</th><th class="r">Value</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td class="mono">{{.Name}}</td><td class="r">{{.Value}}</td></tr>
+{{end}}</tbody></table></div>
+{{end}}{{template "card-close" .Head}}{{end}}
+{{with .Replay}}{{template "card-open" .Head}}
+<p class="small sub">{{.Text}}</p>
+{{template "cmd" .Cmd}}{{template "card-close" .Head}}{{end}}
+</div>
+{{end}}
 {{template "foot" .}}

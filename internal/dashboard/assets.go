@@ -12,7 +12,7 @@ import (
 )
 
 // assetFS holds the dashboard's static files: the logos, copies of
-// docs/assets/, and the stylesheet.
+// docs/assets/, the design's stylesheets and the copy script.
 //
 //go:embed assets/*
 var assetFS embed.FS
@@ -29,7 +29,7 @@ type asset struct {
 var assetByPath, assetPaths = loadAssets()
 
 // assetTypes are the Content-Types of the embedded files' extensions.
-var assetTypes = map[string]string{".svg": "image/svg+xml", ".css": "text/css; charset=utf-8"}
+var assetTypes = map[string]string{".svg": "image/svg+xml", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8"}
 
 // loadAssets hashes every embedded file. A file whose extension has no
 // Content-Type is a programming error.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -212,16 +213,6 @@ func TestFilterLinks(t *testing.T) {
 	}
 }
 
-// section is the part of the page from the heading to the end of its section.
-func section(page, heading string) string {
-	_, rest, ok := strings.Cut(page, "<h2>"+heading+"</h2>")
-	if !ok {
-		return ""
-	}
-	sec, _, _ := strings.Cut(rest, "</section>")
-	return sec
-}
-
 func TestIDPages(t *testing.T) {
 	h := dataHarness(t)
 	ck := h.login()
@@ -246,8 +237,8 @@ func TestIDPages(t *testing.T) {
 		t.Fatal("no session with turns in the fixture")
 	}
 	b := get("/sessions/" + url.PathEscape(sid))
-	if got := strings.Count(section(b, "Turns"), "<tr>") - 1; got != turns {
-		t.Errorf("session %s: %d turn rows, the API has %d", sid, got, turns)
+	if got := len(parseHTML(t, b).find("main li.turn")); got != min(turns, metrics.DefaultLimit) {
+		t.Errorf("session %s: %d turns on the rail, the API has %d", sid, got, turns)
 	}
 	// A memory.
 	mem := apiPath(t, h, "/api/v1/memories").Tables.Memories[0].ID
@@ -287,7 +278,7 @@ func TestIDPagesAnswerNotFound(t *testing.T) {
 		if r.StatusCode < 400 || r.StatusCode >= 500 {
 			t.Errorf("GET %s: %d, want a 4xx", p, r.StatusCode)
 		}
-		if strings.Contains(b, "<table>") {
+		if strings.Contains(b, "<table") {
 			t.Errorf("GET %s shows a table", p)
 		}
 	}
@@ -317,7 +308,7 @@ func TestIDLinksAreEscaped(t *testing.T) {
 	// A session of the odd project links back to it and to its memory.
 	_, b := pageGet(t, h, ck, "/sessions/sess-odd-0")
 	if !strings.Contains(b, `href="/memories/a:b"`) {
-		t.Errorf("the turn rail lacks the link to the memory: %s", section(b, "Turns"))
+		t.Errorf("the turn rail lacks the link to the memory: %s", visibleText(b))
 	}
 }
 
@@ -339,9 +330,10 @@ func TestDeveloperPagesInTheMenu(t *testing.T) {
 			}
 		}
 		_, b := with(prefs, "/projects")
-		for _, link := range []string{`href="/releases"`, `href="/defs"`} {
-			if got := strings.Contains(b, link); got != (prefs != "") {
-				t.Errorf("preference %q: menu has %s: %v", prefs, link, got)
+		links := linksIn(parseHTML(t, b), "nav.nav")
+		for _, link := range []string{"/releases", "/defs"} {
+			if got := slices.Contains(links, link); got != (prefs != "") {
+				t.Errorf("preference %q: the navigation has %s: %v", prefs, link, got)
 			}
 		}
 	}
@@ -351,7 +343,7 @@ func TestDeveloperPagesInTheMenu(t *testing.T) {
 			t.Errorf("/defs lists %s %d times", d.ID, got)
 		}
 	}
-	if got := strings.Count(section(b, "Definitions"), "<tr>") - 1; got != len(metrics.Catalog) {
+	if got := len(parseHTML(t, b).find("main tbody tr")); got != len(metrics.Catalog) {
 		t.Errorf("/defs has %d rows, the catalog %d", got, len(metrics.Catalog))
 	}
 }
@@ -382,22 +374,6 @@ func TestReleasesListsVersionsAndSettings(t *testing.T) {
 	}
 	if !strings.Contains(b, "<code>backsight feedback replay --set") {
 		t.Error("/releases lacks the replay pointer in <code>")
-	}
-}
-
-func TestProjectPageWithoutMemories(t *testing.T) {
-	for _, none := range []bool{true, false} {
-		b := render(t, "project", func(d *PageData) {
-			p := d.V["projects"].Tables.Project
-			p.NoMemories, p.Command = none, "backsight import --project zz"
-		})
-		got := strings.Contains(visibleText(b), "This project has no memories yet. Import its past sessions:")
-		if got != none {
-			t.Errorf("no memories %v: sentence shown %v", none, got)
-		}
-		if has := strings.Contains(b, "<code>backsight import --project zz</code>"); has != none {
-			t.Errorf("no memories %v: command in <code> %v", none, has)
-		}
 	}
 }
 
@@ -448,14 +424,14 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 			for i := range d.V["memories"].Tables.Memories {
 				d.V["memories"].Tables.Memories[i].State = "never_used"
 			}
-		}, []string{"often shown, never used", "recent-weighted counts"}, notStored},
+		}, []string{"often shown, never used", "Counts are recent-weighted"}, notStored},
 		{"memory", func(d *PageData) {
 			m := d.V["memories"].Tables.Memory
 			m.Kind, m.ServerState = "world", "invalidated"
 			m.Row.State = "wrong"
 			m.Shows = []metrics.ShowMark{{At: now, Path: "search", Outcome: "confident_miss", Session: "sess-1", Rank: &one}}
 			m.Retirements = []metrics.RetireMark{{At: now, Kind: "unhide"}, {At: now, Kind: "hide"}}
-		}, []string{"facts about you and your work", "forgotten", "reported wrong", "Claude's search", "shown, then ignored", "restored", "hidden"}, notStored},
+		}, []string{"fact about you and your work", "forgotten", "reported wrong", "Claude's search", "shown, then ignored", "restored", "hidden"}, notStored},
 		{"day", func(d *PageData) { sessions(&metrics.Tables{Sessions: d.V["days"].Tables.Day.Sessions}, "failed") }, []string{"failed"}, notStored},
 		{"project", func(d *PageData) {
 			for i := range d.V["projects"].Tables.Project.Sessions {
@@ -466,6 +442,9 @@ func TestBrowseTablesShowWordsNotStoredValues(t *testing.T) {
 	} {
 		b := render(t, p.name, p.edit)
 		text := visibleText(b)
+		if p.name == "day" || p.name == "project" { // the tiles' popovers are the catalog's prose, which names the stored values it counts
+			text = visibleText(popovers.ReplaceAllString(b, ""))
+		}
 		for _, w := range p.want {
 			if !strings.Contains(b, w) && !strings.Contains(text, w) {
 				t.Errorf("%s lacks %q in %q", p.name, w, text)
@@ -547,8 +526,8 @@ func TestSessionsOfProjectAndDayArePaged(t *testing.T) {
 
 func TestEmptyDayAndProjectLinks(t *testing.T) {
 	b := render(t, "day", func(d *PageData) { d.V["days"].Tables.Day.Sessions = nil })
-	if !strings.Contains(visibleText(b), "No sessions that day.") || strings.Contains(section(b, "Sessions"), "<table>") {
-		t.Errorf("an empty day: %q", section(b, "Sessions"))
+	if !strings.Contains(visibleText(b), "No sessions that day.") || parseHTML(t, b).first("main table") != nil {
+		t.Errorf("an empty day: %q", visibleText(b))
 	}
 	for _, name := range []string{"sessions", "memories", "day"} {
 		b := render(t, name, func(d *PageData) {
@@ -561,7 +540,11 @@ func TestEmptyDayAndProjectLinks(t *testing.T) {
 				d.V["days"].Tables.Day.Sessions[0].Project = "my project"
 			}
 		})
-		if !strings.Contains(b, `<a href="/projects/my%20project" title="my project">my project</a>`) {
+		query := "" // the day page's links keep that day
+		if name == "day" {
+			query = "?since=2026-10-08&amp;until=2026-10-09"
+		}
+		if !strings.Contains(b, `<a class="trunc" href="/projects/my%20project`+query+`" title="my project">my project</a>`) {
 			t.Errorf("%s: project name not linked", name)
 		}
 	}

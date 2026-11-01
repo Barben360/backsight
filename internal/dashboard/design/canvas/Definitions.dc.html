@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Definitions</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="defs" dev="true" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>What does each number mean?</h1><span class="muted">Definitions · the metric catalog · every ⓘ links here</span></div>
+  <section class="card">
+    <div class="card-head">
+      <h2>Catalog</h2>
+      <span class="chip chip-dev">developer</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats defs</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <nav class="tabs" aria-label="Axis"><a href="#" aria-current="true">All <span class="count">38</span></a><a href="#">Found <span class="count">7</span></a><a href="#">Right <span class="count">12</span></a><a href="#">Cost <span class="count">7</span></a><a href="#">Bank <span class="count">6</span></a><a href="#">Flowing <span class="count">10</span></a></nav>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Id</th><th>On the page</th><th>Definition</th><th>Status rule</th><th>Where from</th><th class="r">Fewest needed</th></tr></thead>
+        <tbody>
+          <tr id="recall.hit_rate"><td class="mono">recall.hit_rate</td><td>Found</td><td class="wrapok">Prompt recalls that added ≥ 1 memory / prompt recalls. Wilson interval.</td><td class="wrapok">Relative to the usual level; watch when the upper bound is under 10 %.</td><td>this PC</td><td class="r">20</td></tr>
+          <tr><td class="mono">used.turn_rate</td><td>Used</td><td class="wrapok">Turns that showed memory, said what they used and used ≥ 1 / turns that showed memory and said what they used.</td><td class="wrapok">Relative; unreliable while declare.coverage's upper bound is under 80 %.</td><td>this PC</td><td class="r">20</td></tr>
+          <tr><td class="mono">declare.coverage</td><td>said what it used</td><td class="wrapok">Turns that said what they used / turns that said or didn't.</td><td class="wrapok">Upper bound under 80 % → watch; the Right axis reads "can't judge".</td><td>this PC</td><td class="r">20</td></tr>
+          <tr><td class="mono">verdict.wrong_rate</td><td>Reported wrong</td><td class="wrapok">wrong + outdated verdicts / used + wrong + outdated verdicts.</td><td class="wrapok">Watch when the lower bound is over 5 %; attention over 15 %.</td><td>this PC</td><td class="r">20</td></tr>
+          <tr><td class="mono">context.per_session</td><td>Context</td><td class="wrapok">Characters added per session (prompt hook + session start); typical (p50) and high (p95).</td><td class="wrapok">Watch when high is over 1.5 × recall.session_budget_chars.</td><td>this PC</td><td class="r">20</td></tr>
+          <tr><td class="mono">recall.latency</td><td>Speed</td><td class="wrapok">Prompt hook wall time of recalls; typical and slowest 1 in 20.</td><td class="wrapok">Watch over 2,000 ms, attention over 2,500 ms.</td><td>this PC</td><td class="r">20</td></tr>
+          <tr><td class="mono">pipeline.flow</td><td>Flowing</td><td class="wrapok">Documents whose last status is ok / documents with a send in the window.</td><td class="wrapok">Any failed or set aside → watch; backlog over 24 h → attention.</td><td>this PC</td><td class="r">—</td></tr>
+          <tr><td class="mono">hooks.failures</td><td>steps that crashed</td><td class="wrapok">Hook failures by kind: panic, fatal, timeout, killed, exit, invalid output, input too large, spawn.</td><td class="wrapok">In 24 h: panic, fatal, exit or spawn ≥ 1, or any kind ≥ 3 → watch; ≥ 10 → attention.</td><td>this PC</td><td class="r">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pager"><span>8 of 38 shown</span><a class="btn" href="#">Next →</a></div>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

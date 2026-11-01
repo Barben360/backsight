@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Projects</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="projects" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>How does memory do in each project?</h1><span class="muted">Projects · last 30 days</span></div>
+  <section class="card">
+    <div class="card-head">
+      <h2>Projects</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="chip"><span class="i i-sm i-server"></span>server: memories</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats projects --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th><a href="#">Project <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Sessions <span class="sort">↕</span></a></th>
+          <th class="r" aria-sort="descending"><a href="#">Prompts <span class="sort">▼</span></a></th>
+          <th class="r"><a href="#">Got memory <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Used, of turns judged <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Reported wrong <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Memories <span class="sort">↕</span></a></th>
+          <th><a href="#">Last activity <span class="sort">↕</span></a></th>
+          <th>Prompts per day</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><a href="#">backsight</a></td><td class="r">61</td><td class="r">312</td><td class="r">31 % <span class="muted">(n 312)</span></td><td class="r">64 % <span class="muted">(n 33)</span></td><td class="r">2 of 31</td><td class="r">512</td><td>25 min ago</td><td><svg class="spark" style="width: 120px; height: 20px" viewBox="0 0 120 20" preserveAspectRatio="none" aria-hidden="true"><polyline class="sl" points="2,12 22,8 42,14 62,6 82,10 102,4 118,9"></polyline></svg></td></tr>
+          <tr><td><a href="#">project-a</a></td><td class="r">34</td><td class="r">168</td><td class="r">29 % <span class="muted">(n 168)</span></td><td class="r">58 % <span class="muted">(n 19)</span></td><td class="r">1 of 18</td><td class="r">301</td><td>2 h ago</td><td><svg class="spark" style="width: 120px; height: 20px" viewBox="0 0 120 20" preserveAspectRatio="none" aria-hidden="true"><polyline class="sl" points="2,16 22,12 42,10 62,14 82,8 102,12 118,10"></polyline></svg></td></tr>
+          <tr><td><a href="#">project-b</a></td><td class="r">22</td><td class="r">121</td><td class="r">24 % <span class="muted">(n 121)</span></td><td class="r"><span class="st st-few">6 of 9: too few</span></td><td class="r">0 of 7</td><td class="r">214</td><td>yesterday</td><td><svg class="spark" style="width: 120px; height: 20px" viewBox="0 0 120 20" preserveAspectRatio="none" aria-hidden="true"><polyline class="sl" points="2,10 22,14 42,12 62,16 82,12 102,8 118,14"></polyline></svg></td></tr>
+          <tr><td><a href="#">project-c</a></td><td class="r">14</td><td class="r">54</td><td class="r">13 % <span class="muted">(n 54)</span></td><td class="r"><span class="st st-few">2 of 5: too few</span></td><td class="r">0 of 2</td><td class="r">140</td><td>yesterday</td><td><svg class="spark" style="width: 120px; height: 20px" viewBox="0 0 120 20" preserveAspectRatio="none" aria-hidden="true"><polyline class="sl" points="2,18 22,16 42,18 62,12 82,16 102,18 118,14"></polyline></svg></td></tr>
+          <tr><td><a href="#" class="trunc" title="project-d-shared-frontend-tools">project-d-shared-fronten…</a></td><td class="r">6</td><td class="r">21</td><td class="r"><span class="st st-few">3 of 21: too few</span></td><td class="r"><span class="st st-few">1 of 2: too few</span></td><td class="r">0 of 1</td><td class="r">77</td><td>2 d ago</td><td><svg class="spark" style="width: 120px; height: 20px" viewBox="0 0 120 20" preserveAspectRatio="none" aria-hidden="true"><polyline class="sl" points="2,18 22,18 42,16 62,18 82,18 102,14 118,18"></polyline></svg></td></tr>
+          <tr class="total"><td>all projects pooled</td><td class="r">137</td><td class="r">676</td><td class="r">28 % <span class="muted">13–31 %</span></td><td class="r">62 % <span class="muted">58–64 %</span></td><td class="r">3 of 59</td><td class="r">1,284</td><td></td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="xs muted">Pooled row: the whole window at once; beside it, the lowest and highest project values. Memories come from the server and are not filtered by window.</p>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

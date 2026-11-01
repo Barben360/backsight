@@ -1,49 +1,45 @@
 {{/* views: bank */}}
 {{template "head" .}}{{template "top" .}}
-{{$d := .Frame.Prefs.Dev}}{{$r := .V.bank}}
-<h1>{{.Frame.Title}}</h1>
-{{template "scope" .}}
 
-{{/* widget: size and growth. Reads the metrics bank.size, bank.growth. */}}
-{{template "metric" framed (metric $r "bank.size") $d $.Loc}}
-{{template "metric" framed (metric $r "bank.growth") $d $.Loc}}
-
-{{/* widget: by project. Reads the metric bank.by_project and .V.bank.Tables.ByProject (Project, Memories). */}}
-{{template "metric" framed (metric $r "bank.by_project") $d $.Loc}}
-<table>
-<tr><th>Project</th><th>Memories</th></tr>
-{{range $r.Tables.ByProject}}<tr><td>{{clip .Project}}</td><td>{{n .Memories}}</td></tr>
-{{end}}</table>
-
-{{/* widget: consolidation and notes. Reads the metrics bank.consolidation, notes.stored. */}}
-{{template "metric" framed (metric $r "bank.consolidation") $d $.Loc}}
-{{template "metric" framed (metric $r "notes.stored") $d $.Loc}}
-
-{{/* widget: review queue. Reads .V.bank.Tables.Review (NeverUsed, Hidden, Reported: ID, Project, Shown, LastShown, Command). */}}
-{{with $r.Tables.Review}}<section>
-<h2>Worth a look</h2>
-<h3>Often shown, never used</h3>
-<table>
-<tr><th>Memory</th><th>Project</th><th>Shown</th><th>Last shown</th><th>Look at it</th></tr>
-{{range .NeverUsed}}<tr><td><a href="/memories/{{esc .ID}}">{{short .ID}}</a></td><td>{{clip .Project}}</td><td>{{n .Shown}}</td><td>{{when $.Loc .LastShown}}</td><td><code>{{.Command}}</code></td></tr>
-{{end}}</table>
-<h3>Hidden</h3>
-<table>
-<tr><th>Memory</th><th>Project</th><th>Shown</th><th>Last shown</th><th>Look at it</th></tr>
-{{range .Hidden}}<tr><td><a href="/memories/{{esc .ID}}">{{short .ID}}</a></td><td>{{clip .Project}}</td><td>{{n .Shown}}</td><td>{{when $.Loc .LastShown}}</td><td><code>{{.Command}}</code></td></tr>
-{{end}}</table>
-<h3>Reported wrong</h3>
-<table>
-<tr><th>Memory</th><th>Project</th><th>Shown</th><th>Last shown</th><th>Look at it</th></tr>
-{{range .Reported}}<tr><td><a href="/memories/{{esc .ID}}">{{short .ID}}</a></td><td>{{clip .Project}}</td><td>{{n .Shown}}</td><td>{{when $.Loc .LastShown}}</td><td><code>{{.Command}}</code></td></tr>
-{{end}}</table>
+{{/* widgets: the figures and cards of bank (Card: Head, Leads, Note, Charts, Figs, Extras, Hint, HintCmd; Projects adds Bars: Name, Full, Href, Count, W; Consolidation adds Rows, Info; Review adds Tabs: Title, Count, Question, Open, Rows, Note, Foot). Reads the metrics bank.size, bank.growth, bank.by_project, bank.consolidation, notes.stored, bank.churn, stale.never_used, stale.hidden, stale.reported, .V.bank.Tables.ByProject and .Review. */}}
+{{with bankpage .}}<section aria-labelledby="w-bank-size">
+<h2 class="sr-only" id="w-bank-size">{{.StripTitle}}</h2>
+<div class="figs">
+{{range .Strip}}{{template "fig" .}}{{end}}</div>
 </section>
-{{end}}
-
-{{/* widget: churn and stale counts. Reads the metrics bank.churn, stale.never_used, stale.hidden, stale.reported. */}}
-{{template "metric" framed (metric $r "bank.churn") $d $.Loc}}
-{{template "metric" framed (metric $r "stale.never_used") $d $.Loc}}
-{{template "metric" framed (metric $r "stale.hidden") $d $.Loc}}
-{{template "metric" framed (metric $r "stale.reported") $d $.Loc}}
+<div class="grid-2">
+{{template "pcard" .Growth}}
+{{with .Projects}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "lead" .Card}}{{template "nodata" .Note}}{{if .Bars}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Project</th><th><span class="sr-only">Share of the largest project</span></th><th class="r">Memories</th></tr></thead>
+<tbody>
+{{range .Bars}}<tr><td>{{if .Href}}<a class="trunc" href="{{.Href}}" title="{{.Full}}">{{.Name}}</a>{{else}}<span class="trunc" title="{{.Full}}">{{.Name}}</span>{{end}}</td><td class="bar"><svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{if eq .Count "1"}}1 memory{{else}}{{.Count}} memories{{end}}"><rect class="f-seq2" x="0" y="0" width="{{printf "%.1f" .W}}" height="10"></rect></svg></td><td class="r">{{.Count}}</td></tr>
+{{end}}</tbody></table></div>
+{{if gt .Count .Shown}}<p class="tbl-more">Showing {{.Shown}} of {{.Count}} projects. Every project: <code>{{.More}}</code></p>
+{{end}}{{end}}{{template "card-close" .Head}}{{end}}
+</div>
+<div class="grid-3">
+{{with .Consolidation}}{{template "card-open" .Head}}
+{{template "devids" .Card}}{{template "nodata" .Note}}{{if .Rows}}{{template "dl" .Rows}}{{end}}{{with .Info}}<p class="xs muted">{{.}}</p>
+{{end}}{{template "ctail" .Card}}{{template "card-close" .Head}}{{end}}
+{{template "pcard" .Notes}}
+{{template "pcard" .Churn}}
+</div>
+{{with .Review}}<section class="card" id="review" aria-labelledby="{{.Head.ID}}">
+{{template "card-head" .Head}}{{template "devids" .Card}}{{range .Tabs}}<details class="tabs" name="review"{{if .Open}} open{{end}}><summary>{{.Title}}{{with .Count}} <span class="count">{{.}}</span>{{end}}</summary>
+<p class="small sub">{{.Question}}</p>
+{{template "nodata" .Note}}{{if .Rows}}<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Memory</th><th>Project</th><th class="r">Shown</th><th>Last shown</th><th>Command</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr><td>{{template "idlink" (memlink .ID)}}</td>
+<td>{{if .Project}}{{template "projlink" (projref .Project)}}{{else}}{{dash}}{{end}}</td>
+<td class="r">{{.Shown}}</td>
+<td>{{template "reltime" .Last}}</td>
+<td>{{template "cmd" .Command}}</td></tr>
+{{end}}</tbody></table></div>
+{{if .Foot}}<p class="tbl-more">{{.Foot}} Every one: <code>{{.More}}</code></p>
+{{end}}{{end}}</details>
+{{end}}<div class="card-foot"><span class="muted">Shown: recent-weighted counts.</span></div>
+</section>
+{{end}}{{end}}
 {{template "foot" .}}
-

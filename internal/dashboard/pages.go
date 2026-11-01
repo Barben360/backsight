@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
 	"github.com/Barben360/backsight/internal/views"
@@ -39,8 +40,7 @@ const (
 	firstBuildSentence = "Building the metrics index from this PC's history. This page refreshes every 2 seconds."
 	// firstBuildTextSentence is the text page's: it never refreshes.
 	firstBuildTextSentence = "Building the metrics index from this PC's history. Open the text again in a few seconds."
-	updatedPage            = "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."
-	tooSlowPage            = "The page took too long: try again."
+	updatedPage            = updatedTitle // the heading of the page that says backsight was updated
 )
 
 // declared reads the views header of a template file; ok is false when
@@ -138,6 +138,10 @@ type PageData struct {
 	ID    string                     // the route's id, name or date; "" for a list
 	Msg   string                     // state, error and not-found pages
 	Loc   *time.Location             // the window's zone (tz or this machine's): every time is shown in it
+	L     format.Locale              // the browser's language: numbers are written by funcs that take it; English on the 401 page
+	P     views.Params               // the page's parameters: its links carry the window and filters
+	CLI   string                     // the command that prints the page's first view
+	State *StateView                 // the state pages' words; nil elsewhere
 }
 
 // Frame is what every page shows around its content.
@@ -151,7 +155,12 @@ type Frame struct {
 	Scope                                  *metrics.Scope       // the first declared view's; nil on state pages
 	ServerRead                             *metrics.ServerState // the server's answer when that view read it, else nil
 	Generated                              time.Time
-	Reload                                 int // seconds until the browser asks again; 0: never (the first build's page)
+	Reload                                 int       // seconds until the browser asks again; 0: never (the first build's page)
+	RenderedAt                             time.Time // the request's start (Config.Now)
+	RenderMS                               int64     // ms from the request's start to just before the template runs (views computed)
+	SessionHead                            bool      // the page head says the session's project, span and sent state, not a window
+	Window                                 string    // windowPhrase of the page's params and window; "" on the text and state pages
+	Catching                               string    // catchingOf the first view's freshness; "" when the history is read
 }
 
 // Choice is a link among several; Current marks the one shown.
@@ -191,10 +200,12 @@ func navFor(path string, dev bool) []Choice {
 	return out
 }
 
-// PrefGroup is one setting of the preferences menu and its choices.
+// PrefGroup is one setting of the preferences menu and its choices; Hint
+// is a line under them, if any.
 type PrefGroup struct {
 	Label   string
 	Choices []Choice
+	Hint    string
 }
 
 // windowDays are the window choices, shortest first.
@@ -266,14 +277,132 @@ func prefMenu(path string, p Prefs) []PrefGroup {
 	link := func(label, key, val string, cur bool) Choice {
 		return Choice{Label: label, Href: "/prefs?" + key + "=" + val + "&back=" + url.QueryEscape(path), Current: cur}
 	}
-	flag := func(key string, on bool) []Choice {
-		return []Choice{link("On", key, "1", on), link("Off", key, "0", !on)}
+	flag := func(key, onLabel string, on bool) []Choice {
+		return []Choice{link("Off", key, "0", !on), link(onLabel, key, "1", on)}
 	}
 	theme := make([]Choice, 0, len(themes))
 	for _, t := range themes {
 		theme = append(theme, link(strings.ToUpper(t[:1])+t[1:], "theme", t, p.Theme == t))
 	}
-	return []PrefGroup{{"Theme", theme}, {"Developer mode", flag("dev", p.Dev)}, {"Auto-refresh", flag("refresh", p.Refresh)}}
+	return []PrefGroup{
+		{Label: "Theme", Choices: theme},
+		{Label: "Developer mode", Choices: flag("dev", "On", p.Dev), Hint: "Adds ranking, learned ranking and release detail."},
+		{Label: "Auto-refresh", Choices: flag("refresh", "Every minute", p.Refresh)},
+	}
+}
+
+// zoneOr is loc, UTC when nil.
+func zoneOr(loc *time.Location) *time.Location {
+	if loc == nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// pageTitle is the question a page asks: its first view's, except for the
+// pages about one day, session or memory.
+func pageTitle(spec pageSpec, id string) string {
+	switch spec.Name {
+	case "day":
+		return dayTitle(id)
+	case "session":
+		return "What happened in session " + views.ShortID(id) + "?"
+	case "memory":
+		return "How has memory " + views.ShortID(id) + " done?"
+	}
+	return views.Questions[spec.Views[0]]
+}
+
+// dayTitle is the question of the page about one day (2026-10-29).
+func dayTitle(day string) string {
+	d, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return "What happened that day?"
+	}
+	return "What happened on " + d.Format("Monday, Jan 2") + "?"
+}
+
+// pageData is the part of a page's data every page has, the text and state
+// pages included: the frame with the request's start and the time spent
+// since, and the browser's locale. started is the request's start.
+func (s *Server) pageData(r *http.Request, title string, prefs Prefs, started time.Time) PageData {
+	f := s.frame(r, title, prefs)
+	f.RenderedAt, f.RenderMS = started, max(0, s.now().Sub(started).Milliseconds())
+	return PageData{Frame: f, Loc: time.UTC, L: localeOf(r)}
+}
+
+// withResult sets what the first view's result says about the page: the
+// scope, the server's answer, when it was generated, the zone and the
+// catch-up sentence; the views being computed, it also sets the time spent.
+func (s *Server) withResult(d *PageData, head *metrics.Result) {
+	d.Frame.RenderMS = max(0, s.now().Sub(d.Frame.RenderedAt).Milliseconds())
+	d.Frame.Scope, d.Frame.ServerRead, d.Frame.Generated = &head.Scope, head.Server, head.GeneratedAt
+	d.Frame.Catching = catchingOf(head.Index)
+	d.Loc = head.Window.Loc
+}
+
+// localeOf is the language the browser asked for, English when none is known.
+func localeOf(r *http.Request) format.Locale {
+	return format.FromAcceptLanguage(r.Header.Get("Accept-Language"))
+}
+
+// catchingOf is the sentence for an index still reading its history; ""
+// when it is not.
+func catchingOf(fr index.Freshness) string {
+	if !fr.Partial {
+		return ""
+	}
+	return "Catching up: " + views.Age(fr.LagSeconds*1000) + " of history still being read"
+}
+
+// windowPhrase says the window of a page: the days it spans or, for a
+// start or an end given, its first and last day (the end is exclusive).
+func windowPhrase(p views.Params, w metrics.Window) string {
+	if p.Since == "" && p.Until == "" {
+		days := w.Days
+		if days == 0 {
+			days = p.Days
+		}
+		if days == 1 {
+			return "last 24 h"
+		}
+		return "last " + strconv.Itoa(days) + " days"
+	}
+	const f = "Jan 2"
+	if !w.Since.IsZero() && !w.Until.IsZero() {
+		loc := zoneOr(w.Loc)
+		return w.Since.In(loc).Format(f) + " to " + w.Until.In(loc).Add(-time.Nanosecond).Format(f)
+	}
+	// No resolved window: read the dates as given.
+	day := func(s string) (time.Time, bool) {
+		if len(s) >= 10 {
+			t, err := time.Parse("2006-01-02", s[:10])
+			return t, err == nil
+		}
+		return time.Time{}, false
+	}
+	from, ok := day(p.Since)
+	if !ok {
+		return ""
+	}
+	to, ok := day(p.Until)
+	if !ok {
+		return "since " + from.Format(f)
+	}
+	return from.Format(f) + " to " + to.AddDate(0, 0, -1).Format(f)
+}
+
+// spanPhrase is the days a session spans: "Oct 15", or "Oct 15 – Oct 16".
+func spanPhrase(start, last time.Time, loc *time.Location) string {
+	if start.IsZero() {
+		return "all time"
+	}
+	const f = "Jan 2"
+	s := start.In(zoneOr(loc)).Format(f)
+	if e := last.In(zoneOr(loc)).Format(f); !last.IsZero() && e != s {
+		return s + " – " + e
+	}
+	return s
 }
 
 // frame is the frame of a page about r.
@@ -313,7 +442,14 @@ func (s *Server) Pages() int64 { return s.served.Load() }
 func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		first := spec.Views[0]
-		title := views.Questions[first]
+		started := s.now()
+		id := ""
+		for _, k := range []string{"name", "id", "date"} {
+			if id == "" {
+				id = r.PathValue(k)
+			}
+		}
+		title := pageTitle(spec, id)
 		prefs := s.prefsOf(r)
 		// A pair net/http cannot parse is refused, not dropped: a garbled
 		// filter must not read as no filter.
@@ -326,7 +462,7 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			p, err = views.FromValues(first, q)
 		}
 		if err != nil {
-			s.statePage(w, r, http.StatusBadRequest, title, prefs, sentence(err.Error()), 0)
+			s.statePage(w, r, http.StatusBadRequest, kindBad, title, prefs, sentence(err.Error()), 0)
 			return
 		}
 		if p.DevSet { // the query beats the preference for this request
@@ -334,13 +470,16 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 		} else {
 			p.Dev = prefs.Dev
 		}
-		id := ""
-		for _, k := range []string{"name", "id", "date"} {
-			if id == "" {
-				id = r.PathValue(k)
-			}
+		data := s.pageData(r, title, prefs, started)
+		data.V, data.ID, data.P = map[string]*metrics.Result{}, id, p
+		data.CLI = cliFor(first, id, p)
+		if spec.Name == "session" || spec.Name == "memory" {
+			data.CLI = cliFor(first, id, allTimeParams(p))
 		}
-		data := PageData{V: map[string]*metrics.Result{}, ID: id}
+		if spec.Name == "defs" { // the catalog is read whole: its axis links are anchors on one page
+			p.Limit, p.Offset = metrics.MaxLimit, 0
+			data.P = p
+		}
 		for _, v := range spec.Views {
 			res, st, err := s.data.result(r.Context(), v, p, id)
 			if st == stateReady && errors.Is(err, index.ErrUpdateInProgress) {
@@ -359,21 +498,49 @@ func (s *Server) servePage(spec pageSpec) http.HandlerFunc {
 			data.V[v] = &res
 		}
 		head := data.V[first]
-		data.Frame = s.frame(r, title, prefs)
-		data.Frame.Scope, data.Frame.ServerRead = &head.Scope, head.Server
-		data.Frame.Generated = head.GeneratedAt
-		data.Loc = head.Window.Loc
-		var buf bytes.Buffer
-		if err := s.tpl.pages[spec.Name].ExecuteTemplate(&buf, spec.File, data); err != nil {
+		s.withResult(&data, head)
+		if kindOf[r.Pattern] != "text" {
+			data.Frame.Window = windowPhrase(p, head.Window)
+			if spec.Name == "day" {
+				// The page is about one day: it states that day and offers no window.
+				data.Frame.Windows = nil
+				data.Frame.Window = id
+				if !head.Window.Since.IsZero() {
+					data.Frame.Window = head.Window.Since.In(zoneOr(head.Window.Loc)).Format("2006-01-02")
+				}
+			}
+			if spec.Name == "session" || spec.Name == "memory" {
+				// Both pages read the whole history: no window to pick, and none to name.
+				data.Frame.Windows = nil
+				data.Frame.Window = "all time"
+				if spec.Name == "session" {
+					// A session has no window: its head says its project,
+					// when it ran and how it was sent.
+					data.Frame.Window, data.Frame.SessionHead = "", true
+				}
+			}
+		}
+		body, err := renderPage(s.tpl, spec.Name, data)
+		if err != nil {
 			refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(buf.Bytes())
+		_, _ = w.Write(body)
 		if r.Method == http.MethodGet {
 			s.served.Add(1)
 		}
 	}
+}
+
+// renderPage executes the page called name on data into a buffer: the
+// whole body or an error, nothing half written.
+func renderPage(set *pageSet, name string, data PageData) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := set.pages[name].ExecuteTemplate(&buf, set.specs[name].File, data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // notReadyPage answers a building, updating or updated index with its
@@ -387,11 +554,11 @@ func (s *Server) notReadyPage(w http.ResponseWriter, r *http.Request, st indexSt
 		if kindOf[r.Pattern] == "text" {
 			reload, msg = 0, firstBuildTextSentence
 		}
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, msg, reload)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindBuilding, "backsight", prefs, msg, reload)
 	case stateUpdating:
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, sentence(views.UpdatingSentence), 0)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindUpdating, "backsight", prefs, "", 0)
 	case stateUpdated:
-		s.statePage(w, r, http.StatusServiceUnavailable, "backsight", prefs, updatedPage, 0)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindUpdated, "backsight", prefs, "", 0)
 	default:
 		return false
 	}
@@ -402,11 +569,11 @@ func (s *Server) notReadyPage(w http.ResponseWriter, r *http.Request, st indexSt
 // deadline is the timeout page, an unclassified failure a fixed sentence.
 func (s *Server) failurePage(w http.ResponseWriter, r *http.Request, title string, prefs Prefs, err error) {
 	if errors.Is(r.Context().Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		s.statePage(w, r, http.StatusServiceUnavailable, title, prefs, tooSlowPage, 0)
+		s.statePage(w, r, http.StatusServiceUnavailable, kindTimeout, title, prefs, "", 0)
 		return
 	}
 	status, reported := apiFailure(err)
-	s.statePage(w, r, status, title, prefs, sentence(reported.Error()), 0)
+	s.statePage(w, r, status, failureKind(status), title, prefs, sentence(reported.Error()), 0)
 }
 
 // sentence is a reported message as a page shows it: its first letter
@@ -423,13 +590,14 @@ func sentence(s string) string {
 	return string(r)
 }
 
-// statePage answers status with the state page: a sentence, and for
-// reload > 0 a browser that asks again after that many seconds.
-func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, title string, prefs Prefs, msg string, reload int) {
-	f := s.frame(r, title, prefs)
-	f.Reload = reload
+// statePage answers status with the state page of kind: a sentence, and
+// for reload > 0 a browser that asks again after that many seconds.
+func (s *Server) statePage(w http.ResponseWriter, r *http.Request, status int, kind, title string, prefs Prefs, msg string, reload int) {
+	data := s.pageData(r, title, prefs, s.now())
+	data.Frame.Reload, data.Msg = reload, msg
+	data.State = stateOf(kind, title, msg, data.Frame.Path)
 	var buf bytes.Buffer
-	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", PageData{Frame: f, Msg: msg, Loc: time.UTC}); err != nil {
+	if err := s.tpl.state.ExecuteTemplate(&buf, "state.html", data); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")
 		return
 	}

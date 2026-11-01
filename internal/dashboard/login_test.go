@@ -61,7 +61,7 @@ func isUnauthorizedPage(t *testing.T, resp *http.Response) bool {
 	t.Helper()
 	return resp.StatusCode == http.StatusUnauthorized &&
 		resp.Header.Get("Content-Type") == "text/html; charset=utf-8" &&
-		strings.Contains(body(t, resp), "run backsight dashboard link in a terminal and open the link it prints")
+		strings.Contains(body(t, resp), "This link has expired.")
 }
 
 func TestCodeLogin(t *testing.T) {
@@ -460,7 +460,7 @@ func TestUnauthorizedPageAssets(t *testing.T) {
 		`<link rel="stylesheet" href="` + assetPath("dashboard.css") + `">`,
 		`src="` + assetPath("logo-light.svg") + `"`,
 		`width="64" height="64"`,
-		"This dashboard needs a fresh link: run backsight dashboard link in a terminal and open the link it prints.",
+		"This link has expired.",
 	} {
 		if !strings.Contains(b, want) {
 			t.Errorf("the 401 page lacks %q:\n%s", want, b)

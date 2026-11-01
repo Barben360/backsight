@@ -39,9 +39,10 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusMethodNotAllowed, textGetOnly)
 		return
 	}
+	started := s.now()
 	prefs := s.prefsOf(r)
 	if r.URL.RawQuery != "" {
-		s.statePage(w, r, http.StatusBadRequest, textTitle, prefs, sentence(textNoParams), 0)
+		s.statePage(w, r, http.StatusBadRequest, kindBad, textTitle, prefs, sentence(textNoParams), 0)
 		return
 	}
 	ctx := r.Context()
@@ -61,7 +62,7 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 	}
 	q, err := views.Query("memories", views.Params{Limit: 50, Text: true}, id, s.now())
 	if err != nil {
-		s.statePage(w, r, http.StatusBadRequest, textTitle, prefs, sentence(err.Error()), 0)
+		s.statePage(w, r, http.StatusBadRequest, kindBad, textTitle, prefs, sentence(err.Error()), 0)
 		return
 	}
 	// Never s.data.result: the result cache's key ignores Text.
@@ -70,9 +71,12 @@ func (s *Server) serveText(w http.ResponseWriter, r *http.Request) {
 		s.failurePage(w, r, textTitle, prefs, err)
 		return
 	}
-	data := PageData{V: map[string]*metrics.Result{"memories": &res}, ID: id, Loc: res.Window.Loc}
-	data.Frame = s.frame(r, textTitle, prefs)
-	data.Frame.Scope, data.Frame.ServerRead, data.Frame.Generated = &res.Scope, res.Server, res.GeneratedAt
+	data := s.pageData(r, textTitle, prefs, started)
+	data.V, data.ID = map[string]*metrics.Result{"memories": &res}, id
+	s.withResult(&data, &res)
+	if res.Text != nil { // the page is named by the memory it shows
+		data.Frame.Title = "Memory " + views.ShortID(res.Text.ID)
+	}
 	var buf bytes.Buffer
 	if err := s.tpl.pages[textPageName].ExecuteTemplate(&buf, textPageName+".html", data); err != nil {
 		refuse(w, http.StatusInternalServerError, "the page could not be drawn: run backsight doctor")

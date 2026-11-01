@@ -21,6 +21,7 @@ import (
 	"github.com/Barben360/backsight/internal/hindsight"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/testtool"
+	"github.com/Barben360/backsight/internal/views"
 )
 
 // withGuideDocs makes the guide show and search a small fixture instead
@@ -692,6 +693,29 @@ func TestGuideDashboardTopic(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	for _, want := range []string{"From another PC", "ssh -L 8765:127.0.0.1:8765", "backsight dashboard link"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("guide dashboard lacks %q", want)
+		}
+	}
+}
+
+// The shipped dashboard guide asks each page's question, says what a missing
+// number means and names the keyboard and preference features a reader needs.
+func TestGuideDashboardPages(t *testing.T) {
+	code, out, _ := run(t, "guide", "dashboard")
+	if code != output.OK {
+		t.Fatalf("exit %d", code)
+	}
+	if len(views.Questions) == 0 {
+		t.Fatal("no view questions")
+	}
+	for view, q := range views.Questions {
+		if !strings.Contains(out, q) {
+			t.Errorf("guide dashboard lacks the question of %s: %q", view, q)
+		}
+	}
+	for _, want := range []string{"Show as a table", "Developer mode", "Skip to content", "When a number is missing",
+		"too few to judge", "Selected: press Ctrl+C", "Judged on the last 28 days: too few turns in 7."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("guide dashboard lacks %q", want)
 		}

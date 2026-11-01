@@ -4,8 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Barben360/backsight/internal/feedback"
 
 	"github.com/Barben360/backsight/internal/index/indexgen"
 	"github.com/Barben360/backsight/internal/paths"
@@ -108,6 +113,98 @@ func TestIndexBudgets(t *testing.T) {
 	if catch > catchUpLimit {
 		t.Errorf("15-minute catch-up took %v, limit %v", catch, catchUpLimit)
 	}
+	ledgerSkipTimes(t, state, 20)
+}
+
+// countedCurrent is the feedback directory's CurrentReader, its reads
+// counted; its Stamp is CurrentReader's.
+type countedCurrent struct {
+	feedback.CurrentReader
+	alls atomic.Int64
+}
+
+func (c *countedCurrent) All() (feedback.Ledger, error) {
+	c.alls.Add(1)
+	return c.CurrentReader.All()
+}
+
+// stampless is a CurrentReader with its Stamp hidden, its reads counted.
+type stampless struct {
+	r    feedback.CurrentReader
+	alls atomic.Int64
+}
+
+func (s *stampless) All() (feedback.Ledger, error) {
+	s.alls.Add(1)
+	return s.r.All()
+}
+
+// ledgerSkipTimes measures what the ledger's skip saves: the feedback
+// files aged an hour before the clock, n catch-ups with nothing new on
+// two handles of stateDir's index, one reading through the CurrentReader
+// (it skips), one through the same reader without its Stamp (it reads
+// every time), interleaved; it logs both medians and a Stamp's. Only the
+// read counts are checked: the times are evidence, not a budget.
+func ledgerSkipTimes(t *testing.T, stateDir string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	fdir := paths.Dirs{State: stateDir}.FeedbackDir()
+	ents, err := os.ReadDir(fdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aged := genNow.Add(-time.Hour)
+	for _, e := range ents {
+		if err := os.Chtimes(filepath.Join(fdir, e.Name()), aged, aged); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := func(r feedback.LedgerReader) *Index {
+		o := benchOptions(t, stateDir)
+		o.Ledger = r
+		ix, err := Open(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ix.Close() })
+		return ix
+	}
+	skipR := &countedCurrent{CurrentReader: feedback.CurrentReader{Dir: fdir}}
+	fullR := &stampless{r: feedback.CurrentReader{Dir: fdir}}
+	skipIx, fullIx := open(skipR), open(fullR)
+	if !skipIx.localFeedback {
+		t.Logf("ledger skip: the feedback directory is not local here (%v), not measured", detectFS(fdir, "", func(string) string { return "" }))
+		return
+	}
+	run := func(ix *Index) time.Duration {
+		start := time.Now()
+		fr, err := ix.CatchUp(ctx, ViewBudget)
+		d := time.Since(start)
+		if err != nil || fr.Partial {
+			t.Fatalf("catch-up: %v, partial %v", err, fr.Partial)
+		}
+		return d
+	}
+	run(skipIx) // records the stamp
+	run(fullIx)
+	var skips, fulls, stamps []time.Duration
+	for range n {
+		skips = append(skips, run(skipIx))
+		fulls = append(fulls, run(fullIx))
+		start := time.Now()
+		if _, err := skipR.Stamp(); err != nil {
+			t.Fatal(err)
+		}
+		stamps = append(stamps, time.Since(start))
+	}
+	if got := skipR.alls.Load(); got != 1 {
+		t.Errorf("the stamped reader was read %d times, want once", got)
+	}
+	if got := fullR.alls.Load(); got != int64(n+1) {
+		t.Errorf("the reader without a stamp was read %d times, want %d", got, n+1)
+	}
+	med := func(ds []time.Duration) time.Duration { slices.Sort(ds); return ds[len(ds)/2] }
+	t.Logf("catch-up with nothing new, median of %d: ledger skipped %v, ledger read %v; a stamp %v", n, med(skips), med(fulls), med(stamps))
 }
 
 func BenchmarkFirstBuild(b *testing.B) {

@@ -63,10 +63,10 @@ func (s *Server) servePrefs(w http.ResponseWriter, r *http.Request) {
 	prefs := s.prefsOf(r)
 	// Only a navigation sets a preference: not a HEAD, not a prefetch.
 	if r.Method != http.MethodGet || prefetched(r.Header) {
-		s.statePage(w, r, http.StatusBadRequest, "backsight", prefs, "A preference changes only when its link is opened.", 0)
+		s.statePage(w, r, http.StatusBadRequest, kindBad, "backsight", prefs, "A preference changes only when its link is opened.", 0)
 		return
 	}
-	bad := func(msg string) { s.statePage(w, r, http.StatusBadRequest, "backsight", prefs, msg, 0) }
+	bad := func(msg string) { s.statePage(w, r, http.StatusBadRequest, kindBad, "backsight", prefs, msg, 0) }
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		bad("The query string is malformed.")

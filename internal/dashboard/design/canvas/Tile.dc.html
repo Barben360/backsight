@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overview tile</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<article class="tile {{t.cls}}" aria-label="{{t.name}}">
+  <div class="tile-top">
+    <h3 class="tile-name">{{t.name}}</h3>
+    <span class="chip" title="{{chipTitle}}"><span class="i i-sm {{chipIco}}"></span>{{t.chip}}</span>
+    <sc-if value="{{t.nf}}" hint-placeholder-val="{{ false }}"><span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span></sc-if>
+    <span class="spacer"></span>
+    <details class="info" open="{{infoOpen}}">
+      <summary aria-label="About {{t.name}}"><span class="i i-info"></span></summary>
+      <div class="pop">
+        <b>{{t.name}}: {{t.q}}</b>
+        <dl>
+          <dt>What</dt><dd>{{t.def}}</dd>
+          <dt>Limits</dt><dd>{{t.thr}}</dd>
+          <dt>Based on</dt><dd>{{t.n}}</dd>
+          <dt>Smallest change it can see</dt><dd>{{t.mdc}}</dd>
+        </dl>
+        <span class="term">{{t.devid}}</span>
+        <a href="#">Definition</a>
+      </div>
+    </details>
+  </div>
+  <sc-if value="{{dev}}" hint-placeholder-val="{{ false }}"><span class="devid">{{t.devid}} · {{t.devx}}</span></sc-if>
+  <p class="tile-q">{{t.q}}</p>
+  <div class="tile-v"><span class="big num">{{t.big}}</span><span class="unit">{{t.unit}}</span><span class="ci">{{t.ci}}</span></div>
+  <p class="tile-sub">{{t.sub}}</p>
+  <div class="tile-st">
+    <span class="st {{t.st}}">{{t.word}}</span>
+    <sc-if value="{{hasDelta}}" hint-placeholder-val="{{ true }}"><span class="delta {{t.dcls}}"><span class="arr">{{t.darr}}</span> {{t.dtext}}</span></sc-if>
+  </div>
+  <sc-if value="{{hasNote}}" hint-placeholder-val="{{ false }}"><p class="tile-note">{{t.note}}</p></sc-if>
+  <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="{{sparkLabel}}">
+    <line class="sb" x1="0" y1="31" x2="188" y2="31"></line>
+    <path class="sa" d="{{area}}"></path>
+    <polyline class="sl" points="{{pts}}"></polyline>
+    <circle class="se" cx="{{ex}}" cy="{{ey}}" r="3"></circle>
+  </svg>
+  <div class="tile-foot">
+    <a href="#">{{t.link}}</a>
+    <span class="spacer"></span>
+    <details class="cli">
+      <summary>CLI</summary>
+      <div class="cmd pop cli-pop"><code>{{t.cli}}</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </details>
+  </div>
+</article>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"slot":{"editor":"enum","options":["found","used","wrong","context","speed","flowing"],"default":"found"},"dev":{"editor":"boolean","default":false},"nf":{"editor":"boolean","default":false},"info":{"editor":"boolean","default":false},"$preview":{"width":300,"height":400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const sc = p.scenario ?? 'healthy';
+    const slot = p.slot ?? 'found';
+    const dev = String(p.dev ?? false) === 'true';
+    const base = {
+      found: { name: 'Found', q: 'How often does a prompt get memory?', chip: 'this PC', devid: 'recall.hit_rate',
+        def: 'Prompts where memory was added to the prompt, out of the prompts that asked for it.',
+        thr: 'Watch when it stays under its usual level two weeks running, or when even the upper bound is under 10 %.',
+        cli: 'backsight stats quality --days 7', unit: '%' },
+      used: { name: 'Used', q: 'Does Claude use the memory it is shown?', chip: 'this PC', devid: 'used.turn_rate',
+        def: 'Turns where Claude said it used a memory shown, out of the turns where it said what it used.',
+        thr: 'Watch under its usual level two weeks running. Unreliable while Claude says what it used on under 80 % of turns.',
+        cli: 'backsight stats sessions --has used', unit: '%' },
+      wrong: { name: 'Reported wrong', q: 'Is the memory right? Lower is better.', chip: 'this PC', devid: 'verdict.wrong_rate',
+        def: 'Memories Claude reported wrong or out of date, out of all the memories it judged.',
+        thr: 'Watch when the lower bound is over 5 %, attention over 15 %.',
+        cli: 'backsight stats sessions --has wrong', unit: '%' },
+      context: { name: 'Context', q: 'How much context does memory add per session?', chip: 'this PC', devid: 'context.per_session p95',
+        def: 'Characters backsight added to Claude’s context per session, at session start and before prompts. Tokens are about characters / 4.',
+        thr: 'Watch when the high value is over 9,000 characters (1.5 × the 6,000-character session budget).',
+        cli: 'backsight stats cost --days 7', unit: 'chars' },
+      speed: { name: 'Speed', q: 'How long does memory make a prompt wait?', chip: 'this PC', devid: 'recall.latency p95',
+        def: 'Time memory adds before Claude sees a prompt. Shown: the slowest 1 in 20 prompts.',
+        thr: 'Watch over 2.0 s, attention over 2.5 s.',
+        cli: 'backsight stats cost --days 7', unit: 's' },
+      flowing: { name: 'Flowing', q: 'Do sessions reach the memory server?', chip: 'this PC', devid: 'pipeline.flow',
+        def: 'Sessions whose last send was ok, out of the sessions sent in the window.',
+        thr: 'Watch on any failed or set-aside session; attention when one waits over 24 h.',
+        cli: 'backsight stats pipeline --days 7', unit: '%' },
+    };
+    const OK = { st: 'st-ok', word: 'ok' };
+    const few = { st: 'st-few', word: 'too few', cls: 'is-few' };
+    const better = (t) => ({ dcls: 'better', darr: t.startsWith('+') ? '▲' : '▼', dtext: t + ', better' });
+    const worse = (t) => ({ dcls: 'worse', darr: t.startsWith('+') ? '▲' : '▼', dtext: t + ', worse' });
+    const same = { dcls: '', darr: '=', dtext: 'no change' };
+    const healthy = {
+      found: { ...OK, big: '28', ci: '(21–35 %)', sub: '46 of 167 prompts', ...better('+2 pts'), s: [24,31,27,22,30,29,28], n: '167 prompts', mdc: 'about 9 pts', link: '167 prompts →', devx: 'n 167 · mdc 9 pts' },
+      used: { ...OK, big: '62', ci: '(50–73 %)', sub: 'Said what it used on 100 % of turns.', note: 'Judged on the last 28 days: too few turns in 7.', ...better('+4 pts'), s: [60,64,58,66,61,62,63], n: '38 of 61 turns, last 28 days', mdc: 'about 22 pts', link: '61 turns →', devx: 'n 61 (28 d) · coverage 100 %' },
+      wrong: { ...few, big: '1 of 14', unit: '', ci: '', sub: '1 reported wrong of 14 verdicts', note: '1 of 14: too few to judge.', nodelta: true, s: [0,0,1,0,0,0,0], n: '14 verdicts (20 needed)', mdc: 'not yet measurable', link: '14 verdicts →', devx: 'n 14 < min 20' },
+      context: { ...OK, big: '3,600', ci: '≈ 900 tokens', sub: 'high · typical 2,100 chars', ...better('−200 chars'), s: [3400,3700,3500,3900,3600,3300,3600], n: '34 sessions', mdc: 'about 700 chars', link: '34 sessions →', devx: 'p95 3,600 · p50 2,100' },
+      speed: { ...OK, big: '1.6', ci: '', sub: 'slowest 1 in 20 · typical 840 ms', ...worse('+0.1 s'), s: [1.4,1.5,1.7,1.5,1.6,1.6,1.6], n: '167 prompts', mdc: 'about 0.3 s', link: '167 prompts →', devx: 'p95 1,600 ms · p50 840 ms' },
+      flowing: { ...OK, big: '100', ci: '', sub: '239 of 239 sessions sent', ...same, s: [100,100,100,100,100,100,100], n: '239 sessions', mdc: '—', link: '239 sessions →', devx: 'failed 0 · set aside 0 · backlog 0' },
+    };
+    const S = {
+      healthy,
+      new: {
+        found: { ...few, big: '3 of 9', unit: '', ci: '', sub: 'prompts got memory', note: '3 of 9: too few to judge.', nodelta: true, s: [null,null,null,null,null,33,33], n: '9 prompts (20 needed)', mdc: 'not yet measurable', link: '9 prompts →', devx: 'n 9 < min 20' },
+        used: { st: 'st-learn', word: 'learning', cls: 'is-learn', big: '—', unit: '', ci: '', sub: 'Learning: day 2 of about 7, 12 prompts so far.', nodelta: true, s: [null,null,null,null,null,null,null], n: '1 turn said what it used', mdc: 'not yet measurable', link: '1 turn →', devx: 'learning (day 2, 12 prompts)' },
+        wrong: { ...few, big: '0 of 0', unit: '', ci: '', sub: 'no memory judged yet', note: 'Nothing judged yet.', nodelta: true, s: [null,null,null,null,null,0,0], n: '0 verdicts', mdc: 'not yet measurable', link: '0 verdicts →', devx: 'n 0' },
+        context: { ...OK, big: '1,100', ci: '≈ 280 tokens', sub: 'high · typical 600 chars', nodelta: true, s: [null,null,null,null,null,900,1100], n: '4 sessions', mdc: 'not yet measurable', link: '4 sessions →', devx: 'p95 1,100 · p50 600' },
+        speed: { ...OK, big: '1.4', ci: '', sub: 'slowest 1 in 20 · typical 620 ms', nodelta: true, s: [null,null,null,null,null,1.3,1.4], n: '12 prompts', mdc: 'not yet measurable', link: '12 prompts →', devx: 'p95 1,400 ms · p50 620 ms' },
+        flowing: { ...OK, big: '100', ci: '', sub: '4 of 4 sessions sent', nodelta: true, s: [null,null,null,null,null,100,100], n: '4 sessions', mdc: '—', link: '4 sessions →', devx: 'failed 0' },
+      },
+      cantjudge: {
+        ...healthy,
+        found: { ...OK, big: '27', ci: '(20–34 %)', sub: '41 of 152 prompts', ...worse('−1 pt'), s: [29,26,28,25,27,28,27], n: '152 prompts', mdc: 'about 9 pts', link: '152 prompts →', devx: 'n 152' },
+        used: { st: 'st-unrel', word: 'unreliable', cls: 'is-unrel', big: '56', ci: '(33–77 %)', sub: 'Said what it used on 64 % of turns (16 of 25).', note: 'Unreliable: Claude often didn’t say what it used.', nodelta: true, s: [50,62,48,60,55,58,56], n: '9 of 16 declared turns', mdc: 'about 30 pts', link: '25 turns →', devx: 'coverage 64 % (ub 79 %) < 80 %' },
+        wrong: { ...few, big: '0 of 9', unit: '', ci: '', sub: '0 reported wrong of 9 verdicts', note: '0 of 9: too few to judge.', nodelta: true, s: [0,0,0,0,0,0,0], n: '9 verdicts (20 needed)', mdc: 'not yet measurable', link: '9 verdicts →', devx: 'n 9 < min 20' },
+        context: { ...OK, big: '3,400', ci: '≈ 850 tokens', sub: 'high · typical 2,000 chars', ...better('−100 chars'), s: [3300,3500,3400,3600,3300,3400,3400], n: '31 sessions', mdc: 'about 700 chars', link: '31 sessions →', devx: 'p95 3,400' },
+        speed: { ...OK, big: '1.5', ci: '', sub: 'slowest 1 in 20 · typical 800 ms', ...same, s: [1.5,1.4,1.6,1.5,1.5,1.5,1.5], n: '152 prompts', mdc: 'about 0.3 s', link: '152 prompts →', devx: 'p95 1,500 ms' },
+        flowing: { ...OK, big: '100', ci: '', sub: '212 of 212 sessions sent', ...same, s: [100,100,100,100,100,100,100], n: '212 sessions', mdc: '—', link: '212 sessions →', devx: 'failed 0' },
+      },
+      qualitywatch: {
+        ...healthy,
+        found: { st: 'st-watch', word: 'watch', cls: 'is-watch', big: '14', ci: '(9–20 %)', sub: 'usual 27 % · 21 of 150 prompts', note: 'Fewer prompts get memory than usual: 14 % vs 27 % before.', ...worse('−13 pts'), s: [26,22,17,13,12,15,14], n: '150 prompts', mdc: 'about 8 pts', link: '150 prompts →', devx: 'watch 2 weeks · n 150' },
+        used: { st: 'st-border', word: 'borderline', cls: '', big: '31', ci: '(19–46 %)', sub: 'Said what it used on 96 % of turns.', note: 'Borderline: the interval still reaches the usual level.', ...worse('−9 pts'), s: [40,35,30,28,33,30,31], n: '14 of 45 turns, last 28 days', mdc: 'about 25 pts', link: '45 turns →', devx: 'borderline · ci reaches median 40 %' },
+        wrong: { ...OK, big: '9', ci: '(2–27 %)', sub: '2 of 23 verdicts', ...worse('+3 pts'), s: [0,5,0,10,0,9,9], n: '23 verdicts', mdc: 'about 20 pts', link: '23 verdicts →', devx: 'lb 2.4 % < 5 %' },
+        context: { ...OK, big: '3,900', ci: '≈ 980 tokens', sub: 'high · typical 2,300 chars', ...worse('+300 chars'), s: [3600,3700,3900,4000,3800,3900,3900], n: '33 sessions', mdc: 'about 700 chars', link: '33 sessions →', devx: 'p95 3,900' },
+        speed: { ...OK, big: '1.7', ci: '', sub: 'slowest 1 in 20 · typical 880 ms', ...worse('+0.1 s'), s: [1.6,1.6,1.7,1.8,1.7,1.7,1.7], n: '150 prompts', mdc: 'about 0.3 s', link: '150 prompts →', devx: 'p95 1,700 ms' },
+        flowing: { ...OK, big: '100', ci: '', sub: '226 of 226 sessions sent', ...same, s: [100,100,100,100,100,100,100], n: '226 sessions', mdc: '—', link: '226 sessions →', devx: 'failed 0' },
+      },
+      latency: {
+        ...healthy,
+        speed: { st: 'st-watch', word: 'watch', cls: 'is-watch', big: '2.3', ci: '', sub: 'slowest 1 in 20 · typical 1.1 s · limit 2.5 s', note: 'Memory adds 2.3 s to the slowest prompts (limit 2.5 s).', ...worse('+0.7 s'), s: [1.6,1.7,1.9,2.1,2.2,2.4,2.3], n: '167 prompts', mdc: 'about 0.3 s', link: '167 prompts →', devx: 'p95 2,300 ms > 2,000 ms' },
+      },
+      serverdown: {
+        ...healthy,
+        found: { st: 'st-watch', word: 'watch', cls: 'is-watch', big: '9', ci: '(5–15 %)', sub: '12 of 133 prompts', note: 'Prompts skipped: server unreachable.', ...worse('−19 pts'), s: [27,29,28,26,28,24,9], n: '133 prompts', mdc: 'about 9 pts', link: '133 prompts →', devx: '96 skipped by the breaker' },
+        used: { ...OK, big: '60', ci: '(45–74 %)', sub: 'Said what it used on 98 % of turns.', ...worse('−2 pts'), s: [61,63,60,62,59,61,60], n: '27 of 45 turns, last 28 days', mdc: 'about 22 pts', link: '45 turns →', devx: 'n 45 (28 d)' },
+        wrong: { ...few, big: '0 of 11', unit: '', ci: '', sub: '0 reported wrong of 11 verdicts', note: '0 of 11: too few to judge.', nodelta: true, s: [0,0,0,0,0,0,0], n: '11 verdicts (20 needed)', mdc: 'not yet measurable', link: '11 verdicts →', devx: 'n 11 < min 20' },
+        context: { ...OK, big: '2,100', ci: '≈ 530 tokens', sub: 'high · typical 1,200 chars', ...better('−1,500 chars'), s: [3500,3600,3400,3700,3500,3300,2100], n: '29 sessions', mdc: 'about 700 chars', link: '29 sessions →', devx: 'p95 2,100' },
+        speed: { ...OK, big: '910', unit: 'ms', ci: '', sub: 'slowest 1 in 20 · typical 380 ms', ...better('−0.7 s'), s: [1.6,1.5,1.6,1.7,1.6,1.5,0.9], n: '133 prompts', mdc: 'about 0.3 s', link: '133 prompts →', devx: 'p95 910 ms' },
+        flowing: { st: 'st-watch', word: 'watch', cls: 'is-watch', big: '17', unit: 'waiting', ci: '', sub: '14 notes and 3 sessions on this PC', note: 'Memory server unreachable since 09:12. Nothing is lost.', nodelta: true, s: [100,100,100,100,100,100,82], n: '3 sessions not sent yet', mdc: '—', link: 'Waiting items →', devx: 'reach failing since 09:12 · breaker open' },
+      },
+      broken: {
+        ...healthy,
+        found: { ...OK, big: '25', ci: '(19–32 %)', sub: '40 of 160 prompts', ...worse('−3 pts'), s: [28,27,26,24,25,25,25], n: '160 prompts', mdc: 'about 9 pts', link: '160 prompts →', devx: 'n 160' },
+        used: { ...OK, big: '58', ci: '(45–70 %)', sub: 'Said what it used on 97 % of turns.', ...worse('−4 pts'), s: [62,60,59,57,58,58,58], n: '33 of 57 turns, last 28 days', mdc: 'about 22 pts', link: '57 turns →', devx: 'n 57 (28 d)' },
+        wrong: { ...OK, big: '5', ci: '(1–24 %)', sub: '1 of 20 verdicts', ...same, s: [0,0,5,0,0,5,5], n: '20 verdicts', mdc: 'about 20 pts', link: '20 verdicts →', devx: 'lb 0.9 % < 5 %' },
+        context: { ...OK, big: '3,500', ci: '≈ 880 tokens', sub: 'high · typical 2,100 chars', ...better('−100 chars'), s: [3500,3600,3400,3600,3500,3500,3500], n: '32 sessions', mdc: 'about 700 chars', link: '32 sessions →', devx: 'p95 3,500' },
+        speed: { ...OK, big: '1.9', ci: '', sub: 'slowest 1 in 20 · typical 950 ms', ...worse('+0.3 s'), s: [1.6,1.7,1.8,1.8,1.9,1.9,1.9], n: '160 prompts', mdc: 'about 0.3 s', link: '160 prompts →', devx: 'p95 1,900 ms' },
+        flowing: { st: 'st-bad', word: 'attention', cls: 'is-bad', big: '3', unit: 'failed', ci: '', sub: '1 set aside · oldest waiting 26 h · 188 of 192 sent', note: '3 sessions could not be sent; 1 set aside after an error.', ...worse('+3 failed'), s: [100,100,100,99,98,97,96], n: '192 sessions', mdc: '—', link: '4 sessions →', devx: 'failed 3 · quarantined 1 · backlog 26 h' },
+      },
+    };
+    const t = { ...base[slot], ...((S[sc] || healthy)[slot]) };
+    if (t.unit === undefined) t.unit = base[slot].unit;
+    t.nf = String(p.nf ?? false) === 'true';
+    // sparkline geometry (188 x 32 box, 3 px padding)
+    const vals = t.s || [];
+    const known = vals.filter((v) => v !== null && v !== undefined);
+    const lo = known.length ? Math.min(...known) : 0;
+    const hi = known.length ? Math.max(...known) : 1;
+    const span = hi - lo || 1;
+    const X = (i) => 4 + i * (180 / Math.max(vals.length - 1, 1));
+    const Y = (v) => (hi === lo ? 16 : 28 - ((v - lo) / span) * 24);
+    const ptsArr = [];
+    vals.forEach((v, i) => { if (v !== null && v !== undefined) ptsArr.push([X(i), Y(v)]); });
+    const pts = ptsArr.map((q) => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(' ');
+    const area = ptsArr.length > 1 ? 'M' + ptsArr[0][0].toFixed(1) + ',31 L' + ptsArr.map((q) => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(' L') + ' L' + ptsArr[ptsArr.length - 1][0].toFixed(1) + ',31 Z' : '';
+    const last = ptsArr[ptsArr.length - 1] || [-10, -10];
+    const isServer = t.chip === 'server';
+    return {
+      theme, dev, t,
+      rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad',
+      chipIco: isServer ? 'i-server' : 'i-pc',
+      chipTitle: isServer ? 'From the memory server: all PCs' : 'Activity recorded on this PC',
+      hasDelta: !t.nodelta, hasNote: !!t.note,
+      infoOpen: String(p.info ?? false) === 'true' || undefined,
+      pts, area, ex: last[0], ey: last[1],
+      sparkLabel: t.name + ' per day, last 7 days',
+    };
+  }
+}
+</script>
+</body>
+</html>

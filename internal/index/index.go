@@ -79,6 +79,10 @@ type Index struct {
 	side   bool
 	schema int
 	closed bool
+	// localFeedback: the feedback directory is on a local filesystem, its
+	// mtimes trusted for the ledger's skip.
+	localFeedback bool
+	skip          ledgerSkip
 }
 
 // OpensOf is how many times this process opened an index under stateDir.
@@ -187,7 +191,7 @@ func openOnce(ctx context.Context, o Options, t target, check bool) (*Index, []s
 	if err != nil {
 		return nil, nil, openError(t.path, err)
 	}
-	ix := &Index{sh: sh, path: t.path, opts: o, side: t.side}
+	ix := &Index{sh: sh, path: t.path, opts: o, side: t.side, localFeedback: feedbackLocal(o)}
 	if check && fresh {
 		if afterConnect != nil {
 			afterConnect(t.path)
@@ -203,6 +207,27 @@ func openOnce(ctx context.Context, o Options, t target, check bool) (*Index, []s
 		return nil, nil, openError(t.path, err)
 	}
 	return ix, applied, nil
+}
+
+// feedbackLocal reports whether the feedback directory is on a local
+// filesystem: it, and while it does not exist yet the nearest directory
+// above it that does (where it will be created; the OS cannot tell the
+// type of a missing path). Nothing existing above it is not local.
+func feedbackLocal(o Options) bool {
+	dir := o.Dirs.FeedbackDir()
+	if detectFS(dir, o.Home, o.Getenv).Kind != FSLocal {
+		return false
+	}
+	for d := dir; ; {
+		if _, err := os.Stat(d); err == nil {
+			return d == dir || detectFS(d, o.Home, o.Getenv).Kind == FSLocal
+		}
+		up := filepath.Dir(d)
+		if up == d {
+			return false
+		}
+		d = up
+	}
 }
 
 // acquire takes a reference on path's shared handles, opening them

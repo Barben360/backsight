@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Quality</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="quality" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is it right?</h1><span class="muted">Quality · last 30 days · judged by what Claude said it used</span></div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Does Claude use the memory it is shown?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Used by Claude, per day</b><dl><dt>What</dt><dd>Turns where Claude said it used a memory shown, out of the turns where it said what it used. The dashed line is how often it said what it used at all.</dd><dt>Limits</dt><dd>Unreliable while it says what it used on under 80 % of turns.</dd><dt>Based on</dt><dd>61 turns in 30 days; faint bars show turns per day.</dd><dt>Smallest change it can see</dt><dd>about 22 pts</dd></dl><span class="term">used.turn_rate · declare.coverage</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 30 --json</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="row" style="gap: 24px">
+        <div><span class="num" style="font-size: 24px; font-weight: 600">62 %</span> <span class="small sub">(50–73 %) used by Claude</span></div>
+        <div><span class="num" style="font-size: 24px; font-weight: 600">100 %</span> <span class="small sub">said what it used</span></div>
+        <span class="st st-ok">ok</span>
+      </div>
+      <dc-import name="LineChart" theme="inherit" data="used" hint-size="100%,300px"></dc-import>
+      <div class="card-foot"><a href="#">61 turns →</a></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>What did Claude do with the memories shown?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Where memory went, per day</b><p>Each memory shown, by what Claude said about it at the end of the turn. Pending: the turn has not ended yet. Memories forgotten since are left out.</p><span class="term">used.share_confident outcomes: credit, confident_miss, unknown, shown, pending</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 14 --json</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="StackBars" theme="inherit" data="outcomes" hint-size="100%,330px"></dc-import>
+      <div class="card-foot"><a href="#">312 memories shown →</a><span class="muted">Last 14 days shown; the window has 30.</span></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Which memories were reported wrong or out of date?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --has wrong --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="row" style="gap: 24px"><div><span class="num" style="font-size: 24px; font-weight: 600">4 %</span> <span class="small sub">(1–12 %) · 3 of 71 verdicts · lower is better</span></div><span class="st st-ok">ok</span></div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Memory</th><th>Project</th><th>Report</th><th>When</th><th>Where</th></tr></thead>
+          <tbody>
+            <tr><td><a class="idc" href="#" title="7f3a9c21e04b4d0e9a1f6c55b2d18e07">7f3a9c21</a></td><td>backsight</td><td>reported wrong</td><td><time datetime="2026-10-30T15:19" title="2026-10-30 15:19">25 min ago</time></td><td><a class="idc" href="#">a41c09e2</a> turn 4</td></tr>
+            <tr><td><a class="idc" href="#" title="2c81d0e4b9aa4f3c8e2d17f05b6c9a31">2c81d0e4</a></td><td>project-a</td><td>out of date</td><td><time datetime="2026-10-24" title="2026-10-24 10:02">6 d ago</time></td><td><a class="idc" href="#">0b7e3f12</a> turn 2</td></tr>
+            <tr><td><a class="idc" href="#" title="e5f0a7b3c1d24e8f9a0b6c3d2e1f4a5b">e5f0a7b3</a></td><td>backsight</td><td>out of date</td><td><time datetime="2026-10-11" title="2026-10-11 17:40">19 d ago</time></td><td><a class="idc" href="#">7ac0d915</a> turn 7</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-foot"><a href="#">Review them: often shown, never used · hidden · reported wrong →</a></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>How often does a prompt get memory?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Found, per day</b><p>Prompts where memory was added to the prompt, with its 95 % interval. Faint bars: prompts per day.</p><span class="term">recall.hit_rate · ci wilson</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 30 --json</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="row" style="gap: 24px"><div><span class="num" style="font-size: 24px; font-weight: 600">28 %</span> <span class="small sub">(25–31 %) · 189 of 676 prompts</span></div><span class="st st-ok">ok</span></div>
+      <dc-import name="LineChart" theme="inherit" data="found" hint-size="100%,300px"></dc-import>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Why did prompts get nothing?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 14 --json</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="StackBars" theme="inherit" data="emptyreasons" hint-size="100%,330px"></dc-import>
+      <div class="card-foot"><span class="muted">Most prompts get nothing because nothing close enough is in memory. Importing a project's past sessions helps:</span></div>
+      <div class="cmd"><code>backsight retain backfill --project backsight --plan</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Does Claude search memory itself?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Claude's search</b><p>Typed prompts of 40 characters or more where Claude searched, read or stored memory; and searches that found nothing. Failed searches are counted apart.</p><span class="term">search.rate · search.empty_rate</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 30 --json</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="row" style="gap: 24px">
+        <div><span class="num" style="font-size: 24px; font-weight: 600">24 %</span> <span class="small sub">(20–29 %) of prompts</span></div>
+        <div><span class="num" style="font-size: 24px; font-weight: 600">13 %</span> <span class="small sub">(8–20 %) found nothing</span></div>
+      </div>
+      <dc-import name="LineChart" theme="inherit" data="search" hint-size="100%,300px"></dc-import>
+    </section>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

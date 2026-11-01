@@ -31,6 +31,7 @@ type fakeIndex struct {
 	fileVersion int
 	side        bool
 	catchUpErr  error
+	fresh       *index.Freshness // CatchUp answers it in place of the real index's
 	block       chan struct{}
 	entered     chan struct{}
 	catchUps    int
@@ -102,12 +103,16 @@ func (f *fakeIndex) CatchUp(ctx context.Context, budget time.Duration) (index.Fr
 	f.mu.Lock()
 	f.catchUps++
 	f.budgets = append(f.budgets, budget)
-	err := f.catchUpErr
+	err, fresh := f.catchUpErr, f.fresh
 	f.mu.Unlock()
 	if err != nil {
 		return index.Freshness{}, err
 	}
-	return f.real.CatchUp(ctx, budget)
+	fr, err := f.real.CatchUp(ctx, budget)
+	if fresh != nil {
+		return *fresh, err
+	}
+	return fr, err
 }
 
 func (f *fakeIndex) Schema() int { return f.real.Schema() }
@@ -174,6 +179,7 @@ type fakeServer struct {
 	gate    chan struct{}
 	fail    error
 	memText string
+	stats   *hindsight.BankStats // BankStats answers this when set, else an empty answer
 }
 
 var _ metrics.ServerReader = (*fakeServer)(nil)
@@ -220,7 +226,15 @@ func (f *fakeServer) Version(ctx context.Context) (hindsight.Version, error) {
 }
 
 func (f *fakeServer) BankStats(ctx context.Context) (hindsight.BankStats, error) {
-	return hindsight.BankStats{}, f.enter(ctx, "BankStats")
+	if err := f.enter(ctx, "BankStats"); err != nil {
+		return hindsight.BankStats{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stats != nil {
+		return *f.stats, nil
+	}
+	return hindsight.BankStats{}, nil
 }
 
 func (f *fakeServer) Memory(ctx context.Context, id string) (hindsight.MemoryDetail, error) {

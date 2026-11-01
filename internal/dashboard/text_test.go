@@ -67,7 +67,7 @@ func TestTextPageShowsTheTextEscaped(t *testing.T) {
 	if strings.Contains(b, "<script>alert") {
 		t.Errorf("the text is not escaped: %q", b)
 	}
-	if !strings.Contains(b, "<pre>&lt;script&gt;") {
+	if !strings.Contains(b, `<pre class="memtext">&lt;script&gt;`) {
 		t.Errorf("the text is not in <pre>: %q", b)
 	}
 	if !strings.Contains(b, `href="/memories/`+url.PathEscape(mem)+`"`) {
@@ -190,7 +190,10 @@ func TestTextPageNeverRefreshes(t *testing.T) {
 		if strings.Contains(b, `http-equiv="refresh"`) {
 			t.Errorf("%s (%d) refreshes on its own: %q", p, r.StatusCode, b)
 		}
-		if !strings.Contains(b, `<a href="/prefs?refresh=1&amp;back=`+url.QueryEscape(p)+`" aria-current="page">On</a>`) {
+		if doc := parseHTML(t, b); doc.first("div.page-head h1") == nil || doc.first("div.page-head span") != nil || windowNavs(doc) != 0 {
+			t.Errorf("%s: the text page's head or window links: %q", p, b)
+		}
+		if !strings.Contains(b, `<a href="/prefs?refresh=1&amp;back=`+url.QueryEscape(p)+`" aria-current="true"><span class="check">✓</span>Every minute</a>`) {
 			t.Errorf("%s: the menu does not show auto-refresh as on: %q", p, b)
 		}
 	}
@@ -431,4 +434,16 @@ func TestBuildingPageRefreshOnlyOffTheTextPage(t *testing.T) {
 			t.Errorf("GET %s while building: refresh %v, want %v", path, got, want)
 		}
 	}
+}
+
+// windowNavs counts the window pickers of doc: the bar's "Window" and the
+// Menu's "Window (menu)".
+func windowNavs(doc *node) int {
+	n := 0
+	for _, s := range doc.find("nav.seg") {
+		if strings.HasPrefix(s.attr("aria-label"), "Window") {
+			n++
+		}
+	}
+	return n
 }

@@ -7,15 +7,17 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/Barben360/backsight/internal/index"
 	"github.com/Barben360/backsight/internal/metrics"
-	"github.com/Barben360/backsight/internal/views"
 )
 
 // pageGet is the status and unescaped body of GET path under ck.
@@ -105,15 +107,13 @@ func TestPageParams(t *testing.T) {
 			t.Errorf("GET %s: %d, want %d with %q in %q", c.path, r.StatusCode, c.status, c.want, b)
 		}
 	}
-	_, plain := pageGet(t, h, ck, "/quality")
-	_, dev := pageGet(t, h, ck, "/quality?dev=1")
-	_, off := pageGet(t, h, ck, "/quality?dev=0")
-	if strings.Contains(plain, "<summary>Developer</summary>") || !strings.Contains(dev, "<summary>Developer</summary>") || strings.Contains(off, "<summary>Developer</summary>") {
-		t.Errorf("developer section: without %t, dev=1 %t, dev=0 %t; want false, true, false",
-			strings.Contains(plain, "<summary>Developer</summary>"), strings.Contains(dev, "<summary>Developer</summary>"), strings.Contains(off, "<summary>Developer</summary>"))
+	plain, dev, off := rawPage(t, h, cookieHdr(ck), "/quality"), rawPage(t, h, cookieHdr(ck), "/quality?dev=1"), rawPage(t, h, cookieHdr(ck), "/quality?dev=0")
+	has := func(n *node) bool { return len(n.find("nav.nav details summary")) == 2 }
+	if has(plain) || !has(dev) || has(off) {
+		t.Errorf("developer menu: without %t, dev=1 %t, dev=0 %t; want false, true, false", has(plain), has(dev), has(off))
 	}
-	if !strings.Contains(dev, "Releases") || !strings.Contains(dev, "Definitions") {
-		t.Errorf("dev=1 lacks the developer pages: %q", dev)
+	if got := linksIn(dev, "nav.nav"); !slices.Contains(got, "/releases") || !slices.Contains(got, "/defs") {
+		t.Errorf("dev=1 lacks the developer pages: %q", got)
 	}
 }
 
@@ -129,16 +129,16 @@ func TestStatePages(t *testing.T) {
 		}, "/", firstBuildSentence},
 		{"updating", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, index.ErrUpdateInProgress} })
-		}, "/", sentence(views.UpdatingSentence)},
+		}, "/", "Try again in a minute."},
 		{"updated", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.side = true })
-		}, "/", "backsight was updated: restart the dashboard (Ctrl+C, then backsight dashboard)."},
+		}, "/", "Stop this dashboard (Ctrl+C in its terminal) and start it again:"},
 		{"broken", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.openErrs = []error{index.ErrUpdateInProgress, errors.New("boom /secret/path")} })
 		}, "/", "The metrics index could not be read"},
 		{"catch-up meets an update", func(t *testing.T) *harness {
 			return dataHarness(t, func(f *fakeIndex) { f.catchUpErr = index.ErrUpdateInProgress })
-		}, "/quality", sentence(views.UpdatingSentence)},
+		}, "/quality", "Try again in a minute."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -161,7 +161,7 @@ func TestStatePages(t *testing.T) {
 		h := dataHarness(t)
 		h.ix.set(func(f *fakeIndex) { f.block = make(chan struct{}) })
 		r, b := pageGet(t, h, h.login(), "/")
-		if r.StatusCode != 503 || !strings.Contains(b, "The page took too long: try again.") {
+		if r.StatusCode != 503 || !strings.Contains(b, "The page took too long.") {
 			t.Errorf("%d %q", r.StatusCode, b)
 		}
 	})
@@ -203,17 +203,58 @@ func TestPageCounter(t *testing.T) {
 	}
 }
 
-func TestFooterAndScope(t *testing.T) {
+func TestFooter(t *testing.T) {
+	// A clock that moves 5 ms at each reading: the render takes a known
+	// multiple of 5 ms, and a footer that ignores the configured clock
+	// (or clamps to 0) says 0.
+	var reads atomic.Int64
+	h := newDataHarness(t, withIndex(), withServer(), withDoctor(), func(h *harness, c *Config) {
+		base := c.Now
+		c.Now = func() time.Time { return base().Add(time.Duration(reads.Add(1)*5) * time.Millisecond) }
+	})
+	r := h.do("GET", "/", cookieHdr(h.login())...)
+	doc := parseHTML(t, body(t, r))
+	foot := doc.first("footer.foot")
+	if foot == nil {
+		t.Fatal("no footer")
+	}
+	help := foot.first("a[rel]")
+	if help == nil || help.text() != "Help: backsight guide dashboard" || help.attr("href") != helpURL || help.attr("rel") != "noopener noreferrer" {
+		t.Errorf("help link %+v", help)
+	}
+	if d := foot.first("a[href=/defs]"); d == nil || d.text() != "Definitions" {
+		t.Errorf("definitions link %+v", d)
+	}
+	if !strings.Contains(foot.text(), "backsight test") {
+		t.Errorf("footer %q lacks the version", foot.text())
+	}
+	if c := foot.first("#copy-status"); c == nil || c.attr("aria-live") != "polite" || c.attr("class") != "sr-only" {
+		t.Errorf("copy status %+v", c)
+	}
+	ms := regexp.MustCompile(` in (\d+) ms$`).FindStringSubmatch(foot.first("span time").Parent.text())
+	if ms == nil {
+		t.Fatalf("no render time in %q", foot.text())
+	}
+	if n, _ := strconv.Atoi(ms[1]); n <= 0 || n%5 != 0 {
+		t.Errorf("rendered in %d ms; the clock moves 5 ms per reading, so want a positive multiple of 5", n)
+	}
+
+	got := render(t, "quality", func(d *PageData) {
+		d.Frame.RenderedAt = time.Date(2026, 10, 30, 14, 44, 0, 0, time.UTC) // 15:44 in Paris
+		d.Frame.RenderMS = 84
+	})
+	line := parseHTML(t, got).first("footer.foot time")
+	if line == nil || line.text() != "15:44" || line.attr("datetime") != "2026-10-30T15:44:00+01:00" || line.attr("title") != "2026-10-30 15:44 CET" ||
+		line.Parent.text() != "Rendered at 15:44 in 84 ms" {
+		t.Errorf("rendered time %+v", line)
+	}
+}
+
+func TestScopeLineOnThePage(t *testing.T) {
 	h := dataHarness(t)
 	_, b := pageGet(t, h, h.login(), "/")
-	for _, want := range []string{
-		"Help: backsight guide dashboard",
-		"https://github.com/Barben360/backsight/blob/main/docs/dashboard.md",
-		"backsight test",
-		"memory on hindsight.test:8888",
-		"Activity on this PC",
-		"<h1>Is my memory working?</h1>",
-	} {
+	b = visibleText(b)
+	for _, want := range []string{"memory on hindsight.test:8888", "Activity on this PC"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("/ lacks %q", want)
 		}
@@ -236,9 +277,17 @@ func TestPageAndAPIShareOneResult(t *testing.T) {
 
 func TestNavigationMarksTheCurrentPage(t *testing.T) {
 	h := dataHarness(t)
-	_, b := pageGet(t, h, h.login(), "/cost")
-	if !strings.Contains(b, `<a href="/cost" aria-current="page">Cost</a>`) || strings.Contains(b, `<a href="/" aria-current`) {
-		t.Errorf("navigation: %q", b)
+	doc := rawPage(t, h, cookieHdr(h.login()), "/cost")
+	if got := current(doc, "nav.nav", "page"); !slices.Equal(got, []string{"Cost"}) {
+		t.Errorf("the navigation marks %q, want only Cost", got)
+	}
+	if got := current(doc, "details.navmenu", "page"); !slices.Equal(got, []string{"Cost"}) {
+		t.Errorf("the Menu marks %q, want only Cost", got)
+	}
+	// A page of the Browse menu marks its entry and the menu itself.
+	doc = rawPage(t, h, cookieHdr(h.login()), "/projects")
+	if got := current(doc, "nav.nav", "page"); !slices.Equal(got, []string{"Projects"}) || doc.first("nav.nav details.is-current") == nil {
+		t.Errorf("/projects: marks %q, Browse current %v", got, doc.first("nav.nav details.is-current") != nil)
 	}
 }
 
