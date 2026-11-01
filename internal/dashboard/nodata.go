@@ -101,8 +101,8 @@ func noDataOf(v MetricView, f Frame, l format.Locale, loc *time.Location) (NoDat
 // whether the server answers, how many memories there are), not events over
 // a window: their no-data sentence does not name a window.
 var snapshotMetric = map[string]bool{
-	"local.backlog": true, "server.reach": true, "server.queue": true, "server.extraction_delay": true,
-	"bank.size": true, "bank.growth": true, "bank.by_project": true, "bank.consolidation": true,
+	"local.backlog": true, "server.reach": true, "server.queue": true,
+	"bank.size": true, "bank.by_project": true, "bank.consolidation": true,
 	"doctor.check": true, "jobs.last_run": true,
 }
 
