@@ -173,12 +173,12 @@ New widget titles, in the catalog's style (proposed `Question` for each new metr
 
 ### Colour-blind check (block 6)
 
-The only new colours are the calendar's four steps. They encode magnitude, not identity, so they were run through the validator's ordinal mode (one hue, lightness monotone, visible steps, light end clearing the surface), which passes in both themes; adjacent-pair CVD ΔE does not apply to a one-hue ramp. Every other new mark reuses a checked token.
+The only new colours are the calendar's four steps. They encode magnitude, not identity, so they were run through the validator's ordinal mode (one hue, lightness monotone, visible steps, light end clearing the surface). Its step check measures OKLCH lightness L and requires 0.06 between neighbours (it prints "all gaps >= 0.06"); in relative luminance the light ramp's last gap is smaller (0.057, #1F55A0 to #123566), which the check does not use, which passes in both themes; adjacent-pair CVD ΔE does not apply to a one-hue ramp. Every other new mark reuses a checked token.
 
 | Ramp | Theme | Steps (`--hm-1..4`) | Validator (`--ordinal`) |
 |---|---|---|---|
-| days calendar | light (#FFFFFF) | #5C95E3 #2F72CC #1F55A0 #123566 | all pass: monotone, adjacent ΔL ≥ 0.06, light end 3.06:1, hue spread 1° |
-| same | dark (#161B22) | #3A6AA8 #4C88D8 #7DB1F1 #BBD9FB | all pass: monotone, adjacent ΔL ≥ 0.06, light end 3.14:1, hue spread 5° |
+| days calendar | light (#FFFFFF) | #5C95E3 #2F72CC #1F55A0 #123566 | all pass: monotone, adjacent gaps in OKLCH L ≥ 0.06 (smallest 0.100), light end 3.06:1, hue spread 1° |
+| same | dark (#161B22) | #3A6AA8 #4C88D8 #7DB1F1 #BBD9FB | all pass: monotone, adjacent gaps in OKLCH L ≥ 0.06 (smallest 0.103), light end 3.14:1, hue spread 5° |
 
 - "Nothing recorded" and "0" differ by shape, not colour: a 1.5 px dashed edge versus a 1 px solid edge, both in `--c-shown` (3:1 or more in both themes).
 - Health-check marks reuse the status colours, which are not separable under deuteranopia (watch vs attention, ΔE 3.1, block 3 table); each status has its own shape (circle, triangle, octagon; no run: dashed ring), the legend and the table carry the word.

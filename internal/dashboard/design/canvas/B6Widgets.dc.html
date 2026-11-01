@@ -83,7 +83,7 @@ body{margin:0}
     <figure class="chart">
       <div class="chart-plot">
         <svg class="vb1000" viewBox="0 0 1000 250" role="img" aria-label="Server model tokens per day by task, last 90 days; no record for Sep 12 to Sep 14; before Oct 1 from this PC's daily record">
-          <sc-for list="{{tyt}}" as="g" hint-placeholder-count="4">
+          <sc-for list="{{tyt}}" as="g" hint-placeholder-count="5">
             <line class="gl" x1="48" x2="992" y1="{{g.y}}" y2="{{g.y}}"></line>
             <text class="ta-e" x="40" y="{{g.ty}}">{{g.label}}</text>
           </sc-for>
@@ -226,7 +226,7 @@ class Component extends DCLogic {
     });
     // extraction.tokens, same days, gap and source change: two server tasks stacked (thousands of tokens)
     const tk = [...Array(N)].map((_, d) => [Math.round(140 + r(d, 7) * 110), Math.round(25 + r(d, 8) * 40)]);
-    const tmax = 300, TY = (v) => B - (v / tmax) * (B - T);
+    const tmax = 400, TY = (v) => B - (v / tmax) * (B - T);
     const tareas = [];
     segs.forEach((sg) => {
       ['f-seq1', 'f-seq2'].forEach((cls, j) => {
@@ -239,7 +239,7 @@ class Component extends DCLogic {
         tareas.push({ cls, d: 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z' });
       });
     });
-    const tyt = [0, 100, 200, 300].map((v) => ({ y: TY(v).toFixed(1), ty: (TY(v) + 4).toFixed(1), label: v ? v + ' k' : '0' }));
+    const tyt = [0, 100, 200, 300, 400].map((v) => ({ y: TY(v).toFixed(1), ty: (TY(v) + 4).toFixed(1), label: v ? v + ' k' : '0' }));
     const gyt = [0, 5, 10, 15].map((v) => ({ y: GY(v).toFixed(1), ty: (GY(v) + 4).toFixed(1), label: String(v) }));
     const dLabel = (d) => { const t = new Date(Date.UTC(2026, 7, 2) + d * 86400000); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][t.getUTCMonth()] + ' ' + t.getUTCDate(); };
     const gxt = [0, 15, 30, 45, 60, 75, 89].map((d) => ({ x: X(d).toFixed(1), label: dLabel(d) }));
