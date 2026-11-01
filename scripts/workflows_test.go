@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -562,6 +563,11 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 			if !strings.Contains(j.raw, "runs-on: windows-latest") || !strings.Contains(j.raw, "- run: go test ./... -count=1") {
 				t.Errorf("ci.yml job test-windows does not run go test ./... -count=1 on windows-latest:\n%s", j.raw)
 			}
+			// internal/cli runs about 10 minutes there: go test's default
+			// bound per package would cut it.
+			if m := regexp.MustCompile(`go test \./\.\.\. -count=1 -timeout (\d+)m\b`).FindStringSubmatch(j.raw); m == nil || atoi(m[1]) < 15 {
+				t.Errorf("ci.yml job test-windows does not give go test a timeout of 15 minutes or more (-timeout <n>m):\n%s", j.raw)
+			}
 			if !strings.Contains(j.raw, "BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}") {
 				t.Errorf("ci.yml job test-windows does not put the time budgets' files on the runner's local disk (BACKSIGHT_TEST_BENCH_DIR: ${{ runner.temp }}):\n%s", j.raw)
 			}
@@ -569,4 +575,10 @@ func TestCIRunsTheUnitTestsOnWindows(t *testing.T) {
 		}
 	}
 	t.Error("ci.yml has no test-windows job")
+}
+
+// atoi is s as a number, 0 when it is not one.
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }

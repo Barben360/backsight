@@ -54,7 +54,10 @@ jobs:
         with:
           go-version: "1.26.10" # go.mod's toolchain line (workflows_test.go)
           cache: true
-      - run: go test ./... -count=1
+      # internal/cli alone runs 9 to 10 minutes on the runner (each test
+      # binary run is a process start, slow on Windows): go test's default
+      # 10-minute bound per package would cut it.
+      - run: go test ./... -count=1 -timeout 20m
         env:
           # The runner has a console logon: the server task runs there
           # (TestTaskStartStopForReal checks it came up through the task).
