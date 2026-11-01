@@ -15,7 +15,10 @@
 {{if .Frame.Reload}}<meta http-equiv="refresh" content="{{.Frame.Reload}}">
 {{else if .Frame.Prefs.Refresh}}<meta http-equiv="refresh" content="60">
 {{end}}<title>{{.Frame.Title}} - backsight</title>
+<meta name="color-scheme" content="{{if eq .Frame.Prefs.Theme "dark"}}dark{{else if eq .Frame.Prefs.Theme "light"}}light{{else}}light dark{{end}}">
+<link rel="stylesheet" href="{{asset "tokens.css"}}">
 <link rel="stylesheet" href="{{asset "dashboard.css"}}">
+<script src="{{asset "copy.js"}}" defer></script>
 </head>
 <body>
 {{end}}

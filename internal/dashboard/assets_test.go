@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,6 +16,8 @@ func TestAssetsPublic(t *testing.T) {
 		{"logo-light.svg", "../../docs/assets/logo-light.svg", "image/svg+xml"},
 		{"logo-dark.svg", "../../docs/assets/logo-dark.svg", "image/svg+xml"},
 		{"dashboard.css", "assets/dashboard.css", "text/css; charset=utf-8"},
+		{"tokens.css", "design/tokens.css", "text/css; charset=utf-8"},
+		{"copy.js", "assets/copy.js", "text/javascript; charset=utf-8"},
 	} {
 		want, err := os.ReadFile(c.docs)
 		if err != nil {
@@ -29,6 +32,12 @@ func TestAssetsPublic(t *testing.T) {
 		}
 		if got := r.Header.Get("Content-Type"); got != c.ctype {
 			t.Errorf("%s: Content-Type %q, want %q", c.name, got, c.ctype)
+		}
+		if got := r.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+			t.Errorf("%s: Cache-Control %q", c.name, got)
+		}
+		if !regexp.MustCompile(`^/assets/` + regexp.QuoteMeta(strings.TrimSuffix(c.name, path.Ext(c.name))) + `\.[0-9a-f]{12}` + regexp.QuoteMeta(path.Ext(c.name)) + `$`).MatchString(assetPath(c.name)) {
+			t.Errorf("%s: served at %q", c.name, assetPath(c.name))
 		}
 		if r := h.do("HEAD", assetPath(c.name)); r.StatusCode != http.StatusOK || body(t, r) != "" {
 			t.Errorf("HEAD %s: %d with a body", c.name, r.StatusCode)
@@ -46,16 +55,16 @@ func TestAssetsPublic(t *testing.T) {
 }
 
 func TestAssetPath(t *testing.T) {
-	re := regexp.MustCompile(`^/assets/(logo-light|logo-dark|dashboard)\.[0-9a-f]{12}\.(svg|css)$`)
+	re := regexp.MustCompile(`^/assets/(logo-light|logo-dark|dashboard|tokens|copy)\.[0-9a-f]{12}\.(svg|css|js)$`)
 	seen := map[string]bool{}
-	for _, n := range []string{"logo-light.svg", "logo-dark.svg", "dashboard.css"} {
+	for _, n := range []string{"logo-light.svg", "logo-dark.svg", "dashboard.css", "tokens.css", "copy.js"} {
 		p := assetPath(n)
 		if !re.MatchString(p) {
 			t.Errorf("assetPath(%q) = %q", n, p)
 		}
 		seen[p] = true
 	}
-	if len(seen) != 3 {
+	if len(seen) != 5 {
 		t.Errorf("assetPath names collide: %v", seen)
 	}
 	// The hash follows the content: a changed file gets a new name.
