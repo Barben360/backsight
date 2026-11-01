@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/index"
@@ -390,6 +391,20 @@ func pagesDeclared(t *testing.T) map[string][]string {
 	return out
 }
 
+// dashGetServed is dashGet, retried while the answer is the dashboard's
+// "took too long" 503: the per-request deadline (10 s) can expire on a busy
+// runner (windows-latest once did), which says nothing about whether the
+// view is served. Any other status, or a 503 that persists, is returned.
+func dashGetServed(t *testing.T, base string, c *http.Cookie, path string) (int, string) {
+	t.Helper()
+	status, body := dashGet(t, base, c, path)
+	for try := 0; try < 4 && status == http.StatusServiceUnavailable && strings.Contains(body, "the page took too long"); try++ {
+		time.Sleep(250 * time.Millisecond)
+		status, body = dashGet(t, base, c, path)
+	}
+	return status, body
+}
+
 // Every view a page reads is one the API serves and a `stats` subcommand
 // prints: the pages show nothing the command line cannot.
 func TestEveryPageReadsServedViews(t *testing.T) {
@@ -417,7 +432,7 @@ func TestEveryPageReadsServedViews(t *testing.T) {
 				continue
 			}
 			seen[v] = true
-			if status, body := dashGet(t, base, c, "/api/v1/"+v); status != http.StatusOK {
+			if status, body := dashGetServed(t, base, c, "/api/v1/"+v); status != http.StatusOK {
 				t.Errorf("%s reads %q: GET /api/v1/%s answers %d: %.200s", page, v, v, status, body)
 			}
 		}
