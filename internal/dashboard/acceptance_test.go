@@ -83,6 +83,11 @@ func scenarioPage(t *testing.T, s scenario) (string, error) {
 // the text page, and the Overview on each scenario. Rendered once.
 func allAcceptancePages(t *testing.T) []accPage {
 	t.Helper()
+	if raceEnabled {
+		// Over 10 minutes on the CI runner under -race; make test runs the
+		// sweep in its second line, without it.
+		t.Skip("the page sweep runs without -race (make test)")
+	}
 	accOnce.Do(func() {
 		oldSpec, oldTimeout := dataSpec, renderTimeout
 		t.Cleanup(func() { dataSpec, renderTimeout = oldSpec, oldTimeout })

@@ -89,11 +89,11 @@ func TestStampSeesEveryChange(t *testing.T) {
 		t.Fatalf("after an append: %+v (before %+v)", appended.Files, st.Files)
 	}
 
-	// ledger.json rewritten with the same size, 1 ns later: the mtime alone
-	// tells.
-	put(t, dir, "ledger.json", `{"schema":1,"memories":{}}`, tm(20).Add(time.Nanosecond))
+	// ledger.json rewritten with the same size, 1 µs later: the mtime alone
+	// tells (1 µs, not 1 ns: NTFS keeps mtimes in 100 ns steps).
+	put(t, dir, "ledger.json", `{"schema":1,"memories":{}}`, tm(20).Add(time.Microsecond))
 	rewritten := stampOf(t, r)
-	if rewritten.Equal(appended) || rewritten.Files[2].Size != 26 || rewritten.Files[2].ModTime != tm(20).UnixNano()+1 {
+	if rewritten.Equal(appended) || rewritten.Files[2].Size != 26 || rewritten.Files[2].ModTime != tm(20).Add(time.Microsecond).UnixNano() {
 		t.Fatalf("after a same-size rewrite: %+v (before %+v)", rewritten.Files, appended.Files)
 	}
 
@@ -124,7 +124,7 @@ func TestStampSeesEveryChange(t *testing.T) {
 	if got := names(gone); !slices.Equal(got, []string{"journal-2026-09.jsonl", "journal-2026-11.jsonl", "ledger.json"}) {
 		t.Fatalf("after a deletion: %v", got)
 	}
-	if gone.Equal(month) || !gone.Newest.Equal(tm(20).Add(time.Nanosecond)) {
+	if gone.Equal(month) || !gone.Newest.Equal(tm(20).Add(time.Microsecond)) {
 		t.Fatalf("after a deletion: equal %v, newest %v", gone.Equal(month), gone.Newest)
 	}
 
