@@ -139,15 +139,21 @@ func TestOutboxSizeLimits(t *testing.T) {
 }
 
 // Appenders queue for the lock, each holding it for one fsync'd write. A
-// queue longer than a second (six appends of 200 ms, a slow disk's fsync
-// and file creations) loses none: each waits its turn (windows-latest once
-// kept 15 of 20, the others refused after 50 tries of the lock, about 1 s).
+// queue longer than a second (eight appends of 200 ms) loses none: each
+// waits its turn (windows-latest once kept 15 of 20, the others refused
+// after 50 tries of the lock, about 1 s). The wait's bound is the test's
+// own, far past the queue: how long a queue the default 3 s drains is the
+// disk's speed (on windows-latest under the other packages' tests a turn
+// took over 600 ms, 200 ms of it the sleep, and the sixth of six appends
+// was refused at 3 s); TestOutboxAppendWaitsPastASecondByDefault holds the
+// default wait to its 1.5 s.
 func TestOutboxConcurrentAppends(t *testing.T) {
 	o := outbox(t)
+	o.LockDeadline = time.Now().Add(time.Minute)
 	old := whileAppending
 	whileAppending = func() { time.Sleep(200 * time.Millisecond) }
 	t.Cleanup(func() { whileAppending = old })
-	const n = 6
+	const n = 8
 	errs := make(chan error, n)
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
