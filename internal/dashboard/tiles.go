@@ -21,8 +21,8 @@ type TileGroup struct {
 // Tile is one key number of the Overview.
 type Tile struct {
 	Name, Class   string // Class: is-few | is-watch | is-bad | is-unrel | is-learn | ""
-	Question      string
-	Head          Head // level 3
+	Question      string // the catalog's
+	Head          Head   // level 3
 	Big, Unit, CI string
 	Sub, Note     string
 	Word          string
@@ -36,19 +36,19 @@ type Tile struct {
 
 // tileSpec is what differs between the six tiles.
 type tileSpec struct {
-	group, name, id, question string
-	axis                      string // the verdict axis whose learning turns the tile to learning; "" none
-	one, many                 string // what the metric counts
-	view, has                 string // the command the tile shows
+	group, name, id string
+	axis            string // the verdict axis whose learning turns the tile to learning; "" none
+	one, many       string // what the metric counts
+	view, has       string // the command the tile shows
 }
 
 var tileSpecs = []tileSpec{
-	{"Found", "Found", "recall.hit_rate", "How often does a prompt get memory?", "found", "prompt", "prompts", "quality", ""},
-	{"Right", "Used", "used.turn_rate", "Does Claude use the memory it is shown?", "right", "turn", "turns", "sessions", "used"},
-	{"Right", "Reported wrong", "verdict.wrong_rate", "Is the memory right? Lower is better.", "", "verdict", "verdicts", "sessions", "wrong"},
-	{"Cost", "Context", "context.per_session", "How much context does memory add per session?", "", "session", "sessions", "cost", ""},
-	{"Cost", "Speed", "recall.latency", "How long does memory make a prompt wait?", "", "prompt", "prompts", "cost", ""},
-	{"Flowing", "Flowing", "pipeline.flow", "Do sessions reach the memory server?", "", "session", "sessions", "pipeline", ""},
+	{"Found", "Found", "recall.hit_rate", "found", "prompt", "prompts", "quality", ""},
+	{"Right", "Used", "used.turn_rate", "right", "turn", "turns", "sessions", "used"},
+	{"Right", "Reported wrong", "verdict.wrong_rate", "", "verdict", "verdicts", "sessions", "wrong"},
+	{"Cost", "Context", "context.per_session", "", "session", "sessions", "cost", ""},
+	{"Cost", "Speed", "recall.latency", "", "prompt", "prompts", "cost", ""},
+	{"Flowing", "Flowing", "pipeline.flow", "", "session", "sessions", "pipeline", ""},
 }
 
 // tilesOf are the Overview's six tiles in their four groups, times read in
@@ -79,7 +79,7 @@ func tileOf(r *metrics.Result, s tileSpec, p views.Params, l format.Locale, loc 
 	if r.Verdict != nil && s.axis != "" {
 		axisLearning = r.Verdict.Axes[s.axis].State == metrics.AxisLearning
 	}
-	t := Tile{Name: s.name, Question: s.question}
+	t := Tile{Name: s.name, Question: d.Question}
 	t.Word, t.WordClass = statusWord(d, m, axisLearning)
 	t.Class = tileClass[t.WordClass]
 	learning := t.Word == "learning"
@@ -171,9 +171,9 @@ func tileHead(v MetricView, s tileSpec, p views.Params, l format.Locale) Head {
 	}
 	cmd += strings.TrimPrefix(cliFor(s.view, "", q), "backsight stats "+s.view)
 	h := headOf(v, cmd, l, "", p)
-	h.Level, h.Title = 3, s.question
+	h.Level = 3
 	h.Drill, h.DrillText = "", ""
-	h.Info.Label, h.Info.Name = "About "+s.name, s.name+": "+s.question
+	h.Info.Label, h.Info.Name = "About "+s.name, s.name+": "+v.Def.Question
 	return h
 }
 

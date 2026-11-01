@@ -151,10 +151,10 @@ func TestOverviewSkeleton(t *testing.T) {
 	}
 	shown := 0
 	for _, sp := range tileSpecs {
-		if !strings.Contains(text, sp.question) {
-			t.Errorf("overview lacks the tile question %q", sp.question)
-		}
 		def, _ := metrics.DefOf(sp.id)
+		if !strings.Contains(text, def.Question) {
+			t.Errorf("overview lacks the tile question %q", def.Question)
+		}
 		if want := tileText(def, res.Metrics[sp.id]); want != "—" {
 			shown++
 			if !strings.Contains(text, want) {
@@ -164,6 +164,13 @@ func TestOverviewSkeleton(t *testing.T) {
 	}
 	if shown == 0 {
 		t.Error("no tile has a value in the fixtures: the test checks nothing")
+	}
+	cov := res.Metrics["declare.coverage"]
+	if cov.Value == nil {
+		t.Fatal("no declare.coverage value in the API: the Used sub-line is not checked")
+	}
+	if want := "Said what it used on " + en.Percent(*cov.Value) + " of turns"; !strings.Contains(text, want) {
+		t.Errorf("overview lacks the coverage sentence %q", want)
 	}
 	if len(res.Tables.Lately) == 0 {
 		t.Fatal("no lately rows in the API")

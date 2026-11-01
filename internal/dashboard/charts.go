@@ -11,8 +11,14 @@ import (
 // sparkOf is the small trend line of metric v over its daily series, in the
 // metric's own unit; label names it for a reader who cannot see it.
 func sparkOf(v MetricView, label string, l format.Locale) template.HTML {
-	y := make([]*float64, len(v.M.Series))
-	for i, p := range v.M.Series {
+	// The window's first day is cut short (Partial) and would draw as a dip:
+	// it is left out, so a 7-day window draws its 7 days, today last.
+	series := v.M.Series
+	if len(series) > 0 && series[0].Partial {
+		series = series[1:]
+	}
+	y := make([]*float64, len(series))
+	for i, p := range series {
 		y[i] = p.Value
 	}
 	return chart.Spark{Label: label, Y: y, Fmt: unitFormat(v.Def.Unit, l)}.HTML()

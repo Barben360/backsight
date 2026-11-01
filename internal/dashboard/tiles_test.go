@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard/format"
 	"github.com/Barben360/backsight/internal/metrics"
@@ -114,7 +115,7 @@ func TestTileClasses(t *testing.T) {
 func TestTileHeads(t *testing.T) {
 	tl := tileNamed(t, "healthy", "Context")
 	h := tl.Head
-	if h.Level != 3 || h.Info.Label != "About Context" || h.Info.Name != "Context: How much context does memory add per session?" || h.ID != "w-context-per_session" {
+	if h.Level != 3 || h.Info.Label != "About Context" || h.Info.Name != "Context: "+def(t, "context.per_session").Question || h.Title != def(t, "context.per_session").Question || h.ID != "w-context-per_session" {
 		t.Errorf("head: %+v", h)
 	}
 	if h.Info.What == "" || h.Info.Limits == "" {
@@ -292,5 +293,137 @@ func TestTileWithoutAValue(t *testing.T) {
 	}
 	if speed.Big != "—" || speed.Sub != "" || speed.Note != "4 prompts: too few to judge." {
 		t.Errorf("speed: %+v", speed)
+	}
+}
+
+func tilesFor(r *metrics.Result) map[string]Tile {
+	out := map[string]Tile{}
+	for _, g := range tilesOf(r, tilePage, en, r.Window.Loc, false) {
+		for _, tl := range g.Tiles {
+			out[tl.Name] = tl
+		}
+	}
+	return out
+}
+
+// Flowing's note is the first attention item of the axis, whatever metric
+// it is about.
+func TestFlowingNoteIsTheFirstFlowingItem(t *testing.T) {
+	r := scenarioNamed(t, "broken")
+	a := r.Attention
+	r.Attention = []metrics.Item{a[1], a[0], a[2]} // the waiting backlog first
+	if got := tilesFor(r)["Flowing"].Note; got != scWaitedText {
+		t.Errorf("note %q, want %q", got, scWaitedText)
+	}
+}
+
+// Under the root cause the change in sessions sent is not shown, though the
+// metric has one.
+func TestFlowingHasNoDeltaUnderTheRootCause(t *testing.T) {
+	r := scenarioNamed(t, "serverdown")
+	m := r.Metrics["pipeline.flow"]
+	m.Previous, m.Delta = scF(1), scF(*m.Value-1)
+	r.Metrics["pipeline.flow"] = m
+	if tl := tilesFor(r)["Flowing"]; tl.Delta != nil || tl.Big != "17" {
+		t.Errorf("root cause: delta %+v big %q", tl.Delta, tl.Big)
+	}
+	// Without the root cause the same delta shows.
+	r = scenarioNamed(t, "healthy")
+	m = r.Metrics["pipeline.flow"]
+	m.Previous, m.Delta = scF(1), scF(*m.Value-1)
+	r.Metrics["pipeline.flow"] = m
+	if tl := tilesFor(r)["Flowing"]; tl.Delta == nil {
+		t.Error("no delta without the root cause")
+	}
+}
+
+func TestFlowingRootCauseFallbacks(t *testing.T) {
+	r := scenarioNamed(t, "serverdown")
+	r.Metrics["server.reach"] = scValue("server.reach", metrics.StatusWatch, 96, 0, scExtra(map[string]any{"failing_since": nil})).m
+	if got := tilesFor(r)["Flowing"].Note; got != "Memory server unreachable. Nothing is lost." {
+		t.Errorf("no failing_since: %q", got)
+	}
+	// Without the backlog's counts the tile reads the sessions sent.
+	r = scenarioNamed(t, "serverdown")
+	r.Metrics["local.backlog"] = scValue("local.backlog", metrics.StatusWatch, 17, 0).m
+	tl := tilesFor(r)["Flowing"]
+	if tl.Big != "82" || tl.Unit != "%" || tl.Sub != "14 of 17 sessions sent" || tl.LinkText == "Waiting items →" {
+		t.Errorf("no backlog counts: %+v", tl)
+	}
+}
+
+// sparkLabel is the label of a tile's spark.
+func sparkLabel(t *testing.T, tl Tile) string {
+	t.Helper()
+	s := string(tl.Spark)
+	i := strings.Index(s, `aria-label="`)
+	if i < 0 {
+		t.Fatalf("no label: %s", s)
+	}
+	s = s[i+len(`aria-label="`):]
+	label, _, _ := strings.Cut(s, `"`)
+	return label
+}
+
+// The window's first day is cut short and left out; today is kept.
+func TestSparkDropsTheCutFirstDay(t *testing.T) {
+	r := scenarioNamed(t, "healthy")
+	tl := tilesFor(r)["Found"]
+	if got, want := sparkLabel(t, tl), "Found per day, last 7 days: 24 %, 31 %, 27 %, 22 %, 30 %, 29 %, 28 %"; got != want {
+		t.Errorf("label %q, want %q", got, want)
+	}
+	if n := strings.Count(string(tl.Spark), "<polyline"); n != 1 {
+		t.Errorf("%d lines", n)
+	}
+	// A series whose first bucket is whole keeps it.
+	m := r.Metrics["recall.hit_rate"]
+	series := append([]metrics.Point(nil), m.Series...)
+	series[0].Partial = false
+	m.Series = series
+	r.Metrics["recall.hit_rate"] = m
+	if got := sparkLabel(t, tilesFor(r)["Found"]); !strings.HasPrefix(got, "Found per day, last 7 days: 24 %, 24 %, 31 %") {
+		t.Errorf("whole first day: %q", got)
+	}
+}
+
+// The tile frame follows its Head: server chip, not-filtered chip, a
+// heading id, and no link element for an empty link.
+func TestTileFrameBranches(t *testing.T) {
+	orig := funcs["tiles"]
+	funcs["tiles"] = func(*metrics.Result, views.Params, format.Locale, *time.Location, bool) []TileGroup {
+		h := Head{ID: "w-x", Level: 3, Scope: "server", NotFiltered: true}
+		return []TileGroup{{Name: "G", Tiles: []Tile{{Name: "T", Head: h, Big: "1"}}}}
+	}
+	t.Cleanup(func() { funcs["tiles"] = orig })
+	n := renderTiles(t, scenarioNamed(t, "healthy"), en, false)
+	a := n.first("article.tile")
+	if a == nil {
+		t.Fatal("no tile")
+	}
+	if c := a.first("span.chip"); c == nil || c.text() != "server" {
+		t.Errorf("chip: %v", c)
+	}
+	if a.first("span.chip-nf") == nil {
+		t.Error("no not-filtered chip")
+	}
+	if a.first("div.tile-foot a") != nil {
+		t.Error("a link for an empty Link")
+	}
+	if h := a.first("h3.tile-name"); h == nil || h.attr("id") != "w-x" {
+		t.Errorf("h3: %v", h)
+	}
+}
+
+func TestTileMachineChipAndHeadingID(t *testing.T) {
+	n := renderTiles(t, scenarioNamed(t, "healthy"), en, false)
+	a := n.first("article.tile")
+	if c := a.first("span.chip"); c == nil || c.text() != "this PC" {
+		t.Errorf("chip: %v", c)
+	}
+	if a.first("span.chip-nf") != nil {
+		t.Error("not-filtered chip on a filtered tile")
+	}
+	if h := a.first("h3.tile-name"); h.attr("id") != "w-recall-hit_rate" {
+		t.Errorf("h3 id %q", h.attr("id"))
 	}
 }
