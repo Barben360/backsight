@@ -217,7 +217,14 @@ func (h *hookEnv) queueSubagentReport(lockDeadline time.Time) {
 	source := ""
 	if p := agentTranscriptPath(h.in); p != "" {
 		a := attributor(h.dirs, h.cfg, h.resolver)
+		// Its budget, cut to the lock deadline: a hook that started late
+		// (a spawn slowed by a scan) has its kill close, and the append
+		// must come before it. Past the deadline nothing is resolved: the
+		// report keeps its session's project, provisional.
 		a.Deadline = time.Now().Add(subagentAttributionBudget)
+		if lockDeadline.Before(a.Deadline) {
+			a.Deadline = lockDeadline
+		}
 		e, err := a.Subagent(h.in.SessionID, h.in.AgentID, h.in.TranscriptPath, p, proj, h.in.LastAssistantMessage, now())
 		if err != nil {
 			h.tw.Emit(telemetry.Raw{Name: "attribution_error", Fields: map[string]any{"error": err.Error()}})

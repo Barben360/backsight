@@ -406,6 +406,13 @@ func TestALaggingOrUnreadableTranscriptIsDecidedLater(t *testing.T) {
 	if got, _ := a.Subagent("s1", "ag3", sess, filepath.Join(e.dir, "s1", "subagents", "agent-ag3.jsonl"), "billing", "", clockAt(10, 5)); got.Source != SourceTimeout || !got.Provisional {
 		t.Errorf("past the budget: %+v", got)
 	}
+	// Past it the transcript is not even read (a SubagentStop that started
+	// late has no time to): a lagging one times out, never found
+	// incomplete, which only its read tells.
+	p4 := e.agent("s1", "ag4", billing, "Fix.", [3]string{"Edit", "file_path", filepath.Join(shop, "a.go")})
+	if got, _ := a.Subagent("s1", "ag4", sess, p4, "billing", "Fixed the cart.", clockAt(10, 5)); got.Source != SourceTimeout || !got.Provisional {
+		t.Errorf("past the budget, a lagging transcript: %+v, want timeout (not read)", got)
+	}
 }
 
 // The hook and a rebuild may decide the same report at once: one decision

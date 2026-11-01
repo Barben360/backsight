@@ -253,6 +253,41 @@ func TestSubagentStopFilesTheReportWhereItsWorkIs(t *testing.T) {
 	}
 }
 
+// A SubagentStop that started late (a spawn slowed by a scan, a loaded
+// disk) has its kill close: the path rule's 1.5 s budget is cut to the
+// time left before the lock deadline (the kill less
+// subagentAppendMargin), so the append still comes before the kill. Past
+// that deadline the rule resolves nothing: the report keeps its session's
+// project, provisional ("timeout"), and is queued.
+func TestSubagentStopBoundsItsAttributionByTheKill(t *testing.T) {
+	home := hookHome(t)
+	billing, shop := filepath.Join(home, "billing"), filepath.Join(home, "src", "shop")
+	gitRepo(t, billing, "git@github.com:me/billing.git")
+	gitRepo(t, shop, "git@github.com:me/shop.git")
+	parent := subagentTranscript(t, "s1", "ag1")
+	_ = os.WriteFile(parent, []byte(`{"type":"user","uuid":"u1","sessionId":"s1","cwd":"`+testtool.JSONPath(billing)+`","entrypoint":"cli","message":{"role":"user","content":"go"}}`+"\n"), 0o600)
+	agent := filepath.Join(strings.TrimSuffix(parent, ".jsonl"), "subagents", "agent-ag1.jsonl")
+	edit := func(uuid string) string {
+		return `{"type":"assistant","isSidechain":true,"uuid":"` + uuid + `","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + uuid + `","name":"Edit","input":{"file_path":"` + testtool.JSONPath(filepath.Join(shop, "x.go")) + `"}}]}}` + "\n"
+	}
+	reply := `{"type":"assistant","isSidechain":true,"uuid":"r","cwd":"` + testtool.JSONPath(billing) + `","message":{"role":"assistant","content":[{"type":"text","text":"Fixed it"}]}}` + "\n"
+	_ = os.WriteFile(agent, []byte(`{"type":"user","isSidechain":true,"uuid":"p","cwd":"`+testtool.JSONPath(billing)+`","message":{"role":"user","content":"Fix it."}}`+"\n"+edit("e1")+edit("e2")+reply), 0o600)
+	// The kill is due within the append margin: the lock deadline passed.
+	t.Setenv(hook.KillAtEnv, strconv.FormatInt(time.Now().Add(subagentAppendMargin-time.Millisecond).UnixNano(), 10))
+	fire(t, "subagent-stop", map[string]any{"session_id": "s1", "agent_id": "ag1", "agent_type": "general-purpose", "cwd": billing,
+		"transcript_path": parent, "last_assistant_message": "Fixed it"})
+	raw, _ := os.ReadFile(filepath.Join(pathsOf(home).OutboxDir(), "notes.jsonl"))
+	var n struct {
+		DocumentID  string `json:"document_id"`
+		Project     string `json:"project"`
+		Attribution string `json:"attribution"`
+	}
+	_ = json.Unmarshal(raw, &n)
+	if n.DocumentID != "subagent:s1:ag1" || n.Project != "billing" || n.Attribution != "timeout" {
+		t.Errorf("queued %+v (outbox %q), want the report under its session's project, its attribution timed out", n, raw)
+	}
+}
+
 // SubagentStop's child is killed at hook.KillAt: the time its supervisor
 // passed, else its own start plus hook.ChildDeadline. With the outbox lock
 // held by someone else the whole time, its append is refused before then

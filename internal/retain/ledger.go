@@ -250,6 +250,9 @@ func (a Attributor) computeSubagent(sid, agentID, launch string, repos func() (*
 	if !a.Deadline.IsZero() && fi.Size() > hookReadMax {
 		return fallback(SourceTimeout) // too long to read within the hook's budget
 	}
+	if a.late() {
+		return fallback(SourceTimeout) // the hook's budget is spent: not even read
+	}
 	fh, err := os.Open(agentTranscript)
 	if err != nil {
 		return fallback(SourceUnread)
