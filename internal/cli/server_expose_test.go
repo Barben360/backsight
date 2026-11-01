@@ -485,12 +485,13 @@ func TestExposeRefusesASymlinkOut(t *testing.T) {
 
 // The native runtime serves this PC only (loopback, 0078's non-goal):
 // expose --private refuses before anything is written, naming the way
-// to private exposure; config.toml, server.env and both units stay
-// byte-identical and the units are left alone.
+// to private exposure; config.toml, server.env and the service files
+// (both units; Windows: supervise.json and task.xml) stay byte-identical
+// and nothing runs.
 func TestServerExposeRefusedOnNative(t *testing.T) {
-	testtool.SkipWindows(t, "Task 9: native runtime")
 	home, n, _, sys, _ := nativeHost(t)
-	files := []string{pathsOf(home).ConfigFile(), n.EnvFile(), unitPath(home, n.DBUnit()), unitPath(home, n.ServerUnit())}
+	n.UnitDir = filepath.Dir(unitPath(home, n.DBUnit())) // where the user manager reads the units
+	files := append([]string{pathsOf(home).ConfigFile(), n.EnvFile()}, n.ServiceFiles()...)
 	before := map[string]string{}
 	for _, p := range files {
 		raw, err := os.ReadFile(p)

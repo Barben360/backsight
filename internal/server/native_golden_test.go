@@ -13,7 +13,7 @@ import (
 // byte for byte, whatever the Windows host adds. The project is "bs", so
 // the unit names follow it.
 func TestNativeRenderIsUnchanged(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are pinned on Linux; the Windows host renders its own files")
+	testtool.SkipWindows(t, "linux-only: the Linux units' goldens, recorded with / paths (Windows: TestTaskXMLGolden, TestTaskXMLOddPathGolden)")
 	withFreePort(t, 8889)
 	cfg := config.Default(paths.Dirs{Data: "/srv/bs/data"}, "/home/u")
 	cfg.Server.Runtime, cfg.Server.Project = "native", "bs"

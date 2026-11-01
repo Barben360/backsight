@@ -184,7 +184,7 @@ func TestNativeLockHonoursPythonDotenvDisabled(t *testing.T) {
 // unit's environment, must still resolve the user's config (the live
 // switch to native failed with "no config at <native>/home/.config").
 func TestNativeCheckResolvesTheUsersDirectoriesNotTheUnitsHome(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: /usr/bin/env and a POSIX shim")
+	testtool.SkipWindows(t, "linux-only: the units' POSIX HOME and the user's directories read through /usr/bin/env")
 	withFreePort(t, 8889)
 	home := filepath.Join(t.TempDir(), "u")
 	d, err := paths.Resolve("linux", home, func(string) string { return "" })
@@ -243,7 +243,7 @@ func TestNativeCheckResolvesTheUsersDirectoriesNotTheUnitsHome(t *testing.T) {
 // The golden files pin what a native install runs, and the assertions
 // name each E29 requirement they carry.
 func TestNativeRenderMeetsTheRequirements(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
+	testtool.SkipWindows(t, "linux-only: the rendered systemd units and their / paths (Windows: TestTaskXMLGolden, TestSuperviseJSONHasNoSecret)")
 	withFreePort(t, 8889)
 	cfg := config.Default(paths.Dirs{Data: "/srv/bs/data"}, "/home/u")
 	cfg.Server.Runtime = "native"
@@ -372,7 +372,7 @@ func TestNativeRenderMeetsTheRequirements(t *testing.T) {
 
 // A path with a space, a quote, a % or a $ stays one word in a unit.
 func TestNativeUnitsQuoteTheirPaths(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
+	testtool.SkipWindows(t, "linux-only: systemd's quoting of the units' / paths (Windows: TestTaskXMLCarriesAnyPathExactly)")
 	withFreePort(t, 8889)
 	cfg := config.Default(paths.Dirs{Data: "/srv/my data"}, "/home/u")
 	cfg.Server.ComposeDir = `/srv/my data/100% "$x"`
@@ -571,7 +571,6 @@ func TestNativePgPortIsStable(t *testing.T) {
 // RF 2: only Start enables the units; Stop disables both; StopAPI and
 // StartDatabase leave the other unit alone.
 func TestNativeStartEnablesStopDisables(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
 	installed(t, n, secrets)
@@ -679,7 +678,6 @@ func TestNativeStartEnablesStopDisables(t *testing.T) {
 
 // Start fails when the database never answers, within its bound.
 func TestNativeStartWaitsForTheDatabase(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	n, sys, tools := nativeFixture(t, secrets)
 	installed(t, n, secrets)
@@ -782,7 +780,6 @@ func TestNativeLogsReadTheJournal(t *testing.T) {
 }
 
 func TestNativeDeployedReadsTheUnit(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	n, _, _ := nativeFixture(t, secrets)
 	if v, err := n.Deployed(); err != nil || v != "" {
 		t.Errorf("never installed: %q %v", v, err)
@@ -876,7 +873,7 @@ func TestNativeWriteOnlyWhatChanged(t *testing.T) {
 }
 
 func TestNativeIsARuntime(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
+	testtool.SkipWindows(t, "linux-only: the Linux host's shell commands (systemctl, rm -rf) over / paths and its orchestrator")
 	var rt Runtime = Native{}
 	if rt.Kind() != "native" {
 		t.Error(rt.Kind())
@@ -963,7 +960,7 @@ func TestNativeRenameBankRunsTheVenvsAdmin(t *testing.T) {
 // transient unit, TMPDIR under the private home, then the real password
 // goes in through psql's stdin.
 func TestNativeCreatesTheInstanceWithThePasswordOnStdin(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
+	testtool.SkipWindows(t, "linux-only: the creation through systemd-run and /bin/sh, and TMPDIR's mode bits (Windows: TestWindowsInstanceCreationNeverPutsThePasswordOnArgv)")
 	n, _, tools := nativeFixture(t, config.Secrets{DBPassword: "dbpw-XYZ", APIKey: "a", UIKey: "u", LLMAPIKey: "l"})
 	installed(t, n, config.Secrets{DBPassword: "dbpw-XYZ", APIKey: "a", UIKey: "u", LLMAPIKey: "l"})
 	tmp := filepath.Join(n.Home(), "tmp")
@@ -1041,7 +1038,6 @@ func TestKeptSecretsFromTheNativeEnvironment(t *testing.T) {
 // Ruling R30: Start returns a running server, as Docker's compose up
 // --wait does: the API answers /health with its database connected.
 func TestNativeStartWaitsForTheAPI(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	n, sys, _ := nativeFixture(t, secrets)
 	installed(t, n, secrets)
@@ -1148,7 +1144,6 @@ func TestNativeCreateInstanceRemovesItOnFailure(t *testing.T) {
 // the fix, before it creates, enables or starts anything; StartDatabase
 // (a restore into the database alone) is not concerned.
 func TestNativeStartRefusesAnIncompleteVenv(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	ctx := context.Background()
 	for name, c := range map[string]struct {
 		venv  string // the unit's version ("": the pin)

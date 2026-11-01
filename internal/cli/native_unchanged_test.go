@@ -189,7 +189,7 @@ func nativeInstallRun(t *testing.T) (argv, keys string) {
 // Every command a native install runs reaches systemd and the native
 // tools with the argv it ran at 884c942.
 func TestNativeCommandsRunTheSameArgv(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux native argv is pinned on Linux; Windows runs another host")
+	testtool.SkipWindows(t, "linux-only: the Linux native argv golden (systemctl, systemd-run, the Linux layout); Windows' commands run in the native-chain-windows CI job")
 	argv, keys := nativeInstallRun(t)
 	cliGolden(t, "native-argv.golden", []byte(argv))
 	cliGolden(t, "native-json-keys.golden", []byte(keys))

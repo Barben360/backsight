@@ -520,7 +520,7 @@ func (e *execTools) Run(ctx context.Context, env []string, stdin io.Reader, path
 // RF 4: the user's Python and Hugging Face settings never reach the
 // install; uv is the pinned one, by absolute path, never PATH's.
 func TestNativeFetchIgnoresTheUsersPythonEnvironment(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: POSIX fakes and the Linux tool environment")
+	testtool.SkipWindows(t, "linux-only: shell-script fakes of uv and hf and the Linux tool environment (Windows: TestFetchUVFromTheZipChecksTheHash, TestWindowsVenvLayout)")
 	fakeDir := t.TempDir()
 	ranMarker := filepath.Join(fakeDir, "ran")
 	touch(t, filepath.Join(fakeDir, "uv"), 0o755)
@@ -708,7 +708,6 @@ func completeVenv(t *testing.T, n Native, v string) {
 // of an older build (*.partial) included; never the one the server unit
 // runs, whatever keep says.
 func TestNativePruneVersionsKeepsWhatItIsGiven(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units are the systemd host's")
 	n := newNative(t, &fakeTools{})
 	n.UnitDir = t.TempDir()
 	// Nothing installed yet: nothing to do.

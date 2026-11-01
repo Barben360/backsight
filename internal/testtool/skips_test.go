@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// Every Windows skip names its owner, so that the last task can find what
-// is left: "Task <n>: ", "Task 3b: " or "linux-only: ".
-func TestEverySkipWindowsNamesItsOwner(t *testing.T) {
+// Every Windows skip pins Linux-only behaviour and says which: M7 block 2
+// is done, so no skip waits for a task any more ("Task <n>: ").
+func TestEverySkipWindowsIsLinuxOnly(t *testing.T) {
 	call := regexp.MustCompile(`SkipWindows\(t, "((?:[^"\\]|\\.)*)"`)
-	ok := regexp.MustCompile(`^(Task (3b|[0-9]+)|linux-only): \S`)
+	ok := regexp.MustCompile(skipReason)
 	calls := 0
 	root := filepath.Join("..", "..")
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -33,7 +33,7 @@ func TestEverySkipWindowsNamesItsOwner(t *testing.T) {
 		for _, m := range call.FindAllStringSubmatch(string(raw), -1) {
 			calls++
 			if !ok.MatchString(m[1]) {
-				t.Errorf("%s: SkipWindows reason %q does not start with \"Task <n>: \", \"Task 3b: \" or \"linux-only: \"", p, m[1])
+				t.Errorf("%s: SkipWindows reason %q does not start with \"linux-only: \"", p, m[1])
 			}
 		}
 		return nil
@@ -46,10 +46,13 @@ func TestEverySkipWindowsNamesItsOwner(t *testing.T) {
 	}
 }
 
+// skipReason is what a SkipWindows reason starts with.
+const skipReason = `^linux-only: \S`
+
 func TestSkipReasonRuleRejectsAVagueOne(t *testing.T) {
-	ok := regexp.MustCompile(`^(Task (3b|[0-9]+)|linux-only): \S`)
-	for reason, want := range map[string]bool{"Task 3: mode bits": true, "Task 3b: x": true, "linux-only: POSIX script": true,
-		"no owning task": false, "Task 7-10: x": false, "Task 3:": false, "windows: Task 3: x": false} {
+	ok := regexp.MustCompile(skipReason)
+	for reason, want := range map[string]bool{"linux-only: POSIX script": true, "Task 3: mode bits": false, "Task 3b: x": false,
+		"no owning task": false, "linux-only:": false, "linux-only: ": false, "windows: Task 3: x": false} {
 		if ok.MatchString(reason) != want {
 			t.Errorf("%q: %v, want %v", reason, !want, want)
 		}

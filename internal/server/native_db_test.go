@@ -314,7 +314,7 @@ func TestNativeVerifyDumpCleansUpAlways(t *testing.T) {
 // password file then postgres, on the free port, on loopback only, with no
 // Unix socket; a unit that stops ends the wait at once.
 func TestNativeVerifyDumpRunsItsOwnCluster(t *testing.T) {
-	testtool.SkipWindows(t, "Task 7: the Linux units and scripts are the systemd host's")
+	testtool.SkipWindows(t, "linux-only: the throwaway cluster's systemd-run script over / paths (Windows: TestVerifyDumpLeavesNothingRunning)")
 	n, _, tools := nativeFixture(t, secrets)
 	installed(t, n, secrets)
 	withFreePort(t, 18890)
