@@ -379,9 +379,21 @@ func memoryOf(d PageData) MemoryDetail {
 	if d.Frame.Prefs.Dev {
 		boost.Dev = signed(row.Boost)
 	}
+	// "never" is said only of a zero count: a count above zero with no time
+	// recorded says nothing about when.
+	usedSub := "recent-weighted"
+	if w := last("last ", row.LastUsed, ""); w != "" {
+		usedSub += " · " + w
+	} else if row.Used <= 0 {
+		usedSub += " · never used"
+	}
+	shownSub := last("last ", row.LastShown, "")
+	if shownSub == "" && row.Shown <= 0 {
+		shownSub = "never shown"
+	}
 	pg.Figs = []Fig{
-		{Label: "Shown", Value: l.Int(row.Shown), Sub: last("last ", row.LastShown, "never shown")},
-		{Label: "Used by Claude", Value: l.Fixed(row.Used, 1), Swatch: "f-used", Sub: "recent-weighted · " + last("last ", row.LastUsed, "never used")},
+		{Label: "Shown", Value: l.Int(row.Shown), Sub: shownSub},
+		{Label: "Used by Claude", Value: l.Fixed(row.Used, 1), Swatch: "f-used", Sub: usedSub},
 		{Label: "Shown, then ignored", Value: l.Fixed(row.Ignored, 1), Swatch: "f-ignored", Sub: "recent-weighted"},
 		{Label: "Used when judged", Value: rate},
 		boost,

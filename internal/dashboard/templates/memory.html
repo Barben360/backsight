@@ -5,12 +5,14 @@
 {{with memorypage .}}{{$pg := .}}<nav class="small muted" aria-label="Breadcrumb"><a href="/memories">Memories</a> / <span class="mono" title="{{.ID.Full}}">{{.ID.Text}}</span> <button class="copy" type="button" hidden data-copy="{{.FullID}}" aria-label="Copy the memory id"><span class="i i-sm i-copy"></span>Copy id</button></nav>
 {{if .Found}}<div class="row small muted memory-meta">{{template "projlink" .Project}}{{with .Kind}} · {{with $pg.Swatch}}<i class="sw {{.}}"></i> {{end}}{{.}}{{end}}{{if .Created.Datetime}} · created {{template "reltime" .Created}}{{end}}{{if .Server.Word}}<span class="pill st {{.Server.Class}}">{{.Server.Word}}</span>{{end}}</div>
 {{if .ServerMissing}}<p class="small muted">Kind, creation and state on the server are not available: the server did not answer.</p>
-{{end}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
+{{end}}{{end}}<div class="grid-main">
+{{if .Found}}<div class="figs">{{range .Figs}}{{template "fig" .}}{{end}}</div>
 {{end}}{{with .TextHead}}{{template "card-open" .}}
 <p class="small sub">The text is read live from the memory server when you ask, and never kept by the dashboard.</p>
 {{if $pg.TextHref}}<div class="row"><a class="btn" href="{{$pg.TextHref}}"><span class="i i-doc"></span>Show text</a></div>
 {{end}}{{if $pg.State.Word}}<div class="state {{$pg.State.Class}}"><span class="i i-{{$pg.StateIcon}}"></span><span>{{$pg.State.Word}}</span></div>
 {{end}}{{template "card-close" .}}{{end}}
+</div>
 {{with .Strip}}{{template "card-open" .Head}}
 {{.HTML}}
 {{with .AllShows}}<p class="small"><a href="{{.}}">Show all shows</a></p>

@@ -1046,3 +1046,46 @@ func TestMemoryPageOffsetPastTheEnd(t *testing.T) {
 		t.Error("the pager is gone past the end")
 	}
 }
+
+// The figures and the text card sit side by side in one grid, as in the design.
+func TestMemoryFiguresAndTextCardShareTheMainGrid(t *testing.T) {
+	m := mainOf(t, detailNode(t, "memory", "/memories/m", views.Params{Limit: 50}, nil))
+	grid := m.first("div.grid-main")
+	if grid == nil {
+		t.Fatal("no div.grid-main on the memory page")
+	}
+	if grid.first("div.figs") == nil || grid.first("section.card") == nil {
+		t.Errorf("the grid holds figures %v and card %v, want both", grid.first("div.figs"), grid.first("section.card"))
+	}
+	if !strings.Contains(grid.text(), "The text is read live from the memory server") {
+		t.Error("the text card is not in the main grid")
+	}
+}
+
+// "never used" is said of a zero count only; a count with no time says no time.
+func TestMemoryUsedFigureNeverContradictsItsCount(t *testing.T) {
+	sub := func(used float64, lastUsed *time.Time) string {
+		n := detailNode(t, "memory", "/memories/m", views.Params{Limit: 50}, func(d *PageData) {
+			d.V["memories"].GeneratedAt = detailBase
+			r := &d.V["memories"].Tables.Memory.Row
+			r.Used, r.LastUsed = used, lastUsed
+		})
+		for _, f := range mainOf(t, n).find("div.figs div.fig") {
+			if f.first("span.lab").text() == "Used by Claude" {
+				return f.first("span.s").text()
+			}
+		}
+		t.Fatal("no Used by Claude figure")
+		return ""
+	}
+	if s := sub(1.5, nil); strings.Contains(s, "never") || s != "recent-weighted" {
+		t.Errorf("used 1.5, no time: %q", s)
+	}
+	at := detailBase.Add(-2 * time.Hour)
+	if s := sub(1.5, &at); strings.Contains(s, "never") || !strings.Contains(s, "last ") {
+		t.Errorf("used 1.5 at a time: %q", s)
+	}
+	if s := sub(0, nil); !strings.Contains(s, "never used") {
+		t.Errorf("used 0: %q", s)
+	}
+}

@@ -220,7 +220,7 @@ func (c Strip) HTML() template.HTML {
 	}
 
 	W := float64(c.Size.W)
-	base := math.Max(196, rowFirst+float64(nrows-1)*rowGap+18) // 196 up to five rows, as designed
+	base := rowFirst + float64(nrows-1)*rowGap + 18 // the plot fits its rows: no empty band under them
 	sz := Size{c.Size.W, int(base) + 40, c.Size.Class}
 	focus := len(lines)+len(marks) <= FocusMax
 	attrs := func(b *strings.Builder, text string) {

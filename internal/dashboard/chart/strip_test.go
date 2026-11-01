@@ -67,7 +67,7 @@ func TestStripShapesAndRows(t *testing.T) {
 		}
 	}
 	line := regexp.MustCompile(`<line class="thr-w" x1="([^"]*)" x2="([^"]*)" y1="8" y2="([^"]*)" tabindex="0" aria-label="retired on Oct 4"><title>retired on Oct 4</title></line>`).FindStringSubmatch(out)
-	if line == nil || line[1] != line[2] || line[3] != "196.0" || line[1] != f(176+(992.0-176)*20/46) {
+	if line == nil || line[1] != line[2] || line[3] != "82.0" || line[1] != f(176+(992.0-176)*20/46) {
 		t.Errorf("retirement line: %v", line)
 	}
 	if strings.Count(out, `tabindex="0"`) != 6 {
@@ -75,7 +75,7 @@ func TestStripShapesAndRows(t *testing.T) {
 	}
 	must(t, out, `<text class="ta-e lbl" x="160.0" y="30.0">added to the prompt</text>`, `<text class="ta-e lbl" x="160.0" y="68.0">at session start</text>`,
 		`<line class="gl" x1="170.0" x2="992.0" y1="26.0" y2="26.0">`,
-		`<svg class="vb1000" viewBox="0 0 1000 236"`,
+		`<svg class="vb1000" viewBox="0 0 1000 122"`,
 		`<svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-used"`,
 		`</svg>shown, then ignored</span>`, `</svg>pending</span>`, `<i class="sw sw-dash"></i>retired`,
 		`<th>When</th><th>Where</th><th>What</th><th>Detail</th>`,
@@ -225,7 +225,7 @@ func TestStripTicksAreThinnedAndKept(t *testing.T) {
 	c.Ticks = append([]time.Time{t0.AddDate(0, 0, -3)}, c.Ticks...)
 	c.Ticks = append(c.Ticks, t0.AddDate(0, 0, 90))
 	out := string(c.HTML())
-	n := strings.Count(out, `y="228.0">`)
+	n := strings.Count(out, `y="114.0">`)
 	if n < 2 || n > 6 || !strings.Contains(out, `>Sep 15</text>`) && !strings.Contains(out, `>Sep 14</text>`) {
 		t.Errorf("want 2 to 6 tick labels from the first tick, got %d", n)
 	}
@@ -319,8 +319,8 @@ func TestStripLegendIsAbovePlotAndCreatedAndRetiredAreLabelled(t *testing.T) {
 		t.Error("the legend is after the plot")
 	}
 	x := f(176 + (992.0-176)*23/46)
-	must(t, out, `<line class="mk" x1="`+x+`" x2="`+x+`" y1="8" y2="196.0"></line><text class="lbl" x="`+f(176+(992.0-176)*23/46+4)+`" y="208.0">created</text>`,
-		`<text class="ta-e lbl" x="`+f(176+(992.0-176)*20/46-4)+`" y="208.0">retired</text>`)
+	must(t, out, `<line class="mk" x1="`+x+`" x2="`+x+`" y1="8" y2="82.0"></line><text class="lbl" x="`+f(176+(992.0-176)*23/46+4)+`" y="94.0">created</text>`,
+		`<text class="ta-e lbl" x="`+f(176+(992.0-176)*20/46-4)+`" y="94.0">retired</text>`)
 	c.Created = time.Time{}
 	if strings.Contains(string(c.HTML()), `class="mk"`) || strings.Contains(string(c.HTML()), ">created<") {
 		t.Error("no creation time, no line")
@@ -330,7 +330,7 @@ func TestStripLegendIsAbovePlotAndCreatedAndRetiredAreLabelled(t *testing.T) {
 		t.Error("a creation outside the range is drawn")
 	}
 	c.Created = c.To
-	if o := string(c.HTML()); !strings.Contains(o, `<text class="ta-e lbl" x="988.0" y="208.0">created</text>`) {
+	if o := string(c.HTML()); !strings.Contains(o, `<text class="ta-e lbl" x="988.0" y="94.0">created</text>`) {
 		t.Errorf("a late creation is labelled to the left: %s", o)
 	}
 }
@@ -452,5 +452,33 @@ func TestStripTruncatedNamesTakeFromTheMarkBudget(t *testing.T) {
 	}
 	if strings.Contains(out, "not drawn") {
 		t.Error("112 rows fit")
+	}
+}
+
+// The plot is as tall as its rows: a single row is the row band plus the
+// axis band, not the five-row height with an empty area under it.
+func TestStripHeightFitsItsRows(t *testing.T) {
+	vb := regexp.MustCompile(`viewBox="0 0 1000 (\d+)" role="img"`)
+	height := func(rows int) int {
+		c := baseStrip()
+		c.Rows = c.Rows[:0]
+		c.Marks = nil
+		for i := 0; i < rows; i++ {
+			c.Rows = append(c.Rows, "row "+strconv.Itoa(i))
+			c.Marks = append(c.Marks, Mark{i, t0, "used", "u"})
+		}
+		m := vb.FindStringSubmatch(string(c.HTML()))
+		if m == nil {
+			t.Fatalf("no viewBox with %d rows", rows)
+		}
+		h, _ := strconv.Atoi(m[1])
+		return h
+	}
+	// the first row at 26, 18 below the last row's line to the axis, 40 for its labels.
+	if h := height(1); h > 26+18+40 {
+		t.Errorf("one row: height %d, want at most %d", h, 26+18+40)
+	}
+	if h1, h5 := height(1), height(5); h5-h1 != 4*38 {
+		t.Errorf("each extra row adds 38: one row %d, five %d", h1, h5)
 	}
 }
