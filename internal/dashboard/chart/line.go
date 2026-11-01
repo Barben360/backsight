@@ -5,10 +5,15 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Y is one value of a series. Den > 0 makes it a rate (Num of Den), merged
 // as the sum of Num over the sum of Den when positions are bucketed.
+//
+// A position whose Y values all have a nil V is a gap, whatever their Den.
+// Otherwise, when every Den is positive, the drawn value is the sum of Num
+// over the sum of Den (V is expected to equal Num/Den); else the merge of V.
 type Y struct {
 	V        *float64
 	Num, Den int64
@@ -18,6 +23,11 @@ type Y struct {
 type Series struct {
 	Name, Class string
 	Y           []Y
+	// Dashed draws the line dashed and without dots (the second line of a pair).
+	Dashed bool
+	// Band draws the 95 % Wilson interval of a rate series (every Den > 0)
+	// under the line, from each position's merged sum of Num over sum of Den.
+	Band bool
 }
 
 // Merge says how bucketed values of a series combine.
@@ -60,8 +70,9 @@ const (
 )
 
 type val struct {
-	v  float64
-	ok bool
+	v        float64
+	ok       bool
+	num, den int64 // set when v is a rate ΣNum/ΣDen
 }
 
 // bucketSize is the smallest k with ceil(positions/k) <= MaxMarks.
@@ -104,10 +115,11 @@ func merge(mode Merge, ys []Y) val {
 	}
 	var out float64
 	switch {
-	case mode == MergeRate && allDen:
-		out = float64(num) / float64(den)
 	case count == 0:
 		return val{}
+	case mode == MergeRate && allDen:
+		out = float64(num) / float64(den)
+		return val{out, finite(out), num, den}
 	case mode == MergeMax:
 		out = top
 	case mode == MergeSum:
@@ -115,7 +127,7 @@ func merge(mode Merge, ys []Y) val {
 	default:
 		out = sum / float64(count)
 	}
-	return val{out, finite(out)}
+	return val{v: out, ok: finite(out)}
 }
 
 // HTML draws the chart, or the empty sentence when nothing is drawable.
@@ -202,7 +214,13 @@ func (c Line) HTML() template.HTML {
 			if nmax > 0 && v > 0 {
 				h = float64(v) / float64(nmax) * plotH * 0.3
 			}
-			b.WriteString(`<rect class="nb" x="` + f(x(j)-bw/2) + `" y="` + f(plotBase-h) + `" width="` + f(bw) + `" height="` + f(h) + `"></rect>`)
+			bx0, bx1 := math.Max(left, x(j)-bw/2), math.Min(right, x(j)+bw/2)
+			b.WriteString(`<rect class="nb" x="` + f(bx0) + `" y="` + f(plotBase-h) + `" width="` + f(bx1-bx0) + `" height="` + f(h) + `"></rect>`)
+		}
+	}
+	for s, ser := range c.Series {
+		if ser.Band {
+			b.WriteString(bandPath(vals[s], x, y))
 		}
 	}
 	for _, l := range c.Limits {
@@ -215,6 +233,9 @@ func (c Line) HTML() template.HTML {
 	}
 	for s, ser := range c.Series {
 		cls := known(ser.Class)
+		if ser.Dashed {
+			cls = strings.TrimSpace(cls + " ln-2")
+		}
 		var run []string
 		flush := func() {
 			if len(run) > 1 {
@@ -231,14 +252,14 @@ func (c Line) HTML() template.HTML {
 		}
 		flush()
 		for j, v := range vals[s] {
-			if v.ok {
+			if v.ok && !ser.Dashed {
 				b.WriteString(`<circle class="pt ` + cls + `" cx="` + f(x(j)) + `" cy="` + f(y(v.v)) + `" r="3"></circle>`)
 			}
 		}
 	}
 	b.WriteString(`<line class="bl" x1="` + f(left) + `" x2="` + f(right) + `" y1="` + f(plotBase) + `" y2="` + f(plotBase) + `"></line>`)
-	for _, j := range labelIdx(m) {
-		b.WriteString(`<text class="ta-m" x="` + f(x(j)) + `" y="218">` + esc(xs[j]) + `</text>`)
+	for _, l := range pickLabels(xs, x, W) {
+		b.WriteString(`<text class="ta-m" x="` + f(l.x) + `" y="218">` + esc(xs[l.j]) + `</text>`)
 	}
 
 	focus := m <= FocusMax
@@ -261,9 +282,18 @@ func (c Line) HTML() template.HTML {
 
 	var legend []legendItem
 	head := []string{c.XName}
+	hasBand := false
 	for _, ser := range c.Series {
-		legend = append(legend, legendItem{known(ser.Class), ser.Name})
+		cls := known(ser.Class)
+		if ser.Dashed {
+			cls = strings.TrimSpace(cls + " ln-2")
+		}
+		legend = append(legend, legendItem{cls, ser.Name})
 		head = append(head, ser.Name)
+		hasBand = hasBand || ser.Band
+	}
+	if hasBand {
+		legend = append(legend, legendItem{"band-sw", "interval (95 %)"})
 	}
 	if c.N != nil {
 		legend = append(legend, legendItem{"nb-sw", "faint bars: " + c.NName})
@@ -318,4 +348,107 @@ func labelIdx(m int) []int {
 		}
 	}
 	return out
+}
+
+// bandPath is the 95 % interval of a rate series as one closed path per run
+// of positions that have one; a gap breaks it like the line.
+func bandPath(row []val, x func(int) float64, y func(float64) float64) string {
+	var d strings.Builder
+	var run []int
+	flush := func() {
+		if len(run) > 1 {
+			for i, j := range run {
+				_, hi := wilson(row[j].num, row[j].den)
+				cmd := " L "
+				if i == 0 {
+					cmd = "M "
+				}
+				d.WriteString(cmd + f(x(j)) + " " + f(y(hi)))
+			}
+			for i := len(run) - 1; i >= 0; i-- {
+				lo, _ := wilson(row[run[i]].num, row[run[i]].den)
+				d.WriteString(" L " + f(x(run[i])) + " " + f(y(lo)))
+			}
+			d.WriteString(" Z ")
+		}
+		run = run[:0]
+	}
+	for j, v := range row {
+		if v.ok && v.den > 0 {
+			run = append(run, j)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	if d.Len() == 0 {
+		return ""
+	}
+	return `<path class="band" d="` + strings.TrimSpace(d.String()) + `"></path>`
+}
+
+// wilson is the 95 % Wilson score interval of num successes in den trials,
+// the same as metrics.Wilson (a test pins them equal).
+func wilson(num, den int64) (lo, hi float64) {
+	const z = 1.96
+	if den <= 0 {
+		return 0, 0
+	}
+	num = max(0, min(num, den))
+	n := float64(den)
+	p := float64(num) / n
+	d := 1 + z*z/n
+	centre := (p + z*z/(2*n)) / d
+	half := z * math.Sqrt(p*(1-p)/n+z*z/(4*n*n)) / d
+	lo, hi = max(0, centre-half), min(1, centre+half)
+	if num == 0 {
+		lo = 0
+	}
+	if num == den {
+		hi = 1
+	}
+	return lo, hi
+}
+
+type xLabel struct {
+	j int
+	x float64
+}
+
+// pickLabels chooses at most six x labels (first, last, evenly between),
+// centred on their position but kept inside the svg, and thins them until
+// no two overlap at an estimated 7 user units per character.
+func pickLabels(xs []string, x func(int) float64, width float64) []xLabel {
+	m := len(xs)
+	if m <= 1 {
+		if m == 1 {
+			return []xLabel{{0, clamp(x(0), 0, width)}}
+		}
+		return nil
+	}
+	for cnt := min(m, 6); cnt >= 2; cnt-- {
+		var out []xLabel
+		ok := true
+		for i := 0; i < cnt; i++ {
+			j := int(math.Round(float64(i) * float64(m-1) / float64(cnt-1)))
+			if len(out) > 0 && out[len(out)-1].j == j {
+				continue
+			}
+			hw := float64(utf8.RuneCountInString(xs[j])) * 7 / 2
+			cx := clamp(x(j), hw+1, math.Max(hw+1, width-hw-1))
+			if len(out) > 0 {
+				prev := out[len(out)-1]
+				phw := float64(utf8.RuneCountInString(xs[prev.j])) * 7 / 2
+				if cx-prev.x < hw+phw+8 {
+					ok = false
+					break
+				}
+			}
+			out = append(out, xLabel{j, cx})
+		}
+		if ok {
+			return out
+		}
+	}
+	return []xLabel{{0, clamp(x(0), 0, width)}}
 }

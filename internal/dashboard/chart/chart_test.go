@@ -22,12 +22,33 @@ func ys(vs ...*float64) []Y {
 func plain(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 func pct(v float64) string   { return strconv.FormatFloat(math.Round(v*100), 'f', -1, 64) + " %" }
 
-// every output the tests produce, for the public-text and class checks.
-var outputs []string
+func keep(s string) string { return s }
 
-func keep(s string) string {
-	outputs = append(outputs, s)
-	return s
+// corpus builds the outputs the public-text and class checks scan: every
+// feature of the package at least once, with no dependence on other tests.
+func corpus() []string {
+	x := make([]string, 40)
+	v := make([]*float64, 40)
+	for i := range x {
+		x[i], v[i] = fmt.Sprintf("Oct %d", i+1), p(float64(i%7)/7)
+	}
+	full := usedLine(x, v...)
+	full.N, full.NName = make([]int64, 40), "turns"
+	full.Limits = []Limit{{"limit", 0.9, "thr"}, {"watch", 0.5, "thr-w"}}
+	full.Series = append(full.Series, Series{Name: "Said", Class: "s-coverage", Dashed: true, Y: ys(v...)})
+	full.Series[0].Band = true
+	for i := range full.Series[0].Y {
+		full.Series[0].Y[i].Num, full.Series[0].Y[i].Den = int64(i%7), 7
+	}
+	capped := many(2000)
+	capped.More, capped.Fmt = "backsight stats", pct
+	gap := usedLine([]string{"a", "b", "c", "d", "e"}, p(0), p(1), nil, p(0.5), p(0.2))
+	return []string{
+		string(full.HTML()), string(capped.HTML()), string(gap.HTML()),
+		string(usedLine([]string{"a"}, nil).HTML()),
+		spark("Found per day", 24, 31, 27, 22, 30, 29, 28), spark("L", 1),
+		string(Spark{Label: "L", Fmt: plain, Y: []*float64{nil, p(1), p(2)}}.HTML()),
+	}
 }
 
 func spark(label string, vs ...float64) string {
@@ -243,8 +264,7 @@ func TestChartOutputIsPublicText(t *testing.T) {
 	for i := range x {
 		x[i], v[i] = fmt.Sprintf("Oct %d", i+1), p(float64(i%7)/7)
 	}
-	keep(string(usedLine(x, v...).HTML()))
-	for _, out := range outputs {
+	for _, out := range append(corpus(), keep(string(usedLine(x, v...).HTML()))) {
 		for _, re := range publicPatterns {
 			if m := re.FindString(out); m != "" {
 				t.Errorf("output holds %q (%s)", m, re)
@@ -431,15 +451,12 @@ func TestChartsSurviveDegenerateSeries(t *testing.T) {
 }
 
 func TestChartClassesAreKnown(t *testing.T) {
-	if len(outputs) == 0 {
-		t.Skip("run with the other tests")
-	}
 	known := map[string]bool{}
 	for _, c := range Classes {
 		known[c] = true
 	}
 	re := regexp.MustCompile(`class="([^"]*)"`)
-	for _, out := range outputs {
+	for _, out := range corpus() {
 		for _, m := range re.FindAllStringSubmatch(out, -1) {
 			for _, tok := range strings.Fields(m[1]) {
 				if !known[tok] {
@@ -465,5 +482,188 @@ func TestNiceMax(t *testing.T) {
 		if got := niceMax(in); math.Abs(got-want) > 1e-12 {
 			t.Errorf("niceMax(%v) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+func TestBandIsTheWilsonInterval(t *testing.T) {
+	mk := func(band bool, ys ...Y) Line {
+		x := make([]string, len(ys))
+		for i := range x {
+			x[i] = fmt.Sprintf("d%d", i)
+		}
+		return Line{Label: "L", Size: Half, XName: "Day", X: x, Fmt: pct, Rate: true, Empty: "e", Merge: MergeRate,
+			Series: []Series{{Name: "Found", Class: "s-used", Band: band, Y: ys}}}
+	}
+	half := Y{V: p(0.5), Num: 5, Den: 10}
+	out := string(mk(true, half, half).HTML())
+	lo, hi := wilson(5, 10)
+	yy := func(v float64) string { return f(200 - v*188) }
+	want := `<path class="band" d="M 52.0 ` + yy(hi) + ` L 544.0 ` + yy(hi) + ` L 544.0 ` + yy(lo) + ` L 52.0 ` + yy(lo) + ` Z"></path>`
+	must(t, out, want, `<span><i class="sw band-sw"></i>interval (95 %)</span>`)
+	if strings.Index(out, `class="band"`) > strings.Index(out, "<polyline") {
+		t.Error("the band sits under the line")
+	}
+	if off := string(mk(false, half, half).HTML()); strings.Contains(off, "band") {
+		t.Errorf("no Band, no band: %s", off)
+	}
+	// a gap breaks the band; a lone position has none.
+	gap := string(mk(true, half, half, Y{}, half, half, Y{}, half).HTML())
+	if got := strings.Count(gap, `class="band"`); got != 1 {
+		t.Errorf("one band path, one subpath per run of two (the lone position has none): %s", gap)
+	}
+	if d := regexp.MustCompile(`class="band" d="([^"]*)"`).FindStringSubmatch(gap)[1]; strings.Count(d, "M ") != 2 {
+		t.Errorf("band subpaths = %d, want 2: %s", strings.Count(d, "M "), d)
+	}
+	// bucketed: the interval of the sums.
+	big := many(2000)
+	big.Series[0].Band = true
+	b := string(big.HTML())
+	if strings.Count(b, `class="band"`) != 1 || !strings.Contains(b, yy(func() float64 { _, h := wilson(8, 12); return h }())) {
+		t.Errorf("a bucket's band is the interval of ΣNum/ΣDen: %.300s", b)
+	}
+	// a series without denominators has no band.
+	plainY := mk(true, Y{V: p(0.5)}, Y{V: p(0.6)})
+	if strings.Contains(string(plainY.HTML()), `class="band"`) {
+		t.Error("no denominators, no interval")
+	}
+}
+
+func TestDashedSeriesHasNoDots(t *testing.T) {
+	c := usedLine([]string{"a", "b"}, p(0.2), p(0.4))
+	c.Series[0].Dashed = true
+	out := string(c.HTML())
+	must(t, out, `<polyline class="ln s-used ln-2"`, `<span><i class="sw s-used ln-2"></i>Used</span>`)
+	if strings.Contains(out, `class="pt`) {
+		t.Errorf("a dashed series draws no dots: %s", out)
+	}
+}
+
+func TestAllNilPositionIsAGapEvenWithDen(t *testing.T) {
+	c := usedLine([]string{"a", "b"})
+	c.Merge = MergeRate
+	c.Series[0].Y = []Y{{Num: 1, Den: 2}, {Num: 3, Den: 4}}
+	out := string(c.HTML())
+	must(t, out, `<p class="empty">Nothing yet.</p>`)
+	c.Series[0].Y = []Y{{Num: 1, Den: 2}, {V: p(0.75), Num: 3, Den: 4}}
+	must(t, string(c.HTML()), `<title>a · Used: —</title>`, `<title>b · Used: 75 %</title>`)
+}
+
+func TestXLabelsNeverOverlapOrClip(t *testing.T) {
+	c := many(500)
+	c.Size = Half
+	for i := range c.X {
+		c.X[i] = fmt.Sprintf("Wed Oct %d 2026 03:00", i)
+	}
+	type lab struct {
+		x float64
+		w float64
+	}
+	read := func(out string) []lab {
+		var ls []lab
+		for _, m := range regexp.MustCompile(`<text class="ta-m" x="([\d.]+)" y="218">([^<]*)</text>`).FindAllStringSubmatch(out, -1) {
+			x, _ := strconv.ParseFloat(m[1], 64)
+			ls = append(ls, lab{x, float64(len([]rune(m[2]))) * 7})
+		}
+		return ls
+	}
+	ls := read(string(c.HTML()))
+	if len(ls) == 0 || len(ls) > 3 {
+		t.Fatalf("long labels on a half-width chart: %d labels, want 1 to 3", len(ls))
+	}
+	for i, l := range ls {
+		if l.x-l.w/2 < 0 || l.x+l.w/2 > 560 {
+			t.Errorf("label %d spans %.1f to %.1f, outside the svg", i, l.x-l.w/2, l.x+l.w/2)
+		}
+		if i > 0 && l.x-ls[i-1].x < (l.w+ls[i-1].w)/2 {
+			t.Errorf("labels %d and %d overlap", i-1, i)
+		}
+	}
+	// short labels keep the full six, the first and last inside the svg.
+	short := read(string(many(30).HTML()))
+	if len(short) != 6 {
+		t.Errorf("30 short labels: %d drawn, want 6", len(short))
+	}
+	for _, l := range short {
+		if l.x-l.w/2 < 0 || l.x+l.w/2 > 1000 {
+			t.Errorf("label at %.1f clips", l.x)
+		}
+	}
+}
+
+func TestLineBarAndHitGeometry(t *testing.T) {
+	c := usedLine([]string{"a", "b"}, p(0.5), p(0.25))
+	c.N, c.NName = []int64{10, 5}, "turns"
+	out := string(c.HTML())
+	// own max 10 -> 30 % of the 188-high plot is 56.4; the bar width is 0.6 of the 492 step.
+	must(t, out,
+		`<rect class="nb" x="44.0" y="143.6" width="155.6" height="56.4"></rect>`,
+		`<rect class="nb" x="396.4" y="171.8" width="155.6" height="28.2"></rect>`,
+		`<rect class="hit" x="44.0" y="12.0" width="254.0" height="188.0"`,
+		`<rect class="hit" x="298.0" y="12.0" width="254.0" height="188.0"`)
+}
+
+func TestMergeIgnoresDenOutsideRate(t *testing.T) {
+	ys := []Y{{V: p(2), Num: 1, Den: 2}, {V: p(6), Num: 3, Den: 4}}
+	for m, want := range map[Merge]float64{MergeMax: 6, MergeMean: 4, MergeSum: 8} {
+		if got := merge(m, ys); !got.ok || got.v != want {
+			t.Errorf("merge %d = %v, want %v", m, got, want)
+		}
+	}
+	if got := merge(MergeRate, ys); got.v != 0.5+0.0 && got.v != 4.0/6 {
+		t.Errorf("rate = %v", got)
+	}
+	// a non-finite value inside a bucket is skipped, not poisoning the rest.
+	if got := merge(MergeMean, []Y{{V: p(1)}, {V: p(math.NaN())}, {V: p(math.Inf(1))}}); !got.ok || got.v != 1 {
+		t.Errorf("mean with non-finite = %v, want 1", got)
+	}
+	if got := merge(MergeSum, []Y{{V: p(math.NaN())}}); got.ok {
+		t.Error("only non-finite values: missing")
+	}
+}
+
+func TestNonFiniteLimitsAreSkipped(t *testing.T) {
+	c := Line{Label: "L", Size: Half, XName: "D", X: []string{"a", "b"}, Fmt: plain, Empty: "e",
+		Series: []Series{{Name: "S", Class: "s-used", Y: ys(p(1), p(2))}},
+		Limits: []Limit{{"nan", math.NaN(), "thr"}, {"inf", math.Inf(1), "thr"}, {"ok", 1, "thr-w"}}}
+	out := string(c.HTML())
+	if strings.Contains(out, "NaN") || strings.Contains(out, "Inf") || strings.Contains(out, ">nan<") || strings.Contains(out, ">inf<") {
+		t.Errorf("non-finite limit drawn: %s", out)
+	}
+	if strings.Count(out, `class="thr-w"`) != 1 || strings.Contains(out, `class="thr"`) {
+		t.Errorf("only the finite limit is drawn: %s", out)
+	}
+	must(t, out, `>2.5</text>`) // the axis ignores the infinite limit: max 2 -> 2.5
+}
+
+func TestGeometryNumbers(t *testing.T) {
+	for in, want := range map[float64]string{math.NaN(): "0.0", math.Inf(1): "0.0", math.Inf(-1): "0.0", -0.04: "0.0", 1.25: "1.2", -3: "-3.0"} {
+		if got := f(in); got != want {
+			t.Errorf("f(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSparkSummaryBoundary(t *testing.T) {
+	list := func(n int) string {
+		vs := make([]float64, n)
+		for i := range vs {
+			vs[i] = float64(i + 1)
+		}
+		return spark("L", vs...)
+	}
+	if out := list(31); !strings.Contains(out, "L: 1, 2, 3") || strings.Contains(out, "from") {
+		t.Errorf("31 values are listed: %.200s", out)
+	}
+	if out := list(32); !strings.Contains(out, "L: from 1 to 32, lowest 1, highest 32") {
+		t.Errorf("32 values are summarised: %.200s", out)
+	}
+}
+
+func TestSizeClassIsWhitelisted(t *testing.T) {
+	c := usedLine([]string{"a", "b"}, p(1), p(1))
+	c.Size = Size{560, 230, `vb560" onload="x`}
+	out := string(c.HTML())
+	if strings.Contains(out, "onload") {
+		t.Errorf("unknown size class passed through: %s", out)
 	}
 }

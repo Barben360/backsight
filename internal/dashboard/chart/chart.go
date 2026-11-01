@@ -41,7 +41,7 @@ var (
 var Classes = []string{
 	"chart", "chart-plot", "vb560", "vb1000", "legend", "sw", "nb-sw",
 	"tblfb", "tbl-wrap", "tbl", "tbl-more", "r", "empty",
-	"gl", "bl", "nb", "ln", "ln-2", "pt", "hit", "ta-e", "ta-m", "thr", "thr-w", "thr-t",
+	"gl", "bl", "nb", "band", "band-sw", "ln", "ln-2", "pt", "hit", "ta-e", "ta-m", "thr", "thr-w", "thr-t",
 	"spark", "sb", "sa", "sl", "se",
 	"s-used", "s-coverage", "s-hit", "s-search", "s-empty", "s-latency", "s-search-latency", "s-fg",
 	"seg", "hatch-ln", "val",
@@ -104,7 +104,7 @@ type tableData struct {
 // scrolls sideways, so the legend and the table stay in view.
 func figure(label string, sz Size, focusable bool, svg string, legend []legendItem, t tableData) string {
 	var b strings.Builder
-	b.WriteString(`<figure class="chart"><div class="chart-plot"><svg class="` + esc(sz.Class) + `" viewBox="0 0 ` +
+	b.WriteString(`<figure class="chart"><div class="chart-plot"><svg class="` + esc(known(sz.Class)) + `" viewBox="0 0 ` +
 		strconv.Itoa(sz.W) + ` ` + strconv.Itoa(sz.H) + `" role="img" aria-label="` + esc(label) + `"`)
 	if focusable {
 		b.WriteString(` tabindex="0"`)
