@@ -128,10 +128,10 @@ func TestWorkflowsRunOnHostedRunners(t *testing.T) {
 			for _, m := range runsOn.FindAllStringSubmatch(j.raw, -1) {
 				on = append(on, m[1])
 			}
-			// The unit tests run once on Windows (M7 block 2); every other
-			// job is Linux's.
+			// The unit tests and the native chain run on Windows too (M7
+			// block 2); every other job is Linux's.
 			want := "ubuntu-latest"
-			if w.name == "ci.yml" && j.name == "test-windows" {
+			if w.name == "ci.yml" && (j.name == "test-windows" || j.name == "native-chain-windows") {
 				want = "windows-latest"
 			}
 			if len(on) != 1 || on[0] != want {
