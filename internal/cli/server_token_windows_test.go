@@ -33,7 +33,7 @@ func openFolder(t *testing.T) string {
 	return d
 }
 
-// dacLProtected reports that path's DACL does not inherit from its folder.
+// daclProtected reports that path's DACL does not inherit from its folder.
 func daclProtected(t *testing.T, path string) bool {
 	t.Helper()
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
