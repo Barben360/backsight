@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -118,6 +119,7 @@ func newServerSuperviseCmd(*env) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, _, err := loadServerConfig()
 			if err != nil {
+				logSuperviseFailure("", err)
 				return err
 			}
 			d, _, err := machine()
@@ -125,21 +127,25 @@ func newServerSuperviseCmd(*env) *cobra.Command {
 				return err
 			}
 			n := server.Native{Cfg: cfg, Dirs: d, Sys: nativeSys, Tools: nativeTools, Ask: nativeAsk, Proc: nativeProc, StrayWait: nativeStrayWait}
-			path := n.SuperviseFile()
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return blocked(fmt.Errorf("the supervisor's configuration: %w (run backsight server render)", err))
-			}
-			var sc supervise.Config
-			if err := json.Unmarshal(raw, &sc); err != nil {
-				return blocked(fmt.Errorf("%s: %w (run backsight server render)", path, err))
-			}
 			want := cfg.Server.Project
 			if want == "" {
 				want = server.Project
 			}
+			refuse := func(err error) error {
+				logSuperviseFailure(want, err)
+				return blocked(err)
+			}
+			path := n.SuperviseFile()
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return refuse(fmt.Errorf("the supervisor's configuration: %w (run backsight server render)", err))
+			}
+			var sc supervise.Config
+			if err := json.Unmarshal(raw, &sc); err != nil {
+				return refuse(fmt.Errorf("%s: %w (run backsight server render)", path, err))
+			}
 			if sc.Project != want {
-				return blocked(fmt.Errorf("%s supervises project %q, config.toml names %q: run backsight server render", path, sc.Project, want))
+				return refuse(fmt.Errorf("%s supervises project %q, config.toml names %q: run backsight server render", path, sc.Project, want))
 			}
 			opts := supervise.Options{
 				Check:   func(ctx context.Context, log io.Writer) error { return superviseGuard(ctx, n, sc, log) },
@@ -155,4 +161,21 @@ func newServerSuperviseCmd(*env) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&noAPI, "no-api", false, "start the database alone (the API on api-start)")
 	return cmd
+}
+
+// logSuperviseFailure appends what stopped server supervise before the
+// supervisor ran to <state>/logs/<project>-supervisor.log, the log doctor
+// and server status point at, redacted: the task's conhost has no stderr
+// anyone reads. A config.toml that does not load names no project: the
+// default one's log gets it, the one a default install reads. Without a
+// state directory there is nowhere to write: stderr alone has it.
+func logSuperviseFailure(project string, err error) {
+	if project == "" {
+		project = server.Project
+	}
+	d, _, derr := machine()
+	if derr != nil {
+		return
+	}
+	_ = supervise.LogFailure(filepath.Join(d.State, "logs"), project, localSecretValues(), err)
 }

@@ -157,6 +157,9 @@ type opRequest struct {
 // cfg.Project returns nil at once, having started nothing.
 func Run(ctx context.Context, cfg Config, opts Options) error {
 	if err := cfg.check(opts.NoAPI); err != nil {
+		if cfg.LogDir != "" && cfg.Project != "" {
+			_ = LogFailure(cfg.LogDir, cfg.Project, opts.Secrets, err)
+		}
 		return err
 	}
 	if err := fsutil.MkdirPrivate(cfg.LogDir); err != nil {
@@ -209,6 +212,23 @@ func Run(ctx context.Context, cfg Config, opts Options) error {
 	s.waitOutputs(outputWait)
 	s.logf("supervisor of %s stopped", cfg.Project)
 	return err
+}
+
+// LogFailure appends why the supervisor of project did not run to its log
+// (<logDir>/<project>-supervisor.log), stamped and redacted of secrets as
+// its own lines are: what stops it before Run has nowhere else to go (the
+// task's conhost has no stderr anyone reads).
+func LogFailure(logDir, project string, secrets []string, err error) error {
+	if err := fsutil.MkdirPrivate(logDir); err != nil {
+		return err
+	}
+	l, oerr := openRotating(filepath.Join(logDir, project+"-supervisor.log"))
+	if oerr != nil {
+		return oerr
+	}
+	line := tm.now().UTC().Format(time.RFC3339) + " supervisor of " + project + " did not start: " + err.Error() + "\n"
+	_, werr := io.WriteString(l, redact.Values(line, secrets))
+	return errors.Join(werr, l.Close())
 }
 
 func (c Config) check(noAPI bool) error {

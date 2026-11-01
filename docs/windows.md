@@ -121,7 +121,7 @@ A later `backsight setup` whose probe task passes removes `server.start_on_sessi
 
 In the `logs` directory of backsight's state directory (`%LOCALAPPDATA%\backsight\state\logs` by default; `backsight paths` shows the state directory):
 
-- `<project>-supervisor.log`: what the supervisor did (starts, restarts, refusals, stops);
+- `<project>-supervisor.log`: what the supervisor did (starts, restarts, refusals, stops), and what kept it from starting at all (a `config.toml` that does not load, a missing `supervise.json`); a `config.toml` that does not load names no project, so that goes to `backsight-supervisor.log`;
 - `<project>-db.log`: the database's output;
 - `<project>-api.log`: the memory server's output.
 

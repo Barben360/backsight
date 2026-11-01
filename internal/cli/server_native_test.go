@@ -588,3 +588,56 @@ func TestServerSuperviseRefusesAnotherProjectsJSON(t *testing.T) {
 		t.Errorf("postgres ran %q", got)
 	}
 }
+
+// What stops server supervise before the supervisor runs (a config that
+// does not load, no supervise.json, another project's) goes to the
+// supervisor's log, redacted: the task's conhost has no stderr anyone
+// reads, and doctor and server status point at that log.
+func TestServerSuperviseLogsWhatStopsItBeforeItRuns(t *testing.T) {
+	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-prerun"
+	n, sc := superviseHost(t, p)
+	secret := "sk-prerun-secret-0123456789"
+	if err := os.WriteFile(n.Dirs.SecretsFile(), []byte("api_key = \""+secret+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logOf := func(project string) string {
+		raw, _ := os.ReadFile(filepath.Join(n.LogDir(), project+"-supervisor.log"))
+		return string(raw)
+	}
+	// Another project's supervise.json, its name the secret.
+	sc.Project = secret
+	raw, _ := json.Marshal(sc)
+	if err := os.WriteFile(n.SuperviseFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "server", "supervise"); code != output.Blocked {
+		t.Fatalf("another project's supervise.json: exit %d", code)
+	}
+	if l := logOf(p); !strings.Contains(l, "supervises project") || !strings.Contains(l, "[redacted]") || strings.Contains(l, secret) {
+		t.Errorf("another project's supervise.json: log %q, want the refusal, redacted", l)
+	}
+	// No supervise.json.
+	if err := os.Remove(n.SuperviseFile()); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "server", "supervise"); code != output.Blocked {
+		t.Fatalf("no supervise.json: exit %d", code)
+	}
+	if l := logOf(p); !strings.Contains(l, "the supervisor's configuration") || !strings.Contains(l, "run backsight server render") {
+		t.Errorf("no supervise.json: log %q, want why", l)
+	}
+	if lines := strings.Count(strings.TrimSpace(logOf(p)), "\n") + 1; lines != 2 {
+		t.Errorf("the log holds %d lines, want one per failure (appended):\n%s", lines, logOf(p))
+	}
+	// A config.toml that does not load: the project is unknown, the
+	// default one's log gets it.
+	if err := os.WriteFile(n.Dirs.ConfigFile(), []byte("[server\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "server", "supervise"); code == output.OK {
+		t.Fatal("a config that does not load: exit 0")
+	}
+	if l := logOf(server.Project); !strings.Contains(l, "config.toml") {
+		t.Errorf("a config that does not load: %s log %q, want why", server.Project, l)
+	}
+}
