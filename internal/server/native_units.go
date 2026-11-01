@@ -672,10 +672,17 @@ func (n Native) Delete(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := os.RemoveAll(n.Root()); err != nil {
+	_, task := h.(taskHost)
+	remove := os.RemoveAll
+	if task {
+		// Windows: a file the supervisor's processes, just ended, or a
+		// scanner still hold a moment refuses its removal that moment.
+		remove = removeAllRetry
+	}
+	if err := remove(n.Root()); err != nil {
 		return err
 	}
-	if _, task := h.(taskHost); task {
+	if task {
 		n.dropPg0Skeleton()
 	}
 	return nil

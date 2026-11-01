@@ -13,3 +13,6 @@ func RemoveRetry(path string) error { return os.Remove(path) }
 
 // renameRetry is os.Rename on Unix.
 func renameRetry(from, to string) error { return os.Rename(from, to) }
+
+// Held is false: Unix has no sharing violation to wait out.
+func Held(error) bool { return false }

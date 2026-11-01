@@ -989,3 +989,71 @@ func TestWindowsTextsNameNoSystemdUnit(t *testing.T) {
 		t.Errorf("UnitStates = %v %v, want db and hindsight inactive", states, err)
 	}
 }
+
+// Delete removes the root right after the supervisor's processes end: a
+// file one of them, or a scanner, still holds a moment (opened without
+// FILE_SHARE_DELETE) refuses the removal for that moment, and the removal
+// is retried rather than failing the delete.
+func TestDeleteWaitsForAFileHeldAMoment(t *testing.T) {
+	h, _ := taskFixture(t)
+	n := h.n
+	held := filepath.Join(n.Root(), "db", "postmaster.pid")
+	if err := os.MkdirAll(filepath.Dir(held), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(held, []byte("4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(held) // Go's open shares no DELETE
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = f.Close()
+		close(released)
+	}()
+	defer func() { <-released }()
+	if err := n.Delete(context.Background()); err != nil {
+		t.Fatalf("Delete while a file is held a moment: %v", err)
+	}
+	if exists(n.Root()) {
+		t.Error("the root stays")
+	}
+}
+
+// A file held without FILE_SHARE_DELETE (a process of the job just ended,
+// an indexer) refuses its rename with a sharing violation, not an access
+// denied: renameRetry waits for it as fsutil's retries do.
+func TestRenameRetriesASharingViolation(t *testing.T) {
+	old := renameRetryWait
+	renameRetryWait = 5 * time.Second
+	t.Cleanup(func() { renameRetryWait = old })
+	dir := t.TempDir()
+	from, to := filepath.Join(dir, "from"), filepath.Join(dir, "to")
+	if err := os.WriteFile(from, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(from, to); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		_ = f.Close()
+		t.Fatalf("a rename of a held file: %v, want a sharing violation (the case under test)", err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		_ = f.Close()
+		close(released)
+	}()
+	defer func() { <-released }()
+	if err := renameRetry(from, to); err != nil {
+		t.Fatalf("renameRetry while the file is held a moment: %v", err)
+	}
+	if !exists(to) || exists(from) {
+		t.Errorf("after the rename: to %v, from %v", exists(to), exists(from))
+	}
+}

@@ -33,19 +33,20 @@ func OpenShared(path string) (*os.File, error) {
 // retryEvery is the pause between two attempts.
 const retryEvery = 50 * time.Millisecond
 
-// held is a sharing violation or an access denied: a reader (an antivirus
-// scan, a hook, an editor) has the file open without FILE_SHARE_DELETE.
-func held(err error) bool {
+// Held is a sharing violation or an access denied: a reader (an antivirus
+// scan, a hook, an editor) has the file open without FILE_SHARE_DELETE,
+// what a write, rename or remove waits out.
+func Held(err error) bool {
 	return errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
-// retry runs op again, every retryEvery, while it fails with held, for at
+// retry runs op again, every retryEvery, while it fails with Held, for at
 // most RetryFor.
 func retry(op func() error) error {
 	deadline := time.Now().Add(RetryFor)
 	for {
 		err := op()
-		if err == nil || !held(err) || !time.Now().Before(deadline) {
+		if err == nil || !Held(err) || !time.Now().Before(deadline) {
 			return err
 		}
 		time.Sleep(retryEvery)

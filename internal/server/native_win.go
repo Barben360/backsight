@@ -69,14 +69,17 @@ var osRename = os.Rename
 // renameRetryWait bounds renameRetry.
 var renameRetryWait = 10 * time.Second
 
-// renameRetry is os.Rename, retried for a few seconds while it is denied:
-// on Windows a file just closed by a job's process, or held a moment by
-// an indexer or an antivirus, refuses a move of its directory.
+// renameRetry is os.Rename, retried for a few seconds while it is denied
+// or the file is held: on Windows a file just closed by a job's process,
+// or held a moment by an indexer or an antivirus, refuses a move of its
+// directory (access denied) or of itself (a sharing violation), as
+// fsutil's retries take them (fsutil.Held).
 func renameRetry(from, to string) error {
 	deadline := time.Now().Add(renameRetryWait)
 	for {
 		err := osRename(from, to)
-		if err == nil || !errors.Is(err, fs.ErrPermission) || !time.Now().Before(deadline) {
+		held := errors.Is(err, fs.ErrPermission) || fsutil.Held(err)
+		if err == nil || !held || !time.Now().Before(deadline) {
 			return err
 		}
 		time.Sleep(100 * time.Millisecond)
