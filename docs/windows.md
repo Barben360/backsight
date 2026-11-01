@@ -1,11 +1,11 @@
 # backsight on Windows
 
-backsight runs on Windows 11 x86_64 (amd64), for a standard user: no step asks for administrator rights or writes outside your user profile. Claude Code runs natively (its Bash tool uses Git for Windows' Git Bash), and the memory server runs as programs of your own user, without Docker. Words you may not know are in the [glossary](glossary.md).
+backsight runs on Windows 11 x86_64 (amd64), for a standard user: no step asks for administrator rights or writes outside your user profile. Claude Code runs natively (its main shell there is PowerShell; it runs backsight's hooks in Git Bash when it finds one), and the memory server runs as programs of your own user, without Docker. Words you may not know are in the [glossary](glossary.md).
 
 ## What you need
 
 - Windows 11 on x86_64. Windows on Arm has no backsight yet.
-- [Claude Code](https://code.claude.com/docs/en/setup) 2.1.309 or newer, installed natively (WSL is not tested), with Git for Windows, which its Bash tool needs.
+- [Claude Code](https://code.claude.com/docs/en/setup) 2.1.309 or newer, installed natively (WSL is not tested). Claude Code on Windows uses PowerShell as its main shell, and offers its Bash tool and runs hooks in Git Bash only when it finds Git for Windows. backsight needs that Git Bash: without it Claude Code runs backsight's hooks in PowerShell, where SessionStart gets no environment file, so the commands Claude runs get no `BACKSIGHT_PROJECT` or `BACKSIGHT_SESSION` (the CLI then names the project from the directory it runs in). Claude Code finds Git for Windows installed in its usual places; a portable Git (PortableGit) or one in another directory needs the user environment variable `CLAUDE_CODE_GIT_BASH_PATH` set to its `bin\bash.exe`, in PowerShell: `[Environment]::SetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', '<Git>\bin\bash.exe', 'User')`, then restart Claude Code from a new terminal. Doctor's `git-bash` check says which case you are in.
 - Windows PowerShell 5.1 (Windows ships it) or PowerShell 7, for the install script.
 - About **3.5 GB of free disk** for the server: Python, its packages, the models and the first months of data.
 - An LLM provider, as on Linux ([install](install.md#requirements)).

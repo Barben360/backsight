@@ -35,13 +35,13 @@ The script checks the release's minisign signature (with `minisign`, or `openssl
 
 To install one given release, add `BACKSIGHT_RELEASE_URL=https://github.com/Barben360/backsight/releases/download/<tag>` before `sh`. From release files already downloaded into a directory: `BACKSIGHT_RELEASE_DIR=<dir> sh install.sh`.
 
-On Windows (x86_64; Claude Code's own shell there is Git Bash, and no step needs admin rights), install with:
+On Windows (x86_64; Claude Code's main shell there is PowerShell, with a Bash tool in Git Bash when it finds Git for Windows, and no step needs admin rights), install with:
 
 ```sh
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Barben360/backsight/main/scripts/install.ps1 | iex"
 ```
 
-It checks the signature and checksum as `install.sh` does (in PowerShell: nothing else to install), installs the binary under `%LOCALAPPDATA%\backsight`, the command as `%LOCALAPPDATA%\Programs\backsight\backsight.exe`, and adds that directory to the user `PATH`. A shell started before reads the old `PATH`: until the user opens a new terminal, run backsight by its full path (`"$LOCALAPPDATA/Programs/backsight/backsight.exe"` in Git Bash). It honours `BACKSIGHT_RELEASE_URL` and `BACKSIGHT_RELEASE_DIR` as environment variables (see [Windows](windows.md)).
+It checks the signature and checksum as `install.sh` does (in PowerShell: nothing else to install), installs the binary under `%LOCALAPPDATA%\backsight`, the command as `%LOCALAPPDATA%\Programs\backsight\backsight.exe`, and adds that directory to the user `PATH`. A shell started before reads the old `PATH`: until the user opens a new terminal, run backsight by its full path (`"$LOCALAPPDATA/Programs/backsight/backsight.exe"` in Git Bash). It honours `BACKSIGHT_RELEASE_URL` and `BACKSIGHT_RELEASE_DIR` as environment variables (see [Windows](windows.md)). backsight's hooks need Git Bash, which Claude Code finds only for Git for Windows in its usual places: after setup, `backsight doctor`'s `git-bash` check says whether it does, and its fix (a PowerShell command setting `CLAUDE_CODE_GIT_BASH_PATH`, then a restart of Claude Code) is for the user to run.
 
 ## 2. List the questions
 
