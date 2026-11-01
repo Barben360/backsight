@@ -104,4 +104,13 @@ func TestFindChildCombinator(t *testing.T) {
 	if n := len(root.find("div > div > p")); n != 1 {
 		t.Errorf("div > div > p: %d, want 1", n)
 	}
+	// A child step before and after a descendant step (red if '>' were read
+	// as a descendant step: each would match both paragraphs).
+	mixed := parseHTML(t, `<div class="a"><section><div><p class="x">1</p></div></section><div><span><p class="x">2</p></span></div></div>`)
+	if got := mixed.find(".a > div .x"); len(got) != 1 || got[0].text() != "2" {
+		t.Errorf(".a > div .x: %v, want only 2", got)
+	}
+	if got := mixed.find(".a div > .x"); len(got) != 1 || got[0].text() != "1" {
+		t.Errorf(".a div > .x: %v, want only 1", got)
+	}
 }
