@@ -8,7 +8,12 @@ import (
 	"github.com/Barben360/backsight/internal/metrics"
 )
 
-const minus = "−"
+const (
+	minus = "\u2212"
+	dash  = "—"
+)
+
+func bad(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
 
 // grouped inserts the thousands separator into digits, from 4 digits.
 func (l Locale) grouped(digits string) string {
@@ -39,8 +44,8 @@ func (l Locale) Int(n int64) string {
 
 // Fixed writes v with digits decimals, rounded half away from zero.
 func (l Locale) Fixed(v float64, digits int) string {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return "—"
+	if bad(v) {
+		return dash
 	}
 	scale := math.Pow10(digits)
 	r := math.Round(math.Abs(v) * scale)
@@ -60,6 +65,12 @@ func (l Locale) Fixed(v float64, digits int) string {
 
 // pctNumber is a ratio as a whole percent, one decimal under 1 %.
 func (l Locale) pctNumber(r float64) string {
+	if bad(r) {
+		return dash
+	}
+	if r > 0 && r < 0.0005 {
+		return "< 0.1"
+	}
 	if r > 0 && r < 0.01 {
 		return l.Fixed(r*100, 1)
 	}
@@ -67,10 +78,18 @@ func (l Locale) pctNumber(r float64) string {
 }
 
 // Percent writes a ratio as a percent.
-func (l Locale) Percent(r float64) string { return l.pctNumber(r) + " %" }
+func (l Locale) Percent(r float64) string {
+	if bad(r) {
+		return dash
+	}
+	return l.pctNumber(r) + " %"
+}
 
 // Interval writes a confidence interval of ratios.
 func (l Locale) Interval(ci [2]float64) string {
+	if bad(ci[0]) || bad(ci[1]) {
+		return dash
+	}
 	return "(" + l.pctNumber(ci[0]) + "–" + l.pctNumber(ci[1]) + " %)"
 }
 
@@ -91,6 +110,9 @@ func (l Locale) sizeNumber(v float64) string {
 
 // Size writes v as chars or tokens ("" unit: the number alone).
 func (l Locale) Size(v float64, unit string) string {
+	if bad(v) {
+		return dash
+	}
 	s := l.sizeNumber(v)
 	if unit == "" {
 		return s
@@ -110,12 +132,18 @@ func (l Locale) durationParts(ms float64) (string, string) {
 // Duration writes ms: whole milliseconds under a second, else seconds with
 // one decimal.
 func (l Locale) Duration(ms float64) string {
+	if bad(ms) {
+		return dash
+	}
 	n, u := l.durationParts(ms)
 	return n + " " + u
 }
 
 // Money writes v with two decimals and the currency's mark.
 func (l Locale) Money(v float64, currency string) string {
+	if bad(v) {
+		return dash
+	}
 	num := l.Fixed(math.Abs(v), 2)
 	sign := ""
 	if v < 0 && num != l.Fixed(0, 2) {
@@ -151,6 +179,9 @@ func (l Locale) ValueParts(d metrics.Def, m metrics.Metric) Parts {
 		return Parts{Big: "—"}
 	}
 	v := *m.Value
+	if bad(v) {
+		return Parts{Big: dash}
+	}
 	switch d.Unit {
 	case "ratio":
 		p := Parts{Big: l.pctNumber(v), Unit: "%"}
