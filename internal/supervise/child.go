@@ -24,7 +24,7 @@ type proc struct {
 	treeErr error // why the tree is the child alone, if it is
 }
 
-// startChild starts argv with exactly env (nothing inherited), in a
+// startChild starts argv with exactly env (nothing inherited) in dir, in a
 // process group and a process tree of its own (job_*.go: kill ends both),
 // its stdout and stderr to out. postgres gets a restricted token when
 // this process is an administrator's (token_*.go).
@@ -32,13 +32,14 @@ type proc struct {
 // The output goes through a pipe this process reads, and the child's
 // exit is waited for apart from it: postgres' backends inherit the pipe
 // and may outlive the postmaster for a moment (E34 ruling 2's lesson).
-func startChild(argv, env []string, out io.WriteCloser, postgres bool) (*proc, error) {
+func startChild(argv, env []string, dir string, out io.WriteCloser, postgres bool) (*proc, error) {
 	if len(argv) == 0 {
 		_ = out.Close()
 		return nil, errors.New("no program to start")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append([]string{}, env...)
+	cmd.Dir = dir
 	// out is closed on every path: by the output copy once started, here
 	// on a failure (a log writer always ends with its Close).
 	fail := func(err error) (*proc, error) {

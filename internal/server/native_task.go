@@ -125,6 +125,7 @@ func (h taskHost) Files(pg int, venv string) (map[string][]byte, error) {
 		API:       []string{n.venvBin(venv, "hindsight-api")},
 		Env:       n.windowsEnv(n.join(n.installation(), "bin")),
 		EnvFile:   n.EnvFile(),
+		WorkDir:   n.Root(),
 		LogDir:    n.LogDir(),
 		Venv:      venv,
 	}

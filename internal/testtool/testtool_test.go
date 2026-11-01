@@ -105,6 +105,15 @@ func TestFakeScriptSteps(t *testing.T) {
 		t.Errorf("env step: %q %v", o, err)
 	}
 
+	// cwd prints the directory the caller started it in.
+	path = Write(t, dir, "where", Fake{Script: "cwd"})
+	in := t.TempDir()
+	cmd = exec.Command(path)
+	cmd.Dir = in
+	if o, err := cmd.Output(); err != nil || strings.TrimSpace(string(o)) != in {
+		t.Errorf("cwd step: %q %v, want %q", o, err, in)
+	}
+
 	// exit stops the script and skips Stdout.
 	path = Write(t, dir, "quits", Fake{Stdout: "never\n", Script: "stdout before\nexit 7\nstdout after"})
 	stdout, _, code = runFake(t, path, "")

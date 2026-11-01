@@ -436,6 +436,48 @@ func TestPassingGuardRemovesTheRefusedFile(t *testing.T) {
 	}
 }
 
+// The children run in the native root, as Linux's units do
+// (WorkingDirectory=<Root>), never in the supervisor's own directory (the
+// task's and a detached start's: System32): work_dir, else server.env's
+// directory, the root too.
+func TestChildrenRunInTheNativeRoot(t *testing.T) {
+	fast(t)
+	cwdLine := func(log, want string) bool {
+		for _, l := range strings.Split(log, "\n") {
+			if strings.EqualFold(strings.TrimSpace(l), want) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range []struct {
+		name, sub string // sub: work_dir under fx's directory, "" for none
+	}{{"work_dir", "root"}, {"server.env's directory", ""}} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newFx(t, "cwd-"+strings.ReplaceAll(c.name, " ", ""), fakes{
+				pg:  "cwd\nwrite {dir}/ready up\nwaitfile {dir}/pg-stop",
+				api: "cwd\nwaitfile {dir}/never",
+			})
+			want := x.dir
+			if c.sub != "" {
+				want = x.file(c.sub)
+				if err := os.MkdirAll(want, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				x.cfg.WorkDir = want
+			}
+			x.start(Options{Version: "test"})
+			waitStatus(t, x.cfg.Project, stateRunning, stateRunning)
+			waitFor(t, "both children's working directory in their logs", func() bool {
+				return strings.TrimSpace(x.log("db")) != "" && strings.TrimSpace(x.log("api")) != ""
+			})
+			if !cwdLine(x.log("db"), want) || !cwdLine(x.log("api"), want) {
+				t.Errorf("postgres ran in %q, the API in %q; want both in %q", strings.TrimSpace(x.log("db")), strings.TrimSpace(x.log("api")), want)
+			}
+		})
+	}
+}
+
 func TestStopStopsAPIThenDBAndExitsZero(t *testing.T) {
 	fast(t)
 	x := newFx(t, "stop", fakes{})

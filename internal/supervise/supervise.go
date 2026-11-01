@@ -43,8 +43,12 @@ type Config struct {
 	API       []string `json:"api"`
 	Env       []string `json:"env"`      // the tool environment, no secret
 	EnvFile   string   `json:"env_file"` // server.env: the API's secrets, read at each API start
-	LogDir    string   `json:"log_dir"`
-	Venv      string   `json:"venv"` // the deployed version (DeployedVenv)
+	// WorkDir is the children's working directory, the native root
+	// (Linux's units: WorkingDirectory=<Root>); "" is server.env's
+	// directory, the root too.
+	WorkDir string `json:"work_dir,omitempty"`
+	LogDir  string `json:"log_dir"`
+	Venv    string `json:"venv"` // the deployed version (DeployedVenv)
 }
 
 // Options are what the command gives Run besides supervise.json.
@@ -229,6 +233,14 @@ func (s *supervisor) logPath(what string) string {
 
 // root is the native runtime's root: server.env's directory.
 func (s *supervisor) root() string { return filepath.Dir(s.cfg.EnvFile) }
+
+// workDir is the children's working directory: work_dir, else the root.
+func (s *supervisor) workDir() string {
+	if s.cfg.WorkDir != "" {
+		return s.cfg.WorkDir
+	}
+	return s.root()
+}
 
 // secrets are the values the logs never carry: Options.Secrets and
 // server.env's secret-named values (and its database URL's password).
@@ -494,7 +506,7 @@ func (s *supervisor) startDB(ctx context.Context, r *run) error {
 	if err := os.Remove(filepath.Join(s.root(), refusedFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logf("removing %s: %v", refusedFile, err)
 	}
-	p, err := startChild(s.cfg.Postgres, s.cfg.Env, newLineRedactor(s.dbLog, s.secrets()), true)
+	p, err := startChild(s.cfg.Postgres, s.cfg.Env, s.workDir(), newLineRedactor(s.dbLog, s.secrets()), true)
 	if err != nil {
 		retry("starting postgres", err)
 		return nil
@@ -558,7 +570,7 @@ func (s *supervisor) startAPI(r *run) {
 	s.mu.Lock()
 	s.envSecrets = envSecretValues(pairs)
 	s.mu.Unlock()
-	p, err := startChild(s.cfg.API, append(append([]string{}, s.cfg.Env...), pairs...), newLineRedactor(s.apiLog, s.secrets()), false)
+	p, err := startChild(s.cfg.API, append(append([]string{}, s.cfg.Env...), pairs...), s.workDir(), newLineRedactor(s.apiLog, s.secrets()), false)
 	if err != nil {
 		retry("starting it", err)
 		return

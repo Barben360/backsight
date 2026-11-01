@@ -304,7 +304,7 @@ func TestKillEndsTheChildsTree(t *testing.T) {
 	fake := testtool.Write(t, dir, "grandchild", testtool.Fake{Script: "pid " + gc + "\nwaitfile " + filepath.Join(dir, "never")})
 	cmdExe := filepath.Join(os.Getenv("SYSTEMROOT"), "System32", "cmd.exe")
 	var out strings.Builder
-	p, err := startChild([]string{cmdExe, "/d", "/c", fake}, nil, nopCloser{&out}, false)
+	p, err := startChild([]string{cmdExe, "/d", "/c", fake}, nil, "", nopCloser{&out}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

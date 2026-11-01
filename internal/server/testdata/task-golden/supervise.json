@@ -57,6 +57,7 @@
     "PATH=C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\pg\\18.1.0\\bin;C:\\Windows\\System32"
   ],
   "env_file": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native\\server.env",
+  "work_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\server\\native",
   "log_dir": "C:\\Users\\u\\AppData\\Local\\backsight\\state\\logs",
   "venv": "1.1.0-0123456789ab"
 }

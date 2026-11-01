@@ -46,6 +46,7 @@ import (
 //	stderr <text>            the same on stderr
 //	argv                     print each argument on a line of its own
 //	argline                  print the arguments joined by spaces, then a newline
+//	cwd                      print the working directory and a newline
 //	exit <code>              exit now with the code, skipping Stdout and Stderr
 //	waitfile <path>          wait until the file exists (a process that runs until told to stop)
 //	nofile <path> <code>     exit now with the code when the file does not exist
@@ -292,6 +293,13 @@ func (s spec) step(step string, args []string, stdin io.Reader, stdout, stderr i
 		fmt.Fprintln(stderr, rest(1))
 	case "argline":
 		fmt.Fprintln(stdout, strings.Join(args, " "))
+	case "cwd":
+		dir, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(stderr, "testtool:", err)
+			return 127, true
+		}
+		fmt.Fprintln(stdout, dir)
 	case "argv":
 		for _, a := range args {
 			fmt.Fprintln(stdout, a)
