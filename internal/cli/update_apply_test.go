@@ -1215,7 +1215,9 @@ func TestUpdateApplyIsCommittedOnceTheServerUpgraded(t *testing.T) {
 	}
 	// The old binary must not roll a committed update back.
 	_ = os.Remove(filepath.Join(d.LocksDir(), "state.lock"))
-	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.NeedsUser || !strings.Contains(out, target+" update apply") {
+	// The message as decoded: JSON escapes a Windows path's backslashes.
+	if code, out, _ := run(t, "update", "apply", "--source", src, "--json"); code != output.NeedsUser || decodeApply(t, out).Error == nil ||
+		!strings.Contains(decodeApply(t, out).Error.Message, target+" update apply") {
 		t.Errorf("the old binary on a committed update: exit %d\n%s", code, out)
 	}
 	// The new binary resumes: only the record was left.
