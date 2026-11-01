@@ -101,6 +101,13 @@ func (a Attributor) Learnt() []string {
 // test can bound the wait by itself rather than by its disk's speed.
 var learnOwnerWait = time.Second
 
+// tryAcquire and breakStale are the lock calls of learnOwner, variables so
+// a test can feed it a lock that stays stale however often it is broken.
+var (
+	tryAcquire = state.TryAcquire
+	breakStale = state.BreakStale
+)
+
 // learnOwnerPoll is the pause between two tries of that lock.
 const learnOwnerPoll = 20 * time.Millisecond
 
@@ -123,15 +130,15 @@ func (a Attributor) learnOwner(launchDir string) (ok bool) {
 	var l *state.Lock
 	var err error
 	for deadline := time.Now().Add(learnOwnerWait); ; {
-		if l, err = state.TryAcquire(a.ownersFile()+".lock", "learn owner"); err == nil {
+		if l, err = tryAcquire(a.ownersFile()+".lock", "learn owner"); err == nil {
 			break
 		}
 		var held *state.HeldError
-		if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
-			continue
-		}
 		if !time.Now().Before(deadline) {
 			break
+		}
+		if errors.As(err, &held) && held.Stale && breakStale(held) == nil {
+			continue
 		}
 		time.Sleep(learnOwnerPoll)
 	}
