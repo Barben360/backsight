@@ -96,6 +96,21 @@ func (a Attributor) Learnt() []string {
 	return learnt
 }
 
+// learnOwnerWait is how long learnOwner waits for the owners file's lock
+// before giving up (retried at the session's next turn). A variable so a
+// test can bound the wait by itself rather than by its disk's speed.
+var learnOwnerWait = time.Second
+
+// tryAcquire and breakStale are the lock calls of learnOwner, variables so
+// a test can feed it a lock that stays stale however often it is broken.
+var (
+	tryAcquire = state.TryAcquire
+	breakStale = state.BreakStale
+)
+
+// learnOwnerPoll is the pause between two tries of that lock.
+const learnOwnerPoll = 20 * time.Millisecond
+
 // learnOwner adds the owner a retained session's launch directory teaches
 // (attribution.LaunchOwner: a repository the user committed to) to the
 // owners learnt. The file is shared by every session's flush: written
@@ -114,15 +129,18 @@ func (a Attributor) learnOwner(launchDir string) (ok bool) {
 	}
 	var l *state.Lock
 	var err error
-	for range 50 {
-		if l, err = state.TryAcquire(a.ownersFile()+".lock", "learn owner"); err == nil {
+	for deadline := time.Now().Add(learnOwnerWait); ; {
+		if l, err = tryAcquire(a.ownersFile()+".lock", "learn owner"); err == nil {
 			break
 		}
 		var held *state.HeldError
-		if errors.As(err, &held) && held.Stale && state.BreakStale(held) == nil {
+		if !time.Now().Before(deadline) {
+			break
+		}
+		if errors.As(err, &held) && held.Stale && breakStale(held) == nil {
 			continue
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(learnOwnerPoll)
 	}
 	if err != nil {
 		return false

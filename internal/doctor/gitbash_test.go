@@ -33,7 +33,7 @@ func TestGitBashCases(t *testing.T) {
 			fix: []string{"[Environment]::SetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', '" + portable + `\bin\bash.exe', 'User')`, "restart Claude Code"}},
 		{name: "named the launcher", env: map[string]string{"CLAUDE_CODE_GIT_BASH_PATH": portable + `\git-bash.exe`}, git: portable + `\cmd\git.exe`,
 			files:  []string{portable + `\git-bash.exe`, portable + `\cmd\git.exe`, portable + `\bin\bash.exe`},
-			status: Warn, say: []string{portable + `\git-bash.exe`, "not bash.exe", "PowerShell"},
+			status: Warn, say: []string{portable + `\git-bash.exe`, "not bash.exe", `Git's bin\bash.exe`, "PowerShell"},
 			fix: []string{"'" + portable + `\bin\bash.exe'`, "restart Claude Code"}},
 		{name: "named in another case", env: map[string]string{"CLAUDE_CODE_GIT_BASH_PATH": portable + `\bin\BASH.EXE`}, files: []string{portable + `\bin\BASH.EXE`},
 			status: OK, noFix: true},
@@ -72,6 +72,9 @@ func TestGitBashCases(t *testing.T) {
 			}
 			got := checkGitBash(p)
 			text := got.Summary + " " + got.Detail
+			if i := strings.IndexFunc(text+got.Fix, func(r rune) bool { return r < 0x20 }); i >= 0 {
+				t.Errorf("a control character in the check's text at %d: %q", i, text+got.Fix)
+			}
 			if got.ID != "git-bash" || got.Status != c.status {
 				t.Fatalf("%s: %+v", c.status, got)
 			}

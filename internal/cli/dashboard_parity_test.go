@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Barben360/backsight/internal/dashboard"
 	"github.com/Barben360/backsight/internal/index"
@@ -393,6 +394,9 @@ func pagesDeclared(t *testing.T) map[string][]string {
 // Every view a page reads is one the API serves and a `stats` subcommand
 // prints: the pages show nothing the command line cannot.
 func TestEveryPageReadsServedViews(t *testing.T) {
+	// "served", not "fast": the 10 s request deadline can expire on a busy
+	// runner (windows-latest answered 503 "the page took too long").
+	t.Cleanup(dashboard.SetRenderTimeout(2 * time.Minute))
 	base, c := parityDashboard(t, true)
 	declared := pagesDeclared(t)
 	if len(declared) < 16 {

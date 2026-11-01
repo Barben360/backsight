@@ -39,7 +39,7 @@ func checkGitBash(p GitBashProbe) Check {
 			// git-bash.exe (the mintty launcher) or another program: not
 			// the shell Claude Code runs commands with.
 			c.Status, c.Summary = Warn, "CLAUDE_CODE_GIT_BASH_PATH names "+named+", not bash.exe"
-			c.Detail, c.Fix = "it must name Git's bin\bash.exe (git-bash.exe is a terminal launcher); "+gitBashImpact, fix()
+			c.Detail, c.Fix = `it must name Git's bin\bash.exe (git-bash.exe is a terminal launcher); `+gitBashImpact, fix()
 			return c
 		}
 		if p.Exists(named) {

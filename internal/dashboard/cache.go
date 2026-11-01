@@ -26,6 +26,16 @@ var (
 // computation of a view.
 var renderTimeout = 10 * time.Second
 
+// SetRenderTimeout replaces renderTimeout and returns the function that
+// restores it. For tests of other packages that serve every page and mean
+// "it is served", not "it is fast": a slow CI runner would otherwise answer
+// 503 "the page took too long".
+func SetRenderTimeout(d time.Duration) (restore func()) {
+	old := renderTimeout
+	renderTimeout = d
+	return func() { renderTimeout = old }
+}
+
 // onJoin runs when a caller joins a computation already running for its
 // key (tests count the joins).
 var onJoin = func() {}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/attribution"
 	"github.com/Barben360/backsight/internal/project"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/testtool"
 )
 
@@ -520,8 +521,48 @@ func TestOwnersAreLearntOnlyFromRepositoriesTheUserCommittedTo(t *testing.T) {
 	}
 }
 
-// Two sessions learning owners at once lose none.
+// The product waits about a second for the owners file's lock.
+func TestLearnOwnerWaitsAboutASecond(t *testing.T) {
+	if learnOwnerWait != time.Second {
+		t.Errorf("learnOwnerWait = %v, want 1s", learnOwnerWait)
+	}
+}
+
+// A lock that stays stale however often it is broken costs a bounded wait,
+// not a spin: learnOwner gives up (retried at the next turn).
+func TestLearnOwnerGivesUpOnALockThatStaysStale(t *testing.T) {
+	oldT, oldB, oldW := tryAcquire, breakStale, learnOwnerWait
+	tryAcquire = func(path, _ string) (*state.Lock, error) {
+		return nil, &state.HeldError{Path: path, Stale: true}
+	}
+	breakStale = func(*state.HeldError) error { return nil }
+	learnOwnerWait = 200 * time.Millisecond
+	t.Cleanup(func() { tryAcquire, breakStale, learnOwnerWait = oldT, oldB, oldW })
+	e := newEnv(t)
+	e.attributed()
+	d := e.ownRepo("r0", "git@github.com:owner0/r.git")
+	commitAs(t, d, "me@example.org")
+	a := e.f.Attribution
+	a.Resolver = project.New(filepath.Dir(filepath.Dir(d)), []string{".claude"})
+	done := make(chan bool, 1)
+	go func() { done <- a.learnOwner(d) }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Error("recorded an owner without the lock")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("learnOwner spins on a lock that stays stale")
+	}
+}
+
+// Sessions learning owners at once lose none. The wait's bound is the
+// test's own, far past the queue: how many fsync'd writes fit in the
+// product's 1 s is the disk's speed (windows-latest once kept 1 of 6).
 func TestOwnersLearntConcurrentlyAreAllKept(t *testing.T) {
+	old := learnOwnerWait
+	learnOwnerWait = time.Minute
+	t.Cleanup(func() { learnOwnerWait = old })
 	e := newEnv(t)
 	e.attributed()
 	var dirs []string
