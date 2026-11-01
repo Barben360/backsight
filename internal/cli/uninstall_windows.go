@@ -31,8 +31,9 @@ func cleanerScript(tries, pings int) string {
 		`if exist "%%BACKSIGHT_TRASH%%\" ping -n %d 127.0.0.1 >nul)) & rmdir "%%BACKSIGHT_TRASH%%\.." 2>nul`, tries, pings)
 }
 
-// cleanerCommand is the detached cleaner of trash: cmd.exe /d /q /c (no
-// AutoRun, no echo) from System32, without a window, its environment the
+// cleanerCommand is the detached cleaner of trash: cmd.exe /d /q /v:off
+// /c (no AutoRun, no echo, no delayed expansion that would read a ! of
+// the path) from System32, without a window, its environment the
 // trash path and what ping needs, its directory System32 (it holds none
 // of the data root's).
 func cleanerCommand(trash string) *exec.Cmd {
@@ -45,7 +46,7 @@ func cleanerCommand(trash string) *exec.Cmd {
 	cmd.Dir = system32
 	cmd.Env = []string{"SystemRoot=" + sys, "PATH=" + system32, "BACKSIGHT_TRASH=" + trash}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CmdLine:       `cmd.exe /d /q /c ` + cleanerScript(cleanerTries, cleanerPings),
+		CmdLine:       `cmd.exe /d /q /v:off /c ` + cleanerScript(cleanerTries, cleanerPings),
 		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_BREAKAWAY_FROM_JOB,
 	}
 	return cmd

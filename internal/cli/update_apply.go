@@ -1090,18 +1090,35 @@ func (a *applyRun) supervisor(ctx context.Context) {
 		a.add("supervisor", "skipped", "the native server is not running: its next start runs backsight "+a.res.Target)
 		return
 	}
-	proto := 0 // a binary that does not say speaks another protocol
-	if env, err := runChild(ctx, a.target, "version"); err == nil {
-		var v versionInfo
-		_ = json.Unmarshal(env.Data, &v)
-		proto = v.SuperviseProto
+	keeps := "the server keeps running backsight " + st.Version + " until its next restart"
+	// The new binary's protocol (0, another one, when it does not say). A
+	// binary that cannot say is no reason to stop the server.
+	var v versionInfo
+	env, err := runChild(ctx, a.target, "version")
+	if err == nil {
+		err = json.Unmarshal(env.Data, &v)
+	}
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "backsight "+a.res.Target+" did not report its supervisor protocol ("+err.Error()+"): "+keeps+" ("+restartCmd+")")
+		a.add("supervisor", "kept", keeps+": the new binary's protocol is unknown")
+		return
 	}
 	upgraded := a.res.Server != nil && a.res.Server.Upgraded
-	restart, why := supervisorRestart(*st, proto, upgraded, a.res.Target)
+	restart, why := supervisorRestart(*st, v.SuperviseProto, upgraded, a.res.Target)
 	if !restart {
 		a.add("supervisor", "kept", why)
 		return
 	}
+	// server.lock, as server start and stop take it (update apply holds the
+	// maintenance lock already): no other command stops or starts the
+	// server meanwhile.
+	sl, _, err := state.Acquire(filepath.Join(a.d.LocksDir(), "server.lock"), "update apply")
+	if err != nil {
+		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor was not restarted ("+err.Error()+"): "+restartCmd)
+		a.add("supervisor", "failed", err.Error())
+		return
+	}
+	defer func() { _ = sl.Release() }()
 	if err := restartSupervisor(ctx, n); err != nil {
 		a.res.Warnings = append(a.res.Warnings, "the native server's supervisor was not restarted ("+err.Error()+"): "+restartCmd)
 		a.add("supervisor", "failed", err.Error())

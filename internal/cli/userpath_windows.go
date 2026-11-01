@@ -30,14 +30,21 @@ func pathHas(list, dir string) bool {
 		if e == "" {
 			continue
 		}
-		if samePathEntry(e, dir) {
-			return true
-		}
-		if x, err := registry.ExpandString(e); err == nil && samePathEntry(x, dir) {
+		if isPathEntry(e, dir) {
 			return true
 		}
 	}
 	return false
+}
+
+// isPathEntry: the PATH entry e is dir, as written or once its %VARS% are
+// expanded.
+func isPathEntry(e, dir string) bool {
+	if samePathEntry(e, dir) {
+		return true
+	}
+	x, err := registry.ExpandString(e)
+	return err == nil && samePathEntry(x, dir)
 }
 
 // readUserPath returns the Path value and its registry type (REG_EXPAND_SZ
@@ -105,7 +112,8 @@ func userPathHas(dir string) (bool, error) {
 }
 
 // removeUserPath removes exactly the entries that are dir from the user's
-// PATH (uninstall), and nothing else.
+// PATH (uninstall), as written or once their %VARS% are expanded (the
+// entries pathHas finds), and nothing else.
 func removeUserPath(dir string) (removed bool, err error) {
 	k, err := registry.OpenKey(registry.CURRENT_USER, userPathKey, registry.QUERY_VALUE|registry.SET_VALUE)
 	if errors.Is(err, registry.ErrNotExist) {
@@ -121,7 +129,7 @@ func removeUserPath(dir string) (removed bool, err error) {
 	}
 	var keep []string
 	for _, e := range strings.Split(cur, ";") {
-		if e != "" && samePathEntry(e, dir) {
+		if e != "" && isPathEntry(e, dir) {
 			removed = true
 			continue
 		}

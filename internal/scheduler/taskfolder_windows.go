@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && amd64
 
 package scheduler
 
@@ -21,7 +21,8 @@ import (
 // empty folder: one that still holds a task or a folder is refused, and
 // that refusal is the error. A folder that is not there is no error
 // (deleted false). No administrator right is needed for the user's own
-// folder.
+// folder. x64 only: Connect's VARIANTs are passed by reference as the x64
+// ABI passes every aggregate over 8 bytes (taskfolder_arch.go elsewhere).
 func DeleteTaskFolder(name string) (deleted bool, err error) {
 	if name == "" || strings.ContainsAny(name, `\/`) {
 		return false, fmt.Errorf("task folder %q: want one folder name under the root", name)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
 	"github.com/Barben360/backsight/internal/server"
+	"github.com/Barben360/backsight/internal/state"
 	"github.com/Barben360/backsight/internal/supervise"
 )
 
@@ -39,7 +41,14 @@ func nativeOnWindows(t *testing.T, home string) (proto *int, restarts *int, fail
 		}
 		return supervise.Status{Proto: *proto, Version: "0.1.0", PID: 4242, DB: "running", API: "running"}, nil
 	}
-	restartSupervisor = func(context.Context, server.Native) error { *restarts++; return *failRestart }
+	restartSupervisor = func(context.Context, server.Native) error {
+		// Under server.lock, as server start and stop restart it.
+		if h := state.Inspect(filepath.Join(d.LocksDir(), "server.lock")); h == nil || h.Stale || h.Owner.Command != "update apply" {
+			t.Errorf("the supervisor restarted without update apply holding server.lock: %+v", h)
+		}
+		*restarts++
+		return *failRestart
+	}
 	t.Cleanup(func() { nativeAsk, restartSupervisor = oldA, oldR })
 	return proto, restarts, failRestart
 }
@@ -94,4 +103,52 @@ func TestUpdateApplyRestartsTheSupervisorOnlyOnAProtocolChange(t *testing.T) {
 	if _, st := applyStep(env.Data.Steps, "supervisor"); st.Status != "skipped" || *restarts != 2 {
 		t.Errorf("not running: step %+v, %d restarts", st, *restarts)
 	}
+
+	// The new binary cannot say its protocol: the supervisor keeps
+	// running, and a warning names why.
+	*proto, *failRestart = supervise.Proto, nil
+	setBuild(t, "0.5.0", "abc1234")
+	bin := filepath.Join(pathsOf(home).Data, "bin")
+	inner := binaryExec
+	binaryExec = versionFailsIn{inner: inner, dir: bin}
+	t.Cleanup(func() { binaryExec = inner })
+	env = apply("0.6.0")
+	if _, st := applyStep(env.Data.Steps, "supervisor"); st.Status != "kept" || *restarts != 2 ||
+		!slices.ContainsFunc(env.Data.Warnings, func(w string) bool {
+			return strings.Contains(w, "did not report its supervisor protocol") && strings.Contains(w, "no version here") &&
+				strings.Contains(w, "keeps running backsight 0.1.0")
+		}) {
+		t.Errorf("unknown protocol: step %+v, %d restarts, warnings %q", st, *restarts, env.Data.Warnings)
+	}
+	binaryExec = inner
+
+	// Another command holds server.lock: no restart, a warning.
+	*proto = supervise.Proto + 1
+	setBuild(t, "0.6.0", "abc1234")
+	l, _, err := state.Acquire(filepath.Join(pathsOf(home).LocksDir(), "server.lock"), "server start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = apply("0.7.0")
+	_ = l.Release()
+	if _, st := applyStep(env.Data.Steps, "supervisor"); st.Status != "failed" || *restarts != 2 ||
+		!slices.ContainsFunc(env.Data.Warnings, func(w string) bool {
+			return strings.Contains(w, "was not restarted") && strings.Contains(w, "server start")
+		}) {
+		t.Errorf("server.lock held: step %+v, %d restarts, warnings %q", st, *restarts, env.Data.Warnings)
+	}
+}
+
+// versionFailsIn fails `version` for a binary under dir (the installed
+// ones), not for the staged binary update apply checks first.
+type versionFailsIn struct {
+	inner binaryRunner
+	dir   string
+}
+
+func (v versionFailsIn) Run(ctx context.Context, exe string, args ...string) ([]byte, []byte, int, error) {
+	if len(args) > 0 && args[0] == "version" && strings.HasPrefix(strings.ToLower(exe), strings.ToLower(v.dir)+`\`) {
+		return nil, nil, 0, errors.New("no version here")
+	}
+	return v.inner.Run(ctx, exe, args...)
 }

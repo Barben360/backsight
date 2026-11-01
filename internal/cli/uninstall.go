@@ -497,7 +497,16 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 		add(uninstallTaskFolder(cfg.Server.Project, f.plan, tasks, &res))
 	}
 
-	// 5. Local files, before the binaries: a failure here still resumes.
+	// 5. Windows: the user PATH entry, before any file (the order Windows'
+	// uninstall follows); then the local files, before the binaries: a
+	// failure here still resumes.
+	if runtime.GOOS == "windows" {
+		a, err := uninstallUserPath(d, f.plan)
+		if err != nil {
+			return fail("user path", err)
+		}
+		add(a)
+	}
 	switch {
 	case len(local) == 0:
 		add(undoAction{Name: "local files", Status: "skipped", Detail: "no config or state here"})
@@ -531,14 +540,6 @@ func runUninstall(ctx context.Context, e *env, f uninstallFlags) (uninstallResul
 	// 6. Last, the command on PATH, the shim, the binaries and the
 	// marketplace. A failure here is not resumable (the state may be gone
 	// and the binary with it): what is left is listed, to remove by hand.
-	// Windows: the user PATH entry first, then the files.
-	if runtime.GOOS == "windows" {
-		a, err := uninstallUserPath(d, f.plan)
-		if err != nil {
-			return fail("user path", err)
-		}
-		add(a)
-	}
 	a, warn, err := uninstallBinaries(d, trash, keep, f.plan)
 	res.Warnings = append(res.Warnings, warn...)
 	if err != nil {
@@ -1281,8 +1282,13 @@ func uninstallUserPath(d paths.Dirs, plan bool) (undoAction, error) {
 		return a, nil
 	}
 	if !plan {
-		if _, err := removeUserPath(d.Bin); err != nil {
+		removed, err := removeUserPath(d.Bin)
+		if err != nil {
 			return a, fmt.Errorf("removing %s from the user PATH: %w", d.Bin, err)
+		}
+		if !removed {
+			a.Status, a.Detail = "kept", d.Bin+" stays on the user PATH: no entry of it could be removed"
+			return a, nil
 		}
 	}
 	a.Status, a.Detail = done(plan), d.Bin+" removed from the user PATH (its other entries kept)"

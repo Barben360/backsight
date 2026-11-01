@@ -325,7 +325,10 @@ func TestUninstallRemovesOnlyItsPathEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	setUserPathValue(t, others[0]+";"+strings.ToUpper(d.Bin)+`\;`+others[1]+";"+others[2])
+	// <bin> twice: as written by setup (case and a trailing \ aside) and
+	// through a variable, as a user may have written it: both are <bin>.
+	t.Setenv("BSTEST_BIN_PARENT", filepath.Dir(d.Bin))
+	setUserPathValue(t, others[0]+";"+strings.ToUpper(d.Bin)+`\;`+others[1]+`;%BSTEST_BIN_PARENT%\`+filepath.Base(d.Bin)+";"+others[2])
 
 	if code, _, out := uninstall(t, "--plan"); code != output.OK {
 		t.Fatalf("plan: exit %d\n%s", code, out)
@@ -344,6 +347,14 @@ func TestUninstallRemovesOnlyItsPathEntry(t *testing.T) {
 	}
 	if s := stepNamed(env.Data, "user path"); s == nil || s.Status != "done" || !strings.Contains(s.Detail, d.Bin) {
 		t.Errorf("user path step %+v", s)
+	}
+	// The order: the tasks and their folder, then the PATH entry, then
+	// every file.
+	at := func(name string) int {
+		return slices.IndexFunc(env.Data.Steps, func(a undoAction) bool { return a.Name == name })
+	}
+	if f, p, l, b := at("task folder"), at("user path"), at("local files"), at("binaries"); f < 0 || !(f < p && p < l && l < b) {
+		t.Errorf("steps task folder %d, user path %d, local files %d, binaries %d: want that order", f, p, l, b)
 	}
 	if onDisk(pathCommand(d.Bin)) || onDisk(d.Bin) {
 		t.Errorf("the PATH command or its directory %s stays", d.Bin)
@@ -493,7 +504,7 @@ func TestCleanerGetsTheTrashPathThroughItsEnvironment(t *testing.T) {
 	t.Cleanup(func() { cleanerTries, cleanerPings = oldT, oldP })
 	base := t.TempDir()
 	for _, kept := range []bool{false, true} {
-		data := filepath.Join(base, "Jé & Co 100%USERNAME% x%", map[bool]string{false: "data", true: "data-kept"}[kept])
+		data := filepath.Join(base, "Jé & Co! 100%PATH% x%", map[bool]string{false: "data", true: "data-kept"}[kept])
 		trash := filepath.Join(data, "trash")
 		for _, p := range []string{filepath.Join(trash, "1-current.exe"), filepath.Join(trash, "2-dir & more", "f%PATH%.txt")} {
 			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -511,12 +522,12 @@ func TestCleanerGetsTheTrashPathThroughItsEnvironment(t *testing.T) {
 
 		cmd := cleanerCommand(trash)
 		line := cmd.SysProcAttr.CmdLine
-		for _, part := range []string{base, "Jé", "Co 100", "trash", data} {
+		for _, part := range []string{base, "Jé", "Co! 100", "trash", data} {
 			if strings.Contains(line, part) {
 				t.Errorf("the command line holds %q: %s", part, line)
 			}
 		}
-		if !strings.HasPrefix(line, "cmd.exe /d /q /c ") || !strings.Contains(line, `rmdir /s /q "%BACKSIGHT_TRASH%"`) || !strings.Contains(line, "ping -n 2 127.0.0.1 >nul") {
+		if !strings.HasPrefix(line, "cmd.exe /d /q /v:off /c ") || !strings.Contains(line, `rmdir /s /q "%BACKSIGHT_TRASH%"`) || !strings.Contains(line, "ping -n 2 127.0.0.1 >nul") {
 			t.Errorf("command line %s", line)
 		}
 		if !slices.Contains(cmd.Env, "BACKSIGHT_TRASH="+trash) {

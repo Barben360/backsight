@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/Barben360/backsight/internal/output"
@@ -264,6 +265,64 @@ func TestRemoveUserPathRemovesOnlyThatEntry(t *testing.T) {
 	if removed, err := removeUserPath(dir); err != nil || removed {
 		t.Errorf("second call: %v %v", removed, err)
 	}
+}
+
+// An entry written with a variable that expands to dir is dir: it goes
+// too (pathHas finds it), and one that expands elsewhere stays.
+func TestRemoveUserPathRemovesAnEntryWrittenWithAVariable(t *testing.T) {
+	t.Setenv("BSTEST_PROGRAMS", `C:\Users\x\Programs`)
+	t.Setenv("BSTEST_OTHER", `C:\Users\y`)
+	dir := `C:\Users\x\Programs\backsight`
+	userPathIn(t, `C:\Tools;%BSTEST_PROGRAMS%\backsight\;%BSTEST_OTHER%\backsight`, registry.EXPAND_SZ)
+	removed, err := removeUserPath(dir)
+	if err != nil || !removed {
+		t.Fatal(removed, err)
+	}
+	if v, _ := readUserPathValue(t); v != `C:\Tools;%BSTEST_OTHER%\backsight` {
+		t.Errorf("user PATH %q, want the variable entry of dir gone, the other kept", v)
+	}
+}
+
+// A file reached through its directory's 8.3 short name is the file
+// itself (GitHub's runner has TEMP at C:\Users\RUNNER~1\...): copying it
+// onto its long name changes nothing and does not fail, where replacing a
+// file open for reading is refused.
+func TestCopyFileOntoItselfThroughAShortName(t *testing.T) {
+	long := filepath.Join(t.TempDir(), "a directory with a long name")
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	short := shortPath(t, long)
+	if strings.EqualFold(short, long) {
+		t.Skip("no 8.3 short names on this volume")
+	}
+	p := filepath.Join(long, "checksums.txt")
+	if err := os.WriteFile(p, []byte("sums"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(filepath.Join(short, "checksums.txt"), p, 0o644); err != nil {
+		t.Fatalf("copying a file onto itself: %v", err)
+	}
+	if raw, _ := os.ReadFile(p); string(raw) != "sums" {
+		t.Errorf("content %q", raw)
+	}
+	if left, _ := filepath.Glob(filepath.Join(long, ".checksums.txt.tmp-*")); len(left) > 0 {
+		t.Errorf("temp files left: %q", left)
+	}
+}
+
+func shortPath(t *testing.T, p string) string {
+	t.Helper()
+	in, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetShortPathName(in, &buf[0], uint32(len(buf)))
+	if err != nil || n == 0 {
+		t.Fatalf("GetShortPathName(%s): %v", p, err)
+	}
+	return windows.UTF16ToString(buf[:n])
 }
 
 func TestPathCopyIsAnExe(t *testing.T) {

@@ -464,6 +464,14 @@ func pointShim(target, shim string) error {
 
 // copyFile copies src to dst durably: unique temp file, fsync, rename.
 func copyFile(src, dst string, mode os.FileMode) error {
+	// The same file under two names (an 8.3 short path and its long one, a
+	// link) is already copied: replacing it with itself fails on Windows
+	// (it is open for reading) and is a no-op elsewhere.
+	if si, err := os.Stat(src); err == nil {
+		if di, err := os.Stat(dst); err == nil && os.SameFile(si, di) {
+			return nil
+		}
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err

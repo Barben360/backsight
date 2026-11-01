@@ -188,7 +188,7 @@ func TestUninstallRemovesEachPieceAndKeepsTheRest(t *testing.T) {
 	for _, p := range []string{
 		filepath.Join(m.home, "xdg", "systemd", "user", "backsight-tick.timer"),
 		filepath.Join(m.home, "xdg", "systemd", "user", "backsight-maintain.timer"),
-		filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace"), filepath.Join(d.Bin, "backsight"),
+		filepath.Join(d.Data, "bin"), filepath.Join(d.Data, "marketplace"), pathCommand(d.Bin),
 	} {
 		if onDisk(p) {
 			t.Errorf("still there: %s", p)
