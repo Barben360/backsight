@@ -119,7 +119,7 @@ func newSetupCmd(e *env) *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&f.answers, "answer", nil, "answer a question: id=value (repeatable)")
 	cmd.Flags().StringVar(&f.answersFile, "answers-file", "", "answers as a JSON object or id=value lines (no secrets)")
-	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: take defaults, exit 10 when a required answer or secret is missing")
+	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "never prompt: take the defaults, but provider (it decides where your data goes), consent and what the provider asks for (an unlisted one's model, ack_subscription) must be answered (--answer); exit 10 while one of them or a secret is missing")
 	cmd.Flags().BoolVar(&f.plan, "plan", false, "show the checks, answers and steps without changing anything")
 	cmd.Flags().BoolVar(&f.resume, "resume", false, "continue the last run with its saved answers")
 	cmd.Flags().BoolVar(&f.questions, "questions", false, "list the questions and exit")

@@ -175,6 +175,17 @@ func TestSetupWithoutRequiredAnswersNeedsTheUser(t *testing.T) {
 	if _, err := os.Stat(pathsOf(home).ConfigFile()); err == nil || len(f.calls) > 0 {
 		t.Error("setup acted before its answers")
 	}
+	// The flag's help says so: these two take no default.
+	_, help, _ := run(t, "setup", "--help")
+	var line string
+	for _, l := range strings.Split(help, "\n") {
+		if strings.Contains(l, "--non-interactive") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "provider") || !strings.Contains(line, "consent") {
+		t.Errorf("--non-interactive's help %q: want the provider and consent named as answers it needs", line)
+	}
 }
 
 func TestSetupRefusesSecretsAsAnswers(t *testing.T) {
