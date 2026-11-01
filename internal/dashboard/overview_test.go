@@ -67,6 +67,16 @@ func TestBannerRules(t *testing.T) {
 				if got := [3]string{a.Name, a.Word, a.Note}; got != s.Want.Axes[i] {
 					t.Errorf("axis %d: %q, want %q", i, got, s.Want.Axes[i])
 				}
+				wantClass := map[string]string{"ok": "st-ok", "learning": "st-learn", "can't judge": "st-cant", "too few": "st-few"}[a.Word]
+				if a.Word == "attention" {
+					wantClass = "st-watch"
+					if s.Name == "broken" {
+						wantClass = "st-bad"
+					}
+				}
+				if a.Class != wantClass {
+					t.Errorf("axis %d class %q, want %q", i, a.Class, wantClass)
+				}
 			}
 			if got := reasonTexts(b.Reasons); !slices.Equal(got, s.Want.Reasons) {
 				t.Errorf("reasons %q, want %q", got, s.Want.Reasons)
@@ -177,6 +187,67 @@ func TestBannerRuleEdges(t *testing.T) {
 	// No verdict: nothing is claimed.
 	if b = bannerOf(&metrics.Result{}, en, nil, views.Params{}); b.Class != "v-cant" || len(b.Axes) != 0 || b.Title == "Memory is working." {
 		t.Errorf("no verdict: %+v", b)
+	}
+}
+
+func TestBannerFixRound1(t *testing.T) {
+	// An info item gets the watch pill, a bad one the attention pill.
+	if w, c := pillOf(metrics.SeverityInfo); w != "watch" || c != "st-watch" {
+		t.Errorf("info pill: %s %s", w, c)
+	}
+	if w, c := pillOf(metrics.SeverityBad); w != "attention" || c != "st-bad" {
+		t.Errorf("bad pill: %s %s", w, c)
+	}
+	r := scenarioNamed(t, "cantjudge")
+	r.Attention[0].Severity = metrics.SeverityInfo
+	if c := attentionOf(r, en); c.Items[0].Word != "watch" || c.Items[0].Class != "st-watch" {
+		t.Errorf("info item: %+v", c.Items[0])
+	}
+
+	// Flowing failed count: only with the axis in attention; the age only when over 0.
+	flowing := func(state metrics.AxisState, oldest int64) string {
+		r := scenarioNamed(t, "broken")
+		ax := r.Verdict.Axes["flowing"]
+		ax.State = state
+		r.Verdict.Axes["flowing"] = ax
+		r.Metrics["pipeline.flow"] = scFlow(metrics.StatusBad, 188, 192, 3, 1, 0, oldest).m
+		return bannerOf(r, en, r.Window.Loc, views.Params{}).Axes[3].Note
+	}
+	if got := flowing(metrics.AxisAttention, 0); got != "3 failed" {
+		t.Errorf("no age: %q", got)
+	}
+	if got := flowing(metrics.AxisAttention, 1); got != "3 failed, oldest waiting under 1 min" {
+		t.Errorf("age over 0: %q", got)
+	}
+	if got := flowing(metrics.AxisOK, 93_600_000); got != "188 of 192 sessions sent" {
+		t.Errorf("failed but not in attention: %q", got)
+	}
+
+	// Cost in attention for another metric: no latency limit note.
+	r = scenarioNamed(t, "latency")
+	r.Verdict.Axes["cost"] = scAxis(metrics.AxisAttention, 7, metrics.Reason{Metric: "context.per_session", Severity: metrics.SeverityWatch, Text: "big"})
+	if b := bannerOf(r, en, r.Window.Loc, views.Params{}); b.Axes[2].Note != "slowest prompts 2.3 s" {
+		t.Errorf("other cost cause: %q", b.Axes[2].Note)
+	}
+
+	// can't judge comes before too early, across axes.
+	r = scenarioNamed(t, "healthy")
+	r.Verdict.Axes["found"] = scAxis(metrics.AxisTooEarly, 7, metrics.Reason{Text: "early"})
+	r.Verdict.Axes["flowing"] = scAxis(metrics.AxisCantJudge, 7, metrics.Reason{Text: "cant"})
+	if b := bannerOf(r, en, r.Window.Loc, views.Params{}); b.Title != "Flowing: can't judge yet." {
+		t.Errorf("precedence: %q", b.Title)
+	}
+
+	// A Result without a server answer reads the scope's.
+	r = scenarioNamed(t, "serverdown")
+	r.Server = nil
+	if got := summaryOf(r, en).Scope; got != "(the memory server is not answering)." {
+		t.Errorf("scope down: %q", got)
+	}
+	r = scenarioNamed(t, "healthy")
+	r.Server = nil
+	if got := summaryOf(r, en).Scope; got != "(server, all PCs)." {
+		t.Errorf("scope up: %q", got)
 	}
 }
 

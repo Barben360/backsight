@@ -46,7 +46,7 @@ func extraAs[T any](m metrics.Metric, key string) (T, bool) {
 		return out, false
 	}
 	raw, err := json.Marshal(v)
-	if err != nil || string(raw) == "null" || json.Unmarshal(raw, &out) != nil {
+	if err != nil || json.Unmarshal(raw, &out) != nil {
 		var zero T
 		return zero, false
 	}
@@ -328,7 +328,10 @@ func summaryOf(r *metrics.Result, l format.Locale) SummaryLine {
 	if r.Summary != nil {
 		s = *r.Summary
 	}
-	down := r.Server != nil && !r.Server.OK
+	down := !r.Scope.ServerOK
+	if r.Server != nil {
+		down = !r.Server.OK
+	}
 	out := SummaryLine{
 		Prompts: l.Int(s.PromptsWithMemory), Turns: l.Int(s.TurnsWithMemoryUsed),
 		Tokens: l.Size(float64(s.TokensApprox), ""), Scope: "(server, all PCs).",
