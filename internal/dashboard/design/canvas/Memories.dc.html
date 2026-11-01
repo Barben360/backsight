@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Memories</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="memories" win="90" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Which memories get used?</h1><span class="muted">Memories · last 90 days · 412 memories shown at least once</span></div>
+  <div class="badges"><a class="badge" href="#"><span class="i i-info"></span><b>7</b> often shown, never used</a><a class="badge" href="#"><span class="i i-info"></span><b>3</b> hidden</a><a class="badge" href="#"><span class="i i-info"></span><b>2</b> reported wrong</a></div>
+  <section class="card">
+    <div class="card-head">
+      <h2>Memories</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About these counts"><span class="i i-info"></span></summary><div class="pop"><b>Recent-weighted counts</b><p>Shown, used and ignored weigh recent shows more than old ones, so a memory that was useful last month and not since drifts down.</p><span class="term">ledger decayed counts · boost</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories --sort used</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <nav class="tabs" aria-label="Show"><a href="#" aria-current="true">All <span class="count">412</span></a><a href="#">Often shown, never used <span class="count">7</span></a><a href="#">Hidden <span class="count">3</span></a><a href="#">Reported wrong <span class="count">2</span></a></nav>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th>Memory</th><th><a href="#">Project <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Shown <span class="sort">↕</span></a></th><th class="r" aria-sort="descending"><a href="#">Used <span class="sort">▼</span></a></th><th class="r"><a href="#">Ignored <span class="sort">↕</span></a></th>
+          <th class="r"><a href="#">Used when judged <span class="sort">↕</span></a></th><th>Learned ranking now</th><th><a href="#">Last shown <span class="sort">↕</span></a></th><th><a href="#">Last used <span class="sort">↕</span></a></th><th>State</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><a class="idc" href="#" title="c4a17e93b0d24f6a8e1c95d3072b4f18">c4a17e93</a></td><td>backsight</td><td class="r">21.3</td><td class="r">12.6</td><td class="r">4.1</td><td class="r">75 %</td><td>raised</td><td>25 min ago</td><td>25 min ago</td><td>active</td></tr>
+          <tr><td><a class="idc" href="#" title="7f3a9c21e04b4d0e9a1f6c55b2d18e07">7f3a9c21</a></td><td>backsight</td><td class="r">17.4</td><td class="r">7.1</td><td class="r">4.8</td><td class="r">60 %</td><td>raised</td><td>25 min ago</td><td>today 14:52</td><td><span class="st st-watch">reported wrong</span></td></tr>
+          <tr><td><a class="idc" href="#" title="9d2e71b4a3c04f1e8b7d26c5e0f94a13">9d2e71b4</a></td><td>project-a</td><td class="r">12.0</td><td class="r">6.2</td><td class="r">2.0</td><td class="r">76 %</td><td>raised</td><td>2 h ago</td><td>2 h ago</td><td>active</td></tr>
+          <tr><td><a class="idc" href="#" title="2c81d0e4b9aa4f3c8e2d17f05b6c9a31">2c81d0e4</a></td><td>project-a</td><td class="r">10.5</td><td class="r">3.0</td><td class="r">5.4</td><td class="r">36 %</td><td>lowered</td><td>25 min ago</td><td>4 d ago</td><td><span class="st st-watch">reported wrong</span></td></tr>
+          <tr><td><a class="idc" href="#" title="b81e44c0d93a4f7e8c2a61d05f9e3b72">b81e44c0</a></td><td>backsight</td><td class="r">14.2</td><td class="r">0.0</td><td class="r">8.7</td><td class="r">0 %</td><td>lowered</td><td>25 min ago</td><td class="muted">never</td><td>often shown, never used</td></tr>
+          <tr><td><a class="idc" href="#" title="e5f0a7b3c1d24e8f9a0b6c3d2e1f4a5b">e5f0a7b3</a></td><td>backsight</td><td class="r">6.8</td><td class="r">1.2</td><td class="r">2.9</td><td class="r">29 %</td><td>unchanged</td><td>25 min ago</td><td>12 d ago</td><td>hidden</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pager"><a class="btn" href="#">← Previous</a><span>1–6 of 412 · recent-weighted counts</span><a class="btn" href="#">Next →</a></div>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

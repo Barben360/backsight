@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Verdict banner</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<section class="verdict {{b.cls}}" aria-label="Verdict, last 7 days">
+  <div class="v-head">
+    <span class="v-ico {{b.icon}}" aria-hidden="true"></span>
+    <h2 class="v-title">{{b.title}}<span class="v-when">(last 7 days)</span></h2>
+    <details class="info">
+      <summary aria-label="How the verdict is judged"><span class="i i-info"></span></summary>
+      <div class="pop">
+        <b>How the verdict is judged</b>
+        <p>Always the last 7 days against the 7 before, whatever window is selected. Per axis, the first rule that applies wins: learning, not enough yet, can't judge, attention, ok.</p>
+        <p class="muted">An axis turns to attention when a number stays at watch two weeks in a row, or is bad once. Flowing reacts at once.</p>
+        <a href="#">All definitions</a>
+      </div>
+    </details>
+    <details class="cli">
+      <summary>CLI</summary>
+      <div class="cmd pop cli-pop"><code>backsight stats overview --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </details>
+  </div>
+  <ul class="axes">
+    <sc-for list="{{b.axes}}" as="a" hint-placeholder-count="4">
+      <li class="axis">
+        <span class="axis-name">{{a.name}}</span>
+        <span class="st {{a.st}}">{{a.word}}</span>
+        <span class="axis-note">{{a.note}}</span>
+      </li>
+    </sc-for>
+  </ul>
+  <sc-if value="{{hasReasons}}" hint-placeholder-val="{{ false }}">
+    <ul class="reasons">
+      <sc-for list="{{b.reasons}}" as="r" hint-placeholder-count="1">
+        <li class="reason">
+          <span class="pill st {{r.st}}">{{r.word}}</span>
+          <p>{{r.text}}</p>
+          <div class="cmd"><code>{{r.cmd}}</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+        </li>
+      </sc-for>
+    </ul>
+  </sc-if>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"variant":{"editor":"enum","options":["healthy","new","tooearly","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"$preview":{"width":1440,"height":440}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    const v = this.props.variant ?? 'healthy';
+    const ok = (name, note) => ({ name, st: 'st-ok', word: 'ok', note });
+    const B = {
+      healthy: { cls: 'v-ok', icon: 'st-ok', title: 'Memory is working.',
+        axes: [ok('Found', '28 % of prompts got memory'), ok('Right', 'Judged on the last 28 days: too few turns in 7.'), ok('Cost', 'slowest prompts 1.6 s, context in budget'), ok('Flowing', '239 of 239 sessions sent')], reasons: [] },
+      new: { cls: 'v-learn', icon: 'st-learn', title: 'Learning: day 2 of about 7, 12 prompts so far.',
+        axes: [{ name: 'Found', st: 'st-learn', word: 'learning', note: 'day 2 of about 7' }, { name: 'Right', st: 'st-learn', word: 'learning', note: 'day 2 of about 7' }, ok('Cost', 'slowest prompts 1.4 s'), ok('Flowing', '4 of 4 sessions sent')], reasons: [] },
+      tooearly: { cls: 'v-cant', icon: 'st-few', title: 'Right: not enough yet.',
+        axes: [ok('Found', '31 % of prompts got memory'), { name: 'Right', st: 'st-few', word: 'too few', note: 'Not enough yet: 6 declared turns, 20 needed.' }, ok('Cost', 'slowest prompts 1.2 s'), ok('Flowing', '58 of 58 sessions sent')], reasons: [] },
+      cantjudge: { cls: 'v-cant', icon: 'st-cant', title: 'Right: can’t judge yet.',
+        axes: [ok('Found', '27 % of prompts got memory'), { name: 'Right', st: 'st-cant', word: 'can’t judge', note: 'Claude said what it used on 16 of 25 turns' }, ok('Cost', 'slowest prompts 1.5 s'), ok('Flowing', '212 of 212 sessions sent')],
+        reasons: [{ st: 'st-watch', word: 'watch', text: 'Can’t judge yet: Claude said what it used on only 64 % of turns.', cmd: 'backsight stats sessions --has undeclared' }] },
+      qualitywatch: { cls: 'v-watch', icon: 'st-watch', title: 'Found needs attention.',
+        axes: [{ name: 'Found', st: 'st-watch', word: 'attention', note: '14 % vs 27 % usual, two weeks running' }, ok('Right', '31 % used, borderline'), ok('Cost', 'slowest prompts 1.7 s'), ok('Flowing', '226 of 226 sessions sent')],
+        reasons: [{ st: 'st-watch', word: 'watch', text: 'Fewer prompts get memory than usual: 14 % vs 27 % before.', cmd: 'backsight stats quality --days 14' }] },
+      latency: { cls: 'v-watch', icon: 'st-watch', title: 'Cost needs attention: slowest prompts take 2.3 s.',
+        axes: [ok('Found', '28 % of prompts got memory'), ok('Right', 'Judged on the last 28 days: too few turns in 7.'), { name: 'Cost', st: 'st-watch', word: 'attention', note: 'slowest 1 in 20: 2.3 s, limit 2.5 s' }, ok('Flowing', '239 of 239 sessions sent')],
+        reasons: [{ st: 'st-watch', word: 'watch', text: 'Memory adds 2.3 s to the slowest prompts (limit 2.5 s).', cmd: 'backsight doctor' }] },
+      serverdown: { cls: 'v-watch', icon: 'st-watch', title: 'Flowing: memory server unreachable since 09:12, nothing is lost.',
+        axes: [ok('Found', '9 %: prompts skipped while the server is unreachable'), ok('Right', '60 % used'), ok('Cost', 'slowest prompts 910 ms'), { name: 'Flowing', st: 'st-watch', word: 'attention', note: '14 notes and 3 sessions waiting' }],
+        reasons: [{ st: 'st-watch', word: 'watch', text: 'Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost.', cmd: 'backsight doctor' }] },
+      broken: { cls: 'v-bad', icon: 'st-bad', title: 'Flowing needs attention (3 reasons).',
+        axes: [ok('Found', '25 % of prompts got memory'), ok('Right', '58 % used'), ok('Cost', 'slowest prompts 1.9 s'), { name: 'Flowing', st: 'st-bad', word: 'attention', note: '3 failed, oldest waiting 26 h' }],
+        reasons: [
+          { st: 'st-bad', word: 'attention', text: '3 sessions could not be sent; 1 set aside after an error.', cmd: 'backsight retain retry-quarantine' },
+          { st: 'st-bad', word: 'attention', text: 'A session has waited on this PC for 26 h.', cmd: 'backsight doctor' },
+          { st: 'st-watch', word: 'watch', text: '2 steps crashed in the last 24 h.', cmd: 'backsight report' } ] },
+    };
+    const b = B[v] || B.healthy;
+    return { theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', b, hasReasons: b.reasons.length > 0 };
+  }
+}
+</script>
+</body>
+</html>

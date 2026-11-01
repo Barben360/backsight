@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pipeline</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="pipeline" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is it flowing?</h1><span class="muted">Pipeline · last 7 days · shown here in the "broken" scenario</span></div>
+  <div class="state st-bad"><span class="i i-bad st-bad" style="color: var(--bad)"></span><span><b>3 sessions could not be sent; 1 set aside after an error.</b> A session has waited on this PC for 26 h. 2 steps crashed in the last 24 h.</span></div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Do sessions reach the memory server?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <span class="pill st st-bad">attention</span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Sessions sent</b><dl><dt>What</dt><dd>Each session by its last send result, per day.</dd><dt>Limits</dt><dd>Watch on any failed or set-aside session; attention when one waits over 24 h.</dd></dl><span class="term">pipeline.flow · retain.outcomes</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats pipeline --days 7</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="row" style="gap: 24px">
+        <div><span class="num" style="font-size: 24px; font-weight: 600">188 of 192</span> <span class="small sub">sent</span></div>
+        <div class="small sub">3 failed · 1 set aside · typical send 4.2 s</div>
+      </div>
+      <dc-import name="StackBars" theme="inherit" data="pipelinebroken" hint-size="100%,330px"></dc-import>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>What is waiting on this PC?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <span class="pill st st-bad">attention</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Waiting</th><th class="r">Count</th><th>Oldest</th><th>What to run</th></tr></thead>
+          <tbody>
+            <tr><td>sessions</td><td class="r">3</td><td><span class="st st-bad">26 h</span></td><td><div class="cmd"><code>backsight retain flush</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></td></tr>
+            <tr><td>notes</td><td class="r">2</td><td>40 min</td><td class="muted">sent with the next session</td></tr>
+            <tr><td>set aside after an error</td><td class="r">1</td><td><span class="st st-watch">2 d</span></td><td><div class="cmd"><code>backsight retain retry-quarantine</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details class="why"><summary>Why this matters</summary><div>Sessions that are not sent never become memories. Nothing is lost while they wait; a day-old backlog means sending is stuck.</div></details>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>What is waiting on the server?</h2>
+        <span class="chip"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <span class="pill st st-watch">watch</span>
+      </div>
+      <div class="row small sub" style="gap: 20px"><span><b class="num" style="color: var(--fg)">2</b> server tasks queued</span><span><b class="num" style="color: var(--fg)">1</b> running</span><span><b class="num" style="color: var(--fg)">1</b> failed</span></div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Failed server task</th><th>Age</th><th class="r">Retries</th><th>Session</th></tr></thead>
+          <tbody><tr><td>turning a session into memories</td><td>5 h</td><td class="r">3</td><td><a class="idc" href="#">9e04c2b7</a></td></tr></tbody>
+        </table>
+      </div>
+      <p class="small muted">No error text is shown here. <code>backsight doctor</code> names the fix.</p>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>How long until a session becomes memories?</h2>
+        <span class="chip"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <span class="pill st st-ok">ok</span>
+      </div>
+      <div class="figs">
+        <div class="fig"><span class="lab">typical</span><span class="v">3 min</span></div>
+        <div class="fig"><span class="lab">slowest 1 in 20</span><span class="v">18 min</span><span class="s">watch over 30 min</span></div>
+        <div class="fig"><span class="lab">based on</span><span class="v">200</span><span class="s">last completed server tasks</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>Did any step crash?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <span class="pill st st-watch">watch</span>
+        <details class="info"><summary aria-label="About steps that crashed"><span class="i i-info"></span></summary><div class="pop"><b>Steps that crashed</b><p>Steps backsight runs inside Claude Code (before a prompt, at session end…) that stopped abnormally. A crashed step skips its work; Claude Code goes on.</p><span class="term">hooks.failures by kind: panic, fatal, timeout, killed, exit…</span></div></details>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>How it stopped</th><th class="r">Last 24 h</th><th class="r">7 days</th><th>Last</th></tr></thead>
+          <tbody>
+            <tr><td>crashed (panic)</td><td class="r">1</td><td class="r">1</td><td>3 h ago</td></tr>
+            <tr><td>took too long (timeout)</td><td class="r">1</td><td class="r">2</td><td>9 h ago</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cmd"><code>backsight report</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>Do background jobs run?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <span class="pill st st-ok">ok</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Job</th><th>Runs</th><th>Last run</th><th>Result</th><th class="r">Took</th></tr></thead>
+          <tbody>
+            <tr><td>sending (<code>jobs tick</code>)</td><td>every 5 min</td><td>4 min ago</td><td><span class="st st-ok">ok</span></td><td class="r">2.1 s</td></tr>
+            <tr><td>upkeep (<code>jobs maintain</code>)</td><td>daily</td><td>3 h ago</td><td><span class="st st-ok">ok</span></td><td class="r">48 s</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

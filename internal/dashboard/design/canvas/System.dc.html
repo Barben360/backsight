@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>System</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="system" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is the service up?</h1><span class="muted">System · checked <time datetime="2026-10-30T15:41" title="2026-10-30 15:41">3 min ago</time> (checks are cached 5 min)</span></div>
+
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-head"><h2>Memory server</h2><span class="chip"><span class="i i-sm i-server"></span>server</span><span class="spacer"></span><span class="pill st st-ok">answering</span></div>
+      <dl class="dl">
+        <dt>Address</dt><dd class="mono">127.0.0.1:18888</dd>
+        <dt>Version</dt><dd>Hindsight 0.9.2</dd>
+        <dt>Runs as</dt><dd>native Linux service</dd>
+        <dt>Last answer</dt><dd><time datetime="2026-10-30T15:43" title="2026-10-30 15:43">1 min ago</time></dd>
+        <dt>Pausing after errors</dt><dd>no (closed)</dd>
+        <dt>Prompts skipped</dt><dd class="num">0 in 7 days</dd>
+      </dl>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>This PC</h2><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <dl class="dl">
+        <dt>backsight</dt><dd>v0.1.17-m7</dd>
+        <dt>Update</dt><dd><span class="st st-info" style="color: var(--learn)">v0.1.18-m7 available</span></dd>
+        <dt>Background jobs</dt><dd>sending every 5 min · upkeep daily</dd>
+        <dt>Last backup</dt><dd><span class="st st-watch">9 days ago</span></dd>
+        <dt>History index</dt><dd>up to date · 13 months · 3 s behind</dd>
+      </dl>
+      <div class="cmd"><code>/backsight:update</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>What needs a look here?</h2><span class="spacer"></span><span class="muted small">1 warning</span></div>
+      <ul class="att">
+        <li class="att-item"><span class="pill st st-watch">watch</span><div class="body"><p>The last backup is 9 days old.</p><div class="cmd"><code>backsight doctor</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></div></li>
+      </ul>
+      <p class="xs muted">Warnings that do not affect memory stay on this page; they never change the verdict.</p>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Do the health checks pass?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="chip"><span class="i i-sm i-server"></span>server</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight doctor</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th aria-sort="ascending"><a href="#">Status <span class="sort">▲</span></a></th><th><a href="#">Check <span class="sort">↕</span></a></th><th>Result</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr><td><span class="st st-watch">watch</span></td><td>Backups</td><td class="wrapok">Last backup 9 days ago (expected weekly).</td><td><code>backsight doctor</code></td></tr>
+          <tr><td><span class="st st-info" style="color: var(--learn)">info</span></td><td>Update</td><td class="wrapok">v0.1.18-m7 is available.</td><td><code>/backsight:update</code></td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Memory server reachable</td><td class="wrapok">Answered in 38 ms.</td><td class="muted">—</td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Server version</td><td class="wrapok">Hindsight 0.9.2 is supported.</td><td class="muted">—</td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Search index</td><td class="wrapok">Embeddings ready, 1,284 memories indexed.</td><td class="muted">—</td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Claude Code steps</td><td class="wrapok">All 6 steps installed and answering.</td><td class="muted">—</td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Background jobs</td><td class="wrapok">Sending ran 4 min ago; upkeep ran 3 h ago.</td><td class="muted">—</td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Settings</td><td class="wrapok">Configuration loads; memory feedback on.</td><td class="muted">—</td></tr>
+          <tr><td><span class="st st-ok">ok</span></td><td>Waiting on this PC</td><td class="wrapok">Nothing waiting.</td><td class="muted">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

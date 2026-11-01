@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Releases</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<dc-import name="TopBar" theme="inherit" active="releases" dev="true" win="90" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Did a release or a setting help?</h1><span class="muted">Releases · developer · last 90 days · this PC</span></div>
+  <div class="state st-few"><span class="i i-info"></span><span><b>Observational: weeks, projects and memory differ.</b> Each row covers different days and different work. Read differences as hints, not proof.</span></div>
+  <section class="card">
+    <div class="card-head">
+      <h2>Per version</h2>
+      <span class="chip chip-dev">developer</span>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats releases --days 90</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead>
+          <tr><th rowspan="2">Version</th><th rowspan="2">In use</th><th class="r" rowspan="2">Prompts</th><th class="r" rowspan="2">Turns judged</th><th class="r">Found</th><th class="r">Used</th><th class="r">Reported wrong</th><th class="r">Context high</th><th class="r">Speed</th><th colspan="3" style="border-left: 1px solid var(--border)">Beside it (covariates)</th></tr>
+          <tr><th class="r xs">recall.hit_rate</th><th class="r xs">used.turn_rate</th><th class="r xs">verdict.wrong_rate</th><th class="r xs">context p95</th><th class="r xs">latency p95</th><th style="border-left: 1px solid var(--border)">Top project</th><th class="r">Prompts / day</th><th class="r">Memories</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">v0.1.17-m7</td><td>Oct 28 → now</td><td class="r">58</td><td class="r">7</td><td class="r">29 % <span class="muted">(18–42)</span></td><td class="r"><span class="st st-few">5 of 7</span></td><td class="r">0 of 6</td><td class="r">3,600</td><td class="r">1.6 s</td><td style="border-left: 1px solid var(--border)">backsight 71 %</td><td class="r">24</td><td class="r">1,284</td></tr>
+          <tr><td class="mono">v0.1.16-m7</td><td>Oct 21 → 28</td><td class="r">171</td><td class="r">18</td><td class="r">27 % <span class="muted">(21–34)</span></td><td class="r">61 % <span class="muted">(39–80)</span></td><td class="r">1 of 15</td><td class="r">3,500</td><td class="r">1.5 s</td><td style="border-left: 1px solid var(--border)">backsight 48 %</td><td class="r">24</td><td class="r">1,231</td></tr>
+          <tr><td class="mono">v0.1.15-m6</td><td>Oct 2 → 21</td><td class="r">447</td><td class="r">41</td><td class="r">26 % <span class="muted">(22–30)</span></td><td class="r">59 % <span class="muted">(44–72)</span></td><td class="r">2 of 38</td><td class="r">3,900</td><td class="r">1.7 s</td><td style="border-left: 1px solid var(--border)">project-a 52 %</td><td class="r">23</td><td class="r">1,102</td></tr>
+          <tr><td class="mono">v0.1.14-m6</td><td>Sep 3 → Oct 2</td><td class="r">602</td><td class="r">49</td><td class="r">22 % <span class="muted">(19–26)</span></td><td class="r">55 % <span class="muted">(41–68)</span></td><td class="r">3 of 44</td><td class="r">4,200</td><td class="r">1.9 s</td><td style="border-left: 1px solid var(--border)">backsight 61 %</td><td class="r">21</td><td class="r">904</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="xs muted">Attributed per event to the binary that recorded it, not per day. Comparing two versions with matched projects comes later.</p>
+  </section>
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><h2>Which settings are in effect?</h2><span class="chip chip-dev">developer</span></div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Setting</th><th class="r">Value</th><th>Since</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">recall.prompt_hits</td><td class="r">3</td><td>Sep 3</td></tr>
+            <tr><td class="mono">recall.min_score</td><td class="r">0.5</td><td>Sep 3</td></tr><tr><td class="mono">recall.global_min_score</td><td class="r">0.6</td><td>Sep 3</td></tr>
+            <tr><td class="mono">recall.session_budget_chars</td><td class="r">6,000</td><td>Sep 3</td></tr>
+            <tr><td class="mono">feedback.boost_weight</td><td class="r">0.1</td><td>Oct 2</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>What would another setting do?</h2><span class="chip chip-dev">developer</span></div>
+      <p class="small sub">Replay recorded recalls with another learned-ranking setting, without touching memory or config.toml:</p>
+      <div class="cmd"><code>backsight feedback replay --set boost_weight=0.15</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    </section>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

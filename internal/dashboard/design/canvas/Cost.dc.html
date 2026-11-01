@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cost</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="cost" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is it worth it?</h1><span class="muted">Cost · last 30 days · what memory adds to each prompt, and what the server spends</span></div>
+
+  <div class="figs">
+    <div class="fig"><span class="lab"><span class="i i-sm i-pc"></span>Context per session</span><span class="v">3,600 chars</span><span class="s">high · typical 2,100 · ≈ 900 tokens</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-pc"></span>Context per prompt that got memory</span><span class="v">1,500 chars</span><span class="s">high · typical 640</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-pc"></span>Time added to a prompt</span><span class="v">1.6 s</span><span class="s">slowest 1 in 20 · typical 840 ms</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-pc"></span>Time of a memory search</span><span class="v">1.9 s</span><span class="s">slowest 1 in 20 · typical 420 ms</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-server"></span>Extraction cost</span><span class="v">$186.40</span><span class="s">server, all PCs · 30 days</span></div>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>How much context does memory add per session?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Context added per session</b><dl><dt>What</dt><dd>Characters backsight put in Claude's context in one session: at session start and before prompts. Tokens are about characters / 4.</dd><dt>Limits</dt><dd>Watch when the high value passes 9,000 characters (1.5 × the 6,000-character session budget).</dd><dt>Based on</dt><dd>137 sessions</dd></dl><span class="term">context.per_session p50 · p95</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="Histogram" theme="inherit" data="context" hint-size="100%,330px"></dc-import>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>Where is that context added?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 14</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="StackBars" theme="inherit" data="context" hint-size="100%,330px"></dc-import>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>How long does memory make a prompt wait?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Time memory adds to a prompt</b><dl><dt>What</dt><dd>Time between the prompt and the moment Claude sees it with memory, per day: typical and slowest 1 in 20.</dd><dt>Limits</dt><dd>Watch over 2.0 s, attention over 2.5 s.</dd><dt>Based on</dt><dd>676 prompts</dd><dt>Smallest change it can see</dt><dd>about 0.2 s</dd></dl><span class="term">recall.latency p50 · p95</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="LineChart" theme="inherit" data="latency" hint-size="100%,300px"></dc-import>
+      <div class="card-foot"><a href="#">676 prompts →</a><span class="muted">Too slow? <code>backsight doctor</code> checks the server and its search index.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>What does the server's model spend?</h2>
+        <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <details class="info"><summary aria-label="About this chart"><span class="i i-info"></span></summary><div class="pop"><b>Extraction tokens and cost</b><p>Tokens the memory server's model used to turn sessions into memories and build summaries, from every PC. Cost uses the prices in the <code>[llm]</code> settings. The server keeps 30 days.</p><span class="term">extraction.tokens · extraction.cost</span></div></details>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats cost --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="StackBars" theme="inherit" data="extraction" hint-size="100%,330px"></dc-import>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Server task</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
+          <tbody>
+            <tr><td>turning sessions into memories</td><td class="r">11.2 M</td><td class="r">6.8 M</td><td class="r">1.4 M</td><td class="r">$139.20</td></tr>
+            <tr><td>building summaries</td><td class="r">3.1 M</td><td class="r">1.9 M</td><td class="r">0.4 M</td><td class="r">$40.85</td></tr>
+            <tr><td>other server tasks</td><td class="r">0.6 M</td><td class="r">0.2 M</td><td class="r">0.1 M</td><td class="r">$6.35</td></tr>
+            <tr class="total"><td>all tasks</td><td class="r">14.9 M</td><td class="r">8.9 M</td><td class="r">1.9 M</td><td class="r">$186.40</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <p class="small muted">Steps that crashed are on <a href="#">Pipeline</a>.</p>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Link expired</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light" style="min-height: 900px">
+<main class="solo" style="min-height: 900px">
+  <div class="solo-box">
+    <img class="logo-l" src="/_blob/f3b15505bfa61aad5ef945ca461922b5" alt="backsight">
+    <img class="logo-d" src="/_blob/0b7633182cb35fbccfe34d3cc0c1422c" alt="backsight">
+    <h1>This link has expired.</h1>
+    <p class="sub">Run this in a terminal on this PC for a new one:</p>
+    <div class="cmd" style="width: 100%"><code>backsight dashboard link</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+    <p class="xs muted">Each link opens the dashboard once. It only answers on this PC (127.0.0.1) and forgets you after 2 hours idle.</p>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bank</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="bank" win="30" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head"><h1>Is the memory healthy?</h1><span class="muted">Bank · last 30 days · from the memory server, all PCs</span></div>
+
+  <div class="figs">
+    <div class="fig"><span class="lab"><span class="i i-sm i-server"></span>Memories</span><span class="v">1,284</span><span class="s">+186 in 30 days</span></div>
+    <div class="fig"><span class="lab"><i class="sw f-summary"></i>summary</span><span class="v">212</span><span class="s">+21</span></div>
+    <div class="fig"><span class="lab"><i class="sw f-about"></i>fact about you and your work</span><span class="v">431</span><span class="s">+64</span></div>
+    <div class="fig"><span class="lab"><i class="sw f-session"></i>fact from a session</span><span class="v">641</span><span class="s">+101</span></div>
+    <div class="fig"><span class="lab"><span class="i i-sm i-doc"></span>Documents</span><span class="v">286</span><span class="s">sessions and notes sent</span></div>
+  </div>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>How fast is memory growing?</h2>
+        <span class="chip"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats bank --days 30</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <dc-import name="StackArea" theme="inherit" hint-size="100%,330px"></dc-import>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>Which projects hold the memory?</h2>
+        <span class="chip"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats projects</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <figure class="chart">
+        <svg viewBox="0 0 680 236" role="img" aria-label="Memories per project">
+          <text class="lbl ta-e" x="200" y="24">backsight</text><rect class="f-seq2" x="210" y="10" width="400" height="20" rx="3"><title>backsight: 512</title></rect><text class="val" x="618" y="24">512</text>
+          <text class="lbl ta-e" x="200" y="60">project-a</text><rect class="f-seq2" x="210" y="46" width="235" height="20" rx="3"><title>project-a: 301</title></rect><text class="val" x="453" y="60">301</text>
+          <text class="lbl ta-e" x="200" y="96">project-b</text><rect class="f-seq2" x="210" y="82" width="167" height="20" rx="3"><title>project-b: 214</title></rect><text class="val" x="385" y="96">214</text>
+          <text class="lbl ta-e" x="200" y="132">project-c</text><rect class="f-seq2" x="210" y="118" width="109" height="20" rx="3"><title>project-c: 140</title></rect><text class="val" x="327" y="132">140</text>
+          <text class="lbl ta-e" x="200" y="168">project-d-shared-fronten…<title>project-d-shared-frontend-tools</title></text><rect class="f-seq2" x="210" y="154" width="60" height="20" rx="3"><title>project-d-shared-frontend-tools: 77</title></rect><text class="val" x="278" y="168">77</text>
+          <text class="lbl ta-e" x="200" y="204">no project</text><rect class="f-seq2" x="210" y="190" width="31" height="20" rx="3"><title>no project: 40</title></rect><text class="val" x="249" y="204">40</text>
+          <line class="bl" x1="210" x2="210" y1="4" y2="216"></line>
+        </svg>
+      </figure>
+    </section>
+  </div>
+
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-head">
+        <h2>Are summaries being built?</h2>
+        <span class="chip"><span class="i i-sm i-server"></span>server</span>
+        <span class="spacer"></span>
+        <span class="st st-ok">ok</span>
+      </div>
+      <dl class="dl">
+        <dt>Waiting</dt><dd class="num">4 memories</dd>
+        <dt>Failed</dt><dd class="num">0</dd>
+        <dt>Last built</dt><dd><time datetime="2026-10-30T15:09" title="2026-10-30 15:09">35 min ago</time></dd>
+      </dl>
+      <p class="xs muted">Building summaries groups facts into one memory. It runs on the server after each send.</p>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>Which facts were stored by hand?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Kind</th><th class="r">Saved</th><th class="r">Updated</th><th class="r">Refused</th></tr></thead>
+          <tbody>
+            <tr><td>decision</td><td class="r">14</td><td class="r">3</td><td class="r">0</td></tr>
+            <tr><td>pitfall</td><td class="r">9</td><td class="r">1</td><td class="r">1</td></tr>
+            <tr><td>convention</td><td class="r">6</td><td class="r">2</td><td class="r">0</td></tr>
+            <tr><td>state</td><td class="r">11</td><td class="r">5</td><td class="r">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h2>How much is retired or hidden?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      </div>
+      <dc-import name="StackBars" theme="inherit" data="churn" hint-size="100%,300px"></dc-import>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Which memories need a look?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About the review queue"><span class="i i-info"></span></summary><div class="pop"><b>Review queue</b><p>Memories shown often but never used, hidden, or reported wrong. Counts are recent-weighted counts: older shows weigh less. These never change the verdict.</p><span class="term">memory stale: never_used · hidden · reported</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight memory stale</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <nav class="tabs" aria-label="Review queue">
+      <a href="#" aria-current="true">Often shown, never used <span class="count">7</span></a>
+      <a href="#">Hidden <span class="count">3</span></a>
+      <a href="#">Reported wrong <span class="count">2</span></a>
+    </nav>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Memory</th><th>Project</th><th class="r" aria-sort="descending"><a href="#">Shown <span class="sort">▼</span></a></th><th><a href="#">Last shown <span class="sort">↕</span></a></th><th>Command</th></tr></thead>
+        <tbody>
+          <tr><td><a class="idc" href="#" title="b81e44c0d93a4f7e8c2a61d05f9e3b72">b81e44c0</a></td><td>backsight</td><td class="r">14.2</td><td><time datetime="2026-10-30" title="2026-10-30 11:02">5 h ago</time></td><td><div class="cmd" style="max-width: 360px"><code>backsight forget b81e44c0</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></td></tr>
+          <tr><td><a class="idc" href="#" title="3d9f0a27e6c14b58a9d0e3f17c2b6a84">3d9f0a27</a></td><td>project-a</td><td class="r">9.8</td><td><time datetime="2026-10-29" title="2026-10-29 17:20">yesterday</time></td><td><div class="cmd" style="max-width: 360px"><code>backsight forget 3d9f0a27</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></td></tr>
+          <tr><td><a class="idc" href="#" title="c4a17e93b0d24f6a8e1c95d3072b4f18">c4a17e93</a></td><td>backsight</td><td class="r">7.5</td><td><time datetime="2026-10-27" title="2026-10-27 09:44">3 d ago</time></td><td><div class="cmd" style="max-width: 360px"><code>backsight forget c4a17e93</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card-foot"><a href="#">All 7 →</a><span class="muted">Shown: recent-weighted counts.</span></div>
+  </section>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

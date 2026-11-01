@@ -7,6 +7,8 @@ First draft of the `backsight dashboard` UI for issue #115 (decision 0079 §8–
 - `reference/dashboard.css`: the single stylesheet built on `tokens.css`. The canvas uses this same file, so the mockups and the references cannot drift apart.
 - `reference/overview.html`, `reference/memory.html`: static HTML, no script. Open them straight from disk; they load the logos from `docs/assets/`.
 
+`canvas/` holds read-only, byte-for-byte copies of the 26 canvas artboards (`*.dc.html`) the pages are built from, taken on 2026-11-01, the day block 5 started, so the scenarios' wording and numbers can be read offline and reviewed in a diff. The canvas above stays the source: a change to the design is made there and these copies are refreshed from it, never edited here. They are mockups that need the canvas's runtime (`support.js`, `<dc-import>`, inline styles): nothing embeds, serves or links them.
+
 ## Rules for block 5 (from the review)
 
 - **No inline styles.** The dashboard's CSP is `style-src 'self'`, which blocks every `style="…"` attribute. The references have none (`grep -c 'style="' reference/*.html` is 0). A value computed per item in Go must be an SVG attribute (`x`, `y`, `width`, `height`, `d`, `points`, `viewBox`) or one class from a finite set in `dashboard.css`, never a style. The canvas artboards still use inline styles for layout, which is fine there: they are mockups, not the page.

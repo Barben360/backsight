@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Strip timeline</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<figure class="chart">
+  <div class="legend">
+    <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-used" d="M0,-5 A5,5 0 1,1 0,5 A5,5 0 1,1 0,-5Z"></path></svg>used by Claude</span>
+    <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-ignored" d="M0,-6 L6,0 L0,6 L-6,0Z"></path></svg>shown, then ignored</span>
+    <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-undeclared" d="M-4.5,-4.5 H4.5 V4.5 H-4.5Z"></path></svg>not declared</span>
+    <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="f-shown" d="M0,-3 A3,3 0 1,1 0,3 A3,3 0 1,1 0,-3Z"></path></svg>shown only</span>
+    <span><svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path class="mk-pend" d="M0,-4.5 A4.5,4.5 0 1,1 0,4.5 A4.5,4.5 0 1,1 0,-4.5Z"></path></svg>pending</span>
+    <span><i class="sw sw-dash"></i>hidden, then restored</span>
+  </div>
+  <svg viewBox="0 0 1000 236" role="img" aria-label="Every time memory 7f3a9c21 was shown, by where, since it was created on Sep 14">
+    <sc-for list="{{rows}}" as="w" hint-placeholder-count="5">
+      <line class="gl" x1="170" x2="992" y1="{{w.y}}" y2="{{w.y}}"></line>
+      <text class="ta-e lbl" x="160" y="{{w.ty}}">{{w.label}}</text>
+    </sc-for>
+    <line class="thr-w" x1="{{hideX}}" x2="{{hideX}}" y1="8" y2="196"></line>
+    <line class="thr-w" x1="{{restX}}" x2="{{restX}}" y1="8" y2="196"></line>
+    <text class="lbl" x="{{hideTx}}" y="208">hidden Oct 9 · restored Oct 11</text>
+    <line class="mk" x1="{{createdX}}" x2="{{createdX}}" y1="8" y2="196"></line>
+    <text class="lbl" x="{{createdTx}}" y="208">created</text>
+    <sc-for list="{{marks}}" as="m" hint-placeholder-count="23">
+      <path class="{{m.cls}}" d="{{m.d}}"><title>{{m.t}}</title></path>
+    </sc-for>
+    <line class="bl" x1="170" x2="992" y1="196" y2="196"></line>
+    <sc-for list="{{xt}}" as="x" hint-placeholder-count="6">
+      <text class="ta-m" x="{{x.x}}" y="228">{{x.label}}</text>
+    </sc-for>
+  </svg>
+  <details class="tblfb">
+    <summary>Show as a table</summary>
+    <table class="tbl">
+      <thead><tr><th>When</th><th>Where shown</th><th>What Claude did</th><th class="r">Rank</th><th>Turn</th></tr></thead>
+      <tbody><sc-for list="{{table}}" as="t" hint-placeholder-count="5"><tr><td>{{t.when}}</td><td>{{t.where}}</td><td>{{t.oc}}</td><td class="r">{{t.rank}}</td><td><a class="idc" href="#">{{t.sess}}</a> turn {{t.turn}}</td></tr></sc-for></tbody>
+    </table>
+  </details>
+</figure>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"$preview":{"width":1440,"height":320}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    const where = ['added to the prompt', 'before a question', 'at session start', 'Claude’s search', 'opened by Claude'];
+    const L = 176, R = 986;
+    // days since Sep 14 (day 0) to Oct 30 (day 46)
+    const D = 46;
+    const X = (d) => L + (d / D) * (R - L);
+    const rowY = (i) => 26 + i * 38;
+    const date = (d) => { const m = d < 17 ? 'Sep' : 'Oct'; const dd = d < 17 ? 14 + d : d - 16; return m + ' ' + dd; };
+    const shows = [
+      [1, 0, 'used', 1], [3, 0, 'ignored', 3], [4, 2, 'shown', 0], [6, 0, 'used', 1], [9, 1, 'used', 2], [11, 0, 'ignored', 4], [13, 3, 'used', 1],
+      [15, 2, 'shown', 0], [17, 0, 'undeclared', 2], [19, 0, 'used', 1], [21, 4, 'used', 0], [26, 1, 'ignored', 2], [28, 0, 'used', 2], [29, 2, 'shown', 0],
+      [30, 0, 'ignored', 5], [33, 3, 'undeclared', 3], [35, 0, 'used', 1], [37, 1, 'ignored', 3], [39, 2, 'shown', 0], [41, 0, 'used', 1], [42, 0, 'ignored', 2],
+      [45, 0, 'pending', 1], [46, 1, 'pending', 2],
+    ];
+    const shape = (oc, x, y) => {
+      if (oc === 'used') return 'M' + x + ',' + (y - 6) + ' A6,6 0 1,1 ' + x + ',' + (y + 6) + ' A6,6 0 1,1 ' + x + ',' + (y - 6) + 'Z';
+      if (oc === 'ignored') return 'M' + x + ',' + (y - 7) + ' L' + (x + 7) + ',' + y + ' L' + x + ',' + (y + 7) + ' L' + (x - 7) + ',' + y + 'Z';
+      if (oc === 'undeclared') return 'M' + (x - 5) + ',' + (y - 5) + ' H' + (x + 5) + ' V' + (y + 5) + ' H' + (x - 5) + 'Z';
+      if (oc === 'shown') return 'M' + x + ',' + (y - 3.5) + ' A3.5,3.5 0 1,1 ' + x + ',' + (y + 3.5) + ' A3.5,3.5 0 1,1 ' + x + ',' + (y - 3.5) + 'Z';
+      return 'M' + x + ',' + (y - 5) + ' A5,5 0 1,1 ' + x + ',' + (y + 5) + ' A5,5 0 1,1 ' + x + ',' + (y - 5) + 'Z';
+    };
+    const cls = { used: 'f-used', ignored: 'f-ignored', undeclared: 'f-undeclared', shown: 'f-shown', pending: 'mk-pend' };
+    const word = { used: 'used by Claude', ignored: 'shown, then ignored', undeclared: 'not declared', shown: 'shown only', pending: 'pending' };
+    const sess = ['a41c09e2', '5be2d7f0', '93c1a4e8', 'd0f63b15', '2e8a91c7', 'c7d24e60'];
+    const marks = shows.map((s, i) => ({ cls: 'mkp ' + cls[s[2]], d: shape(s[2], X(s[0]).toFixed(1), rowY(s[1])), t: date(s[0]) + ' · ' + where[s[1]] + ' · ' + word[s[2]] + (s[3] ? ' · rank ' + s[3] + ' (without the learned ranking: ' + (s[3] + (i % 3 === 0 ? 1 : 0)) + ')' : '') + ' · session ' + sess[i % 6] }));
+    const rows = where.map((w, i) => ({ label: w, y: rowY(i), ty: rowY(i) + 4 }));
+    const xt = [0, 10, 17, 24, 31, 38, 46].map((d) => ({ x: X(d).toFixed(1), label: date(d) }));
+    const table = shows.slice().reverse().slice(0, 8).map((s, i) => ({ when: date(s[0]), where: where[s[1]], oc: word[s[2]], rank: s[3] || '—', sess: sess[(shows.length - 1 - i) % 6], turn: 2 + (i % 5) }));
+    return {
+      theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', rows, marks, xt, table,
+      createdX: X(0).toFixed(1), createdTx: (X(0) + 4).toFixed(1),
+      hideX: X(25).toFixed(1), restX: X(27).toFixed(1), hideTx: (X(25) - 4).toFixed(1),
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Component sheet 2</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="light">
+<div class="wrap" style="padding-top: 32px; padding-bottom: 48px; display: flex; flex-direction: column; gap: 28px">
+  <div><h1 style="font-size: 24px">Component sheet 2</h1><p class="muted small">Charts (inline SVG drawn by Go, each with a table view), every empty and error state, and a forced-colours preview. Values on hover come from each mark's &lt;title&gt;; in Go each mark also gets tabindex and an aria-label so focus shows the same text.</p></div>
+
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-head"><h3>Sparkline</h3></div>
+      <svg class="spark" viewBox="0 0 188 32" preserveAspectRatio="none" role="img" aria-label="Found per day, last 7 days: 24, 31, 27, 22, 30, 29, 28 %">
+        <line class="sb" x1="0" y1="31" x2="188" y2="31"></line>
+        <path class="sa" d="M4,31 L4,22.2 L34,6.7 L64,15.6 L94,26.7 L124,8.9 L154,11.1 L184,13.3 L184,31 Z"></path>
+        <polyline class="sl" points="4,22.2 34,6.7 64,15.6 94,26.7 124,8.9 154,11.1 184,13.3"></polyline>
+        <circle class="se" cx="184" cy="13.3" r="3"></circle>
+      </svg>
+      <p class="xs muted">Daily values, the last one marked. No axis: the tile above it carries the number.</p>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Status icons, same size as the word</h3></div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+        <span class="st st-ok">ok</span><span class="st st-watch">watch</span><span class="st st-bad">attention</span><span class="st st-border">borderline</span>
+        <span class="st st-few">too few</span><span class="st st-cant">can't judge</span><span class="st st-learn">learning</span><span class="st st-info">info</span>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Info badges (never in the attention list)</h3></div>
+      <div class="badges"><a class="badge" href="#"><span class="i i-info"></span><b>7</b> often shown, never used</a><a class="badge" href="#"><span class="i i-info"></span><b>3</b> hidden</a><a class="badge" href="#"><span class="i i-info"></span><b>2</b> reported wrong</a></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section class="card"><div class="card-head"><h3>Line chart with faint n bars, table view open</h3></div><dc-import name="LineChart" theme="inherit" data="used" table="true" hint-size="100%,560px"></dc-import></section>
+    <section class="card"><div class="card-head"><h3>Line chart with a limit line</h3></div><dc-import name="LineChart" theme="inherit" data="latency" hint-size="100%,300px"></dc-import></section>
+    <section class="card"><div class="card-head"><h3>Stacked bars: where memory went (pending is hatched)</h3></div><dc-import name="StackBars" theme="inherit" data="outcomes" hint-size="100%,330px"></dc-import></section>
+    <section class="card"><div class="card-head"><h3>Stacked bars: sessions sent, failed labelled</h3></div><dc-import name="StackBars" theme="inherit" data="pipelinebroken" hint-size="100%,330px"></dc-import></section>
+    <section class="card"><div class="card-head"><h3>Stacked area: new memories by kind</h3></div><dc-import name="StackArea" theme="inherit" hint-size="100%,330px"></dc-import></section>
+    <section class="card"><div class="card-head"><h3>Histogram with typical and high markers</h3></div><dc-import name="Histogram" theme="inherit" data="context" hint-size="100%,330px"></dc-import></section>
+  </div>
+  <section class="card"><div class="card-head"><h3>Strip timeline: one mark per show, shape and colour by what Claude did</h3></div><dc-import name="StripTimeline" theme="inherit" hint-size="100%,300px"></dc-import></section>
+
+  <h2 class="sec-h">States every widget handles</h2>
+  <div class="grid-3">
+    <section class="card">
+      <div class="card-head"><h3>Fresh install (no data)</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <div class="empty"><span class="row"><span class="st st-few">Nothing yet</span></span><span>Nothing yet: memory starts recording at your next Claude Code prompt.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Memory feedback off (no data)</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <div class="empty"><span class="row"><span class="st st-few">No data</span></span><span>Memory feedback is off (<code>feedback.enabled</code>).</span><span class="xs muted">Quality numbers need it. Found, Cost and Flowing still work.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Server-only host (no data)</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <div class="empty"><span class="row"><span class="st st-few">No data</span></span><span>This PC runs the server only: activity is recorded on the PCs that use it.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Too few</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <div class="state st-few"><span class="i i-few"></span><span><b>2 of 14: too few to judge.</b> 2 reported wrong of 14 verdicts; 20 are needed.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Server down, server widget</h3><span class="chip"><span class="i i-sm i-server"></span>server</span></div>
+      <div class="state st-watch"><span class="i i-server"></span><span><b>Memory server not answering since 09:12.</b> Showing counts from 2 h ago.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Window with no events</h3><span class="chip"><span class="i i-sm i-pc"></span>this PC</span></div>
+      <div class="empty"><span class="row">No prompts in the last 24 h.</span><span class="small">Pick a longer window: <a href="#">7 d</a> · <a href="#">30 d</a></span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>History still being read</h3><span class="chip"><span class="i i-sm i-clock"></span>Catching up</span></div>
+      <div class="state st-learn"><span class="i i-clock"></span><span><b>Catching up:</b> 3 days of history are still being read. Numbers before Oct 27 may be missing.</span></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Stale page</h3></div>
+      <div class="state st-watch"><span class="i i-clock"></span><span><b>Updated 12 min ago.</b> <a href="#">Refresh.</a></span></div>
+      <p class="xs muted">Appears 5 min after rendering, from CSS alone; the top bar's chip says the same.</p>
+    </section>
+    <section class="card">
+      <div class="card-head"><h3>Project with no memories</h3><span class="chip"><span class="i i-sm i-server"></span>server</span></div>
+      <div class="empty"><span>This project has no memories yet. Import its past sessions:</span><div class="cmd" style="width: 100%"><code>backsight retain backfill --project project-c --plan</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></div>
+    </section>
+  </div>
+  <p class="small muted">The 401, first-build and update pages are full pages: see the last row of the canvas. Borderline and unreliable tiles in place: Overview "Quality watch" and "Can't judge".</p>
+
+  <h2 class="sec-h">Forced colours preview (simulated Windows "high contrast black")</h2>
+  <div class="page fc-preview" style="padding: 24px; border-radius: 10px; display: flex; flex-direction: column; gap: 16px">
+    <p class="small">Text, borders and focus take the system colours. Status stays readable from its word and icon shape. Chart fills keep their colours, outlined.</p>
+    <dc-import name="Banner" theme="inherit" variant="broken" hint-size="100%,330px"></dc-import>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: start">
+      <dc-import name="Tile" theme="inherit" scenario="broken" slot="flowing" hint-size="100%,330px"></dc-import>
+      <dc-import name="Tile" theme="inherit" scenario="qualitywatch" slot="used" hint-size="100%,330px"></dc-import>
+      <dc-import name="Tile" theme="inherit" scenario="healthy" slot="wrong" hint-size="100%,330px"></dc-import>
+      <dc-import name="Tile" theme="inherit" scenario="healthy" slot="found" hint-size="100%,330px"></dc-import>
+    </div>
+    <section class="card"><dc-import name="StackBars" theme="inherit" data="outcomes" hint-size="100%,330px"></dc-import></section>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":4200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

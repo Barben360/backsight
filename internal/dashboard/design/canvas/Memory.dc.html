@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Memory</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="memories" win="90" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <nav class="small muted" aria-label="Breadcrumb"><a href="#">Memories</a> / 7f3a9c21</nav>
+  <div class="page-head">
+    <h1>How has memory <span class="mono" title="7f3a9c21e04b4d0e9a1f6c55b2d18e07">7f3a9c21</span> been used?</h1>
+    <span class="muted"><a href="#">backsight</a> · <i class="sw f-about"></i> fact about you and your work · created <time datetime="2026-09-14" title="2026-09-14 10:31">Sep 14</time></span>
+    <span class="pill st st-ok">active</span>
+  </div>
+
+  <div class="grid-main">
+    <div class="figs">
+      <div class="fig"><span class="lab">Shown</span><span class="v">23</span><span class="s">17.4 recent-weighted</span></div>
+      <div class="fig"><span class="lab"><i class="sw f-used"></i>Used by Claude</span><span class="v">9</span><span class="s">last <time datetime="2026-10-30T14:52" title="2026-10-30 14:52">today 14:52</time></span></div>
+      <div class="fig"><span class="lab"><i class="sw f-ignored"></i>Shown, then ignored</span><span class="v">6</span></div>
+      <div class="fig"><span class="lab">Used when judged</span><span class="v">60 %</span><span class="s">9 of 15</span></div>
+      <div class="fig"><span class="lab">Learned ranking now</span><span class="v v-word">raised</span><span class="s">shown a little higher</span></div>
+    </div>
+    <section class="card">
+      <div class="card-head"><h2>What does it say?</h2><span class="chip"><span class="i i-sm i-server"></span>server</span></div>
+      <p class="small sub">The text is read live from the memory server when you ask, and never kept by the dashboard.</p>
+      <div class="row"><a class="btn" href="#"><span class="i i-doc"></span>Show text</a></div>
+      <div class="state st-watch"><span class="i i-watch"></span><span>Reported wrong once: <time datetime="2026-10-30T15:11" title="2026-10-30 15:11">today 15:11</time>, session <a class="idc" href="#">a41c09e2</a> turn 4.</span></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>When and where was it shown?</h2>
+      <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About this timeline"><span class="i i-info"></span></summary><div class="pop"><b>Strip timeline</b><p>One mark per time this memory was shown, on the row of where it was shown. Shape and colour say what Claude did with it. Hover or focus a mark for the turn, its rank, and its rank without the learned ranking.</p><span class="term">ledger shows · path · outcome · rank · boost</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats memories 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <dc-import name="StripTimeline" theme="inherit" hint-size="100%,300px"></dc-import>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <h2>How high was it ranked when shown?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+      </div>
+      <dc-import name="Histogram" theme="inherit" data="rank" hint-size="100%,330px"></dc-import>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>What can I do with it?</h2></div>
+      <dl class="dl dl-center">
+        <dt>Read it in the terminal</dt><dd><div class="cmd"><code>backsight read 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
+        <dt>Hide it from recall</dt><dd><div class="cmd"><code>backsight forget 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
+        <dt>Bring it back</dt><dd><div class="cmd"><code>backsight forget --restore 7f3a9c21</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></dd>
+      </dl>
+      <p class="xs muted">The dashboard never changes memory: it shows the command, you run it.</p>
+    </section>
+  </div>
+</main>
+<footer class="foot"><div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a></div></footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme ?? 'light' }; }
+}
+</script>
+</body>
+</html>

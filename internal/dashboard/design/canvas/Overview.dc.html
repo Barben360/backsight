@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overview</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="page" data-theme="{{theme}}">
+<dc-import name="TopBar" theme="inherit" active="overview" dev="{{dev}}" scope="{{scope}}" filter="{{filter}}" hint-size="100%,94px"></dc-import>
+<main id="main" class="wrap main">
+  <div class="page-head">
+    <h1>Is my memory working?</h1>
+    <span class="muted">Overview · window: last 7 days</span>
+  </div>
+
+  <dc-import name="Banner" theme="inherit" variant="{{scenario}}" hint-size="100%,190px"></dc-import>
+
+  <p class="summary">In the last 7 days: <b>{{s.p}}</b> prompts got memory, Claude used it in <b>{{s.t}}</b> turns, about <b>{{s.k}}</b> tokens added; extraction cost <b>{{s.cost}}</b> <span class="muted">{{s.scope}}</span></p>
+
+  <div class="tgroups" aria-label="Key numbers">
+    <section class="tgroup">
+      <h2 class="tgroup-h">Found</h2>
+      <div class="tgroup-tiles">
+        <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="found" dev="{{dev}}" hint-size="100%,330px"></dc-import>
+      </div>
+    </section>
+    <section class="tgroup">
+      <h2 class="tgroup-h">Right</h2>
+      <div class="tgroup-tiles">
+        <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="used" dev="{{dev}}" hint-size="100%,330px"></dc-import>
+        <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="wrong" dev="{{dev}}" hint-size="100%,330px"></dc-import>
+      </div>
+    </section>
+    <section class="tgroup">
+      <h2 class="tgroup-h">Cost</h2>
+      <div class="tgroup-tiles">
+        <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="context" dev="{{dev}}" hint-size="100%,330px"></dc-import>
+        <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="speed" dev="{{dev}}" hint-size="100%,330px"></dc-import>
+      </div>
+    </section>
+    <section class="tgroup">
+      <h2 class="tgroup-h">Flowing</h2>
+      <div class="tgroup-tiles">
+        <dc-import name="Tile" theme="inherit" scenario="{{scenario}}" slot="flowing" dev="{{dev}}" hint-size="100%,330px"></dc-import>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid-main">
+    <section class="card" aria-labelledby="att-h">
+      <div class="card-head">
+        <h2 id="att-h">What should I do?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <span class="muted small">{{attCount}}</span>
+      </div>
+      <sc-if value="{{hasAtt}}" hint-placeholder-val="{{ false }}">
+        <ul class="att">
+          <sc-for list="{{att}}" as="a" hint-placeholder-count="1">
+            <li class="att-item">
+              <span class="pill st {{a.st}}">{{a.word}}</span>
+              <div class="body">
+                <p>{{a.text}}</p>
+                <div class="cmd"><code>{{a.cmd}}</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div>
+                <details class="why"><summary>Why this matters</summary><div>{{a.why}}</div></details>
+              </div>
+            </li>
+          </sc-for>
+        </ul>
+      </sc-if>
+      <sc-if value="{{noAtt}}" hint-placeholder-val="{{ true }}">
+        <div class="empty"><span class="row"><span class="st st-ok">Nothing needs attention.</span></span><span class="small">{{calm}}</span></div>
+      </sc-if>
+    </section>
+
+    <section class="card" aria-labelledby="late-h">
+      <div class="card-head">
+        <h2 id="late-h">What happened lately?</h2>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats sessions --limit 5</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>Session</th><th>Project</th><th>When</th><th class="r">Shown</th><th class="r">Used</th><th class="r">Wrong</th></tr></thead>
+          <tbody>
+            <sc-for list="{{lately}}" as="l" hint-placeholder-count="5">
+              <tr>
+                <td><a class="idc" href="#" title="{{l.full}}">{{l.id}}</a></td>
+                <td><a href="#" class="trunc" title="{{l.projFull}}">{{l.proj}}</a></td>
+                <td><time datetime="2026-10-30" title="{{l.abs}}">{{l.when}}</time></td>
+                <td class="r">{{l.shown}}</td>
+                <td class="r">{{l.used}}</td>
+                <td class="r"><span class="{{l.wcls}}">{{l.wrong}}</span></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-foot"><a href="#">All sessions →</a></div>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="glance-h">
+    <div class="card-head">
+      <h2 id="glance-h">How big is the memory?</h2>
+      <span class="chip" title="From the memory server: all PCs"><span class="i i-sm i-server"></span>server</span>
+      <sc-if value="{{filtered}}" hint-placeholder-val="{{ false }}"><span class="chip chip-nf" title="Not filtered: this shows the whole memory.">not filtered</span></sc-if>
+      <span class="spacer"></span>
+      <details class="info"><summary aria-label="About memory at a glance"><span class="i i-info"></span></summary><div class="pop"><b>Memory at a glance</b><p>Memories on the server, by kind, and how many were added in the window. The badges count memories worth a look; they never change the verdict.</p><span class="term">bank.size · bank.growth · stale.*</span></div></details>
+      <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats bank</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+    </div>
+    <sc-if value="{{g.down}}" hint-placeholder-val="{{ false }}">
+      <div class="state st-watch"><span class="i i-server"></span><span>Memory server not answering since 09:12. Counts below are from 2 h ago.</span></div>
+    </sc-if>
+    <div class="glance">
+      <div class="glance-total">
+        <span class="muted small">Memories</span>
+        <span class="v">{{g.total}}</span>
+        <span class="small sub">{{g.growth}}</span>
+      </div>
+      <div class="glance-kinds">
+        <svg class="kbar-svg" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{g.aria}}">
+          <rect class="f-summary" x="0" y="0" width="{{g.w1}}" height="10"></rect>
+          <rect class="f-about" x="{{g.x2}}" y="0" width="{{g.w2}}" height="10"></rect>
+          <rect class="f-session" x="{{g.x3}}" y="0" width="{{g.w3}}" height="10"></rect>
+        </svg>
+        <div class="legend">
+          <span><i class="sw f-summary"></i>summary <b class="num">{{g.k1}}</b></span>
+          <span><i class="sw f-about"></i>fact about you and your work <b class="num">{{g.k2}}</b></span>
+          <span><i class="sw f-session"></i>fact from a session <b class="num">{{g.k3}}</b></span>
+        </div>
+      </div>
+      <div class="glance-look">
+        <span class="muted small">Worth a look</span>
+        <sc-if value="{{g.hasBadges}}" hint-placeholder-val="{{ true }}">
+          <div class="badges">
+            <a class="badge" href="#"><span class="i i-info"></span><b>7</b> often shown, never used</a>
+            <a class="badge" href="#"><span class="i i-info"></span><b>3</b> hidden</a>
+            <a class="badge" href="#"><span class="i i-info"></span><b>2</b> reported wrong</a>
+          </div>
+        </sc-if>
+        <sc-if value="{{g.noBadges}}" hint-placeholder-val="{{ false }}"><span class="small sub">Nothing to review.</span></sc-if>
+      </div>
+    </div>
+  </section>
+
+  <sc-if value="{{dev}}" hint-placeholder-val="{{ false }}">
+    <section class="card" aria-labelledby="dev-h">
+      <div class="card-head">
+        <h2 id="dev-h">How well is memory ranked?</h2>
+        <span class="chip chip-dev">developer</span>
+        <span class="chip"><span class="i i-sm i-pc"></span>this PC</span>
+        <span class="spacer"></span>
+        <details class="cli"><summary>CLI</summary><div class="cmd pop cli-pop"><code>backsight stats quality --days 7 --dev</code><button class="copy" type="button"><span class="i i-sm i-copy"></span>Copy</button></div></details>
+      </div>
+      <div class="figs">
+        <div class="fig"><span class="lab">Confidently ranked, then used</span><span class="v">41 % <span class="small sub">(33–49 %)</span></span><span class="s mono">used.share_confident · prompt path</span></div>
+        <div class="fig"><span class="lab">Used memory ranked first / in top 3</span><span class="v">52 % / 81 %</span><span class="s mono">used.rank hit@1 · hit@3</span></div>
+        <div class="fig"><span class="lab">Memories Claude found itself</span><span class="v">12 %</span><span class="s mono">search.rescue_rate</span></div>
+        <div class="fig"><span class="lab">Turns where every memory was marked used</span><span class="v">18 %</span><span class="s mono">used.rubber_stamp · min_n 30</span></div>
+        <div class="fig"><span class="lab">Running version</span><span class="v mono" style="font-size: 16px">v0.1.17-m7</span><span class="s">since <time datetime="2026-10-28" title="2026-10-28 18:02">2 d ago</time> · <a href="#">Releases</a></span></div>
+      </div>
+    </section>
+  </sc-if>
+</main>
+<footer class="foot">
+  <div class="wrap"><span>backsight v0.1.17-m7</span><a href="#">Help: backsight guide dashboard</a><a href="#">Definitions</a><span>Rendered at <time datetime="2026-10-30T15:44">15:44</time> in 84 ms</span></div>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"scenario":{"editor":"enum","options":["new","healthy","cantjudge","qualitywatch","latency","serverdown","broken"],"default":"healthy"},"dev":{"editor":"boolean","default":false},"filter":{"editor":"text","default":""},"$preview":{"width":1440,"height":1600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const sc = p.scenario ?? 'healthy';
+    const dev = String(p.dev ?? false) === 'true';
+    const filter = p.filter ?? '';
+    const S = {
+      healthy: { p: '46', t: '10', k: '17 k', cost: '$43.62', scope: '(server, all PCs).' },
+      new: { p: '3', t: '0', k: '1,100', cost: 'price not set', scope: '(server, all PCs).' },
+      cantjudge: { p: '41', t: '9', k: '15 k', cost: '$39.80', scope: '(server, all PCs).' },
+      qualitywatch: { p: '21', t: '8', k: '18 k', cost: '$41.05', scope: '(server, all PCs).' },
+      latency: { p: '46', t: '10', k: '17 k', cost: '$43.62', scope: '(server, all PCs).' },
+      serverdown: { p: '12', t: '9', k: '11 k', cost: 'unknown', scope: '(the memory server is not answering).' },
+      broken: { p: '40', t: '11', k: '16 k', cost: '$40.12', scope: '(server, all PCs).' },
+    };
+    const W = (text, cmd, why) => ({ st: 'st-watch', word: 'watch', text, cmd, why });
+    const A = (text, cmd, why) => ({ st: 'st-bad', word: 'attention', text, cmd, why });
+    const ATT = {
+      healthy: [], new: [], latency: [W('Memory adds 2.3 s to the slowest prompts (limit 2.5 s).', 'backsight doctor', 'Every prompt waits for memory before Claude sees it. Past 2.5 s the wait becomes noticeable. Doctor checks the server and its search index and names the fix.')],
+      cantjudge: [W('Can’t judge yet: Claude said what it used on only 64 % of turns.', 'backsight stats sessions --has undeclared', 'Whether memory is right depends on Claude saying which memories it used. Under 80 % of turns, the Used and Reported wrong numbers are not reliable. The sessions listed show the turns where it said nothing.')],
+      qualitywatch: [W('Fewer prompts get memory than usual: 14 % vs 27 % before.', 'backsight stats quality --days 14', 'With less memory, Claude starts each prompt with less of your context. The Quality page shows why prompts got nothing: often a project with little memory yet, which importing its past sessions fixes.')],
+      serverdown: [W('Memory server unreachable since 09:12: 14 notes and 3 sessions wait on this PC, nothing is lost.', 'backsight doctor', 'While the server is unreachable, prompts get no memory and sessions wait on this PC. They are sent on their own once it answers. After 24 h this becomes urgent.')],
+      broken: [
+        A('3 sessions could not be sent; 1 set aside after an error.', 'backsight retain retry-quarantine', 'Sessions that are not sent never become memories. The one set aside failed in a way that a retry may fix; the other two are retried on their own.'),
+        A('A session has waited on this PC for 26 h.', 'backsight doctor', 'Sessions normally reach the server within minutes. A day-old backlog means sending is stuck; doctor names the step that fails.'),
+        W('2 steps crashed in the last 24 h.', 'backsight report', 'A step that crashes skips its work for that prompt or session. Two in a day is worth a bug report: it collects the logs without any memory or prompt text.'),
+      ],
+    };
+    const L = {
+      healthy: [
+        ['a41c09e2', 'backsight', '25 min ago', 10, 2, 1],
+        ['5be2d7f0', 'project-a', '2 h ago', 4, 1, 0],
+        ['93c1a4e8', 'backsight', '5 h ago', 9, 3, 0],
+        ['d0f63b15', 'project-c', 'yesterday', 3, 0, 0],
+        ['2e8a91c7', 'project-d-shared-frontend-tools', '2 d ago', 5, 1, 0],
+      ],
+      new: [['c7d24e60', 'backsight', '40 min ago', 2, 0, 0], ['81f0b3a9', 'backsight', 'yesterday', 1, 0, 0]],
+    };
+    const late = (L[sc] || L.healthy).map((r) => ({ id: r[0], full: r[0] + '4e1b0c9d2f7a63e85b1d0c4a', proj: r[1].length > 24 ? r[1].slice(0, 24) + '…' : r[1], projFull: r[1], when: r[2], abs: '2026-10-30 15:19', shown: r[3], used: r[4], wrong: r[5], wcls: r[5] > 0 ? 'st st-watch' : '' }));
+    const att = ATT[sc] || [];
+    const isNew = sc === 'new';
+    const g = isNew
+      ? { total: '38', growth: '+38 in the last 7 days', k1: '0', k2: '12', k3: '26', w1: 0, x2: 0, w2: 31.6, x3: 32.1, w3: 67.9, hasBadges: false, noBadges: true }
+      : { total: '1,284', growth: '+46 in the last 7 days · 286 documents', k1: '212', k2: '431', k3: '641', w1: 16.5, x2: 17, w2: 33.1, x3: 50.6, w3: 49.4, hasBadges: true, noBadges: false };
+    g.down = sc === 'serverdown';
+    g.aria = 'Memories by kind: ' + g.k1 + ' summaries, ' + g.k2 + ' facts about you and your work, ' + g.k3 + ' facts from a session';
+    return {
+      theme, scenario: sc, dev: dev, filter, filtered: !!filter,
+      scope: sc === 'serverdown' ? 'serverdown' : 'ok',
+      s: S[sc] || S.healthy,
+      att, hasAtt: att.length > 0, noAtt: att.length === 0,
+      attCount: att.length ? att.length + (att.length === 1 ? ' item' : ' items') : '',
+      calm: isNew ? 'Memory is still learning: the verdict firms up after about a week of prompts.' : 'Everything is within its usual range. Nothing to do.',
+      lately: late, g,
+    };
+  }
+}
+</script>
+</body>
+</html>

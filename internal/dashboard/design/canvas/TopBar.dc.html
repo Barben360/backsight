@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Top bar and scope line</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="#" title="Overview"><img class="logo-l" src="/_blob/f3b15505bfa61aad5ef945ca461922b5" alt="backsight"><img class="logo-d" src="/_blob/0b7633182cb35fbccfe34d3cc0c1422c" alt="backsight"></a>
+    <nav class="nav" aria-label="Pages">
+      <a href="#" aria-current="{{cur.overview}}">Overview</a>
+      <a href="#" aria-current="{{cur.quality}}">Quality</a>
+      <a href="#" aria-current="{{cur.cost}}">Cost</a>
+      <a href="#" aria-current="{{cur.bank}}">Bank</a>
+      <a href="#" aria-current="{{cur.pipeline}}">Pipeline</a>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <details class="menu {{browseCls}}" open="{{openBrowse}}">
+        <summary>Browse <span class="caret">▾</span></summary>
+        <div class="menu-pop">
+          <a href="#" aria-current="{{cur.projects}}">Projects</a>
+          <a href="#" aria-current="{{cur.sessions}}">Sessions</a>
+          <a href="#" aria-current="{{cur.memories}}">Memories</a>
+        </div>
+      </details>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <a href="#" aria-current="{{cur.system}}">System</a>
+      <sc-if value="{{dev}}" hint-placeholder-val="{{ false }}">
+        <span class="nav-sep" aria-hidden="true"></span>
+        <details class="menu {{devCls}}" open="{{openDev}}">
+          <summary>Developer <span class="caret">▾</span></summary>
+          <div class="menu-pop">
+            <a href="#" aria-current="{{cur.releases}}">Releases</a>
+            <a href="#" aria-current="{{cur.defs}}">Definitions</a>
+          </div>
+        </details>
+      </sc-if>
+    </nav>
+    <div class="tools">
+      <nav class="seg" aria-label="Window">
+        <a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a>
+      </nav>
+      <details class="menu proj" open="{{openProject}}">
+        <summary class="btn"><span class="i i-filter"></span><span class="trunc trunc-short">{{filterLabel}}</span><span class="caret">▾</span></summary>
+        <div class="menu-pop right wide">
+          <span class="grp">Project</span>
+          <a href="#" aria-current="{{allCur}}"><span class="check">{{allCheck}}</span>All projects</a>
+          <a href="#"><span class="check"></span>backsight</a>
+          <a href="#"><span class="check"></span>project-a</a>
+          <a href="#"><span class="check"></span>project-b</a>
+          <a href="#"><span class="check"></span>project-c</a>
+          <a href="#" title="project-d-shared-frontend-tools"><span class="check"></span><span class="trunc">project-d-shared-fronten…</span></a>
+        </div>
+      </details>
+      <a class="btn btn-quiet refresh-t" href="#"><span class="i i-refresh"></span>Refresh</a>
+      <details class="menu" open="{{openPrefs}}">
+        <summary class="btn btn-quiet" aria-label="Preferences"><span class="i i-gear"></span><span class="refresh-t">Preferences</span></summary>
+        <div class="menu-pop right wide">
+          <span class="grp">Theme</span>
+          <a href="#" aria-current="true"><span class="check">✓</span>System</a>
+          <a href="#"><span class="check"></span>Light</a>
+          <a href="#"><span class="check"></span>Dark</a>
+          <hr>
+          <span class="grp">Developer mode</span>
+          <a href="#" aria-current="{{devOff}}"><span class="check">{{devOffCheck}}</span>Off</a>
+          <a href="#" aria-current="{{devOn}}"><span class="check">{{devOnCheck}}</span>On</a>
+          <span class="hint">Adds ranking, learned ranking and release detail.</span>
+          <hr>
+          <span class="grp">Auto-refresh</span>
+          <a href="#" aria-current="true"><span class="check">✓</span>Off</a>
+          <a href="#"><span class="check"></span>Every minute</a>
+        </div>
+      </details>
+      <details class="menu navmenu" open="{{openMenu}}">
+        <summary class="btn"><span class="i i-menu"></span>Menu</summary>
+        <div class="menu-pop right wider">
+          <span class="grp">Window</span>
+          <nav class="seg" aria-label="Window"><a href="#" aria-current="{{w.d1}}">24 h</a><a href="#" aria-current="{{w.d7}}">7 d</a><a href="#" aria-current="{{w.d30}}">30 d</a><a href="#" aria-current="{{w.d90}}">90 d</a></nav>
+          <span class="grp">Project</span>
+          <a href="#"><span class="i i-filter"></span>{{filterLabel}} <span class="caret">▾</span></a>
+          <hr>
+          <a href="#" aria-current="{{cur.overview}}">Overview</a>
+          <a href="#" aria-current="{{cur.quality}}">Quality</a>
+          <a href="#" aria-current="{{cur.cost}}">Cost</a>
+          <a href="#" aria-current="{{cur.bank}}">Bank</a>
+          <a href="#" aria-current="{{cur.pipeline}}">Pipeline</a>
+          <span class="grp">Browse</span>
+          <a href="#" aria-current="{{cur.projects}}">Projects</a>
+          <a href="#" aria-current="{{cur.sessions}}">Sessions</a>
+          <a href="#" aria-current="{{cur.memories}}">Memories</a>
+          <hr>
+          <a href="#" aria-current="{{cur.system}}">System</a>
+          <sc-if value="{{dev}}" hint-placeholder-val="{{ false }}">
+            <span class="grp">Developer</span>
+            <a href="#" aria-current="{{cur.releases}}">Releases</a>
+            <a href="#" aria-current="{{cur.defs}}">Definitions</a>
+          </sc-if>
+          <hr>
+          <a href="#"><span class="i i-refresh"></span>Refresh</a>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>
+<div class="scopebar">
+  <div class="wrap scope">
+    <span>Activity on <b>this PC</b></span>
+    <sc-if value="{{serverDown}}" hint-placeholder-val="{{ false }}">
+      <span class="dot">memory on <b>127.0.0.1:18888</b></span>
+      <span class="st st-watch">not answering since 09:12</span>
+    </sc-if>
+    <sc-if value="{{serverOk}}" hint-placeholder-val="{{ true }}">
+      <span class="dot">memory on <b>127.0.0.1:18888</b></span>
+    </sc-if>
+    <span class="dot">updated <time datetime="2026-10-30T15:42" title="2026-10-30 15:42">{{age}}</time></span>
+    <sc-if value="{{stale}}" hint-placeholder-val="{{ false }}">
+      <a class="chip chip-stale" href="#"><span class="i i-sm i-clock"></span>Updated 12 min ago. Refresh.</a>
+    </sc-if>
+    <sc-if value="{{filtered}}" hint-placeholder-val="{{ false }}">
+      <span class="dot">project <b>{{filterLabel}}</b></span>
+    </sc-if>
+    <sc-if value="{{partial}}" hint-placeholder-val="{{ false }}">
+      <span class="chip"><span class="i i-sm i-clock"></span>Catching up: 3 days of history still being read</span>
+    </sc-if>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"active":{"editor":"enum","options":["overview","quality","cost","bank","pipeline","projects","sessions","memories","system","releases","defs"],"default":"overview"},"dev":{"editor":"boolean","default":false},"open":{"editor":"enum","options":["none","browse","developer","project","prefs","menu"],"default":"none"},"scope":{"editor":"enum","options":["ok","serverdown","stale","partial"],"default":"ok"},"filter":{"editor":"text","default":""},"win":{"editor":"enum","options":["1","7","30","90"],"default":"7"},"$preview":{"width":1440,"height":520}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme ?? 'light';
+    const active = p.active ?? 'overview';
+    const dev = String(p.dev ?? false) === 'true';
+    const open = p.open ?? 'none';
+    const scope = p.scope ?? 'ok';
+    const filter = p.filter ?? '';
+    const win = String(p.win ?? '7');
+    const w = { d1: win === '1' ? 'true' : undefined, d7: win === '7' ? 'true' : undefined, d30: win === '30' ? 'true' : undefined, d90: win === '90' ? 'true' : undefined };
+    const keys = ['overview','quality','cost','bank','pipeline','projects','sessions','memories','system','releases','defs'];
+    const cur = {};
+    keys.forEach((k) => { cur[k] = k === active ? 'page' : undefined; });
+    return {
+      theme,
+      rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo',
+      cur, dev, w,
+      browseCls: ['projects','sessions','memories'].includes(active) ? 'is-current' : '',
+      devCls: ['releases','defs'].includes(active) ? 'is-current' : '',
+      openBrowse: open === 'browse' || undefined,
+      openDev: open === 'developer' || undefined,
+      openProject: open === 'project' || undefined,
+      openPrefs: open === 'prefs' || undefined,
+      openMenu: open === 'menu' || undefined,
+      filterLabel: filter ? filter : 'All projects',
+      filtered: !!filter,
+      allCur: filter ? undefined : 'true',
+      allCheck: filter ? '' : '✓',
+      devOff: dev ? undefined : 'true', devOffCheck: dev ? '' : '✓',
+      devOn: dev ? 'true' : undefined, devOnCheck: dev ? '✓' : '',
+      serverDown: scope === 'serverdown',
+      serverOk: scope !== 'serverdown',
+      stale: scope === 'stale',
+      partial: scope === 'partial',
+      age: scope === 'stale' ? '12 min ago' : (scope === 'serverdown' ? '1 min ago' : '2 min ago'),
+    };
+  }
+}
+</script>
+</body>
+</html>

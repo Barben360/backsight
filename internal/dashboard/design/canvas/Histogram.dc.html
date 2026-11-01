@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Histogram</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./dashboard.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}">
+<figure class="chart">
+  <svg viewBox="0 0 680 230" role="img" aria-label="{{label}}">
+    <sc-for list="{{yt}}" as="g" hint-placeholder-count="4">
+      <line class="gl" x1="44" x2="672" y1="{{g.y}}" y2="{{g.y}}"></line>
+      <text class="ta-e" x="38" y="{{g.ty}}">{{g.label}}</text>
+    </sc-for>
+    <sc-for list="{{bars}}" as="b" hint-placeholder-count="12">
+      <rect class="f-used" x="{{b.x}}" y="{{b.y}}" width="{{b.w}}" height="{{b.h}}" rx="2"><title>{{b.t}}</title></rect>
+    </sc-for>
+    <sc-for list="{{marks}}" as="m" hint-placeholder-count="2">
+      <line class="{{m.cls}}" x1="{{m.x}}" x2="{{m.x}}" y1="14" y2="200"></line>
+      <text class="lbl {{m.anchor}}" x="{{m.tx}}" y="12">{{m.label}}</text>
+    </sc-for>
+    <line class="bl" x1="44" x2="672" y1="200" y2="200"></line>
+    <sc-for list="{{xt}}" as="x" hint-placeholder-count="7">
+      <text class="ta-m" x="{{x.x}}" y="218">{{x.label}}</text>
+    </sc-for>
+  </svg>
+  <p class="xs muted">{{caption}}</p>
+  <details class="tblfb">
+    <summary>Show as a table</summary>
+    <table class="tbl">
+      <thead><tr><th>{{binName}}</th><th class="r">{{countName}}</th></tr></thead>
+      <tbody><sc-for list="{{rows}}" as="r" hint-placeholder-count="5"><tr><td>{{r.b}}</td><td class="r">{{r.n}}</td></tr></sc-for></tbody>
+    </table>
+  </details>
+</figure>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark","inherit"],"default":"light"},"data":{"editor":"enum","options":["context","rank"],"default":"context"},"$preview":{"width":720,"height":340}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'light';
+    const which = this.props.data ?? 'context';
+    const L = 44, R = 672, T = 14, B = 200;
+    let bins, counts, label, caption, binName, countName, marks = [];
+    if (which === 'rank') {
+      bins = ['1', '2', '3', '4', '5', '6+', 'unranked'];
+      counts = [9, 6, 4, 2, 1, 1, 0];
+      label = 'Position of this memory when it was shown, 23 shows';
+      caption = 'Rank 1 is the first memory added. Unranked: opened by Claude or shown at session start.';
+      binName = 'Rank when shown'; countName = 'Times shown';
+    } else {
+      bins = ['0', '500', '1,000', '1,500', '2,000', '2,500', '3,000', '3,500', '4,000', '4,500', '5,000', '5,500+'];
+      counts = [4, 8, 12, 20, 28, 20, 16, 12, 8, 4, 4, 1];
+      label = 'Sessions by characters memory added, last 30 days, 137 sessions';
+      caption = 'Each bar: sessions whose added context falls in that 500-character step. Session budget: 6,000 characters; watch above 9,000.';
+      binName = 'Characters added (from)'; countName = 'Sessions';
+    }
+    const n = bins.length, slot = (R - L) / n, bw = slot - 4;
+    const cmax = Math.max(...counts, 1);
+    const ymax = Math.ceil(cmax / 4) * 4;
+    const Y = (k) => B - (k / ymax) * (B - T - 10);
+    const bars = counts.map((k, i) => ({ x: (L + i * slot + 2).toFixed(1), w: bw.toFixed(1), y: Y(k).toFixed(1), h: (B - Y(k)).toFixed(1), t: (which === 'rank' ? 'Rank ' : '') + bins[i] + ': ' + k + ' ' + countName.toLowerCase() }));
+    const xt = bins.map((b, i) => ({ x: (L + i * slot + (which === 'rank' ? slot / 2 : 2)).toFixed(1), label: b }));
+    if (which === 'context') {
+      const px = (chars) => L + (chars / 500) * slot;
+      marks = [
+        { cls: 'mk', x: px(2100).toFixed(1), tx: (px(2100) - 4).toFixed(1), anchor: 'ta-e', label: 'typical 2,100' },
+        { cls: 'mk', x: px(3600).toFixed(1), tx: (px(3600) + 4).toFixed(1), anchor: '', label: 'high 3,600' },
+      ];
+    }
+    const yt = [];
+    for (let k = 0; k <= ymax; k += Math.max(1, ymax / 4)) yt.push({ y: Y(k).toFixed(1), ty: (Y(k) + 4).toFixed(1), label: String(k) });
+    return { theme, rootCls: theme === 'inherit' ? 'dc-in' : 'page dc-solo pad', label, caption, binName, countName, bars, xt, yt, marks, rows: counts.map((k, i) => ({ b: bins[i], n: k })) };
+  }
+}
+</script>
+</body>
+</html>
