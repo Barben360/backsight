@@ -53,12 +53,30 @@ func jobLogged(e *env, name string, run func() error) error {
 	if log == nil {
 		return run()
 	}
-	stdout, stderr := e.stdout, e.stderr
+	stdout, stderr, notes := e.stdout, e.stderr, noteOut
 	// The log first: a console write that fails (no console) must not
-	// keep the line from the log.
-	e.stdout, e.stderr = io.MultiWriter(log, stdout), io.MultiWriter(log, stderr)
-	defer func() { e.stdout, e.stderr = stdout, stderr }()
+	// keep the line from the log. noteOut: what is printed beside the
+	// result on stderr itself (runtime notes, unconfirmed replaces).
+	e.stdout, e.stderr, noteOut = io.MultiWriter(log, stdout), io.MultiWriter(log, stderr), io.MultiWriter(log, notes)
+	finished := false
+	defer func() {
+		e.stdout, e.stderr, noteOut = stdout, stderr, notes
+		if finished {
+			return
+		}
+		// A panic: the log says so and keeps what was printed, then the
+		// panic goes on.
+		r := recover()
+		if r == nil { // runtime.Goexit: nothing to rethrow
+			closeLog()
+			return
+		}
+		_, _ = fmt.Fprintf(log, "\n%s jobs %s ended: panic: %v\n", now().UTC().Format(time.RFC3339), name, r)
+		closeLog()
+		panic(r)
+	}()
 	err := run()
+	finished = true
 	code := output.OK
 	var rep reported
 	switch {

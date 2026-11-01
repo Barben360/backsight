@@ -11,6 +11,7 @@ import (
 
 	"github.com/Barben360/backsight/internal/config"
 	"github.com/Barben360/backsight/internal/output"
+	"github.com/Barben360/backsight/internal/retain"
 )
 
 // onWindowsJobs makes the jobs keep their own log, as on Windows.
@@ -127,5 +128,43 @@ func TestJobLogOnlyOnWindows(t *testing.T) {
 	ran := false
 	if err := jobLogged(e, "tick", func() error { ran = true; return errors.New("boom") }); err == nil || err.Error() != "boom" || !ran {
 		t.Errorf("the job: ran %v, %v", ran, err)
+	}
+}
+
+// What a job prints beside its result (a runtime note, an unconfirmed
+// replace) on stderr directly reaches its log too.
+func TestJobLogKeepsTheNotes(t *testing.T) {
+	home := devInstall(t, true)
+	onWindowsJobs(t)
+	e := &env{stdout: &strings.Builder{}, stderr: &strings.Builder{}}
+	_ = jobLogged(e, "tick", func() error {
+		printNote("the server runs until you log off")
+		reportUnconfirmed(pathsOf(home).State, noteOut, retain.Result{Session: "s1", Unconfirmed: []retain.Unconfirmed{{Document: "conversation:s1", Reason: "timeout"}}})
+		return nil
+	})
+	log := readFile(t, jobLogPath(pathsOf(home).State, "backsight", "tick"))
+	for _, want := range []string{"note: the server runs until you log off\n", "session s1: conversation:s1 was never confirmed on the server (timeout)"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the log lacks %q:\n%s", want, log)
+		}
+	}
+}
+
+// A job that panics still closes its log: what it printed, a last line
+// without a newline included, and that it panicked.
+func TestJobLogClosesOnAPanic(t *testing.T) {
+	home := devInstall(t, true)
+	onWindowsJobs(t)
+	e := &env{stdout: &strings.Builder{}, stderr: &strings.Builder{}}
+	func() {
+		defer func() { _ = recover() }()
+		_ = jobLogged(e, "tick", func() error {
+			fmt.Fprint(e.stdout, "half a line")
+			panic("boom")
+		})
+	}()
+	log := readFile(t, jobLogPath(pathsOf(home).State, "backsight", "tick"))
+	if !strings.Contains(log, "half a line") || !strings.Contains(log, "jobs tick ended: panic: boom") {
+		t.Errorf("log:\n%s", log)
 	}
 }
