@@ -466,7 +466,7 @@ func TestFigAndNoDataPartials(t *testing.T) {
 	if e == nil || !strings.Contains(e.text(), "Nothing recorded in the last 7 days.") || !strings.Contains(e.text(), "Pick a longer window:") {
 		t.Fatalf("empty: %v", e)
 	}
-	if links := e.find("nav.seg a"); len(links) != 2 || links[0].attr("href") != "/?days=30" {
+	if links := e.find("div.seg a"); len(links) != 2 || links[0].attr("href") != "/?days=30" {
 		t.Errorf("links: %v", links)
 	}
 	n = widgetProbe(t, `{{template "nodata" nodatum .V .F .L .Loc}}`, struct {

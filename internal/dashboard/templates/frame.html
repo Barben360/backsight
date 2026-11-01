@@ -76,7 +76,7 @@
 <summary class="btn"><span class="i i-menu"></span>Menu</summary>
 <div class="menu-pop right wider">
 {{if .Frame.Windows}}<span class="grp">Window</span>
-<nav class="seg" aria-label="Window">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
+<nav class="seg" aria-label="Window (menu)">{{range .Frame.Windows}}{{template "seglink" .}}{{end}}</nav>
 <span class="grp">Project</span>
 <a href="/projects"><span class="i i-filter"></span>{{if .Frame.ProjectInput}}{{clip .Frame.ProjectInput}}{{else}}All projects{{end}} <span class="caret" aria-hidden="true">▾</span></a>
 <hr>
@@ -202,7 +202,7 @@
 {{end}}
 
 {{define "nodata"}}{{if .Text}}<div class="empty{{with .Class}} {{.}}{{end}}"><span>{{.Text}}{{with .Code}}<code>{{.}}</code>{{end}}{{.Close}}</span>{{with .Tail}}<span class="xs muted">{{.}}</span>{{end}}
-{{if .Links}}<span class="small">{{.Pick}}</span><nav class="seg" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</nav>
+{{if .Links}}<span class="small">{{.Pick}}</span><div class="seg" role="group" aria-label="Longer windows">{{range .Links}}{{template "seglink" .}}{{end}}</div>
 {{end}}</div>{{end}}{{end}}
 
 {{/*
