@@ -1335,3 +1335,38 @@ func TestUnregisterMarksTheServerStoppedFirst(t *testing.T) {
 		t.Errorf("marker while stopping %v, after %v: want it written before the stop", markedWhileStopping, n.Stopped())
 	}
 }
+
+// With no supervisor answering, server status and doctor read <Root>\refused,
+// the last supervisor's refusal (0080: "where server status and doctor
+// read it"); the identity check's own refusal, current, comes first.
+func TestRefusalReadsTheLastSupervisorsRefusal(t *testing.T) {
+	h, f := taskFixture(t)
+	ctx := context.Background()
+	n := h.n
+	n.Tools = &fakeTools{Out: dbToolsOut("on")}
+	recordInstance(t, n, "111")
+	f.up = false
+	if got := n.Refusal(ctx); got != "" || n.LastRefusal() != "" {
+		t.Fatalf("nothing refused: %q / %q", got, n.LastRefusal())
+	}
+	reason := n.SuperviseFile() + " runs postgres with fsync=off, not fsync=on: refusing to start it"
+	if err := os.WriteFile(filepath.Join(n.Root(), "refused"), []byte(reason+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.LastRefusal(); got != reason {
+		t.Errorf("LastRefusal = %q, want %q", got, reason)
+	}
+	if got := n.Refusal(ctx); got != reason {
+		t.Errorf("no supervisor, the refused file: %q, want %q", got, reason)
+	}
+	if err := os.WriteFile(n.IdentityFile(), []byte("222\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.Refusal(ctx); !strings.Contains(got, "not the one backsight recorded") {
+		t.Errorf("no supervisor, the identity check refusing too: %q, want the identity check's", got)
+	}
+	f.up, f.st = true, supervise.Status{DB: "running", API: "running"}
+	if got := n.Refusal(ctx); got != "" {
+		t.Errorf("a supervisor running unrefused: %q, want none whatever the file says", got)
+	}
+}

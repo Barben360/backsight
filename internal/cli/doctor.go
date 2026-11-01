@@ -251,7 +251,7 @@ var nativeGOOS = runtime.GOOS
 // DACLs of the data root, the config directory and both secret files.
 func windowsFacts(ctx context.Context, f *doctor.NativeFacts, n server.Native, d paths.Dirs, unread func(string, error)) {
 	f.Windows, f.Project, f.TaskName, f.LogDir, f.StartOnSession = true, n.Cfg.Server.Project, n.TaskName(), n.LogDir(), n.Cfg.Server.StartOnSession
-	f.Stopped = n.Stopped()
+	f.Stopped, f.LastRefusal = n.Stopped(), n.LastRefusal()
 	var err error
 	f.Task, err = n.TaskState(ctx)
 	unread("native-task", err)

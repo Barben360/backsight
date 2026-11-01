@@ -5,6 +5,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,8 +35,9 @@ func statusRefusal(t *testing.T) (int, string, string) {
 // server status gives the native server's refusal on Windows (decision
 // 0080: the reason where server status reads it): the supervisor's while
 // it answers refused, in the JSON and the text; with no supervisor, the
-// identity check's, which server start refused with; none for the
-// recorded instance.
+// identity check's, which server start refused with, else the last
+// supervisor's recorded refusal; none for the recorded instance once
+// nothing is recorded.
 func TestServerStatusGivesTheRefusal(t *testing.T) {
 	p := "bs-test-" + strconv.Itoa(os.Getpid()) + "-cli-status"
 	n, _ := superviseHost(t, p)
@@ -59,7 +61,16 @@ func TestServerStatusGivesTheRefusal(t *testing.T) {
 	if code, refusal, _ := statusRefusal(t); code != output.Blocked || !strings.Contains(refusal, "is not the one backsight recorded (identifier 111, recorded 222)") {
 		t.Errorf("no supervisor, another identity recorded: exit %d, refusal %q", code, refusal)
 	}
+	// The recorded instance: the identity check passes, and the last
+	// supervisor's refusal (<Root>\refused) is what status gives until a
+	// start passes the guard, which removes it.
 	withInstance(t, n, "111", "111")
+	if code, refusal, _ := statusRefusal(t); code != output.Blocked || !strings.Contains(refusal, "has no recorded identity") {
+		t.Errorf("no supervisor, the recorded instance, the last run refused: exit %d, refusal %q, want the last run's", code, refusal)
+	}
+	if err := os.Remove(filepath.Join(n.Root(), "refused")); err != nil {
+		t.Fatal(err)
+	}
 	if code, refusal, _ := statusRefusal(t); code != output.Blocked || refusal != "" {
 		t.Errorf("no supervisor, the recorded instance: exit %d, refusal %q, want none", code, refusal)
 	}

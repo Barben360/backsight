@@ -536,8 +536,9 @@ func tailLines(text string, n int) string {
 // journal says it there): the supervisor's final refusal while it answers
 // refused (fsync, identity, at the task's start), else, with no supervisor
 // answering, the identity check's (server start refuses before starting
-// one). server status shows it: decision 0080's "the reason where server
-// status and doctor read it".
+// one), else the last supervisor's recorded refusal (LastRefusal). server
+// status shows it: decision 0080's "the reason where server status and
+// doctor read it".
 func (n Native) Refusal(ctx context.Context) string {
 	if n.Err != nil {
 		return ""
@@ -554,7 +555,23 @@ func (n Native) Refusal(ctx context.Context) string {
 	if errors.As(n.CheckInstance(ctx), &g) {
 		return g.Error()
 	}
-	return ""
+	return n.LastRefusal()
+}
+
+// refusedFile, under Root(), is the last supervisor's final refusal,
+// which it writes and removes once its guard passes (supervise's
+// refusedFile).
+const refusedFile = "refused"
+
+// LastRefusal is the last supervisor's final refusal (<Root>\refused),
+// "" when none is recorded: what server status and doctor say when no
+// supervisor answers.
+func (n Native) LastRefusal() string {
+	raw, err := os.ReadFile(n.join(n.Root(), refusedFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // DeployedVenv is supervise.json's venv.

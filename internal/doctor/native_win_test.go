@@ -113,6 +113,11 @@ func TestDoctorWindowsChecks(t *testing.T) {
 			"backsight 0.8.1, older than this one (0.9.0)", "", nil},
 		{"supervisor refused the database", func(n *NativeFacts) { n.Supervisor.DB, n.Supervisor.Refusal = "refused", "the instance is empty" }, "supervisor", Error,
 			"the instance is empty", "backsight server status", nil},
+		{"no supervisor, its last run refused", func(n *NativeFacts) { n.Supervisor, n.LastRefusal = nil, "the instance is empty" }, "supervisor", Error,
+			"refused to start the database: the instance is empty", "backsight server status", nil},
+		{"stopped after a refusal", func(n *NativeFacts) {
+			n.Task, n.Supervisor, n.LastRefusal = server.TaskDisabled, nil, "the instance is empty"
+		}, "supervisor", Info, "stopped (backsight server stop); its last run refused to start the database: the instance is empty", "", []string{"native-task"}},
 		{"API restarting", func(n *NativeFacts) { n.Supervisor.API = "restarting" }, "supervisor", Warn,
 			"the API is restarting", `api.log`, nil},
 		{"supervisor unread", func(n *NativeFacts) {

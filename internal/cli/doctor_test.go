@@ -593,13 +593,26 @@ func TestDoctorOnWindowsReadsTheTaskAndTheSupervisor(t *testing.T) {
 	t.Cleanup(func() {
 		nativeGOOS, nativeSys, nativeAsk, otherReaders, nativeProc = oldOS, oldSys, oldAsk, oldReaders, oldProc
 	})
+	// The last supervisor's refusal, which doctor reads with none answering.
+	cfg, err := config.Load(d.ConfigFile(), d, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := runtimeFor(cfg).(server.Native).Root()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "refused"), []byte("the instance is empty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, c := doctorChecks(t)
 	if c["native-task"].Status != doctor.Info || !strings.Contains(c["native-task"].Summary, `\backsight\server is disabled`) {
 		t.Errorf("native-task: %+v", c["native-task"])
 	}
-	if c["supervisor"].Status != doctor.Info || !strings.Contains(c["supervisor"].Summary, "stopped") {
-		t.Errorf("supervisor: %+v", c["supervisor"])
+	if c["supervisor"].Status != doctor.Info || !strings.Contains(c["supervisor"].Summary, "stopped") ||
+		!strings.Contains(c["supervisor"].Summary, "refused to start the database: the instance is empty") {
+		t.Errorf("supervisor: %+v, want stopped and the last run's refusal", c["supervisor"])
 	}
 	if c["native-private"].Status != doctor.Error || !strings.Contains(c["native-private"].Summary, d.SecretsFile()+` can be read by BUILTIN\Users`) {
 		t.Errorf("native-private: %+v", c["native-private"])

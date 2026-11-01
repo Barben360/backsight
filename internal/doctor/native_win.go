@@ -58,8 +58,19 @@ func checkSupervisor(f NativeFacts) Check {
 	}
 	st := f.Supervisor
 	if st == nil {
-		if f.stoppedOnPurpose() {
+		refused := ""
+		if f.LastRefusal != "" {
+			refused = "refused to start the database: " + f.LastRefusal
+		}
+		switch {
+		case f.stoppedOnPurpose() && refused != "":
+			c.Status, c.Summary = Info, "the native server is stopped (backsight server stop); its last run "+refused
+			return c
+		case f.stoppedOnPurpose():
 			c.Status, c.Summary = Info, "the native server is stopped (backsight server stop)"
+			return c
+		case refused != "":
+			c.Status, c.Summary, c.Fix = Error, "no supervisor answers; the last one "+refused, "backsight server status"
 			return c
 		}
 		c.Status, c.Summary = Error, "no supervisor answers: the native server is not running"

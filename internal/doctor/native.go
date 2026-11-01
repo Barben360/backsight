@@ -52,6 +52,9 @@ type NativeFacts struct {
 	Task           string // server.TaskEnabled, server.TaskDisabled or server.NotInstalled
 	StartOnSession bool   // server.start_on_session: Task Scheduler refused the task at setup
 	Stopped        bool   // backsight server stop's marker: down on purpose
+	// LastRefusal is the last supervisor's final refusal (<Root>\refused),
+	// read when none answers.
+	LastRefusal string
 	// Supervisor is its answer to status, nil when none answers.
 	Supervisor  *supervise.Status
 	LogDir      string // the supervisor's logs
